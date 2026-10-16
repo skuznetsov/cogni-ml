@@ -29444,3 +29444,43 @@ Refresh after source/toolchain/device/model/workload changes.
   gate or bound listening-evidence drift. Authority: serial run_safe, reserve15%,
   unrelated processes untouched, local atomic commit/no push. Rollback tooling/
   report commit; no production inference arithmetic changed.
+
+### Continuation 2026-10-15 — acting prompts and wider output window
+
+- Base `8e1f326a`: two no-reference Russian prompts (newsreader/storyteller and
+  a newly written Max/Juffin dialogue), each native/MLX at caps512 and768.
+  Actual native F32 uniform prefixes proved and matched upstream shadow
+  sampler; the wider plan changes only the cap. All four same-backend first512
+  code prefixes equal their initial runs exactly on GPU, all11 IDs.
+- 512 was an experimental cap, not the native context ceiling. Metal requires
+  prompt_rows+max_frames-1<=1024; prompt lengths158/190 permit867/835 frames.
+  The768 tests fit925/957 resident rows. Beyond1024 needs full-attention
+  scratch/guard changes (`scores[1024]`), not only a CLI override or KV eviction.
+- Wide news: native768cap/35.666s, MLX741EOS/34.412s, all-ID fork704. Both
+  quiet from11.5s through the final full windows35.5/34.0; partial peak2PCM16.
+  This rejects a512-cap-only explanation for this prompt/seed's missing voiced
+  continuation; silence cause remains open. Wide dialogue: native525EOS/24.381s
+  and MLX645EOS/29.954s, code/main forks126/132, long internal pauses persist.
+  ASR recognizes final dialogue reply in both; no listening/acting certificate.
+- First-prefill hidden/main-logit GPU gates pass unchanged3e-5+3e-4abs(ref),
+  zero failures/nonfinite for both prompts at prompt-only and wide capacities.
+  Wide probes request1frame with768 cache budget, not full768-step traces.
+  Terminal metric reads add no graph work at depth2. Comparison stdout and
+  embedded support shaders are bound to executed binaries;14 CPU guards pass.
+- ASR still omits news storyteller, adds unrequested "Продолжение следует...";
+  exactzero says "Thank you." No words/identity certification from ASR or
+  amplitude, no full generation/DAC numeric parity. Native remains speaker0;
+  two actor roles are learned cues, not separate speaker assignments.
+- Report `docs/drama3-acting-tests.md`, index
+  `.landmark/evidence/drama3-acting-tests.json`, raw receipts/WAVs in local
+  `directing-roles-20261015/` and `directing-roles-wide-20261015/`. Retained first
+  wide sampler compile failure resolved by proper Metal flags before generation.
+  Correlated mini-Quad ROBUST for narrow measurements/cap falsifier, VULNERABLE
+  for successful acting or unique cause. No production/default/precision change.
+- Next causal probe: direction/cue-format-only ablation, fixed spoken text and
+  sampler inputs; no established newline cause. Return numeric frontiers:
+  generation common-prefix forks and prior MoE39/DAC, without causal promotion.
+  Refresh on source/model/tokenizer/input/tape/conditioning/artifact/runtime/
+  device/OS/gate or bound listening-evidence drift. Authority: serial run_safe,
+  reserve15%, unrelated processes untouched, local atomic commit/no push.
+  Rollback this report/index/landmark commit; keep raw evidence outside Git.

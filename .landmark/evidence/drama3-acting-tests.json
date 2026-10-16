@@ -1,0 +1,432 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-acting-tests",
+  "created_at_utc": "2026-10-16T01:43:17.670735+00:00",
+  "base_revision": "8e1f326a83925f8af7f00109cf6e6989441d3c20",
+  "allowed_paths": [
+    "docs/drama3-acting-tests.md",
+    ".landmark/evidence/drama3-acting-tests.json",
+    "LANDMARKS.md"
+  ],
+  "changed_paths": [
+    "docs/drama3-acting-tests.md",
+    ".landmark/evidence/drama3-acting-tests.json",
+    "LANDMARKS.md"
+  ],
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "Scoped eight-WAV acting-prompt/window diagnostic: native capacity, actual shared F32 sampler inputs, GPU same-backend first-512 token stability, first-prefill pointwise gates and quiet intervals. In the news prompt/seed the 512 cap alone does not explain missing voiced continuation.",
+    "excluded": [
+      "Confirmed words, actor quality, distinct speakers or natural pauses",
+      "A universal silence remedy or unique causal explanation",
+      "Full generation token or floating-point/DAC parity",
+      "Original Fish full text-generation coverage or stock MLX RNG",
+      "Native contexts beyond 1024 positions",
+      "Zero existing host control reads, uploads or GPU waits",
+      "Production/default changes, performance promotion or LTP/WBA certificate"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Unequal conditioning/sampler inputs, a changed prefix, cap mistaken for EOS, or ASR/amplitude mistaken for words or numeric parity.",
+    "guards": "Bound prompt/checkpoint/source/binary/actual F32 sampler; GPU prefix and unchanged pointwise checks; explicit EOS/cap; digital-zero ASR negative; exact stdout and embedded comparator binding.",
+    "rollback": "Revert this report/index/landmark commit; production inference is unchanged. Preserve raw cache evidence."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "mlx": "0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "model": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "generation_graph_depth": 2,
+    "probe_graph_depths": [
+      2
+    ],
+    "minimum_free_memory_percent": 15,
+    "quiet_host_required": false,
+    "execution": "Serial run_safe; private mmap; source-bound reused production binary; fresh first-prefill probe builds. Shared-host timings are exploratory."
+  },
+  "configuration": {
+    "seed": 1,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "reference": null,
+    "frame_caps": [
+      512,
+      768
+    ],
+    "wider_plan_only_changes_cap": true,
+    "initial_f32_uniform_count": 5632,
+    "initial_f32_uniform_sha256": "63e955c00512b965c17303e4c2517ed4eeb093193af6c881542045c0c7ece7a1",
+    "wide_f32_uniform_count": 8448,
+    "wide_f32_uniform_sha256": "708654400de323b1e6698b230d01f4329065ae9582fad67bc71213e77d3a3dd6",
+    "sampler": "Actual native F32 producer and existing MLX shared-uniform inverse-CDF shadow sampler; not seed-only control."
+  },
+  "results": [
+    {
+      "case": "news-story",
+      "text_sha256": "029217880c23eb56629b018a3618eef74d23cd38ad9881e10c323bb663aa122b",
+      "termination": {
+        "native": {
+          "frames_returned": 768,
+          "stopped_on_eos": false,
+          "truncated": true,
+          "max_frames": 768,
+          "samples": 1572864
+        },
+        "mlx": {
+          "status": "eos",
+          "eos_detected": true,
+          "frame_cap_reached": false,
+          "generation_iterations": 742,
+          "frames_returned": 741,
+          "max_frames": 768,
+          "samples": 1517568
+        }
+      },
+      "exact_leading_native_mlx_all_id_frames": 704,
+      "first_codebook_mismatch_zero_based": 704,
+      "first_main_mismatch_zero_based": 704,
+      "same_backend_first_512_all_ids_exact": true,
+      "native_capacity": 925,
+      "waves": {
+        "native": {
+          "artifact": {
+            "id": "news-story-native",
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav",
+            "sha256": "d2851a548e76087b768e8a1db254551e5f7c5b1575c421d3912340c90308f2bf",
+            "bytes": 3145772
+          },
+          "duration_seconds": 35.66585034013605,
+          "internal_quiet_intervals": [
+            {
+              "start_window": 12,
+              "end_window_exclusive": 14,
+              "start_seconds": 6.0,
+              "end_seconds": 7.0,
+              "duration_seconds": 1.0,
+              "window_count": 2
+            }
+          ],
+          "terminal_quiet_intervals": [
+            {
+              "start_window": 23,
+              "end_window_exclusive": 71,
+              "start_seconds": 11.5,
+              "end_seconds": 35.5,
+              "duration_seconds": 24.0,
+              "window_count": 48
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 35.5,
+            "duration_seconds": 0.16585,
+            "peak_pcm16": 2.0,
+            "rms_pcm16": 0.6649554371833801,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx": {
+          "artifact": {
+            "id": "news-story-mlx",
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.wav",
+            "sha256": "ff922ddd25704da34fba0f17a9ea74c6ce4ebd46da2717b6cf0ca75cf03ad8c1",
+            "bytes": 3035180
+          },
+          "duration_seconds": 34.411972789115644,
+          "internal_quiet_intervals": [
+            {
+              "start_window": 12,
+              "end_window_exclusive": 14,
+              "start_seconds": 6.0,
+              "end_seconds": 7.0,
+              "duration_seconds": 1.0,
+              "window_count": 2
+            }
+          ],
+          "terminal_quiet_intervals": [
+            {
+              "start_window": 23,
+              "end_window_exclusive": 68,
+              "start_seconds": 11.5,
+              "end_seconds": 34.0,
+              "duration_seconds": 22.5,
+              "window_count": 45
+            }
+          ],
+          "partial_tail": {
+            "start_seconds": 34.0,
+            "duration_seconds": 0.411973,
+            "peak_pcm16": 2.0,
+            "rms_pcm16": 0.6649029850959778,
+            "peak_threshold_met": true,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    },
+    {
+      "case": "max-juffin",
+      "text_sha256": "801f156854c389511820de037faec8becafe155a2eaed8791de6340721172756",
+      "termination": {
+        "native": {
+          "frames_returned": 525,
+          "stopped_on_eos": true,
+          "truncated": false,
+          "max_frames": 768,
+          "samples": 1075200
+        },
+        "mlx": {
+          "status": "eos",
+          "eos_detected": true,
+          "frame_cap_reached": false,
+          "generation_iterations": 646,
+          "frames_returned": 645,
+          "max_frames": 768,
+          "samples": 1320960
+        }
+      },
+      "exact_leading_native_mlx_all_id_frames": 126,
+      "first_codebook_mismatch_zero_based": 126,
+      "first_main_mismatch_zero_based": 132,
+      "same_backend_first_512_all_ids_exact": true,
+      "native_capacity": 957,
+      "waves": {
+        "native": {
+          "artifact": {
+            "id": "max-juffin-native",
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/max-juffin/native.wav",
+            "sha256": "c9d32a0a0cea718068690b9695bfd142f91432d81b4ee26b6e7f5d39cf88d3ba",
+            "bytes": 2150444
+          },
+          "duration_seconds": 24.38095238095238,
+          "internal_quiet_intervals": [
+            {
+              "start_window": 22,
+              "end_window_exclusive": 24,
+              "start_seconds": 11.0,
+              "end_seconds": 12.0,
+              "duration_seconds": 1.0,
+              "window_count": 2
+            },
+            {
+              "start_window": 28,
+              "end_window_exclusive": 37,
+              "start_seconds": 14.0,
+              "end_seconds": 18.5,
+              "duration_seconds": 4.5,
+              "window_count": 9
+            }
+          ],
+          "terminal_quiet_intervals": [],
+          "partial_tail": {
+            "start_seconds": 24.0,
+            "duration_seconds": 0.380952,
+            "peak_pcm16": 2291.0,
+            "rms_pcm16": 265.88372802734375,
+            "peak_threshold_met": false,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        },
+        "mlx": {
+          "artifact": {
+            "id": "max-juffin-mlx",
+            "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/max-juffin/mlx.wav",
+            "sha256": "91cb284578fb0c9bc758a58cd330206dad15f68669550a53bbf67b7ba0984e80",
+            "bytes": 2641964
+          },
+          "duration_seconds": 29.95374149659864,
+          "internal_quiet_intervals": [
+            {
+              "start_window": 27,
+              "end_window_exclusive": 36,
+              "start_seconds": 13.5,
+              "end_seconds": 18.0,
+              "duration_seconds": 4.5,
+              "window_count": 9
+            },
+            {
+              "start_window": 40,
+              "end_window_exclusive": 45,
+              "start_seconds": 20.0,
+              "end_seconds": 22.5,
+              "duration_seconds": 2.5,
+              "window_count": 5
+            }
+          ],
+          "terminal_quiet_intervals": [],
+          "partial_tail": {
+            "start_seconds": 29.5,
+            "duration_seconds": 0.453741,
+            "peak_pcm16": 4317.0,
+            "rms_pcm16": 496.66351318359375,
+            "peak_threshold_met": false,
+            "full_window": false,
+            "quiet_full_window": false
+          }
+        }
+      }
+    }
+  ],
+  "executed_dod": {
+    "command_ledgers": [
+      "initial-commands.json",
+      "wide-commands.json"
+    ],
+    "expected_signal": "Both matrices complete; complete exact per-backend first512 prefixes; zero first-prefill pointwise/nonfinite failures with unchanged tolerances; successful bound GPU measurements and artifact composition.",
+    "observed": "All declared narrow signals pass. Storyteller delivery and silence cause remain open.",
+    "wide_successful_commands": [
+      "preflight",
+      "prove-native-sampling-tape-768-v2",
+      "native-news-story",
+      "mlx-news-story",
+      "native-max-juffin",
+      "mlx-max-juffin",
+      "asr-four-cases",
+      "package-prefill",
+      "build-prefill-probe",
+      "prefill-probe-self-test",
+      "prefill-news-story",
+      "prefill-max-juffin",
+      "measure-two-cases",
+      "validate-prefill-lineage",
+      "baseline-cpu-guards",
+      "wide-cpu-guards",
+      "receipt-cpu-guards"
+    ],
+    "retained_failure": {
+      "name": "prove-native-sampling-tape-768",
+      "exit_code": 1,
+      "cause": "Missing Metal build/link flags in the initial compile-only command.",
+      "recovery": "Corrected v2 producer succeeds before any wider generation."
+    },
+    "cpu_guard_tests": 14,
+    "first_prefill": {
+      "atol": 3e-05,
+      "rtol": 0.0003,
+      "capacity_budget": 768,
+      "generated_frame_request": 1,
+      "terminal_reads_add_graph_work": false
+    },
+    "validation_limit": "Packet template and shared graph validator absent; no pass claimed. Direct bound artifact/source/command checks executed; packet structure alone is not proof."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Measured capacity/prefix/first-prefill/quiet observations and prompt/seed-specific cap-only falsifier.",
+    "correlation": "Same-lineage mini-Quadrumvirate review, not independent model evidence.",
+    "vulnerable_claims_rejected": "Successful acting, unique silence cause, universal fix, or full generation/DAC parity."
+  },
+  "next_falsifier": "Change only direction/cue format with fixed spoken words and uniforms; do not assume newline causality. Numeric common-prefix and prior MoE39/DAC frontiers remain separate.",
+  "refresh": {
+    "triggers": [
+      "source/compiler",
+      "checkpoint/tokenizer",
+      "prompt",
+      "sampler/tape",
+      "conditioning",
+      "runtime/device/OS",
+      "gate",
+      "artifact hash",
+      "bound listener feedback"
+    ],
+    "operation": "Rebind affected inputs and rerun the affected matrix/probes; do not inherit this certificate across changed boundaries.",
+    "failure_policy": "Reopen dependent claims; absent local raw artifacts invalidate reuse."
+  },
+  "evidence": [
+    {
+      "id": "initial-plan.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/plan.json",
+      "sha256": "b5f0ba1017df89bd3dd478a71df435d411b2d4816b7f7ba832ab5064b4370c71",
+      "bytes": 4159
+    },
+    {
+      "id": "initial-source-binding.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/source-binding.json",
+      "sha256": "e3afcdec17443fca3cd5da487fa782aa38bf6229681b28d1fe3e645736861496",
+      "bytes": 7339
+    },
+    {
+      "id": "initial-commands.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/commands.json",
+      "sha256": "82ca593b01ada28e5d48e4d9a0c98685ebb26e588cfe62b150672b6ca9c87d83",
+      "bytes": 116208
+    },
+    {
+      "id": "initial-random-tape-prefix.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/random-tape-prefix.json",
+      "sha256": "54ed442f741ad9115a80baf181b7aac081155ac5882c90f7a5aab485c12ee04d",
+      "bytes": 578
+    },
+    {
+      "id": "initial-measurements.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/measurements.json",
+      "sha256": "e08551ec4007fd3e4fa605245bfa6296dc32971f4206fca3a83ff284211f7bab",
+      "bytes": 29114
+    },
+    {
+      "id": "initial-asr.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/asr.json",
+      "sha256": "fa7c11a269ac5fdfdf95267cf913f7dea0a764247e1e90bc2eae764bac289406",
+      "bytes": 25357
+    },
+    {
+      "id": "initial-prefill-lineage.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-20261015/prefill-lineage.json",
+      "sha256": "275a22c2360bb9600546a4734cfc56f564a0f40dd577c125dd06dd45aeedc8dc",
+      "bytes": 1472
+    },
+    {
+      "id": "wide-plan.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/plan.json",
+      "sha256": "2ba1bafeb0b7260186944066774ab45bab657b18ec4d930041fc9b89c7e53414",
+      "bytes": 4159
+    },
+    {
+      "id": "wide-source-binding.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/source-binding.json",
+      "sha256": "d7add2ae0d1f39d12b3ef63f6cd191e65be8b2fb68116a5b5ba52ff78615f1e3",
+      "bytes": 6422
+    },
+    {
+      "id": "wide-commands.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/commands.json",
+      "sha256": "efe74e25734a814031e943cec930fcc80dcc7fc3f4d942f3129385b81cd295da",
+      "bytes": 180208
+    },
+    {
+      "id": "wide-random-tape-prefix.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/random-tape-prefix.json",
+      "sha256": "4664e1af9b41df85ed192dd9c9edef3613fd87131da86354acf96874651035e7",
+      "bytes": 578
+    },
+    {
+      "id": "wide-measurements.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/measurements.json",
+      "sha256": "a419cebd1901a54a7a268d0ab9789ce95da87a4200a62dfee42b4b97707f976f",
+      "bytes": 48392
+    },
+    {
+      "id": "wide-asr.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/asr.json",
+      "sha256": "86eabe346de7e33ee97f96bf6a8c3813e8bc9574472d3644154b06fb28538e8b",
+      "bytes": 28385
+    },
+    {
+      "id": "wide-prefill-lineage.json",
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/prefill-lineage.json",
+      "sha256": "d852dfe4315e4de8a68d4dbacc359bac10e4d150f64363a81ef496decfd5c7b0",
+      "bytes": 4942
+    },
+    {
+      "id": "report",
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-acting-tests.md",
+      "sha256": "5bd95858553596e5c3b98363081009a6679cb266429c9d7b05444a8455c5bbf7",
+      "bytes": 13238
+    }
+  ]
+}
