@@ -10,7 +10,55 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: mapped weight wrapper lifetime — 2026-10-16
+## Active slice: raw weight views and binding exposure — 2026-10-16
+
+Completed bounded contrast from `c37f4d91`: one Engine and a separate persistent
+prime, followed by all six permutations of persistent / views-only / fresh
+wrappers (18 warm requests). Views-only clears raw TensorBuffer objects while
+preserving identical live MetalBuffer objects, mmap owners and GPU F32 caches.
+Fresh continues to clear views and replace whole-shard wrappers. A passive,
+job-local first-command histogram counts encoder set_buffer calls after host
+return, with zero counts retained for unbound shards.
+Opaque owner IDs identify shards within this worker, not Metal resource IDs.
+
+Risk remains CAUTION: resetting views with work in flight could invalidate
+bindings; all resets and probe starts require the existing terminal boundary.
+Rollback is disabling the diagnostic executable or reverting this slice.
+No new inference submit, wait, readback, shader or precision change is admitted.
+Falsifiers: a views-only factory call or changed buffer identity; a lookup
+counted as a binding; an unused shard reported as exposed; a second command
+included in the first-command histogram; changed codes/WAV or wait/read ledgers.
+DoD: genuine failing witnesses followed by focused graph-0/2 GPU and negative
+boundary cases, offline schedule/qualification mutation tests, balanced warm
+P/V/R requests with exact outputs, and unchanged saved-MLX full-code and
+158-row terminal hidden/logit gates at the existing tolerances. Active-host
+timings can reject a simple cost explanation but cannot establish equivalence
+or identify internal driver registration from wrapper addresses.
+
+Observed DoD: 69 relevant Metal and 14 offline tests pass, with all 19 full
+60x11 codes/WAV and 122-submit/wait/read ledgers exact. Three saved-MLX GPU
+full-code checks and both V/R 158-row final hidden/logit gates pass unchanged
+3e-5/3e-4 tolerances. Activations remain on GPU. Warm first-command histograms
+are exact: 5442 total bindings, 862 raw-weight bindings across five model
+shards (100/183/198/190/191), zero for the codec shard; 566 converted GPU
+cache entries retain their identities. These are host exposure counts.
+
+Preparation medians P/V/R are 2.542us / 3.917us / 1.075104ms; first-driver
+ranges remain 0.391–5.862 / 0.393–9.054 / 0.377–6.375s. Within-triplet request
+R-minus-P median is -0.018379s, range -1.049909..+6.465244s, three wins each.
+No stable speed gain, equivalence or default promotion is established. Warm
+first-command page-ins/disk reads are zero; process system-CPU time still
+spreads into seconds. This does not identify driver work or prove residency.
+The active host and cross-triplet carryover limit causal inference.
+See [Raw weight views and binding exposure](drama3-weight-views.md) and its
+evidence index for exact observations and scoped ROBUST mini-Quad verdict.
+Next falsifier: a separately guarded narrower-resource-extent contrast with
+the view sham and identical ownership/numerical/queue witnesses. An older
+per-tensor-view probe had no stable gain; changing an encoder length alone
+does not change the bound Metal resource. Return numeric frontier remains
+MoE39/common-prefix and DAC post-module; this slice does not close either.
+
+## Prior slice: mapped weight wrapper lifetime — 2026-10-16
 
 From `99a4f447`, compare persistent raw mapped buffers with recreated host Metal
 wrappers over the same mmap owners/pages. A faster warm request alone cannot
@@ -49,10 +97,10 @@ zero process page-ins/disk-read bytes; whole-request reads are not always zero, 
 counters do not certify residency. Converted-cache and lazy view-rebuild
 asymmetry, overlapping counter windows and quiet-host-off noise limit inference.
 See [Mapped weight wrapper comparison](drama3-weight-wrappers.md) for exact
-pairing, scope, receipts and lineage. Next discriminator: a view-only sham
-that rebuilds raw tensor views but preserves Metal handles, plus passive binding
-counts. Driver validation granularity remains a later hypothesis requiring its
-own ownership/numerical probes. Keep MoE39/common-prefix and DAC post-module as
+pairing, scope, receipts and lineage. The subsequent
+[view-only sham](drama3-weight-views.md) executes the proposed separation and
+passive binding counts. Driver validation granularity remains a hypothesis
+requiring its own ownership/numerical probes. Keep MoE39/common-prefix and DAC post-module as
 the open numerical return frontier.
 
 ## Active slice: first-prefill startup attribution — 2026-10-16

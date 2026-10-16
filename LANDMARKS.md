@@ -29807,3 +29807,46 @@ Refresh after source/toolchain/device/model/workload changes.
   evidence eviction. Standing authority: serial run_safe,15% floor, unrelated
   processes untouched, exact-path local atomic commit/no push. Rollback by
   omitting the diagnostic enable or reverting this isolated commit.
+
+
+### Continuation 2026-10-16 — raw weight views and binding exposure
+
+- Base `c37f4d91`: Context-mediated view-only reset retains identical raw Metal
+  buffers/mmap owners, while fresh reset recreates them. Existing terminal
+  guards reject active/pending/aborted use without draining. Passive binding
+  capture arms at the current command index, counts host set_buffer returns,
+  seals after the first existing submit and publishes only at terminal;
+  abort discards it. Direct bank use/concurrency and future aliases are outside
+  the supported boundary. No shader, precision, queue or inference read/wait
+  changes; disabled observer branch overhead is unmeasured.
+- One Engine completes one excluded prime and six P/V/R permutations (18 warm
+  jobs). P/V/R preparation medians 2.542us/3.917us/1.075104ms; first-driver ranges
+  0.391–5.862/0.393–9.054/0.377–6.375s. Within-triplet R-minus-P request median
+  -0.018379s, range -1.049909..+6.465244s, three wins each. All arms retain long
+  spread; no stable gain, equivalence, internal-registration inference or
+  default promotion. Active-host order/carryover remains a confound.
+- Every warm first command has 5442 bindings, 862 raw across five model shards
+  (100/183/198/190/191); codec 0. Six mappings declare 25867452416 bytes, not
+  physical residency or bytes read. All 566 converted GPU cache entries retain
+  their host identities. Warm first-command page-ins/reads are zero while
+  system-CPU time spreads into seconds; process windows are nonadditive.
+- All 19 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  69 relevant Metal/14 offline cases, three saved-control MLX-GPU code checks
+  and both V/R 158-row final hidden/logit gates pass unchanged 3e-5/3e-4. No
+  activation read or new inference synchronization. Endpoint parity does not
+  close MoE39 or establish general voice/prosody/DAC/long-speech parity.
+- Correlated mini-Quad verdict ROBUST for the bounded diagnostic, executed
+  numerical/queue contract and descriptive observations. Report
+  `docs/drama3-weight-views.md`, index `.landmark/evidence/drama3-weight-views.json`,
+  external raw root `/opt/mldata_ssd/cogni-ml/drama3-weight-views-20261016/`.
+  Offline analysis alias failure is retained; v2 passes, with no GPU rerun.
+- Next falsifier: whole-shard versus narrower page-aligned no-copy resource
+  extent, with the view sham, mmap ownership/alignment/range checks and unchanged
+  numerical/queue gates. Earlier per-tensor views had no stable gain; the new
+  qualified sham/exposure addresses a missing discriminator, not that result's
+  automatic reversal. Return numeric frontier: MoE39/common-prefix and DAC
+  post-module stage. Refresh on source/model/layout/input/tape/tolerance/queue/
+  observer/device/OS drift, contradiction or artifact eviction. Standing
+  authority: serial run_safe, 15% floor, unrelated processes untouched, external
+  scratch/local weights, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated slice.

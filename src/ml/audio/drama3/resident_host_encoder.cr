@@ -7,8 +7,10 @@
     struct HostEncoder
       @encoder : ML::Metal::ComputeEncoder
       @profile : ML::Audio::Drama3::HostProfile
+      @weight_probe : ML::Audio::Drama3::MetalBackend::WeightBufferBank?
 
-      def initialize(command : ML::Metal::CommandBuffer, @profile : ML::Audio::Drama3::HostProfile)
+      def initialize(command : ML::Metal::CommandBuffer, @profile : ML::Audio::Drama3::HostProfile,
+                     @weight_probe : ML::Audio::Drama3::MetalBackend::WeightBufferBank? = nil)
         @encoder = @profile.measure(ML::Audio::Drama3::HostEvent::EncoderCreate) do
           ML::Metal::ComputeEncoder.new(command)
         end
@@ -29,6 +31,7 @@
         @profile.measure(ML::Audio::Drama3::HostEvent::EncoderAPI) do
           @encoder.set_buffer(buffer, index, access, offset, length, partition)
         end
+        @weight_probe.try(&.record_binding(buffer))
         self
       end
 

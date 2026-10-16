@@ -117,12 +117,24 @@ module ML::Audio::Drama3
         @mappings = {} of UInt64 => MappedBuffer
         @tensors = {} of UInt64 => TensorBuffer
         @generation = 0_i64
+        @view_generation = 0_i64
         @factory_calls = 0_i64
+        @tensor_views_created = 0_i64
+        @shard_ids = {} of UInt64 => Int32
+        @buffer_owners = {} of UInt64 => UInt64
+        @binding_counts = Hash(UInt64, Int64).new(0_i64)
+        @capture_armed = false
+        @capture_observed = false
+        @capture_submitted = false
+        @capture_index = -1_i64
+        @buffer_bindings = 0_i64
+        @raw_weight_bindings = 0_i64
 
         def tensor_buffer(tensor : Tensor) : TensorBuffer
           if tensor.raw_bytes && (owner = tensor.owner)
             @tensors[tensor.object_id] ||= begin
               mapping = @mappings[owner.object_id] ||= create(owner)
+              @tensor_views_created += 1
               TensorBuffer.new(tensor, true, mapping)
             end
           else
@@ -133,28 +145,89 @@ module ML::Audio::Drama3
         private def create(owner : MappedFile) : MappedBuffer
           mapping = MappedBuffer.new(owner)
           @factory_calls += 1
+          @shard_ids[owner.object_id] ||= @shard_ids.size + 1
+          @buffer_owners[mapping.buffer.object_id] = owner.object_id
+          @binding_counts[owner.object_id] ||= 0_i64
           mapping
+        end
+
+        # This is host API exposure, not shader access, residency or a driver
+        # resource ID. Context arms at an idle job boundary and seals only after
+        # its existing first submit succeeds. Snapshot publication additionally
+        # requires Context's existing terminal boundary.
+        def start_first_command(index : Int64) : Nil
+          @capture_index = index
+          @capture_armed = true
+          @capture_observed = @capture_submitted = false
+          @buffer_bindings = @raw_weight_bindings = 0_i64
+          @binding_counts.clear
+          @mappings.each_key { |owner| @binding_counts[owner] = 0_i64 }
+        end
+
+        def first_command_capture? : Bool
+          @capture_armed
+        end
+
+        def first_command_started! : Nil
+          raise ArgumentError.new("first weight command already observed") unless @capture_armed && !@capture_observed
+          @capture_observed = true
+        end
+
+        # Called only after the underlying encoder accepted set_buffer. The
+        # reverse table is prepared at mapping construction, never by a tensor
+        # lookup or an Objective-C address that could be recycled after release.
+        def record_binding(buffer : ML::MetalBuffer) : Nil
+          return unless @capture_armed && @capture_observed
+          @buffer_bindings += 1
+          if owner = @buffer_owners[buffer.object_id]?
+            @binding_counts[owner] += 1
+            @raw_weight_bindings += 1
+          end
+        end
+
+        def first_command_submitted! : Nil
+          if @capture_armed && @capture_observed
+            @capture_submitted = true
+            @capture_armed = false
+          end
+        end
+
+        def discard_first_command! : Nil
+          @capture_armed = @capture_submitted = false
+        end
+
+        def first_command_bindings
+          raise ArgumentError.new("first weight command has not been submitted") unless @capture_submitted
+          shards = @mappings.map do |owner, mapping|
+            {shard: @shard_ids[owner], mapped_bytes: mapping.buffer.size, bindings: @binding_counts[owner]}
+          end.sort_by { |shard| shard[:shard] }
+          {command_index: @capture_index, observed: @capture_observed, submitted: @capture_submitted,
+           buffer_bindings: @buffer_bindings, raw_weight_bindings: @raw_weight_bindings, shards: shards}
         end
 
         # Recreate exactly one buffer per previously used shard. Keep old
         # Crystal objects/owners for the qualification, but release ALL Metal
         # handles before constructing any replacement: no overlapping aliases.
         # Objective-C addresses may be recycled and are not resource IDs.
-        def prepare(refresh : Bool) : Hash(String, Int64)
+        def prepare(refresh : Bool, clear_views : Bool = false) : Hash(String, Int64)
           retired = constructed = same_backing = address_reuses = 0_i64
           retire_ns = construct_ns = 0_i64
           views_cleared = 0_i64
+          if refresh || clear_views
+            views_cleared = @tensors.size.to_i64
+            @tensors.clear
+            @view_generation += 1
+          end
           if refresh
             old = @mappings.values.map do |mapping|
               buffer = mapping.buffer
               {mapping, buffer.contents, buffer.size, buffer.storage_mode, buffer.handle.address}
             end
-            views_cleared = @tensors.size.to_i64
-            @tensors.clear
             started = Time.instant
             old.each { |item| item[0].buffer.release; retired += 1 }
             retire_ns = (Time.instant - started).total_nanoseconds.to_i64
             @mappings.clear
+            @buffer_owners.clear
             old.each do |item|
               previous, pointer, size, mode, address = item
               raise "old weight wrapper still valid" if previous.buffer.valid?
@@ -171,7 +244,9 @@ module ML::Audio::Drama3
             end
             @generation += 1
           end
-          {"generation" => @generation, "mappings" => @mappings.size.to_i64,
+          {"generation" => @generation, "view_generation" => @view_generation,
+           "tensor_views_created" => @tensor_views_created, "tensor_views" => @tensors.size.to_i64,
+           "mappings" => @mappings.size.to_i64,
            "mapped_bytes" => @mappings.values.sum(0_i64) { |m| m.buffer.size },
            "factory_calls" => @factory_calls, "retired" => retired, "constructed" => constructed,
            "same_backing" => same_backing, "handle_address_reuses" => address_reuses,

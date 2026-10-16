@@ -279,16 +279,37 @@ module ML::Audio::Drama3::Resident
       @weight_wrapper_bank = MetalBackend::WeightBufferBank.new
     end
 
-    def prepare_weight_wrappers(refresh : Bool) : Hash(String, Int64)
+    def prepare_weight_wrappers(refresh : Bool, clear_views : Bool = false) : Hash(String, Int64)
       bank = @weight_wrapper_bank
       raise ArgumentError.new("weight wrapper probe is not enabled") unless bank
       check_weight_wrapper_boundary!
       begin
-        bank.prepare(refresh)
+        bank.prepare(refresh, clear_views)
       rescue ex
         abort
         raise ex
       end
+    end
+
+    def begin_weight_wrapper_job! : Nil
+      bank = @weight_wrapper_bank
+      raise ArgumentError.new("weight wrapper probe is not enabled") unless bank
+      check_weight_wrapper_boundary!
+      bank.start_first_command(@submissions)
+    end
+
+    def weight_wrapper_first_command_bindings
+      bank = @weight_wrapper_bank
+      raise ArgumentError.new("weight wrapper probe is not enabled") unless bank
+      check_weight_wrapper_boundary!
+      bank.first_command_bindings
+    end
+
+    # Host object identity only: no Metal query, weight byte or activation read.
+    def converted_weight_cache_signature
+      @weights.map do |key, value|
+        {key, value.object_id, value.buffer.object_id, value.count, value.offset}
+      end.sort_by(&.[0])
     end
 
     private def check_weight_wrapper_boundary! : Nil
@@ -386,7 +407,10 @@ module ML::Audio::Drama3::Resident
                     host_profile.measure(HostEvent::CommandCreate) { ML::Metal::CommandBuffer.new }
                   end
         @command = command
-        HostEncoder.new(command, host_profile)
+        probe = @weight_wrapper_bank
+        probe = nil unless probe.try(&.first_command_capture?)
+        probe.try(&.first_command_started!)
+        HostEncoder.new(command, host_profile, probe)
       end
     rescue ex
       abort
@@ -434,6 +458,7 @@ module ML::Audio::Drama3::Resident
         @command = nil
         @lease = nil
         @submissions += 1
+        @weight_wrapper_bank.try(&.first_command_submitted!)
         @pending.clear
       end
     rescue ex
@@ -452,6 +477,7 @@ module ML::Audio::Drama3::Resident
     # A failed inference cannot be resumed: earlier GPU writes are not undone.
     # Preserve the original exception while making every known command terminal.
     def abort : Nil
+      @weight_wrapper_bank.try(&.discard_first_command!)
       unless @aborted
         @@workspace_quarantine_mutex.synchronize do
           # A failed drain is not a lifetime certificate for packed weights.

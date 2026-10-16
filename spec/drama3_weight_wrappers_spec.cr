@@ -34,7 +34,24 @@ require "../src/ml/audio/drama3/resident"
         unchanged["mappings"].should eq(1)
         unchanged["constructed"].should eq(0)
         bank.tensor_buffer(tensor).should be(first)
+        sham = bank.prepare(false, clear_views: true)
+        sham["generation"].should eq(0)
+        sham["view_generation"].should eq(1)
+        sham["tensor_views_cleared"].should eq(2)
+        sham["constructed"].should eq(0)
+        sham["retired"].should eq(0)
+        sham["factory_calls"].should eq(unchanged["factory_calls"])
+        rebuilt = bank.tensor_buffer(tensor)
+        rebuilt.should_not be(first)
+        rebuilt.buffer.should be(old)
+        rebuilt.buffer.valid?.should be_true
+        rebuilt.buffer.contents.should eq(old_contents)
+        rebuilt.buffer.size.should eq(old_size)
+        rebuilt.buffer.storage_mode.should eq(old_mode)
+        rebuilt.offset.should eq(first.offset)
         changed = bank.prepare(true)
+        changed["generation"].should eq(1)
+        changed["view_generation"].should eq(2)
         changed["retired"].should eq(1)
         changed["constructed"].should eq(1)
         changed["same_backing"].should eq(1)
@@ -72,10 +89,11 @@ require "../src/ml/audio/drama3/resident"
             3.times do |step|
               before = context.graph_stats
               reads = context.readbacks.dup
-              stats = context.prepare_weight_wrappers(step == 1)
+              stats = context.prepare_weight_wrappers(step == 2, clear_views: step == 1)
               context.graph_stats.should eq(before)
               context.readbacks.should eq(reads)
-              stats["constructed"].should eq(step == 1 ? 1 : 0)
+              stats["constructed"].should eq(step == 2 ? 1 : 0)
+              context.begin_weight_wrapper_job!
               x = context.upload([1_f32, 2_f32])
               result = context.read(context.matvec(matrix, x), "terminal")
               result.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
@@ -84,6 +102,13 @@ require "../src/ml/audio/drama3/resident"
               graph["completion_waits"].should eq(before["completion_waits"] + 1)
               graph["pending"].should eq(0)
               context.readbacks["terminal"].should eq((reads["terminal"]? || 0) + 8)
+              bindings = context.weight_wrapper_first_command_bindings
+              bindings[:command_index].should eq(before["submitted"])
+              bindings[:observed].should be_true
+              bindings[:submitted].should be_true
+              bindings[:raw_weight_bindings].should eq(1)
+              bindings[:shards].size.should eq(1)
+              bindings[:shards][0][:bindings].should eq(1)
             end
           end
         end
@@ -115,15 +140,76 @@ require "../src/ml/audio/drama3/resident"
         converted = context.tensor(scales)
         context.read(converted, "terminal").should eq([1_f32, 2_f32, 3_f32, 4_f32])
         3.times do |step|
-          context.prepare_weight_wrappers(step > 0)
+          context.prepare_weight_wrappers(step == 2, clear_views: step == 1)
+          before_cache = context.converted_weight_cache_signature
           context.tensor(scales).should be(converted)
           input = context.upload(Array(Float32).new(64, 0.5_f32))
           ids = context.upload([1_f32, 0_f32])
           actual = context.read(context.experts(matrix, input, ids), "terminal")
           actual.map(&.unsafe_as(UInt32)).should eq([92_f32, 124_f32, 28_f32, 60_f32].map(&.unsafe_as(UInt32)))
+          context.converted_weight_cache_signature.should eq(before_cache)
         end
       ensure
         File.delete(path) if File.exists?(path)
+      end
+    end
+
+    it "counts successful first-command bindings rather than view lookups or later commands" do
+      drama3_wrapper_fixture do |_, tensor|
+        drama3_wrapper_fixture do |_, unused|
+          bank = ML::Audio::Drama3::MetalBackend::WeightBufferBank.new
+          raw = bank.tensor_buffer(tensor)
+          bank.tensor_buffer(unused)
+          bank.start_first_command(17_i64)
+          # Lookup and reconstruction alone do not expose a shard to Metal.
+          bank.tensor_buffer(unused)
+          activation = ML::MetalBuffer.from_array([1_f32, 2_f32])
+          command = ML::Metal::CommandBuffer.new
+          bank.first_command_started!
+          encoder = ML::Audio::Drama3::Resident::HostEncoder.new(command, ML::Audio::Drama3::HostProfile.new(false), bank)
+          encoder.set_buffer(raw.buffer, 0)
+          encoder.set_buffer(raw.buffer, 1)
+          encoder.set_buffer(activation, 2)
+          encoder.end_encoding
+          command.commit_and_wait
+          bank.first_command_submitted!
+          snapshot = bank.first_command_bindings
+          snapshot[:command_index].should eq(17)
+          snapshot[:buffer_bindings].should eq(3)
+          snapshot[:raw_weight_bindings].should eq(2)
+          snapshot[:shards].map { |s| s[:bindings] }.should eq([2_i64, 0_i64])
+          # A later bind must not mutate the sealed first-command result.
+          bank.record_binding(raw.buffer)
+          bank.first_command_bindings.should eq(snapshot)
+          activation.release
+        end
+      end
+    end
+
+    it "excludes cached converted weights and refuses unpublished or aborted snapshots" do
+      drama3_wrapper_fixture do |_, tensor|
+        context = ML::Audio::Drama3::Resident::Context.new
+        context.enable_weight_wrapper_probe!
+        cached = context.tensor(tensor)
+        context.read(cached, "terminal")
+        context.begin_weight_wrapper_job!
+        expect_raises(ArgumentError, /submitted/) { context.weight_wrapper_first_command_bindings }
+        context.tensor(tensor).should be(cached)
+        context.read(context.add(cached, context.zeros(4)), "terminal")
+        snapshot = context.weight_wrapper_first_command_bindings
+        snapshot[:buffer_bindings].should be > 0
+        snapshot[:raw_weight_bindings].should eq(0)
+        snapshot[:shards].map { |s| s[:bindings] }.should eq([0_i64])
+        context.read(context.zeros(1), "terminal")
+        context.weight_wrapper_first_command_bindings.should eq(snapshot)
+        context.begin_weight_wrapper_job!
+        context.matvec(ML::Audio::Drama3::Matrix.new(tensor), context.upload([1_f32, 2_f32]))
+        before = context.graph_stats
+        expect_raises(ArgumentError, /terminal/) { context.begin_weight_wrapper_job! }
+        expect_raises(ArgumentError, /terminal/) { context.weight_wrapper_first_command_bindings }
+        context.graph_stats.should eq(before)
+        context.abort
+        expect_raises(ArgumentError, /aborted/) { context.weight_wrapper_first_command_bindings }
       end
     end
 

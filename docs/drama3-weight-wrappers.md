@@ -239,3 +239,8 @@ comparison could test validation granularity, but requires its own page
 alignment, offset, ownership and numerical witnesses. These are hypotheses,
 not promoted optimizations; wrapper caching already exists and did not remove
 the observed driver spread.
+
+Follow-up: [Raw weight views and binding exposure](drama3-weight-views.md)
+executes the view-only sham on one Engine with all six P/V/R permutations and
+passive first-command counts. All three modes retain seconds-long spread;
+the follow-up establishes no stable speed gain or default promotion.
