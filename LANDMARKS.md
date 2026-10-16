@@ -29995,3 +29995,37 @@ Refresh after source/toolchain/device/model/workload changes.
   Standing authority: serial run_safe,15% floor, unrelated processes untouched,
   external scratch/local weights, exact-path local atomic commit/no push.
 
+### Continuation 2026-10-16 — exact DAC Conv1d weight layout acceleration
+
+- From `fc717747`, normalized ungrouped Conv1d packs its effective F32 weights
+  as `[in,tap,out]` inside the existing apply pass. Scale reduction, serial
+  multiply/add order, bias/padding/dilation, allocation and dispatch counts
+  remain unchanged. `coalesced` is default; frozen
+  `DRAMA3_DAC_CONV_LAYOUT=native` restores the original path. Grouped/depthwise
+  and transpose kernels keep their original layouts.
+- Seven Metal examples pass. Direct weight/output guards stay GPU with a
+  20-byte receipt. All 58 real DAC stages,157,782,720 values, match native bits
+  with no nonfinites; negative controls pass. The first standalone report was
+  invalidated for lazy iterator exhaustion; only rebuilt r2 qualifies it.
+  Timed decodes have no observers/reads and retain32 existing commands/waits.
+  The untimed stage/negative receipts total472 bytes, including one separate
+  negative command. The 197-frame upstream control has identical58 metrics
+  and WAV in both arms; historical full DAC gate remains red, first at
+  post-module layer0. No tolerance changes or upstream compatibility claim.
+- Standalone DAC ABBA/BAAB medians6.298823/2.841204s (2.217x). Full-request
+  ABBA mirrored wins1.35797x/1.15125x; worker warm medians28.994506/23.131649s
+  for2.786395s audio,RTF10.406/8.302. All12 requests retain complete codes,
+  WAV,tape,reads/waits. Fresh unset-selector Studio cold/warm controls also
+  pass exact original baseline. Active-host generation timing shifts are
+  confounds; these are not independent replicas or realtime performance.
+- Correlated mini-Quad ROBUST within bounded parity/speed scope, with actual
+  root execution. Index `.landmark/evidence/drama3-dac-layout.json`, report
+  `docs/drama3-dac-layout.md`, immutable raw receipt
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS drift or
+  raw evidence loss; timing generalization also needs new host/input controls.
+- Packed-Q4 word loads gave no sustained win and were rejected. Next speed
+  discriminator is packing several output rows per64-lane affine expert group,
+  retaining native F32 subtotal/final-sum order. Numerical return pointer is
+  the late-layer slice above; neither strict backbone nor DAC gate is closed.
+

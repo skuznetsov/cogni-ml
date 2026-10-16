@@ -31,6 +31,38 @@ promotion. Rollback is omitting the probe or retaining the current loader.
 Keep serial run_safe, 15% floor, external scratch/local weights and existing
 upstream tolerances. Numerical return pointer is the late-layer slice below.
 
+The packed-load probe preserves all 7,077,888 compared native output values
+bitwise on GPU, including negative/nonfinite and odd-offset controls, but its
+seven-pair GPU command-duration medians show no sustained gain (native/word:
+0.996851 gate, 0.999277 up, 0.994630 down). Overlapping command intervals do
+not establish an additive MoE cost. Retain the production byte loader.
+
+Next discriminator: WN ungrouped DAC Conv1d currently puts neighboring output
+lanes at distant weight addresses. Transpose the effective weights inside the
+existing normalization-apply pass and change only the Conv1d weight index.
+CAUTION: a transpose error, different F32 reduction or a DAC-only gain lost in
+complete requests. Keep native/coalesced selection frozen per decoder and native
+as rollback. Preserve the same scale reduction, allocation sizes/counts, dispatch
+count, padding and in-channel/tap accumulation; grouped and transpose kernels
+remain unchanged. DoD: synthetic bitwise tails/dilation guards, all 58 real
+DAC stages compared on GPU, unchanged upstream metrics at existing tolerances,
+then counterbalanced profiler-off complete codes/WAV/tape/read/wait controls.
+The existing full upstream DAC gate is already red; exact native parity and
+identical upstream failures establish no regression, not upstream compatibility.
+
+Observed: all 58 DAC stages (157,782,720 values) compare bitwise on GPU with
+zero nonfinites; negative controls and seven Metal specs pass. Standalone DAC
+ABBA/BAAB medians are 6.298823/2.841204 s (2.217x). Full-request ABBA gives
+two pair wins of 1.35797x/1.15125x with exact complete codes, WAV, sampler
+inputs and read/wait ledgers in all 12 requests. Median worker warm request
+time is 28.994506/23.131649 s for 2.786395 s audio (RTF 10.406/8.302).
+Generation-phase timing variation is not attributed to DAC. `coalesced` is
+the default; `DRAMA3_DAC_CONV_LAYOUT=native` is rollback. Full upstream DAC
+metrics remain identical and red. Details: `docs/drama3-dac-layout.md`.
+Next generation-kernel discriminator: pack multiple expert output rows into
+the existing 64-thread group without changing native F32 subtotals or group
+sum order; require exact GPU controls before full-request timing.
+
 ## Prior slice: late-layer matched-input fidelity — 2026-10-16
 
 From `d05bc45d`, locate the first tolerance violation in execution boundaries

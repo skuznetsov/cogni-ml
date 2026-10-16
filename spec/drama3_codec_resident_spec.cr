@@ -5,6 +5,62 @@ require "../src/ml/audio/drama3/codec_resident"
 include ML::Audio::Drama3
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+  DR3C_LAYOUT_RECEIPT_SOURCE = CodecResident::SOURCE + <<-METAL
+    inline bool dr3c_layout_bits_differ(uint actual, uint reference) {
+        return actual != reference;
+    }
+
+    kernel void dr3c_layout_receipt(
+        device const float* native_effective [[buffer(0)]],
+        device const float* packed_effective [[buffer(1)]],
+        device const float* output_native [[buffer(2)]],
+        device const float* output_candidate [[buffer(3)]],
+        device atomic_uint* receipt [[buffer(4)]],
+        constant ulong* params [[buffer(5)]],
+        uint index [[thread_position_in_grid]]) {
+        uint weight_count = uint(params[0]);
+        uint per_channel = uint(params[1]);
+        uint out_channels = uint(params[2]);
+        uint output_count = uint(params[3]);
+
+        if (index < weight_count) {
+            uint out_channel = index % out_channels;
+            uint inner = index / out_channels;
+            uint native_index = out_channel * per_channel + inner;
+            float actual = native_effective[native_index];
+            float packed = packed_effective[index];
+            if (!isfinite(actual) || !isfinite(packed)) {
+                atomic_fetch_add_explicit(&receipt[1], 1u, memory_order_relaxed);
+            }
+            if (dr3c_layout_bits_differ(as_type<uint>(actual), as_type<uint>(packed))) {
+                atomic_fetch_add_explicit(&receipt[0], 1u, memory_order_relaxed);
+            }
+        }
+
+        if (index < output_count) {
+            float actual = output_native[index];
+            float candidate = output_candidate[index];
+            uint actual_bits = as_type<uint>(actual);
+            uint candidate_bits = as_type<uint>(candidate);
+            if (!isfinite(actual) || !isfinite(candidate)) {
+                atomic_fetch_add_explicit(&receipt[3], 1u, memory_order_relaxed);
+            }
+            if (dr3c_layout_bits_differ(actual_bits, candidate_bits)) {
+                atomic_fetch_add_explicit(&receipt[2], 1u, memory_order_relaxed);
+            }
+
+            // Exercise the same bit comparator with a deliberately perturbed
+            // candidate, without materializing or reading an activation array.
+            if (ulong(index) == params[4]) {
+                uint negative_bits = candidate_bits ^ 1u;
+                if (dr3c_layout_bits_differ(actual_bits, negative_bits)) {
+                    atomic_fetch_add_explicit(&receipt[4], 1u, memory_order_relaxed);
+                }
+            }
+        }
+    }
+    METAL
+
   private def drama3_resident_tensor(tensors : Hash(String, Tensor), name : String,
                                      shape : Array(Int32), values : Vector) : Nil
     tensors["codec.#{name}"] = Tensor.new(shape, values)
@@ -115,8 +171,10 @@ include ML::Audio::Drama3
   describe "DRAMA-3 resident codec" do
     it "matches the native codec in both code layouts without activation readbacks" do
       previous = ENV["DRAMA3_BACKEND"]?
+      previous_layout = ENV["DRAMA3_DAC_CONV_LAYOUT"]?
       begin
         ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "native"
         pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
 
         config = CodecConfig.new(
@@ -172,6 +230,18 @@ include ML::Audio::Drama3
         actual_major.zip(expected).each { |a, b| (a - b).abs.should be < 5.0e-4_f32 }
         context.readbacks.should eq({"control" => 8_i64, "terminal" => expected.size.to_i64 * 8})
 
+        # The small real-geometry codec fixture includes ungrouped normalized
+        # Conv1d, plus non-normalized depthwise Conv1d in ConvNeXt. The opt-in
+        # path must preserve every terminal bit and leave the depthwise path on
+        # its original grouped kernel.
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        coalesced_context = Resident::Context.new
+        coalesced_decoder = CodecResident.new(store, coalesced_context, config)
+        coalesced = coalesced_decoder.decode(coalesced_context.upload(codebook_major), frames, true)
+        coalesced_context.read(coalesced, "terminal").map(&.unsafe_as(UInt32)).should eq(actual_major.map(&.unsafe_as(UInt32)))
+        coalesced_context.readbacks.should eq({"control" => 4_i64, "terminal" => expected.size.to_i64 * 4})
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "native"
+
         # A device observer retains the actual buffers, rather than invoking
         # the legacy CPU trace callback. Enabling it must preserve all output
         # bits and leave the readback ledger empty until the terminal read.
@@ -197,6 +267,138 @@ include ML::Audio::Drama3
           ENV["DRAMA3_BACKEND"] = previous
         else
           ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_layout
+          ENV["DRAMA3_DAC_CONV_LAYOUT"] = previous_layout
+        else
+          ENV.delete("DRAMA3_DAC_CONV_LAYOUT")
+        end
+      end
+    end
+
+    it "keeps the selected Conv1d layout frozen and rejects invalid values before dispatch" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_layout = ENV["DRAMA3_DAC_CONV_LAYOUT"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+        config = CodecConfig.new(latent_channels: 8, transformer_heads: 2, transformer_head_dim: 4,
+          decoder_channels: 8, decoder_rates: [1])
+        context = Resident::Context.new
+        store = WeightStore.new({} of String => Tensor)
+
+        ENV.delete("DRAMA3_DAC_CONV_LAYOUT")
+        CodecResident.new(store, context, config).dac_conv_layout.should eq("coalesced")
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "native"
+        decoder = CodecResident.new(store, context, config)
+        decoder.dac_conv_layout.should eq("native")
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        decoder.dac_conv_layout.should eq("native")
+
+        before = context.submissions
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "invalid"
+        expect_raises(ArgumentError, /DRAMA3_DAC_CONV_LAYOUT/) do
+          CodecResident.new(store, context, config)
+        end
+        context.submissions.should eq(before)
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_layout
+          ENV["DRAMA3_DAC_CONV_LAYOUT"] = previous_layout
+        else
+          ENV.delete("DRAMA3_DAC_CONV_LAYOUT")
+        end
+      end
+    end
+
+    it "packs normalized ungrouped Conv1d weights without changing F32 results" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_layout = ENV["DRAMA3_DAC_CONV_LAYOUT"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+
+        # The odd shape exercises effective-weight and output tails, dilation,
+        # and bias placement. The second matches the checkpoint's final
+        # residual-unit Conv1d geometry (96 channels, 7 taps, dilation 9).
+        [
+          {rows: 23, in_channels: 7, out_channels: 11, kernel: 7, stride: 1, dilation: 3},
+          {rows: 23, in_channels: 96, out_channels: 96, kernel: 7, stride: 1, dilation: 9},
+        ].each do |geometry|
+          rows = geometry[:rows]
+          in_channels = geometry[:in_channels]
+          out_channels = geometry[:out_channels]
+          kernel_size = geometry[:kernel]
+          stride = geometry[:stride]
+          dilation = geometry[:dilation]
+          per_channel = in_channels * kernel_size
+          weight_count = out_channels * per_channel
+          input_values = Array(Float32).new(rows * in_channels) do |i|
+            (((i * 17) % 43) - 21).to_f32 * 0.0005_f32
+          end
+          weight_values = Array(Float32).new(weight_count) do |i|
+            (((i * 7) % 23) - 11).to_f32 * 0.001_f32
+          end
+          gains = Array(Float32).new(out_channels) do |i|
+            (0.04_f32 + i.to_f32 * 0.003_f32)
+          end
+          biases = Array(Float32).new(out_channels) do |i|
+            (i - 5).to_f32 * 0.002_f32
+          end
+
+          context = Resident::Context.new
+          input = context.upload(input_values)
+          weight = context.upload(weight_values)
+          gain = context.upload(gains)
+          bias = context.upload(biases)
+          scales = context.alloc(out_channels)
+          effective_native = context.alloc(weight_count)
+          effective_coalesced = context.alloc(weight_count)
+          output_native = context.alloc(rows * out_channels)
+          output_coalesced = context.alloc(rows * out_channels)
+
+          context.dispatch("dr3c_wn_scales", CodecResident::SOURCE, [weight, gain, scales],
+            [out_channels.to_u64, per_channel.to_u64], out_channels)
+          context.dispatch("dr3c_wn_apply", CodecResident::SOURCE, [weight, scales, effective_native],
+            [weight_count.to_u64, per_channel.to_u64], weight_count)
+          context.dispatch("dr3c_wn_apply_coalesced", CodecResident::SOURCE, [weight, scales, effective_coalesced],
+            [weight_count.to_u64, per_channel.to_u64], weight_count)
+          context.dispatch("dr3c_conv1d", CodecResident::SOURCE,
+            [input, effective_native, bias, output_native],
+            [rows.to_u64, in_channels.to_u64, out_channels.to_u64, kernel_size.to_u64,
+             stride.to_u64, 1_u64, dilation.to_u64], rows * out_channels)
+          context.dispatch("dr3c_conv1d_coalesced", CodecResident::SOURCE,
+            [input, effective_coalesced, bias, output_coalesced],
+            [rows.to_u64, in_channels.to_u64, out_channels.to_u64, kernel_size.to_u64,
+             stride.to_u64, dilation.to_u64], rows * out_channels)
+
+          output_count = rows * out_channels
+          negative_index = output_count - 1
+          receipt = context.upload(Array(Float32).new(5, 0_f32))
+          context.dispatch("dr3c_layout_receipt", DR3C_LAYOUT_RECEIPT_SOURCE,
+            [effective_native, effective_coalesced, output_native, output_coalesced, receipt],
+            [weight_count.to_u64, per_channel.to_u64, out_channels.to_u64,
+             output_count.to_u64, negative_index.to_u64], Math.max(weight_count, output_count))
+          context.readbacks.should be_empty
+          counts = context.read(receipt, "terminal").map(&.unsafe_as(UInt32))
+          counts.should eq([0_u32, 0_u32, 0_u32, 0_u32, 1_u32])
+          context.readbacks.should eq({"terminal" => 20_i64})
+        end
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_layout
+          ENV["DRAMA3_DAC_CONV_LAYOUT"] = previous_layout
+        else
+          ENV.delete("DRAMA3_DAC_CONV_LAYOUT")
         end
       end
     end

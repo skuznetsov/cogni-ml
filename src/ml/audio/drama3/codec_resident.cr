@@ -73,6 +73,7 @@ module ML::Audio::Drama3
     @@dac_scratch_quarantine_mutex = Mutex.new
 
     getter config : CodecConfig
+    getter dac_conv_layout : String
     property trace : Proc(String, Vector, Nil)?
     # Diagnostic observers can enqueue comparisons or retain immutable device
     # activations without introducing a host read or completion barrier.
@@ -89,6 +90,8 @@ module ML::Audio::Drama3
 
     def initialize(@store : WeightStore, @context : Resident::Context,
                    @config : CodecConfig = CodecConfig.default, @prefix : String = "codec.")
+      @dac_conv_layout = ENV["DRAMA3_DAC_CONV_LAYOUT"]? || "coalesced"
+      raise ArgumentError.new("DRAMA3_DAC_CONV_LAYOUT must be native or coalesced") unless @dac_conv_layout.in?("native", "coalesced")
       @trace = nil
       @device_trace = nil
     end
@@ -435,18 +438,26 @@ module ML::Audio::Drama3
       bias_tensor = tensor("#{prefix}.bias")
       validate_shape!(bias_tensor, [out_channels], "#{prefix}.bias")
       resident_weight = @context.tensor(weight)
+      coalesced = @dac_conv_layout == "coalesced" && weight_normalized && groups == 1
       if weight_normalized
         gain = tensor("#{prefix}.weight_g")
         validate_element_count!(gain, out_channels, "#{prefix}.weight_g")
         resident_weight = effective_weight(resident_weight, @context.tensor(gain), out_channels,
-          checked_count(in_per_group, kernel))
+          checked_count(in_per_group, kernel), coalesced)
       end
       output = activation_output(checked_count(input.rows, out_channels), scratch,
         [input.data] + additional_exclusions)
-      @context.dispatch("dr3c_conv1d", SOURCE,
-        [input.data, resident_weight, @context.tensor(bias_tensor), output],
-        [input.rows.to_u64, input.channels.to_u64, out_channels.to_u64, kernel.to_u64,
-         stride.to_u64, groups.to_u64, dilation.to_u64], output.count)
+      if coalesced
+        @context.dispatch("dr3c_conv1d_coalesced", SOURCE,
+          [input.data, resident_weight, @context.tensor(bias_tensor), output],
+          [input.rows.to_u64, input.channels.to_u64, out_channels.to_u64, kernel.to_u64,
+           stride.to_u64, dilation.to_u64], output.count)
+      else
+        @context.dispatch("dr3c_conv1d", SOURCE,
+          [input.data, resident_weight, @context.tensor(bias_tensor), output],
+          [input.rows.to_u64, input.channels.to_u64, out_channels.to_u64, kernel.to_u64,
+           stride.to_u64, groups.to_u64, dilation.to_u64], output.count)
+      end
       Activation.new(input.rows, out_channels, output)
     end
 
@@ -477,13 +488,15 @@ module ML::Audio::Drama3
     end
 
     private def effective_weight(weight : Resident::Buffer, gain : Resident::Buffer,
-                                  channels : Int32, per_channel : Int32) : Resident::Buffer
+                                  channels : Int32, per_channel : Int32,
+                                  coalesced : Bool = false) : Resident::Buffer
       raise ArgumentError.new("invalid weight-normalization shape") unless channels > 0 && per_channel > 0 && weight.count == checked_count(channels, per_channel)
       scales = @context.alloc(channels)
       @context.dispatch("dr3c_wn_scales", SOURCE, [weight, gain, scales],
         [channels.to_u64, per_channel.to_u64], channels)
       effective = @context.alloc(weight.count)
-      @context.dispatch("dr3c_wn_apply", SOURCE, [weight, scales, effective],
+      kernel = coalesced ? "dr3c_wn_apply_coalesced" : "dr3c_wn_apply"
+      @context.dispatch(kernel, SOURCE, [weight, scales, effective],
         [weight.count.to_u64, per_channel.to_u64], weight.count)
       effective
     end

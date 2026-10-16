@@ -72,12 +72,18 @@ def main():
     schedules.add_argument("--dense-schedule", help="Comma-separated tree/simd/simd32 modes; scratch and host profiling stay off")
     schedules.add_argument("--resource-schedule", help="Comma-separated 0/1 resource observers; timeline and host profiling stay on")
     schedules.add_argument("--expert-threads-schedule", help="Comma-separated 32/64 thread requests; dense stays tree, scratch and profiling off")
+    schedules.add_argument("--dac-layout-schedule", help="Comma-separated native/coalesced DAC layouts; scratch and profiling stay off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
     args = parser.parse_args()
     resource_modes = None
-    if args.resource_schedule is not None:
+    dac_layouts = None
+    if args.dac_layout_schedule is not None:
+        dac_layouts = [mode.strip() for mode in args.dac_layout_schedule.split(",")]
+        assert dac_layouts and all(mode in ("native", "coalesced") for mode in dac_layouts), "DAC layouts must be native or coalesced"
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in dac_layouts]
+    elif args.resource_schedule is not None:
         resource_modes = [mode.strip() for mode in args.resource_schedule.split(",")]
         assert resource_modes and all(mode in ("0", "1") for mode in resource_modes), "resource schedule must contain 0 or 1"
         schedule = [("0", "1", args.binary, "tree", "64") for mode in resource_modes]
@@ -118,6 +124,8 @@ def main():
             DRAMA3_BACKBONE_DENSE_REDUCTION="tree",
         )
         controls["DRAMA3_METAL_RESOURCES"] = resource_modes[arm] if resource_modes is not None else "0"
+        if dac_layouts is not None:
+            controls["DRAMA3_DAC_CONV_LAYOUT"] = dac_layouts[arm]
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)

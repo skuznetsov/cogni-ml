@@ -1,0 +1,243 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-dac-layout-20261016",
+  "base_revision": "fc717747",
+  "created_at_utc": "2026-10-16T23:33:14.100507+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Coalesced WN ungrouped DAC Conv1d on pinned checkpoint, M2 Max; exact native parity and fixed-trajectory speed, not full upstream compatibility or realtime.",
+    "default": "coalesced",
+    "rollback": "DRAMA3_DAC_CONV_LAYOUT=native"
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-commands.json",
+    "commands_receipt_sha256": "1e3481d9e7f07cb50477bb844426e250162386de62c1146261173f9a4885c7ea",
+    "executed": [
+      {
+        "name": "codec-spec-r1",
+        "exit_code": 0,
+        "log_sha256": "44ecbee79794cf03b5d1907a8fef07f74f3a4e87c9b895b733e7dd63bdc06c0f"
+      },
+      {
+        "name": "build-codec-cross-r1",
+        "exit_code": 0,
+        "log_sha256": "77667d1bda71a5fc248faedda463191ba970c9afb47dd92314bc5ebc04689682"
+      },
+      {
+        "name": "codec-upstream-coalesced-r1",
+        "exit_code": 0,
+        "log_sha256": "d3348e0ccd6172515dbf01c6c8e901405cc8333365951a03396034914fcad66c"
+      },
+      {
+        "name": "codec-upstream-native-r1",
+        "exit_code": 0,
+        "log_sha256": "25d8fc9bf6e9a375796aefbcda168fc10bd4a43f187cfa3da513b22a93323d20"
+      },
+      {
+        "name": "build-studio-r1",
+        "exit_code": 0,
+        "log_sha256": "e83729cd6d17a7e65eb8bae08fa2a427df930e06192eade04e3a2a3e03653de5"
+      },
+      {
+        "name": "full-layout-r1",
+        "exit_code": 0,
+        "log_sha256": "4393f8cb0f4408512941a9fbdb41d0152c7502c50a075ea6ab3d806abfb8958e"
+      },
+      {
+        "name": "build-dac-layout-bench-r1",
+        "exit_code": 0,
+        "log_sha256": "1584dd046227dc27ab297f2077eb0928d8cadeb1337c215596f317b0cd7fb5b9"
+      },
+      {
+        "name": "dac-layout-bench-r1",
+        "exit_code": 0,
+        "log_sha256": "6d738cdfcf43d70c4327b509bdd45a49a1877ba3f0e394984d57820a50f3f580"
+      },
+      {
+        "name": "build-dac-layout-bench-r2",
+        "exit_code": 0,
+        "log_sha256": "0bd4aed1697f113a41e8bb549b65894572f6eab49641c49abd2f9f7368522d7c"
+      },
+      {
+        "name": "dac-layout-bench-r2",
+        "exit_code": 0,
+        "log_sha256": "76539dd3f70e208fd352bf58e59481ac0c5f48cd2bbbe78aae6d23621e0e85b5"
+      },
+      {
+        "name": "codec-spec-r2",
+        "exit_code": 0,
+        "log_sha256": "8dbbdea13a71fe3b955aa0ac3239a625d1b8f5974f6b65d4393f5fbb2299814c"
+      },
+      {
+        "name": "build-studio-default-r1",
+        "exit_code": 0,
+        "log_sha256": "395cec72f8045f1597acbe84f91f8ec768e99b561751b4c502d805953f1e2170"
+      },
+      {
+        "name": "full-default-r1",
+        "exit_code": 0,
+        "log_sha256": "1288e8d8598522bf7ba2b7bc017b97af3be4e37c4ffc3a0255de5b42a23ffaf6"
+      }
+    ],
+    "excluded_numerical_evidence": {
+      "dac-layout-bench-r1": "Lazy iterator exhausted after first sum; missing nonfinite total and serialized stages. Rebuilt r2 materializes and requires58 results."
+    }
+  },
+  "final_source_sha256": {
+    "src/ml/audio/drama3/codec_resident.cr": "f7bbbe6053535ce914b710aa67dca0ac6ae8a2a9de4008f8482432768f2d299a",
+    "src/ml/audio/drama3/kernels/codec_resident.metal": "a64219b96f8736f32b158b8c0be1136a8867f136ecb693e27d1b8ae4bf9d7bc9",
+    "spec/drama3_codec_resident_spec.cr": "73a3c0ea02040f7dce89d21387e25078786d33969158b94f12fc83aec7c04cad",
+    "examples/drama3_dac_layout_bench.cr": "697b3a43d95a2dc0b76b77c8b03c462b7d46d19232675ebd637fb0da51d9c087",
+    "examples/support/drama3_dac_layout_compare.metal": "9fab6e5cde50f0817c947bf33aefa5151e118f2c73a389e80e277aaee63d33bb",
+    "scripts/drama3/measure_host_pairs.py": "f9ba584c0f437740492203fe14b5bd86b9f2571c15b0f7c776c00b01259cf5f0"
+  },
+  "lineage": {
+    "codec_sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-runs/gpu-kernels-20261016/timeline-native-arm0-repeat1.wav.json",
+      "sha256": "40e627444dc0f9acf254c6fdc5b96bb54f6d6189f52f27d71cf83ed2baf4d44f",
+      "frames": 60,
+      "frame_layout": "[main,c0..c9]",
+      "upload_layout": "frame_major_f32",
+      "upload_sha256": "ec0c148b5a184ae99e5621e008117534e0bdb51dfeb0a22d220f1b68d605264d"
+    },
+    "source_build_binary_join": "Use paired build/run records in immutable command receipt; runtime source hashes alone are insufficient. Final source changes the constructor default only; explicit coalesced kernel is the qualified branch. Final diagnostic support source also removes one trailing blank line; executed GPU logic is unchanged."
+  },
+  "numerics": {
+    "metal_specs": "7 examples,0 failures/errors/pending in codec-spec-r2; includes unset/frozen/invalid selector and GPU effective/output bit receipts.",
+    "native_stage_count": 58,
+    "native_values": 157782720,
+    "bit_mismatches": 0,
+    "nonfinite_pairs": 0,
+    "negative_control": {
+      "expected_bit_mismatches": 2,
+      "expected_nonfinite_pairs": 1,
+      "observed_bit_mismatches": 2,
+      "observed_nonfinite_pairs": 1,
+      "diagnostic_submissions": 1,
+      "diagnostic_waits": 1
+    },
+    "terminal_receipt_bytes": 472,
+    "full_requests_exact": 14,
+    "upstream_197_frames": {
+      "all58_metrics_equal": true,
+      "wav_sha256": "d24a30bb0f8463ac0f43722945033b67b1350f7b6ec96ff5bce5235ac4c7b876",
+      "full_gate_passes": false,
+      "first_failed_stage": "quantizer.post_module.layers.0",
+      "tolerances": "unchanged; historical gate remains red"
+    }
+  },
+  "timing": {
+    "speech_seconds": 2.786394557823129,
+    "standalone_dac_medians_seconds": {
+      "native": 6.2988226665,
+      "coalesced": 2.841204292
+    },
+    "full_request_worker_medians_seconds": {
+      "native": {
+        "request_wall": 28.994505791924894,
+        "generation": 21.791374593500002,
+        "codec": 7.1381910315
+      },
+      "coalesced": {
+        "request_wall": 23.131649260758422,
+        "generation": 20.32204064575,
+        "codec": 2.7681199792499998
+      }
+    },
+    "mirrored_pair_ratios": [
+      {
+        "native_arm": 0,
+        "coalesced_arm": 1,
+        "native_over_coalesced": {
+          "request_wall": 1.357972203033897,
+          "generation": 1.1466709103151709,
+          "codec": 2.870931376074748
+        }
+      },
+      {
+        "native_arm": 3,
+        "coalesced_arm": 2,
+        "native_over_coalesced": {
+          "request_wall": 1.1512545102733847,
+          "generation": 0.9999996198849742,
+          "codec": 2.2814214100893566
+        }
+      }
+    ],
+    "request_rtf": {
+      "native": 10.405743045441795,
+      "coalesced": 8.301641702469453
+    },
+    "final_unset_selector_smoke_seconds": [
+      33.493504791054875,
+      26.045501958113164
+    ],
+    "unit": "warm median per worker; two correlated warm repeats; cold excluded; active host ABBA cannot eliminate abrupt contention"
+  },
+  "execution": {
+    "production_new_allocations_dispatches_waits_or_reads": 0,
+    "standalone_per_decode_submitted_completed_waits": 32,
+    "standalone_diagnostic_graph": {
+      "depth": 2,
+      "submitted": 385,
+      "completed": 385,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 385,
+      "retained_bytes": 0,
+      "max_retained_bytes": 4319129600
+    },
+    "standalone_readback": {
+      "timed_arms": 0,
+      "diagnostic_activations": 0,
+      "terminal_compact_receipt": 464,
+      "control_compact_receipt": 8
+    },
+    "serial_safe_controls": "run_safe,15 percent free floor,quiet-host0,external scratch,local weights; unrelated processes untouched"
+  },
+  "adversary": {
+    "verdict": "ROBUST within declared scope",
+    "review": "Correlated same-lineage source review plus root execution; lazy-iterator failure was observed, quarantined and fixed before qualification. No independent execution replication."
+  },
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-commands.json",
+      "sha256": "1e3481d9e7f07cb50477bb844426e250162386de62c1146261173f9a4885c7ea"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dac-layout-bench-r2.json",
+      "sha256": "6260e214108850eefd0d6241c3879b3924ffe6ea2a903c4fa8ab2ed32f0764b7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/full-layout-r1-analysis.json",
+      "sha256": "4f1953fdefd5d8e843f050783a009ecd26dfdef306df3a8d2249d75182638dfb"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/full-layout-r1/layout-worker.json",
+      "sha256": "bc2751e407e55a49e53a884c71081cfd49c980a32729c50e522113067fca357e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/full-default-r1/default-worker.json",
+      "sha256": "91dc50e1dfdc1892384adb3df3d4aa0517c59adc9aa954d778b6473ab37c7fc2"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/codec-upstream-native-r1.json",
+      "sha256": "34c254cd1df52fe6e358b52b7c8c6164f854ce4aa3f7ed400bf49ff03b45f067"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/codec-upstream-coalesced-r1.json",
+      "sha256": "93bb3c4932201842b105a5fd4c22caa4ae0f3e27421cf6ba0b45382b6c9f8223"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/analyze_layout.py",
+      "sha256": "22b8bb05fd777994771f820856b86b42bd357f14416aa232d9ab0d376ebc905b"
+    }
+  ],
+  "refresh_on": [
+    "kernel/selection/source/compiler/model/input/reference/queue/device/OS drift",
+    "new host workload or generation length for timing generalization",
+    "raw artifact loss"
+  ],
+  "next_signal": "Batched affine expert packed-row probe preserving native F32 arithmetic; local bitwise/timing qualification before any production promotion."
+}

@@ -85,6 +85,27 @@ exclusive with the other schedules, fixes both dense selectors at `tree`, and
 keeps scratch and profiling off. The driver retains exact full-output and
 read/wait checks; speed promotion requires the full-request measurement.
 
+For the DAC weight-layout comparison, use
+`--dac-layout-schedule native,coalesced,coalesced,native --prefix layout`.
+This schedule changes only `DRAMA3_DAC_CONV_LAYOUT`, keeps scratch and
+profiling off, and retains the same full-output/read/wait checks. Treat a
+worker's warm median as one measurement; repeats within it are correlated.
+The selector is frozen when the decoder is constructed; `coalesced` is the
+default. `native` restores
+the original weight layout; `coalesced` changes only normalized, ungrouped
+Conv1d weight storage and indexing, preserving the F32 accumulation order.
+See [DAC layout qualification](../../docs/drama3-dac-layout.md).
+
+The standalone `examples/drama3_dac_layout_bench.cr` accepts
+`MODEL_DIR --timings=8` after a normal release Metal build. It pins the saved
+60-frame codes and codec hash, primes both layouts, then times ABBA and BAAB
+decodes without observers. Separate untimed decodes compare all 58 stages
+bitwise on GPU; only compact counters cross the terminal diagnostic boundary.
+The negative control and a nonzero process exit must be checked. Join its
+report with the build/run manifest and binary hash: source files hashed at
+runtime alone do not identify compiled production code. These native parity
+checks do not close the existing upstream numerical gate.
+
 The extended native timeline records host commit/wait bounds and optional GPU
 start/end timestamps without adding a wait. Analyze one selected request's
 JSONL with `analyze_command_timeline.py --input "$SELECTED_STDERR"`, optionally

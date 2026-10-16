@@ -42,6 +42,22 @@ kernel void dr3c_wn_apply(
     if (i < p[0]) effective[i] = weight[i] * scales[i / p[1]];
 }
 
+// Same per-element F32 multiply as dr3c_wn_apply, stored as [inner, out]
+// for the ungrouped Conv1d kernel's output-channel lanes.
+kernel void dr3c_wn_apply_coalesced(
+    device const float* weight [[buffer(0)]],
+    device const float* scales [[buffer(1)]],
+    device float* effective [[buffer(2)]],
+    constant ulong* p [[buffer(3)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= p[0]) return;
+    uint channels = uint(p[0] / p[1]);
+    uint out_channel = i % channels;
+    uint inner = i / channels;
+    ulong source = ulong(out_channel) * p[1] + inner;
+    effective[i] = weight[source] * scales[out_channel];
+}
+
 kernel void dr3c_conv1d(
     device const float* input [[buffer(0)]],
     device const float* weight [[buffer(1)]],
@@ -64,6 +80,32 @@ kernel void dr3c_conv1d(
             if (input_t < 0 || input_t >= int(rows)) continue;
             ulong wi = (ulong(out_channel) * in_per_group + in_local) * kernel_size + tap;
             sum += input[ulong(input_t) * in_channels + in_channel] * weight[wi];
+        }
+    }
+    output[i] = sum;
+}
+
+// Ungrouped, output-channel-inner counterpart of dr3c_conv1d. The serial
+// in_local -> tap accumulation and its F32 rounding order are unchanged.
+kernel void dr3c_conv1d_coalesced(
+    device const float* input [[buffer(0)]],
+    device const float* weight [[buffer(1)]],
+    device const float* bias [[buffer(2)]],
+    device float* output [[buffer(3)]],
+    constant ulong* p [[buffer(4)]],
+    uint i [[thread_position_in_grid]]) {
+    uint rows = uint(p[0]), in_channels = uint(p[1]), out_channels = uint(p[2]);
+    uint kernel_size = uint(p[3]), stride = uint(p[4]), dilation = uint(p[5]);
+    if (i >= rows * out_channels) return;
+    uint t = i / out_channels, out_channel = i % out_channels;
+    int left_pad = int((kernel_size - 1) * dilation);
+    float sum = bias[out_channel];
+    for (uint in_local = 0; in_local < in_channels; ++in_local) {
+        for (uint tap = 0; tap < kernel_size; ++tap) {
+            int input_t = int(t * stride) - left_pad + int(tap * dilation);
+            if (input_t < 0 || input_t >= int(rows)) continue;
+            ulong wi = (ulong(in_local) * kernel_size + tap) * out_channels + out_channel;
+            sum += input[ulong(input_t) * in_channels + in_local] * weight[wi];
         }
     }
     output[i] = sum;
