@@ -29533,3 +29533,31 @@ Refresh after source/toolchain/device/model/workload changes.
   precision/gate/graph-policy drift. Authority: serial run_safe, reserve 15%,
   unrelated processes untouched, local atomic commit/no push. Rollback disable
   arena/auto and use <=1024 positions, or revert the feature commit.
+
+### Continuation 2026-10-16 — opt-in tower codebook embedding fusion
+
+- Base `37ee7fdd`: an eight-codebook sum drops 26 allocations/dispatches to one
+  GPU kernel reading mapped BF16/F16/F32 bytes at their original byte offsets.
+  Sequential FP32 addition, semantic masking and clipping are preserved; scaled
+  tensors fall back. Existing command leases retain weight/frame/output; no new
+  hot-loop readback or wait. `DRAMA3_TOWER_EMBEDDING_FUSION=0` remains default.
+- Four focused Metal examples pass. At depths0/2, 1,179,648 output elements per
+  depth are bitwise exact; seven alternating 64-op pairs show median paired GPU
+  speedups10.00x/10.69x for this operation only. No per-operation fence.
+- Eight cold/warm native worker jobs in 0/1/1/0 arm order produce the same60
+  frames/all11IDs and WAV bytes. Warm allocations135590->133034; readbacks and
+  122 submissions/waits unchanged. Warm request medians29.53s/31.54s reject
+  whole-generation speed promotion on this shared-host sample.
+- Fresh pinned MLX F32 control with the same704-F32 sampler inputs matches the
+  complete60-frame code trajectory. First-prefill hidden/logits pass unchanged
+  3e-5+3e-4abs(ref), maxAbs4.7683716e-6/1.4305115e-5. No stock-RNG, general
+  MoE/DAC, long-generation, silence or voice-quality parity claim.
+- Report `docs/drama3-tower-embedding.md`; curated receipts
+  `.landmark/evidence/drama3-tower-embedding.json`; raw local
+  `drama3-runs/studio-20261015/`. Correlated mini-Quad ROBUST within these bounds.
+  Next falsifier: interleave whole jobs and separate host encoding/allocation
+  time from GPU time before workspace reuse. The135590 allocations are a lead,
+  not a measured cause. No LTP/WBA certificate.
+- Refresh on source/shader/model/input/tape/runtime/device/OS/graph/precision/
+  tolerance drift. Authority remains serial run_safe,15% reserve, unrelated
+  processes untouched, local commits/no push. Rollback flag0 or this commit.

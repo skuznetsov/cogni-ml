@@ -108,7 +108,286 @@ include ML::Audio::Drama3
     end
   end
 
+  private def drama3_embedding_word(dtype : String, row : Int32, column : Int32) : UInt32
+    # The three rows selected by [-1, 7, 2] after clipping are all negative
+    # zero. This makes a fused accumulator initialized from the first row fail
+    # the exact-bit comparison against the legacy +0 accumulator.
+    return dtype == "F32" ? 0x8000_0000_u32 : 0x0000_8000_u32 if row == 0 || row == 7 || row == 10
+
+    case (row * 4 + column) % 8
+    when 0 then 0x0000_0001_u32
+    when 1 then dtype == "F32" ? 0x8000_0001_u32 : 0x0000_8001_u32
+    when 2 then dtype == "F32" ? 0x3f00_0000_u32 : (dtype == "BF16" ? 0x0000_3f00_u32 : 0x0000_3800_u32)
+    when 3 then dtype == "F32" ? 0xbf80_0000_u32 : (dtype == "BF16" ? 0x0000_bf80_u32 : 0x0000_bc00_u32)
+    when 4 then 0_u32
+    when 5 then dtype == "F32" ? 0x8000_0000_u32 : 0x0000_8000_u32
+    when 6 then dtype == "F32" ? 0x3fc0_0000_u32 : (dtype == "BF16" ? 0x0000_3fc0_u32 : 0x0000_3e00_u32)
+    else        dtype == "F32" ? 0xbe80_0000_u32 : (dtype == "BF16" ? 0x0000_be80_u32 : 0x0000_b400_u32)
+    end
+  end
+
+  private def drama3_embedding_table_fixture(dtype : String)
+    raise ArgumentError.new("unsupported embedding fixture dtype") unless dtype.in?("F32", "BF16", "F16")
+    rows, columns = 12, 4
+    bytes_per_element = dtype == "F32" ? 4 : 2
+    byte_count = rows * columns * bytes_per_element
+    header = {"embedding" => {"dtype" => dtype, "shape" => [rows, columns], "data_offsets" => [0_i64, byte_count.to_i64]}}.to_json
+    header += " " * ((8 - header.bytesize % 8) % 8)
+    file = File.tempfile("drama3-codebook-", ".safetensors") do |stream|
+      stream.write_bytes(header.bytesize.to_u64, IO::ByteFormat::LittleEndian)
+      stream << header
+      rows.times do |row|
+        columns.times do |column|
+          word = drama3_embedding_word(dtype, row, column)
+          if dtype == "F32"
+            stream.write_bytes(word, IO::ByteFormat::LittleEndian)
+          else
+            stream.write_bytes(word.to_u16, IO::ByteFormat::LittleEndian)
+          end
+        end
+      end
+    end
+    owner = MappedFile.new(file.path)
+    header_size = IO::ByteFormat::LittleEndian.decode(UInt64, owner.slice(0_i64, 8_i64)).to_i64
+    tensor = Tensor.new([rows, columns], dtype, owner.slice(8_i64 + header_size, byte_count.to_i64), owner)
+    {file: file, owner: owner, matrix: Matrix.new(tensor)}
+  end
+
+  private def drama3_codebook_cases : Array(Tuple(Array(Float32), Int32, Int32))
+    cases = [] of Tuple(Array(Float32), Int32, Int32)
+    clipped_negative_zero = [11_f32, -1_f32, 7_f32, 2_f32]
+    signed_subnormal_and_negative = [12_f32, 3_f32, 0_f32, 1_f32]
+    nonsemantic = [9_f32, -1_f32, 7_f32, 2_f32]
+    cases << {clipped_negative_zero, 0, 3}
+    cases << {signed_subnormal_and_negative, 0, 3}
+    cases << {nonsemantic, 0, 3}
+    cases << {signed_subnormal_and_negative, 0, 1}
+    cases << {signed_subnormal_and_negative, 1, 2}
+    cases << {signed_subnormal_and_negative, 2, 3}
+    cases << {signed_subnormal_and_negative, 1, 1}
+    cases << {signed_subnormal_and_negative, 3, 3}
+    cases
+  end
+
   describe "DRAMA-3 resident tower" do
+    it "matches fused codebook sums bitwise for mapped F32/BF16/F16 tables and queued depths 0 and 2" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      previous_fusion = ENV["DRAMA3_TOWER_EMBEDDING_FUSION"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+        cases = drama3_codebook_cases
+        {"F32", "BF16", "F16"}.each do |dtype|
+          fixture = drama3_embedding_table_fixture(dtype)
+          begin
+            table = fixture[:matrix]
+            table_buffer = MetalBackend.tensor_buffer(table.tensor, true)
+            table_buffer.offset.should be > 0
+            {"0", "2"}.each do |depth|
+              ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth
+              ENV["DRAMA3_TOWER_EMBEDDING_FUSION"] = "0"
+              context = Resident::Context.new
+              legacy_outputs = [] of Resident::Buffer
+              legacy_allocations = [] of Int64
+              fused_outputs = [] of Resident::Buffer
+              fused_allocations = [] of Int64
+              begin
+                cases.each do |values, first_codebook, end_codebook|
+                  frame = context.upload(values)
+                  before = context.allocation_stats[:allocations]
+                  legacy_outputs << context.codebook_sum(table, frame, first_codebook, end_codebook,
+                    4, 10, 13, RESIDENT_TOWER_SOURCE)
+                  legacy_allocations << context.allocation_stats[:allocations] - before
+                end
+                graph_before = context.graph_stats
+                reads_before = context.readbacks.dup
+                context.submit
+                after_legacy = context.graph_stats
+                context.readbacks.should eq(reads_before)
+                if depth == "0"
+                  after_legacy["completion_waits"].should eq(graph_before["completion_waits"] + 1)
+                else
+                  after_legacy["completion_waits"].should eq(graph_before["completion_waits"])
+                  after_legacy["pending"].should eq(1)
+                end
+
+                cases.each do |values, first_codebook, end_codebook|
+                  frame = context.upload(values)
+                  before = context.allocation_stats[:allocations]
+                  fused_outputs << context.codebook_sum(table, frame, first_codebook, end_codebook,
+                    4, 10, 13, RESIDENT_TOWER_SOURCE, true)
+                  fused_allocations << context.allocation_stats[:allocations] - before
+                end
+                context.readbacks.should eq(reads_before)
+                context.submit
+                queued = context.graph_stats
+                if depth == "0"
+                  queued["completion_waits"].should eq(graph_before["completion_waits"] + 2)
+                  queued["pending"].should eq(0)
+                else
+                  queued["completion_waits"].should eq(graph_before["completion_waits"])
+                  queued["pending"].should eq(2)
+                end
+                context.finish
+                drained = context.graph_stats
+                drained["submitted"].should eq(graph_before["submitted"] + 2)
+                drained["completed"].should eq(graph_before["completed"] + 2)
+                drained["completion_waits"].should eq(graph_before["completion_waits"] + 2)
+                drained["pending"].should eq(0)
+
+                cases.each_with_index do |(_, first_codebook, end_codebook), index|
+                  codebooks = end_codebook - first_codebook
+                  legacy_allocations[index].should eq(codebooks == 0 ? 1_i64 : (3 * codebooks + 2).to_i64)
+                  fused_allocations[index].should eq(1_i64)
+                  legacy = context.read(legacy_outputs[index], "diagnostic")
+                  fused = context.read(fused_outputs[index], "diagnostic")
+                  fused.map(&.unsafe_as(UInt32)).should eq(legacy.map(&.unsafe_as(UInt32)))
+                end
+                context.graph_stats.should eq(drained)
+                context.readbacks["diagnostic"].should eq((cases.size * 2 * 4 * 4).to_i64)
+                context.readbacks["terminal"].should eq(0_i64)
+                context.readbacks["control"].should eq(0_i64)
+              ensure
+                context.finish
+                MetalBackend.reset!
+              end
+            end
+          ensure
+            fixture[:file].delete
+          end
+        end
+      ensure
+        MetalBackend.reset!
+        {"DRAMA3_BACKEND"                 => previous_backend,
+         "DRAMA3_COGNIGRAPH_MAX_INFLIGHT" => previous_depth,
+         "DRAMA3_TOWER_EMBEDDING_FUSION"  => previous_fusion}.each do |name, value|
+          if value
+            ENV[name] = value
+          else
+            ENV.delete(name)
+          end
+        end
+      end
+    end
+
+    it "keeps affine-quantized codebook tables on the legacy path when fusion is requested" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "0"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+        fixture = drama3_embedding_table_fixture("F32")
+        begin
+          owner = fixture[:owner]
+          packed = Tensor.new([12, 1], "U32", owner.slice(8_i64 + IO::ByteFormat::LittleEndian.decode(UInt64, owner.slice(0_i64, 8_i64)).to_i64, 12_i64 * 4), owner)
+          scales = Tensor.new([12, 1], Array(Float32).new(12) { |index| (index + 1).to_f32 / 17_f32 })
+          biases = Tensor.new([12, 1], Array(Float32).new(12) { |index| (index - 5).to_f32 / 23_f32 })
+          quantized = Matrix.new(packed, scales, biases, 4, 8)
+          cases = drama3_codebook_cases
+          legacy_outputs = [] of Resident::Buffer
+          requested_outputs = [] of Resident::Buffer
+          context = Resident::Context.new
+          begin
+            cases.each do |values, first_codebook, end_codebook|
+              frame = context.upload(values)
+              legacy_outputs << context.codebook_sum(quantized, frame, first_codebook, end_codebook,
+                4, 10, 13, RESIDENT_TOWER_SOURCE)
+            end
+            waits_before = context.graph_stats["completion_waits"]
+            context.submit
+            cases.each do |values, first_codebook, end_codebook|
+              frame = context.upload(values)
+              before = context.allocation_stats[:allocations]
+              requested_outputs << context.codebook_sum(quantized, frame, first_codebook, end_codebook,
+                4, 10, 13, RESIDENT_TOWER_SOURCE, true)
+              allocations = context.allocation_stats[:allocations] - before
+              codebooks = end_codebook - first_codebook
+              allocations.should eq(codebooks == 0 ? 1_i64 : (3 * codebooks + 2).to_i64)
+            end
+            context.readbacks["terminal"].should eq(0_i64)
+            context.readbacks["diagnostic"].should eq(0_i64)
+            context.submit
+            context.graph_stats["completion_waits"].should eq(waits_before + 2)
+            context.finish
+            cases.each_with_index do |_, index|
+              context.read(requested_outputs[index], "diagnostic").map(&.unsafe_as(UInt32))
+                .should eq(context.read(legacy_outputs[index], "diagnostic").map(&.unsafe_as(UInt32)))
+            end
+            context.readbacks["control"].should eq(0_i64)
+          ensure
+            context.finish
+            MetalBackend.reset!
+          end
+        ensure
+          fixture[:file].delete
+        end
+      ensure
+        MetalBackend.reset!
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+      end
+    end
+
+    it "defaults to legacy codebook dispatch and opt-in fusion preserves output bits" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      previous_fusion = ENV["DRAMA3_TOWER_EMBEDDING_FUSION"]?
+      contexts = [] of Resident::Context
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "0"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+        config = drama3_resident_tower_config
+        store = drama3_resident_tower_store(config)
+        outputs = [] of Vector
+        allocations = [] of Int64
+        {"0", "1"}.each do |fusion|
+          ENV["DRAMA3_TOWER_EMBEDDING_FUSION"] = fusion
+          context = Resident::Context.new
+          contexts << context
+          resident = TowerResident.new(config, store, context, 2)
+          frame = resident.upload_frame([12, -1, 7, 2])
+          text = context.upload([0.1_f32, -0.2_f32, 0.3_f32, 0.4_f32])
+          before = context.allocation_stats[:allocations]
+          output = resident.embed_backbone(frame, text)
+          allocations << context.allocation_stats[:allocations] - before
+          outputs << context.read(output, "terminal")
+          context.graph_stats["completion_waits"].should eq(1)
+          context.readbacks["diagnostic"].should eq(0_i64)
+        end
+        allocations.should eq([6_i64, 2_i64])
+        outputs[1].map(&.unsafe_as(UInt32)).should eq(outputs[0].map(&.unsafe_as(UInt32)))
+      ensure
+        contexts.each(&.finish)
+        MetalBackend.reset!
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+        if previous_fusion
+          ENV["DRAMA3_TOWER_EMBEDDING_FUSION"] = previous_fusion
+        else
+          ENV.delete("DRAMA3_TOWER_EMBEDDING_FUSION")
+        end
+      end
+    end
+
     it "matches tiny CPU reference traces through backbone embedding, teacher force, and sampled frame" do
       previous_backend = ENV["DRAMA3_BACKEND"]?
       begin

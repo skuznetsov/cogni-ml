@@ -55,8 +55,21 @@ kernel void drama3_tower_mask_semantic(
   output[i] = token >= int(p[1]) && token <= int(p[2]) ? input[i] : 0.0f;
 }
 
+inline uint drama3_tower_load_u32(device const uchar *bytes, ulong offset) {
+  return uint(bytes[offset]) | uint(bytes[offset + 1]) << 8 |
+      uint(bytes[offset + 2]) << 16 | uint(bytes[offset + 3]) << 24;
+}
+
+inline float drama3_tower_decode(device const uchar *bytes, ulong offset,
+                                 ulong index, ulong dtype) {
+  if (dtype == 0) return as_type<float>(drama3_tower_load_u32(bytes, offset + index * 4));
+  const ulong position = offset + index * 2;
+  const ushort word = ushort(bytes[position]) | ushort(bytes[position + 1]) << 8;
+  return dtype == 1 ? as_type<float>(uint(word) << 16) : float(as_type<half>(word));
+}
+
 kernel void drama3_tower_unseen_embedding(
-    device const float *table [[buffer(0)]],
+    device const uchar *table [[buffer(0)]],
     device const float *frame [[buffer(1)]],
     device float *output [[buffer(2)]],
     constant ulong *p [[buffer(3)]],
@@ -67,13 +80,16 @@ kernel void drama3_tower_unseen_embedding(
   const uint end_codebook = uint(p[3]);
   const int semantic_begin = int(p[4]);
   const int semantic_end = int(p[5]);
+  const ulong table_offset = p[6];
+  const ulong dtype = p[7];
   if (i >= dim) return;
   const int main = int(frame[0]);
   float sum = 0.0f;
   if (main >= semantic_begin && main <= semantic_end) {
     for (uint cb = first_codebook; cb < end_codebook; ++cb) {
       const int id = clamp(int(frame[cb + 1]), 0, int(vocab) - 1);
-      sum += table[(cb * vocab + uint(id)) * dim + i];
+      const ulong index = (ulong(cb) * vocab + uint(id)) * dim + i;
+      sum += drama3_tower_decode(table, table_offset, index, dtype);
     }
   }
   output[i] = sum;

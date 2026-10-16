@@ -444,6 +444,70 @@ module ML::Audio::Drama3::Resident
       output
     end
 
+    # Sum a contiguous range of codebook embeddings. The fused route reads the
+    # table in its checkpoint dtype and preserves the scalar FP32 addition
+    # order of the legacy row/embedding/add dispatch chain.
+    def codebook_sum(matrix : Matrix, frame : Buffer, first_codebook : Int32, end_codebook : Int32,
+                     vocab_size : Int32, semantic_begin : Int32, semantic_end : Int32,
+                     source : String, fused : Bool = false) : Buffer
+      check_owner!(frame)
+      raise ArgumentError.new("resident codebook vocabulary") unless vocab_size > 0 && matrix.rows % vocab_size == 0
+      raise ArgumentError.new("resident codebook range") unless first_codebook >= 0 && first_codebook <= end_codebook &&
+        end_codebook <= matrix.rows // vocab_size && end_codebook < frame.count
+      raise ArgumentError.new("resident codebook semantic range") unless semantic_begin <= semantic_end
+
+      if fused && matrix.scales.nil? && matrix.tensor.dtype.in?("F32", "BF16", "F16")
+        return fused_codebook_sum(matrix, frame, first_codebook, end_codebook,
+          vocab_size, semantic_begin, semantic_end, source)
+      end
+
+      total = zeros(matrix.cols)
+      return total if first_codebook == end_codebook
+      first_codebook.upto(end_codebook - 1) do |codebook|
+        row = alloc(1)
+        dispatch(
+          "drama3_tower_codebook_row", source,
+          [frame, row],
+          [vocab_size.to_u64, codebook.to_u64, (codebook + 1).to_u64,
+           semantic_begin.to_i64.to_u64, semantic_end.to_i64.to_u64],
+          1,
+        )
+        embedding = embedding(matrix, row)
+        total = add(total, embedding)
+      end
+      masked = alloc(matrix.cols)
+      dispatch(
+        "drama3_tower_mask_semantic", source,
+        [total, frame.slice(0, 1), masked],
+        [matrix.cols.to_u64, semantic_begin.to_i64.to_u64, semantic_end.to_i64.to_u64],
+        matrix.cols,
+      )
+      masked
+    end
+
+    private def fused_codebook_sum(matrix : Matrix, frame : Buffer, first_codebook : Int32, end_codebook : Int32,
+                                   vocab_size : Int32, semantic_begin : Int32, semantic_end : Int32,
+                                   source : String) : Buffer
+      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      # Retain the mapped backing handle with the command lease. `count` is
+      # only a checked view size here; the kernel uses the tensor's byte offset.
+      retained_weight = Buffer.new(weight.buffer,
+        (weight.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
+      output = alloc(matrix.cols)
+      enc = encoder
+      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("drama3_tower_unseen_embedding", source))
+      enc.set_buffer(weight.buffer, 0)
+      enc.set_buffer(frame.buffer, 1, offset: frame.offset)
+      enc.set_buffer(output.buffer, 2, offset: output.offset)
+      params = [vocab_size.to_u64, matrix.cols.to_u64, first_codebook.to_u64, end_codebook.to_u64,
+                semantic_begin.to_i64.to_u64, semantic_end.to_i64.to_u64,
+                weight.offset.to_u64, encoding(matrix.tensor)]
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 3)
+      enc.dispatch_1d(matrix.cols)
+      @pending.concat([retained_weight, frame, output])
+      output
+    end
+
     def embedding(matrix : Matrix, token : Buffer) : Buffer
       check_owner!(token)
       raise ArgumentError.new("resident embedding scalar") unless token.count == 1

@@ -74,11 +74,17 @@ module ML::Audio::Drama3
     @caches : Array(LayerCache)
     @store : WeightStore
     @context : Resident::Context
+    @codebook_embedding_fusion : Bool
 
     def initialize(@config : TowerConfig, @store : WeightStore, @context : Resident::Context, @capacity : Int32, prefix : String = "tower")
       raise ArgumentError.new("tower cache capacity must be positive") unless @capacity > 0
       @offset = 0
       @prefix = prefix
+      @codebook_embedding_fusion = case ENV["DRAMA3_TOWER_EMBEDDING_FUSION"]? || "0"
+                                   when "0" then false
+                                   when "1" then true
+                                   else raise ArgumentError.new("DRAMA3_TOWER_EMBEDDING_FUSION must be 0 or 1")
+                                   end
       @codebook_embeddings = matrix("codebook_embeddings.weight", @config.num_codebooks * @config.vocab_size, @config.dim)
       @shared_layers = Array(Layer).new(@config.shared_enrichment_layers) do |index|
         load_layer("shared_layers.#{index}", "semantic_embedding")
@@ -380,28 +386,9 @@ module ML::Audio::Drama3
     end
 
     private def codebook_sum(frame : Resident::Buffer, first_codebook : Int32, end_codebook : Int32) : Resident::Buffer
-      total = @context.zeros(@config.dim)
-      return total if first_codebook >= end_codebook
-      first_codebook.upto(end_codebook - 1) do |codebook|
-        row = @context.alloc(1)
-        @context.dispatch(
-          "drama3_tower_codebook_row", RESIDENT_TOWER_SOURCE,
-          [frame, row],
-          [@config.vocab_size.to_u64, codebook.to_u64, (codebook + 1).to_u64,
-           @config.semantic_begin.to_i64.to_u64, @config.semantic_end.to_i64.to_u64],
-          1,
-        )
-        embedding = @context.embedding(@codebook_embeddings, row)
-        total = @context.add(total, embedding)
-      end
-      masked = @context.alloc(@config.dim)
-      @context.dispatch(
-        "drama3_tower_mask_semantic", RESIDENT_TOWER_SOURCE,
-        [total, frame.slice(0, 1), masked],
-        [@config.dim.to_u64, @config.semantic_begin.to_i64.to_u64, @config.semantic_end.to_i64.to_u64],
-        @config.dim,
-      )
-      masked
+      @context.codebook_sum(@codebook_embeddings, frame, first_codebook, end_codebook,
+        @config.vocab_size, @config.semantic_begin, @config.semantic_end,
+        RESIDENT_TOWER_SOURCE, @codebook_embedding_fusion)
     end
 
     private def clipped_code(code : Resident::Buffer) : Resident::Buffer

@@ -1,0 +1,664 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-tower-embedding",
+  "created_at_utc": "2026-10-16T04:27:09.325571+00:00",
+  "base_revision": "37ee7fdd49d44416d58f8acaf9140285812ab466",
+  "allowed_paths": [
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/tower_resident.cr",
+    "src/ml/audio/drama3/kernels/tower_resident.metal",
+    "spec/drama3_tower_resident_spec.cr",
+    "examples/drama3_embedding_benchmark.cr",
+    "docs/drama3-tower-embedding.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-tower-embedding.json"
+  ],
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "Opt-in codebook-sum arithmetic/lifetime equivalence and isolated GPU timing; bounded repeated-job and upstream checks.",
+    "excluded": [
+      "End-to-end speedup or default promotion",
+      "General upstream MoE/DAC parity",
+      "New precision/tolerance policy",
+      "No existing host control/terminal reads or waits",
+      "GC-free inference or LTP/WBA certificate"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Mapped tensor byte-offset/dtype error, changed FP32 reduction order, or premature backing-buffer release.",
+    "guards": "Nonzero-offset BF16/F16/F32 tests, signed zero/subnormals, semantic/clipping/empty/scaled fallback, owner validation, depth0/2 command leases and exact output/ledger checks.",
+    "rollback": "DRAMA3_TOWER_EMBEDDING_FUSION=0 (default) or revert this isolated commit."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "os": "macOS 26.6.2 (25G83)",
+    "crystal": "1.22.0",
+    "mlx": "0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "upstream_worktree_clean": true,
+    "model": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "codec_sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+    "execution": "Serial run_safe, 15 percent physical free-memory floor, quiet-host check off; unrelated processes untouched."
+  },
+  "kernel": {
+    "default_enabled": false,
+    "allocations_and_dispatches_eight_codebooks": [
+      26,
+      1
+    ],
+    "addition_order": "Sequential FP32 from positive zero; raw unscaled checkpoint table bytes; scaled tensors fall back.",
+    "new_hot_loop_waits_or_readbacks": false,
+    "output_comparison": "Bitwise terminal read after existing pair drain, no intermediate read.",
+    "verified_elements_per_depth": 1179648,
+    "results": [
+      {
+        "depth": 0,
+        "pairs": 7,
+        "operations_per_arm": 64,
+        "gpu_us_per_operation": {
+          "legacy": 77.1783888922073,
+          "fused": 6.421876605600119
+        },
+        "paired_speedup_median": 9.99543536819059,
+        "paired_speedup_range": [
+          9.183919659771357,
+          12.538740726710952
+        ],
+        "allocations_per_operation": {
+          "legacy": 26,
+          "fused": 1
+        },
+        "exact_bitwise": true,
+        "scope": "fixed frame codebook embedding sum only, warm measurements on shared host"
+      },
+      {
+        "depth": 2,
+        "pairs": 7,
+        "operations_per_arm": 64,
+        "gpu_us_per_operation": {
+          "legacy": 69.32616815902293,
+          "fused": 6.539063178934157
+        },
+        "paired_speedup_median": 10.691982503328171,
+        "paired_speedup_range": [
+          8.264222357847625,
+          12.008362986552015
+        ],
+        "allocations_per_operation": {
+          "legacy": 26,
+          "fused": 1
+        },
+        "exact_bitwise": true,
+        "scope": "fixed frame codebook embedding sum only, warm measurements on shared host"
+      }
+    ]
+  },
+  "repeated_worker": {
+    "jobs": 8,
+    "exact_full_codes": true,
+    "exact_wav_bytes": true,
+    "sampler_inputs": {
+      "dtype": "float32-le",
+      "uniform_count": 704,
+      "sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "provenance": "host input tape uploaded once"
+    },
+    "readbacks": {
+      "control": 496,
+      "terminal": 494160
+    },
+    "graph_counts": {
+      "depth": 2,
+      "submitted": 122,
+      "completed": 122,
+      "completion_waits": 122,
+      "pending": 0
+    },
+    "warm_wall_seconds_median": {
+      "0": 29.525602479698136,
+      "1": 31.535105229355395
+    },
+    "arms": [
+      {
+        "arm": 0,
+        "fusion": "0",
+        "repeat": 0,
+        "request_wall_seconds": 35.41113862488419,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 136157,
+        "phase_seconds": {
+          "initialize": 0.005428125,
+          "generation": 26.972838541,
+          "codec": 8.390087375
+        }
+      },
+      {
+        "arm": 0,
+        "fusion": "0",
+        "repeat": 1,
+        "request_wall_seconds": 32.46002483414486,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 135590,
+        "phase_seconds": {
+          "initialize": 0.004904458,
+          "generation": 26.328963208,
+          "codec": 6.096861291
+        }
+      },
+      {
+        "arm": 1,
+        "fusion": "1",
+        "repeat": 0,
+        "request_wall_seconds": 36.13255112525076,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 133601,
+        "phase_seconds": {
+          "initialize": 0.007163667,
+          "generation": 27.77325375,
+          "codec": 8.290316708
+        }
+      },
+      {
+        "arm": 1,
+        "fusion": "1",
+        "repeat": 1,
+        "request_wall_seconds": 28.77805258333683,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 133034,
+        "phase_seconds": {
+          "initialize": 0.004557959,
+          "generation": 22.087533833,
+          "codec": 6.58432975
+        }
+      },
+      {
+        "arm": 2,
+        "fusion": "1",
+        "repeat": 0,
+        "request_wall_seconds": 36.164574957918376,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 133601,
+        "phase_seconds": {
+          "initialize": 0.005841292,
+          "generation": 28.00769025,
+          "codec": 8.054771417
+        }
+      },
+      {
+        "arm": 2,
+        "fusion": "1",
+        "repeat": 1,
+        "request_wall_seconds": 34.29215787537396,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 133034,
+        "phase_seconds": {
+          "initialize": 0.004051416,
+          "generation": 25.803835667,
+          "codec": 8.342552666
+        }
+      },
+      {
+        "arm": 3,
+        "fusion": "0",
+        "repeat": 0,
+        "request_wall_seconds": 37.04148104088381,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 136157,
+        "phase_seconds": {
+          "initialize": 0.011938791,
+          "generation": 29.9236255,
+          "codec": 7.082153209
+        }
+      },
+      {
+        "arm": 3,
+        "fusion": "0",
+        "repeat": 1,
+        "request_wall_seconds": 26.591180125251412,
+        "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+        "frames": 60,
+        "eos": true,
+        "allocations": 135590,
+        "phase_seconds": {
+          "initialize": 0.003625083,
+          "generation": 19.062335125,
+          "codec": 7.483812167
+        }
+      }
+    ]
+  },
+  "upstream": {
+    "shared_F32_tape_trajectory": {
+      "native_frames": 60,
+      "mlx_frames": 60,
+      "main_token": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebooks": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_tokens": {
+        "common_prefix_frames": 60,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "helper_sha256": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da",
+      "sampler_prefix_sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "scope": "Shared F32 sampler input tape, F32 MLX core control; full codes compared on GPU. Existing native numerical frontier remains open if outputs differ."
+    },
+    "prefill": {
+      "prompt_rows": 158,
+      "resident_capacity": 2205,
+      "cache_frame_budget": 2048,
+      "stages": [
+        {
+          "name": "prompt.backbone.hidden",
+          "max_abs": 4.7683716e-06,
+          "atol": 3e-05,
+          "rtol": 0.0003,
+          "pointwise_failures": 0,
+          "nonfinite": 0,
+          "passes": true
+        },
+        {
+          "name": "prompt.main_logits",
+          "max_abs": 1.4305115e-05,
+          "atol": 3e-05,
+          "rtol": 0.0003,
+          "pointwise_failures": 0,
+          "nonfinite": 0,
+          "passes": true
+        }
+      ]
+    },
+    "scope": "Pinned MLX F32 core control and identical inverse-CDF input tape; not stock RNG equivalence or full DAC parity."
+  },
+  "dod_commands": [
+    {
+      "name": "tower-fusion-spec-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "spec",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+        "spec/drama3_tower_resident_spec.cr"
+      ],
+      "started_at_utc": "2026-10-16T03:54:11.869786+00:00",
+      "finished_at_utc": "2026-10-16T03:54:23.597160+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 11.69975983304903,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/tower-fusion-spec-v1.log",
+      "log_sha256": "39ebfbc6b0b5d1136ab3e640b5f9c4cec9e3c866031c0309b32ed7b6850892ea"
+    },
+    {
+      "name": "tower-embedding-build-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "build",
+        "examples/drama3_embedding_benchmark.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+        "-o",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/drama3_embedding_benchmark"
+      ],
+      "started_at_utc": "2026-10-16T03:54:43.991375+00:00",
+      "finished_at_utc": "2026-10-16T03:54:50.375719+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 6.369703458622098,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/tower-embedding-build-v1.log",
+      "log_sha256": "6ac8011020683bd146d3c44fdfe2b6ef71de63ad39d3e44cfa8dd22d05978139"
+    },
+    {
+      "name": "tower-embedding-depth0",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/drama3_embedding_benchmark",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--pairs=7",
+        "--ops=64",
+        "--depth=0"
+      ],
+      "started_at_utc": "2026-10-16T03:55:09.514566+00:00",
+      "finished_at_utc": "2026-10-16T03:55:13.172499+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 3.649335458409041,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/tower-embedding-depth0.log",
+      "log_sha256": "b3d720d7d20ed7fef507845cb5775122f0c42601b12e3c44a313fd69c64ab57c"
+    },
+    {
+      "name": "tower-embedding-depth2",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/drama3_embedding_benchmark",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--pairs=7",
+        "--ops=64",
+        "--depth=2"
+      ],
+      "started_at_utc": "2026-10-16T03:55:25.824534+00:00",
+      "finished_at_utc": "2026-10-16T03:55:26.565470+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7339124167338014,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/tower-embedding-depth2.log",
+      "log_sha256": "0c3ca63c55340d0490a2e324c6f4d0a74f16719588a08dcfe787cb6b955994de"
+    },
+    {
+      "name": "studio-metal-build-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "build",
+        "examples/drama3_studio.cr",
+        "--release",
+        "-Ddrama3_metal",
+        "--error-trace",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+        "-o",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/drama3_studio"
+      ],
+      "started_at_utc": "2026-10-16T03:55:52.367050+00:00",
+      "finished_at_utc": "2026-10-16T03:56:08.120491+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 15.739149291999638,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/studio-metal-build-v1.log",
+      "log_sha256": "9937d7e1eb376592ffe53f413830b64d1b75f5727566c5b8005a0ca0dd2111cf"
+    },
+    {
+      "name": "worker-pairs-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/python3",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker_probe.py"
+      ],
+      "started_at_utc": "2026-10-16T03:56:52.899998+00:00",
+      "finished_at_utc": "2026-10-16T04:01:22.009923+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 269.10076866624877,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker-pairs-v1.log",
+      "log_sha256": "bce7314b42fb22a53a7f4fff895d39225bfc61d3c34274205aab542ebca6eca0"
+    },
+    {
+      "name": "prefill-build-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "build",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prefill_probe_2048.cr",
+        "-o",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill_probe",
+        "--release",
+        "-Ddrama3_metal",
+        "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+      ],
+      "started_at_utc": "2026-10-16T04:02:49.114510+00:00",
+      "finished_at_utc": "2026-10-16T04:02:58.485451+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 9.299045791849494,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill-build-v1.log",
+      "log_sha256": "394f23521298010dd996648f46f8bea690cdc6a7007e70fccc3561cdbdf50b5e"
+    },
+    {
+      "name": "prefill-gate-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill_probe",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill-gate.json"
+      ],
+      "started_at_utc": "2026-10-16T04:03:18.924883+00:00",
+      "finished_at_utc": "2026-10-16T04:03:58.887253+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 39.95373220788315,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill-gate-v1.log",
+      "log_sha256": "7eaafd9ace8a6cbe5bb7402cf779752067d0485b073bcd617c402fdb7e7a13cc"
+    },
+    {
+      "name": "prefill-oracle-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill_probe",
+        "900",
+        "40960",
+        "--self-test"
+      ],
+      "started_at_utc": "2026-10-16T04:04:15.940445+00:00",
+      "finished_at_utc": "2026-10-16T04:04:16.673378+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7245294591411948,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill-oracle-v1.log",
+      "log_sha256": "5e583968e4ee397fb3e4920f20e27317e81210e3afe9f9a7b749987e5152d411"
+    },
+    {
+      "name": "mlx-control-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "900",
+        "40960",
+        "scripts/drama3/generate_mlx_control.py",
+        "--text",
+        "Hello, this is a voice test.",
+        "--seed",
+        "1",
+        "--max-frames",
+        "64",
+        "--output",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.wav",
+        "--report",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json",
+        "--model-dir",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--mlx-root",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+        "--random-tape",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json"
+      ],
+      "started_at_utc": "2026-10-16T04:04:27.017589+00:00",
+      "finished_at_utc": "2026-10-16T04:05:09.136447+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 42.10694729164243,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control-v1.log",
+      "log_sha256": "8495a57c512b4e0281685ed29d76ae9740b66560eed77040739e20df93bb08dc"
+    },
+    {
+      "name": "worker-upstream-gpu-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "900",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/compare_worker_upstream.py"
+      ],
+      "started_at_utc": "2026-10-16T04:05:32.089288+00:00",
+      "finished_at_utc": "2026-10-16T04:05:32.861009+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7590664997696877,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker-upstream-gpu-v1.log",
+      "log_sha256": "8680691794a254a60727ad3d2e09f8543550a8b5adce4f1e6c184bee05b523f9"
+    },
+    {
+      "name": "final-format-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "tool",
+        "format",
+        "--check",
+        "examples/drama3_embedding_benchmark.cr",
+        "examples/drama3_studio.cr",
+        "spec/drama3_tower_resident_spec.cr",
+        "spec/drama3_studio_store_spec.cr",
+        "spec/drama3_studio_media_spec.cr",
+        "spec/drama3_studio_http_spec.cr",
+        "spec/drama3_studio_worker_spec.cr",
+        "src/ml/audio/drama3/resident.cr",
+        "src/ml/audio/drama3/tower_resident.cr",
+        "src/ml/audio/drama3/studio/engine.cr",
+        "src/ml/audio/drama3/studio/backend.cr",
+        "src/ml/audio/drama3/studio/media.cr",
+        "src/ml/audio/drama3/studio/server.cr",
+        "src/ml/audio/drama3/studio/store.cr"
+      ],
+      "started_at_utc": "2026-10-16T04:24:03.358503+00:00",
+      "finished_at_utc": "2026-10-16T04:24:04.109117+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.715765833389014,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/final-format-v1.log",
+      "log_sha256": "ddfee695197485f051866064662a594dec91453d088b1a535b446592abab238b"
+    }
+  ],
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Narrow arithmetic/lifetime and measured operation results, with root-executed checks. Worker review is correlated, not independent evidence.",
+    "rejected_promotion": "Warm full-request medians are 29.53s legacy versus 31.54s fused; no whole-model speedup established on this sample/shared host.",
+    "next_falsifier": "Interleaved full jobs separating host encoding/allocation time from per-command GPU time, unchanged outputs and readback/wait ledger."
+  },
+  "lineage": {
+    "source_sha256": {
+      "src/ml/audio/drama3/resident.cr": "53e53b73619274a416ede56c4a2802d0b2f805e8a8aed1edfdcb7a00e6025ebc",
+      "src/ml/audio/drama3/tower_resident.cr": "f89b4c4e58e2180751505b051aadc53668e56d7da6c17e3fb391d7be63ade2e8",
+      "src/ml/audio/drama3/kernels/tower_resident.metal": "392089ec29e1883d7eac581367748eea78a7d20df217c3fe4b0f7de4ecafdc86",
+      "spec/drama3_tower_resident_spec.cr": "df564997212a394580f948c719b0330ae75806517d34ae1846bf5d3830bb8bd8",
+      "examples/drama3_embedding_benchmark.cr": "1beb7dd9bf50b38d8381a07232a9ebd01a4d725ff3e1ad9a06e1d720be78f3fe",
+      "docs/drama3-tower-embedding.md": "2c024b5bdb8847b1ae90d766053961759b357fca175704507eb565c9d8e5bf46"
+    },
+    "bindings": [
+      {
+        "command": "tower-fusion-spec-v1",
+        "current_source_matches": true,
+        "source_count": 4,
+        "path_list_sha256": "0bc1bf6e02b886160841a7409830ce8676bf0af312b1034643805d8bf71b1c8f"
+      },
+      {
+        "command": "tower-embedding-depth0",
+        "current_source_matches": true,
+        "source_count": 31,
+        "path_list_sha256": "c0a10c239def2f413f20c36a88cb5ec0302574863854d2185988f0f5f73212f7"
+      },
+      {
+        "command": "tower-embedding-depth2",
+        "current_source_matches": true,
+        "source_count": 31,
+        "path_list_sha256": "c0a10c239def2f413f20c36a88cb5ec0302574863854d2185988f0f5f73212f7"
+      },
+      {
+        "command": "worker-pairs-v1",
+        "current_source_matches": true,
+        "source_count": 32,
+        "path_list_sha256": "aa9b1c6089369e8436828b326648561f33d809cd7790063c798af13821c3db63"
+      }
+    ],
+    "binding_scope": "Build-v1 immediately precedes repeated-worker probe; later worker-management/UI changes do not alter the bound engine or native arithmetic. Final browser no-reference WAV matches this probe. Raw command manifest retains broader source fingerprints.",
+    "decay_trigger": "Production/shader/checkpoint/input/tape/fixture/runtime/device/OS/graph/precision/tolerance drift; refresh exact probes and paired timings before promotion."
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/commands.json",
+      "sha256": "c95487fe6ddb7b1e4be6087a850a81c77cab645c3ff344da721af503ec4e6cf7",
+      "bytes": 475156
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/run.py",
+      "sha256": "1511d1e5e7dc18223aa2dc8c58ee39a5725eff187f71aecc1bfab272a3c17164",
+      "bytes": 3385
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker_probe.py",
+      "sha256": "7ed92e55366f710fa258ef633a9aff96e9ddb0b8472e7393c799deed545da2b5",
+      "bytes": 2578
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/embedding-summary.json",
+      "sha256": "f8e19b96710588af7ea0fb73b0f1c5641f855d400d319bcc806bbd8ab4407f5e",
+      "bytes": 1014
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker-pairs.json",
+      "sha256": "3c7241a3e54d2d61cccf2bfa1dcf1accf4079af393985413f171353636e9d2f4",
+      "bytes": 105769
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/worker-upstream-comparison.json",
+      "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+      "bytes": 1181
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/prefill-gate.json",
+      "sha256": "20676871a141baa475186dfa36c88c1e4ccdb91594ddb65a4ea89d9113450f1f",
+      "bytes": 2422
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json",
+      "sha256": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+      "bytes": 27638
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.wav",
+      "sha256": "c3fe85788c9bab0d2c6b30a21639092b65c4d39bb1068f2b97256821febf211f",
+      "bytes": 245804
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o",
+      "sha256": "a355b555dd78966f34623b3897d0b1176cff8e4bd7059f5c2d84c55283ab2d30",
+      "bytes": 66808
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/curate_evidence.py",
+      "sha256": "339fc45556a1f62e70825527cd8f0214a138ab5474ea249c75a6f820dbcb0c10",
+      "bytes": 13580
+    }
+  ]
+}
