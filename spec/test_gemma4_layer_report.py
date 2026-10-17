@@ -115,7 +115,167 @@ def report_with(*runs: dict, requested_tokens: int = 256) -> dict:
     }
 
 
+def paired_run(depth: int = 48, label: str = "paired", *, trial: int = 1) -> dict:
+    gpu = power_measurement(mean=100, energy=100)
+    fluke = power_measurement("current_ac", "VA", mean=170, energy=170)
+    for measurement in (gpu, fluke):
+        measurement.update(start_ms=1000, end_ms=2000)
+    # Different sample cadences do not change the common request window.
+    fluke["curve"] = [
+        {"elapsed_ms": 0, "value": 166},
+        {"elapsed_ms": 400, "value": 170},
+        {"elapsed_ms": 600, "value": 170},
+        {"elapsed_ms": 1000, "value": 174},
+    ]
+    fluke["sample_count"] = 4
+    return run_record(
+        depth, label, trial=trial, gpu_measurement=gpu, circuit_measurement=fluke
+    )
+
+
 class LayerReportTests(unittest.TestCase):
+    def test_canvas_payload_preserves_native_times_units_and_trial_identity(self) -> None:
+        before = paired_run(label="depth48-before", trial=1)
+        after = paired_run(label="depth48-after", trial=1)
+        shallow = paired_run(16, "depth16", trial=2)
+        report = report_with(before, after, shallow)
+        payload = layer_report._depth_chart_payload(report)
+
+        self.assertEqual(payload["schema"], "cogni.gemma4.depth_chart.v1")
+        self.assertEqual(payload["requested_tokens"], 256)
+        self.assertEqual(payload["excluded_count"], 0)
+        self.assertEqual([run["label"] for run in payload["runs"]],
+                         ["depth48-before", "depth48-after", "depth16"])
+        self.assertEqual(payload["runs"][2]["trial"], 2)
+        run = payload["runs"][0]
+        self.assertEqual(run["duration_ms"], 1000)
+        self.assertEqual(run["gpu"], {
+            "unit": "W", "integral_unit": "J", "mean": 100, "integral": 100,
+            "points": [[0, 96], [500, 100], [1000, 104]],
+        })
+        self.assertEqual(run["fluke"]["unit"], "VA")
+        self.assertEqual(run["fluke"]["integral_unit"], "VA·s")
+        self.assertEqual(run["fluke"]["points"],
+                         [[0, 166], [400, 170], [600, 170], [1000, 174]])
+
+    def test_canvas_excludes_unpaired_short_and_ambiguous_trials(self) -> None:
+        good = paired_run(16, "good")
+        missing = paired_run(label="missing")
+        missing["circuit_measurement"] = None
+        short = paired_run(label="short")
+        short["actual_tokens"] = 255
+        first = paired_run(label="duplicate")
+        duplicate = paired_run(label="duplicate")
+        payload = layer_report._depth_chart_payload(
+            report_with(good, missing, short, first, duplicate)
+        )
+        self.assertEqual([run["label"] for run in payload["runs"]], ["good"])
+        self.assertEqual(payload["excluded_count"], 4)
+
+    def test_canvas_data_is_embedded_safely_and_assets_are_standalone(self) -> None:
+        label = '</script><img src=x onerror="alert(1)">'
+        rendered = layer_report.render_html(report_with(paired_run(16, label)))
+        self.assertIn('id="depth-explorer"', rendered)
+        match = re.search(
+            r'<script type="application/json" id="depth-chart-data">(.*?)</script>',
+            rendered, re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertNotIn("<", match.group(1))
+        self.assertEqual(json.loads(match.group(1))["runs"][0]["label"], label)
+        self.assertNotRegex(rendered, r'<script[^>]+src=')
+        self.assertNotRegex(rendered, r'<link[^>]+rel=["\']stylesheet')
+
+    def test_presentation_keeps_gate_and_units_without_detailed_tables(self) -> None:
+        report = report_with(paired_run(), paired_run(16, "shallow"))
+        rendered = layer_report.render_presentation(report)
+        self.assertIn('id="depth-explorer"', rendered)
+        self.assertIn("Fixed-token gate: eligible", rendered)
+        self.assertIn("quality is unvalidated", rendered)
+        self.assertIn("W and J", rendered)
+        self.assertIn("VA and VA·s", rendered)
+        self.assertNotIn("Summary by run label", rendered)
+        self.assertNotIn("Run comparison (details)", rendered)
+        self.assertNotRegex(rendered, r'<script[^>]+src=')
+        report["runs"][1]["actual_tokens"] = 255
+        self.assertIn("Fixed-token gate: blocked", layer_report.render_presentation(report))
+
+    def test_sensor_pairs_show_common_windows_with_separate_units(self) -> None:
+        report = report_with(paired_run(), paired_run(16, "shallow"))
+        rendered = layer_report.render_html(report)
+        section = rendered.split('id="sensor-comparison"', 1)[1].split("</section>", 1)[0]
+
+        self.assertIn("Matched sensor windows: 2 / 2", section)
+        self.assertIn("GPU board mean (W)", section)
+        self.assertIn("Fluke circuit mean (VA)", section)
+        self.assertIn("Fluke integral (VA·s)", section)
+        self.assertIn('data-label="GPU W">100</td>', section)
+        self.assertIn('data-label="Fluke VA">170</td>', section)
+        self.assertIn("Do not subtract these readings", section)
+        self.assertIn("power factor", section)
+        self.assertIn('aria-label="GPU active power (W) over elapsed time (ms)"', section)
+        self.assertIn('aria-label="Fluke apparent power (VA) over elapsed time (ms)"', section)
+        self.assertEqual(section.count("1000 ms</text>"), 4)
+        self.assertLess(rendered.index('id="sensor-comparison"'), rendered.index("Summary by run label"))
+
+    def test_sensor_pairing_rejects_missing_shifted_and_reversed_windows(self) -> None:
+        for field, replacement in (
+            ("start_ms", None),
+            ("start_ms", 1001),
+            ("end_ms", 1999),
+            ("end_ms", 999),
+            ("start_ms", True),
+        ):
+            with self.subTest(field=field, replacement=replacement):
+                run = paired_run()
+                run["circuit_measurement"][field] = replacement
+                self.assertIsNotNone(layer_report._paired_window_reason(run))
+        run = paired_run()
+        run["ended_at_epoch_ms"] = run["started_at_epoch_ms"]
+        self.assertIsNotNone(layer_report._paired_window_reason(run))
+
+    def test_sensor_pairing_rejects_partial_or_unordered_curves(self) -> None:
+        for curve in (
+            [{"elapsed_ms": 1, "value": 100}, {"elapsed_ms": 1000, "value": 100}],
+            [{"elapsed_ms": 0, "value": 100}, {"elapsed_ms": 999, "value": 100}],
+            [{"elapsed_ms": 0, "value": 100}, {"elapsed_ms": 0, "value": 100}, {"elapsed_ms": 1000, "value": 100}],
+            [{"elapsed_ms": 0, "value": 100}, {"elapsed_ms": 1001, "value": 100}, {"elapsed_ms": 1000, "value": 100}],
+            [],
+        ):
+            with self.subTest(curve=curve):
+                run = paired_run()
+                run["gpu_measurement"]["curve"] = curve
+                self.assertIsNotNone(layer_report._paired_window_reason(run))
+        run = paired_run()
+        run["gpu_measurement"]["duration_seconds"] = 2
+        self.assertIsNotNone(layer_report._paired_window_reason(run))
+
+    def test_sensor_pairing_rejects_unavailable_or_incompatible_sources(self) -> None:
+        for measurement in (
+            None,
+            {"status": "unavailable", "reason": "offline"},
+            power_measurement("active_power", "W"),
+        ):
+            with self.subTest(measurement=measurement):
+                run = paired_run()
+                run["circuit_measurement"] = measurement
+                self.assertIsNotNone(layer_report._paired_window_reason(run))
+
+    def test_paired_summary_requires_every_trial_to_be_matched_and_exact(self) -> None:
+        for defect in ("window", "tokens"):
+            with self.subTest(defect=defect):
+                first = paired_run(label="paired-batch")
+                second = paired_run(label="paired-batch", trial=2)
+                if defect == "window":
+                    second["gpu_measurement"]["start_ms"] += 1
+                else:
+                    second["actual_tokens"] = 255
+                rendered = layer_report.render_html(report_with(first, second))
+                section = rendered.split('id="sensor-comparison"', 1)[1].split("</section>", 1)[0]
+                row = re.search(r"<tr>.*?paired-batch.*?</tr>", section, re.DOTALL).group(0)
+                self.assertEqual(row.count("Unavailable"), 4)
+                self.assertIn("All trials must have exact token counts and matched sensor windows", section)
+
     def test_fixed_count_gate_and_report_caveats_are_explicit(self) -> None:
         report = report_with(
             run_record(48, gpu_measurement=power_measurement(), circuit_measurement=power_measurement("current_ac", "VA")),
@@ -436,18 +596,24 @@ class LayerReportTests(unittest.TestCase):
             source = Path(directory) / "report.json"
             output = Path(directory) / "report.html"
             source.write_text(json.dumps(report), encoding="utf-8")
-            result = subprocess.run(
-                [sys.executable, str(REPORT_SCRIPT), str(source), "--output", str(output)],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            rendered = output.read_text(encoding="utf-8")
-            self.assertIn("Gemma 4 depth report", rendered)
-            self.assertIn("Fixed-token comparison gate: blocked", rendered)
+            for presentation_only in (False, True):
+                with self.subTest(presentation_only=presentation_only):
+                    command = [sys.executable, str(REPORT_SCRIPT), str(source), "--output", str(output)]
+                    if presentation_only:
+                        command.append("--presentation-only")
+                    result = subprocess.run(
+                        command, check=False, capture_output=True, text=True,
+                        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    rendered = output.read_text(encoding="utf-8")
+                    self.assertIn('id="depth-explorer"', rendered)
+                    if presentation_only:
+                        self.assertIn("AI Energy Audit", rendered)
+                        self.assertIn("Fixed-token gate: blocked", rendered)
+                    else:
+                        self.assertIn("Gemma 4 depth report", rendered)
+                        self.assertIn("Fixed-token comparison gate: blocked", rendered)
 
 
 if __name__ == "__main__":

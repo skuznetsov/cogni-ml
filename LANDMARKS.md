@@ -28642,6 +28642,22 @@ Refresh after source/toolchain/device/model/workload changes.
   Short sensor windows, shared GPU activity and unvalidated answer quality
   prevent a precise isolated wattage or useful-answer efficiency claim. Fluke
   remains whole-circuit VA / VA s, not active W / J.
+- The paired Fluke/NVIDIA view uses the same recorded request windows: 12/12
+  pairs in this campaign. It rejects shifted/partial windows and mismatched
+  units. Depth 16 changed GPU J/request by -62.9% and the circuit VA s integral
+  by -64.8% relative to full-before; these within-source changes do not measure
+  GPU share, PSU efficiency or sensor calibration accuracy.
+- The report's Canvas explorer and compact `--presentation-only` HTML preserve
+  individual trials, actual elapsed time, separate W/VA sources and both full
+  batches. Source curves retain interpolated request boundaries without added
+  smoothing or padding. Source assets and pitch embedding instructions are in
+  the decoder-depth document; the output works offline. No changes to the team's
+  public site are implied.
+- Visualization DoD: 25 Python report tests pass locally and on gputer; 13
+  JavaScript contract/projection tests and syntax checking pass locally. Both
+  generated HTML files match across hosts by SHA-256. Browser checks cover
+  controls, sample inspection and 375/611 px layouts; calibration and useful
+  answer quality remain outside this verification scope.
 - Every retained tensor payload matches the original; its SHA-256 is unchanged.
   Full-model service was restored and completed the final three trials. No new
   backend failure occurred; the earlier sustained-load watchdog risk remains.

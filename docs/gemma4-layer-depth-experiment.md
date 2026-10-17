@@ -135,12 +135,12 @@ and Fluke windows had bracketing coverage; loading, hashing, eight-token warmup
 and waits were outside those windows. The prompt digest is
 `aec49f7658576d37a23d3180917cf7f53285f9ebf55db09ca6194a2202c42986`.
 
-| Batch | Decoder blocks | Stored parameters | Seconds | GPU W | GPU J/request | Fluke VA s/request |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Full before | 48 | 11,907,350,576 | 5.658 | 159.7 | 903.8 | 1328.7 |
-| Prefix 32 | 32 | 8,267,880,992 | 3.970 | 161.5 | 640.9 | 914.9 |
-| Prefix 16 | 16 | 4,628,411,408 | 2.316 | 144.8 | 335.1 | 468.3 |
-| Full after | 48 | 11,907,350,576 | 5.635 | 163.5 | 921.4 | 1326.3 |
+| Batch | Decoder blocks | Stored parameters | Seconds | GPU W | Fluke VA | GPU J/request | Fluke VA s/request |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full before | 48 | 11,907,350,576 | 5.658 | 159.7 | 234.8 | 903.8 | 1328.7 |
+| Prefix 32 | 32 | 8,267,880,992 | 3.970 | 161.5 | 230.5 | 640.9 | 914.9 |
+| Prefix 16 | 16 | 4,628,411,408 | 2.316 | 144.8 | 202.1 | 335.1 | 468.3 |
+| Full after | 48 | 11,907,350,576 | 5.635 | 163.5 | 235.3 | 921.4 | 1326.3 |
 
 Relative to the initial full-model batch, the 16-block batch used about 63%
 less measured GPU energy and took about 59% less time. The 32-block batch
@@ -150,6 +150,77 @@ The 16-block trial means ranged from 134.9 to 154.0 W, so the mean-power effect
 needs longer, isolated windows before a precise claim. Sensor averaging,
 shared GPU activity and short current windows remain limits. This is fixed
 synthetic token work; it does not establish quality-preserving energy savings.
+
+## Paired Fluke and NVIDIA visualization
+
+The report pairs both sources by their recorded request boundaries. A pair
+requires matching integer start/end timestamps, matching durations, compatible
+W/VA classes, and strictly ordered curves spanning the full window. Missing or
+shifted coverage stays unavailable. Per-label paired means require every trial
+to pass these checks and the exact-token check; the renderer does not silently
+drop incomplete trials from a label mean. Matching recorded windows does not
+establish hardware synchronization or remove sensor lag, averaging or clock
+offset. No idle subtraction or time shift is applied.
+
+The preserved `depth-20261017-a` report has 12/12 matched pairs. Relative to the
+initial full-model batch, depth 16 reduced GPU J/request by 62.9% and the Fluke
+VA s/request integral by 64.8%. These are separate changes within each source.
+NVIDIA measures active GPU-board power; Fluke covers the measured circuit and,
+without a measured power factor, supplies apparent power. Do not subtract W
+from VA, infer GPU share, or calculate PSU efficiency from this pair. See
+[Fluke's electrical glossary](https://www.fluke.com/en-us/learn/blog/electrical/electrical-glossary)
+for the active/apparent power distinction.
+
+`gemma4_layer_report.py` includes an interactive Canvas explorer and the paired
+static traces in the full report. `--presentation-only` creates a compact,
+self-contained HTML page for the hackathon pitch:
+
+```sh
+python3 scripts/gemma4_layer_report.py /path/to/comparison.json \
+  --output /path/to/fluke-nvidia-comparison.html
+python3 scripts/gemma4_layer_report.py /path/to/comparison.json \
+  --presentation-only --output /path/to/depth-explorer.html
+node --test spec/test_gemma4_depth_chart.js
+```
+
+Copy `gemma4_depth_chart.js` and `gemma4_depth_chart.css` alongside the Python
+renderer when deploying its source. The output embeds both assets and the
+measured curves; opening it requires no CDN, package install or network access.
+The Canvas sizing and interaction patterns are adapted from Tokenomics Viewer's
+`public/index.html` under its retained ISC notice. The source checkout is named
+`tokenomics` locally. Neither that repository nor the team's published pitch is
+modified by generating the report.
+
+The explorer switches between NVIDIA W and Fluke VA, individual trials, 3D
+categorical run lanes and a 2D overlay. The two 48-layer batches remain separate
+to expose drift. Time is elapsed milliseconds from each request start, not a
+normalized progress axis. Curves stop at their request boundaries and use linear
+segments. Boundary values are linearly interpolated from bracketing raw samples
+by the measurement integrator; the viewer adds no smoothing or synthetic zeros.
+Zoom/pan and nearest-source-point inspection affect presentation only. Duplicate
+label/trial identities, non-exact runs and unmatched windows are excluded
+explicitly from the explorer; the full report retains their original records.
+The plot is a historical measurement view, not a live feed or useful-answer
+efficiency claim.
+
+For a static pitch site, copy the generated page to that site's directory and
+link to it, or embed it without extra dependencies:
+
+```html
+<iframe src="./depth-explorer.html" title="Measured Gemma 4 power traces"
+        style="width:100%;height:1100px;border:0" loading="lazy"></iframe>
+```
+
+The visualization change passed 25 Python report tests locally and on gputer,
+13 JavaScript contract/projection tests locally, and JavaScript syntax checking.
+The full and compact HTML outputs were byte-identical between local rendering
+and gputer. Browser checks covered sensor/trial/layout switching, zoom/reset,
+source-point inspection, the PNG action, and 375/611 px layouts. These checks
+verify the rendering and rejection guards, not sensor calibration or model
+quality. The pitch bundle's separate evidence index records source and artifact
+hashes without replacing the original experiment index.
+
+## Model provenance and rollback
 
 Loader logs show `n_layer_all` 48/32/16/48 and GPU offload 49/49, 33/33,
 17/17, 49/49 respectively. Every retained tensor payload was independently

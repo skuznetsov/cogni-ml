@@ -1,0 +1,633 @@
+#depth-explorer {
+  --depth-ink: #17221b;
+  --depth-forest: #24382b;
+  --depth-muted: #657064;
+  --depth-line: #dedfd5;
+  --depth-cream: #f3f0e6;
+  --depth-paper: #fffefa;
+  --depth-gold: #dfbd59;
+  --depth-blue: #287bb8;
+  color: var(--depth-ink);
+  background: var(--depth-cream);
+  border: 1px solid #d9d8cb;
+  border-radius: 18px;
+  padding: 0;
+  overflow: hidden;
+  font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#depth-explorer *,
+#depth-explorer *::before,
+#depth-explorer *::after {
+  box-sizing: border-box;
+}
+
+#depth-explorer .depth-explorer-root {
+  min-width: 0;
+}
+
+#depth-explorer .depth-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 194px;
+  padding: 30px clamp(20px, 4vw, 52px) 27px;
+  color: #f6f4e9;
+  background:
+    radial-gradient(ellipse at 92% 8%, rgba(223, 189, 89, .15), transparent 36%),
+    linear-gradient(118deg, #171c17, #263b2d 74%, #304434);
+}
+
+#depth-explorer .depth-hero-copy {
+  min-width: 0;
+}
+
+#depth-explorer .depth-eyebrow {
+  margin: 0 0 9px;
+  color: var(--depth-gold);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .16em;
+}
+
+#depth-explorer .depth-title {
+  max-width: 760px;
+  margin: 0;
+  color: #fffdf2;
+  font-size: clamp(27px, 3.2vw, 42px);
+  font-weight: 700;
+  letter-spacing: -.035em;
+  line-height: 1.08;
+}
+
+#depth-explorer .depth-subtitle {
+  max-width: 650px;
+  margin: 11px 0 0;
+  color: #d6ded2;
+  font-size: 14px;
+}
+
+#depth-explorer .depth-hero-badges {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+  padding-bottom: 3px;
+}
+
+#depth-explorer .depth-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 4px 9px;
+  border: 1px solid rgba(223, 189, 89, .58);
+  border-radius: 999px;
+  color: #f5dd8e;
+  background: rgba(223, 189, 89, .11);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  white-space: nowrap;
+}
+
+#depth-explorer .depth-hero-badge-muted {
+  border-color: rgba(218, 226, 214, .3);
+  color: #d8dfd4;
+  background: rgba(244, 247, 239, .06);
+}
+
+#depth-explorer .depth-controls {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  padding: 18px clamp(18px, 3vw, 38px) 14px;
+  border-bottom: 1px solid var(--depth-line);
+  background: #fbfaf5;
+}
+
+#depth-explorer .depth-control-block {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+#depth-explorer .depth-control-label {
+  color: var(--depth-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+
+#depth-explorer .depth-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 37px;
+  padding: 3px;
+  border: 1px solid #d9dcd2;
+  border-radius: 9px;
+  background: #efefe7;
+}
+
+#depth-explorer .depth-segment-button,
+#depth-explorer .depth-action-button,
+#depth-explorer .depth-select {
+  min-height: 31px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--depth-ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+#depth-explorer .depth-segment-button {
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#depth-explorer .depth-segment-button.active {
+  border-color: #d8d9d0;
+  background: var(--depth-paper);
+  box-shadow: 0 1px 2px rgba(35, 47, 37, .08);
+  font-weight: 700;
+}
+
+#depth-explorer .depth-select {
+  min-width: 110px;
+  padding: 5px 28px 5px 9px;
+  border-color: #d9dcd2;
+  background-color: #fffefa;
+  cursor: pointer;
+}
+
+#depth-explorer .depth-control-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+
+#depth-explorer .depth-action-button {
+  padding: 6px 11px;
+  border-color: #d5d9cf;
+  background: #fffefa;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#depth-explorer .depth-action-primary {
+  border-color: #263d2e;
+  color: #fffdf4;
+  background: #263d2e;
+}
+
+#depth-explorer .depth-action-button:hover:not(:disabled),
+#depth-explorer .depth-segment-button:hover:not(:disabled) {
+  border-color: #aab3a6;
+}
+
+#depth-explorer button:focus-visible,
+#depth-explorer select:focus-visible,
+#depth-explorer .depth-canvas:focus-visible {
+  outline: 3px solid #b98d1f;
+  outline-offset: 2px;
+}
+
+#depth-explorer button:disabled,
+#depth-explorer select:disabled {
+  color: #92988e;
+  cursor: not-allowed;
+  opacity: .65;
+}
+
+#depth-explorer .depth-current-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 37px;
+  padding: 8px clamp(18px, 3vw, 38px);
+  color: #344537;
+  background: #f8f6ee;
+  font-size: 12px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+#depth-explorer .depth-current-selection::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--depth-gold);
+  content: "";
+}
+
+#depth-explorer .depth-chart-panel {
+  margin: 0 clamp(12px, 2.4vw, 30px);
+  padding: 15px 14px 8px;
+  border: 1px solid #e0e1d8;
+  border-radius: 14px;
+  background: var(--depth-paper);
+  box-shadow: 0 5px 18px rgba(35, 48, 37, .045);
+}
+
+#depth-explorer .depth-chart-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 7px 11px;
+}
+
+#depth-explorer .depth-chart-heading-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+#depth-explorer .depth-chart-title {
+  color: #28382c;
+  font-size: 14px;
+}
+
+#depth-explorer .depth-chart-subtitle {
+  color: var(--depth-muted);
+  font-size: 11px;
+}
+
+#depth-explorer .depth-unit-chip {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid #e2d49b;
+  border-radius: 999px;
+  color: #65521d;
+  background: #faf4dd;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+#depth-explorer .depth-canvas-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #edece4;
+  border-radius: 10px;
+  background: var(--depth-paper);
+}
+
+#depth-explorer .depth-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(430px, 42vw, 520px);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+#depth-explorer .depth-canvas:active {
+  cursor: grabbing;
+}
+
+#depth-explorer .depth-tooltip {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  width: max-content;
+  max-width: min(250px, calc(100% - 16px));
+  padding: 9px 11px;
+  border: 1px solid #d5d9cf;
+  border-radius: 8px;
+  color: #26352a;
+  background: rgba(255, 254, 250, .97);
+  box-shadow: 0 7px 24px rgba(29, 40, 31, .15);
+  pointer-events: none;
+  font-size: 11px;
+}
+
+#depth-explorer .depth-tooltip[hidden] {
+  display: none;
+}
+
+#depth-explorer .depth-tooltip-title {
+  font-size: 12px;
+}
+
+#depth-explorer .depth-tooltip-meta {
+  color: var(--depth-muted);
+}
+
+#depth-explorer .depth-tooltip-value {
+  margin-top: 2px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+#depth-explorer .depth-chart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 31px;
+  padding: 5px 7px 0;
+  color: var(--depth-muted);
+  font-size: 10px;
+}
+
+#depth-explorer .depth-chart-status {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#depth-explorer .depth-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: 8px;
+  padding: 14px clamp(18px, 3vw, 38px) 4px;
+}
+
+#depth-explorer .depth-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dfdfd5;
+  border-radius: 9px;
+  background: rgba(255, 254, 250, .72);
+}
+
+#depth-explorer .depth-legend-swatch {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 4px;
+  border-radius: 99px;
+}
+
+#depth-explorer .depth-legend-number {
+  color: #879084;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+
+#depth-explorer .depth-legend-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+#depth-explorer .depth-legend-name {
+  overflow: hidden;
+  color: #28382c;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#depth-explorer .depth-legend-detail {
+  color: var(--depth-muted);
+  font-size: 10px;
+}
+
+#depth-explorer .depth-legend-empty {
+  color: var(--depth-muted);
+  font-size: 12px;
+}
+
+#depth-explorer .depth-batch-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 21px clamp(18px, 3vw, 38px) 9px;
+}
+
+#depth-explorer .depth-batch-title {
+  margin: 0;
+  color: #28382c;
+  font-size: 15px;
+}
+
+#depth-explorer .depth-batch-caption {
+  color: var(--depth-muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+#depth-explorer .depth-batch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 9px;
+  padding: 0 clamp(18px, 3vw, 38px) 17px;
+}
+
+#depth-explorer .depth-batch-card {
+  min-width: 0;
+  padding: 12px 13px 10px;
+  border: 1px solid #dedfd4;
+  border-top: 3px solid var(--depth-card-color, #788273);
+  border-radius: 9px;
+  background: rgba(255, 254, 250, .82);
+}
+
+#depth-explorer .depth-batch-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#depth-explorer .depth-batch-card-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+#depth-explorer .depth-batch-name {
+  overflow-wrap: anywhere;
+  color: #25352a;
+  font-size: 12px;
+}
+
+#depth-explorer .depth-batch-layer {
+  color: var(--depth-muted);
+  font-size: 10px;
+}
+
+#depth-explorer .depth-batch-unit {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #415646;
+  background: #ebefe7;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+#depth-explorer .depth-metrics {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+#depth-explorer .depth-metric-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0 0;
+  border-top: 1px solid #edede6;
+  font-size: 10px;
+}
+
+#depth-explorer .depth-metric-row dt {
+  color: var(--depth-muted);
+}
+
+#depth-explorer .depth-metric-row dd {
+  margin: 0;
+  color: #29382d;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+#depth-explorer .depth-card-missing {
+  margin: 8px 0 2px;
+  color: var(--depth-muted);
+  font-size: 11px;
+}
+
+#depth-explorer .depth-scope-note {
+  margin: 0;
+  padding: 13px clamp(18px, 3vw, 38px) 18px;
+  border-top: 1px solid #dfdfd4;
+  color: #626c60;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+#depth-explorer .depth-unavailable {
+  margin: 0;
+  padding: 13px clamp(18px, 3vw, 38px) 18px;
+  color: #714124;
+  background: #fbf1e7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+#depth-explorer .depth-unavailable[hidden] {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  #depth-explorer .depth-hero {
+    display: grid;
+    align-items: start;
+    gap: 17px;
+    min-height: 0;
+    padding-top: 25px;
+    padding-bottom: 22px;
+  }
+
+  #depth-explorer .depth-hero-badges {
+    justify-content: flex-start;
+  }
+
+  #depth-explorer .depth-controls {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  #depth-explorer .depth-control-actions {
+    margin-left: 0;
+  }
+
+  #depth-explorer .depth-chart-panel {
+    margin-right: 10px;
+    margin-left: 10px;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  #depth-explorer .depth-chart-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+    padding-top: 7px;
+    padding-bottom: 4px;
+  }
+
+  #depth-explorer .depth-chart-status {
+    text-align: left;
+  }
+}
+
+@media (max-width: 460px) {
+  #depth-explorer .depth-hero {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  #depth-explorer .depth-title {
+    font-size: 29px;
+  }
+
+  #depth-explorer .depth-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  #depth-explorer .depth-control-block:first-child {
+    grid-column: 1 / -1;
+  }
+
+  #depth-explorer .depth-segment-button {
+    padding-right: 7px;
+    padding-left: 7px;
+    font-size: 11px;
+  }
+
+  #depth-explorer .depth-trial-control .depth-select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  #depth-explorer .depth-control-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  #depth-explorer .depth-chart-heading {
+    align-items: flex-start;
+  }
+
+  #depth-explorer .depth-chart-subtitle {
+    max-width: 230px;
+  }
+
+  #depth-explorer .depth-unit-chip {
+    max-width: 120px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  #depth-explorer .depth-canvas {
+    height: 430px;
+  }
+
+  #depth-explorer .depth-batch-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  #depth-explorer .depth-batch-caption {
+    text-align: left;
+  }
+}
