@@ -1,0 +1,606 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+// Correctness-first Qwen-Image 2.1 block kernels. All tensors are F32 and
+// row-major [token, channel]. Reductions use one CUDA thread per row/head;
+// this keeps the first implementation deterministic and shape-generic.
+
+.visible .entry qi21_layernorm_modulate_gate(
+    .param .u64 input_ptr,
+    .param .u64 modulation_ptr,
+    .param .u64 normalized_ptr,
+    .param .u64 gate_ptr,
+    .param .u32 tokens,
+    .param .u32 dim,
+    .param .f32 eps,
+    .param .u32 modulation_block
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<32>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<24>;
+
+    ld.param.u64 %rd1, [input_ptr];
+    ld.param.u64 %rd2, [modulation_ptr];
+    ld.param.u64 %rd3, [normalized_ptr];
+    ld.param.u64 %rd4, [gate_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [dim];
+    ld.param.f32 %f1, [eps];
+    ld.param.u32 %r3, [modulation_block];
+    mov.u32 %r4, %ctaid.x;
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra LN_DONE;
+    mov.u32 %r5, %tid.x;
+    setp.ne.u32 %p2, %r5, 0;
+    @%p2 bra LN_DONE;
+
+    mul.lo.u32 %r6, %r4, %r2;
+    shl.b32 %r7, %r2, 2;
+    mul.lo.u32 %r8, %r4, %r7;
+    mad.lo.u32 %r10, %r3, %r2, %r8;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r11, 0;
+LN_SUM:
+    setp.ge.u32 %p3, %r11, %r2;
+    @%p3 bra LN_MEAN;
+    add.u32 %r12, %r6, %r11;
+    mul.wide.u32 %rd5, %r12, 4;
+    add.s64 %rd6, %rd1, %rd5;
+    ld.global.f32 %f3, [%rd6];
+    add.rn.f32 %f2, %f2, %f3;
+    add.u32 %r11, %r11, 1;
+    bra LN_SUM;
+LN_MEAN:
+    cvt.rn.f32.u32 %f4, %r2;
+    div.rn.f32 %f5, %f2, %f4;
+    mov.f32 %f6, 0f00000000;
+    mov.u32 %r11, 0;
+LN_VAR:
+    setp.ge.u32 %p4, %r11, %r2;
+    @%p4 bra LN_INV;
+    add.u32 %r12, %r6, %r11;
+    mul.wide.u32 %rd5, %r12, 4;
+    add.s64 %rd6, %rd1, %rd5;
+    ld.global.f32 %f3, [%rd6];
+    sub.rn.f32 %f7, %f3, %f5;
+    fma.rn.f32 %f6, %f7, %f7, %f6;
+    add.u32 %r11, %r11, 1;
+    bra LN_VAR;
+LN_INV:
+    div.rn.f32 %f6, %f6, %f4;
+    add.rn.f32 %f6, %f6, %f1;
+    sqrt.rn.f32 %f6, %f6;
+    rcp.rn.f32 %f8, %f6;
+    mov.u32 %r11, 0;
+LN_STORE:
+    setp.ge.u32 %p5, %r11, %r2;
+    @%p5 bra LN_DONE;
+    add.u32 %r12, %r6, %r11;
+    mul.wide.u32 %rd5, %r12, 4;
+    add.s64 %rd6, %rd1, %rd5;
+    add.s64 %rd7, %rd3, %rd5;
+    add.u32 %r13, %r10, %r11;
+    mul.wide.u32 %rd8, %r13, 4;
+    add.s64 %rd9, %rd2, %rd8;
+    add.u32 %r14, %r13, %r2;
+    mul.wide.u32 %rd10, %r14, 4;
+    add.s64 %rd11, %rd2, %rd10;
+    add.s64 %rd12, %rd4, %rd5;
+    ld.global.f32 %f3, [%rd6];
+    ld.global.f32 %f9, [%rd9];
+    ld.global.f32 %f10, [%rd11];
+    sub.rn.f32 %f11, %f3, %f5;
+    mul.rn.f32 %f11, %f11, %f8;
+    add.rn.f32 %f12, %f9, 0f3F800000;
+    mul.rn.f32 %f11, %f11, %f12;
+    st.global.f32 [%rd7], %f11;
+    // tanh(x) = 2 / (1 + exp(-2x)) - 1.
+    mul.rn.f32 %f13, %f10, 0fC0000000;
+    mul.rn.f32 %f13, %f13, 0f3FB8AA3B;
+    ex2.approx.ftz.f32 %f14, %f13;
+    add.rn.f32 %f14, %f14, 0f3F800000;
+    rcp.approx.ftz.f32 %f14, %f14;
+    add.rn.f32 %f14, %f14, %f14;
+    sub.rn.f32 %f14, %f14, 0f3F800000;
+    st.global.f32 [%rd12], %f14;
+    add.u32 %r11, %r11, 1;
+    bra LN_STORE;
+LN_DONE:
+    ret;
+}
+
+.visible .entry qi21_rmsnorm(
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u64 weight_ptr,
+    .param .u32 tokens,
+    .param .u32 heads,
+    .param .u32 head_dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<6>;
+    .reg .b32 %r<24>;
+    .reg .b64 %rd<18>;
+    .reg .f32 %f<16>;
+
+    ld.param.u64 %rd1, [input_ptr];
+    ld.param.u64 %rd2, [output_ptr];
+    ld.param.u64 %rd3, [weight_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [heads];
+    ld.param.u32 %r3, [head_dim];
+    ld.param.f32 %f1, [eps];
+    mov.u32 %r4, %ctaid.x;
+    mov.u32 %r5, %ctaid.y;
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra RMS_DONE;
+    setp.ge.u32 %p2, %r5, %r2;
+    @%p2 bra RMS_DONE;
+    mov.u32 %r6, %tid.x;
+    setp.ne.u32 %p3, %r6, 0;
+    @%p3 bra RMS_DONE;
+    mul.lo.u32 %r7, %r2, %r3;
+    mul.lo.u32 %r8, %r4, %r7;
+    mad.lo.u32 %r9, %r5, %r3, %r8;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r10, 0;
+RMS_SUM:
+    setp.ge.u32 %p4, %r10, %r3;
+    @%p4 bra RMS_INV;
+    add.u32 %r11, %r9, %r10;
+    mul.wide.u32 %rd4, %r11, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    ld.global.f32 %f3, [%rd5];
+    fma.rn.f32 %f2, %f3, %f3, %f2;
+    add.u32 %r10, %r10, 1;
+    bra RMS_SUM;
+RMS_INV:
+    cvt.rn.f32.u32 %f4, %r3;
+    div.rn.f32 %f2, %f2, %f4;
+    add.rn.f32 %f2, %f2, %f1;
+    sqrt.rn.f32 %f2, %f2;
+    rcp.rn.f32 %f5, %f2;
+    mov.u32 %r10, 0;
+RMS_STORE:
+    setp.ge.u32 %p5, %r10, %r3;
+    @%p5 bra RMS_DONE;
+    add.u32 %r11, %r9, %r10;
+    mul.wide.u32 %rd4, %r11, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    mul.wide.u32 %rd7, %r10, 4;
+    add.s64 %rd8, %rd3, %rd7;
+    ld.global.f32 %f3, [%rd5];
+    ld.global.f32 %f6, [%rd8];
+    mul.rn.f32 %f7, %f3, %f5;
+    mul.rn.f32 %f7, %f7, %f6;
+    st.global.f32 [%rd6], %f7;
+    add.u32 %r10, %r10, 1;
+    bra RMS_STORE;
+RMS_DONE:
+    ret;
+}
+
+.visible .entry qi21_rope(
+    .param .u64 input_ptr,
+    .param .u64 output_ptr,
+    .param .u64 cos_ptr,
+    .param .u64 sin_ptr,
+    .param .u32 tokens,
+    .param .u32 heads,
+    .param .u32 head_dim
+)
+{
+    .reg .pred %p<6>;
+    .reg .b32 %r<24>;
+    .reg .b64 %rd<18>;
+    .reg .f32 %f<16>;
+
+    ld.param.u64 %rd1, [input_ptr];
+    ld.param.u64 %rd2, [output_ptr];
+    ld.param.u64 %rd3, [cos_ptr];
+    ld.param.u64 %rd4, [sin_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [heads];
+    ld.param.u32 %r3, [head_dim];
+    mov.u32 %r4, %ctaid.x;
+    mov.u32 %r5, %ctaid.y;
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra ROPE_DONE;
+    setp.ge.u32 %p2, %r5, %r2;
+    @%p2 bra ROPE_DONE;
+    mov.u32 %r6, %tid.x;
+    setp.ne.u32 %p3, %r6, 0;
+    @%p3 bra ROPE_DONE;
+    mul.lo.u32 %r7, %r2, %r3;
+    mul.lo.u32 %r8, %r4, %r7;
+    mad.lo.u32 %r9, %r5, %r3, %r8;
+    shr.u32 %r10, %r3, 1;
+    mul.lo.u32 %r11, %r4, %r10;
+    mov.u32 %r12, 0;
+ROPE_LOOP:
+    setp.ge.u32 %p4, %r12, %r10;
+    @%p4 bra ROPE_DONE;
+    shl.b32 %r13, %r12, 1;
+    add.u32 %r14, %r9, %r13;
+    mul.wide.u32 %rd5, %r14, 4;
+    add.s64 %rd6, %rd1, %rd5;
+    add.s64 %rd7, %rd2, %rd5;
+    add.u32 %r15, %r14, 1;
+    mul.wide.u32 %rd8, %r15, 4;
+    add.s64 %rd9, %rd1, %rd8;
+    add.s64 %rd10, %rd2, %rd8;
+    add.u32 %r16, %r11, %r12;
+    mul.wide.u32 %rd11, %r16, 4;
+    add.s64 %rd12, %rd3, %rd11;
+    add.s64 %rd13, %rd4, %rd11;
+    ld.global.f32 %f1, [%rd6];
+    ld.global.f32 %f2, [%rd9];
+    ld.global.f32 %f3, [%rd12];
+    ld.global.f32 %f4, [%rd13];
+    mul.rn.f32 %f5, %f1, %f3;
+    neg.f32 %f7, %f2;
+    fma.rn.f32 %f5, %f7, %f4, %f5;
+    mul.rn.f32 %f6, %f1, %f4;
+    fma.rn.f32 %f6, %f2, %f3, %f6;
+    st.global.f32 [%rd7], %f5;
+    st.global.f32 [%rd10], %f6;
+    add.u32 %r12, %r12, 1;
+    bra ROPE_LOOP;
+ROPE_DONE:
+    ret;
+}
+
+.visible .entry qi21_block_causal_attention(
+    .param .u64 q_ptr,
+    .param .u64 k_ptr,
+    .param .u64 v_ptr,
+    .param .u64 image_ids_ptr,
+    .param .u64 key_valid_ptr,
+    .param .u64 output_ptr,
+    .param .u32 tokens,
+    .param .u32 heads,
+    .param .u32 head_dim,
+    .param .f32 scale
+)
+{
+    .reg .pred %p<16>;
+    .reg .b32 %r<48>;
+    .reg .b64 %rd<32>;
+    .reg .f32 %f<32>;
+
+    ld.param.u64 %rd1, [q_ptr];
+    ld.param.u64 %rd2, [k_ptr];
+    ld.param.u64 %rd3, [v_ptr];
+    ld.param.u64 %rd4, [image_ids_ptr];
+    ld.param.u64 %rd5, [key_valid_ptr];
+    ld.param.u64 %rd6, [output_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [heads];
+    ld.param.u32 %r3, [head_dim];
+    ld.param.f32 %f1, [scale];
+    mov.u32 %r4, %ctaid.x;
+    mov.u32 %r5, %ctaid.y;
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra ATTN_DONE;
+    setp.ge.u32 %p2, %r5, %r2;
+    @%p2 bra ATTN_DONE;
+    mov.u32 %r6, %tid.x;
+    setp.ne.u32 %p3, %r6, 0;
+    @%p3 bra ATTN_DONE;
+    mul.lo.u32 %r7, %r2, %r3;
+    mul.lo.u32 %r8, %r4, %r7;
+    mad.lo.u32 %r9, %r5, %r3, %r8;
+    mul.wide.u32 %rd7, %r4, 4;
+    add.s64 %rd8, %rd4, %rd7;
+    ld.global.s32 %r10, [%rd8];
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+    mov.u32 %r11, 0;
+ATTN_KEY:
+    setp.ge.u32 %p4, %r11, %r1;
+    @%p4 bra ATTN_NORMALIZE;
+    mul.wide.u32 %rd9, %r11, 1;
+    add.s64 %rd10, %rd5, %rd9;
+    ld.global.u8 %r12, [%rd10];
+    setp.eq.u32 %p5, %r12, 0;
+    @%p5 bra ATTN_NEXT_KEY;
+    setp.ge.s32 %p6, %r10, 0;
+    @!%p6 bra ATTN_CAUSAL;
+    mul.wide.u32 %rd11, %r11, 4;
+    add.s64 %rd12, %rd4, %rd11;
+    ld.global.s32 %r13, [%rd12];
+    setp.ne.s32 %p7, %r10, %r13;
+    @%p7 bra ATTN_CAUSAL;
+    bra ATTN_ALLOWED;
+ATTN_CAUSAL:
+    setp.ge.u32 %p8, %r4, %r11;
+    @%p8 bra ATTN_ALLOWED;
+    bra ATTN_NEXT_KEY;
+ATTN_ALLOWED:
+    mul.lo.u32 %r14, %r11, %r7;
+    mad.lo.u32 %r15, %r5, %r3, %r14;
+    mov.f32 %f4, 0f00000000;
+    mov.u32 %r16, 0;
+ATTN_DOT:
+    setp.ge.u32 %p9, %r16, %r3;
+    @%p9 bra ATTN_SCORE;
+    add.u32 %r17, %r9, %r16;
+    add.u32 %r18, %r15, %r16;
+    mul.wide.u32 %rd13, %r17, 4;
+    mul.wide.u32 %rd14, %r18, 4;
+    add.s64 %rd15, %rd1, %rd13;
+    add.s64 %rd16, %rd2, %rd14;
+    ld.global.f32 %f5, [%rd15];
+    ld.global.f32 %f6, [%rd16];
+    fma.rn.f32 %f4, %f5, %f6, %f4;
+    add.u32 %r16, %r16, 1;
+    bra ATTN_DOT;
+ATTN_SCORE:
+    mul.rn.f32 %f4, %f4, %f1;
+    setp.eq.f32 %p10, %f3, 0f00000000;
+    @%p10 bra ATTN_FIRST;
+    max.f32 %f7, %f2, %f4;
+    sub.rn.f32 %f8, %f2, %f7;
+    mul.rn.f32 %f8, %f8, 0f3FB8AA3B;
+    ex2.approx.ftz.f32 %f8, %f8;
+    sub.rn.f32 %f9, %f4, %f7;
+    mul.rn.f32 %f9, %f9, 0f3FB8AA3B;
+    ex2.approx.ftz.f32 %f9, %f9;
+    bra ATTN_ACCUM;
+ATTN_FIRST:
+    mov.f32 %f7, %f4;
+    mov.f32 %f8, 0f00000000;
+    mov.f32 %f9, 0f3F800000;
+ATTN_ACCUM:
+    mul.f32 %f3, %f3, %f8;
+    add.rn.f32 %f3, %f3, %f9;
+    mov.u32 %r16, 0;
+ATTN_VALUE:
+    setp.ge.u32 %p11, %r16, %r3;
+    @%p11 bra ATTN_KEY_COMMIT;
+    add.u32 %r17, %r9, %r16;
+    add.u32 %r18, %r15, %r16;
+    mul.wide.u32 %rd13, %r17, 4;
+    mul.wide.u32 %rd14, %r18, 4;
+    add.s64 %rd15, %rd6, %rd13;
+    add.s64 %rd16, %rd3, %rd14;
+    ld.global.f32 %f11, [%rd16];
+    // On the first valid key the destination has not been initialized yet.
+    // Store its value directly instead of reading uninitialized device memory.
+    @%p10 bra ATTN_VALUE_FIRST;
+    ld.global.f32 %f10, [%rd15];
+    mul.rn.f32 %f10, %f10, %f8;
+    fma.rn.f32 %f10, %f9, %f11, %f10;
+    bra ATTN_VALUE_STORE;
+ATTN_VALUE_FIRST:
+    mov.f32 %f10, %f11;
+ATTN_VALUE_STORE:
+    st.global.f32 [%rd15], %f10;
+    add.u32 %r16, %r16, 1;
+    bra ATTN_VALUE;
+ATTN_KEY_COMMIT:
+    mov.f32 %f2, %f7;
+ATTN_NEXT_KEY:
+    add.u32 %r11, %r11, 1;
+    bra ATTN_KEY;
+ATTN_NORMALIZE:
+    mov.u32 %r16, 0;
+ATTN_NORM_LOOP:
+    setp.ge.u32 %p12, %r16, %r3;
+    @%p12 bra ATTN_DONE;
+    add.u32 %r17, %r9, %r16;
+    mul.wide.u32 %rd13, %r17, 4;
+    add.s64 %rd14, %rd6, %rd13;
+    ld.global.f32 %f10, [%rd14];
+    div.rn.f32 %f10, %f10, %f3;
+    st.global.f32 [%rd14], %f10;
+    add.u32 %r16, %r16, 1;
+    bra ATTN_NORM_LOOP;
+ATTN_DONE:
+    ret;
+}
+
+.visible .entry qi21_residual_norm_modulate_gate(
+    .param .u64 hidden_ptr,
+    .param .u64 projected_ptr,
+    .param .u64 gate1_ptr,
+    .param .u64 modulation_ptr,
+    .param .u64 state_ptr,
+    .param .u64 normalized_ptr,
+    .param .u64 gate2_ptr,
+    .param .u32 tokens,
+    .param .u32 dim,
+    .param .f32 eps
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<32>;
+    .reg .b64 %rd<24>;
+    .reg .f32 %f<24>;
+    ld.param.u64 %rd1, [hidden_ptr];
+    ld.param.u64 %rd2, [projected_ptr];
+    ld.param.u64 %rd3, [gate1_ptr];
+    ld.param.u64 %rd4, [modulation_ptr];
+    ld.param.u64 %rd5, [state_ptr];
+    ld.param.u64 %rd6, [normalized_ptr];
+    ld.param.u64 %rd7, [gate2_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [dim];
+    ld.param.f32 %f1, [eps];
+    mov.u32 %r3, %ctaid.x;
+    setp.ge.u32 %p1, %r3, %r1;
+    @%p1 bra RES_DONE;
+    mov.u32 %r4, %tid.x;
+    setp.ne.u32 %p2, %r4, 0;
+    @%p2 bra RES_DONE;
+    mul.lo.u32 %r5, %r3, %r2;
+    shl.b32 %r6, %r2, 2;
+    mul.lo.u32 %r7, %r3, %r6;
+    mov.f32 %f2, 0f00000000;
+    mov.u32 %r8, 0;
+RES_STATE:
+    setp.ge.u32 %p3, %r8, %r2;
+    @%p3 bra RES_MEAN;
+    add.u32 %r9, %r5, %r8;
+    mul.wide.u32 %rd8, %r9, 4;
+    add.s64 %rd9, %rd1, %rd8;
+    add.s64 %rd10, %rd2, %rd8;
+    add.s64 %rd11, %rd3, %rd8;
+    add.s64 %rd12, %rd5, %rd8;
+    ld.global.f32 %f3, [%rd9];
+    ld.global.f32 %f4, [%rd10];
+    ld.global.f32 %f5, [%rd11];
+    fma.rn.f32 %f3, %f5, %f4, %f3;
+    st.global.f32 [%rd12], %f3;
+    add.rn.f32 %f2, %f2, %f3;
+    add.u32 %r8, %r8, 1;
+    bra RES_STATE;
+RES_MEAN:
+    cvt.rn.f32.u32 %f6, %r2;
+    div.rn.f32 %f2, %f2, %f6;
+    mov.f32 %f7, 0f00000000;
+    mov.u32 %r8, 0;
+RES_VAR:
+    setp.ge.u32 %p4, %r8, %r2;
+    @%p4 bra RES_INV;
+    add.u32 %r9, %r5, %r8;
+    mul.wide.u32 %rd8, %r9, 4;
+    add.s64 %rd9, %rd5, %rd8;
+    ld.global.f32 %f3, [%rd9];
+    sub.rn.f32 %f4, %f3, %f2;
+    fma.rn.f32 %f7, %f4, %f4, %f7;
+    add.u32 %r8, %r8, 1;
+    bra RES_VAR;
+RES_INV:
+    div.rn.f32 %f7, %f7, %f6;
+    add.rn.f32 %f7, %f7, %f1;
+    sqrt.rn.f32 %f7, %f7;
+    rcp.rn.f32 %f8, %f7;
+    mov.u32 %r8, 0;
+RES_STORE:
+    setp.ge.u32 %p5, %r8, %r2;
+    @%p5 bra RES_DONE;
+    add.u32 %r9, %r5, %r8;
+    mul.wide.u32 %rd8, %r9, 4;
+    add.s64 %rd9, %rd5, %rd8;
+    add.s64 %rd10, %rd6, %rd8;
+    add.s64 %rd11, %rd7, %rd8;
+    shl.b32 %r10, %r2, 1;
+    add.u32 %r10, %r10, %r7;
+    add.u32 %r10, %r10, %r8;
+    mul.wide.u32 %rd12, %r10, 4;
+    add.s64 %rd13, %rd4, %rd12;
+    add.u32 %r11, %r10, %r2;
+    mul.wide.u32 %rd14, %r11, 4;
+    add.s64 %rd15, %rd4, %rd14;
+    ld.global.f32 %f3, [%rd9];
+    ld.global.f32 %f9, [%rd13];
+    ld.global.f32 %f11, [%rd15];
+    sub.rn.f32 %f12, %f3, %f2;
+    mul.rn.f32 %f12, %f12, %f8;
+    add.rn.f32 %f13, %f9, 0f3F800000;
+    mul.rn.f32 %f12, %f12, %f13;
+    st.global.f32 [%rd10], %f12;
+    mul.rn.f32 %f14, %f11, 0fC0000000;
+    mul.rn.f32 %f14, %f14, 0f3FB8AA3B;
+    ex2.approx.ftz.f32 %f15, %f14;
+    add.rn.f32 %f15, %f15, 0f3F800000;
+    rcp.approx.ftz.f32 %f15, %f15;
+    add.rn.f32 %f15, %f15, %f15;
+    sub.rn.f32 %f15, %f15, 0f3F800000;
+    st.global.f32 [%rd11], %f15;
+    add.u32 %r8, %r8, 1;
+    bra RES_STORE;
+RES_DONE:
+    ret;
+}
+
+.visible .entry qi21_swiglu(
+    .param .u64 gate_up_ptr,
+    .param .u64 output_ptr,
+    .param .u32 tokens,
+    .param .u32 intermediate_dim
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<20>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<12>;
+    ld.param.u64 %rd1, [gate_up_ptr];
+    ld.param.u64 %rd2, [output_ptr];
+    ld.param.u32 %r1, [tokens];
+    ld.param.u32 %r2, [intermediate_dim];
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ctaid.y;
+    mov.u32 %r5, %ntid.x;
+    mov.u32 %r7, %tid.x;
+    mad.lo.u32 %r6, %r4, %r5, %r7;
+    setp.ge.u32 %p1, %r3, %r1;
+    @%p1 bra SWIGLU_DONE;
+    setp.ge.u32 %p2, %r6, %r2;
+    @%p2 bra SWIGLU_DONE;
+    shl.b32 %r10, %r2, 1;
+    mad.lo.u32 %r11, %r3, %r10, %r6;
+    add.u32 %r12, %r11, %r2;
+    mul.wide.u32 %rd3, %r11, 4;
+    mul.wide.u32 %rd4, %r12, 4;
+    mad.lo.u32 %r13, %r3, %r2, %r6;
+    mul.wide.u32 %rd5, %r13, 4;
+    add.s64 %rd6, %rd1, %rd3;
+    add.s64 %rd7, %rd1, %rd4;
+    add.s64 %rd8, %rd2, %rd5;
+    ld.global.f32 %f1, [%rd6];
+    ld.global.f32 %f2, [%rd7];
+    neg.f32 %f3, %f1;
+    mul.rn.f32 %f3, %f3, 0f3FB8AA3B;
+    ex2.approx.ftz.f32 %f4, %f3;
+    add.rn.f32 %f4, %f4, 0f3F800000;
+    rcp.approx.ftz.f32 %f4, %f4;
+    mul.rn.f32 %f1, %f1, %f4;
+    mul.rn.f32 %f1, %f1, %f2;
+    st.global.f32 [%rd8], %f1;
+SWIGLU_DONE:
+    ret;
+}
+
+.visible .entry qi21_residual_gate_add(
+    .param .u64 state_ptr,
+    .param .u64 gate_ptr,
+    .param .u64 projected_ptr,
+    .param .u64 output_ptr,
+    .param .u32 count
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<8>;
+    ld.param.u64 %rd1, [state_ptr];
+    ld.param.u64 %rd2, [gate_ptr];
+    ld.param.u64 %rd3, [projected_ptr];
+    ld.param.u64 %rd4, [output_ptr];
+    ld.param.u32 %r1, [count];
+    mov.u32 %r2, %ctaid.x;
+    mov.u32 %r3, %ntid.x;
+    mov.u32 %r5, %tid.x;
+    mad.lo.u32 %r4, %r3, %r2, %r5;
+    setp.ge.u32 %p1, %r4, %r1;
+    @%p1 bra ADD_DONE;
+    mul.wide.u32 %rd5, %r4, 4;
+    add.s64 %rd6, %rd1, %rd5;
+    add.s64 %rd7, %rd2, %rd5;
+    add.s64 %rd8, %rd3, %rd5;
+    add.s64 %rd9, %rd4, %rd5;
+    ld.global.f32 %f1, [%rd6];
+    ld.global.f32 %f2, [%rd7];
+    ld.global.f32 %f3, [%rd8];
+    fma.rn.f32 %f1, %f2, %f3, %f1;
+    st.global.f32 [%rd9], %f1;
+ADD_DONE:
+    ret;
+}

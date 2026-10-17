@@ -280,9 +280,12 @@ module ML::CUDA
                    block_x : UInt32, block_y : UInt32, block_z : UInt32,
                    params : Void**, label : String,
                    shared_mem_bytes : UInt32 = 0_u32) : Nil
-    check! LibCUDADriver.cuLaunchKernel(fn.handle, grid_x, grid_y, grid_z,
+    code = LibCUDADriver.cuLaunchKernel(fn.handle, grid_x, grid_y, grid_z,
       block_x, block_y, block_z, shared_mem_bytes, @@current_stream,
-      params, Pointer(Void*).null), "cuLaunchKernel(#{label})"
+      params, Pointer(Void*).null)
+    # Formatting error context belongs on the failure path. Successful resident
+    # dispatches do not need a fresh host String for every GPU kernel.
+    check!(code, "cuLaunchKernel(#{label})") unless code == 0
   end
 
   class ResidentSequenceRunner

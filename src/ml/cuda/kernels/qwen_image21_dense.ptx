@@ -1,0 +1,65 @@
+.version 8.0
+.target sm_80
+.address_size 64
+
+// Reference dense projection for F32/BF16 fixtures. Packed real model
+// projections use the existing Qwen3.5 Q8_0/Q5_K/Q6_K kernels instead.
+.visible .entry qi21_dense_gemv(
+    .param .u64 weights, .param .u64 input, .param .u64 output,
+    .param .u32 in_dim, .param .u32 out_dim, .param .u32 element_bytes
+)
+{
+    .reg .pred %p<3>;
+    .reg .b32 %r<14>;
+    .reg .b64 %rd<14>;
+    .reg .f32 %f<5>;
+    ld.param.u64 %rd1, [weights];
+    ld.param.u64 %rd2, [input];
+    ld.param.u64 %rd3, [output];
+    ld.param.u32 %r1, [in_dim];
+    ld.param.u32 %r2, [out_dim];
+    ld.param.u32 %r3, [element_bytes];
+    mov.u32 %r4, %ctaid.x;
+    mov.u32 %r5, %ntid.x;
+    mov.u32 %r6, %tid.x;
+    mad.lo.u32 %r4, %r4, %r5, %r6;
+    setp.ge.u32 %p1, %r4, %r2;
+    @%p1 bra DONE;
+    mov.u32 %r5, %ctaid.y;
+    mul.wide.u32 %rd4, %r4, %r1;
+    cvt.u64.u32 %rd5, %r3;
+    mul.lo.u64 %rd4, %rd4, %rd5;
+    add.u64 %rd1, %rd1, %rd4;
+    mul.wide.u32 %rd6, %r5, %r1;
+    shl.b64 %rd6, %rd6, 2;
+    add.u64 %rd2, %rd2, %rd6;
+    mov.f32 %f1, 0f00000000;
+    mov.u32 %r7, 0;
+LOOP:
+    setp.ge.u32 %p1, %r7, %r1;
+    @%p1 bra STORE;
+    setp.eq.u32 %p2, %r3, 2;
+    @%p2 bra BF16;
+    ld.global.f32 %f2, [%rd1];
+    bra VALUE;
+BF16:
+    ld.global.u16 %r8, [%rd1];
+    shl.b32 %r8, %r8, 16;
+    mov.b32 %f2, %r8;
+VALUE:
+    ld.global.f32 %f3, [%rd2];
+    fma.rn.f32 %f1, %f2, %f3, %f1;
+    add.u64 %rd1, %rd1, %rd5;
+    add.u64 %rd2, %rd2, 4;
+    add.u32 %r7, %r7, 1;
+    bra LOOP;
+STORE:
+    mul.wide.u32 %rd7, %r5, %r2;
+    cvt.u64.u32 %rd8, %r4;
+    add.u64 %rd7, %rd7, %rd8;
+    shl.b64 %rd7, %rd7, 2;
+    add.u64 %rd3, %rd3, %rd7;
+    st.global.f32 [%rd3], %f1;
+DONE:
+    ret;
+}

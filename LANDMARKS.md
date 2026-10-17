@@ -6,6 +6,23 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWENIMAGE21-CUDA-BLOCK-2026-10-16] First resident CUDA DiT block passes bounded upstream gate
+
+- Reuses the Qwen3.5 driver and Q8_0/Q5_K/Q6_K packed projection kernels.
+  Successful enqueue is device-only, with preallocated scratch and no copies,
+  allocation or synchronization; blocking checkpoint readback is diagnostic.
+- RTX 5060 Ti: all 16 tiny and real-width block-0 checkpoints pass pinned
+  official CUDA/F32 Diffusers with TF32 off. Tiny worst max_abs 3.57628e-7
+  (bound 2e-5); real worst 5.61523e-3 (bound <1e-2), output 5.79834e-4,
+  two-block chain 6.71387e-4. Real output/chain cosine >0.999999.
+- CUDA specs 3/3 cover all five admitted formats, NaN-poisoned graph replay,
+  changed-input two-block device chaining, multi-image masks and invalid keys;
+  existing regressions 6/6 and Python comparator tests 4/4. Targeted review
+  ROBUST within this scope. No long-sequence, full-model or speed claim.
+- Pins, commands, hashes, bounds and rollback: docs/qwen-image21-cuda-block.md.
+  Refresh numerical evidence after weights, upstream, arithmetic, mask, PTX
+  or driver changes. Production image dispatch remains unchanged.
+
 ### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
 
 - Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus
