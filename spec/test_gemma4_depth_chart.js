@@ -525,3 +525,32 @@ test('pan and zoom domains remain bounded by the measured campaign interval', ()
   assert.deepEqual(panDomain(zoomed, full, 1), { start: 500, end: 1000 });
   assert.deepEqual(zoomDomain(zoomed, full, 0.5, 0.1), full);
 });
+
+
+test('explicit PF=1 estimate yields J/token without changing measured VA or raw integrals', () => {
+  const payload = makePayload();
+  payload.circuit_meter = 'ut61b';
+  payload.presentation_source = 'fluke';
+  const measured = buildChartModel(payload, 'fluke', 1);
+  payload.circuit_energy_estimate = { power_factor: 1, basis: 'assumed' };
+  assert.equal(validatePayload(payload), null);
+  const estimate = buildChartModel(payload, 'fluke', 1);
+  assert.equal(estimate.perTokenUnit, 'J/token');
+  assert.equal(estimate.estimatedEnergy, true);
+  assert.deepEqual(estimate.series[0].points, measured.series[0].points);
+  assert.equal(estimate.series[0].integralUnit, 'VA·s');
+  assert.deepEqual(estimate.series[0].perTokenPoints, measured.series[0].perTokenPoints);
+  assert.equal(buildChartModel(payload, 'fluke', 1, 'power').perTokenUnit, 'VA/token');
+  assert.equal(buildChartModel(payload, 'gpu', 1).perTokenUnit, 'J/token');
+  assert.equal(buildChartModel(payload, 'gpu', 1).estimatedEnergy, false);
+  const mounted = mountCompact(payload);
+  assert.equal(mounted.controller.error, null);
+  assert.match(visibleText(mounted.section), /Estimated J\/token/);
+  assert.match(visibleText(mounted.section), /PF=1 assumed/);
+  assert.ok(mounted.canvasLabels.some(s => s.includes('J/token') && s.includes('PF=1')));
+  payload.circuit_energy_estimate.power_factor = 0.9;
+  assert.match(validatePayload(payload), /power.factor|PF=1/i);
+  payload.circuit_energy_estimate.power_factor = 1;
+  delete payload.presentation_source;
+  assert.match(validatePayload(payload), /compact|presentation/i);
+});

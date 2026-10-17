@@ -91,6 +91,17 @@
     };
   }
 
+  function estimatesCircuitEnergy(payload, sourceKey = 'fluke', metric = 'energy') {
+    return sourceKey === 'fluke' && metric === 'energy' &&
+      payload?.circuit_energy_estimate?.power_factor === 1;
+  }
+
+  function ratioUnitFor(payload, sourceKey, metric) {
+    if (estimatesCircuitEnergy(payload, sourceKey, metric)) return 'J/token';
+    const source = sourceDefinitionsForPayload(payload)[sourceKey];
+    return `${metric === 'energy' ? source.integralUnit : source.unit}/token`;
+  }
+
   function measurementClock(payload) {
     if (payload?.measurement_clock === undefined) return 'gputer';
     return typeof payload.measurement_clock === 'string' && payload.measurement_clock.trim()
@@ -125,6 +136,15 @@
       }
       if (circuitMeter !== 'ut61b') {
         return 'Power trace presentation_source is only supported for UT61B demo payloads.';
+      }
+    }
+    if (payload.circuit_energy_estimate !== undefined) {
+      const estimate = payload.circuit_energy_estimate;
+      if (!estimate || estimate.power_factor !== 1 || estimate.basis !== 'assumed') {
+        return 'Circuit energy estimate requires PF=1 power_factor and assumed basis.';
+      }
+      if (circuitMeter !== 'ut61b' || payload.presentation_source !== 'fluke') {
+        return 'Circuit energy estimate is reserved for the compact UT61B presentation.';
       }
     }
     const sources = sourceDefinitions(circuitMeter);
@@ -348,7 +368,8 @@
     return {
       source: sourceKey,
       metric,
-      perTokenUnit: `${metric === 'energy' ? sources[sourceKey].integralUnit : sources[sourceKey].unit}/token`,
+      estimatedEnergy: estimatesCircuitEnergy(payload, sourceKey, metric),
+      perTokenUnit: ratioUnitFor(payload, sourceKey, metric),
       perTokenDomain: { start: 0, end: Math.max(1e-9, ...series.flatMap(item => item.perTokenPoints.map(point => point.value))) },
       trial,
       lanes: labels,
@@ -529,7 +550,7 @@
     metricButtons.setAttribute('role', 'group');
     metricButtons.setAttribute('aria-label', 'Per-token metric');
     const energyButton = element(document, 'button', 'depth-segment-button', presentation.compact
-      ? `${circuitSource.integralUnit}/token` : 'J/token');
+      ? (estimatesCircuitEnergy(payload) ? 'Estimated J/token' : `${circuitSource.integralUnit}/token`) : 'J/token');
     energyButton.type = 'button';
     energyButton.dataset.depthMetric = 'energy';
     const powerButton = element(document, 'button', 'depth-segment-button', presentation.compact
@@ -561,7 +582,9 @@
     chartHeadingCopy.append(element(document, 'strong', 'depth-chart-title', presentation.compact
       ? 'UT61B apparent power and per-token ratios' : 'Power and cost per token'));
     chartHeadingCopy.append(element(document, 'span', 'depth-chart-subtitle', presentation.compact
-      ? 'Solid: UT61B apparent power · dashed: VA/token or VA·s/token · same color: same run'
+      ? (estimatesCircuitEnergy(payload)
+        ? 'Solid: measured VA · dashed: estimated J/token (PF=1 assumed) or VA/token'
+        : 'Solid: UT61B apparent power · dashed: VA/token or VA·s/token · same color: same run')
       : 'Solid: power · dashed: ratio · same color: same run'));
     const chartUnit = element(document, 'span', 'depth-unit-chip');
     chartUnit.dataset.depthUnit = 'true';
@@ -618,7 +641,9 @@
     const scopeText = presentation.compact
       ? `Measured ${clock} traces · ${tokenLabel} tokens per trial · experimental quality not validated. ${circuitSource.shortLabel} is ${circuitSource.detail}. VA/token divides apparent power by token count; VA·s/token integrates apparent power over elapsed seconds. Bounded Catmull–Rom smooths the display only; integrals use the original piecewise-linear samples. Curves stop at their reported endpoints; elapsed time is not normalized.`
       : `Measured ${clock} traces · ${tokenLabel} tokens per trial · experimental quality not validated. NVIDIA is active-board W; ${circuitSource.shortLabel} is ${circuitSource.detail}. Bounded Catmull–Rom smooths the display only; integrals use the original piecewise-linear samples. Curves stop at their reported endpoints; elapsed time is not normalized. Power/token means power divided by token count, not energy per token.`;
-    const scope = element(document, 'p', 'depth-scope-note', scopeText);
+    const estimateNote = estimatesCircuitEnergy(payload)
+      ? ' Estimated J/token = integral(VA × PF) / N, PF=1 assumed, not measured. Raw VA and VA·s remain unchanged; actual joules depend on the unknown power factor.' : '';
+    const scope = element(document, 'p', 'depth-scope-note', scopeText + estimateNote);
     scope.dataset.depthScope = 'true';
     root.append(scope);
     const unavailable = element(document, 'p', 'depth-unavailable', error || '');
@@ -785,15 +810,16 @@
 
     function updateSelectionLabels(model) {
       const source = sourceDefinitionsForPayload(payload)[state.source];
-      const ratioUnit = `${state.metric === 'energy' ? source.integralUnit : source.unit}/token`;
-      elements.current.textContent = `${source.shortLabel} · trial ${state.trial} · 2D Catmull–Rom · ${ratioUnit}`;
+      const ratioUnit = ratioUnitFor(payload, state.source, state.metric);
+      const estimate = estimatesCircuitEnergy(payload, state.source, state.metric);
+      elements.current.textContent = `${source.shortLabel} · trial ${state.trial} · 2D Catmull–Rom · ${ratioUnit}${estimate ? " · estimated, PF=1 assumed" : ""}`;
       elements.chartUnit.textContent = `${source.unit} / ${ratioUnit}`;
-      elements.energyButton.textContent = `${source.integralUnit}/token`;
+      elements.energyButton.textContent = estimatesCircuitEnergy(payload, state.source) ? 'Estimated J/token' : `${source.integralUnit}/token`;
       elements.powerButton.textContent = `${source.unit}/token`;
       const observed = model?.series.filter(series => series.normalization === 'received_tokens').length || 0;
       const total = model?.series.length || 0;
       if (presentation.compact) {
-        const metricName = state.metric === 'energy' ? 'VA·s integral' : 'apparent power';
+        const metricName = estimate ? 'Estimated energy (J, PF=1 assumed)' : state.metric === 'energy' ? 'VA·s integral' : 'apparent power';
         elements.normalization.textContent = observed === total && total > 0
           ? `${metricName}/N(t): uses observed cumulative token IDs, held between receipt timestamps on ${clock}. Ratios begin at the first token; the apparent-power integral includes prefill.`
           : observed === 0
@@ -807,7 +833,7 @@
             ? `${formula}final: divided by the final ${requestedTokenLabel(payload)} generated tokens. These historical runs have no token timestamps; the dashed curve is not normalized by tokens generated so far.`
             : `${formula}(t) uses received token counts where available; historical runs use the final ${requestedTokenLabel(payload)} tokens. Hover a ratio point to see its denominator basis.`;
       }
-      elements.canvas.setAttribute('aria-label', `Interactive two-panel ${source.axisLabel.toLowerCase()} chart. Solid ${source.unit} above, dashed ${ratioUnit} below, shared time in milliseconds. Selected trial ${state.trial}. Use arrow keys to inspect points, plus and minus to zoom, and R to reset.`);
+      elements.canvas.setAttribute('aria-label', `Interactive two-panel ${source.axisLabel.toLowerCase()} chart. Solid ${source.unit} above, dashed ${ratioUnit}${estimate ? " (estimated, PF=1 assumed)" : ""} below, shared time in milliseconds. Selected trial ${state.trial}. Use arrow keys to inspect points, plus and minus to zoom, and R to reset.`);
       dataAttribute(dom.section, 'source', state.source);
       dataAttribute(dom.section, 'unit', source.unit);
       dataAttribute(dom.section, 'trial', state.trial);
@@ -873,7 +899,7 @@
             ['Duration', displayTime(run.durationMs)],
             ['Mean', formatMetric(run.mean, run.unit)],
             ['Integral', formatMetric(run.integral, run.integralUnit)],
-            ['Final ratio', formatMetric(run.perTokenPoints.at(-1)?.value, model.perTokenUnit)],
+            [model.estimatedEnergy ? 'Estimated ratio (PF=1)' : 'Final ratio', formatMetric(run.perTokenPoints.at(-1)?.value, model.perTokenUnit)],
           ];
           for (const [labelText, valueText] of rows) {
             const row = element(document, 'div', 'depth-metric-row');
@@ -898,7 +924,7 @@
       elements.tooltip.replaceChildren();
       elements.tooltip.append(element(document, 'strong', 'depth-tooltip-title', point.label));
       elements.tooltip.append(element(document, 'span', 'depth-tooltip-meta', `Trial ${point.trial} · ${source.shortLabel} · ${point.kind === 'ratio' ? 'derived ratio' : 'source sample'}`));
-      elements.tooltip.append(element(document, 'span', 'depth-tooltip-value', `${displayNumber(point.value)} ${point.unit} at ${displayTime(point.timeMs)}`));
+      elements.tooltip.append(element(document, 'span', 'depth-tooltip-value', `${displayNumber(point.value)} ${point.unit} at ${displayTime(point.timeMs)}${point.kind === 'ratio' && estimatesCircuitEnergy(payload, state.source, state.metric) ? ' · estimated, PF=1 assumed' : ''}`));
       if (point.kind === 'ratio') elements.tooltip.append(element(document, 'span', 'depth-tooltip-meta', point.normalization === 'received_tokens' ? 'Denominator: received tokens at this time' : `Denominator: final ${requestedTokenLabel(payload)} tokens`));
       elements.tooltip.hidden = false;
       const left = clamp(point.x + 12, 8, Math.max(8, canvasWidth - 240));
@@ -969,7 +995,7 @@
           title: presentation.compact ? `APPARENT POWER · ${source.unit}` : `POWER · ${source.unit}`, dashed: false },
         { plot: ratioPlot, domain: model.perTokenDomain, kind: 'ratio', unit: model.perTokenUnit,
           title: presentation.compact
-            ? `${state.metric === 'energy' ? 'VA·s INTEGRAL' : 'APPARENT POWER'} / TOKEN · ${model.perTokenUnit}`
+            ? (model.estimatedEnergy ? 'ESTIMATED ENERGY · J/token · PF=1 assumed' : `${state.metric === 'energy' ? 'VA·s INTEGRAL' : 'APPARENT POWER'} / TOKEN · ${model.perTokenUnit}`)
             : `${state.metric === 'energy' ? 'ENERGY' : 'POWER'} / TOKEN · ${model.perTokenUnit}`,
           dashed: true },
       ];

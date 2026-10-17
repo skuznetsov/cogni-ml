@@ -725,6 +725,8 @@ def _depth_chart_payload(
     }
     if presentation_source is not None:
         payload["presentation_source"] = presentation_source
+        if circuit_meter == "ut61b" and presentation_source == "fluke":
+            payload["circuit_energy_estimate"] = {"power_factor": 1, "basis": "assumed"}
     return payload
 
 
@@ -934,7 +936,8 @@ def render_presentation(report: Any) -> str:
         measurement_scope = (
             f"Measurement clock: {_escape(measurement_clock)}. UT61B reports whole-circuit "
             "apparent power in VA and apparent-power integral in VA·s from AC current using "
-            "the assumed grid voltage. These readings do not establish active watts or joules."
+            "the assumed grid voltage. The lower panel shows estimated J/token assuming PF=1; "
+            "power factor is not measured. Raw VA and VA·s are preserved; actual joules depend on PF."
         )
         curve_notes = (
             "Request-window UT61B apparent-power samples; boundary values are linearly interpolated "

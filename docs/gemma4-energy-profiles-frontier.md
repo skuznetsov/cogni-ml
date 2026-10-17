@@ -218,3 +218,12 @@ answers, longer controlled runs, calibration and appropriate power measurement.
 Refresh this evidence after source, backend/model/tokenizer, GPU, collector,
 clock synchronization, measurement configuration or calibration changes; missing
 raw evidence makes a measurement unavailable and reopens the dependent claim.
+
+
+The compact UT61B demo additionally admits an explicitly assumed PF=1 energy
+estimate, requested by the operator. Only the derived ratio uses estimated
+J/token; source VA/VA s and VM series retain measured units. Chart metadata must
+state the assumed basis and PF=1, and the UI/PNG must expose it. Other factors
+and non-compact/non-UT61B contexts fail closed. The guard is the Node model/mount
+estimate test plus browser labels; this does not promote the estimate to an
+active-energy measurement. Re-render the prior source state to roll back.

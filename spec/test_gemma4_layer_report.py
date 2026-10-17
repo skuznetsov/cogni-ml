@@ -316,6 +316,9 @@ class LayerReportTests(unittest.TestCase):
         )
         self.assertIsNotNone(presentation_data)
         self.assertEqual(json.loads(presentation_data.group(1))["presentation_source"], "fluke")
+        self.assertEqual(json.loads(presentation_data.group(1))["circuit_energy_estimate"], {"power_factor": 1, "basis": "assumed"})
+        self.assertIn("estimated J/token assuming PF=1", presentation_copy)
+        self.assertNotIn("circuit_energy_estimate", payload)
 
     def test_canvas_keeps_actual_token_progress_and_historical_fallback(self) -> None:
         observed = paired_run(label="observed")

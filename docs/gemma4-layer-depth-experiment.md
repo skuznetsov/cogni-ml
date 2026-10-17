@@ -409,3 +409,26 @@ git diff --check
 # From the retained artifact directory, without Python -O:
 python3 check_same_clock_evidence.py
 ```
+
+
+### Demo energy estimate with assumed power factor
+
+At the operator's explicit request, the compact UT61B demo now shows estimated
+J/token with PF=1 assumed. Its payload declares
+`circuit_energy_estimate={power_factor: 1, basis: "assumed"}`. This is admitted
+only for the compact UT61B presentation; invalid factors/bases or other meter
+contexts fail validation. Estimated energy is `integral(VA * PF) / N(t)`;
+PF=1 leaves the numeric ratio equal to VA s/token. Measured upper-panel VA,
+raw VA s integrals, VM series and technical report units remain unchanged.
+The selected metric, lower canvas title, cards, tooltip and explanatory copy
+identify the estimate or PF assumption. VA/token remains the alternative mode.
+
+DoD: 32 Python report tests and 28 Node chart tests, including the formerly
+failing estimate test, preserve raw values and reject missing-context or invalid
+PF metadata. All checks passed locally; all 32 Python report tests also passed
+on gputer. Browser verification confirmed estimated J/token and PF=1 after
+mounting and switching both ratio modes, including the lower canvas title.
+Local and gputer compact/full HTML hashes matched. Restore the prior renderer
+and HTML for rollback. Refresh if PF becomes measured or its assumed value,
+source data, chart contract or renderer changes. This estimate does not resolve
+meter calibration or establish measured active circuit energy.
