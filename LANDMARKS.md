@@ -28698,3 +28698,26 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/gemma4-layer-depth-experiment.md` and the frontier document. Refresh on
   protocol/backend, source, model, GPU/driver, collector, clock, concurrent load
   changes or raw-evidence loss. Calibration and useful-answer quality are open.
+
+### 2026-10-17 — UT61B retained-frame decoding and remote-write telemetry
+
+- `scripts/ut61b_telemetry.py` captures bounded 2400 8N1 POSIX serial input,
+  preserving raw frames, receipt clocks and rejection reasons in a new JSONL.
+  The corrected FS9922 decoder admits the real bargraph flag and APO metadata;
+  nano, HOLD/REL/MIN/MAX, overload and malformed current frames fail closed.
+- Six retained hardware packets decode to 0.864-1.003 A AC. Original evidence
+  is unchanged; the separate redecoded report records source rows and decoder
+  SHA-256. Assumed 116 V yields apparent VA, never active watts or joules.
+- The Python remote-write v1 sender imported 29 samples in five distinct UT61B
+  series into gputer VictoriaMetrics. Raw export matched every timestamp and
+  value (absolute tolerance 1e-12); four same-ms validity observations coalesced.
+  Invalid rows produce validity only, never zero current or power.
+- DoD: 25 focused Python decoder/wire tests pass locally and on gputer, with
+  primary-source flag checks and real VM readback as the external wire check.
+  Two later 15-second captures yielded no valid frames. The operator confirms
+  transmission mode was already on; stable USB streaming and synchronized
+  UT61B/NVIDIA comparison remain open, as does comparative meter accuracy.
+- Commands, rollback, evidence names and refresh triggers are in
+  `docs/ut61b-telemetry.md`. Recheck on meter/adapter/driver, mode/settings,
+  decoder, wire or VM changes. Stop the bounded process to roll back; retained
+  raw data survives both decoding failures and failed imports.
