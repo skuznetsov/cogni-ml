@@ -32,6 +32,7 @@ CONTROLS = {
     "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
     "DRAMA3_BACKBONE_DENSE_FUSION": "0",
     "DRAMA3_EXPERT_PACKED_ROWS": "0",
+    "DRAMA3_TOWER_FFN_PAIR_FUSION": "0",
 }
 INPUT = {
     "text": "Hello, this is a voice test.",
@@ -79,6 +80,7 @@ def main():
     schedules.add_argument("--dac-layout-schedule", help="Comma-separated native/coalesced DAC layouts; scratch and profiling stay off")
     schedules.add_argument("--expert-packed-rows-schedule", help="Comma-separated 0/1 batched expert row packing; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--dense-fusion-schedule", help="Comma-separated 0/1 backbone qkv/z/b/a fusion; coalesced DAC, scratch and profiling off")
+    schedules.add_argument("--tower-ffn-pair-schedule", help="Comma-separated 0/1 tower w1/w3 fusion; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
@@ -87,7 +89,12 @@ def main():
     dac_layouts = None
     expert_packed_rows = None
     dense_fusion = None
-    if args.dense_fusion_schedule is not None:
+    tower_ffn_pair = None
+    if args.tower_ffn_pair_schedule is not None:
+        tower_ffn_pair = [mode.strip() for mode in args.tower_ffn_pair_schedule.split(",")]
+        assert tower_ffn_pair and all(mode in ("0", "1") for mode in tower_ffn_pair), "tower FFN pair fusion must be 0 or 1"
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in tower_ffn_pair]
+    elif args.dense_fusion_schedule is not None:
         dense_fusion = [mode.strip() for mode in args.dense_fusion_schedule.split(",")]
         assert dense_fusion and all(mode in ("0", "1") for mode in dense_fusion), "dense fusion must be 0 or 1"
         schedule = [("0", "0", args.binary, "tree", "64") for mode in dense_fusion]
@@ -148,6 +155,9 @@ def main():
         if dense_fusion is not None:
             controls["DRAMA3_BACKBONE_DENSE_FUSION"] = dense_fusion[arm]
             controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        if tower_ffn_pair is not None:
+            controls["DRAMA3_TOWER_FFN_PAIR_FUSION"] = tower_ffn_pair[arm]
+            controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
@@ -195,6 +205,8 @@ def main():
                         "wav_sha256": sha(output), "report": report,
                     }
                     validate(report, item["wav_sha256"], baseline)
+                    if tower_ffn_pair is not None:
+                        assert report["resident_tower_ffn_pair_fusion"] == (tower_ffn_pair[arm] == "1"), "frozen tower selector differs from requested arm"
                     if binary == args.binary:
                         assert report["host_profile"]["enabled"] == (profile == "1")
                     records.append(item)

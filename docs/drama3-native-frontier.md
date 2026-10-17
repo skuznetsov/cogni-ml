@@ -10,7 +10,82 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: precision-preserving decode acceleration — 2026-10-16
+## Active slice: tower FFN paired projections — 2026-10-17
+
+At `2149cd03`, tower FFN w1/w3 use two dense matvec dispatches over the same
+resident normalized input. The pinned BF16 matrices are 6144 by 2048 in each
+of thirteen tower layers. Hypothesis: one two-output dispatch can reduce
+encoding/binding cost while preserving the original 64-lane F32 products and
+tree. This family is not established as the current dominant request cost.
+
+CAUTION: changed compiler reduction, mixed row/offset selection, unsafe output
+reuse, or a local win without WAV benefit. Keep two output allocations in the
+same ordinal order and retain the original inline calls as default/rollback.
+No new production GPU allocation, submission, wait or read is admitted. This
+is ordinary dispatch fusion. Unsupported formats/reductions must fall back.
+
+First falsifier: alternating paired separate/fused production calls over
+captured tower normalized inputs, GPU exact-bit/finite receipts, rejecting
+bit/NaN controls and existing command timestamps. Then compare w1/w3, SiLU,
+product, w2 and layer outputs against pinned MLX with unchanged tolerances,
+and run offset/tail/format/fallback/frozen-selector guards. The legacy CPU
+activation-reading tower trace is not the qualification instrument.
+
+DoD: release Metal specs; captured-input local pairs; device-only native-arm
+and upstream intermediate comparisons; complete profiler-off WAV ABBA/BAAB with
+identical full codes, sampler tape, WAV, allocations, reads and waits. Enable
+by default only after full-request benefit is confirmed without regressions;
+otherwise retain an off-by-default experiment or reject the candidate.
+Heavy work stays serial under run_safe with the authorized 15% memory floor,
+external scratch, local weights and unrelated processes untouched. Existing
+strict backbone/DAC upstream failures remain open and cannot be relabeled.
+
+The first combined-row implementation preserves 2,654,208 local values exactly
+and passes the six captured MLX projection controls at the old tolerances.
+Its local paired command median is only 1.04135x (17/21 wins), with one case
+at 0.99875x. Full-request ABBA gives 1.21078/1.05162 mirrored ratios, but reverse
+BAAB gives 1.03778/0.92573; unchanged DAC also varies. No reproducible complete
+request benefit is established. Default remains off.
+
+The second implementation computes both original trees for equal-row,
+aligned BF16 pairs in one threadgroup, sharing each input load and using
+exact ushort expansion. It guards both mapped ranges/alignment and launches
+only the common row count; other supported dense pairs retain the combined
+row domain. Twenty release Metal examples pass, including specialized and
+fallback branch receipts, exact-end weights, input/output views, cancellation,
+and BF16 zero/subnormal/Inf/NaN bit controls. All 2,654,208 local values remain
+exact; all six MLX projection controls pass the old tolerances. The pooled
+local command ratio is 1.16337x (21/21 wins), with case medians
+1.20037x/1.15581x/1.14107x. This is not isolated kernel timing or WAV benefit.
+
+The 87-row tower replay compares 674 traced states at prompt row85 and first
+decode row0, plus the decode frame, exactly. At each of the 675 sites,
+off/on upstream metrics match; the complete V1/V2 comparison arrays also
+match. Three late residual8 baseline comparisons exceed the unchanged MLX
+tolerances: decode w2, decode FFN
+residual, and prefill row85 FFN residual. No-regression is established for
+this capture; strict upstream compatibility remains false. Q/K norm buffers
+are snapshotted on GPU before in-place RoPE only in the diagnostic observer.
+Normal requests have no observer or added copy/wait/read.
+
+Complete profiler-off V2 ABBA gives warm worker median request times
+23.175658/24.907944s (separate/fused), with mirrored ratios0.904047/0.960349.
+Reverse BAAB repeat gives26.576364/28.817057s, ratios0.787350/1.078039.
+All24 qualifying requests preserve full codes, sampler tape, WAV, allocations,
+reads and waits. No reproducible WAV gain is established; keep default off.
+These are active-host measurements for2.786395s audio, not an isolated causal
+kernel regression or real-time performance.
+
+The first reverse attempt is excluded: after9 exact results, an unfused
+worker aborted during exit in the GCD watchdog's global mutex lock. All
+request graphs were drained; bridge source is unchanged. Static-destruction
+race is an unproven hypothesis, and the clean repeat does not fix that risk.
+Next discriminators: full decode GPU attribution before choosing another
+kernel family, and a separate minimal watchdog/exit reproducer. See
+[tower pair qualification](drama3-tower-pair-fusion.md) and
+`.landmark/evidence/drama3-tower-pair-fusion.json` for scope and lineage.
+
+## Prior slice: precision-preserving decode acceleration — 2026-10-16
 
 Target sustained generation below real time, preferably RTF 0.8–0.9, with
 first-audio latency measured separately. A 2048-sample frame at 44.1 kHz gives

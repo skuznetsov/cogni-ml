@@ -66,6 +66,8 @@ module ML::Audio::Drama3
     getter config : TowerConfig
     getter offset : Int32
     getter capacity : Int32
+    getter ffn_pair_fusion_enabled : Bool
+    property buffer_trace : Proc(String, Array(Int32), Resident::Buffer, Nil)?
 
     @codebook_embeddings : Matrix
     @codebook_heads : Array(Matrix)
@@ -85,6 +87,12 @@ module ML::Audio::Drama3
                                    when "1" then true
                                    else raise ArgumentError.new("DRAMA3_TOWER_EMBEDDING_FUSION must be 0 or 1")
                                    end
+      @ffn_pair_fusion_enabled = case ENV["DRAMA3_TOWER_FFN_PAIR_FUSION"]? || "0"
+                                 when "0" then false
+                                 when "1" then true
+                                 else raise ArgumentError.new("DRAMA3_TOWER_FFN_PAIR_FUSION must be 0 or 1")
+                                 end
+      @buffer_trace = nil
       @codebook_embeddings = matrix("codebook_embeddings.weight", @config.num_codebooks * @config.vocab_size, @config.dim)
       @shared_layers = Array(Layer).new(@config.shared_enrichment_layers) do |index|
         load_layer("shared_layers.#{index}", "semantic_embedding")
@@ -374,8 +382,12 @@ module ML::Audio::Drama3
     end
 
     private def feed_forward(layer : Layer, input : Resident::Buffer, trace : TowerTraceCallback?, prefix : String) : Resident::Buffer
-      up = @context.matvec(layer.w1, input)
-      gate = @context.matvec(layer.w3, input)
+      if @ffn_pair_fusion_enabled
+        up, gate = @context.matvec_pair({layer.w1, layer.w3}, input, fused: true)
+      else
+        up = @context.matvec(layer.w1, input)
+        gate = @context.matvec(layer.w3, input)
+      end
       activated = @context.silu(up)
       product = @context.mul(activated, gate)
       trace_value(trace, "#{prefix}.w1", [1_i32, 1_i32, @config.intermediate_size], up)
@@ -422,6 +434,7 @@ module ML::Audio::Drama3
     end
 
     private def trace_value(trace : TowerTraceCallback?, name : String, shape : Array(Int32), value : Resident::Buffer) : Nil
+      @buffer_trace.try(&.call(name, shape, value))
       trace.try(&.call(name, shape, @context.read(value, "diagnostic")))
     end
 

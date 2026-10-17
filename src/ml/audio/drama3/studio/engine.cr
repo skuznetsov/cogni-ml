@@ -115,6 +115,7 @@ require "../wav"
                              truncated: !result.generation.stopped, sample_rate: 44100, samples: samples.size,
                              seconds: samples.size / 44100.0, peak: peak, rms: rms,
                              sampler_inputs: generator.sampler_inputs, resident_readbacks: reads,
+                             resident_tower_ffn_pair_fusion: generator.tower.ffn_pair_fusion_enabled,
                              resident_graph: graph.transform_values { |value, key| key.in?("submitted", "completed", "completion_waits") ? value - before_graph[key] : value },
                              resident_allocation_stats: {allocations: allocation[:allocations] - before_alloc[:allocations],
                                                          requested_bytes: allocation[:requested_bytes] - before_alloc[:requested_bytes],

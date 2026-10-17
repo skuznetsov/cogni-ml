@@ -64,6 +64,65 @@ kernel void dr3_dense_four_tree(
     }
     if (lane == 0) y[r] = parts[0];
 }
+kernel void dr3_dense_pair_tree(
+    device const uchar* w0 [[buffer(0)]], device const uchar* w1 [[buffer(1)]],
+    device const float* x [[buffer(2)]],
+    device float* y0 [[buffer(3)]], device float* y1 [[buffer(4)]],
+    constant ulong* p [[buffer(5)]],
+    uint output_row [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint projection = output_row < p[0] ? 0 : 1;
+    uint r = projection == 0 ? output_row : output_row - uint(p[0]);
+    constant ulong* q = p + projection * 5;
+    device const uchar* w = projection == 0 ? w0 : w1;
+    device float* y = projection == 0 ? y0 : y1;
+    threadgroup float parts[64];
+    uint cols = uint(q[1]);
+    float s = 0;
+    ulong row = q[4] * q[0] + r;
+    for (uint j = lane; j < cols; j += 64) s += dr3_float(w, q[2], row * cols + j, q[3]) * x[j];
+    parts[lane] = s;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint d = 32; d > 0; d /= 2) {
+        if (lane < d) parts[lane] += parts[lane + d];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0) y[r] = parts[0];
+}
+
+// Equal-row BF16 specialization: one input load feeds both original F32
+// accumulators. The host selects this only for even, in-range weight offsets.
+kernel void dr3_dense_pair_bf16_aligned(
+    device const uchar* w0 [[buffer(0)]], device const uchar* w1 [[buffer(1)]],
+    device const float* x [[buffer(2)]],
+    device float* y0 [[buffer(3)]], device float* y1 [[buffer(4)]],
+    constant ulong* p [[buffer(5)]],
+    uint r [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint cols = uint(p[1]);
+    ulong row_base = ulong(r) * ulong(cols);
+    float s0 = 0.0f, s1 = 0.0f;
+    for (uint j = lane; j < cols; j += 64) {
+        float xval = x[j];
+        ulong element = row_base + ulong(j);
+        s0 += dr3_bf16_aligned(w0, p[2], element) * xval;
+        s1 += dr3_bf16_aligned(w1, p[7], element) * xval;
+    }
+    threadgroup float parts0[64], parts1[64];
+    parts0[lane] = s0;
+    parts1[lane] = s1;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint d = 32; d > 0; d /= 2) {
+        if (lane < d) {
+            parts0[lane] += parts0[lane + d];
+            parts1[lane] += parts1[lane + d];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0) {
+        y0[r] = parts0[0];
+        y1[r] = parts1[0];
+    }
+}
+
 kernel void dr3_dense_simd(device const uchar* w [[buffer(0)]],device const float* x [[buffer(1)]],device float* y [[buffer(2)]],constant ulong* p [[buffer(3)]],uint r [[threadgroup_position_in_grid]],uint lane [[thread_index_in_threadgroup]],uint simd_lane [[thread_index_in_simdgroup]],uint simdgroup [[simdgroup_index_in_threadgroup]],uint simd_width [[threads_per_simdgroup]]) {
     threadgroup float parts[64];uint cols=uint(p[1]);float s=0;ulong row=p[4]*p[0]+r;
     if(p[3]==1&&(p[2]&1)==0){for(uint j=lane;j<cols;j+=64)s+=dr3_bf16_aligned(w,p[2],row*cols+j)*x[j];}

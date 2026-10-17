@@ -30093,3 +30093,52 @@ Refresh after source/toolchain/device/model/workload changes.
   Sustained RTF 0.8–0.9 remains open. A separate possible next discriminator is
   exact-tree tower FFN w1/w3 fusion; no current dominance claim is established.
 
+### 2026-10-17 — opt-in exact-tree tower FFN paired projections
+
+- From `2149cd03`, a frozen `DRAMA3_TOWER_FFN_PAIR_FUSION=1` combines
+  shared-input w1/w3 projections. Equal-row aligned BF16 pairs use two
+  independent original F32 64-lane trees with one shared input load;
+  supported other pairs use combined row domains. Unsupported cases retain
+  the established separate calls. Unset/`0` remains the default and rollback.
+  The two ordinal output allocations, production submissions, waits and reads
+  are unchanged; the new borrowed-buffer observer is normally nil.
+- Twenty release Metal examples pass. The final local probe preserves
+  2,654,208 values per arm bitwise, rejects bit/NaN controls, passes six MLX
+  projection controls at unchanged tolerances, and observes 1.16337 pooled
+  paired command ratio with 21/21 wins. Intervals overlap; they are not
+  isolated kernel times or additive family costs. The first generic variant
+  gave only 1.04135 locally and no reproducible complete-request benefit.
+- On the pinned 87-hidden-row fixture, 674 selected tower trace sites plus
+  the first decode frame give 675 exact off/on comparisons. These are 675
+  comparison triplets (2,025 raw records); the 675 per-arm upstream metrics
+  match across arms and between the two variants.
+  Three residual8 failures already occur in the unfused capture; strict MLX
+  compatibility remains false. This covers prefill row85 and decode row0,
+  not every cache history. Six projection payloads are hashed, not the whole
+  checkpoint; unchanged dispatch.cr was omitted from recorded source maps.
+- Final profiler-off ABBA and complete reverse BAAB preserve all24 codes,
+  sampler tapes, WAVs and allocation/read/wait ledgers. Warm worker request
+  medians separate/fused are 23.175658/24.907944s and 26.576364/28.817057s
+  for2.786395s audio. Mirrored request ratios0.904047/0.960349 and
+  0.787350/1.078039 do not establish request benefit. Unchanged DAC also
+  varies on this active host. Keep default off; sustained realtime is open.
+- The first reverse attempt is excluded after9 exact results because an
+  unfused worker aborted at exit. Its stack reaches the repeating GCD
+  watchdog's process-global mutex in unchanged bridge.mm after drained
+  graphs. Static-mutex teardown racing the callback is a hypothesis, not a
+  proven cause. The full unchanged repeat exits cleanly; this does not fix
+  the captured failure. Keep the strict worker-exit assertion.
+- Correlated mini-Quad review and root execution support bounded native
+  parity and the local observation, not independent replication or default
+  promotion. Details `docs/drama3-tower-pair-fusion.md`, index
+  `.landmark/evidence/drama3-tower-pair-fusion.json`; selected current and
+  historical source scopes remain separate under
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/`.
+  Refresh on source/compiler/bridge/model/reference/input/tolerance/queue/
+  device/OS changes or raw evidence loss; timings also decay with host load.
+  Next performance discriminator: full decode GPU attribution checked
+  against profiler-off WAV requests. Separate reliability return pointer:
+  a minimal watchdog/process-exit reproducer. Standing authority remains
+  serial run_safe,15% memory floor, external scratch/local weights,
+  unrelated processes untouched, exact-path local atomic commit/no push.
+
