@@ -28721,3 +28721,23 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/ut61b-telemetry.md`. Recheck on meter/adapter/driver, mode/settings,
   decoder, wire or VM changes. Stop the bounded process to roll back; retained
   raw data survives both decoding failures and failed imports.
+
+### 2026-10-17 — UT61B bounded capture after adapter reseating
+
+- With the same committed decoder and 2400 8N1 settings, captures after the
+  operator reseated the optical/USB adapter received 34 valid frames in 20 s
+  and 68 in 40 s. No malformed complete frames were observed; one partial
+  frame was retained at the first stop. The combined current range was
+  0.850-1.212 A AC. This supersedes the preceding live-input blocker within
+  these two bounded windows, without proving the physical cause or sustained
+  stability.
+- Real remote-write imported 103 and 204 metric samples. VM raw export matched
+  all 307 timestamps exactly and values within `1e-12`, without coalescing.
+  The second import's immediate export was empty; a later check matched without
+  a resend. Write acceptance alone does not establish readable stored data.
+- Fresh raw frames, exports and `verify_ut61b_live_roundtrip.py` are retained
+  separately from the original failed captures and redecoded evidence, in the
+  task artifact's `layer-depth/` and the owned gputer deployment's `reports/`.
+  Reproduction, rollback and refresh triggers remain in
+  `docs/ut61b-telemetry.md`. Calibration, comparative meter accuracy and a
+  synchronized UT61B/NVIDIA experiment remain open.

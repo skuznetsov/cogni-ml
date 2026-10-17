@@ -100,10 +100,32 @@ are in the task artifact's `layer-depth/` directory and in
 
 Two subsequent 15-second captures received no valid frames (nine and four
 rejected candidates). The operator confirmed that data transmission mode was
-already enabled. This verifies decoding of the retained hardware frames and
-the remote-write/readback path; a stable ongoing USB stream, meter calibration,
-and a synchronized UT61B/NVIDIA comparison remain unverified. Do not treat
-series wiring as evidence that this meter is more accurate than Fluke.
+already enabled.
+
+After the operator reseated the optical/USB adapter, two new captures with the
+same decoder and serial settings received 34 valid frames in 20 seconds and
+68 in 40 seconds, respectively. No malformed complete frame was observed; the
+first capture retained one partial frame at the bounded stop. AC current ranged
+from 0.850 to 1.212 A across the two captures. The median receipt interval was
+582 and 589 ms, respectively, and neither capture reported a low-battery flag.
+Raw input is preserved in `ut61b-20261017-reseated.jsonl` and
+`ut61b-20261017-reseated-confirm.jsonl` in the same artifact and gputer report
+directories.
+
+Both fresh captures were imported through real Prometheus remote-write v1:
+103 and 204 metric samples, respectively, with no same-ms coalescing. Raw VM
+export matched all 307 timestamps exactly and values within `1e-12`. The first
+immediate export after the second import was empty; a later export matched
+without resending the input. An HTTP write success alone is therefore not the
+readback check. The separate `verify_ut61b_live_roundtrip.py` and corresponding
+`*-reseated*-vm-export.json` summaries preserve the fresh-capture scope; the
+earlier retained-frame proof remains unchanged.
+
+This establishes two successful bounded captures after reseating, rather than
+a long-duration stability or causal diagnosis of the previous corruption.
+Meter calibration and a synchronized UT61B/NVIDIA comparison remain unverified.
+Do not treat series wiring as evidence that this meter is more accurate than
+Fluke.
 
 Software DoD, run locally and on gputer:
 
