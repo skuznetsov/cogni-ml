@@ -10,8 +10,10 @@ The Linux integration uses a local llama.cpp server as the full-depth inference
 backend. cogni-ml owns the Eco (0/256), Balanced (256/512), and Quality
 (1024/1024) reasoning/answer token budgets. These are initial policy defaults,
 not measured quality or energy optima. Existing Metal diagnostics keep their
-current behavior. Layer truncation, synthetic CUDA probes as useful inference,
-and guaranteed instantaneous watt limits are rejected.
+current behavior. These profiles reject layer truncation, synthetic CUDA probes
+as useful inference, and guaranteed instantaneous watt limits. A separately
+requested hackathon [decoder-depth experiment](gemma4-layer-depth-experiment.md)
+may use explicitly labelled pruned copies without changing these profiles.
 
 Thinking uses Gemma 4's native thought channel. A bounded reasoning completion
 is followed by an answer completion with the closed channel in its actual

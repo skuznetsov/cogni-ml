@@ -28622,8 +28622,34 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/gemma4-energy-profiles.md` and
   `docs/gemma4-energy-profiles-frontier.md`. Refresh on source, model/backend,
   hardware, collector, clocks or calibration changes and raw-evidence loss.
-- New user-authorized frontier: experimentally reduce actual decoder depth,
-  accepting poor answer quality, to test card load. Keep normal profiles
-  full-depth. Discriminate actual skipped layers from CPU offload; compare
-  fixed token work with GPU telemetry and Fluke. Restore the full model after
-  the experiment; no GPU reset or changes to unrelated workloads are authorized.
+- The separately authorized decoder-depth experiment is recorded below;
+  normal token profiles remain full-depth.
+
+### 2026-10-17 — Bounded Gemma 4 decoder-depth experiment on gputer
+
+- `gemma4_prune_layers.py` creates new prefix GGUFs, trims the two per-layer
+  arrays and preserves original tensor payloads. It rejects unsupported layouts,
+  nonzero PLE/shared KV and existing output paths. Loader logs confirm actual
+  48/32/16/48 decoder blocks, all on GPU; placement changes are not this test.
+- Campaign `depth-20261017-a`, RTX 5060 Ti, llama.cpp b11714, Q4_K_M: three
+  requests per batch, each exactly 256 generated tokens with the same prompt,
+  greedy settings, cache disabled and EOS ignored. Before/32/16/after means:
+  5.658/3.970/2.316/5.635 s; 159.7/161.5/144.8/163.5 GPU W;
+  903.8/640.9/335.1/921.4 GPU J per request. All 12 GPU and Fluke windows had
+  coverage. The raw GPU capture has 1,200 samples and zero sample errors.
+- Fewer blocks reduced fixed-work duration and integrated energy. Weight count
+  did not proportionally predict watts: 32 blocks used almost the same mean W.
+  Short sensor windows, shared GPU activity and unvalidated answer quality
+  prevent a precise isolated wattage or useful-answer efficiency claim. Fluke
+  remains whole-circuit VA / VA s, not active W / J.
+- Every retained tensor payload matches the original; its SHA-256 is unchanged.
+  Full-model service was restored and completed the final three trials. No new
+  backend failure occurred; the earlier sustained-load watchdog risk remains.
+- DoD: 2 Crystal experiment specs and 36 Python pruning/telemetry/report tests
+  pass; direct hardware evidence and reproduction are in
+  `docs/gemma4-layer-depth-experiment.md`. Raw reports, loader logs, manifests
+  and rendered comparison are preserved in the task artifact bundle's
+  `layer-depth/` and under the owned deployment's `reports/` directory.
+- Refresh on source, model/backend, GPU/driver, prompt/settings, collector,
+  clocks, calibration, concurrent-load changes or raw-evidence loss. No GPU
+  reset, power-limit change or changes to unrelated workloads were authorized.

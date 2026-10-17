@@ -39,6 +39,10 @@ compares request windows against raw Fluke measurements in VictoriaMetrics and
 renders standalone comparison graphs. See [setup and measurement units](docs/gemma4-energy-profiles.md)
 and the [hardware validation boundary](docs/gemma4-energy-profiles-frontier.md).
 
+An opt-in [decoder-depth experiment](docs/gemma4-layer-depth-experiment.md)
+compares prefix-pruned Gemma 4 copies at fixed generated-token counts, using
+NVIDIA board watts/joules and separate Fluke circuit measurements.
+
 ## Qwen-Image 2.1
 
 The local text-to-image package combines the official Qwen3-VL text encoder
