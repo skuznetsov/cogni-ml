@@ -7,12 +7,16 @@ const {
   buildChartModel,
   catmullRomSegments,
   commonTimeDomain,
+  createShell,
   formatMetric,
   layoutCanvasLegend,
+  mount,
   nearestSample,
   panDomain,
   perTokenPoints,
   progressPerTokenPoints,
+  presentationOptions,
+  sourceDefinitions,
   projectPoint,
   validatePayload,
   valueDomain,
@@ -43,8 +47,158 @@ function makePayload(runs = [makeRun()], requestedTokens = 256) {
   };
 }
 
+class FakeElement {
+  constructor(tagName) {
+    this.tagName = tagName;
+    this.children = [];
+    this.dataset = {};
+    this.attributes = {};
+    this.classList = { toggle() {} };
+    this.style = { setProperty() {} };
+    this.textContent = '';
+    this.listeners = {};
+  }
+
+  append(...nodes) { this.children.push(...nodes); }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  querySelector() { return null; }
+  replaceChildren(...nodes) { this.children = nodes; }
+  getBoundingClientRect() { return { width: 800, height: 470, left: 0, top: 0 }; }
+  getContext() { return this.context; }
+  focus() {}
+}
+
+function shellFor(payload) {
+  const document = { createElement: tagName => new FakeElement(tagName) };
+  const section = new FakeElement('section');
+  return { section, shell: createShell(document, section, payload, null) };
+}
+
+function visibleText(node) {
+  return [node.textContent || '', ...node.children.map(visibleText)].join(' ');
+}
+
+function mountCompact(payload) {
+  const canvasLabels = [];
+  const context = new Proxy({
+    measureText: text => ({ width: String(text).length * 6 }),
+    fillText: text => canvasLabels.push(String(text)),
+  }, {
+    get(target, key) { return key in target ? target[key] : () => {}; },
+  });
+  const section = new FakeElement('section');
+  const document = {
+    defaultView: { devicePixelRatio: 1, addEventListener() {} },
+    createElement(tagName) {
+      const node = new FakeElement(tagName);
+      if (tagName === 'canvas') node.context = context;
+      return node;
+    },
+    getElementById(id) { return id === 'depth-explorer' ? section : null; },
+  };
+  section.ownerDocument = document;
+  return { controller: mount(section, payload), section, canvasLabels };
+}
+
 test('accepts the paired GPU-W and Fluke-VA payload contract', () => {
   assert.equal(validatePayload(makePayload()), null);
+});
+
+test('accepts UT61B circuit traces and exposes truthful circuit labels', () => {
+  const payload = makePayload();
+  payload.circuit_meter = 'ut61b';
+  payload.measurement_clock = 'gputer';
+  assert.equal(validatePayload(payload), null);
+
+  assert.equal(typeof sourceDefinitions, 'function');
+  const circuit = sourceDefinitions('ut61b').fluke;
+  assert.equal(circuit.label, 'UT61B circuit');
+  assert.equal(circuit.shortLabel, 'UT61B circuit');
+  assert.equal(circuit.buttonLabel, 'UT61B circuit (VA)');
+  assert.equal(circuit.axisLabel, 'UT61B circuit apparent power');
+  assert.equal(circuit.unit, 'VA');
+  assert.equal(circuit.integralUnit, 'VA·s');
+  assert.match(circuit.detail, /AC current.*assumed grid voltage/);
+  assert.doesNotMatch(JSON.stringify(circuit), /Fluke|\bW\b|\bJ\b/);
+
+  assert.equal(buildChartModel(payload, 'fluke', 1).perTokenUnit, 'VA·s/token');
+  assert.equal(buildChartModel(payload, 'fluke', 1, 'power').perTokenUnit, 'VA/token');
+});
+
+test('defaults historical chart payloads to Fluke and rejects unsupported meters', () => {
+  assert.equal(sourceDefinitions().fluke.label, 'Fluke circuit');
+
+  const payload = makePayload();
+  payload.circuit_meter = 'generic-meter';
+  assert.match(validatePayload(payload), /circuit_meter.*fluke.*ut61b/i);
+
+  const invalidClock = makePayload();
+  invalidClock.measurement_clock = '  ';
+  assert.match(validatePayload(invalidClock), /measurement_clock.*non-empty/i);
+});
+
+test('presentation source metadata selects the UT61B compact demo and bounds source IDs', () => {
+  const historical = makePayload();
+  assert.equal(validatePayload(historical), null);
+  assert.deepEqual(presentationOptions(historical), { source: 'gpu', compact: false });
+
+  const demo = makePayload();
+  demo.circuit_meter = 'ut61b';
+  demo.measurement_clock = 'gputer';
+  demo.presentation_source = 'fluke';
+  assert.equal(validatePayload(demo), null);
+  assert.deepEqual(presentationOptions(demo), { source: 'fluke', compact: true });
+
+  const invalid = makePayload();
+  invalid.presentation_source = 'ut61b';
+  assert.match(validatePayload(invalid), /presentation_source.*gpu.*fluke/i);
+});
+
+test('compact UT61B shell hides source chooser and uses apparent-power labels', () => {
+  const payload = makePayload();
+  payload.circuit_meter = 'ut61b';
+  payload.measurement_clock = 'gputer';
+  payload.presentation_source = 'fluke';
+  const { section, shell } = shellFor(payload);
+  const text = visibleText(section);
+
+  assert.equal(presentationOptions(payload).source, 'fluke');
+  assert.equal(shell.energyButton.textContent, 'VA·s/token');
+  assert.equal(shell.powerButton.textContent, 'VA/token');
+  assert.match(shell.canvas.attributes['aria-label'], /UT61B apparent-power/);
+  assert.match(text, /UT61B circuit · selected trial/);
+  assert.doesNotMatch(text, /NVIDIA|Fluke|\bW\b|\bJ\b/);
+
+  const legacy = shellFor(makePayload());
+  const legacyText = visibleText(legacy.section);
+  assert.match(legacyText, /NVIDIA GPU \(W\)/);
+  assert.match(legacyText, /Fluke circuit \(VA\)/);
+  assert.match(legacyText, /J\/token/);
+});
+
+test('mount renders compact UT61B with UT61B selected and no active-energy wording', () => {
+  const payload = makePayload();
+  payload.circuit_meter = 'ut61b';
+  payload.measurement_clock = 'gputer';
+  payload.presentation_source = 'fluke';
+  payload.runs[0].token_progress = {
+    basis: 'received_token_ids',
+    points: [[0, 0], [500, 128], [1000, 256]],
+  };
+  const { controller, section, canvasLabels } = mountCompact(payload);
+
+  assert.ok(controller);
+  assert.equal(controller.error, null);
+  assert.equal(controller.state.source, 'fluke');
+  assert.equal(section.dataset.depthReady, 'true');
+  assert.equal(section.dataset.unit, 'VA');
+  assert.ok(canvasLabels.some(label => label.includes('APPARENT POWER · VA')));
+  assert.ok(canvasLabels.some(label => label.includes('VA·s INTEGRAL / TOKEN · VA·s/token')));
+  const text = visibleText(section);
+  assert.match(text, /VA·s integral\/N\(t\): uses observed cumulative token IDs.*on gputer/);
+  assert.match(text, /the apparent-power integral includes prefill/);
+  assert.doesNotMatch(text, /NVIDIA|Fluke|\bW\b|\bJ\b|energy includes prefill/i);
 });
 
 test('accepts positive integer token counts and rejects invalid counts', () => {

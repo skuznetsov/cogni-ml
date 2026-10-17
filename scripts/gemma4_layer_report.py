@@ -8,12 +8,14 @@ import html
 import json
 import math
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
 
 SCHEMA = "cogni.gemma4.layer_depth.v1"
 DEPTH_COLORS = ("#247a72", "#c07824", "#6952a3", "#2878b5", "#b34a5a", "#668a35")
+CIRCUIT_METERS = {"fluke": "Fluke", "ut61b": "UT61B"}
 
 
 class ReportError(ValueError):
@@ -54,6 +56,104 @@ def _sha256(value: Any, location: str) -> str | None:
     if value is not None and (len(value) != 64 or any(c not in "0123456789abcdefABCDEF" for c in value)):
         raise ReportError(f"{location} must be a 64-character SHA-256 hex digest or null")
     return value
+
+
+def _circuit_meter(report: dict[str, Any]) -> str:
+    """Return the selected circuit meter, preserving legacy reports as Fluke."""
+    return report.get("circuit_meter", "fluke")
+
+
+def _circuit_meter_name(report: dict[str, Any]) -> str:
+    return CIRCUIT_METERS[_circuit_meter(report)]
+
+
+def _measurement_clock(report: dict[str, Any]) -> str:
+    return report.get("measurement_clock") or "gputer"
+
+
+def _circuit_chart_title(report: dict[str, Any], *, paired: bool = False) -> str:
+    if _circuit_meter(report) == "ut61b":
+        return "UT61B circuit"
+    return "Fluke" if paired else "Circuit"
+
+
+def _validate_circuit_measurement_identity(
+    measurement: Any,
+    location: str,
+    report_meter: str,
+    measurement_clock: str | None,
+) -> None:
+    if report_meter == "ut61b" and not isinstance(measurement, dict):
+        raise ReportError(f"{location} must retain UT61B source identity, including when unavailable")
+    if measurement is None or not isinstance(measurement, dict):
+        return
+    measurement_meter = _optional_type(measurement, "meter", str, location)
+    selector = _optional_type(measurement, "selector", str, location)
+    if measurement_meter is not None and measurement_meter not in CIRCUIT_METERS:
+        raise ReportError(f"{location}.meter must be 'fluke', 'ut61b', or null")
+    if measurement_meter is not None and measurement_meter != report_meter:
+        raise ReportError(
+            f"{location}.meter {measurement_meter!r} does not match report.circuit_meter {report_meter!r}"
+        )
+    metric = measurement.get("metric")
+    if report_meter == "fluke" and (
+        (isinstance(metric, dict) and metric.get("__name__") == "ut61b_current_amperes")
+        or (selector is not None and selector.lstrip().startswith("ut61b_current_amperes"))
+    ):
+        raise ReportError(f"{location} identifies UT61B data in a Fluke report")
+    if report_meter == "ut61b":
+        if measurement_meter != "ut61b":
+            raise ReportError(f"{location}.meter must be 'ut61b' for a UT61B report")
+        if measurement_clock is None:
+            raise ReportError("report.measurement_clock is required for UT61B source identity")
+        selector_match = re.fullmatch(
+            r"\s*ut61b_current_amperes\s*\{\s*(.*?)\s*\}\s*", selector or ""
+        )
+        if selector_match is None:
+            raise ReportError(
+                f"{location}.selector must identify the UT61B current-amperes metric and labels"
+            )
+        selector_labels: dict[str, str] = {}
+        for item in selector_match.group(1).split(","):
+            key, separator, value = item.partition("=")
+            key, value = key.strip(), value.strip()
+            if not separator or not key or len(value) < 2 or value[0] != '"' or value[-1] != '"':
+                raise ReportError(f"{location}.selector has malformed UT61B label matchers")
+            if key in selector_labels:
+                raise ReportError(f"{location}.selector repeats a UT61B label matcher")
+            selector_labels[key] = value[1:-1]
+
+        if not isinstance(metric, dict) or metric.get("__name__") != "ut61b_current_amperes":
+            raise ReportError(f"{location}.metric.__name__ must be 'ut61b_current_amperes'")
+        expected_labels = {
+            "circuit": measurement_clock,
+            "meter": "ut61b",
+            "mode": "ac",
+        }
+        for key, expected in expected_labels.items():
+            if selector_labels.get(key) != expected or metric.get(key) != expected:
+                raise ReportError(
+                    f"{location} must identify UT61B metric label {key}={expected!r}"
+                )
+
+        active_fields = (
+            "mean_active_power_watts",
+            "active_energy_joules",
+            "estimated_active_energy_joules",
+        )
+        if any(measurement.get(field) is not None for field in active_fields):
+            raise ReportError(f"{location} cannot report UT61B current as active W or J")
+
+        if measurement.get("status") == "available":
+            if measurement.get("kind") != "current_ac" or measurement.get("power_unit") != "VA":
+                raise ReportError(
+                    f"{location} must preserve current_ac and VA for UT61B apparent power"
+                )
+        elif (
+            measurement.get("kind") not in (None, "current_ac")
+            or measurement.get("power_unit") not in (None, "VA")
+        ):
+            raise ReportError(f"{location} has conflicting UT61B current_ac/VA metadata")
 
 
 def _validate_curve(measurement: dict[str, Any], location: str, *, percent: bool = False) -> None:
@@ -151,6 +251,14 @@ def validate_report(report: Any) -> dict[str, Any]:
         raise ReportError("report root must be an object")
     if report.get("schema") != SCHEMA:
         raise ReportError(f"schema must be {SCHEMA!r}")
+    circuit_meter = _circuit_meter(report)
+    if not isinstance(circuit_meter, str) or circuit_meter not in CIRCUIT_METERS:
+        raise ReportError("report.circuit_meter must be 'fluke' or 'ut61b'")
+    measurement_clock = _optional_type(report, "measurement_clock", str, "report")
+    if measurement_clock is not None and not measurement_clock.strip():
+        raise ReportError("report.measurement_clock must be a non-empty string or null")
+    if circuit_meter == "ut61b" and measurement_clock is None:
+        raise ReportError("report.measurement_clock is required for UT61B reports")
     _optional_type(report, "campaign_id", str, "report")
     _sha256(report.get("prompt_sha256"), "report.prompt_sha256")
     _optional_type(report, "notes", str, "report")
@@ -199,7 +307,14 @@ def validate_report(report: Any) -> dict[str, Any]:
         _optional_type(run, "error", str, location)
         _optional_type(run, "_source_report", str, location)
         _validate_measurement(run.get("gpu_measurement"), f"{location}.gpu_measurement")
-        _validate_measurement(run.get("circuit_measurement"), f"{location}.circuit_measurement")
+        circuit_measurement = run.get("circuit_measurement")
+        _validate_measurement(circuit_measurement, f"{location}.circuit_measurement")
+        _validate_circuit_measurement_identity(
+            circuit_measurement,
+            f"{location}.circuit_measurement",
+            circuit_meter,
+            measurement_clock,
+        )
         _validate_measurement(
             run.get("gpu_utilization_measurement"),
             f"{location}.gpu_utilization_measurement",
@@ -273,8 +388,8 @@ def _measurement_cell(measurement: dict[str, Any] | None, source: str, actual_to
     else:
         mean = measurement.get("mean_apparent_power_va")
         energy = measurement.get("apparent_energy_va_seconds")
-        power_label = "Fluke apparent power" if source == "Fluke" else f"{source} apparent power"
-        energy_label = "Fluke apparent energy" if source == "Fluke" else f"{source} apparent energy"
+        power_label = f"{source} apparent power"
+        energy_label = f"{source} apparent energy"
         lines.append(f"<div>{power_label}: {_fmt(mean)} VA</div>")
         lines.append(f"<div>{energy_label}: {_fmt(energy)} VA·s</div>")
         estimate = measurement.get("estimated_active_energy_joules")
@@ -458,7 +573,9 @@ def _chart(
         units.add(unit)
         candidates.append((run, measurement, unit, kind))
     if len(units) > 1:
-        source_label = "GPU" if source_key == "gpu_measurement" else "Circuit"
+        source_label = "GPU" if source_key == "gpu_measurement" else (
+            f"{_circuit_meter_name(report)} circuit" if _circuit_meter(report) == "ut61b" else "Circuit"
+        )
         unit_names = " and ".join(unit for unit in ("W", "VA", "%") if unit in units)
         return f'<p class="chart-note">{source_label} chart omitted because available curves mix {unit_names}</p>'
     if not candidates:
@@ -510,7 +627,7 @@ def _chart(
     return f'<figure><figcaption>{_escape(title)}</figcaption>{"".join(svg)}<div class="legend">{legend}</div></figure>'
 
 
-def _paired_window_reason(run: dict[str, Any]) -> str | None:
+def _paired_window_reason(run: dict[str, Any], circuit_meter: str = "fluke") -> str | None:
     """Require recorded common windows; matching clocks does not prove sensor sync."""
     start, end = run.get("started_at_epoch_ms"), run.get("ended_at_epoch_ms")
     if type(start) is not int or type(end) is not int or end <= start:
@@ -518,7 +635,7 @@ def _paired_window_reason(run: dict[str, Any]) -> str | None:
     duration_ms = end - start
     for key, source, expected in (
         ("gpu_measurement", "GPU", ("W", "active")),
-        ("circuit_measurement", "Fluke", ("VA", "apparent")),
+        ("circuit_measurement", CIRCUIT_METERS[circuit_meter], ("VA", "apparent")),
     ):
         measurement = run.get(key)
         if _power_class(measurement) != expected:
@@ -545,8 +662,16 @@ def _paired_window_reason(run: dict[str, Any]) -> str | None:
     return None
 
 
-def _depth_chart_payload(report: dict[str, Any]) -> dict[str, Any]:
+def _depth_chart_payload(
+    report: dict[str, Any], *, presentation_source: str | None = None
+) -> dict[str, Any]:
     """Keep per-trial source curves and reject ambiguous chart identities."""
+    circuit_meter = _circuit_meter(report)
+    if presentation_source is not None:
+        if presentation_source not in {"gpu", "fluke"}:
+            raise ReportError("presentation_source must be 'gpu' or 'fluke'")
+        if circuit_meter != "ut61b":
+            raise ReportError("presentation_source is reserved for the UT61B demo")
     identities: dict[tuple[str, int], int] = {}
     for run in report["runs"]:
         identity = (run["label"], run["trial"])
@@ -559,7 +684,7 @@ def _depth_chart_payload(report: dict[str, Any]) -> dict[str, Any]:
         if (
             identities[(run["label"], run["trial"])] != 1
             or not _is_exact_run(run, report["requested_tokens"])
-            or _paired_window_reason(run) is not None
+            or _paired_window_reason(run, circuit_meter) is not None
         ):
             continue
         item = {
@@ -589,32 +714,46 @@ def _depth_chart_payload(report: dict[str, Any]) -> dict[str, Any]:
                 "points": [[point["elapsed_ms"], point["value"]] for point in measurement["curve"]],
             }
         runs.append(item)
-    return {
+    payload = {
         "schema": "cogni.gemma4.depth_chart.v1",
         "campaign_id": report.get("campaign_id") or "Gemma 4 decoder-depth comparison",
         "requested_tokens": report["requested_tokens"],
+        "circuit_meter": circuit_meter,
+        "measurement_clock": _measurement_clock(report),
         "runs": runs,
         "excluded_count": len(report["runs"]) - len(runs),
     }
+    if presentation_source is not None:
+        payload["presentation_source"] = presentation_source
+    return payload
 
 
-def _depth_chart_assets(report: dict[str, Any]) -> tuple[str, str, str]:
-    data = json.dumps(_depth_chart_payload(report), ensure_ascii=False, allow_nan=False).replace("<", "\\u003c")
+def _depth_chart_assets(
+    report: dict[str, Any], *, presentation_source: str | None = None
+) -> tuple[str, str, str]:
+    data = json.dumps(
+        _depth_chart_payload(report, presentation_source=presentation_source),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).replace("<", "\\u003c")
     css = Path(__file__).with_name("gemma4_depth_chart.css").read_text(encoding="utf-8")
     javascript = Path(__file__).with_name("gemma4_depth_chart.js").read_text(encoding="utf-8")
     return data, css, javascript
 
 
 def _paired_sensor_section(report: dict[str, Any]) -> str:
+    meter_name = _circuit_meter_name(report)
+    meter_label = f"{meter_name} circuit"
+    circuit_meter = _circuit_meter(report)
     groups: dict[str, list[tuple[dict[str, Any], str | None]]] = {}
-    pairs = [(run, _paired_window_reason(run)) for run in report["runs"]]
+    pairs = [(run, _paired_window_reason(run, circuit_meter)) for run in report["runs"]]
     for run, reason in pairs:
         groups.setdefault(run["label"], []).append((run, reason))
     columns = (
         ("GPU W", "GPU board mean (W)", "gpu_measurement", "mean_active_power_watts"),
-        ("Fluke VA", "Fluke circuit mean (VA)", "circuit_measurement", "mean_apparent_power_va"),
+        (f"{meter_name} VA", f"{meter_label} mean (VA)", "circuit_measurement", "mean_apparent_power_va"),
         ("GPU J", "GPU energy / request (J)", "gpu_measurement", "active_energy_joules"),
-        ("Fluke VA·s", "Fluke integral (VA·s)", "circuit_measurement", "apparent_energy_va_seconds"),
+        (f"{meter_name} VA·s", f"{meter_name} integral (VA·s)", "circuit_measurement", "apparent_energy_va_seconds"),
     )
     rows = []
     for label, group in groups.items():
@@ -639,7 +778,9 @@ def _paired_sensor_section(report: dict[str, Any]) -> str:
             continue
         window_ms = run["ended_at_epoch_ms"] - run["started_at_epoch_ms"]
         single = {**report, "runs": [run]}
-        charts = _chart(single, "gpu_measurement", "GPU") + _chart(single, "circuit_measurement", "Fluke")
+        charts = _chart(single, "gpu_measurement", "GPU") + _chart(
+            single, "circuit_measurement", _circuit_chart_title(report, paired=True)
+        )
         open_attribute = " open" if not opened else ""
         opened = True
         details.append(
@@ -649,11 +790,11 @@ def _paired_sensor_section(report: dict[str, Any]) -> str:
         )
     matched_total = sum(reason is None for _, reason in pairs)
     return (
-        '<section class="panel" id="sensor-comparison"><h2>Fluke and NVIDIA: same request windows</h2>'
+        f'<section class="panel" id="sensor-comparison"><h2>{_escape(meter_name)} and NVIDIA: same request windows</h2>'
         f'<p><strong>Matched sensor windows: {matched_total} / {len(pairs)}</strong>.</p>'
-        '<p>NVIDIA reports active GPU board power in W; Fluke reports whole-circuit apparent power in VA '
+        f'<p>NVIDIA reports active GPU board power in W; {_escape(meter_name)} reports whole-circuit apparent power in VA '
         'from AC current and the assumed grid voltage. Do not subtract these readings or infer GPU share or PSU efficiency. '
-        'Converting Fluke to active W requires the circuit power factor.</p>'
+        f'Converting {_escape(meter_name)} to active W requires the circuit power factor.</p>'
         '<p>Compare timing and trends within each source. Matching recorded timestamps does not remove '
         'sensor lag, sensor averaging or host-clock offset. No time shift or idle subtraction is applied.</p>'
         '<p class="muted">Request-boundary values are linearly interpolated from bracketing raw samples; '
@@ -670,6 +811,8 @@ def _paired_sensor_section(report: dict[str, Any]) -> str:
 def render_html(report: Any) -> str:
     """Render a validated report to a self-contained HTML document."""
     report = validate_report(report)
+    meter_name = _circuit_meter_name(report)
+    measurement_clock = _measurement_clock(report)
     reasons = _gate_reasons(report)
     gate = "blocked" if reasons else "eligible"
     requested = report["requested_tokens"]
@@ -710,7 +853,7 @@ def render_html(report: Any) -> str:
             f'<td data-label="Tokens"><div>Actual tokens: {_fmt(actual)}</div><div>{_escape(token_display)}</div><div>Report request: {_fmt(requested)}</div><div>{_escape(throughput_display)}</div></td>'
             f'<td data-label="Runtime"><div>Elapsed: {_escape(duration_display)}</div><div>Started: {_fmt(run.get("started_at_epoch_ms"))} epoch ms</div><div>Ended: {_fmt(run.get("ended_at_epoch_ms"))} epoch ms</div></td>'
             f'<td data-label="GPU board">{_measurement_cell(run.get("gpu_measurement"), "GPU", actual)}</td>'
-            f'<td data-label="Circuit meter">{_measurement_cell(run.get("circuit_measurement"), "Fluke", actual)}</td>'
+            f'<td data-label="Circuit meter">{_measurement_cell(run.get("circuit_measurement"), meter_name, actual)}</td>'
             f'<td data-label="GPU utilization">{_utilization_cell(run.get("gpu_utilization_measurement"))}</td>'
             f'<td data-label="Model and output">{metadata}{error_line}{answer_line}</td>'
             "</tr>"
@@ -745,7 +888,7 @@ def render_html(report: Any) -> str:
         else ""
     )
     gpu_chart = _chart(report, "gpu_measurement", "GPU")
-    circuit_chart = _chart(report, "circuit_measurement", "Circuit")
+    circuit_chart = _chart(report, "circuit_measurement", _circuit_chart_title(report))
     utilization_chart = _chart(report, "gpu_utilization_measurement", "GPU", utilization=True)
     chart_data, chart_css, chart_js = _depth_chart_assets(report)
     return f"""<!doctype html>
@@ -761,27 +904,59 @@ main{{max-width:1480px;margin:0 auto;padding:clamp(14px,3vw,32px)}}h1{{font-size
 @media(max-width:520px){{main{{padding:12px}}.panel{{padding:12px}}td{{padding-left:100px}}td::before{{width:90px}}}}
 {chart_css}
 </style></head><body><main>
-<header><h1>{title_id}</h1><p>Prefix-pruned Gemma 4 decoder-layer experiment; report-level requested output: <strong>{_fmt(requested)} tokens per run</strong>.</p><p>Prompt SHA-256: <code>{prompt_hash}</code></p>{notes_html}{sources_html}</header>
+<header><h1>{title_id}</h1><p>Prefix-pruned Gemma 4 decoder-layer experiment; report-level requested output: <strong>{_fmt(requested)} tokens per run</strong>.</p><p>Measurement clock: {_escape(measurement_clock)}</p><p>Prompt SHA-256: <code>{prompt_hash}</code></p>{notes_html}{sources_html}</header>
 <section class="panel gate {gate}"><h2>Fixed-token comparison gate: {gate}</h2>{blocker_html}</section>
 <section id="depth-explorer"><script type="application/json" id="depth-chart-data">{chart_data}</script></section>
 <noscript><p class="panel">The interactive explorer requires JavaScript. The measured tables and SVG traces below remain available.</p></noscript>
 {_paired_sensor_section(report)}
 <section class="panel"><h2>Summary by run label</h2><p>Means are per-trial averages. Aggregate metrics are available only when every run in that label completed with the exact requested token count and the relevant measurement is available in its stated unit.</p>{_summary_table(report)}</section>
 <section class="panel"><h2>Sampled curves</h2><p>Each chart has its own unit axis. Colors identify decoder depth; trials at the same depth share a color.</p><div class="charts">{gpu_chart}{circuit_chart}{utilization_chart}</div></section>
-<section class="panel"><h2>Run comparison (details)</h2><p>Actual token counts are compared with the requested count. Observed throughput uses actual tokens and elapsed wall time.</p><div class="table-wrap"><table><thead><tr><th>Run</th><th>Output tokens</th><th>Runtime</th><th>GPU board measurement</th><th>Fluke circuit meter</th><th>GPU utilization</th><th>Model and output</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
-<section class="panel"><h2>Measurement scope and interpretation</h2><ul><li>GPU readings are board-level; the shared host may contribute concurrent load.</li><li>The Fluke circuit meter covers its measured circuit and may include other loads.</li><li>Each measurement reports its sample window and sample count where supplied; these limits affect comparability.</li><li>Weights are metadata: weight size is not a power measurement and cannot establish watts or energy.</li><li>Answer quality is unvalidated; nonsense accuracy is accepted for this experiment.</li><li>A passing fixed-token gate does not establish full-depth generation or quality equivalence.</li><li>Current-derived values stay in VA and VA·s. They are never relabeled as W or J; any active-energy estimate is shown separately with assumptions.</li></ul></section>
+<section class="panel"><h2>Run comparison (details)</h2><p>Actual token counts are compared with the requested count. Observed throughput uses actual tokens and elapsed wall time.</p><div class="table-wrap"><table><thead><tr><th>Run</th><th>Output tokens</th><th>Runtime</th><th>GPU board measurement</th><th>{_escape(meter_name)} circuit meter</th><th>GPU utilization</th><th>Model and output</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div></section>
+<section class="panel"><h2>Measurement scope and interpretation</h2><ul><li>GPU readings are board-level; the shared host may contribute concurrent load.</li><li>{_escape(meter_name)} circuit meter covers its measured circuit and may include other loads.</li><li>Each measurement reports its sample window and sample count where supplied; these limits affect comparability.</li><li>Weights are metadata: weight size is not a power measurement and cannot establish watts or energy.</li><li>Answer quality is unvalidated; nonsense accuracy is accepted for this experiment.</li><li>A passing fixed-token gate does not establish full-depth generation or quality equivalence.</li><li>Current-derived values stay in VA and VA·s. They are never relabeled as W or J; any active-energy estimate is shown separately with assumptions.</li></ul></section>
 </main><script>{chart_js}</script></body></html>"""
 
 
 def render_presentation(report: Any) -> str:
     """Render the same measured explorer as one offline, embeddable HTML file."""
     report = validate_report(report)
-    data, css, javascript = _depth_chart_assets(report)
+    meter_name = _circuit_meter_name(report)
+    measurement_clock = _measurement_clock(report)
+    ut61b_demo = _circuit_meter(report) == "ut61b"
+    data, css, javascript = _depth_chart_assets(
+        report, presentation_source="fluke" if ut61b_demo else None
+    )
     reasons = _gate_reasons(report)
     gate = "blocked" if reasons else "eligible"
     blockers = "".join(f"<li>{_escape(reason)}</li>" for reason in reasons)
     gate_details = f"<ul>{blockers}</ul>" if blockers else ""
     campaign = _escape(report.get("campaign_id") or "Gemma 4 decoder-depth comparison")
+    if ut61b_demo:
+        measurement_scope = (
+            f"Measurement clock: {_escape(measurement_clock)}. UT61B reports whole-circuit "
+            "apparent power in VA and apparent-power integral in VA·s from AC current using "
+            "the assumed grid voltage. These readings do not establish active watts or joules."
+        )
+        curve_notes = (
+            "Request-window UT61B apparent-power samples; boundary values are linearly interpolated "
+            "from bracketing samples. The interactive display uses bounded Catmull–Rom; VA·s "
+            "integrates the original piecewise-linear samples. No extrapolation or clock-offset "
+            "correction. Matching recorded windows does not remove sensor lag or averaging. "
+            "Shared-host activity may contribute."
+        )
+    else:
+        measurement_scope = (
+            f"Measurement clock: {_escape(measurement_clock)}. NVIDIA: active GPU board power, W and J. "
+            f"{_escape(meter_name)}: whole-circuit apparent power, VA and VA·s from AC current using "
+            "the assumed grid voltage. These are different physical scopes and quantities; do not "
+            "subtract them or infer GPU share or PSU efficiency."
+        )
+        curve_notes = (
+            "Request-window source curves; boundary values are linearly interpolated from bracketing "
+            "raw samples. The interactive display uses bounded Catmull–Rom; energy uses original "
+            "piecewise-linear samples. No extrapolation, idle subtraction or clock-offset correction. "
+            "Matching recorded windows does not remove sensor lag or averaging. Shared-host activity "
+            "may contribute."
+        )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Energy Audit — {campaign}</title><style>
@@ -791,8 +966,8 @@ def render_presentation(report: Any) -> str:
 <section id="depth-explorer"><script type="application/json" id="depth-chart-data">{data}</script></section>
 <noscript><p>The interactive graph requires JavaScript. Use the full report for static measured tables and SVG traces.</p></noscript>
 <footer class="audit-context"><p><strong>Campaign: {campaign}. Fixed-token gate: {gate}.</strong> {report['requested_tokens']} generated tokens per request; answer quality is unvalidated.</p>{gate_details}
-<p>NVIDIA: active GPU board power, W and J. Fluke: whole-circuit apparent power, VA and VA·s, using the assumed grid voltage. These are different physical scopes and quantities; do not subtract them or infer GPU share or PSU efficiency.</p>
-<p>Request-window source curves; boundary values are linearly interpolated from bracketing raw samples. The interactive display uses bounded Catmull–Rom; energy uses original piecewise-linear samples. No extrapolation, idle subtraction or clock-offset correction. Matching recorded windows does not remove sensor lag or averaging. Shared-host activity may contribute.</p>
+<p>{measurement_scope}</p>
+<p>{curve_notes}</p>
 <p>Prompt SHA-256: <code>{_escape(report.get('prompt_sha256') or 'Unavailable')}</code>. Imported report provenance requires the original experiment evidence.</p></footer>
 </main><script>{javascript}</script></body></html>"""
 
@@ -822,7 +997,13 @@ def _merge_reports(paths: list[Path]) -> dict[str, Any]:
         "seed",
         "warmup_tokens",
     )
+    base_meter = _circuit_meter(base)
+    base_clock = _measurement_clock(base)
     for path, report in zip(paths[1:], reports[1:]):
+        if _circuit_meter(report) != base_meter:
+            raise ReportError(f"cannot merge {path}: circuit_meter differs between reports")
+        if _measurement_clock(report) != base_clock:
+            raise ReportError(f"cannot merge {path}: measurement_clock differs between reports")
         for key in ("requested_tokens", "prompt_sha256", "campaign_id"):
             left = base.get(key)
             right = report.get(key)

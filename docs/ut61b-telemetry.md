@@ -140,3 +140,22 @@ after changes to the meter mode, adapter, USB driver, serial settings, decoder,
 writer or VictoriaMetrics. Rollback is to stop the bounded capture and retain
 the JSONL; the tool does not alter the meter's measurement settings or the
 server's GPU configuration.
+
+
+## Same-host depth campaign
+
+The later `depth-ut61b-20261017-c` campaign connects the USB adapter directly to
+gputer (`/dev/ttyUSB0`) and records UT61B, NVIDIA and received token counters on
+that host's clock. In 300 seconds it retains 507 valid AC frames and one initial
+partial frame before all request windows. All 12 requests have bracketing
+current coverage and a held valid-AC state, with a maximum 2000 ms raw gap.
+This supersedes the synchronized-comparison blocker for these bounded windows.
+
+The actual GPU, UT61B and token metrics match 8207 raw-export samples after
+remote-write; 1522 belong to the three UT61B metric families. A delayed export
+was verified without resending. Full methods, drift, results, recovery mode,
+reproduction and artifact names are in
+[the layer-depth experiment](gemma4-layer-depth-experiment.md#same-host-ut61b-campaign-2026-10-17).
+The demo now uses UT61B as its single circuit source. This operational choice
+does not establish greater calibration accuracy than Fluke. The assumed
+116 V still yields apparent VA / VA s; active circuit W / J remain unavailable.

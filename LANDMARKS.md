@@ -28741,3 +28741,36 @@ Refresh after source/toolchain/device/model/workload changes.
   Reproduction, rollback and refresh triggers remain in
   `docs/ut61b-telemetry.md`. Calibration, comparative meter accuracy and a
   synchronized UT61B/NVIDIA experiment remain open.
+
+
+### 2026-10-17 — Same-host UT61B layer-depth campaign
+
+- Campaign `depth-ut61b-20261017-c` ran 48/32/16/48 prefix depths, three
+  exact-256-token requests each, with UT61B USB, NVIDIA telemetry and received
+  token counters timestamped on gputer. The normal full-48 service was restored
+  and healthy. Receipt clocks share a 1.017 ms offset corridor; sensor averaging
+  and transport latency remain outside that claim.
+- VM raw exports match all 8207 samples across seven metric families and
+  18 series, with exact timestamps and absolute value tolerance `1e-12`.
+  A separate checker reconstructs UT61B digits and all 24 window integrals.
+  The initial accepted write was not immediately visible; `--verify-existing`
+  recovered through readback without resending. Unknown/invalid held meter
+  states and gaps above 2000 ms reject a measurement.
+- Mean UT61B request integrals were 1382.88, 922.84, 529.07 and 1431.54 VA s;
+  the two reduced depths were 33.3% and 61.7% below the first full batch.
+  Full-depth drift was +3.52% (GPU J +7.59%). Both full baselines remain visible.
+  Assumed 116 V produces apparent VA and VA s, never active W/J. Calibration,
+  comparative meter accuracy, answer quality and quiet-host causality are open.
+- The compact demo uses UT61B alone; NVIDIA remains in the technical report.
+  Explicit circuit-meter metadata prevents historical Fluke relabeling and
+  mixed-meter merges. Previous HTML, input and bundle evidence are frozen under
+  `previous-f4bb6457/`; the owned startup script is the model rollback.
+- DoD: 69 Python tests pass locally and on gputer; 27 Node tests pass locally,
+  including received-token canvas mounting. Browser trials, ratios, inspection,
+  zoom/reset, PNG prepared status and 375/611 px layouts pass; both rendered HTML
+  hashes match gputer. Scoped adversary: ROBUST for readback and unit/UI guards.
+- Commands, checks and lineage are in `docs/gemma4-layer-depth-experiment.md`
+  and `docs/ut61b-telemetry.md`; raw captures and exports remain in the task's
+  `layer-depth/` artifact and the owned gputer deployment's `reports/`.
+  Refresh after source, model/backend, GPU/driver, workload, clock, meter/USB,
+  voltage/calibration, concurrent-load changes or raw-evidence loss.

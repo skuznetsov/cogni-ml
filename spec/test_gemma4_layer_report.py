@@ -133,7 +133,190 @@ def paired_run(depth: int = 48, label: str = "paired", *, trial: int = 1) -> dic
     )
 
 
+def ut61b_report(*runs: dict) -> dict:
+    report = report_with(*runs)
+    report["circuit_meter"] = "ut61b"
+    report["measurement_clock"] = "gputer"
+    for run in report["runs"]:
+        measurement = run.get("circuit_measurement")
+        if measurement is not None:
+            measurement["meter"] = "ut61b"
+            measurement["selector"] = (
+                'ut61b_current_amperes{circuit="gputer",meter="ut61b",mode="ac"}'
+            )
+            measurement["metric"] = {
+                "__name__": "ut61b_current_amperes",
+                "circuit": "gputer",
+                "meter": "ut61b",
+                "mode": "ac",
+            }
+    return report
+
+
 class LayerReportTests(unittest.TestCase):
+    def test_ut61b_report_metadata_and_source_identity_are_preserved(self) -> None:
+        run = paired_run(label="ut61b-depth48")
+        run["token_progress"] = {
+            "status": "available", "basis": "received_token_ids", "final_tokens": 256,
+            "points": [
+                {"elapsed_ms": 0, "generated_tokens": 0},
+                {"elapsed_ms": 400, "generated_tokens": 100},
+                {"elapsed_ms": 1000, "generated_tokens": 256},
+            ],
+        }
+        report = ut61b_report(run)
+
+        validated = layer_report.validate_report(report)
+        payload = layer_report._depth_chart_payload(validated)
+
+        self.assertEqual(validated["circuit_meter"], "ut61b")
+        self.assertEqual(validated["measurement_clock"], "gputer")
+        self.assertEqual(payload["circuit_meter"], "ut61b")
+        self.assertEqual(payload["measurement_clock"], "gputer")
+        self.assertEqual(report["runs"][0]["circuit_measurement"]["meter"], "ut61b")
+        self.assertEqual(
+            report["runs"][0]["circuit_measurement"]["selector"],
+            'ut61b_current_amperes{circuit="gputer",meter="ut61b",mode="ac"}',
+        )
+        self.assertEqual(payload["runs"][0]["fluke"]["unit"], "VA")
+        self.assertEqual(payload["runs"][0]["fluke"]["integral_unit"], "VA·s")
+        self.assertEqual(payload["runs"][0]["token_progress"]["points"], [[0, 0], [400, 100], [1000, 256]])
+
+    def test_meter_validation_rejects_unsupported_or_mismatched_identity(self) -> None:
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report({**report_with(paired_run()), "circuit_meter": "other"})
+
+        mismatched_report = ut61b_report(paired_run())
+        mismatched_report["runs"][0]["circuit_measurement"]["meter"] = "fluke"
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(mismatched_report)
+
+        missing_identity = ut61b_report(paired_run())
+        del missing_identity["runs"][0]["circuit_measurement"]["meter"]
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(missing_identity)
+
+        unsupported_measurement = report_with(paired_run())
+        unsupported_measurement["runs"][0]["circuit_measurement"]["meter"] = "other"
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(unsupported_measurement)
+
+        relabeled_ut61b = report_with(paired_run())
+        relabeled_ut61b["runs"][0]["circuit_measurement"].update(
+            {
+                "selector": (
+                    'ut61b_current_amperes{circuit="gputer",meter="ut61b",mode="ac"}'
+                ),
+                "metric": {
+                    "__name__": "ut61b_current_amperes",
+                    "circuit": "gputer",
+                    "meter": "ut61b",
+                    "mode": "ac",
+                },
+            }
+        )
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(relabeled_ut61b)
+
+        misleading_metric = ut61b_report(paired_run())
+        misleading_metric["runs"][0]["circuit_measurement"]["selector"] = (
+            'ut61b_current_amperes{circuit="gputer",meter="fluke",mode="ac"}'
+        )
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(misleading_metric)
+
+        lookalike_metric = ut61b_report(paired_run())
+        lookalike_metric["runs"][0]["circuit_measurement"]["selector"] = (
+            "ut61b_current_amperesBogus"
+        )
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(lookalike_metric)
+
+        wrong_metric_name = ut61b_report(paired_run())
+        wrong_metric_name["runs"][0]["circuit_measurement"]["metric"]["__name__"] = (
+            "fluke_current_amperes"
+        )
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(wrong_metric_name)
+
+        wrong_clock = ut61b_report(paired_run())
+        wrong_clock["measurement_clock"] = "other-clock"
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(wrong_clock)
+
+        active_energy_on_apparent_source = ut61b_report(paired_run())
+        active_energy_on_apparent_source["runs"][0]["circuit_measurement"][
+            "estimated_active_energy_joules"
+        ] = 12.5
+        with self.assertRaises(layer_report.ReportError):
+            layer_report.validate_report(active_energy_on_apparent_source)
+
+    def test_unavailable_ut61b_measurement_retains_source_identity(self) -> None:
+        run = paired_run()
+        run["circuit_measurement"] = {
+            "status": "unavailable",
+            "reason": "no samples",
+            "meter": "ut61b",
+            "selector": (
+                'ut61b_current_amperes{circuit="gputer",meter="ut61b",mode="ac"}'
+            ),
+            "metric": {
+                "__name__": "ut61b_current_amperes",
+                "circuit": "gputer",
+                "meter": "ut61b",
+                "mode": "ac",
+            },
+        }
+
+        validated = layer_report.validate_report(ut61b_report(run))
+
+        self.assertEqual(validated["runs"][0]["circuit_measurement"]["status"], "unavailable")
+        self.assertIn("UT61B unavailable: no samples", layer_report.render_html(validated))
+
+    def test_ut61b_full_html_uses_truthful_meter_copy_and_apparent_units(self) -> None:
+        rendered = layer_report.render_html(ut61b_report(paired_run(), paired_run(16, "shallow")))
+        visible_html = re.sub(r"<script\b.*?</script>", "", rendered, flags=re.DOTALL)
+
+        self.assertIn("UT61B", visible_html)
+        self.assertNotIn("Fluke", visible_html)
+        self.assertIn("UT61B circuit mean (VA)", visible_html)
+        self.assertIn("UT61B integral (VA·s)", visible_html)
+        self.assertIn("UT61B circuit meter", visible_html)
+        self.assertIn("Measurement clock: gputer", visible_html)
+        self.assertNotIn("UT61B circuit mean (W)", visible_html)
+        self.assertNotIn("UT61B integral (J)", visible_html)
+
+        data = re.search(
+            r'<script type="application/json" id="depth-chart-data">(.*?)</script>',
+            rendered, re.DOTALL,
+        )
+        self.assertIsNotNone(data)
+        payload = json.loads(data.group(1))
+        self.assertEqual(payload["circuit_meter"], "ut61b")
+        self.assertEqual(payload["measurement_clock"], "gputer")
+        self.assertNotIn("presentation_source", payload)
+
+        presentation = layer_report.render_presentation(
+            ut61b_report(paired_run(), paired_run(16, "shallow"))
+        )
+        presentation_copy = re.sub(r"<script\b.*?</script>", "", presentation, flags=re.DOTALL)
+        self.assertIn("UT61B", presentation_copy)
+        self.assertNotIn("NVIDIA", presentation_copy)
+        self.assertNotIn("Fluke", presentation_copy)
+        self.assertIn("Measurement clock: gputer", presentation_copy)
+        self.assertIn(
+            "UT61B reports whole-circuit apparent power in VA and apparent-power integral in VA·s",
+            presentation_copy,
+        )
+        self.assertIn("VA·s integrates the original piecewise-linear samples", presentation_copy)
+        self.assertNotIn("energy uses original", presentation_copy)
+        presentation_data = re.search(
+            r'<script type="application/json" id="depth-chart-data">(.*?)</script>',
+            presentation, re.DOTALL,
+        )
+        self.assertIsNotNone(presentation_data)
+        self.assertEqual(json.loads(presentation_data.group(1))["presentation_source"], "fluke")
+
     def test_canvas_keeps_actual_token_progress_and_historical_fallback(self) -> None:
         observed = paired_run(label="observed")
         observed["token_progress"] = {
@@ -242,6 +425,12 @@ class LayerReportTests(unittest.TestCase):
         self.assertIn("VA and VA·s", rendered)
         self.assertNotIn("Summary by run label", rendered)
         self.assertNotIn("Run comparison (details)", rendered)
+        data = re.search(
+            r'<script type="application/json" id="depth-chart-data">(.*?)</script>',
+            rendered, re.DOTALL,
+        )
+        self.assertIsNotNone(data)
+        self.assertNotIn("presentation_source", json.loads(data.group(1)))
         self.assertNotRegex(rendered, r'<script[^>]+src=')
         report["runs"][1]["actual_tokens"] = 255
         self.assertIn("Fixed-token gate: blocked", layer_report.render_presentation(report))
@@ -634,6 +823,20 @@ class LayerReportTests(unittest.TestCase):
                     second.write_text(json.dumps(right), encoding="utf-8")
 
                     with self.assertRaises(layer_report.ReportError):
+                        layer_report._merge_reports([first, second])
+
+    def test_merge_rejects_ut61b_and_legacy_fluke_roots_in_either_order(self) -> None:
+        legacy_fluke = report_with(paired_run())
+        ut61b = ut61b_report(paired_run())
+        for left_report, right_report in ((legacy_fluke, ut61b), (ut61b, legacy_fluke)):
+            with self.subTest(left_meter=left_report.get("circuit_meter")):
+                with tempfile.TemporaryDirectory() as directory:
+                    first = Path(directory) / "first.json"
+                    second = Path(directory) / "second.json"
+                    first.write_text(json.dumps(left_report), encoding="utf-8")
+                    second.write_text(json.dumps(right_report), encoding="utf-8")
+
+                    with self.assertRaisesRegex(layer_report.ReportError, "circuit_meter"):
                         layer_report._merge_reports([first, second])
 
     def test_single_report_cli_writes_standalone_html(self) -> None:

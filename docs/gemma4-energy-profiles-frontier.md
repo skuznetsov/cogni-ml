@@ -112,6 +112,38 @@ focused Crystal examples and 27 Python report tests pass locally and on gputer;
 
 ## Direct gputer evidence, 2026-10-17
 
+### Same-host UT61B campaign boundary
+
+The user-authorized repeat uses 48/32/16/48 decoder blocks, three requests per
+batch and 256 observed generated token IDs per request. USB current-frame
+receipt, NVIDIA row receipt and token-event receipt are timestamped on gputer.
+This removes inter-host clock conversion, not sensor averaging or delivery lag.
+The existing prefix models and owned service are reused; full depth is restored
+on success or failure. Raw collector files and inference reports are retained.
+
+All three sources must pass Prometheus remote-write and raw export readback
+with original labels, timestamps and values. Postprocessing replaces the old
+Fluke measurement explicitly with UT61B; it must not relabel legacy samples.
+UT61B retains held validity, raw boundary bracketing, a 2,000 ms maximum gap and
+assumed 116 V provenance. Circuit integrals remain VA s, GPU integrals remain J.
+DoD: twelve exact-token requests with available paired windows, raw round-trip
+checks, truthful meter labels in the refreshed charts and a healthy full model
+after restoration. Missing coverage, conflicting samples or incomplete token
+streams block publication of a complete campaign. Rollback keeps earlier chart
+artifacts and the original full-model startup script.
+
+Observed outcome: all twelve requests completed with exactly 256 tokens, all
+paired windows are available, and 8207 raw metric samples round-trip with exact
+timestamps and value tolerance `1e-12`. The full 48-layer service is healthy.
+An initial export-visibility delay is recovered with `--verify-existing`, without
+resending stored samples. The independent raw checker recomputes all window
+curves and integrals. UT61B's 48-layer before/after integral drift is 3.52%;
+keep both baselines. The demo uses only UT61B; NVIDIA remains technical evidence.
+Adversary verdict is ROBUST for the bounded acquisition/readback/unit contract,
+not for causal savings ratios, answer quality, sensor latency or calibration.
+Detailed commands, results, rollback and refresh triggers are in
+`docs/gemma4-layer-depth-experiment.md`.
+
 The isolated deployment is `/build/persisten/cogni-gemma4-energy` on the
 user-provided gputer host. The original remote checkout was not modified.
 `tools/INSTALLATION.md` records installation digests, build commands, service

@@ -40,8 +40,62 @@
       integralUnit: 'VA·s',
       axisLabel: 'Circuit apparent power',
       detail: 'Whole circuit · volt-amperes (VA) · assumed grid voltage',
+      buttonLabel: 'Fluke circuit (VA)',
     },
   };
+  const CIRCUIT_METERS = new Set(['fluke', 'ut61b']);
+  const PRESENTATION_SOURCES = new Set(['gpu', 'fluke']);
+
+  function sourceDefinitions(circuitMeter = 'fluke') {
+    if (!CIRCUIT_METERS.has(circuitMeter)) throw new TypeError('Unsupported circuit meter.');
+    const meterName = circuitMeter === 'ut61b' ? 'UT61B' : 'Fluke';
+    return {
+      ...SOURCE,
+      fluke: {
+        ...SOURCE.fluke,
+        label: `${meterName} circuit`,
+        shortLabel: `${meterName} circuit`,
+        buttonLabel: `${meterName} circuit (VA)`,
+        axisLabel: circuitMeter === 'ut61b'
+          ? 'UT61B circuit apparent power' : SOURCE.fluke.axisLabel,
+        detail: `Whole circuit · apparent power from AC current · volt-amperes (VA) at assumed grid voltage`,
+      },
+    };
+  }
+
+  function sourceDefinitionsForPayload(payload) {
+    const hasPayloadObject = payload && typeof payload === 'object' && !Array.isArray(payload);
+    const circuitMeter = !hasPayloadObject
+      ? null
+      : payload.circuit_meter === undefined ? 'fluke' : payload.circuit_meter;
+    if (CIRCUIT_METERS.has(circuitMeter)) return sourceDefinitions(circuitMeter);
+    const sources = sourceDefinitions('fluke');
+    return {
+      ...sources,
+      fluke: {
+        ...sources.fluke,
+        label: 'Circuit meter',
+        shortLabel: 'Circuit meter',
+        buttonLabel: 'Circuit meter (VA)',
+        detail: 'Circuit meter identity is unavailable because the payload meter is unsupported',
+      },
+    };
+  }
+
+  function presentationOptions(payload) {
+    const source = PRESENTATION_SOURCES.has(payload?.presentation_source)
+      ? payload.presentation_source : 'gpu';
+    return {
+      source,
+      compact: payload?.circuit_meter === 'ut61b' && source === 'fluke',
+    };
+  }
+
+  function measurementClock(payload) {
+    if (payload?.measurement_clock === undefined) return 'gputer';
+    return typeof payload.measurement_clock === 'string' && payload.measurement_clock.trim()
+      ? payload.measurement_clock.trim() : 'unavailable';
+  }
 
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -59,6 +113,21 @@
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return 'Power trace data is not an object.';
     if (payload.schema !== SCHEMA) return 'Power trace schema is missing or unsupported.';
     if (typeof payload.campaign_id !== 'string' || !payload.campaign_id.trim()) return 'Power trace campaign ID is missing.';
+    const circuitMeter = payload.circuit_meter === undefined ? 'fluke' : payload.circuit_meter;
+    if (!CIRCUIT_METERS.has(circuitMeter)) return 'Power trace circuit_meter must be fluke or ut61b.';
+    if (payload.measurement_clock !== undefined &&
+        (typeof payload.measurement_clock !== 'string' || !payload.measurement_clock.trim())) {
+      return 'Power trace measurement_clock must be a non-empty string.';
+    }
+    if (payload.presentation_source !== undefined) {
+      if (!PRESENTATION_SOURCES.has(payload.presentation_source)) {
+        return 'Power trace presentation_source must be gpu or fluke.';
+      }
+      if (circuitMeter !== 'ut61b') {
+        return 'Power trace presentation_source is only supported for UT61B demo payloads.';
+      }
+    }
+    const sources = sourceDefinitions(circuitMeter);
     if (!isPositiveInteger(payload.requested_tokens)) return 'Power trace requested_tokens must be a positive integer token count.';
     if (!Array.isArray(payload.runs)) return 'Power trace runs must be an array.';
     if (!Number.isInteger(payload.excluded_count) || payload.excluded_count < 0) return 'Excluded count must be a nonnegative integer.';
@@ -107,7 +176,7 @@
       }
 
       for (const sourceKey of ['gpu', 'fluke']) {
-        const source = SOURCE[sourceKey];
+        const source = sources[sourceKey];
         const series = run[sourceKey];
         if (!series || typeof series !== 'object' || Array.isArray(series)) return `${prefix} ${source.label} series is missing.`;
         if (series.unit !== source.unit) return `${prefix} ${source.label} unit must be ${source.unit}.`;
@@ -251,7 +320,8 @@
   function buildChartModel(payload, sourceKey, trial, metric = 'energy') {
     const error = validatePayload(payload);
     if (error) throw new TypeError(error);
-    if (!SOURCE[sourceKey]) throw new TypeError(`Unknown power trace source: ${sourceKey}`);
+    const sources = sourceDefinitions(payload?.circuit_meter);
+    if (!sources[sourceKey]) throw new TypeError(`Unknown power trace source: ${sourceKey}`);
     const labels = [...new Set(payload.runs.map(run => run.label))];
     const laneByLabel = new Map(labels.map((label, index) => [label, index]));
     if (!['energy', 'power'].includes(metric)) throw new TypeError('Unknown per-token metric.');
@@ -261,8 +331,8 @@
       trial: run.trial,
       color: run.color,
       laneIndex: laneByLabel.get(run.label),
-      unit: SOURCE[sourceKey].unit,
-      integralUnit: SOURCE[sourceKey].integralUnit,
+      unit: sources[sourceKey].unit,
+      integralUnit: sources[sourceKey].integralUnit,
       mean: run[sourceKey].mean,
       integral: run[sourceKey].integral,
       durationMs: run[sourceKey].points[run[sourceKey].points.length - 1][0],
@@ -278,7 +348,7 @@
     return {
       source: sourceKey,
       metric,
-      perTokenUnit: `${metric === 'energy' ? SOURCE[sourceKey].integralUnit : SOURCE[sourceKey].unit}/token`,
+      perTokenUnit: `${metric === 'energy' ? sources[sourceKey].integralUnit : sources[sourceKey].unit}/token`,
       perTokenDomain: { start: 0, end: Math.max(1e-9, ...series.flatMap(item => item.perTokenPoints.map(point => point.value))) },
       trial,
       lanes: labels,
@@ -408,13 +478,21 @@
   function createShell(document, section, payload, error) {
     const root = element(document, 'div', 'depth-explorer-root');
     root.dataset.depthChartApp = 'true';
+    const sources = sourceDefinitionsForPayload(payload);
+    const circuitSource = sources.fluke;
+    const presentation = presentationOptions(payload);
+    const clock = measurementClock(payload);
 
     const hero = element(document, 'header', 'depth-hero');
     const heroCopy = element(document, 'div', 'depth-hero-copy');
-    heroCopy.append(element(document, 'p', 'depth-eyebrow', 'MEASURED ON GPUTER'));
-    const depths = new Set((payload?.runs || []).map(run => run.decoder_layers));
+    heroCopy.append(element(document, 'p', 'depth-eyebrow', `MEASURED ON ${clock.toUpperCase()}`));
+    const runs = Array.isArray(payload?.runs) ? payload.runs : [];
+    const depths = new Set(runs
+      .filter(run => run && typeof run === 'object' && Number.isInteger(run.decoder_layers))
+      .map(run => run.decoder_layers));
     heroCopy.append(element(document, 'h2', 'depth-title', depths.size > 1
-      ? 'Fewer layers. A shorter power trace.' : 'Measured power over time.'));
+      ? (presentation.compact ? 'Fewer layers. A shorter UT61B trace.' : 'Fewer layers. A shorter power trace.')
+      : (presentation.compact ? 'Measured UT61B apparent power.' : 'Measured power over time.')));
     heroCopy.append(element(document, 'p', 'depth-subtitle', 'Compare each measured run over its actual token-generation time.'));
     const heroBadges = element(document, 'div', 'depth-hero-badges');
     heroBadges.append(element(document, 'span', 'depth-hero-badge', `${requestedTokenLabel(payload)} TOKENS`));
@@ -424,6 +502,7 @@
 
     const controls = element(document, 'div', 'depth-controls');
     const sourceControl = element(document, 'div', 'depth-control-block');
+    sourceControl.hidden = presentation.compact;
     sourceControl.append(element(document, 'span', 'depth-control-label', 'Measurement source'));
     const sourceButtons = element(document, 'div', 'depth-segmented');
     sourceButtons.setAttribute('role', 'group');
@@ -431,7 +510,7 @@
     const gpuButton = element(document, 'button', 'depth-segment-button', 'NVIDIA GPU (W)');
     gpuButton.type = 'button';
     gpuButton.dataset.depthSource = 'gpu';
-    const flukeButton = element(document, 'button', 'depth-segment-button', 'Fluke circuit (VA)');
+    const flukeButton = element(document, 'button', 'depth-segment-button', circuitSource.buttonLabel);
     flukeButton.type = 'button';
     flukeButton.dataset.depthSource = 'fluke';
     sourceButtons.append(gpuButton, flukeButton);
@@ -449,10 +528,12 @@
     const metricButtons = element(document, 'div', 'depth-segmented');
     metricButtons.setAttribute('role', 'group');
     metricButtons.setAttribute('aria-label', 'Per-token metric');
-    const energyButton = element(document, 'button', 'depth-segment-button', 'J/token');
+    const energyButton = element(document, 'button', 'depth-segment-button', presentation.compact
+      ? `${circuitSource.integralUnit}/token` : 'J/token');
     energyButton.type = 'button';
     energyButton.dataset.depthMetric = 'energy';
-    const powerButton = element(document, 'button', 'depth-segment-button', 'W/token');
+    const powerButton = element(document, 'button', 'depth-segment-button', presentation.compact
+      ? `${circuitSource.unit}/token` : 'W/token');
     powerButton.type = 'button';
     powerButton.dataset.depthMetric = 'power';
     metricButtons.append(energyButton, powerButton);
@@ -466,7 +547,8 @@
     downloadButton.type = 'button';
     downloadButton.dataset.depthDownload = 'true';
     actions.append(resetButton, downloadButton);
-    controls.append(sourceControl, trialControl, metricControl, actions);
+    if (!presentation.compact) controls.append(sourceControl);
+    controls.append(trialControl, metricControl, actions);
     root.append(controls);
 
     const current = element(document, 'div', 'depth-current-selection');
@@ -476,8 +558,11 @@
     const chartPanel = element(document, 'div', 'depth-chart-panel');
     const chartHeading = element(document, 'div', 'depth-chart-heading');
     const chartHeadingCopy = element(document, 'div', 'depth-chart-heading-copy');
-    chartHeadingCopy.append(element(document, 'strong', 'depth-chart-title', 'Power and cost per token'));
-    chartHeadingCopy.append(element(document, 'span', 'depth-chart-subtitle', 'Solid: power · dashed: ratio · same color: same run'));
+    chartHeadingCopy.append(element(document, 'strong', 'depth-chart-title', presentation.compact
+      ? 'UT61B apparent power and per-token ratios' : 'Power and cost per token'));
+    chartHeadingCopy.append(element(document, 'span', 'depth-chart-subtitle', presentation.compact
+      ? 'Solid: UT61B apparent power · dashed: VA/token or VA·s/token · same color: same run'
+      : 'Solid: power · dashed: ratio · same color: same run'));
     const chartUnit = element(document, 'span', 'depth-unit-chip');
     chartUnit.dataset.depthUnit = 'true';
     chartHeading.append(chartHeadingCopy, chartUnit);
@@ -488,8 +573,12 @@
     canvas.dataset.depthCanvas = 'true';
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('tabindex', '0');
-    canvas.setAttribute('aria-label', 'Interactive power trace chart. Use arrow keys to inspect source samples, plus and minus to zoom, and R to reset.');
-    canvas.textContent = 'Interactive measured power chart. Use the controls above to inspect the traces.';
+    canvas.setAttribute('aria-label', presentation.compact
+      ? 'Interactive UT61B apparent-power chart. Use arrow keys to inspect source samples, plus and minus to zoom, and R to reset.'
+      : 'Interactive power trace chart. Use arrow keys to inspect source samples, plus and minus to zoom, and R to reset.');
+    canvas.textContent = presentation.compact
+      ? 'Interactive measured UT61B apparent-power chart. Use the controls above to inspect the traces.'
+      : 'Interactive measured power chart. Use the controls above to inspect the traces.';
     const tooltip = element(document, 'div', 'depth-tooltip');
     tooltip.dataset.depthTooltip = 'true';
     tooltip.setAttribute('role', 'tooltip');
@@ -517,14 +606,19 @@
 
     const batchHeading = element(document, 'div', 'depth-batch-heading');
     batchHeading.append(element(document, 'h3', 'depth-batch-title', 'Batch readings'));
-    batchHeading.append(element(document, 'span', 'depth-batch-caption', 'Selected source and trial · reported summaries'));
+    batchHeading.append(element(document, 'span', 'depth-batch-caption', presentation.compact
+      ? 'UT61B circuit · selected trial · reported summaries'
+      : 'Selected source and trial · reported summaries'));
     root.append(batchHeading);
     const cards = element(document, 'div', 'depth-batch-grid');
     cards.dataset.depthCards = 'true';
     root.append(cards);
 
     const tokenLabel = requestedTokenLabel(payload);
-    const scope = element(document, 'p', 'depth-scope-note', `Measured gputer traces · ${tokenLabel} tokens per trial · experimental quality not validated. NVIDIA is active-board W; Fluke is whole-circuit VA at assumed 116 V. Bounded Catmull–Rom smooths the display only; energy uses the original piecewise-linear samples. Curves stop at their reported endpoints; elapsed time is not normalized. W/token means power divided by token count, not energy per token.`);
+    const scopeText = presentation.compact
+      ? `Measured ${clock} traces · ${tokenLabel} tokens per trial · experimental quality not validated. ${circuitSource.shortLabel} is ${circuitSource.detail}. VA/token divides apparent power by token count; VA·s/token integrates apparent power over elapsed seconds. Bounded Catmull–Rom smooths the display only; integrals use the original piecewise-linear samples. Curves stop at their reported endpoints; elapsed time is not normalized.`
+      : `Measured ${clock} traces · ${tokenLabel} tokens per trial · experimental quality not validated. NVIDIA is active-board W; ${circuitSource.shortLabel} is ${circuitSource.detail}. Bounded Catmull–Rom smooths the display only; integrals use the original piecewise-linear samples. Curves stop at their reported endpoints; elapsed time is not normalized. Power/token means power divided by token count, not energy per token.`;
+    const scope = element(document, 'p', 'depth-scope-note', scopeText);
     scope.dataset.depthScope = 'true';
     root.append(scope);
     const unavailable = element(document, 'p', 'depth-unavailable', error || '');
@@ -661,6 +755,8 @@
       }
     }
     if (!error) error = validatePayload(payload);
+    const presentation = presentationOptions(payload);
+    const clock = measurementClock(payload);
     const dom = buildChartDom(document, payload, error);
     if (!dom) return null;
     const { elements } = dom;
@@ -668,7 +764,7 @@
     const trials = dom.trials;
     const initialTrial = trials.includes(1) ? 1 : trials[0] ?? null;
     const state = {
-      source: 'gpu',
+      source: presentationOptions(payload).source,
       metric: 'energy',
       trial: initialTrial,
       viewDomain: null,
@@ -688,7 +784,7 @@
     }
 
     function updateSelectionLabels(model) {
-      const source = SOURCE[state.source];
+      const source = sourceDefinitionsForPayload(payload)[state.source];
       const ratioUnit = `${state.metric === 'energy' ? source.integralUnit : source.unit}/token`;
       elements.current.textContent = `${source.shortLabel} · trial ${state.trial} · 2D Catmull–Rom · ${ratioUnit}`;
       elements.chartUnit.textContent = `${source.unit} / ${ratioUnit}`;
@@ -696,12 +792,21 @@
       elements.powerButton.textContent = `${source.unit}/token`;
       const observed = model?.series.filter(series => series.normalization === 'received_tokens').length || 0;
       const total = model?.series.length || 0;
-      const formula = state.metric === 'energy' ? 'E(t) / N' : 'P(t) / N';
-      elements.normalization.textContent = observed === total && total > 0
-        ? `${formula}(t): observed cumulative token IDs, held between receipt timestamps on gputer. Ratios begin at the first token; energy includes prefill.`
-        : observed === 0
-          ? `${formula}final: divided by the final ${requestedTokenLabel(payload)} generated tokens. These historical runs have no token timestamps; the dashed curve is not normalized by tokens generated so far.`
-          : `${formula}(t) uses received token counts where available; historical runs use the final ${requestedTokenLabel(payload)} tokens. Hover a ratio point to see its denominator basis.`;
+      if (presentation.compact) {
+        const metricName = state.metric === 'energy' ? 'VA·s integral' : 'apparent power';
+        elements.normalization.textContent = observed === total && total > 0
+          ? `${metricName}/N(t): uses observed cumulative token IDs, held between receipt timestamps on ${clock}. Ratios begin at the first token; the apparent-power integral includes prefill.`
+          : observed === 0
+            ? `${metricName}/Nfinal: divided by the final ${requestedTokenLabel(payload)} generated tokens. These historical runs have no token timestamps; the dashed curve is not normalized by tokens generated so far.`
+            : `${metricName}/N(t) uses received token counts where available; historical runs use the final ${requestedTokenLabel(payload)} tokens. Hover a ratio point to see its denominator basis.`;
+      } else {
+        const formula = state.metric === 'energy' ? 'E(t) / N' : 'P(t) / N';
+        elements.normalization.textContent = observed === total && total > 0
+          ? `${formula}(t): observed cumulative token IDs, held between receipt timestamps on ${clock}. Ratios begin at the first token; energy includes prefill.`
+          : observed === 0
+            ? `${formula}final: divided by the final ${requestedTokenLabel(payload)} generated tokens. These historical runs have no token timestamps; the dashed curve is not normalized by tokens generated so far.`
+            : `${formula}(t) uses received token counts where available; historical runs use the final ${requestedTokenLabel(payload)} tokens. Hover a ratio point to see its denominator basis.`;
+      }
       elements.canvas.setAttribute('aria-label', `Interactive two-panel ${source.axisLabel.toLowerCase()} chart. Solid ${source.unit} above, dashed ${ratioUnit} below, shared time in milliseconds. Selected trial ${state.trial}. Use arrow keys to inspect points, plus and minus to zoom, and R to reset.`);
       dataAttribute(dom.section, 'source', state.source);
       dataAttribute(dom.section, 'unit', source.unit);
@@ -757,7 +862,7 @@
         const title = element(document, 'div', 'depth-batch-card-title');
         title.append(element(document, 'strong', 'depth-batch-name', label));
         title.append(element(document, 'span', 'depth-batch-layer', `${sourceRun.decoder_layers} layers · trial ${state.trial}`));
-        const badge = element(document, 'span', 'depth-batch-unit', SOURCE[state.source].unit);
+        const badge = element(document, 'span', 'depth-batch-unit', sourceDefinitionsForPayload(payload)[state.source].unit);
         head.append(title, badge);
         card.append(head);
         if (!run) {
@@ -789,7 +894,7 @@
         return;
       }
       state.hovered = point;
-      const source = SOURCE[state.source];
+      const source = sourceDefinitionsForPayload(payload)[state.source];
       elements.tooltip.replaceChildren();
       elements.tooltip.append(element(document, 'strong', 'depth-tooltip-title', point.label));
       elements.tooltip.append(element(document, 'span', 'depth-tooltip-meta', `Trial ${point.trial} · ${source.shortLabel} · ${point.kind === 'ratio' ? 'derived ratio' : 'source sample'}`));
@@ -821,8 +926,10 @@
       else elements.cards.replaceChildren();
 
       if (error) {
-        drawEmptyState(ctx, width, 'Measured power traces are unavailable.');
-        elements.chartStatus.textContent = 'Power trace data is unavailable.';
+        drawEmptyState(ctx, width, presentation.compact
+          ? 'UT61B apparent-power traces are unavailable.' : 'Measured power traces are unavailable.');
+        elements.chartStatus.textContent = presentation.compact
+          ? 'UT61B trace data is unavailable.' : 'Power trace data is unavailable.';
         clearTooltip();
         return;
       }
@@ -833,7 +940,7 @@
         return;
       }
 
-      const source = SOURCE[state.source];
+      const source = sourceDefinitionsForPayload(payload)[state.source];
       ctx.save();
       ctx.font = '600 10px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
       const canvasLegend = layoutCanvasLegend(model.lanes, width, label => ctx.measureText(label).width);
@@ -858,9 +965,13 @@
       const timeDomain = state.viewDomain || model.timeDomain;
       const tickFractions = plotWidth < 300 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
       const panels = [
-        { plot: powerPlot, domain: model.valueDomain, kind: 'power', unit: source.unit, title: `POWER · ${source.unit}`, dashed: false },
+        { plot: powerPlot, domain: model.valueDomain, kind: 'power', unit: source.unit,
+          title: presentation.compact ? `APPARENT POWER · ${source.unit}` : `POWER · ${source.unit}`, dashed: false },
         { plot: ratioPlot, domain: model.perTokenDomain, kind: 'ratio', unit: model.perTokenUnit,
-          title: `${state.metric === 'energy' ? 'ENERGY' : 'POWER'} / TOKEN · ${model.perTokenUnit}`, dashed: true },
+          title: presentation.compact
+            ? `${state.metric === 'energy' ? 'VA·s INTEGRAL' : 'APPARENT POWER'} / TOKEN · ${model.perTokenUnit}`
+            : `${state.metric === 'energy' ? 'ENERGY' : 'POWER'} / TOKEN · ${model.perTokenUnit}`,
+          dashed: true },
       ];
       for (const panel of panels) {
         const { plot, domain } = panel;
@@ -954,7 +1065,7 @@
     }
 
     function updateSource(source) {
-      if (!SOURCE[source] || source === state.source || error) return;
+      if (!sourceDefinitionsForPayload(payload)[source] || source === state.source || error) return;
       state.source = source;
       clearTooltip();
       setPressed(elements.gpuButton, source === 'gpu');
@@ -1020,6 +1131,9 @@
         const campaign = payload.campaign_id.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'campaign';
         anchor.href = elements.canvas.toDataURL('image/png');
         anchor.download = `gemma4-power-trace-${campaign}-trial-${state.trial}-${state.source}-${state.metric}.png`;
+        if (state.source === 'fluke' && payload?.circuit_meter === 'ut61b') {
+          anchor.download = `gemma4-power-trace-${campaign}-trial-${state.trial}-ut61b-${state.metric}.png`;
+        }
         anchor.hidden = true;
         section.append(anchor);
         anchor.click();
@@ -1127,8 +1241,8 @@
       }
     });
 
-    setPressed(elements.gpuButton, true);
-    setPressed(elements.flukeButton, false);
+    setPressed(elements.gpuButton, state.source === 'gpu');
+    setPressed(elements.flukeButton, state.source === 'fluke');
     setPressed(elements.energyButton, true);
     setPressed(elements.powerButton, false);
     dataAttribute(dom.section, 'depthMounted', 'true');
@@ -1154,6 +1268,9 @@
   return {
     SCHEMA,
     SOURCE,
+    presentationOptions,
+    sourceDefinitions,
+    createShell,
     buildChartModel,
     catmullRomSegments,
     perTokenPoints,

@@ -287,3 +287,125 @@ python3 -m unittest discover -s spec -p test_gemma4_prune_layers.py
 python3 -m unittest discover -s spec -p test_gemma4_gpu_telemetry.py
 python3 -m unittest discover -s spec -p test_gemma4_layer_report.py
 ```
+
+
+## Same-host UT61B campaign (2026-10-17)
+
+Campaign `depth-ut61b-20261017-c` repeats the prefix-depth experiment with the
+UT61B USB adapter connected directly to gputer as `/dev/ttyUSB0`. It uses the
+same owned deployment, model hashes, prompt, greedy settings and exact
+256-token workload. Batches are `depth48-before`, `depth32`, `depth16` and
+`depth48-after`, with three requests each. The full 48-layer service is restored
+before the final batch and remains healthy after both collectors stop.
+
+Both bounded collectors run for 300 seconds on gputer. GPU power, utilization
+and memory are captured every 250 ms; UT61B retains complete serial frames and
+rejected candidates with receipt epoch milliseconds and monotonic timestamps.
+Actual received-token counters use the same host's epoch clock, guarded against
+wall/monotonic request-duration drift. These are observer receipt timestamps,
+not device-side sampling timestamps. A common host removes inter-host clock
+offset but does not remove meter averaging, transport or token-delivery lag.
+
+Raw-only GPU and UT61B captures are subsequently sent through Prometheus
+remote-write v1 by `scripts/gemma4_same_clock_report.py`. Crystal already writes
+the token counters through that protocol. The postprocessor exports all seven
+metric families from VictoriaMetrics, rejects missing/conflicting/extra samples
+within the selected capture ranges, and compares timestamps exactly and values
+with absolute tolerance `1e-12` before constructing measurements. The UT61B
+held valid-AC state merges every mode, including unknown and rejected frames;
+request boundaries must be bracketed, with raw gaps at most 2000 ms.
+
+A successful write can precede raw-export visibility. If a prior attempt wrote
+successfully but failed the bounded readback, `--verify-existing` performs the
+same full comparison without sending another write. Its output explicitly
+records `write_attempted=false` and does not invent write-response statistics.
+Existing evidence paths are never overwritten; retain a failed partial export
+and choose a fresh prefix if one already exists.
+
+From `/build/persisten/cogni-gemma4-energy`, after the four batch reports and
+bounded captures have closed:
+
+```sh
+python3 source/scripts/gemma4_same_clock_report.py \
+  --input reports/depth-ut61b-20261017-c-depth48-before.json \
+    reports/depth-ut61b-20261017-c-depth32.json \
+    reports/depth-ut61b-20261017-c-depth16.json \
+    reports/depth-ut61b-20261017-c-depth48-after.json \
+  --gpu-jsonl reports/depth-ut61b-20261017-c-gpu.jsonl \
+  --ut61b-jsonl reports/depth-ut61b-20261017-c-ut61b.jsonl \
+  --output reports/depth-ut61b-20261017-c-comparison.json \
+  --evidence-prefix reports/depth-ut61b-20261017-c-vm
+```
+
+The new comparison explicitly identifies `circuit_meter=ut61b` and
+`measurement_clock=gputer`. Original batch reports retain their original
+measurements; the postprocessor replaces those legacy circuit fields using
+fresh UT61B samples, without relabeling Fluke evidence. Legacy reports continue
+to render as Fluke, and mixed-meter merges or inconsistent metric identities
+are rejected. UT61B records cannot claim active circuit W/J.
+
+The compact UT61B presentation is the demo's single-source view, using solid
+VA and same-color dashed VA s/token or VA/token against actual cumulative
+received tokens. NVIDIA remains in the separate full technical comparison.
+Historical inputs and the earlier complete presentation bundle are retained
+under `previous-f4bb6457/` in the task artifact. Restoring the archived HTML is
+the chart rollback; restoring the normal startup script is the model rollback.
+
+
+Observed means (three requests per row, 256 tokens each):
+
+| Batch | Time (s) | GPU W | GPU J | UT61B VA | UT61B VA s | UT61B VA s/token |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 48 before | 5.601 | 156.36 | 875.72 | 246.91 | 1382.88 | 5.402 |
+| 32 | 3.973 | 153.97 | 611.83 | 232.24 | 922.84 | 3.605 |
+| 16 | 2.322 | 135.28 | 314.08 | 227.82 | 529.07 | 2.067 |
+| 48 after | 5.631 | 167.33 | 942.23 | 254.23 | 1431.54 | 5.592 |
+
+The reduced-depth UT61B request integrals are 33.3% and 61.7% below the initial
+48-layer batch, while mean apparent power changes much less. The final full
+batch's UT61B integral is 3.52% higher than the initial full batch; GPU energy
+is 7.59% higher. Keep both baselines visible rather than hiding drift or claiming
+an invariant causal savings ratio. These short windows include prefill and
+sensor lag, exclude loading/warmup/waits, and do not establish useful-answer
+quality, calibration, quiet-host operation or comparative meter accuracy.
+
+The 300-second capture retained 1199 GPU samples with zero sample errors and
+507 valid AC frames plus one initial partial frame before any request. Raw VM
+exports match 8207 unique metric samples: 1199 each for GPU W, utilization and
+memory; 508 UT61B validity, 507 current, 507 apparent VA; and 3088 observed-token
+counter points across 12 series. No same-millisecond UT61B rows coalesced.
+The initial write was accepted before raw exports became visible; the final
+`--verify-existing` readback sent no second write. An independent artifact
+checker, importing no collector/writer/integrator implementation, reconstructs
+UT61B display values, verifies every raw sample, and recomputes all 24 power
+curves and window integrals. The GPU/UT61B wall-minus-monotonic receipt offsets
+occupy a 1.017 ms corridor; this is not a sensor-latency measurement.
+
+Evidence is retained as `depth-ut61b-20261017-c-*`,
+`check_same_clock_evidence.py`, `ut61b-nvidia-comparison-evidence.json`,
+`ut61b-nvidia-comparison.html` and `depth-explorer.html` in the task artifact's
+`layer-depth/`. Raw captures, VM exports and source batch reports also remain
+under the owned gputer deployment's `reports/`. Refresh on changes to source,
+model/backend, GPU/driver, workload, clock, USB/meter/adapter, serial settings,
+voltage assumption or calibration, concurrent activity, or raw-evidence loss.
+
+
+Verification for this source state: the following 69 Python tests passed both
+locally and on gputer; 27 Node chart tests passed locally, including a canvas
+mount with actual-token progress. Browser checks exercised all three trials,
+both UT61B ratio modes, point inspection, zoom/reset, PNG prepared status, and
+375/611 px layouts. The full technical view mounted and switched from NVIDIA
+to UT61B. PNG downloaded bytes were not inspected. Compact and full HTML hashes
+match the independently rendered gputer copies. The independent raw-evidence
+checker passed locally and on gputer. The scoped adversary verdict is ROBUST
+for acquisition/readback, unit separation and these rendered paths; causal
+savings, calibration and useful-answer efficiency remain unverified.
+
+```sh
+python3 -m unittest spec/test_gemma4_same_clock_report.py spec/test_gemma4_layer_report.py spec/test_ut61b_telemetry.py spec/test_prometheus_remote_write.py
+node spec/test_gemma4_depth_chart.js
+node --check scripts/gemma4_depth_chart.js
+git diff --check
+# From the retained artifact directory, without Python -O:
+python3 check_same_clock_evidence.py
+```
