@@ -30059,3 +30059,37 @@ Refresh after source/toolchain/device/model/workload changes.
   multi-output dispatch with exact original row reductions; current additive
   dominance is unproven. Require local GPU parity/timing then full requests.
 
+### 2026-10-17 — exact-tree backbone qkv/z/b/a dispatch experiment
+
+- From `932e7b6b`, a frozen opt-in selector combines four shared-input decode
+  projections into one dispatch, preserving byte decoding and the original
+  F32 lane/reduction order. Same four ordinal output allocations; no new
+  production commands, waits or reads. Unsupported formats/reductions fall
+  back. Unset/`DRAMA3_BACKBONE_DENSE_FUSION=0` retains the original four
+  inline calls and remains the default/rollback.
+- Final local production-API probe compares 2,668,032 values bitwise on GPU,
+  rejects bit/NaN controls, passes 37,056 upstream projection values at the old
+  tolerance, and gives 1.16824 pooled paired command ratio (21/21 wins).
+  This is a local command interval result, not an additive family cost.
+- Seventeen Metal examples pass. The new decode `#step` harness observes
+  frozen off/on arms and compares 243 boundaries / 497,664 native values exactly;
+  both arms have identical 243 upstream metric records. The existing strict
+  failure remains row 1/layer 39 hidden. Only 729 compact GPU receipts cross the
+  terminal diagnostic boundary (14,580 B plus existing 4 B finite control), with
+  one final command/wait. The older late-layer prefill gate cannot qualify
+  this changed decode dispatch.
+- All 12 full-request ABBA trajectories/WAV/tapes/reads/waits and corresponding
+  cold/warm allocation counts/bytes match. Request ratios 0.983651/0.952369
+  do not establish benefit; generation ratios disagree and unchanged DAC
+  varies. Warm worker request medians 24.626830/25.464262 s for 2.786395 s audio
+  give observed RTF 8.838/9.139. Keep default off. Do not infer causal slowdown
+  of this kernel or full upstream compatibility from these observations.
+- Correlated mini-Quad review plus root execution supports bounded native
+  parity/local timing. Details `docs/drama3-dense-fusion.md`, index
+  `.landmark/evidence/drama3-dense-fusion.json`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/dense-fusion-commands.json`.
+  Refresh on source/compiler/model/input/reference/tolerance/queue/device/OS
+  drift or evidence loss; request timing also decays with host-load drift.
+  Sustained RTF 0.8–0.9 remains open. A separate possible next discriminator is
+  exact-tree tower FFN w1/w3 fusion; no current dominance claim is established.
+

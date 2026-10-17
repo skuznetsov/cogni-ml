@@ -35,6 +35,35 @@ kernel void dr3_dense(device const uchar* w [[buffer(0)]],device const float* x 
     for(uint j=lane;j<cols;j+=64)s+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];parts[lane]=s;threadgroup_barrier(mem_flags::mem_threadgroup);
     for(uint d=32;d>0;d/=2){if(lane<d)parts[lane]+=parts[lane+d];threadgroup_barrier(mem_flags::mem_threadgroup);}if(lane==0)y[r]=parts[0];
 }
+kernel void dr3_dense_four_tree(
+    device const uchar* w0 [[buffer(0)]], device const uchar* w1 [[buffer(1)]],
+    device const uchar* w2 [[buffer(2)]], device const uchar* w3 [[buffer(3)]],
+    device const float* x [[buffer(4)]],
+    device float* y0 [[buffer(5)]], device float* y1 [[buffer(6)]],
+    device float* y2 [[buffer(7)]], device float* y3 [[buffer(8)]],
+    constant ulong* p [[buffer(9)]],
+    uint output_row [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint projection = 0, r = output_row;
+    while (projection < 3 && r >= p[projection * 5]) {
+        r -= uint(p[projection * 5]);
+        projection++;
+    }
+    constant ulong* q = p + projection * 5;
+    device const uchar* w = projection == 0 ? w0 : projection == 1 ? w1 : projection == 2 ? w2 : w3;
+    device float* y = projection == 0 ? y0 : projection == 1 ? y1 : projection == 2 ? y2 : y3;
+    threadgroup float parts[64];
+    uint cols = uint(q[1]);
+    float s = 0;
+    ulong row = q[4] * q[0] + r;
+    for (uint j = lane; j < cols; j += 64) s += dr3_float(w, q[2], row * cols + j, q[3]) * x[j];
+    parts[lane] = s;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint d = 32; d > 0; d /= 2) {
+        if (lane < d) parts[lane] += parts[lane + d];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0) y[r] = parts[0];
+}
 kernel void dr3_dense_simd(device const uchar* w [[buffer(0)]],device const float* x [[buffer(1)]],device float* y [[buffer(2)]],constant ulong* p [[buffer(3)]],uint r [[threadgroup_position_in_grid]],uint lane [[thread_index_in_threadgroup]],uint simd_lane [[thread_index_in_simdgroup]],uint simdgroup [[simdgroup_index_in_threadgroup]],uint simd_width [[threads_per_simdgroup]]) {
     threadgroup float parts[64];uint cols=uint(p[1]);float s=0;ulong row=p[4]*p[0]+r;
     if(p[3]==1&&(p[2]&1)==0){for(uint j=lane;j<cols;j+=64)s+=dr3_bf16_aligned(w,p[2],row*cols+j)*x[j];}

@@ -642,6 +642,17 @@ module ML::Audio::Drama3::Resident
       value
     end
 
+    private def dense_four_eligible?(matrices : Tuple(Matrix, Matrix, Matrix, Matrix)) : Bool
+      total_rows = matrices[0].rows.to_i64 + matrices[1].rows.to_i64 + matrices[2].rows.to_i64 + matrices[3].rows.to_i64
+      return false unless total_rows.in?(1_i64..Int32::MAX.to_i64)
+      matrices.each do |matrix|
+        return false unless matrix.rows > 0 && matrix.expert == 0 && matrix.tensor.shape.size == 2
+        return false if matrix.scales || matrix.biases
+        return false unless matrix.tensor.dtype.in?("F32", "BF16", "F16")
+      end
+      true
+    end
+
     private def validate_expert_reduction(value : String) : String
       raise ArgumentError.new("expert reduction must be native or mlx_q4") unless value.in?("native", "mlx_q4")
       value
@@ -746,6 +757,52 @@ module ML::Audio::Drama3::Resident
       enc.dispatch_threadgroups({matrix.rows, 1, 1}, {threadgroup_width, 1, 1})
       @pending.concat([x, y])
       y
+    end
+
+    # Same-input dense projections with the original independent 64-lane tree.
+    # Unsupported layouts and reductions stay on the established four-matvec
+    # path; callers opt into the fused candidate explicitly.
+    def matvec_four(matrices : Tuple(Matrix, Matrix, Matrix, Matrix), x : Buffer,
+                    dense_reduction : String? = nil, fused : Bool = false) : Tuple(Buffer, Buffer, Buffer, Buffer)
+      check_owner!(x)
+      matrices.each do |matrix|
+        raise ArgumentError.new("resident matvec width") unless matrix.cols == x.count
+      end
+      reduction = dense_reduction ? validate_dense_reduction(dense_reduction) : @dense_reduction
+      unless fused && reduction == "tree" && dense_four_eligible?(matrices)
+        return {
+          matvec(matrices[0], x, dense_reduction: reduction),
+          matvec(matrices[1], x, dense_reduction: reduction),
+          matvec(matrices[2], x, dense_reduction: reduction),
+          matvec(matrices[3], x, dense_reduction: reduction),
+        }
+      end
+
+      weights = {
+        weight_buffer(matrices[0].tensor), weight_buffer(matrices[1].tensor),
+        weight_buffer(matrices[2].tensor), weight_buffer(matrices[3].tensor),
+      }
+      outputs = {
+        alloc(matrices[0].rows), alloc(matrices[1].rows),
+        alloc(matrices[2].rows), alloc(matrices[3].rows),
+      }
+      params = [] of UInt64
+      matrices.each_with_index do |matrix, index|
+        params.concat([matrix.rows.to_u64, matrix.cols.to_u64, weights[index].offset.to_u64,
+                       encoding(matrix.tensor), matrix.expert.to_u64])
+      end
+      total_rows = matrices[0].rows + matrices[1].rows + matrices[2].rows + matrices[3].rows
+
+      enc = encoder
+      enc.set_pipeline(pipeline("dr3_dense_four_tree", SOURCE))
+      weights.each_with_index { |weight, index| enc.set_buffer(weight.buffer, index) }
+      enc.set_buffer(x.buffer, 4, offset: x.offset)
+      outputs.each_with_index { |output, index| enc.set_buffer(output.buffer, index + 5, offset: output.offset) }
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 9)
+      enc.dispatch_threadgroups({total_rows, 1, 1}, {64, 1, 1})
+      @pending << x
+      outputs.each { |output| @pending << output }
+      outputs
     end
 
     def expert(matrix : Matrix, x : Buffer, ids : Buffer? = nil, rank : Int32 = 0, reduction : String = "native") : Buffer

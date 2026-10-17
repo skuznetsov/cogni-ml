@@ -74,13 +74,47 @@ established. `DRAMA3_EXPERT_PACKED_ROWS=1` remains opt-in; unset/0 is the
 frozen default. Fixed DAC timing also varies, so this run does not isolate
 a causal expert-kernel regression. See `docs/drama3-expert-packed-rows.md`.
 
-Next distinct hypothesis: qkv/z/b/a share one decode input and could use a
-multi-output dense dispatch while retaining each row's exact reduction tree.
-No current additive profile establishes this family's dominance. First require
-captured-input GPU bit parity and paired local timing, then complete-request
-qualification. Target RTF0.8–0.9 remains open; the DAC-qualified RTF8.302 still
-needs about9.2–10.4x overall improvement at this fixed workload. Prior blanket
-SIMD trials do not justify another selector retry without a new discriminator.
+Current hypothesis at `932e7b6b`: qkv/z/b/a share one decode input and could
+use one multi-output dense dispatch while retaining every row's original
+64-lane F32 accumulation and reduction tree. No current additive profile
+establishes this family's dominance. CAUTION: dynamic resource selection can
+cost more than three saved dispatches, or change F32 code generation. Reuse
+the same four output allocations in ordinal order, weight mappings and input
+view; do not combine live scratch slots, repack weights, or add queue waits.
+
+First discriminator: `drama3_dense_fusion_benchmark MODEL DENSE_FIXTURE MLX_REFERENCE` with
+alternating separate/fused groups on pinned upstream inputs, existing command
+timestamps and device-side bit/nonfinite receipts. A seeded bit/NaN error
+must be rejected. Guard uneven row counts, column tails, F32/F16/BF16 and
+input/output/weight offsets before production use. If this local workload
+does not improve, retain four dispatches and stop this formulation. Otherwise
+qualify an opt-in implementation with exact fixed-trajectory request pairs,
+unchanged upstream metrics, allocation/submit/wait/read ledgers and frozen
+selection/fallback tests before changing the default. Rollback is the existing
+four-dispatch path. Target RTF0.8–0.9 remains open; the DAC-qualified RTF8.302
+still needs about9.2–10.4x overall improvement at this fixed workload. Prior
+blanket SIMD trials do not justify another selector retry without a new
+discriminator.
+
+Observed: the production-API qkv/z/b/a probe preserves 2,668,032 native values
+bitwise on GPU, rejects injected bit/NaN errors, and passes all 37,056 pinned
+MLX projection values at the existing tolerances. All 21 measured local pairs
+favor fusion; pooled paired command ratio is 1.16824. Seventeen Metal examples
+pass. A separate `#step` gate covers 243 decode boundaries / 497,664 values,
+with exact native parity and identical baseline/candidate MLX metric records.
+The old full upstream failure at row 1/layer 39 hidden remains; the prefill-only
+late-layer harness is not used as proof for this changed decode path.
+
+Full profiler-off 12-request ABBA preserves codes, WAV, sampler tape, allocation
+counts/bytes, reads and waits. Mirrored original/fused request ratios are
+0.983651/0.952369, with generation 1.035217/0.972357 and unchanged DAC also
+varying. Request medians 24.626830/25.464262 s for 2.786395 s audio do not establish
+a speedup. Keep `DRAMA3_BACKBONE_DENSE_FUSION=0` (unset also off), with the
+original four inline matvecs as rollback. Local command wins are not realtime
+throughput. Details and evidence: `docs/drama3-dense-fusion.md` and
+`.landmark/evidence/drama3-dense-fusion.json`. A distinct possible next probe
+is exact-tree tower FFN w1/w3 fusion; current dominance and request benefit
+remain unproven.
 
 ## Prior slice: late-layer matched-input fidelity — 2026-10-16
 

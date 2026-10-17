@@ -30,6 +30,8 @@ CONTROLS = {
     "DRAMA3_MMAP_SHARED": "0",
     "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
     "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+    "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+    "DRAMA3_EXPERT_PACKED_ROWS": "0",
 }
 INPUT = {
     "text": "Hello, this is a voice test.",
@@ -48,6 +50,8 @@ def sha(path):
 
 def validate(report, wav_sha, baseline):
     base = baseline["report"]
+    # Frames contain every generated code, and sampler_inputs pins the complete
+    # uploaded uniform tape; waveform identity alone is not the arithmetic gate.
     for key in ("frames", "sampler_inputs", "resident_readbacks"):
         assert report[key] == base[key], key + " changed"
     for key in ("submitted", "completed", "completion_waits", "pending"):
@@ -74,6 +78,7 @@ def main():
     schedules.add_argument("--expert-threads-schedule", help="Comma-separated 32/64 thread requests; dense stays tree, scratch and profiling off")
     schedules.add_argument("--dac-layout-schedule", help="Comma-separated native/coalesced DAC layouts; scratch and profiling stay off")
     schedules.add_argument("--expert-packed-rows-schedule", help="Comma-separated 0/1 batched expert row packing; coalesced DAC, scratch and profiling off")
+    schedules.add_argument("--dense-fusion-schedule", help="Comma-separated 0/1 backbone qkv/z/b/a fusion; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
@@ -81,7 +86,12 @@ def main():
     resource_modes = None
     dac_layouts = None
     expert_packed_rows = None
-    if args.expert_packed_rows_schedule is not None:
+    dense_fusion = None
+    if args.dense_fusion_schedule is not None:
+        dense_fusion = [mode.strip() for mode in args.dense_fusion_schedule.split(",")]
+        assert dense_fusion and all(mode in ("0", "1") for mode in dense_fusion), "dense fusion must be 0 or 1"
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in dense_fusion]
+    elif args.expert_packed_rows_schedule is not None:
         expert_packed_rows = [mode.strip() for mode in args.expert_packed_rows_schedule.split(",")]
         assert expert_packed_rows and all(mode in ("0", "1") for mode in expert_packed_rows), "expert row packing must be 0 or 1"
         schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_packed_rows]
@@ -134,6 +144,9 @@ def main():
             controls["DRAMA3_DAC_CONV_LAYOUT"] = dac_layouts[arm]
         if expert_packed_rows is not None:
             controls["DRAMA3_EXPERT_PACKED_ROWS"] = expert_packed_rows[arm]
+            controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        if dense_fusion is not None:
+            controls["DRAMA3_BACKBONE_DENSE_FUSION"] = dense_fusion[arm]
             controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"

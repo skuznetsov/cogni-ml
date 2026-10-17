@@ -26,6 +26,7 @@ module ML::Audio::Drama3
     @batch_experts : Bool
     getter last_moe_batched = false
     getter dense_reduction : String
+    getter dense_fusion_enabled : Bool
     getter expert_down_reduction : String
     getter batch_experts : Bool
 
@@ -44,6 +45,9 @@ module ML::Audio::Drama3
       unless @dense_reduction.in?("tree", "simd")
         raise ArgumentError.new("DRAMA3_BACKBONE_DENSE_REDUCTION must be tree or simd")
       end
+      dense_fusion = ENV["DRAMA3_BACKBONE_DENSE_FUSION"]? || "0"
+      raise ArgumentError.new("DRAMA3_BACKBONE_DENSE_FUSION must be 0 or 1") unless dense_fusion.in?("0", "1")
+      @dense_fusion_enabled = dense_fusion == "1"
       @expert_down_reduction = ENV["DRAMA3_EXPERT_DOWN_REDUCTION"]? || "native"
       unless @expert_down_reduction.in?("native", "mlx_q4")
         raise ArgumentError.new("DRAMA3_EXPERT_DOWN_REDUCTION must be native or mlx_q4")
@@ -321,12 +325,17 @@ module ML::Audio::Drama3
 
     private def linear_attention(x : Resident::Buffer, prefix : String, layer : Int32) : Resident::Buffer
       c = @config
-      # Keep the reduction choice local to this measured shared-input group.
-      # The returned device allocations feed the existing temporal/gating path.
-      qkv = @ctx.matvec(@store.matrix(prefix + ".in_proj_qkv.weight"), x, dense_reduction: @dense_reduction)
-      z = @ctx.matvec(@store.matrix(prefix + ".in_proj_z.weight"), x, dense_reduction: @dense_reduction)
-      b = @ctx.matvec(@store.matrix(prefix + ".in_proj_b.weight"), x, dense_reduction: @dense_reduction)
-      a = @ctx.matvec(@store.matrix(prefix + ".in_proj_a.weight"), x, dense_reduction: @dense_reduction)
+      if @dense_fusion_enabled
+        qkv, z, b, a = @ctx.matvec_four({
+          @store.matrix(prefix + ".in_proj_qkv.weight"), @store.matrix(prefix + ".in_proj_z.weight"),
+          @store.matrix(prefix + ".in_proj_b.weight"), @store.matrix(prefix + ".in_proj_a.weight"),
+        }, x, dense_reduction: @dense_reduction, fused: true)
+      else
+        qkv = @ctx.matvec(@store.matrix(prefix + ".in_proj_qkv.weight"), x, dense_reduction: @dense_reduction)
+        z = @ctx.matvec(@store.matrix(prefix + ".in_proj_z.weight"), x, dense_reduction: @dense_reduction)
+        b = @ctx.matvec(@store.matrix(prefix + ".in_proj_b.weight"), x, dense_reduction: @dense_reduction)
+        a = @ctx.matvec(@store.matrix(prefix + ".in_proj_a.weight"), x, dense_reduction: @dense_reduction)
+      end
       project(prefix + ".out_proj", linear_attention_ready(qkv, z, b, a, prefix, layer, @position))
     end
 
