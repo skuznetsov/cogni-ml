@@ -1,6 +1,24 @@
 require "json"
 require "option_parser"
 require "../src/ml/gguf/gemma4_chat"
+require "../src/ml/gguf/gemma4_energy_cli"
+
+# The Linux energy controller uses a full-depth local llama.cpp backend.
+if ARGV.includes?("--energy-profile") || ARGV.includes?("--compare-energy-profiles")
+  energy_args = ARGV.flat_map do |arg|
+    case arg
+    when "--energy-profile"          then ["--profile"]
+    when "--compare-energy-profiles" then ["--profiles", "eco,balanced,quality"]
+    else                                  [arg]
+    end
+  end
+  begin
+    exit ML::GGUF::Gemma4EnergyCLI.run(energy_args)
+  rescue ex
+    STDERR.puts "gemma4_generate: #{ex.message}"
+    exit 1
+  end
+end
 
 def apply_tool_string_enum_hints(tools : Array(JSON::Any), raw_hints : String?) : Array(JSON::Any)
   return tools if raw_hints.nil? || raw_hints.empty? || tools.empty?

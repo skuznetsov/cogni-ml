@@ -28598,3 +28598,32 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
   device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
   prompt, kernel/compiler, device/OS, Python component, or harness changes.
+
+### 2026-10-17 — Gemma 4 token profiles and physical measurement boundary
+
+- `bin/gemma4_energy.cr` and the existing generator's energy flags use a local
+  llama.cpp full-depth backend on Linux. Eco/Balanced/Quality cap reasoning and
+  answers independently at 0/256, 256/512 and 1024/1024 tokens; the native Metal
+  profiler path is preserved. Native CUDA probes are not a generation backend.
+- Direct gputer checks: RTX 5060 Ti, llama.cpp b11714, Gemma 4 12B Q4_K_M,
+  49/49 layers offloaded; 22 Crystal examples and 10 Python renderer tests pass.
+  Nine rotating default math runs return 391 with real Fluke coverage. Separate
+  live probes establish forced reasoning closure and explicit answer truncation.
+  Imported reports require coherent accounting and remain unverified provenance.
+- VictoriaMetrics raw export requires one series, matching Fluke validity and
+  bracketing coverage; gaps or missing data are unavailable. AC RMS current times
+  assumed 116 V is VA; its integral is VA s. Joules require active watts or an
+  explicitly labelled PF estimate. Short meter windows, shared-host load and
+  unreviewed answer quality do not establish an efficiency ranking.
+- The longer prompt completed once for each profile. A subsequent repeat hit
+  CUDA watchdog/Xid 8; no OOM was observed. Our service was restored and the
+  partial report/crash log retained. Sustained GPU stability remains unresolved.
+- Source-linked scope, commands, model digest and decay conditions:
+  `docs/gemma4-energy-profiles.md` and
+  `docs/gemma4-energy-profiles-frontier.md`. Refresh on source, model/backend,
+  hardware, collector, clocks or calibration changes and raw-evidence loss.
+- New user-authorized frontier: experimentally reduce actual decoder depth,
+  accepting poor answer quality, to test card load. Keep normal profiles
+  full-depth. Discriminate actual skipped layers from CPU offload; compare
+  fixed token work with GPU telemetry and Fluke. Restore the full model after
+  the experiment; no GPU reset or changes to unrelated workloads are authorized.

@@ -27,8 +27,17 @@ src/ml/
   optim/        Adam/AdamW
   llm/          llama.cpp FFI bindings
   gguf/         GGUF reader, tokenizer, dequantization, Qwen35, NomicBertMoE
+  energy/       Raw VictoriaMetrics circuit measurements and integration
   metal/        Device, ComputeEncoder, ComputeGraph, GraphEncoder
 ```
+
+## Gemma 4 energy profiles
+
+The Linux energy controller runs Eco, Balanced, and Quality through a local
+llama.cpp Gemma 4 server, with independent reasoning and answer budgets. It
+compares request windows against raw Fluke measurements in VictoriaMetrics and
+renders standalone comparison graphs. See [setup and measurement units](docs/gemma4-energy-profiles.md)
+and the [hardware validation boundary](docs/gemma4-energy-profiles-frontier.md).
 
 ## Qwen-Image 2.1
 
