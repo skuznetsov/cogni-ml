@@ -134,6 +134,52 @@ def paired_run(depth: int = 48, label: str = "paired", *, trial: int = 1) -> dic
 
 
 class LayerReportTests(unittest.TestCase):
+    def test_canvas_keeps_actual_token_progress_and_historical_fallback(self) -> None:
+        observed = paired_run(label="observed")
+        observed["token_progress"] = {
+            "status": "available", "basis": "received_token_ids", "final_tokens": 256,
+            "points": [
+                {"elapsed_ms": 0, "generated_tokens": 0},
+                {"elapsed_ms": 200, "generated_tokens": 1},
+                {"elapsed_ms": 1000, "generated_tokens": 256},
+            ],
+            "remote_write": {"status": "available"},
+        }
+        report = report_with(observed, paired_run(label="historical"))
+        layer_report.validate_report(report)
+        payload = layer_report._depth_chart_payload(report)
+        self.assertEqual(payload["runs"][0]["token_progress"], {
+            "basis": "received_token_ids", "points": [[0, 0], [200, 1], [1000, 256]],
+        })
+        self.assertNotIn("token_progress", payload["runs"][1])
+
+    def test_rejects_available_but_invalid_token_progress(self) -> None:
+        valid = {
+            "status": "available", "basis": "received_token_ids", "final_tokens": 256,
+            "points": [{"elapsed_ms": 0, "generated_tokens": 0},
+                       {"elapsed_ms": 1000, "generated_tokens": 256}],
+        }
+        for mutation in (
+            {"basis": "text_chunks"}, {"final_tokens": 255},
+            {"points": []},
+            {"points": [{"elapsed_ms": 0, "generated_tokens": 0},
+                        {"elapsed_ms": 999, "generated_tokens": 256}]},
+            {"points": [{"elapsed_ms": 0, "generated_tokens": 0},
+                        {"elapsed_ms": 1000, "generated_tokens": 257}]},
+            {"points": [{"elapsed_ms": 0, "generated_tokens": 0},
+                        {"elapsed_ms": 400, "generated_tokens": 100},
+                        {"elapsed_ms": 600, "generated_tokens": 99},
+                        {"elapsed_ms": 1000, "generated_tokens": 256}]},
+            {"points": [{"elapsed_ms": 0, "generated_tokens": 0},
+                        {"elapsed_ms": True, "generated_tokens": 1},
+                        {"elapsed_ms": 1000, "generated_tokens": 256}]},
+        ):
+            with self.subTest(mutation=mutation):
+                run = paired_run()
+                run["token_progress"] = {**valid, **mutation}
+                with self.assertRaises(layer_report.ReportError):
+                    layer_report.validate_report(report_with(run))
+
     def test_canvas_payload_preserves_native_times_units_and_trial_identity(self) -> None:
         before = paired_run(label="depth48-before", trial=1)
         after = paired_run(label="depth48-after", trial=1)

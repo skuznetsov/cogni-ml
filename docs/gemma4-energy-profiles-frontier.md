@@ -65,6 +65,51 @@ Primary contracts: [Gemma formatting](https://ai.google.dev/gemma/docs/core/prom
 [llama-server API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md),
 [VictoriaMetrics raw export](https://docs.victoriametrics.com/victoriametrics/url-examples/#apiv1export).
 
+## Token progress and chart normalization
+
+The optional layer-experiment token observer counts generated token IDs from
+the pinned backend's completion stream. Text chunks, characters and an assumed
+constant token rate are rejected as token counters. Timestamps describe receipt
+on gputer, not the precise GPU generation instant. The terminal count must agree
+with the backend's fixed-work count. Same-millisecond observations are coalesced
+to the latest count; missing or invalid streams remain explicit failures.
+
+Observed counters are retained in the report and sent after inference to the
+loopback VictoriaMetrics `/api/v1/write` endpoint using Prometheus remote-write
+v1 (protobuf and raw-block Snappy). Bounded retries preserve ordering; a failed
+write is recorded and returns a failing CLI result without erasing inference
+evidence. Request identity labels apply only to the new experiment counters.
+Fluke's physical series keeps its existing labels. No prompt or generated text
+is stored in metrics. This opt-in experiment does not widen the production
+profile runner's contract.
+
+The chart uses two aligned 2D panels: solid power and same-color dashed ratios.
+With observed token counts, ratios use held cumulative N(t), omitting points
+before the first token. Historical runs use their final N with an explicit
+label. J/token integrates the original piecewise-linear power samples; bounded
+Catmull–Rom interpolation is for display only. Fluke retains VA/token and
+VA·s/token. W/token is the literal requested power/count ratio, not tokens/s
+or energy/token.
+
+Risk: CAUTION for token accounting and wire encoding. Rollback: revert the
+feature commit and omit `--token-progress`; prior reports remain readable.
+DoD: focused counter/wire specs and chart/report checks pass; a bounded gputer
+request returns the exact requested count and raw VM export reproduces the
+counter's timestamps and values. The strongest guards reject duplicated final
+token IDs, incomplete streams, denominator zero, interpolated counters, wire
+errors and unit drift. Live evidence must be refreshed after backend, clock,
+collector, encoding or measurement changes.
+
+Contracts: [Prometheus remote-write v1](https://prometheus.io/docs/specs/prw/remote_write_spec/),
+[VictoriaMetrics write endpoint](https://docs.victoriametrics.com/victoriametrics/url-examples/#apiv1write).
+
+The direct `token-progress-20261017-b` probe completed 256 tokens at 48 layers
+in 5,588.13 ms. Raw VM export exactly reproduced all 257 counter points, from
+zero to 256, with both NVIDIA and Fluke measurement windows available. Nineteen
+focused Crystal examples and 27 Python report tests pass locally and on gputer;
+22 chart checks pass locally. Evidence and refresh limits are recorded in
+`docs/gemma4-layer-depth-experiment.md`.
+
 ## Direct gputer evidence, 2026-10-17
 
 The isolated deployment is `/build/persisten/cogni-gemma4-energy` on the

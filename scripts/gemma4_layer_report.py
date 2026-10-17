@@ -109,6 +109,42 @@ def _validate_measurement(value: Any, location: str, *, utilization: bool = Fals
     _validate_curve(value, location)
 
 
+def _validate_token_progress(run: dict[str, Any], location: str) -> None:
+    progress = run.get("token_progress")
+    if progress is None:
+        return
+    if not isinstance(progress, dict):
+        raise ReportError(f"{location}.token_progress must be an object")
+    if progress.get("status") != "available":
+        # Partial observations remain in the raw report, never a denominator.
+        return
+    prefix = f"{location}.token_progress"
+    if progress.get("basis") != "received_token_ids":
+        raise ReportError(f"{prefix} requires received_token_ids")
+    total = progress.get("final_tokens")
+    if isinstance(total, bool) or not isinstance(total, int) or total < 1 or total != run.get("actual_tokens"):
+        raise ReportError(f"{prefix} final count must agree with actual_tokens")
+    points = progress.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        raise ReportError(f"{prefix} needs at least two observations")
+    previous_time, previous_count = -1, -1
+    for point in points:
+        if not isinstance(point, dict):
+            raise ReportError(f"{prefix} points must be objects")
+        time_ms, count = point.get("elapsed_ms"), point.get("generated_tokens")
+        if (isinstance(time_ms, bool) or not isinstance(time_ms, int) or time_ms < 0
+                or isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= total
+                or time_ms <= previous_time or count < previous_count):
+            raise ReportError(f"{prefix} requires ordered integer times and nondecreasing token counts")
+        previous_time, previous_count = time_ms, count
+    start, end = run.get("started_at_epoch_ms"), run.get("ended_at_epoch_ms")
+    if (not isinstance(start, int) or isinstance(start, bool)
+            or not isinstance(end, int) or isinstance(end, bool)
+            or points[0] != {"elapsed_ms": 0, "generated_tokens": 0}
+            or previous_time != end - start or previous_count != total):
+        raise ReportError(f"{prefix} must cover the full request window from zero to the final count")
+
+
 def validate_report(report: Any) -> dict[str, Any]:
     """Validate all fields used by the report while allowing future extra fields."""
     if not isinstance(report, dict):
@@ -154,6 +190,7 @@ def validate_report(report: Any) -> dict[str, Any]:
         for key in ("started_at_epoch_ms", "ended_at_epoch_ms", "elapsed_ms"):
             _number(run.get(key), f"{location}.{key}")
         _number(run.get("actual_tokens"), f"{location}.actual_tokens", integer=True)
+        _validate_token_progress(run, location)
         _optional_type(run, "model_identity", str, location)
         _sha256(run.get("model_sha256"), f"{location}.model_sha256")
         _number(run.get("parameter_count"), f"{location}.parameter_count", integer=True)
@@ -532,6 +569,13 @@ def _depth_chart_payload(report: dict[str, Any]) -> dict[str, Any]:
             "duration_ms": run["ended_at_epoch_ms"] - run["started_at_epoch_ms"],
             "color": colors[run["label"]],
         }
+        progress = run.get("token_progress")
+        if progress and progress.get("status") == "available":
+            _validate_token_progress(run, run["label"])
+            item["token_progress"] = {
+                "basis": progress["basis"],
+                "points": [[point["elapsed_ms"], point["generated_tokens"]] for point in progress["points"]],
+            }
         for name, key, unit, integral_unit, mean_key, integral_key in (
             ("gpu", "gpu_measurement", "W", "J", "mean_active_power_watts", "active_energy_joules"),
             ("fluke", "circuit_measurement", "VA", "VA·s", "mean_apparent_power_va", "apparent_energy_va_seconds"),
@@ -748,7 +792,7 @@ def render_presentation(report: Any) -> str:
 <noscript><p>The interactive graph requires JavaScript. Use the full report for static measured tables and SVG traces.</p></noscript>
 <footer class="audit-context"><p><strong>Campaign: {campaign}. Fixed-token gate: {gate}.</strong> {report['requested_tokens']} generated tokens per request; answer quality is unvalidated.</p>{gate_details}
 <p>NVIDIA: active GPU board power, W and J. Fluke: whole-circuit apparent power, VA and VA·s, using the assumed grid voltage. These are different physical scopes and quantities; do not subtract them or infer GPU share or PSU efficiency.</p>
-<p>Historical request-window source curves; boundary values are linearly interpolated from bracketing raw samples. No additional smoothing, extrapolation, idle subtraction or clock-offset correction. Matching recorded windows does not remove sensor lag or averaging. Shared-host activity may contribute.</p>
+<p>Request-window source curves; boundary values are linearly interpolated from bracketing raw samples. The interactive display uses bounded Catmull–Rom; energy uses original piecewise-linear samples. No extrapolation, idle subtraction or clock-offset correction. Matching recorded windows does not remove sensor lag or averaging. Shared-host activity may contribute.</p>
 <p>Prompt SHA-256: <code>{_escape(report.get('prompt_sha256') or 'Unavailable')}</code>. Imported report provenance requires the original experiment evidence.</p></footer>
 </main><script>{javascript}</script></body></html>"""
 

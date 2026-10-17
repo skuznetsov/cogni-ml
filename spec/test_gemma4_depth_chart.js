@@ -5,18 +5,21 @@ const test = require('node:test');
 
 const {
   buildChartModel,
+  catmullRomSegments,
   commonTimeDomain,
   formatMetric,
   layoutCanvasLegend,
   nearestSample,
   panDomain,
+  perTokenPoints,
+  progressPerTokenPoints,
   projectPoint,
   validatePayload,
   valueDomain,
   zoomDomain,
 } = require('../scripts/gemma4_depth_chart.js');
 
-function makeRun({ label = 'depth48-before', trial = 1, duration = 1000, gpu = [[0, 100], [500, 150], [duration, 120]], fluke = [[0, 230], [250, 240], [duration, 235]] } = {}) {
+function makeRun({ label = 'depth48-before', trial = 1, duration = 1000, gpu = [[0, 100], [500, 150], [duration, 120]], fluke = [[0, 230], [250, 240], [duration, 235]], token_progress } = {}) {
   const layerMatch = label.match(/depth(\d+)/);
   return {
     label,
@@ -24,6 +27,7 @@ function makeRun({ label = 'depth48-before', trial = 1, duration = 1000, gpu = [
     trial,
     duration_ms: duration,
     color: label === 'depth32' ? '#d39a27' : '#2377b5',
+    ...(token_progress === undefined ? {} : { token_progress }),
     gpu: { unit: 'W', integral_unit: 'J', mean: 123, integral: 124, points: gpu },
     fluke: { unit: 'VA', integral_unit: 'VA·s', mean: 230, integral: 231, points: fluke },
   };
@@ -102,13 +106,218 @@ test('chart model keeps samples exact, filters one trial, and never extrapolates
     makeRun({ label: 'depth32', duration: 700, gpu: [[0, 90], [300, 110], [700, 95]] }),
     makeRun({ label: 'depth16', trial: 2, duration: 1500 }),
   ];
-  const model = buildChartModel(makePayload(runs), 'gpu', 1);
+  const payload = makePayload(runs, 10);
+  const model = buildChartModel(payload, 'gpu', 1);
   assert.deepEqual(model.series.map(series => series.label), ['depth48-before', 'depth32']);
   assert.deepEqual(model.series[0].points.map(point => [point.timeMs, point.value]), [[0, 100], [400, 140], [1000, 120]]);
+  assert.deepEqual(model.series[0].perTokenPoints.map(point => point.timeMs), [0, 400, 1000]);
+  assert.deepEqual(model.series[0].perTokenPoints.map(point => point.value), [0, 4.8, 12.6]);
+  assert.equal(model.series[0].color, payload.runs[0].color);
+  assert.equal(model.series[0].normalization, 'final_tokens');
   assert.equal(model.series[1].points.at(-1).timeMs, 700);
   assert.equal(model.timeDomain.end, 1000);
-  assert.equal(model.valueDomain.start, 0);
-  assert.ok(model.valueDomain.end >= 140);
+  assert.equal(model.metric, 'energy');
+  assert.equal(model.perTokenUnit, 'J/token');
+  assert.equal(model.perTokenDomain.start, 0);
+  assert.ok(model.perTokenDomain.end >= 12.6);
+});
+
+test('per-token energy integrates raw irregular-cadence samples and power divides each sample', () => {
+  const points = [
+    { timeMs: 0, value: 100 },
+    { timeMs: 1000, value: 200 },
+    { timeMs: 3000, value: 100 },
+  ];
+  const energy = perTokenPoints(points, 10, 'energy');
+  assert.deepEqual(energy, [
+    { timeMs: 0, value: 0 },
+    { timeMs: 1000, value: 15 },
+    { timeMs: 3000, value: 45 },
+  ]);
+  assert.ok(energy.every(point => Number.isFinite(point.value) && point.value >= 0));
+  assert.ok(energy.every((point, index) => index === 0 || point.value >= energy[index - 1].value));
+  assert.deepEqual(perTokenPoints(points, 10, 'power'), [
+    { timeMs: 0, value: 10 },
+    { timeMs: 1000, value: 20 },
+    { timeMs: 3000, value: 10 },
+  ]);
+});
+
+test('per-token model units follow instrument and metric', () => {
+  const run = makeRun({
+    duration: 3000,
+    gpu: [[0, 100], [1000, 200], [3000, 100]],
+    fluke: [[0, 230], [1000, 250], [3000, 240]],
+  });
+  const payload = makePayload([run], 10);
+
+  const gpuEnergy = buildChartModel(payload, 'gpu', 1);
+  const gpuPower = buildChartModel(payload, 'gpu', 1, 'power');
+  const flukeEnergy = buildChartModel(payload, 'fluke', 1);
+  const flukePower = buildChartModel(payload, 'fluke', 1, 'power');
+
+  assert.equal(gpuEnergy.perTokenUnit, 'J/token');
+  assert.equal(gpuEnergy.metric, 'energy');
+  assert.equal(gpuPower.perTokenUnit, 'W/token');
+  assert.equal(gpuPower.metric, 'power');
+  assert.equal(flukeEnergy.perTokenUnit, 'VA·s/token');
+  assert.equal(flukePower.perTokenUnit, 'VA/token');
+  assert.deepEqual(gpuEnergy.series[0].perTokenPoints.map(point => point.value), [0, 15, 45]);
+  assert.deepEqual(gpuPower.series[0].perTokenPoints.map(point => point.value), [10, 20, 10]);
+  assert.equal(gpuEnergy.perTokenDomain.start, 0);
+  assert.equal(gpuPower.perTokenDomain.start, 0);
+});
+
+test('per-token points reject invalid denominators, metrics, and source samples', () => {
+  assert.equal(typeof perTokenPoints, 'function');
+  const points = [{ timeMs: 0, value: 100 }, { timeMs: 1000, value: 200 }];
+  for (const tokenCount of [0, -1, 1.5, NaN, Infinity, null]) {
+    assert.throws(() => perTokenPoints(points, tokenCount, 'energy'));
+  }
+  assert.throws(() => perTokenPoints(points, 10, 'joules'));
+
+  const invalidPointSets = [
+    [{ timeMs: NaN, value: 1 }, { timeMs: 1, value: 2 }],
+    [{ timeMs: Infinity, value: 1 }, { timeMs: 1, value: 2 }],
+    [{ timeMs: 0, value: NaN }, { timeMs: 1, value: 2 }],
+    [{ timeMs: 0, value: Infinity }, { timeMs: 1, value: 2 }],
+    [{ timeMs: 0, value: -1 }, { timeMs: 1, value: 2 }],
+    [{ timeMs: -1, value: 1 }, { timeMs: 1, value: 2 }],
+    [{ timeMs: 0, value: 1 }, { timeMs: 0, value: 2 }],
+    [{ timeMs: 1, value: 1 }, { timeMs: 0, value: 2 }],
+  ];
+  for (const invalidPoints of invalidPointSets) {
+    assert.throws(() => perTokenPoints(invalidPoints, 10, 'energy'));
+  }
+});
+
+test('actual-token progress derives at the union of power and received-token times', () => {
+  const power = [
+    { timeMs: 0, value: 100 },
+    { timeMs: 1500, value: 100 },
+    { timeMs: 3000, value: 100 },
+  ];
+  const progress = [[0, 0], [1000, 1], [2000, 2], [3000, 3]];
+
+  assert.deepEqual(progressPerTokenPoints(power, progress, 'energy'), [
+    { timeMs: 1000, value: 100 },
+    { timeMs: 1500, value: 150 },
+    { timeMs: 2000, value: 100 },
+    { timeMs: 3000, value: 100 },
+  ]);
+  assert.deepEqual(progressPerTokenPoints(power, progress, 'power'), [
+    { timeMs: 1000, value: 100 },
+    { timeMs: 1500, value: 100 },
+    { timeMs: 2000, value: 50 },
+    { timeMs: 3000, value: 100 / 3 },
+  ]);
+});
+
+test('actual-token progress linearly interpolates power at counter times and integrates raw power', () => {
+  const power = [
+    { timeMs: 0, value: 100 },
+    { timeMs: 2000, value: 300 },
+    { timeMs: 3000, value: 100 },
+  ];
+  const progress = [[0, 0], [1000, 1], [2000, 2], [3000, 3]];
+
+  assert.deepEqual(progressPerTokenPoints(power, progress, 'power'), [
+    { timeMs: 1000, value: 200 },
+    { timeMs: 2000, value: 150 },
+    { timeMs: 3000, value: 100 / 3 },
+  ]);
+  assert.deepEqual(progressPerTokenPoints(power, progress, 'energy'), [
+    { timeMs: 1000, value: 150 },
+    { timeMs: 2000, value: 200 },
+    { timeMs: 3000, value: 200 },
+  ]);
+});
+
+test('chart model uses received-token progress when available and final-token fallback otherwise', () => {
+  const run = makeRun({
+    duration: 3000,
+    gpu: [[0, 100], [1500, 100], [3000, 100]],
+    fluke: [[0, 230], [1500, 240], [3000, 235]],
+    token_progress: {
+      basis: 'received_token_ids',
+      points: [[0, 0], [1000, 1], [2000, 2], [3000, 3]],
+    },
+  });
+  const actual = buildChartModel(makePayload([run], 3), 'gpu', 1);
+  const historical = buildChartModel(makePayload([makeRun({
+    duration: 3000,
+    gpu: [[0, 100], [1500, 100], [3000, 100]],
+    fluke: [[0, 230], [1500, 240], [3000, 235]],
+  })], 3), 'gpu', 1);
+
+  assert.equal(actual.series[0].normalization, 'received_tokens');
+  assert.deepEqual(actual.series[0].perTokenPoints.map(point => point.timeMs), [1000, 1500, 2000, 3000]);
+  assert.deepEqual(actual.series[0].perTokenPoints.map(point => point.value), [100, 150, 100, 100]);
+  assert.deepEqual(actual.series[0].points.map(point => [point.timeMs, point.value]), [[0, 100], [1500, 100], [3000, 100]]);
+  assert.equal(historical.series[0].normalization, 'final_tokens');
+  assert.deepEqual(historical.series[0].perTokenPoints.map(point => point.value), [0, 50, 100]);
+});
+
+test('payload accepts absent token progress and rejects malformed received-token counters', () => {
+  assert.equal(validatePayload(makePayload()), null);
+
+  const malformedProgress = [
+    ['wrong basis', { basis: 'generated_token_ids', points: [[0, 0], [1000, 256]] }],
+    ['missing points', { basis: 'received_token_ids' }],
+    ['one point', { basis: 'received_token_ids', points: [[0, 0]] }],
+    ['wrong initial sample', { basis: 'received_token_ids', points: [[0, 1], [1000, 256]] }],
+    ['wrong final time', { basis: 'received_token_ids', points: [[0, 0], [900, 256]] }],
+    ['wrong final count', { basis: 'received_token_ids', points: [[0, 0], [1000, 255]] }],
+    ['fractional time', { basis: 'received_token_ids', points: [[0, 0], [500.5, 100], [1000, 256]] }],
+    ['negative time', { basis: 'received_token_ids', points: [[0, 0], [-1, 100], [1000, 256]] }],
+    ['fractional count', { basis: 'received_token_ids', points: [[0, 0], [500, 1.5], [1000, 256]] }],
+    ['negative count', { basis: 'received_token_ids', points: [[0, 0], [500, -1], [1000, 256]] }],
+    ['duplicate time', { basis: 'received_token_ids', points: [[0, 0], [500, 1], [500, 2], [1000, 256]] }],
+    ['unordered time', { basis: 'received_token_ids', points: [[0, 0], [700, 1], [500, 2], [1000, 256]] }],
+    ['decreasing count', { basis: 'received_token_ids', points: [[0, 0], [500, 2], [700, 1], [1000, 256]] }],
+    ['count exceeds requested total', { basis: 'received_token_ids', points: [[0, 0], [500, 257], [1000, 256]] }],
+  ];
+
+  for (const [description, token_progress] of malformedProgress) {
+    const payload = makePayload([makeRun({ token_progress })]);
+    assert.ok(validatePayload(payload), `should reject ${description}`);
+  }
+});
+
+test('Catmull-Rom segments preserve endpoints and constrain controls across irregular cadence', () => {
+  const points = [
+    { x: 0, y: 0 },
+    { x: 1, y: 100 },
+    { x: 9, y: 0 },
+    { x: 10, y: 80 },
+  ];
+  const segments = catmullRomSegments(points);
+  assert.equal(segments.length, points.length - 1);
+  for (let index = 0; index < segments.length; index += 1) {
+    const { start, c1, c2, end } = segments[index];
+    const lowerY = Math.min(points[index].y, points[index + 1].y);
+    const upperY = Math.max(points[index].y, points[index + 1].y);
+    assert.deepEqual(start, points[index]);
+    assert.deepEqual(end, points[index + 1]);
+    for (const control of [c1, c2]) {
+      assert.ok(control.x >= start.x && control.x <= end.x);
+      assert.ok(control.y >= lowerY && control.y <= upperY);
+    }
+  }
+  assert.deepEqual(catmullRomSegments([]), []);
+  assert.deepEqual(catmullRomSegments([{ x: 2, y: 5 }]), []);
+});
+
+test('Catmull-Rom segments reject non-finite or non-increasing x coordinates', () => {
+  assert.equal(typeof catmullRomSegments, 'function');
+  for (const points of [
+    [{ x: 0, y: 1 }, { x: 0, y: 2 }],
+    [{ x: 1, y: 1 }, { x: 0, y: 2 }],
+    [{ x: 0, y: 1 }, { x: Infinity, y: 2 }],
+    [{ x: NaN, y: 1 }, { x: 1, y: 2 }],
+  ]) {
+    assert.throws(() => catmullRomSegments(points));
+  }
 });
 
 test('source-specific value domains stay zero-based and never combine unlike units', () => {
@@ -120,28 +329,27 @@ test('source-specific value domains stay zero-based and never combine unlike uni
   assert.notEqual(valueDomain(runs, 'gpu', 1).end, valueDomain(runs, 'fluke', 1).end);
 });
 
-test('3D projection separates categorical lanes while preserving linear elapsed time', () => {
+test('2D projection ignores categorical lane metadata and maps time and value linearly', () => {
   const plot = { left: 60, top: 24, width: 400, height: 320 };
   const timeDomain = { start: 0, end: 1000 };
   const powerDomain = { start: 0, end: 200 };
-  const first = projectPoint({ timeMs: 0, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain, 'lanes');
-  const midpoint = projectPoint({ timeMs: 500, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain, 'lanes');
-  const halfPower = projectPoint({ timeMs: 500, value: 100, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain, 'lanes');
-  const last = projectPoint({ timeMs: 1000, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain, 'lanes');
-  const nextLane = projectPoint({ timeMs: 0, value: 0, laneIndex: 1, laneCount: 4 }, plot, timeDomain, powerDomain, 'lanes');
+  const first = projectPoint({ timeMs: 0, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain);
+  const midpoint = projectPoint({ timeMs: 500, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain);
+  const halfPower = projectPoint({ timeMs: 500, value: 100, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain);
+  const last = projectPoint({ timeMs: 1000, value: 0, laneIndex: 0, laneCount: 4 }, plot, timeDomain, powerDomain);
+  const nextLane = projectPoint({ timeMs: 0, value: 0, laneIndex: 3, laneCount: 4 }, plot, timeDomain, powerDomain);
 
   assert.ok(Math.abs((midpoint.x - first.x) - (last.x - midpoint.x)) < 1e-9);
   assert.equal(first.y, midpoint.y);
   assert.ok(halfPower.y < midpoint.y);
-  assert.ok(nextLane.x > first.x);
-  assert.ok(nextLane.y < first.y);
+  assert.deepEqual([nextLane.x, nextLane.y], [first.x, first.y]);
   assert.equal(first.y, plot.top + plot.height);
 });
 
 test('overlay projection shares a zero baseline and maps time without lane offsets', () => {
   const plot = { left: 50, top: 20, width: 300, height: 240 };
-  const a = projectPoint({ timeMs: 0, value: 0, laneIndex: 0, laneCount: 4 }, plot, { start: 0, end: 600 }, { start: 0, end: 300 }, 'overlay');
-  const b = projectPoint({ timeMs: 600, value: 300, laneIndex: 3, laneCount: 4 }, plot, { start: 0, end: 600 }, { start: 0, end: 300 }, 'overlay');
+  const a = projectPoint({ timeMs: 0, value: 0 }, plot, { start: 0, end: 600 }, { start: 0, end: 300 });
+  const b = projectPoint({ timeMs: 600, value: 300 }, plot, { start: 0, end: 600 }, { start: 0, end: 300 });
   assert.deepEqual([a.x, a.y], [50, 260]);
   assert.deepEqual([b.x, b.y], [350, 20]);
 });

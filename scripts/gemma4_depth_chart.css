@@ -284,7 +284,7 @@
 #depth-explorer .depth-canvas {
   display: block;
   width: 100%;
-  height: clamp(430px, 42vw, 520px);
+  height: clamp(510px, 45vw, 590px);
   touch-action: none;
   cursor: crosshair;
 }
@@ -308,6 +308,13 @@
   box-shadow: 0 7px 24px rgba(29, 40, 31, .15);
   pointer-events: none;
   font-size: 11px;
+}
+
+#depth-explorer .depth-normalization {
+  margin: 3px 1px 8px;
+  color: var(--depth-muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 #depth-explorer .depth-tooltip[hidden] {
@@ -618,7 +625,7 @@
   }
 
   #depth-explorer .depth-canvas {
-    height: 430px;
+    height: 510px;
   }
 
   #depth-explorer .depth-batch-heading {

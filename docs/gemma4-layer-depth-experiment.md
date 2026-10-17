@@ -191,13 +191,14 @@ The Canvas sizing and interaction patterns are adapted from Tokenomics Viewer's
 `tokenomics` locally. Neither that repository nor the team's published pitch is
 modified by generating the report.
 
-The explorer switches between NVIDIA W and Fluke VA, individual trials, 3D
-categorical run lanes and a 2D overlay. The two 48-layer batches remain separate
-to expose drift. Time is elapsed milliseconds from each request start, not a
-normalized progress axis. Curves stop at their request boundaries and use linear
-segments. Boundary values are linearly interpolated from bracketing raw samples
-by the measurement integrator; the viewer adds no smoothing or synthetic zeros.
-Zoom/pan and nearest-source-point inspection affect presentation only. Duplicate
+The explorer switches between NVIDIA W and Fluke VA, individual trials, and
+J/token or W/token. Two aligned 2D panels share elapsed milliseconds: solid
+power above and a same-color dashed ratio below. Fluke ratios retain VA/token
+and VA·s/token. The two 48-layer batches remain separate to expose drift.
+Bounded time-parametric Catmull–Rom curves smooth the display only; energy
+integrates the original piecewise-linear samples, with interpolated request
+boundaries and no extrapolation or synthetic zeros. Zoom/pan and point
+inspection affect presentation only. Duplicate
 label/trial identities, non-exact runs and unmatched windows are excluded
 explicitly from the explorer; the full report retains their original records.
 The plot is a historical measurement view, not a live feed or useful-answer
@@ -211,14 +212,53 @@ link to it, or embed it without extra dependencies:
         style="width:100%;height:1100px;border:0" loading="lazy"></iframe>
 ```
 
-The visualization change passed 25 Python report tests locally and on gputer,
-13 JavaScript contract/projection tests locally, and JavaScript syntax checking.
-The full and compact HTML outputs were byte-identical between local rendering
-and gputer. Browser checks covered sensor/trial/layout switching, zoom/reset,
-source-point inspection, the PNG action, and 375/611 px layouts. These checks
+The current visualization passes 27 Python report tests locally and on gputer,
+22 JavaScript contract/projection tests locally, and JavaScript syntax checking.
+The full and compact HTML outputs are checked against gputer rendering.
+Browser checks cover sensor/trial/ratio switching, zoom/reset, point inspection,
+the PNG action, and 375/611 px layouts. These checks
 verify the rendering and rejection guards, not sensor calibration or model
 quality. The pitch bundle's separate evidence index records source and artifact
 hashes without replacing the original experiment index.
+
+### Observed token counters
+
+Add `--token-progress` to the layer experiment to count token IDs in the
+completion stream. The observer retains receipt timestamps, checks the final
+count against fixed work, and sends `cogni_llm_generated_tokens_total` through
+Prometheus remote-write v1 to the configured loopback VictoriaMetrics service.
+Its bounded labels identify campaign, host, run label, depth, trial and answer
+phase. Missing or malformed streams fail explicitly; failed metric writes
+preserve the report and return a failing CLI status.
+
+When counters are available, the chart uses cumulative received N(t), held
+between observations, and omits ratios before the first token. The historical
+depth campaign has no token timestamps: its dashed curves explicitly use final
+N=256 instead. W/token is instantaneous power divided by the chosen token count;
+it is distinct from energy/token and throughput. Timing is observer receipt on
+gputer, not a hardware timestamp for each GPU token.
+
+Direct probe `token-progress-20261017-b` completed 256 tokens at 48 layers in
+5,588.13 ms. All 257 recorded counter points, including zero and terminal
+anchors, exactly match raw VictoriaMetrics export timestamps and values. Both
+GPU and Fluke request windows were available. This verifies the observer and
+transport on the pinned backend, not a new depth comparison or answer quality.
+The probe JSON, raw export and roundtrip check are preserved with the report
+artifacts. Focused software checks are:
+
+```sh
+crystal spec spec/gemma4_token_progress_spec.cr spec/prometheus_remote_write_spec.cr \
+  spec/gemma4_layer_experiment_spec.cr spec/gemma4_energy_cli_spec.cr
+node --test spec/test_gemma4_depth_chart.js
+python3 -m unittest discover -s spec -p test_gemma4_layer_report.py
+```
+
+The Crystal checks pass 19 examples locally and on gputer. Rollback: omit
+`--token-progress` or revert this feature; historical reports remain readable.
+Refresh the live counter evidence after backend, clock, stream, wire encoding,
+or measurement changes. The longer BLE capture ended with a collector storage
+error after the retained request; this probe does not establish sustained
+collector operation.
 
 ## Model provenance and rollback
 

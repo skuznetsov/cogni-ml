@@ -28669,3 +28669,32 @@ Refresh after source/toolchain/device/model/workload changes.
 - Refresh on source, model/backend, GPU/driver, prompt/settings, collector,
   clocks, calibration, concurrent-load changes or raw-evidence loss. No GPU
   reset, power-limit change or changes to unrelated workloads were authorized.
+
+### 2026-10-17 — 2D power ratios and observed Gemma 4 token progress
+
+- This entry supersedes the preceding Canvas rendering description. The explorer
+  now has aligned 2D power and same-color dashed ratio panels, with J/token and
+  W/token selection. Fluke retains VA and VA s/token units. Time-aware bounded
+  Catmull-Rom controls smooth display only; energy integrates original linear
+  samples. Historical runs explicitly divide by final N=256.
+- Opt-in `--token-progress` counts actual llama.cpp token IDs, validates the
+  terminal accounting, and writes `cogni_llm_generated_tokens_total` through
+  Prometheus remote-write v1. Ratios use the received cumulative counter held
+  between timestamps, begin at the first token, and include prefill energy.
+  Missing or malformed progress cannot silently become a live denominator.
+- Direct gputer campaign `token-progress-20261017-b`, full 48 decoder blocks:
+  256 tokens in 5588.13 ms, 257 counter samples, all 257 timestamps and values
+  exactly matched by VictoriaMetrics raw export. GPU and Fluke request windows
+  are covered; this single-depth probe does not establish a new depth ranking.
+  The bounded Fluke collector later ended on a storage error, after this window.
+- DoD: 19 focused Crystal specs and 27 Python report tests pass locally and on
+  gputer; 22 Node chart tests and JS syntax pass locally. Full, compact and
+  observed-counter HTML hashes match across hosts. Browser checks cover source
+  and ratio toggles, trials, point inspection, zoom/reset and 375/611 px layouts;
+  the PNG button reached its prepared status, without a downloaded-byte check.
+- Raw historical input SHA-256 remains
+  `75b16e56eb51f4f063d1df3d0a14b56f262e541bc2cc5fc4d2bed47c759ecab4`.
+  Source, commands, rollback and evidence lineage are in
+  `docs/gemma4-layer-depth-experiment.md` and the frontier document. Refresh on
+  protocol/backend, source, model, GPU/driver, collector, clock, concurrent load
+  changes or raw-evidence loss. Calibration and useful-answer quality are open.
