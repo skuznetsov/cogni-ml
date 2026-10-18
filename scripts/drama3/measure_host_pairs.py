@@ -33,6 +33,7 @@ CONTROLS = {
     "DRAMA3_BACKBONE_DENSE_FUSION": "0",
     "DRAMA3_EXPERT_PACKED_ROWS": "0",
     "DRAMA3_TOWER_FFN_PAIR_FUSION": "0",
+    "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
 }
 INPUT = {
     "text": "Hello, this is a voice test.",
@@ -49,6 +50,24 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def parse_expert_down_sum_schedule(value):
+    modes = [mode.strip() for mode in value.split(",")]
+    if any(mode not in ("0", "1") for mode in modes) or "0" not in modes:
+        raise ValueError("expert down sum fusion schedule must contain only 0 or 1 and include baseline 0")
+    return modes
+
+
+def validate_expert_down_sum_fusion(report, requested_mode):
+    expected = requested_mode == "1"
+    actual = report["resident_expert_down_sum_fusion"]
+    assert type(actual) is bool and actual is expected, "frozen expert down sum selector differs from requested arm"
+
+
+def configure_expert_down_sum_arm(controls, requested_mode):
+    controls["DRAMA3_EXPERT_DOWN_SUM_FUSION"] = requested_mode
+    controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+
+
 def validate(report, wav_sha, baseline):
     base = baseline["report"]
     # Frames contain every generated code, and sampler_inputs pins the complete
@@ -63,7 +82,7 @@ def validate(report, wav_sha, baseline):
             assert stats["released"] == 1 and stats["bytes"] == 0 and stats["quarantined"] == 0, stats
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
     schedules = parser.add_mutually_exclusive_group()
@@ -81,16 +100,25 @@ def main():
     schedules.add_argument("--expert-packed-rows-schedule", help="Comma-separated 0/1 batched expert row packing; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--dense-fusion-schedule", help="Comma-separated 0/1 backbone qkv/z/b/a fusion; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--tower-ffn-pair-schedule", help="Comma-separated 0/1 tower w1/w3 fusion; coalesced DAC, scratch and profiling off")
+    schedules.add_argument("--expert-down-sum-schedule", help="Comma-separated 0/1 expert down-sum fusion; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     resource_modes = None
     dac_layouts = None
     expert_packed_rows = None
     dense_fusion = None
     tower_ffn_pair = None
-    if args.tower_ffn_pair_schedule is not None:
+    expert_down_sum = None
+    if args.expert_down_sum_schedule is not None:
+        expert_down_sum = parse_expert_down_sum_schedule(args.expert_down_sum_schedule)
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_down_sum]
+    elif args.tower_ffn_pair_schedule is not None:
         tower_ffn_pair = [mode.strip() for mode in args.tower_ffn_pair_schedule.split(",")]
         assert tower_ffn_pair and all(mode in ("0", "1") for mode in tower_ffn_pair), "tower FFN pair fusion must be 0 or 1"
         schedule = [("0", "0", args.binary, "tree", "64") for mode in tower_ffn_pair]
@@ -158,6 +186,8 @@ def main():
         if tower_ffn_pair is not None:
             controls["DRAMA3_TOWER_FFN_PAIR_FUSION"] = tower_ffn_pair[arm]
             controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+        if expert_down_sum is not None:
+            configure_expert_down_sum_arm(controls, expert_down_sum[arm])
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
@@ -207,6 +237,8 @@ def main():
                     validate(report, item["wav_sha256"], baseline)
                     if tower_ffn_pair is not None:
                         assert report["resident_tower_ffn_pair_fusion"] == (tower_ffn_pair[arm] == "1"), "frozen tower selector differs from requested arm"
+                    if expert_down_sum is not None:
+                        validate_expert_down_sum_fusion(report, expert_down_sum[arm])
                     if binary == args.binary:
                         assert report["host_profile"]["enabled"] == (profile == "1")
                     records.append(item)

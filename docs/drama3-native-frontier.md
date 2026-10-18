@@ -10,7 +10,43 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: captured decode-family replay — 2026-10-18
+## Active slice: native expert down and weighted-sum fusion — 2026-10-18
+
+The preceding replay ranks native expert down as the largest measured decode
+projection family. Test a single GPU dispatch that preserves each affine-group
+subtotal, the ascending group fold, and then the ascending weighted rank fold.
+Restrict the first implementation to affine Q4/Q8 group-64 matrices with native
+64-lane reduction, 1..32 groups dividing 64, 1..8 ranks, and at most 256 rank/group
+lanes. Other shapes, reductions and requested 32-lane launches retain the
+existing down-plus-sum path. Prefill batching is outside this slice.
+
+CAUTION: changing reduction order, incomplete barriers for invalid IDs, or a
+diagnostic callback silently selecting fallback would invalidate parity.
+Keep the frozen `DRAMA3_EXPERT_DOWN_SUM_FUSION=0|1` selector off by default until
+qualification. Rollback is selector 0. Diagnostic callbacks must exercise the
+candidate and may additionally materialize its per-rank down outputs.
+DoD: GPU bit/finite receipts against the existing kernels, including seeded
+negative controls, offsets/dtypes/invalid IDs and actual varying inputs from
+all 40 layers; unchanged upstream metrics at the existing tolerances; and
+counterbalanced profiler-off complete-WAV pairs with identical full codes,
+sampler tape, WAV and read/wait ledgers. No production synchronization or
+activation read is admitted. Default promotion requires repeatable complete
+request benefit, not a local command speedup. Heavy runs remain serial under
+run_safe with external scratch, local weights and the authorized 15% floor.
+
+Outcome: the opt-in implementation passes 12 GPU examples and four offline
+driver checks. All 120 varying-input captures (40 layers at rows 0/29/59) and
+243 backbone boundary pairs are bit-exact; saved MLX metrics remain identical,
+including the existing row 1/layer 39 strict failure. All 24 complete requests
+preserve codes, sampler tape, WAV and normal read/wait ledgers. Local paired
+GPU command intervals favor fusion at median 1.679x, but may overlap and are
+not additive request costs. Generation medians decrease 6.18%/4.53% in two
+counterbalanced blocks; unchanged DAC timing also moves and one mirrored
+worker contrast regresses. Keep default 0; do not attribute the larger full-WAV
+delta to fusion alone. Details and refresh boundaries:
+[ordered expert down-sum qualification](drama3-expert-down-sum.md).
+
+## Prior slice: captured decode-family replay — 2026-10-18
 
 The complete capture below establishes decode command windows but rejects
 phase-specific shader-family attribution. The next probe records actual

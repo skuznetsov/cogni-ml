@@ -222,6 +222,8 @@ module ML::Audio::Drama3::Resident
     getter dense_reduction : String
     getter expert_threads : Int32
     getter expert_packed_rows_enabled : Bool
+    getter expert_down_sum_fusion_enabled : Bool
+    getter expert_down_sum_fused_dispatches = 0_i64
     @command : ML::Metal::CommandBuffer?
     @encoder : HostEncoder?
     @pending = [] of Buffer
@@ -257,6 +259,9 @@ module ML::Audio::Drama3::Resident
       packed_rows = ENV["DRAMA3_EXPERT_PACKED_ROWS"]? || "0"
       raise ArgumentError.new("DRAMA3_EXPERT_PACKED_ROWS must be 0 or 1") unless packed_rows.in?("0", "1")
       @expert_packed_rows_enabled = packed_rows == "1"
+      down_sum = ENV["DRAMA3_EXPERT_DOWN_SUM_FUSION"]? || "0"
+      raise ArgumentError.new("DRAMA3_EXPERT_DOWN_SUM_FUSION must be 0 or 1") unless down_sum.in?("0", "1")
+      @expert_down_sum_fusion_enabled = down_sum == "1"
       @resources_enabled = ENV["DRAMA3_METAL_RESOURCES"]? == "1"
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1" || @resources_enabled
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
@@ -1061,6 +1066,60 @@ module ML::Audio::Drama3::Resident
       end
       @pending.concat([x, output, ids])
       output
+    end
+
+    # Preserve both scalar folds: affine groups first, selected ranks second.
+    # The optional down output is diagnostic only and is written by the same
+    # candidate kernel, so tracing never silently qualifies the fallback path.
+    def experts_down_sum(matrix : Matrix, x : Buffer, ids : Buffer, weights : Buffer,
+                         reduction : String = "native", capture_down : Bool = false) : NamedTuple(output: Buffer, down: Buffer?)
+      check_owner!(x)
+      check_owner!(ids)
+      check_owner!(weights)
+      selected_reduction = validate_expert_reduction(reduction)
+      raise ArgumentError.new("resident batched experts require affine weights") unless matrix.scales && matrix.biases
+      raise ArgumentError.new("resident expert down sum ranks") unless ids.count > 0 && weights.count == ids.count
+      raise ArgumentError.new("resident batched expert input width") unless x.count == matrix.cols.to_i64 * ids.count
+      validate_mlx_q4!(matrix) if selected_reduction == "mlx_q4"
+      groups = matrix.cols // matrix.group_size
+      raise ArgumentError.new("resident affine groups") if groups > 8192
+      count = matrix.rows.to_i64 * ids.count
+      raise ArgumentError.new("resident batched expert output too large") if count > Int32::MAX
+      st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
+      scale_encoding, bias_encoding = encoding(st), encoding(bt)
+      eligible = @expert_down_sum_fusion_enabled && selected_reduction == "native" &&
+                 matrix.group_size == 64 && matrix.bits.in?(4, 8) && native_expert_threads(matrix) == 64 &&
+                 groups.in?(1..32) && 64 % groups == 0 && ids.count.in?(1..8) && groups * ids.count <= 256
+      threads = ((groups * ids.count + 31) // 32) * 32 if eligible
+      fused_pipeline = pipeline("dr3_experts_down_sum", SOURCE) if eligible
+      if fused_pipeline && threads && threads <= fused_pipeline.max_total_threads_per_threadgroup
+        weight = weight_buffer(matrix.tensor)
+        scales, biases = weight_buffer(st), weight_buffer(bt)
+        down = capture_down ? alloc(count.to_i32) : nil
+        output = alloc(matrix.rows)
+        p = [matrix.rows.to_u64, matrix.cols.to_u64, matrix.bits.to_u64, matrix.group_size.to_u64,
+             weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, scale_encoding, bias_encoding,
+             (matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1).to_u64, ids.count.to_u64,
+             capture_down ? 1_u64 : 0_u64]
+        enc = encoder
+        enc.set_pipeline(fused_pipeline)
+        enc.set_buffer(weight.buffer, 0)
+        enc.set_buffer(scales.buffer, 1)
+        enc.set_buffer(biases.buffer, 2)
+        bindings = [x, output, ids, weights, down || output]
+        bindings.each_with_index { |v, i| enc.set_buffer(v.buffer, i + 3, offset: v.offset) }
+        enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 8)
+        enc.set_threadgroup_memory(groups * ids.count * 4, 0)
+        enc.dispatch_threadgroups({matrix.rows, 1, 1}, {threads, 1, 1})
+        @pending.concat(bindings)
+        @expert_down_sum_fused_dispatches += 1
+        {output: output, down: down}
+      else
+        down = experts(matrix, x, ids, per_rank_input: true, reduction: selected_reduction)
+        output = alloc(matrix.rows)
+        dispatch("dr3_experts_weighted_sum", SOURCE, [down, weights, output], [matrix.rows.to_u64, ids.count.to_u64], matrix.rows)
+        {output: output, down: capture_down ? down : nil}
+      end
     end
 
     private def native_expert_threads(matrix : Matrix) : Int32

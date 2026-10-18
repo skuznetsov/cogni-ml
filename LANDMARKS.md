@@ -30219,3 +30219,22 @@ Refresh after source/toolchain/device/model/workload changes.
   artifact change; timings also decay with host load. Standing authority:
   serial run_safe,15% floor, external scratch/local weights, unrelated processes
   untouched, exact-path local atomic commit/no push. NVIDIA remains parked.
+
+### 2026-10-18 — Ordered expert down-sum fusion remains opt-in
+
+- Native Q4/Q8 group 64 candidate preserves group and rank fold order on GPU.
+  Twelve GPU examples and four offline driver checks pass; 120 actual captures
+  across all 40 layers/rows 0,29,59 and 243 boundary pairs are bit-exact. Saved MLX
+  metrics are identical; strict row 1/layer 39 failure remains open.
+- All 24 full requests across ABBA and reverse blocks preserve full codes,
+  sampler tape, WAV and 122-command/read/wait ledgers. Candidate saves 3,560
+  allocations/dispatches and 222.5MiB cumulative requested bytes per request.
+  No production synchronization or activation read is added.
+- Local paired command median ratio 1.679x is not isolated/additive shader cost.
+  Generation block medians decrease 6.18%/4.53%, but unchanged DAC moves and one
+  mirrored worker contrast regresses. Default stays 0; select
+  `DRAMA3_EXPERT_DOWN_SUM_FUSION=1` in a new Context for the candidate.
+- Details `docs/drama3-expert-down-sum.md`; source/artifact index
+  `.landmark/evidence/drama3-expert-down-sum.json`. Refresh correctness after
+  source/options/model/reference drift and timing after driver/device/load
+  changes. Root execution plus correlated mini-Quad review supports this scope.

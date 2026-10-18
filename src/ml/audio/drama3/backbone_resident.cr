@@ -212,8 +212,11 @@ module ML::Audio::Drama3
                    gate = @ctx.experts(gate_matrix, x, ids)
                    up = @ctx.experts(up_matrix, x, ids)
                    activation = @ctx.mul(@ctx.silu(gate), up)
-                   down = @ctx.experts(down_matrix, activation, ids, per_rank_input: true, reduction: @expert_down_reduction)
+                   projected = @ctx.experts_down_sum(down_matrix, activation, ids, routing.slice(@config.top_k, @config.top_k),
+                     reduction: @expert_down_reduction, capture_down: !!callback)
+                   combined = projected[:output]
                    if callback
+                     down = projected[:down].not_nil!
                      @config.top_k.times do |rank|
                        trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate.slice(rank * gate_matrix.rows, gate_matrix.rows))
                        trace_moe_buffer(callback, "expert_up_outputs.rank_#{rank}", up.slice(rank * up_matrix.rows, up_matrix.rows))
@@ -221,9 +224,8 @@ module ML::Audio::Drama3
                        trace_moe_buffer(callback, "expert_down_outputs.rank_#{rank}", down.slice(rank * down_matrix.rows, down_matrix.rows))
                      end
                    end
-                   combined = @ctx.alloc(@config.hidden)
-                   @ctx.dispatch("dr3_expert_sum", SOURCE, [down, routing, combined], [combined.count.to_u64, @config.top_k.to_u64], combined.count)
                    if callback
+                     down = projected[:down].not_nil!
                      trace_moe_buffer(callback, "routed_sum_official", combined, snapshot: true)
                      if @moe_trace_auxiliary
                        auxiliary_prefix = @ctx.zeros(@config.hidden)

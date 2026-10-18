@@ -57,6 +57,7 @@ require "../wav"
         before_graph = @context.graph_stats
         before_reads = @context.readbacks.dup
         before_alloc = @context.allocation_stats
+        before_down_sum_dispatches = @context.expert_down_sum_fused_dispatches
         generator = ResidentGenerator.new(@config, @store, @context, capacity.to_i32)
         # Progress is telemetry, not a per-frame pipe/disk transaction. This
         # clock check does not submit, wait for or read any device work.
@@ -116,6 +117,8 @@ require "../wav"
                              seconds: samples.size / 44100.0, peak: peak, rms: rms,
                              sampler_inputs: generator.sampler_inputs, resident_readbacks: reads,
                              resident_tower_ffn_pair_fusion: generator.tower.ffn_pair_fusion_enabled,
+                             resident_expert_down_sum_fusion: @context.expert_down_sum_fusion_enabled,
+                             resident_expert_down_sum_fused_dispatches: @context.expert_down_sum_fused_dispatches - before_down_sum_dispatches,
                              resident_graph: graph.transform_values { |value, key| key.in?("submitted", "completed", "completion_waits") ? value - before_graph[key] : value },
                              resident_allocation_stats: {allocations: allocation[:allocations] - before_alloc[:allocations],
                                                          requested_bytes: allocation[:requested_bytes] - before_alloc[:requested_bytes],

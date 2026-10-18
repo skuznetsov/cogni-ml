@@ -6,6 +6,31 @@ require "set"
 require "../src/ml/audio/drama3/backbone_resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+module ML::Audio::Drama3::Resident
+  class Context
+    # The context selector is frozen when constructed, so the baseline arm uses
+    # this diagnostic-only override to execute the unfused reference while the
+    # candidate arm reaches the real context-selected kernel.
+    property decode_compare_unfused_expert_down_sum = false
+    getter decode_compare_reference_expert_down_sum_calls = 0_i64
+
+    def experts_down_sum(matrix : Matrix, x : Buffer, ids : Buffer, weights : Buffer,
+                         reduction : String = "native", capture_down : Bool = false) : NamedTuple(output: Buffer, down: Buffer?)
+      return previous_def unless @decode_compare_unfused_expert_down_sum
+
+      down = experts(matrix, x, ids, per_rank_input: true, reduction: reduction)
+      routing = alloc(ids.count * 2)
+      copy(ids, routing.slice(0, ids.count))
+      copy(weights, routing.slice(ids.count, weights.count))
+      output = alloc(matrix.rows)
+      dispatch("dr3_expert_sum", BackboneResident::SOURCE, [down, routing, output],
+        [output.count.to_u64, ids.count.to_u64], output.count)
+      @decode_compare_reference_expert_down_sum_calls += 1
+      {output: output, down: capture_down ? down : nil}
+    end
+  end
+end
+
 module Drama3DenseDecodeCompare
   include ML::Audio::Drama3
   alias Context = Resident::Context
@@ -135,7 +160,7 @@ module Drama3DenseDecodeCompare
     records
   end
 
-  def self.configure_environment : Nil
+  def self.configure_environment(expert_down_sum_mode : Bool = false) : Nil
     ENV.keys.each { |key| ENV.delete(key) if key.starts_with?("DRAMA3_") }
     {
       "DRAMA3_BACKEND"                    => "metal",
@@ -146,6 +171,7 @@ module Drama3DenseDecodeCompare
       "DRAMA3_BACKBONE_DENSE_FUSION"      => "0",
       "DRAMA3_DELTA_TRANSPOSE"            => "1",
       "DRAMA3_EXPERT_DOWN_REDUCTION"      => "native",
+      "DRAMA3_EXPERT_DOWN_SUM_FUSION"     => expert_down_sum_mode ? "1" : "0",
       "DRAMA3_EXPERT_THREADS"             => "64",
       "DRAMA3_EXPERT_PACKED_ROWS"         => "0",
       "DRAMA3_METAL_TIMELINE"             => "0",
@@ -196,8 +222,10 @@ module Drama3DenseDecodeCompare
 
   def self.run : Nil
     context = nil.as(Context?)
-    raise "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON" unless ARGV.size == 4
-    model_dir, input_path, trace_path, output_path = ARGV.map { |value| File.expand_path(value) }
+    usage = "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON [--expert-down-sum]"
+    raise usage unless ARGV.size == 4 || (ARGV.size == 5 && ARGV[4] == "--expert-down-sum")
+    expert_down_sum_mode = ARGV.size == 5
+    model_dir, input_path, trace_path, output_path = ARGV.first(4).map { |value| File.expand_path(value) }
     raise "refusing existing output" if File.exists?(output_path)
     config_path = File.join(model_dir, "config.json")
     index_path = File.join(model_dir, "model.safetensors.index.json")
@@ -213,7 +241,7 @@ module Drama3DenseDecodeCompare
     references.each { |record| reference_records[record[:name]] = record[:values] }
     references = [] of NamedTuple(name: String, values: Array(Float32))
 
-    configure_environment
+    configure_environment(expert_down_sum_mode)
     store = WeightStore.new(model_dir)
     ctx = Context.new
     context = ctx
@@ -221,18 +249,25 @@ module Drama3DenseDecodeCompare
     raise "decode comparator requires tree dense reduction" unless ctx.dense_reduction == "tree"
     raise "decode comparator requires 64 expert threads" unless ctx.expert_threads == 64
     raise "decode comparator requires packed rows disabled" if ctx.expert_packed_rows_enabled
+    raise "dense comparison must freeze expert-down-sum fusion off" if !expert_down_sum_mode && ctx.expert_down_sum_fusion_enabled
+    raise "diagnostic unfused override must start disabled" if ctx.decode_compare_unfused_expert_down_sum
     baseline = BackboneResident.new(config, store, ctx, ROWS)
     raise "baseline fusion selector not frozen off" if baseline.dense_fusion_enabled
     raise "baseline MoE batching selector mismatch" unless baseline.batch_experts
     raise "baseline expert-down reduction mismatch" unless baseline.expert_down_reduction == "native"
-    ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = "1"
+    raise "expert-down-sum selector not frozen on" if expert_down_sum_mode && !ctx.expert_down_sum_fusion_enabled
+    ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = expert_down_sum_mode ? "0" : "1"
     candidate = BackboneResident.new(config, store, ctx, ROWS)
-    raise "candidate fusion selector not frozen on" unless candidate.dense_fusion_enabled
+    if expert_down_sum_mode
+      raise "candidate dense fusion selector mismatch" if candidate.dense_fusion_enabled
+    else
+      raise "candidate fusion selector not frozen on" unless candidate.dense_fusion_enabled
+    end
     raise "candidate MoE batching selector mismatch" unless candidate.batch_experts
     raise "candidate expert-down reduction mismatch" unless candidate.expert_down_reduction == "native"
     ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = "0"
     raise "baseline selector changed after candidate construction" if baseline.dense_fusion_enabled
-    raise "candidate selector changed after environment reset" unless candidate.dense_fusion_enabled
+    raise "candidate selector changed after environment reset" unless candidate.dense_fusion_enabled == !expert_down_sum_mode
     raise "reduction control mismatch" unless baseline.dense_reduction == "tree" && candidate.dense_reduction == "tree"
 
     reference_buffers = {} of String => Buffer
@@ -242,6 +277,7 @@ module Drama3DenseDecodeCompare
     input_buffers = inputs.map { |values| ctx.upload(values) }
     baseline_captures = [] of Capture
     candidate_captures = [] of Capture
+    expert_down_sum_row_proof = [] of JSON::Any
     active_row = 0
     baseline.buffer_trace = ->(name : String, buffer : Buffer) {
       baseline_captures << Capture.new(active_row, name, buffer)
@@ -254,8 +290,38 @@ module Drama3DenseDecodeCompare
     stages = expected_stages(config.layers)
     input_buffers.each_with_index do |input, row|
       active_row = row
-      baseline.step(input)
+      baseline_dispatch_before = ctx.expert_down_sum_fused_dispatches
+      baseline_reference_before = ctx.decode_compare_reference_expert_down_sum_calls
+      if expert_down_sum_mode
+        ctx.decode_compare_unfused_expert_down_sum = true
+        baseline.step(input)
+        ctx.decode_compare_unfused_expert_down_sum = false
+      else
+        baseline.step(input)
+      end
+      baseline_dispatch_delta = ctx.expert_down_sum_fused_dispatches - baseline_dispatch_before
+      baseline_reference_delta = ctx.decode_compare_reference_expert_down_sum_calls - baseline_reference_before
+      if expert_down_sum_mode
+        raise "baseline fused expert-down-sum dispatches after row #{row}" unless baseline_dispatch_delta == 0
+        raise "baseline unfused reference calls after row #{row}" unless baseline_reference_delta == config.layers
+      end
+
+      candidate_dispatch_before = ctx.expert_down_sum_fused_dispatches
+      candidate_reference_before = ctx.decode_compare_reference_expert_down_sum_calls
       candidate.step(input)
+      candidate_dispatch_delta = ctx.expert_down_sum_fused_dispatches - candidate_dispatch_before
+      candidate_reference_delta = ctx.decode_compare_reference_expert_down_sum_calls - candidate_reference_before
+      if expert_down_sum_mode
+        raise "candidate fused expert-down-sum dispatches after row #{row}" unless candidate_dispatch_delta == config.layers
+        raise "candidate unexpectedly used unfused reference after row #{row}" unless candidate_reference_delta == 0
+        expert_down_sum_row_proof << j({
+          "row" => row,
+          "baseline_fused_dispatch_delta" => baseline_dispatch_delta,
+          "baseline_reference_call_delta" => baseline_reference_delta,
+          "candidate_fused_dispatch_delta" => candidate_dispatch_delta,
+          "candidate_reference_call_delta" => candidate_reference_delta,
+        })
+      end
       expected_count = (row + 1) * stages.size
       raise "baseline boundary count after row #{row}" unless baseline_captures.size == expected_count
       raise "candidate boundary count after row #{row}" unless candidate_captures.size == expected_count
@@ -263,6 +329,12 @@ module Drama3DenseDecodeCompare
       raise "baseline boundary order mismatch on row #{row}" unless expected_row_stages == stages
       candidate_row_stages = candidate_captures.last(stages.size).map(&.stage)
       raise "candidate boundary order mismatch on row #{row}" unless candidate_row_stages == stages
+    end
+    if expert_down_sum_mode
+      expected_dispatches = (ROWS * config.layers).to_i64
+      raise "expert-down-sum reference call count mismatch" unless ctx.decode_compare_reference_expert_down_sum_calls == expected_dispatches
+      raise "expert-down-sum fused dispatch count mismatch" unless ctx.expert_down_sum_fused_dispatches == expected_dispatches
+      raise "expert-down-sum per-row proof count mismatch" unless expert_down_sum_row_proof.size == ROWS
     end
     expected_capture_count = ROWS * stages.size
     raise "baseline boundary count mismatch" unless baseline_captures.size == expected_capture_count
@@ -406,6 +478,25 @@ module Drama3DenseDecodeCompare
       "readbacks" => j(ctx.readbacks),
       "cases" => JSON::Any.new(case_reports),
     } of String => JSON::Any
+    if expert_down_sum_mode
+      report["format"] = j("drama3-expert-down-sum-decode-comparison-v1")
+      report["mode"] = j("expert_down_sum")
+      report["selectors"] = j({
+        "baseline_dense_fusion" => false, "candidate_dense_fusion" => false,
+        "frozen_after_construction" => true, "dense_reduction" => "tree", "moe_batch" => true,
+        "expert_down_reduction" => "native", "expert_threads" => 64, "queue_depth" => 2,
+        "expert_down_sum_fusion" => ctx.expert_down_sum_fusion_enabled,
+        "baseline_unfused_override" => true, "profile" => false, "timeline" => false,
+      })
+      report["expert_down_sum_dispatch_proof"] = j({
+        "reference_unfused_calls" => ctx.decode_compare_reference_expert_down_sum_calls,
+        "baseline_fused_dispatches" => 0_i64,
+        "candidate_fused_dispatches" => ctx.expert_down_sum_fused_dispatches,
+        "expected_candidate_dispatches_per_row" => config.layers,
+        "expected_total_dispatches" => ROWS * config.layers,
+        "per_row" => expert_down_sum_row_proof,
+      })
+    end
     File.write(output_path, JSON::Any.new(report).to_pretty_json + "\n")
     puts({output: output_path, native_exact_pass: native_exact_pass,
       upstream_metrics_identical: upstream_metrics_identical, strict_upstream_pass: strict_upstream_pass,

@@ -196,6 +196,63 @@ kernel void dr3_experts(
         y[rank * rows + r] = sum;
     }
 }
+// Native group-64 down projection followed by the original ordered rank sum.
+// Each active lane owns one [rank, group] subtotal. No rank may return before
+// the barrier: one invalid ID still has to let the other ranks finish safely.
+// p: rows, cols, bits, group, w/s/b offsets, s/b encodings, experts, ranks,
+// diagnostic-down flag. Production binds y as the unused diagnostic output.
+kernel void dr3_experts_down_sum(
+    device const uchar* w [[buffer(0)]], device const uchar* s [[buffer(1)]],
+    device const uchar* b [[buffer(2)]], device const float* x [[buffer(3)]],
+    device float* y [[buffer(4)]], device const float* ids [[buffer(5)]],
+    device const float* weights [[buffer(6)]], device float* down [[buffer(7)]],
+    constant ulong* p [[buffer(8)]], threadgroup float* parts [[threadgroup(0)]],
+    uint r [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint rows = uint(p[0]), cols = uint(p[1]), bits = uint(p[2]), group = uint(p[3]);
+    uint groups = cols / group, ranks = uint(p[10]);
+    uint rank = lane / groups, g = lane % groups;
+    if (rank < ranks) {
+        float selected = ids[rank], part = 0;
+        if (isfinite(selected) && selected >= 0 && selected < float(p[9]) && floor(selected) == selected) {
+            uint row = uint(selected) * rows + r;
+            uint ix = row * groups + g, per = 32 / bits, mask = (1u << bits) - 1;
+            float scale = dr3_float(s, p[5], ix, p[7]), bias = dr3_float(b, p[6], ix, p[8]);
+            for (uint j = 0; j < group / per; j++) {
+                uint col = g * group + j * per;
+                uint word = dr3_u32(w, p[4] + (ulong(row) * (cols / per) + col / per) * 4);
+                for (uint k = 0; k < per; k++) {
+                    float weight = scale * float((word >> (k * bits)) & mask) + bias;
+                    part += weight * x[rank * cols + col + k];
+                }
+            }
+        }
+        parts[lane] = part;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane == 0) {
+        float total = 0;
+        for (uint rank = 0; rank < ranks; rank++) {
+            float selected = ids[rank], sum = 0;
+            if (!isfinite(selected) || selected < 0 || selected >= float(p[9]) || floor(selected) != selected) {
+                sum = NAN;
+            } else {
+                for (uint g = 0; g < groups; g++) sum += parts[rank * groups + g];
+            }
+            if (p[11]) down[rank * rows + r] = sum;
+            total += sum * weights[rank];
+        }
+        y[r] = total;
+    }
+}
+kernel void dr3_experts_weighted_sum(
+    device const float* x [[buffer(0)]], device const float* weights [[buffer(1)]],
+    device float* y [[buffer(2)]], constant ulong* p [[buffer(3)]],
+    uint i [[thread_position_in_grid]]) {
+    if (i >= p[0]) return;
+    float sum = 0;
+    for (uint rank = 0; rank < p[1]; rank++) sum += x[rank * p[0] + i] * weights[rank];
+    y[i] = sum;
+}
 // Optional batched-only row packing. Each row keeps dr3_experts' packed-word
 // loads, affine dequantization and sequential F32 subtotal. The row leader
 // then adds its group subtotals in the same ascending order as the native
