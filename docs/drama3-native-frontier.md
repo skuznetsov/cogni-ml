@@ -10,7 +10,65 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: tower FFN paired projections — 2026-10-17
+## Active slice: decode replay after complete capture — 2026-10-17
+
+At `03435478`, the last two exact-arithmetic fusion candidates improve local
+probes without a repeatable complete WAV benefit. The next performance
+discriminator is a complete warm-request Metal shader capture, bracketed by
+profiler-off requests on the same binary and fixed sampler tape. Preserve full
+codes, WAV, allocations, readbacks and command/wait counts. Existing completion
+timestamps may be read after the existing waits; no intermediate wait or
+activation read is admitted. Profiler-on wall time is not production throughput.
+
+CAUTION: overlapping shader samples can create a false bottleneck ranking.
+Do not sum their durations or percentages. Establish a documented common
+interval/weight or report only sampled coverage with explicit unknowns; if the
+trace cannot distinguish families, pivot to a bounded representative replay.
+No kernel selector or default changes follow from a trace alone. DoD: complete
+decode coverage, exact trajectory/ledger controls, profiler-off request timing,
+and a falsifiable next target rather than unsupported additive attribution.
+
+Separately, an unchanged watchdog callback aborted on a destroyed-or-invalid
+mutex during worker exit. First reproduce the teardown ordering using the real
+bridge callback with no model and no outstanding GPU work. Only then change
+watchdog lifetime. Guard ordinary exit, concurrent registration/removal, enabled
+deadline termination and disabled-timeout behavior. DoD: the reproducer fails
+before the fix and passes after it, existing native timing tests pass, and
+complete requests retain their arithmetic and synchronization ledgers. Revert
+the lifetime change independently if these guards fail; never disable the
+deadline to hide the exit failure.
+
+Heavy runs remain serial under run_safe with the authorized 15% memory floor,
+external scratch and local weights. The strict upstream failures below remain
+open; native exactness is a no-regression claim only.
+
+Outcome at `6ab91a4a`: the watchdog reproducer establishes static teardown as
+a sufficient cause matching the exit failure. The isolated lifetime fix passes
+late/normal/disabled exit, concurrency and timeout guards; eight complete WAV
+requests on the rebuilt binary exit normally with unchanged codes, sampler tape
+and WAV. All five warm requests preserve allocation/read/wait ledgers. The
+bounded 2,025-record tower upstream replay equals its saved pre-fix report,
+including the same three strict failures. See [watchdog qualification](metal-watchdog-exit.md).
+
+The complete warm Shader Timeline capture is saved and the raw trace removed.
+Profiler-off warm requests take 23.662–26.734s for 2.786s audio (observed RTF
+8.492–9.594). Native GPU command-window unions locate about 11.1s in decode,
+4.6s in prefill and 2.6s in DAC. These overlapping phase windows are not additive
+kernel costs. The first prefill wait includes 6.3–8.6s before GPU execution;
+its cause is unresolved.
+
+A phase-specific shader-family interpretation is rejected for this capture:
+DAC labels overlap the selected decode windows although this no-reference
+request runs DAC later. Exact timestamp units and complete command counts do
+not repair that semantic contradiction. Do not choose a kernel default from
+the clipped shader distribution. The next discriminator is a diagnostic replay
+of captured decode operands, using homogeneous production-kernel families and
+existing command timestamps, with exact GPU output checks. A candidate still
+needs unchanged upstream metrics and profiler-off complete-request pairs.
+No inference synchronization, activation read, tolerance or selector changed.
+Details and refresh boundaries: [complete decode profile](drama3-complete-decode-profile.md).
+
+## Prior slice: tower FFN paired projections — 2026-10-17
 
 At `2149cd03`, tower FFN w1/w3 use two dense matvec dispatches over the same
 resident normalized input. The pinned BF16 matrices are 6144 by 2048 in each
@@ -78,10 +136,11 @@ kernel regression or real-time performance.
 
 The first reverse attempt is excluded: after9 exact results, an unfused
 worker aborted during exit in the GCD watchdog's global mutex lock. All
-request graphs were drained; bridge source is unchanged. Static-destruction
-race is an unproven hypothesis, and the clean repeat does not fix that risk.
-Next discriminators: full decode GPU attribution before choosing another
-kernel family, and a separate minimal watchdog/exit reproducer. See
+request graphs were drained; bridge source was unchanged. Static-destruction
+race was an unproven hypothesis at that point; the later reproducer and
+isolated lifetime fix are documented in the active slice above.
+The next discriminators at that point were full decode GPU attribution before
+choosing another kernel family and a minimal watchdog/exit reproducer. See
 [tower pair qualification](drama3-tower-pair-fusion.md) and
 `.landmark/evidence/drama3-tower-pair-fusion.json` for scope and lineage.
 

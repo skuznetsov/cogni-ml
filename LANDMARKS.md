@@ -30142,3 +30142,48 @@ Refresh after source/toolchain/device/model/workload changes.
   serial run_safe,15% memory floor, external scratch/local weights,
   unrelated processes untouched, exact-path local atomic commit/no push.
 
+### 2026-10-17 — complete decode capture and bounded watchdog teardown fix
+
+- `6ab91a4a` fixes process-lifetime ownership of the Metal watchdog registry.
+  The same final real-bridge teardown probe fails against the recorded source
+  with exit134/invalid mutex after a completed command and empty registry;
+  the candidate exits0 with the actual late callback completed. Normal,
+  disabled, concurrency and terminating-timeout guards pass. This establishes
+  a sufficient matching cause, not every possible shutdown fault. See
+  `.landmark/evidence/metal-watchdog-exit.json` and `docs/metal-watchdog-exit.md`.
+- Eight complete requests on the rebuilt binary (three workers exiting0)
+  preserve full frame codes, sampler tape and WAV against the saved baseline.
+  All five warm requests preserve allocation counts/bytes and read/wait/graph
+  ledgers. The fixed 60-frame request produces2.786395s audio; profiler-off
+  warm observations23.661635–26.733517s give RTF8.492–9.594 on this active host.
+  No new speedup, selector, tolerance, inference wait or activation read.
+- Native command-window unions place decode at11.07–11.23s, prefill4.56–4.62s,
+  DAC2.62–2.69s. They are not additive shader costs. First prefill waits include
+  6.3–8.6s before execution; page-in/resource/driver/contention cause is unknown.
+- Refuted route: phase-specific Shader Timeline family attribution. Despite
+  122 unique order-joined submissions and agreement with native GPU-window
+  unions,5,033 codec-labelled sample rows overlap mapped generation decode.
+  Source invokes DAC only after generation. V2 suppresses family/shader tables
+  and reports phase_attribution_rejected. V1 distributions are superseded;
+  do not infer DAC execution in decode, runtime bounds or a dominant family.
+- The bounded tower GPU replay reproduces all2,025 raw comparison records and
+  ledgers exactly;675 native off/on sites remain exact. The same three late
+  residual8 MLX failures remain at unchanged tolerances. This is no regression
+  at prefillrow85/decode0, not complete backbone/DAC upstream compatibility.
+- Confirmed performance frontier: validate a representative captured-input
+  decode replay with homogeneous production families, batched drains and exact
+  GPU checks before another kernel candidate. Full-WAV profiler-off pairs still
+  decide promotion. An isolated generation/DAC trace can separately test sample
+  semantics. Numerical return pointer: `docs/drama3-native-frontier.md`, late-layer
+  matched-input fidelity and layer39 MoE sections; strict gates remain open.
+- Details `docs/drama3-complete-decode-profile.md`; index
+  `.landmark/evidence/drama3-complete-decode-profile.json`; raw selected exports,
+  pinned executed harness and command receipts under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/`. Raw trace removed.
+  Current capture startup/cleanup refinements are CPU-tested; the recorded
+  experiment used the separately hashed earlier harness. Correlated mini-Quad
+  and root execution support only the declared scope. Refresh on source,
+  compiler/runtime, model/reference/input/tolerance/queue/device/OS or artifact
+  change; timing also decays with host load. Standing authority: serial
+  run_safe,15% memory floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commits/no push. NVIDIA work stays parked.
