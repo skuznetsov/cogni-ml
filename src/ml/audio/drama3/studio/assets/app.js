@@ -22,7 +22,11 @@
   let newSessionName = "";
   let renameEditing = false;
   let renameDraft = "";
-  let voiceForm = { name: "", transcript: "", file: null };
+  let voiceForm = { name: "", transcript: "", file: null, fileName: "", previewUrl: null, duration: null };
+  let voiceDraftVersion = 0;
+  let voiceSaving = false;
+  let recorderPhase = "idle";
+  let voiceRecorder = null;
   let exportFormat = null;
   let renderedEditorSessionId = null;
   let lastKeys = {};
@@ -235,7 +239,7 @@
       tab: libraryTab,
       filter: assetFilter,
       active: activeSessionId,
-      voiceForm: [voiceForm.name, voiceForm.transcript, voiceForm.file && voiceForm.file.name, voiceForm.file && voiceForm.file.size],
+      voiceForm: [voiceForm.name, voiceForm.transcript, voiceForm.fileName, voiceForm.file && voiceForm.file.size, voiceDraftVersion, voiceForm.duration, recorderPhase, voiceSaving],
       voices: state.voices.map((voice) => [voice.id, voice.name, voice.transcript, voice.filename, voice.seconds, Boolean(voice.archived)]),
       assets: state.assets.map((asset) => [asset.id, asset.kind, asset.filename, asset.format, asset.session_id, asset.segment_id, asset.revision, asset.seconds, asset.created_at, asset.stopped_on_eos])
     });
@@ -705,7 +709,8 @@
     assetList.replaceChildren();
     byId("voice-name").value = voiceForm.name;
     byId("voice-transcript").value = voiceForm.transcript;
-    byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : t("Choose an audio file");
+    byId("voice-file-label").textContent = voiceForm.file ? voiceForm.fileName : t("Choose an audio file");
+    renderVoiceRecorder();
     byId("asset-filter").value = assetFilter;
     byId("voices-panel").hidden = libraryTab !== "voices";
     byId("audio-panel").hidden = libraryTab !== "audio";
@@ -749,6 +754,102 @@
     const limit = Number.isFinite(maxReference) && maxReference > 0 ? maxReference : 10;
     const ffmpegNote = state.capabilities.ffmpeg === false ? t(" Export conversion is unavailable.") : "";
     byId("capability-note").replaceChildren(node("strong", "", t("Formats: {formats}", { formats: formats || "WAV" })), document.createTextNode(t(" · reference up to {seconds} sec.", { seconds: limit }) + ffmpegNote));
+  }
+
+  function renderVoiceRecorder() {
+    const busy = recorderPhase !== "idle";
+    const hasSample = Boolean(voiceForm.file);
+    const record = byId("voice-record-button");
+    const stop = byId("voice-stop-button");
+    const rerecord = byId("voice-rerecord-button");
+    const discard = byId("voice-discard-button");
+    const status = byId("voice-record-status");
+    const previewWrap = byId("voice-preview-wrap");
+    const preview = byId("voice-preview");
+    const fileInput = byId("voice-file");
+    const nameInput = byId("voice-name");
+    const transcriptInput = byId("voice-transcript");
+    const save = byId("voice-save-button");
+
+    if (hasSample && !voiceForm.previewUrl) createVoicePreviewUrl();
+    const desiredUrl = voiceForm.previewUrl || "";
+    if (preview.getAttribute("src") !== desiredUrl) {
+      preview.pause();
+      preview.removeAttribute("src");
+      if (desiredUrl) preview.setAttribute("src", desiredUrl);
+      preview.load();
+    }
+    previewWrap.hidden = !hasSample;
+    byId("voice-sample-duration").textContent = voiceForm.duration ? t("Recording length: {seconds} sec", { seconds: voiceForm.duration.toFixed(1).replace(".", i18n.getLanguage() === "ru" ? "," : ".") }) : "";
+
+    record.hidden = busy || hasSample;
+    rerecord.hidden = busy || !hasSample;
+    discard.hidden = !hasSample;
+    stop.hidden = !busy;
+    stop.disabled = recorderPhase === "stopping";
+    status.hidden = !busy;
+    status.textContent = recorderPhase === "requesting" ? t("Waiting for microphone permission…")
+      : recorderPhase === "preparing" ? t("Preparing microphone…")
+      : recorderPhase === "recording" ? t("Recording. Stop when finished; capture ends at 9.5 seconds.")
+      : t("Finishing recording…");
+    stop.textContent = recorderPhase === "requesting" || recorderPhase === "preparing" ? t("Cancel recording setup") : t("Stop recording");
+
+    fileInput.disabled = voiceSaving || busy;
+    nameInput.disabled = voiceSaving;
+    transcriptInput.disabled = voiceSaving;
+    byId("voice-script-en").disabled = voiceSaving;
+    byId("voice-script-ru").disabled = voiceSaving;
+    record.disabled = voiceSaving;
+    rerecord.disabled = voiceSaving;
+    discard.disabled = voiceSaving || busy;
+    save.disabled = voiceSaving || busy || !hasSample || !voiceForm.name.trim() || !voiceForm.transcript.trim() || !voiceForm.previewUrl;
+    save.textContent = voiceSaving ? t("Saving…") : t("Save voice");
+  }
+
+  function createVoicePreviewUrl() {
+    if (!voiceForm.file || voiceForm.previewUrl) return;
+    if (!window.URL || typeof window.URL.createObjectURL !== "function") throw new LocalizedError("Audio preview is not available in this browser.");
+    voiceForm.previewUrl = window.URL.createObjectURL(voiceForm.file);
+  }
+
+  function revokeVoicePreviewUrl(url) {
+    if (!url || !window.URL || typeof window.URL.revokeObjectURL !== "function") return;
+    try { window.URL.revokeObjectURL(url); }
+    catch (_) { /* The browser may already have released this preview URL. */ }
+  }
+
+  function setVoiceSample(file, fileName, duration) {
+    let previewUrl = null;
+    if (file) {
+      if (!window.URL || typeof window.URL.createObjectURL !== "function") throw new LocalizedError("Audio preview is not available in this browser.");
+      previewUrl = window.URL.createObjectURL(file);
+    }
+    const previousUrl = voiceForm.previewUrl;
+    voiceForm.file = file || null;
+    voiceForm.fileName = file ? String(fileName || file.name || "microphone-reference.wav") : "";
+    voiceForm.previewUrl = previewUrl;
+    voiceForm.duration = Number.isFinite(duration) && duration > 0 ? duration : null;
+    voiceDraftVersion += 1;
+    revokeVoicePreviewUrl(previousUrl);
+    byId("voice-file").value = "";
+    recordRenderKeys();
+  }
+
+  function discardVoiceSample() {
+    if (recorderPhase !== "idle") voiceRecorder.cancel();
+    setVoiceSample(null, "", null);
+    showNotice(() => t("Sample discarded."), "success");
+    renderState(true);
+  }
+
+  function startVoiceRecording() {
+    if (voiceSaving || recorderPhase !== "idle" || !voiceRecorder) return;
+    voiceRecorder.start();
+  }
+
+  async function stopVoiceRecording() {
+    if (!voiceRecorder || recorderPhase === "idle") return;
+    await voiceRecorder.stop();
   }
 
   function renderAssetCard(asset) {
@@ -1083,24 +1184,43 @@
 
   async function uploadVoice(event) {
     event.preventDefault();
+    if (voiceSaving || recorderPhase !== "idle") return;
     const file = voiceForm.file;
-    if (!file) { showNotice(() => t("Choose an audio file for the reference."), "error"); return; }
+    if (!file) { showNotice(() => t("Choose or record an audio sample first."), "error"); return; }
+    if (!voiceForm.previewUrl) { showNotice(() => t("Preview the sample before saving."), "error"); return; }
     if (file.size > 20 * 1024 * 1024) { showNotice(() => t("The file exceeds the 20 MB limit."), "error"); return; }
     const name = voiceForm.name.trim();
     if (!name) { showNotice(() => t("Enter a voice name."), "error"); return; }
-    const query = new URLSearchParams({ name, transcript: voiceForm.transcript });
-    await withLock("upload-voice", async () => {
+    const transcript = voiceForm.transcript.trim();
+    if (!transcript) { showNotice(() => t("Enter the exact transcript before saving."), "error"); return; }
+    const sentVersion = voiceDraftVersion;
+    const sentFile = file;
+    voiceSaving = true;
+    renderState(true);
+    try {
+      const query = new URLSearchParams({ name, transcript });
       await request("/api/voices?" + query.toString(), {
         method: "POST",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file
       });
-      voiceForm = { name: "", transcript: "", file: null };
-      byId("voice-upload-form").reset();
-      await refreshState(false, true);
+      const unchanged = voiceDraftVersion === sentVersion && voiceForm.file === sentFile && voiceForm.name.trim() === name && voiceForm.transcript.trim() === transcript;
+      if (unchanged) {
+        const previewUrl = voiceForm.previewUrl;
+        voiceForm = { name: "", transcript: "", file: null, fileName: "", previewUrl: null, duration: null };
+        voiceDraftVersion += 1;
+        revokeVoicePreviewUrl(previewUrl);
+        byId("voice-upload-form").reset();
+      }
+      const refreshed = await refreshState(false, true);
       renderState(true);
-      showNotice(() => t("Voice added to the library."), "success");
-    });
+      showNotice(() => refreshed ? t("Voice added to the library.") : t("Voice saved, but the library could not be refreshed."), refreshed ? "success" : "error");
+    } catch (error) {
+      showNotice(() => errorText(error), "error");
+    } finally {
+      voiceSaving = false;
+      renderState(true);
+    }
   }
 
   async function archiveVoice(id) {
@@ -1127,7 +1247,11 @@
 
   function handleAction(action, target) {
     const id = target.dataset.id;
-    if (action === "select-session") activateSession(id);
+    if (action === "record-voice") startVoiceRecording();
+    else if (action === "rerecord-voice") startVoiceRecording();
+    else if (action === "stop-voice") stopVoiceRecording().catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "discard-voice") discardVoiceSample();
+    else if (action === "select-session") activateSession(id);
     else if (action === "archive-session") archiveSession(id, true).catch((error) => showNotice(() => errorText(error), "error"));
     else if (action === "restore-session") archiveSession(id, false).catch((error) => showNotice(() => errorText(error), "error"));
     else if (action === "rename-session") {
@@ -1151,6 +1275,20 @@
       handleAction(actionTarget.dataset.action, actionTarget);
       return;
     }
+    const scriptButton = event.target.closest("[data-voice-script]");
+    if (scriptButton) {
+      event.preventDefault();
+      const scripts = {
+        en: "Bright skies, three quiet friends, and warm sunlight. Please bring the blue box, fresh flowers, and a small cup of tea.",
+        ru: "Щенок шёл по узкой дорожке. Вчера я купил пять свежих яблок, чашку чая и жёлтую шаль."
+      };
+      voiceForm.transcript = scripts[scriptButton.dataset.voiceScript] || "";
+      voiceDraftVersion += 1;
+      byId("voice-transcript").value = voiceForm.transcript;
+      recordRenderKeys();
+      byId("voice-transcript").focus();
+      return;
+    }
     const tab = event.target.closest("[data-library-tab]");
     if (tab) renderTab(tab.dataset.libraryTab);
   });
@@ -1170,9 +1308,11 @@
       recordRenderKeys();
     } else if (target.id === "voice-name") {
       voiceForm.name = target.value;
+      voiceDraftVersion += 1;
       recordRenderKeys();
     } else if (target.id === "voice-transcript") {
       voiceForm.transcript = target.value;
+      voiceDraftVersion += 1;
       recordRenderKeys();
     }
   });
@@ -1186,9 +1326,17 @@
       updateConnection(connectionState.connected, connectionState.message);
       if (typeof noticeMessage === "function") byId("notice").textContent = noticeMessage();
     } else if (target.id === "voice-file") {
-      voiceForm.file = target.files && target.files[0] ? target.files[0] : null;
-      byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : t("Choose an audio file");
-      recordRenderKeys();
+      const file = target.files && target.files[0] ? target.files[0] : null;
+      if (file) {
+        try {
+          setVoiceSample(file, file.name, null);
+          showNotice(() => t("Sample ready. Preview it and check the exact transcript before saving."), "success");
+          renderState(true);
+        } catch (error) {
+          showNotice(() => errorText(error), "error");
+          target.value = "";
+        }
+      }
     } else if (target.id === "asset-filter") {
       assetFilter = target.value;
       renderLibrary();
@@ -1213,6 +1361,10 @@
   byId("new-session-form").addEventListener("submit", createSession);
   byId("new-segment-form").addEventListener("submit", createSegment);
   byId("voice-upload-form").addEventListener("submit", uploadVoice);
+  byId("voice-record-button").dataset.action = "record-voice";
+  byId("voice-rerecord-button").dataset.action = "rerecord-voice";
+  byId("voice-stop-button").dataset.action = "stop-voice";
+  byId("voice-discard-button").dataset.action = "discard-voice";
   byId("refresh-button").addEventListener("click", () => refreshState(true, true));
   byId("archive-toggle").addEventListener("click", () => {
     showArchivedSessions = !showArchivedSessions;
@@ -1222,13 +1374,51 @@
   byId("session-toolbar").addEventListener("submit", (event) => {
     if (event.target.id === "rename-session-form") renameSession(event).catch((error) => showNotice(() => errorText(error), "error"));
   });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshState(false, true); });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshState(false, true);
+    else if (recorderPhase !== "idle") stopVoiceRecording();
+  });
+  window.addEventListener("pagehide", () => {
+    if (voiceRecorder) voiceRecorder.cancel();
+    const previewUrl = voiceForm.previewUrl;
+    voiceForm.previewUrl = null;
+    revokeVoicePreviewUrl(previewUrl);
+    const preview = byId("voice-preview");
+    preview.pause();
+    preview.removeAttribute("src");
+    preview.load();
+  });
+  window.addEventListener("pageshow", () => {
+    if (!voiceForm.file) return;
+    try { createVoicePreviewUrl(); renderState(true); }
+    catch (error) { showNotice(() => errorText(error), "error"); }
+  });
   document.addEventListener("error", (event) => {
     if (event.target instanceof HTMLMediaElement) showNotice(() => t("Could not open the audio file. Refresh the library and try again."), "error");
   }, true);
 
   i18n.apply();
   byId("language-select").value = i18n.getLanguage();
+  voiceRecorder = new window.Drama3VoiceRecorder({
+    environment: window,
+    onState: (snapshot) => {
+      recorderPhase = snapshot.phase;
+      renderState(true);
+    },
+    onComplete: (blob, duration) => {
+      try {
+        setVoiceSample(blob, "microphone-reference.wav", duration);
+        showNotice(() => t("Recording ready. Preview it and check the exact transcript before saving."), "success");
+        renderState(true);
+      } catch (error) {
+        showNotice(() => errorText(error), "error");
+      }
+    },
+    onError: (error) => {
+      showNotice(() => t(error && error.message ? error.message : "Microphone recording could not start."), "error");
+      renderState(true);
+    }
+  });
   renderState(true);
   updateConnection(false, "Connecting…");
   refreshState(false, true);

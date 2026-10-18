@@ -79,6 +79,20 @@ test("segment counts and audio duration follow the selected language", () => {
   assert.equal(i18n.formatStamp("invalid"), "");
 });
 
+test("voice reference guidance and microphone controls stay available in English and Russian", () => {
+  const { i18n } = load();
+  assert.equal(i18n.t("Save voice"), "Save voice");
+  assert.equal(i18n.t("Record with microphone"), "Record with microphone");
+  assert.match(i18n.t("Recording. Stop when finished; capture ends at 9.5 seconds."), /9\.5 seconds/);
+  i18n.setLanguage("ru");
+  assert.equal(i18n.t("Save voice"), "Сохранить голос");
+  assert.equal(i18n.t("Record with microphone"), "Записать с микрофона");
+  assert.equal(i18n.t("Use this text"), "Использовать этот текст");
+  assert.match(i18n.t("Use a prepared reading or your own short text. Speak in a neutral, natural style at a comfortable volume. A short sample can guide a similar sound, but results vary."), /нейтрально/);
+  assert.match(i18n.t("Recording. Stop when finished; capture ends at 9.5 seconds."), /9,5 секунды/);
+  assert.equal(i18n.t("Enter the exact transcript before saving."), "Введите точную расшифровку перед сохранением.");
+});
+
 test("static translation changes labels and attributes without touching input values", () => {
   const { i18n, document } = load("ru");
   const input = { dataset: { i18nPlaceholder: "Project name" }, value: "Мой проект", setAttribute(key, value) { this[key] = value; } };

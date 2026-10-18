@@ -9,6 +9,15 @@ WAV/MP3/Opus export. A session is an editable document, not reused model KV stat
 Each text segment generates independently; concatenation does not promise voice
 continuity, sentence alignment or seamless crossfades.
 
+Voice references can be uploaded or recorded through a user-initiated local
+microphone flow. Both are previewed before the existing import API saves them;
+recordings use mono PCM16 WAV at the browser AudioContext sample rate and stop at
+9.5 seconds under the backend's ten-second limit. Permission is requested only
+after Record is clicked, and the editable transcript remains the user's exact
+text. Example readings offer English and Russian phonetic variety without
+claiming complete sound coverage or guaranteed voice quality. Synthetic capture
+tests do not establish microphone behavior across physical devices or browsers.
+
 The server binds to loopback only. All audio, transcripts and metadata stay in
 the selected local data directory. Browser requests cannot choose filesystem
 paths or model paths. Same-origin mutation checks, bounded requests and
@@ -45,6 +54,9 @@ DoD and falsifiers:
   rejection and conversion failure without a false successful asset.
 - Browser test: create two sessions, upload a reference with transcript, edit
   segments, generate, select an earlier take and export/download audio.
+- Recorder tests: exercise the worklet with synthetic samples and fake streams;
+  verify permission cancellation, stale completion cancellation, WAV encoding,
+  duration bounds and track cleanup without opening a physical microphone.
 - Native repeated-job probe: identical seed/text yields identical code IDs and
   WAV bytes, unchanged sampler tape/readback ledger; compare the existing pinned
   upstream fixture with unchanged tolerances. Measure cold and warm phases

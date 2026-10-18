@@ -33,15 +33,25 @@ The interface defaults to English. Use the language selector in the header to
 switch between English and Russian without reloading. The choice is saved in
 this browser; if browser storage is blocked, it lasts for the current page.
 Interface language does not change speech text, voice names or transcripts.
-Switching preserves unsaved editor and upload drafts, including a selected
-reference file. Rebuild and restart the studio to update its embedded UI assets.
+Switching preserves unsaved editor and voice-reference drafts, including a
+selected file, recording preview and transcript. Rebuild and restart the studio
+to update its embedded UI assets.
 
 ## Working with voices and sessions
 
 1. Create a session and add one or more text segments.
-2. To clone a voice, upload a clean recording of up to ten seconds and enter
-   its exact transcript. The import normalizes it to mono 44.1 kHz PCM16.
-   Select that saved reference on each segment that should use the voice.
+2. To add a voice reference, choose an audio file or select **Record with
+   microphone**. The browser asks for microphone permission only after that
+   button is clicked. Recording captures mono PCM and stops at 9.5 seconds,
+   leaving room under the import limit of ten seconds. Stop, discard, or record
+   again as needed. The preview is available before saving for both recordings
+   and uploaded files. Enter the exact words spoken, then select **Save voice**;
+   both paths use the same local import and normalize to mono 44.1 kHz PCM16.
+   The suggested English and Russian readings include several consonant and
+   vowel patterns, but they do not cover every sound. Use a neutral, natural
+   delivery at a comfortable volume; a reference can guide a similar sound, but
+   voice quality and identity vary. Select a saved reference on each segment
+   that should use it.
 3. Generate a segment. Advanced settings expose seed, frame budget and sampler
    settings. A fixed seed with the same text/reference/settings reuses the same
    sampler inputs. A changed prompt can still produce different speech.

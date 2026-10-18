@@ -8,6 +8,7 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23151918%22/%3E%3Ctext x=%2232%22 y=%2246%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2244%22 font-weight=%22700%22 fill=%22%238bd8c2%22%3ED%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="/assets/style.css">
     <script src="/assets/i18n.js" defer></script>
+    <script src="/assets/voice-recorder.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
@@ -112,11 +113,34 @@
                 <small data-i18n="WAV, MP3 or another supported format · up to 20 MB">WAV, MP3 or another supported format · up to 20 MB</small>
               </label>
               <input class="sr-only" id="voice-file" name="file" type="file" accept="audio/*">
+              <div class="voice-guidance">
+                <p data-i18n="Use a prepared reading or your own short text. Speak in a neutral, natural style at a comfortable volume. A short sample can guide a similar sound, but results vary.">Use a prepared reading or your own short text. Speak in a neutral, natural style at a comfortable volume. A short sample can guide a similar sound, but results vary.</p>
+                <div class="voice-script-card">
+                  <div><strong data-i18n="English sample">English sample</strong><span lang="en">Bright skies, three quiet friends, and warm sunlight. Please bring the blue box, fresh flowers, and a small cup of tea.</span></div>
+                  <button class="text-button" id="voice-script-en" type="button" data-voice-script="en" data-i18n="Use this text">Use this text</button>
+                </div>
+                <div class="voice-script-card">
+                  <div><strong data-i18n="Russian sample">Russian sample</strong><span lang="ru">Щенок шёл по узкой дорожке. Вчера я купил пять свежих яблок, чашку чая и жёлтую шаль.</span></div>
+                  <button class="text-button" id="voice-script-ru" type="button" data-voice-script="ru" data-i18n="Use this text">Use this text</button>
+                </div>
+              </div>
+              <div class="voice-recorder-controls" aria-label="Microphone recording" data-i18n-aria-label="Microphone recording">
+                <button class="button button-secondary button-wide" id="voice-record-button" type="button" data-i18n="Record with microphone">Record with microphone</button>
+                <button class="button button-secondary button-wide" id="voice-stop-button" type="button" hidden data-i18n="Stop recording">Stop recording</button>
+                <button class="text-button" id="voice-rerecord-button" type="button" hidden data-i18n="Record again">Record again</button>
+                <button class="text-button" id="voice-discard-button" type="button" hidden data-i18n="Discard sample">Discard sample</button>
+                <p class="voice-record-status" id="voice-record-status" role="status" aria-live="polite" hidden></p>
+              </div>
+              <div class="voice-preview-wrap" id="voice-preview-wrap" hidden>
+                <label class="field-label" for="voice-preview" data-i18n="Preview before saving">Preview before saving</label>
+                <audio id="voice-preview" controls preload="metadata"></audio>
+                <span class="field-hint" id="voice-sample-duration"></span>
+              </div>
               <label class="field-label" for="voice-name" data-i18n="Name">Name</label>
               <input id="voice-name" name="name" type="text" maxlength="120" placeholder="For example, Quiet narrator" data-i18n-placeholder="For example, Quiet narrator" required>
               <label class="field-label" for="voice-transcript" data-i18n="What is said in the recording">What is said in the recording</label>
-              <textarea id="voice-transcript" name="transcript" rows="2" maxlength="2000" placeholder="An exact transcript helps match the voice" data-i18n-placeholder="An exact transcript helps match the voice"></textarea>
-              <button class="button button-secondary button-wide" type="submit" data-i18n="Upload voice">Upload voice</button>
+              <textarea id="voice-transcript" name="transcript" rows="2" maxlength="2000" placeholder="An exact transcript helps match the voice" data-i18n-placeholder="An exact transcript helps match the voice" required></textarea>
+              <button class="button button-secondary button-wide" id="voice-save-button" type="submit" data-i18n="Save voice">Save voice</button>
             </form>
             <div class="library-section-title"><h3 data-i18n="Saved voices">Saved voices</h3><span id="voice-count">0</span></div>
             <div class="voice-list" id="voice-list"></div>
