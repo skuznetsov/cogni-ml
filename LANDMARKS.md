@@ -30317,3 +30317,35 @@ Refresh after source/toolchain/device/model/workload changes.
   `.landmark/evidence/drama3-expert-down-sum.json`. Refresh correctness after
   source/options/model/reference drift and timing after driver/device/load
   changes. Root execution plus correlated mini-Quad review supports this scope.
+
+### 2026-10-18 — Prefill memory cause remains open; runtime stays stopped
+
+- The private fixed-coarse MLX probe stopped inside its first 269-row prefill
+  without memory counters or row progress. No generation or WAV result exists.
+  The user requires code investigation before any restart: model and Studio
+  must remain stopped. Preserve the aborted private script/log under
+  `/opt/mldata_ssd/cogni-ml/drama3-voice-diagnosis-20261018/`.
+- Source inspection at native base `60a28599` and MLX-audio
+  `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7` rejects KV growth alone as a
+  multi-GiB cause: capacity 256 to 512 adds 23MiB per arm; predictable complete
+  F32 recurrent/KV backing is about 108.81MiB. No obvious rowwise Python
+  retention or causal native Studio defect was found. Cause is IN_PROGRESS;
+  no model/cache/precision/kernel fix or numerical compatibility claim follows.
+- Header arithmetic for checkpoint `5331ab509359c0e4a7e353a19e255ddf3e8152a8`
+  counts 1,167 core tensors and 31,363,559,936 F32-loader bytes. This is neither
+  observed residency nor peak memory. Allocator scratch, reservations, page
+  residency and conversion transients still need discrimination.
+- `scripts/drama3/mlx_memory.py` provides header-only inventory and opt-in
+  stage/row telemetry on existing upstream eval boundaries, with an explicit
+  budget. It rejects chunk schedules other than one before model entry and
+  restores its process-global hook on exceptions. Ten CPU tests pass; no
+  MLX/Torch/model import, weight tensor load or GPU execution was used. The
+  observer is for an isolated single-threaded probe, not Studio, and cannot
+  prevent an intra-eval peak. See `docs/drama3-prefill-memory.md` for limits.
+- Next falsifier, only after runtime investigation is authorized: one bounded
+  first-prefill probe with stage/row active/cached/peak/RSS and cache metadata,
+  Studio off, fresh external output, normal run_safe 15% floor. Do not repeat
+  the full two-arm voice experiment first. Refresh on source, model, precision,
+  chunk schedule, MLX/driver or device change. Voice-quality work returns to
+  the fixed-coarse experiment after memory causality and a causal fix are
+  established; unchanged upstream tolerances and no-push authority remain.
