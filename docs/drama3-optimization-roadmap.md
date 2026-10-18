@@ -21,6 +21,12 @@ benchmark evidence. User authorized implementation after the 2026-10-18 audit.
   bits and saved MLX metrics in the tested scope. Local paired command intervals
   favor fusion at 2.5806x and warm allocations decrease by 5,340. Two of four
   full-WAV worker contrasts regress; it also remains default-off.
+- [Known-input GDN scan](drama3-gdn-scan.md) is measured in a standalone GPU
+  diagnostic at production dimensions and graph depths 0/2. Dense summary,
+  prefix and replay are slower on the tested 19/29-row blocks and fail native
+  bit identity despite passing unchanged tolerance metrics. Keep it out of
+  production. A single-launch serial-token control preserves every output/state
+  bit and gives about 5% local gain; full-prefill/WAV benefit remains unknown.
 - [Late upstream differences](drama3-late-matched.md) remain unresolved. Preserve
   existing tolerances; unchanged MLX metrics are a no-regression claim.
 - [Projection replay](drama3-decode-replay.md) provides bounded family costs;
@@ -47,6 +53,10 @@ benchmark evidence. User authorized implementation after the 2026-10-18 audit.
    24 complete requests pass their declared no-regression gates. Strict MLX
    parity and repeatable causal full-request benefit remain unestablished.
    This is dataflow fusion, not temporal GDN parallelism.
+   The subsequent known-input dense affine scan is rejected on its measured
+   short blocks. Next bounded prefill candidate: integrate the bit-exact serial
+   tile, preserve convolution history, and charge preparation/commit plus full
+   requests before promotion. It is not an autoregressive decode optimization.
 3. q1 wavefront experiment: next backbone needs q0/q1 only, while tower finishes
    q2..q9. Actual overlap needs GPU queue dependencies, isolated scratch and
    retained frames. Single-queue reordering alone is insufficient; theoretical
@@ -153,12 +163,20 @@ unknown. Qwen therefore motivates a bounded prefill falsifier, not a DRAMA
 decode claim. Projected-K or block residual changes the exact model/sampler
 contract and requires separate quality and verification evidence.
 
-Immediate mathematical falsifier: a bounded known-input prefill block at the
-production GDN dimensions, including summary construction, prefix composition,
-replay, every output and final state commit. Test the existing output/state gates
-before forecasting speed or touching production routing. State-only subkernel
-gains are insufficient; changed F32 reduction order may reject the route. q1
-overlap and the other accepted branches remain available, unimplemented paths.
+The bounded production-dimension falsifier now includes summary construction,
+prefix composition, replay, every output and final state. At depths 0/2, all
+size-8 affine groups fail native bit identity; their complete GPU corridors are
+1.66–2.70x slower. Errors are finite and within the existing tolerance metric;
+that does not override the native gate. The exact serial control instead gives
+paired medians of 1.0581x/1.0548x locally. See the scan qualification for source
+pins, actual zero/nonzero captures and the limitations of overlapping command
+intervals. No new MLX or WAV comparison was run; production remains unchanged.
+
+Next falsifier: production prefill integration of the serial control, including
+convolution/q/k preparation, every output and state/history commit, followed by
+upstream boundaries and complete requests. Dense scan rejection is scoped to
+this implementation and short workload; compact/WY and longer-window scans need
+new evidence. q1 overlap and other accepted branches remain unimplemented paths.
 
 Refresh after source, compiler/driver, device, weights, prompt, sampler or
 reference changes. Active return pointer: `docs/drama3-native-frontier.md`.

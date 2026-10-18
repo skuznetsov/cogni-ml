@@ -10,7 +10,58 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: exact GDN postprojection corridor — 2026-10-18
+## Active slice: known-input GDN scan qualification — 2026-10-18
+
+At `e4131aaa`, the user authorized the production-dimension GPU prefill probe.
+Admit diagnostic-only block summaries, affine prefixes, initial-state transport
+and block replay, charging every output and the final committed state. Capture
+the original normalized/scaled q/k, v, gates and actual zero/nonzero states on
+GPU; compare with the existing transposed sequential kernel. Native output/state
+bit identity and the existing upstream tolerances remain unchanged. A separate
+single-launch sequential-token replay is an order-preserving control, not a
+temporal scan. No production selector, submission, wait or read is added.
+
+CAUTION: F32 recurrence is not exactly affine; summary composition can change
+rounding even when real-number algebra is exact. Dense prefixes may also cost
+more than the saved dependency depth. First falsifier: every-row output and
+final-state GPU bit/tolerance receipts, with a one-ULP and nonfinite seeded
+defect and an exact sequential control. Time complete diagnostic corridors in
+counterbalanced pairs only after qualifying the instrument. Reject promotion
+on a native bit mismatch; retain measured tolerance metrics without changing
+the gate. Source, fixture, graph and checkpoint identities bound the result.
+Rollback is omitting the standalone diagnostic; production remains unchanged.
+DoD: focused release Metal probe specs, actual prompt captures at key/value
+width 128, zero/nonzero starts, multiple block sizes and graph depths 0/2,
+full-corridor comparison/timing receipts and a scoped adversary review. Heavy
+runs remain serial under run_safe, external scratch and the 15% memory floor.
+
+Outcome: six release Metal examples pass. Actual captures at graph depths 0/2
+cover layers 0/38, 29 zero-state rows and 19 rows starting from an actual nonzero
+state. Sequential replay reproduces capture bits. The single-launch serial
+control is bit-exact for every output/final state in all 24 validation groups
+and all 80 timed pairs including warmups. Its descriptive paired GPU speed
+medians are 1.0581x/1.0548x at depths 0/2; this is not a complete-request gain.
+The dense affine scan fails native bit gates in 6/12 groups per depth, beginning
+where replay consumes a changed summary/prefix. All errors remain within the
+unchanged tolerance metric (maximum absolute error 3.8146973e-5), but every
+timing cohort loses; useful size-8 scans are 1.66–2.70x slower. Reject promotion
+of this implementation on these short blocks. No production route changed and
+no new upstream/WAV comparison was run. Full receipts, paired-log analysis,
+limitations and commands: [GDN scan qualification](drama3-gdn-scan.md).
+
+Next bounded falsifier: integrate the order-preserving serial tile into
+known-input prefill while preserving convolution history and every output/state
+bit. Charge q/k preparation, normalization, projection and state commit; then
+refresh upstream boundaries and full-WAV pairs before claiming request benefit.
+Compact/WY summaries and surrogate stochastic verification remain separate
+research questions; this result does not reject every temporal scan algorithm.
+
+The user reports no audible quality degradation in the examples they listened
+to despite the old row-1/layer-39 MLX mismatch. This is listening evidence for
+those examples, not a passed numerical gate or evidence of a general audio
+defect. The cases in which that discrepancy affects sound remain unknown.
+
+## Prior slice: exact GDN postprojection corridor — 2026-10-18
 
 At `699879e3`, the user authorized the next bounded experiment and clarified
 that the earlier Qwen mathematics meant surrogates and temporal GDN parallelism,
@@ -36,8 +87,8 @@ saved MLX metrics at unchanged tolerances, ordinary code/tape/EOS/WAV identity
 and read/wait ledgers. Complete-request pairs are required for a request-speed
 claim/default promotion. Local gains alone do not qualify one. Root runs heavy
 work serially under run_safe, using external scratch and the authorized 15%
-free-memory floor. Full-state temporal scan and surrogate verification remain
-separate, unimplemented DRAMA experiments.
+free-memory floor. Temporal scan is now measured only in the standalone
+diagnostic above; production scan and surrogate verification remain unimplemented.
 
 Outcome: 25 release Metal examples and 36 offline driver checks pass. All 90
 actual-input GDN captures and 243 native backbone boundary pairs are bit-exact;
@@ -52,12 +103,10 @@ not established. Source review and 29 deliberately damaged receipt checks suppor
 the bounded claims, not independent build/model attestation. See
 [GDN postprojection qualification](drama3-gdn-post.md).
 
-Next falsifier: known-input prefill GDN affine block composition at production
-head dimensions, charging summary, prefix, replay, every output and committed
-state. Preserve the existing output/state and upstream gates. F32 reassociation
-can reject an algebraically exact scan. Historical projected-K/block-residual
-surrogates and greedy verification do not certify stochastic DRAMA decode;
-their distinct evidence and limitations are in the optimization roadmap.
+The proposed known-input affine scan falsifier is resolved above for this dense
+short-block implementation. Historical projected-K/block-residual surrogates
+and greedy verification do not certify stochastic DRAMA decode; their distinct
+evidence and limitations are in the optimization roadmap.
 
 ## Prior slice: exact expert gate/up/SwiGLU fusion — 2026-10-18
 

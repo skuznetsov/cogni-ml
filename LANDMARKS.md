@@ -6,6 +6,33 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DRAMA3-GDN-SCAN-2026-10-18] Dense scan rejected; exact serial control retained
+
+- Standalone GPU diagnostic at `e4131aaa`, production dimensions K=V=128,
+  layers 0/38, actual varying q/k/v/gates and zero/nonzero incoming states.
+  Summary, prefix, transport, every replay output and final state are charged.
+  Production sources and routes are unchanged; no new MLX or WAV run.
+- Six release Metal examples and ten offline examples pass. At graph depths
+  0/2, sequential replay reproduces capture bits. Serial tile is bit-exact for
+  all 24 validation groups and all 80 timed pairs including warmups. Its local
+  paired GPU medians are 1.0581x/1.0548x; full-request benefit is unmeasured.
+- Dense affine scan fails native bit identity in 6/12 groups per depth and is
+  slower in every timing cohort; useful size-8 scans lose by 1.66–2.70x.
+  Maximum absolute error is 3.8146973e-5, all finite and within the unchanged
+  tolerance metric. Real-arithmetic affine algebra does not preserve F32 bits.
+- Combined JSON/timeline-log analysis, live selected-source/executable hashes,
+  16 damaged-receipt rejections and scoped source review are ROBUST for these
+  bounded claims. Review is correlated; local receipts are not attestation.
+  Source pins, artifact hashes, limits and refresh: `docs/drama3-gdn-scan.md`
+  and `.landmark/evidence/drama3-gdn-scan.json`.
+- Next falsifier: integrate the exact serial tile into known-input prefill,
+  preserving convolution history and output/state bits; charge preparation,
+  normalization, projection and commit before upstream/full-WAV pairs. Compact
+  scans and surrogate stochastic verification remain separate research paths.
+  Refresh after source/compiler/driver/device/checkpoint/input/graph/control
+  changes or artifact loss. Listening found no quality defect in the user's
+  examples; the old layer-39 MLX mismatch remains an open numerical issue.
+
 ### [LM-DRAMA3-GDN-POST-2026-10-18] Exact local fusion, default off
 
 - `DRAMA3_GDN_POST_FUSION=0|1` freezes at Context construction. The candidate
@@ -25,9 +52,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   This is correlated review, not independent runtime replication. Qualification,
   commands, source/artifact hashes and refresh: `docs/drama3-gdn-post.md` and
   `.landmark/evidence/drama3-gdn-post.json`.
-- Next falsifier: known-input prefill GDN summary/prefix/replay, including every
-  output and committed state at production dimensions. Algebraic exactness alone
-  does not preserve F32 bits. Refresh after source/toolchain/device/checkpoint,
+- Follow-up known-input prefill GDN summary/prefix/replay is qualified above;
+  dense scan is rejected on the tested short blocks. Refresh after source/toolchain/device/checkpoint,
   sampler/text/reference/queue-depth or flag-stack changes and artifact loss.
 
 ### [LM-DRAMA3-OPTIMIZATION-CONTINUATION-2026-10-18] Exact fusion first
@@ -52,7 +78,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   Correction: the user's intended historical Qwen reference was projected-K and
   block-residual surrogates plus temporal affine GDN scan, not the separate
   rank-one update/output fusion. Their source-backed limits are in the roadmap.
-  Known-input prefill is the next bounded scan falsifier. The historical greedy
+  Known-input prefill scan is qualified above. The historical greedy
   verifier does not certify stochastic DRAMA sampling or fixed-tape identity.
 - q1 overlap, GPU EOS blocks, calibrated BF16-to-Q8, line protocol and streaming
   remain hypotheses/future slices. Existing late MLX failures remain open.
