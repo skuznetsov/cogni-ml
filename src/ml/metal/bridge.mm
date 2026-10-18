@@ -71,8 +71,20 @@ struct GSCommandWaitRecord {
     int64_t timeout_ms;
 };
 
-static std::mutex gs_command_waits_mutex;
-static std::vector<GSCommandWaitRecord*> gs_command_waits;
+struct GSCommandWaitState {
+    std::mutex mutex;
+    std::vector<GSCommandWaitRecord*> records;
+};
+
+// The watchdog dispatch source is process-wide and may still run while C++
+// static objects are being torn down. Keep its mutex and records alive for the
+// full process lifetime so a late callback cannot lock or inspect destroyed
+// state. This intentionally retains one small state object until process exit.
+static GSCommandWaitState& command_wait_state() {
+    static GSCommandWaitState* state = new GSCommandWaitState();
+    return *state;
+}
+
 static dispatch_source_t gs_command_watchdog = nil;
 
 static int64_t command_timeout_ms() {
@@ -102,9 +114,10 @@ static uint64_t monotonic_time_ns() {
 }
 
 static void command_watchdog_tick() {
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
     uint64_t now = monotonic_time_ns();
-    for (GSCommandWaitRecord* record : gs_command_waits) {
+    for (GSCommandWaitRecord* record : state.records) {
         if (now >= record->deadline_ns) {
             std::fprintf(stderr,
                          "GS FATAL: Metal command buffer exceeded %lldms; "
@@ -140,14 +153,16 @@ static void register_command_wait(GSCommandWaitRecord* record, int64_t timeout_m
     ensure_command_watchdog();
     record->timeout_ms = timeout_ms;
     record->deadline_ns = monotonic_time_ns() + (uint64_t)timeout_ms * NSEC_PER_MSEC;
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
-    gs_command_waits.push_back(record);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.records.push_back(record);
 }
 
 static void unregister_command_wait(GSCommandWaitRecord* record) {
-    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
-    auto found = std::find(gs_command_waits.begin(), gs_command_waits.end(), record);
-    if (found != gs_command_waits.end()) gs_command_waits.erase(found);
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    auto found = std::find(state.records.begin(), state.records.end(), record);
+    if (found != state.records.end()) state.records.erase(found);
 }
 
 struct GSCommandSubmitProfile {

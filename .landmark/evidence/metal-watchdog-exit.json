@@ -1,0 +1,105 @@
+{
+  "format": "cogni-metal-watchdog-exit-v1",
+  "base_revision": "034354781281a04cc1858d7ce3d45e267530e7be",
+  "claim": "VERIFIED within bounded static-teardown scope",
+  "adversary_verdict": "ROBUST within scope; source and artifacts reviewed by a correlated same-lineage agent, root inspected source",
+  "source_sha256": {
+    "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13",
+    "spec/metal_watchdog_exit_probe.mm": "a6c2c7f7b05801a8cdd9beea6d7b6224e0628daf9d708dc3e0f544afe19beb83",
+    "spec/metal_submit_profile_test.mm": "098e983ff4ebd2f909a535b8741f10dbe0ab8ccd644d2078615f77ea297f5d4a"
+  },
+  "external_probe_evidence": {
+    "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/evidence.json",
+    "sha256": "3cd896b4c7e673a04bc7428e2f3f4b968aa215c4be8b5766bb88928d2d51d0f4"
+  },
+  "discriminator": {
+    "probe_path": "spec/metal_watchdog_exit_probe.mm",
+    "probe_sha256": "a6c2c7f7b05801a8cdd9beea6d7b6224e0628daf9d708dc3e0f544afe19beb83",
+    "baseline_bridge_path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/bridge-head.mm",
+    "baseline_bridge_sha256": "edef19096f3bf4d1acfd1858c2b96d130614879e065ba026b49ff9d7b1fdc0c3",
+    "runs": [
+      {
+        "variant": "recorded HEAD baseline",
+        "binary_path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-baseline-final-probe",
+        "binary_sha256": "564b3ea2e8aac57bb8b40420fa93936ff04dac47580ad837886949beeb7a1730",
+        "command": "COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-baseline-final-probe 15 512 late > /opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/baseline-final-probe-late.log 2>&1",
+        "observed_exit": 134,
+        "log_path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/baseline-final-probe-late.log",
+        "log_sha256": "fe2d9ae91b73580d052c236961ec1cc3b7db2d78ded23b9dfbe8b849789bb42a",
+        "observed_signal": "Completed empty bridge command, no pending waits, then libc++abi system_error mutex lock failed: Invalid argument and Abort (exit 134)."
+      },
+      {
+        "variant": "patched bridge candidate",
+        "binary_path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-candidate-final-probe",
+        "binary_sha256": "5010f1604cba7046bf71bdd2ebb3e4b6baf713a8512844dfb03ed4a9bec0e0ea",
+        "command": "COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 scripts/run_safe.sh /opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-candidate-final-probe 15 512 late > /opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/candidate-final-probe-late.log 2>&1",
+        "observed_exit": 0,
+        "log_path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/candidate-final-probe-late.log",
+        "log_sha256": "5f5f7d91e62327fe7e9fbe2ce24fecb201535744bfd72b58d111a47afb3c83d5",
+        "observed_signal": "BRIDGE_NOOP_COMPLETED status=0 pending_waits=0 watchdog=active mode=late; WATCHDOG_LATE_CALLBACK_COMPLETED count=1 after bridge globals teardown; exit 0."
+      }
+    ]
+  },
+  "guards": [
+    "late real empty-command exit0",
+    "normal real empty-command exit0",
+    "disabled watchdog real empty-command exit0",
+    "concurrent callback observes two wait records then empty registry",
+    "timeout intentionally exits124 with unchanged GS FATAL",
+    "CPU-only submit/timeline profiling spec PASS"
+  ],
+  "full_wav_controls": {
+    "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/watchdog-full-request-controls.json",
+    "sha256": "820027d1fddd710b2887bd2bba87acd9dd935fbce00620e395f380aa0e580170",
+    "requests": 2,
+    "complete_codes_sampler_tape_and_wav_equal_to_saved_baseline": true,
+    "submitted_completed_waits_each": 122,
+    "pending_each": 0,
+    "no_tolerance_change": true
+  },
+  "limits": [
+    "Static teardown is a sufficient cause matching the incident, not a proof that the original inference incident had no additional fault.",
+    "The probe does not certify exit with abandoned application threads or pending commands.",
+    "Strict upstream numerical compatibility remains open; a no-regression receipt does not establish compatibility."
+  ],
+  "refresh_on": [
+    "bridge state ownership or wait registration change",
+    "watchdog callback or teardown change",
+    "compiler/runtime/device/OS change"
+  ],
+  "rollback": "Revert only the isolated lifetime commit; do not disable the watchdog.",
+  "root_guard_recheck": [
+    {
+      "name": "watchdog-final-concurrent",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-candidate-final-probe",
+        "15",
+        "512",
+        "concurrent"
+      ],
+      "git_head": "034354781281a04cc1858d7ce3d45e267530e7be",
+      "started_at_utc": "2026-10-18T01:33:17.309921+00:00",
+      "finished_at_utc": "2026-10-18T01:33:18.152877+00:00",
+      "exit_code": 0,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/watchdog-final-concurrent.log",
+      "log_sha256": "490ff8260a1a872061e483eff32ff2b25bd113a48c1aea5732747b84af1ced25"
+    },
+    {
+      "name": "watchdog-final-timeout",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/drama_watchdog_probe/watchdog-candidate-final-probe",
+        "15",
+        "512",
+        "timeout"
+      ],
+      "git_head": "034354781281a04cc1858d7ce3d45e267530e7be",
+      "started_at_utc": "2026-10-18T01:33:18.181246+00:00",
+      "finished_at_utc": "2026-10-18T01:33:18.832577+00:00",
+      "exit_code": 124,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/watchdog-final-timeout.log",
+      "log_sha256": "1298b2793826465f55adbd9eab777cb44338e9eaa9b5764c39ca6c3a8b6c5a66"
+    }
+  ]
+}

@@ -4,6 +4,16 @@
 #include <cassert>
 #include <cmath>
 
+static size_t command_wait_set_size() {
+    GSCommandWaitState& state = command_wait_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.records.size();
+}
+
+static bool command_wait_set_empty() {
+    return command_wait_set_size() == 0;
+}
+
 @interface SubmitProfileFake : NSObject
 @property int commits;
 @property int waits;
@@ -23,12 +33,12 @@
 
 @implementation SubmitProfileFake
 - (void)commit {
-    assert(gs_command_waits.size() == (self.expectsRegisteredCommit ? 1 : 0));
+    assert(command_wait_set_size() == (self.expectsRegisteredCommit ? 1 : 0));
     self.commits += 1;
     if (self.commitDelay) usleep(self.commitDelay);
 }
 - (void)waitUntilCompleted {
-    assert(gs_command_waits.size() == 1);
+    assert(command_wait_set_size() == 1);
     assert(self.commits == 1);
     self.waits += 1;
     if (self.waitDelay) usleep(self.waitDelay);
@@ -94,7 +104,7 @@ int main() {
             SubmitProfileFake* cmd = fake(slow_commit ? 20000 : 0, slow_commit ? 0 : 20000);
             GSCommandSubmitProfile profile;
             wait_for_command_completion((id<MTLCommandBuffer>)cmd, true, &profile);
-            assert(cmd.commits == 1 && cmd.waits == 1 && gs_command_waits.empty());
+            assert(cmd.commits == 1 && cmd.waits == 1 && command_wait_set_empty());
             assert(profile.setup_ms >= 0 && profile.retire_ms >= 0);
             assert(profile.commit_ms >= 0 && profile.wait_ms >= 0);
             assert(profile.mach_before_commit > 0);
@@ -104,12 +114,12 @@ int main() {
         // The uninstrumented path retains one commit/wait and registration.
         SubmitProfileFake* plain = fake(0, 0);
         wait_for_command_completion((id<MTLCommandBuffer>)plain, true);
-        assert(plain.commits == 1 && plain.waits == 1 && gs_command_waits.empty());
+        assert(plain.commits == 1 && plain.waits == 1 && command_wait_set_empty());
         // Already-committed waits must never commit again.
         SubmitProfileFake* already = fake(0, 0);
         already.commits = 1;
         wait_for_command_completion((id<MTLCommandBuffer>)already, false);
-        assert(already.commits == 1 && already.waits == 1 && gs_command_waits.empty());
+        assert(already.commits == 1 && already.waits == 1 && command_wait_set_empty());
 
         // Async timeline captures the existing commit and wait boundaries,
         // with exactly one commit and one completion wait.
@@ -133,7 +143,7 @@ int main() {
         assert(before_wait > 0.0 && after_wait >= before_wait);
         assert(gpu_valid == 1 && gpu_end > gpu_start);
         assert(kernel_valid == 1 && kernel_end > kernel_start);
-        assert(gs_command_waits.empty());
+        assert(command_wait_set_empty());
 
         // Missing timestamps are represented as unavailable metrics, not a
         // failed completion or an additional synchronization operation.
@@ -153,7 +163,7 @@ int main() {
             &gpu_start, &gpu_end, &gpu_valid, &kernel_start, &kernel_end, &kernel_valid);
         assert(timeline_status == 0 && unavailable.commits == 1 && unavailable.waits == 1);
         assert(gpu_valid == 0 && kernel_valid == 0);
-        assert(gs_command_waits.empty());
+        assert(command_wait_set_empty());
 
         // Failed completion remains failed, but the timeline path still waits
         // exactly once and marks optional metrics invalid.
@@ -169,7 +179,7 @@ int main() {
             &gpu_start, &gpu_end, &gpu_valid, &kernel_start, &kernel_end, &kernel_valid);
         assert(timeline_status == -6 && failed_timeline.commits == 1 && failed_timeline.waits == 1);
         assert(gpu_valid == 0 && kernel_valid == 0);
-        assert(gs_command_waits.empty());
+        assert(command_wait_set_empty());
 
         double gpu_seconds = -1.0;
         SubmitProfileFake* good = fake(0, 0);
@@ -179,7 +189,7 @@ int main() {
         bad.status = MTLCommandBufferStatusError;
         assert(gs_commit_and_wait_status_gpu_elapsed((__bridge_retained void*)bad, &gpu_seconds) == -6);
         assert(gpu_seconds == 0 && bad.commits == 1 && bad.waits == 1);
-        assert(gs_command_waits.empty());
+        assert(command_wait_set_empty());
         // Resource observers never initialize Metal or wait for GPU work.
         uint64_t resources[8] = {};
         double sample_begin = 0, sample_end = 0;
