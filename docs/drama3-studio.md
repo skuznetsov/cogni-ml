@@ -29,6 +29,13 @@ The model loads lazily on the first generation, then remains in one native
 worker for subsequent jobs. The HTTP server stays responsive during inference.
 Do not run additional GPU benchmark jobs concurrently with generation.
 
+The interface defaults to English. Use the language selector in the header to
+switch between English and Russian without reloading. The choice is saved in
+this browser; if browser storage is blocked, it lasts for the current page.
+Interface language does not change speech text, voice names or transcripts.
+Switching preserves unsaved editor and upload drafts, including a selected
+reference file. Rebuild and restart the studio to update its embedded UI assets.
+
 ## Working with voices and sessions
 
 1. Create a session and add one or more text segments.
@@ -129,6 +136,14 @@ COGNI_RUN_SAFE_MIN_FREE_PCT=15 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
   scripts/run_safe.sh crystal 900 40960 spec -Dcpu_only \
   spec/drama3_studio_store_spec.cr spec/drama3_studio_media_spec.cr \
   spec/drama3_studio_http_spec.cr spec/drama3_studio_worker_spec.cr
+```
+
+The language catalog has dependency-free checks for the English default,
+saved and blocked browser storage, literal interpolation, plural forms and
+static label updates:
+
+```sh
+node --test spec/drama3_studio_i18n_spec.js
 ```
 
 The admitted scope and verification requirements are in

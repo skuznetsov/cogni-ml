@@ -93,9 +93,10 @@ module ML::Audio::Drama3::Studio
       request = context.request
       path = request.path
       method = request.method
-      if method == "GET" && path.in?("/", "/app.js", "/style.css", "/assets/app.js", "/assets/style.css")
+      if method == "GET" && path.in?("/", "/app.js", "/i18n.js", "/style.css", "/assets/app.js", "/assets/i18n.js", "/assets/style.css")
         mime, data = case path
                      when "/app.js", "/assets/app.js"       then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/app.js") }}}
+                     when "/i18n.js", "/assets/i18n.js"     then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/i18n.js") }}}
                      when "/style.css", "/assets/style.css" then {"text/css; charset=utf-8", {{ read_file("#{__DIR__}/assets/style.css") }}}
                      else                                        {"text/html; charset=utf-8", {{ read_file("#{__DIR__}/assets/index.html") }}}
                      end

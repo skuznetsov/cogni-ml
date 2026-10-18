@@ -84,6 +84,23 @@ private class StudioTestServer
 end
 
 describe ML::Audio::Drama3::Studio::App do
+  it "serves an English default interface and the local language catalog" do
+    server = StudioTestServer.new
+    html = server.request("GET", "/", "")
+    html.status_code.should eq(200)
+    html.body.should contain("<html lang=\"en\">")
+    html.body.should contain("id=\"language-select\"")
+    html.body.index("/assets/i18n.js").not_nil!.should be < html.body.index("/assets/app.js").not_nil!
+    catalog = server.request("GET", "/assets/i18n.js", "")
+    catalog.status_code.should eq(200)
+    catalog.headers["Content-Type"].should contain("text/javascript")
+    catalog.body.should contain("StudioI18n")
+    catalog.headers["Content-Security-Policy"].should contain("script-src 'self'")
+    server.backend.calls.should eq(0)
+  ensure
+    server.try(&.close)
+  end
+
   it "recovers its queue after claim and failure-record I/O errors without retrying inference" do
     server = StudioTestServer.new
     server.store.claim_failures = 1

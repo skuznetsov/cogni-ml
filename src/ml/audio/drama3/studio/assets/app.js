@@ -1,6 +1,12 @@
 (() => {
   "use strict";
 
+  const i18n = window.StudioI18n;
+  const t = i18n.t;
+  const segmentCountText = i18n.segmentCount;
+  const formatSeconds = i18n.formatSeconds;
+  const formatStamp = i18n.formatStamp;
+
   const byId = (id) => document.getElementById(id);
   const state = { sessions: [], voices: [], assets: [], jobs: [], capabilities: {} };
   const drafts = new Map();
@@ -24,6 +30,15 @@
   let pollTimer = null;
   let refreshPromise = null;
   let stateRequestSequence = 0;
+  let connectionState = { connected: false, message: "Connecting…" };
+  let noticeMessage = null;
+
+  class LocalizedError extends Error {
+    constructor(message, parameters) {
+      super(message);
+      this.parameters = parameters;
+    }
+  }
 
   const node = (tag, className, text) => {
     const item = document.createElement(tag);
@@ -60,7 +75,8 @@
 
   function showNotice(message, kind) {
     const target = byId("notice");
-    target.textContent = message;
+    noticeMessage = message;
+    target.textContent = typeof message === "function" ? message() : message;
     target.className = "notice" + (kind ? " is-" + kind : "");
     target.hidden = !message;
     if (noticeTimer) window.clearTimeout(noticeTimer);
@@ -70,15 +86,16 @@
   }
 
   function updateConnection(connected, message) {
+    connectionState = { connected, message };
     const status = byId("connection-status");
     const group = status.parentElement;
-    status.textContent = message;
+    status.textContent = t(message);
     group.classList.toggle("is-online", connected);
     group.classList.toggle("is-error", !connected);
   }
 
   function errorText(error) {
-    const message = error && error.message ? error.message : String(error || "Неизвестная ошибка");
+    const message = error instanceof LocalizedError ? t(error.message, error.parameters) : error && error.message ? error.message : String(error || t("Unknown error"));
     return message.length > 700 ? message.slice(0, 697) + "…" : message;
   }
 
@@ -97,8 +114,8 @@
       catch (_) { payload = { message: raw }; }
     }
     if (!response.ok) {
-      const message = payload && (payload.error || payload.message) ? payload.error || payload.message : "Запрос не выполнен (" + response.status + ")";
-      throw new Error(String(message));
+      if (payload && (payload.error || payload.message)) throw new Error(String(payload.error || payload.message));
+      throw new LocalizedError("Request failed ({status})", { status: response.status });
     }
     return payload;
   }
@@ -127,7 +144,7 @@
   }
 
   function ingestState(payload) {
-    if (!payload || typeof payload !== "object") throw new Error("Сервер вернул некорректное состояние студии.");
+    if (!payload || typeof payload !== "object") throw new LocalizedError("The server returned invalid studio state.");
     const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
     const voices = Array.isArray(payload.voices) ? payload.voices : [];
     const assets = Array.isArray(payload.assets) ? payload.assets : [];
@@ -307,7 +324,7 @@
     if (!draft) return;
     const badge = card.querySelector(".save-state");
     if (badge) {
-      badge.textContent = draft.conflict ? "Конфликт" : draft.saving ? "Сохранение…" : draft.dirty ? "Не сохранено" : "Сохранено";
+      badge.textContent = draft.conflict ? t("Conflict") : draft.saving ? t("Saving…") : draft.dirty ? t("Unsaved") : t("Saved");
       badge.classList.toggle("is-dirty", draft.dirty || draft.conflict);
     }
     const save = card.querySelector('[data-action="save-segment"]');
@@ -320,7 +337,7 @@
     const sessions = state.sessions.filter((session) => showArchivedSessions || !session.archived);
     byId("session-count").textContent = String(sessions.length);
     byId("sessions-empty").hidden = sessions.length > 0;
-    byId("archive-toggle").textContent = showArchivedSessions ? "Скрыть архив" : "Показать архив";
+    byId("archive-toggle").textContent = showArchivedSessions ? t("Hide archive") : t("Show archive");
     byId("archive-toggle").setAttribute("aria-pressed", String(showArchivedSessions));
     byId("new-session-name").value = newSessionName;
 
@@ -332,26 +349,20 @@
       const glyph = node("span", "session-glyph", String(index + 1).padStart(2, "0"));
       glyph.setAttribute("aria-hidden", "true");
       const copy = node("span", "session-copy");
-      const name = node("span", "session-name", session.name || "Без названия");
-      const metaText = session.archived ? "В архиве" : segmentCountText(sessionSegments(session).length);
+      const name = node("span", "session-name", session.name || t("Untitled"));
+      const metaText = session.archived ? t("Archived") : segmentCountText(sessionSegments(session).length);
       const meta = node("span", "session-meta", metaText);
       append(copy, name, meta);
       append(select, glyph, copy);
       const actions = node("span", "session-row-actions");
       actions.append(makeButton(session.archived ? "↶" : "⌑", "mini-action", session.archived ? "restore-session" : "archive-session", {
-        title: session.archived ? "Вернуть из архива" : "Переместить в архив",
-        ariaLabel: session.archived ? "Вернуть сессию из архива" : "Переместить сессию в архив"
+        title: session.archived ? t("Restore from archive") : t("Move to archive"),
+        ariaLabel: session.archived ? t("Restore session from archive") : t("Move session to archive")
       }));
       actions.lastElementChild.dataset.id = session.id;
       append(row, select, actions);
       list.append(row);
     });
-  }
-
-  function segmentCountText(count) {
-    if (count === 1) return "1 фрагмент";
-    if (count > 1 && count < 5) return count + " фрагмента";
-    return count + " фрагментов";
   }
 
   function renderEditor() {
@@ -367,9 +378,9 @@
     if (!session) {
       composer.hidden = true;
       empty.hidden = false;
-      const heading = node("h2", "", "Начните с новой сессии");
-      const copy = node("p", "", "Создайте рабочую сессию в левой панели, чтобы добавить текст и аудио.");
-      empty.replaceChildren(node("div", "empty-orbit"), node("p", "eyebrow", "Ваше пространство"), heading, copy);
+      const heading = node("h2", "", t("Start with a new session"));
+      const copy = node("p", "", t("Create a session in the left panel to add text and audio."));
+      empty.replaceChildren(node("div", "empty-orbit"), node("p", "eyebrow", t("Your workspace")), heading, copy);
       renderedEditorSessionId = null;
       return;
     }
@@ -377,7 +388,7 @@
     empty.hidden = true;
     composer.hidden = false;
     const titleBlock = node("div", "session-title-block");
-    const eyebrow = node("p", "eyebrow", "Текстовая сессия");
+    const eyebrow = node("p", "eyebrow", t("Text session"));
     if (renameEditing) {
       const form = node("form", "rename-form");
       form.id = "rename-session-form";
@@ -387,26 +398,26 @@
       input.maxLength = 120;
       input.required = true;
       input.value = renameDraft;
-      input.setAttribute("aria-label", "Новое название сессии");
-      const saveName = makeButton("Готово", "button button-secondary");
+      input.setAttribute("aria-label", t("New name for this session"));
+      const saveName = makeButton(t("Done"), "button button-secondary");
       saveName.type = "submit";
-      const cancelName = makeButton("Отмена", "button button-quiet", "cancel-rename");
+      const cancelName = makeButton(t("Cancel"), "button button-quiet", "cancel-rename");
       append(form, input, saveName, cancelName);
       append(titleBlock, eyebrow, form);
     } else {
       const line = node("div", "session-title-line");
-      const title = node("h1", "session-title", session.name || "Без названия");
-      if (session.archived) line.append(node("span", "archive-pill", "В архиве"));
-      const rename = makeButton("✎", "rename-button", "rename-session", { title: "Переименовать сессию", ariaLabel: "Переименовать сессию" });
+      const title = node("h1", "session-title", session.name || t("Untitled"));
+      if (session.archived) line.append(node("span", "archive-pill", t("Archived")));
+      const rename = makeButton("✎", "rename-button", "rename-session", { title: t("Rename session"), ariaLabel: t("Rename session") });
       append(line, title, rename);
-      const subtitle = node("p", "session-subtitle", segmentCountText(sessionSegments(session).length) + " · экспорт использует выбранные записи по порядку");
+      const subtitle = node("p", "session-subtitle", t("{count} · exports use selected takes in order", { count: segmentCountText(sessionSegments(session).length) }));
       append(titleBlock, eyebrow, line, subtitle);
     }
 
     const toolbarActions = node("div", "toolbar-actions");
     const format = node("select");
     format.id = "export-format";
-    format.setAttribute("aria-label", "Формат экспорта");
+    format.setAttribute("aria-label", t("Export format"));
     const formats = supportedFormats();
     formats.forEach((value) => {
       const option = node("option", "", value.toUpperCase());
@@ -415,7 +426,7 @@
     });
     exportFormat = formats.includes(exportFormat) ? exportFormat : formats[0];
     format.value = exportFormat;
-    const exportButton = makeButton("Экспорт сессии", "button button-secondary", "export-session", { disabled: Boolean(session.archived) || sessionSegments(session).length === 0 });
+    const exportButton = makeButton(t("Export session"), "button button-secondary", "export-session", { disabled: Boolean(session.archived) || sessionSegments(session).length === 0 });
     exportButton.dataset.id = session.id;
     const missing = sessionSegments(session).filter((segment) => {
       if (!segment.selected_take_id) return true;
@@ -423,7 +434,7 @@
     }).length;
     if (missing > 0 && sessionSegments(session).length > 0) {
       exportButton.disabled = true;
-      exportButton.title = "Для экспорта нужно выбрать аудио для каждого фрагмента";
+      exportButton.title = t("Select audio for every segment before exporting");
     }
     append(toolbarActions, format, exportButton);
     append(toolbar, titleBlock, toolbarActions);
@@ -435,7 +446,7 @@
     const submit = byId("new-segment-form").querySelector('button[type="submit"]');
     submit.disabled = Boolean(session.archived);
     if (missing > 0 && sessionSegments(session).length > 0) {
-      const hint = node("p", "field-hint export-hint", "Экспорт включает все фрагменты по порядку. Сначала создайте или выберите запись для каждого (не готово: " + missing + ").");
+      const hint = node("p", "field-hint export-hint", t("Exports include all segments in order. Generate or select a take for each first ({count} not ready).", { count: missing }));
       const footer = document.querySelector(".composer-footer");
       if (footer) footer.append(hint);
     }
@@ -443,7 +454,7 @@
     sessionSegments(session).forEach((segment, index) => segmentList.append(renderSegmentCard(session, segment, index)));
     if (sessionSegments(session).length === 0) {
       const blank = node("div", "editor-empty");
-      blank.append(node("div", "empty-orbit"), node("p", "eyebrow", "Начало сессии"), node("h2", "", "Здесь будет ваша история"), node("p", "", "Добавьте текст выше — затем выберите голос и создайте первый аудиофрагмент."));
+      blank.append(node("div", "empty-orbit"), node("p", "eyebrow", t("Session start")), node("h2", "", t("Your story starts here")), node("p", "", t("Add text above, then choose a voice and generate your first audio segment.")));
       segmentList.append(blank);
     }
     if (renameEditing) window.setTimeout(() => byId("rename-session-input") && byId("rename-session-input").focus(), 0);
@@ -460,22 +471,22 @@
     const head = node("div", "segment-head");
     const titleGroup = node("div", "segment-title");
     const number = node("span", "segment-index", String(index + 1).padStart(2, "0"));
-    const heading = node("h3", "", "Фрагмент " + String(index + 1).padStart(2, "0"));
+    const heading = node("h3", "", t("Segment {number}", { number: String(index + 1).padStart(2, "0") }));
     const pending = state.jobs.find((job) => sameId(job.segment_id, segment.id) && (job.status === "queued" || job.status === "running"));
-    const pendingLabel = pending ? node("span", "success-pill", pending.status === "queued" ? "В очереди" : "Создание…") : null;
+    const pendingLabel = pending ? node("span", "success-pill", pending.status === "queued" ? t("Queued") : t("Generating…")) : null;
     append(titleGroup, number, heading, pendingLabel);
     const headActions = node("div", "segment-actions");
-    const badge = node("span", "save-state" + (draft.dirty || draft.conflict ? " is-dirty" : ""), draft.conflict ? "Конфликт" : draft.saving ? "Сохранение…" : draft.dirty ? "Не сохранено" : "Сохранено");
+    const badge = node("span", "save-state" + (draft.dirty || draft.conflict ? " is-dirty" : ""), draft.conflict ? t("Conflict") : draft.saving ? t("Saving…") : draft.dirty ? t("Unsaved") : t("Saved"));
     badge.setAttribute("aria-live", "polite");
-    const save = makeButton("Сохранить", "button button-quiet", "save-segment", { disabled: !draft.dirty || draft.saving || draft.conflict || Boolean(session.archived) });
+    const save = makeButton(t("Save"), "button button-quiet", "save-segment", { disabled: !draft.dirty || draft.saving || draft.conflict || Boolean(session.archived) });
     save.dataset.id = segment.id;
-    const remove = makeButton("Удалить", "button button-quiet", "delete-segment", { disabled: Boolean(session.archived), title: "Удалить фрагмент" });
+    const remove = makeButton(t("Delete"), "button button-quiet", "delete-segment", { disabled: Boolean(session.archived), title: t("Delete segment") });
     remove.dataset.id = segment.id;
     append(headActions, badge, save, remove);
     append(head, titleGroup, headActions);
 
     const body = node("div", "segment-body");
-    const textLabel = node("label", "segment-label", "Текст");
+    const textLabel = node("label", "segment-label", t("Text"));
     const textArea = node("textarea", "segment-text");
     textArea.dataset.segmentId = segment.id;
     textArea.dataset.field = "text";
@@ -489,31 +500,31 @@
 
     const controls = node("div", "segment-controls");
     const voiceWrap = node("div", "voice-select-wrap");
-    const voiceLabel = node("label", "field-label", "Голос-референс");
+    const voiceLabel = node("label", "field-label", t("Reference voice"));
     voiceLabel.htmlFor = "segment-voice-" + String(segment.id);
     const voiceSelect = node("select");
     voiceSelect.id = voiceLabel.htmlFor;
     voiceSelect.dataset.segmentId = segment.id;
     voiceSelect.dataset.field = "voice_id";
     voiceSelect.disabled = Boolean(session.archived);
-    const noVoice = node("option", "", "Без референса");
+    const noVoice = node("option", "", t("No reference"));
     noVoice.value = "";
     voiceSelect.append(noVoice);
     state.voices.filter((voice) => !voice.archived || sameId(voice.id, draft.voice_id)).forEach((voice) => {
-      const option = node("option", "", (voice.archived ? "[архив] " : "") + (voice.name || "Голос"));
+      const option = node("option", "", voice.archived ? t("[archived] {name}", { name: voice.name || t("Voice") }) : (voice.name || t("Voice")));
       option.value = voice.id;
       option.selected = sameId(voice.id, draft.voice_id);
       voiceSelect.append(option);
     });
     if (draft.voice_id && !state.voices.some((voice) => sameId(voice.id, draft.voice_id))) {
-      const unavailable = node("option", "", "Сохранённый голос недоступен");
+      const unavailable = node("option", "", t("Saved voice unavailable"));
       unavailable.value = draft.voice_id;
       unavailable.selected = true;
       voiceSelect.append(unavailable);
     }
     voiceSelect.value = draft.voice_id || "";
     append(voiceWrap, voiceLabel, voiceSelect);
-    const generate = makeButton("Создать аудио", "button button-primary", "generate-segment", { disabled: Boolean(session.archived) || Boolean(pending) });
+    const generate = makeButton(t("Generate audio"), "button button-primary", "generate-segment", { disabled: Boolean(session.archived) || Boolean(pending) });
     generate.dataset.id = segment.id;
     append(controls, voiceWrap, generate);
     body.append(controls);
@@ -521,11 +532,11 @@
     const settings = node("details", "settings-disclosure");
     settings.open = settingsDisclosure.get(String(segment.id)) === true;
     settings.addEventListener("toggle", () => settingsDisclosure.set(String(segment.id), settings.open));
-    const settingsSummary = node("summary", "", "Параметры генерации");
+    const settingsSummary = node("summary", "", t("Generation settings"));
     const grid = node("div", "settings-grid");
     const settingsSpec = [
       ["seed", "Seed", "number", "1"],
-      ["max_frames", "Лимит кадров", "number", "1"],
+      ["max_frames", t("Frame limit"), "number", "1"],
       ["temperature", "Temperature", "number", "0.05"],
       ["top_k", "Top K", "number", "1"],
       ["top_p", "Top P", "number", "0.05"]
@@ -546,8 +557,8 @@
     body.append(settings);
 
     if (draft.conflict) {
-      const conflict = node("div", "notice is-error", "Сегмент изменился на сервере после ваших правок. Перезагрузите версию или скопируйте текст перед продолжением.");
-      const reload = makeButton("Загрузить версию сервера", "button button-quiet", "reload-segment");
+      const conflict = node("div", "notice is-error", t("This segment changed on the server after your edits. Reload it or copy your text before continuing."));
+      const reload = makeButton(t("Load server version"), "button button-quiet", "reload-segment");
       reload.dataset.id = segment.id;
       append(body, conflict, reload);
     }
@@ -558,54 +569,54 @@
 
   function renderSelectedTake(session, segment) {
     const wrapper = node("section", "selected-take");
-    wrapper.setAttribute("aria-label", "Выбранная аудиозапись");
+    wrapper.setAttribute("aria-label", t("Selected audio take"));
     const take = state.assets.find((asset) => sameId(asset.id, segment.selected_take_id));
     if (segment.selected_take_id && !take) {
-      wrapper.append(node("div", "history-empty", "Выбранная аудиозапись недоступна в библиотеке."));
+      wrapper.append(node("div", "history-empty", t("The selected take is unavailable in the library.")));
     } else if (!take) {
-      wrapper.append(node("div", "history-empty", "Для этого фрагмента пока нет аудио. Создайте первую запись после сохранения текста."));
+      wrapper.append(node("div", "history-empty", t("No audio for this segment yet. Save the text, then generate your first take.")));
     } else {
       const heading = node("div", "take-heading");
       const copy = node("div", "");
-      const title = node("strong", "", take.filename || "Выбранная запись");
-      const meta = node("small", "", "Версия " + (take.revision === undefined ? "—" : take.revision) + " · " + formatSeconds(take.seconds) + stampSuffix(take.created_at));
+      const title = node("strong", "", take.filename || t("Selected take"));
+      const meta = node("small", "", t("Version {revision}", { revision: take.revision === undefined ? "—" : take.revision }) + " · " + formatSeconds(take.seconds) + stampSuffix(take.created_at));
       append(copy, title, meta);
       const tags = node("div", "take-tags");
-      tags.append(node("span", "take-tag", "Выбрано"));
-      if (take.stopped_on_eos === false) tags.append(node("span", "take-tag is-warning", "Возможна обрезка"));
+      tags.append(node("span", "take-tag", t("Selected")));
+      if (take.stopped_on_eos === false) tags.append(node("span", "take-tag is-warning", t("Possibly truncated")));
       append(heading, copy, tags);
       const player = node("audio");
       player.controls = true;
       player.preload = "none";
       player.src = "/api/audio/" + idPart(take.id);
-      player.setAttribute("aria-label", "Прослушать выбранную запись");
+      player.setAttribute("aria-label", t("Play selected take"));
       append(wrapper, heading, player);
       if (take.stopped_on_eos === false) {
-        wrapper.append(node("p", "field-hint", "Модель не сообщила о завершении фрагмента: проверьте запись перед экспортом."));
+        wrapper.append(node("p", "field-hint", t("The model did not signal the end of this segment. Check the take before exporting.")));
       }
     }
 
     const history = node("details", "take-history");
     history.open = historyDisclosure.get(String(segment.id)) === true;
     history.addEventListener("toggle", () => historyDisclosure.set(String(segment.id), history.open));
-    history.append(node("summary", "", "История записей"));
+    history.append(node("summary", "", t("Take history")));
     const list = node("div", "history-list");
     const takes = state.assets.filter((asset) => asset.kind === "take" && sameId(asset.session_id, session.id) && sameId(asset.segment_id, segment.id)).sort((a, b) => assetTime(b) - assetTime(a));
     if (takes.length === 0) {
-      list.append(node("div", "history-empty", "Записей пока нет."));
+      list.append(node("div", "history-empty", t("No takes yet.")));
     } else {
       takes.forEach((asset) => {
         const row = node("div", "history-item");
         const copy = node("div", "history-copy");
-        const title = node("strong", "", "Версия " + (asset.revision === undefined ? "—" : asset.revision) + (sameId(asset.id, segment.selected_take_id) ? " · выбрана" : ""));
-        const meta = node("span", "", formatSeconds(asset.seconds) + stampSuffix(asset.created_at) + (asset.stopped_on_eos === false ? " · возможна обрезка" : ""));
+        const title = node("strong", "", t(sameId(asset.id, segment.selected_take_id) ? "Version {revision} · selected" : "Version {revision}", { revision: asset.revision === undefined ? "—" : asset.revision }));
+        const meta = node("span", "", formatSeconds(asset.seconds) + stampSuffix(asset.created_at) + (asset.stopped_on_eos === false ? " · " + t("possibly truncated") : ""));
         append(copy, title, meta);
         const actions = node("div", "history-actions");
-        const listen = node("a", "", "Слушать");
+        const listen = node("a", "", t("Listen"));
         listen.href = "/api/audio/" + idPart(asset.id);
-        listen.textContent = "Слушать";
-        listen.setAttribute("aria-label", "Слушать версию " + (asset.revision === undefined ? "" : asset.revision));
-        const select = makeButton(sameId(asset.id, segment.selected_take_id) ? "Выбрано" : "Выбрать", "button button-quiet", "select-take", { disabled: sameId(asset.id, segment.selected_take_id) || Boolean(session.archived) });
+        listen.textContent = t("Listen");
+        listen.setAttribute("aria-label", t("Listen to version {revision}", { revision: asset.revision === undefined ? "" : asset.revision }));
+        const select = makeButton(sameId(asset.id, segment.selected_take_id) ? t("Selected") : t("Select"), "button button-quiet", "select-take", { disabled: sameId(asset.id, segment.selected_take_id) || Boolean(session.archived) });
         select.dataset.id = segment.id;
         select.dataset.assetId = asset.id;
         append(actions, listen, select);
@@ -618,26 +629,9 @@
     return wrapper;
   }
 
-  function formatSeconds(value) {
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0) return "длительность неизвестна";
-    if (seconds < 10) return seconds.toFixed(1).replace(".", ",") + " сек";
-    const whole = Math.floor(seconds);
-    const minutes = Math.floor(whole / 60);
-    const remainder = whole % 60;
-    return minutes ? minutes + ":" + String(remainder).padStart(2, "0") : whole + " сек";
-  }
-
   function stampSuffix(value) {
     const stamp = formatStamp(value);
     return stamp ? " · " + stamp : "";
-  }
-
-  function formatStamp(value) {
-    if (!value) return "";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "";
-    return new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
   }
 
   function assetTime(asset) {
@@ -657,13 +651,13 @@
       const top = node("div", "job-topline");
       const session = state.sessions.find((item) => sameId(item.id, job.session_id));
       const segment = session && sessionSegments(session).find((item) => sameId(item.id, job.segment_id));
-      const titleText = job.kind === "export" ? "Экспорт" : job.kind === "generate" ? "Генерация аудио" : String(job.kind || "Задача");
-      const title = node("span", "job-title", titleText + (segment ? " · Фрагмент " + (sessionSegments(session).indexOf(segment) + 1) : ""));
+      const titleText = job.kind === "export" ? t("Export") : job.kind === "generate" ? t("Audio generation") : String(job.kind || t("Job"));
+      const title = node("span", "job-title", segment ? t("{title} · Segment {number}", { title: titleText, number: sessionSegments(session).indexOf(segment) + 1 }) : titleText);
       const status = node("span", "job-state", jobStatus(job.status));
       append(top, title, status);
       const detail = node("div", "job-detail");
-      const context = session ? session.name : "Локальная очередь";
-      const detailText = job.status === "queued" ? "Ожидает выполнения" : job.status === "running" ? jobDetailText(job.detail) || "Выполняется" : job.status === "failed" ? "Задача завершилась с ошибкой" : "Готово";
+      const context = session ? session.name : t("Local queue");
+      const detailText = job.status === "queued" ? t("Waiting to run") : job.status === "running" ? jobDetailText(job.detail) || t("Running") : job.status === "failed" ? t("Job failed") : t("Done");
       append(detail, node("span", "", context), node("span", "", detailText));
       append(card, top, detail);
       if (job.status === "running" || job.status === "queued") {
@@ -690,18 +684,18 @@
     if (!detail) return "";
     const counter = detail.match(/\b(prefill|frame)\s+(\d+)\s*\/\s*(\d+)\b/i);
     if (counter) {
-      const phase = counter[1].toLowerCase() === "prefill" ? "Подготовка" : "Кадр";
+      const phase = counter[1].toLowerCase() === "prefill" ? t("Prefill") : t("Frame");
       return phase + " · " + counter[2] + " / " + counter[3];
     }
     return detail;
   }
 
   function jobStatus(status) {
-    if (status === "queued") return "В очереди";
-    if (status === "running") return "В работе";
-    if (status === "complete") return "Готово";
-    if (status === "failed") return "Ошибка";
-    return String(status || "Статус неизвестен");
+    if (status === "queued") return t("Queued");
+    if (status === "running") return t("In progress");
+    if (status === "complete") return t("Done");
+    if (status === "failed") return t("Error");
+    return String(status || t("Unknown status"));
   }
 
   function renderLibrary() {
@@ -711,7 +705,7 @@
     assetList.replaceChildren();
     byId("voice-name").value = voiceForm.name;
     byId("voice-transcript").value = voiceForm.transcript;
-    byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : "Выберите аудиофайл";
+    byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : t("Choose an audio file");
     byId("asset-filter").value = assetFilter;
     byId("voices-panel").hidden = libraryTab !== "voices";
     byId("audio-panel").hidden = libraryTab !== "audio";
@@ -728,10 +722,10 @@
       const top = node("div", "voice-card-top");
       const info = node("div", "voice-info");
       append(info,
-        node("strong", "", voice.name || "Голос без названия"),
+        node("strong", "", voice.name || t("Unnamed voice")),
         node("small", "", formatSeconds(voice.seconds) + (voice.filename ? " · " + voice.filename : ""))
       );
-      const remove = makeButton("⌫", "mini-action", "delete-voice", { title: "Переместить голос в архив", ariaLabel: "Переместить голос в архив" });
+      const remove = makeButton("⌫", "mini-action", "delete-voice", { title: t("Move voice to archive"), ariaLabel: t("Move voice to archive") });
       remove.dataset.id = voice.id;
       append(top, info, remove);
       card.append(top);
@@ -740,7 +734,7 @@
       player.controls = true;
       player.preload = "none";
       player.src = "/api/voice-audio/" + idPart(voice.id);
-      player.setAttribute("aria-label", "Прослушать референс " + (voice.name || ""));
+      player.setAttribute("aria-label", t("Play reference {name}", { name: voice.name || "" }));
       card.append(player);
       voiceList.append(card);
     });
@@ -753,8 +747,8 @@
     const formats = supportedFormats().map((value) => value.toUpperCase()).join(" · ");
     const maxReference = Number(state.capabilities.max_reference_seconds);
     const limit = Number.isFinite(maxReference) && maxReference > 0 ? maxReference : 10;
-    const ffmpegNote = state.capabilities.ffmpeg === false ? " Конвертация экспорта недоступна." : "";
-    byId("capability-note").replaceChildren(node("strong", "", "Форматы: " + (formats || "WAV")), document.createTextNode(" · референс до " + limit + " сек." + ffmpegNote));
+    const ffmpegNote = state.capabilities.ffmpeg === false ? t(" Export conversion is unavailable.") : "";
+    byId("capability-note").replaceChildren(node("strong", "", t("Formats: {formats}", { formats: formats || "WAV" })), document.createTextNode(t(" · reference up to {seconds} sec.", { seconds: limit }) + ffmpegNote));
   }
 
   function renderAssetCard(asset) {
@@ -762,10 +756,10 @@
     const top = node("div", "asset-card-top");
     const info = node("div", "asset-info");
     const session = state.sessions.find((item) => sameId(item.id, asset.session_id));
-    const label = asset.kind === "export" ? "Экспорт" : "Запись";
+    const label = asset.kind === "export" ? t("Export") : t("Take");
     const metaParts = [String(asset.format || "audio").toUpperCase(), formatSeconds(asset.seconds)];
-    if (asset.revision !== undefined && asset.revision !== null) metaParts.push("версия " + asset.revision);
-    if (session && assetFilter === "all") metaParts.push(session.name || "Без названия");
+    if (asset.revision !== undefined && asset.revision !== null) metaParts.push(t("version {revision}", { revision: asset.revision }));
+    if (session && assetFilter === "all") metaParts.push(session.name || t("Untitled"));
     if (asset.created_at) metaParts.push(formatStamp(asset.created_at));
     append(info, node("strong", "", asset.filename || label), node("small", "", metaParts.join(" · ")));
     const kind = node("span", "asset-kind" + (asset.kind === "export" ? " is-export" : ""), label);
@@ -774,15 +768,15 @@
     player.controls = true;
     player.preload = "none";
     player.src = "/api/audio/" + idPart(asset.id);
-    player.setAttribute("aria-label", "Прослушать " + (asset.filename || label));
+    player.setAttribute("aria-label", t("Play {name}", { name: asset.filename || label }));
     const actions = node("div", "asset-actions");
-    const download = node("a", "", "Скачать");
+    const download = node("a", "", t("Download"));
     download.href = "/api/audio/" + idPart(asset.id) + "?download=1";
     download.setAttribute("download", "");
-    const remove = makeButton("Удалить", "", "delete-asset", { title: "Удалить аудиофайл" });
+    const remove = makeButton(t("Delete"), "", "delete-asset", { title: t("Delete audio file") });
     remove.dataset.id = asset.id;
     append(actions, download, remove);
-    if (asset.stopped_on_eos === false) card.append(node("p", "field-hint", "Возможна обрезка: запись остановлена на лимите."));
+    if (asset.stopped_on_eos === false) card.append(node("p", "field-hint", t("Possibly truncated: recording stopped at the frame limit.")));
     append(card, top, player, actions);
     return card;
   }
@@ -814,9 +808,9 @@
       top_k: Number(draft.top_k),
       top_p: Number(draft.top_p)
     };
-    if (!values.text.trim()) throw new Error("Добавьте текст перед сохранением.");
-    if (![values.seed, values.max_frames, values.temperature, values.top_k, values.top_p].every(Number.isFinite)) throw new Error("Проверьте числовые параметры генерации.");
-    if (!Number.isInteger(values.seed) || !Number.isInteger(values.max_frames) || !Number.isInteger(values.top_k)) throw new Error("Seed, лимит кадров и Top K должны быть целыми числами.");
+    if (!values.text.trim()) throw new LocalizedError("Add text before saving.");
+    if (![values.seed, values.max_frames, values.temperature, values.top_k, values.top_p].every(Number.isFinite)) throw new LocalizedError("Check the numeric generation settings.");
+    if (!Number.isInteger(values.seed) || !Number.isInteger(values.max_frames) || !Number.isInteger(values.top_k)) throw new LocalizedError("Seed, frame limit and Top K must be integers.");
     return values;
   }
 
@@ -826,8 +820,8 @@
     const session = selectedSession();
     if (!draft || !session) return false;
     if (!draft.dirty) return true;
-    if (session.archived) throw new Error("Архивную сессию нельзя изменять.");
-    if (draft.conflict) throw new Error("Сначала загрузите актуальную версию сегмента.");
+    if (session.archived) throw new LocalizedError("Archived sessions cannot be edited.");
+    if (draft.conflict) throw new LocalizedError("Load the current segment version first.");
     if (draft.saving && draft.savePromise) return draft.savePromise;
 
     const payload = segmentPayload(draft);
@@ -839,7 +833,7 @@
       try {
         await request("/api/sessions/" + idPart(session.id) + "/segments/" + idPart(segmentId), jsonRequest("PATCH", Object.assign({ revision: savedRevision }, payload)));
         const refreshed = await refreshState(false, true);
-        if (!refreshed) throw new Error("Изменения отправлены, но состояние не обновилось. Проверьте соединение и обновите студию.");
+        if (!refreshed) throw new LocalizedError("Changes were sent, but studio state could not be refreshed. Check the connection and refresh the studio.");
         const live = sessionSegments(selectedSession()).find((segment) => sameId(segment.id, segmentId));
         if (live) {
           draft.baseRevision = live.revision;
@@ -848,7 +842,7 @@
           } else {
             draft.dirty = true;
             draft.conflict = false;
-            window.setTimeout(() => saveDraft(segmentId).catch((error) => showNotice(errorText(error), "error")), 0);
+            window.setTimeout(() => saveDraft(segmentId).catch((error) => showNotice(() => errorText(error), "error")), 0);
           }
         } else if (draft.version === sentVersion) {
           draft.dirty = false;
@@ -888,12 +882,12 @@
         const payload = await request("/api/state", { method: "GET" });
         if (requestSequence !== stateRequestSequence) return false;
         ingestState(payload);
-        updateConnection(true, activeJobs().length ? "Очередь работает" : "Локально подключено");
+        updateConnection(true, activeJobs().length ? "Queue running" : "Connected locally");
         return true;
       } catch (error) {
         if (requestSequence === stateRequestSequence) {
-          updateConnection(false, "Нет соединения");
-          showNotice("Не удалось обновить состояние студии: " + errorText(error), "error");
+          updateConnection(false, "Disconnected");
+          showNotice(() => t("Could not refresh studio state: {error}", { error: errorText(error) }), "error");
         }
         return false;
       } finally {
@@ -949,14 +943,14 @@
     if (locks.has(key)) return;
     locks.add(key);
     try { await operation(); }
-    catch (error) { showNotice(errorText(error), "error"); }
+    catch (error) { showNotice(() => errorText(error), "error"); }
     finally { locks.delete(key); }
   }
 
   async function createSession(event) {
     event.preventDefault();
     const name = newSessionName.trim();
-    if (!name) { showNotice("Введите название сессии.", "error"); return; }
+    if (!name) { showNotice(() => t("Enter a session name."), "error"); return; }
     await withLock("create-session", async () => {
       const previous = new Set(state.sessions.map((session) => String(session.id)));
       const result = await request("/api/sessions", jsonRequest("POST", { name }));
@@ -968,17 +962,17 @@
       if (created) activeSessionId = created.id;
       activeSegmentId = null;
       renderState(true);
-      showNotice("Сессия создана.", "success");
+      showNotice(() => t("Session created."), "success");
     });
   }
 
   async function createSegment(event) {
     event.preventDefault();
     const session = selectedSession();
-    if (!session) { showNotice("Сначала создайте сессию.", "error"); return; }
+    if (!session) { showNotice(() => t("Create a session first."), "error"); return; }
     const text = currentComposerText();
-    if (!text.trim()) { showNotice("Введите текст фрагмента.", "error"); return; }
-    if (session.archived) { showNotice("Архивную сессию нельзя изменять.", "error"); return; }
+    if (!text.trim()) { showNotice(() => t("Enter segment text."), "error"); return; }
+    if (session.archived) { showNotice(() => t("Archived sessions cannot be edited."), "error"); return; }
     await withLock("create-segment", async () => {
       const before = new Set(sessionSegments(session).map((segment) => String(segment.id)));
       const result = await request("/api/sessions/" + idPart(session.id) + "/segments", jsonRequest("POST", {
@@ -997,7 +991,7 @@
       const found = created && created.id !== undefined ? sessionSegments(latest).find((segment) => sameId(segment.id, created.id)) : sessionSegments(latest).find((segment) => !before.has(String(segment.id)));
       activeSegmentId = found ? found.id : null;
       renderState(true);
-      showNotice("Фрагмент добавлен.", "success");
+      showNotice(() => t("Segment added."), "success");
     });
   }
 
@@ -1006,12 +1000,12 @@
     const session = selectedSession();
     if (!session) return;
     const name = renameDraft.trim();
-    if (!name) { showNotice("Название не может быть пустым.", "error"); return; }
+    if (!name) { showNotice(() => t("The name cannot be empty."), "error"); return; }
     await withLock("rename-session", async () => {
       await request("/api/sessions/" + idPart(session.id), jsonRequest("PATCH", { name }));
       renameEditing = false;
       await refreshState(false, true);
-      showNotice("Название обновлено.", "success");
+      showNotice(() => t("Name updated."), "success");
     });
   }
 
@@ -1025,7 +1019,7 @@
         const next = state.sessions.find((item) => !item.archived);
         if (next) activateSession(next.id);
       }
-      showNotice(archived ? "Сессия перемещена в архив." : "Сессия возвращена из архива.", "success");
+      showNotice(() => archived ? t("Session moved to archive.") : t("Session restored from archive."), "success");
     });
   }
 
@@ -1033,13 +1027,13 @@
     const session = selectedSession();
     const segment = sessionSegments(session).find((item) => sameId(item.id, id));
     if (!session || !segment) return;
-    if (!window.confirm("Удалить этот текстовый фрагмент? Связанные записи могут остаться в аудиобиблиотеке.")) return;
+    if (!window.confirm(t("Delete this text segment? Its takes may remain in the audio library."))) return;
     await withLock("segment-" + id, async () => {
       const draft = drafts.get(String(id));
       await request("/api/sessions/" + idPart(session.id) + "/segments/" + idPart(id) + "?revision=" + encodeURIComponent(String(draft ? draft.baseRevision : segment.revision)), { method: "DELETE" });
       drafts.delete(String(id));
       await refreshState(false, true);
-      showNotice("Фрагмент удалён.", "success");
+      showNotice(() => t("Segment deleted."), "success");
     });
   }
 
@@ -1049,7 +1043,7 @@
     if (!live) return;
     drafts.set(String(id), draftFromSegment(live));
     renderState(true);
-    showNotice("Загружена актуальная версия сегмента.", "success");
+    showNotice(() => t("Loaded the current segment version."), "success");
   }
 
   async function generateSegment(id) {
@@ -1058,10 +1052,10 @@
     if (!session || !draft) return;
     await withLock("generate-" + id, async () => {
       if (draft.dirty) await saveDraft(id);
-      if (draft.conflict) throw new Error("Разрешите конфликт версии перед генерацией.");
+      if (draft.conflict) throw new LocalizedError("Resolve the version conflict before generating.");
       await request("/api/sessions/" + idPart(session.id) + "/segments/" + idPart(id) + "/generate", jsonRequest("POST", {}));
       await refreshState(false, true);
-      showNotice("Задача добавлена в очередь. Предыдущая запись останется доступна.", "success");
+      showNotice(() => t("Job added to the queue. The previous take remains available."), "success");
     });
   }
 
@@ -1071,7 +1065,7 @@
     await withLock("take-" + segmentId, async () => {
       await request("/api/sessions/" + idPart(session.id) + "/segments/" + idPart(segmentId) + "/select", jsonRequest("POST", { asset_id: assetId }));
       await refreshState(false, true);
-      showNotice("Выбрана другая запись.", "success");
+      showNotice(() => t("Selected a different take."), "success");
     });
   }
 
@@ -1083,17 +1077,17 @@
       await request("/api/sessions/" + idPart(id) + "/export", jsonRequest("POST", { format }));
       await refreshState(false, true);
       renderTab("audio");
-      showNotice("Экспорт добавлен в очередь. Результат появится в библиотеке аудио.", "success");
+      showNotice(() => t("Export added to the queue. The result will appear in the audio library."), "success");
     });
   }
 
   async function uploadVoice(event) {
     event.preventDefault();
     const file = voiceForm.file;
-    if (!file) { showNotice("Выберите аудиофайл для референса.", "error"); return; }
-    if (file.size > 20 * 1024 * 1024) { showNotice("Файл превышает ограничение 20 МБ.", "error"); return; }
+    if (!file) { showNotice(() => t("Choose an audio file for the reference."), "error"); return; }
+    if (file.size > 20 * 1024 * 1024) { showNotice(() => t("The file exceeds the 20 MB limit."), "error"); return; }
     const name = voiceForm.name.trim();
-    if (!name) { showNotice("Укажите название голоса.", "error"); return; }
+    if (!name) { showNotice(() => t("Enter a voice name."), "error"); return; }
     const query = new URLSearchParams({ name, transcript: voiceForm.transcript });
     await withLock("upload-voice", async () => {
       await request("/api/voices?" + query.toString(), {
@@ -1105,49 +1099,49 @@
       byId("voice-upload-form").reset();
       await refreshState(false, true);
       renderState(true);
-      showNotice("Голос добавлен в библиотеку.", "success");
+      showNotice(() => t("Voice added to the library."), "success");
     });
   }
 
   async function archiveVoice(id) {
     const voice = state.voices.find((item) => sameId(item.id, id));
     if (!voice) return;
-    if (!window.confirm("Переместить голос «" + (voice.name || "Без названия") + "» в архив?")) return;
+    if (!window.confirm(t("Move voice “{name}” to archive?", { name: voice.name || t("Untitled") }))) return;
     await withLock("voice-" + id, async () => {
       await request("/api/voices/" + idPart(id), { method: "DELETE" });
       await refreshState(false, true);
-      showNotice("Голос перемещён в архив.", "success");
+      showNotice(() => t("Voice moved to archive."), "success");
     });
   }
 
   async function deleteAsset(id) {
     const asset = state.assets.find((item) => sameId(item.id, id));
     if (!asset) return;
-    if (!window.confirm("Удалить аудиофайл «" + (asset.filename || "без названия") + "»?")) return;
+    if (!window.confirm(t("Delete audio file “{name}”?", { name: asset.filename || t("untitled") }))) return;
     await withLock("asset-" + id, async () => {
       await request("/api/assets/" + idPart(id), { method: "DELETE" });
       await refreshState(false, true);
-      showNotice("Аудиофайл удалён.", "success");
+      showNotice(() => t("Audio file deleted."), "success");
     });
   }
 
   function handleAction(action, target) {
     const id = target.dataset.id;
     if (action === "select-session") activateSession(id);
-    else if (action === "archive-session") archiveSession(id, true).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "restore-session") archiveSession(id, false).catch((error) => showNotice(errorText(error), "error"));
+    else if (action === "archive-session") archiveSession(id, true).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "restore-session") archiveSession(id, false).catch((error) => showNotice(() => errorText(error), "error"));
     else if (action === "rename-session") {
       const session = selectedSession();
       if (session && !session.archived) { renameEditing = true; renameDraft = session.name || ""; renderState(true); }
     } else if (action === "cancel-rename") { renameEditing = false; renderState(true); }
-    else if (action === "save-segment") withLock("save-" + id, async () => { await saveDraft(id); showNotice("Изменения сохранены.", "success"); }).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "delete-segment") deleteSegment(id).catch((error) => showNotice(errorText(error), "error"));
+    else if (action === "save-segment") withLock("save-" + id, async () => { await saveDraft(id); showNotice(() => t("Changes saved."), "success"); }).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "delete-segment") deleteSegment(id).catch((error) => showNotice(() => errorText(error), "error"));
     else if (action === "reload-segment") reloadSegment(id);
-    else if (action === "generate-segment") generateSegment(id).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "select-take") selectTake(id, target.dataset.assetId).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "export-session") exportSession(id).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "delete-voice") archiveVoice(id).catch((error) => showNotice(errorText(error), "error"));
-    else if (action === "delete-asset") deleteAsset(id).catch((error) => showNotice(errorText(error), "error"));
+    else if (action === "generate-segment") generateSegment(id).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "select-take") selectTake(id, target.dataset.assetId).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "export-session") exportSession(id).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "delete-voice") archiveVoice(id).catch((error) => showNotice(() => errorText(error), "error"));
+    else if (action === "delete-asset") deleteAsset(id).catch((error) => showNotice(() => errorText(error), "error"));
   }
 
   document.addEventListener("click", (event) => {
@@ -1185,9 +1179,15 @@
 
   document.addEventListener("change", (event) => {
     const target = event.target;
-    if (target.id === "voice-file") {
+    if (target.id === "language-select") {
+      i18n.setLanguage(target.value);
+      i18n.apply();
+      renderState(true);
+      updateConnection(connectionState.connected, connectionState.message);
+      if (typeof noticeMessage === "function") byId("notice").textContent = noticeMessage();
+    } else if (target.id === "voice-file") {
       voiceForm.file = target.files && target.files[0] ? target.files[0] : null;
-      byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : "Выберите аудиофайл";
+      byId("voice-file-label").textContent = voiceForm.file ? voiceForm.file.name : t("Choose an audio file");
       recordRenderKeys();
     } else if (target.id === "asset-filter") {
       assetFilter = target.value;
@@ -1220,14 +1220,16 @@
     recordRenderKeys();
   });
   byId("session-toolbar").addEventListener("submit", (event) => {
-    if (event.target.id === "rename-session-form") renameSession(event).catch((error) => showNotice(errorText(error), "error"));
+    if (event.target.id === "rename-session-form") renameSession(event).catch((error) => showNotice(() => errorText(error), "error"));
   });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshState(false, true); });
   document.addEventListener("error", (event) => {
-    if (event.target instanceof HTMLMediaElement) showNotice("Не удалось открыть аудиофайл. Обновите библиотеку и попробуйте ещё раз.", "error");
+    if (event.target instanceof HTMLMediaElement) showNotice(() => t("Could not open the audio file. Refresh the library and try again."), "error");
   }, true);
 
+  i18n.apply();
+  byId("language-select").value = i18n.getLanguage();
   renderState(true);
-  updateConnection(false, "Подключение…");
+  updateConnection(false, "Connecting…");
   refreshState(false, true);
 })();

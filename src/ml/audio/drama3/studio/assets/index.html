@@ -1,132 +1,138 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#151918">
-    <title>DRAMA · аудиостудия</title>
+    <title>DRAMA · Audio studio</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23151918%22/%3E%3Ctext x=%2232%22 y=%2246%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2244%22 font-weight=%22700%22 fill=%22%238bd8c2%22%3ED%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="/assets/style.css">
+    <script src="/assets/i18n.js" defer></script>
     <script src="/assets/app.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <a class="brand" href="/" aria-label="DRAMA, главная">
+        <a class="brand" href="/" aria-label="DRAMA, home" data-i18n-aria-label="DRAMA, home">
           <span class="brand-mark" aria-hidden="true">D</span>
-          <span class="brand-copy"><strong>DRAMA</strong><small>аудиостудия</small></span>
+          <span class="brand-copy"><strong>DRAMA</strong><small data-i18n="audio studio">audio studio</small></span>
         </a>
         <div class="topbar-status">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="connection-status" role="status">Подключение…</span>
+          <span id="connection-status" role="status" data-i18n="Connecting…">Connecting…</span>
         </div>
-        <button class="icon-button refresh-button" id="refresh-button" type="button" aria-label="Обновить библиотеку" title="Обновить библиотеку">
+        <label class="sr-only" for="language-select" data-i18n="Interface language">Interface language</label>
+        <select class="language-select" id="language-select" name="language" title="Interface language" data-i18n-title="Interface language">
+          <option value="en" lang="en">English</option>
+          <option value="ru" lang="ru">Русский</option>
+        </select>
+        <button class="icon-button refresh-button" id="refresh-button" type="button" aria-label="Refresh library" data-i18n-aria-label="Refresh library" title="Refresh library" data-i18n-title="Refresh library">
           <span aria-hidden="true">↻</span>
         </button>
       </header>
 
       <main class="workspace-grid">
-        <aside class="panel sessions-panel" aria-label="Сессии">
+        <aside class="panel sessions-panel" aria-label="Sessions" data-i18n-aria-label="Sessions">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Рабочее пространство</p>
-              <h2>Сессии</h2>
+              <p class="eyebrow" data-i18n="Workspace">Workspace</p>
+              <h2 data-i18n="Sessions">Sessions</h2>
             </div>
             <span class="count-badge" id="session-count">0</span>
           </div>
 
           <form class="new-session-form" id="new-session-form">
-            <label class="sr-only" for="new-session-name">Название новой сессии</label>
-            <input id="new-session-name" name="name" type="text" maxlength="120" placeholder="Название проекта" autocomplete="off">
-            <button class="square-add" type="submit" aria-label="Создать сессию" title="Создать сессию">+</button>
+            <label class="sr-only" for="new-session-name" data-i18n="New session name">New session name</label>
+            <input id="new-session-name" name="name" type="text" maxlength="120" placeholder="Project name" data-i18n-placeholder="Project name" autocomplete="off">
+            <button class="square-add" type="submit" aria-label="Create session" data-i18n-aria-label="Create session" title="Create session" data-i18n-title="Create session">+</button>
           </form>
 
-          <button class="text-button archive-toggle" id="archive-toggle" type="button" aria-pressed="false">Показать архив</button>
-          <nav class="session-list" aria-label="Список сессий">
+          <button class="text-button archive-toggle" id="archive-toggle" type="button" aria-pressed="false" data-i18n="Show archive">Show archive</button>
+          <nav class="session-list" aria-label="Session list" data-i18n-aria-label="Session list">
             <ul id="sessions-list"></ul>
-            <p class="empty-state compact-empty" id="sessions-empty" hidden>Здесь пока нет сессий. Создайте первую, чтобы начать.</p>
+            <p class="empty-state compact-empty" id="sessions-empty" hidden data-i18n="No sessions yet. Create your first one to get started.">No sessions yet. Create your first one to get started.</p>
           </nav>
           <div class="sidebar-note">
             <span class="note-mark" aria-hidden="true">i</span>
-            <p>Каждый фрагмент создаётся отдельно. Для похожего звучания назначьте ему голос-референс.</p>
+            <p data-i18n="Each segment is generated separately. Assign a reference voice for a similar sound.">Each segment is generated separately. Assign a reference voice for a similar sound.</p>
           </div>
         </aside>
 
-        <section class="panel editor-panel" aria-label="Редактор сессии">
+        <section class="panel editor-panel" aria-label="Session editor" data-i18n-aria-label="Session editor">
           <div class="session-toolbar" id="session-toolbar"></div>
           <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
           <div class="notice is-error queue-paused-warning" id="queue-paused-warning" role="alert" aria-live="assertive" hidden>
-            <strong>Очередь задач приостановлена.</strong>
-            <span>Не удалось сохранить состояние студии. Сервер повторяет попытку; новые задачи пока не запускаются.</span>
+            <strong data-i18n="The job queue is paused.">The job queue is paused.</strong>
+            <span data-i18n="Studio state could not be saved. The server is retrying; new jobs will wait.">Studio state could not be saved. The server is retrying; new jobs will wait.</span>
           </div>
-          <section class="jobs-region" id="jobs-region" aria-label="Очередь задач" aria-live="polite"></section>
+          <section class="jobs-region" id="jobs-region" aria-label="Job queue" data-i18n-aria-label="Job queue" aria-live="polite"></section>
           <section class="composer-card" aria-labelledby="composer-title" id="composer-card">
             <div class="composer-copy">
-              <p class="eyebrow">Новый фрагмент</p>
-              <h2 id="composer-title">Добавьте текст для озвучивания</h2>
+              <p class="eyebrow" data-i18n="New segment">New segment</p>
+              <h2 id="composer-title" data-i18n="Add text to turn into speech">Add text to turn into speech</h2>
             </div>
             <form id="new-segment-form">
-              <label class="sr-only" for="new-segment-text">Текст нового фрагмента</label>
-              <textarea id="new-segment-text" name="text" rows="3" maxlength="12000" placeholder="Введите или вставьте текст…" required></textarea>
+              <label class="sr-only" for="new-segment-text" data-i18n="New segment text">New segment text</label>
+              <textarea id="new-segment-text" name="text" rows="3" maxlength="12000" placeholder="Type or paste text…" data-i18n-placeholder="Type or paste text…" required></textarea>
               <div class="composer-footer">
-                <span class="field-hint">Новый фрагмент появится в конце сессии.</span>
-                <button class="button button-primary" type="submit"><span aria-hidden="true">＋</span> Добавить фрагмент</button>
+                <span class="field-hint" data-i18n="The new segment will be added to the end of this session.">The new segment will be added to the end of this session.</span>
+                <button class="button button-primary" type="submit"><span aria-hidden="true">＋</span> <span data-i18n="Add segment">Add segment</span></button>
               </div>
             </form>
           </section>
           <div class="segment-list" id="segment-list" aria-live="polite"></div>
           <div class="editor-empty" id="editor-empty" hidden>
             <div class="empty-orbit" aria-hidden="true"><span></span></div>
-            <p class="eyebrow">Начало сессии</p>
-            <h2>Здесь будет ваша история</h2>
-            <p>Добавьте текст выше — затем выберите голос и создайте первый аудиофрагмент.</p>
+            <p class="eyebrow" data-i18n="Session start">Session start</p>
+            <h2 data-i18n="Your story starts here">Your story starts here</h2>
+            <p data-i18n="Add text above, then choose a voice and generate your first audio segment.">Add text above, then choose a voice and generate your first audio segment.</p>
           </div>
         </section>
 
-        <aside class="panel library-panel" aria-label="Библиотека">
+        <aside class="panel library-panel" aria-label="Library" data-i18n-aria-label="Library">
           <div class="panel-heading library-heading">
             <div>
-              <p class="eyebrow">Материалы</p>
-              <h2>Библиотека</h2>
+              <p class="eyebrow" data-i18n="Materials">Materials</p>
+              <h2 data-i18n="Library">Library</h2>
             </div>
           </div>
-          <div class="tab-list" role="tablist" aria-label="Разделы библиотеки">
-            <button class="tab-button is-active" id="voices-tab" type="button" role="tab" aria-selected="true" aria-controls="voices-panel" data-library-tab="voices">Голоса</button>
-            <button class="tab-button" id="audio-tab" type="button" role="tab" aria-selected="false" aria-controls="audio-panel" data-library-tab="audio">Аудио</button>
+          <div class="tab-list" role="tablist" aria-label="Library sections" data-i18n-aria-label="Library sections">
+            <button class="tab-button is-active" id="voices-tab" type="button" role="tab" aria-selected="true" aria-controls="voices-panel" data-library-tab="voices" data-i18n="Voices">Voices</button>
+            <button class="tab-button" id="audio-tab" type="button" role="tab" aria-selected="false" aria-controls="audio-panel" data-library-tab="audio" data-i18n="Audio">Audio</button>
           </div>
           <section id="voices-panel" class="library-content" role="tabpanel" aria-labelledby="voices-tab">
             <form class="voice-upload" id="voice-upload-form">
               <div class="voice-upload-heading">
-                <h3>Добавить голос</h3>
-                <span class="micro-badge">до 10 сек</span>
+                <h3 data-i18n="Add a voice">Add a voice</h3>
+                <span class="micro-badge" data-i18n="up to 10 sec">up to 10 sec</span>
               </div>
               <label class="file-drop" for="voice-file">
                 <span class="upload-icon" aria-hidden="true">↑</span>
-                <span id="voice-file-label">Выберите аудиофайл</span>
-                <small>WAV, MP3 или другой поддерживаемый формат · до 20 МБ</small>
+                <span id="voice-file-label" data-i18n="Choose an audio file">Choose an audio file</span>
+                <small data-i18n="WAV, MP3 or another supported format · up to 20 MB">WAV, MP3 or another supported format · up to 20 MB</small>
               </label>
               <input class="sr-only" id="voice-file" name="file" type="file" accept="audio/*">
-              <label class="field-label" for="voice-name">Название</label>
-              <input id="voice-name" name="name" type="text" maxlength="120" placeholder="Например, Тихий рассказчик" required>
-              <label class="field-label" for="voice-transcript">Что произнесено в записи</label>
-              <textarea id="voice-transcript" name="transcript" rows="2" maxlength="2000" placeholder="Точная расшифровка помогает сопоставить голос"></textarea>
-              <button class="button button-secondary button-wide" type="submit">Загрузить голос</button>
+              <label class="field-label" for="voice-name" data-i18n="Name">Name</label>
+              <input id="voice-name" name="name" type="text" maxlength="120" placeholder="For example, Quiet narrator" data-i18n-placeholder="For example, Quiet narrator" required>
+              <label class="field-label" for="voice-transcript" data-i18n="What is said in the recording">What is said in the recording</label>
+              <textarea id="voice-transcript" name="transcript" rows="2" maxlength="2000" placeholder="An exact transcript helps match the voice" data-i18n-placeholder="An exact transcript helps match the voice"></textarea>
+              <button class="button button-secondary button-wide" type="submit" data-i18n="Upload voice">Upload voice</button>
             </form>
-            <div class="library-section-title"><h3>Сохранённые голоса</h3><span id="voice-count">0</span></div>
+            <div class="library-section-title"><h3 data-i18n="Saved voices">Saved voices</h3><span id="voice-count">0</span></div>
             <div class="voice-list" id="voice-list"></div>
-            <p class="empty-state" id="voices-empty" hidden>Добавьте короткую запись, чтобы использовать её как референс.</p>
+            <p class="empty-state" id="voices-empty" hidden data-i18n="Add a short recording to use as a reference.">Add a short recording to use as a reference.</p>
           </section>
           <section id="audio-panel" class="library-content" role="tabpanel" aria-labelledby="audio-tab" hidden>
             <div class="asset-filter-row">
-              <label class="sr-only" for="asset-filter">Фильтр аудио</label>
+              <label class="sr-only" for="asset-filter" data-i18n="Audio filter">Audio filter</label>
               <select id="asset-filter">
-                <option value="current">Эта сессия</option>
-                <option value="all">Все сессии</option>
+                <option value="current" data-i18n="This session">This session</option>
+                <option value="all" data-i18n="All sessions">All sessions</option>
               </select>
               <span id="asset-count" class="count-badge">0</span>
             </div>
             <div class="asset-list" id="asset-list"></div>
-            <p class="empty-state" id="assets-empty" hidden>Сохранённые аудио появятся здесь после генерации или экспорта.</p>
+            <p class="empty-state" id="assets-empty" hidden data-i18n="Saved audio will appear here after generation or export.">Saved audio will appear here after generation or export.</p>
           </section>
           <div class="library-footer" id="capability-note"></div>
         </aside>
