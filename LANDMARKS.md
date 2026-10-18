@@ -6,6 +6,33 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DRAMA3-OPTIMIZATION-CONTINUATION-2026-10-18] Exact fusion first
+
+- User requested durable continuation and authorized implementation after the
+  source/evidence audit at `a8156b8c`. Roadmap and limitations:
+  `docs/drama3-optimization-roadmap.md`; active slice:
+  `docs/drama3-native-frontier.md`.
+- Start exact routed/shared gate/up/SwiGLU, default-off; preserve F32 reductions,
+  old upstream tolerances and GPU residency. First signal: fail-first API spec,
+  then GPU bit receipts, captured operands and profiler-off full WAV pairs.
+- First slice implemented: 19 release Metal examples and eight offline checks;
+  240 actual-input captures and 243 native boundary pairs are bit-exact. Existing
+  strict row 1/layer 39 MLX failure is unchanged. All 24 complete WAV requests
+  preserve codes, sampler tape and read/wait ledgers. Warm allocations decrease
+  21,360. Local GPU ratios 1.2165x/1.6828x do not establish request speedup:
+  forward generation is unchanged, reverse improves, one mirrored pair regresses
+  and the unchanged DAC phase moves. Keep `DRAMA3_EXPERT_SWIGLU_FUSION=0` by
+  default. Evidence/limits: `docs/drama3-expert-swiglu.md` and
+  `.landmark/evidence/drama3-expert-swiglu.json`.
+- Next discriminator: exact per-head RMS/SiLU/multiply corridor after GDN;
+  preserve state writes and reduction order. The historical Qwen rank-one
+  update/output fusion and bounded low-rank/scan limits are recorded in the
+  roadmap; they do not certify DRAMA bitwise arithmetic or performance.
+- q1 overlap, GPU EOS blocks, calibrated BF16-to-Q8, line protocol and streaming
+  remain hypotheses/future slices. Existing late MLX failures remain open.
+- Recheck source/model/device/compiler/sampler pins before reusing evidence;
+  local command gains and ASR/RMS alone do not establish user-visible success.
+
 ### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
 
 - Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus

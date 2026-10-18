@@ -187,9 +187,10 @@ module ML::Audio::Drama3
     end
 
     private def mlp(x : Resident::Buffer, prefix : String) : Resident::Buffer
-      gate = project(prefix + ".gate_proj", x)
-      up = project(prefix + ".up_proj", x)
-      project(prefix + ".down_proj", @ctx.mul(@ctx.silu(gate), up))
+      gate_matrix = @store.matrix(prefix + ".gate_proj.weight")
+      up_matrix = @store.matrix(prefix + ".up_proj.weight")
+      swiglu = @ctx.matvec_swiglu(gate_matrix, up_matrix, x)
+      project(prefix + ".down_proj", swiglu[:output])
     end
 
     private def moe(x : Resident::Buffer, prefix : String, layer : Int32) : Resident::Buffer
@@ -209,13 +210,14 @@ module ML::Audio::Drama3
         batched = @batch_experts && !!gate_matrix.scales && !!up_matrix.scales && !!down_matrix.scales
         @last_moe_batched = batched if callback
         result = if batched
-                   gate = @ctx.experts(gate_matrix, x, ids)
-                   up = @ctx.experts(up_matrix, x, ids)
-                   activation = @ctx.mul(@ctx.silu(gate), up)
+                   swiglu = @ctx.experts_swiglu(gate_matrix, up_matrix, x, ids, capture_projections: !!callback)
+                   activation = swiglu[:output]
                    projected = @ctx.experts_down_sum(down_matrix, activation, ids, routing.slice(@config.top_k, @config.top_k),
                      reduction: @expert_down_reduction, capture_down: !!callback)
                    combined = projected[:output]
                    if callback
+                     gate = swiglu[:gate].not_nil!
+                     up = swiglu[:up].not_nil!
                      down = projected[:down].not_nil!
                      @config.top_k.times do |rank|
                        trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate.slice(rank * gate_matrix.rows, gate_matrix.rows))

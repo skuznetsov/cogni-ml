@@ -224,6 +224,9 @@ module ML::Audio::Drama3::Resident
     getter expert_packed_rows_enabled : Bool
     getter expert_down_sum_fusion_enabled : Bool
     getter expert_down_sum_fused_dispatches = 0_i64
+    getter expert_swiglu_fusion_enabled : Bool
+    getter expert_swiglu_fused_dispatches = 0_i64
+    getter dense_swiglu_fused_dispatches = 0_i64
     @command : ML::Metal::CommandBuffer?
     @encoder : HostEncoder?
     @pending = [] of Buffer
@@ -262,6 +265,9 @@ module ML::Audio::Drama3::Resident
       down_sum = ENV["DRAMA3_EXPERT_DOWN_SUM_FUSION"]? || "0"
       raise ArgumentError.new("DRAMA3_EXPERT_DOWN_SUM_FUSION must be 0 or 1") unless down_sum.in?("0", "1")
       @expert_down_sum_fusion_enabled = down_sum == "1"
+      swiglu_fusion = ENV["DRAMA3_EXPERT_SWIGLU_FUSION"]? || "0"
+      raise ArgumentError.new("DRAMA3_EXPERT_SWIGLU_FUSION must be 0 or 1") unless swiglu_fusion.in?("0", "1")
+      @expert_swiglu_fusion_enabled = swiglu_fusion == "1"
       @resources_enabled = ENV["DRAMA3_METAL_RESOURCES"]? == "1"
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1" || @resources_enabled
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
@@ -795,6 +801,71 @@ module ML::Audio::Drama3::Resident
       y
     end
 
+    # The opt-in dense candidate keeps the two original 64-lane BF16 trees,
+    # then applies the same F32 SwiGLU operations in one dispatch. All other
+    # layouts and reductions retain the original projection/SILU/multiply path.
+    def matvec_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer,
+                      dense_reduction : String? = nil, capture_projections : Bool = false) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      check_owner!(x)
+      unless gate_matrix.rows == up_matrix.rows && gate_matrix.cols == up_matrix.cols
+        raise ArgumentError.new("resident SwiGLU projection shape mismatch")
+      end
+      unless @expert_swiglu_fusion_enabled && gate_matrix.scales.nil? && up_matrix.scales.nil? &&
+             gate_matrix.biases.nil? && up_matrix.biases.nil?
+        return fallback_matvec_swiglu(gate_matrix, up_matrix, x, dense_reduction, capture_projections)
+      end
+
+      reduction = dense_reduction ? validate_dense_reduction(dense_reduction) : @dense_reduction
+      unless reduction == "tree" && gate_matrix.rows == up_matrix.rows && gate_matrix.cols == up_matrix.cols &&
+             gate_matrix.cols == x.count && gate_matrix.expert == 0 && up_matrix.expert == 0 &&
+             gate_matrix.tensor.shape.size == 2 && up_matrix.tensor.shape.size == 2 &&
+             gate_matrix.tensor.dtype == "BF16" && up_matrix.tensor.dtype == "BF16"
+        return fallback_matvec_swiglu(gate_matrix, up_matrix, x, reduction, capture_projections)
+      end
+
+      gate_weight = weight_buffer(gate_matrix.tensor)
+      up_weight = weight_buffer(up_matrix.tensor)
+      unless dense_pair_bf16_aligned_eligible?({gate_matrix, up_matrix}, {gate_weight, up_weight})
+        return fallback_matvec_swiglu(gate_matrix, up_matrix, x, reduction, capture_projections)
+      end
+
+      fused_pipeline = pipeline("dr3_dense_swiglu_bf16_aligned_tree", SOURCE)
+      if fused_pipeline.max_total_threads_per_threadgroup < 64
+        return fallback_matvec_swiglu(gate_matrix, up_matrix, x, reduction, capture_projections)
+      end
+
+      output = alloc(gate_matrix.rows)
+      gate = capture_projections ? alloc(gate_matrix.rows) : nil
+      up = capture_projections ? alloc(gate_matrix.rows) : nil
+      enc = encoder
+      enc.set_pipeline(fused_pipeline)
+      enc.set_buffer(gate_weight.buffer, 0)
+      enc.set_buffer(up_weight.buffer, 1)
+      enc.set_buffer(x.buffer, 2, offset: x.offset)
+      enc.set_buffer(output.buffer, 3, offset: output.offset)
+      enc.set_buffer((gate || output).buffer, 4, offset: (gate || output).offset)
+      enc.set_buffer((up || output).buffer, 5, offset: (up || output).offset)
+      params = [gate_matrix.rows.to_u64, gate_matrix.cols.to_u64,
+                gate_weight.offset.to_u64, up_weight.offset.to_u64,
+                capture_projections ? 1_u64 : 0_u64]
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 6)
+      enc.dispatch_threadgroups({gate_matrix.rows, 1, 1}, {64, 1, 1})
+      @pending << x
+      @pending << output
+      @pending << gate if gate
+      @pending << up if up
+      @dense_swiglu_fused_dispatches += 1
+      {output: output, gate: gate, up: up}
+    end
+
+    private def fallback_matvec_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer,
+                                       dense_reduction : String?, capture_projections : Bool) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      gate = matvec(gate_matrix, x, dense_reduction: dense_reduction)
+      up = matvec(up_matrix, x, dense_reduction: dense_reduction)
+      output = mul(silu(gate), up)
+      {output: output, gate: capture_projections ? gate : nil, up: capture_projections ? up : nil}
+    end
+
     # Same-input dense projections with the original independent 64-lane tree.
     # Unsupported layouts and reductions stay on the established four-matvec
     # path; callers opt into the fused candidate explicitly.
@@ -1068,6 +1139,83 @@ module ML::Audio::Drama3::Resident
       output
     end
 
+    # Combine the two independent native affine expert projections with the
+    # established F32 SILU and multiply. The candidate gives one half of the
+    # 64-lane group to each projection and preserves each original group fold.
+    def experts_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer, ids : Buffer,
+                       capture_projections : Bool = false) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      check_owner!(x)
+      check_owner!(ids)
+      unless gate_matrix.rows == up_matrix.rows && gate_matrix.cols == up_matrix.cols
+        raise ArgumentError.new("resident expert SwiGLU projection shape mismatch")
+      end
+      gate_experts = gate_matrix.tensor.shape.size == 3 ? gate_matrix.tensor.shape[0] : 1
+      up_experts = up_matrix.tensor.shape.size == 3 ? up_matrix.tensor.shape[0] : 1
+      unless gate_experts == up_experts
+        raise ArgumentError.new("resident expert SwiGLU expert count mismatch")
+      end
+      unless expert_swiglu_eligible?(gate_matrix, up_matrix, x, ids)
+        return fallback_experts_swiglu(gate_matrix, up_matrix, x, ids, capture_projections)
+      end
+
+      gate_weight = weight_buffer(gate_matrix.tensor)
+      gate_scales = weight_buffer(gate_matrix.scales.not_nil!)
+      gate_biases = weight_buffer(gate_matrix.biases.not_nil!)
+      up_weight = weight_buffer(up_matrix.tensor)
+      up_scales = weight_buffer(up_matrix.scales.not_nil!)
+      up_biases = weight_buffer(up_matrix.biases.not_nil!)
+      fused_pipeline = pipeline("dr3_experts_swiglu_q4q8_group64", SOURCE)
+      if fused_pipeline.max_total_threads_per_threadgroup < 64
+        return fallback_experts_swiglu(gate_matrix, up_matrix, x, ids, capture_projections)
+      end
+
+      rows = gate_matrix.rows
+      groups = gate_matrix.cols // gate_matrix.group_size
+      count = (rows.to_i64 * ids.count).to_i32
+      output = alloc(count)
+      gate = capture_projections ? alloc(count) : nil
+      up = capture_projections ? alloc(count) : nil
+      params = [rows.to_u64, gate_matrix.cols.to_u64, gate_matrix.bits.to_u64,
+                gate_matrix.group_size.to_u64, gate_weight.offset.to_u64,
+                gate_scales.offset.to_u64, gate_biases.offset.to_u64,
+                encoding(gate_matrix.scales.not_nil!), encoding(gate_matrix.biases.not_nil!),
+                up_matrix.bits.to_u64, up_matrix.group_size.to_u64,
+                up_weight.offset.to_u64, up_scales.offset.to_u64, up_biases.offset.to_u64,
+                encoding(up_matrix.scales.not_nil!), encoding(up_matrix.biases.not_nil!),
+                (gate_matrix.tensor.shape.size == 3 ? gate_matrix.tensor.shape[0] : 1).to_u64,
+                ids.count.to_u64, capture_projections ? 1_u64 : 0_u64]
+
+      enc = encoder
+      enc.set_pipeline(fused_pipeline)
+      enc.set_buffer(gate_weight.buffer, 0)
+      enc.set_buffer(gate_scales.buffer, 1)
+      enc.set_buffer(gate_biases.buffer, 2)
+      enc.set_buffer(up_weight.buffer, 3)
+      enc.set_buffer(up_scales.buffer, 4)
+      enc.set_buffer(up_biases.buffer, 5)
+      enc.set_buffer(x.buffer, 6, offset: x.offset)
+      enc.set_buffer(output.buffer, 7, offset: output.offset)
+      enc.set_buffer(ids.buffer, 8, offset: ids.offset)
+      enc.set_buffer((gate || output).buffer, 9, offset: (gate || output).offset)
+      enc.set_buffer((up || output).buffer, 10, offset: (up || output).offset)
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 11)
+      enc.set_threadgroup_memory(groups * 2 * sizeof(Float32), 0)
+      enc.dispatch_threadgroups({rows, ids.count, 1}, {64, 1, 1})
+      @pending.concat([x, output, ids])
+      @pending << gate if gate
+      @pending << up if up
+      @expert_swiglu_fused_dispatches += 1
+      {output: output, gate: gate, up: up}
+    end
+
+    private def fallback_experts_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer, ids : Buffer,
+                                        capture_projections : Bool) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      gate = experts(gate_matrix, x, ids)
+      up = experts(up_matrix, x, ids)
+      output = mul(silu(gate), up)
+      {output: output, gate: capture_projections ? gate : nil, up: capture_projections ? up : nil}
+    end
+
     # Preserve both scalar folds: affine groups first, selected ranks second.
     # The optional down output is diagnostic only and is written by the same
     # candidate kernel, so tracing never silently qualifies the fallback path.
@@ -1127,6 +1275,26 @@ module ML::Audio::Drama3::Resident
       # complete only when every group fits in the first 32; group 33 must
       # retain the original launch and scalar group-sum order.
       @expert_threads == 32 && matrix.cols // matrix.group_size <= 32 ? 32 : 64
+    end
+
+    private def expert_swiglu_eligible?(gate_matrix : Matrix, up_matrix : Matrix,
+                                        x : Buffer, ids : Buffer) : Bool
+      return false unless @expert_swiglu_fusion_enabled && @expert_threads == 64
+      return false unless gate_matrix.scales && gate_matrix.biases && up_matrix.scales && up_matrix.biases
+      return false unless gate_matrix.group_size == 64 && up_matrix.group_size == 64
+      return false unless gate_matrix.bits.in?(4, 8) && up_matrix.bits.in?(4, 8)
+      return false unless gate_matrix.rows == up_matrix.rows && gate_matrix.cols == up_matrix.cols
+      # Packed column counts differ for Q4 and Q8, so compare the logical
+      # expert-matrix geometry instead of requiring equal storage shapes.
+      return false unless gate_matrix.tensor.shape.size == up_matrix.tensor.shape.size
+      gate_experts = gate_matrix.tensor.shape.size == 3 ? gate_matrix.tensor.shape[0] : 1
+      up_experts = up_matrix.tensor.shape.size == 3 ? up_matrix.tensor.shape[0] : 1
+      return false unless gate_experts == up_experts
+      return false unless gate_matrix.tensor.dtype == "U32" && up_matrix.tensor.dtype == "U32"
+      return false unless x.count == gate_matrix.cols && ids.count.in?(1..32)
+      groups = gate_matrix.cols // gate_matrix.group_size
+      return false unless groups.in?(1..32)
+      gate_matrix.rows.to_i64 * ids.count <= Int32::MAX.to_i64
     end
 
     def argmax(x : Buffer) : Buffer

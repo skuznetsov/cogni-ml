@@ -35,6 +35,47 @@ kernel void dr3_dense(device const uchar* w [[buffer(0)]],device const float* x 
     for(uint j=lane;j<cols;j+=64)s+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];parts[lane]=s;threadgroup_barrier(mem_flags::mem_threadgroup);
     for(uint d=32;d>0;d/=2){if(lane<d)parts[lane]+=parts[lane+d];threadgroup_barrier(mem_flags::mem_threadgroup);}if(lane==0)y[r]=parts[0];
 }
+
+// Equal-shape BF16 projections use two independent original 64-lane trees.
+// The candidate shares input loads and applies the same F32 SILU/multiply.
+kernel void dr3_dense_swiglu_bf16_aligned_tree(
+    device const uchar* gate_w [[buffer(0)]], device const uchar* up_w [[buffer(1)]],
+    device const float* x [[buffer(2)]], device float* y [[buffer(3)]],
+    device float* gate [[buffer(4)]], device float* up [[buffer(5)]],
+    constant ulong* p [[buffer(6)]],
+    uint r [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint cols = uint(p[1]);
+    ulong row_base = ulong(r) * ulong(cols);
+    float gate_part = 0.0f, up_part = 0.0f;
+    for (uint j = lane; j < cols; j += 64) {
+        float input = x[j];
+        ulong element = row_base + ulong(j);
+        gate_part += dr3_bf16_aligned(gate_w, p[2], element) * input;
+        up_part += dr3_bf16_aligned(up_w, p[3], element) * input;
+    }
+    threadgroup float gate_parts[64], up_parts[64];
+    gate_parts[lane] = gate_part;
+    up_parts[lane] = up_part;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint d = 32; d > 0; d /= 2) {
+        if (lane < d) {
+            gate_parts[lane] += gate_parts[lane + d];
+            up_parts[lane] += up_parts[lane + d];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (lane == 0) {
+        float gate_value = gate_parts[0];
+        float up_value = up_parts[0];
+        float sigmoid = dr3_sigmoid(gate_value);
+        float activated = gate_value * sigmoid;
+        y[r] = activated * up_value;
+        if (p[4]) {
+            gate[r] = gate_value;
+            up[r] = up_value;
+        }
+    }
+}
 kernel void dr3_dense_four_tree(
     device const uchar* w0 [[buffer(0)]], device const uchar* w1 [[buffer(1)]],
     device const uchar* w2 [[buffer(2)]], device const uchar* w3 [[buffer(3)]],
@@ -194,6 +235,84 @@ kernel void dr3_experts(
         float sum = 0;
         for (uint g = 0; g < groups; g++) sum += parts[g];
         y[rank * rows + r] = sum;
+    }
+}
+
+// Native group-64 gate/up pair plus F32 SILU. Lanes 0..31 compute gate
+// subtotals and lanes 32..63 compute up subtotals. The lane leader retains
+// both original ascending group folds. Invalid IDs still reach the barrier.
+// p: rows, cols, gate bits/group/w/s/b offsets and encodings, up bits/group/
+// w/s/b offsets and encodings, experts, ranks, capture-projections flag.
+kernel void dr3_experts_swiglu_q4q8_group64(
+    device const uchar* gate_w [[buffer(0)]], device const uchar* gate_s [[buffer(1)]],
+    device const uchar* gate_b [[buffer(2)]], device const uchar* up_w [[buffer(3)]],
+    device const uchar* up_s [[buffer(4)]], device const uchar* up_b [[buffer(5)]],
+    device const float* x [[buffer(6)]], device float* y [[buffer(7)]],
+    device const float* ids [[buffer(8)]], device float* gate [[buffer(9)]],
+    device float* up [[buffer(10)]], constant ulong* p [[buffer(11)]],
+    threadgroup float* parts [[threadgroup(0)]],
+    uint2 pos [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint r = pos.x, rank = pos.y, rows = uint(p[0]), cols = uint(p[1]);
+    uint groups = cols / 64, group_index = lane & 31;
+    float selected = ids[rank];
+    bool valid = isfinite(selected) && selected >= 0 && selected < float(p[16]) && floor(selected) == selected;
+    if (valid && group_index < groups) {
+        uint expert_row = uint(selected) * rows + r;
+        if (lane < 32) {
+            uint bits = uint(p[2]), per = 32 / bits, mask = (1u << bits) - 1;
+            uint ix = expert_row * groups + group_index;
+            float scale = dr3_float(gate_s, p[5], ix, p[7]);
+            float bias = dr3_float(gate_b, p[6], ix, p[8]);
+            float part = 0.0f;
+            for (uint word_index = 0; word_index < 64 / per; word_index++) {
+                uint col = group_index * 64 + word_index * per;
+                uint word = dr3_u32(gate_w, p[4] + (ulong(expert_row) * (cols / per) + col / per) * 4);
+                for (uint value_index = 0; value_index < per; value_index++) {
+                    float weight = scale * float((word >> (value_index * bits)) & mask) + bias;
+                    part += weight * x[col + value_index];
+                }
+            }
+            parts[group_index] = part;
+        } else {
+            uint bits = uint(p[9]), per = 32 / bits, mask = (1u << bits) - 1;
+            uint ix = expert_row * groups + group_index;
+            float scale = dr3_float(up_s, p[12], ix, p[14]);
+            float bias = dr3_float(up_b, p[13], ix, p[15]);
+            float part = 0.0f;
+            for (uint word_index = 0; word_index < 64 / per; word_index++) {
+                uint col = group_index * 64 + word_index * per;
+                uint word = dr3_u32(up_w, p[11] + (ulong(expert_row) * (cols / per) + col / per) * 4);
+                for (uint value_index = 0; value_index < per; value_index++) {
+                    float weight = scale * float((word >> (value_index * bits)) & mask) + bias;
+                    part += weight * x[col + value_index];
+                }
+            }
+            parts[groups + group_index] = part;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane == 0) {
+        uint output_index = rank * rows + r;
+        if (!valid) {
+            y[output_index] = NAN;
+            if (p[18]) {
+                gate[output_index] = NAN;
+                up[output_index] = NAN;
+            }
+        } else {
+            float gate_value = 0.0f, up_value = 0.0f;
+            for (uint group_index = 0; group_index < groups; group_index++) {
+                gate_value += parts[group_index];
+                up_value += parts[groups + group_index];
+            }
+            float sigmoid = dr3_sigmoid(gate_value);
+            float activated = gate_value * sigmoid;
+            y[output_index] = activated * up_value;
+            if (p[18]) {
+                gate[output_index] = gate_value;
+                up[output_index] = up_value;
+            }
+        }
     }
 }
 // Native group-64 down projection followed by the original ordered rank sum.

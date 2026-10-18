@@ -34,6 +34,8 @@ CONTROLS = {
     "DRAMA3_EXPERT_PACKED_ROWS": "0",
     "DRAMA3_TOWER_FFN_PAIR_FUSION": "0",
     "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+    "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+    "DRAMA3_PREFILL_CHUNK": "1",
 }
 INPUT = {
     "text": "Hello, this is a voice test.",
@@ -66,6 +68,44 @@ def validate_expert_down_sum_fusion(report, requested_mode):
 def configure_expert_down_sum_arm(controls, requested_mode):
     controls["DRAMA3_EXPERT_DOWN_SUM_FUSION"] = requested_mode
     controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+
+
+def parse_expert_swiglu_schedule(value):
+    modes = [mode.strip() for mode in value.split(",")]
+    if any(mode not in ("0", "1") for mode in modes) or "0" not in modes:
+        raise ValueError("expert SwiGLU fusion schedule must contain only 0 or 1 and include baseline 0")
+    return modes
+
+
+def configure_expert_swiglu_arm(controls, requested_mode):
+    controls["DRAMA3_EXPERT_SWIGLU_FUSION"] = requested_mode
+    controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+
+
+def validate_expert_swiglu_fusion(report, requested_mode):
+    expected = requested_mode == "1"
+    actual = report["resident_expert_swiglu_fusion"]
+    assert type(actual) is bool and actual is expected, "frozen expert SwiGLU selector differs from requested arm"
+    prompt_rows = report["prompt_rows"]
+    frames = report["frames"]
+    max_frames = report["max_frames"]
+    assert type(prompt_rows) is int and prompt_rows > 0, "invalid prompt row count for SwiGLU coverage"
+    assert isinstance(frames, list) and frames, "missing generated frames for SwiGLU coverage"
+    assert type(max_frames) is int and max_frames > 0, "invalid max frame count for SwiGLU coverage"
+    expected_dispatches = (prompt_rows + min(len(frames), max_frames - 1)) * 40
+    for key, label in (
+        ("resident_expert_swiglu_fused_dispatches", "routed"),
+        ("resident_dense_swiglu_fused_dispatches", "shared/dense"),
+    ):
+        count = report[key]
+        assert type(count) is int and count >= 0, f"invalid {label} SwiGLU fused dispatch count"
+        if expected:
+            assert count == expected_dispatches, (
+                f"candidate arm used {count} {label} SwiGLU fused dispatches; "
+                f"expected {expected_dispatches} from all backbone rows"
+            )
+        else:
+            assert count == 0, f"baseline arm used a {label} SwiGLU fused dispatch"
 
 
 def validate(report, wav_sha, baseline):
@@ -101,6 +141,7 @@ def build_parser():
     schedules.add_argument("--dense-fusion-schedule", help="Comma-separated 0/1 backbone qkv/z/b/a fusion; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--tower-ffn-pair-schedule", help="Comma-separated 0/1 tower w1/w3 fusion; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--expert-down-sum-schedule", help="Comma-separated 0/1 expert down-sum fusion; coalesced DAC, scratch and profiling off")
+    schedules.add_argument("--expert-swiglu-schedule", help="Comma-separated 0/1 routed/shared SwiGLU fusion; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
@@ -115,7 +156,11 @@ def main():
     dense_fusion = None
     tower_ffn_pair = None
     expert_down_sum = None
-    if args.expert_down_sum_schedule is not None:
+    expert_swiglu = None
+    if args.expert_swiglu_schedule is not None:
+        expert_swiglu = parse_expert_swiglu_schedule(args.expert_swiglu_schedule)
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_swiglu]
+    elif args.expert_down_sum_schedule is not None:
         expert_down_sum = parse_expert_down_sum_schedule(args.expert_down_sum_schedule)
         schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_down_sum]
     elif args.tower_ffn_pair_schedule is not None:
@@ -188,6 +233,8 @@ def main():
             controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
         if expert_down_sum is not None:
             configure_expert_down_sum_arm(controls, expert_down_sum[arm])
+        if expert_swiglu is not None:
+            configure_expert_swiglu_arm(controls, expert_swiglu[arm])
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
@@ -239,6 +286,8 @@ def main():
                         assert report["resident_tower_ffn_pair_fusion"] == (tower_ffn_pair[arm] == "1"), "frozen tower selector differs from requested arm"
                     if expert_down_sum is not None:
                         validate_expert_down_sum_fusion(report, expert_down_sum[arm])
+                    if expert_swiglu is not None:
+                        validate_expert_swiglu_fusion(report, expert_swiglu[arm])
                     if binary == args.binary:
                         assert report["host_profile"]["enabled"] == (profile == "1")
                     records.append(item)

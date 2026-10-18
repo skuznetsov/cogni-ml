@@ -10,7 +10,52 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: native expert down and weighted-sum fusion — 2026-10-18
+## Active slice: exact expert gate/up/SwiGLU fusion — 2026-10-18
+
+The user authorized the audit roadmap in
+[optimization continuation](drama3-optimization-roadmap.md). Begin with routed
+and shared gate/up/SwiGLU fusion, preserving the native affine group folds,
+dense64 tree, stable sigmoid and intermediate F32 rounding. Initial admission:
+equal-shape affine Q4/Q8 group64 expert pairs with 1..32 groups and native64
+threads; equal aligned BF16 dense pairs with tree reduction for shared experts.
+Other valid cases retain the original path. Batched prefill is outside this slice.
+
+CAUTION: compiler reassociation, changed sigmoid, invalid-ID barriers, diagnostic
+fallback or register pressure can defeat exactness or speed. Freeze
+`DRAMA3_EXPERT_SWIGLU_FUSION=0|1` at Context construction, default/rollback 0.
+Do not add production reads, submissions, waits or change compiler math options.
+Diagnostics must exercise the actual candidate and may materialize gate/up.
+
+First falsifier: the new focused spec fails against the absent API, then compares
+candidate gate/up/activation bits on GPU against the explicit old kernels,
+including offsets, affine encodings, special values, fallback and seeded defects.
+DoD: release Metal specs; actual varying captured inputs and specialized dispatch
+counters; unchanged upstream metrics at the existing tolerances; counterbalanced
+profiler-off complete-WAV pairs with identical codes, sampler tape, WAV and normal
+read/wait ledgers. Default promotion additionally requires repeatable complete
+request benefit. Existing strict upstream failures remain open. Heavy work stays
+serial under run_safe with external scratch, local weights and 15% memory floor.
+
+Outcome: the opt-in implementation passes 19 release Metal examples and eight
+offline driver checks. All 240 varying-input captures and 243 backbone boundary
+pairs are bit-exact against the native reference; saved MLX metrics remain
+identical, including the existing row 1/layer 39 strict failure. All 24 complete
+requests preserve codes, sampler tape, WAV and ordinary read/wait ledgers.
+Local paired GPU command intervals favor routed/shared fusion at median
+1.2165x/1.6828x; these intervals are not additive request costs. Warm allocations
+fall by 21,360. Forward generation medians are unchanged (20.706 -> 20.708 s),
+while reverse improves (20.560 -> 18.949 s); one mirrored contrast regresses and
+the unchanged DAC phase moves materially. Keep default 0: a repeatable causal
+full-request win is not established. Details, limits and refresh commands:
+[expert SwiGLU qualification](drama3-expert-swiglu.md).
+
+Next admissible probe: establish exact RMS/SiLU/multiply postprojection
+equivalence at `linear_attention_ready`, then capture actual GDN operands and
+measure that bounded corridor. Preserve the sequential RMS fold, recurrence
+state writes and `out_proj`; do not infer a rank-one algebra speedup from
+adjacent dispatch fusion. The other roadmap branches remain unimplemented.
+
+## Prior slice: native expert down and weighted-sum fusion — 2026-10-18
 
 The preceding replay ranks native expert down as the largest measured decode
 projection family. Test a single GPU dispatch that preserves each affine-group

@@ -1,0 +1,598 @@
+{
+  "format": "drama3-expert-swiglu-v1",
+  "base_revision": "a8156b8c7a048faebd4f0eb10d4a323839169498",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Default-off exact native fusion in the admitted geometry, bounded GPU/native/upstream no-regression checks and descriptive paired timings on the pinned request/device. No strict upstream parity, repeatable causal request speedup or default-promotion claim."
+  },
+  "decision": {
+    "selector": "DRAMA3_EXPERT_SWIGLU_FUSION",
+    "default": "0",
+    "candidate": "1",
+    "rollback": "Use selector 0 and construct a new resident Context.",
+    "promotion": "Withheld: forward generation median is unchanged, one mirrored contrast regresses, and unmodified DAC timings drift materially on the shared host.",
+    "next_falsifier": "Compare the existing per-head RMS/SiLU/multiply sequence with a fused F32 expression before implementing the GDN postprojection candidate; then compare actual GPU outputs and unchanged recurrent state."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-optimization-roadmap.md",
+      "docs/drama3-expert-swiglu.md",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "src/ml/audio/drama3/kernels/resident.metal",
+      "src/ml/audio/drama3/studio/engine.cr",
+      "examples/drama3_dense_decode_compare.cr",
+      "examples/drama3_expert_swiglu_benchmark.cr",
+      "examples/support/drama3_expert_swiglu_benchmark.cr",
+      "scripts/drama3/measure_host_pairs.py",
+      "spec/drama3_expert_swiglu_spec.cr",
+      "spec/drama3_expert_swiglu_driver_spec.py",
+      ".landmark/evidence/drama3-expert-swiglu.json"
+    ],
+    "excluded": [
+      "Primary dirty Qwen checkout edits",
+      "New production readbacks, submissions or waits",
+      "Changed F32 reduction order, precision, compiler math options or upstream tolerances",
+      "Batched prefill, GDN state changes, approximate quantization, streaming and combined-flag qualification",
+      "Restarting the live Studio, unrelated process control, push or history rewrite"
+    ]
+  },
+  "changed_paths": [
+    "LANDMARKS.md",
+    "docs/drama3-native-frontier.md",
+    "docs/drama3-optimization-roadmap.md",
+    "docs/drama3-expert-swiglu.md",
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/backbone_resident.cr",
+    "src/ml/audio/drama3/kernels/resident.metal",
+    "src/ml/audio/drama3/studio/engine.cr",
+    "examples/drama3_dense_decode_compare.cr",
+    "examples/drama3_expert_swiglu_benchmark.cr",
+    "examples/support/drama3_expert_swiglu_benchmark.cr",
+    "scripts/drama3/measure_host_pairs.py",
+    "spec/drama3_expert_swiglu_spec.cr",
+    "spec/drama3_expert_swiglu_driver_spec.py",
+    ".landmark/evidence/drama3-expert-swiglu.json"
+  ],
+  "source_sha256": {
+    "LANDMARKS.md": "5d8aec778ac5eb4fc12336cb19ccbec95a614f2bb15187ea5e5de903e6fa74fc",
+    "docs/drama3-native-frontier.md": "311ca100e09f4b295b6f42996d60cce3db522b6e711c48fd78f7732c9ecbccfe",
+    "docs/drama3-optimization-roadmap.md": "966fff9255d0bef7a514956b40b863e5108fcc17ad953d0948d0c969fc84d770",
+    "docs/drama3-expert-swiglu.md": "7ffff650b837dac6ac0dcd330eb288a7bbd7980059c4280eab1d3f18953d117f",
+    "src/ml/audio/drama3/resident.cr": "cc720ecc55a0f908bf761634526a78e6b0428af428f5a111cb99db0ce648fab7",
+    "src/ml/audio/drama3/backbone_resident.cr": "4ee922acd3707485300a4b7780f6339684afd13ee08a920733c6acca44374d89",
+    "src/ml/audio/drama3/kernels/resident.metal": "6a8be5013988899ec721783c1a32ce206da151ee61d0d970877d392903ec6da9",
+    "src/ml/audio/drama3/studio/engine.cr": "1872e51037e43649f279e8fc78a8c5cd3a9c70b4e0ef4d47d73cbbc670d2ca0e",
+    "examples/drama3_dense_decode_compare.cr": "177b2a74d0b45844f698cd0d3c01206d0b60bcb4a9565e45cb4eac3aa9bf176b",
+    "examples/drama3_expert_swiglu_benchmark.cr": "673dc80e25e9d1ad098f2e672824bfe6f7735322c4543147acada3889298fdbc",
+    "examples/support/drama3_expert_swiglu_benchmark.cr": "0e01579cc8f5c1941dd9988c87862b9740fbb6f681cce9435cfd170c092084f1",
+    "scripts/drama3/measure_host_pairs.py": "321e2a6bbe5155650f38bfa04b22ff43dea85e3b13a2f74a32ade12e5f3259e3",
+    "spec/drama3_expert_swiglu_spec.cr": "b8c8a50666b64ba87481ad51836eaeb035a6713438a62a9ddb614e5d4fe00adc",
+    "spec/drama3_expert_swiglu_driver_spec.py": "eb12a5062ff1a210624fd31f9cc7e6c74550f3dcc6be68edcafe7a83dea81559"
+  },
+  "unchanged_dependency_sha256": {
+    "examples/support/drama3_dense_fusion.metal": "8411dabfdedee24603221337d759fff038d8348955f9e4d59dfe6f162c30cff7",
+    "examples/support/drama3_prefill_compare.metal": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+    "src/ml/audio/drama3/generator_resident.cr": "19d1cc67c12fb8300f3e614361ec057e3ce2bf34fdfb652d67f6a984c487ea88",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d",
+    "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13"
+  },
+  "runtime": {
+    "device": "Apple M2 Max, 38 GPU cores, 64 GiB unified memory",
+    "checkpoint": "cguldogan/drama-3-mlx-q4@5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "saved_upstream": "cguldogan/mlx-audio@e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1",
+    "checkpoint_shards_newly_authenticated": false,
+    "weights_on_local_ssd": true,
+    "environment": {
+      "TMPDIR": "/opt/mldata_ssd/cogni-ml/tmp",
+      "CRYSTAL_CACHE_DIR": "/opt/mldata_ssd/cogni-ml/crystal-cache",
+      "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+      "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+    },
+    "heavy_runs": "Serial run_safe; root executed builds/GPU runs. Shared host load uncontrolled; unrelated processes untouched.",
+    "running_studio_restarted": false,
+    "bridge_object": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o",
+      "sha256": "16613762decfabc1d44d6615ef0af95986fdccafc07ad93d9f007c5440a055f3"
+    }
+  },
+  "builds": [
+    {
+      "source": "examples/drama3_expert_swiglu_benchmark.cr",
+      "binary": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/benchmark",
+        "sha256": "e3e3a061be099f1dee91472a1384d385800d6374fdfcfbcb40c596a0c6573a4a"
+      },
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/build-benchmark.log",
+        "sha256": "85c57a562fa1ec59de32bd78283f836584c30d3a6aa13e091edf53bc87706f1e"
+      },
+      "observed_returncode": 0,
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "600",
+        "14000",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "examples/drama3_expert_swiglu_benchmark.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/benchmark",
+        "--link-flags=/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ]
+    },
+    {
+      "source": "examples/drama3_dense_decode_compare.cr",
+      "binary": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/decode-compare",
+        "sha256": "950b1f4c8dfbb803e078aa64c1cbd25e1fc698d085e0bb957ccde904690f98ce"
+      },
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/build-decode-compare.log",
+        "sha256": "63070014b6bfedde6a6aff8eed9ce22f26ab268ece104ca7ad0e3a354c294ff3"
+      },
+      "observed_returncode": 0,
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "600",
+        "14000",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "examples/drama3_dense_decode_compare.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/decode-compare",
+        "--link-flags=/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ]
+    },
+    {
+      "source": "examples/drama3_studio.cr",
+      "binary": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/drama3-studio",
+        "sha256": "7f47d65636aa5f04c30fa5b90e2416fb1e28ca790384662f079d02793dabd862"
+      },
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/build-worker.log",
+        "sha256": "09ff1db42a8f1821adab1fe45e397521bd2af38a70582e3900db5dd8b68d0f3d"
+      },
+      "observed_returncode": 0,
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "600",
+        "14000",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "examples/drama3_studio.cr",
+        "-o",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/drama3-studio",
+        "--link-flags=/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ]
+    }
+  ],
+  "verification": {
+    "fail_first": {
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/fail-first.log",
+        "sha256": "d57999e671bbe1fde03498e5a00fc315d73d3d347e1d22669457640d10b36274"
+      },
+      "observed_returncode": 1,
+      "expected_signal": "Undefined expert_swiglu_fused_dispatches on the baseline Context.",
+      "initial_gpu_guard_failure": "Mixed Q4/Q8 pairs exposed an incorrect packed-shape equality guard; fixed to logical rank and expert-count checks before qualification."
+    },
+    "gpu_specs": {
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/spec-metal.log",
+        "sha256": "88ba20a92349f2f7e69068bef0e4c6810172b2accecb3b2528e7fc4d42771205"
+      },
+      "observed_returncode": 0,
+      "examples": 19,
+      "failures": 0,
+      "errors": 0,
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "360",
+        "10000",
+        "spec",
+        "--release",
+        "-Ddrama3_metal",
+        "spec/drama3_expert_swiglu_spec.cr",
+        "spec/drama3_expert_down_sum_spec.cr",
+        "spec/drama3_dense_fusion_spec.cr",
+        "spec/drama3_tower_pair_fusion_spec.cr",
+        "--link-flags=/opt/mldata_ssd/cogni-ml/drama3-decode-profile-20261017/bridge.o -framework Metal -framework Foundation -lc++ -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
+      ]
+    },
+    "offline_driver_checks": {
+      "log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/spec-driver.log",
+        "sha256": "35bd37126fe4b5a1b96518106737df011197069372e1f5a0cf76ceaf8d81d572"
+      },
+      "observed_returncode": 0,
+      "examples": 8,
+      "reproduction_command": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "spec/drama3_expert_swiglu_driver_spec.py",
+        "spec/drama3_expert_down_sum_driver_spec.py",
+        "-v"
+      ]
+    },
+    "capture": {
+      "manifest": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/capture/capture.json",
+        "sha256": "daf8040b902b36834e2648ae528a881cfc0cdf8a81b4728fbb36a0bb18d9e824"
+      },
+      "stdout": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/capture-r2.log",
+        "sha256": "5a2cec3dd1b7990b925b9555a5cfd7b6b788f549d3dcdde0bb993bff77409b87"
+      },
+      "stderr": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/capture-r2.stderr.log",
+        "sha256": "eef6843ad86a27cbed2efa20454310ae6f5b3bb188565d6c432d35e19b6681e9"
+      },
+      "observed_returncode": 0,
+      "candidate_calls": 240,
+      "decode_rows": [
+        0,
+        29,
+        59
+      ],
+      "layers_per_family_per_row": 40,
+      "gate_up_activation_bit_mismatches": 0,
+      "nonfinite_pairs": 0,
+      "production_readbacks": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "production_graph": {
+        "depth": 2,
+        "submitted": 122,
+        "completed": 122,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 122,
+        "retained_bytes": 0
+      },
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/benchmark",
+        "420",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-down-sum-20261018/wav-pairs/expert-down-sum-worker.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/capture"
+      ]
+    },
+    "local_pairs": {
+      "pairs": 20,
+      "warmups_per_family": 2,
+      "measured_per_family": 8,
+      "gpu_commands": 60,
+      "values_checked_per_arm": 11059200,
+      "bit_mismatches": 0,
+      "nonfinite_pairs": 0,
+      "seeded_control_per_family": {
+        "bit_mismatches": 2,
+        "nonfinite_pairs": 1,
+        "rejected": true
+      },
+      "activation_readbacks": 0
+    },
+    "upstream_comparison": {
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-expert-swiglu-20261018/decode-comparison.json",
+        "sha256": "dacf04f1b372368df1e9f6abfcf666d718f925150420675b20682da20cf9b572"
+      },
+      "capture": {
+        "baseline_boundaries": 243,
+        "candidate_boundaries": 243,
+        "comparisons": 729,
+        "comparison_order": "row-major; layer attention_residual, layer hidden, final hidden; native pair then each MLX arm"
+      },
+      "result": {
+        "candidate_native_exact_pass": true,
+        "upstream_metrics_identical": true,
+        "strict_upstream_pass": false,
+        "first_native_difference": null,
+        "first_baseline_upstream_failure": {
+          "row": 1,
+          "stage": "backbone.layers.39.hidden"
+        },
+        "first_candidate_upstream_failure": {
+          "row": 1,
+          "stage": "backbone.layers.39.hidden"
+        }
+      },
+      "dispatch_proof": {
+        "expert_reference_calls": 120,
+        "dense_reference_calls": 120,
+        "candidate_expert_fused_dispatches": 120,
+        "candidate_dense_fused_dispatches": 120,
+        "expected_per_family_per_row": 40,
+        "per_row": [
+          {
+            "row": 0,
+            "candidate_expert_fused_dispatches": 40,
+            "candidate_dense_fused_dispatches": 40,
+            "baseline_expert_reference_calls": 40,
+            "baseline_dense_reference_calls": 40,
+            "baseline_fused_dispatches": 0
+          },
+          {
+            "row": 1,
+            "candidate_expert_fused_dispatches": 40,
+            "candidate_dense_fused_dispatches": 40,
+            "baseline_expert_reference_calls": 40,
+            "baseline_dense_reference_calls": 40,
+            "baseline_fused_dispatches": 0
+          },
+          {
+            "row": 2,
+            "candidate_expert_fused_dispatches": 40,
+            "candidate_dense_fused_dispatches": 40,
+            "baseline_expert_reference_calls": 40,
+            "baseline_dense_reference_calls": 40,
+            "baseline_fused_dispatches": 0
+          }
+        ]
+      },
+      "interpretation": "native exactness and candidate-vs-baseline upstream metrics are identical; the same row-1 layer-39 boundary remains outside the strict MLX tolerance in both arms"
+    },
+    "upstream_command": [
+      "scripts/run_safe.sh",
+      "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/decode-compare",
+      "360",
+      "40960",
+      "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+      "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/decode-comparison.json",
+      "--expert-swiglu"
+    ],
+    "full_requests": {
+      "observed_returncodes": [
+        0,
+        0
+      ],
+      "requests": 24,
+      "fresh_workers": 8,
+      "cold_repeats_excluded_per_worker": 1,
+      "warm_repeats_per_worker": 2,
+      "exact_codes_sampler_stop_wav_read_wait_ledgers": true,
+      "fused_dispatches_per_on_request_per_family": 3560,
+      "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "audio_seconds": 2.7863945578,
+      "forward": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-expert-swiglu-20261018/wav-pairs/expert-swiglu-worker.json",
+        "sha256": "41fe9781e8cf6c1b43e8e3fb0fc12540015830adb25057a51ae907376593c333"
+      },
+      "reverse": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-expert-swiglu-20261018/wav-pairs-reverse/expert-swiglu-worker.json",
+        "sha256": "f281519c85402a9eab3f163939a4f390a1dabb42ea5d332e5626e3986c12e85f"
+      },
+      "commands": [
+        [
+          "scripts/run_safe.sh",
+          "python3",
+          "1800",
+          "40960",
+          "-B",
+          "scripts/drama3/measure_host_pairs.py",
+          "--binary",
+          "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/drama3-studio",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--baseline",
+          "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+          "--prefix",
+          "expert-swiglu",
+          "--warm-repeats",
+          "2",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/wav-pairs",
+          "--expert-swiglu-schedule",
+          "0,1,1,0"
+        ],
+        [
+          "scripts/run_safe.sh",
+          "python3",
+          "1800",
+          "40960",
+          "-B",
+          "scripts/drama3/measure_host_pairs.py",
+          "--binary",
+          "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/drama3-studio",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--baseline",
+          "/opt/mldata_ssd/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json",
+          "--prefix",
+          "expert-swiglu",
+          "--warm-repeats",
+          "2",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/wav-pairs-reverse",
+          "--expert-swiglu-schedule",
+          "1,0,0,1"
+        ]
+      ]
+    },
+    "analysis": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/analysis.json",
+      "sha256": "f3a302c1255499b28fa7a43a69a55eeff66c3c4053df16e5ca6cab78e6f85939"
+    },
+    "analyzer": {
+      "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/analyze.py",
+      "sha256": "ed95f2294aa3280126db7e91166b9582100b0484501450830407231ad7355d55"
+    },
+    "analysis_command": [
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/analyze.py",
+      "--output",
+      "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/analysis.json"
+    ],
+    "malformed_receipt_attack": {
+      "script": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/negative_checks.py",
+        "sha256": "75fe261bdec28ceb804ba1808b981734c54dc404c7e07d5dc519353bde118d8d"
+      },
+      "result": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/analysis-negative-mutations.json",
+        "sha256": "676e4b0755b4fffdf0fb62005658727978d9de4ec14b018f891119f48dd380ad"
+      },
+      "root_log": {
+        "path": "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/negative-checks-root.log",
+        "sha256": "87d70335e161ae95856c2aa144a6068472afb0990d26a040523a14e94c882eae"
+      },
+      "observed_returncode": 0,
+      "expected_rejections": 18,
+      "original_input_hashes_unchanged": 35,
+      "command": [
+        "python3",
+        "-B",
+        "/opt/mldata_ssd/cogni-ml/drama3-expert-swiglu-20261018/negative_checks.py"
+      ]
+    },
+    "format_and_diff": "Root observed Crystal format --check on all affected Crystal files and git diff --check pass."
+  },
+  "performance": {
+    "local_median_paired_unfused_over_fused": {
+      "routed": 1.2164579762636447,
+      "shared": 1.6828038609492237
+    },
+    "full_request_summary": {
+      "jobs": 24,
+      "fresh_workers": 8,
+      "warm_worker_medians_by_mode": {
+        "0": {
+          "request_s": 23.528268396039493,
+          "generation_s": 20.5595567815,
+          "dac_s": 2.93342997925,
+          "request_rtf": 8.44398304259403,
+          "generation_rtf": 7.378551872328093,
+          "dac_rtf": 1.052769059944652,
+          "generation_plus_dac_s": 23.49298676075,
+          "generation_plus_dac_rtf": 8.431320932272744,
+          "allocation": {
+            "allocations": 135590.0,
+            "requested_bytes": 4079562724.0,
+            "allocation_ns": 0.0
+          }
+        },
+        "1": {
+          "request_s": 22.2655991979409,
+          "generation_s": 19.30151038525,
+          "dac_s": 3.167040854,
+          "request_rtf": 7.990827837217972,
+          "generation_rtf": 6.927055729138921,
+          "dac_rtf": 1.1366089002486928,
+          "generation_plus_dac_s": 22.18993615625,
+          "generation_plus_dac_rtf": 7.963673376454654,
+          "allocation": {
+            "allocations": 114230.0,
+            "requested_bytes": 3882708964.0,
+            "allocation_ns": 0.0
+          }
+        }
+      },
+      "off_over_on_ratios": {
+        "request_s": 1.0567094191750008,
+        "generation_s": 1.0651786503304623,
+        "dac_s": 0.926236860994405
+      },
+      "block_off_over_on_ratios": [
+        {
+          "request_s": 0.9929851198921634,
+          "generation_s": 0.9999301942396899,
+          "dac_s": 0.968337160749673
+        },
+        {
+          "request_s": 1.0598516113646348,
+          "generation_s": 1.0850226339235847,
+          "dac_s": 0.926236860994405
+        }
+      ],
+      "scope": "descriptive counterbalanced forward/reverse blocks; no causal, promotion, or isolated-kernel claim"
+    },
+    "mirrored_contrasts": {
+      "full_wav_forward": [
+        {
+          "off_arm": 0,
+          "on_arm": 1,
+          "request_s": 1.1509428154037937,
+          "generation_s": 1.096523635353459,
+          "dac_s": 1.5892737311448846
+        },
+        {
+          "off_arm": 3,
+          "on_arm": 2,
+          "request_s": 0.8588303653070768,
+          "generation_s": 0.9129569320346439,
+          "dac_s": 0.5989726482293454
+        }
+      ],
+      "full_wav_reverse": [
+        {
+          "off_arm": 1,
+          "on_arm": 0,
+          "request_s": 1.0236959294715193,
+          "generation_s": 1.0532347265132729,
+          "dac_s": 0.8589322155281388
+        },
+        {
+          "off_arm": 2,
+          "on_arm": 3,
+          "request_s": 1.0957103417212772,
+          "generation_s": 1.1169175744186302,
+          "dac_s": 0.9882041592370165
+        }
+      ]
+    },
+    "allocation_count_reduction_per_warm_request": 21360,
+    "cumulative_requested_byte_reduction": 196853760,
+    "not_peak_memory_or_dram_traffic": true,
+    "allocation_ns_unavailable_with_profiling_off": true,
+    "interpretation": "Local command wins and lower allocation counts are observed. Complete-request effects vary by order; no repeatable causal speedup or real-time generation is established."
+  },
+  "adversary": {
+    "verdict": "ROBUST within default-off implementation, bounded exact no-regression and descriptive measurement scope",
+    "review": "Root execution and artifact/source inspection plus correlated same-lineage mini-Quadrumvirate source and evidence review; not independent replication.",
+    "remaining_limits": [
+      "Special-value specs compare NaN classes, not NaN payload/sign bits.",
+      "Pinned real-input capture is homogeneous Q4/Q4; mixed Q4/Q8 has synthetic GPU coverage only.",
+      "Existing strict upstream row1/layer39 hidden failure remains; saved MLX oracle was reused, not regenerated.",
+      "One short prompt/device/checkpoint does not establish broad audio quality or combined-flag behavior.",
+      "Command intervals overlap at queue depth two and are not isolated shader latencies or additive costs.",
+      "Source hashes and receipts do not attest build provenance or authenticate checkpoint shard payloads.",
+      "Capture manifest pins source hashes without a direct benchmark executable digest; the retained binary is hashed by this index. Full worker manifests directly bind their executable."
+    ]
+  },
+  "packet_validation": {
+    "repository_template_and_validator": "Not present in this checkout; no validate-landmark-graph pass is claimed.",
+    "local_check": "Root parses JSON, checks allowed/changed path equality, dereferences recorded source/artifact hashes, and checks intended git diff scope.",
+    "does_not_execute_substantive_dod": true
+  },
+  "refresh": {
+    "availability": "Raw artifacts remain on the external SSD under the indexed paths; absence or digest drift reopens the associated claim.",
+    "correctness_decay": "Kernel/API/reduction, compiler math options, ownership/callback semantics, fixture, model or sampler drift.",
+    "timing_decay": "Device, driver/compiler, workload, controls, graph depth, host load or source drift.",
+    "operation": "Rebuild at the intended source state; rerun focused GPU checks, actual capture, pinned upstream comparison and both counterbalanced profiler-off blocks.",
+    "failure_policy": "Keep selector0 and preserve upstream tolerances; distinguish native regression from the existing shared upstream miss."
+  },
+  "links": [
+    "docs/drama3-expert-swiglu.md",
+    "docs/drama3-optimization-roadmap.md",
+    "docs/drama3-native-frontier.md",
+    "LANDMARKS.md"
+  ]
+}

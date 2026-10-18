@@ -13,6 +13,32 @@ module ML::Audio::Drama3::Resident
     # candidate arm reaches the real context-selected kernel.
     property decode_compare_unfused_expert_down_sum = false
     getter decode_compare_reference_expert_down_sum_calls = 0_i64
+    property decode_compare_unfused_expert_swiglu = false
+    getter decode_compare_reference_expert_swiglu_calls = 0_i64
+    getter decode_compare_reference_dense_swiglu_calls = 0_i64
+
+    def experts_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer, ids : Buffer,
+                       capture_projections : Bool = false) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      return previous_def unless @decode_compare_unfused_expert_swiglu
+
+      gate = experts(gate_matrix, x, ids)
+      up = experts(up_matrix, x, ids)
+      output = mul(silu(gate), up)
+      @decode_compare_reference_expert_swiglu_calls += 1
+      {output: output, gate: capture_projections ? gate : nil, up: capture_projections ? up : nil}
+    end
+
+    def matvec_swiglu(gate_matrix : Matrix, up_matrix : Matrix, x : Buffer,
+                      dense_reduction : String? = nil,
+                      capture_projections : Bool = false) : NamedTuple(output: Buffer, gate: Buffer?, up: Buffer?)
+      return previous_def unless @decode_compare_unfused_expert_swiglu
+
+      gate = matvec(gate_matrix, x, dense_reduction: dense_reduction)
+      up = matvec(up_matrix, x, dense_reduction: dense_reduction)
+      output = mul(silu(gate), up)
+      @decode_compare_reference_dense_swiglu_calls += 1
+      {output: output, gate: capture_projections ? gate : nil, up: capture_projections ? up : nil}
+    end
 
     def experts_down_sum(matrix : Matrix, x : Buffer, ids : Buffer, weights : Buffer,
                          reduction : String = "native", capture_down : Bool = false) : NamedTuple(output: Buffer, down: Buffer?)
@@ -160,7 +186,7 @@ module Drama3DenseDecodeCompare
     records
   end
 
-  def self.configure_environment(expert_down_sum_mode : Bool = false) : Nil
+  def self.configure_environment(expert_down_sum_mode : Bool = false, expert_swiglu_mode : Bool = false) : Nil
     ENV.keys.each { |key| ENV.delete(key) if key.starts_with?("DRAMA3_") }
     {
       "DRAMA3_BACKEND"                    => "metal",
@@ -172,6 +198,7 @@ module Drama3DenseDecodeCompare
       "DRAMA3_DELTA_TRANSPOSE"            => "1",
       "DRAMA3_EXPERT_DOWN_REDUCTION"      => "native",
       "DRAMA3_EXPERT_DOWN_SUM_FUSION"     => expert_down_sum_mode ? "1" : "0",
+      "DRAMA3_EXPERT_SWIGLU_FUSION"       => expert_swiglu_mode ? "1" : "0",
       "DRAMA3_EXPERT_THREADS"             => "64",
       "DRAMA3_EXPERT_PACKED_ROWS"         => "0",
       "DRAMA3_METAL_TIMELINE"             => "0",
@@ -222,9 +249,11 @@ module Drama3DenseDecodeCompare
 
   def self.run : Nil
     context = nil.as(Context?)
-    usage = "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON [--expert-down-sum]"
-    raise usage unless ARGV.size == 4 || (ARGV.size == 5 && ARGV[4] == "--expert-down-sum")
-    expert_down_sum_mode = ARGV.size == 5
+    usage = "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON [--expert-down-sum|--expert-swiglu]"
+    raise usage unless ARGV.size == 4 || (ARGV.size == 5 && ARGV[4].in?("--expert-down-sum", "--expert-swiglu"))
+    expert_down_sum_mode = ARGV[4]? == "--expert-down-sum"
+    expert_swiglu_mode = ARGV[4]? == "--expert-swiglu"
+    dense_mode = !expert_down_sum_mode && !expert_swiglu_mode
     model_dir, input_path, trace_path, output_path = ARGV.first(4).map { |value| File.expand_path(value) }
     raise "refusing existing output" if File.exists?(output_path)
     config_path = File.join(model_dir, "config.json")
@@ -241,7 +270,7 @@ module Drama3DenseDecodeCompare
     references.each { |record| reference_records[record[:name]] = record[:values] }
     references = [] of NamedTuple(name: String, values: Array(Float32))
 
-    configure_environment(expert_down_sum_mode)
+    configure_environment(expert_down_sum_mode, expert_swiglu_mode)
     store = WeightStore.new(model_dir)
     ctx = Context.new
     context = ctx
@@ -251,14 +280,16 @@ module Drama3DenseDecodeCompare
     raise "decode comparator requires packed rows disabled" if ctx.expert_packed_rows_enabled
     raise "dense comparison must freeze expert-down-sum fusion off" if !expert_down_sum_mode && ctx.expert_down_sum_fusion_enabled
     raise "diagnostic unfused override must start disabled" if ctx.decode_compare_unfused_expert_down_sum
+    raise "SwiGLU selector mismatch" unless ctx.expert_swiglu_fusion_enabled == expert_swiglu_mode
+    raise "SwiGLU diagnostic override must start disabled" if ctx.decode_compare_unfused_expert_swiglu
     baseline = BackboneResident.new(config, store, ctx, ROWS)
     raise "baseline fusion selector not frozen off" if baseline.dense_fusion_enabled
     raise "baseline MoE batching selector mismatch" unless baseline.batch_experts
     raise "baseline expert-down reduction mismatch" unless baseline.expert_down_reduction == "native"
     raise "expert-down-sum selector not frozen on" if expert_down_sum_mode && !ctx.expert_down_sum_fusion_enabled
-    ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = expert_down_sum_mode ? "0" : "1"
+    ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = dense_mode ? "1" : "0"
     candidate = BackboneResident.new(config, store, ctx, ROWS)
-    if expert_down_sum_mode
+    unless dense_mode
       raise "candidate dense fusion selector mismatch" if candidate.dense_fusion_enabled
     else
       raise "candidate fusion selector not frozen on" unless candidate.dense_fusion_enabled
@@ -267,7 +298,7 @@ module Drama3DenseDecodeCompare
     raise "candidate expert-down reduction mismatch" unless candidate.expert_down_reduction == "native"
     ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = "0"
     raise "baseline selector changed after candidate construction" if baseline.dense_fusion_enabled
-    raise "candidate selector changed after environment reset" unless candidate.dense_fusion_enabled == !expert_down_sum_mode
+    raise "candidate selector changed after environment reset" unless candidate.dense_fusion_enabled == dense_mode
     raise "reduction control mismatch" unless baseline.dense_reduction == "tree" && candidate.dense_reduction == "tree"
 
     reference_buffers = {} of String => Buffer
@@ -278,6 +309,7 @@ module Drama3DenseDecodeCompare
     baseline_captures = [] of Capture
     candidate_captures = [] of Capture
     expert_down_sum_row_proof = [] of JSON::Any
+    expert_swiglu_row_proof = [] of JSON::Any
     active_row = 0
     baseline.buffer_trace = ->(name : String, buffer : Buffer) {
       baseline_captures << Capture.new(active_row, name, buffer)
@@ -292,10 +324,16 @@ module Drama3DenseDecodeCompare
       active_row = row
       baseline_dispatch_before = ctx.expert_down_sum_fused_dispatches
       baseline_reference_before = ctx.decode_compare_reference_expert_down_sum_calls
+      baseline_swiglu_before = {ctx.expert_swiglu_fused_dispatches, ctx.dense_swiglu_fused_dispatches,
+                               ctx.decode_compare_reference_expert_swiglu_calls, ctx.decode_compare_reference_dense_swiglu_calls}
       if expert_down_sum_mode
         ctx.decode_compare_unfused_expert_down_sum = true
         baseline.step(input)
         ctx.decode_compare_unfused_expert_down_sum = false
+      elsif expert_swiglu_mode
+        ctx.decode_compare_unfused_expert_swiglu = true
+        baseline.step(input)
+        ctx.decode_compare_unfused_expert_swiglu = false
       else
         baseline.step(input)
       end
@@ -305,9 +343,19 @@ module Drama3DenseDecodeCompare
         raise "baseline fused expert-down-sum dispatches after row #{row}" unless baseline_dispatch_delta == 0
         raise "baseline unfused reference calls after row #{row}" unless baseline_reference_delta == config.layers
       end
+      if expert_swiglu_mode
+        raise "baseline executed fused SwiGLU after row #{row}" unless
+          ctx.expert_swiglu_fused_dispatches == baseline_swiglu_before[0] &&
+          ctx.dense_swiglu_fused_dispatches == baseline_swiglu_before[1]
+        raise "baseline did not execute all unfused SwiGLU calls after row #{row}" unless
+          ctx.decode_compare_reference_expert_swiglu_calls - baseline_swiglu_before[2] == config.layers &&
+          ctx.decode_compare_reference_dense_swiglu_calls - baseline_swiglu_before[3] == config.layers
+      end
 
       candidate_dispatch_before = ctx.expert_down_sum_fused_dispatches
       candidate_reference_before = ctx.decode_compare_reference_expert_down_sum_calls
+      candidate_swiglu_before = {ctx.expert_swiglu_fused_dispatches, ctx.dense_swiglu_fused_dispatches,
+                                ctx.decode_compare_reference_expert_swiglu_calls, ctx.decode_compare_reference_dense_swiglu_calls}
       candidate.step(input)
       candidate_dispatch_delta = ctx.expert_down_sum_fused_dispatches - candidate_dispatch_before
       candidate_reference_delta = ctx.decode_compare_reference_expert_down_sum_calls - candidate_reference_before
@@ -322,6 +370,18 @@ module Drama3DenseDecodeCompare
           "candidate_reference_call_delta" => candidate_reference_delta,
         })
       end
+      if expert_swiglu_mode
+        expert_delta = ctx.expert_swiglu_fused_dispatches - candidate_swiglu_before[0]
+        dense_delta = ctx.dense_swiglu_fused_dispatches - candidate_swiglu_before[1]
+        raise "candidate did not execute all fused SwiGLU calls after row #{row}" unless
+          expert_delta == config.layers && dense_delta == config.layers
+        raise "candidate unexpectedly executed an unfused SwiGLU override after row #{row}" unless
+          ctx.decode_compare_reference_expert_swiglu_calls == candidate_swiglu_before[2] &&
+          ctx.decode_compare_reference_dense_swiglu_calls == candidate_swiglu_before[3]
+        expert_swiglu_row_proof << j({row: row, candidate_expert_fused_dispatches: expert_delta,
+          candidate_dense_fused_dispatches: dense_delta, baseline_expert_reference_calls: config.layers,
+          baseline_dense_reference_calls: config.layers, baseline_fused_dispatches: 0})
+      end
       expected_count = (row + 1) * stages.size
       raise "baseline boundary count after row #{row}" unless baseline_captures.size == expected_count
       raise "candidate boundary count after row #{row}" unless candidate_captures.size == expected_count
@@ -335,6 +395,14 @@ module Drama3DenseDecodeCompare
       raise "expert-down-sum reference call count mismatch" unless ctx.decode_compare_reference_expert_down_sum_calls == expected_dispatches
       raise "expert-down-sum fused dispatch count mismatch" unless ctx.expert_down_sum_fused_dispatches == expected_dispatches
       raise "expert-down-sum per-row proof count mismatch" unless expert_down_sum_row_proof.size == ROWS
+    end
+    if expert_swiglu_mode
+      expected_dispatches = (ROWS * config.layers).to_i64
+      raise "SwiGLU reference call count mismatch" unless
+        ctx.decode_compare_reference_expert_swiglu_calls == expected_dispatches &&
+        ctx.decode_compare_reference_dense_swiglu_calls == expected_dispatches
+      raise "SwiGLU fused dispatch count mismatch" unless ctx.expert_swiglu_fused_dispatches == expected_dispatches &&
+        ctx.dense_swiglu_fused_dispatches == expected_dispatches && expert_swiglu_row_proof.size == ROWS
     end
     expected_capture_count = ROWS * stages.size
     raise "baseline boundary count mismatch" unless baseline_captures.size == expected_capture_count
@@ -496,6 +564,21 @@ module Drama3DenseDecodeCompare
         "expected_total_dispatches" => ROWS * config.layers,
         "per_row" => expert_down_sum_row_proof,
       })
+    end
+    if expert_swiglu_mode
+      report["format"] = j("drama3-expert-swiglu-decode-comparison-v1")
+      report["mode"] = j("expert_swiglu")
+      report["selectors"] = j({baseline_dense_fusion: false, candidate_dense_fusion: false,
+        frozen_after_construction: true, dense_reduction: "tree", moe_batch: true,
+        expert_down_reduction: "native", expert_threads: 64, queue_depth: 2,
+        expert_swiglu_fusion: ctx.expert_swiglu_fusion_enabled, expert_down_sum_fusion: false,
+        baseline_unfused_override: true, profile: false, timeline: false})
+      report["expert_swiglu_dispatch_proof"] = j({
+        expert_reference_calls: ctx.decode_compare_reference_expert_swiglu_calls,
+        dense_reference_calls: ctx.decode_compare_reference_dense_swiglu_calls,
+        candidate_expert_fused_dispatches: ctx.expert_swiglu_fused_dispatches,
+        candidate_dense_fused_dispatches: ctx.dense_swiglu_fused_dispatches,
+        expected_per_family_per_row: config.layers, per_row: expert_swiglu_row_proof})
     end
     File.write(output_path, JSON::Any.new(report).to_pretty_json + "\n")
     puts({output: output_path, native_exact_pass: native_exact_pass,
