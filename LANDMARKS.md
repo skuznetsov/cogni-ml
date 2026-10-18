@@ -30187,3 +30187,35 @@ Refresh after source/toolchain/device/model/workload changes.
   change; timing also decays with host load. Standing authority: serial
   run_safe,15% memory floor, external scratch/local weights, unrelated processes
   untouched, exact-path local atomic commits/no push. NVIDIA work stays parked.
+
+### 2026-10-18 — GPU projection replay qualifies a bounded decode ranking
+
+- Diagnostic-only capture on the pinned short request covers exact projection
+  names in all40 backbone layers and all4+9 tower blocks at rows0/29/59:
+  597/598/598 calls. The first main head is explicitly omitted. Inputs, expert
+  IDs and outputs are snapshotted and compared on GPU before mutation; snapshots
+  add41,924,840B, with no extra capture wait or activation read.
+- The final role-split replay has423 paired identical-arm cells/rounds,
+  1,269 commands,55,616,202 checked values per arm, no bit/nonfinite mismatch,
+  and negative control[2,1]. Full60 codes/sampler tape/WAV and normal122-command
+  ledgers match. Exact inventory and kernel/reduction homogeneity guard against
+  missing or mixed captures;7 Crystal and13 Python guard examples pass.
+- Local per-row medians: expert down16.14–16.29ms, gate/up12.75–13.05ms,
+  qkv8.61–8.72ms. Other linear roles are separate. Recurrent state, attention
+  execution and sampler remain unranked; command costs are not additive request
+  costs. No production kernel/default changed and no WAV speedup is claimed.
+- Rebuilt bounded tower upstream replay equals all2,025 prior comparisons and
+  ledgers;675 native sites exact, same3 strict failure sites, unchanged tolerances.
+  Numerical return pointer remains late-layer/MoE39 in the native frontier.
+- Next falsifier: varying-input all-layer down and expert weighted-sum fusion
+  pairs preserving reduction order, then profiler-off complete WAV
+  qualification. Previous blanket SIMD/fusion/packing local wins did not admit
+  defaults. The unknown recurrent/sampler remainder can change priorities.
+- Details `docs/drama3-decode-replay.md`, index
+  `.landmark/evidence/drama3-decode-replay.json`, raw receipts/binaries under
+  `/opt/mldata_ssd/cogni-ml/drama3-decode-replay-20261018/`. Root execution and
+  correlated mini-Quad review qualify only this diagnostic scope. Refresh on
+  source/compiler/runtime/model/input/reference/tolerance/queue/device/OS or
+  artifact change; timings also decay with host load. Standing authority:
+  serial run_safe,15% floor, external scratch/local weights, unrelated processes
+  untouched, exact-path local atomic commit/no push. NVIDIA remains parked.

@@ -10,7 +10,51 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: decode replay after complete capture — 2026-10-17
+## Active slice: captured decode-family replay — 2026-10-18
+
+The complete capture below establishes decode command windows but rejects
+phase-specific shader-family attribution. The next probe records actual
+decode projection operands with GPU snapshots in a diagnostic-only executable,
+replays homogeneous production dense/expert projection families, and compares
+outputs on GPU. Keep immutable checkpoint buffers mapped; snapshot inputs before
+the call and outputs before the caller can mutate them. Time complete replay
+commands with existing completion timestamps, outside capture and comparison
+commands. Count observed omitted generic dispatches; attention, recurrent state,
+sampler and other uninstrumented direct paths remain unranked. Local command
+costs are not additive request costs.
+
+CAUTION: aliased snapshots, missing direct projection calls, replay cache
+warmth and mismatched command domains can create a false ranking or speedup.
+DoD: exact finite receipts including seeded failures; representative early,
+middle and late decode rows; zero activation reads; no extra capture waits;
+counterbalanced replay commands and an explicit unknown-cost remainder.
+Any selected arithmetic-preserving candidate must retain existing upstream
+metrics and pass profiler-off complete-WAV pairs before default promotion.
+The existing strict upstream failures remain open. Rollback is omitting the
+standalone probe; no production selector change is admitted by this diagnostic
+qualification. Heavy runs remain serial under
+run_safe, with external scratch, local weights and the authorized 15% floor.
+
+Outcome: 1,793 exact-inventory projection captures at rows0/29/59 preserve all
+60 codes, sampler tape, WAV and normal read/wait ledgers. The final 423-pair
+replay checks 55,616,202 values per identical arm with zero bit/nonfinite
+mismatches and rejects the seeded bit/NaN control. Exact-name and homogeneous
+kernel/reduction guards prevent a smaller or mixed capture from qualifying.
+All 2,025 bounded tower upstream comparisons repeat the saved metrics;
+the same three strict sites remain over tolerance.
+
+Local command medians are 16.14–16.29ms for expert down, 12.75–13.05ms for
+expert gate/up, and 8.61–8.72ms for linear-attention qkv, per selected row.
+The other four linear roles are now measured separately. Uncaptured recurrent,
+attention execution and sampler work remain unranked; no full-request speedup
+is established. Next discriminator: varying-input all-layer expert-down and
+weighted-sum fusion pairs, preserving the original reduction order, followed
+by full-WAV qualification. A new qkv shape-specific loading/reuse hypothesis
+is a separate candidate. Previously rejected blanket selectors and fusion
+defaults are not reopened by local cost alone. See
+[captured projection replay](drama3-decode-replay.md).
+
+## Prior slice: complete decode capture — 2026-10-17
 
 At `03435478`, the last two exact-arithmetic fusion candidates improve local
 probes without a repeatable complete WAV benefit. The next performance
