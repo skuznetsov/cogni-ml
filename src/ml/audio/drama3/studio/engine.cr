@@ -59,6 +59,7 @@ require "../wav"
         before_alloc = @context.allocation_stats
         before_down_sum_dispatches = @context.expert_down_sum_fused_dispatches
         before_expert_swiglu_dispatches = @context.expert_swiglu_fused_dispatches
+        before_gdn_post_dispatches = @context.gdn_post_fused_dispatches
         before_dense_swiglu_dispatches = @context.dense_swiglu_fused_dispatches
         generator = ResidentGenerator.new(@config, @store, @context, capacity.to_i32)
         # Progress is telemetry, not a per-frame pipe/disk transaction. This
@@ -123,6 +124,8 @@ require "../wav"
                              resident_expert_down_sum_fused_dispatches: @context.expert_down_sum_fused_dispatches - before_down_sum_dispatches,
                              resident_expert_swiglu_fusion: @context.expert_swiglu_fusion_enabled,
                              resident_expert_swiglu_fused_dispatches: @context.expert_swiglu_fused_dispatches - before_expert_swiglu_dispatches,
+                             resident_gdn_post_fusion: @context.gdn_post_fusion_enabled,
+                             resident_gdn_post_fused_dispatches: @context.gdn_post_fused_dispatches - before_gdn_post_dispatches,
                              resident_dense_swiglu_fused_dispatches: @context.dense_swiglu_fused_dispatches - before_dense_swiglu_dispatches,
                              resident_graph: graph.transform_values { |value, key| key.in?("submitted", "completed", "completion_waits") ? value - before_graph[key] : value },
                              resident_allocation_stats: {allocations: allocation[:allocations] - before_alloc[:allocations],

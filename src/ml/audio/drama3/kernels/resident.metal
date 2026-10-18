@@ -25,6 +25,27 @@ kernel void dr3_rms(device const float* x [[buffer(0)]],device const float* w [[
     float inv=1.0f/sqrt(sum/float(width)+as_type<float>(uint(p[2])));
     for(uint j=0;j<width;j++)y[h*width+j]=x[h*width+j]*inv*(p[3]?1.0f+w[j]:w[j]);
 }
+// Lane zero retains the original ascending RMS reduction. Elementwise work
+// shares its F32 inverse without materializing normalized/SiLU buffers.
+kernel void dr3_gdn_post(
+    device const float* x [[buffer(0)]], device const float* z [[buffer(1)]],
+    device const float* w [[buffer(2)]], device float* y [[buffer(3)]],
+    constant ulong* p [[buffer(4)]], uint head [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]]) {
+    uint width=uint(p[0]); uint base=head*width;
+    threadgroup float inverse;
+    if(lane==0) {
+        float sum=0;
+        for(uint j=0;j<width;j++)sum+=x[base+j]*x[base+j];
+        inverse=1.0f/sqrt(sum/float(width)+as_type<float>(uint(p[1])));
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for(uint j=lane;j<width;j+=64) {
+        float normalized=(x[base+j]*inverse)*w[j];
+        float activated=z[base+j]*dr3_sigmoid(z[base+j]);
+        y[base+j]=normalized*activated;
+    }
+}
 kernel void dr3_rope(device float* x [[buffer(0)]],constant ulong* p [[buffer(1)]],uint id [[thread_position_in_grid]]) {
     uint pairs=uint(p[2])/2;if(id>=p[0]*pairs)return;uint h=id/pairs,i=id%pairs;
     float angle=float(p[3])/pow(as_type<float>(uint(p[4])),float(2*i)/float(p[2]));float c=cos(angle),s=sin(angle);

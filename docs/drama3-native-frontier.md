@@ -10,7 +10,56 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: exact expert gate/up/SwiGLU fusion — 2026-10-18
+## Active slice: exact GDN postprojection corridor — 2026-10-18
+
+At `699879e3`, the user authorized the next bounded experiment and clarified
+that the earlier Qwen mathematics meant surrogates and temporal GDN parallelism,
+not the ordinary rank-one update/output fusion. Revisit those distinct research
+paths from live source without importing approximate arithmetic into this slice.
+
+Admit an opt-in `DRAMA3_GDN_POST_FUSION=0|1`, frozen at Context construction,
+default/rollback 0. Replace only `rms(output, norm.weight) -> silu(z) -> multiply`
+at `linear_attention_ready`. Preserve the ascending per-head F32 RMS fold,
+`(x * inverse_rms) * weight`, stable SiLU, and final multiply order. Leave all
+recurrent state writes, convolution, q/k normalization and out projection
+unchanged. A head-local broadcast/barrier is allowed; no CPU/GPU readback,
+submission or wait is added. Invalid shape/owner is rejected before encoding;
+unsupported pipeline limits retain the old sequence.
+
+CAUTION: compiler reassociation, special-value handling, a non-diagnostic
+fallback or serial sigmoid work can invalidate exactness or speed. The first
+falsifier is a fail-first API spec followed by GPU bit/class comparisons across
+edge widths and slices, with seeded comparison defects. Then capture actual
+varying GDN operands across all 30 recurrent layers, compare output on GPU,
+and time counterbalanced replay commands outside comparison work. Preserve
+saved MLX metrics at unchanged tolerances, ordinary code/tape/EOS/WAV identity
+and read/wait ledgers. Complete-request pairs are required for a request-speed
+claim/default promotion. Local gains alone do not qualify one. Root runs heavy
+work serially under run_safe, using external scratch and the authorized 15%
+free-memory floor. Full-state temporal scan and surrogate verification remain
+separate, unimplemented DRAMA experiments.
+
+Outcome: 25 release Metal examples and 36 offline driver checks pass. All 90
+actual-input GDN captures and 243 native backbone boundary pairs are bit-exact;
+saved MLX metrics are identical, including the existing row 1/layer 39 strict
+failure. All 24 full requests preserve codes, sampler tape, EOS, WAV and ordinary
+read/wait ledgers. Local replay favors fusion at a median paired 2.5806x, but
+these command intervals may overlap. Warm allocations decrease by 5,340.
+Forward/reverse complete-request medians improve from 25.777/22.953 s to
+24.247/21.923 s, while two of four mirrored worker contrasts regress and the
+unchanged DAC moves materially. Keep default 0; causal complete-request gain is
+not established. Source review and 29 deliberately damaged receipt checks support
+the bounded claims, not independent build/model attestation. See
+[GDN postprojection qualification](drama3-gdn-post.md).
+
+Next falsifier: known-input prefill GDN affine block composition at production
+head dimensions, charging summary, prefix, replay, every output and committed
+state. Preserve the existing output/state and upstream gates. F32 reassociation
+can reject an algebraically exact scan. Historical projected-K/block-residual
+surrogates and greedy verification do not certify stochastic DRAMA decode;
+their distinct evidence and limitations are in the optimization roadmap.
+
+## Prior slice: exact expert gate/up/SwiGLU fusion — 2026-10-18
 
 The user authorized the audit roadmap in
 [optimization continuation](drama3-optimization-roadmap.md). Begin with routed
@@ -49,11 +98,9 @@ the unchanged DAC phase moves materially. Keep default 0: a repeatable causal
 full-request win is not established. Details, limits and refresh commands:
 [expert SwiGLU qualification](drama3-expert-swiglu.md).
 
-Next admissible probe: establish exact RMS/SiLU/multiply postprojection
-equivalence at `linear_attention_ready`, then capture actual GDN operands and
-measure that bounded corridor. Preserve the sequential RMS fold, recurrence
-state writes and `out_proj`; do not infer a rank-one algebra speedup from
-adjacent dispatch fusion. The other roadmap branches remain unimplemented.
+The GDN postprojection probe is qualified above. The other roadmap branches
+remain unimplemented; adjacent dispatch fusion does not establish a temporal
+GDN scan or a surrogate decode speedup.
 
 ## Prior slice: native expert down and weighted-sum fusion — 2026-10-18
 

@@ -17,6 +17,10 @@ benchmark evidence. User authorized implementation after the 2026-10-18 audit.
   upstream no-regression and 24-request checks. It removes 21,360 warm-request
   allocations, but one timing block is unchanged and one mirrored contrast
   regresses. It remains default-off; this is not a repeatable full-WAV speedup.
+- [GDN postprojection fusion](drama3-gdn-post.md) retains exact native output
+  bits and saved MLX metrics in the tested scope. Local paired command intervals
+  favor fusion at 2.5806x and warm allocations decrease by 5,340. Two of four
+  full-WAV worker contrasts regress; it also remains default-off.
 - [Late upstream differences](drama3-late-matched.md) remain unresolved. Preserve
   existing tolerances; unchanged MLX metrics are a no-regression claim.
 - [Projection replay](drama3-decode-replay.md) provides bounded family costs;
@@ -36,14 +40,13 @@ benchmark evidence. User authorized implementation after the 2026-10-18 audit.
    experts. Preserve original
    F32 reductions and stable sigmoid; qualify actual specialized dispatches,
    intermediate GPU bit checks, old upstream metrics and full WAV pairs.
-2. Exact GDN postprojection fusion, preserving all reduction trees. Profile the
-   unranked recurrence/normalization remainder before forecasting a gain.
-   The smallest source-backed corridor is `rms(output, norm.weight) -> silu(z)
-   -> multiply` at `backbone_resident.cr:358-362`. Preserve the sequential
-   per-head RMS fold and expression order; leave recurrence state writes and
-   `out_proj` unchanged. First falsifier: old versus fused F32 expressions at
-   edge head widths, followed by GPU output/state bits on actual operands.
-   This is dataflow fusion, not a new rank-one algebra result.
+2. Implemented, default-off: GDN postprojection `rms(output, norm.weight) ->
+   silu(z) -> multiply`. The sequential per-head RMS fold and expression order
+   are preserved; recurrence state writes and `out_proj` are unchanged. The
+   25-example GPU suite, 90 actual-input captures, 243 native boundaries and
+   24 complete requests pass their declared no-regression gates. Strict MLX
+   parity and repeatable causal full-request benefit remain unestablished.
+   This is dataflow fusion, not temporal GDN parallelism.
 3. q1 wavefront experiment: next backbone needs q0/q1 only, while tower finishes
    q2..q9. Actual overlap needs GPU queue dependencies, isolated scratch and
    retained frames. Single-queue reordering alone is insufficient; theoretical
@@ -86,48 +89,76 @@ complete-request benefit. Ordinary fusion, batching and overlap are not LTP/WBA.
 
 ## Earlier Qwen3.5 mathematical simplification
 
-The strongest source-backed match for the deployed decode simplification is the
-fused DeltaNet state update and output in
-`src/ml/gguf/kernels/delta_net.metal:645` in the primary Qwen checkout:
+The intended reference is Qwen3.5's surrogate and temporal-GDN parallelism
+work, not separate rank-one update/output fusion (`LM-codex-DN-FUSED-EXACT-1`).
+Evidence is from primary Qwen HEAD `d07e3089`, not DRAMA measurements.
 
-```
-delta = beta * (V - g * dot(S, K))
-S_next = g * S + K * delta
-y = scale * dot(S_next, Q)
-```
+- **Projected-K surrogate (approximate state).** Calibration K vectors define a
+  fixed per-head basis `U` (`bin/qwen35_deltanet_fixed_basis_probe.cr:3142-3158`).
+  For `S≈MUᵀ`, `c=Uᵀk`, `q̄=Uᵀq`, update
+  `M′=gM+β(v−gMc)cᵀ`, emit `y=M′q̄`
+  (`bin/qwen35_deltanet_fixed_basis_probe.cr:1275-1309`; exact recurrence:
+  `src/ml/gguf/qwen35_cpu.cr:1052-1099`). This is exact only for the projected-K
+  model. Chunk K/Q projection is token-parallel, but the low-rank state scan
+  still loops serially over tokens and parallelizes rank work
+  (`src/ml/gguf/kernels/delta_net.metal:81-112, 397-470`): it reduces state
+  work, not exact temporal dependence.
+- Local known-span gains: 24-token core `9.63→4.55 ms` (9B),
+  `13.99→4.04 ms` (27B); full layer `48.9→16.1 ms`, `77.1→29.1 ms`
+  (`LANDMARKS.md:767-783`). Autoregressive draft was slower than exact
+  (`188.9/630.5 ms` vs `180.1/493.9 ms`); ideal-overlap estimates were only
+  `1.0579x/1.0839x` and remained draft-bound (`LANDMARKS.md:788-793`).
+- **Block-residual surrogate (approximate layer skip).** The probe collects
+  exact block input/output pairs, fits PCA plus a ridge residual map, then uses
+  `x+Δ̂(x)` in place of the selected block
+  (`bin/qwen35_deltanet_fixed_basis_probe.cr:3248-3287, 3839-3903, 3946-4025`).
+  It predicts a block; it is not a GDN scan. On 9B band `26:27`, rank 16,
+  gamma 8 reached `92.89%` mean / `83.33%` minimum acceptance with exact greedy
+  parity, but self-spec was `0.4553x` sequential exact speed (`10727.5 ms`
+  baseline vs `23565.8 ms`; ideal overlap `0.8764x`;
+  `LANDMARKS.md:6556-6580`). A wider band fell from near break-even at gen 8 to
+  `57.75%` mean acceptance at gen 16; correction preserved parity but charged
+  the rejects (`LANDMARKS.md:6604-6624`).
+- **Exact affine scan (temporal parallelism).** Per value row,
+  `rₜ=rₜ₋₁Aₜ+Bₜ`, `Aₜ=gₜ(I−βₜkₜkₜᵀ)`, `Bₜ=βₜvₜkₜᵀ`; compose
+  `(A₁,B₁)∘(A₂,B₂)=(A₁A₂,B₁A₂+B₂)`, scan block prefixes, then replay for every
+  output (`src/ml/gguf/qwen35_deltanet_block_scan.cr:142-170`,
+  `src/ml/gguf/qwen35_deltanet_scan_model.cr:26-63`). Algebra tests passed.
+  A compact-B subkernel improved `2.179→0.302 ms`, but the full single-block,
+  state-only route lost to rowwise (`0.422-0.714 ms` vs `0.277-0.516 ms`); prefix
+  scan/replay/output costs remain, and no product integration followed
+  (`LANDMARKS.md:4961-5071`). Changed F32 order means algebraic exactness is not
+  bitwise equivalence.
 
-The rank-one update allows output accumulation while writing the new state,
-removing a separate materialized decay and a later state read. The historical
-`LM-codex-DN-FUSED-EXACT-1` records direct numerical gates and paired 20/64-token
-decode gains; `qwen35_metal.cr` still selects this path by default unless
-`QWEN35_DN_FUSED=0`. Those are historical Qwen measurements, not DRAMA evidence.
-Its prior numerical checks permit small differences; they do not certify the
-unchanged bitwise reduction contract of the current DRAMA slice.
+**Verifier/deployment.** The scanner accepts candidate IDs through the first
+exact target top-1 mismatch, emits the target ID, and leaves state replay to the
+caller (`src/ml/gguf/qwen35_spec_acceptance.cr:1-47`). The wall runner snapshots
+verifier state, verifies known candidates, then restores and replays the emitted
+prefix through exact target prefill after rejection (`bin/qwen35_deltanet_fixed_basis_probe.cr:7280-7319`). This protects the fixed temperature-zero greedy sequence; it does
+not preserve stochastic target distribution or a fixed random-tape sample path
+(no probability-ratio or residual-draw step). Product generation still says
+`product_self_spec=unsupported decode_path=unchanged`
+(`bin/qwen35_generate.cr:721-740`); its plan validates routes without executing
+approximate proposal bodies (`src/ml/gguf/qwen35_self_spec_plan.cr:7-11`).
 
-The alternate identity `dot(g*S + K*delta, Q) = g*dot(S,Q) + delta*dot(K,Q)`
-was tested separately and failed to improve longer decode. Associative affine
-composition/WY block scan has a small-shape algebra proof but its attempted
-compact Metal route lost to the rowwise kernel. Do not present either as the
-deployed decode win. See `LANDMARKS.md` entries `LM-codex-DN-FUSED-EXACT-1`,
-the output-dot refutation near line 2888, and block scan near line 4961.
+**DRAMA transfer.** Exact affine scan is a prefill candidate: `BackboneResident#prefill`
+is layer-major and batches projections, while GDN currently processes rows in
+order (`src/ml/audio/drama3/backbone_prefill.cr:11-41, 87-101`;
+`src/ml/audio/drama3/backbone_resident.cr:346-360`). Prompt-frame chunks are known inputs
+(`src/ml/audio/drama3/generator_resident.cr:396-420`); preserve convolution
+history order and existing F32 output/state gates. During generation, the next
+main token and residual codes are sampled before the next scalar backbone step
+(`src/ml/audio/drama3/generator_resident.cr:164-205`), so future GDN inputs are
+unknown. Qwen therefore motivates a bounded prefill falsifier, not a DRAMA
+decode claim. Projected-K or block residual changes the exact model/sampler
+contract and requires separate quality and verification evidence.
 
-Two related techniques have different contracts. Q4 prefill shares an H16 input
-conversion that both original GEMMs already perform; its guarded FFN route is
-`qwen35_metal.cr:3597` and `:6820` (`LM-codex-Q4K-PAIR-H16-1`). This is exact
-dataflow reuse only when that same rounding already exists. Introducing H16
-inputs to a current F32 path would change precision. Projected-K rank-64
-recurrence (`LM-QWEN35-DELTANET-LOWRANK-1`) is approximate/probe-only: a prompt
-falsifier found a greedy-token mismatch. Exact verification can protect a
-committed result but did not establish a speed win over ordinary exact decode.
-Neither route qualifies DRAMA under its current precision contract. The
-associative scan is a future long-prefill hypothesis, not a deployed win;
-algebraic equivalence alone does not preserve F32 operation order.
-
-A second relevant negative prior: Qwen's Q8 paired SwiGLU passed focused
-correctness but regressed wall time and was reverted. DRAMA uses different
-affine weights and shapes; real-input and complete-request pairs must decide
-whether this attempt survives. Historical compressed-state and shape-specific
-wins remain hypotheses here, not fresh DRAMA performance evidence.
+Immediate mathematical falsifier: a bounded known-input prefill block at the
+production GDN dimensions, including summary construction, prefix composition,
+replay, every output and final state commit. Test the existing output/state gates
+before forecasting speed or touching production routing. State-only subkernel
+gains are insufficient; changed F32 reduction order may reject the route. q1
+overlap and the other accepted branches remain available, unimplemented paths.
 
 Refresh after source, compiler/driver, device, weights, prompt, sampler or
 reference changes. Active return pointer: `docs/drama3-native-frontier.md`.

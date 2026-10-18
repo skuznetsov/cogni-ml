@@ -35,6 +35,7 @@ CONTROLS = {
     "DRAMA3_TOWER_FFN_PAIR_FUSION": "0",
     "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
     "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+    "DRAMA3_GDN_POST_FUSION": "0",
     "DRAMA3_PREFILL_CHUNK": "1",
 }
 INPUT = {
@@ -108,8 +109,85 @@ def validate_expert_swiglu_fusion(report, requested_mode):
             assert count == 0, f"baseline arm used a {label} SwiGLU fused dispatch"
 
 
+def parse_gdn_post_schedule(value):
+    modes = [mode.strip() for mode in value.split(",")]
+    if any(mode not in ("0", "1") for mode in modes) or "0" not in modes:
+        raise ValueError("GDN post fusion schedule must contain only 0 or 1 and include baseline 0")
+    return modes
+
+
+def configure_gdn_post_arm(controls, requested_mode):
+    controls["DRAMA3_GDN_POST_FUSION"] = requested_mode
+    controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
+
+
+def validate_gdn_post_fusion(report, requested_mode, *, expected_prompt_rows, expected_max_frames):
+    expected = requested_mode == "1"
+    actual = report["resident_gdn_post_fusion"]
+    assert type(actual) is bool and actual is expected, "frozen GDN post selector differs from requested arm"
+
+    prompt_rows = report["prompt_rows"]
+    frames = report["frames"]
+    max_frames = report["max_frames"]
+    assert type(expected_prompt_rows) is int and expected_prompt_rows > 0, "invalid paired prompt row count for GDN post coverage"
+    assert type(expected_max_frames) is int and expected_max_frames > 0, "invalid requested max frame count for GDN post coverage"
+    assert type(prompt_rows) is int and prompt_rows == expected_prompt_rows, "reported prompt rows differ from paired baseline"
+    assert type(max_frames) is int and max_frames == expected_max_frames, "reported max frames differ from requested input"
+    assert isinstance(frames, list) and 0 < len(frames) <= expected_max_frames, "invalid generated frames for GDN post coverage"
+    expected_dispatches = (expected_prompt_rows + min(len(frames), expected_max_frames - 1)) * 30
+    count = report["resident_gdn_post_fused_dispatches"]
+    assert type(count) is int and count >= 0, "invalid GDN post fused dispatch count"
+    if expected:
+        assert count == expected_dispatches, (
+            f"candidate arm used {count} GDN post fused dispatches; "
+            f"expected {expected_dispatches} from all backbone rows"
+        )
+    else:
+        assert count == 0, "baseline arm used a GDN post fused dispatch"
+
+
 def validate(report, wav_sha, baseline):
     base = baseline["report"]
+    current_engine_report = (
+        report.get("backend") == "metal_resident" or base.get("backend") == "metal_resident"
+    )
+    # The request is the independent cap/sampler oracle; the saved baseline is
+    # the paired oracle for tokenized prompt rows and termination outcome.
+    for key in ("max_frames", "prompt_rows"):
+        if current_engine_report or key in report or key in base:
+            assert key in report and key in base, "missing paired report field " + key
+            actual = report[key]
+            expected = base[key]
+            assert type(actual) is int and type(expected) is int, key + " must be an integer"
+            if key == "max_frames":
+                assert actual == INPUT[key] and expected == INPUT[key], key + " differs from pinned input"
+            else:
+                assert actual > 0 and expected > 0 and actual == expected, key + " differs from paired baseline"
+
+    for key in ("stopped_on_eos", "truncated"):
+        if current_engine_report or key in report or key in base:
+            assert key in report and key in base, "missing paired report field " + key
+            assert type(report[key]) is bool and type(base[key]) is bool, key + " must be a boolean"
+            assert report[key] is base[key], key + " changed"
+    if "stopped_on_eos" in report and "truncated" in report:
+        assert report["truncated"] is (not report["stopped_on_eos"]), "termination flags disagree"
+        frames = report["frames"]
+        assert isinstance(frames, list), "frames must be a list when termination flags are reported"
+        if report["stopped_on_eos"]:
+            assert 0 < len(frames) < INPUT["max_frames"], "EOS flag disagrees with frame count"
+        else:
+            assert len(frames) == INPUT["max_frames"], "truncation flag disagrees with frame count"
+
+    for key in ("text", "seed", "temperature", "top_k", "top_p"):
+        if current_engine_report or key in report or key in base:
+            assert key in report and key in base, "missing paired report field " + key
+            actual = report[key]
+            expected = INPUT[key]
+            expected_type = str if key == "text" else int if key in ("seed", "top_k") else float
+            assert type(actual) is expected_type and type(base[key]) is expected_type, key + " has invalid type"
+            assert actual == expected and base[key] == expected, key + " differs from pinned input"
+            assert actual == base[key], key + " differs from paired baseline"
+
     # Frames contain every generated code, and sampler_inputs pins the complete
     # uploaded uniform tape; waveform identity alone is not the arithmetic gate.
     for key in ("frames", "sampler_inputs", "resident_readbacks"):
@@ -142,6 +220,7 @@ def build_parser():
     schedules.add_argument("--tower-ffn-pair-schedule", help="Comma-separated 0/1 tower w1/w3 fusion; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--expert-down-sum-schedule", help="Comma-separated 0/1 expert down-sum fusion; coalesced DAC, scratch and profiling off")
     schedules.add_argument("--expert-swiglu-schedule", help="Comma-separated 0/1 routed/shared SwiGLU fusion; coalesced DAC, scratch and profiling off")
+    schedules.add_argument("--gdn-post-schedule", help="Comma-separated 0/1 GDN post fusion; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
@@ -157,7 +236,11 @@ def main():
     tower_ffn_pair = None
     expert_down_sum = None
     expert_swiglu = None
-    if args.expert_swiglu_schedule is not None:
+    gdn_post = None
+    if args.gdn_post_schedule is not None:
+        gdn_post = parse_gdn_post_schedule(args.gdn_post_schedule)
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in gdn_post]
+    elif args.expert_swiglu_schedule is not None:
         expert_swiglu = parse_expert_swiglu_schedule(args.expert_swiglu_schedule)
         schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_swiglu]
     elif args.expert_down_sum_schedule is not None:
@@ -235,6 +318,8 @@ def main():
             configure_expert_down_sum_arm(controls, expert_down_sum[arm])
         if expert_swiglu is not None:
             configure_expert_swiglu_arm(controls, expert_swiglu[arm])
+        if gdn_post is not None:
+            configure_gdn_post_arm(controls, gdn_post[arm])
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
@@ -288,6 +373,12 @@ def main():
                         validate_expert_down_sum_fusion(report, expert_down_sum[arm])
                     if expert_swiglu is not None:
                         validate_expert_swiglu_fusion(report, expert_swiglu[arm])
+                    if gdn_post is not None:
+                        validate_gdn_post_fusion(
+                            report, gdn_post[arm],
+                            expected_prompt_rows=baseline["report"]["prompt_rows"],
+                            expected_max_frames=INPUT["max_frames"],
+                        )
                     if binary == args.binary:
                         assert report["host_profile"]["enabled"] == (profile == "1")
                     records.append(item)

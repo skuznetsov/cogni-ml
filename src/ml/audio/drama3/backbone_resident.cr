@@ -357,8 +357,7 @@ module ML::Audio::Drama3
       v = convolved.slice(2 * kw, c.value_heads * c.value_dim)
       output = @ctx.alloc(v.count)
       @ctx.dispatch(@delta_kernel, SOURCE, [q, k, v, a, b, weight(prefix + ".A_log"), weight(prefix + ".dt_bias"), @delta[layer].not_nil!, output], [c.value_heads.to_u64, c.value_dim.to_u64, c.key_heads.to_u64, c.key_dim.to_u64], v.count)
-      normalized = @ctx.rms(output, weight(prefix + ".norm.weight"), c.eps, heads: c.value_heads)
-      @ctx.mul(normalized, @ctx.silu(z))
+      @ctx.gdn_post(output, z, weight(prefix + ".norm.weight"), c.eps, heads: c.value_heads)
     end
   end
 end

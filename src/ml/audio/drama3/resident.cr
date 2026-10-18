@@ -227,6 +227,8 @@ module ML::Audio::Drama3::Resident
     getter expert_swiglu_fusion_enabled : Bool
     getter expert_swiglu_fused_dispatches = 0_i64
     getter dense_swiglu_fused_dispatches = 0_i64
+    getter gdn_post_fusion_enabled : Bool
+    getter gdn_post_fused_dispatches = 0_i64
     @command : ML::Metal::CommandBuffer?
     @encoder : HostEncoder?
     @pending = [] of Buffer
@@ -268,6 +270,9 @@ module ML::Audio::Drama3::Resident
       swiglu_fusion = ENV["DRAMA3_EXPERT_SWIGLU_FUSION"]? || "0"
       raise ArgumentError.new("DRAMA3_EXPERT_SWIGLU_FUSION must be 0 or 1") unless swiglu_fusion.in?("0", "1")
       @expert_swiglu_fusion_enabled = swiglu_fusion == "1"
+      gdn_post = ENV["DRAMA3_GDN_POST_FUSION"]? || "0"
+      raise ArgumentError.new("DRAMA3_GDN_POST_FUSION must be 0 or 1") unless gdn_post.in?("0", "1")
+      @gdn_post_fusion_enabled = gdn_post == "1"
       @resources_enabled = ENV["DRAMA3_METAL_RESOURCES"]? == "1"
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1" || @resources_enabled
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
@@ -761,6 +766,33 @@ module ML::Audio::Drama3::Resident
       raise ArgumentError.new("resident RMS shape") unless heads > 0 && x.count % heads == 0 && w.count == x.count // heads && eps.finite? && eps > 0
       output = alloc(x.count)
       dispatch("dr3_rms", SOURCE, [x, w, output], [x.count.to_u64, w.count.to_u64, eps.to_f32.unsafe_as(UInt32).to_u64, zero_centered ? 1_u64 : 0_u64], heads)
+      output
+    end
+
+    # Preserve the serial per-head RMS fold and both intermediate F32 products.
+    # The selector is frozen; callers cannot silently change arithmetic mid-run.
+    def gdn_post(x : Buffer, z : Buffer, w : Buffer, eps : Float64, heads : Int32 = 1) : Buffer
+      check_owner!(x)
+      check_owner!(z)
+      check_owner!(w)
+      raise ArgumentError.new("resident GDN post shape") unless x.count > 0 && heads > 0 &&
+        x.count == z.count && x.count % heads == 0 && w.count == x.count // heads &&
+        eps.finite? && eps > 0
+      selected = pipeline("dr3_gdn_post", SOURCE) if @gdn_post_fusion_enabled
+      unless selected && selected.max_total_threads_per_threadgroup >= 64
+        return mul(rms(x, w, eps, heads: heads), silu(z))
+      end
+      output = alloc(x.count)
+      enc = encoder
+      enc.set_pipeline(selected)
+      [x, z, w, output].each_with_index do |binding, index|
+        enc.set_buffer(binding.buffer, index, offset: binding.offset)
+        @pending << binding
+      end
+      params = [w.count.to_u64, eps.to_f32.unsafe_as(UInt32).to_u64]
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 4)
+      enc.dispatch_threadgroups({heads, 1, 1}, {64, 1, 1})
+      @gdn_post_fused_dispatches += 1
       output
     end
 

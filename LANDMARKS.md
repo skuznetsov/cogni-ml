@@ -6,6 +6,30 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DRAMA3-GDN-POST-2026-10-18] Exact local fusion, default off
+
+- `DRAMA3_GDN_POST_FUSION=0|1` freezes at Context construction. The candidate
+  combines per-head RMS, SiLU(z) and multiply, preserving the ascending F32 fold
+  and products. No production read, submit or completion wait is added; existing
+  per-frame CPU EOS reads remain. Rollback/default is 0 and a new Context.
+- 25 release Metal examples, 36 offline driver checks, 90 varying-input captures
+  and 243 native boundary pairs pass. Saved MLX metrics are unchanged, including
+  row 1/layer 39 strict failure. All 24 full requests preserve code/tape/EOS/WAV
+  and ordinary read/wait ledgers. Warm allocations fall by 5,340.
+- Local paired GPU command intervals favor fusion at 2.5806x across eight pairs.
+  Full-request medians improve in both timing blocks, but two of four mirrored
+  worker contrasts regress and unchanged DAC timings drift. Causal full-WAV gain
+  is unestablished; keep default 0. Intervals may overlap and are not additive.
+- Final source review and 29 damaged-receipt attacks are ROBUST for these bounded
+  claims. Candidate model files are hashed; control payload is unauthenticated.
+  This is correlated review, not independent runtime replication. Qualification,
+  commands, source/artifact hashes and refresh: `docs/drama3-gdn-post.md` and
+  `.landmark/evidence/drama3-gdn-post.json`.
+- Next falsifier: known-input prefill GDN summary/prefix/replay, including every
+  output and committed state at production dimensions. Algebraic exactness alone
+  does not preserve F32 bits. Refresh after source/toolchain/device/checkpoint,
+  sampler/text/reference/queue-depth or flag-stack changes and artifact loss.
+
 ### [LM-DRAMA3-OPTIMIZATION-CONTINUATION-2026-10-18] Exact fusion first
 
 - User requested durable continuation and authorized implementation after the
@@ -24,10 +48,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   and the unchanged DAC phase moves. Keep `DRAMA3_EXPERT_SWIGLU_FUSION=0` by
   default. Evidence/limits: `docs/drama3-expert-swiglu.md` and
   `.landmark/evidence/drama3-expert-swiglu.json`.
-- Next discriminator: exact per-head RMS/SiLU/multiply corridor after GDN;
-  preserve state writes and reduction order. The historical Qwen rank-one
-  update/output fusion and bounded low-rank/scan limits are recorded in the
-  roadmap; they do not certify DRAMA bitwise arithmetic or performance.
+- The next exact per-head RMS/SiLU/multiply slice is qualified above, default-off.
+  Correction: the user's intended historical Qwen reference was projected-K and
+  block-residual surrogates plus temporal affine GDN scan, not the separate
+  rank-one update/output fusion. Their source-backed limits are in the roadmap.
+  Known-input prefill is the next bounded scan falsifier. The historical greedy
+  verifier does not certify stochastic DRAMA sampling or fixed-tape identity.
 - q1 overlap, GPU EOS blocks, calibrated BF16-to-Q8, line protocol and streaming
   remain hypotheses/future slices. Existing late MLX failures remain open.
 - Recheck source/model/device/compiler/sampler pins before reusing evidence;
