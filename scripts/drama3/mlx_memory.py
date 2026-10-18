@@ -135,13 +135,16 @@ class MemoryTrace:
         # scalar .item(), cache clearing, or allocator policy changes occur here.
         active = int(self.mx.get_active_memory())
         cached = int(self.mx.get_cache_memory())
+        peak = int(self.mx.get_peak_memory())
         rss = self.rss_reader()
-        exceeded = self.budget_bytes is not None and max(active + cached, rss) > self.budget_bytes
+        # MLX peak is cumulative since process start (this tracer never resets
+        # it). Include transient active allocations released before this sample.
+        exceeded = self.budget_bytes is not None and max(active + cached, peak, rss) > self.budget_bytes
         record = {
             "format": "drama3-mlx-memory-v1", "stage": stage, "pid": os.getpid(),
             "monotonic_seconds": time.monotonic(), "completed_rows": completed_rows,
             "mlx_active_bytes": active, "mlx_cached_bytes": cached,
-            "mlx_peak_active_bytes": int(self.mx.get_peak_memory()),
+            "mlx_peak_active_bytes": peak,
             "process_rss_bytes": rss, "caches": cache_inventory(groups or {}),
             "budget_bytes": self.budget_bytes, "budget_exceeded": exceeded,
         }
@@ -156,8 +159,9 @@ class MemoryTrace:
         Only for an isolated, single-threaded diagnostic. Require the pinned
         method's PREFILL_CHUNK_SIZE global to be 1 before entering the model.
         The final evaluation-count check detects additional schedule drift. The
-        budget is checked before entry and after existing evals; it cannot cap
-        a peak inside one evaluation. External run_safe pressure guards remain
+        budget is checked before entry and after existing evals, including MLX's
+        cumulative peak; it cannot interrupt a peak inside one evaluation.
+        External run_safe pressure guards remain
         necessary. Exceptions restore the original eval function.
         """
         if self._in_prefill:

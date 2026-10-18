@@ -30349,3 +30349,44 @@ Refresh after source/toolchain/device/model/workload changes.
   chunk schedule, MLX/driver or device change. Voice-quality work returns to
   the fixed-coarse experiment after memory causality and a causal fix are
   established; unchanged upstream tolerances and no-push authority remain.
+
+### 2026-10-18 — One bounded upstream prefill completes with stable row memory
+
+- The user authorized one measured first prefill with one MLX model, Studio
+  off. The exact private reference codes and text rebuilt the 269-row prompt;
+  the pinned F32 loader and upstream revision remained unchanged. The process
+  exited 0 under a 40GiB observed budget, 900s timeout and run_safe 15% floor.
+  Postflight found no probe process or Studio listener; free memory returned
+  to 82%. This completed grant does not restart the earlier voice experiment.
+- Core loading accounts for 29.2096GiB active, rising to 31.2396GiB after the
+  codec hook. Across rows 2..256, active-plus-cached spans only 0.375MiB;
+  sampled RSS drifts 7.375MiB. Row 257 adds the predicted 23MiB of logical
+  cache backing. The diagnostic tail copy adds 82.8125MiB of logical backbone
+  state; its physical increment was not isolated. The largest sampled
+  active-plus-cached value is 31.6531GiB. Sparse free-memory polls reached 27%,
+  which is not a continuously sampled minimum or an instantaneous safety cap.
+- The memory guard now includes cumulative MLX peak-active bytes, preventing
+  released transient peaks from escaping the next budget decision. A CPU
+  falsifier failed before the change; all 11 diagnostic CPU tests now pass.
+  The observer adds no GPU eval, wait or activation read at stage/row boundaries;
+  it still cannot interrupt an allocation inside an existing evaluation.
+- Official prompt assembly matches on GPU. One final-row backbone replay from
+  the copied pre-final cache has maximum absolute difference 0.0 and finite
+  endpoint hidden/cache arrays, with a +1 negative control. There is no matching
+  saved full-prompt golden or new independent native/upstream gate; tower and
+  all intermediate rows are outside this numerical check. Existing strict
+  tolerances and the native layer-39 discrepancy remain unchanged.
+- Root execution and correlated mini-Quad review support ROBUST only for this
+  first-prefill observation and numerical scope. Multi-GiB rowwise growth was
+  not reproduced; duplicate historical Studio instances remain plausible but
+  unproven. Repeated requests, generation retention and native worker lifetimes
+  remain open. Next discriminator is ownership/restart/cleanup inspection before
+  any separately authorized Studio run, not another unbounded two-arm probe.
+- Details `docs/drama3-prefill-memory.md`, index
+  `.landmark/evidence/drama3-prefill-memory.json`; private trace, harness and
+  receipts under `/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/`.
+  Refresh after source, checkpoint contents, precision, chunk schedule,
+  MLX/Metal/driver, device, input or concurrent-process changes. Timings include
+  telemetry and are not performance evidence. Model and Studio remain stopped;
+  unrelated projects were untouched, external scratch/local weights and
+  exact-path local atomic commit/no-push constraints remain in force.

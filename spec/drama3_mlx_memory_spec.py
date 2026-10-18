@@ -165,6 +165,18 @@ class MlxMemorySpec(unittest.TestCase):
             trace.prefill(Model(), SimpleNamespace(shape=(1, 1, 11)), [], [], stage="prefill")
         self.assertEqual(calls, [])
 
+    def test_transient_peak_excess_stops_even_after_active_memory_falls(self):
+        mx, _ = fake_mx()
+        output = io.StringIO()
+        mx.get_peak_memory = lambda: 201
+        trace = memory.MemoryTrace(mx, output, budget_bytes=200, rss_reader=lambda: 0)
+        with self.assertRaises(memory.MemoryBudgetExceeded):
+            trace.snapshot("after_eval")
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["mlx_active_bytes"] + record["mlx_cached_bytes"], 120)
+        self.assertEqual(record["mlx_peak_active_bytes"], 201)
+        self.assertTrue(record["budget_exceeded"])
+
     def test_chunk_schedule_is_checked_before_any_model_work(self):
         mx, calls = fake_mx()
         original_eval = mx.eval

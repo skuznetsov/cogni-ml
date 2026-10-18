@@ -1,10 +1,12 @@
 # DRAMA-3 prefill memory investigation
 
-The cause of the interrupted MLX probe's memory growth remains **IN_PROGRESS**.
-Source inspection rejects KV-cache growth alone as a multi-GiB explanation.
-No causal model, cache, precision, or kernel fix has been established. The new
-diagnostic is CPU-tested preparation for a future measurement, not a leak fix.
-The model and Studio remain stopped by user instruction.
+One bounded, single-model MLX prefill completed all 269 rows without
+reproducing multi-GiB per-row growth. Most allocation occurred while loading
+the F32 core and codec. Cache growth matched the source prediction. The cause
+of the older interrupted incident remains **IN_PROGRESS**: this run does not
+prove duplicate Studio processes caused it, or exclude retention in later
+generation and repeated requests. No causal model/cache/kernel fix is claimed.
+The diagnostic process exited; Studio was not started.
 
 ## Observed boundary and source identity
 
@@ -17,9 +19,9 @@ which memory grew. Preserve the aborted receipt and original script under
 This audit uses native base `60a28599`, MLX-audio
 `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7`, and checkpoint
 `cguldogan/drama-3-mlx-q4@5331ab509359c0e4a7e353a19e255ddf3e8152a8`.
-Only source, config/index JSON, and safetensors headers were inspected. No MLX
-import, model/Studio launch, weight tensor load, or GPU experiment was used for
-this investigation.
+The preparatory source audit used only source, config/index JSON, and
+safetensors headers. The separately authorized single-model runtime follow-up
+is recorded below. Neither phase started Studio.
 
 ## Static discriminators
 
@@ -93,7 +95,7 @@ each return, including rows 1, 256, 257, and 269. It delegates the original
 arguments exactly once, returns the original result, and restores the function
 in `finally`. No additional explicit GPU evaluation/synchronization, tensor
 readback, cache clear, precision change, or allocator-policy change is added.
-Actual MLX runtime behavior of the observer has not been exercised.
+The observer has now been exercised in the bounded runtime follow-up below.
 
 Records contain active/cached/peak MLX counters, current process RSS, and cache
 backing shapes/dtypes/bytes. They contain no activations or audio. Cache metadata
@@ -105,14 +107,17 @@ neither is an exact unified-memory physical-footprint measurement. The RSS
 subprocess and JSON writes add host overhead, so traced timings cannot support
 a performance claim.
 
-The explicit budget checks the larger of process RSS and active-plus-cached
-MLX bytes before prefill and after each existing evaluation. A budget violation
-flushes the offending record and stops before encoding another row. It cannot
-prevent a peak inside one evaluation or before a snapshot, and cannot protect
-against other processes. The normal external `run_safe` system-pressure guard
-and user-authorized 15% floor still apply to any future run. Counter/telemetry
-errors fail closed and abort the diagnostic; original evaluation errors are
-propagated. No budget value grants permission to restart a model.
+The explicit budget checks the maximum of process RSS, active-plus-cached
+MLX bytes, and cumulative MLX peak-active bytes before prefill and after each
+existing evaluation. The tracer never resets the peak counter. A CPU falsifier
+exposed that the original guard recorded the peak but omitted it from its
+decision; the guard now includes a transient peak even after active memory
+falls. A violation flushes the record and stops before encoding another row.
+It cannot interrupt a peak inside one evaluation or before a snapshot, and
+cannot protect against other processes. The external `run_safe` system-pressure
+guard and user-authorized 15% floor still apply. Counter/telemetry errors fail
+closed; original evaluation errors propagate. No budget value grants permission
+to restart a model.
 
 The `mx.eval` hook is process-global. Use only in the isolated single-threaded
 probe with `PREFILL_CHUNK_SIZE=1`; do not install it in Studio or a concurrent
@@ -129,7 +134,7 @@ Executed without importing the GPU/model runtime:
 
 ```text
 python3 -B spec/drama3_mlx_memory_spec.py
-  10 tests pass
+  11 tests pass
 python3 -B scripts/drama3/mlx_memory.py --model-dir <local-checkpoint>
   1167 tensors; 31,363,559,936 F32-core bytes
 git diff --check
@@ -139,17 +144,116 @@ git diff --check
 CPU falsifiers cover packed/promotion arithmetic, bad index paths and missing
 tensors, backing capacity versus valid prefix, one-for-one evaluation
 delegation, chunk-schedule rejection before model entry, pre-entry and per-row
-budget failure, original-error propagation,
+budget failure, released-but-over-budget peak detection, original-error propagation,
 hook restoration, schedule drift, absence of retained array handles, and no
 MLX/Torch/model import. These establish diagnostic logic, not GPU correctness,
-physical memory causality, or an upstream numerical gate. Tolerances are
-unchanged; no new upstream numerical result exists.
+physical memory causality, or an upstream numerical gate. The runtime result
+below adds a scoped upstream self-consistency check. Existing native/upstream
+tolerances are unchanged; no new independent full native gate was run.
 
-Next discriminator, only after runtime investigation is authorized: use a fresh
-external output directory, keep Studio stopped, and measure the first prefill
-with an explicit budget and stage/row telemetry. Fixed recurrent-state
-initialization and one 23 MiB KV step predict the cache portion. Growth beyond
-those terms should be localized to initial weight residency, row temporaries,
-or allocator reservation before changing kernels. Do not repeat the complete
-two-arm voice experiment as the first memory probe. Refresh this audit after
-source, checkpoint, precision, chunk schedule, MLX/driver, or device changes.
+## Bounded single-model runtime follow-up, 2026-10-18
+
+The user authorized one first-prefill measurement, without Studio. The private
+harness reused the aborted probe's exact text and saved `[10,178]` voice codes;
+it constructed the same `[269,11]` prompt. Inputs/audio remain on the external
+SSD and are not in Git. It loaded one model, including the original codec
+hook, through the same F32 core loader; packed U32 weights stayed packed.
+Pinned upstream was clean at `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7`.
+Runtime: MLX/MLX-Metal 0.31.1, NumPy 1.26.4, Torch 2.6.0; 64 GiB host.
+Known DRAMA/MLX runtime scans and Studio ports 8787/8788 were clear before
+launch and again afterward. Unrelated processes were untouched.
+
+```text
+PYTHONOPTIMIZE=0 PYTHONDONTWRITEBYTECODE=1 TMPDIR=<external-output>/tmp \
+COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
+scripts/run_safe.sh <pinned-venv-python> 900 40960 \
+  <external-output>/bounded_prefill.py
+```
+
+The child also rejects optimized Python, source drift and a matching second
+runtime before model import. Its observer used a 40 GiB budget; the external
+runner used the same RSS-tree limit, a 900-second timeout and the 15% floor.
+All 285 snapshots passed their budget checks. The process exited 0 and both
+Studio ports remained closed. System free memory was 82% before and after;
+sparse external polls reached 27%. That is not a continuously sampled minimum;
+the guard log reports no floor-triggered stop.
+
+| Stage / completed row | MLX active MiB | MLX cached MiB | Logical cache backing MiB |
+| --- | ---: | ---: | ---: |
+| Constructed / quantized | 0.01 | <0.01 | 0 |
+| Core shard 1 / 2 / 3 | 6,411.62 / 12,724.24 / 19,061.48 | 0 | 0 |
+| Core shard 4 / 5 | 25,566.10 / 29,910.63 | 0 | 0 |
+| Codec hook / parameter eval | 31,989.33 | 255.77 | 0 |
+| Prefill row 1 | 32,076.34 | 254.67 | 85.8125 |
+| Prefill row 2 | 32,078.97 | 252.04 | 85.8125 |
+| Prefill row 256 | 32,079.04 | 251.98 | 85.8125 |
+| Prefill row 257 | 32,104.06 | 253.83 | 108.8125 |
+| Prefill row 268, before checkpoint copy | 32,102.05 | 237.96 | 108.8125 |
+| Prefill row 269, with diagnostic checkpoint | 32,182.65 | 230.17 | 108.8125 + 82.8125 checkpoint |
+
+The core's measured active allocation is 29.2096 GiB; the codec hook raises
+it to 31.2396 GiB. Construction and quantization were lazy. Rows 2 through 256
+range from 31.3235 to 31.3273 GiB active; row 256 is only 76,812 bytes above row
+2. Across those rows, active-plus-cached spans only 0.375 MiB. RSS still drifts
+by about 7.4 MiB; this is not evidence of zero host retention. The exact 23 MiB
+logical cache step at row 257 matches the source prediction.
+Active/cached samples have small asynchronous lifetime fluctuations; a cache
+metadata change must not be equated to the difference between two physical
+footprint samples.
+
+For numerical checking only, the harness deep-copied 82.8125 MiB of logical
+backbone backing after row 268. The copy is lazy; row 269 includes this retained
+diagnostic state. Its physical increment was not isolated with a no-clone
+control. An immediate post-copy budget sample was also taken. There is no
+second full prefill, teacher cache, generation, sampler, or DAC decode.
+Peak-active was 31.4318 GiB through prefill, and
+31.4894 GiB including tail replay and terminal GPU reductions. The largest
+sampled active-plus-cached value was 31.6531 GiB, below the 40 GiB budget.
+Sampled RSS peaked at 3.4772 GiB during loading and stayed near 1.28 GiB in
+prefill; it clearly does not represent all Metal-buffer ownership. Do not add
+RSS and MLX counters or promote them to exact physical residency.
+
+The original 269 per-row `mx.eval` calls were delegated unchanged. Stage/row
+sampling adds no explicit GPU eval, wait or activation readback; it does add
+host RSS queries and JSON writes. The final check reads one five-number GPU
+receipt. Instrumented prefill took 33.554 seconds, while the trace from runtime
+import through terminal checks spans 82.087 seconds. These are diagnostic
+timings, not a speed benchmark. The runner's `after ~56s` is an approximate loop
+counter and must not replace the monotonic clock.
+
+### Upstream check and remaining falsifier
+
+The prompt built by GPU splicing matched official `build_prompt` exactly on
+GPU. After the original prefill, `_backbone_step` replayed the final row against
+the copied pre-final backbone cache. Upstream deliberately skips tower prefill
+on this last row, so replay also skips it. Endpoint hidden and all backbone
+cache arrays were finite, with maximum absolute replay difference **0.0**.
+A hidden perturbation of +1 produced difference 1.0, and a small array
+deepcopy/source-mutation control passed. This does not stress mutation of every
+cache layout, check tower finiteness, or compare all intermediate rows.
+
+No saved golden exists for this exact 269-row prompt. The existing private
+312-row controls use a different prompt and were rejected as a reference.
+The successful check establishes matched input and same-upstream tail replay
+consistency, not independent native/upstream parity. The prior strict native
+layer-39 discrepancy remains open; tolerances were not widened.
+
+Root execution and correlated mini-Quad review support **ROBUST** only for the
+bounded single-prefill observation and this numerical scope. Stable rows make
+intrinsic multi-GiB rowwise retention an unsupported explanation for this run.
+Concurrent full models remain a plausible historical contributor, but only
+one arm was measured and the old incident had no counters. Repeated requests,
+generation retention and native Studio lifetimes remain untested. Inspect
+single-worker ownership and restart/cleanup boundaries before any separately
+authorized Studio restart; do not infer that the full voice experiment is safe
+from this first-prefill result alone.
+
+The source/artifact digest index and exact selected counters are in
+`.landmark/evidence/drama3-prefill-memory.json`; full private trace, harness and
+receipts are under
+`/opt/mldata_ssd/cogni-ml/drama3-prefill-memory-20261018-2246/`.
+Refresh after source, checkpoint contents, precision, chunk schedule,
+MLX/Metal/driver, device, input or concurrent-process changes. Weight payloads
+were loaded as-is; this run recorded config/index hashes rather than rehashing
+all tensor payloads. The bounded runtime grant is consumed; model and Studio
+remain stopped at handoff.
