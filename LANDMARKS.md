@@ -30497,3 +30497,45 @@ Refresh after source/toolchain/device/model/workload changes.
   The bounded batch is finished; no model or Studio remains running. Serial
   run_safe, 15% floor, external scratch/local weights, unrelated projects
   untouched and exact-path local atomic commit/no-push boundaries still apply.
+
+### 2026-10-18 — DRAMA long multi-growth control at graph depths 0 and 2
+
+- Source 811f3c96 / the existing native binary completed serial cold-auto and
+  fixed-capacity pairs at both graph depths: 96 prompt rows, cap512, actual
+  growth 96 -> 192 -> 384 -> 607 at backbone/tower positions 96/95, 192/191,
+  384/383. All four native outputs match in complete codes, WAV bytes and
+  sampler inputs; all 512 code rows match pinned MLX. All runs cap without
+  EOS (23.77723356s); complete text delivery and upstream WAV parity are not
+  established. An independent CPU native Prompt.build matches all 96 MLX IDs.
+- Submit/complete/wait counts match auto/fixed within each depth: 1152 at
+  depth0, 641 at depth2, pending/retained0. Reads remain control4104 and
+  terminal4216832 bytes per job. Production sources and synchronization did
+  not change. Both private servers/workers exited normally, no owned children
+  or listeners remain; second owners reject before loading.
+- Entire-pair minimum sampled free/reclaimable memory is 20.990014% / 22.856045%
+  at depth0/2; automatic-only minima are 23.096251% / 23.554206%. Maximum sampled
+  Metal bytes are 27681030144 / 27680833536. The 15% floor, 40960MiB observed
+  budget and finite deadlines stayed unchanged. An initial MLX run was stopped
+  by the same 15% guard; retry used more headroom. These are sampled observations,
+  not a hard peak bound, physical residency proof or leak-freedom result.
+- Separate fixed608 common-prefix replays captured 1718 stages; four boundary
+  checkpoints and local require-path adjustments were added privately, with
+  arithmetic/cadence/tolerances unchanged.
+  Strict atol6e-5/rtol3e-4 comparison FAILS on 38/6443151 values, confined to 29
+  late tower-logit stages. First captured excess is step385; cause is unlocalized.
+  Captured backbone hidden/main logits/tower hidden pass. Counterfactual step512
+  has zero excess and is excluded. This is not a direct automatic-state trace;
+  old internal layer39 discrepancy remains open. Do not infer that exact sampled
+  codes close numeric parity or that growth caused the strict-logit mismatch.
+- Correlated review: ROBUST for the bounded native growth/output/counter claim;
+  strict numeric common-prefix parity is BROKEN for this captured set. Evidence:
+  .landmark/evidence/drama3-window-long.json and docs/drama3-studio-frontier.md;
+  private receipts/traces/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/. One cold/warm pair per
+  depth is not a speed or retention trend. Full-model 1024/4096, automatic voice
+  reference windows, and the parked 149632-byte residual remain outside scope.
+  Refresh on source/checkpoint/config/input/tape/capacity/precision/tolerance,
+  graph/allocator/runtime/device/driver changes; host workload changes admission.
+  Next numeric discriminator: trace the first excessive tower-logit coordinate
+  on the same prefix against MLX, without weakening the gate. Owned model and
+  Studio processes are stopped; no background service or push was started.

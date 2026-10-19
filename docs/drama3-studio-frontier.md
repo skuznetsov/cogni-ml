@@ -240,3 +240,76 @@ outside the claim. Manual mode remains the default. Evidence:
 under `/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/`. Refresh after
 source, checkpoint/config, runtime/device/driver, allocator/graph policy, capacity,
 input/tape or tolerance changes. Admission also depends on current host workload.
+
+## Long generation with repeated growth (2026-10-18)
+
+The longer control uses the same production binary from source revision
+`811f3c96d2679d404c951aa5db012a26072c3d39`, a 64-word English input, 96 prompt
+rows, a 512-frame cap and a shared F32 sampler tape. Each graph depth, 0 and 2,
+runs one cold automatic request followed by one fixed-capacity request in the
+same worker. Automatic capacity grows 96 -> 192 -> 384 -> 607 at backbone/tower
+positions 96/95, 192/191 and 384/383. All three admission receipts reconcile
+with the planned cache allocation, downstream reserve and retained generations.
+
+Both pairs completed 512 frames / 1048576 samples / 23.77723356 seconds. Every
+native code, WAV byte and sampler input matches within and across depths; every
+code frame also matches the pinned MLX F32 core control. All five generations
+hit the cap without EOS, so this verifies the bounded prefix rather than complete
+pronunciation of the supplied text. An independent CPU-only native Prompt.build
+export matches all 96 upstream prompt IDs. Studio's raw sidecars record the
+text and row count; they do not themselves persist those IDs.
+
+Automatic and fixed requests have identical submit/complete/wait counts within
+each depth: 1152 at depth 0 and 641 at depth 2. Both drain pending/retained work
+to zero. Readbacks stay at 4104 control bytes and 4216832 terminal bytes per
+request. No production code, synchronization, activation readback or arithmetic
+was changed for this verification.
+
+The entire pair's minimum sampled free/reclaimable memory was 20.990014% at
+depth 0 and 22.856045% at depth 2; automatic-only minima were 23.096251% and
+23.554206%. Maximum sampled Metal bytes were 27681030144 and 27680833536;
+maximum sampled process footprint was 3115320304 and 3127002072 bytes. These
+metrics overlap and must not be added. Serial run_safe retained its 15% floor,
+40960 MiB process-tree RSS guard and finite deadlines; engine observations are
+sampled, not a physical peak bound. An earlier MLX attempt stopped at the same
+15% floor; the retry used more available headroom without weakening guards.
+Both private HTTP servers and workers exited normally, with no owned children
+or listeners remaining. Second model owners were rejected before loading.
+
+Separate teacher-forced replays use the identical native-built prompt and full
+512-code continuation, with private copies of the existing diagnostics adding
+capture steps 96, 97, 288 and 289 and adjusting local require paths. Native
+arithmetic and row-submit cadence
+are unchanged; activations remain on the GPU until the final drain. Fixed
+capacity 608 consumes the last capped frame as well, so step 512 is explicitly
+counterfactual and excluded from actual-generation parity. The diagnostic is
+not a direct capture of the automatic request's internal states.
+
+At unchanged atol=6e-5 / rtol=3e-4, 38 of 6443151 actual-generation values exceed
+tolerance, across 29 late tower-logit stages. Strict numeric upstream parity
+therefore FAILS. The first captured excess is step 385; unsampled earlier steps
+are not covered. Backbone hidden, main logits and tower hidden have no excess
+in the captured set. Captures 0, 1, 96, 97, 192, 288, 289 and 384 pass; the
+counterfactual terminal step has zero excess but is excluded regardless.
+Overall max absolute error is 0.00012588501 and relative L2 is 2.2957594e-6;
+the largest absolute error is not itself outside its relative tolerance. The
+cause of these 38 excesses is not localized by this replay, and the earlier
+internal layer-39 discrepancy remains open. Neither discrepancy is attributed
+to window growth. Exact upstream codes do not establish hidden/logit or
+upstream waveform parity.
+
+The correlated mini-Quadrumvirate verdict is ROBUST for exact native production
+outputs and unchanged counters through these three admitted growths. The
+claim of strict numeric common-prefix parity is BROKEN for this captured set;
+the failed gate is preserved without changing precision or tolerances.
+
+One cold/warm pair per depth is not a speed or sustained retention experiment.
+The earlier 149632-byte residual remains parked. The full model was not run
+across 1024/1025 or at 4096 positions; the earlier small GPU tests retain that
+boundary coverage. Automatic reference windows remain outside the claim.
+Evidence: `.landmark/evidence/drama3-window-long.json`; private commands,
+receipts, traces and audio are under
+`/opt/mldata_ssd/cogni-ml/drama3-window-long-20261018/`. Refresh after source,
+checkpoint/config, runtime/device/driver, graph/allocator policy, capacity,
+input/tape or precision/tolerance changes. Current host workload also changes
+memory admission.
