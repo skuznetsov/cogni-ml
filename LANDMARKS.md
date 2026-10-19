@@ -30833,3 +30833,22 @@ Refresh after source/toolchain/device/model/workload changes.
 - Full XLSR conditioning, spatial pipeline parity and generation speed remain
   open. Reproduction, evidence hashes and refresh triggers are recorded in
   docs/wan-causal-audio.md; checkpoints and scratch remain external.
+
+### 2026-10-19 — Opt-in tiled F32 video attention primitive
+
+- The new opt-in primitive shares eight query rows over 32-key tiles while
+  retaining F32 operands, products, online softmax and accumulation. Existing
+  video attention remains the default. Encoding borrows the caller encoder
+  and buffers without submission, wait, activation readback or tracked Metal
+  buffer allocation; setup compiles head dimensions 64 and 128.
+- Six pinned PyTorch 2.8.0 MPS cases cover query/key tails, batches, sharp
+  logits, near ties, a single key and Wan's 36,608-key extent. All values pass
+  finite abs 2e-5 + rel 2e-5; repeated outputs are bit-identical. The final
+  focused/common primitive run reports 19 examples, zero failures/errors/
+  pending. Correlated mini-Quadrumvirate verdict ROBUST in this bounded scope.
+- One preceding baseline-first pair measured 209.46 ms versus 52.16 ms GPU at
+  Q=64, K=36,608, H=40, D=128. This provisional component timing does not
+  establish a controlled speedup, full-query cost or video generation speed.
+  Transformer integration, distinct-layer propagation and full video remain
+  open. Exact coverage, reproduction, local evidence and refresh triggers:
+  docs/video-tiled-attention.md.
