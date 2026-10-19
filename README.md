@@ -1,5 +1,25 @@
 # Cogni-ML
 
+> **Model licenses and user-supplied weights: pretrained model weights are not
+> bundled with Cogni-ML. Download them yourself from the official sources below,
+> read and comply with their licenses, and accept the terms where required.**
+>
+> **The core library's MIT license does not replace licenses covering model
+> weights, upstream code, or model-specific adaptations. Downloading weights
+> separately does not remove restrictions on commercial use, hosted services,
+> redistribution, or adapted inference code.**
+
+| Model | Official weights | Applicable license |
+| --- | --- | --- |
+| LTX 2.5 | [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) | [LTX-2.x Community License](https://github.com/Lightricks/LTX-2/blob/e98f6d927d83c92ef2be6aec76c8440b19306e39/LICENSE-2_x) |
+| DRAMA-3 | [fishaudio/drama-3](https://huggingface.co/fishaudio/drama-3) | [Fish Audio Community License](https://huggingface.co/fishaudio/drama-3/blob/main/LICENSE) |
+| Qwen-Image 2.1 | [Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) | [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE) |
+| Wan 2.2 S2V | [Wan-AI/Wan2.2-S2V-14B](https://huggingface.co/Wan-AI/Wan2.2-S2V-14B) | [Apache License 2.0](https://github.com/Wan-Video/Wan2.2/blob/1ea34ff48f87168174e12956e200b1d908b1c5ff/LICENSE.txt) |
+
+These links are starting points, not a complete license inventory. Check the
+terms for the exact checkpoint, revision, and auxiliary models you use. See also
+the [video source and license notices](third_party/VIDEO_NOTICES.md).
+
 Crystal machine learning library with native Apple Silicon GPU acceleration.
 
 Cogni-ML is currently two things:
