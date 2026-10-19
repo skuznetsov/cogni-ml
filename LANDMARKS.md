@@ -30621,3 +30621,41 @@ Refresh after source/toolchain/device/model/workload changes.
   source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/
   graph/capture-policy/precision/tolerance changes, or missing/changed private
   artifacts. No service or push.
+
+### 2026-10-19 — DRAMA terminal backbone norm isolated at step 385
+
+- Passive GPU captures at 384/385 preserve both backends' 1718 ordinary traces
+  bitwise, plus native674/MLX702 earlier details; 86 exact joins. Mixed inputs
+  are bit-equal, historical KV/SSM is not. All40 selected layer outputs at385
+  pass unchanged atol6e-5/rtol3e-4. At384, only layer39 output coordinate755
+  exceeds among selected layer outputs. Both terminal norm outputs pass;
+  these boundaries describe drift and do not establish a causal layer.
+- Terminal backbone RMSNorm is ordinary, eps1e-6; its converted BF16 weight
+  already includes the shift. Four GPU crossover diagonals reconstruct
+  bitwise, 8192 same-input values pass. Loaded Qwen/RMSNorm source paths and
+  hashes match passive replay. At385, norm-operator RMS3.16184852e-7 versus
+  incoming-input effect through MLX1.16726309e-6; both telescopes are exact.
+- Substituting only M(H_N) for N(H_N), with captured native pre-norm input,
+  fixed embedding and unchanged native tower HNorm/EH, retains both excessive
+  EH coordinates394/636. Replacement errors -7.46250153e-5/-9.36985016e-5
+  exceed allowed7.14400148e-5/6.79394102e-5. Original native HNorm/EH diagonals
+  reconstruct bitwise. This does not substitute the MLX diagonal M(H_M).
+- Production source is unchanged. Passive cadence remains608 submit/complete/
+  waits at depth2, no pre-drain reads;164 added GPU snapshots are diagnostic
+  work, not performance-neutral. Each standalone native probe drains once,
+  terminal32768/control0/diagnostic0 bytes. Serial run_safe retains configured
+  15% admission/stop threshold, finite deadlines and tree-RSS guards; logs do
+  not establish observed minima, graph retained bytes are accounting.
+- Correlated mini-Quadrumvirate: ROBUST within captured local attribution;
+  recomputed strict late-logit gate remains FAIL38 values in29 stages385–505.
+  Two analyzer schema EXIT1 attempts are retained, not passes. No Studio,
+  speed or quality claim. Next: layer39 attention/residual and stateless
+  norm/router/MoE crosses on identical captured inputs, keeping history separate.
+- Evidence: .landmark/evidence/drama3-backbone385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/. Eighteen source hashes
+  checked before/after runs match production811f3c96. Selected payload/binary
+  pins do not attest full checkpoint or transitive build integrity. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/graph/
+  capture-policy/precision/tolerance changes or missing/changed artifacts.
+  No service or push.

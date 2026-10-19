@@ -477,3 +477,88 @@ matches the production revision in a post-run check, not a before/after capture.
 Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
 prefix/cache/graph/capture-policy/precision/tolerance changes; missing or changed
 private artifacts reopen dependent claims.
+
+## Step-385 terminal backbone norm (2026-10-19)
+
+Passive GPU snapshots now cover all 40 backbone layer outputs and the terminal
+norm boundary at steps 384/385. Both replays preserve all 1718 ordinary captures
+(6449296 F32 values) bitwise against their earlier runs. Native also preserves
+674 earlier tower details; MLX preserves 702. There are 86 exact capture joins.
+The mixed backbone inputs at these two steps are bit-equal, but historical
+KV/SSM state differs across implementations; later layer comparisons are
+descriptive and do not isolate a layer operator or a generation-wide origin.
+
+All 40 selected layer outputs at step 385 pass the unchanged atol=6e-5 /
+rtol=3e-4 gate. Their RMS difference grows from 2.04040892e-5 after layer 38 to
+4.27149705e-5 after layer 39. At step 384, layer 39 has the first selected
+layer-output excess, at coordinate 755. Both terminal norm outputs pass.
+These observations do not establish that the old layer-39 MoE discrepancy or
+window growth caused the later tower failures.
+
+The backbone terminal norm is ordinary RMSNorm, unlike the tower's
+zero-centered HNorm. Its original BF16 checkpoint weight already includes the
+converter's shift; the GPU probes promote it to F32 without adding another 1.
+The native deployed RMS kernel and the actual upstream Qwen `nn.RMSNorm` use
+epsilon 1e-6. The loaded Qwen and MLX normalization source paths and hashes
+match those of the passive replay. All four original diagonals reconstruct
+bitwise, and all 8192 same-input norm comparisons pass the unchanged gate.
+
+At step 385, the norm-operator effect on captured native input has RMS
+3.16184852e-7; changing the captured input through MLX norm has RMS
+1.16726309e-6. The original output difference has RMS 1.28342528e-6. Both
+four-cell telescoping decompositions reconstruct exactly in post-drain F64
+analysis of F32 outputs. The larger input effect in RMS does not make the norm
+operator contribution irrelevant at every coordinate.
+
+A direct GPU counterfactual replaces only `N(H_N)` with `M(H_N)`: the MLX
+terminal norm evaluated on the same captured native pre-norm input. It keeps
+the bit-equal embedding half, native tower HNorm/EH and original MLX EH
+reference fixed. It does not replace the hidden with the MLX diagonal
+`M(H_M)`. Both original native HNorm/EH diagonals reconstruct bitwise.
+
+| EH coordinate | Original error | Terminal-norm-only replacement error | Allowed error |
+| --- | ---: | ---: | ---: |
+| 394 | -7.36713409e-5 | -7.46250153e-5 | 7.14400148e-5 |
+| 636 | -9.60826874e-5 | -9.36985016e-5 | 6.79394102e-5 |
+
+Only coordinates 394 and 636 fail in each 2048-value EH output. Thus matching
+terminal norm arithmetic alone is insufficient for these captured failures.
+This is a local intervention, not a production change or a complete generation
+with substituted arithmetic. The strict captured late-logit gate is recomputed
+from the new ordinary traces: 38 excessive values in 29 stages, spanning steps
+385 through 505. No precision or tolerance changed.
+
+The native passive replay retains 608 submit/complete/waits at depth 2, with no
+reads before its final drain and no graph-counter change during terminal
+reads. The 164 new GPU snapshots add 1343488 terminal bytes and 656 finite-status
+control bytes. Each standalone native probe drains once and reads 32768
+terminal bytes afterward, with zero control/diagnostic reads; MLX evaluates
+the four norm outputs once before serialization. Snapshot copies add GPU work
+and are not a performance-neutral benchmark. No production synchronization or
+activation/cache readback was added, and Studio was not started.
+
+Heavy jobs stayed serial under run_safe with the configured 15% free-memory
+threshold, finite deadlines, tree RSS8192MiB for builds/analyses and40960MiB for
+model jobs. Logs retain preflight values, not each run's minimum free-memory
+percentage. Graph retained bytes are accounting, not physical residency.
+Two analyzer-only EXIT1 attempts from absent zero readback keys/incorrect
+control-read expectations are retained separately; neither is a numeric pass.
+An incorrect standalone MLX import was corrected before that probe executed.
+
+The correlated mini-Quadrumvirate verdict is ROBUST within these captured
+operator tests. Incoming drift exists before terminal norm; its origin and
+historical state contribution remain open. The next discriminator is layer 39:
+capture attention output/residual, post-attention norm, router/MoE contributions
+and final residual, then cross stateless operations on identical inputs. Treat
+stateful attention and KV/SSM history separately. No speed or audio-quality
+claim follows from these diagnostics.
+
+Evidence: `.landmark/evidence/drama3-backbone385-localization.json`; pinned
+private sources, arrays, binaries, run plans and receipts are under
+`/opt/mldata_ssd/cogni-ml/drama3-backbone385-20261019/`. Eighteen production
+source hashes, including the norm shader, loader and bridge source, were checked
+before/after the runs and match production revision `811f3c96`. Selected raw
+BF16 payloads are pinned; full checkpoint integrity and transitive build
+attestation are not claimed. Refresh after source/probe/binary/checkpoint/config/
+runtime/device/driver/prefix/cache/graph/capture-policy/precision/tolerance
+changes; missing or changed private artifacts reopen dependent claims.
