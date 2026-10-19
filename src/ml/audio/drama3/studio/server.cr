@@ -95,12 +95,12 @@ module ML::Audio::Drama3::Studio
       method = request.method
       if method == "GET" && path.in?("/", "/app.js", "/i18n.js", "/style.css", "/assets/app.js", "/assets/i18n.js", "/assets/style.css", "/assets/voice-recorder.js", "/assets/voice-recorder-worklet.js")
         mime, data = case path
-                     when "/app.js", "/assets/app.js"       then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/app.js") }}}
-                     when "/i18n.js", "/assets/i18n.js"     then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/i18n.js") }}}
-                     when "/style.css", "/assets/style.css" then {"text/css; charset=utf-8", {{ read_file("#{__DIR__}/assets/style.css") }}}
+                     when "/app.js", "/assets/app.js"         then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/app.js") }}}
+                     when "/i18n.js", "/assets/i18n.js"       then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/i18n.js") }}}
+                     when "/style.css", "/assets/style.css"   then {"text/css; charset=utf-8", {{ read_file("#{__DIR__}/assets/style.css") }}}
                      when "/assets/voice-recorder.js"         then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/voice-recorder.js") }}}
                      when "/assets/voice-recorder-worklet.js" then {"text/javascript; charset=utf-8", {{ read_file("#{__DIR__}/assets/voice-recorder-worklet.js") }}}
-                     else                                        {"text/html; charset=utf-8", {{ read_file("#{__DIR__}/assets/index.html") }}}
+                     else                                          {"text/html; charset=utf-8", {{ read_file("#{__DIR__}/assets/index.html") }}}
                      end
         context.response.content_type = mime
         context.response.print(data)
@@ -108,7 +108,8 @@ module ML::Audio::Drama3::Studio
         state = @store.state
         state.as_h["capabilities"] = JSON.parse({backend: "metal_resident", model: @model_name,
                                                  ffmpeg: @media.available?, formats: @media.available? ? ["wav", "mp3", "opus"] : [] of String,
-                                                 max_reference_seconds: 10, queue_error: @queue_error}.to_json)
+                                                 max_reference_seconds: 10, queue_error: @queue_error,
+                                                 auto_window_available: ENV["DRAMA3_DAC_SCRATCH"]? == "1"}.to_json)
         json(context, state)
       elsif method == "POST" && path == "/api/sessions"
         json(context, @store.create_session(body(context)["name"].as_s))

@@ -1,8 +1,40 @@
 require "spec"
 require "json"
 require "../src/ml/audio/drama3/window_budget"
+require "../src/ml/audio/drama3/studio/frame_window"
 
 include ML::Audio::Drama3
+
+describe ML::Audio::Drama3::Studio::FrameWindow do
+  it "allocates all requested manual positions and rejects overflowing prompt plus frames" do
+    window = ML::Audio::Drama3::Studio::FrameWindow.manual(269, 512)
+    window.frames.should eq(512)
+    window.capacity.should eq(780)
+    window.plan.should be_nil
+    ML::Audio::Drama3::Studio::FrameWindow.manual(4096, 1).capacity.should eq(4096)
+    expect_raises(ArgumentError) { ML::Audio::Drama3::Studio::FrameWindow.manual(4096, 2) }
+    expect_raises(ArgumentError) { ML::Audio::Drama3::Studio::FrameWindow.manual(0, 10) }
+  end
+
+  it "uses live advisory admission up to the explicit ceiling and rejects unknown telemetry" do
+    window = ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, budget_telemetry, false, true)
+    window.frames.should eq(8)
+    window.capacity.should eq(10)
+    window.plan.not_nil!.advisory_only.should be_true
+    expect_raises(ArgumentError, /UnknownTelemetry/) do
+      ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, Drama3WindowBudget::Telemetry.new, false, true)
+    end
+  end
+
+  it "rejects uncalibrated reference encoding and incompatible DAC layouts" do
+    expect_raises(ArgumentError, /voice references/) do
+      ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, budget_telemetry, true, true)
+    end
+    expect_raises(ArgumentError, /DRAMA3_DAC_SCRATCH/) do
+      ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, budget_telemetry, false, false)
+    end
+  end
+end
 
 private def budget_backbone_config : BackboneConfig
   BackboneConfig.new(JSON.parse(<<-JSON

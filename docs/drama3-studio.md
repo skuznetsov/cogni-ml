@@ -17,6 +17,7 @@ COGNI_RUN_SAFE_MIN_FREE_PCT=15 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
 Then start the studio with your checkpoint directory:
 
 ```sh
+DRAMA3_STUDIO_MEMORY_LIMIT_MIB=40960 \
 COGNI_RUN_SAFE_MIN_FREE_PCT=15 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
   scripts/run_safe.sh build/drama3_studio 43200 40960 \
   --model /absolute/path/to/drama3-mlx-q4 --port 8787
@@ -27,6 +28,12 @@ Open `http://127.0.0.1:8787`. The default data directory is
 Only one studio process may use a data directory at a time. Stop with Ctrl-C.
 The model loads lazily on the first generation, then remains in one native
 worker for subsequent jobs. The HTTP server stays responsive during inference.
+The worker also holds a per-user lease on the canonical model directory, so
+another cooperating Studio worker using that checkpoint is rejected before
+loading, even with a different data directory or port. Symlink aliases share
+the lease. Other model copies, standalone generators and other users are outside
+this guard. Lock files remain in place; the open descriptor owns the lease and
+process exit releases it.
 Do not run additional GPU benchmark jobs concurrently with generation.
 
 The interface defaults to English. Use the language selector in the header to
@@ -80,6 +87,27 @@ The frame budget is bounded by the current 4096-position native window, includin
 prompt/reference rows. The worker rejects requests whose prompt and budget do
 not fit. A take that reaches its budget is marked as truncated. References do
 not guarantee identical voice identity across all texts or languages.
+
+An optional **Window size → Automatic (memory budget)** setting chooses the
+largest admissible window up to **Frame limit** before allocating KV state.
+Enable it by starting the server with `DRAMA3_DAC_SCRATCH=1`; it currently supports
+generation without a voice reference. Manual mode remains the default, including
+older saved segments. Automatic sizing uses the advisory memory planner and
+retains its conservative cold static-weight allowance on warm requests. A warm
+request can therefore be rejected despite having enough real headroom. Unknown
+telemetry or an unsupported reference rejects the request instead of guessing.
+Speech duration is only known when the model emits EOS; text length cannot
+guarantee a sufficient frame budget. The window is not resized during generation.
+
+The worker samples free/reclaimable memory and stops at the 15% floor. Set
+`DRAMA3_STUDIO_MEMORY_LIMIT_MIB` to add an observed process-footprint and Metal
+allocation budget, checked separately because these counters overlap. Checks
+run after loading, at stage boundaries, through existing generation callbacks,
+and after the existing between-job GC, without additional GPU waits or tensor
+reads. Reports include those samples, cache identities, tracked buffer bytes
+and the worker PID. The external `run_safe.sh` guard still bounds process-tree
+RSS and wall time during loading and long operations. Both are sampled guards,
+not a hard physical peak guarantee.
 
 Jobs execute serially. Errors fail the job and restart the native worker when
 needed. A worker that produces no response for five minutes is killed and

@@ -32,6 +32,30 @@ private def drama3_studio_finish(store : ML::Audio::Drama3::Studio::Store, job :
 end
 
 describe ML::Audio::Drama3::Studio::Store do
+  it "persists automatic windows and snapshots their frame ceiling without changing old defaults" do
+    root = File.tempname("drama3-studio-auto-window")
+    begin
+      store = ML::Audio::Drama3::Studio::Store.new(root)
+      sid = store.create_session("Windows")["id"].as_s
+      segment = store.save_segment(sid, nil, drama3_studio_input("Manual", 0))
+      segment["auto_frames"].as_bool.should be_false
+      gid = segment["id"].as_s
+      segment = store.save_segment(sid, gid, drama3_studio_json_fields(
+        text: "Automatic", revision: 1, auto_frames: true, max_frames: 4096))
+      job = store.enqueue_generation(sid, gid)
+      store.save_segment(sid, gid, drama3_studio_json_fields(text: "Changed", revision: 2, auto_frames: false))
+      job["input"]["auto_frames"].as_bool.should be_true
+      job["input"]["max_frames"].as_i.should eq(4096)
+      reloaded = ML::Audio::Drama3::Studio::Store.new(root)
+      reloaded.state["sessions"][0]["segments"][0]["auto_frames"].as_bool.should be_false
+      expect_raises(ArgumentError, /auto_frames/) do
+        reloaded.save_segment(sid, gid, drama3_studio_json_fields(text: "Invalid", revision: 3, auto_frames: "yes"))
+      end
+    ensure
+      FileUtils.rm_rf(root) if File.exists?(root)
+    end
+  end
+
   it "checks segment revisions and rejects out-of-range sampling settings" do
     root = File.tempname("drama3-studio-revision")
     begin

@@ -1,6 +1,7 @@
 require "option_parser"
 require "../src/ml/audio/drama3/studio/server"
 require "../src/ml/audio/drama3/studio/engine"
+require "../src/ml/audio/drama3/studio/model_lease"
 
 model = ""
 data = File.expand_path("~/.local/share/cogni-ml/drama3-studio")
@@ -24,8 +25,12 @@ ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] ||= "2"
 if worker
   {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
     begin
+      # This lease is independent of library directory and port, and is held
+      # until the worker exits. Acquire it before constructing any model state.
+      model_lease = ML::Audio::Drama3::Studio::ModelLease.new(model)
       engine = ML::Audio::Drama3::Studio::Engine.new(model)
-      STDOUT.puts({event: "ready", model_load_seconds: engine.load_seconds}.to_json)
+      ready_memory = engine.memory_status("worker_ready")
+      STDOUT.puts({event: "ready", model_load_seconds: engine.load_seconds, memory: ready_memory}.to_json)
       STDOUT.flush
       while line = STDIN.gets
         raise "worker request too large" if line.bytesize > 128 * 1024
@@ -40,15 +45,20 @@ if worker
         GC.collect
         gc_seconds = (Time.instant - gc_started).total_seconds
         gc_after = ML::Audio::Drama3::HostProfile.gc_snapshot
-        STDOUT.puts({event: "result", report: report,
-                     worker_gc: {wall_seconds: gc_seconds,
-                                 stats: ML::Audio::Drama3::HostProfile.gc_delta(gc_before, gc_after)}}.to_json)
+        report.as_h["worker_gc"] = JSON.parse({wall_seconds: gc_seconds,
+                                               stats:        ML::Audio::Drama3::HostProfile.gc_delta(gc_before, gc_after)}.to_json)
+        report.as_h["memory_after_gc"] = engine.memory_status("after_gc")
+        report.as_h["worker_ready_memory"] = ready_memory
+        File.write(input["output"].as_s + ".json", report.to_pretty_json)
+        STDOUT.puts({event: "result", report: report}.to_json)
         STDOUT.flush
       end
     rescue ex
       STDOUT.puts({event: "error", message: ex.message || "native inference failed"}.to_json)
       STDOUT.flush
       exit 1
+    ensure
+      model_lease.try(&.close)
     end
   {% else %}
     abort "studio worker requires a Darwin build with -Ddrama3_metal"

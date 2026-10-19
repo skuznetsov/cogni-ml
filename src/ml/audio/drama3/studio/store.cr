@@ -135,6 +135,11 @@ module ML::Audio::Drama3::Studio
 
         seed = optional_i64(fields, "seed", old, 0_i64)
         max_frames = optional_bounded_i32(fields, "max_frames", old, 1024_i32, 1_i32, 4096_i32)
+        auto_frames = if value = fields["auto_frames"]?
+                        required_bool(value, "auto_frames")
+                      else
+                        old.try(&.["auto_frames"]?).try(&.as_bool?) || false
+                      end
         temperature = optional_number(fields, "temperature", old, 1.0_f64)
         top_k = optional_bounded_i32(fields, "top_k", old, 50_i32, 1_i32, 1024_i32)
         top_p = optional_number(fields, "top_p", old, 1.0_f64)
@@ -146,6 +151,7 @@ module ML::Audio::Drama3::Studio
           "voice_id"         => nullable(voice_id),
           "seed"             => integer(seed),
           "max_frames"       => integer(max_frames.to_i64),
+          "auto_frames"      => boolean(auto_frames),
           "temperature"      => number(temperature),
           "top_k"            => integer(top_k.to_i64),
           "top_p"            => number(top_p),

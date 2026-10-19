@@ -135,6 +135,7 @@
       voice_id: segment.voice_id || null,
       seed: segment.seed === undefined ? 0 : segment.seed,
       max_frames: segment.max_frames === undefined ? 512 : segment.max_frames,
+      auto_frames: segment.auto_frames === true,
       temperature: segment.temperature === undefined ? 0.8 : segment.temperature,
       top_k: segment.top_k === undefined ? 30 : segment.top_k,
       top_p: segment.top_p === undefined ? 0.9 : segment.top_p,
@@ -223,7 +224,7 @@
           id: segment.id,
           revision: segment.revision,
           selected: segment.selected_take_id,
-          draft: draft ? [draft.text, draft.voice_id, draft.seed, draft.max_frames, draft.temperature, draft.top_k, draft.top_p, draft.dirty, draft.saving, draft.conflict, draft.version] : null
+          draft: draft ? [draft.text, draft.voice_id, draft.seed, draft.max_frames, draft.auto_frames, draft.temperature, draft.top_k, draft.top_p, draft.dirty, draft.saving, draft.conflict, draft.version] : null
         };
       }),
       assets: state.assets.filter((asset) => sameId(asset.session_id, activeSessionId)).map((asset) => [asset.id, asset.kind, asset.filename, asset.session_id, asset.segment_id, asset.revision, asset.seconds, asset.created_at, asset.stopped_on_eos])
@@ -538,6 +539,20 @@
     settings.addEventListener("toggle", () => settingsDisclosure.set(String(segment.id), settings.open));
     const settingsSummary = node("summary", "", t("Generation settings"));
     const grid = node("div", "settings-grid");
+    const windowLabel = node("label", "", t("Window size"));
+    const windowSelect = node("select");
+    windowSelect.dataset.segmentId = segment.id;
+    windowSelect.dataset.field = "auto_frames";
+    windowSelect.disabled = Boolean(session.archived);
+    const manualOption = node("option", "", t("Manual"));
+    manualOption.value = "false";
+    const autoOption = node("option", "", t("Automatic (memory budget)"));
+    autoOption.value = "true";
+    autoOption.disabled = Boolean(draft.voice_id) || !state.capabilities.auto_window_available;
+    append(windowSelect, manualOption, autoOption);
+    windowSelect.value = String(draft.auto_frames);
+    windowLabel.append(windowSelect);
+    grid.append(windowLabel);
     const settingsSpec = [
       ["seed", "Seed", "number", "1"],
       ["max_frames", t("Frame limit"), "number", "1"],
@@ -558,6 +573,8 @@
       grid.append(label);
     });
     append(settings, settingsSummary, grid);
+    settings.append(node("p", "field-hint", t("Automatic sizing uses available memory up to the frame limit. Speech ends at EOS; duration cannot be predicted exactly.")));
+    if (autoOption.disabled) settings.append(node("p", "field-hint", t("Automatic windows are unavailable on this server or with a voice reference.")));
     body.append(settings);
 
     if (draft.conflict) {
@@ -905,6 +922,7 @@
       voice_id: draft.voice_id ? String(draft.voice_id) : null,
       seed: Number(draft.seed),
       max_frames: Number(draft.max_frames),
+      auto_frames: draft.auto_frames === true,
       temperature: Number(draft.temperature),
       top_k: Number(draft.top_k),
       top_p: Number(draft.top_p)
@@ -1013,11 +1031,16 @@
     const draft = drafts.get(String(target.dataset.segmentId));
     if (!draft) return;
     const field = target.dataset.field;
-    if (field === "voice_id") draft.voice_id = target.value || null;
+    if (field === "voice_id") {
+      draft.voice_id = target.value || null;
+      if (draft.voice_id) draft.auto_frames = false;
+    }
+    else if (field === "auto_frames") draft.auto_frames = target.value === "true";
     else if (field) draft[field] = target.value;
     draft.dirty = true;
     draft.version += 1;
-    refreshLocalEditorState(draft.id);
+    if (field === "voice_id") renderState(true);
+    else refreshLocalEditorState(draft.id);
     recordRenderKeys();
   }
 
@@ -1081,6 +1104,7 @@
         voice_id: null,
         seed: 0,
         max_frames: 512,
+        auto_frames: false,
         temperature: 0.8,
         top_k: 30,
         top_p: 0.9

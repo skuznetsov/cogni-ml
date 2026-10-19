@@ -30390,3 +30390,57 @@ Refresh after source/toolchain/device/model/workload changes.
   telemetry and are not performance evidence. Model and Studio remain stopped;
   unrelated projects were untouched, external scratch/local weights and
   exact-path local atomic commit/no-push constraints remain in force.
+
+### 2026-10-18 — Studio model lease and bounded repeated-request memory control
+
+- The user authorized checking one-model ownership, several serial requests
+  under a stop budget and 15% floor, and automatic frame sizing. This superseded
+  the earlier no-restart restriction only for the bounded Studio/control batch.
+  The cooperating worker now acquires a per-user canonical-checkpoint lease
+  before Engine construction; different libraries, ports and symlink aliases
+  cannot load the same path concurrently. Other users, copies, older binaries
+  and standalone generators remain outside the lease.
+- Native PID 84823 completed three manual 128-frame HTTP jobs. Its fourth,
+  automatic request rejected with InsufficientBudget and the batch stopped.
+  A separate cold-auto-first pilot completed four requests in PID 99716:
+  automatic128 followed by three manual128. Both contenders failed before ready
+  without loading another model. Each worker reused its 566 converted tensor
+  identities (742818696 bytes); pending graph work and retained graph bytes
+  returned to zero, DAC scratch was released, and no extra GPU synchronization
+  or activation readback was introduced.
+- Post-GC tracked bytes in the first pilot were 26610326412, 26610338704 and
+  26610338704. The second measured 26610271116, 26610271116, 26610404364 and
+  26610420748: +149632 bytes across its manual series, including +16KiB in the
+  final pair. The fixed 32MiB warm-pair regression guard passed. This does not
+  establish zero retention or long-run leak freedom. Source review found no
+  unbounded per-job owner in the successful path; individual residual wrapper
+  identities are not observed. Driver allocation drift is a separate metric.
+- Minimum pre-GC sampled free/reclaimable memory was 20.0339%; maximum sampled
+  Metal allocation was 27029962752 bytes. Guards used a 40GiB observed budget,
+  finite request/series/outer deadlines, and the 15% floor; they are sampled,
+  cannot interrupt a GPU operation, and do not constitute a physical peak cap.
+  Both pilot servers/workers and the sequential MLX control exited. Final
+  process/listener checks passed; unrelated projects were untouched.
+- Auto mode is opt-in, uses the existing conservative advisory planner before
+  KV allocation, requires DAC scratch and no reference, and respects the user's
+  frame cap and 4096 total positions. Cold auto admitted 128 generated frames /
+  156 total positions, then emitted 60 and EOS. Exact duration is EOS-defined;
+  sufficient capacity for arbitrary text and mid-generation cache growth are
+  not implemented. Keep warm cold-inventory rejection: wrapper identity does
+  not prove mapped-page residency, so subtracting mapped weights was rejected.
+- All seven native outputs matched in codes and WAV. A fresh upstream control
+  at e7488935ec2ebfafd38ef2b58e290d79f3d05dc7 and checkpoint
+  5331ab509359c0e4a7e353a19e255ddf3e8152a8 used the same 128-frame cap, text,
+  prompt rows, seed, sampler settings and F32 tape prefix. Full 60-frame codes
+  and EOS matched each native output exactly. No new hidden/logit or waveform
+  numeric parity claim follows; layer-39 strict discrepancy and tolerances
+  remain unchanged. Native build, 41 CPU specs and 17 JS tests passed.
+- Evidence: `.landmark/evidence/drama3-studio-memory.json` and
+  `docs/drama3-studio-frontier.md`; private raw reports, harness, comparisons
+  and WAVs in `/opt/mldata_ssd/cogni-ml/drama3-studio-memory-20261018/`.
+  Next discriminator is allocation identity/lifetime tagging for the small
+  residual, followed by a bounded varied-input series if needed. Refresh on
+  source, checkpoint/config, input/tape/capacity, precision/tolerance,
+  allocator/graph policy, runtime/device/driver or concurrent workload change.
+  This batch is finished; Studio and models remain stopped. No background
+  service or push was authorized by this check.
