@@ -30816,3 +30816,20 @@ Refresh after source/toolchain/device/model/workload changes.
   precondition, not an enforced lease. Full spatial memory/performance,
   batch>1 and complete pipeline parity remain open. Reproduction, exact pins,
   local evidence and refresh triggers: docs/wan-vae.md.
+
+### 2026-10-19 — Native Wan causal audio conditioning component
+
+- The F32 Metal MotionEncoder passes all 22 intermediate checkpoints for tiny
+  synthetic and real 12-tensor fixtures at the unchanged finite abs 2e-5 + rel
+  2e-5 gate. Production input has 84 buckets plus 17 prefix frames; dropping
+  five motion latents leaves local `[21,5,5120]` and global `[21,5120]` outputs.
+- A nearly constant tiny row refuted centered-variance LayerNorm compatibility.
+  The scoped Wan kernel now follows PyTorch 2.8.0 MPS raw moments, reduction and
+  variance-below-1e-6 clamp. The generic video normalization is unchanged.
+- Final-source run: four examples, zero failures/errors/pending. Two encodes in
+  one caller encoder are bit-identical, allocate no tracked GPU buffers, and
+  add no submissions, waits or activation downloads. Alias rejection passes.
+  Correlated mini-Quadrumvirate verdict ROBUST for serialized component use.
+- Full XLSR conditioning, spatial pipeline parity and generation speed remain
+  open. Reproduction, evidence hashes and refresh triggers are recorded in
+  docs/wan-causal-audio.md; checkpoints and scratch remain external.
