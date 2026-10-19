@@ -30697,3 +30697,52 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on native/oracle/upstream/configuration/precision/tolerance/runtime/
   device/driver changes or missing/changed private artifacts. No full model,
   Studio, or service was started; no push.
+
+### 2026-10-19 — Video production-width blocks and scoped GPU weight loading
+
+- Extends the reduced native video milestone above. Wan block0 plus first audio
+  injector/AdaIN passes all 35 upstream checkpoints at C5120/H40/D128/FF13824,
+  B2/S2, with both synthetic F32 and 39 real BF16 tensors from official
+  Wan-AI/Wan2.2-S2V-14B@dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b.
+  Weight conversion and F32 block math execute on GPU. This is a selected
+  block/audio subset, not native BF16 arithmetic or full-model execution.
+- LTX source-builder widths video4096/32x128/FF16384, audio2048/32x64/FF8192
+  pass 22 checkpoints across two cases and two applications of the same block
+  weights (88 array comparisons). Four reduced gate variants also pass,
+  including asymmetric video/audio gates, cross-AdaLN and bias-free video FFN.
+  These use synthetic F32 state_dict sidecars, not actual LTX checkpoint flags.
+  Official LTX-2.5 and Diffusers config/weight access returned HTTP 403; authorized
+  actual metadata, shard prefixes/dtypes and real-weight parity remain open.
+- The strict selected-tensor safetensors loader rejects malformed, changed,
+  mutable-descriptor and over-budget plans before GPU allocation; BF16/F16/F32
+  conversion plus projection shares one encoder. Caller reserve includes raw
+  staging+F32 destinations+other residency, but only the supplied Arena is
+  checked against it; no general total-residency guarantee. Loader: 10 examples;
+  common: 10; Wan: 6 per reduced/synthetic/official fixture; LTX: 2 per variant.
+  final focused runs have zero failures/errors/pending. All values retain
+  abs 2e-5 + rel 2e-5 and finite/exact-checkpoint gates.
+- Fullwidth falsifiers rejected F32 phase rounding (Wan RoPE now high/low
+  coefficients+GPU compensated phase/precise trig), noncontiguous Torch2.8 MPS
+  SDPA as this oracle (contiguous SDPA and native match independent GPU formula),
+  finite x=12 Metal tanh-GELU NaN (F32 saturation branch), and long serial linear
+  reduction error (16 F32 FMA lanes+balanced tree). Tail widths 15/16/17/31/32/33
+  pass independent scalar-reference guards. Same-input/propagated projection
+  checks now pass; closest Wan synthetic FFN uses 0.935 of its error allowance.
+- Cumulative MetalBuffer count is unchanged across weight decode, chained
+  blocks and scratch reuse in a caller-owned serial encoder, before terminal
+  completion/read. No zero-host-allocation/GC or throughput claim. Correlated
+  mini-Quadrumvirate verdict ROBUST within these fixtures; arbitrary inputs,
+  full sequence/model accumulation, conditioning/embeddings, masks, VAEs,
+  scheduling, lip sync and end-to-end speed/quality remain unadmitted.
+- Evidence/reproduction: docs/video-native-frontier.md and private
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/production-block-gates.json,
+  SHA256 a4582e1834743252f27056fdd989508e24ade38f29c745d0109fbbdc8902501c.
+  Pins are not a transitive build attestation. All GPU runs serial/run_safe,
+  configured 15% free-memory floor, finite deadlines/tree-RSS caps; no observed
+  minimum/physical-peak claim. No full model, Studio or service startup/push.
+- Next falsifiers: authorized real LTX metadata/weights through the same gate;
+  resident lower-precision weight storage with qualified F32 arithmetic and
+  complete model resource accounting before full startup. F32 whole-Wan
+  residency is not admitted on 64 GiB with the 15% floor. Refresh on native/oracle/
+  upstream/checkpoint/configuration/precision/tolerance/runtime/device/driver
+  changes, or missing/changed artifacts. Existing model routes/defaults intact.

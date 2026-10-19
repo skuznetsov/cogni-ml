@@ -9,6 +9,73 @@ lib LibVideoSpecMemory
 end
 
 describe ML::Video::MetalOps do
+  it "keeps every projection term around the reduction width and its tails" do
+    [15, 16, 17, 31, 32, 33].each do |dim|
+      arena = ML::Video::Arena.new
+      begin
+        rows, channels = 2, 3
+        values = Array(Float32).new(rows * dim) do |i|
+          i < dim ? 1.0_f32 : (((i * 7) % 19 - 9) * 0.125).to_f32
+        end
+        weights = Array(Float32).new(channels * dim) do |i|
+          col, lane = i // dim, i % dim
+          sign = lane.even? ? 1.0_f32 : -1.0_f32
+          sign * (8.0_f32 + col * 0.25_f32 + (lane % 5) * 0.015625_f32)
+        end
+        biases = [0.03125_f32, -0.0625_f32, 0.125_f32]
+        reference = Array(Float64).new(rows * channels) do |i|
+          row, col = i // channels, i % channels
+          (0...dim).sum(0.0_f64) do |lane|
+            values[row * dim + lane].to_f64 * weights[col * dim + lane].to_f64
+          end + biases[col].to_f64
+        end
+        x = arena.upload("x", values)
+        w = arena.upload("w", weights)
+        b = arena.upload("b", biases)
+        output = arena.alloc("output", rows * channels)
+        allocations = ML::MetalBuffer.video_spec_allocations
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        2.times { ML::Video::MetalOps.linear(encoder, x, w, b, output, rows, dim, channels) }
+        encoder.end_encoding
+        command.commit
+        command.wait
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        output.read(rows * channels).zip(reference).each do |actual, expected|
+          fail "Non-finite linear result at width #{dim}" unless actual.finite?
+          actual.should be_close(expected, 2e-5 + 2e-5 * expected.abs)
+        end
+      ensure
+        arena.release
+      end
+    end
+  end
+
+  it "saturates tanh GELU for large finite checkpoint activations" do
+    arena = ML::Video::Arena.new
+    begin
+      values = [-10.0_f32, 10.0_f32, -12.0_f32, 12.0_f32, -100.0_f32,
+                100.0_f32, -10000.0_f32, 10000.0_f32, -1e20_f32, 1e20_f32, 0.0_f32]
+      input = arena.upload("input", values)
+      output = arena.alloc("output", values.size)
+      allocations = ML::MetalBuffer.video_spec_allocations
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      2.times { ML::Video::MetalOps.gelu(encoder, input, output, values.size) }
+      encoder.end_encoding
+      command.commit
+      command.wait
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      output.read(values.size).zip(values).each do |actual, value|
+        expected = value > 0 ? value : 0.0_f32
+        fail "Non-finite GELU #{actual} at finite input #{value}" unless actual.finite?
+        actual.should be_close(expected, 2e-5 + 2e-5 * expected.abs)
+      end
+    ensure
+      arena.release
+    end
+  end
+
   it "encodes a projection and GELU without host intermediates or buffer allocations" do
     arena = ML::Video::Arena.new
     begin

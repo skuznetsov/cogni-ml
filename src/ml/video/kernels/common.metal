@@ -8,9 +8,21 @@ kernel void video_linear_f32(
     constant uint &dout [[buffer(6)]], uint id [[thread_position_in_grid]]) {
     if (id >= rows * dout) return;
     const uint row = id / dout, col = id % dout;
-    float acc = 0.0f;
-    for (uint i = 0; i < din; ++i) acc += x[row * din + i] * w[col * din + i];
-    y[id] = acc + bias[col];
+    // Bound the length of each F32 reduction at production FFN widths.
+    // Keep the final tree explicit under the existing safe-math compilation.
+    float sums[16] = {0.0f};
+    uint i = 0;
+    for (; i + 15 < din; i += 16) {
+        #pragma unroll
+        for (uint j = 0; j < 16; ++j)
+            sums[j] = fma(x[row * din + i + j], w[col * din + i + j], sums[j]);
+    }
+    for (; i < din; ++i) sums[0] = fma(x[row * din + i], w[col * din + i], sums[0]);
+    const float a = (sums[0] + sums[1]) + (sums[2] + sums[3]);
+    const float b = (sums[4] + sums[5]) + (sums[6] + sums[7]);
+    const float c = (sums[8] + sums[9]) + (sums[10] + sums[11]);
+    const float d = (sums[12] + sums[13]) + (sums[14] + sums[15]);
+    y[id] = ((a + b) + (c + d)) + bias[col];
 }
 
 kernel void video_norm_f32(
@@ -90,6 +102,12 @@ kernel void video_gelu_f32(
     uint id [[thread_position_in_grid]]) {
     if (id >= count) return;
     const float v = x[id];
+    // At |v| >= 10 the tanh factor already rounds to +/-1 in F32.
+    // Avoid overflow inside Metal tanh (observed at v=12), and in v cubed.
+    if (approximate && abs(v) >= 10.0f) {
+        y[id] = v > 0.0f ? v : 0.0f;
+        return;
+    }
     y[id] = approximate ? 0.5f * v * (1.0f + tanh(0.7978845608028654f * (v + 0.044715f * v * v * v)))
                         : 0.5f * v * (1.0f + video_erf(v * 0.7071067811865475f));
 }

@@ -2,6 +2,7 @@
 # e98f6d927d83c92ef2be6aec76c8440b19306e39. Changed for native Metal/Crystal;
 # covered by the LTX-2.x Community License (LICENSE-2_x).
 require "./metal_ops"
+require "./checkpoint"
 
 module ML::Video
   # One dual-stream block, batch size one, with text cross-attention and the
@@ -23,9 +24,84 @@ module ML::Video
     audio_head_dim : Int32,
     video_modulation_rows : Int32 = 1,
     audio_modulation_rows : Int32 = 1,
+    video_prompt_modulation_rows : Int32 = 1,
+    audio_prompt_modulation_rows : Int32 = 1,
+    cross_attention_adaln : Bool = false,
+    video_apply_gated_attention : Bool = false,
+    audio_apply_gated_attention : Bool = false,
+    video_ff_bias : Bool = true,
+    audio_ff_bias : Bool = true,
     norm_eps : Float32 = 1e-6_f32
 
   class LTX2DualStreamBlock
+    # Map the exact BasicAVTransformerBlock state-dict keys consumed by this
+    # native slice. The returned targets are Arena keys; the source names are
+    # upstream block.state_dict() keys. The model shard's block prefix is not
+    # inferred here because gated checkpoint metadata has not been admitted.
+    def self.checkpoint_bindings(config : LTX2DualStreamConfig,
+                                 dtype : ML::GGUF::SafeTensorDType? = nil) : Array(WeightBinding)
+      bindings = [] of WeightBinding
+      append_attention_bindings(bindings, "attn1", config.video_dim, config.video_dim,
+        config.video_heads, config.video_head_dim, config.video_apply_gated_attention, dtype)
+      append_attention_bindings(bindings, "attn2", config.video_dim, config.video_context_dim,
+        config.video_heads, config.video_head_dim, config.video_apply_gated_attention, dtype)
+      append_attention_bindings(bindings, "audio_to_video_attn", config.video_dim, config.audio_dim,
+        config.audio_heads, config.audio_head_dim, config.video_apply_gated_attention, dtype)
+      append_attention_bindings(bindings, "audio_attn1", config.audio_dim, config.audio_dim,
+        config.audio_heads, config.audio_head_dim, config.audio_apply_gated_attention, dtype)
+      append_attention_bindings(bindings, "audio_attn2", config.audio_dim, config.audio_context_dim,
+        config.audio_heads, config.audio_head_dim, config.audio_apply_gated_attention, dtype)
+      append_attention_bindings(bindings, "video_to_audio_attn", config.audio_dim, config.video_dim,
+        config.audio_heads, config.audio_head_dim, config.audio_apply_gated_attention, dtype)
+      append_ff_bindings(bindings, "ff", config.video_dim, config.video_ff_bias, dtype)
+      append_ff_bindings(bindings, "audio_ff", config.audio_dim, config.audio_ff_bias, dtype)
+      bindings
+    end
+
+    private def self.append_attention_bindings(bindings : Array(WeightBinding), name : String,
+                                               query_dim : Int32, context_dim : Int32,
+                                               heads : Int32, head_dim : Int32,
+                                               gated : Bool,
+                                               dtype : ML::GGUF::SafeTensorDType?) : Nil
+      inner = heads.to_i64 * head_dim
+      q_dim = query_dim.to_i64
+      c_dim = context_dim.to_i64
+      add_binding(bindings, name, "to_q.weight", [inner, q_dim], dtype)
+      add_binding(bindings, name, "to_q.bias", [inner], dtype)
+      add_binding(bindings, name, "to_k.weight", [inner, c_dim], dtype)
+      add_binding(bindings, name, "to_k.bias", [inner], dtype)
+      add_binding(bindings, name, "to_v.weight", [inner, c_dim], dtype)
+      add_binding(bindings, name, "to_v.bias", [inner], dtype)
+      add_binding(bindings, name, "q_norm.weight", [inner], dtype)
+      add_binding(bindings, name, "k_norm.weight", [inner], dtype)
+      add_binding(bindings, name, "to_out.0.weight", [q_dim, inner], dtype)
+      add_binding(bindings, name, "to_out.0.bias", [q_dim], dtype)
+      if gated
+        add_binding(bindings, name, "to_gate_logits.weight", [heads.to_i64, q_dim], dtype)
+        add_binding(bindings, name, "to_gate_logits.bias", [heads.to_i64], dtype)
+      end
+    end
+
+    private def self.append_ff_bindings(bindings : Array(WeightBinding), name : String,
+                                        dim : Int32, bias : Bool,
+                                        dtype : ML::GGUF::SafeTensorDType?) : Nil
+      width = 4_i64 * dim
+      d = dim.to_i64
+      add_binding(bindings, name, "net.0.proj.weight", [width, d], dtype)
+      add_binding(bindings, name, "net.2.weight", [d, width], dtype)
+      if bias
+        add_binding(bindings, name, "net.0.proj.bias", [width], dtype)
+        add_binding(bindings, name, "net.2.bias", [d], dtype)
+      end
+    end
+
+    private def self.add_binding(bindings : Array(WeightBinding), prefix : String,
+                                 suffix : String, shape : Array(Int64),
+                                 dtype : ML::GGUF::SafeTensorDType?) : Nil
+      source = "#{prefix}.#{suffix}"
+      bindings << WeightBinding.new("w.#{source}", source, shape, dtype)
+    end
+
     struct AttentionWeights
       getter query : ML::MetalBuffer
       getter key : ML::MetalBuffer
@@ -37,9 +113,12 @@ module ML::Video
       getter key_bias : ML::MetalBuffer
       getter value_bias : ML::MetalBuffer
       getter projection_bias : ML::MetalBuffer
+      getter gate : ML::MetalBuffer?
+      getter gate_bias : ML::MetalBuffer?
 
       def initialize(@query, @key, @value, @query_norm, @key_norm, @projection,
-                     @query_bias, @key_bias, @value_bias, @projection_bias)
+                     @query_bias, @key_bias, @value_bias, @projection_bias,
+                     @gate, @gate_bias)
       end
     end
 
@@ -53,9 +132,12 @@ module ML::Video
       getter key_rope : ML::MetalBuffer
       getter attended : ML::MetalBuffer
       getter module_output : ML::MetalBuffer
+      getter gate_logits : ML::MetalBuffer?
+      getter gated_attended : ML::MetalBuffer?
 
       def initialize(@query, @key, @value, @query_norm, @key_norm, @query_rope,
-                     @key_rope, @attended, @module_output)
+                     @key_rope, @attended, @module_output, @gate_logits,
+                     @gated_attended)
       end
     end
 
@@ -96,6 +178,7 @@ module ML::Video
 
     @zero : ML::MetalBuffer
     @rope_pipeline : ML::Metal::ComputePipeline
+    @gate_pipeline : ML::Metal::ComputePipeline
     @video_sa : AttentionLayer
     @video_text : AttentionLayer
     @video_a2v : AttentionLayer
@@ -104,6 +187,17 @@ module ML::Video
     @audio_v2a : AttentionLayer
     @video_ff_weights : FeedForwardWeights
     @audio_ff_weights : FeedForwardWeights
+
+    @video_text_shift : ML::MetalBuffer?
+    @video_text_scale : ML::MetalBuffer?
+    @video_text_gate : ML::MetalBuffer?
+    @video_prompt_shift : ML::MetalBuffer?
+    @video_prompt_scale : ML::MetalBuffer?
+    @audio_text_shift : ML::MetalBuffer?
+    @audio_text_scale : ML::MetalBuffer?
+    @audio_text_gate : ML::MetalBuffer?
+    @audio_prompt_shift : ML::MetalBuffer?
+    @audio_prompt_scale : ML::MetalBuffer?
 
     @video_x : ML::MetalBuffer
     @audio_x : ML::MetalBuffer
@@ -145,6 +239,8 @@ module ML::Video
     @video_sa_modulated : ML::MetalBuffer
     @video_after_sa : ML::MetalBuffer
     @video_text_norm : ML::MetalBuffer
+    @video_text_query_modulated : ML::MetalBuffer
+    @video_text_context_modulated : ML::MetalBuffer
     @video_after_text : ML::MetalBuffer
     @video_a2v_query_norm : ML::MetalBuffer
     @video_a2v_query_modulated : ML::MetalBuffer
@@ -162,6 +258,8 @@ module ML::Video
     @audio_sa_modulated : ML::MetalBuffer
     @audio_after_sa : ML::MetalBuffer
     @audio_text_norm : ML::MetalBuffer
+    @audio_text_query_modulated : ML::MetalBuffer
+    @audio_text_context_modulated : ML::MetalBuffer
     @audio_after_text : ML::MetalBuffer
     @audio_v2a_query_norm : ML::MetalBuffer
     @audio_v2a_query_modulated : ML::MetalBuffer
@@ -182,6 +280,18 @@ module ML::Video
       @audio_x = input("audio_x")
       @video_context = input("video_context")
       @audio_context = input("audio_context")
+      if @config.cross_attention_adaln
+        @video_text_shift = input("video_text_shift")
+        @video_text_scale = input("video_text_scale")
+        @video_text_gate = input("video_text_gate")
+        @video_prompt_shift = input("video_prompt_shift")
+        @video_prompt_scale = input("video_prompt_scale")
+        @audio_text_shift = input("audio_text_shift")
+        @audio_text_scale = input("audio_text_scale")
+        @audio_text_gate = input("audio_text_gate")
+        @audio_prompt_shift = input("audio_prompt_shift")
+        @audio_prompt_scale = input("audio_prompt_scale")
+      end
       @video_sa_shift = input("video_sa_shift")
       @video_sa_scale = input("video_sa_scale")
       @video_sa_gate = input("video_sa_gate")
@@ -221,32 +331,37 @@ module ML::Video
       @zero = @arena.alloc("#{prefix}.zero", max_dim)
       @zero.write(Array(Float32).new(max_dim, 0.0_f32))
       @rope_pipeline = ML::Metal::ComputePipeline.new("ltx2_split_rope_f32", SOURCE)
+      @gate_pipeline = ML::Metal::PipelineCache.get("ltx2_apply_head_gates") do
+        ML::Metal::ComputePipeline.new("ltx2_apply_head_gates_f32", SOURCE)
+      end
 
       @video_sa = build_attention(prefix, "video.attn1", "attn1", @config.video_tokens,
         @config.video_tokens, @config.video_dim, @config.video_dim,
-        @config.video_heads, @config.video_head_dim)
+        @config.video_heads, @config.video_head_dim, @config.video_apply_gated_attention)
       @video_text = build_attention(prefix, "video.attn2", "attn2", @config.video_tokens,
         @config.video_context_tokens, @config.video_dim, @config.video_context_dim,
-        @config.video_heads, @config.video_head_dim)
+        @config.video_heads, @config.video_head_dim, @config.video_apply_gated_attention)
       @video_a2v = build_attention(prefix, "video.audio_to_video_attn", "audio_to_video_attn",
         @config.video_tokens, @config.audio_tokens, @config.video_dim, @config.audio_dim,
-        @config.audio_heads, @config.audio_head_dim)
+        @config.audio_heads, @config.audio_head_dim, @config.video_apply_gated_attention)
       @audio_sa = build_attention(prefix, "audio.audio_attn1", "audio_attn1", @config.audio_tokens,
         @config.audio_tokens, @config.audio_dim, @config.audio_dim,
-        @config.audio_heads, @config.audio_head_dim)
+        @config.audio_heads, @config.audio_head_dim, @config.audio_apply_gated_attention)
       @audio_text = build_attention(prefix, "audio.audio_attn2", "audio_attn2", @config.audio_tokens,
         @config.audio_context_tokens, @config.audio_dim, @config.audio_context_dim,
-        @config.audio_heads, @config.audio_head_dim)
+        @config.audio_heads, @config.audio_head_dim, @config.audio_apply_gated_attention)
       @audio_v2a = build_attention(prefix, "audio.video_to_audio_attn", "video_to_audio_attn",
         @config.audio_tokens, @config.video_tokens, @config.audio_dim, @config.video_dim,
-        @config.audio_heads, @config.audio_head_dim)
-      @video_ff_weights = build_ff_weights("ff", @config.video_dim)
-      @audio_ff_weights = build_ff_weights("audio_ff", @config.audio_dim)
+        @config.audio_heads, @config.audio_head_dim, @config.audio_apply_gated_attention)
+      @video_ff_weights = build_ff_weights("ff", @config.video_dim, @config.video_ff_bias)
+      @audio_ff_weights = build_ff_weights("audio_ff", @config.audio_dim, @config.audio_ff_bias)
 
       @video_sa_norm = alloc(prefix, "video.sa_norm", @config.video_tokens * @config.video_dim)
       @video_sa_modulated = alloc(prefix, "video.sa_modulated", @config.video_tokens * @config.video_dim)
       @video_after_sa = alloc(prefix, "video.after_attn1", @config.video_tokens * @config.video_dim)
       @video_text_norm = alloc(prefix, "video.text_norm", @config.video_tokens * @config.video_dim)
+      @video_text_query_modulated = alloc(prefix, "video.text_query_modulated", @config.video_tokens * @config.video_dim)
+      @video_text_context_modulated = alloc(prefix, "video.text_context_modulated", @config.video_context_tokens * @config.video_context_dim)
       @video_after_text = alloc(prefix, "video.after_attn2", @config.video_tokens * @config.video_dim)
       @video_a2v_query_norm = alloc(prefix, "video.a2v_query_norm", @config.video_tokens * @config.video_dim)
       @video_a2v_query_modulated = alloc(prefix, "video.a2v_query_modulated", @config.video_tokens * @config.video_dim)
@@ -264,6 +379,8 @@ module ML::Video
       @audio_sa_modulated = alloc(prefix, "audio.sa_modulated", @config.audio_tokens * @config.audio_dim)
       @audio_after_sa = alloc(prefix, "audio.after_audio_attn1", @config.audio_tokens * @config.audio_dim)
       @audio_text_norm = alloc(prefix, "audio.text_norm", @config.audio_tokens * @config.audio_dim)
+      @audio_text_query_modulated = alloc(prefix, "audio.text_query_modulated", @config.audio_tokens * @config.audio_dim)
+      @audio_text_context_modulated = alloc(prefix, "audio.text_context_modulated", @config.audio_context_tokens * @config.audio_context_dim)
       @audio_after_text = alloc(prefix, "audio.after_audio_attn2", @config.audio_tokens * @config.audio_dim)
       @audio_v2a_query_norm = alloc(prefix, "audio.v2a_query_norm", @config.audio_tokens * @config.audio_dim)
       @audio_v2a_query_modulated = alloc(prefix, "audio.v2a_query_modulated", @config.audio_tokens * @config.audio_dim)
@@ -285,6 +402,9 @@ module ML::Video
         "video.audio_to_video_attn.output" => @video_a2v.scratch.module_output,
         "video.after_av_cross_attention"   => @video_after_av,
         "video.ff.output"                  => @video_ff_module_output,
+        "video.ff.input"                   => @video_ff_modulated,
+        "video.ff.hidden"                  => @video_ff_hidden,
+        "video.ff.activated"               => @video_ff_activated,
         "video.output"                     => @video_output,
         "audio.audio_attn1.output"         => @audio_sa.scratch.module_output,
         "audio.after_audio_attn1"          => @audio_after_sa,
@@ -293,6 +413,9 @@ module ML::Video
         "audio.video_to_audio_attn.output" => @audio_v2a.scratch.module_output,
         "audio.after_av_cross_attention"   => @audio_after_av,
         "audio.audio_ff.output"            => @audio_ff_module_output,
+        "audio.audio_ff.input"             => @audio_ff_modulated,
+        "audio.audio_ff.hidden"            => @audio_ff_hidden,
+        "audio.audio_ff.activated"         => @audio_ff_activated,
         "audio.output"                     => @audio_output,
       }
       validate_buffers
@@ -307,18 +430,46 @@ module ML::Video
         @video_after_sa, c.video_tokens, c.video_dim, c.video_modulation_rows)
       ML::Video::MetalOps.norm(e, @video_after_sa, @zero, @zero, @video_text_norm,
         c.video_tokens, c.video_dim, c.norm_eps, rms: true)
-      encode_attention(e, @video_text, @video_text_norm, @video_context)
+      video_text_query = @video_text_norm
+      video_text_context = @video_context
+      if c.cross_attention_adaln
+        video_text_query = @video_text_query_modulated
+        video_text_context = @video_text_context_modulated
+        ML::Video::MetalOps.modulate(e, @video_text_norm, @video_text_shift.not_nil!,
+          @video_text_scale.not_nil!, @video_text_query_modulated, c.video_tokens,
+          c.video_dim, c.video_modulation_rows)
+        ML::Video::MetalOps.modulate(e, @video_context, @video_prompt_shift.not_nil!,
+          @video_prompt_scale.not_nil!, @video_text_context_modulated,
+          c.video_context_tokens, c.video_context_dim, c.video_prompt_modulation_rows)
+      end
+      encode_attention(e, @video_text, video_text_query, video_text_context)
       ML::Video::MetalOps.add(e, @video_after_sa, @video_text.scratch.module_output,
-        @video_after_text, c.video_tokens * c.video_dim)
+        @video_after_text, c.video_tokens * c.video_dim,
+        c.cross_attention_adaln ? @video_text_gate : nil,
+        c.video_dim, c.video_modulation_rows)
 
       encode_stream_self(e, @audio_x, @audio_sa_shift, @audio_sa_scale, @audio_sa_gate,
         @audio_sa, @audio_self_cos, @audio_self_sin, @audio_sa_norm, @audio_sa_modulated,
         @audio_after_sa, c.audio_tokens, c.audio_dim, c.audio_modulation_rows)
       ML::Video::MetalOps.norm(e, @audio_after_sa, @zero, @zero, @audio_text_norm,
         c.audio_tokens, c.audio_dim, c.norm_eps, rms: true)
-      encode_attention(e, @audio_text, @audio_text_norm, @audio_context)
+      audio_text_query = @audio_text_norm
+      audio_text_context = @audio_context
+      if c.cross_attention_adaln
+        audio_text_query = @audio_text_query_modulated
+        audio_text_context = @audio_text_context_modulated
+        ML::Video::MetalOps.modulate(e, @audio_text_norm, @audio_text_shift.not_nil!,
+          @audio_text_scale.not_nil!, @audio_text_query_modulated, c.audio_tokens,
+          c.audio_dim, c.audio_modulation_rows)
+        ML::Video::MetalOps.modulate(e, @audio_context, @audio_prompt_shift.not_nil!,
+          @audio_prompt_scale.not_nil!, @audio_text_context_modulated,
+          c.audio_context_tokens, c.audio_context_dim, c.audio_prompt_modulation_rows)
+      end
+      encode_attention(e, @audio_text, audio_text_query, audio_text_context)
       ML::Video::MetalOps.add(e, @audio_after_sa, @audio_text.scratch.module_output,
-        @audio_after_text, c.audio_tokens * c.audio_dim)
+        @audio_after_text, c.audio_tokens * c.audio_dim,
+        c.cross_attention_adaln ? @audio_text_gate : nil,
+        c.audio_dim, c.audio_modulation_rows)
 
       # Both AV directions consume the same post-text state, as upstream does.
       ML::Video::MetalOps.norm(e, @video_after_text, @zero, @zero, @video_a2v_query_norm,
@@ -365,13 +516,24 @@ module ML::Video
       values = [c.video_dim, c.video_context_dim, c.video_context_tokens, c.video_tokens,
                 c.video_heads, c.video_head_dim, c.audio_dim, c.audio_context_dim,
                 c.audio_context_tokens, c.audio_tokens, c.audio_heads, c.audio_head_dim,
-                c.video_modulation_rows, c.audio_modulation_rows]
+                c.video_modulation_rows, c.audio_modulation_rows,
+                c.video_prompt_modulation_rows, c.audio_prompt_modulation_rows]
       raise ArgumentError.new("LTX dimensions must be positive") unless values.all? { |v| v > 0 }
+      unless c.video_dim.to_i64 == c.video_heads.to_i64 * c.video_head_dim &&
+             c.audio_dim.to_i64 == c.audio_heads.to_i64 * c.audio_head_dim
+        raise ArgumentError.new("LTX modality dimensions must equal heads times head dimension")
+      end
       unless c.video_modulation_rows == 1 || c.video_modulation_rows == c.video_tokens
         raise ArgumentError.new("video modulation rows must be one or video_tokens")
       end
       unless c.audio_modulation_rows == 1 || c.audio_modulation_rows == c.audio_tokens
         raise ArgumentError.new("audio modulation rows must be one or audio_tokens")
+      end
+      unless c.video_prompt_modulation_rows == 1 || c.video_prompt_modulation_rows == c.video_context_tokens
+        raise ArgumentError.new("video prompt modulation rows must be one or video_context_tokens")
+      end
+      unless c.audio_prompt_modulation_rows == 1 || c.audio_prompt_modulation_rows == c.audio_context_tokens
+        raise ArgumentError.new("audio prompt modulation rows must be one or audio_context_tokens")
       end
       if c.video_head_dim > 256 || c.audio_head_dim > 256
         raise ArgumentError.new("LTX Metal attention head dimensions cannot exceed 256")
@@ -402,8 +564,11 @@ module ML::Video
 
     private def build_attention(prefix : String, scratch_name : String, weight_name : String,
                                 query_rows : Int32, key_rows : Int32, query_dim : Int32,
-                                context_dim : Int32, heads : Int32, head_dim : Int32) : AttentionLayer
+                                context_dim : Int32, heads : Int32, head_dim : Int32,
+                                gated : Bool) : AttentionLayer
       inner = heads * head_dim
+      gate = gated ? required_weight("#{weight_name}.to_gate_logits.weight") : nil
+      gate_bias = gated ? required_weight("#{weight_name}.to_gate_logits.bias") : nil
       weights = AttentionWeights.new(
         required_weight("#{weight_name}.to_q.weight"),
         required_weight("#{weight_name}.to_k.weight"),
@@ -415,6 +580,8 @@ module ML::Video
         required_weight("#{weight_name}.to_k.bias"),
         required_weight("#{weight_name}.to_v.bias"),
         required_weight("#{weight_name}.to_out.0.bias"),
+        gate,
+        gate_bias,
       )
       scratch = AttentionScratch.new(
         alloc(prefix, "#{scratch_name}.query", query_rows * inner),
@@ -426,17 +593,19 @@ module ML::Video
         alloc(prefix, "#{scratch_name}.key_rope", key_rows * inner),
         alloc(prefix, "#{scratch_name}.attended", query_rows * inner),
         alloc(prefix, "#{scratch_name}.module_output", query_rows * query_dim),
+        gated ? alloc(prefix, "#{scratch_name}.gate_logits", query_rows * heads) : nil,
+        gated ? alloc(prefix, "#{scratch_name}.gated_attended", query_rows * inner) : nil,
       )
       AttentionLayer.new(weights, scratch, query_rows, key_rows, query_dim,
         context_dim, heads, head_dim)
     end
 
-    private def build_ff_weights(name : String, dim : Int32) : FeedForwardWeights
+    private def build_ff_weights(name : String, dim : Int32, bias : Bool) : FeedForwardWeights
       FeedForwardWeights.new(
         required_weight("#{name}.net.0.proj.weight"),
         required_weight("#{name}.net.2.weight"),
-        optional_bias("#{name}.net.0.proj.bias"),
-        optional_bias("#{name}.net.2.bias"),
+        bias ? required_weight("#{name}.net.0.proj.bias") : @zero,
+        bias ? required_weight("#{name}.net.2.bias") : @zero,
       )
     end
 
@@ -471,6 +640,21 @@ module ML::Video
         {@v2a_video_scale, c.video_modulation_rows * c.video_dim},
       }.each { |buffer, count| ML::Video::MetalOps.check(buffer, count.to_i64) }
 
+      if c.cross_attention_adaln
+        {
+          {@video_text_shift.not_nil!, c.video_modulation_rows.to_i64 * c.video_dim},
+          {@video_text_scale.not_nil!, c.video_modulation_rows.to_i64 * c.video_dim},
+          {@video_text_gate.not_nil!, c.video_modulation_rows.to_i64 * c.video_dim},
+          {@video_prompt_shift.not_nil!, c.video_prompt_modulation_rows.to_i64 * c.video_context_dim},
+          {@video_prompt_scale.not_nil!, c.video_prompt_modulation_rows.to_i64 * c.video_context_dim},
+          {@audio_text_shift.not_nil!, c.audio_modulation_rows.to_i64 * c.audio_dim},
+          {@audio_text_scale.not_nil!, c.audio_modulation_rows.to_i64 * c.audio_dim},
+          {@audio_text_gate.not_nil!, c.audio_modulation_rows.to_i64 * c.audio_dim},
+          {@audio_prompt_shift.not_nil!, c.audio_prompt_modulation_rows.to_i64 * c.audio_context_dim},
+          {@audio_prompt_scale.not_nil!, c.audio_prompt_modulation_rows.to_i64 * c.audio_context_dim},
+        }.each { |buffer, count| ML::Video::MetalOps.check(buffer, count) }
+      end
+
       video_self_rope = c.video_tokens.to_i64 * c.video_heads * (c.video_head_dim // 2)
       audio_self_rope = c.audio_tokens.to_i64 * c.audio_heads * (c.audio_head_dim // 2)
       # Both AV cross attentions use the audio module's head count and head size.
@@ -503,6 +687,14 @@ module ML::Video
         {layer.weights.query_bias, inner}, {layer.weights.key_bias, inner},
         {layer.weights.value_bias, inner}, {layer.weights.projection_bias, query_dim.to_i64},
       }.each { |buffer, count| ML::Video::MetalOps.check(buffer, count) }
+      if layer.weights.gate
+        gate = layer.weights.gate || raise ArgumentError.new("Missing LTX gated-attention weights")
+        gate_bias = layer.weights.gate_bias || raise ArgumentError.new("Missing LTX gated-attention bias")
+        ML::Video::MetalOps.check(gate, layer.heads.to_i64 * query_dim)
+        ML::Video::MetalOps.check(gate_bias, layer.heads.to_i64)
+        ML::Video::MetalOps.check(layer.scratch.gate_logits.not_nil!, layer.query_rows.to_i64 * layer.heads)
+        ML::Video::MetalOps.check(layer.scratch.gated_attended.not_nil!, layer.query_rows.to_i64 * inner)
+      end
     end
 
     private def validate_ff_weights(weights : FeedForwardWeights, dim : Int32) : Nil
@@ -559,8 +751,37 @@ module ML::Video
       end
       ML::Video::MetalOps.attention(e, query_rope, key_rope, s.value, s.attended,
         layer.query_rows, layer.key_rows, layer.heads, layer.head_dim)
-      ML::Video::MetalOps.linear(e, s.attended, w.projection, w.projection_bias, s.module_output,
+      attention_output = s.attended
+      if gate_weight = w.gate
+        gate_bias = w.gate_bias || raise ArgumentError.new("Missing LTX gated-attention bias")
+        gate_logits = s.gate_logits || raise ArgumentError.new("Missing LTX gated-attention scratch")
+        gated_attended = s.gated_attended || raise ArgumentError.new("Missing LTX gated-attention scratch")
+        ML::Video::MetalOps.linear(e, query, gate_weight, gate_bias, gate_logits,
+          layer.query_rows, layer.query_dim, layer.heads)
+        encode_apply_head_gates(e, s.attended, gate_logits, gated_attended,
+          layer.query_rows, layer.heads, layer.head_dim)
+        attention_output = gated_attended
+      end
+      ML::Video::MetalOps.linear(e, attention_output, w.projection, w.projection_bias, s.module_output,
         layer.query_rows, layer.inner_dim, layer.query_dim)
+    end
+
+    private def encode_apply_head_gates(e : ML::Metal::ComputeEncoder,
+                                        attended : ML::MetalBuffer,
+                                        gate_logits : ML::MetalBuffer,
+                                        output : ML::MetalBuffer,
+                                        rows : Int32, heads : Int32,
+                                        head_dim : Int32) : Nil
+      count = rows.to_i64 * heads * head_dim
+      ML::Video::MetalOps.check(attended, count)
+      ML::Video::MetalOps.check(gate_logits, rows.to_i64 * heads)
+      ML::Video::MetalOps.check(output, count)
+      ML::Video::MetalOps.distinct(output, attended, gate_logits)
+      e.set_pipeline(@gate_pipeline)
+      e.set_buffer(attended, 0).set_buffer(gate_logits, 1)
+      e.set_buffer(output, 2, ML::Metal::BufferAccess::Write)
+      e.set_value(head_dim.to_u32, 3).set_value(count.to_u32, 4)
+      e.dispatch_1d(count.to_i32)
     end
 
     private def encode_stream_self(e : ML::Metal::ComputeEncoder,

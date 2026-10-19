@@ -19,6 +19,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shutil
 import sys
 import types
 from pathlib import Path
@@ -33,6 +34,8 @@ import torch.nn.functional as F
 
 REVISION = "1ea34ff48f87168174e12956e200b1d908b1c5ff"
 DIFFUSERS_VERSION = "0.31.0"
+CHECKPOINT_REPO = "Wan-AI/Wan2.2-S2V-14B"
+CHECKPOINT_REVISION = "dab4e9c55bbe4c8c4d03db1c2c98c7f0ac9c454b"
 DEFAULT_UPSTREAM = Path("/opt/mldata_ssd/cogni-ml/video-scene-20261019/wan-audit")
 SOURCE_SHA256 = {
     "wan_modules_model.py": "8b39115298ca7322806c19b3165b3f435a94fe4a58f0624aec24f8e7f4997432",
@@ -136,7 +139,147 @@ def _capture(hooks: list[Any], module: nn.Module, key: str, destination: dict[st
     hooks.append(module.register_forward_hook(save) if not input else module.register_forward_pre_hook(save))
 
 
-def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
+def _binding_manifest(dim: int, ffn_dim: int, dtype: str = "F32") -> list[dict[str, Any]]:
+    """Official block-0/audio-injector keys matched to native Arena names."""
+    bindings: list[dict[str, Any]] = []
+
+    def add(target: str, source: str, *shape: int) -> None:
+        bindings.append({"target": target, "source": source, "shape": list(shape), "dtype": dtype})
+
+    add("block_modulation", "blocks.0.modulation", 1, 6, dim)
+    add("norm3_weight", "blocks.0.norm3.weight", dim)
+    add("norm3_bias", "blocks.0.norm3.bias", dim)
+    for prefix in ("self", "cross"):
+        source_prefix = f"blocks.0.{prefix}_attn"
+        for name in ("q", "k", "v", "o"):
+            add(f"{prefix}_{name}_weight", f"{source_prefix}.{name}.weight", dim, dim)
+            add(f"{prefix}_{name}_bias", f"{source_prefix}.{name}.bias", dim)
+        add(f"{prefix}_norm_q_weight", f"{source_prefix}.norm_q.weight", dim)
+        add(f"{prefix}_norm_k_weight", f"{source_prefix}.norm_k.weight", dim)
+    add("ffn_in_weight", "blocks.0.ffn.0.weight", ffn_dim, dim)
+    add("ffn_in_bias", "blocks.0.ffn.0.bias", ffn_dim)
+    add("ffn_out_weight", "blocks.0.ffn.2.weight", dim, ffn_dim)
+    add("ffn_out_bias", "blocks.0.ffn.2.bias", dim)
+    add("adain_weight", "audio_injector.injector_adain_layers.0.linear.weight", 2 * dim, dim)
+    add("adain_bias", "audio_injector.injector_adain_layers.0.linear.bias", 2 * dim)
+    for name in ("q", "k", "v", "o"):
+        source_prefix = "audio_injector.injector.0"
+        add(f"audio_{name}_weight", f"{source_prefix}.{name}.weight", dim, dim)
+        add(f"audio_{name}_bias", f"{source_prefix}.{name}.bias", dim)
+    add("audio_q_norm_weight", "audio_injector.injector.0.norm_q.weight", dim)
+    add("audio_k_norm_weight", "audio_injector.injector.0.norm_k.weight", dim)
+    return bindings
+
+
+def _validate_checkpoint_subset(path: Path, dim: int, ffn_dim: int) -> str:
+    """Check exact names, shapes, and supported uniform dtype without loading payloads."""
+    from safetensors import safe_open
+
+    manifest = _binding_manifest(dim, ffn_dim)
+    expected = {binding["source"] for binding in manifest}
+    with safe_open(str(path), framework="pt", device="cpu") as checkpoint:
+        actual = set(checkpoint.keys())
+        if actual != expected:
+            raise RuntimeError(
+                f"Checkpoint subset keys differ: missing={sorted(expected - actual)}, "
+                f"extra={sorted(actual - expected)}"
+            )
+        dtypes = set()
+        for binding in manifest:
+            tensor_slice = checkpoint.get_slice(binding["source"])
+            if tensor_slice.get_shape() != binding["shape"]:
+                raise RuntimeError(
+                    f"Checkpoint shape mismatch for {binding['source']}: "
+                    f"{tensor_slice.get_shape()} != {binding['shape']}"
+                )
+            dtype = tensor_slice.get_dtype()
+            if dtype not in {"BF16", "F16", "F32"}:
+                raise RuntimeError(f"Unsupported checkpoint dtype for {binding['source']}: {dtype}")
+            binding["dtype"] = dtype
+            dtypes.add(dtype)
+    if len(dtypes) != 1:
+        raise RuntimeError(f"Checkpoint subset must use one supported dtype, found {sorted(dtypes)}")
+    return next(iter(dtypes))
+
+
+def _source_checkpoint_tensors(
+    block: nn.Module, injector: nn.Module
+) -> dict[str, torch.Tensor]:
+    """Export source-shaped tensors under official WanModel_S2V state keys."""
+    tensors: dict[str, torch.Tensor] = {
+        "blocks.0.modulation": block.modulation.detach(),  # type: ignore[attr-defined]
+        "blocks.0.norm3.weight": block.norm3.weight.detach(),  # type: ignore[attr-defined]
+        "blocks.0.norm3.bias": block.norm3.bias.detach(),  # type: ignore[attr-defined]
+        "blocks.0.ffn.0.weight": block.ffn[0].weight.detach(),  # type: ignore[attr-defined]
+        "blocks.0.ffn.0.bias": block.ffn[0].bias.detach(),  # type: ignore[attr-defined]
+        "blocks.0.ffn.2.weight": block.ffn[2].weight.detach(),  # type: ignore[attr-defined]
+        "blocks.0.ffn.2.bias": block.ffn[2].bias.detach(),  # type: ignore[attr-defined]
+    }
+    for prefix in ("self", "cross"):
+        module = getattr(block, f"{prefix}_attn")
+        for name in ("q", "k", "v", "o"):
+            projection = getattr(module, name)
+            tensors[f"blocks.0.{prefix}_attn.{name}.weight"] = projection.weight.detach()
+            tensors[f"blocks.0.{prefix}_attn.{name}.bias"] = projection.bias.detach()
+        tensors[f"blocks.0.{prefix}_attn.norm_q.weight"] = module.norm_q.weight.detach()
+        tensors[f"blocks.0.{prefix}_attn.norm_k.weight"] = module.norm_k.weight.detach()
+
+    adain = injector.injector_adain_layers[0]  # type: ignore[attr-defined]
+    tensors["audio_injector.injector_adain_layers.0.linear.weight"] = adain.linear.weight.detach()
+    tensors["audio_injector.injector_adain_layers.0.linear.bias"] = adain.linear.bias.detach()
+    attention = injector.injector[0]  # type: ignore[attr-defined]
+    for name in ("q", "k", "v", "o"):
+        projection = getattr(attention, name)
+        tensors[f"audio_injector.injector.0.{name}.weight"] = projection.weight.detach()
+        tensors[f"audio_injector.injector.0.{name}.bias"] = projection.bias.detach()
+    tensors["audio_injector.injector.0.norm_q.weight"] = attention.norm_q.weight.detach()
+    tensors["audio_injector.injector.0.norm_k.weight"] = attention.norm_k.weight.detach()
+    return tensors
+
+
+def _load_checkpoint_subset(
+    block: nn.Module, injector: nn.Module, path: Path, device: torch.device
+) -> None:
+    """Copy the exact 39 official block-0/injector-0 tensors onto the oracle device."""
+    from safetensors.torch import load_file
+
+    targets = _source_checkpoint_tensors(block, injector)
+    loaded = load_file(str(path), device="cpu")
+    if set(loaded) != set(targets):
+        raise RuntimeError(
+            f"Checkpoint subset keys differ: missing={sorted(set(targets) - set(loaded))}, "
+            f"extra={sorted(set(loaded) - set(targets))}"
+        )
+    with torch.no_grad():
+        for name, target in targets.items():
+            source = loaded[name]
+            if tuple(source.shape) != tuple(target.shape):
+                raise RuntimeError(
+                    f"Checkpoint shape mismatch for {name}: {tuple(source.shape)} != {tuple(target.shape)}"
+                )
+            if not torch.isfinite(source).all():
+                raise RuntimeError(f"Non-finite checkpoint values in {name}")
+            target.copy_(source.to(device=device, dtype=torch.float32))
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def generate(
+    upstream: Path,
+    seed: int = 7031,
+    *,
+    production_width: bool = False,
+    weights_output: Path | None = None,
+    checkpoint_file: Path | None = None,
+) -> dict[str, Any]:
+    if checkpoint_file is not None and not production_width:
+        raise ValueError("--checkpoint-file requires --production-width")
     _verify_sources(upstream)
     if not torch.backends.mps.is_available():
         raise RuntimeError("MPS is unavailable; refusing to use CPU neural fallback")
@@ -146,8 +289,17 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
     torch.set_num_threads(1)
     model_module, audio_module, s2v_module, s2v_utils = _install_import_shims(upstream)
 
-    b, seq, ctx_len, dim, heads, ffn_dim = 2, 12, 3, 32, 2, 64
-    video_frames, spatial, audio_tokens, split = 2, 4, 5, 8
+    checkpoint_dtype = "F32"
+    if production_width:
+        # Full Wan2.2-S2V-14B channel/head/FFN widths, with two batches and a
+        # two-token video+motion sequence to keep checkpoints compact.
+        b, seq, ctx_len, dim, heads, ffn_dim = 2, 2, 1, 5120, 40, 13824
+        video_frames, spatial, audio_tokens, split = 1, 1, 5, 1
+    else:
+        b, seq, ctx_len, dim, heads, ffn_dim = 2, 12, 3, 32, 2, 64
+        video_frames, spatial, audio_tokens, split = 2, 4, 5, 8
+    if checkpoint_file is not None:
+        checkpoint_dtype = _validate_checkpoint_subset(checkpoint_file, dim, ffn_dim)
     head_dim = dim // heads
     block = s2v_module.WanS2VAttentionBlock(
         dim=dim,
@@ -185,6 +337,8 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
             nn.init.normal_(parameter, mean=0.0, std=0.02)
         else:
             nn.init.normal_(parameter, mean=0.0, std=0.035)
+    if checkpoint_file is not None:
+        _load_checkpoint_subset(block, injector, checkpoint_file, device)
 
     # All token vectors are deterministic MPS tensors. Prefix coordinates reach
     # representative late-video positions; the suffix is a negative-time motion
@@ -198,16 +352,24 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
     # Each batch member has its own late-video grid and negative-time motion
     # grid. The first member retains the prior boundary positions; the second
     # probes distinct batch indexing at all three axes.
-    batch_grids = [
-        (
-            ([255, 511, 1022], [257, 513, 1024], [2, 2, 2]),
-            ([-30, 0, 0], [-29, 2, 2], [1, 2, 2]),
-        ),
-        (
-            ([301, 700, 800], [303, 702, 802], [2, 2, 2]),
-            ([-45, 10, 20], [-44, 12, 22], [1, 2, 2]),
-        ),
-    ]
+    if production_width:
+        batch_grids = [
+            (([255, 511, 1022], [256, 512, 1023], [1, 1, 1]),
+             ([-30, 0, 0], [-29, 1, 1], [1, 1, 1])),
+            (([301, 700, 800], [302, 701, 801], [1, 1, 1]),
+             ([-45, 10, 20], [-44, 11, 21], [1, 1, 1])),
+        ]
+    else:
+        batch_grids = [
+            (
+                ([255, 511, 1022], [257, 513, 1024], [2, 2, 2]),
+                ([-30, 0, 0], [-29, 2, 2], [1, 2, 2]),
+            ),
+            (
+                ([301, 700, 800], [303, 702, 802], [2, 2, 2]),
+                ([-45, 10, 20], [-44, 12, 22], [1, 2, 2]),
+            ),
+        ]
     positions: list[list[list[int]]] = []
     for video_grid, motion_grid in batch_grids:
         sample_positions: list[list[int]] = []
@@ -297,14 +459,36 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
     _capture(hooks, block.ffn[2], "ffn_out", checkpoint)
 
     sdpa_outputs: list[torch.Tensor] = []
+    sdpa_audit_rows: list[torch.Tensor] = []
 
     def sdpa_adapter(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
         # Wan's CUDA flash/distributed attention is replaced only at this kernel
-        # boundary. No padding/mask applies to the tiny equal-length fixture.
-        output = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+        # boundary. Torch 2.8 MPS SDPA diverges on transposed non-contiguous
+        # inputs; materialize its [B,H,S,D] inputs on MPS before dispatch. No
+        # padding/mask applies to the tiny equal-length fixture.
+        q_heads = q.transpose(1, 2).contiguous()
+        k_heads = k.transpose(1, 2).contiguous()
+        v_heads = v.transpose(1, 2).contiguous()
+        if any(t.device.type != "mps" or not t.is_contiguous() for t in (q_heads, k_heads, v_heads)):
+            raise RuntimeError("Wan SDPA adapter requires contiguous MPS Q/K/V")
+        output_heads = F.scaled_dot_product_attention(
+            q_heads, k_heads, v_heads,
             attn_mask=None, dropout_p=0.0, is_causal=False,
-        ).transpose(1, 2).contiguous()
+        )
+        manual_scores = torch.matmul(q_heads, k_heads.transpose(-2, -1)) / (q_heads.shape[-1] ** 0.5)
+        manual_output = torch.matmul(torch.softmax(manual_scores, dim=-1), v_heads)
+        difference = (output_heads - manual_output).abs()
+        tolerance = 2e-5 + 2e-5 * manual_output.abs()
+        finite = torch.isfinite(output_heads).all() & torch.isfinite(manual_output).all()
+        violations = ((difference > tolerance) | ~torch.isfinite(difference) | ~torch.isfinite(tolerance)).sum()
+        normalized = difference / tolerance
+        max_normalized = torch.where(
+            torch.isfinite(normalized), normalized, torch.full_like(normalized, float("inf"))
+        ).amax()
+        sdpa_audit_rows.append(
+            torch.stack((max_normalized, violations.to(torch.float32), finite.to(torch.float32)))
+        )
+        output = output_heads.transpose(1, 2).contiguous()
         sdpa_outputs.append(output.detach().clone())
         return output
 
@@ -437,7 +621,26 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
     if missing:
         raise RuntimeError(f"Upstream hooks did not capture checkpoints: {missing}")
 
-    return {
+    attention_names = ("self_attention", "cross_attention", "audio_attention")
+    if len(sdpa_audit_rows) != len(attention_names):
+        raise RuntimeError(f"Expected {len(attention_names)} SDPA audit rows, got {len(sdpa_audit_rows)}")
+    # Read these GPU-computed audit scalars once at the same terminal export
+    # boundary as the fixture tensors; do not synchronize inside attention.
+    attention_metrics = torch.stack(sdpa_audit_rows).detach().to(device="cpu").tolist()
+    attention_validation = []
+    for name, (max_normalized, violations, finite) in zip(attention_names, attention_metrics):
+        receipt = {
+            "call": name,
+            "max_normalized_error": max_normalized,
+            "violations": int(violations),
+            "finite": bool(finite),
+        }
+        attention_validation.append(receipt)
+        if not receipt["finite"] or receipt["violations"] != 0 or receipt["max_normalized_error"] > 1.0:
+            raise RuntimeError(f"MPS SDPA differs from explicit MPS attention beyond the fixed gate: {receipt}")
+
+    source_weights = _source_checkpoint_tensors(block, injector) if production_width else None
+    result = {
         "upstream": {
             "repo": "https://github.com/Wan-Video/Wan2.2",
             "revision": REVISION,
@@ -445,9 +648,28 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
             "source_sha256": source_hashes,
             "oracle_device": "mps",
             "fallback_disabled": True,
-            "attention_adapter": "torch.nn.functional.scaled_dot_product_attention replacing CUDA-only flash/distributed backend; upstream module forward and projections remain active",
+            "fixture_mode": "production_width" if production_width else "tiny",
+            "attention_adapter": "Torch 2.8 MPS SDPA with contiguous [B,H,S,D] Q/K/V; required by the non-contiguous-transpose MPS discriminator; replaces only CUDA-only flash/distributed attention while upstream module forward and projections remain active",
+            "attention_validation": {
+                "reference": "same-input MPS matmul -> softmax(scores / sqrt(head_dim)) -> matmul, independently computed on contiguous Q/K/V",
+                "tolerance": "2e-5 + 2e-5 * abs(reference)",
+                "checks": attention_validation,
+            },
             "rope_adapter": "official rope_precompute FP64 complex CPU setup table called per batch member to preserve its per-sample sequence buckets; split-real F32 coefficient application on MPS",
             "seed": seed,
+            "checkpoint_source": (
+                {
+                    "repo": CHECKPOINT_REPO,
+                    "revision": CHECKPOINT_REVISION,
+                    "path": checkpoint_file.name,
+                    "sha256": _sha256_file(checkpoint_file),
+                    "bytes": checkpoint_file.stat().st_size,
+                    "dtype": checkpoint_dtype,
+                    "dtype_conversion": "source sidecar dtype is preserved; checkpoint tensors are copied to the MPS oracle in F32",
+                }
+                if checkpoint_file is not None
+                else None
+            ),
         },
         "config": {
             "batches": b,
@@ -462,11 +684,53 @@ def generate(upstream: Path, seed: int = 7031) -> dict[str, Any]:
             "spatial_tokens": spatial,
             "audio_tokens": audio_tokens,
             "audio_attention_query_rows_per_frame": spatial,
+            "qk_norm": True,
+            "cross_attn_norm": True,
+            "enable_adain": True,
+            "adain_mode": "attn_norm",
+            "audio_inject_layers": [0],
         },
         "inputs": {name: _flat(value) for name, value in inputs.items()},
-        "weights": {name: _flat(value) for name, value in weights.items()},
+        "weights": {} if production_width else {name: _flat(value) for name, value in weights.items()},
         "expected": {name: _flat(value) for name, value in expected.items()},
     }
+    if production_width:
+        if weights_output is None:
+            raise ValueError("--production-width requires a safetensors sidecar path")
+        if tuple(block.modulation.shape) != (1, 6, dim):
+            raise RuntimeError(f"Unexpected official modulation shape: {tuple(block.modulation.shape)}")
+        assert source_weights is not None
+        manifest = _binding_manifest(dim, ffn_dim, checkpoint_dtype)
+        if set(source_weights) != {binding["source"] for binding in manifest}:
+            raise RuntimeError("Source-shaped checkpoint tensor keys differ from the binding manifest")
+        for binding in manifest:
+            if tuple(source_weights[binding["source"]].shape) != tuple(binding["shape"]):
+                raise RuntimeError(f"Source checkpoint shape mismatch for {binding['source']}")
+        weights_output.parent.mkdir(parents=True, exist_ok=True)
+        if checkpoint_file is not None:
+            # Keep the audited source representation intact so the native loader
+            # exercises the original BF16/F16 bytes before GPU F32 conversion.
+            if checkpoint_file.resolve() != weights_output.resolve():
+                shutil.copyfile(checkpoint_file, weights_output)
+            copied_sha256 = _sha256_file(weights_output)
+            if copied_sha256 != result["upstream"]["checkpoint_source"]["sha256"]:
+                raise RuntimeError("Checkpoint sidecar copy does not match the original source bytes")
+        else:
+            from safetensors.torch import save_file
+
+            cpu_weights = {
+                name: tensor.detach().to(device="cpu", dtype=torch.float32).contiguous()
+                for name, tensor in source_weights.items()
+            }
+            save_file(cpu_weights, str(weights_output), metadata={"format": "pt", "wan_revision": REVISION})
+        result["weight_bindings"] = manifest
+        result["weights_file"] = {
+            "path": weights_output.name,
+            "sha256": copied_sha256 if checkpoint_file is not None else _sha256_file(weights_output),
+            "bytes": weights_output.stat().st_size,
+            "dtype": checkpoint_dtype,
+        }
+    return result
 
 
 def main() -> None:
@@ -474,9 +738,21 @@ def main() -> None:
     parser.add_argument("--upstream", type=Path, default=Path(os.environ.get("WAN_S2V_UPSTREAM_DIR", DEFAULT_UPSTREAM)))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=7031)
+    parser.add_argument("--production-width", action="store_true",
+                        help="Use the pinned 14B block width and write weights to a safetensors sidecar")
+    parser.add_argument("--weights-output", type=Path,
+                        help="Production-width safetensors sidecar (defaults beside --output)")
+    parser.add_argument("--checkpoint-file", type=Path,
+                        help="Optional official 39-tensor block-0/injector-0 safetensors subset")
     args = parser.parse_args()
-    result = generate(args.upstream, args.seed)
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    weights_output = None
+    if args.production_width:
+        weights_output = args.weights_output or args.output.with_suffix(".weights.safetensors")
+        if weights_output.parent.resolve() != args.output.parent.resolve():
+            raise ValueError("The production weights sidecar must be beside the JSON fixture")
+    result = generate(args.upstream, args.seed, production_width=args.production_width,
+                      weights_output=weights_output, checkpoint_file=args.checkpoint_file)
     args.output.write_text(json.dumps(result, separators=(",", ":")) + "\n")
     print(json.dumps({"output": str(args.output), "checkpoints": len(result["expected"]), "source_revision": REVISION}))
 

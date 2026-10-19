@@ -47,10 +47,10 @@ kernel void wan_segment_add(
 // counts exactly matching Wan's split of head_dim/2 into temporal/height/width.
 kernel void wan_rope_f32(
     device const float *x [[buffer(0)]], device const float *positions [[buffer(1)]],
-    device float *y [[buffer(2)]], constant uint &batches [[buffer(3)]],
-    constant uint &seq [[buffer(4)]], constant uint &heads [[buffer(5)]],
-    constant uint &head_dim [[buffer(6)]], constant float &theta [[buffer(7)]],
-    constant uint &axis0 [[buffer(8)]], constant uint &axis1 [[buffer(9)]],
+    device float *y [[buffer(2)]], device const float *frequency_hi [[buffer(3)]],
+    device const float *frequency_lo [[buffer(4)]], constant uint &batches [[buffer(5)]],
+    constant uint &seq [[buffer(6)]], constant uint &heads [[buffer(7)]],
+    constant uint &head_dim [[buffer(8)]],
     uint id [[thread_position_in_grid]]) {
     const uint pairs = head_dim / 2;
     const uint total = batches * seq * heads * pairs;
@@ -60,22 +60,29 @@ kernel void wan_rope_f32(
     const uint row = token_head / heads;
     const uint token = row % seq;
     const uint batch = row / seq;
-    uint axis, local_pair, axis_dim;
-    if (pair < axis0) {
-        axis = 0; local_pair = pair; axis_dim = axis0;
-    } else if (pair < axis0 + axis1) {
-        axis = 1; local_pair = pair - axis0; axis_dim = axis1;
-    } else {
-        axis = 2; local_pair = pair - axis0 - axis1; axis_dim = pairs - axis0 - axis1;
-    }
+    const uint axis0 = (pairs / 3) + (pairs % 3);
+    const uint axis1 = pairs / 3;
+    const uint axis = pair < axis0 ? 0 : (pair < axis0 + axis1 ? 1 : 2);
     const float position = positions[(batch * seq + token) * 3 + axis];
-    // `rope_params` takes the real component count 2 * axis_dim, so its
-    // exponent `-2*k/real_dim` is `-k/axis_dim` in complex-pair coordinates.
-    const float angle = position * pow(theta, -float(local_pair) / float(axis_dim));
-    // The safe-mode GPU probe still found ~5e-5 sine error near 801 radians
-    // with the ordinary intrinsics. Precise variants match the upstream FP64
-    // RoPE table closely while preserving GPU-only runtime math.
-    const float cosine = precise::cos(angle), sine = precise::sin(angle);
+    // The upstream source creates its inverse frequencies and complex phase
+    // table in FP64. Split the setup-only constants into hi/lo F32, then retain
+    // the product residual with FMA. Two-component phase composition avoids
+    // discarding that residual before the precise trig functions, including
+    // for positions outside the small fixture coordinates.
+    const float frequency = frequency_hi[pair];
+    const float phase_hi = position * frequency;
+    const float product_residual = fma(position, frequency, -phase_hi);
+    const float phase_tail = fma(position, frequency_lo[pair], product_residual);
+    const float phase_sum = phase_hi + phase_tail;
+    const float phase_virtual = phase_sum - phase_hi;
+    const float phase_residual = (phase_hi - (phase_sum - phase_virtual)) +
+                                 (phase_tail - phase_virtual);
+    const float cos_hi = precise::cos(phase_sum);
+    const float sin_hi = precise::sin(phase_sum);
+    const float cos_lo = precise::cos(phase_residual);
+    const float sin_lo = precise::sin(phase_residual);
+    const float cosine = cos_hi * cos_lo - sin_hi * sin_lo;
+    const float sine = sin_hi * cos_lo + cos_hi * sin_lo;
     const uint offset = token_head * head_dim + pair * 2;
     const float real = x[offset], imag = x[offset + 1];
     y[offset] = real * cosine - imag * sine;

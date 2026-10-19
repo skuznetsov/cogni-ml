@@ -30,3 +30,20 @@ kernel void ltx2_split_rope_f32(
     const float s = sin_freq[freq];
     y[id] = component < half_dim ? first * c - second * s : second * c + first * s;
 }
+
+// LTX applies `2 * sigmoid(to_gate_logits(x))` per head before the
+// attention output projection. logits are [tokens, heads], values are
+// [tokens, heads, head_dim].
+kernel void ltx2_apply_head_gates_f32(
+    device const float *attended [[buffer(0)]],
+    device const float *gate_logits [[buffer(1)]],
+    device float *gated [[buffer(2)]],
+    constant uint &head_dim [[buffer(3)]],
+    constant uint &count [[buffer(4)]],
+    uint id [[thread_position_in_grid]]) {
+    if (id >= count) return;
+
+    const uint gate_index = id / head_dim;
+    const float gate = 2.0f / (1.0f + exp(-gate_logits[gate_index]));
+    gated[id] = attended[id] * gate;
+}

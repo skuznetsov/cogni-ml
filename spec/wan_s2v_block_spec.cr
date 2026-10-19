@@ -3,6 +3,7 @@
 # 1ea34ff48f87168174e12956e200b1d908b1c5ff.
 require "spec"
 require "json"
+require "digest/sha256"
 require "../src/ml/video/wan_s2v_block"
 require "./support/video_allocation_counter"
 
@@ -25,15 +26,86 @@ private def wan_json_f32(value : JSON::Any) : Array(Float32)
   value.as_a.map(&.as_f.to_f32)
 end
 
-private def wan_matches(actual : Array(Float32), expected : JSON::Any) : Bool
+private def wan_comparison(name : String, actual : Array(Float32), expected : JSON::Any) : Tuple(Bool, String)
   reference = wan_json_f32(expected)
-  return false unless actual.size == reference.size
+  unless actual.size == reference.size
+    return {false, "#{name}: checkpoint size mismatch native=#{actual.size} oracle=#{reference.size}"}
+  end
+
+  violations = 0
+  finite_count = 0
+  native_non_finite = 0
+  oracle_non_finite = 0
+  worst_ratio = -1.0_f64
+  worst_index = 0
+  worst_actual = 0.0_f32
+  worst_reference = 0.0_f32
+  worst_difference = 0.0_f32
+  worst_limit = 0.0_f32
+
   actual.each_with_index do |value, index|
     target = reference[index]
-    return false unless value.finite? && target.finite?
-    return false unless (value - target).abs <= 2e-5_f32 + 2e-5_f32 * target.abs
+    native_non_finite += 1 unless value.finite?
+    oracle_non_finite += 1 unless target.finite?
+    unless value.finite? && target.finite?
+      violations += 1
+      if worst_ratio < Float64::INFINITY
+        worst_ratio = Float64::INFINITY
+        worst_index = index
+        worst_actual = value
+        worst_reference = target
+        worst_difference = (value - target).abs
+        worst_limit = 2e-5_f32 + 2e-5_f32 * target.abs
+      end
+      next
+    end
+
+    finite_count += 1
+    difference = (value - target).abs
+    limit = 2e-5_f32 + 2e-5_f32 * target.abs
+    ratio = difference.to_f64 / limit.to_f64
+    if difference > limit
+      violations += 1
+    end
+    if ratio > worst_ratio
+      worst_ratio = ratio
+      worst_index = index
+      worst_actual = value
+      worst_reference = target
+      worst_difference = difference
+      worst_limit = limit
+    end
   end
-  true
+
+  detail = String.build do |io|
+    io << "#{name}: checked=#{actual.size} finite=#{finite_count}"
+    io << " native_non_finite=#{native_non_finite} oracle_non_finite=#{oracle_non_finite}"
+    io << " violations=#{violations}"
+    io << " max_normalized_error=#{worst_ratio} at flat=#{worst_index}"
+    io << " native=#{worst_actual} oracle=#{worst_reference}"
+    io << " abs=#{worst_difference} limit=#{worst_limit}"
+  end
+  {violations == 0, detail}
+end
+
+private def wan_matches(actual : Array(Float32), expected : JSON::Any) : Bool
+  wan_comparison("fixture value", actual, expected)[0]
+end
+
+private def wan_snapshot_json(snapshots : Hash(String, Array(Float32))) : JSON::Any
+  encoded = {} of String => JSON::Any
+  snapshots.each do |name, values|
+    encoded_values = [] of JSON::Any
+    values.each do |value|
+      if value.finite?
+        encoded_values << JSON::Any.new(value.to_f64)
+      else
+        encoded_values << JSON::Any.new(value.to_s)
+      end
+    end
+    encoded[name] = JSON::Any.new(encoded_values)
+  end
+  JSON::Any.new(encoded)
 end
 
 private def wan_rope_diagnostic(actual : Array(Float32), expected : JSON::Any,
@@ -120,20 +192,33 @@ private def wan_fixture : JSON::Any
   JSON.parse(File.read(path))
 end
 
+private def wan_fixture_path : String
+  ENV["WAN_S2V_BLOCK_FIXTURE"]? || raise "Set WAN_S2V_BLOCK_FIXTURE to the pinned MPS oracle fixture"
+end
+
+private def wan_sha256_file(path : String) : String
+  digest = Digest::SHA256.new
+  buffer = Bytes.new(1024 * 1024)
+  File.open(path, "rb") do |file|
+    while (count = file.read(buffer)) > 0
+      digest.update(buffer[0, count])
+    end
+  end
+  digest.final.hexstring
+end
+
 private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   inputs = ML::Video::Arena.new
   weights = ML::Video::Arena.new
   scratch = ML::Video::Arena.new
   traces = ML::Video::Arena.new
   output = ML::Video::Arena.new
+  checkpoint_file = nil.as(ML::Video::CheckpointFile?)
+  prepared_weights = nil.as(ML::Video::PreparedWeights?)
   begin
     fixture["inputs"].as_h.each do |name, values|
       inputs.upload(name, wan_json_f32(values))
     end
-    fixture["weights"].as_h.each do |name, values|
-      weights.upload(name, wan_json_f32(values))
-    end
-
     config_json = fixture["config"]
     block_cfg = ML::Video::WanS2VConfig.new(
       batches: config_json["batches"].as_i,
@@ -156,6 +241,50 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       spatial_tokens: config_json["spatial_tokens"].as_i,
       audio_tokens: config_json["audio_tokens"].as_i,
     )
+
+    if weight_manifest = fixture["weights_file"]?
+      fixture["upstream"]["fixture_mode"].as_s.should eq("production_width")
+      fixture_path = wan_fixture_path
+      relative_path = weight_manifest["path"].as_s
+      (File.basename(relative_path) == relative_path && relative_path != "." && relative_path != "..").should be_true,
+        "weight sidecar must stay beside the fixture"
+      sidecar_path = File.join(File.dirname(File.expand_path(fixture_path)), relative_path)
+      File.size(sidecar_path).should eq(weight_manifest["bytes"].as_i64)
+      wan_sha256_file(sidecar_path).should eq(weight_manifest["sha256"].as_s)
+
+      fixture_bindings = fixture["weight_bindings"].as_a
+      fixture_bindings.size.should eq(39)
+      dtypes = fixture_bindings.map { |item| item["dtype"].as_s }.uniq
+      dtypes.size.should eq(1), "all checkpoint fixture tensors must use one source dtype"
+      checkpoint_dtype = ML::GGUF::SafeTensorDType.parse(dtypes.first)
+      bindings = ML::Video::WanS2VBlock.checkpoint_bindings(block_cfg, checkpoint_dtype)
+      fixture_bindings.map { |item| item["source"].as_s }.sort.should eq(bindings.map(&.source).sort)
+      fixture_bindings.map { |item| item["target"].as_s }.sort.should eq(bindings.map(&.target).sort)
+      fixture_bindings.each do |item|
+        native = bindings.find! { |binding| binding.source == item["source"].as_s }
+        item["shape"].as_a.map(&.as_i64).should eq(native.shape)
+        ML::GGUF::SafeTensorDType.parse(item["dtype"].as_s).should eq(native.dtype)
+      end
+
+      checkpoint_file = ML::Video::CheckpointFile.new(sidecar_path)
+      plan = ML::Video::WeightPlan.new(
+        [checkpoint_file.not_nil!], bindings,
+        8_i64 * 1024 * 1024 * 1024, 1024_i64 * 1024 * 1024,
+      )
+      plan.entries.size.should eq(39)
+      plan.destination_bytes.should eq(2_034_886_656_i64)
+      expected_staging_bytes = plan.destination_bytes * checkpoint_dtype.bytes_per_element // 4
+      expected_staging_bytes.should eq(
+        checkpoint_dtype.f32? ? 2_034_886_656_i64 : 1_017_443_328_i64
+      )
+      plan.staging_bytes.should eq(expected_staging_bytes)
+      plan.peak_bytes.should be <= 8_i64 * 1024 * 1024 * 1024
+      prepared_weights = ML::Video::PreparedWeights.new(plan, weights)
+    else
+      fixture["weights"].as_h.each do |name, values|
+        weights.upload(name, wan_json_f32(values))
+      end
+    end
 
     ML::Video::WanS2VBlock.prepare!
     ML::Video::WanS2VAudioInjector.prepare!
@@ -181,8 +310,13 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       batches: block_cfg.batches, seq: block_cfg.seq,
       context_tokens: block_cfg.context_tokens, dim: block_cfg.dim,
       heads: block_cfg.heads, ffn_dim: block_cfg.ffn_dim,
-      split: block_cfg.split - 1, theta: block_cfg.theta,
-      video_frames: block_cfg.video_frames, spatial_tokens: block_cfg.spatial_tokens,
+      split: block_cfg.split, theta: block_cfg.theta,
+      video_frames: block_cfg.video_frames, spatial_tokens: block_cfg.spatial_tokens + 1,
+    )
+    mismatched_audio_cfg = ML::Video::WanS2VAudioConfig.new(
+      batches: audio_cfg.batches, seq: audio_cfg.seq, dim: audio_cfg.dim,
+      heads: audio_cfg.heads, video_frames: audio_cfg.video_frames,
+      spatial_tokens: audio_cfg.spatial_tokens + 1, audio_tokens: audio_cfg.audio_tokens,
     )
     rejected_command = ML::Metal::CommandBuffer.new
     rejected_encoder = ML::Metal::ComputeEncoder.new(rejected_command)
@@ -190,15 +324,35 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       ML::Video::WanS2VBlock.encode_with_audio(
         rejected_encoder, inputs["x"], inputs["modulation"], inputs["positions"],
         inputs["context"], inputs["local_audio"], inputs["global_audio"],
-        block_output, audio_output, weights, scratch, mismatched_cfg, audio_cfg,
+        block_output, audio_output, weights, scratch, mismatched_cfg, mismatched_audio_cfg,
       )
     end
     rejected_encoder.end_encoding
     rejected_command.discard
 
+    different_rope_cfg = ML::Video::WanS2VConfig.new(
+      batches: block_cfg.batches, seq: block_cfg.seq,
+      context_tokens: block_cfg.context_tokens, dim: block_cfg.dim,
+      heads: block_cfg.heads, ffn_dim: block_cfg.ffn_dim,
+      split: block_cfg.split, theta: block_cfg.theta + 0.5_f32,
+      video_frames: block_cfg.video_frames, spatial_tokens: block_cfg.spatial_tokens,
+    )
+    rope_guard_command = ML::Metal::CommandBuffer.new
+    rope_guard_encoder = ML::Metal::ComputeEncoder.new(rope_guard_command)
+    expect_raises(KeyError) do
+      ML::Video::WanS2VBlock.encode_with_audio(
+        rope_guard_encoder, inputs["x"], inputs["modulation"], inputs["positions"],
+        inputs["context"], inputs["local_audio"], inputs["global_audio"],
+        block_output, audio_output, weights, scratch, different_rope_cfg, audio_cfg,
+      )
+    end
+    rope_guard_encoder.end_encoding
+    rope_guard_command.discard
+
     allocation_start = ML::MetalBuffer.video_spec_allocations
     command = ML::Metal::CommandBuffer.new
     encoder = ML::Metal::ComputeEncoder.new(command)
+    prepared_weights.try(&.encode(encoder))
     ML::Video::WanS2VBlock.encode_with_audio(
       encoder, inputs["x"], inputs["modulation"], inputs["positions"],
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
@@ -215,14 +369,21 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       "Wan encode must not allocate MetalBuffers after setup"
     command.commit
     command.wait
+    prepared_weights.try(&.release)
+    checkpoint_file.try(&.close)
 
     snapshots = {} of String => Array(Float32)
     block_trace.each { |name, buffer| snapshots[name] = buffer.read((buffer.size // 4).to_i).map(&.to_f32) }
     audio_trace.each { |name, buffer| snapshots[name] = buffer.read((buffer.size // 4).to_i).map(&.to_f32) }
     snapshots["repeat_block_output"] = repeat_block_output.read((repeat_block_output.size // 4).to_i).map(&.to_f32)
     snapshots["repeat_audio_output"] = repeat_audio_output.read((repeat_audio_output.size // 4).to_i).map(&.to_f32)
+    if snapshot_path = ENV["WAN_S2V_SNAPSHOT_DUMP"]?
+      File.write(snapshot_path, wan_snapshot_json(snapshots).to_json)
+    end
     snapshots
   ensure
+    prepared_weights.try(&.release)
+    checkpoint_file.try(&.close)
     output.release
     traces.release
     scratch.release
@@ -287,6 +448,8 @@ describe ML::Video::WanS2VBlock do
     fixture["upstream"]["diffusers_version"].as_s.should eq("0.31.0")
     fixture["upstream"]["oracle_device"].as_s.should eq("mps")
     fixture["upstream"]["fallback_disabled"].as_bool.should be_true
+    fixture_mode = fixture["upstream"]["fixture_mode"].as_s
+    {"tiny", "production_width"}.includes?(fixture_mode).should be_true
     source_hashes = fixture["upstream"]["source_sha256"].as_h
     source_hashes.keys.sort.should eq(WAN_SOURCE_SHA256.keys.sort)
     WAN_SOURCE_SHA256.each { |name, expected| source_hashes[name].as_s.should eq(expected) }
@@ -294,6 +457,21 @@ describe ML::Video::WanS2VBlock do
     fixture["config"]["batches"].as_i.should eq(2), "the MPS parity fixture must exercise two batches"
     fixture["config"]["heads"].as_i.should be > 1
     config = fixture["config"]
+    if fixture_mode == "production_width"
+      config["dim"].as_i.should eq(5120)
+      config["ffn_dim"].as_i.should eq(13824)
+      config["heads"].as_i.should eq(40)
+      (config["dim"].as_i // config["heads"].as_i).should eq(128)
+      config["qk_norm"].as_bool.should be_true
+      config["cross_attn_norm"].as_bool.should be_true
+      config["enable_adain"].as_bool.should be_true
+      config["adain_mode"].as_s.should eq("attn_norm")
+      config["audio_inject_layers"].as_a.map(&.as_i).should eq([0])
+      config["split"].as_i.should eq(1)
+      config["video_frames"].as_i.should eq(1)
+      config["spatial_tokens"].as_i.should eq(1)
+      config["audio_tokens"].as_i.should eq(5)
+    end
     dim = config["dim"].as_i
     seq = config["seq"].as_i
     positions = fixture["inputs"]["positions"].as_a
@@ -302,11 +480,16 @@ describe ML::Video::WanS2VBlock do
       (0...3).map { |axis| positions[offset + axis].as_f }
     }
     position_at.call(0, 0).should eq([255.0, 511.0, 1022.0])
-    position_at.call(0, 7).should eq([256.0, 512.0, 1023.0])
     position_at.call(1, 0).should eq([301.0, 700.0, 800.0])
-    position_at.call(1, 7).should eq([302.0, 701.0, 801.0])
-    position_at.call(0, 8).should eq([-30.0, 0.0, 0.0])
-    position_at.call(1, 8).should eq([-45.0, 10.0, 20.0])
+    if fixture_mode == "production_width"
+      position_at.call(0, 1).should eq([-30.0, 0.0, 0.0])
+      position_at.call(1, 1).should eq([-45.0, 10.0, 20.0])
+    else
+      position_at.call(0, 7).should eq([256.0, 512.0, 1023.0])
+      position_at.call(1, 7).should eq([302.0, 701.0, 801.0])
+      position_at.call(0, 8).should eq([-30.0, 0.0, 0.0])
+      position_at.call(1, 8).should eq([-45.0, 10.0, 20.0])
+    end
     position_at.call(0, 0).should_not eq(position_at.call(0, 1)),
       "RoPE regression fixture must distinguish neighboring token positions"
     position_at.call(0, 0).should_not eq(position_at.call(1, 0)),
@@ -326,12 +509,22 @@ describe ML::Video::WanS2VBlock do
     required_checkpoints = ML::Video::WanS2VBlock::CHECKPOINTS.keys + ML::Video::WanS2VAudioInjector::CHECKPOINTS.keys
     fixture["expected"].as_h.keys.sort.should eq(required_checkpoints.sort)
     snapshots = wan_run_fixture(fixture)
+    checkpoint_failures = [] of String
     fixture["expected"].as_h.each do |name, expected|
-      snapshots.has_key?(name).should be_true, "missing Wan checkpoint #{name}"
-      detail = name == "self_q_rope" ? " (#{wan_rope_diagnostic(snapshots[name], expected, snapshots, fixture)})" : ""
-      wan_matches(snapshots[name], expected).should be_true,
-        "#{name} exceeds abs 2e-5 + rel 2e-5 gate#{detail}"
+      unless snapshots.has_key?(name)
+        checkpoint_failures << "missing Wan checkpoint #{name}"
+        next
+      end
+
+      passed, detail = wan_comparison(name, snapshots[name], expected)
+      unless passed
+        if name == "self_q_rope"
+          detail += " (#{wan_rope_diagnostic(snapshots[name], expected, snapshots, fixture)})"
+        end
+        checkpoint_failures << detail
+      end
     end
+    checkpoint_failures.empty?.should be_true, checkpoint_failures.join("\n")
     corrupted_audio_reference = wan_json_f32(fixture["expected"]["audio_output"])
     corrupted_audio_reference[0] += 0.01_f32
     wan_matches(snapshots["audio_output"], JSON.parse(corrupted_audio_reference.to_json)).should be_false,

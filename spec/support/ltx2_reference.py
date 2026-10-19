@@ -2,10 +2,11 @@
 # Adapted from Lightricks/LTX-2 source at e98f6d927d83c92ef2be6aec76c8440b19306e39.
 # Changed for a native Metal/Crystal parity fixture; covered by the LTX-2.x
 # Community License (LICENSE-2_x). This notice does not grant relicensing rights.
-"""Create an MPS fixture by executing the pinned upstream LTX-2 block.
+"""Create MPS fixtures by executing the pinned upstream LTX-2 block.
 
-No CPU execution fallback is admitted. The tiny shape keeps the oracle probe
-small while exercising the actual upstream dual-stream module topology.
+No CPU execution fallback is admitted. Reduced shapes exercise topology
+cheaply; --production-width keeps source channel/head widths and uses tiny
+token counts for a synthetic memory and shape probe.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 import os
 from pathlib import Path
 import random
+import struct
 import sys
 from types import ModuleType
 from typing import Any
@@ -32,6 +34,8 @@ SEED = 20261019
 PERTURBATION_SEED = 20261020
 PINNED_SOURCE_SHA256 = {
     "ltx_core/model/transformer/transformer.py": "6d24b7294be9afb28d69156b9a17d59477d01b43547156cf79767cee1f9f24d5",
+    "ltx_core/model/transformer/model.py": "49b841c389c70872b5858b3d7fcca3c97a78bca8c5646976523217366b0efbaa",
+    "ltx_core/model/transformer/model_configurator.py": "8e9c6c0838ceed2eeac480eb1b13c8f22bfbbdf068b34df720888ab28926c625",
     "ltx_core/model/transformer/attention.py": "e65abeb1536d0ae8b0f1236a913f2b5675fab61ba09d90fe33ccc03f496cabbd",
     "ltx_core/model/transformer/feed_forward.py": "e6c743950e90b0540499674c688271c5aab45101e6f776fbdde78f50bff12567",
     "ltx_core/model/transformer/gelu_approx.py": "c9d008a2db4f945ee39d24ff6c191fc6c15093ad021d86648b6a70dc16d6da55",
@@ -93,6 +97,38 @@ def import_upstream(source_root: Path) -> tuple[Any, ...]:
         AdaLNTimestepEmbedding,
         TransformerArgs,
     )
+
+
+def install_mps_contiguous_sdpa(torch: Any) -> dict[str, Any]:
+    """Work around the measured Torch 2.8 MPS strided-transpose SDPA defect.
+
+    Pinned LTX ``PytorchAttention`` transposes Q/K/V into head-major views
+    before calling SDPA. Keep that upstream implementation and backend
+    selection intact; make only the tensors contiguous at the SDPA boundary.
+    """
+    upstream_sdpa = torch.nn.functional.scaled_dot_product_attention
+    receipt: dict[str, Any] = {"calls": 0, "noncontiguous_qkv_calls": 0}
+
+    def contiguous_sdpa(query: Any, key: Any, value: Any, *args: Any, **kwargs: Any) -> Any:
+        if any(tensor.device.type != "mps" for tensor in (query, key, value)):
+            raise RuntimeError("LTX oracle SDPA requires MPS Q/K/V tensors")
+        receipt["calls"] += 1
+        if not query.is_contiguous() or not key.is_contiguous() or not value.is_contiguous():
+            receipt["noncontiguous_qkv_calls"] += 1
+        return upstream_sdpa(
+            query.contiguous(), key.contiguous(), value.contiguous(), *args, **kwargs
+        )
+
+    torch.nn.functional.scaled_dot_product_attention = contiguous_sdpa
+    receipt.update(
+        {
+            "scope": "oracle-only wrapper after upstream Q/K/V transpose at the SDPA call boundary",
+            "upstream_attention_source_unchanged": True,
+            "evidence_receipt": "/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-official-block0/attention-isolation.json",
+            "evidence_summary": "same-input Torch 2.8 MPS isolation: noncontiguous transposed SDPA had 19966 tolerance violations; contiguous-transpose SDPA matched explicit GPU attention within 0.0158 norm",
+        }
+    )
+    return receipt
 
 
 def deterministic_values(count: int, seed: int, *, near_one: bool = False) -> list[float]:
@@ -173,16 +209,18 @@ def build_case_inputs(
     audio_dim: int,
     video_context_dim: int,
     audio_context_dim: int,
+    cross_attention_adaln: bool,
     device: Any,
 ) -> tuple[dict[str, Any], Any, Any, Any, Any, Any, Any]:
     # Use a nontrivial per-token perturbation mask. The native adapter receives
     # the exact product of this mask and the gate to match upstream's two
     # elementwise products while keeping the mask outside the module contract.
-    video_mask = torch.tensor([0.25, 0.625, 1.0], device=device, dtype=torch.float32).view(1, video_tokens, 1)
-    audio_mask = torch.tensor([1.0, 0.5, 0.0, 0.75], device=device, dtype=torch.float32).view(1, audio_tokens, 1)
+    video_mask = torch.linspace(0.25, 1.0, video_tokens, device=device, dtype=torch.float32).view(1, video_tokens, 1)
+    audio_mask = torch.linspace(1.0, 0.25, audio_tokens, device=device, dtype=torch.float32).view(1, audio_tokens, 1)
 
-    video_mod = torch.linspace(-0.012, 0.013, 6 * video_dim, device=device).view(1, 1, 6 * video_dim)
-    audio_mod = torch.linspace(0.011, -0.014, 6 * audio_dim, device=device).view(1, 1, 6 * audio_dim)
+    adaln_rows = 9 if cross_attention_adaln else 6
+    video_mod = torch.linspace(-0.012, 0.013, adaln_rows * video_dim, device=device).view(1, 1, adaln_rows * video_dim)
+    audio_mod = torch.linspace(0.011, -0.014, adaln_rows * audio_dim, device=device).view(1, 1, adaln_rows * audio_dim)
     video_timestep = AdaLNTimestepEmbedding(video_mod, torch.zeros((1, 1, video_dim), device=device))
     audio_timestep = AdaLNTimestepEmbedding(audio_mod, torch.zeros((1, 1, audio_dim), device=device))
 
@@ -195,6 +233,38 @@ def build_case_inputs(
     video_ff_shift, video_ff_scale, video_ff_gate = base_values("scale_shift_table", video_timestep, slice(3, 6), video_tokens)
     audio_sa_shift, audio_sa_scale, audio_sa_gate = base_values("audio_scale_shift_table", audio_timestep, slice(0, 3), audio_tokens)
     audio_ff_shift, audio_ff_scale, audio_ff_gate = base_values("audio_scale_shift_table", audio_timestep, slice(3, 6), audio_tokens)
+
+    video_text_values: dict[str, Any] = {}
+    audio_text_values: dict[str, Any] = {}
+    if cross_attention_adaln:
+        video_text_shift, video_text_scale = block.get_ada_values(
+            block.scale_shift_table, 1, video_timestep, slice(6, 8)
+        )
+        (video_text_gate,) = block.get_ada_values(
+            block.scale_shift_table, 1, video_timestep, slice(8, 9)
+        )
+        audio_text_shift, audio_text_scale = block.get_ada_values(
+            block.audio_scale_shift_table, 1, audio_timestep, slice(6, 8)
+        )
+        (audio_text_gate,) = block.get_ada_values(
+            block.audio_scale_shift_table, 1, audio_timestep, slice(8, 9)
+        )
+        video_prompt_shift, video_prompt_scale = block.prompt_scale_shift_table.unbind(dim=0)
+        audio_prompt_shift, audio_prompt_scale = block.audio_prompt_scale_shift_table.unbind(dim=0)
+        video_text_values = {
+            "video_text_shift": repeat_rows(video_text_shift, video_tokens),
+            "video_text_scale": repeat_rows(video_text_scale, video_tokens),
+            "video_text_gate": repeat_rows(video_text_gate, video_tokens),
+            "video_prompt_shift": repeat_rows(video_prompt_shift.view(1, 1, video_context_dim), video_context.shape[1]),
+            "video_prompt_scale": repeat_rows(video_prompt_scale.view(1, 1, video_context_dim), video_context.shape[1]),
+        }
+        audio_text_values = {
+            "audio_text_shift": repeat_rows(audio_text_shift, audio_tokens),
+            "audio_text_scale": repeat_rows(audio_text_scale, audio_tokens),
+            "audio_text_gate": repeat_rows(audio_text_gate, audio_tokens),
+            "audio_prompt_shift": repeat_rows(audio_prompt_shift.view(1, 1, audio_context_dim), audio_context.shape[1]),
+            "audio_prompt_scale": repeat_rows(audio_prompt_scale.view(1, 1, audio_context_dim), audio_context.shape[1]),
+        }
 
     # AV scale/shift values are two table rows per direction, shared over all
     # tokens. Their native counterpart is expanded into each token's input row.
@@ -271,6 +341,8 @@ def build_case_inputs(
         "v2a_audio_gate": audio_v2a_gate_rows,
         "v2a_video_shift": repeat_rows(video_v2a_shift, video_tokens),
         "v2a_video_scale": repeat_rows(video_v2a_scale, video_tokens),
+        **video_text_values,
+        **audio_text_values,
     }
     for name, pe in (
         ("video_self", video_pe),
@@ -282,11 +354,15 @@ def build_case_inputs(
         inputs[f"{name}_cos"] = cosine
         inputs[f"{name}_sin"] = sine
 
+    # The native block contract receives precomputed prompt shift/scale rows.
+    # This fixture uses the upstream static-table path; prompt_timestep=None
+    # means the model-side prompt AdaLN MLP contribution is intentionally absent.
     video_args = {
         "x": video_x,
         "context": video_context,
         "context_mask": None,
         "timestep_embedding": video_timestep,
+        "prompt_timestep": None,
         "positional_embeddings": video_pe,
         "cross_positional_embeddings": video_cross_pe,
         "cross_scale_shift_timestep": video_cross_shift_timestep,
@@ -299,6 +375,7 @@ def build_case_inputs(
         "context": audio_context,
         "context_mask": None,
         "timestep_embedding": audio_timestep,
+        "prompt_timestep": None,
         "positional_embeddings": audio_pe,
         "cross_positional_embeddings": audio_cross_pe,
         "cross_scale_shift_timestep": audio_cross_shift_timestep,
@@ -334,6 +411,220 @@ def verify_source_manifest(source_root: Path) -> dict[str, str]:
     return actual
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def save_float32_safetensors(path: Path, tensors: dict[str, Any], torch: Any) -> None:
+    """Write a bounded, standard safetensors file without a dependency install."""
+    header: dict[str, Any] = {}
+    offset = 0
+    ordered = sorted(tensors.items())
+    for name, tensor in ordered:
+        shape = [int(axis) for axis in tensor.shape]
+        count = 1
+        for axis in shape:
+            count *= axis
+        end = offset + count * 4
+        header[name] = {"dtype": "F32", "shape": shape, "data_offsets": [offset, end]}
+        offset = end
+    raw_header = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    raw_header += b" " * ((-len(raw_header)) % 8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as stream:
+        stream.write(struct.pack("<Q", len(raw_header)))
+        stream.write(raw_header)
+        for _name, tensor in ordered:
+            cpu = tensor.detach().to(device="cpu", dtype=torch.float32).contiguous()
+            array = cpu.numpy()
+            if array.dtype.byteorder == ">":
+                array = array.byteswap().newbyteorder("<")
+            stream.write(memoryview(array).cast("B"))
+
+
+def make_config(
+    production_width: bool,
+    cross_attention_adaln: bool,
+    video_gated_attention: bool,
+    audio_gated_attention: bool,
+    video_ff_no_bias: bool,
+) -> dict[str, Any]:
+    if production_width:
+        return {
+            "video_dim": 4096,
+            "video_context_dim": 4096,
+            "video_context_tokens": 2,
+            "video_tokens": 2,
+            "video_heads": 32,
+            "video_head_dim": 128,
+            "audio_dim": 2048,
+            "audio_context_dim": 2048,
+            "audio_context_tokens": 2,
+            "audio_tokens": 3,
+            "audio_heads": 32,
+            "audio_head_dim": 64,
+            "video_ffn_dim": 16384,
+            "audio_ffn_dim": 8192,
+            "ffn_multiplier": 4,
+            "video_modulation_rows": 2,
+            "audio_modulation_rows": 3,
+            "video_prompt_modulation_rows": 1,
+            "audio_prompt_modulation_rows": 1,
+            "cross_attention_adaln": True,
+            "video_apply_gated_attention": video_gated_attention,
+            "audio_apply_gated_attention": audio_gated_attention,
+            "video_ff_bias": False,
+            "audio_ff_bias": True,
+            "norm_eps": 1e-6,
+            "checkpoint_layers": 48,
+            "executed_blocks": 1,
+            "production_width_probe": True,
+            "checkpoint_metadata_verified": False,
+            "source_defaults": {
+                "video_heads": 32,
+                "video_head_dim": 128,
+                "video_context_dim": 4096,
+                "audio_heads": 32,
+                "audio_head_dim": 64,
+                "audio_context_dim": 2048,
+                "checkpoint_layers": 48,
+                "ffn_multiplier": 4,
+                "apply_gated_attention": False,
+                "cross_attention_adaln": False,
+                "video_ff_bias": True,
+                "audio_ff_bias": True,
+            },
+            "synthetic_probe_overrides": {
+                "cross_attention_adaln": True,
+                "video_apply_gated_attention": video_gated_attention,
+                "audio_apply_gated_attention": audio_gated_attention,
+                "video_ff_bias": False,
+                "audio_ff_bias": True,
+            },
+            "source_evidence": "Pinned model.py defaults and model_configurator.py forwards dimensions; FeedForward source defaults to multiplier 4. model_configurator.py comments that LTX 2.5 (gemma4) sets video ff_bias=false. Gated checkpoint flags and exact HF config remain unverified.",
+            "checkpoint_metadata_access": "official Lightricks/LTX-2.5-Diffusers transformer/config.json returned HTTP 403: not in authorized list",
+        }
+    video_context_dim = 32 if cross_attention_adaln else 24
+    audio_context_dim = 16 if cross_attention_adaln else 12
+    synthetic_probe_overrides: dict[str, Any] = {}
+    if cross_attention_adaln:
+        synthetic_probe_overrides.update(
+            cross_attention_adaln=True,
+            video_context_dim=video_context_dim,
+            audio_context_dim=audio_context_dim,
+        )
+    if video_gated_attention:
+        synthetic_probe_overrides["video_apply_gated_attention"] = True
+    if audio_gated_attention:
+        synthetic_probe_overrides["audio_apply_gated_attention"] = True
+    if video_ff_no_bias:
+        synthetic_probe_overrides["video_ff_bias"] = False
+    return {
+        "video_dim": 32,
+        # Upstream prompt AdaLN tables are created at the stream hidden width
+        # and added directly to context, so that branch requires matching widths.
+        "video_context_dim": video_context_dim,
+        "video_context_tokens": 2,
+        "video_tokens": 3,
+        "video_heads": 2,
+        "video_head_dim": 16,
+        "audio_dim": 16,
+        "audio_context_dim": audio_context_dim,
+        "audio_context_tokens": 2,
+        "audio_tokens": 4,
+        "audio_heads": 2,
+        "audio_head_dim": 8,
+        "video_ffn_dim": 128,
+        "audio_ffn_dim": 64,
+        "ffn_multiplier": 4,
+        "video_modulation_rows": 3,
+        "audio_modulation_rows": 4,
+        "video_prompt_modulation_rows": 1,
+        "audio_prompt_modulation_rows": 1,
+        "cross_attention_adaln": cross_attention_adaln,
+        "video_apply_gated_attention": video_gated_attention,
+        "audio_apply_gated_attention": audio_gated_attention,
+        "video_ff_bias": not video_ff_no_bias,
+        "audio_ff_bias": True,
+        "norm_eps": 1e-6,
+        "production_width_probe": False,
+        "checkpoint_metadata_verified": False,
+        "synthetic_probe_overrides": synthetic_probe_overrides,
+    }
+
+
+def initialize_block(torch: Any, block: Any, device: Any, *, production_width: bool) -> None:
+    if not production_width:
+        with torch.no_grad():
+            for name, parameter in block.named_parameters():
+                shape = tuple(parameter.shape)
+                count = parameter.numel()
+                vals = deterministic_values(
+                    count,
+                    SEED + sum((i + 1) * ord(ch) for i, ch in enumerate(name)),
+                    near_one=name.endswith("q_norm.weight") or name.endswith("k_norm.weight"),
+                )
+                if name in ("scale_shift_table", "audio_scale_shift_table"):
+                    for row in (2, 5):
+                        vals[row * shape[1] : (row + 1) * shape[1]] = [
+                            0.65 + 0.02 * ((column % 3) - 1) for column in range(shape[1])
+                        ]
+                    if shape[0] > 8:
+                        vals[8 * shape[1] : 9 * shape[1]] = [
+                            0.75 + 0.02 * ((column % 3) - 1) for column in range(shape[1])
+                        ]
+                elif name in ("scale_shift_table_a2v_ca_video", "scale_shift_table_a2v_ca_audio"):
+                    vals[4 * shape[1] : 5 * shape[1]] = [
+                        0.75 + 0.02 * ((column % 3) - 1) for column in range(shape[1])
+                    ]
+                parameter.copy_(torch.tensor(vals, dtype=torch.float32).reshape(shape))
+        block.to(device=device, dtype=torch.float32)
+        return
+
+    block.to(device=device, dtype=torch.float32)
+    with torch.no_grad():
+        for name, parameter in block.named_parameters():
+            seed = SEED + sum((i + 1) * ord(ch) for i, ch in enumerate(name))
+            torch.manual_seed(seed)
+            values = torch.rand(parameter.shape, device=device, dtype=torch.float32)
+            values.mul_(0.07).sub_(0.035)
+            if name.endswith("q_norm.weight") or name.endswith("k_norm.weight"):
+                values.mul_(0.015).add_(1.0)
+            if name in ("scale_shift_table", "audio_scale_shift_table"):
+                for row in (2, 5):
+                    columns = torch.arange(parameter.shape[1], device=device, dtype=torch.int32)
+                    values[row] = 0.65 + 0.02 * (columns.remainder(3).to(torch.float32) - 1.0)
+                if parameter.shape[0] > 8:
+                    columns = torch.arange(parameter.shape[1], device=device, dtype=torch.int32)
+                    values[8] = 0.75 + 0.02 * (columns.remainder(3).to(torch.float32) - 1.0)
+            elif name in ("scale_shift_table_a2v_ca_video", "scale_shift_table_a2v_ca_audio"):
+                columns = torch.arange(parameter.shape[1], device=device, dtype=torch.int32)
+                values[4] = 0.75 + 0.02 * (columns.remainder(3).to(torch.float32) - 1.0)
+            parameter.copy_(values)
+
+
+def native_state_dict(block: Any) -> dict[str, Any]:
+    prefixes = (
+        "attn1.",
+        "attn2.",
+        "audio_attn1.",
+        "audio_attn2.",
+        "audio_to_video_attn.",
+        "video_to_audio_attn.",
+        "ff.",
+        "audio_ff.",
+    )
+    return {
+        name: tensor.detach()
+        for name, tensor in block.state_dict().items()
+        if name.startswith(prefixes)
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -357,7 +648,40 @@ def main() -> None:
         default="mps",
         help="Oracle device (CPU is intentionally not an option)",
     )
+    parser.add_argument(
+        "--production-width",
+        action="store_true",
+        help="Use pinned builder-width defaults with tiny tokens for a synthetic branch exercise (not checkpoint metadata); enables Cross-AdaLN and both gates by default",
+    )
+    parser.add_argument(
+        "--cross-attention-adaln",
+        action="store_true",
+        help="Exercise the text Cross-AdaLN branch in the reduced fixture",
+    )
+    parser.add_argument(
+        "--gated-attention",
+        action="store_true",
+        help="Enable per-head gated attention for both modalities",
+    )
+    parser.add_argument(
+        "--video-gated-attention",
+        action="store_true",
+        help="Enable per-head gated attention for video modules only",
+    )
+    parser.add_argument(
+        "--audio-gated-attention",
+        action="store_true",
+        help="Enable per-head gated attention for audio modules only",
+    )
+    parser.add_argument(
+        "--video-ff-no-bias",
+        action="store_true",
+        help="Disable video FF bias in the reduced fixture; production-width probe is already bias-free",
+    )
     args = parser.parse_args()
+
+    if args.gated_attention and (args.video_gated_attention or args.audio_gated_attention):
+        parser.error("--gated-attention cannot be combined with modality-specific gate flags")
 
     source_root = args.source_root.resolve()
     if not (source_root / "ltx_core/model/transformer/transformer.py").is_file():
@@ -381,41 +705,43 @@ def main() -> None:
     if not torch.backends.mps.is_available():
         raise SystemExit("MPS unavailable: refusing CPU oracle")
     device = torch.device("mps")
+    attention_layout = install_mps_contiguous_sdpa(torch)
 
-    config = {
-        "video_dim": 32,
-        "video_context_dim": 24,
-        "video_context_tokens": 2,
-        "video_tokens": 3,
-        "video_heads": 2,
-        "video_head_dim": 16,
-        "audio_dim": 16,
-        "audio_context_dim": 12,
-        "audio_context_tokens": 2,
-        "audio_tokens": 4,
-        "audio_heads": 2,
-        "audio_head_dim": 8,
-        "video_modulation_rows": 3,
-        "audio_modulation_rows": 4,
-        "norm_eps": 1e-6,
-    }
+    explicit_gate_flags = args.gated_attention or args.video_gated_attention or args.audio_gated_attention
+    video_gated_attention = (
+        args.gated_attention or args.video_gated_attention
+        if explicit_gate_flags
+        else args.production_width
+    )
+    audio_gated_attention = (
+        args.gated_attention or args.audio_gated_attention
+        if explicit_gate_flags
+        else args.production_width
+    )
+    config = make_config(
+        args.production_width,
+        args.cross_attention_adaln,
+        video_gated_attention,
+        audio_gated_attention,
+        args.video_ff_no_bias,
+    )
     video = TransformerConfig(
         dim=config["video_dim"],
         heads=config["video_heads"],
         d_head=config["video_head_dim"],
         context_dim=config["video_context_dim"],
-        apply_gated_attention=False,
-        cross_attention_adaln=False,
-        ff_bias=True,
+        apply_gated_attention=config["video_apply_gated_attention"],
+        cross_attention_adaln=config["cross_attention_adaln"],
+        ff_bias=config["video_ff_bias"],
     )
     audio = TransformerConfig(
         dim=config["audio_dim"],
         heads=config["audio_heads"],
         d_head=config["audio_head_dim"],
         context_dim=config["audio_context_dim"],
-        apply_gated_attention=False,
-        cross_attention_adaln=False,
-        ff_bias=True,
+        apply_gated_attention=config["audio_apply_gated_attention"],
+        cross_attention_adaln=config["cross_attention_adaln"],
+        ff_bias=config["audio_ff_bias"],
     )
     sdpa = PytorchAttention(priority=[SDPBackend.MATH])
     block = BasicAVTransformerBlock(
@@ -425,34 +751,17 @@ def main() -> None:
         norm_eps=config["norm_eps"],
         attention_ops=AttentionOps(attention_function=sdpa, masked_attention_function=sdpa),
     )
-    with torch.no_grad():
-        for name, parameter in block.named_parameters():
-            shape = tuple(parameter.shape)
-            count = parameter.numel()
-            vals = deterministic_values(
-                count,
-                SEED + sum((i + 1) * ord(ch) for i, ch in enumerate(name)),
-                near_one=name.endswith("q_norm.weight") or name.endswith("k_norm.weight"),
-            )
-            # Strong gates make an omitted residual branch fail the fixed parity gate.
-            if name in ("scale_shift_table", "audio_scale_shift_table"):
-                for row in (2, 5):
-                    vals[row * shape[1] : (row + 1) * shape[1]] = [
-                        0.65 + 0.02 * ((column % 3) - 1) for column in range(shape[1])
-                    ]
-            elif name in ("scale_shift_table_a2v_ca_video", "scale_shift_table_a2v_ca_audio"):
-                vals[4 * shape[1] : 5 * shape[1]] = [
-                    0.75 + 0.02 * ((column % 3) - 1) for column in range(shape[1])
-                ]
-            parameter.copy_(torch.tensor(vals, dtype=torch.float32).reshape(shape))
-    block = block.to(device=device, dtype=torch.float32).eval()
+    initialize_block(torch, block, device, production_width=args.production_width)
+    block.eval()
 
     video_pos = make_positions(torch, config["video_tokens"], 3)
     audio_pos = make_positions(torch, config["audio_tokens"], 1)
-    video_pe = build_pe(torch, precompute_freqs_cis, video_pos, 32, config["video_heads"], LTXRopeType)
-    audio_pe = build_pe(torch, precompute_freqs_cis, audio_pos, 16, config["audio_heads"], LTXRopeType)
-    video_cross_pe = build_pe(torch, precompute_freqs_cis, video_pos, 16, config["audio_heads"], LTXRopeType)
-    audio_cross_pe = build_pe(torch, precompute_freqs_cis, audio_pos, 16, config["audio_heads"], LTXRopeType)
+    video_inner = config["video_heads"] * config["video_head_dim"]
+    audio_inner = config["audio_heads"] * config["audio_head_dim"]
+    video_pe = build_pe(torch, precompute_freqs_cis, video_pos, video_inner, config["video_heads"], LTXRopeType)
+    audio_pe = build_pe(torch, precompute_freqs_cis, audio_pos, audio_inner, config["audio_heads"], LTXRopeType)
+    video_cross_pe = build_pe(torch, precompute_freqs_cis, video_pos, audio_inner, config["audio_heads"], LTXRopeType)
+    audio_cross_pe = build_pe(torch, precompute_freqs_cis, audio_pos, audio_inner, config["audio_heads"], LTXRopeType)
     video_pe = tuple(value.to(device=device) for value in video_pe)
     audio_pe = tuple(value.to(device=device) for value in audio_pe)
     video_cross_pe = tuple(value.to(device=device) for value in video_cross_pe)
@@ -465,25 +774,35 @@ def main() -> None:
         "video.attn2.output": block.attn2,
         "video.audio_to_video_attn.output": block.audio_to_video_attn,
         "video.ff.output": block.ff,
+        "video.ff.hidden": block.ff.net[0].proj,
+        "video.ff.activated": block.ff.net[0],
         "audio.audio_attn1.output": block.audio_attn1,
         "audio.audio_attn2.output": block.audio_attn2,
         "audio.video_to_audio_attn.output": block.video_to_audio_attn,
         "audio.audio_ff.output": block.audio_ff,
+        "audio.audio_ff.hidden": block.audio_ff.net[0].proj,
+        "audio.audio_ff.activated": block.audio_ff.net[0],
     }
 
     def save_output(name: str) -> Any:
         def hook(_module: Any, _inputs: Any, output: Any) -> None:
-            hook_outputs[name] = output.detach()
+            hook_outputs[name] = output.detach().clone()
+
+        return hook
+
+    def save_first_input(name: str) -> Any:
+        def hook(_module: Any, inputs: tuple[Any, ...]) -> None:
+            hook_outputs[name] = inputs[0].detach().clone()
 
         return hook
 
     for name, module in module_names.items():
         hooks.append(module.register_forward_hook(save_output(name)))
+    hooks.append(block.ff.register_forward_pre_hook(save_first_input("video.ff.input")))
+    hooks.append(block.audio_ff.register_forward_pre_hook(save_first_input("audio.audio_ff.input")))
 
     # A source-hashed deterministic parameter set is serialized alongside each
     # case so native code consumes the exact values executed by the upstream block.
-    weights = {name: tensor_values(value) for name, value in block.state_dict().items()}
-
     cases = []
     final_outputs = []
     try:
@@ -493,12 +812,12 @@ def main() -> None:
             video_rng = random.Random(SEED + 1)
             audio_rng = random.Random(SEED + 2)
             video_x = torch.tensor(
-                [video_rng.uniform(-0.4, 0.4) for _ in range(3 * config["video_dim"])],
+                [video_rng.uniform(-0.4, 0.4) for _ in range(config["video_tokens"] * config["video_dim"])],
                 device=device,
                 dtype=torch.float32,
             ).view(1, config["video_tokens"], config["video_dim"])
             audio_x = torch.tensor(
-                [audio_rng.uniform(-0.4, 0.4) for _ in range(4 * config["audio_dim"])],
+                [audio_rng.uniform(-0.4, 0.4) for _ in range(config["audio_tokens"] * config["audio_dim"])],
                 device=device,
                 dtype=torch.float32,
             ).view(1, config["audio_tokens"], config["audio_dim"])
@@ -511,15 +830,15 @@ def main() -> None:
                 ).view_as(video_x)
                 video_x = video_x + perturb
             video_context = torch.tensor(
-                deterministic_values(2 * config["video_context_dim"], SEED + 31),
+                deterministic_values(config["video_context_tokens"] * config["video_context_dim"], SEED + 31),
                 device=device,
                 dtype=torch.float32,
-            ).view(1, 2, config["video_context_dim"])
+            ).view(1, config["video_context_tokens"], config["video_context_dim"])
             audio_context = torch.tensor(
-                deterministic_values(2 * config["audio_context_dim"], SEED + 47),
+                deterministic_values(config["audio_context_tokens"] * config["audio_context_dim"], SEED + 47),
                 device=device,
                 dtype=torch.float32,
-            ).view(1, 2, config["audio_context_dim"])
+            ).view(1, config["audio_context_tokens"], config["audio_context_dim"])
 
             input_tensors, video_arg_data, audio_arg_data, video_gate, audio_gate, video_mask, audio_mask = build_case_inputs(
                 torch,
@@ -539,6 +858,7 @@ def main() -> None:
                 config["audio_dim"],
                 config["video_context_dim"],
                 config["audio_context_dim"],
+                config["cross_attention_adaln"],
                 device,
             )
             video_args = TransformerArgs(**video_arg_data)
@@ -551,8 +871,14 @@ def main() -> None:
                 # outputs captured from the actual upstream forward call.
                 v_after_sa = video_x + hook_outputs["video.attn1.output"] * input_tensors["video_sa_gate"].view_as(video_x)
                 a_after_sa = audio_x + hook_outputs["audio.audio_attn1.output"] * input_tensors["audio_sa_gate"].view_as(audio_x)
-                v_after_text = v_after_sa + hook_outputs["video.attn2.output"]
-                a_after_text = a_after_sa + hook_outputs["audio.audio_attn2.output"]
+                video_text_residual = hook_outputs["video.attn2.output"]
+                audio_text_residual = hook_outputs["audio.audio_attn2.output"]
+                if "video_text_gate" in input_tensors:
+                    video_text_residual = video_text_residual * input_tensors["video_text_gate"].view_as(video_x)
+                if "audio_text_gate" in input_tensors:
+                    audio_text_residual = audio_text_residual * input_tensors["audio_text_gate"].view_as(audio_x)
+                v_after_text = v_after_sa + video_text_residual
+                a_after_text = a_after_sa + audio_text_residual
                 v_after_av = v_after_text + hook_outputs["video.audio_to_video_attn.output"] * video_gate * video_mask
                 a_after_av = a_after_text + hook_outputs["audio.video_to_audio_attn.output"] * audio_gate * audio_mask
                 v_out = v_after_av + hook_outputs["video.ff.output"] * input_tensors["video_ff_gate"].view_as(video_x)
@@ -598,8 +924,14 @@ def main() -> None:
                 chained_video, chained_audio = block(chained_video_args, chained_audio_args)
                 chained_v_after_sa = actual_video.x + hook_outputs["video.attn1.output"] * input_tensors["video_sa_gate"].view_as(video_x)
                 chained_a_after_sa = actual_audio.x + hook_outputs["audio.audio_attn1.output"] * input_tensors["audio_sa_gate"].view_as(audio_x)
-                chained_v_after_text = chained_v_after_sa + hook_outputs["video.attn2.output"]
-                chained_a_after_text = chained_a_after_sa + hook_outputs["audio.audio_attn2.output"]
+                chained_video_text_residual = hook_outputs["video.attn2.output"]
+                chained_audio_text_residual = hook_outputs["audio.audio_attn2.output"]
+                if "video_text_gate" in input_tensors:
+                    chained_video_text_residual = chained_video_text_residual * input_tensors["video_text_gate"].view_as(video_x)
+                if "audio_text_gate" in input_tensors:
+                    chained_audio_text_residual = chained_audio_text_residual * input_tensors["audio_text_gate"].view_as(audio_x)
+                chained_v_after_text = chained_v_after_sa + chained_video_text_residual
+                chained_a_after_text = chained_a_after_sa + chained_audio_text_residual
                 chained_v_after_av = chained_v_after_text + hook_outputs["video.audio_to_video_attn.output"] * video_gate * video_mask
                 chained_a_after_av = chained_a_after_text + hook_outputs["audio.video_to_audio_attn.output"] * audio_gate * audio_mask
                 chained_v_out = chained_v_after_av + hook_outputs["video.ff.output"] * input_tensors["video_ff_gate"].view_as(video_x)
@@ -638,11 +970,26 @@ def main() -> None:
         for hook in hooks:
             hook.remove()
 
+    if attention_layout["calls"] == 0 or attention_layout["noncontiguous_qkv_calls"] == 0:
+        raise RuntimeError("MPS SDPA contiguity workaround was not exercised")
+
     if torch.allclose(final_outputs[0][0], final_outputs[1][0], atol=1e-5, rtol=1e-5):
         raise RuntimeError("seeded perturbation did not change video output")
     if torch.allclose(final_outputs[0][1], final_outputs[1][1], atol=1e-5, rtol=1e-5):
         raise RuntimeError("seeded video perturbation did not reach audio output")
 
+    weight_tensors = native_state_dict(block)
+    weights_path = args.output.with_suffix(".weights.safetensors")
+    save_float32_safetensors(weights_path, weight_tensors, torch)
+    weight_bindings = [
+        {
+            "target": f"w.{name}",
+            "source": name,
+            "shape": [int(axis) for axis in tensor.shape],
+            "dtype": "F32",
+        }
+        for name, tensor in sorted(weight_tensors.items())
+    ]
     output = {
         "upstream": {
             "repo": "https://github.com/Lightricks/LTX-2",
@@ -650,24 +997,39 @@ def main() -> None:
             "license": "LTX-2.x Community License (LICENSE-2_x)",
             "source_files_sha256": source_manifest,
             "class": "ltx_core.model.transformer.transformer.BasicAVTransformerBlock",
+            "fixture_mode": "synthetic_builder_width_probe" if args.production_width else "reduced_width",
         },
         "oracle": {
             "device": "mps",
             "dtype": "float32",
             "attention": "upstream PytorchAttention pinned to SDPBackend.MATH",
+            "attention_layout_workaround": attention_layout,
             "pytorch_mps_fallback": False,
             "seed": SEED,
             "perturbation_seed": PERTURBATION_SEED,
             "fixture_shape_only": True,
+            "production_width_probe": args.production_width,
             "production_dimensions_admitted": False,
+            "prompt_timestep_mode": "none_static_prompt_scale_shift_table_only",
+            "prompt_timestep_checkpoint_setting_verified": False,
         },
         "config": config,
-        "weights": weights,
+        "weights_file": {
+            "path": weights_path.name,
+            "bytes": weights_path.stat().st_size,
+            "sha256": sha256_file(weights_path),
+        },
+        "weight_budget_bytes": 4 * 1024**3,
+        "weight_reserve_bytes": 1024**3,
+        "weight_bindings": weight_bindings,
         "cases": cases,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, separators=(",", ":")) + "\n")
-    print(f"wrote {args.output} ({len(cases)} MPS cases, revision {PINNED_REVISION})")
+    print(
+        f"wrote {args.output} and {weights_path} ({weights_path.stat().st_size} bytes; "
+        f"{len(cases)} MPS cases, revision {PINNED_REVISION})"
+    )
 
 
 if __name__ == "__main__":

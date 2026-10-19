@@ -1,4 +1,5 @@
 require "./metal_ops"
+require "./checkpoint"
 
 module ML::Video
   # Copyright 2024-2025 The Alibaba Wan Team Authors.
@@ -133,6 +134,48 @@ module ML::Video
     SOURCE = {{ read_file("#{__DIR__}/kernels/wan_s2v.metal") }}
     EPS    = 1e-6_f32
 
+    # Map the upstream WanModel_S2V block-0 and audio-injector state-dict keys
+    # to the Arena names consumed by encode_with_audio. Shapes preserve the
+    # PyTorch state-dict layout; Metal linear weights remain [out, in].
+    def self.checkpoint_bindings(cfg : WanS2VConfig,
+                                 dtype : ML::GGUF::SafeTensorDType? = nil) : Array(WeightBinding)
+      dim = cfg.dim.to_i64
+      ffn = cfg.ffn_dim.to_i64
+      bindings = [] of WeightBinding
+      bindings << WeightBinding.new("block_modulation", "blocks.0.modulation", [1_i64, 6_i64, dim])
+      bindings << WeightBinding.new("norm3_weight", "blocks.0.norm3.weight", [dim])
+      bindings << WeightBinding.new("norm3_bias", "blocks.0.norm3.bias", [dim])
+      {"self", "cross"}.each do |prefix|
+        source_prefix = "blocks.0.#{prefix}_attn"
+        {"q", "k", "v", "o"}.each do |name|
+          bindings << WeightBinding.new("#{prefix}_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
+          bindings << WeightBinding.new("#{prefix}_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
+        end
+        bindings << WeightBinding.new("#{prefix}_norm_q_weight", "#{source_prefix}.norm_q.weight", [dim])
+        bindings << WeightBinding.new("#{prefix}_norm_k_weight", "#{source_prefix}.norm_k.weight", [dim])
+      end
+      bindings << WeightBinding.new("ffn_in_weight", "blocks.0.ffn.0.weight", [ffn, dim])
+      bindings << WeightBinding.new("ffn_in_bias", "blocks.0.ffn.0.bias", [ffn])
+      bindings << WeightBinding.new("ffn_out_weight", "blocks.0.ffn.2.weight", [dim, ffn])
+      bindings << WeightBinding.new("ffn_out_bias", "blocks.0.ffn.2.bias", [dim])
+      bindings << WeightBinding.new("adain_weight", "audio_injector.injector_adain_layers.0.linear.weight", [2_i64 * dim, dim])
+      bindings << WeightBinding.new("adain_bias", "audio_injector.injector_adain_layers.0.linear.bias", [2_i64 * dim])
+      {"q", "k", "v", "o"}.each do |name|
+        source_prefix = "audio_injector.injector.0"
+        bindings << WeightBinding.new("audio_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
+        bindings << WeightBinding.new("audio_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
+      end
+      bindings << WeightBinding.new("audio_q_norm_weight", "audio_injector.injector.0.norm_q.weight", [dim])
+      bindings << WeightBinding.new("audio_k_norm_weight", "audio_injector.injector.0.norm_k.weight", [dim])
+      if expected_dtype = dtype
+        bindings.map do |binding|
+          WeightBinding.new(binding.target, binding.source, binding.shape, expected_dtype)
+        end
+      else
+        bindings
+      end
+    end
+
     private def self.pipeline(name : String) : ML::Metal::ComputePipeline
       ML::Metal::PipelineCache.get(name) { ML::Metal::ComputePipeline.new(name, SOURCE) }
     end
@@ -155,6 +198,10 @@ module ML::Video
       ff = cfg.rows * cfg.ffn_dim
       ctx = cfg.context_rows
       arena.upload("wan_b_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
+      frequency_hi, frequency_lo = rope_frequencies(cfg)
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+      arena.upload(frequency_hi_name, frequency_hi)
+      arena.upload(frequency_lo_name, frequency_lo)
       {
         {"wan_b_norm1", n}, {"wan_b_mod1", n},
         {"wan_b_self_q", n}, {"wan_b_self_k", n}, {"wan_b_self_v", n},
@@ -241,8 +288,8 @@ module ML::Video
       norm_rms(e, self_q, weights["self_norm_q_weight"], scratch["wan_b_zero_bias"], self_qn, rows, dim)
       trace_copy(e, trace, "self_q_norm", self_qn, n)
       norm_rms(e, self_k, weights["self_norm_k_weight"], scratch["wan_b_zero_bias"], self_kn, rows, dim)
-      encode_rope(e, self_qn, positions, self_qr, cfg)
-      encode_rope(e, self_kn, positions, self_kr, cfg)
+      encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
+      encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
       MetalOps.attention(e, self_qr, self_kr, self_v, self_attn,
@@ -360,13 +407,44 @@ module ML::Video
 
     private def self.encode_rope(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                  positions : ML::MetalBuffer, y : ML::MetalBuffer,
-                                 cfg : WanS2VConfig) : Nil
+                                 cfg : WanS2VConfig, scratch : Arena) : Nil
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       e.set_pipeline(pipeline("wan_rope_f32"))
       e.set_buffer(x, 0).set_buffer(positions, 1).set_buffer(y, 2, ML::Metal::BufferAccess::Write)
-      e.set_value(cfg.batches.to_u32, 3).set_value(cfg.seq.to_u32, 4)
-      e.set_value(cfg.heads.to_u32, 5).set_value(cfg.head_dim.to_u32, 6).set_value(cfg.theta, 7)
-      e.set_value(cfg.rope_axis_dims[0].to_u32, 8).set_value(cfg.rope_axis_dims[1].to_u32, 9)
+      e.set_buffer(scratch[frequency_hi_name], 3).set_buffer(scratch[frequency_lo_name], 4)
+      e.set_value(cfg.batches.to_u32, 5).set_value(cfg.seq.to_u32, 6)
+      e.set_value(cfg.heads.to_u32, 7).set_value(cfg.head_dim.to_u32, 8)
       e.dispatch_1d(cfg.batches * cfg.seq * cfg.heads * (cfg.head_dim // 2))
+    end
+
+    # Frequency constants depend on theta and the per-axis pair partitions.
+    # Keying setup buffers by that identity makes a reused Arena fail closed if
+    # an encoder is accidentally given a different RoPE configuration.
+    private def self.rope_frequency_names(cfg : WanS2VConfig) : {String, String}
+      axis0, axis1, axis2 = cfg.rope_axis_dims
+      identity = "#{cfg.theta}_#{cfg.head_dim}_#{axis0}_#{axis1}_#{axis2}"
+      {"wan_b_rope_freq_hi_#{identity}", "wan_b_rope_freq_lo_#{identity}"}
+    end
+
+    # Wan builds these inverse frequencies in FP64 before constructing its
+    # complex RoPE table. Keep a two-F32 expansion in resident setup buffers;
+    # runtime phase construction and rotation remain entirely on the GPU.
+    private def self.rope_frequencies(cfg : WanS2VConfig) : {Array(Float32), Array(Float32)}
+      pairs = cfg.head_dim // 2
+      frequency_hi = Array(Float32).new(pairs, 0.0_f32)
+      frequency_lo = Array(Float32).new(pairs, 0.0_f32)
+      theta = cfg.theta.to_f64
+      pair = 0
+      {cfg.rope_axis_dims[0], cfg.rope_axis_dims[1], cfg.rope_axis_dims[2]}.each do |axis_dim|
+        axis_dim.times do |local_pair|
+          frequency = 1.0_f64 / (theta ** (local_pair.to_f64 / axis_dim.to_f64))
+          high = frequency.to_f32
+          frequency_hi[pair] = high
+          frequency_lo[pair] = (frequency - high.to_f64).to_f32
+          pair += 1
+        end
+      end
+      {frequency_hi, frequency_lo}
     end
 
     private def self.trace_copy(e : ML::Metal::ComputeEncoder,
@@ -398,6 +476,9 @@ module ML::Video
       MetalOps.check(weights["norm3_weight"], dim)
       MetalOps.check(weights["norm3_bias"], dim)
       MetalOps.check(scratch["wan_b_zero_bias"], dim)
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+      MetalOps.check(scratch[frequency_hi_name], cfg.head_dim // 2)
+      MetalOps.check(scratch[frequency_lo_name], cfg.head_dim // 2)
       MetalOps.check(weights["self_q_weight"], weight_count)
       MetalOps.check(weights["self_q_bias"], dim)
       MetalOps.check(weights["self_k_weight"], weight_count)
