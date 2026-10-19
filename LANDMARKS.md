@@ -30781,3 +30781,20 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on native/oracle/upstream/checkpoint/configuration/precision/tolerance/
   runtime/device/driver changes or missing/changed artifacts. No full inference,
   Studio or service was started; no push.
+
+### 2026-10-19 — Native Wan Flow-UniPC component gate
+
+- Opt-in GPU-only F32 guidance, conversion, corrector and predictor now pass
+  pinned Wan upstream fixtures for 1/2/40 steps on 257-element samples. All
+  1,028/2,056/41,120 values satisfy the unchanged finite abs 2e-5 + rel 2e-5
+  gate. Each invocation: two examples, zero failures/errors/pending.
+- Two serial schedules reuse all five resident scratch buffers in one caller
+  encoder, produce bit-identical repeated output and allocate no GPU buffers
+  during encode. Alias, schedule mutation/exhaustion and degenerate timestep
+  checks pass. Correlated mini-Quadrumvirate verdict: ROBUST in this scope.
+- Oracle retains the pinned scheduler equations with CPU constant-matrix setup
+  and independent CPU sigma scalar storage for PyTorch 2.8.0 MPS. No neural
+  activation fallback/readback is added. Full video sampling and concurrent
+  command-buffer use remain open; this is not a generation-speed result.
+- Reproduction, exact hashes, limitations and refresh triggers:
+  docs/wan-unipc.md. Local evidence is under external wan-full scratch.
