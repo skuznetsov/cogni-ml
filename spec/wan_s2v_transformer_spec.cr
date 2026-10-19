@@ -1,6 +1,7 @@
 require "spec"
 require "json"
 require "../src/ml/video/wan_s2v_transformer"
+require "../src/ml/video/wan_s2v_memory"
 require "../src/ml/video/wan_s2v_audio"
 require "./support/video_allocation_counter"
 
@@ -100,6 +101,33 @@ describe ML::Video::WanS2VTransformerConfig do
     expect_raises(ArgumentError) { ML::Video::WanS2VTransformerConfig.new(injection_ids: [40]) }
   end
 
+  it "prepares one exclusive block and injector workspace with exact union accounting" do
+    cfg = ML::Video::WanS2VTransformerConfig.new(
+      context_tokens: 3, dim: 16, heads: 2, ffn_dim: 32, layers: 2,
+      video_frames: 2, spatial_tokens: 16, latent_height: 8, latent_width: 8,
+      injection_ids: [0, 1], text_dim: 4, text_tokens: 3, freq_dim: 4,
+      in_dim: 4, out_dim: 2, audio_dim: 8, patch_tile_rows: 4)
+    block = ML::Video::Arena.new
+    audio = ML::Video::Arena.new
+    begin
+      expect_raises(ArgumentError) { ML::Video::WanS2VTransformer.prepare_reused_scratch!(block, block, cfg) }
+      ML::Video::WanS2VTransformer.prepare_reused_scratch!(block, audio, cfg)
+      ML::Video::WanS2VTransformer::REUSED_AUDIO_SCRATCH.each do |target, source|
+        audio[target].same?(block[source]).should be_true
+      end
+      ML::Video::WanS2VTransformer.workspace_resident_bytes(block, audio).should eq(
+        ML::Video::WanS2VTransformer.reused_scratch_bytes(cfg))
+      ML::Video::WanS2VTransformer.reused_scratch_bytes(cfg).should be < (
+        ML::Video::WanS2VBlock.scratch_bytes(cfg.block_config) +
+        ML::Video::WanS2VAudioInjector.scratch_bytes(cfg.audio_config)
+      )
+      expect_raises(ArgumentError) { ML::Video::WanS2VTransformer.prepare_reused_scratch!(block, audio, cfg) }
+    ensure
+      audio.release
+      block.release
+    end
+  end
+
   it "keeps setup-only position metadata ordered across noisy, reference, and FramePack suffixes" do
     cfg = ML::Video::WanS2VTransformerConfig.new(
       context_tokens: 3, dim: 12, heads: 2, ffn_dim: 24, layers: 2,
@@ -175,7 +203,11 @@ describe ML::Video::WanS2VTransformer do
       end
       ML::Video::WanS2VTransformer.prepare!
       ML::Video::WanS2VTransformer.prepare_transformer_scratch!(transformer_scratch, cfg)
-      ML::Video::WanS2VTransformer.prepare_scratch!(block_scratch, audio_scratch, cfg)
+      if ENV["WAN_S2V_REUSE_SCRATCH"]? == "1"
+        ML::Video::WanS2VTransformer.prepare_reused_scratch!(block_scratch, audio_scratch, cfg)
+      else
+        ML::Video::WanS2VTransformer.prepare_scratch!(block_scratch, audio_scratch, cfg)
+      end
       ML::Video::WanS2VTransformer.transformer_scratch_bytes(cfg).should eq(transformer_scratch.resident_bytes)
 
       raw_sequence = output.alloc("raw_sequence", cfg.rows * cfg.dim)

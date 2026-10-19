@@ -30869,3 +30869,16 @@ Refresh after source/toolchain/device/model/workload changes.
   Forty-layer propagation, full spatial use, complete conditioning and video
   generation speed remain open. Reproduction and decay triggers:
   docs/wan-transformer.md. Evidence stays in external wan-full scratch.
+
+### 2026-10-19 — Wan cross-arena serial scratch reuse
+
+- Opt-in `wan_s2v_memory.cr` aliases four consumed block buffers into the
+  following audio injector. Two distinct empty arenas become one exclusive
+  workspace, retained and released together; default preparation is unchanged.
+- The existing pinned retained/drop two-layer oracle passes for the shared and
+  separate layouts: five examples each, zero failures/errors/pending, unchanged
+  finite abs 2e-5 + rel 2e-5. The run covers layer/injector propagation, allocation
+  and future-weight alias guards, and union byte accounting. Correlated
+  adversary verdict ROBUST for this bounded serial contract; forty-layer and
+  full spatial evidence remain open. See docs/wan-transformer.md for receipts
+  and source/runtime/geometry/lifetime decay triggers.

@@ -30,6 +30,13 @@ bytes, compared with 24,542,691,840 bytes for the earlier combined layout.
 This excludes weights, sequence ping-pong, conditioning, VAE and private driver
 resources. It is not an observed process peak or the 832x512 first-chunk budget.
 
+`wan_s2v_memory.cr` adds opt-in `prepare_reused_scratch!` for two distinct empty
+arenas. It shares the consumed block normalization, Q, attention and projection
+buffers with the following audio injector. Both arenas are one exclusive
+workspace: keep them alive together until completion, and release them together.
+`reused_scratch_bytes` and `workspace_resident_bytes` count their union rather
+than summing aliases twice. The default separate-arena preparation is unchanged.
+
 ## Executed evidence
 
 The pinned upstream revision is
@@ -49,6 +56,11 @@ fallback disabled. All gates retain finite per-value
 - A stack-wide guard rejects scratch/activation/trace overlap with any resident
   parameter before encoding the first layer, including a future layer's weight.
   The tiny forward and this counterexample pass together after the guard change.
+- The opt-in cross-arena layout and the separate layout each pass the same
+  retained/drop two-layer fixture, allocation/overlap guards and exact union
+  accounting: five examples, zero failures/errors/pending per layout. These
+  results establish serial lifetimes at tiny spatial geometry, not full 480p
+  memory or forty-layer propagation. Releasing either arena early is forbidden.
 
 External local receipts are under
 `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-full/`:
@@ -56,12 +68,17 @@ External local receipts are under
 `block-alias-build.log`, `block-alias-f32-native.log`, and
 `block-alias-bf16-native.log`, `transformer-global-guard-build.log`, and
 `transformer-global-guard-native.log`. Fixtures/parameters stay outside the repository.
+The cross-arena receipts are `transformer-reused-build.log`,
+`transformer-reused-native.log` and `transformer-separate-scratch-native.log`.
 
 From a build linked against the current Metal bridge, run:
 
 ```sh
 WAN_S2V_TRANSFORMER_FIXTURE="$evidence/transformer-tiny-drop.json" \
   COGNI_RUN_SAFE_MIN_FREE_PCT=15 \
+  scripts/run_safe.sh "$build/wan_s2v_transformer_spec" 120 4096
+WAN_S2V_TRANSFORMER_FIXTURE="$evidence/transformer-tiny-drop.json" \
+  WAN_S2V_REUSE_SCRATCH=1 COGNI_RUN_SAFE_MIN_FREE_PCT=15 \
   scripts/run_safe.sh "$build/wan_s2v_transformer_spec" 120 4096
 WAN_S2V_BLOCK_FIXTURE="$official_block/wan-official.json" \
   WAN_S2V_WEIGHT_DTYPE=f32 COGNI_RUN_SAFE_MIN_FREE_PCT=15 \
