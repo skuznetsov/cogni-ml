@@ -196,6 +196,17 @@ private def wan_fixture_path : String
   ENV["WAN_S2V_BLOCK_FIXTURE"]? || raise "Set WAN_S2V_BLOCK_FIXTURE to the pinned MPS oracle fixture"
 end
 
+private def wan_resident_weight_dtype : ML::Video::WeightDType
+  case ENV["WAN_S2V_WEIGHT_DTYPE"]? || "f32"
+  when "f32"
+    ML::Video::WeightDType::F32
+  when "bf16"
+    ML::Video::WeightDType::BF16
+  else
+    raise ArgumentError.new("WAN_S2V_WEIGHT_DTYPE must be f32 or bf16")
+  end
+end
+
 private def wan_sha256_file(path : String) : String
   digest = Digest::SHA256.new
   buffer = Bytes.new(1024 * 1024)
@@ -208,6 +219,7 @@ private def wan_sha256_file(path : String) : String
 end
 
 private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
+  resident_dtype = wan_resident_weight_dtype
   inputs = ML::Video::Arena.new
   weights = ML::Video::Arena.new
   scratch = ML::Video::Arena.new
@@ -257,6 +269,10 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       dtypes = fixture_bindings.map { |item| item["dtype"].as_s }.uniq
       dtypes.size.should eq(1), "all checkpoint fixture tensors must use one source dtype"
       checkpoint_dtype = ML::GGUF::SafeTensorDType.parse(dtypes.first)
+      if resident_dtype.bf16?
+        checkpoint_dtype.should eq(ML::GGUF::SafeTensorDType::BF16),
+          "resident BF16 mode requires an exact BF16 source checkpoint"
+      end
       bindings = ML::Video::WanS2VBlock.checkpoint_bindings(block_cfg, checkpoint_dtype)
       fixture_bindings.map { |item| item["source"].as_s }.sort.should eq(bindings.map(&.source).sort)
       fixture_bindings.map { |item| item["target"].as_s }.sort.should eq(bindings.map(&.target).sort)
@@ -270,17 +286,33 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       plan = ML::Video::WeightPlan.new(
         [checkpoint_file.not_nil!], bindings,
         8_i64 * 1024 * 1024 * 1024, 1024_i64 * 1024 * 1024,
+        resident_dtype: resident_dtype, require_all: true,
       )
       plan.entries.size.should eq(39)
-      plan.destination_bytes.should eq(2_034_886_656_i64)
-      expected_staging_bytes = plan.destination_bytes * checkpoint_dtype.bytes_per_element // 4
-      expected_staging_bytes.should eq(
-        checkpoint_dtype.f32? ? 2_034_886_656_i64 : 1_017_443_328_i64
-      )
+      expected_destination_bytes = resident_dtype.bf16? ? 1_017_443_328_i64 : 2_034_886_656_i64
+      plan.destination_bytes.should eq(expected_destination_bytes)
+      expected_staging_bytes = if resident_dtype.bf16?
+                                 0_i64
+                               else
+                                 expected_destination_bytes * checkpoint_dtype.bytes_per_element // 4
+                               end
+      if resident_dtype.bf16?
+        expected_staging_bytes.should eq(0_i64),
+          "native BF16 residency must not decode or stage a second copy"
+      else
+        expected_staging_bytes.should eq(
+          checkpoint_dtype.f32? ? 2_034_886_656_i64 : 1_017_443_328_i64
+        )
+      end
       plan.staging_bytes.should eq(expected_staging_bytes)
       plan.peak_bytes.should be <= 8_i64 * 1024 * 1024 * 1024
       prepared_weights = ML::Video::PreparedWeights.new(plan, weights)
+      bindings.each do |binding|
+        weights.dtype(binding.target).should eq(resident_dtype)
+      end
     else
+      resident_dtype.should eq(ML::Video::WeightDType::F32),
+        "the synthetic JSON fixture contains F32 parameters only"
       fixture["weights"].as_h.each do |name, values|
         weights.upload(name, wan_json_f32(values))
       end
@@ -294,6 +326,13 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     audio_output = output.alloc("audio_output", audio_cfg.values)
     repeat_block_output = output.alloc("repeat_block_output", block_cfg.values)
     repeat_audio_output = output.alloc("repeat_audio_output", audio_cfg.values)
+    chained_block_output = output.alloc("chained_block_output", block_cfg.values)
+    {inputs, scratch, traces, output}.each do |arena|
+      arena.buffers.each_key do |name|
+        arena.dtype(name).should eq(ML::Video::WeightDType::F32),
+          "activations, scratch, and checkpoints must remain F32"
+      end
+    end
 
     expected = fixture["expected"].as_h
     block_trace = {} of String => ML::MetalBuffer
@@ -364,6 +403,10 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
       repeat_block_output, repeat_audio_output, weights, scratch, block_cfg, audio_cfg,
     )
+    ML::Video::WanS2VBlock.encode(
+      encoder, block_output, inputs["modulation"], inputs["positions"],
+      inputs["context"], chained_block_output, weights, scratch, block_cfg,
+    )
     encoder.end_encoding
     ML::MetalBuffer.video_spec_allocations.should eq(allocation_start),
       "Wan encode must not allocate MetalBuffers after setup"
@@ -377,6 +420,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     audio_trace.each { |name, buffer| snapshots[name] = buffer.read((buffer.size // 4).to_i).map(&.to_f32) }
     snapshots["repeat_block_output"] = repeat_block_output.read((repeat_block_output.size // 4).to_i).map(&.to_f32)
     snapshots["repeat_audio_output"] = repeat_audio_output.read((repeat_audio_output.size // 4).to_i).map(&.to_f32)
+    snapshots["chained_block_output"] = chained_block_output.read((chained_block_output.size // 4).to_i).map(&.to_f32)
     if snapshot_path = ENV["WAN_S2V_SNAPSHOT_DUMP"]?
       File.write(snapshot_path, wan_snapshot_json(snapshots).to_json)
     end
@@ -539,6 +583,10 @@ describe ML::Video::WanS2VBlock do
     end
     snapshots["repeat_block_output"].should eq(snapshots["output"])
     snapshots["repeat_audio_output"].should eq(snapshots["audio_output"])
+    snapshots["chained_block_output"].all?(&.finite?).should be_true,
+      "a second block must consume the first block's resident output"
+    snapshots["chained_block_output"].should_not eq(snapshots["output"]),
+      "the chained block must execute on the prior block output"
     fixture["inputs"]["local_audio"].as_a.any? { |value| value.as_f != 0 }.should be_true
     prefix = fixture["config"]["split"].as_i * dim
     snapshots["audio_output"][0, prefix].should_not eq(snapshots["output"][0, prefix]),

@@ -30746,3 +30746,38 @@ Refresh after source/toolchain/device/model/workload changes.
   residency is not admitted on 64 GiB with the 15% floor. Refresh on native/oracle/
   upstream/checkpoint/configuration/precision/tolerance/runtime/device/driver
   changes, or missing/changed artifacts. Existing model routes/defaults intact.
+
+### 2026-10-19 — Wan original BF16 GPU storage and complete weight residency
+
+- Wan parameters now retain original BF16 bytes on GPU with F32 operands,
+  activations and accumulation. The opt-in loader uses zero staging/F32-mirror
+  bytes in this mode; F32 loading remains the default. Block/loader encoding
+  adds no GPU buffer allocation, submission, wait or activation download.
+- Final-source matrix: 69 examples, zero failures/errors/pending. Both official
+  storage modes pass all 35 upstream checkpoints at the unchanged finite
+  abs 2e-5 + rel 2e-5 gate. The 38 captured native arrays contain 817,152
+  bit-identical F32 values; chained arrays are native controls, not another
+  upstream-layer oracle. Original F32 and synthetic LTX gates also pass.
+- Adversarial public-map replacement/deletion hid typed ownership from reserve
+  accounting and delayed release. Retained typed identities, deduplicated
+  resident-byte accounting, preallocation target checks and dual-owner cleanup
+  close that tested gap. Correlated mini-Quadrumvirate verdict: ROBUST within
+  setup-only ownership, storage, numerical and caller-encoder contracts.
+- A separate guarded run kept all 1260 official transformer tensors live:
+  32,591,511,218 BF16 bytes; Metal allocation delta 32,592,494,592 bytes.
+  Admission/minimum sampled free memory was 80%/30%, with the 15% stop floor.
+  GPU scan covered every BF16 word and found zero non-finite weights.
+  Setup/probe elapsed 34.88/50.05 seconds; these are not generation timings.
+  Samples do not establish a continuous minimum or physical peak; UMA RSS and
+  Metal bytes are not additive. Scan checksums do not attest raw shard identity.
+- LTX primary download access succeeds after terms acceptance; Diffusers config
+  remains HTTP 403. Actual LTX metadata/weights and real-weight parity are still
+  unadmitted. Full denoising, distinct-layer accumulation, conditioning, VAEs,
+  whole-pipeline memory, video quality and end-to-end speed remain open.
+- Evidence/reproduction: docs/video-native-frontier.md and private
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-bf16/qualification.json,
+  SHA256 67e48510835e6fc9425d99d53c692f8cc2f110c1037d390b5a61e36419bf2e17.
+  Exact source/fixture/binary pins are not a transitive build attestation.
+  Refresh on native/oracle/upstream/checkpoint/configuration/precision/tolerance/
+  runtime/device/driver changes or missing/changed artifacts. No full inference,
+  Studio or service was started; no push.

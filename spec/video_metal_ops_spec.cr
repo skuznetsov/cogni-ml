@@ -8,6 +8,32 @@ lib LibVideoSpecMemory
   fun free(ptr : Void*) : Void
 end
 
+private def video_metal_bf16_expand(value : Float32) : Float32
+  (value.unsafe_as(UInt32) & 0xffff0000_u32).unsafe_as(Float32)
+end
+
+private def video_metal_resident_weight(
+  arena : ML::Video::Arena, name : String, values : Array(Float32),
+  dtype : ML::Video::WeightDType,
+) : ML::MetalBuffer
+  case dtype
+  when ML::Video::WeightDType::F32
+    arena.upload(name, values)
+  when ML::Video::WeightDType::BF16
+    buffer = arena.alloc_weight(name, values.size, dtype)
+    raw = Bytes.new(values.size * sizeof(UInt16))
+    values.each_with_index do |value, index|
+      bits = (value.unsafe_as(UInt32) >> 16).to_u16
+      raw[index * 2] = (bits & 0xff).to_u8
+      raw[index * 2 + 1] = (bits >> 8).to_u8
+    end
+    buffer.write_bytes(raw.to_unsafe, raw.size)
+    buffer
+  else
+    raise ArgumentError.new("Unsupported resident weight dtype")
+  end
+end
+
 describe ML::Video::MetalOps do
   it "keeps every projection term around the reduction width and its tails" do
     [15, 16, 17, 31, 32, 33].each do |dim|
@@ -291,6 +317,312 @@ describe ML::Video::MetalOps do
         reference = z / Math.sqrt(5.0 + 1e-6)
         actual.should be_close(reference, 2e-5 + 2e-5 * reference.abs)
       end
+    ensure
+      arena.release
+    end
+  end
+
+  it "tracks resident weight dtype and validates its byte extent" do
+    arena = ML::Video::Arena.new
+    begin
+      ordinary = arena.alloc("ordinary", 2)
+      packed = arena.alloc_weight("packed", 3, ML::Video::WeightDType::BF16)
+      ordinary.size.should eq(2 * sizeof(Float32))
+      packed.size.should eq(3 * sizeof(UInt16))
+      arena.dtype("ordinary").should eq(ML::Video::WeightDType::F32)
+      arena.dtype("packed").should eq(ML::Video::WeightDType::BF16)
+      arena.check_weight("ordinary", 2_i64)
+      arena.check_weight("packed", 3_i64)
+      ML::Video::MetalOps.check_storage(ordinary, 3_i64, ML::Video::WeightDType::BF16)
+      expect_raises(ArgumentError) { arena.check_weight("ordinary", 3_i64) }
+      expect_raises(ArgumentError) { arena.check_weight("packed", 4_i64) }
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.check_storage(ordinary, 3_i64, ML::Video::WeightDType::F32)
+      end
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.check_storage(packed, 0_i64, ML::Video::WeightDType::BF16)
+      end
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.check_storage(
+          ordinary, Int32::MAX.to_i64 + 1, ML::Video::WeightDType::BF16)
+      end
+
+      released = arena.alloc_weight("released_weight", 1, ML::Video::WeightDType::BF16)
+      released.release
+      expect_raises(ArgumentError) { arena.check_weight("released_weight", 1_i64) }
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.check_storage(released, 1_i64, ML::Video::WeightDType::BF16)
+      end
+
+      removed = arena.alloc_weight("removed_weight", 2, ML::Video::WeightDType::BF16)
+      arena.remove("removed_weight")
+      removed.valid?.should be_false
+      arena.buffers.has_key?("removed_weight").should be_false
+      arena.alloc("removed_weight", 1).size.should eq(sizeof(Float32))
+      arena.dtype("removed_weight").should eq(ML::Video::WeightDType::F32)
+    ensure
+      arena.release
+    end
+  end
+
+  it "rejects replacement of a typed resident weight before the encode preflight" do
+    arena = ML::Video::Arena.new
+    begin
+      original = arena.alloc_weight("typed_weight", 2, ML::Video::WeightDType::BF16)
+      replacement = arena.alloc("larger_f32_replacement", 4)
+      replacement.size.should be > original.size
+      arena.buffers["typed_weight"] = replacement
+
+      expect_raises(ArgumentError, "Resident video weight buffer identity changed") do
+        arena.dtype("typed_weight")
+      end
+      expect_raises(ArgumentError, "Resident video weight buffer identity changed") do
+        arena.check_weight("typed_weight", 2_i64)
+      end
+
+      # Ordinary F32 scratch remains replaceable for the no-copy alias tests.
+      arena.dtype("larger_f32_replacement").should eq(ML::Video::WeightDType::F32)
+      arena.buffers["typed_weight"] = original
+    ensure
+      arena.release
+    end
+  end
+
+  it "accounts for and releases replaced typed buffers exactly once" do
+    arena = ML::Video::Arena.new
+    live_bytes = ML::MetalBuffer.stats[:live_bytes]
+    begin
+      original = arena.alloc_weight("typed_weight", 2, ML::Video::WeightDType::BF16)
+      replacement = arena.alloc("f32_replacement", 4)
+      arena.buffers["typed_weight"] = replacement
+
+      # The replacement appears under two public keys, while the replaced
+      # BF16 allocation remains Arena-owned through typed metadata.
+      arena.resident_bytes.should eq(original.size + replacement.size)
+      arena.remove("typed_weight")
+      original.valid?.should be_false
+      replacement.valid?.should be_false
+      arena.resident_bytes.should eq(0_i64)
+      ML::MetalBuffer.stats[:live_bytes].should eq(live_bytes)
+    ensure
+      arena.release
+    end
+  end
+
+  it "keeps deleted typed allocations owned until remove or release" do
+    arena = ML::Video::Arena.new
+    live_bytes = ML::MetalBuffer.stats[:live_bytes]
+    original = arena.alloc_weight("deleted_typed_weight", 3, ML::Video::WeightDType::BF16)
+    begin
+      arena.buffers.delete("deleted_typed_weight").should be(original)
+      arena.resident_bytes.should eq(original.size)
+      expect_raises(ArgumentError, /Duplicate/) do
+        arena.alloc("deleted_typed_weight", 1)
+      end
+      expect_raises(ArgumentError, /Duplicate/) do
+        arena.alloc_weight("deleted_typed_weight", 1, ML::Video::WeightDType::F32)
+      end
+
+      arena.remove("deleted_typed_weight")
+      original.valid?.should be_false
+      arena.resident_bytes.should eq(0_i64)
+
+      # Explicit removal clears the typed owner and permits safe name reuse.
+      reused = arena.alloc("deleted_typed_weight", 1)
+      arena.dtype("deleted_typed_weight").should eq(ML::Video::WeightDType::F32)
+      reused.size.should eq(sizeof(Float32))
+    ensure
+      arena.release
+    end
+    ML::MetalBuffer.stats[:live_bytes].should eq(live_bytes)
+
+    release_arena = ML::Video::Arena.new
+    release_live_bytes = ML::MetalBuffer.stats[:live_bytes]
+    released_orphan = release_arena.alloc_weight("release_orphan", 2, ML::Video::WeightDType::BF16)
+    begin
+      release_arena.buffers.delete("release_orphan")
+      release_arena.resident_bytes.should eq(released_orphan.size)
+    ensure
+      release_arena.release
+    end
+    released_orphan.valid?.should be_false
+    release_arena.resident_bytes.should eq(0_i64)
+    ML::MetalBuffer.stats[:live_bytes].should eq(release_live_bytes)
+  end
+
+  it "keeps BF16 linear weights resident with exact F32 reduction parity across tails and bias types" do
+    [15, 16, 17, 31, 32, 33].each do |dim|
+      arena = ML::Video::Arena.new
+      begin
+        rows, channels = 2, 3
+        inputs = Array(Float32).new(rows * dim) do |i|
+          i < dim ? 1.0_f32 : (((i * 7) % 19 - 9) * 0.125).to_f32
+        end
+        weights = Array(Float32).new(channels * dim) do |i|
+          col, lane = i // dim, i % dim
+          sign = lane.even? ? 1.0_f32 : -1.0_f32
+          sign * (8.0_f32 + col * 0.25_f32 + (lane % 5) * 0.015625_f32)
+        end
+        biases = [0.1_f32, -0.3_f32, 0.7_f32]
+        x = arena.upload("linear_x", inputs)
+        dtype_pairs = {
+          {ML::Video::WeightDType::F32, ML::Video::WeightDType::F32},
+          {ML::Video::WeightDType::F32, ML::Video::WeightDType::BF16},
+          {ML::Video::WeightDType::BF16, ML::Video::WeightDType::F32},
+          {ML::Video::WeightDType::BF16, ML::Video::WeightDType::BF16},
+        }
+        cases = [] of Tuple(ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer,
+                            ML::MetalBuffer, Array(Float32), Array(Float32))
+        dtype_pairs.each_with_index do |(weight_dtype, bias_dtype), index|
+          prefix = "linear_#{index}"
+          effective_weights = weight_dtype == ML::Video::WeightDType::BF16 ? weights.map { |value| video_metal_bf16_expand(value) } : weights
+          effective_biases = bias_dtype == ML::Video::WeightDType::BF16 ? biases.map { |value| video_metal_bf16_expand(value) } : biases
+          w = video_metal_resident_weight(arena, "#{prefix}_weight", weights, weight_dtype)
+          b = video_metal_resident_weight(arena, "#{prefix}_bias", biases, bias_dtype)
+          ref_w = arena.upload("#{prefix}_reference_weight", effective_weights)
+          ref_b = arena.upload("#{prefix}_reference_bias", effective_biases)
+          output = arena.alloc("#{prefix}_output", rows * channels)
+          reference = arena.alloc("#{prefix}_reference", rows * channels)
+          cases << {w, b, output, reference, effective_weights, effective_biases}
+        end
+
+        allocations = ML::MetalBuffer.video_spec_allocations
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        dtype_pairs.each_with_index do |(weight_dtype, bias_dtype), index|
+          w, b, output, reference, _, _ = cases[index]
+          ref_w = arena["linear_#{index}_reference_weight"]
+          ref_b = arena["linear_#{index}_reference_bias"]
+          ML::Video::MetalOps.linear(encoder, x, w, b, output, rows, dim, channels,
+            weight_dtype: weight_dtype, bias_dtype: bias_dtype)
+          ML::Video::MetalOps.linear(encoder, x, ref_w, ref_b, reference, rows, dim, channels)
+        end
+        encoder.end_encoding
+        command.commit
+        command.wait
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+
+        cases.each do |(_, _, output, reference, effective_weights, effective_biases)|
+          actual = output.read(rows * channels)
+          expected = reference.read(rows * channels)
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          actual.each_with_index do |value, index|
+            row, col = index // channels, index % channels
+            total = (0...dim).sum(0.0_f64) do |lane|
+              inputs[row * dim + lane].to_f64 * effective_weights[col * dim + lane].to_f64
+            end + effective_biases[col].to_f64
+            value.should be_close(total, 2e-5 + 2e-5 * total.abs)
+          end
+        end
+      ensure
+        arena.release
+      end
+    end
+  end
+
+  it "keeps BF16 affine RMSNorm and LayerNorm bit-identical to F32-expanded parameters" do
+    arena = ML::Video::Arena.new
+    begin
+      rows, dim = 2, 37
+      inputs = Array(Float32).new(rows * dim) { |i| (Math.sin(i * 0.13) * 2.0).to_f32 }
+      weights = Array(Float32).new(dim) { |i| (0.7 + 0.007 * i).to_f32 }
+      biases = Array(Float32).new(dim) { |i| (0.13 * Math.sin(i * 0.31)).to_f32 }
+      x = arena.upload("norm_x", inputs)
+      dtype_pairs = {
+        {ML::Video::WeightDType::F32, ML::Video::WeightDType::F32},
+        {ML::Video::WeightDType::F32, ML::Video::WeightDType::BF16},
+        {ML::Video::WeightDType::BF16, ML::Video::WeightDType::F32},
+        {ML::Video::WeightDType::BF16, ML::Video::WeightDType::BF16},
+      }
+      cases = [] of Tuple(ML::MetalBuffer, ML::MetalBuffer, Array(ML::MetalBuffer),
+                          Array(ML::MetalBuffer), Array(Float32), Array(Float32))
+      dtype_pairs.each_with_index do |(weight_dtype, bias_dtype), index|
+        prefix = "norm_#{index}"
+        effective_weights = weight_dtype == ML::Video::WeightDType::BF16 ? weights.map { |value| video_metal_bf16_expand(value) } : weights
+        effective_biases = bias_dtype == ML::Video::WeightDType::BF16 ? biases.map { |value| video_metal_bf16_expand(value) } : biases
+        w = video_metal_resident_weight(arena, "#{prefix}_weight", weights, weight_dtype)
+        b = video_metal_resident_weight(arena, "#{prefix}_bias", biases, bias_dtype)
+        ref_w = arena.upload("#{prefix}_reference_weight", effective_weights)
+        ref_b = arena.upload("#{prefix}_reference_bias", effective_biases)
+        outputs = [
+          arena.alloc("#{prefix}_layer_output", rows * dim),
+          arena.alloc("#{prefix}_rms_output", rows * dim),
+        ]
+        references = [
+          arena.alloc("#{prefix}_layer_reference", rows * dim),
+          arena.alloc("#{prefix}_rms_reference", rows * dim),
+        ]
+        cases << {w, b, outputs, references, effective_weights, effective_biases}
+      end
+
+      allocations = ML::MetalBuffer.video_spec_allocations
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      {false, true}.each_with_index do |rms, mode|
+        dtype_pairs.each_with_index do |(weight_dtype, bias_dtype), index|
+          w, b, outputs, references, _, _ = cases[index]
+          output = outputs[mode]
+          reference = references[mode]
+          ML::Video::MetalOps.norm(encoder, x, w, b, output, rows, dim, 1e-6_f32,
+            rms: rms, affine: true, weight_dtype: weight_dtype, bias_dtype: bias_dtype)
+          ML::Video::MetalOps.norm(encoder, x, arena["norm_#{index}_reference_weight"],
+            arena["norm_#{index}_reference_bias"], reference, rows, dim, 1e-6_f32,
+            rms: rms, affine: true)
+        end
+      end
+      encoder.end_encoding
+      command.commit
+      command.wait
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+
+      cases.each do |(_, _, outputs, references, effective_weights, effective_biases)|
+        [false, true].each_with_index do |rms, mode|
+          actual = outputs[mode].read(rows * dim)
+          expected = references[mode].read(rows * dim)
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          rows.times do |row|
+            offset = row * dim
+            mean = rms ? 0.0 : inputs[offset, dim].sum(&.to_f64) / dim
+            variance = inputs[offset, dim].sum do |value|
+              centered = rms ? value.to_f64 : value.to_f64 - mean
+              centered * centered
+            end / dim
+            inverse = 1.0 / Math.sqrt(variance + 1e-6)
+            dim.times do |column|
+              centered = rms ? inputs[offset + column].to_f64 : inputs[offset + column].to_f64 - mean
+              value = centered * inverse * effective_weights[column] + effective_biases[column]
+              actual[row * dim + column].should be_close(value, 2e-5 + 2e-5 * value.abs)
+            end
+          end
+        end
+      end
+    ensure
+      arena.release
+    end
+  end
+
+  it "rejects BF16 linear aliases and released typed weights before dispatch" do
+    arena = ML::Video::Arena.new
+    begin
+      x = arena.upload("alias_x", [1.0_f32, 2.0_f32])
+      w = video_metal_resident_weight(arena, "alias_weight", [1.0_f32, 0.0_f32,
+                                                              0.0_f32, 1.0_f32], ML::Video::WeightDType::BF16)
+      bias = arena.upload("alias_bias", [0.0_f32, 0.0_f32])
+      released = arena.alloc_weight("released_linear_weight", 4, ML::Video::WeightDType::BF16)
+      released.release
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.linear(encoder, x, w, bias, x, 1, 2, 2,
+          weight_dtype: ML::Video::WeightDType::BF16)
+      end
+      output = arena.alloc("bf16_released_output", 2)
+      expect_raises(ArgumentError) do
+        ML::Video::MetalOps.linear(encoder, x, released, bias, output, 1, 2, 2,
+          weight_dtype: ML::Video::WeightDType::BF16)
+      end
+      encoder.end_encoding
+      command.discard
     ensure
       arena.release
     end

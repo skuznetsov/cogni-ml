@@ -1,20 +1,71 @@
 require "../metal/dispatch"
 
 module ML::Video
+  enum WeightDType
+    F32
+    BF16
+
+    def bytes_per_element : Int32
+      case self
+      in .f32?  then 4
+      in .bf16? then 2
+      end
+    end
+  end
+
   # Setup-only owner. Keep this object and all external inputs alive until the
   # caller's command completes. Do not release or upload while work is in flight.
   class Arena
     getter buffers = {} of String => ML::MetalBuffer
+    @dtypes = {} of String => WeightDType
+    @typed_buffers = {} of String => ML::MetalBuffer
 
     def initialize
       raise "Native video requires Metal" unless ML::Metal::Device.init!
       MetalOps.prepare!
     end
 
+    # Setup-only accounting. Typed allocations remain Arena-owned even if the
+    # public buffer map is edited, so include both sets and deduplicate aliases.
+    def resident_bytes : Int64
+      resident = [] of ML::MetalBuffer
+      @buffers.each_value do |buffer|
+        resident << buffer unless resident.any? { |other| other.same?(buffer) }
+      end
+      @typed_buffers.each_value do |buffer|
+        resident << buffer unless resident.any? { |other| other.same?(buffer) }
+      end
+
+      total = 0_i64
+      resident.each do |buffer|
+        next unless buffer.valid?
+        raise ArgumentError.new("Arena resident byte count exceeds Int64") if buffer.size > Int64::MAX - total
+        total += buffer.size
+      end
+      total
+    end
+
+    def allocated?(name : String) : Bool
+      @buffers.has_key?(name) || @typed_buffers.has_key?(name)
+    end
+
     def alloc(name : String, count : Int32) : ML::MetalBuffer
-      raise ArgumentError.new("Duplicate buffer #{name}") if @buffers.has_key?(name)
+      raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
       raise ArgumentError.new("Buffer count must be positive") unless count > 0
-      @buffers[name] = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
+      buffer = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
+      @buffers[name] = buffer
+      @dtypes[name] = WeightDType::F32
+      buffer
+    end
+
+    def alloc_weight(name : String, count : Int32, dtype : WeightDType) : ML::MetalBuffer
+      raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
+      raise ArgumentError.new("Buffer count must be positive") unless count > 0
+      buffer = ML::MetalBuffer.new(count.to_i64 * dtype.bytes_per_element)
+      @buffers[name] = buffer
+      @dtypes[name] = dtype
+      @typed_buffers[name] = buffer
+      buffer
     end
 
     def upload(name : String, values : Array(Float32)) : ML::MetalBuffer
@@ -27,9 +78,35 @@ module ML::Video
       @buffers[name]
     end
 
+    def dtype(name : String) : WeightDType
+      buffer = @buffers[name]
+      dtype = @dtypes[name]? || WeightDType::F32
+      if typed_buffer = @typed_buffers[name]?
+        unless typed_buffer.same?(buffer)
+          raise ArgumentError.new("Resident video weight buffer identity changed")
+        end
+      end
+      dtype
+    end
+
+    def check_weight(name : String, count : Int64) : Nil
+      MetalOps.check_storage(@buffers[name], count, dtype(name))
+    end
+
+    def remove(name : String) : Nil
+      buffer = @buffers.delete(name)
+      typed_buffer = @typed_buffers.delete(name)
+      @dtypes.delete(name)
+      buffer.try(&.release)
+      typed_buffer.try(&.release)
+    end
+
     def release : Nil
       @buffers.each_value(&.release)
+      @typed_buffers.each_value(&.release)
       @buffers.clear
+      @dtypes.clear
+      @typed_buffers.clear
     end
   end
 
@@ -40,7 +117,15 @@ module ML::Video
     SOURCE = {{ read_file("#{__DIR__}/kernels/common.metal") }}
 
     def self.check(buffer : ML::MetalBuffer, count : Int64) : Nil
-      unless buffer.valid? && count > 0 && count <= Int32::MAX && buffer.size >= count * 4
+      unless count > 0 && count <= Int32::MAX
+        raise ArgumentError.new("Invalid or undersized resident video buffer")
+      end
+      check_storage(buffer, count, WeightDType::F32)
+    end
+
+    def self.check_storage(buffer : ML::MetalBuffer, count : Int64, dtype : WeightDType) : Nil
+      unless buffer.valid? && count > 0 && count <= Int32::MAX &&
+             count <= buffer.size // dtype.bytes_per_element
         raise ArgumentError.new("Invalid or undersized resident video buffer")
       end
     end
@@ -71,7 +156,8 @@ module ML::Video
     end
 
     def self.prepare! : Nil
-      {"video_linear_f32", "video_norm_f32", "video_modulate_f32",
+      {"video_linear_f32", "video_linear_mixed", "video_norm_f32", "video_norm_mixed",
+       "video_modulate_f32",
        "video_add_f32", "video_gelu_f32", "video_copy_f32",
        "video_attention_f32"}.each { |name| pipeline(name) }
     end
@@ -82,41 +168,61 @@ module ML::Video
 
     def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                     w : ML::MetalBuffer, bias : ML::MetalBuffer, y : ML::MetalBuffer,
-                    rows : Int32, in_dim : Int32, out_dim : Int32) : Nil
+                    rows : Int32, in_dim : Int32, out_dim : Int32,
+                    weight_dtype : WeightDType = WeightDType::F32,
+                    bias_dtype : WeightDType = WeightDType::F32) : Nil
       dims(rows, in_dim, out_dim)
       check(x, rows.to_i64 * in_dim)
-      check(w, out_dim.to_i64 * in_dim)
-      check(bias, out_dim.to_i64)
+      check_storage(w, out_dim.to_i64 * in_dim, weight_dtype)
+      check_storage(bias, out_dim.to_i64, bias_dtype)
       check(y, rows.to_i64 * out_dim)
       distinct(y, x, w, bias)
-      e.set_pipeline(pipeline("video_linear_f32"))
-      e.set_buffer(x, 0).set_buffer(w, 1).set_buffer(bias, 2)
-      e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
-      e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5).set_value(out_dim.to_u32, 6)
+      if weight_dtype.f32? && bias_dtype.f32?
+        # Preserve the established F32 path for existing users.
+        e.set_pipeline(pipeline("video_linear_f32"))
+        e.set_buffer(x, 0).set_buffer(w, 1).set_buffer(bias, 2)
+        e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
+        e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5).set_value(out_dim.to_u32, 6)
+      else
+        e.set_pipeline(pipeline("video_linear_mixed"))
+        e.set_buffer(x, 0).set_buffer(w, 1).set_buffer(bias, 2)
+        e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
+        e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5).set_value(out_dim.to_u32, 6)
+        e.set_buffer(w, 7).set_buffer(bias, 8)
+        e.set_value(weight_dtype.bf16? ? 1_u32 : 0_u32, 9)
+        e.set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 10)
+      end
       e.dispatch_1d(rows * out_dim)
     end
 
     def self.norm(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                   weight : ML::MetalBuffer, bias : ML::MetalBuffer, y : ML::MetalBuffer,
                   rows : Int32, dim : Int32, eps : Float32, rms : Bool = false,
-                  affine : Bool = false) : Nil
+                  affine : Bool = false, weight_dtype : WeightDType = WeightDType::F32,
+                  bias_dtype : WeightDType = WeightDType::F32) : Nil
       dims(rows, dim)
       raise ArgumentError.new("Invalid norm epsilon") unless eps.finite? && eps > 0
       check(x, rows.to_i64 * dim)
       check(y, rows.to_i64 * dim)
       inplace_or_distinct(x, y)
       if affine
-        check(weight, dim.to_i64)
-        check(bias, dim.to_i64)
+        check_storage(weight, dim.to_i64, weight_dtype)
+        check_storage(bias, dim.to_i64, bias_dtype)
         distinct(y, weight, bias)
       end
-      e.set_pipeline(pipeline("video_norm_f32"))
+      mixed_affine = affine && (!weight_dtype.f32? || !bias_dtype.f32?)
+      e.set_pipeline(pipeline(mixed_affine ? "video_norm_mixed" : "video_norm_f32"))
       # Non-affine kernels never read these slots. Bind a known-valid input,
       # rather than accepting stale handles in nominally unused arguments.
       e.set_buffer(x, 0).set_buffer(affine ? weight : x, 1).set_buffer(affine ? bias : x, 2)
       e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
       e.set_value(dim.to_u32, 4).set_value(eps, 5)
       e.set_value(rms ? 1_u32 : 0_u32, 6).set_value(affine ? 1_u32 : 0_u32, 7)
+      if mixed_affine
+        e.set_buffer(weight, 8).set_buffer(bias, 9)
+        e.set_value(weight_dtype.bf16? ? 1_u32 : 0_u32, 10)
+        e.set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 11)
+      end
       threads = Math.min(256, ((dim + 31) // 32) * 32)
       e.dispatch_threadgroups({rows, 1, 1}, {threads, 1, 1})
     end

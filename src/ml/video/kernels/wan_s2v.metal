@@ -6,12 +6,22 @@ using namespace metal;
 // 1ea34ff48f87168174e12956e200b1d908b1c5ff.
 // Wan2.2 S2V's input modulation has six fields and two video segments:
 // [B,6,2,C]. The learned table is [6,C] and broadcasts over both axes.
+inline float wan_modulation_value(device const float *base_f32,
+                                  device const ushort *base_bf16,
+                                  uint index, uint is_bf16) {
+    if (is_bf16 != 0) {
+        return as_type<float>(uint(base_bf16[index]) << 16);
+    }
+    return base_f32[index];
+}
+
 kernel void wan_modulate_segments(
     device const float *x [[buffer(0)]], device const float *e [[buffer(1)]],
-    device const float *base [[buffer(2)]], device float *y [[buffer(3)]],
+    device const float *base_f32 [[buffer(2)]], device float *y [[buffer(3)]],
     constant uint &batches [[buffer(4)]], constant uint &seq [[buffer(5)]],
     constant uint &dim [[buffer(6)]], constant uint &split [[buffer(7)]],
     constant uint &shift_field [[buffer(8)]], constant uint &scale_field [[buffer(9)]],
+    device const ushort *base_bf16 [[buffer(10)]], constant uint &base_is_bf16 [[buffer(11)]],
     uint id [[thread_position_in_grid]]) {
     if (id >= batches * seq * dim) return;
     const uint channel = id % dim;
@@ -20,17 +30,18 @@ kernel void wan_modulate_segments(
     const uint segment = token < split ? 0 : 1;
     const uint shift_at = ((batch * 6 + shift_field) * 2 + segment) * dim + channel;
     const uint scale_at = ((batch * 6 + scale_field) * 2 + segment) * dim + channel;
-    const float shift = e[shift_at] + base[shift_field * dim + channel];
-    const float scale = e[scale_at] + base[scale_field * dim + channel];
+    const float shift = e[shift_at] + wan_modulation_value(base_f32, base_bf16, shift_field * dim + channel, base_is_bf16);
+    const float scale = e[scale_at] + wan_modulation_value(base_f32, base_bf16, scale_field * dim + channel, base_is_bf16);
     y[id] = x[id] * (1.0f + scale) + shift;
 }
 
 kernel void wan_segment_add(
     device const float *x [[buffer(0)]], device const float *delta [[buffer(1)]],
-    device const float *e [[buffer(2)]], device const float *base [[buffer(3)]],
+    device const float *e [[buffer(2)]], device const float *base_f32 [[buffer(3)]],
     device float *y [[buffer(4)]], constant uint &batches [[buffer(5)]],
     constant uint &seq [[buffer(6)]], constant uint &dim [[buffer(7)]],
     constant uint &split [[buffer(8)]], constant uint &gate_field [[buffer(9)]],
+    device const ushort *base_bf16 [[buffer(10)]], constant uint &base_is_bf16 [[buffer(11)]],
     uint id [[thread_position_in_grid]]) {
     if (id >= batches * seq * dim) return;
     const uint channel = id % dim;
@@ -38,7 +49,7 @@ kernel void wan_segment_add(
     const uint batch = id / (seq * dim);
     const uint segment = token < split ? 0 : 1;
     const uint gate_at = ((batch * 6 + gate_field) * 2 + segment) * dim + channel;
-    const float gate = e[gate_at] + base[gate_field * dim + channel];
+    const float gate = e[gate_at] + wan_modulation_value(base_f32, base_bf16, gate_field * dim + channel, base_is_bf16);
     y[id] = x[id] + gate * delta[id];
 }
 

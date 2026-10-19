@@ -21,6 +21,16 @@ private def checkpoint_header(dtype = "F32", shape = "[2]", offsets = "[0,8]")
   %({"w":{"dtype":"#{dtype}","shape":#{shape},"data_offsets":#{offsets}}})
 end
 
+private class FailingVideoCheckpoint < ML::Video::CheckpointFile
+  @copies = 0
+
+  def copy_raw(info : ML::Video::CheckpointTensor, destination : Bytes) : Nil
+    @copies += 1
+    raise IO::Error.new("Injected checkpoint copy failure") if @copies == 2
+    super
+  end
+end
+
 describe ML::Video::CheckpointFile do
   it "admits a scalar and preserves the original descriptor without CPU decoding" do
     with_video_checkpoint(checkpoint_header(shape: "[]", offsets: "[0,4]"), Bytes[0, 0, 128, 63]) do |path|
@@ -162,9 +172,264 @@ describe ML::Video::CheckpointFile do
       end
     end
   end
+
+  it "plans original BF16 residency without staging and rejects incomplete or multiply bound manifests" do
+    header = %({"w":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]},"b":{"dtype":"BF16","shape":[1],"data_offsets":[4,6]}})
+    with_video_checkpoint(header, Bytes.new(6)) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      begin
+        bindings = [
+          ML::Video::WeightBinding.new("weight", "w", [2_i64]),
+          ML::Video::WeightBinding.new("bias", "b", [1_i64]),
+        ]
+        allocations = ML::MetalBuffer.video_spec_allocations
+        plan = ML::Video::WeightPlan.new([file], bindings, 14_i64, 8_i64,
+          resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+        plan.resident_dtype.should eq(ML::Video::WeightDType::BF16)
+        plan.destination_bytes.should eq(6)
+        plan.staging_bytes.should eq(0)
+        plan.peak_bytes.should eq(14)
+        expect_raises(ArgumentError, /budget/) do
+          ML::Video::WeightPlan.new([file], bindings, 13_i64, 8_i64, resident_dtype: ML::Video::WeightDType::BF16)
+        end
+        expect_raises(ArgumentError, /complete/) do
+          ML::Video::WeightPlan.new([file], bindings[0, 1], 64_i64, resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+        end
+        duplicate = ML::Video::WeightBinding.new("another", "w", [2_i64])
+        expect_raises(ArgumentError, /source/) do
+          ML::Video::WeightPlan.new([file], [bindings[0], duplicate], 64_i64, resident_dtype: ML::Video::WeightDType::BF16)
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      ensure
+        file.close
+      end
+    end
+  end
+
+  it "rejects F32 and F16 sources in native BF16 mode rather than quantizing them" do
+    {"F32" => 8, "F16" => 4}.each do |dtype, bytes|
+      with_video_checkpoint(checkpoint_header(dtype: dtype, offsets: "[0,#{bytes}]"), Bytes.new(bytes)) do |path|
+        file = ML::Video::CheckpointFile.new(path)
+        begin
+          binding = ML::Video::WeightBinding.new("weight", "w", [2_i64])
+          allocations = ML::MetalBuffer.video_spec_allocations
+          expect_raises(ArgumentError, /original BF16/) do
+            ML::Video::WeightPlan.new([file], [binding], 64_i64, resident_dtype: ML::Video::WeightDType::BF16)
+          end
+          ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        ensure
+          file.close
+        end
+      end
+    end
+  end
 end
 
 describe ML::Video::PreparedWeights do
+  it "rolls back partial BF16 setup while preserving caller-owned buffers" do
+    header = %({"w":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]},"b":{"dtype":"BF16","shape":[1],"data_offsets":[4,6]}})
+    with_video_checkpoint(header, Bytes.new(6)) do |path|
+      file = FailingVideoCheckpoint.new(path)
+      arena = ML::Video::Arena.new
+      begin
+        original = arena.upload("existing", [7_f32])
+        bindings = [
+          ML::Video::WeightBinding.new("weight", "w", [2_i64]),
+          ML::Video::WeightBinding.new("bias", "b", [1_i64]),
+        ]
+        plan = ML::Video::WeightPlan.new([file.as(ML::Video::CheckpointFile)], bindings, 10_i64, 4_i64,
+          resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+        baseline = ML::MetalBuffer.stats
+        expect_raises(IO::Error, /Injected/) { ML::Video::PreparedWeights.new(plan, arena) }
+        rolled_back = ML::MetalBuffer.stats
+        rolled_back[:live_buffers].should eq(baseline[:live_buffers])
+        rolled_back[:live_bytes].should eq(baseline[:live_bytes])
+        arena.buffers.keys.should eq(["existing"])
+        original.valid?.should be_true
+        original.read(1).should eq([7_f32])
+        arena.dtype("existing").should eq(ML::Video::WeightDType::F32)
+        # Rollback must remove dtype entries as well as buffers.
+        arena.alloc("weight", 1)
+        arena.dtype("weight").should eq(ML::Video::WeightDType::F32)
+      ensure
+        arena.release
+        file.close
+      end
+    end
+  end
+
+  it "rejects released native BF16 destinations before encoding any work" do
+    with_video_checkpoint(checkpoint_header(dtype: "BF16", offsets: "[0,4]"), Bytes.new(4)) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      arena = ML::Video::Arena.new
+      prepared = nil.as(ML::Video::PreparedWeights?)
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      begin
+        bindings = [ML::Video::WeightBinding.new("weight", "w", [2_i64])]
+        plan = ML::Video::WeightPlan.new([file], bindings, 4_i64,
+          resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+        prepared = ML::Video::PreparedWeights.new(plan, arena)
+        arena["weight"].release
+        expect_raises(ArgumentError, /resident video buffer/) { prepared.encode(encoder) }
+      ensure
+        encoder.end_encoding
+        command.discard
+        prepared.try(&.release)
+        arena.release
+        file.close
+      end
+    end
+  end
+
+  it "rejects a replaced destination before either BF16 validation or F32 decode dispatch" do
+    {ML::Video::WeightDType::F32, ML::Video::WeightDType::BF16}.each do |dtype|
+      with_video_checkpoint(checkpoint_header(dtype: "BF16", offsets: "[0,4]"), Bytes.new(4)) do |path|
+        file = ML::Video::CheckpointFile.new(path)
+        arena = ML::Video::Arena.new
+        prepared = nil.as(ML::Video::PreparedWeights?)
+        baseline = ML::MetalBuffer.stats
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        begin
+          bindings = [ML::Video::WeightBinding.new("weight", "w", [2_i64])]
+          plan = ML::Video::WeightPlan.new([file], bindings, 12_i64,
+            resident_dtype: dtype, require_all: true)
+          prepared = ML::Video::PreparedWeights.new(plan, arena)
+          original = arena["weight"]
+          replacement = ML::MetalBuffer.new(8_i64)
+          arena.buffers["weight"] = replacement
+          allocations = ML::MetalBuffer.video_spec_allocations
+          expect_raises(ArgumentError, /destination was replaced/) { prepared.encode(encoder) }
+          ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+          prepared.release
+          arena.release
+          original.valid?.should be_false
+          replacement.valid?.should be_false
+          released = ML::MetalBuffer.stats
+          released[:live_buffers].should eq(baseline[:live_buffers])
+          released[:live_bytes].should eq(baseline[:live_bytes])
+        ensure
+          encoder.end_encoding
+          command.discard
+          prepared.try(&.release)
+          arena.release
+          file.close
+        end
+      end
+    end
+  end
+
+  it "counts replaced or deleted typed owners against the checkpoint reserve before allocation" do
+    {false, true}.each do |replace|
+      with_video_checkpoint(checkpoint_header(dtype: "BF16", offsets: "[0,4]"), Bytes.new(4)) do |path|
+        file = ML::Video::CheckpointFile.new(path)
+        arena = ML::Video::Arena.new
+        baseline = ML::MetalBuffer.stats
+        replacement = nil.as(ML::MetalBuffer?)
+        begin
+          original = arena.alloc_weight("hidden", 2, ML::Video::WeightDType::BF16)
+          if replace
+            replacement = ML::MetalBuffer.new(8_i64)
+            arena.buffers["hidden"] = replacement
+          else
+            arena.buffers.delete("hidden")
+          end
+          binding = ML::Video::WeightBinding.new("weight", "w", [2_i64])
+          reserve = replace ? 8_i64 : 0_i64
+          plan = ML::Video::WeightPlan.new([file], [binding], 64_i64, reserve,
+            resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+          allocations = ML::MetalBuffer.video_spec_allocations
+          expect_raises(ArgumentError, /reserve/) { ML::Video::PreparedWeights.new(plan, arena) }
+          ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+          arena.release
+          original.valid?.should be_false
+          replacement.try { |buffer| buffer.valid?.should be_false }
+          released = ML::MetalBuffer.stats
+          released[:live_buffers].should eq(baseline[:live_buffers])
+          released[:live_bytes].should eq(baseline[:live_bytes])
+        ensure
+          arena.release
+          file.close
+        end
+      end
+    end
+  end
+
+  it "rejects a deleted typed destination before allocating F32 staging" do
+    with_video_checkpoint(checkpoint_header, Bytes.new(8)) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      arena = ML::Video::Arena.new
+      begin
+        original = arena.alloc_weight("weight", 2, ML::Video::WeightDType::BF16)
+        arena.buffers.delete("weight")
+        binding = ML::Video::WeightBinding.new("weight", "w", [2_i64])
+        plan = ML::Video::WeightPlan.new([file], [binding], 64_i64, 4_i64)
+        allocations = ML::MetalBuffer.video_spec_allocations
+        expect_raises(ArgumentError, /already exists/) { ML::Video::PreparedWeights.new(plan, arena) }
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        original.valid?.should be_true
+      ensure
+        arena.release
+        file.close
+      end
+    end
+  end
+
+  it "loads raw BF16 directly into final GPU buffers and chains projections without a parameter mirror" do
+    header = %({"w":{"dtype":"BF16","shape":[2,2],"data_offsets":[0,8]},"b":{"dtype":"BF16","shape":[2],"data_offsets":[8,12]}})
+    raw = IO::Memory.new
+    [0x3f80_u16, 0xc000_u16, 0x3f00_u16, 0x4080_u16, 0x3e80_u16, 0xbf00_u16].each do |word|
+      raw.write_bytes(word, IO::ByteFormat::LittleEndian)
+    end
+    with_video_checkpoint(header, raw.to_slice) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      arena = ML::Video::Arena.new
+      prepared = nil.as(ML::Video::PreparedWeights?)
+      begin
+        bindings = [
+          ML::Video::WeightBinding.new("w", "w", [2_i64, 2_i64]),
+          ML::Video::WeightBinding.new("b", "b", [2_i64]),
+        ]
+        plan = ML::Video::WeightPlan.new([file], bindings, 36_i64, 24_i64,
+          resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+        before_setup = ML::MetalBuffer.video_spec_allocations
+        prepared = ML::Video::PreparedWeights.new(plan, arena)
+        ML::MetalBuffer.video_spec_allocations.should eq(before_setup + 2)
+        arena.buffers.values.sum(0_i64, &.size).should eq(12_i64)
+        arena.dtype("w").should eq(ML::Video::WeightDType::BF16)
+        arena.dtype("b").should eq(ML::Video::WeightDType::BF16)
+        Bytes.new(arena["w"].contents.as(UInt8*), 8).should eq(raw.to_slice[0, 8])
+        Bytes.new(arena["b"].contents.as(UInt8*), 4).should eq(raw.to_slice[8, 4])
+        x = arena.upload("x", [3_f32, -1_f32])
+        y = arena.alloc("y", 2)
+        z = arena.alloc("z", 2)
+        allocations = ML::MetalBuffer.video_spec_allocations
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        2.times do
+          prepared.encode(encoder)
+          ML::Video::MetalOps.linear(encoder, x, arena["w"], arena["b"], y, 1, 2, 2,
+            weight_dtype: arena.dtype("w"), bias_dtype: arena.dtype("b"))
+          ML::Video::MetalOps.linear(encoder, y, arena["w"], arena["b"], z, 1, 2, 2,
+            weight_dtype: arena.dtype("w"), bias_dtype: arena.dtype("b"))
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        encoder.end_encoding
+        command.commit_and_wait
+        y.read(2).should eq([5.25_f32, -3_f32])
+        z.read(2).should eq([11.5_f32, -9.875_f32])
+        prepared.release
+        arena["w"].valid?.should be_true
+        expect_raises(ArgumentError, /released/) { prepared.encode(encoder) }
+      ensure
+        prepared.try(&.release)
+        arena.release
+        file.close
+      end
+    end
+  end
+
   it "rejects an occupied target or unreserved arena before allocating loader buffers" do
     unless ML::Metal::Device.init!
       pending "Metal required"

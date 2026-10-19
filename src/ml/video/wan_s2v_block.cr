@@ -182,6 +182,7 @@ module ML::Video
 
     # Call during model setup. Compilation is intentionally kept out of encode.
     def self.prepare! : Nil
+      MetalOps.prepare!
       {"wan_modulate_segments", "wan_segment_add", "wan_rope_f32"}.each do |name|
         pipeline(name)
       end
@@ -230,8 +231,9 @@ module ML::Video
       "ffn_in" => :ff, "ffn_gelu" => :ff, "ffn_out" => :n, "output" => :n,
     }
 
-    # Encode one upstream WanS2VAttentionBlock. Inputs and all parameters are
-    # contiguous F32 Metal buffers; `modulation` is [B,6,2,C], `positions` is
+    # Encode one upstream WanS2VAttentionBlock. Inputs, activations and scratch
+    # are contiguous F32 Metal buffers; learned parameters may be F32 or BF16.
+    # `modulation` is [B,6,2,C], `positions` is
     # integer-valued F32 [B,S,3], and context is [B,L,C]. No host math, buffer
     # creation, upload, commit, wait, or read occurs in this method.
     def self.encode(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
@@ -279,15 +281,17 @@ module ML::Video
         rows, dim, EPS, affine: false)
       trace_copy(e, trace, "norm1", norm1, n)
       encode_modulate(e, norm1, modulation, weights["block_modulation"], mod1,
-        cfg, 0, 1)
+        cfg, 0, 1, weights.dtype("block_modulation"))
       trace_copy(e, trace, "self_mod", mod1, n)
       encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim)
       trace_copy(e, trace, "self_q", self_q, n)
       trace_copy(e, trace, "self_k", self_k, n)
       trace_copy(e, trace, "self_v", self_v, n)
-      norm_rms(e, self_q, weights["self_norm_q_weight"], scratch["wan_b_zero_bias"], self_qn, rows, dim)
+      norm_rms(e, self_q, weights["self_norm_q_weight"], weights.dtype("self_norm_q_weight"),
+        scratch["wan_b_zero_bias"], self_qn, rows, dim)
       trace_copy(e, trace, "self_q_norm", self_qn, n)
-      norm_rms(e, self_k, weights["self_norm_k_weight"], scratch["wan_b_zero_bias"], self_kn, rows, dim)
+      norm_rms(e, self_k, weights["self_norm_k_weight"], weights.dtype("self_norm_k_weight"),
+        scratch["wan_b_zero_bias"], self_kn, rows, dim)
       encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
       encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
       trace_copy(e, trace, "self_q_rope", self_qr, n)
@@ -295,27 +299,31 @@ module ML::Video
       MetalOps.attention(e, self_qr, self_kr, self_v, self_attn,
         cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches)
       trace_copy(e, trace, "self_attention", self_attn, n)
-      MetalOps.linear(e, self_attn, weights["self_o_weight"], weights["self_o_bias"], self_proj, rows, dim, dim)
+      linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim)
       trace_copy(e, trace, "self_projection", self_proj, n)
-      encode_gated_residual(e, x, self_proj, modulation, weights["block_modulation"], self_res, cfg, 2)
+      encode_gated_residual(e, x, self_proj, modulation, weights["block_modulation"], self_res,
+        cfg, 2, weights.dtype("block_modulation"))
       trace_copy(e, trace, "self_residual", self_res, n)
 
       # text/context cross attention (norm3 is affine; no RoPE)
       MetalOps.norm(e, self_res, weights["norm3_weight"], weights["norm3_bias"], cross_norm,
-        rows, dim, EPS, affine: true)
+        rows, dim, EPS, affine: true, weight_dtype: weights.dtype("norm3_weight"),
+        bias_dtype: weights.dtype("norm3_bias"))
       trace_copy(e, trace, "cross_norm", cross_norm, n)
-      MetalOps.linear(e, cross_norm, weights["cross_q_weight"], weights["cross_q_bias"], cross_q, rows, dim, dim)
-      MetalOps.linear(e, context, weights["cross_k_weight"], weights["cross_k_bias"], cross_k, ctx_rows, dim, dim)
-      MetalOps.linear(e, context, weights["cross_v_weight"], weights["cross_v_bias"], cross_v, ctx_rows, dim, dim)
+      linear(e, cross_norm, weights, "cross_q_weight", "cross_q_bias", cross_q, rows, dim, dim)
+      linear(e, context, weights, "cross_k_weight", "cross_k_bias", cross_k, ctx_rows, dim, dim)
+      linear(e, context, weights, "cross_v_weight", "cross_v_bias", cross_v, ctx_rows, dim, dim)
       trace_copy(e, trace, "cross_q", cross_q, n)
       trace_copy(e, trace, "cross_k", cross_k, ctx_rows.to_i64 * dim)
       trace_copy(e, trace, "cross_v", cross_v, ctx_rows.to_i64 * dim)
-      norm_rms(e, cross_q, weights["cross_norm_q_weight"], scratch["wan_b_zero_bias"], cross_qn, rows, dim)
-      norm_rms(e, cross_k, weights["cross_norm_k_weight"], scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
+      norm_rms(e, cross_q, weights["cross_norm_q_weight"], weights.dtype("cross_norm_q_weight"),
+        scratch["wan_b_zero_bias"], cross_qn, rows, dim)
+      norm_rms(e, cross_k, weights["cross_norm_k_weight"], weights.dtype("cross_norm_k_weight"),
+        scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
       MetalOps.attention(e, cross_qn, cross_kn, cross_v, cross_attn,
         cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches)
       trace_copy(e, trace, "cross_attention", cross_attn, n)
-      MetalOps.linear(e, cross_attn, weights["cross_o_weight"], weights["cross_o_bias"], cross_proj, rows, dim, dim)
+      linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim)
       trace_copy(e, trace, "cross_projection", cross_proj, n)
       MetalOps.add(e, self_res, cross_proj, cross_res, n.to_i32)
       trace_copy(e, trace, "cross_residual", cross_res, n)
@@ -325,15 +333,16 @@ module ML::Video
         rows, dim, EPS, affine: false)
       trace_copy(e, trace, "ffn_norm", ffn_norm, n)
       encode_modulate(e, ffn_norm, modulation, weights["block_modulation"], ffn_mod,
-        cfg, 3, 4)
+        cfg, 3, 4, weights.dtype("block_modulation"))
       trace_copy(e, trace, "ffn_mod", ffn_mod, n)
-      MetalOps.linear(e, ffn_mod, weights["ffn_in_weight"], weights["ffn_in_bias"], ffn_in, rows, dim, cfg.ffn_dim)
+      linear(e, ffn_mod, weights, "ffn_in_weight", "ffn_in_bias", ffn_in, rows, dim, cfg.ffn_dim)
       trace_copy(e, trace, "ffn_in", ffn_in, ff_count)
       MetalOps.gelu(e, ffn_in, ffn_gelu, ff_count.to_i32, approximate: true)
       trace_copy(e, trace, "ffn_gelu", ffn_gelu, ff_count)
-      MetalOps.linear(e, ffn_gelu, weights["ffn_out_weight"], weights["ffn_out_bias"], ffn_out, rows, cfg.ffn_dim, dim)
+      linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim)
       trace_copy(e, trace, "ffn_out", ffn_out, n)
-      encode_gated_residual(e, cross_res, ffn_out, modulation, weights["block_modulation"], y, cfg, 5)
+      encode_gated_residual(e, cross_res, ffn_out, modulation, weights["block_modulation"], y,
+        cfg, 5, weights.dtype("block_modulation"))
       trace_copy(e, trace, "output", y, n)
     end
 
@@ -370,23 +379,36 @@ module ML::Video
     private def self.encode_qkv(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                 q : ML::MetalBuffer, k : ML::MetalBuffer, v : ML::MetalBuffer,
                                 w : Arena, rows : Int32, dim : Int32) : Nil
-      MetalOps.linear(e, x, w["self_q_weight"], w["self_q_bias"], q, rows, dim, dim)
-      MetalOps.linear(e, x, w["self_k_weight"], w["self_k_bias"], k, rows, dim, dim)
-      MetalOps.linear(e, x, w["self_v_weight"], w["self_v_bias"], v, rows, dim, dim)
+      linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim)
+      linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim)
+      linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim)
+    end
+
+    private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
+                            weights : Arena, weight_name : String, bias_name : String,
+                            y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
+                            out_dim : Int32) : Nil
+      MetalOps.linear(e, x, weights[weight_name], weights[bias_name], y,
+        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_name),
+        bias_dtype: weights.dtype(bias_name))
     end
 
     private def self.norm_rms(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
-                              weight : ML::MetalBuffer, bias : ML::MetalBuffer,
-                              y : ML::MetalBuffer, rows : Int32, dim : Int32) : Nil
-      MetalOps.norm(e, x, weight, bias, y, rows, dim, EPS, rms: true, affine: true)
+                              weight : ML::MetalBuffer, weight_dtype : WeightDType,
+                              bias : ML::MetalBuffer, y : ML::MetalBuffer,
+                              rows : Int32, dim : Int32) : Nil
+      MetalOps.norm(e, x, weight, bias, y, rows, dim, EPS, rms: true, affine: true,
+        weight_dtype: weight_dtype)
     end
 
     private def self.encode_modulate(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                      modulation : ML::MetalBuffer, base : ML::MetalBuffer,
                                      y : ML::MetalBuffer, cfg : WanS2VConfig,
-                                     shift_field : Int32, scale_field : Int32) : Nil
+                                     shift_field : Int32, scale_field : Int32,
+                                     base_dtype : WeightDType) : Nil
       e.set_pipeline(pipeline("wan_modulate_segments"))
       e.set_buffer(x, 0).set_buffer(modulation, 1).set_buffer(base, 2)
+      e.set_buffer(base, 10).set_value(base_dtype.bf16? ? 1_u32 : 0_u32, 11)
       e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
       e.set_value(cfg.batches.to_u32, 4).set_value(cfg.seq.to_u32, 5).set_value(cfg.dim.to_u32, 6)
       e.set_value(cfg.split.to_u32, 7).set_value(shift_field.to_u32, 8).set_value(scale_field.to_u32, 9)
@@ -396,9 +418,11 @@ module ML::Video
     private def self.encode_gated_residual(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                            delta : ML::MetalBuffer, modulation : ML::MetalBuffer,
                                            base : ML::MetalBuffer, y : ML::MetalBuffer,
-                                           cfg : WanS2VConfig, gate_field : Int32) : Nil
+                                           cfg : WanS2VConfig, gate_field : Int32,
+                                           base_dtype : WeightDType) : Nil
       e.set_pipeline(pipeline("wan_segment_add"))
       e.set_buffer(x, 0).set_buffer(delta, 1).set_buffer(modulation, 2).set_buffer(base, 3)
+      e.set_buffer(base, 10).set_value(base_dtype.bf16? ? 1_u32 : 0_u32, 11)
       e.set_buffer(y, 4, ML::Metal::BufferAccess::Write)
       e.set_value(cfg.batches.to_u32, 5).set_value(cfg.seq.to_u32, 6).set_value(cfg.dim.to_u32, 7)
       e.set_value(cfg.split.to_u32, 8).set_value(gate_field.to_u32, 9)
@@ -472,37 +496,37 @@ module ML::Video
       MetalOps.check(context, ctx)
       MetalOps.distinct(y, x, modulation, positions, context)
       weight_count = dim * dim
-      MetalOps.check(weights["block_modulation"], 6_i64 * dim)
-      MetalOps.check(weights["norm3_weight"], dim)
-      MetalOps.check(weights["norm3_bias"], dim)
+      weights.check_weight("block_modulation", 6_i64 * dim)
+      weights.check_weight("norm3_weight", dim)
+      weights.check_weight("norm3_bias", dim)
       MetalOps.check(scratch["wan_b_zero_bias"], dim)
       frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       MetalOps.check(scratch[frequency_hi_name], cfg.head_dim // 2)
       MetalOps.check(scratch[frequency_lo_name], cfg.head_dim // 2)
-      MetalOps.check(weights["self_q_weight"], weight_count)
-      MetalOps.check(weights["self_q_bias"], dim)
-      MetalOps.check(weights["self_k_weight"], weight_count)
-      MetalOps.check(weights["self_k_bias"], dim)
-      MetalOps.check(weights["self_v_weight"], weight_count)
-      MetalOps.check(weights["self_v_bias"], dim)
-      MetalOps.check(weights["self_o_weight"], weight_count)
-      MetalOps.check(weights["self_o_bias"], dim)
-      MetalOps.check(weights["self_norm_q_weight"], dim)
-      MetalOps.check(weights["self_norm_k_weight"], dim)
-      MetalOps.check(weights["cross_q_weight"], weight_count)
-      MetalOps.check(weights["cross_q_bias"], dim)
-      MetalOps.check(weights["cross_k_weight"], weight_count)
-      MetalOps.check(weights["cross_k_bias"], dim)
-      MetalOps.check(weights["cross_v_weight"], weight_count)
-      MetalOps.check(weights["cross_v_bias"], dim)
-      MetalOps.check(weights["cross_o_weight"], weight_count)
-      MetalOps.check(weights["cross_o_bias"], dim)
-      MetalOps.check(weights["cross_norm_q_weight"], dim)
-      MetalOps.check(weights["cross_norm_k_weight"], dim)
-      MetalOps.check(weights["ffn_in_weight"], cfg.ffn_dim.to_i64 * dim)
-      MetalOps.check(weights["ffn_in_bias"], cfg.ffn_dim.to_i64)
-      MetalOps.check(weights["ffn_out_weight"], dim * cfg.ffn_dim)
-      MetalOps.check(weights["ffn_out_bias"], dim)
+      weights.check_weight("self_q_weight", weight_count)
+      weights.check_weight("self_q_bias", dim)
+      weights.check_weight("self_k_weight", weight_count)
+      weights.check_weight("self_k_bias", dim)
+      weights.check_weight("self_v_weight", weight_count)
+      weights.check_weight("self_v_bias", dim)
+      weights.check_weight("self_o_weight", weight_count)
+      weights.check_weight("self_o_bias", dim)
+      weights.check_weight("self_norm_q_weight", dim)
+      weights.check_weight("self_norm_k_weight", dim)
+      weights.check_weight("cross_q_weight", weight_count)
+      weights.check_weight("cross_q_bias", dim)
+      weights.check_weight("cross_k_weight", weight_count)
+      weights.check_weight("cross_k_bias", dim)
+      weights.check_weight("cross_v_weight", weight_count)
+      weights.check_weight("cross_v_bias", dim)
+      weights.check_weight("cross_o_weight", weight_count)
+      weights.check_weight("cross_o_bias", dim)
+      weights.check_weight("cross_norm_q_weight", dim)
+      weights.check_weight("cross_norm_k_weight", dim)
+      weights.check_weight("ffn_in_weight", cfg.ffn_dim.to_i64 * dim)
+      weights.check_weight("ffn_in_bias", cfg.ffn_dim.to_i64)
+      weights.check_weight("ffn_out_weight", dim * cfg.ffn_dim)
+      weights.check_weight("ffn_out_bias", dim)
       MetalOps.check(scratch["wan_b_norm1"], n)
       MetalOps.check(scratch["wan_b_mod1"], n)
       MetalOps.check(scratch["wan_b_self_q"], n)
@@ -605,6 +629,7 @@ module ML::Video
     end
 
     def self.prepare! : Nil
+      MetalOps.prepare!
       {"wan_audio_gather", "wan_audio_silu", "wan_audio_adain", "wan_audio_scatter"}.each do |name|
         pipeline(name)
       end
@@ -676,7 +701,7 @@ module ML::Video
       e.set_value(global_count.to_u32, 2)
       e.dispatch_1d(global_count.to_i32)
       trace_copy(e, trace, "global_silu", global_silu, global_count)
-      MetalOps.linear(e, global_silu, weights["adain_weight"], weights["adain_bias"],
+      linear(e, global_silu, weights, "adain_weight", "adain_bias",
         adain_proj, cfg.frame_rows, cfg.dim, 2 * cfg.dim)
       trace_copy(e, trace, "adain_projection", adain_proj, cfg.frame_rows.to_i64 * 2 * cfg.dim)
       e.set_pipeline(pipeline("wan_audio_adain"))
@@ -686,23 +711,25 @@ module ML::Video
       e.dispatch_1d(video_count.to_i32)
       trace_copy(e, trace, "adain_video", adain, video_count)
 
-      MetalOps.linear(e, adain, weights["audio_q_weight"], weights["audio_q_bias"], q,
+      linear(e, adain, weights, "audio_q_weight", "audio_q_bias", q,
         cfg.gathered_rows, cfg.dim, cfg.dim)
-      MetalOps.linear(e, local_audio, weights["audio_k_weight"], weights["audio_k_bias"], k,
+      linear(e, local_audio, weights, "audio_k_weight", "audio_k_bias", k,
         cfg.audio_rows, cfg.dim, cfg.dim)
-      MetalOps.linear(e, local_audio, weights["audio_v_weight"], weights["audio_v_bias"], v,
+      linear(e, local_audio, weights, "audio_v_weight", "audio_v_bias", v,
         cfg.audio_rows, cfg.dim, cfg.dim)
       trace_copy(e, trace, "audio_q", q, video_count)
       trace_copy(e, trace, "audio_k", k, audio_count)
       trace_copy(e, trace, "audio_v", v, audio_count)
       MetalOps.norm(e, q, weights["audio_q_norm_weight"], scratch["wan_a_zero_bias"], qn,
-        cfg.gathered_rows, cfg.dim, EPS, rms: true, affine: true)
+        cfg.gathered_rows, cfg.dim, EPS, rms: true, affine: true,
+        weight_dtype: weights.dtype("audio_q_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
       MetalOps.norm(e, k, weights["audio_k_norm_weight"], scratch["wan_a_zero_bias"], kn,
-        cfg.audio_rows, cfg.dim, EPS, rms: true, affine: true)
+        cfg.audio_rows, cfg.dim, EPS, rms: true, affine: true,
+        weight_dtype: weights.dtype("audio_k_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
       MetalOps.attention(e, qn, kn, v, attn, cfg.spatial_tokens, cfg.audio_tokens,
         cfg.heads, cfg.head_dim, cfg.frame_rows)
       trace_copy(e, trace, "audio_attention", attn, video_count)
-      MetalOps.linear(e, attn, weights["audio_o_weight"], weights["audio_o_bias"], proj,
+      linear(e, attn, weights, "audio_o_weight", "audio_o_bias", proj,
         cfg.gathered_rows, cfg.dim, cfg.dim)
       trace_copy(e, trace, "audio_projection", proj, video_count)
       e.set_pipeline(pipeline("wan_audio_scatter"))
@@ -711,6 +738,15 @@ module ML::Video
       e.set_value(cfg.video_tokens.to_u32, 5).set_value(cfg.dim.to_u32, 6)
       e.dispatch_1d(all_count)
       trace_copy(e, trace, "audio_output", y, all_count.to_i64)
+    end
+
+    private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
+                            weights : Arena, weight_name : String, bias_name : String,
+                            y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
+                            out_dim : Int32) : Nil
+      MetalOps.linear(e, x, weights[weight_name], weights[bias_name], y,
+        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_name),
+        bias_dtype: weights.dtype(bias_name))
     end
 
     private def self.trace_copy(e : ML::Metal::ComputeEncoder,
@@ -744,7 +780,7 @@ module ML::Video
         {"audio_v_weight", dim * dim}, {"audio_v_bias", dim},
         {"audio_o_weight", dim * dim}, {"audio_o_bias", dim},
         {"audio_q_norm_weight", dim}, {"audio_k_norm_weight", dim},
-      }.each { |name, count| MetalOps.check(weights[name], count) }
+      }.each { |name, count| weights.check_weight(name, count) }
       MetalOps.check(scratch["wan_a_zero_bias"], dim)
       {
         {"wan_a_gather", gathered}, {"wan_a_norm", gathered},

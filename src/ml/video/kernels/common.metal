@@ -25,6 +25,45 @@ kernel void video_linear_f32(
     y[id] = ((a + b) + (c + d)) + bias[col];
 }
 
+inline float video_bf16_to_float(ushort value) {
+    return as_type<float>(uint(value) << 16);
+}
+
+// Mixed resident-weight consumer. The F32/F32 case stays on video_linear_f32;
+// these typed views allow BF16 weights and bias independently without changing
+// the F32 activation, accumulator, reduction tree, or final bias addition.
+kernel void video_linear_mixed(
+    device const float *x [[buffer(0)]], device const ushort *w16 [[buffer(1)]],
+    device const ushort *bias16 [[buffer(2)]], device float *y [[buffer(3)]],
+    constant uint &rows [[buffer(4)]], constant uint &din [[buffer(5)]],
+    constant uint &dout [[buffer(6)]], device const float *w32 [[buffer(7)]],
+    device const float *bias32 [[buffer(8)]], constant uint &weight_bf16 [[buffer(9)]],
+    constant uint &bias_bf16 [[buffer(10)]], uint id [[thread_position_in_grid]]) {
+    if (id >= rows * dout) return;
+    const uint row = id / dout, col = id % dout;
+    float sums[16] = {0.0f};
+    uint i = 0;
+    for (; i + 15 < din; i += 16) {
+        #pragma unroll
+        for (uint j = 0; j < 16; ++j) {
+            const uint index = col * din + i + j;
+            const float weight = weight_bf16 ? video_bf16_to_float(w16[index]) : w32[index];
+            sums[j] = fma(x[row * din + i + j], weight, sums[j]);
+        }
+    }
+    for (; i < din; ++i) {
+        const uint index = col * din + i;
+        const float weight = weight_bf16 ? video_bf16_to_float(w16[index]) : w32[index];
+        sums[0] = fma(x[row * din + i], weight, sums[0]);
+    }
+    const float a = (sums[0] + sums[1]) + (sums[2] + sums[3]);
+    const float b = (sums[4] + sums[5]) + (sums[6] + sums[7]);
+    const float c = (sums[8] + sums[9]) + (sums[10] + sums[11]);
+    const float d = (sums[12] + sums[13]) + (sums[14] + sums[15]);
+    const float offset = bias_bf16 ? video_bf16_to_float(bias16[col]) : bias32[col];
+    y[id] = ((a + b) + (c + d)) + offset;
+}
+
 kernel void video_norm_f32(
     device const float *x [[buffer(0)]], device const float *weight [[buffer(1)]],
     device const float *bias [[buffer(2)]], device float *y [[buffer(3)]],
@@ -63,6 +102,55 @@ kernel void video_norm_f32(
     for (uint d = tid; d < dim; d += threads) {
         float z = (x[row * dim + d] - mean) * inverse;
         y[row * dim + d] = affine ? z * weight[d] + bias[d] : z;
+    }
+}
+
+kernel void video_norm_mixed(
+    device const float *x [[buffer(0)]], device const ushort *weight16 [[buffer(1)]],
+    device const ushort *bias16 [[buffer(2)]], device float *y [[buffer(3)]],
+    constant uint &dim [[buffer(4)]], constant float &eps [[buffer(5)]],
+    constant uint &rms [[buffer(6)]], constant uint &affine [[buffer(7)]],
+    device const float *weight32 [[buffer(8)]], device const float *bias32 [[buffer(9)]],
+    constant uint &weight_bf16 [[buffer(10)]], constant uint &bias_bf16 [[buffer(11)]],
+    uint row [[threadgroup_position_in_grid]], uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]], uint sg [[simdgroup_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]]) {
+    threadgroup float partials[8];
+    threadgroup float mean, inverse;
+    float sum = 0.0f;
+    if (!rms) for (uint d = tid; d < dim; d += threads) sum += x[row * dim + d];
+    float reduced = simd_sum(sum);
+    if (lane == 0) partials[sg] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        float total = 0.0f;
+        for (uint i = 0; i < threads / 32; ++i) total += partials[i];
+        mean = total / float(dim);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    sum = 0.0f;
+    for (uint d = tid; d < dim; d += threads) {
+        const float z = x[row * dim + d] - mean;
+        sum += z * z;
+    }
+    reduced = simd_sum(sum);
+    if (lane == 0) partials[sg] = reduced;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0) {
+        float total = 0.0f;
+        for (uint i = 0; i < threads / 32; ++i) total += partials[i];
+        inverse = rsqrt(total / float(dim) + eps);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint d = tid; d < dim; d += threads) {
+        float z = (x[row * dim + d] - mean) * inverse;
+        if (affine) {
+            const float scale = weight_bf16 ? video_bf16_to_float(weight16[d]) : weight32[d];
+            const float offset = bias_bf16 ? video_bf16_to_float(bias16[d]) : bias32[d];
+            y[row * dim + d] = z * scale + offset;
+        } else {
+            y[row * dim + d] = z;
+        }
     }
 }
 

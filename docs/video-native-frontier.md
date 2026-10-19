@@ -1,7 +1,7 @@
 # Native speech-to-video frontier
 
-Status: IN_PROGRESS; resident block and scoped weight-loading gates pass, while
-complete video generation remains open.
+Status: IN_PROGRESS; resident block gates and complete Wan BF16 transformer-weight
+residency pass, while complete video generation remains open.
 
 ## Scope and source anchors
 
@@ -19,17 +19,22 @@ has been measured.
 - LTX checkpoint access was tested at `Lightricks/LTX-2.5` revision
   `49b093a39c19169a8a81721dcc541e07e945232f` and
   `Lightricks/LTX-2.5-Diffusers` revision
-  `da0b690960026eab794b8ceaf841233cf7064478`. Official config/weight access
-  returned HTTP 403 for the current account. Actual LTX checkpoint configuration
-  and tensor metadata are not admitted by the synthetic probes below.
+  `da0b690960026eab794b8ceaf841233cf7064478`. After acceptance of the terms,
+  authenticated access to the primary repository's
+  `diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors` succeeds
+  (42,018,190,584 bytes). The Diffusers config still returned HTTP 403.
+  This is an access/size check, not a download or admission of actual LTX
+  checkpoint configuration, tensor metadata, or real-weight parity.
 
 ## Admitted block boundary
 
-All admitted block neural math uses F32 Metal kernels and resident buffers.
-Weight byte I/O and preparation of fixed constants occur at setup. A caller-owned
-serial encoder can perform weight conversion, a block, a chained block, and
-scratch reuse before one terminal completion/read phase. No block/loader encode
-method submits, waits, downloads activations, or allocates a Metal buffer.
+All admitted block neural math uses F32 Metal arithmetic and resident buffers.
+Wan parameters may remain in original BF16 storage; consumers expand operands
+to F32 on GPU. Weight byte I/O and preparation of fixed constants occur at setup.
+A caller-owned serial encoder can perform weight conversion, a block, a chained
+block, and scratch reuse before one terminal completion/read phase. No
+block/loader encode method submits, waits, downloads activations, or allocates
+a Metal buffer.
 Cumulative allocation guards cover temporary as well as retained GPU buffers;
 they make no zero-host-allocation or GC claim.
 
@@ -66,44 +71,95 @@ in F32. This certifies the stated F32 path, not CUDA flash or native BF16 math.
 
 ## Scoped checkpoint loading
 
+### Original BF16 storage with F32 accumulation
+
+`WeightPlan` accepts `resident_dtype: WeightDType::BF16`; its default remains F32.
+Native BF16 mode admits only original BF16 sources and copies their raw bytes
+directly into final Metal buffers at setup, with zero staging bytes and no F32
+parameter mirror. F32/F16 inputs are rejected rather than silently quantized.
+Activations, normalization arithmetic, the 16-FMA-lane projection reduction,
+and outputs remain F32. Every learned Wan parameter is typed, including biases,
+norm coefficients and modulation tables. All pipelines are prepared at setup.
+
+The official 39-tensor Wan fixture passes all 35 upstream checkpoints in both
+storage modes. A separate comparison of 38 captured native arrays, including
+scratch reuse and resident chaining, finds all 817,152 F32 values bit-identical
+between BF16 storage and F32-expanded weights. Chained outputs in this comparison
+are native-versus-native controls, not an additional upstream layer oracle.
+The original F32 Wan and LTX fixture matrix also passes unchanged tolerances.
+Mixed linear/norm regressions cover all weight/bias dtype pairs, reduction tails
+and cancellation at widths 15/16/17/31/32/33, aliases and invalid lifetimes.
+
 `src/ml/video/checkpoint.cr` reads bounded safetensors headers without mapping a
 whole shard or using the engine's CPU dequantizer. It rejects duplicate keys,
 unknown tensor fields, unsupported dtypes, invalid shapes, overlapping/missing
 payload ranges, changed files, missing/duplicate bindings and over-budget plans
 before GPU allocation. Exposed descriptors/plans are defensive snapshots.
 
-Supported source dtypes are BF16, F16 and F32. Setup copies selected raw bytes
-into GPU-visible staging; `weight_decode.metal` converts them into resident F32
-destinations in the caller's encoder. Raw staging and destination buffers must
-outlive command completion. The caller releases staging afterward; Arena owns
-the F32 destinations. File identity/size/mtime checks assume immutable local
-files and are not an adversarial cryptographic file-locking guarantee.
+In default F32 mode, supported source dtypes are BF16, F16 and F32. Setup copies
+selected raw bytes into GPU-visible staging; `weight_decode.metal` converts them
+into resident F32 destinations in the caller's encoder. Raw staging and
+destinations must outlive command completion. The caller releases staging
+afterward; Arena owns destinations in either mode. BF16 encode validates
+lifetimes/identities and emits no conversion dispatch. File identity/size/mtime
+checks assume immutable local files and are not an adversarial cryptographic
+file-locking guarantee.
 
-The explicit plan includes raw staging, F32 destinations and caller-reserved
-other residency. PreparedWeights checks existing buffers in its supplied Arena
-against that reserve. It does not independently enumerate all other arenas or
-system processes; total residency remains a caller contract with run-time guards.
+The explicit plan includes staging, typed destinations and caller-reserved
+other residency. `require_all: true` additionally rejects missing or multiply
+bound source tensors. PreparedWeights checks existing buffers in its supplied
+Arena against the reserve, including typed allocations whose public-map entries
+were replaced or deleted. It rejects reused names before allocating staging.
+Typed identity checks prevent consumers from interpreting a replacement with
+stale dtype metadata; removal/release frees both current and original buffers.
+Rollback restores allocation counts/bytes while preserving caller buffers.
+It does not independently enumerate all other arenas or system processes;
+total residency remains a caller contract with run-time guards.
 
-- Official Wan subset: 1,017,443,328 raw tensor bytes and 2,034,886,656 F32
-  destination bytes. With 1 GiB reserve the plan fits its 8 GiB budget. Only
-  selected ranges from three official shards were fetched, not the whole model.
+- Official Wan subset: 1,017,443,328 raw tensor bytes. Native BF16 uses exactly
+  that many destination bytes with zero staging; default F32 uses 2,034,886,656
+  destination bytes plus raw staging. Both storage modes pass the same oracle.
 - LTX builder-width synthetic subset: 1,546,306,304 bytes each for raw staging
   and F32 destinations. Including 1 GiB reserve gives 4,166,354,432 planned bytes
   under the 4 GiB budget. This is accounting, not an observed physical peak.
-- Wan's full checkpoint index declares 32,591,511,218 weight bytes. Assuming
-  all indexed weights are BF16 (only three selected shard headers were inspected,
-  all BF16), expansion implies about 65.18 GB of F32 destinations, above the
-  memory left after the required 15% floor on this 64 GiB host. This is an
-  estimate, not a full-shard residency measurement. Whole-model startup remains
-  unadmitted; native lower-precision kernels or a separately qualified residency
-  strategy are needed first.
+- All four pinned Wan shard headers match the complete index: 1260 BF16 tensors,
+  exactly 32,591,511,218 bytes (30.35 GiB). F32 expansion would require twice
+  those destination bytes, before staging/activations/encoders.
 
-The loader passed 10 examples, including all three GPU conversions followed by
-projection in one encoder, repeated encoding without new GPU allocations, and
-malformed/mutable/over-budget negative cases. The Wan fixture additionally pins
-the exact 39 source/target/shape/dtype mappings and the selected BF16 payload SHA.
+The current loader passed 18 examples, including all three GPU conversions
+followed by projection in one encoder, repeated encoding without new GPU
+allocations, and malformed/mutable/over-budget/lifetime/rollback negative cases.
+Common primitives passed 17 examples. The Wan fixture additionally pins the exact 39
+source/target/shape/dtype mappings and the selected BF16 payload SHA.
 LTX bindings currently describe an upstream block state_dict; actual checkpoint
 shard prefixes, dtypes and flags require authorized metadata/weight access.
+
+### Complete Wan transformer-weight residency probe
+
+`examples/wan_s2v_weight_residency.cr` independently checks all four pinned
+headers/index coverage, loads all 1260 tensors simultaneously into live Metal
+destinations, and scans every BF16 word on GPU. The bounded M2 Max run passed:
+
+| Signal | Observed value |
+| --- | --- |
+| Requested live weight buffers/bytes | 1260 / 32,591,511,218 |
+| Raw staging / F32 parameter mirror | 0 / 0 bytes |
+| Device allocation delta after loading | 32,592,494,592 bytes |
+| Admission budget / other-residency reserve | 35 GiB / 2 GiB |
+| Admission / minimum sampled free-memory percentage | 80% / 30% |
+| Configured stop floor | 15% |
+| Setup / whole probe elapsed | 34.88 s / 50.05 s |
+| GPU scan / non-finite weights | 62,930 chunks / 0 |
+
+Setup copies checkpoint bytes; the scan uses one caller-owned serial encoder
+and one terminal completion/read of 503,440 diagnostic bytes. Those operations
+are not generation timings. System free-memory and tree RSS were sampled about
+every 0.5 seconds; the observed minimum is not a continuous minimum or physical
+GPU-memory peak. UMA RSS and Metal bytes must not be added as independent usage.
+The scan-output SHA hashes modular chunk checksums, not the raw shard payloads;
+header pins and the HF download receipt do not attest full-payload identity.
+This establishes live GPU storage/readability of the diffusion-transformer
+weights, not whole S2V inference or a complete T5/VAE/audio memory budget.
 
 ## Numerical falsifiers and repairs
 
@@ -165,7 +221,7 @@ export PYTHONDONTWRITEBYTECODE=1 PYTORCH_ENABLE_MPS_FALLBACK=0
 export COGNI_RUN_SAFE_MIN_FREE_PCT=15
 make BUILD_DIR="$video_tmp/build" "$video_tmp/build/bridge.o"
 for unit in video_metal_ops video_checkpoint wan_s2v_block ltx2_block; do
-  crystal build "spec/${unit}_spec.cr" -o "$video_tmp/build/${unit}_spec" \
+  scripts/run_safe.sh crystal 180 4096 build "spec/${unit}_spec.cr" -o "$video_tmp/build/${unit}_spec" \
     --link-flags="$video_tmp/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld"
 done
 ```
@@ -198,7 +254,7 @@ scripts/run_safe.sh "$video_tmp/build/wan_s2v_block_spec" 180 8192 --verbose
 scripts/run_safe.sh "$video_tmp/build/ltx2_block_spec" 180 8192 --verbose
 ```
 
-Expected: respectively 10/10/6/2 examples, zero failures, errors or pending cases,
+Expected: respectively 17/18/6/2 examples, zero failures, errors or pending cases,
 all named values finite and within the fixed gate, unchanged cumulative GPU
 allocations during encode, and chaining without an intermediate host wait/read.
 Reduced gates are regenerated without `--production-width`; LTX additionally
@@ -207,29 +263,52 @@ uses neither gate, `--gated-attention`, `--video-gated-attention`, and
 three. Missing fixture environment variables produce pending oracle tests;
 pending results are not parity passes.
 
+Repeat the official Wan fixture with `WAN_S2V_WEIGHT_DTYPE=bf16` and `f32`;
+`WAN_S2V_SNAPSHOT_DUMP` writes the 38 native arrays used for the F32-bit comparison.
+BF16 mode requires the actual BF16 sidecar and rejects a synthetic F32 fixture.
+To reproduce the separate complete-weight probe after downloading all four
+pinned official shards and their index into `$video_tmp/checkpoints/wan`:
+
+```sh
+scripts/run_safe.sh crystal 180 4096 build examples/wan_s2v_weight_residency.cr \
+  -o "$video_tmp/build/wan_s2v_weight_residency" \
+  --link-flags="$video_tmp/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld"
+scripts/run_safe.sh "$video_tmp/build/wan_s2v_weight_residency" 240 40960 \
+  "$video_tmp/checkpoints/wan" 35840 2048
+```
+
 All GPU runs are serial under run_safe: configured 15% free-system-memory floor,
-finite deadlines and tree-RSS caps. Logs establish configured guards and successful
-runs, not an observed minimum free-memory percentage or physical peak. No full
+finite deadlines and tree-RSS caps. Only the complete-weight probe additionally
+records sampled system headroom/RSS; block logs establish configured guards and
+successful runs, not observed minima or physical peaks. No complete inference
 model, Studio or service was started. Diagnostic snapshots and terminal reads
 are probe overhead, not generation timings.
 
 ## Evidence, review and remaining frontier
 
-The current private index is
-`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/production-block-gates.json`.
-SHA256: `a4582e1834743252f27056fdd989508e24ade38f29c745d0109fbbdc8902501c`.
-It pins native/oracle source, binaries, fixture/weight payloads, command receipts,
-red discriminators and final logs. It is a curated evidence index, not a
-transitive reproducible-build attestation. The preceding reduced milestone is
-retained separately in `evidence/final-block-gates.json` (SHA256
+The current private receipts are under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-bf16/`:
+the final-source fixture matrix, post-review lifetime tests, BF16/F32 bit
+comparison, and the separate full-residency report. The curated index is
+`evidence/wan-bf16/qualification.json` (SHA256
+`67e48510835e6fc9425d99d53c692f8cc2f110c1037d390b5a61e36419bf2e17`);
+it pins native/oracle source, binaries, fixtures, receipts and logs.
+It is not a transitive reproducible-build or
+full-shard cryptographic attestation. The preceding F32 production milestone
+is retained in `evidence/production-block-gates.json` (SHA256
+`a4582e1834743252f27056fdd989508e24ade38f29c745d0109fbbdc8902501c`),
+and the reduced milestone in `evidence/final-block-gates.json` (SHA256
 `40be04204a58d9b00e3b1f7f2f6a838a56000ff807c7145877fe5dd675d3279c`).
 Correlated mini-Quadrumvirate review returned ROBUST for the exercised parser,
-conversion, block/gate configurations, reduction tails, and caller-owned encoder
-contracts. It does not admit the following open capabilities:
+typed storage/conversion, block/gate configurations, reduction tails, mutable-map
+ownership/budget guards and caller-owned encoder contracts. It does not admit
+the following open capabilities:
 
-- Authorized actual LTX config/weights, prefixes/dtypes and real-weight parity.
-- Remaining distinct transformer layers and whole-request resource accounting;
-  native lower-precision kernels require a separate accuracy gate.
+- Actual LTX checkpoint config, prefixes/dtypes and real-weight parity; primary
+  download access is now confirmed, while the Diffusers config remains blocked.
+- Remaining distinct transformer layers, long-sequence/model accumulation and
+  whole-request resource accounting. BF16 weight residency alone does not
+  establish full-pipeline capacity or arithmetic in BF16.
 - Native text/audio/image conditioning and dynamic embeddings, motion packing,
   per-example masks/lengths, both video VAEs and complete denoising/scheduling.
 - Full 5–10 second output, lip sync, accumulated quality and controlled end-to-end
