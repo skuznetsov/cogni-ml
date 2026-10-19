@@ -155,6 +155,29 @@ kernel void drama3_tower_append_kv(
   value_cache[destination] = value[i];
 }
 
+kernel void drama3_tower_relocate_kv(
+    device const float *old_key_cache [[buffer(0)]],
+    device const float *old_value_cache [[buffer(1)]],
+    device float *new_key_cache [[buffer(2)]],
+    device float *new_value_cache [[buffer(3)]],
+    constant ulong *p [[buffer(4)]],
+    uint i [[thread_position_in_grid]]) {
+  const uint heads = uint(p[0]);
+  const uint head_dim = uint(p[1]);
+  const uint old_capacity = uint(p[2]);
+  const uint new_capacity = uint(p[3]);
+  const uint length = uint(p[4]);
+  const uint count = heads * length * head_dim;
+  if (i >= count) return;
+  const uint head = i / (length * head_dim);
+  const uint time = (i / head_dim) % length;
+  const uint dimension = i % head_dim;
+  const uint old_index = (head * old_capacity + time) * head_dim + dimension;
+  const uint new_index = (head * new_capacity + time) * head_dim + dimension;
+  new_key_cache[new_index] = old_key_cache[old_index];
+  new_value_cache[new_index] = old_value_cache[old_index];
+}
+
 kernel void drama3_tower_compact_cache(
     device const float *cache [[buffer(0)]],
     device float *output [[buffer(1)]],

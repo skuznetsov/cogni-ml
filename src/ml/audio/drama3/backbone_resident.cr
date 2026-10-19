@@ -9,6 +9,7 @@ module ML::Audio::Drama3
     SOURCE = {{ read_file("#{__DIR__}/kernels/backbone_resident.metal") }}
     MAX_CAPACITY = 4096
     getter config : BackboneConfig, position = 0
+    getter capacity : Int32, maximum_capacity : Int32
     property trace : Proc(String, Vector, Nil)?
     property buffer_trace : Proc(String, Resident::Buffer, Nil)?
     # Device-only diagnostic observers. They are nil on the ordinary inference
@@ -20,6 +21,7 @@ module ML::Audio::Drama3
     @keys : Array(Resident::Buffer?)
     @values : Array(Resident::Buffer?)
     @full_attention_scores : Resident::Buffer?
+    @wide_attention : Bool
     @conv : Array(Resident::Buffer?)
     @delta : Array(Resident::Buffer?)
     @delta_kernel : String
@@ -30,8 +32,15 @@ module ML::Audio::Drama3
     getter expert_down_reduction : String
     getter batch_experts : Bool
 
-    def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
-      raise ArgumentError.new("resident backbone capacity must be 1..#{MAX_CAPACITY}") unless @capacity.in?(1..MAX_CAPACITY)
+    def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context,
+                   capacity : Int32, maximum_capacity : Int32 = capacity)
+      raise ArgumentError.new("resident backbone capacity must be 1..#{MAX_CAPACITY}") unless capacity.in?(1..MAX_CAPACITY)
+      raise ArgumentError.new("resident backbone maximum capacity must be #{capacity}..#{MAX_CAPACITY}") unless maximum_capacity.in?(capacity..MAX_CAPACITY)
+      @capacity = capacity
+      @maximum_capacity = maximum_capacity
+      # Keep reduction order stable for the request even when its backing grows
+      # through the 1024-token threshold.
+      @wide_attention = @maximum_capacity > 1024
       raise ArgumentError.new("resident router supports at most 512 experts") unless @config.experts <= 512
       layout = ENV["DRAMA3_DELTA_TRANSPOSE"]? || "1"
       raise ArgumentError.new("DRAMA3_DELTA_TRANSPOSE must be 0 or 1") unless layout.in?("0", "1")
@@ -64,21 +73,64 @@ module ML::Audio::Drama3
       @moe_trace_auxiliary = false
       @diagnostic_layer = nil
       @ones = @ctx.upload(Array(Float32).new(@config.key_dim, 1_f32))
-      if @capacity > 1024 && @config.layers >= @config.full_interval
+      if @wide_attention && @config.layers >= @config.full_interval
         score_count = checked_buffer_count("full-attention score scratch", [@capacity, @config.heads])
-        @full_attention_scores = @ctx.alloc(score_count)
+        @full_attention_scores = @ctx.alloc_persistent(score_count)
       end
       @config.layers.times do |i|
         if (i + 1) % @config.full_interval == 0
           cache_count = checked_buffer_count("full-attention KV cache", [@capacity, @config.kv_heads, @config.head_dim])
-          @keys[i] = @ctx.alloc(cache_count)
-          @values[i] = @ctx.alloc(cache_count)
+          @keys[i] = @ctx.alloc_persistent(cache_count)
+          @values[i] = @ctx.alloc_persistent(cache_count)
         else
           width = 2 * @config.key_heads * @config.key_dim + @config.value_heads * @config.value_dim
           @conv[i] = @ctx.zeros(width * @config.conv_kernel)
           @delta[i] = @ctx.zeros(@config.value_heads * @config.value_dim * @config.key_dim)
         end
       end
+    end
+
+    # Grow only the full-attention backing. Recurrent convolution/delta state
+    # has fixed shape and survives unchanged. All new storage is allocated
+    # before any prefix copy is queued, then the new backing becomes visible
+    # only after every copy has been encoded.
+    def grow_capacity!(new_capacity : Int32) : Nil
+      raise ArgumentError.new("resident backbone growth must increase capacity") unless new_capacity > @capacity
+      raise ArgumentError.new("resident backbone growth exceeds maximum capacity") unless new_capacity <= @maximum_capacity
+
+      replacement_keys = Array(Resident::Buffer?).new(@config.layers, nil)
+      replacement_values = Array(Resident::Buffer?).new(@config.layers, nil)
+      key_copies = [] of Tuple(Resident::Buffer, Resident::Buffer)
+      value_copies = [] of Tuple(Resident::Buffer, Resident::Buffer)
+      cache_count = checked_buffer_count("full-attention KV cache", [new_capacity, @config.kv_heads, @config.head_dim])
+      prefix_count = @position > 0 ? checked_buffer_count("full-attention KV prefix", [@position, @config.kv_heads, @config.head_dim]) : 0
+
+      @config.layers.times do |i|
+        next unless (i + 1) % @config.full_interval == 0
+        old_keys = @keys[i].not_nil!
+        old_values = @values[i].not_nil!
+        new_keys = @ctx.alloc_persistent(cache_count)
+        new_values = @ctx.alloc_persistent(cache_count)
+        replacement_keys[i] = new_keys
+        replacement_values[i] = new_values
+        if prefix_count > 0
+          key_copies << {old_keys.slice(0, prefix_count), new_keys.slice(0, prefix_count)}
+          value_copies << {old_values.slice(0, prefix_count), new_values.slice(0, prefix_count)}
+        end
+      end
+
+      replacement_scores = if @wide_attention && @config.layers >= @config.full_interval
+                             @ctx.alloc_persistent(checked_buffer_count("full-attention score scratch", [new_capacity, @config.heads]))
+                           else
+                             nil
+                           end
+
+      key_copies.each { |source, target| @ctx.copy(source, target) }
+      value_copies.each { |source, target| @ctx.copy(source, target) }
+      @keys = replacement_keys
+      @values = replacement_values
+      @full_attention_scores = replacement_scores
+      @capacity = new_capacity
     end
 
     def diagnostic_layer=(layer : Int32?) : Int32?
@@ -310,7 +362,7 @@ module ML::Audio::Drama3
       @ctx.copy(v, values.slice(position * v.count, v.count))
       output = @ctx.alloc(q.count)
       enc = @ctx.encoder
-      wide = @capacity > 1024
+      wide = @wide_attention
       kernel = wide ? "dr3_full_attention_wide" : "dr3_full_attention"
       enc.set_pipeline(@ctx.pipeline(kernel, SOURCE))
       [q, keys, values, gate, output].each_with_index { |b, i| enc.set_buffer(b.buffer, i, offset: b.offset) }

@@ -30444,3 +30444,56 @@ Refresh after source/toolchain/device/model/workload changes.
   allocator/graph policy, runtime/device/driver or concurrent workload change.
   This batch is finished; Studio and models remain stopped. No background
   service or push was authorized by this check.
+
+### 2026-10-18 — DRAMA resident KV growth during generation
+
+- The user parked the 149632-byte post-GC residual and prioritized expanding
+  the window during generation. This supersedes the previous growth exclusion;
+  the residual remains unresolved. Studio's optional automatic mode now plans
+  a final frame/position bound, starts at min(final, max(prompt, 64)), and doubles
+  persistent KV buffers as needed up to the admitted bound (at most 4096 total
+  positions). Manual allocation remains the default; auto still requires
+  DRAMA3_DAC_SCRATCH=1 and no reference. EOS determines duration, not text length.
+- Backbone token-major and tower head-major valid prefixes move directly on
+  the GPU. Attention reduction choice is pinned from the final bound, including
+  crossing 1024/1025. Growth occurs after the existing non-EOS scalar read,
+  without additional submit/wait, activation readback or inference-time GC.
+  Persistent allocations bypass the workspace; command leases retain old
+  buffers through copies. Output storage and sampler inputs stay fixed.
+- Admission reserves the conservative cold inventory, downstream DAC memory
+  and all prior KV generations. Studio rechecks host, Metal, process and
+  per-buffer limits before replacement allocations, with the same 15% floor
+  and 40GiB observed budget. Rejection allocates no replacement; allocation or
+  copy failure aborts the single-use generator. These are sampled guards, not
+  a hard physical reservation. Low-level callers own equivalent budget policy.
+- All 49 CPU examples, 17 JS tests, seven generator and five cache Metal
+  examples, native build and formatting/syntax checks passed. Multiple small
+  expansions, EOS/final-frame bounds, head-major strides and synthetic-prefix
+  wide attention at 1024/1025 were checked at graph depths 0 and 2. The three-row
+  pinned diagnostic compared 243 backbone boundaries per arm / 729 comparisons:
+  dynamic 1 -> 2 -> 4 is bit-identical to fixed8, with identical upstream metrics.
+  Strict upstream parity remains red at row1 backbone.layers.39.hidden; no
+  precision or tolerance change was made.
+- Full HTTP pilots completed auto64 -> 128 plus three fixed540 requests at
+  each graph depth, one worker per serial pilot. All eight had identical native
+  codes/WAV/tape, 60 frames and EOS. A fresh same-cap512 pinned MLX F32 core
+  control matched every code frame and EOS. Reads stayed control496/terminal494160;
+  submitted/completed/waits were 182 at depth0 and 122 at depth2, equal within
+  each pair, with pending0. Minimum sampled free memory 20.3375% / 20.2565%,
+  maximum sampled Metal 27052982272 / 27066695680 bytes. Contending model workers
+  rejected before loading; both pilots cleaned up normally, no owned children
+  or listeners left. No speed, general voice-quality or zero-retention claim.
+- Earlier depth2 cap512 and cap128 attempts rejected before growth allocation
+  and before generation respectively. Failure receipts omit numeric admission
+  values, so the exact causes remain open; the final same-binary cap512 recheck
+  passed without weakening guards. Correlated review: ROBUST for the tested
+  guarded no-reference Studio path. Full4096 model generation and automatic
+  reference windows remain unverified.
+- Evidence: .landmark/evidence/drama3-window-growth.json and
+  docs/drama3-studio-frontier.md. Private receipts/harness/audio under
+  /opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/. Refresh after source,
+  checkpoint/config, precision/tolerance, input/tape/capacity, allocator/graph,
+  runtime/device/driver changes; host workload invalidates admission headroom.
+  The bounded batch is finished; no model or Studio remains running. Serial
+  run_safe, 15% floor, external scratch/local weights, unrelated projects
+  untouched and exact-path local atomic commit/no-push boundaries still apply.

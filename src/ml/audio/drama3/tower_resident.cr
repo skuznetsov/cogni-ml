@@ -20,6 +20,8 @@ module ML::Audio::Drama3
   # temporal offset shared by all layer KV caches, and leaves its command graph
   # pending in the supplied context so the caller can compose backbone work.
   class TowerResident
+    MAX_CAPACITY = 4096
+
     private struct Layer
       getter embedding : Matrix
       getter enorm : Resident::Buffer
@@ -65,7 +67,7 @@ module ML::Audio::Drama3
 
     getter config : TowerConfig
     getter offset : Int32
-    getter capacity : Int32
+    getter capacity : Int32, maximum_capacity : Int32
     getter ffn_pair_fusion_enabled : Bool
     property buffer_trace : Proc(String, Array(Int32), Resident::Buffer, Nil)?
 
@@ -78,8 +80,12 @@ module ML::Audio::Drama3
     @context : Resident::Context
     @codebook_embedding_fusion : Bool
 
-    def initialize(@config : TowerConfig, @store : WeightStore, @context : Resident::Context, @capacity : Int32, prefix : String = "tower")
-      raise ArgumentError.new("tower cache capacity must be positive") unless @capacity > 0
+    def initialize(@config : TowerConfig, @store : WeightStore, @context : Resident::Context,
+                   capacity : Int32, prefix : String = "tower", maximum_capacity : Int32 = capacity)
+      raise ArgumentError.new("tower cache capacity must be 1..#{MAX_CAPACITY}") unless capacity.in?(1..MAX_CAPACITY)
+      raise ArgumentError.new("tower maximum cache capacity must be #{capacity}..#{MAX_CAPACITY}") unless maximum_capacity.in?(capacity..MAX_CAPACITY)
+      @capacity = capacity
+      @maximum_capacity = maximum_capacity
       @offset = 0
       @prefix = prefix
       @codebook_embedding_fusion = case ENV["DRAMA3_TOWER_EMBEDDING_FUSION"]? || "0"
@@ -103,10 +109,41 @@ module ML::Audio::Drama3
       @codebook_heads = Array(Matrix).new(@config.num_codebooks - 1) do |index|
         matrix("codebook_heads.#{index}.weight", @config.vocab_size, @config.dim)
       end
-      cache_width = @config.n_local_heads * @capacity * @config.head_dim
+      cache_width = checked_cache_count(@capacity)
       @caches = Array(LayerCache).new(@config.layer_count) do
-        LayerCache.new(@context.alloc(cache_width), @context.alloc(cache_width))
+        LayerCache.new(@context.alloc_persistent(cache_width), @context.alloc_persistent(cache_width))
       end
+    end
+
+    # KV is stored head-major, so a capacity change must relocate each valid
+    # head prefix with both source and destination strides represented in the
+    # device kernel. Every replacement is allocated before copies are queued;
+    # offset and all other recurrent state remain untouched.
+    def grow_capacity!(new_capacity : Int32) : Nil
+      raise ArgumentError.new("tower growth must increase capacity") unless new_capacity > @capacity
+      raise ArgumentError.new("tower growth exceeds maximum capacity") unless new_capacity <= @maximum_capacity
+
+      cache_width = checked_cache_count(new_capacity)
+      copy_count = @offset > 0 ? checked_cache_count(@offset) : 0
+      replacements = Array(LayerCache).new(@config.layer_count) do
+        LayerCache.new(@context.alloc_persistent(cache_width), @context.alloc_persistent(cache_width))
+      end
+
+      if copy_count > 0
+        @caches.each_with_index do |cache, index|
+          replacement = replacements[index]
+          @context.dispatch(
+            "drama3_tower_relocate_kv", RESIDENT_TOWER_SOURCE,
+            [cache.keys, cache.values, replacement.keys, replacement.values],
+            [@config.n_local_heads.to_u64, @config.head_dim.to_u64, @capacity.to_u64,
+             new_capacity.to_u64, @offset.to_u64],
+            copy_count,
+          )
+        end
+      end
+
+      @caches = replacements
+      @capacity = new_capacity
     end
 
     def reset! : Nil
@@ -461,6 +498,22 @@ module ML::Audio::Drama3
       limit = MetalBackend.max_buffer_length
       unless limit > 0 && bytes <= limit
         raise ArgumentError.new("resident tower attention scores require #{bytes} Metal bytes; device limit is #{limit}")
+      end
+      count.to_i32
+    end
+
+    private def checked_cache_count(capacity : Int32) : Int32
+      heads = @config.n_local_heads
+      dimension = @config.head_dim
+      unless heads > 0 && dimension > 0 && capacity > 0
+        raise ArgumentError.new("resident tower cache shape must be positive")
+      end
+      count = heads.to_i64 * capacity.to_i64 * dimension.to_i64
+      raise ArgumentError.new("resident tower cache exceeds Int32 element capacity") if count > Int32::MAX
+      bytes = count * sizeof(Float32).to_i64
+      limit = MetalBackend.max_buffer_length
+      unless limit > 0 && bytes <= limit
+        raise ArgumentError.new("resident tower cache requires #{bytes} Metal bytes; device limit is #{limit}")
       end
       count.to_i32
     end

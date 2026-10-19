@@ -573,7 +573,7 @@
       grid.append(label);
     });
     append(settings, settingsSummary, grid);
-    settings.append(node("p", "field-hint", t("Automatic sizing uses available memory up to the frame limit. Speech ends at EOS; duration cannot be predicted exactly.")));
+    settings.append(node("p", "field-hint", t("Automatic mode grows the window during generation within the memory budget and frame limit. Speech ends at EOS; duration cannot be predicted exactly.")));
     if (autoOption.disabled) settings.append(node("p", "field-hint", t("Automatic windows are unavailable on this server or with a voice reference.")));
     body.append(settings);
 

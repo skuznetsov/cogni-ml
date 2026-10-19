@@ -90,6 +90,13 @@ require "digest/sha256"
         FrameWindow.automatic(request, telemetry, reference, ENV["DRAMA3_DAC_SCRATCH"]? == "1")
       end
 
+      private def growth_telemetry(sample : JSON::Any) : Drama3WindowBudget::Telemetry
+        Drama3WindowBudget::Telemetry.new(
+          sample["physical_bytes"].as_i64, sample["free_reclaimable_bytes"].as_i64,
+          sample["metal_recommended_bytes"].as_i64, sample["metal_allocated_bytes"].as_i64,
+          MetalBackend.max_buffer_length)
+      end
+
       # A failure is fatal to the worker. The supervisor starts a fresh process
       # for the next job instead of resuming potentially partial GPU state.
       def generate(input : JSON::Any, output : String, &progress : String -> Nil) : JSON::Any
@@ -128,8 +135,34 @@ require "digest/sha256"
         before_expert_swiglu_dispatches = @context.expert_swiglu_fused_dispatches
         before_gdn_post_dispatches = @context.gdn_post_fused_dispatches
         before_dense_swiglu_dispatches = @context.dense_swiglu_fused_dispatches
-        generator = ResidentGenerator.new(@config, @store, @context, capacity.to_i32)
+        generator = ResidentGenerator.new(@config, @store, @context, capacity,
+          maximum_capacity: window.maximum_capacity)
         observe_memory("initialize_end")
+        growth_admissions = [] of JSON::Any
+        if growth_plan = window.growth_plan
+          backbone_config = BackboneConfig.new(@config)
+          breakdown = growth_plan.window_plan.breakdown
+          # Preserve the final request's DAC/temporary/static allowance even
+          # though much of it is not allocated at this scalar-control boundary.
+          future_reserve = breakdown.decoder_scratch_bytes + breakdown.codec_temporaries_bytes +
+                           breakdown.generation_temporaries_bytes + breakdown.converted_static_bytes
+          generator.before_window_growth = ->(previous : Int32, target : Int32) do
+            sample = observe_memory("window_growth_admit_#{growth_admissions.size + 1}")
+            allocation = WindowGrowth.cache_bytes_per_capacity(backbone_config, @tower_config,
+              target, window.maximum_capacity)
+            admission = WindowGrowth.admit_growth(allocation.total_bytes, future_reserve, 1024_i64 * 1024 * 1024,
+              growth_telemetry(sample), allocation.largest_buffer_bytes, @memory_guard.remaining_bytes(sample))
+            raise MemoryGuard::Exceeded.new("window growth rejected before allocation: #{admission.failure}") unless admission.success?
+            receipt = admission.admission.not_nil!
+            growth_admissions << JSON.parse({from: previous, to: target, before: sample, admission: receipt}.to_json)
+            nil
+          end
+          generator.after_window_growth = ->(_previous : Int32, _target : Int32) do
+            sample = observe_memory("window_growth_end_#{growth_admissions.size}")
+            growth_admissions.last.as_h["after"] = sample
+            nil
+          end
+        end
         # Progress is telemetry, not a per-frame pipe/disk transaction. This
         # clock check does not submit, wait for or read any device work.
         last_progress = Time.instant - 1.second
@@ -188,7 +221,9 @@ require "digest/sha256"
         report = JSON.parse({backend: "metal_resident", worker_pid: Process.pid, worker_job: @jobs + 1, warm_worker: @jobs > 0,
                              model_path: @model, model_load_seconds: @load_seconds, text: text, seed: seed,
                              max_frames: max_frames, temperature: temperature, top_k: top_k, top_p: top_p,
-                             requested_max_frames: requested_frames, capacity: capacity,
+                             requested_max_frames: requested_frames, initial_capacity: capacity, capacity: generator.capacity,
+                             maximum_capacity: window.maximum_capacity, window_growths: generator.window_growths,
+                             window_growth_plan: window.growth_plan, window_growth_admissions: growth_admissions,
                              window_mode: automatic ? "experimental_auto" : "manual", window_plan: window.plan,
                              memory_stages: @memory_stages,
                              memory_observations: {sample_count: @memory_samples, sampled_max_footprint_bytes: @sampled_footprint,

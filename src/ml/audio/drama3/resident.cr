@@ -555,6 +555,15 @@ module ML::Audio::Drama3::Resident
       end
     end
 
+    # Cache and state backings must not alias reusable workspace slots. This
+    # path intentionally always creates a fresh, command-leased allocation.
+    def alloc_persistent(count : Int32) : Buffer
+      raise ArgumentError.new("resident context aborted") if @aborted
+      raise ArgumentError.new("resident persistent allocation count must be positive") unless count > 0
+      raise ArgumentError.new("resident persistent allocation exceeds device buffer limit") if @max_buffer_length > 0 && count.to_i64 * 4 > @max_buffer_length
+      alloc_fresh(count)
+    end
+
     private def alloc_fresh(count : Int32) : Buffer
       raise ArgumentError.new("resident context aborted") if @aborted
       raise ArgumentError.new("resident allocation count must be positive") unless count > 0

@@ -80,6 +80,7 @@ module Drama3DenseDecodeCompare
   CONFIG_SHA256 = "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c"
   INDEX_SHA256 = "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
   ROWS = 3
+  WINDOW_GROWTH_MAX_CAPACITY = 8
   WIDTH = 2048
   TILES = (WIDTH + 1023) // 1024
   RECEIPT_WIDTH = 5
@@ -259,12 +260,13 @@ module Drama3DenseDecodeCompare
 
   def self.run : Nil
     context = nil.as(Context?)
-    usage = "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON [--expert-down-sum|--expert-swiglu|--gdn-post]"
-    raise usage unless ARGV.size == 4 || (ARGV.size == 5 && ARGV[4].in?("--expert-down-sum", "--expert-swiglu", "--gdn-post"))
+    usage = "usage: drama3_dense_decode_compare MODEL_DIR INPUTS_JSON MLX_SCALAR_TRACE OUTPUT_JSON [--expert-down-sum|--expert-swiglu|--gdn-post|--window-growth]"
+    raise usage unless ARGV.size == 4 || (ARGV.size == 5 && ARGV[4].in?("--expert-down-sum", "--expert-swiglu", "--gdn-post", "--window-growth"))
     expert_down_sum_mode = ARGV[4]? == "--expert-down-sum"
     expert_swiglu_mode = ARGV[4]? == "--expert-swiglu"
     gdn_post_mode = ARGV[4]? == "--gdn-post"
-    dense_mode = !expert_down_sum_mode && !expert_swiglu_mode && !gdn_post_mode
+    window_growth_mode = ARGV[4]? == "--window-growth"
+    dense_mode = !window_growth_mode && !expert_down_sum_mode && !expert_swiglu_mode && !gdn_post_mode
     model_dir, input_path, trace_path, output_path = ARGV.first(4).map { |value| File.expand_path(value) }
     raise "refusing existing output" if File.exists?(output_path)
     config_path = File.join(model_dir, "config.json")
@@ -295,13 +297,17 @@ module Drama3DenseDecodeCompare
     raise "SwiGLU diagnostic override must start disabled" if ctx.decode_compare_unfused_expert_swiglu
     raise "GDN post selector mismatch" unless ctx.gdn_post_fusion_enabled == gdn_post_mode
     raise "GDN post diagnostic override must start disabled" if ctx.decode_compare_unfused_gdn_post
-    baseline = BackboneResident.new(config, store, ctx, ROWS)
+    baseline_initial_capacity = window_growth_mode ? WINDOW_GROWTH_MAX_CAPACITY : ROWS
+    candidate_initial_capacity = window_growth_mode ? 1 : ROWS
+    candidate_maximum_capacity = window_growth_mode ? WINDOW_GROWTH_MAX_CAPACITY : ROWS
+    baseline = BackboneResident.new(config, store, ctx, baseline_initial_capacity)
     raise "baseline fusion selector not frozen off" if baseline.dense_fusion_enabled
     raise "baseline MoE batching selector mismatch" unless baseline.batch_experts
     raise "baseline expert-down reduction mismatch" unless baseline.expert_down_reduction == "native"
     raise "expert-down-sum selector not frozen on" if expert_down_sum_mode && !ctx.expert_down_sum_fusion_enabled
     ENV["DRAMA3_BACKBONE_DENSE_FUSION"] = dense_mode ? "1" : "0"
-    candidate = BackboneResident.new(config, store, ctx, ROWS)
+    candidate = BackboneResident.new(config, store, ctx, candidate_initial_capacity,
+      maximum_capacity: candidate_maximum_capacity)
     unless dense_mode
       raise "candidate dense fusion selector mismatch" if candidate.dense_fusion_enabled
     else
@@ -324,6 +330,7 @@ module Drama3DenseDecodeCompare
     expert_down_sum_row_proof = [] of JSON::Any
     expert_swiglu_row_proof = [] of JSON::Any
     gdn_post_row_proof = [] of JSON::Any
+    window_growth_records = [] of JSON::Any
     gdn_layers = config.layers - config.layers // config.full_interval
     active_row = 0
     baseline.buffer_trace = ->(name : String, buffer : Buffer) {
@@ -381,6 +388,23 @@ module Drama3DenseDecodeCompare
       candidate_swiglu_before = {ctx.expert_swiglu_fused_dispatches, ctx.dense_swiglu_fused_dispatches,
                                 ctx.decode_compare_reference_expert_swiglu_calls, ctx.decode_compare_reference_dense_swiglu_calls}
       candidate_gdn_before = {ctx.gdn_post_fused_dispatches, ctx.decode_compare_reference_gdn_post_calls}
+      if window_growth_mode
+        required_capacity = candidate.position + 1
+        if required_capacity > candidate.capacity
+          previous_capacity = candidate.capacity
+          grown_capacity = previous_capacity * 2
+          grown_capacity = candidate.maximum_capacity if grown_capacity > candidate.maximum_capacity
+          raise "window growth cannot satisfy row #{row}" unless grown_capacity >= required_capacity
+          candidate.grow_capacity!(grown_capacity)
+          window_growth_records << j({
+            "row" => row,
+            "position_before_row" => candidate.position,
+            "required_capacity" => required_capacity,
+            "previous_capacity" => previous_capacity,
+            "new_capacity" => grown_capacity,
+          })
+        end
+      end
       candidate.step(input)
       candidate_dispatch_delta = ctx.expert_down_sum_fused_dispatches - candidate_dispatch_before
       candidate_reference_delta = ctx.decode_compare_reference_expert_down_sum_calls - candidate_reference_before
@@ -583,6 +607,41 @@ module Drama3DenseDecodeCompare
       "readbacks" => j(ctx.readbacks),
       "cases" => JSON::Any.new(case_reports),
     } of String => JSON::Any
+    if window_growth_mode
+      same_resident_flags = baseline.dense_fusion_enabled == candidate.dense_fusion_enabled &&
+        baseline.dense_reduction == candidate.dense_reduction &&
+        baseline.expert_down_reduction == candidate.expert_down_reduction &&
+        baseline.batch_experts == candidate.batch_experts
+      raise "window-growth arms use different kernel or reduction flags" unless same_resident_flags
+      raise "window-growth unexpectedly enabled a context fusion" if ctx.expert_down_sum_fusion_enabled ||
+        ctx.expert_swiglu_fusion_enabled || ctx.gdn_post_fusion_enabled
+      report["mode"] = j("window_growth")
+      report["selectors"] = j({
+        "baseline_dense_fusion" => baseline.dense_fusion_enabled,
+        "candidate_dense_fusion" => candidate.dense_fusion_enabled,
+        "same_kernel_and_reduction_flags" => same_resident_flags,
+        "expert_down_sum_fusion" => ctx.expert_down_sum_fusion_enabled,
+        "expert_swiglu_fusion" => ctx.expert_swiglu_fusion_enabled,
+        "gdn_post_fusion" => ctx.gdn_post_fusion_enabled,
+        "frozen_after_construction" => true, "dense_reduction" => "tree", "moe_batch" => true,
+        "expert_down_reduction" => "native", "expert_threads" => 64, "queue_depth" => 2,
+        "profile" => false, "timeline" => false,
+      })
+      report["window_growth"] = j({
+        "baseline" => {
+          "initial_capacity" => baseline_initial_capacity,
+          "final_capacity" => baseline.capacity,
+          "maximum_capacity" => baseline.maximum_capacity,
+        },
+        "candidate" => {
+          "initial_capacity" => candidate_initial_capacity,
+          "final_capacity" => candidate.capacity,
+          "maximum_capacity" => candidate.maximum_capacity,
+        },
+        "growth_records" => window_growth_records,
+        "bounded_claim" => "three pinned rows only; the candidate grows geometrically up to capacity 8 and is compared across the existing 243 device-resident backbone boundaries; this does not establish long-context behavior or production memory bounds",
+      })
+    end
     if expert_down_sum_mode
       report["format"] = j("drama3-expert-down-sum-decode-comparison-v1")
       report["mode"] = j("expert_down_sum")

@@ -31,6 +31,7 @@ require "../src/ml/audio/drama3/generator_resident"
   class ML::Audio::Drama3::TowerResident
     def prefill_generator_regression_state : Array(Resident::Buffer)
       result = [] of Resident::Buffer
+      return result if @offset == 0
       @caches.each do |cache|
         count = @config.n_local_heads * @offset * @config.head_dim
         [cache.keys, cache.values].each do |source|
@@ -58,12 +59,16 @@ require "../src/ml/audio/drama3/generator_resident"
     getter backbone_state : Array(Array(UInt32))
     getter tower_state : Array(Array(UInt32))
     getter trace_names : Array(String)
+    getter capacity : Int32
+    getter growth_count : Int32
+    getter sampler_sha256 : String
 
     def initialize(@frames : Array(Array(Int32)), @stopped : Bool, @backbone_position : Int32,
                    @tower_offset : Int32, @readbacks : Hash(String, Int64), @graph_stats : Hash(String, Int64),
                    @hidden_bits : Array(UInt32)?, @logits_bits : Array(UInt32)?,
                    @backbone_state : Array(Array(UInt32)), @tower_state : Array(Array(UInt32)),
-                   @trace_names : Array(String))
+                   @trace_names : Array(String), @capacity : Int32, @growth_count : Int32,
+                   @sampler_sha256 : String)
     end
   end
 
@@ -81,17 +86,16 @@ require "../src/ml/audio/drama3/generator_resident"
     all_rows[0, rows]
   end
 
-  private def drama3_prefill_generator_non_eos_seed : UInt64
+  private def drama3_prefill_generator_non_eos_seed(frames : Int32 = 2) : UInt64
     seed = 0_u64
     loop do
       random = Random.new(seed)
-      draws = Array(Float32).new(10) { random.rand.to_f32 }
-      first = (draws[0] * 5_f32).to_i32
-      second = (draws[5] * 5_f32).to_i32
+      draws = Array(Float32).new(frames * 5) { random.rand.to_f32 }
+      candidates = Array(Int32).new(frames) { |index| (draws[index * 5] * 5_f32).to_i32 }
       # Candidate indices 2 and 3 map to semantic tokens 21 and 22. Those
-      # tokens are absent from the mixed prompt, so both generated frames are
-      # non-EOS without relying on the repeat fallback.
-      return seed if first.in?(2..3) && second.in?(2..3) && first != second
+      # tokens are absent from the mixed prompt. Alternation also keeps a
+      # one-row repeat window from invoking the retry sampler in growth tests.
+      return seed if candidates.all?(&.in?(2..3)) && candidates.each_cons_pair.all? { |left, right| left != right }
       seed += 1
     end
   end
@@ -99,7 +103,8 @@ require "../src/ml/audio/drama3/generator_resident"
   private def drama3_prefill_generator_run(chunk : Int32, depth : Int32, scratch : Bool,
                                            eos_first : Bool, prompt_rows : Int32 = 7,
                                            max_frames : Int32 = 2,
-                                           resident_prompt : Bool = false) : Drama3PrefillGeneratorObservation
+                                           resident_prompt : Bool = false, initial_capacity : Int32 = 8,
+                                           maximum_capacity : Int32 = 8) : Drama3PrefillGeneratorObservation
     env_keys = [
       "DRAMA3_BACKEND", "DRAMA3_COGNIGRAPH_MAX_INFLIGHT", "DRAMA3_GENERATION_SCRATCH",
       "DRAMA3_PREFILL_CHUNK", "DRAMA3_DELTA_TRANSPOSE", "DRAMA3_MOE_BATCH",
@@ -125,7 +130,8 @@ require "../src/ml/audio/drama3/generator_resident"
       config = JSON.parse(File.read(File.join(path, "config.json")))
       config.as_h["eos_token_id"] = JSON::Any.new(2_i64)
       context = ML::Audio::Drama3::Resident::Context.new
-      generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3PrefillGeneratorZeroHeadStore.new(path), context, 8)
+      generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3PrefillGeneratorZeroHeadStore.new(path), context,
+        initial_capacity, maximum_capacity: maximum_capacity)
       captured = {} of String => ML::Audio::Drama3::Resident::Buffer
       capture = !scratch && !eos_first
       if capture
@@ -136,7 +142,7 @@ require "../src/ml/audio/drama3/generator_resident"
       end
 
       prompt = drama3_prefill_generator_prompt(prompt_rows)
-      seed = eos_first ? 0_u64 : drama3_prefill_generator_non_eos_seed
+      seed = eos_first ? 0_u64 : drama3_prefill_generator_non_eos_seed(max_frames)
       top_k = eos_first ? 1 : 5
       top_p = eos_first ? 0.9 : 1.0
       result = if resident_prompt
@@ -172,6 +178,7 @@ require "../src/ml/audio/drama3/generator_resident"
       Drama3PrefillGeneratorObservation.new(
         result.generation.frames, result.generation.stopped, generator.backbone.position, generator.tower.offset,
         inference_readbacks, inference_graph, hidden_bits, logits_bits, backbone_state, tower_state, captured.keys.sort,
+        generator.capacity, generator.window_growths.size, generator.sampler_inputs.not_nil![:sha256],
       )
     ensure
       env_keys.each do |key|
@@ -213,6 +220,84 @@ require "../src/ml/audio/drama3/generator_resident"
   end
 
   describe "DRAMA-3 generator sequence prefill" do
+    it "grows only after non-EOS without changing state, draws or synchronization" do
+      [0, 2].each do |depth|
+        [false, true].each do |scratch|
+          [false, true].each do |resident|
+            rows = resident ? 7 : 1
+            frames = resident ? 2 : 4
+            capacity = rows + frames - 1
+            fixed = drama3_prefill_generator_run(1, depth, scratch, false, rows, frames, resident, capacity, capacity)
+            grown = drama3_prefill_generator_run(1, depth, scratch, false, rows, frames, resident, rows, capacity)
+            grown.frames.size.should eq(frames)
+            grown.capacity.should eq(capacity)
+            grown.growth_count.should eq(resident ? 1 : 2)
+            grown.sampler_sha256.should eq(fixed.sampler_sha256)
+            drama3_prefill_generator_assert_equal(fixed, grown, !scratch)
+          end
+        end
+      end
+    end
+
+    it "does not grow when EOS precedes the first capacity boundary" do
+      [0, 2].each do |depth|
+        fixed = drama3_prefill_generator_run(1, depth, false, true, 1, 4, false, 4, 4)
+        grown = drama3_prefill_generator_run(1, depth, false, true, 1, 4, false, 1, 4)
+        grown.capacity.should eq(1)
+        grown.growth_count.should eq(0)
+        drama3_prefill_generator_assert_equal(fixed, grown, false)
+      end
+    end
+
+    it "rejects growth before allocation and aborts instead of resuming partial state" do
+      keys = ["DRAMA3_BACKEND", "DRAMA3_COGNIGRAPH_MAX_INFLIGHT", "DRAMA3_GENERATION_SCRATCH", "DRAMA3_PREFILL_CHUNK"]
+      previous = keys.to_h { |key| {key, ENV[key]?} }
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_GENERATION_SCRATCH"] = "1"
+        ENV["DRAMA3_PREFILL_CHUNK"] = "1"
+        [0, 2].each do |depth|
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth.to_s
+          [false, true].each do |fail_after_copy|
+            path = File.join(__DIR__, "support/drama3/reference_fixture")
+            config = JSON.parse(File.read(File.join(path, "config.json")))
+            config.as_h["eos_token_id"] = JSON::Any.new(2_i64)
+            context = ML::Audio::Drama3::Resident::Context.new
+            generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3PrefillGeneratorZeroHeadStore.new(path),
+              context, 1, maximum_capacity: 4)
+            before = 0_i64
+            reject = ->(_from : Int32, _to : Int32) do
+              before = context.allocation_stats[:allocations]
+              raise "injected window failure"
+              nil
+            end
+            if fail_after_copy
+              generator.after_window_growth = reject
+            else
+              generator.before_window_growth = reject
+            end
+            expect_raises(Exception, /injected window failure/) do
+              generator.generate(drama3_prefill_generator_prompt(1), 4, drama3_prefill_generator_non_eos_seed(4),
+                top_k: 5, top_p: 1.0)
+            end
+            context.allocation_stats[:allocations].should eq(before)
+            generator.capacity.should eq(fail_after_copy ? 2 : 1)
+            generator.window_growths.size.should eq(fail_after_copy ? 1 : 0)
+            context.graph_stats["pending"].should eq(0)
+            expect_raises(ArgumentError, /aborted/) { context.alloc(1) }
+          end
+        end
+      ensure
+        previous.each do |key, value|
+          if value
+            ENV[key] = value
+          else
+            ENV.delete(key)
+          end
+        end
+      end
+    end
+
     it "matches scalar generation, prompt activations, persistent state and read boundaries at graph depths zero and two" do
       [false, true].each do |eos_first|
         [0, 2].each do |depth|

@@ -30,13 +30,23 @@ module ML::Audio::Drama3
   class ResidentGenerator
     MAX_REPEAT_WINDOW = 16
 
+    record WindowExpansion, from : Int32, to : Int32, backbone_position : Int32, tower_offset : Int32 do
+      include JSON::Serializable
+    end
+
     getter backbone : BackboneResident
     getter tower : TowerResident
     getter ctx : Resident::Context
     getter capacity : Int32
+    getter maximum_capacity : Int32
+    getter window_growths = [] of WindowExpansion
     getter prefill_chunk : Int32
     getter sampler_inputs : NamedTuple(dtype: String, uniform_count: Int32, sha256: String, provenance: String)?
     property progress : Proc(String, Nil)?
+    # Host-only admission/telemetry at an existing drained EOS boundary.
+    # A rejection happens before any replacement allocation or cache copy.
+    property before_window_growth : Proc(Int32, Int32, Nil)?
+    property after_window_growth : Proc(Int32, Int32, Nil)?
     # Optional device-only diagnostic handoff. Callbacks enqueue comparisons;
     # normal generation has no additional work or readbacks when nil.
     property device_trace : Proc(String, Resident::Buffer, Nil)?
@@ -48,7 +58,13 @@ module ML::Audio::Drama3
     @generation_scratch : Bool
     @workspaces = {} of String => Resident::Workspace
 
-    def initialize(config : JSON::Any, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
+    def initialize(config : JSON::Any, @store : WeightStore, @ctx : Resident::Context, capacity : Int32,
+                   maximum_capacity : Int32? = nil)
+      @capacity = capacity
+      @maximum_capacity = maximum_capacity || capacity
+      unless @capacity.in?(1..4096) && @maximum_capacity.in?(@capacity..4096)
+        raise ArgumentError.new("invalid resident initial/maximum cache capacity")
+      end
       backbone_config = BackboneConfig.new(config)
       tower_config = TowerConfig.from_json(config.to_json)
       @eos = config["eos_token_id"].as_i
@@ -56,8 +72,8 @@ module ML::Audio::Drama3
       @semantic_end = config["semantic_end_token_id"].as_i
       raise ArgumentError.new("invalid candidate token band") unless @eos < @semantic_begin && @semantic_end - @semantic_begin + 1 == tower_config.vocab_size
 
-      @backbone = BackboneResident.new(backbone_config, @store, @ctx, @capacity)
-      @tower = TowerResident.new(tower_config, @store, @ctx, @capacity)
+      @backbone = BackboneResident.new(backbone_config, @store, @ctx, @capacity, maximum_capacity: @maximum_capacity)
+      @tower = TowerResident.new(tower_config, @store, @ctx, @capacity, maximum_capacity: @maximum_capacity)
       @head = @store.matrix("lm_head.weight")
       raise ArgumentError.new("invalid main head dimensions") unless @head.cols == backbone_config.hidden && @head.rows == 1 + @semantic_end - @semantic_begin + 1
       @progress = nil
@@ -116,7 +132,7 @@ module ML::Audio::Drama3
       raise ArgumentError.new("empty prompt or non-positive frame bound") if prompt.empty? || max_frames < 1
       raise ArgumentError.new("invalid prompt width") unless prompt.all? { |row| row.size == @tower.config.num_codebooks + 1 }
       raise ArgumentError.new("sampling top_k exceeds resident sampler limit 1024") unless top_k.in?(1..1024)
-      raise ArgumentError.new("resident cache capacity exceeded") unless prompt.size.to_i64 + max_frames - 1 <= @capacity
+      validate_window!(prompt.size, max_frames)
 
       # Preserve the CPU path's parameter validation before any model work.
       Sampler.new(seed).candidates([0_f32], temperature, top_k, top_p)
@@ -185,6 +201,8 @@ module ML::Audio::Drama3
             break
           end
 
+          grow_for_frame!(step + 1 == max_frames)
+
           frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
             # A generated frame escapes into previous_frame and the terminal
             # code array, so its backing is outside the reusable tower plan.
@@ -239,7 +257,7 @@ module ML::Audio::Drama3
       raise ArgumentError.new("reference semantic token band does not match model") unless prompt.semantic_begin == @semantic_begin
       raise ArgumentError.new("prompt belongs to a different resident context") unless prompt.context.same?(@ctx)
       raise ArgumentError.new("sampling top_k exceeds resident sampler limit 1024") unless top_k.in?(1..1024)
-      raise ArgumentError.new("resident cache capacity exceeded") unless prompt.row_count.to_i64 + max_frames - 1 <= @capacity
+      validate_window!(prompt.row_count, max_frames)
 
       # Validate all host-controlled inputs before model work, matching the
       # original resident API's boundary.
@@ -316,6 +334,8 @@ module ML::Audio::Drama3
             break
           end
 
+          grow_for_frame!(step + 1 == max_frames)
+
           frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
             # A generated frame escapes into previous_frame and the terminal
             # code array, so its backing is outside the reusable tower plan.
@@ -354,6 +374,30 @@ module ML::Audio::Drama3
       terminal_frames = decode_terminal_frames(terminal_values, generated_count, frame_width)
       generation = Generation.new(terminal_frames, stopped, prompt.row_count)
       ResidentGeneration.new(generation, device_frames)
+    end
+
+    private def validate_window!(prompt_rows : Int32, max_frames : Int32) : Nil
+      raise ArgumentError.new("prompt exceeds initial resident cache capacity") if prompt_rows > @capacity
+      raise ArgumentError.new("resident cache capacity exceeded") if prompt_rows.to_i64 + max_frames - 1 > @maximum_capacity
+    end
+
+    private def grow_for_frame!(last_frame : Bool) : Nil
+      required = Math.max(@tower.offset + 1, @backbone.position + (last_frame ? 0 : 1))
+      return if required <= @capacity
+      raise ArgumentError.new("resident maximum cache capacity exceeded") if required > @maximum_capacity
+      target = Math.min(@maximum_capacity, Math.max(required, @capacity * 2))
+      previous = @capacity
+      @before_window_growth.try(&.call(previous, target))
+      Profile.measure("generator_resident.window_growth", category: "generation.window") do
+        # The scalar control read has already drained preceding commands. New
+        # bindings retain old storage through the queued GPU prefix copies.
+        # Any partial allocation/copy failure aborts this single-use generator.
+        @backbone.grow_capacity!(target)
+        @tower.grow_capacity!(target)
+        @capacity = target
+        @window_growths << WindowExpansion.new(previous, target, @backbone.position, @tower.offset)
+      end
+      @after_window_growth.try(&.call(previous, target))
     end
 
     def workspace_stats

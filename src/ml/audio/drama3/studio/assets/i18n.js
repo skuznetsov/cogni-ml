@@ -137,7 +137,7 @@
     "Window size": "Размер окна",
     "Manual": "Вручную",
     "Automatic (memory budget)": "Автоматически (по памяти)",
-    "Automatic sizing uses available memory up to the frame limit. Speech ends at EOS; duration cannot be predicted exactly.": "Автоматический размер зависит от доступной памяти и ограничен лимитом кадров. Речь заканчивается на EOS; точно предсказать длительность нельзя.",
+    "Automatic mode grows the window during generation within the memory budget and frame limit. Speech ends at EOS; duration cannot be predicted exactly.": "Автоматический режим расширяет окно во время генерации в пределах бюджета памяти и лимита кадров. Речь заканчивается на EOS; точно предсказать длительность нельзя.",
     "Automatic windows are unavailable on this server or with a voice reference.": "Автоматическое окно недоступно на этом сервере или при использовании голоса-референса.",
     "Frame limit": "Лимит кадров",
     "This segment changed on the server after your edits. Reload it or copy your text before continuing.": "Сегмент изменился на сервере после ваших правок. Перезагрузите версию или скопируйте текст перед продолжением.",

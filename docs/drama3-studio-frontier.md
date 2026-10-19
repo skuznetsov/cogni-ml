@@ -162,3 +162,81 @@ comparison analysis, harness and audio remain under
 `/opt/mldata_ssd/cogni-ml/drama3-studio-memory-20261018/`. Refresh after source,
 checkpoint, capacity, input/tape, runtime/device, allocation policy or concurrent
 workload changes. Timings include telemetry and are not a performance claim.
+
+## Growing resident windows (2026-10-18, bounded verification)
+
+This slice supersedes the previous exclusion of cache growth. Automatic
+no-reference requests may start with a smaller KV capacity and grow geometrically
+up to their admitted final position limit, at the existing non-EOS scalar-control
+boundary. The output frame cap, sampler tape, prompt and attention reduction path
+remain fixed for the request. Prefill fits in the initial capacity. Manual windows
+keep their existing allocation policy; automatic reference windows remain excluded.
+
+Backbone token-major prefixes and tower head-major prefixes must be copied exactly
+on the GPU, with the latter relocated using both capacity strides. Persistent
+replacement buffers cannot use temporary workspace slots. Bound command leases
+retain old storage until copies complete; no additional submit, wait, tensor read,
+GC or CPU activation copy is admitted. A request whose final capacity exceeds 1024
+uses the wide attention implementation from its first row, even while its backing
+is smaller, so growth never changes reduction order.
+
+Risk: CAUTION. Admit the full request before allocation, including the conservative
+cold static inventory, downstream DAC reserve, and every earlier cache generation
+in the planned growth schedule without assuming prompt GC reclamation. Recheck
+current host/Metal/process headroom before each replacement allocation, retaining
+the 15% floor, configured observed budget and per-buffer limits. Reject before
+allocation on failed admission; an allocation/copy failure aborts the worker.
+These remain sampled guards rather than physical reservations. Rollback is manual
+allocation and the isolated commit.
+
+DoD: require bit-identical
+valid caches, generated codes, EOS and sampler inputs against fixed final capacity
+at graph depths 0 and 2, including multiple growths, head-major relocation,
+1024/1025, prompt/last-frame bounds and EOS before growth. Rejected growth must
+allocate nothing; inference readback and completion-wait counts must not increase.
+Run bounded serial full-model WAV controls under the 15% floor and 40GiB observed
+budget, compare with the same pinned upstream control at unchanged tolerances,
+and stop/reap owned processes after the probe. The 149632-byte post-GC residual
+is parked and is not part of this slice.
+
+Observed result: 49 CPU examples, 17 JS tests, seven generator Metal examples,
+five cache Metal examples, formatting/syntax checks and the native Studio build
+passed. Generator tests cover repeated expansion, EOS before expansion, final
+frame bounds and admission/allocation failure at graph depths 0 and 2. The cache
+tests compare real two-head relocation and wide-attention output exactly across
+1024/1025 using a synthetic cached prefix; they do not execute 1024 full-model
+steps. A three-row diagnostic compared 243 backbone boundaries per arm, with
+729 comparisons: growing 1 -> 2 -> 4 and fixed capacity 8 were bit-identical, and
+both arms had identical upstream metrics. The first strict MLX failure remains
+row 1, `backbone.layers.39.hidden`; tolerances were not widened.
+
+Two serial HTTP pilots each completed four full-model WAV requests in one
+worker: cold automatic capacity 64 -> 128 followed by three fixed-capacity 540
+controls, with a 29-row prompt and a 512-frame cap. All eight emitted 60 frames
+and EOS; native full codes, WAV bytes and sampler inputs matched exactly.
+Readbacks remained 496 control and 494160 terminal bytes per request. Submitted
+commands and completion waits matched within each graph depth: 182 at depth 0,
+122 at depth 2, with no pending work after completion. Each pilot rejected a
+second model owner before loading; servers and workers exited normally, with
+no listeners or owned children remaining. A fresh pinned MLX F32 core control
+with the same text, cap and sampler tape matched all 60 code frames and EOS.
+This does not establish upstream waveform or general hidden/logit parity.
+
+Minimum sampled free/reclaimable memory was 20.3375% / 20.2565% and maximum
+sampled Metal allocation was 27052982272 / 27066695680 bytes at depth 0 / 2.
+The 15% floor, 40GiB observed process limit and finite deadlines were unchanged.
+Earlier depth-2 attempts rejected before replacement allocation
+(`InsufficientHostBudget`, cap 512) and before generation/cache allocation
+(`InsufficientBudget`, cap 128). Those failures did not persist numeric admission
+reports, so their exact causes remain unproven; the successful recheck used the
+same binary without relaxing guards. Admission is sampled, not a reservation.
+
+The correlated mini-Quadrumvirate verdict is ROBUST for guarded Studio growth
+within this tested no-reference scope. Direct low-level generator callers own
+request planning and growth admission. Full 4096-position model runs, automatic
+reference windows, sustained leak freedom, voice quality and speed gains remain
+outside the claim. Manual mode remains the default. Evidence:
+`.landmark/evidence/drama3-window-growth.json`; raw receipts and audio remain
+under `/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/`. Refresh after
+source, checkpoint/config, runtime/device/driver, allocator/graph policy, capacity,
+input/tape or tolerance changes. Admission also depends on current host workload.

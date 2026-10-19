@@ -10,6 +10,9 @@ describe ML::Audio::Drama3::Studio::FrameWindow do
     window = ML::Audio::Drama3::Studio::FrameWindow.manual(269, 512)
     window.frames.should eq(512)
     window.capacity.should eq(780)
+    window.maximum_capacity.should eq(780)
+    window.growth_reservation_bytes.should eq(0_i64)
+    window.growth_plan.should be_nil
     window.plan.should be_nil
     ML::Audio::Drama3::Studio::FrameWindow.manual(4096, 1).capacity.should eq(4096)
     expect_raises(ArgumentError) { ML::Audio::Drama3::Studio::FrameWindow.manual(4096, 2) }
@@ -20,10 +23,23 @@ describe ML::Audio::Drama3::Studio::FrameWindow do
     window = ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, budget_telemetry, false, true)
     window.frames.should eq(8)
     window.capacity.should eq(10)
+    window.maximum_capacity.should eq(10)
+    window.growth_plan.not_nil!.capacity_schedule.should eq([10])
     window.plan.not_nil!.advisory_only.should be_true
     expect_raises(ArgumentError, /UnknownTelemetry/) do
       ML::Audio::Drama3::Studio::FrameWindow.automatic(budget_request, Drama3WindowBudget::Telemetry.new, false, true)
     end
+  end
+
+  it "separates automatic initial cache capacity from its pre-admitted final capacity" do
+    request = budget_request(prompt_frames: 80, frame_cap: 100)
+    window = ML::Audio::Drama3::Studio::FrameWindow.automatic(request, budget_telemetry, false, true)
+    window.frames.should eq(100)
+    window.capacity.should eq(80)
+    window.maximum_capacity.should eq(179)
+    window.growth_plan.not_nil!.capacity_schedule.should eq([80, 160, 179])
+    window.growth_reservation_bytes.should eq(window.growth_plan.not_nil!.prior_generation_reservation_bytes)
+    window.plan.should eq(window.growth_plan.not_nil!.window_plan)
   end
 
   it "rejects uncalibrated reference encoding and incompatible DAC layouts" do

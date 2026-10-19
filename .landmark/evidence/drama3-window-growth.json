@@ -1,0 +1,985 @@
+{
+  "format": "drama3-window-growth-evidence-v1",
+  "date": "2026-10-18",
+  "claim": "Optional no-reference Studio generation grows persistent GPU KV windows within a pre-admitted final bound, without additional inference synchronization or activation readback. Eight short WAV controls and bounded GPU probes preserve native outputs; existing strict upstream layer-39 discrepancy remains.",
+  "claim_status": "VERIFIED within the explicitly tested scope",
+  "risk": "CAUTION; request memory policy, persistent GPU ownership and layout relocation",
+  "native_base": "24340f0b5d968802728d7a655d25fdfece36d9ce",
+  "allowed_paths": [
+    "src/ml/audio/drama3/window_growth.cr",
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/backbone_resident.cr",
+    "src/ml/audio/drama3/tower_resident.cr",
+    "src/ml/audio/drama3/generator_resident.cr",
+    "src/ml/audio/drama3/kernels/tower_resident.metal",
+    "src/ml/audio/drama3/studio/engine.cr",
+    "src/ml/audio/drama3/studio/frame_window.cr",
+    "src/ml/audio/drama3/studio/assets/app.js",
+    "src/ml/audio/drama3/studio/assets/i18n.js",
+    "examples/drama3_dense_decode_compare.cr",
+    "spec/drama3_prefill_generator_spec.cr",
+    "spec/drama3_window_budget_spec.cr",
+    "spec/drama3_window_growth_spec.cr",
+    "spec/drama3_window_growth_resident_spec.cr",
+    "docs/drama3-studio.md",
+    "docs/drama3-studio-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-window-growth.json"
+  ],
+  "changed_paths": [
+    "src/ml/audio/drama3/window_growth.cr",
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/backbone_resident.cr",
+    "src/ml/audio/drama3/tower_resident.cr",
+    "src/ml/audio/drama3/generator_resident.cr",
+    "src/ml/audio/drama3/kernels/tower_resident.metal",
+    "src/ml/audio/drama3/studio/engine.cr",
+    "src/ml/audio/drama3/studio/frame_window.cr",
+    "src/ml/audio/drama3/studio/assets/app.js",
+    "src/ml/audio/drama3/studio/assets/i18n.js",
+    "examples/drama3_dense_decode_compare.cr",
+    "spec/drama3_prefill_generator_spec.cr",
+    "spec/drama3_window_budget_spec.cr",
+    "spec/drama3_window_growth_spec.cr",
+    "spec/drama3_window_growth_resident_spec.cr",
+    "docs/drama3-studio.md",
+    "docs/drama3-studio-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-window-growth.json"
+  ],
+  "source_sha256": {
+    "src/ml/audio/drama3/window_growth.cr": "b50c61b3a6d5840ef36ef2d1a071efd7989c6e929c3305785a55b3732403ed5d",
+    "src/ml/audio/drama3/resident.cr": "35d400ce1268db27296b5bf80720e402078332ce587ecaffab8d4c683b34eed7",
+    "src/ml/audio/drama3/backbone_resident.cr": "2520b2e38d5c3001d4d20a1ec23958d6af8ae10d12fe6dea0db2552fbdc71a7d",
+    "src/ml/audio/drama3/tower_resident.cr": "ca855406bdbb14374aa008aad17775c28be8c82cea100a9549ff069a4f030b82",
+    "src/ml/audio/drama3/generator_resident.cr": "30edd220b3f2e09455c5bc21f9eab40c31550c8f49e92d9fedcc034ef61f2785",
+    "src/ml/audio/drama3/kernels/tower_resident.metal": "0c5ef05e6d2203c8c6e43157e4059372a9edafe47da858b232736cc23e08c518",
+    "src/ml/audio/drama3/studio/engine.cr": "5a9b47bc3966f11115d85b5bd519e6eaad48c7bf097a796c83365c692ff3261c",
+    "src/ml/audio/drama3/studio/frame_window.cr": "7f2d094f8ab30b9e46f8c1db6a57ed7d798d5af0be0715a7e8eba0fc5a1d27e7",
+    "src/ml/audio/drama3/studio/assets/app.js": "92c4f5f5a9ac1b0f40f77886bd806db8d96a04e495fa013c9ae9d500b435a008",
+    "src/ml/audio/drama3/studio/assets/i18n.js": "55517f45ce89035f1ee210473a65f7c05e1a5a2acc7f95eaa30dccce1d2b4d97",
+    "examples/drama3_dense_decode_compare.cr": "06fb8580ea2fdf23f54f8f6e5d4a9549cc69405ddb6b947dab9fd775d6a4ee00",
+    "spec/drama3_prefill_generator_spec.cr": "65713b2ee11bdaea8b6cdc88136a958b455ad63c51aed7d60f5fce366ec7a7e6",
+    "spec/drama3_window_budget_spec.cr": "789774d3e1d85be3abf11a68cf9d9cc4bcf2c31919aecd127678c0d9fa0f34e3",
+    "spec/drama3_window_growth_spec.cr": "0bf95c5f5349a6f1774a16898be845988b1d39749f33ef6ec5584e30622497ce",
+    "spec/drama3_window_growth_resident_spec.cr": "44eb7149bc274b139d1e2aa36c72cc182913786c2c2c58daf4c4a35905cc09a8"
+  },
+  "documentation_sha256": {
+    "docs/drama3-studio.md": "e33cf4ba840d8b2d7f97d20392c55d2c80518716ca3070a29b2d69d447736daf",
+    "docs/drama3-studio-frontier.md": "7c23b76ac95f3919ee89bc2e6f401199efdcdac47145131bc07ea6ad84c8c9c8",
+    "LANDMARKS.md": "307239690e60b38f0bbe84f22084aa3f13d754a833420e10af9175427289c94c"
+  },
+  "native_binary": {
+    "path": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build/drama3_studio",
+    "sha256": "fd23c8a3249b4a9bd5da7d49972ac9845586166ff9a9cbcfcb7d10882e225a8e",
+    "bridge_sha256": "16613762decfabc1d44d6615ef0af95986fdccafc07ad93d9f007c5440a055f3",
+    "toolchain": "Crystal 1.22.0 (2026-10-12)\n\nLLVM: 23.1.3\nDefault target: aarch64-apple-darwin25.6.0",
+    "device": "Apple M2 Max",
+    "platform": "macOS-26.6.2-arm64-arm-64bit"
+  },
+  "checkpoint": {
+    "repository": "cguldogan/drama-3-mlx-q4",
+    "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+    "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855"
+  },
+  "implementation": {
+    "policy": "Manual remains default. Automatic requires DRAMA3_DAC_SCRATCH=1 and no voice reference; begin at min(final,max(prompt,64)), double and clip to admitted final capacity <=4096 positions.",
+    "fixed_request_fields": "Output frame cap, sampler tape, output storage, prompt and attention reduction implementation; >1024 final capacity selects wide attention from the first row.",
+    "transport": "GPU copies valid backbone token-major prefixes and relocates tower head-major prefixes with old/new strides. Fresh persistent buffers bypass workspace; bound commands retain old backing.",
+    "boundary": "After existing scalar token/EOS read; EOS exits before growth. No additional command submit/wait, activation readback or inference-time GC.",
+    "admission": "Final cold-inventory plan reserves downstream DAC/temporaries and all prior cache generations; each replacement rechecks host/Metal/process/per-buffer limits with 15% host floor and 1GiB margin. Rejected admission allocates no replacements; allocation/copy failure aborts the generator.",
+    "low_level_caller_responsibility": "ResidentGenerator with maximum_capacity > capacity manages buffers but has no automatic Studio policy; direct callers must plan budgets and supply before_window_growth admission.",
+    "rollback": "Select manual window sizing; reverting this isolated atomic commit restores the prior fixed allocation path."
+  },
+  "run_bounds": {
+    "model_runs_serial": true,
+    "request_timeout_seconds": 240,
+    "series_and_outer_timeout_seconds": 900,
+    "rss_tree_limit_mib": 40960,
+    "native_observed_limit_bytes": 42949672960,
+    "system_free_floor_percent": 15,
+    "guards_are_sampled": true,
+    "hard_peak_guarantee": false,
+    "counter_overlap": "OS footprint, RSS and Metal are not additive physical categories.",
+    "unrelated_processes_untouched": true,
+    "scratch_location": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018",
+    "weights_remain_local": true
+  },
+  "verification": [
+    {
+      "scope": "CPU planner/admission and Studio regression specs",
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "240",
+        "8192",
+        "spec",
+        "-Dcpu_only",
+        "spec/drama3_studio_worker_spec.cr",
+        "spec/drama3_studio_store_spec.cr",
+        "spec/drama3_studio_memory_guard_spec.cr",
+        "spec/drama3_studio_media_spec.cr",
+        "spec/drama3_studio_http_spec.cr",
+        "spec/drama3_studio_model_lease_spec.cr",
+        "spec/drama3_window_budget_spec.cr",
+        "spec/drama3_window_growth_spec.cr"
+      ],
+      "observed": "49 examples, 0 failures, 0 errors",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/cpu-spec.log"
+    },
+    {
+      "command": [
+        "node",
+        "--test",
+        "spec/drama3_studio_i18n_spec.js",
+        "spec/drama3_studio_recorder_spec.js"
+      ],
+      "observed": "17 passed, 0 failed",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/js-spec.log"
+    },
+    {
+      "scope": "Tiny generator; graph0/2, multiple growths, host/device APIs, scratch0/1, EOS/final bounds, rejected/partial-failure abort, codes/states/draws/readbacks/waits",
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "240",
+        "8192",
+        "spec",
+        "-Ddrama3_metal",
+        "spec/drama3_prefill_generator_spec.cr",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15"
+      },
+      "observed": "7 examples, 0 failures, 0 errors",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/generator-spec.log"
+    },
+    {
+      "scope": "Real two-head stride relocation; pinned wide attention at 1024/1025 on synthetic prefix; graph0/2; persistent workspace and bounds",
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "crystal",
+        "240",
+        "8192",
+        "spec",
+        "-Ddrama3_metal",
+        "spec/drama3_window_growth_resident_spec.cr",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+      ],
+      "environment": {
+        "DRAMA3_BACKEND": "metal",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15"
+      },
+      "observed": "5 examples, 0 failures, 0 errors",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/resident-spec.log"
+    },
+    {
+      "scope": "Native release build",
+      "reproduction_command": [
+        "scripts/run_safe.sh",
+        "make",
+        "360",
+        "12288",
+        "drama3_studio",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build",
+        "BRIDGE_OBJ=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o"
+      ],
+      "observed": "exit 0",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build.log"
+    },
+    {
+      "scope": "Full-model HTTP probes, one worker each, serial",
+      "reproduction_command_template": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "900",
+        "40960",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/probe.py",
+        "--binary",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build/drama3_studio",
+        "--model",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "--output-dir",
+        "<depth-specific directory>",
+        "--frames",
+        "512",
+        "--depth",
+        "<0 or 2>",
+        "--auto-first",
+        "--pinned-control",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-cap512.json"
+      ],
+      "observed": "Two four-request series complete; exact native outputs and same-cap pinned upstream codes; clean cleanup.",
+      "receipts": [
+        "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth0/probe.json",
+        "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-recheck/probe.json"
+      ]
+    },
+    {
+      "scope": "Formatting, JavaScript syntax, whitespace, packet paths and source/artifact hash integrity",
+      "observed": "All checks passed; index validation is not semantic proof",
+      "receipt": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/final-checks.json"
+    }
+  ],
+  "native_series": {
+    "depth0": {
+      "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth0/probe.json",
+      "graph_depth": 0,
+      "request_order": [
+        {
+          "automatic": true,
+          "label": "auto_frames_max512_cold",
+          "position": 1,
+          "revision": 1,
+          "worker_job": 1,
+          "worker_pid": 82618
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat1",
+          "position": 2,
+          "revision": 2,
+          "worker_job": 2,
+          "worker_pid": 82618
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat2",
+          "position": 3,
+          "revision": 2,
+          "worker_job": 3,
+          "worker_pid": 82618
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat3",
+          "position": 4,
+          "revision": 2,
+          "worker_job": 4,
+          "worker_pid": 82618
+        }
+      ],
+      "requested_frame_cap": 512,
+      "prompt_rows": 29,
+      "automatic": {
+        "initial_capacity": 64,
+        "capacity": 128,
+        "maximum_capacity": 540,
+        "window_growths": [
+          {
+            "backbone_position": 64,
+            "from": 64,
+            "to": 128,
+            "tower_offset": 63
+          }
+        ],
+        "window_growth_plan": {
+          "capacity_schedule": [
+            64,
+            128,
+            256,
+            512,
+            540
+          ],
+          "final_capacity": 540,
+          "frames": 512,
+          "generation_cache_bytes": [
+            6029312,
+            12058624,
+            24117248,
+            48234496,
+            50872320
+          ],
+          "initial_capacity": 64,
+          "prior_generation_reservation_bytes": 90439680,
+          "window_plan": {
+            "additional_margin_bytes": 1164181504,
+            "advisory_only": true,
+            "breakdown": {
+              "backbone_cache_bytes": 22118400,
+              "checkpoint_mapped_bytes": 25867452416,
+              "codec_temporaries_bytes": 201326592,
+              "codec_weightnorm_temporaries_included_bytes": 151019520,
+              "converted_static_bytes": 1577211912,
+              "decoder_scratch_bytes": 1207959552,
+              "estimated_total_bytes": 29041371460,
+              "generation_buffers_bytes": 77628,
+              "generation_temporaries_bytes": 69624320,
+              "largest_buffer_bytes": 5498961920,
+              "recurrent_state_bytes": 66846720,
+              "reference_encoder_peak_bytes": 0,
+              "tower_cache_bytes": 28753920
+            },
+            "budget_bytes": 32437754265,
+            "effective_frame_cap": 512,
+            "estimated_bytes": 29041371460,
+            "generated_frames": 512,
+            "host_budget_bytes": 32437754265,
+            "host_gc_retention_certified": false,
+            "host_reserved_bytes": 10307921511,
+            "max_buffer_length": 41747087360,
+            "metal_budget_bytes": 42739694800,
+            "total_positions": 540
+          }
+        },
+        "window_growth_admissions": [
+          {
+            "admission": {
+              "admitted": true,
+              "downstream_reserve_bytes": 3056122376,
+              "host_after_bytes": 10565273080,
+              "host_free_bytes": 14707195904,
+              "host_reserved_bytes": 10307921511,
+              "largest_buffer_bytes": 262144,
+              "margin_bytes": 1073741824,
+              "max_buffer_length": 41747087360,
+              "metal_current_allocated_bytes": 24109137920,
+              "metal_recommended_bytes": 55662788608,
+              "metal_remaining_bytes": 31553650688,
+              "new_allocation_bytes": 12058624,
+              "process_after_bytes": 14698612216,
+              "process_remaining_bytes": 18840535040,
+              "required_bytes": 4141922824
+            },
+            "after": {
+              "free_reclaimable_bytes": 14707343360,
+              "metal_allocated_bytes": 24121196544,
+              "metal_recommended_bytes": 55662788608,
+              "physical_bytes": 68719476736,
+              "process_footprint_bytes": 215319440,
+              "process_peak_footprint_bytes": 244138896,
+              "tracked_buffers": {
+                "live_buffers": 3531,
+                "live_bytes": 24119565668,
+                "peak_bytes": 24119565668
+              },
+              "valid": true
+            },
+            "before": {
+              "free_reclaimable_bytes": 14707195904,
+              "metal_allocated_bytes": 24109137920,
+              "metal_recommended_bytes": 55662788608,
+              "physical_bytes": 68719476736,
+              "process_footprint_bytes": 215319440,
+              "process_peak_footprint_bytes": 244138896,
+              "tracked_buffers": {
+                "live_buffers": 3485,
+                "live_bytes": 24107507044,
+                "peak_bytes": 24114352384
+              },
+              "valid": true
+            },
+            "from": 64,
+            "to": 128
+          }
+        ]
+      },
+      "fixed_capacity": 540,
+      "frames_each": 60,
+      "eos_each": true,
+      "truncated_each": false,
+      "native_codes_sha256": "549d418f7d5d5c35a8844826bdcb777db531fd6f538518076725fcb7619c4139",
+      "native_wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "native_sampler_inputs": {
+        "dtype": "float32-le",
+        "sha256": "63e955c00512b965c17303e4c2517ed4eeb093193af6c881542045c0c7ece7a1",
+        "uniform_count": 5632
+      },
+      "native_exact_auto_fixed_and_repeats": true,
+      "same_cap_pinned_upstream_codes_exact": true,
+      "readbacks_each": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "graph_each": {
+        "completed": 182,
+        "completion_waits": 182,
+        "depth": 0,
+        "max_pending": 0,
+        "max_retained_bytes": 0,
+        "pending": 0,
+        "retained_bytes": 0,
+        "submitted": 182
+      },
+      "minimum_sampled_free_reclaimable_percent": 20.337486267089844,
+      "maximum_sampled_metal_bytes": 27052982272,
+      "maximum_sampled_process_footprint_bytes": 1425392648,
+      "post_gc_tracked_live_bytes": [
+        26610271116,
+        26610271116,
+        26610271116,
+        26610377612
+      ],
+      "second_owner_contender": {
+        "events": [
+          {
+            "event": "error",
+            "message": "DRAMA3 model already owned (lease unavailable): <model>"
+          }
+        ],
+        "expected_reject_before_load": true,
+        "lease_error_seen": true,
+        "ready_event_seen": false,
+        "returncode": 1,
+        "timed_out": false,
+        "timeout_seconds": 15.0
+      },
+      "cleanup": {
+        "forced_server_kill": false,
+        "known_child_pids": [
+          82618
+        ],
+        "listener_gone": true,
+        "remaining_child_pids": [],
+        "returncode": 0,
+        "worker_pid_gone": true
+      },
+      "outer_run_safe_exit": 0,
+      "environment": {
+        "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+        "DRAMA3_DAC_SCRATCH": "1",
+        "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+        "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+        "DRAMA3_GDN_POST_FUSION": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_METAL_RESOURCES": "0",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_PREFILL_CHUNK": "1",
+        "DRAMA3_STUDIO_MEMORY_LIMIT_MIB": "40960",
+        "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+        "DRAMA3_TOWER_FFN_PAIR_FUSION": "0"
+      }
+    },
+    "depth2-recheck": {
+      "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-recheck/probe.json",
+      "graph_depth": 2,
+      "request_order": [
+        {
+          "automatic": true,
+          "label": "auto_frames_max512_cold",
+          "position": 1,
+          "revision": 1,
+          "worker_job": 1,
+          "worker_pid": 523
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat1",
+          "position": 2,
+          "revision": 2,
+          "worker_job": 2,
+          "worker_pid": 523
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat2",
+          "position": 3,
+          "revision": 2,
+          "worker_job": 3,
+          "worker_pid": 523
+        },
+        {
+          "automatic": false,
+          "label": "fixed512_repeat3",
+          "position": 4,
+          "revision": 2,
+          "worker_job": 4,
+          "worker_pid": 523
+        }
+      ],
+      "requested_frame_cap": 512,
+      "prompt_rows": 29,
+      "automatic": {
+        "initial_capacity": 64,
+        "capacity": 128,
+        "maximum_capacity": 540,
+        "window_growths": [
+          {
+            "backbone_position": 64,
+            "from": 64,
+            "to": 128,
+            "tower_offset": 63
+          }
+        ],
+        "window_growth_plan": {
+          "capacity_schedule": [
+            64,
+            128,
+            256,
+            512,
+            540
+          ],
+          "final_capacity": 540,
+          "frames": 512,
+          "generation_cache_bytes": [
+            6029312,
+            12058624,
+            24117248,
+            48234496,
+            50872320
+          ],
+          "initial_capacity": 64,
+          "prior_generation_reservation_bytes": 90439680,
+          "window_plan": {
+            "additional_margin_bytes": 1164181504,
+            "advisory_only": true,
+            "breakdown": {
+              "backbone_cache_bytes": 22118400,
+              "checkpoint_mapped_bytes": 25867452416,
+              "codec_temporaries_bytes": 201326592,
+              "codec_weightnorm_temporaries_included_bytes": 151019520,
+              "converted_static_bytes": 1577211912,
+              "decoder_scratch_bytes": 1207959552,
+              "estimated_total_bytes": 29041371460,
+              "generation_buffers_bytes": 77628,
+              "generation_temporaries_bytes": 69624320,
+              "largest_buffer_bytes": 5498961920,
+              "recurrent_state_bytes": 66846720,
+              "reference_encoder_peak_bytes": 0,
+              "tower_cache_bytes": 28753920
+            },
+            "budget_bytes": 33313823129,
+            "effective_frame_cap": 512,
+            "estimated_bytes": 29041371460,
+            "generated_frames": 512,
+            "host_budget_bytes": 33313823129,
+            "host_gc_retention_certified": false,
+            "host_reserved_bytes": 10307921511,
+            "max_buffer_length": 41747087360,
+            "metal_budget_bytes": 42739645696,
+            "total_positions": 540
+          }
+        },
+        "window_growth_admissions": [
+          {
+            "admission": {
+              "admitted": true,
+              "downstream_reserve_bytes": 3056122376,
+              "host_after_bytes": 10447963640,
+              "host_free_bytes": 14589886464,
+              "host_reserved_bytes": 10307921511,
+              "largest_buffer_bytes": 262144,
+              "margin_bytes": 1073741824,
+              "max_buffer_length": 41747087360,
+              "metal_current_allocated_bytes": 24093491200,
+              "metal_recommended_bytes": 55662788608,
+              "metal_remaining_bytes": 31569297408,
+              "new_allocation_bytes": 12058624,
+              "process_after_bytes": 14714258936,
+              "process_remaining_bytes": 18856181760,
+              "required_bytes": 4141922824
+            },
+            "after": {
+              "free_reclaimable_bytes": 14589886464,
+              "metal_allocated_bytes": 24105549824,
+              "metal_recommended_bytes": 55662788608,
+              "physical_bytes": 68719476736,
+              "process_footprint_bytes": 199803768,
+              "process_peak_footprint_bytes": 245547896,
+              "tracked_buffers": {
+                "live_buffers": 2002,
+                "live_bytes": 24101560884,
+                "peak_bytes": 24114363624
+              },
+              "valid": true
+            },
+            "before": {
+              "free_reclaimable_bytes": 14589886464,
+              "metal_allocated_bytes": 24093491200,
+              "metal_recommended_bytes": 55662788608,
+              "physical_bytes": 68719476736,
+              "process_footprint_bytes": 199803768,
+              "process_peak_footprint_bytes": 245547896,
+              "tracked_buffers": {
+                "live_buffers": 1956,
+                "live_bytes": 24089502260,
+                "peak_bytes": 24114363624
+              },
+              "valid": true
+            },
+            "from": 64,
+            "to": 128
+          }
+        ]
+      },
+      "fixed_capacity": 540,
+      "frames_each": 60,
+      "eos_each": true,
+      "truncated_each": false,
+      "native_codes_sha256": "549d418f7d5d5c35a8844826bdcb777db531fd6f538518076725fcb7619c4139",
+      "native_wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "native_sampler_inputs": {
+        "dtype": "float32-le",
+        "sha256": "63e955c00512b965c17303e4c2517ed4eeb093193af6c881542045c0c7ece7a1",
+        "uniform_count": 5632
+      },
+      "native_exact_auto_fixed_and_repeats": true,
+      "same_cap_pinned_upstream_codes_exact": true,
+      "readbacks_each": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "graph_each": {
+        "completed": 122,
+        "completion_waits": 122,
+        "depth": 2,
+        "max_pending": 2,
+        "max_retained_bytes": 31886862604,
+        "pending": 0,
+        "retained_bytes": 0,
+        "submitted": 122
+      },
+      "minimum_sampled_free_reclaimable_percent": 20.256543159484863,
+      "maximum_sampled_metal_bytes": 27066695680,
+      "maximum_sampled_process_footprint_bytes": 1440482384,
+      "post_gc_tracked_live_bytes": [
+        26610271116,
+        26610383756,
+        26610533324,
+        26610551756
+      ],
+      "second_owner_contender": {
+        "events": [
+          {
+            "event": "error",
+            "message": "DRAMA3 model already owned (lease unavailable): <model>"
+          }
+        ],
+        "expected_reject_before_load": true,
+        "lease_error_seen": true,
+        "ready_event_seen": false,
+        "returncode": 1,
+        "timed_out": false,
+        "timeout_seconds": 15.0
+      },
+      "cleanup": {
+        "forced_server_kill": false,
+        "known_child_pids": [
+          523
+        ],
+        "listener_gone": true,
+        "remaining_child_pids": [],
+        "returncode": 0,
+        "worker_pid_gone": true
+      },
+      "outer_run_safe_exit": 0,
+      "environment": {
+        "DRAMA3_BACKBONE_DENSE_FUSION": "0",
+        "DRAMA3_BACKEND": "metal",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+        "DRAMA3_DAC_SCRATCH": "1",
+        "DRAMA3_EXPERT_DOWN_SUM_FUSION": "0",
+        "DRAMA3_EXPERT_SWIGLU_FUSION": "0",
+        "DRAMA3_GDN_POST_FUSION": "0",
+        "DRAMA3_MEMORY_PROFILE": "0",
+        "DRAMA3_METAL_RESOURCES": "0",
+        "DRAMA3_MMAP_SHARED": "0",
+        "DRAMA3_MOE_BATCH": "1",
+        "DRAMA3_PREFILL_CHUNK": "1",
+        "DRAMA3_STUDIO_MEMORY_LIMIT_MIB": "40960",
+        "DRAMA3_TOWER_EMBEDDING_FUSION": "0",
+        "DRAMA3_TOWER_FFN_PAIR_FUSION": "0"
+      }
+    }
+  },
+  "intermediate_gpu_diagnostic": {
+    "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-growth.json",
+    "capture": {
+      "baseline_boundaries": 243,
+      "candidate_boundaries": 243,
+      "comparisons": 729,
+      "comparison_order": "row-major; layer attention_residual, layer hidden, final hidden; native pair then each MLX arm"
+    },
+    "result": {
+      "candidate_native_exact_pass": true,
+      "upstream_metrics_identical": true,
+      "strict_upstream_pass": false,
+      "first_native_difference": null,
+      "first_baseline_upstream_failure": {
+        "row": 1,
+        "stage": "backbone.layers.39.hidden"
+      },
+      "first_candidate_upstream_failure": {
+        "row": 1,
+        "stage": "backbone.layers.39.hidden"
+      }
+    },
+    "window_growth": {
+      "baseline": {
+        "initial_capacity": 8,
+        "final_capacity": 8,
+        "maximum_capacity": 8
+      },
+      "candidate": {
+        "initial_capacity": 1,
+        "final_capacity": 4,
+        "maximum_capacity": 8
+      },
+      "growth_records": [
+        {
+          "row": 1,
+          "position_before_row": 1,
+          "required_capacity": 2,
+          "previous_capacity": 1,
+          "new_capacity": 2
+        },
+        {
+          "row": 2,
+          "position_before_row": 2,
+          "required_capacity": 3,
+          "previous_capacity": 2,
+          "new_capacity": 4
+        }
+      ],
+      "bounded_claim": "three pinned rows only; the candidate grows geometrically up to capacity 8 and is compared across the existing 243 device-resident backbone boundaries; this does not establish long-context behavior or production memory bounds"
+    },
+    "readbacks": {
+      "control": 4,
+      "terminal": 14580
+    },
+    "graph_after_drain": {
+      "depth": 2,
+      "submitted": 1,
+      "completed": 1,
+      "pending": 0,
+      "max_pending": 1,
+      "completion_waits": 1,
+      "retained_bytes": 0,
+      "max_retained_bytes": 21939829472
+    },
+    "source_sha256": {
+      "harness": "06fb8580ea2fdf23f54f8f6e5d4a9549cc69405ddb6b947dab9fd775d6a4ee00",
+      "comparison_metal": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+      "resident_cr": "35d400ce1268db27296b5bf80720e402078332ce587ecaffab8d4c683b34eed7",
+      "backbone_resident_cr": "2520b2e38d5c3001d4d20a1ec23958d6af8ae10d12fe6dea0db2552fbdc71a7d",
+      "resident_metal_embedded": "ae7d503ea3b014fb0aaa9622dc18bab7cbd31bdbc7fd54b3b357f0aa04a13d62",
+      "backbone_resident_metal_embedded": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d"
+    },
+    "command": [
+      "scripts/run_safe.sh",
+      "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build/upstream-growth",
+      "360",
+      "18000",
+      "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+      "/opt/mldata_ssd/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+      "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-growth.json",
+      "--window-growth"
+    ]
+  },
+  "upstream_control": {
+    "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-cap512.json",
+    "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "runtime": {
+      "python": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+      "python_executable": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "mlx_version": "0.31.1",
+      "replay_loader_path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/replay_mlx_generation.py",
+      "replay_loader_sha256": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+      "replay_loader_git_revision": "24340f0b5d968802728d7a655d25fdfece36d9ce",
+      "default_device": "Device(gpu, 0)",
+      "hub_network_policy": {
+        "HF_HUB_OFFLINE": "1",
+        "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1"
+      },
+      "allocator_cache_limit_bytes": 0,
+      "previous_allocator_cache_limit_bytes": 65283502899,
+      "prefill_chunk_size": 1,
+      "host_readback_scope": "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, one terminal sampled-main scalar for EOS classification, and terminal output/logit conversion after mx.eval; no per-token activation readback"
+    },
+    "source_hashes": {
+      "mlx_audio/utils.py": "a9a6e2c29962949ce0e278d4b923394d81529586feec4599616af292ce64de42",
+      "mlx_audio/tts/utils.py": "3d31af164037578ade6e0f9126d8d5ea647b1176c69d3c4280bf3094806c0388",
+      "mlx_audio/tts/models/base.py": "6fb902515978db0e5024b8fc4c7eea1a25902bf16eb7276170fd6e7cc1fccc70",
+      "mlx_audio/tts/models/fish_omni/__init__.py": "989358fa928817bdc3d1e62d5be2994600cc933f8a535e556c6d7815d3638ac0",
+      "mlx_audio/tts/models/fish_omni/config.py": "b86e352cfd602b306ce701fa0f9b9282f8cba11cb1cc78f6ea188c44fb23ee22",
+      "mlx_audio/tts/models/fish_omni/fish_omni.py": "3b0eb71f765c6696055f5f2bdd0810dd31cd75c9385ff0202fb452938f246441",
+      "mlx_audio/tts/models/fish_omni/prompt.py": "c2f9c80ed2e4ba6c73a3806e3fdbd94f5cea80c75cce450a003e4e71d17f25c2",
+      "mlx_audio/tts/models/fish_omni/tower.py": "a184fcc388a70d389ec912c531eb3bbdcc0372be638560d1dd9a9ee1a1ecdba0",
+      "mlx_audio/lm/models/qwen3_5.py": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1",
+      "mlx_audio/lm/models/activations.py": "c90408cee7fff39eaaf5aa0fa34a8351bf898f2acab572cb09e3c90f776c183b",
+      "mlx_audio/lm/models/base.py": "0cac9ce6bf366622934f11eab4cc5eb2d394f46ac702cdd507c9c23c18fc1b96",
+      "mlx_audio/lm/models/cache.py": "ab41054c4564784e7e131d7bd9c9e42a91b951bb4478d3a7ce8017ed3028e632",
+      "mlx_audio/lm/models/gated_delta.py": "c51f0547d8f066bbc6306011cd87be5aeac1c6fad42a1dacfe3f6e22818cbd32",
+      "mlx_audio/lm/models/rope_utils.py": "c96bca6b7a7eafec4fe64e7e632d8697e078f1721cefb2c8b36e565a1f4b21af",
+      "mlx_audio/lm/models/switch_layers.py": "aa9ee805cd397f60996e254bd75cd97454770a34f748bc7bc97035f12857825e",
+      "mlx_audio/codec/models/fish_s1_dac/__init__.py": "c0dcbc2fbe7b7b2e3ce1563e9b966722b6ec9f5bfbd0da95212d9280fcbd51d4",
+      "mlx_audio/codec/models/fish_s1_dac/fish_s1_dac.py": "365bd3384b07c8da019edbcb5aeac7b7aee560e4ed4821dbe3fff29a68c802d1",
+      "scripts/drama3/replay_mlx_generation.py": "33a1468038b1a97ec9d144665a4d0572a9fed9c9ab544ab2f97bc64c6cd31cad",
+      "scripts/drama3/generate_mlx_control.py": "6da10f4be3fe38d2e90f5cc178802533ee7b7e7a7c7c5424720e55aa8779dd0a"
+    },
+    "loader": "F32 promotion of floating core tensors; packed integers preserved; official quantization/post-load hook and checkpoint-dtype Fish DAC loader.",
+    "settings": {
+      "seed": 1,
+      "seed_semantics": "seeds MLX stock RNG; with --random-tape the supplied uniforms control all 11 draws per generation iteration and seed does not control those choices",
+      "max_frames": 512,
+      "temperature": 0.8,
+      "top_k": 30,
+      "top_p": 0.9,
+      "repetition_aware_retry": {
+        "temperature": 1.0,
+        "top_k": 30,
+        "top_p": 0.95,
+        "window_frames": 16
+      },
+      "sampler": "shared_uniform_inverse_cdf_shadow",
+      "sampler_draw_order": [
+        "main",
+        "main_retry",
+        "codebook_1",
+        "codebook_2",
+        "codebook_3",
+        "codebook_4",
+        "codebook_5",
+        "codebook_6",
+        "codebook_7",
+        "codebook_8",
+        "codebook_9"
+      ],
+      "draws_per_iteration": 11,
+      "random_tape": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json",
+        "sha256": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+        "uniform_count": 8448,
+        "used_uniform_count": 671,
+        "uniform_domain": "inclusive [0,1]; 1 selects the last retained candidate",
+        "host_uploads": 1,
+        "sampler_scope": "same top-k and top-p candidate filtering; MLX F32 inverse CDF advances on exact CDF equality like Crystal's subtractive rule and clamps U=1 to the last retained candidate; numeric operation order and precision may still diverge from native"
+      },
+      "capture_steps": []
+    },
+    "text_sha256": "2dd06472b5cc6f3148d3f272a3120751768e444548f06875a6547704aa599b15",
+    "termination": {
+      "status": "eos",
+      "eos_detected": true,
+      "last_sampled_main_token": 248046,
+      "generation_iterations": 61,
+      "returned_frames": 60,
+      "max_frames": 512,
+      "frame_cap_reached": false,
+      "reason_source": "terminal scalar from the final sample_main result; EOS frame itself is omitted by official generate_codes"
+    },
+    "control_codes_sha256": "549d418f7d5d5c35a8844826bdcb777db531fd6f538518076725fcb7619c4139",
+    "native_codes_exact": true,
+    "native_vs_upstream_wav_numeric_claim": false,
+    "precision_and_tolerances_changed": false,
+    "strict_layer39_resolved": false
+  },
+  "rejected_attempts": [
+    {
+      "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2/probe.json",
+      "manifest": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-window-growth-20261018/depth2/library/studio.json",
+      "requested_frame_cap": 512,
+      "error": "window growth rejected before allocation: InsufficientHostBudget",
+      "numeric_failed_admission_receipt_persisted": false,
+      "cleanup": {
+        "forced_server_kill": false,
+        "known_child_pids": [],
+        "listener_gone": true,
+        "remaining_child_pids": [],
+        "returncode": 0,
+        "worker_pid_gone": true
+      },
+      "causal_claim": "Exact rejection cause beyond the recorded admission failure is unproven. The same-binary cap512 recheck passed without source or guard changes."
+    },
+    {
+      "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-cap128/probe.json",
+      "manifest": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-window-growth-20261018/depth2-cap128/library/studio.json",
+      "requested_frame_cap": 128,
+      "error": "automatic window rejected: InsufficientBudget",
+      "numeric_failed_admission_receipt_persisted": false,
+      "cleanup": {
+        "forced_server_kill": false,
+        "known_child_pids": [],
+        "listener_gone": true,
+        "remaining_child_pids": [],
+        "returncode": 0,
+        "worker_pid_gone": true
+      },
+      "causal_claim": "Exact rejection cause beyond the recorded admission failure is unproven. The same-binary cap512 recheck passed without source or guard changes."
+    }
+  ],
+  "header_only_preflight": {
+    "report": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/preflight.json",
+    "scope": "No inference/command execution or weight payload loading; mapped headers plus host/Metal telemetry. Both caps were admissible in this later snapshot. This cannot establish the causes of earlier failed admissions."
+  },
+  "review": {
+    "verdict": "ROBUST",
+    "scope": "Guarded no-reference Studio growth plus the declared test/HTTP cases.",
+    "reviewer": "Correlated mini-Quadrumvirate source and receipt review; same lineage, not independent evidence.",
+    "attacks": [
+      "New persistent allocation/lifetime and stale KV strides",
+      "EOS, prompt/final-frame and pinned reduction boundaries",
+      "Fail-closed budget rejection before replacement allocation and abort after partial failure",
+      "Exact native states/codes/WAV/tape and unchanged read/wait ledgers",
+      "Proxy mismatch: upstream code equality does not resolve hidden/logit discrepancy; short tracked-byte plateau does not prove leak freedom"
+    ],
+    "remaining_observability_issue": "Rejected admission loses numeric AdmissionReport in the persisted job error; exact earlier failure causes remain open."
+  },
+  "limits": [
+    "Full-model pilots cover one actual 64->128 growth, one text/seed and 60 returned frames; subsequent expansions are covered only by small-model GPU tests.",
+    "1024/1025 attention proof uses a synthetic cached prefix, not 1024 full-model generation steps.",
+    "No full4096 model run, automatic reference sizing, unbounded expansion, performance, voice-quality or sustained leak-freedom claim.",
+    "15% and process limits are sampled, cannot interrupt an individual GPU operation and do not reserve memory atomically.",
+    "Warm admission deliberately keeps conservative cold static inventory; mapping identity is not residency proof.",
+    "149632-byte historical residual is parked. Current small post-GC drift is retained in receipts; no zero-retention claim.",
+    "Existing scalar EOS and terminal output reads remain. No additional activation readback or inference synchronization was introduced.",
+    "Strict upstream late-layer gate still fails at row1 backbone.layers.39.hidden with the original tolerances."
+  ],
+  "private_artifact_directory": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018",
+  "artifact_sha256": {
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/cpu-spec.log": "a585c2f6badd8c1180a4cc2be084de8d69aa499e0378ccce8364daf81ebbc754",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/js-spec.log": "bbdae1dbf08ca36453fdc4abe52d60ad44efc3e169ec11936687b29f057eee76",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/generator-spec.log": "8f7787b4839b42ce896cfe3e607deb4259cad5c8ee51ed2bd641ca1d19d4031d",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/resident-spec.log": "96347e5773e6b125c5108d1730ef307aa74d6ba6c0bb1a4da5d5b56b0c53d92b",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/build.log": "db3d61e703f8d13e24d419b4f59f41a0b9ed2878970f687644cf17b82755a767",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-growth-build.log": "10051b6a49a987f41e1f9c0c5dea5dd033de7b7e0f9c5ac35b1023dc19547381",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-growth.log": "3c74d930a637368ff88cc2694b9df616c034ea21583a081aef5bdb939fd4c72e",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-growth.json": "5fe54becf14af55eeb7aaba9dd9234ed0aac965e2d23902086957c84d04a1221",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-cap512.log": "a0502feb6ea4bf5dfefa32941f06843940b8159524c52d4691489d51edbde85a",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-cap512.json": "27299aa8399e48d55791155e5d164f13eddf84c3fef99ebaa7ebb742e4aa97fc",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/upstream-cap512.wav": "c3fe85788c9bab0d2c6b30a21639092b65c4d39bb1068f2b97256821febf211f",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth0.log": "d6781e7a723e6fc75bcdd7337fead5f43e891752eb421d0c42bcbbe2ca98abe7",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth0/probe.json": "e8160c78f50c1aeb369c7ee599387e38b477151e968c168144b545c8df89fd53",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2.log": "ab72a42cf7e888e38b1d4a3582e5e80395cf5bdb5307df9998532e6122d7ca31",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2/probe.json": "b366e28067ee2fe3c8af4b3213eb5d2ed3003501d994eeb7007e5b8d19f3d2da",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-cap128.log": "34bf3cbec354ed9a86b5bdc88c6c6d8f3cb6a2abc041ae145870581dab521d56",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-cap128/probe.json": "6ccf0077e0c2483fec8883e332f21acdd7d4f6ac9645df7e0759bf4567b1d554",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-recheck.log": "ebd269883eb38453ed8a6b528c9473844bedd5008ae2c9516736f8145c70e470",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/depth2-recheck/probe.json": "4df2a5149dfa168f299cb3397b9cc55b82c27902d32fbe1857ee699664988be6",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/preflight.log": "836513908a5e7ce1ee1d0500e2a831cba456196c6c0f785d419957d7b0dbc6a1",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/preflight.json": "b89dcd86b32a343a5bc2c37dd298e089322e72462509a213721b7cb980e02f09",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/probe.py": "5ac3d29bade99d43aed3a3eb2d6d22c402b458f53a6fd01309d6c6a0adce360c",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/budget_preflight.cr": "541b69d650d93df9e220c90848728fde3802001b75b3f7cadbd171665e6a75a2",
+    "/Volumes/Nata's Data/MLData/cogni-ml/drama3-window-growth-20261018/depth2/library/studio.json": "040cb47e4e5110dba329d67e25b9f91e0ef0c70cbc904ce4fb7755a7439962b8",
+    "/Volumes/Nata's Data/MLData/cogni-ml/drama3-window-growth-20261018/depth2-cap128/library/studio.json": "b03ede6cfbd6f41cafddb104bb29f20874f14107f98d146f9b04df5ef3cf22ff",
+    "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/final-checks.json": "482cf3b60a4840c69b9aa657229c38dac7aeb4501331f2852954c4a591bfb7a8"
+  },
+  "cleanup": "Both successful HTTP servers/workers and the sequential upstream control exited; receipts show normal cleanup with no listener/owned children. Earlier rejected pilots also passed cleanup. No background service started.",
+  "structural_validation": {
+    "repository_template_available": false,
+    "repository_validator_available": false,
+    "fallback": "JSON parse plus exact changed-path/source/artifact hash checks. This is index integrity only, not a semantic proof."
+  },
+  "continuation": {
+    "active_frontier": "Requested bounded GPU window growth is implemented and tested. The tiny historical retained-byte residual remains parked.",
+    "next_falsifier": "Any wider claim needs a bounded longer varied-input multi-growth full-model run under current headroom; persist numeric failed-admission receipts before claiming causal diagnosis.",
+    "decay_trigger": "Refresh after source, checkpoint/config, precision/tolerance, input/tape/capacity, allocator/graph policy or runtime/device/driver changes. Current host workload invalidates admission headroom; lost artifacts invalidate replay evidence.",
+    "standing_authority": "Bounded batch finished; models and Studio stopped. Local exact-path atomic commit, no push; unrelated projects untouched."
+  },
+  "run_environment": {
+    "CRYSTAL_CACHE_DIR": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/cache",
+    "TMPDIR": "/opt/mldata_ssd/cogni-ml/drama3-window-growth-20261018/tmp",
+    "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  }
+}

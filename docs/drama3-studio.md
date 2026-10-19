@@ -88,8 +88,12 @@ prompt/reference rows. The worker rejects requests whose prompt and budget do
 not fit. A take that reaches its budget is marked as truncated. References do
 not guarantee identical voice identity across all texts or languages.
 
-An optional **Window size → Automatic (memory budget)** setting chooses the
-largest admissible window up to **Frame limit** before allocating KV state.
+An optional **Window size → Automatic (memory budget)** setting admits a final
+window up to **Frame limit**, starts at 64 positions or the prompt size (capped
+by the admitted final window), and grows the KV buffers geometrically during
+generation as needed. Cache values
+move directly between GPU buffers at the existing EOS control boundary. The
+sampler tape and output frame cap stay fixed; growth adds no synchronization.
 Enable it by starting the server with `DRAMA3_DAC_SCRATCH=1`; it currently supports
 generation without a voice reference. Manual mode remains the default, including
 older saved segments. Automatic sizing uses the advisory memory planner and
@@ -97,7 +101,14 @@ retains its conservative cold static-weight allowance on warm requests. A warm
 request can therefore be rejected despite having enough real headroom. Unknown
 telemetry or an unsupported reference rejects the request instead of guessing.
 Speech duration is only known when the model emits EOS; text length cannot
-guarantee a sufficient frame budget. The window is not resized during generation.
+guarantee a sufficient frame budget. Growth stops at the admitted limit, never
+past 4096 total positions. Admission charges all earlier cache generations and
+downstream DAC memory, then rechecks observed headroom before each expansion.
+Early EOS can avoid allocating unused tail capacity; a full-length request still
+needs the final window and temporarily retains previous storage during copies.
+These admission checks belong to Studio. Direct callers of
+`ResidentGenerator(maximum_capacity: ...)` must plan their own request budget
+and install a `before_window_growth` callback to admit replacement allocations.
 
 The worker samples free/reclaimable memory and stops at the 15% floor. Set
 `DRAMA3_STUDIO_MEMORY_LIMIT_MIB` to add an observed process-footprint and Metal
