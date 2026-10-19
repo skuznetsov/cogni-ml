@@ -138,35 +138,40 @@ module ML::Video
     # to the Arena names consumed by encode_with_audio. Shapes preserve the
     # PyTorch state-dict layout; Metal linear weights remain [out, in].
     def self.checkpoint_bindings(cfg : WanS2VConfig,
-                                 dtype : ML::GGUF::SafeTensorDType? = nil) : Array(WeightBinding)
+                                 dtype : ML::GGUF::SafeTensorDType? = nil,
+                                 block_index : Int32 = 0,
+                                 injector_index : Int32 = 0,
+                                 block_target_prefix : String = "",
+                                 audio_target_prefix : String = "") : Array(WeightBinding)
+      raise ArgumentError.new("Wan block and injector indices must be non-negative") if block_index < 0 || injector_index < 0
       dim = cfg.dim.to_i64
       ffn = cfg.ffn_dim.to_i64
       bindings = [] of WeightBinding
-      bindings << WeightBinding.new("block_modulation", "blocks.0.modulation", [1_i64, 6_i64, dim])
-      bindings << WeightBinding.new("norm3_weight", "blocks.0.norm3.weight", [dim])
-      bindings << WeightBinding.new("norm3_bias", "blocks.0.norm3.bias", [dim])
+      bindings << WeightBinding.new("#{block_target_prefix}block_modulation", "blocks.#{block_index}.modulation", [1_i64, 6_i64, dim])
+      bindings << WeightBinding.new("#{block_target_prefix}norm3_weight", "blocks.#{block_index}.norm3.weight", [dim])
+      bindings << WeightBinding.new("#{block_target_prefix}norm3_bias", "blocks.#{block_index}.norm3.bias", [dim])
       {"self", "cross"}.each do |prefix|
-        source_prefix = "blocks.0.#{prefix}_attn"
+        source_prefix = "blocks.#{block_index}.#{prefix}_attn"
         {"q", "k", "v", "o"}.each do |name|
-          bindings << WeightBinding.new("#{prefix}_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
-          bindings << WeightBinding.new("#{prefix}_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
+          bindings << WeightBinding.new("#{block_target_prefix}#{prefix}_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
+          bindings << WeightBinding.new("#{block_target_prefix}#{prefix}_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
         end
-        bindings << WeightBinding.new("#{prefix}_norm_q_weight", "#{source_prefix}.norm_q.weight", [dim])
-        bindings << WeightBinding.new("#{prefix}_norm_k_weight", "#{source_prefix}.norm_k.weight", [dim])
+        bindings << WeightBinding.new("#{block_target_prefix}#{prefix}_norm_q_weight", "#{source_prefix}.norm_q.weight", [dim])
+        bindings << WeightBinding.new("#{block_target_prefix}#{prefix}_norm_k_weight", "#{source_prefix}.norm_k.weight", [dim])
       end
-      bindings << WeightBinding.new("ffn_in_weight", "blocks.0.ffn.0.weight", [ffn, dim])
-      bindings << WeightBinding.new("ffn_in_bias", "blocks.0.ffn.0.bias", [ffn])
-      bindings << WeightBinding.new("ffn_out_weight", "blocks.0.ffn.2.weight", [dim, ffn])
-      bindings << WeightBinding.new("ffn_out_bias", "blocks.0.ffn.2.bias", [dim])
-      bindings << WeightBinding.new("adain_weight", "audio_injector.injector_adain_layers.0.linear.weight", [2_i64 * dim, dim])
-      bindings << WeightBinding.new("adain_bias", "audio_injector.injector_adain_layers.0.linear.bias", [2_i64 * dim])
+      bindings << WeightBinding.new("#{block_target_prefix}ffn_in_weight", "blocks.#{block_index}.ffn.0.weight", [ffn, dim])
+      bindings << WeightBinding.new("#{block_target_prefix}ffn_in_bias", "blocks.#{block_index}.ffn.0.bias", [ffn])
+      bindings << WeightBinding.new("#{block_target_prefix}ffn_out_weight", "blocks.#{block_index}.ffn.2.weight", [dim, ffn])
+      bindings << WeightBinding.new("#{block_target_prefix}ffn_out_bias", "blocks.#{block_index}.ffn.2.bias", [dim])
+      bindings << WeightBinding.new("#{audio_target_prefix}adain_weight", "audio_injector.injector_adain_layers.#{injector_index}.linear.weight", [2_i64 * dim, dim])
+      bindings << WeightBinding.new("#{audio_target_prefix}adain_bias", "audio_injector.injector_adain_layers.#{injector_index}.linear.bias", [2_i64 * dim])
       {"q", "k", "v", "o"}.each do |name|
-        source_prefix = "audio_injector.injector.0"
-        bindings << WeightBinding.new("audio_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
-        bindings << WeightBinding.new("audio_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
+        source_prefix = "audio_injector.injector.#{injector_index}"
+        bindings << WeightBinding.new("#{audio_target_prefix}audio_#{name}_weight", "#{source_prefix}.#{name}.weight", [dim, dim])
+        bindings << WeightBinding.new("#{audio_target_prefix}audio_#{name}_bias", "#{source_prefix}.#{name}.bias", [dim])
       end
-      bindings << WeightBinding.new("audio_q_norm_weight", "audio_injector.injector.0.norm_q.weight", [dim])
-      bindings << WeightBinding.new("audio_k_norm_weight", "audio_injector.injector.0.norm_k.weight", [dim])
+      bindings << WeightBinding.new("#{audio_target_prefix}audio_q_norm_weight", "audio_injector.injector.#{injector_index}.norm_q.weight", [dim])
+      bindings << WeightBinding.new("#{audio_target_prefix}audio_k_norm_weight", "audio_injector.injector.#{injector_index}.norm_k.weight", [dim])
       if expected_dtype = dtype
         bindings.map do |binding|
           WeightBinding.new(binding.target, binding.source, binding.shape, expected_dtype)
@@ -195,27 +200,60 @@ module ML::Video
     # Allocate every temporary before command encoding. The same Arena can be
     # reused across serial invocations after the previous command has completed.
     def self.prepare_scratch!(arena : Arena, cfg : WanS2VConfig) : Nil
-      n = cfg.values
-      ff = cfg.rows * cfg.ffn_dim
-      ctx = cfg.context_rows
       arena.upload("wan_b_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
       frequency_hi, frequency_lo = rope_frequencies(cfg)
       frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       arena.upload(frequency_hi_name, frequency_hi)
       arena.upload(frequency_lo_name, frequency_lo)
-      {
-        {"wan_b_norm1", n}, {"wan_b_mod1", n},
-        {"wan_b_self_q", n}, {"wan_b_self_k", n}, {"wan_b_self_v", n},
-        {"wan_b_self_qn", n}, {"wan_b_self_kn", n}, {"wan_b_self_qr", n}, {"wan_b_self_kr", n},
-        {"wan_b_self_attn", n}, {"wan_b_self_proj", n}, {"wan_b_self_res", n},
-        {"wan_b_cross_norm", n}, {"wan_b_cross_q", n}, {"wan_b_cross_k", ctx * cfg.dim},
-        {"wan_b_cross_v", ctx * cfg.dim}, {"wan_b_cross_qn", n},
-        {"wan_b_cross_kn", ctx * cfg.dim}, {"wan_b_cross_attn", n},
-        {"wan_b_cross_proj", n}, {"wan_b_cross_res", n},
-        {"wan_b_ffn_norm", n}, {"wan_b_ffn_mod", n}, {"wan_b_ffn_in", ff},
-        {"wan_b_ffn_gelu", ff}, {"wan_b_ffn_out", n},
-      }.each { |name, count| arena.alloc(name, count) }
+      scratch_plan(cfg).each { |name, count| arena.alloc(name, count) }
     end
+
+    # Unique backing allocations after lifetime aliases. Operations are
+    # enqueued serially: normalization/modulation and RoPE are elementwise
+    # in-place; cross-attention and FFN each reuse their consumed phase buffers.
+    def self.scratch_plan(cfg : WanS2VConfig) : Array(Tuple(String, Int32))
+      n = cfg.values
+      ff = cfg.rows * cfg.ffn_dim
+      ctx = cfg.context_rows
+      [
+        {"wan_b_norm1", n},
+        {"wan_b_self_q", n}, {"wan_b_self_k", n}, {"wan_b_self_v", n},
+        {"wan_b_self_attn", n}, {"wan_b_self_proj", n}, {"wan_b_self_res", n},
+        {"wan_b_cross_norm", n}, {"wan_b_cross_k", ctx * cfg.dim},
+        {"wan_b_cross_v", ctx * cfg.dim},
+        {"wan_b_ffn_in", ff}, {"wan_b_ffn_out", n},
+      ]
+    end
+
+    def self.scratch_bytes(cfg : WanS2VConfig) : Int64
+      # Includes the shared zero-bias vector and both FP32 RoPE frequency parts.
+      values = scratch_plan(cfg).sum { |_, count| count.to_i64 }
+      (values + cfg.dim + cfg.head_dim) * sizeof(Float32)
+    end
+
+    # The admitted, non-aliased block layout before lifetime reuse. Keep this
+    # accounting executable so reviews can distinguish real liveness savings
+    # from a missing allocation. Three context-sized arrays are K, V and normed
+    # K; FFN input/GELU are separate in the reference layout.
+    def self.unaliased_scratch_bytes(cfg : WanS2VConfig) : Int64
+      n = cfg.values.to_i64
+      context = cfg.context_rows.to_i64 * cfg.dim
+      ffn = cfg.rows.to_i64 * cfg.ffn_dim
+      values = 21_i64 * n + 3_i64 * context + 2_i64 * ffn
+      (values + cfg.dim + cfg.head_dim) * sizeof(Float32)
+    end
+
+    # These are direct references to the same backing allocation, not copies.
+    # Each pair is safe because the source value is dead before the next write.
+    SCRATCH_ALIASES = {
+      "mod1" => "wan_b_norm1",
+      "self_qn/self_qr/cross_q/cross_qn" => "wan_b_self_q",
+      "self_kn/self_kr" => "wan_b_self_k",
+      "cross_attn" => "wan_b_self_attn",
+      "cross_proj/cross_res" => "wan_b_self_proj",
+      "ffn_norm/ffn_mod" => "wan_b_cross_norm",
+      "ffn_gelu" => "wan_b_ffn_in",
+    }
 
     # Checkpoints are optional preallocated destinations. Accepted names are
     # documented here so the oracle and trace contract remain stable.
@@ -240,57 +278,58 @@ module ML::Video
                     modulation : ML::MetalBuffer, positions : ML::MetalBuffer,
                     context : ML::MetalBuffer, y : ML::MetalBuffer,
                     weights : Arena, scratch : Arena, cfg : WanS2VConfig,
-                    trace : Hash(String, ML::MetalBuffer)? = nil) : Nil
+                    trace : Hash(String, ML::MetalBuffer)? = nil,
+                    weight_prefix : String = "") : Nil
       n = cfg.values.to_i64
       rows = cfg.rows
       ctx_rows = cfg.context_rows
       dim = cfg.dim
       ff_count = (rows.to_i64 * cfg.ffn_dim)
-      validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg)
-      validate_trace!(trace, x, modulation, positions, context, y, weights, scratch, cfg)
+      validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
+      validate_trace!(trace, x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
 
       norm1 = scratch["wan_b_norm1"]
-      mod1 = scratch["wan_b_mod1"]
+      mod1 = norm1
       self_q = scratch["wan_b_self_q"]
       self_k = scratch["wan_b_self_k"]
       self_v = scratch["wan_b_self_v"]
-      self_qn = scratch["wan_b_self_qn"]
-      self_kn = scratch["wan_b_self_kn"]
-      self_qr = scratch["wan_b_self_qr"]
-      self_kr = scratch["wan_b_self_kr"]
+      self_qn = self_q
+      self_kn = self_k
+      self_qr = self_q
+      self_kr = self_k
       self_attn = scratch["wan_b_self_attn"]
       self_proj = scratch["wan_b_self_proj"]
       self_res = scratch["wan_b_self_res"]
       cross_norm = scratch["wan_b_cross_norm"]
-      cross_q = scratch["wan_b_cross_q"]
+      cross_q = self_q
       cross_k = scratch["wan_b_cross_k"]
       cross_v = scratch["wan_b_cross_v"]
-      cross_qn = scratch["wan_b_cross_qn"]
-      cross_kn = scratch["wan_b_cross_kn"]
-      cross_attn = scratch["wan_b_cross_attn"]
-      cross_proj = scratch["wan_b_cross_proj"]
-      cross_res = scratch["wan_b_cross_res"]
-      ffn_norm = scratch["wan_b_ffn_norm"]
-      ffn_mod = scratch["wan_b_ffn_mod"]
+      cross_qn = cross_q
+      cross_kn = cross_k
+      cross_attn = self_attn
+      cross_proj = self_proj
+      cross_res = cross_proj
+      ffn_norm = cross_norm
+      ffn_mod = cross_norm
       ffn_in = scratch["wan_b_ffn_in"]
-      ffn_gelu = scratch["wan_b_ffn_gelu"]
+      ffn_gelu = ffn_in
       ffn_out = scratch["wan_b_ffn_out"]
 
       # self-attention branch (norm1 is non-affine in upstream)
-      MetalOps.norm(e, x, weights["norm3_weight"], weights["norm3_bias"], norm1,
+      MetalOps.norm(e, x, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], norm1,
         rows, dim, EPS, affine: false)
       trace_copy(e, trace, "norm1", norm1, n)
-      encode_modulate(e, norm1, modulation, weights["block_modulation"], mod1,
-        cfg, 0, 1, weights.dtype("block_modulation"))
+      encode_modulate(e, norm1, modulation, weights[key(weight_prefix, "block_modulation")], mod1,
+        cfg, 0, 1, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_mod", mod1, n)
-      encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim)
+      encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim, weight_prefix)
       trace_copy(e, trace, "self_q", self_q, n)
       trace_copy(e, trace, "self_k", self_k, n)
       trace_copy(e, trace, "self_v", self_v, n)
-      norm_rms(e, self_q, weights["self_norm_q_weight"], weights.dtype("self_norm_q_weight"),
+      norm_rms(e, self_q, weights[key(weight_prefix, "self_norm_q_weight")], weights.dtype(key(weight_prefix, "self_norm_q_weight")),
         scratch["wan_b_zero_bias"], self_qn, rows, dim)
       trace_copy(e, trace, "self_q_norm", self_qn, n)
-      norm_rms(e, self_k, weights["self_norm_k_weight"], weights.dtype("self_norm_k_weight"),
+      norm_rms(e, self_k, weights[key(weight_prefix, "self_norm_k_weight")], weights.dtype(key(weight_prefix, "self_norm_k_weight")),
         scratch["wan_b_zero_bias"], self_kn, rows, dim)
       encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
       encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
@@ -299,50 +338,50 @@ module ML::Video
       MetalOps.attention(e, self_qr, self_kr, self_v, self_attn,
         cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches)
       trace_copy(e, trace, "self_attention", self_attn, n)
-      linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim)
+      linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "self_projection", self_proj, n)
-      encode_gated_residual(e, x, self_proj, modulation, weights["block_modulation"], self_res,
-        cfg, 2, weights.dtype("block_modulation"))
+      encode_gated_residual(e, x, self_proj, modulation, weights[key(weight_prefix, "block_modulation")], self_res,
+        cfg, 2, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_residual", self_res, n)
 
       # text/context cross attention (norm3 is affine; no RoPE)
-      MetalOps.norm(e, self_res, weights["norm3_weight"], weights["norm3_bias"], cross_norm,
-        rows, dim, EPS, affine: true, weight_dtype: weights.dtype("norm3_weight"),
-        bias_dtype: weights.dtype("norm3_bias"))
+      MetalOps.norm(e, self_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], cross_norm,
+        rows, dim, EPS, affine: true, weight_dtype: weights.dtype(key(weight_prefix, "norm3_weight")),
+        bias_dtype: weights.dtype(key(weight_prefix, "norm3_bias")))
       trace_copy(e, trace, "cross_norm", cross_norm, n)
-      linear(e, cross_norm, weights, "cross_q_weight", "cross_q_bias", cross_q, rows, dim, dim)
-      linear(e, context, weights, "cross_k_weight", "cross_k_bias", cross_k, ctx_rows, dim, dim)
-      linear(e, context, weights, "cross_v_weight", "cross_v_bias", cross_v, ctx_rows, dim, dim)
+      linear(e, cross_norm, weights, "cross_q_weight", "cross_q_bias", cross_q, rows, dim, dim, weight_prefix)
+      linear(e, context, weights, "cross_k_weight", "cross_k_bias", cross_k, ctx_rows, dim, dim, weight_prefix)
+      linear(e, context, weights, "cross_v_weight", "cross_v_bias", cross_v, ctx_rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "cross_q", cross_q, n)
       trace_copy(e, trace, "cross_k", cross_k, ctx_rows.to_i64 * dim)
       trace_copy(e, trace, "cross_v", cross_v, ctx_rows.to_i64 * dim)
-      norm_rms(e, cross_q, weights["cross_norm_q_weight"], weights.dtype("cross_norm_q_weight"),
+      norm_rms(e, cross_q, weights[key(weight_prefix, "cross_norm_q_weight")], weights.dtype(key(weight_prefix, "cross_norm_q_weight")),
         scratch["wan_b_zero_bias"], cross_qn, rows, dim)
-      norm_rms(e, cross_k, weights["cross_norm_k_weight"], weights.dtype("cross_norm_k_weight"),
+      norm_rms(e, cross_k, weights[key(weight_prefix, "cross_norm_k_weight")], weights.dtype(key(weight_prefix, "cross_norm_k_weight")),
         scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
       MetalOps.attention(e, cross_qn, cross_kn, cross_v, cross_attn,
         cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches)
       trace_copy(e, trace, "cross_attention", cross_attn, n)
-      linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim)
+      linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "cross_projection", cross_proj, n)
       MetalOps.add(e, self_res, cross_proj, cross_res, n.to_i32)
       trace_copy(e, trace, "cross_residual", cross_res, n)
 
       # feed-forward branch: norm2, segmented AdaLN, tanh GELU, gated residual
-      MetalOps.norm(e, cross_res, weights["norm3_weight"], weights["norm3_bias"], ffn_norm,
+      MetalOps.norm(e, cross_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], ffn_norm,
         rows, dim, EPS, affine: false)
       trace_copy(e, trace, "ffn_norm", ffn_norm, n)
-      encode_modulate(e, ffn_norm, modulation, weights["block_modulation"], ffn_mod,
-        cfg, 3, 4, weights.dtype("block_modulation"))
+      encode_modulate(e, ffn_norm, modulation, weights[key(weight_prefix, "block_modulation")], ffn_mod,
+        cfg, 3, 4, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "ffn_mod", ffn_mod, n)
-      linear(e, ffn_mod, weights, "ffn_in_weight", "ffn_in_bias", ffn_in, rows, dim, cfg.ffn_dim)
+      linear(e, ffn_mod, weights, "ffn_in_weight", "ffn_in_bias", ffn_in, rows, dim, cfg.ffn_dim, weight_prefix)
       trace_copy(e, trace, "ffn_in", ffn_in, ff_count)
       MetalOps.gelu(e, ffn_in, ffn_gelu, ff_count.to_i32, approximate: true)
       trace_copy(e, trace, "ffn_gelu", ffn_gelu, ff_count)
-      linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim)
+      linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim, weight_prefix)
       trace_copy(e, trace, "ffn_out", ffn_out, n)
-      encode_gated_residual(e, cross_res, ffn_out, modulation, weights["block_modulation"], y,
-        cfg, 5, weights.dtype("block_modulation"))
+      encode_gated_residual(e, cross_res, ffn_out, modulation, weights[key(weight_prefix, "block_modulation")], y,
+        cfg, 5, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "output", y, n)
     end
 
@@ -357,11 +396,13 @@ module ML::Video
                                weights : Arena, scratch : Arena,
                                cfg : WanS2VConfig, audio_cfg : WanS2VAudioConfig,
                                block_trace : Hash(String, ML::MetalBuffer)? = nil,
-                               audio_trace : Hash(String, ML::MetalBuffer)? = nil) : Nil
+                               audio_trace : Hash(String, ML::MetalBuffer)? = nil,
+                               block_weight_prefix : String = "",
+                               audio_weight_prefix : String = "") : Nil
       validate_audio_pair!(cfg, audio_cfg)
-      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg, block_trace)
+      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg, block_trace, block_weight_prefix)
       WanS2VAudioInjector.encode(e, block_output, local_audio, global_audio, y,
-        weights, scratch, audio_cfg, audio_trace)
+        weights, scratch, audio_cfg, audio_trace, audio_weight_prefix)
     end
 
     def self.validate_audio_pair!(cfg : WanS2VConfig, audio_cfg : WanS2VAudioConfig) : Nil
@@ -378,19 +419,26 @@ module ML::Video
 
     private def self.encode_qkv(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                 q : ML::MetalBuffer, k : ML::MetalBuffer, v : ML::MetalBuffer,
-                                w : Arena, rows : Int32, dim : Int32) : Nil
-      linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim)
-      linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim)
-      linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim)
+                                w : Arena, rows : Int32, dim : Int32,
+                                weight_prefix : String) : Nil
+      linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim, weight_prefix)
+      linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim, weight_prefix)
+      linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim, weight_prefix)
     end
 
     private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                             weights : Arena, weight_name : String, bias_name : String,
                             y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
-                            out_dim : Int32) : Nil
-      MetalOps.linear(e, x, weights[weight_name], weights[bias_name], y,
-        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_name),
-        bias_dtype: weights.dtype(bias_name))
+                            out_dim : Int32, weight_prefix : String = "") : Nil
+      weight_key = key(weight_prefix, weight_name)
+      bias_key = key(weight_prefix, bias_name)
+      MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
+        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
+        bias_dtype: weights.dtype(bias_key))
+    end
+
+    private def self.key(prefix : String, name : String) : String
+      prefix.empty? ? name : "#{prefix}#{name}"
     end
 
     private def self.norm_rms(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
@@ -484,7 +532,7 @@ module ML::Video
     private def self.validate_inputs!(x : ML::MetalBuffer, modulation : ML::MetalBuffer,
                                       positions : ML::MetalBuffer, context : ML::MetalBuffer,
                                       y : ML::MetalBuffer, weights : Arena, scratch : Arena,
-                                      cfg : WanS2VConfig) : Nil
+                                      cfg : WanS2VConfig, weight_prefix : String = "") : Nil
       n = cfg.values.to_i64
       dim = cfg.dim.to_i64
       ctx = cfg.context_rows.to_i64 * dim
@@ -496,82 +544,61 @@ module ML::Video
       MetalOps.check(context, ctx)
       MetalOps.distinct(y, x, modulation, positions, context)
       weight_count = dim * dim
-      weights.check_weight("block_modulation", 6_i64 * dim)
-      weights.check_weight("norm3_weight", dim)
-      weights.check_weight("norm3_bias", dim)
+      weights.check_weight(key(weight_prefix, "block_modulation"), 6_i64 * dim)
+      weights.check_weight(key(weight_prefix, "norm3_weight"), dim)
+      weights.check_weight(key(weight_prefix, "norm3_bias"), dim)
       MetalOps.check(scratch["wan_b_zero_bias"], dim)
       frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       MetalOps.check(scratch[frequency_hi_name], cfg.head_dim // 2)
       MetalOps.check(scratch[frequency_lo_name], cfg.head_dim // 2)
-      weights.check_weight("self_q_weight", weight_count)
-      weights.check_weight("self_q_bias", dim)
-      weights.check_weight("self_k_weight", weight_count)
-      weights.check_weight("self_k_bias", dim)
-      weights.check_weight("self_v_weight", weight_count)
-      weights.check_weight("self_v_bias", dim)
-      weights.check_weight("self_o_weight", weight_count)
-      weights.check_weight("self_o_bias", dim)
-      weights.check_weight("self_norm_q_weight", dim)
-      weights.check_weight("self_norm_k_weight", dim)
-      weights.check_weight("cross_q_weight", weight_count)
-      weights.check_weight("cross_q_bias", dim)
-      weights.check_weight("cross_k_weight", weight_count)
-      weights.check_weight("cross_k_bias", dim)
-      weights.check_weight("cross_v_weight", weight_count)
-      weights.check_weight("cross_v_bias", dim)
-      weights.check_weight("cross_o_weight", weight_count)
-      weights.check_weight("cross_o_bias", dim)
-      weights.check_weight("cross_norm_q_weight", dim)
-      weights.check_weight("cross_norm_k_weight", dim)
-      weights.check_weight("ffn_in_weight", cfg.ffn_dim.to_i64 * dim)
-      weights.check_weight("ffn_in_bias", cfg.ffn_dim.to_i64)
-      weights.check_weight("ffn_out_weight", dim * cfg.ffn_dim)
-      weights.check_weight("ffn_out_bias", dim)
+      {
+        {"self_q_weight", weight_count}, {"self_q_bias", dim},
+        {"self_k_weight", weight_count}, {"self_k_bias", dim},
+        {"self_v_weight", weight_count}, {"self_v_bias", dim},
+        {"self_o_weight", weight_count}, {"self_o_bias", dim},
+        {"self_norm_q_weight", dim}, {"self_norm_k_weight", dim},
+        {"cross_q_weight", weight_count}, {"cross_q_bias", dim},
+        {"cross_k_weight", weight_count}, {"cross_k_bias", dim},
+        {"cross_v_weight", weight_count}, {"cross_v_bias", dim},
+        {"cross_o_weight", weight_count}, {"cross_o_bias", dim},
+        {"cross_norm_q_weight", dim}, {"cross_norm_k_weight", dim},
+        {"ffn_in_weight", cfg.ffn_dim.to_i64 * dim}, {"ffn_in_bias", cfg.ffn_dim.to_i64},
+        {"ffn_out_weight", dim * cfg.ffn_dim}, {"ffn_out_bias", dim},
+      }.each { |name, count| weights.check_weight(key(weight_prefix, name), count) }
       MetalOps.check(scratch["wan_b_norm1"], n)
-      MetalOps.check(scratch["wan_b_mod1"], n)
       MetalOps.check(scratch["wan_b_self_q"], n)
       MetalOps.check(scratch["wan_b_self_k"], n)
       MetalOps.check(scratch["wan_b_self_v"], n)
-      MetalOps.check(scratch["wan_b_self_qn"], n)
-      MetalOps.check(scratch["wan_b_self_kn"], n)
-      MetalOps.check(scratch["wan_b_self_qr"], n)
-      MetalOps.check(scratch["wan_b_self_kr"], n)
       MetalOps.check(scratch["wan_b_self_attn"], n)
       MetalOps.check(scratch["wan_b_self_proj"], n)
       MetalOps.check(scratch["wan_b_self_res"], n)
       MetalOps.check(scratch["wan_b_cross_norm"], n)
-      MetalOps.check(scratch["wan_b_cross_q"], n)
       MetalOps.check(scratch["wan_b_cross_k"], ctx)
       MetalOps.check(scratch["wan_b_cross_v"], ctx)
-      MetalOps.check(scratch["wan_b_cross_qn"], n)
-      MetalOps.check(scratch["wan_b_cross_kn"], ctx)
-      MetalOps.check(scratch["wan_b_cross_attn"], n)
-      MetalOps.check(scratch["wan_b_cross_proj"], n)
-      MetalOps.check(scratch["wan_b_cross_res"], n)
-      MetalOps.check(scratch["wan_b_ffn_norm"], n)
-      MetalOps.check(scratch["wan_b_ffn_mod"], n)
       MetalOps.check(scratch["wan_b_ffn_in"], ff)
-      MetalOps.check(scratch["wan_b_ffn_gelu"], ff)
       MetalOps.check(scratch["wan_b_ffn_out"], n)
-      ensure_disjoint!(y, x, modulation, positions, context, weights, scratch)
+      ensure_disjoint!(y, x, modulation, positions, context, weights, scratch, weight_prefix)
     end
 
     private def self.ensure_disjoint!(y : ML::MetalBuffer, x : ML::MetalBuffer,
                                       modulation : ML::MetalBuffer, positions : ML::MetalBuffer,
                                       context : ML::MetalBuffer, weights : Arena,
-                                      scratch : Arena) : Nil
+                                      scratch : Arena, weight_prefix : String) : Nil
       scratch.buffers.each do |name, buffer|
         reject_overlap!(buffer, y)
         reject_overlap!(buffer, x)
         reject_overlap!(buffer, modulation)
         reject_overlap!(buffer, positions)
         reject_overlap!(buffer, context)
-        weights.buffers.each_value { |weight| reject_overlap!(buffer, weight) }
+        weights.buffers.each do |weight_name, weight|
+          reject_overlap!(buffer, weight) if weight_name.starts_with?(weight_prefix)
+        end
         scratch.buffers.each do |other_name, other|
           reject_overlap!(buffer, other) if name < other_name
         end
       end
-      weights.buffers.each_value do |buffer|
+      weights.buffers.each do |weight_name, buffer|
+        next unless weight_name.starts_with?(weight_prefix)
         reject_overlap!(buffer, y)
         reject_overlap!(buffer, x)
         reject_overlap!(buffer, modulation)
@@ -588,7 +615,7 @@ module ML::Video
                                      x : ML::MetalBuffer, modulation : ML::MetalBuffer,
                                      positions : ML::MetalBuffer, context : ML::MetalBuffer,
                                      y : ML::MetalBuffer, weights : Arena, scratch : Arena,
-                                     cfg : WanS2VConfig) : Nil
+                                     cfg : WanS2VConfig, weight_prefix : String = "") : Nil
       return unless destinations = trace
       n = cfg.values.to_i64
       ctx = cfg.context_rows.to_i64 * cfg.dim
@@ -607,7 +634,7 @@ module ML::Video
         reject_overlap!(buffer, context)
         reject_overlap!(buffer, y)
         weights.buffers.each do |weight_name, weight|
-          reject_overlap!(buffer, weight)
+          reject_overlap!(buffer, weight) if weight_name.starts_with?(weight_prefix)
         end
         scratch.buffers.each do |scratch_name, temporary|
           reject_overlap!(buffer, temporary)
@@ -639,18 +666,47 @@ module ML::Video
     end
 
     def self.prepare_scratch!(arena : Arena, cfg : WanS2VAudioConfig) : Nil
+      arena.upload("wan_a_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
+      scratch_plan(cfg).each { |name, count| arena.alloc(name, count) }
+    end
+
+    # Unique allocations after serial-lifetime aliases. `wan_a_gather` is
+    # normalized and AdaIN-modulated in place; Q/K RMS norm is in place. The
+    # attention and output projections retain separate storage from V and X.
+    def self.scratch_plan(cfg : WanS2VAudioConfig) : Array(Tuple(String, Int32))
+      gathered = cfg.gathered_rows * cfg.dim
+      frames = cfg.frame_rows * cfg.dim
+      audio = cfg.audio_rows * cfg.dim
+      [
+        # gather is normalized and AdaIN-modulated in place; Q and K are RMS
+        # normalized in place. These aliases keep injector scratch live-set
+        # bounded independently of the number of injections.
+        {"wan_a_gather", gathered},
+        {"wan_a_global_silu", frames}, {"wan_a_adain_proj", cfg.frame_rows.to_i64 * cfg.dim * 2},
+        {"wan_a_q", gathered}, {"wan_a_k", audio}, {"wan_a_v", audio},
+        {"wan_a_attn", gathered}, {"wan_a_proj", gathered},
+      ].map { |name, count| {name, count.to_i32} }
+    end
+
+    def self.scratch_bytes(cfg : WanS2VAudioConfig) : Int64
+      values = scratch_plan(cfg).sum { |_, count| count.to_i64 }
+      (values + cfg.dim) * sizeof(Float32)
+    end
+
+    # Original non-aliased layout used by the component oracle.
+    def self.unaliased_scratch_bytes(cfg : WanS2VAudioConfig) : Int64
       gathered = cfg.gathered_rows.to_i64 * cfg.dim
       frames = cfg.frame_rows.to_i64 * cfg.dim
       audio = cfg.audio_rows.to_i64 * cfg.dim
-      arena.upload("wan_a_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
-      {
-        {"wan_a_gather", gathered}, {"wan_a_norm", gathered},
-        {"wan_a_global_silu", frames}, {"wan_a_adain_proj", cfg.frame_rows.to_i64 * cfg.dim * 2},
-        {"wan_a_adain", gathered}, {"wan_a_q", gathered}, {"wan_a_qn", gathered},
-        {"wan_a_k", audio}, {"wan_a_kn", audio}, {"wan_a_v", audio},
-        {"wan_a_attn", gathered}, {"wan_a_proj", gathered},
-      }.each { |name, count| arena.alloc(name, count.to_i32) }
+      values = 7_i64 * gathered + 3_i64 * audio + 3_i64 * frames
+      (values + cfg.dim) * sizeof(Float32)
     end
+
+    SCRATCH_ALIASES = {
+      "wan_a_norm/wan_a_adain" => "wan_a_gather",
+      "wan_a_qn"               => "wan_a_q",
+      "wan_a_kn"               => "wan_a_k",
+    }
 
     CHECKPOINTS = {
       "gathered_video" => :video, "audio_norm" => :video, "global_silu" => :global,
@@ -666,18 +722,19 @@ module ML::Video
                     local_audio : ML::MetalBuffer, global_audio : ML::MetalBuffer,
                     y : ML::MetalBuffer, weights : Arena, scratch : Arena,
                     cfg : WanS2VAudioConfig,
-                    trace : Hash(String, ML::MetalBuffer)? = nil) : Nil
-      validate_inputs!(x, local_audio, global_audio, y, weights, scratch, cfg)
-      validate_trace!(trace, x, local_audio, global_audio, y, weights, scratch, cfg)
+                    trace : Hash(String, ML::MetalBuffer)? = nil,
+                    weight_prefix : String = "") : Nil
+      validate_inputs!(x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
+      validate_trace!(trace, x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
       gathered = scratch["wan_a_gather"]
-      normed = scratch["wan_a_norm"]
+      normed = gathered
       global_silu = scratch["wan_a_global_silu"]
       adain_proj = scratch["wan_a_adain_proj"]
-      adain = scratch["wan_a_adain"]
+      adain = normed
       q = scratch["wan_a_q"]
-      qn = scratch["wan_a_qn"]
+      qn = q
       k = scratch["wan_a_k"]
-      kn = scratch["wan_a_kn"]
+      kn = k
       v = scratch["wan_a_v"]
       attn = scratch["wan_a_attn"]
       proj = scratch["wan_a_proj"]
@@ -702,7 +759,7 @@ module ML::Video
       e.dispatch_1d(global_count.to_i32)
       trace_copy(e, trace, "global_silu", global_silu, global_count)
       linear(e, global_silu, weights, "adain_weight", "adain_bias",
-        adain_proj, cfg.frame_rows, cfg.dim, 2 * cfg.dim)
+        adain_proj, cfg.frame_rows, cfg.dim, 2 * cfg.dim, weight_prefix)
       trace_copy(e, trace, "adain_projection", adain_proj, cfg.frame_rows.to_i64 * 2 * cfg.dim)
       e.set_pipeline(pipeline("wan_audio_adain"))
       e.set_buffer(normed, 0).set_buffer(adain_proj, 1).set_buffer(adain, 2, ML::Metal::BufferAccess::Write)
@@ -712,25 +769,25 @@ module ML::Video
       trace_copy(e, trace, "adain_video", adain, video_count)
 
       linear(e, adain, weights, "audio_q_weight", "audio_q_bias", q,
-        cfg.gathered_rows, cfg.dim, cfg.dim)
+        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix)
       linear(e, local_audio, weights, "audio_k_weight", "audio_k_bias", k,
-        cfg.audio_rows, cfg.dim, cfg.dim)
+        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix)
       linear(e, local_audio, weights, "audio_v_weight", "audio_v_bias", v,
-        cfg.audio_rows, cfg.dim, cfg.dim)
+        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix)
       trace_copy(e, trace, "audio_q", q, video_count)
       trace_copy(e, trace, "audio_k", k, audio_count)
       trace_copy(e, trace, "audio_v", v, audio_count)
-      MetalOps.norm(e, q, weights["audio_q_norm_weight"], scratch["wan_a_zero_bias"], qn,
+      MetalOps.norm(e, q, weights["#{weight_prefix}audio_q_norm_weight"], scratch["wan_a_zero_bias"], qn,
         cfg.gathered_rows, cfg.dim, EPS, rms: true, affine: true,
-        weight_dtype: weights.dtype("audio_q_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
-      MetalOps.norm(e, k, weights["audio_k_norm_weight"], scratch["wan_a_zero_bias"], kn,
+        weight_dtype: weights.dtype("#{weight_prefix}audio_q_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
+      MetalOps.norm(e, k, weights["#{weight_prefix}audio_k_norm_weight"], scratch["wan_a_zero_bias"], kn,
         cfg.audio_rows, cfg.dim, EPS, rms: true, affine: true,
-        weight_dtype: weights.dtype("audio_k_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
+        weight_dtype: weights.dtype("#{weight_prefix}audio_k_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
       MetalOps.attention(e, qn, kn, v, attn, cfg.spatial_tokens, cfg.audio_tokens,
         cfg.heads, cfg.head_dim, cfg.frame_rows)
       trace_copy(e, trace, "audio_attention", attn, video_count)
       linear(e, attn, weights, "audio_o_weight", "audio_o_bias", proj,
-        cfg.gathered_rows, cfg.dim, cfg.dim)
+        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix)
       trace_copy(e, trace, "audio_projection", proj, video_count)
       e.set_pipeline(pipeline("wan_audio_scatter"))
       e.set_buffer(x, 0).set_buffer(proj, 1).set_buffer(y, 2, ML::Metal::BufferAccess::Write)
@@ -743,10 +800,16 @@ module ML::Video
     private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                             weights : Arena, weight_name : String, bias_name : String,
                             y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
-                            out_dim : Int32) : Nil
-      MetalOps.linear(e, x, weights[weight_name], weights[bias_name], y,
-        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_name),
-        bias_dtype: weights.dtype(bias_name))
+                            out_dim : Int32, weight_prefix : String = "") : Nil
+      weight_key = key(weight_prefix, weight_name)
+      bias_key = key(weight_prefix, bias_name)
+      MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
+        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
+        bias_dtype: weights.dtype(bias_key))
+    end
+
+    private def self.key(prefix : String, name : String) : String
+      prefix.empty? ? name : "#{prefix}#{name}"
     end
 
     private def self.trace_copy(e : ML::Metal::ComputeEncoder,
@@ -762,7 +825,8 @@ module ML::Video
     private def self.validate_inputs!(x : ML::MetalBuffer, local_audio : ML::MetalBuffer,
                                       global_audio : ML::MetalBuffer, y : ML::MetalBuffer,
                                       weights : Arena, scratch : Arena,
-                                      cfg : WanS2VAudioConfig) : Nil
+                                      cfg : WanS2VAudioConfig,
+                                      weight_prefix : String = "") : Nil
       n = cfg.values.to_i64
       dim = cfg.dim.to_i64
       gathered = cfg.gathered_rows.to_i64 * dim
@@ -780,13 +844,12 @@ module ML::Video
         {"audio_v_weight", dim * dim}, {"audio_v_bias", dim},
         {"audio_o_weight", dim * dim}, {"audio_o_bias", dim},
         {"audio_q_norm_weight", dim}, {"audio_k_norm_weight", dim},
-      }.each { |name, count| weights.check_weight(name, count) }
+      }.each { |name, count| weights.check_weight(key(weight_prefix, name), count) }
       MetalOps.check(scratch["wan_a_zero_bias"], dim)
       {
-        {"wan_a_gather", gathered}, {"wan_a_norm", gathered},
+        {"wan_a_gather", gathered},
         {"wan_a_global_silu", frames}, {"wan_a_adain_proj", cfg.frame_rows.to_i64 * dim * 2},
-        {"wan_a_adain", gathered}, {"wan_a_q", gathered}, {"wan_a_qn", gathered},
-        {"wan_a_k", audio}, {"wan_a_kn", audio}, {"wan_a_v", audio},
+        {"wan_a_q", gathered}, {"wan_a_k", audio}, {"wan_a_v", audio},
         {"wan_a_attn", gathered}, {"wan_a_proj", gathered},
       }.each { |name, count| MetalOps.check(scratch[name], count) }
       scratch.buffers.each do |name, buffer|
@@ -794,19 +857,24 @@ module ML::Video
           raise ArgumentError.new("Wan audio input/output aliases scratch buffer #{name}")
         end
         weights.buffers.each do |weight_name, weight|
-          raise ArgumentError.new("Wan audio scratch aliases weight #{weight_name}") if MetalOps.overlap?(buffer, weight)
+          if weight_name.starts_with?(weight_prefix) && MetalOps.overlap?(buffer, weight)
+            raise ArgumentError.new("Wan audio scratch aliases weight #{weight_name}")
+          end
         end
         scratch.buffers.each do |other_name, other|
           raise ArgumentError.new("Wan audio scratch buffers overlap") if name < other_name && MetalOps.overlap?(buffer, other)
         end
       end
       weights.buffers.each do |name, buffer|
+        next unless name.starts_with?(weight_prefix)
         if MetalOps.overlap?(buffer, y) || MetalOps.overlap?(buffer, x) || MetalOps.overlap?(buffer, local_audio) || MetalOps.overlap?(buffer, global_audio)
           raise ArgumentError.new("Wan audio input/output aliases weight #{name}")
         end
       end
       weights.buffers.each do |name, buffer|
+        next unless name.starts_with?(weight_prefix)
         weights.buffers.each do |other_name, other|
+          next unless other_name.starts_with?(weight_prefix)
           raise ArgumentError.new("Wan audio weights overlap") if name < other_name && MetalOps.overlap?(buffer, other)
         end
       end
@@ -816,7 +884,8 @@ module ML::Video
                                      x : ML::MetalBuffer, local_audio : ML::MetalBuffer,
                                      global_audio : ML::MetalBuffer, y : ML::MetalBuffer,
                                      weights : Arena, scratch : Arena,
-                                     cfg : WanS2VAudioConfig) : Nil
+                                     cfg : WanS2VAudioConfig,
+                                     weight_prefix : String = "") : Nil
       return unless destinations = trace
       video = cfg.gathered_rows.to_i64 * cfg.dim
       global = cfg.frame_rows.to_i64 * cfg.dim
@@ -836,7 +905,9 @@ module ML::Video
           raise ArgumentError.new("Wan audio checkpoint aliases a live input/output") if MetalOps.overlap?(buffer, input)
         end
         weights.buffers.each do |weight_name, weight|
-          raise ArgumentError.new("Wan audio checkpoint aliases weight #{weight_name}") if MetalOps.overlap?(buffer, weight)
+          if weight_name.starts_with?(weight_prefix) && MetalOps.overlap?(buffer, weight)
+            raise ArgumentError.new("Wan audio checkpoint aliases weight #{weight_name}")
+          end
         end
         scratch.buffers.each do |scratch_name, temporary|
           raise ArgumentError.new("Wan audio checkpoint aliases scratch #{scratch_name}") if MetalOps.overlap?(buffer, temporary)

@@ -689,10 +689,10 @@ describe ML::Video::WanS2VBlock do
       second = ML::MetalBuffer.wrap_no_copy((ptr.as(UInt8*) + page).as(Void*), (2 * page).to_i64)
       first.handle.should_not eq(second.handle)
       scratch.buffers["wan_a_gather"].release
-      scratch.buffers["wan_a_norm"].release
+      scratch.buffers["wan_a_q"].release
       scratch.buffers["wan_a_gather"] = first
       first_in_scratch = true
-      scratch.buffers["wan_a_norm"] = second
+      scratch.buffers["wan_a_q"] = second
       second_in_scratch = true
 
       command = ML::Metal::CommandBuffer.new

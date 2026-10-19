@@ -30852,3 +30852,20 @@ Refresh after source/toolchain/device/model/workload changes.
   Transformer integration, distinct-layer propagation and full video remain
   open. Exact coverage, reproduction, local evidence and refresh triggers:
   docs/video-tiled-attention.md.
+
+### 2026-10-19 — Wan transformer composition and scratch lifetime gate
+
+- Native patch/text/time, distinct layer/injector dispatch, prediction head and
+  unpatchify pass pinned upstream tiny two-layer retained-history and first-chunk
+  empty-history/no-pose fixtures at the unchanged finite abs 2e-5 + rel 2e-5
+  gate: four examples, zero failures/errors/pending.
+- Serial lifetime aliases reduce executable default block/injector scratch
+  accounting from 24,542,691,840 to 11,488,395,776 bytes. Real official block-zero
+  regression gates pass in F32 and BF16 resident modes: six examples each,
+  zero failures/errors/pending, with trace/chaining/allocation/overlap checks.
+- Adversary found that prefix-scoped block guards alone could miss a future
+  layer's parameter alias. A stack-wide pre-encode guard now rejects that
+  counterexample; correlated verdict ROBUST for this bounded serial scope.
+  Forty-layer propagation, full spatial use, complete conditioning and video
+  generation speed remain open. Reproduction and decay triggers:
+  docs/wan-transformer.md. Evidence stays in external wan-full scratch.
