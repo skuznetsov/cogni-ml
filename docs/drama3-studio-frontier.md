@@ -406,3 +406,74 @@ Refresh on source, probe/binary, checkpoint/config, runtime/device/driver,
 prefix/cache/graph,
 capture policy or precision/tolerance changes; missing or changed private
 artifacts invalidate dependent claims until refreshed.
+
+## Step-385 hnorm and EH composition (2026-10-19)
+
+The standalone GPU hnorm crossover now separates the incoming backbone hidden
+difference from normalization arithmetic at captured steps 384 and 385. Both
+implementations use epsilon 1e-6 and the same original BF16 weight payload,
+promoted to F32 and applied as `(1 + weight)`. Native uses its deployed RMS
+kernel; MLX calls the pinned upstream `ZeroCenteredRMSNorm`. Eight fixture joins
+and all four original-input/original-operator diagonals are bit-exact. All 8192
+same-input scalar comparisons pass the unchanged atol=6e-5 / rtol=3e-4 gate.
+
+At step 385, the same-input norm-operator difference on native hidden has RMS
+4.63713349e-7, while changing hidden input through MLX norm has RMS
+3.24896306e-6. The original norm-output difference has RMS 3.23206563e-6. These
+are local sensitivity measurements: normalization contributes, but the incoming
+hidden difference has the larger RMS effect on this captured pair.
+
+For step 385, a second GPU probe concatenates the bit-equal normalized embedding
+half with each of the four norm outputs, then applies both EH implementations.
+The two original diagonals and four earlier EH crossover outputs reconstruct
+bitwise; all 8192 same-EH-input scalar comparisons pass. The signed decomposition
+below uses MLX norm/EH to transport the hidden-input effect, then adds the norm
+operator effect at native hidden and the EH operator effect at native norm.
+It telescopes exactly in post-drain F64 analysis of captured F32 outputs; the
+GPU operations retain their original precision.
+
+| EH coordinate | Original error | Hidden input through MLX norm/EH | Norm operator through MLX EH | EH operator | Allowed error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 394 | -7.36713409e-5 | -6.91413879e-5 | -4.76837158e-6 | +2.38418579e-7 | 7.14400148e-5 |
+| 636 | -9.60826874e-5 | -8.85725021e-5 | -2.98023224e-6 | -4.52995300e-6 | 6.79394102e-5 |
+
+A direct captured counterfactual replaces only hnorm on the native hidden,
+keeps native EH, and compares against the unchanged original MLX reference.
+Coordinate 394 moves inside tolerance (-6.89029694e-5); coordinate 636 remains
+outside (-9.22679901e-5). Across all 2048 EH outputs only 636 remains excessive.
+Thus matching hnorm alone is insufficient to close this captured EH failure.
+This does not establish the root cause of the incoming hidden difference or
+predict a complete generation with a substituted norm.
+
+The initial composition fixture guard rejected the assumption that the embedding
+halves also match bitwise at step 384, before any composition GPU execution.
+The rejected source and EXIT1 log are retained; composition is restricted to
+385, while 384 remains a valid standalone hnorm control. This failure is not
+counted as a passing numeric test.
+
+Production code is unchanged. Each private native probe submits/completes/waits
+once at graph depth 2, has no readbacks before its final drain, and reads 32768
+terminal bytes afterward; pending/retained end at zero. Each MLX probe evaluates
+all four GPU outputs once before serialization. Heavy work stayed serial under
+run_safe with the configured 15% memory guard, finite deadlines and tree-RSS guards;
+Studio was not started. CPU work only analyzes drained diagnostic outputs.
+Graph retained-byte counters are resource accounting, not physical-memory
+measurements; the wrapper logs preflight percentages, not each run's minimum.
+
+The correlated mini-Quadrumvirate verdict is ROBUST for this captured crossover
+and counterfactual. The existing 38 late-logit failures and old backbone-layer-39
+discrepancy remain open; no tolerance, precision, speed or quality claim changed.
+The next discriminator is the producer of step-385 backbone hidden: terminal
+normalization and its preceding layer output on captured common inputs, keeping
+historical KV separate. No earlier generation-wide origin or window-growth
+causality has been established.
+
+Evidence: `.landmark/evidence/drama3-hnorm385-localization.json`; pinned private
+sources, binaries, plans, receipts and arrays are under
+`/opt/mldata_ssd/cogni-ml/drama3-hnorm385-20261019/`. Selected raw BF16 payloads
+are pinned; complete checkpoint integrity and full transitive build attestation
+are not claimed. The norm shader, native loader and bridge source supplement
+matches the production revision in a post-run check, not a before/after capture.
+Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
+prefix/cache/graph/capture-policy/precision/tolerance changes; missing or changed
+private artifacts reopen dependent claims.

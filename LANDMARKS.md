@@ -30581,3 +30581,43 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
   prefix/cache/graph/capture-policy/precision/tolerance changes. Missing or
   changed private artifacts reopen dependent claims. No service or push.
+
+### 2026-10-19 — DRAMA step-385 hnorm contribution isolated
+
+- GPU hnorm crossovers at captured steps 384/385 reproduce eight fixture joins
+  and four original diagonals bitwise. Same original BF16 norm payload,
+  epsilon 1e-6 and F32 arithmetic; all 8192 same-input scalar comparisons pass
+  unchanged atol=6e-5/rtol=3e-4. At 385, norm-operator RMS on native hidden is
+  4.63713349e-7 versus 3.24896306e-6 for hidden input through MLX norm. This
+  local RMS comparison does not make norm arithmetic irrelevant.
+- Fixed-embedding hnorm-to-EH GPU composition at 385 reconstructs two original
+  diagonals and four earlier EH crosses bitwise; 8192 same-input EH values pass.
+  At coordinate 636, incoming hidden through MLX norm/EH alone differs by
+  -8.85725021e-5 against allowed 6.79394102e-5. At 394, the norm effect
+  -4.76837158e-6 contributes to crossing the bound. Replacing only native
+  hnorm at the same captured native hidden, keeping native EH and original
+  MLX reference fixed, resolves 394 but leaves 636 excessive (-9.22679901e-5).
+  Hnorm replacement alone is insufficient for this captured failure.
+- A fixture guard rejected the assumed bit-equal embedding halves at 384
+  before composition GPU execution. Source/log retained; restrict composition
+  to 385 and retain 384 as a standalone norm control. Do not count EXIT1 as pass.
+- Production source is unchanged. Each private native crossover drains once:
+  submit/complete/waits 1 at depth 2, pending/retained 0, no reads before drain,
+  terminal 32768 bytes. Each MLX probe evaluates four GPU outputs once; only
+  drained diagnostic analysis runs on CPU. Serial run_safe, configured 15%
+  memory guard, finite deadlines and tree-RSS guards remain; Studio stays
+  stopped. Graph retained bytes are accounting, not physical-memory readings;
+  run logs retain preflight values, not each run's minimum free percentage.
+- Correlated mini-Quadrumvirate: ROBUST for captured local attribution;
+  prior 38-value late-logit gate still FAIL, old backbone39 remains open.
+  Next discriminator: trace incoming backbone hidden from terminal norm and
+  preceding layer output on captured common inputs; keep historical KV
+  separate. No generation-wide origin, growth causality, speed or quality claim.
+- Evidence: .landmark/evidence/drama3-hnorm385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned artifacts under
+  /opt/mldata_ssd/cogni-ml/drama3-hnorm385-20261019/. Selected payload/source/
+  binary pins do not attest full checkpoint or transitive build integrity.
+  Three source supplement hashes are post-run checks only. Refresh on
+  source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/
+  graph/capture-policy/precision/tolerance changes, or missing/changed private
+  artifacts. No service or push.
