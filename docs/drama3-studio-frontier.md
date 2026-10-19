@@ -313,3 +313,96 @@ receipts, traces and audio are under
 checkpoint/config, runtime/device/driver, graph/allocator policy, capacity,
 input/tape or precision/tolerance changes. Current host workload also changes
 memory admission.
+
+## Step-385 tower localization on the common prefix (2026-10-19)
+
+The fixed608 teacher-forced replay from the preceding experiment is now
+instrumented privately at steps 384 and 385. Prompt IDs, all 512 code rows,
+model configuration, original F32 weight conversion, row cadence and selectors
+match the pinned control. This fixes the discrete prefix; it does not make the
+native and MLX floating-point hidden or historical KV states identical.
+
+Native queue-ordered GPU snapshots preserve all 1718 original captures /
+6449296 values bitwise, including the excluded counterfactual terminal step.
+The passive MLX internal replay also preserves all 1718 ordinary captures and
+all 52 earlier layer-boundary references bitwise. Its wrappers call the actual
+dispatched modules once and retain their input/output arrays without adding
+eval or host reads in forward. The original per-row terminal-hidden eval
+materializes these ancestors before the next cache update. The 702 MLX refs
+include 650 internal endpoints and 52 boundaries; the analyzer compares 312
+unique internal stages / 878592 scalars per step. Native SiLU alone has no
+passive module endpoint and is excluded.
+
+At step 385, embedding and `enorm` in shared layer 0 match bitwise. The incoming
+backbone hidden already differs (max absolute error 1.14440918e-5), within the
+unchanged atol=6e-5 / rtol=3e-4. The first bit-different selected tower stage is
+`hnorm`, also within tolerance (max 2.09808350e-5, RMS 3.23206563e-6). The first
+selected internal tolerance excess is `tower.shared_layers.0.eh_proj`, at
+zero-based coordinates 394 and 636. Its RMS error is 3.55308084e-5; coordinate
+636 differs by -9.60826874e-5 against an allowed 6.79394102e-5. All 26 normalized
+layer outputs across both steps still pass. Step 384 already has internal
+excesses, first at shared-layer-0 attention residual, while its captured head
+logits pass. Step 385 is therefore not the first generation-wide numeric drift.
+
+Four-way GPU operator crossovers feed each captured native and MLX vector into
+both implementations. Original-input/original-operator diagonals must reproduce
+their captured outputs bitwise before attribution. Nine codebook heads and the
+first EH projection use original dense BF16 payloads; each payload hash matches
+independently across loaders. The MLX probe promotes those exact BF16 values to
+F32, matching the replay, while native retains its deployed BF16-load/F32 path.
+No additional quantization, precision or tolerance change is introduced.
+
+For all nine heads at both steps, 36 diagonal reconstructions are bit-exact and
+147456 same-input scalar comparisons have zero tolerance excesses. The original
+two step-385 head failures decompose as follows. Signed differences below use
+MLX output as reference; input effect is measured within MLX and kernel effect
+uses the native captured input.
+
+| Output, zero-based coordinate | Original error | Input effect | Kernel effect | Allowed error |
+| --- | ---: | ---: | ---: | ---: |
+| head 6, 644 | -7.66515732e-5 | -7.67111778e-5 | +5.96046448e-8 | 6.13896525e-5 |
+| head 8, 887 | +7.33137131e-5 | +7.34925270e-5 | -1.78813934e-7 | 6.86764991e-5 |
+
+The first EH projection likewise reproduces all four diagonals bitwise, with
+zero tolerance excesses in 8192 same-input comparisons. Substituting only the
+input reproduces both excessive EH coordinates in both implementations. At
+coordinate 636, the -9.60826874e-5 total is the sum of an MLX input effect of
+-9.15527344e-5 and a same-input kernel effect of -4.52995300e-6. At coordinate
+394, the corresponding terms are -7.36713409e-5, -7.39097595e-5 and +2.38418579e-7.
+These same-input operator deltas pass. This does not prove that this single
+projection causes the later head errors: other operations and historical
+KV states also differ. It does not identify whether `hnorm` adds meaningful
+drift beyond the differing backbone input.
+
+No production source, arithmetic, completion wait or activation readback was
+changed. The native detailed replay retains 608 submit/complete/waits at depth
+2, pending/retained zero, zero diagnostic reads, control9568 and terminal33808960
+bytes; terminal reads do not change graph counters. The extra 674 terminal
+snapshots explain 2696 additional finite-status bytes (four per snapshot),
+compared with control6872 in the prior replay. All readback counters are zero
+before the final drain. Extra snapshot bytes are diagnostic-only and read after
+that drain. Each standalone four-projection native crossover drains once; the
+MLX EH crossover evaluates its four outputs
+once before serialization. These are private operator probes, not generation
+loop changes. Heavy work stayed serial under run_safe with a 15% free-memory
+floor, 40960MiB tree RSS limit and finite deadlines. Studio was not started.
+
+The correlated mini-Quadrumvirate verdict is ROBUST for this captured operator
+localization, not a numeric repair. Strict upstream parity remains failed for
+the prior 38 late-logit values, and
+the earlier backbone-layer-39 discrepancy remains open. No speed or audio-quality
+claim follows. The next discriminator is a same-input crossover of shared-layer-0
+`hnorm` on the two captured step-385 backbone hidden vectors, before tracing its
+producer farther into backbone. Historical KV remains a separate contribution.
+
+Evidence: `.landmark/evidence/drama3-tower385-localization.json`; source, binaries,
+receipts, fixture joins and four-way arrays are under
+`/opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/`. Full five-shard integrity is
+not established by config/index pins. Probe binaries and production source
+snapshots are hashed; a complete reproducible source-to-binary build attestation
+is not claimed. An initial MLX metadata-only failure and an invalid terminal
+control-byte-equality guard are retained separately, not counted as passes.
+Refresh on source, probe/binary, checkpoint/config, runtime/device/driver,
+prefix/cache/graph,
+capture policy or precision/tolerance changes; missing or changed private
+artifacts invalidate dependent claims until refreshed.

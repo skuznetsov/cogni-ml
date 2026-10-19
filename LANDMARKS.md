@@ -30539,3 +30539,45 @@ Refresh after source/toolchain/device/model/workload changes.
   Next numeric discriminator: trace the first excessive tower-logit coordinate
   on the same prefix against MLX, without weakening the gate. Owned model and
   Studio processes are stopped; no background service or push was started.
+
+### 2026-10-19 — DRAMA step-385 tower operator localization
+
+- The private fixed608 teacher-forced replay retains the exact 96 prompt IDs
+  and all 512 code rows from the long-window control, at graph depth2. This
+  equalizes the discrete prefix, not floating-point hidden or historical KV.
+  Native detailed snapshots and the passive MLX internal replay both preserve
+  all 1718 original captures / 6449296 values bitwise. MLX also preserves all
+  52 earlier boundaries; 312 unique internal stages per selected step are
+  compared at unchanged atol6e-5/rtol3e-4. Production source is unchanged.
+- At step385, shared-layer-0 embedding/enorm are bit-exact; incoming backbone
+  hidden and hnorm differ within tolerance. The first selected internal excess
+  is eh_proj at coordinates394/636. All 26 normalized layer outputs across
+  steps384/385 pass. Step384 already has internal excesses with passing logits;
+  this does not identify the earliest generation-wide drift or a growth cause.
+- Four-way GPU crossovers reproduce all 36 head and four EH original diagonals
+  bitwise, with independently matching raw BF16 payloads across loaders. Same-
+  input comparisons have zero excesses in 147456 head and 8192 EH values. Input
+  substitution alone reproduces both step385 head failures (head6/644,
+  head8/887) and both EH failures in each stack. For head6/644, total error
+  -7.66515732e-5 decomposes into MLX input effect -7.67111778e-5 and same-input
+  operator effect +5.96046448e-8. This is local attribution, not sole causation
+  through all later tower operations and differing historical KV states.
+- Graph cadence remains 608 submit/complete/waits, pending/retained0; all reads
+  are zero before drain. The 674 extra terminal snapshots explain 2696 extra
+  finite-status bytes (9568 vs6872), with no graph-counter change during reads.
+  GPU work stayed serial with finite deadlines, the 15% floor and 40960MiB
+  observed tree-RSS guard. No Studio was started. These are sampled guards,
+  not physical residency or peak-memory proofs.
+- Correlated mini-Quadrumvirate verdict: ROBUST for captured operator
+  localization. The strict prior38-value late-logit gate and old backbone39
+  discrepancy remain open. Next discriminator: same-input shared-layer-0 hnorm
+  crossover on the captured step385 backbone hidden vectors, before tracing
+  their producer. No precision/tolerance, speed or audio-quality claim changed.
+- Evidence: .landmark/evidence/drama3-tower385-localization.json and
+  docs/drama3-studio-frontier.md; private pinned probes/reports under
+  /opt/mldata_ssd/cogni-ml/drama3-tower385-20261019/. Source and binary hashes
+  are separately observed, not a complete reproducible-build attestation;
+  config/index pins do not establish full five-shard payload integrity.
+  Refresh on source/probe/binary/checkpoint/config/runtime/device/driver,
+  prefix/cache/graph/capture-policy/precision/tolerance changes. Missing or
+  changed private artifacts reopen dependent claims. No service or push.
