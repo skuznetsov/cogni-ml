@@ -30798,3 +30798,21 @@ Refresh after source/toolchain/device/model/workload changes.
   command-buffer use remain open; this is not a generation-speed result.
 - Reproduction, exact hashes, limitations and refresh triggers:
   docs/wan-unipc.md. Local evidence is under external wan-full scratch.
+
+### 2026-10-19 — Native Wan VAE causal cache and repeated decode gate
+
+- The opt-in native F32 VAE passes real 194-tensor image/motion/decode fixtures
+  at 8x8 and 16x24 against pinned upstream MPS, retaining finite abs 2e-5 + rel
+  2e-5. Seventy-three motion frames yield 19 latents; 22 decode latents yield
+  85 raw frames, cropped at offset four to 80 frames. This is small spatial
+  correctness coverage, not a 480p or video generation-speed result.
+- The motion falsifier exposed frame-major writes into NCDHW temporal history;
+  native history now agrees with the convolution's `[B,C,2,H,W]` reader.
+  Residual operations preserve live skip buffers. The final 16x24 run decodes
+  twice in one caller command with bit-identical output and no tracked GPU
+  buffer allocations during encoding: three examples, zero failures/errors/
+  pending. Correlated mini-Quadrumvirate verdict ROBUST for serialized use.
+- Workspace exclusivity across overlapping command buffers is a caller
+  precondition, not an enforced lease. Full spatial memory/performance,
+  batch>1 and complete pipeline parity remain open. Reproduction, exact pins,
+  local evidence and refresh triggers: docs/wan-vae.md.
