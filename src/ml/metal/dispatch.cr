@@ -9,6 +9,10 @@ module ML
     end
 
     struct ComputeEncoder
+      def initialize(command_buffer : Pointer(Void))
+        raise "Metal disabled (cpu_only)"
+      end
+
       def set_pipeline(pipeline : ComputePipeline) : self
         raise "Metal disabled (cpu_only)"
       end
@@ -179,6 +183,7 @@ module ML
       @cmd_buffer : Pointer(Void)
       @encoder : Pointer(Void)
       @pipeline : ComputePipeline?
+      @ended : Bool
 
       def initialize(command_buffer : CommandBuffer, concurrent : Bool = false)
         @cmd_buffer = command_buffer.handle
@@ -189,6 +194,18 @@ module ML
                    end
         raise "Failed to create compute encoder" if @encoder.null?
         @pipeline = nil
+        @ended = false
+      end
+
+      # Borrow the current root of an externally owned command chain. The
+      # owner must retain it and close this encoder before continuing the root.
+      def initialize(command_buffer : Pointer(Void))
+        raise ArgumentError.new("Compute encoder requires a live command buffer") if command_buffer.null?
+        @cmd_buffer = command_buffer
+        @encoder = MetalDispatchFFI.create_compute_encoder(@cmd_buffer)
+        raise "Failed to create compute encoder" if @encoder.null?
+        @pipeline = nil
+        @ended = false
       end
 
       # Insert memory barrier between dependent dispatches (concurrent encoder only)
@@ -313,7 +330,9 @@ module ML
 
       # End encoding
       def end_encoding : Nil
+        raise ArgumentError.new("Compute encoder is already ended") if @ended
         MetalDispatchFFI.encoder_end_encoding(@encoder)
+        @ended = true
       end
     end
 

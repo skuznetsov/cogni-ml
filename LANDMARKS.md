@@ -30897,3 +30897,17 @@ Refresh after source/toolchain/device/model/workload changes.
   verdict ROBUST for this bounded integration; full spatial performance and
   forty-layer propagation remain open. See docs/wan-transformer.md for receipts
   and refresh triggers.
+
+### 2026-10-19 — Serial GPU stage pools and asynchronous weight I/O
+
+- Opt-in page-aligned no-copy views overlap across serial phases; allocations
+  within one phase stay disjoint. Typed Arena leases and explicit completion
+  lifetimes prevent storage reuse or unmapping under queued GPU consumers.
+- Twelve alternating MetalIO stages pass exact GPU-consumer comparisons using
+  continued native/MPS command roots and one terminal host wait. The focused
+  six-example gate and broader 23-example primitive/staging regression pass,
+  including allocation, bounds, alias, ownership and changed-file guards.
+- Correlated mini-Quadrumvirate verdict ROBUST for this bounded serial scope.
+  Real asynchronous device-I/O failure injection, multi-gigabyte throughput,
+  complete pipeline memory and generation speed remain open. Source files must
+  remain immutable; refresh triggers and reproduction: docs/video-stage-io.md.

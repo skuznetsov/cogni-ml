@@ -23,10 +23,12 @@ LLAMA_LIB_DIR ?= $(firstword \
 
 OBJC_SOURCES := src/ml/metal/bridge.mm
 BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
+WAN_MPS_CHAIN_OBJ := $(BUILD_DIR)/metal_mps_command_chain.o
+WAN_STAGE_IO_OBJ := $(BUILD_DIR)/metal_stage_io.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec_video_staging spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -37,6 +39,19 @@ $(BUILD_SENTINEL):
 $(BRIDGE_OBJ): $(OBJC_SOURCES) | $(BUILD_SENTINEL)
 	clang++ -c $(OBJC_SOURCES) -o $(BRIDGE_OBJ) \
 		-std=c++17 -fobjc-arc -fPIC
+
+$(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS command chain requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(WAN_STAGE_IO_OBJ): src/ml/video/metal_stage_io.mm | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "Wan stage I/O requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+spec_video_staging: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
+	$(CRYSTAL) spec spec/video_metal_ops_spec.cr spec/video_stage_pool_spec.cr \
+		spec/video_stage_io_spec.cr spec/video_mps_command_chain_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld" $(ARGS)
 
 spec: $(BRIDGE_OBJ)
 	$(CRYSTAL) spec \

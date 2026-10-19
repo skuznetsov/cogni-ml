@@ -1,4 +1,5 @@
 require "../metal/dispatch"
+require "./metal_stage_pool"
 
 module ML::Video
   enum WeightDType
@@ -19,8 +20,25 @@ module ML::Video
     getter buffers = {} of String => ML::MetalBuffer
     @dtypes = {} of String => WeightDType
     @typed_buffers = {} of String => ML::MetalBuffer
+    @stage_pool : MetalStagePool?
+    @stage_phase : String?
+    @stage_lane : String
+    @stage_views = {} of UInt64 => MetalStageBufferView
+    @stage_names = {} of String => UInt64
 
-    def initialize
+    # When stage_pool is provided, only alloc uses its uninitialized scratch
+    # path. upload always owns a normal MetalBuffer so small CPU-written
+    # constants cannot overwrite another phase's shared backing.
+    def initialize(@stage_pool : MetalStagePool? = nil,
+                   @stage_phase : String? = nil,
+                   @stage_lane : String = "default")
+      if @stage_pool && !@stage_phase
+        raise ArgumentError.new("A stage phase is required with a stage pool")
+      end
+      if phase = @stage_phase
+        raise ArgumentError.new("Stage phase name must not be empty") if phase.empty?
+      end
+      raise ArgumentError.new("Stage lane name must not be empty") if @stage_lane.empty?
       raise "Native video requires Metal" unless ML::Metal::Device.init!
       MetalOps.prepare!
     end
@@ -33,6 +51,10 @@ module ML::Video
         resident << buffer unless resident.any? { |other| other.same?(buffer) }
       end
       @typed_buffers.each_value do |buffer|
+        resident << buffer unless resident.any? { |other| other.same?(buffer) }
+      end
+      @stage_views.each_value do |view|
+        buffer = view.buffer
         resident << buffer unless resident.any? { |other| other.same?(buffer) }
       end
 
@@ -52,6 +74,20 @@ module ML::Video
     def alloc(name : String, count : Int32) : ML::MetalBuffer
       raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
       raise ArgumentError.new("Buffer count must be positive") unless count > 0
+      if pool = @stage_pool
+        view = pool.allocate!(@stage_phase.not_nil!, @stage_lane, count.to_i64 * sizeof(Float32))
+        begin
+          adopt_stage_view(name, view, WeightDType::F32, false)
+        rescue ex
+          if view.arena_owned?
+            view.release_from_arena!(object_id)
+          else
+            view.release!
+          end
+          raise ex
+        end
+        return view.buffer
+      end
       buffer = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
       @buffers[name] = buffer
       @dtypes[name] = WeightDType::F32
@@ -68,8 +104,31 @@ module ML::Video
       buffer
     end
 
+    # Transfer a no-copy stage view to this Arena as an F32 activation or
+    # scratch buffer. The view remains alive until Arena.release/remove.
+    def adopt(name : String, view : MetalStageBufferView) : ML::MetalBuffer
+      adopt_stage_view(name, view, WeightDType::F32, false)
+      view.buffer
+    end
+
+    # Weights in the shared stage pool require an explicit storage dtype so
+    # kernels never infer BF16 from byte counts or a buffer's public map entry.
+    def adopt_weight(name : String, view : MetalStageBufferView,
+                     dtype : WeightDType) : ML::MetalBuffer
+      unless view.requested_bytes % dtype.bytes_per_element == 0
+        raise ArgumentError.new("Stage weight byte size is not aligned to its dtype")
+      end
+      adopt_stage_view(name, view, dtype, true)
+      view.buffer
+    end
+
     def upload(name : String, values : Array(Float32)) : ML::MetalBuffer
-      buffer = alloc(name, values.size)
+      raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
+      raise ArgumentError.new("Buffer count must be positive") if values.empty?
+      # Uploads are setup constants, not phase-resident stage data.
+      buffer = ML::MetalBuffer.new(values.size.to_i64 * sizeof(Float32))
+      @buffers[name] = buffer
+      @dtypes[name] = WeightDType::F32
       buffer.write(values)
       buffer
     end
@@ -97,16 +156,67 @@ module ML::Video
       buffer = @buffers.delete(name)
       typed_buffer = @typed_buffers.delete(name)
       @dtypes.delete(name)
-      buffer.try(&.release)
-      typed_buffer.try(&.release)
+      @stage_names.delete(name)
+      stage_owned = false
+      if buffer
+        stage_owned ||= release_stage_view_if_unreferenced(buffer)
+      end
+      if typed_buffer
+        stage_owned ||= release_stage_view_if_unreferenced(typed_buffer)
+      end
+      unless stage_owned
+        buffer.try(&.release)
+        typed_buffer.try(&.release)
+      end
     end
 
     def release : Nil
-      @buffers.each_value(&.release)
-      @typed_buffers.each_value(&.release)
+      @buffers.each do |_, buffer|
+        next if pooled_buffer?(buffer)
+        buffer.release
+      end
+      @typed_buffers.each do |_, buffer|
+        next if pooled_buffer?(buffer)
+        buffer.release
+      end
+      @stage_views.each_value { |view| view.release_from_arena!(object_id) }
+      @stage_views.clear
+      @stage_names.clear
       @buffers.clear
       @dtypes.clear
       @typed_buffers.clear
+    end
+
+    private def adopt_stage_view(name : String, view : MetalStageBufferView,
+                                 dtype : WeightDType, typed : Bool) : Nil
+      raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
+      raise ArgumentError.new("Invalid or released stage buffer view") unless view.buffer.valid?
+      unless view.requested_bytes >= dtype.bytes_per_element &&
+             view.requested_bytes % dtype.bytes_per_element == 0
+        raise ArgumentError.new("Stage view size is incompatible with its dtype")
+      end
+      view.claim_for_arena!(object_id)
+      @buffers[name] = view.buffer
+      @dtypes[name] = dtype
+      @typed_buffers[name] = view.buffer if typed
+      @stage_views[view.lease_id] = view
+      @stage_names[name] = view.lease_id
+    end
+
+    private def pooled_buffer?(buffer : ML::MetalBuffer) : Bool
+      @stage_views.values.any? { |view| view.buffer.same?(buffer) }
+    end
+
+    private def release_stage_view_if_unreferenced(buffer : ML::MetalBuffer) : Bool
+      view = @stage_views.values.find { |candidate| candidate.buffer.same?(buffer) }
+      return false unless view
+      still_referenced = @buffers.values.any? { |other| other.same?(buffer) } ||
+                         @typed_buffers.values.any? { |other| other.same?(buffer) }
+      return true if still_referenced
+      @stage_views.delete(view.lease_id)
+      @stage_names.reject! { |_, lease_id| lease_id == view.lease_id }
+      view.release_from_arena!(object_id)
+      true
     end
   end
 
