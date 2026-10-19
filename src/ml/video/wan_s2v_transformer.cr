@@ -242,8 +242,10 @@ module ML::Video
                            cfg : WanS2VTransformerConfig,
                            trace_layer : Int32? = nil,
                            block_trace : Hash(String, ML::MetalBuffer)? = nil,
-                           audio_trace : Hash(String, ML::MetalBuffer)? = nil) : ML::MetalBuffer
+                           audio_trace : Hash(String, ML::MetalBuffer)? = nil,
+                           tiled_attention : Bool = false) : ML::MetalBuffer
       cfg.validate!
+      WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
       block_cfg = cfg.block_config
       audio_cfg = cfg.audio_config
       # Per-block checks are prefix-scoped. Protect every resident parameter
@@ -283,15 +285,15 @@ module ML::Video
           # arenas separate and preserve the upstream block-then-inject order.
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
-            layer_trace ? block_trace : nil, "block.#{layer}.")
+            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention)
           WanS2VAudioInjector.encode(e, spare, local_audio, global_audio, current,
             weights, audio_scratch, audio_cfg,
-            layer_trace ? audio_trace : nil, "audio.#{injector_index}.")
+            layer_trace ? audio_trace : nil, "audio.#{injector_index}.", tiled_attention)
           injector_index += 1
         else
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
-            layer_trace ? block_trace : nil, "block.#{layer}.")
+            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention)
           current, spare = spare, current
         end
       end
@@ -332,15 +334,17 @@ module ML::Video
                     motion_frames : Int32,
                     trace_layer : Int32? = nil,
                     block_trace : Hash(String, ML::MetalBuffer)? = nil,
-                    audio_trace : Hash(String, ML::MetalBuffer)? = nil) : ML::MetalBuffer
+                    audio_trace : Hash(String, ML::MetalBuffer)? = nil,
+                    tiled_attention : Bool = false) : ML::MetalBuffer
       cfg.validate!
+      WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
       encode_patch_inputs(e, video_latents, condition_latents, reference_latents,
         motion_latents, sequence, weights, transformer_scratch, cfg, motion_frames)
       encode_text(e, raw_context, projected_context, text_hidden, weights, cfg)
       encode_time(e, timestep, time_embedding, modulation, weights, transformer_scratch, cfg)
       hidden = encode_layers(e, sequence, alternate, modulation, positions,
         projected_context, local_audio, global_audio, weights, block_scratch,
-        audio_scratch, cfg, trace_layer, block_trace, audio_trace)
+        audio_scratch, cfg, trace_layer, block_trace, audio_trace, tiled_attention)
       encode_head(e, hidden, time_embedding, prediction, latent_output, weights,
         cfg, cfg.video_frames, cfg.latent_height, cfg.latent_width)
       latent_output

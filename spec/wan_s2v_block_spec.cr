@@ -320,6 +320,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
 
     ML::Video::WanS2VBlock.prepare!
     ML::Video::WanS2VAudioInjector.prepare!
+    tiled_attention = ENV["WAN_S2V_TILED_ATTENTION"]? == "1"
+    ML::Video::MetalOps.prepare_tiled_attention! if tiled_attention
     ML::Video::WanS2VBlock.prepare_scratch!(scratch, block_cfg)
     ML::Video::WanS2VAudioInjector.prepare_scratch!(scratch, audio_cfg)
     block_output = output.alloc("block_output", block_cfg.values)
@@ -396,16 +398,17 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       encoder, inputs["x"], inputs["modulation"], inputs["positions"],
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
       block_output, audio_output, weights, scratch, block_cfg, audio_cfg,
-      block_trace, audio_trace,
-    )
+      block_trace, audio_trace, tiled_attention: tiled_attention)
     ML::Video::WanS2VBlock.encode_with_audio(
       encoder, inputs["x"], inputs["modulation"], inputs["positions"],
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
       repeat_block_output, repeat_audio_output, weights, scratch, block_cfg, audio_cfg,
+      tiled_attention: tiled_attention,
     )
     ML::Video::WanS2VBlock.encode(
       encoder, block_output, inputs["modulation"], inputs["positions"],
       inputs["context"], chained_block_output, weights, scratch, block_cfg,
+      tiled_attention: tiled_attention,
     )
     encoder.end_encoding
     ML::MetalBuffer.video_spec_allocations.should eq(allocation_start),

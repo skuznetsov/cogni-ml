@@ -135,6 +135,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--upstream", type=Path, default=DEFAULT_UPSTREAM)
+    parser.add_argument("--head-dim", type=int, choices=(8, 64, 128), default=8,
+                        help="Use a bounded two-layer model with the selected real attention-head width")
     args = parser.parse_args()
     _verify_sources(args.upstream)
     if not torch.backends.mps.is_available():
@@ -159,7 +161,9 @@ def main() -> None:
             raise RuntimeError("CausalAudioEncoder is outside the transformer fixture")
 
     s2v_module.CausalAudioEncoder = FixtureCausalAudioEncoder
-    cfg = TINY
+    cfg = dict(TINY)
+    cfg["dim"] = cfg["heads"] * args.head_dim
+    cfg["ffn_dim"] = 2 * cfg["dim"]
     model = s2v_module.WanModel_S2V(
         cond_dim=cfg["in_dim"], audio_dim=cfg["audio_dim"], num_audio_token=4,
         enable_adain=True, audio_inject_layers=cfg["injection_ids"], zero_init=False,

@@ -1,4 +1,5 @@
 require "./metal_ops"
+require "./metal_attention"
 require "./checkpoint"
 
 module ML::Video
@@ -246,13 +247,13 @@ module ML::Video
     # These are direct references to the same backing allocation, not copies.
     # Each pair is safe because the source value is dead before the next write.
     SCRATCH_ALIASES = {
-      "mod1" => "wan_b_norm1",
+      "mod1"                             => "wan_b_norm1",
       "self_qn/self_qr/cross_q/cross_qn" => "wan_b_self_q",
-      "self_kn/self_kr" => "wan_b_self_k",
-      "cross_attn" => "wan_b_self_attn",
-      "cross_proj/cross_res" => "wan_b_self_proj",
-      "ffn_norm/ffn_mod" => "wan_b_cross_norm",
-      "ffn_gelu" => "wan_b_ffn_in",
+      "self_kn/self_kr"                  => "wan_b_self_k",
+      "cross_attn"                       => "wan_b_self_attn",
+      "cross_proj/cross_res"             => "wan_b_self_proj",
+      "ffn_norm/ffn_mod"                 => "wan_b_cross_norm",
+      "ffn_gelu"                         => "wan_b_ffn_in",
     }
 
     # Checkpoints are optional preallocated destinations. Accepted names are
@@ -279,7 +280,9 @@ module ML::Video
                     context : ML::MetalBuffer, y : ML::MetalBuffer,
                     weights : Arena, scratch : Arena, cfg : WanS2VConfig,
                     trace : Hash(String, ML::MetalBuffer)? = nil,
-                    weight_prefix : String = "") : Nil
+                    weight_prefix : String = "",
+                    tiled_attention : Bool = false) : Nil
+      validate_attention_backend!(cfg.head_dim, tiled_attention)
       n = cfg.values.to_i64
       rows = cfg.rows
       ctx_rows = cfg.context_rows
@@ -335,8 +338,8 @@ module ML::Video
       encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
-      MetalOps.attention(e, self_qr, self_kr, self_v, self_attn,
-        cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches)
+      attention(e, self_qr, self_kr, self_v, self_attn,
+        cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
       trace_copy(e, trace, "self_attention", self_attn, n)
       linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "self_projection", self_proj, n)
@@ -359,8 +362,8 @@ module ML::Video
         scratch["wan_b_zero_bias"], cross_qn, rows, dim)
       norm_rms(e, cross_k, weights[key(weight_prefix, "cross_norm_k_weight")], weights.dtype(key(weight_prefix, "cross_norm_k_weight")),
         scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
-      MetalOps.attention(e, cross_qn, cross_kn, cross_v, cross_attn,
-        cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches)
+      attention(e, cross_qn, cross_kn, cross_v, cross_attn,
+        cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
       trace_copy(e, trace, "cross_attention", cross_attn, n)
       linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "cross_projection", cross_proj, n)
@@ -398,11 +401,31 @@ module ML::Video
                                block_trace : Hash(String, ML::MetalBuffer)? = nil,
                                audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                                block_weight_prefix : String = "",
-                               audio_weight_prefix : String = "") : Nil
+                               audio_weight_prefix : String = "",
+                               tiled_attention : Bool = false) : Nil
       validate_audio_pair!(cfg, audio_cfg)
-      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg, block_trace, block_weight_prefix)
+      validate_attention_backend!(cfg.head_dim, tiled_attention)
+      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg, block_trace, block_weight_prefix, tiled_attention)
       WanS2VAudioInjector.encode(e, block_output, local_audio, global_audio, y,
-        weights, scratch, audio_cfg, audio_trace, audio_weight_prefix)
+        weights, scratch, audio_cfg, audio_trace, audio_weight_prefix, tiled_attention)
+    end
+
+    def self.validate_attention_backend!(head_dim : Int32, tiled_attention : Bool) : Nil
+      if tiled_attention && !{64, 128}.includes?(head_dim)
+        raise ArgumentError.new("Wan tiled attention requires head dimension 64 or 128")
+      end
+    end
+
+    # Both backends use caller-owned F32 buffers and the borrowed serial encoder.
+    def self.attention(e : ML::Metal::ComputeEncoder, q : ML::MetalBuffer,
+                       k : ML::MetalBuffer, v : ML::MetalBuffer, y : ML::MetalBuffer,
+                       q_rows : Int32, k_rows : Int32, heads : Int32,
+                       head_dim : Int32, batches : Int32, tiled : Bool) : Nil
+      if tiled
+        MetalOps.attention_tiled(e, q, k, v, y, q_rows, k_rows, heads, head_dim, batches)
+      else
+        MetalOps.attention(e, q, k, v, y, q_rows, k_rows, heads, head_dim, batches)
+      end
     end
 
     def self.validate_audio_pair!(cfg : WanS2VConfig, audio_cfg : WanS2VAudioConfig) : Nil
@@ -723,7 +746,9 @@ module ML::Video
                     y : ML::MetalBuffer, weights : Arena, scratch : Arena,
                     cfg : WanS2VAudioConfig,
                     trace : Hash(String, ML::MetalBuffer)? = nil,
-                    weight_prefix : String = "") : Nil
+                    weight_prefix : String = "",
+                    tiled_attention : Bool = false) : Nil
+      WanS2VBlock.validate_attention_backend!(cfg.head_dim, tiled_attention)
       validate_inputs!(x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
       validate_trace!(trace, x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
       gathered = scratch["wan_a_gather"]
@@ -783,8 +808,8 @@ module ML::Video
       MetalOps.norm(e, k, weights["#{weight_prefix}audio_k_norm_weight"], scratch["wan_a_zero_bias"], kn,
         cfg.audio_rows, cfg.dim, EPS, rms: true, affine: true,
         weight_dtype: weights.dtype("#{weight_prefix}audio_k_norm_weight"), bias_dtype: scratch.dtype("wan_a_zero_bias"))
-      MetalOps.attention(e, qn, kn, v, attn, cfg.spatial_tokens, cfg.audio_tokens,
-        cfg.heads, cfg.head_dim, cfg.frame_rows)
+      WanS2VBlock.attention(e, qn, kn, v, attn, cfg.spatial_tokens, cfg.audio_tokens,
+        cfg.heads, cfg.head_dim, cfg.frame_rows, tiled_attention)
       trace_copy(e, trace, "audio_attention", attn, video_count)
       linear(e, attn, weights, "audio_o_weight", "audio_o_bias", proj,
         cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix)

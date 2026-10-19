@@ -99,6 +99,8 @@ describe ML::Video::WanS2VTransformerConfig do
     expect_raises(ArgumentError) { ML::Video::WanS2VTransformerConfig.new(latent_height: 7) }
     expect_raises(ArgumentError) { ML::Video::WanS2VTransformerConfig.new(injection_ids: [0, 0]) }
     expect_raises(ArgumentError) { ML::Video::WanS2VTransformerConfig.new(injection_ids: [40]) }
+    expect_raises(ArgumentError) { ML::Video::WanS2VBlock.validate_attention_backend!(8, true) }
+    ML::Video::WanS2VBlock.validate_attention_backend!(128, true)
   end
 
   it "prepares one exclusive block and injector workspace with exact union accounting" do
@@ -202,6 +204,8 @@ describe ML::Video::WanS2VTransformer do
         weights.upload(binding.target, wan_transformer_f32(fixture_weights[binding.source]))
       end
       ML::Video::WanS2VTransformer.prepare!
+      tiled_attention = ENV["WAN_S2V_TILED_ATTENTION"]? == "1"
+      ML::Video::MetalOps.prepare_tiled_attention! if tiled_attention
       ML::Video::WanS2VTransformer.prepare_transformer_scratch!(transformer_scratch, cfg)
       if ENV["WAN_S2V_REUSE_SCRATCH"]? == "1"
         ML::Video::WanS2VTransformer.prepare_reused_scratch!(block_scratch, audio_scratch, cfg)
@@ -270,7 +274,7 @@ describe ML::Video::WanS2VTransformer do
       ML::Video::WanS2VTransformer.encode_layers(layer_encoder, raw_sequence, one_layer_alternate,
         raw_modulation, positions, raw_context, local_audio, global_audio, weights,
         block_scratch, audio_scratch, one_layer_cfg, 0, one_layer_trace,
-        one_layer_audio_trace)
+        one_layer_audio_trace, tiled_attention: tiled_attention)
       layer_encoder.end_encoding
       layer_command.commit
       layer_command.wait
@@ -315,7 +319,8 @@ describe ML::Video::WanS2VTransformer do
         positions, local_audio, global_audio, sequence, alternate, prediction,
         latent_output, weights, transformer_scratch, block_scratch, audio_scratch,
         cfg, fixture["config"]["motion_frames"].as_i,
-        trace_layer: 1, block_trace: block1_trace, audio_trace: audio1_trace)
+        trace_layer: 1, block_trace: block1_trace, audio_trace: audio1_trace,
+        tiled_attention: tiled_attention)
       full_encoder.end_encoding
       ML::MetalBuffer.video_spec_allocations.should eq(before_encode), "transformer forward must allocate no GPU buffers"
       full_command.commit
@@ -376,7 +381,8 @@ describe ML::Video::WanS2VTransformer do
         drop_sequence, drop_alternate, drop_prediction, drop_latent_output,
         weights, transformer_scratch, block_scratch, audio_scratch, drop_cfg,
         fixture["config"]["motion_frames"].as_i,
-        trace_layer: 1, block_trace: drop_block_trace, audio_trace: drop_audio_trace)
+        trace_layer: 1, block_trace: drop_block_trace, audio_trace: drop_audio_trace,
+        tiled_attention: tiled_attention)
       drop_encoder.end_encoding
       ML::MetalBuffer.video_spec_allocations.should eq(before_drop),
         "no-pose first-request forward must allocate no GPU buffers"

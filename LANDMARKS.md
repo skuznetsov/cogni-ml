@@ -30882,3 +30882,18 @@ Refresh after source/toolchain/device/model/workload changes.
   adversary verdict ROBUST for this bounded serial contract; forty-layer and
   full spatial evidence remain open. See docs/wan-transformer.md for receipts
   and source/runtime/geometry/lifetime decay triggers.
+
+### 2026-10-19 — Opt-in tiled attention in Wan composition
+
+- Blocks, audio injectors and the transformer can select the existing F32
+  tiled attention kernel; unsupported head widths fail before encoding.
+  Default dispatch and tolerances remain unchanged, with no added allocation,
+  submission, wait or activation readback in encode.
+- Real official block-zero plus audio-injector traces pass with F32 and BF16
+  resident weights: six examples each, zero failures/errors/pending. A distinct
+  two-layer fixture at head width 128 and shared scratch passes five examples;
+  the original fixture passes the default path after integration. Repeats,
+  allocation and forbidden-overlap guards are included. Correlated adversary
+  verdict ROBUST for this bounded integration; full spatial performance and
+  forty-layer propagation remain open. See docs/wan-transformer.md for receipts
+  and refresh triggers.
