@@ -30659,3 +30659,41 @@ Refresh after source/toolchain/device/model/workload changes.
   source/probe/binary/checkpoint/config/runtime/device/driver/prefix/cache/graph/
   capture-policy/precision/tolerance changes or missing/changed artifacts.
   No service or push.
+
+
+### 2026-10-19 — Native Wan S2V and LTX resident block gates
+
+- Opt-in F32 Metal modules now cover Wan S2V attention/FFN plus its first audio
+  injector, and the LTX dual-stream block. The combined GPU spec on M2 Max
+  passed 16 examples with zero failures, errors, or pending cases. Wan has 35
+  upstream checkpoints at B=2 with distinct inputs and high RoPE coordinates;
+  LTX has 64 checkpoint mappings across two cases and two chained blocks.
+  Fixed abs 2e-5 + rel 2e-5 gate; existing DRAMA/Qwen tolerances are unchanged.
+- Cumulative allocation instrumentation remains unchanged during repeated
+  encoding. Wan block/audio and LTX block/block chaining use resident buffers
+  in one serial encoder and one terminal completion/read phase. Range aliases,
+  prefix mismatches, corrupted references, changed inputs, and C320 AdaIN
+  coverage are exercised. This does not establish zero host allocation/GC.
+- The large-position gate rejected a missing head divisor in RoPE indexing.
+  A later identical-input failure was quantitatively explained by standard MSL
+  trig error: sin(801) error 5.325852e-5 predicts the observed rotated-component
+  error within 3e-8; precise sine error is 1.773396e-9. Corrected indexing and
+  precise sin/cos pass without changing positions or tolerance.
+- Correlated mini-Quadrumvirate verdict: ROBUST within these reduced fixtures.
+  MPS upstream oracles use declared SDPA/F32-rotation adapters. Production head
+  sizes, FP64 activation rotations, LTX gated/cross-AdaLN checkpoint settings,
+  masks, full weights/encoders/VAEs, full video, quality, and speed remain open.
+  Next falsifier: actual production dimensions and conditioning flags against
+  pinned upstream before checkpoint admission and whole-request memory planning.
+- Wan adaptations are Apache-2.0. LTX adaptations carry LTX-2.x Community
+  restrictions, including revenue and competing-product conditions; see
+  third_party/VIDEO_NOTICES.md. This milestone grants no deployment clearance.
+- Evidence and reproduction: docs/video-native-frontier.md; private artifacts
+  under /opt/mldata_ssd/cogni-ml/video-scene-20261019/. The source/binary/fixture
+  index evidence/final-block-gates.json has SHA256
+  40be04204a58d9b00e3b1f7f2f6a838a56000ff807c7145877fe5dd675d3279c.
+  Pins do not attest a transitive reproducible build. Configured 15% memory
+  floor, finite deadlines and tree-RSS limits; no observed memory-minimum claim.
+  Refresh on native/oracle/upstream/configuration/precision/tolerance/runtime/
+  device/driver changes or missing/changed private artifacts. No full model,
+  Studio, or service was started; no push.

@@ -1454,6 +1454,17 @@ puts "dim=#{vec.size}"
 vecs = model.embed_batch(["Hello", "World", "Crystal"])
 ```
 
+## Native Video Block Probes
+
+Opt-in Metal modules provide a Wan 2.2 S2V attention block with audio injection
+(`ml/video/wan_s2v_block`) and an LTX dual-stream block (`ml/video/ltx2_block`).
+They use resident F32 buffers, reusable scratch, and caller-owned serial command
+encoding. These are upstream-checked block slices; checkpoint loading, encoders,
+VAEs, and full video generation remain open. See the
+[native video frontier](docs/video-native-frontier.md) for supported configurations
+and reproducible gates, and [license notices](third_party/VIDEO_NOTICES.md) before
+using or redistributing the LTX-specific modules.
+
 ## Metal Kernels
 
 | Kernel | Purpose |
@@ -1490,4 +1501,9 @@ NVIDIA/CUDA support is currently an experimental backend-probe track, not a full
 
 ## License
 
-MIT
+The core library is MIT licensed. Optional Wan adaptations retain Apache-2.0
+notices. Optional LTX adaptations are covered by the LTX-2.x Community License,
+which includes commercial-use conditions; they are not covered by MIT.
+See [video source and license notices](third_party/VIDEO_NOTICES.md) for exact
+paths and included agreements, and the [native video frontier](docs/video-native-frontier.md)
+for the current implementation boundary.

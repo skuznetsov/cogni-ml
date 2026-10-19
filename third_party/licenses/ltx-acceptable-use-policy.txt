@@ -1,0 +1,239 @@
+                                            ACCEPTABLE USE POLICY
+
+Last Updated: March 30, 2026
+
+
+
+
+Lightricks Ltd. and its affiliates (the “Company” or “Lightricks” or “We”) offers mobile software applications,
+web services and generative AI (as defined below) models (collectively the “Products”), which are made
+available on cloud-hosted basis and/or on-premises deployments (“you”, “your”), for the purpose of
+creating, editing, perfecting and producing photos, videos, storytelling and remakes, using, among other
+things, artificial intelligence (“AI”) tools (both proprietary of Lightricks or third party tools).
+
+This Acceptable Use Policy (“AUP”) applies to anyone who uses Lightricks’ Products, and is intended to help
+our users stay safe and ensure our Products are being used responsibly.
+
+
+We aim for our Products to be used safely and responsibly, while maximizing your control over how you
+use them. By using our Products, you accept and agree to adhere to this AUP.
+
+
+We have established universal policies applicable to all our Products, as well as specific policies for users
+who use our LTX Video (“LTXV”) API (the “API”) to create applications for themselves or others. Violating
+our policies could result in action against your account, up to suspension or termination. We also work to
+make our models safer and more useful, by training them to refuse harmful instructions and reduce their
+tendency to produce harmful content.
+
+
+We believe that learning from real-world use is a critical component of creating and releasing increasingly
+safe AI systems. We cannot predict all beneficial or abusive uses of our technology, so we proactively
+monitor for new abuse trends. Our policies will evolve based on what we learn over time.
+
+Compliance with Law
+
+You must use the Products in accordance with all applicable laws. This includes not using our Products to:
+
+●   Compromise the privacy of others;
+
+●   Use subliminal, manipulative, or deceptive techniques that distort a person’s behavior so that they are
+    unable to make informed decisions in a way that is likely to cause harm;
+
+●   Engage in regulated activity without complying with applicable regulations;
+
+●   Create or expand facial recognition databases without consent;
+
+●   Promote or engage in any illegal activity, including the exploitation or harm of children and the
+    development or distribution of illegal substances, goods, or services;
+
+●   Exploit any vulnerabilities related to age, disability, or socio-economic circumstances;
+
+●   Conduct real-time remote biometric identification in public spaces for law enforcement purposes;
+●   Evaluate or classify individuals based on their social behavior or personal traits leading to detrimental
+    or unfavorable treatment;
+
+●   Categorize individuals based on their biometric data to deduce or infer sensitive attributes such as
+    their race, political opinions, religious beliefs, or sexual orientation;
+
+●   Assess or predict the risk of an individual committing a criminal offense based solely on their personal
+    traits or on profiling;
+
+●   Infer an individual’s emotions in the workplace and educational settings, except when necessary for
+    medical or safety reasons;
+
+●   Share personal information without consent;
+
+●   Provide advice on essential services, including in the medical or health field, without review by a
+    qualified professional and disclosure of the use of AI assistance and its potential limitations.
+
+Universal Usage Standards
+
+Do Not Compromise Children’s Safety
+
+This includes using our Products to:
+
+●   Create, distribute, or promote child sexual abuse material;
+
+●   Facilitate trafficking, sextortion, or any other form of exploitation of a minor;
+
+●   Facilitate minor grooming, including generating content designed to impersonate a minor;
+
+●   Facilitate or depict child abuse of any form;
+
+●   Promote or facilitate pedophilic relationships;
+
+●   Fetishize minors.
+
+Do Not Incite Violence or Hateful Behavior
+
+This includes using our Products to:
+
+●   Incite, facilitate, or promote violent extremism, terrorism, or hateful behavior;
+
+●   Depict support for organizations or individuals associated with violent extremism, terrorism, or hateful
+    behavior;
+
+●   Facilitate or promote any act of violence or intimidation;
+
+●   Promote discriminatory practices or behaviors against individuals or groups on the basis of protected
+    attributes
+
+Do Not Compromise Someone’s Privacy or Identity
+This includes using our Products to:
+
+●   Compromise security or gain unauthorized access to computer systems or networks;
+
+●   Violate any person’s privacy rights;
+
+●   Misuse, collect, solicit, or gain access to private information without permission;
+
+●   Impersonate a human by presenting results as human-generated
+
+Do Not Create Psychologically or Emotionally Harmful Content
+
+This includes using our Products to:
+
+●   Facilitate or conceal any form of self-harm;
+
+●   Promote unhealthy or unattainable body image or beauty standards;
+
+●   Shame, humiliate, intimidate, bully, harass, or celebrate the suffering of individuals;
+
+●   Coordinate the harassment or intimidation of an individual or group;
+
+●   Generate content depicting sexual violence;
+
+●   Generate content depicting animal cruelty or abuse;
+
+●   Generate violent or gory content inspired by real acts of violence;
+
+●   Promote, trivialize, or depict graphic violence or gratuitous gore
+
+Do Not Spread Misinformation
+
+This includes using our Products to:
+
+●   Create and disseminate deceptive or misleading information;
+
+●   Create and advance conspiratorial narratives;
+
+●   Impersonate real entities or create fake personas without consent;
+
+Do Not Engage in Fraudulent, Abusive, or Predatory Practices
+
+This includes using our Products to:
+
+●   Facilitate the production, acquisition, or distribution of counterfeit goods;
+
+●   Promote or facilitate the generation of spam;
+
+●   Generate content for fraudulent activities, schemes, scams, phishing, or malware;
+
+●   Generate deceptive or misleading digital content;
+●   Engage in or facilitate multi-level marketing, pyramid schemes, or other deceptive business models;
+
+●   Promote or facilitate predatory lending practices;
+
+●   Engage in deceptive, abusive behaviors that exploit vulnerable people;
+
+●   Promote or facilitate the use of abusive debt collection practices;
+
+●   Develop a product that deploys subliminal, manipulative, or deceptive techniques
+
+Do Not Abuse our Products
+
+This includes using our Products to:
+
+●   Coordinate malicious activity across multiple accounts;
+
+●   Utilize automation to engage in spammy behavior;
+
+●   Circumvent a ban through the use of a different account;
+
+●   Facilitate or provide account access to persons or entities in unsupported locations;
+
+●   Intentionally bypass capabilities or restrictions established within our products;
+
+●   Use or access our Products or any outputs to develop, modify, fine tune or improve any products or
+    services that compete with our Products, including to develop, fine tune or train any artificial
+    intelligence or machine learning algorithms or models of any kind
+
+Do Not Generate Sexually Explicit Content
+
+This includes using our Products to:
+
+●   Depict or request sexual intercourse or sex acts;
+
+●   Generate content related to sexual fetishes or fantasies;
+
+●   Facilitate, promote, or depict incest or bestiality;
+
+●   Engage in erotic chats
+
+Restrictions on Use of Licensed Content for AI Model Training
+
+Our Products, and the content incorporated therein, are subject to additional restrictions, which reflect our
+obligations towards third parties. Such restrictions include the following:
+
+●   You may not reproduce, redistribute, or make available any training data incorporated into our
+    Products. This includes video, imagery, metadata (titles, keywords, etc.), or any other component used
+    in training.
+
+●   You may not use any outputs from any of our Products in applications involving unlawful pornography,
+    defamation, hate speech, deepfakes, biometric identification, or other unlawful activity.
+●   You may not extract metadata or reverse-engineer model behavior to infer personal information,
+    identity, or content provenance.
+
+●   Where content from our Products is used commercially, users must assume responsibility for ensuring
+    it does not replicate any real-world likeness, person, brand, or location unless independently cleared.
+
+Use of our API
+
+Our API allows you to integrate the relevant Product into your applications. As the developer of your
+applications, you are responsible for designing and implementing how your users interact with our
+technology.
+
+We recognize that our API introduces new capabilities with scalable impact, so we have service-specific
+policies that apply to all use of our APIs in addition to our Universal Policies:
+
+●   Don’t compromise the privacy of others, including (i) collecting, processing, disclosing, inferring or
+    generating personal data without complying with applicable legal requirements; (ii) facilitating
+    spyware, communications surveillance, or unauthorized monitoring of individuals.
+
+●   Don’t perform or facilitate the following activities that may significantly impair the safety, wellbeing, or
+    rights of others, including: (i) providing tailored legal, medical/health, or financial advice without
+    review by a qualified professional and disclosure of the use of AI assistance and its potential
+    limitations; (ii) making high-stakes automated decisions in domains that affect an individual’s safety,
+    rights or well-being (e.g., law enforcement, migration, management of critical infrastructure, safety
+    components of products, essential services, credit, employment, housing, education, social scoring, or
+    insurance); and (iii) facilitating real money gambling or payday lending.
+
+●   Don’t misuse our API to cause harm by intentionally deceiving or misleading others, including: (i)
+    generating or promoting disinformation, misinformation, or false online engagement (e.g., comments,
+    reviews); (ii) impersonating another individual or organization without consent or legal right; (iii)
+    failing to ensure that automated systems (e.g., chatbots) disclose to people that they are interacting
+    with AI, unless it’s obvious from the context.
+
+●   Don’t develop applications that may be inappropriate for minors, including sexually explicit or
+    suggestive content. This does not include content created for scientific or educational purposes.
+
