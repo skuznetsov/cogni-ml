@@ -9,22 +9,42 @@
 
 @interface CogniTrackedMPSCommandBuffer : MPSCommandBuffer
 @property(nonatomic, strong) NSMutableArray<id<MTLCommandBuffer>> *segments;
+@property(nonatomic, strong) NSHashTable<id<MTLCommandBuffer>> *segmentSet;
+@property(nonatomic, strong) id<MTLCommandBuffer> lastRoot;
 - (void)rememberCurrentRoot;
 @end
+
+// Keep ordered roots for terminal status/timing inspection, but use a
+// pointer-identity hash table for membership. The list alone makes repeated
+// root checks quadratic as MPSGraph creates more command-buffer segments.
+static BOOL gs_mps_chain_track_root(
+    NSMutableArray *segments, NSHashTable *segmentSet, id root) {
+  if (!root || [segmentSet containsObject:root])
+    return NO;
+  [segmentSet addObject:root];
+  [segments addObject:root];
+  return YES;
+}
 
 @implementation CogniTrackedMPSCommandBuffer
 - (instancetype)initWithCommandBuffer:(id<MTLCommandBuffer>)commandBuffer {
   self = [super initWithCommandBuffer:commandBuffer];
   if (self) {
     self.segments = [NSMutableArray new];
+    self.segmentSet = [[NSHashTable alloc]
+        initWithOptions:NSPointerFunctionsStrongMemory |
+                   NSPointerFunctionsObjectPointerPersonality
+              capacity:1];
     [self rememberCurrentRoot];
   }
   return self;
 }
 - (void)rememberCurrentRoot {
   id<MTLCommandBuffer> root = self.rootCommandBuffer;
-  if (root && ![self.segments containsObject:root])
-    [self.segments addObject:root];
+  if (root == self.lastRoot)
+    return;
+  self.lastRoot = root;
+  gs_mps_chain_track_root(self.segments, self.segmentSet, root);
 }
 - (void)commitAndContinue {
   [self rememberCurrentRoot];
@@ -32,6 +52,65 @@
   [self rememberCurrentRoot];
 }
 @end
+
+// CPU-only discriminator for the root-membership implementation. Distinct
+// probe roots deliberately compare equal so an equality-based set would lose
+// roots and an ordered-array containsObject scan would invoke isEqual O(N^2).
+static uint64_t gs_mps_chain_probe_equality_calls = 0;
+
+@interface CogniMPSChainRootProbeObject : NSObject
+@property(nonatomic) NSUInteger identity;
+- (instancetype)initWithIdentity:(NSUInteger)identity;
+@end
+
+@implementation CogniMPSChainRootProbeObject
+- (instancetype)initWithIdentity:(NSUInteger)identity {
+  self = [super init];
+  if (self)
+    self.identity = identity;
+  return self;
+}
+- (BOOL)isEqual:(id)object {
+  ++gs_mps_chain_probe_equality_calls;
+  return [object isKindOfClass:[CogniMPSChainRootProbeObject class]] &&
+         self.identity == ((CogniMPSChainRootProbeObject *)object).identity;
+}
+- (NSUInteger)hash { return self.identity; }
+@end
+
+extern "C" int32_t gs_mps_chain_root_tracking_probe(
+    int32_t uniqueRoots, int32_t *retainedRoots, uint64_t *equalityCalls) {
+  if (uniqueRoots <= 0 || !retainedRoots || !equalityCalls)
+    return -1;
+  @autoreleasepool {
+    NSMutableArray *segments = [NSMutableArray new];
+    NSHashTable *segmentSet = [[NSHashTable alloc]
+        initWithOptions:NSPointerFunctionsStrongMemory |
+                   NSPointerFunctionsObjectPointerPersonality
+              capacity:(NSUInteger)uniqueRoots];
+    NSMutableArray<CogniMPSChainRootProbeObject *> *roots =
+        [NSMutableArray arrayWithCapacity:(NSUInteger)uniqueRoots];
+    gs_mps_chain_probe_equality_calls = 0;
+    for (int32_t index = 0; index < uniqueRoots; ++index) {
+      CogniMPSChainRootProbeObject *root =
+          [[CogniMPSChainRootProbeObject alloc]
+              initWithIdentity:(NSUInteger)index];
+      [roots addObject:root];
+      gs_mps_chain_track_root(segments, segmentSet, root);
+    }
+    CogniMPSChainRootProbeObject *equalClone =
+        [[CogniMPSChainRootProbeObject alloc] initWithIdentity:0];
+    gs_mps_chain_track_root(segments, segmentSet, equalClone);
+    for (CogniMPSChainRootProbeObject *root in roots)
+      gs_mps_chain_track_root(segments, segmentSet, root);
+    *retainedRoots = (int32_t)segments.count;
+    *equalityCalls = gs_mps_chain_probe_equality_calls;
+    return segmentSet.count == segments.count &&
+                   segments.count == (NSUInteger)uniqueRoots + 1
+               ? 0
+               : -2;
+  }
+}
 
 @interface CogniMPSCommandChain : NSObject
 @property(nonatomic, strong) CogniTrackedMPSCommandBuffer *command;
