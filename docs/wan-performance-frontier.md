@@ -528,6 +528,104 @@ whole-block numerical and latency gates; short kernel evidence cannot choose
 the dominant complete-block bottleneck. Long-key self-attention and large
 GEMM remain the higher-impact profiling candidates.
 
+## Bounded full-key attention qualification
+
+Full video, model and complete-block execution remain deferred. The standalone
+probe keeps K=36,608, H=40, D=128 and F32 operands, but selects at most 1,024 independent
+query rows. Its expected output is the corresponding per-head slice of the
+pinned full-query upstream oracle; keys and values are never truncated. This
+is a reduced-query primitive experiment, not a whole-block latency estimate.
+
+The first comparison uses existing MPSGraph chunk-128 SDPA and existing native
+tiled attention. The second compares native tiled attention with a probe-local variant
+that loads immutable Q fragments before the ascending key loop. The latter
+may save repeated loads, or lose occupancy through register pressure. It must
+retain all score, online-softmax and value-reduction arithmetic in source order.
+No production kernel or default is changed; stopping the standalone probe is
+the rollback. The earlier rejected explicit-graph, small-chunk and K/V-layout
+routes are not being reopened.
+
+Inputs, plans, pipelines and buffers are prepared before timing. Each arm uses
+one terminal wait and zero explicit encode-time MetalBuffer allocations; input
+fill, GPU comparisons and compact metric readback are separate diagnostics.
+Require one warmup and three AB/BA/AB measured pairs, finite strict upstream
+and native-output comparisons for every pair, and a seeded one-value error
+control. The Q-fragment candidate additionally requires native bit identity.
+The primary timing uses Q=256: two MPS calls and four 320-group native
+segments. Q=257 needs a third padded MPS call and a fifth native segment, so
+its tail/last-query slice is a separate correctness gate, not pooled timing.
+Numerical failure or
+failure to win all three pairs rejects promotion; no tolerance widening is
+admitted. Reduced-query occupancy, MPSGraph private allocations and whole-block
+error propagation remain unqualified until their own later gates.
+
+Use the cache-aware 15% admission policy, a separately declared owned-group
+footprint cap, a 64 MiB swap-growth limit and a 90 s deadline. Keep explicit
+buffers below 2 GiB and report opaque MPS storage separately as unbounded by
+that count. Record source/native-object/binary/fixture identities with results.
+
+### Observed results on M2 Max, 2026-10-20
+
+The release build of
+[`wan_s2v_bounded_attention_benchmark.cr`](../examples/wan_s2v_bounded_attention_benchmark.cr)
+completed, followed by four guarded standalone runs. Each used one AB warmup,
+three AB/BA/AB pairs, a strict GPU comparison after each pair and one seeded
+error control. Input fill, pipeline/plan construction and validation were
+outside the timed arms. The primary measure is host arm wall time through its
+one terminal wait; the reported sum of command-root GPU intervals is a separate
+diagnostic, not additive kernel cost.
+
+| Q=256, start=0 paired cohort | Baseline median | Candidate median | Candidate/baseline | Candidate wins |
+| --- | ---: | ---: | ---: | ---: |
+| MPS chunk-128 vs existing native tiled | 61.482625 ms | 208.984750 ms | 3.39909 | 0/3 |
+| Existing native tiled vs Q-fragment hoist | 207.366334 ms | 171.417000 ms | 0.82664 | 3/3 |
+
+The Q-fragment hoist reduced native arm wall time by 17.336% in this cohort,
+with bitwise-identical native output. This admits further primitive review;
+it does not replace MPS or establish a generation speedup. The two rows are
+separate cohorts, so the cached candidate was not paired directly against MPS.
+Retain MPS as the evaluated block baseline and leave application/backend
+defaults unchanged; the probe does not qualify a replacement.
+
+Both comparisons also passed on the final 257 queries, starting at 36,351 and
+ending at 36,608. These cover the partial native tile and padded third MPS
+chunk. Their diagnostic timings are not pooled with Q=256, and the executable
+forces timing admission false for all shapes except Q=256/start=0.
+
+All 48 finite numerical checks passed the unchanged
+`2e-5 + 2e-5*abs(reference)` tolerance. The largest upstream absolute error was
+`8.493662e-7`, with maximum tolerance ratio `0.039907727`. All eight cached-vs-native
+checks were bitwise equal. Outputs started as NaN, so the first finite checks
+also reject omitted writes. Each run's final `candidate[0] += 1` control
+produced exactly one bit difference and one strict violation. No activation
+values were read back; only compact diagnostic metrics were read after their
+separate terminal waits. Every timed arm used one terminal wait and zero tracked
+encode-time MetalBuffer allocations; source inspection found no intermediate
+host wait. This does not count opaque MPS allocations as tracked buffers.
+
+The explicit plans matched Arena residency: 1,528,299,580 bytes for MPS-vs-tiled
+and 1,520,435,260 bytes for the native pair at Q=256. The tail plans add 81,920
+bytes. Runtime guards used a 5 GiB owned-process budget, 90 s deadline, 64 MiB
+swap-growth limit and the cache-aware 15% floor. Across the four short runs,
+the largest sampled footprint was 1,551,680,352 bytes (1.445 GiB), the smallest
+sampled cache headroom estimate was 24,592,924,672 bytes (22.903 GiB), minimum
+reported free pressure was 81%, and sampled swap growth was zero. All groups
+ended with zero live processes. Samples do not establish a between-poll peak,
+and file-backed cache is not guaranteed immediately reclaimable memory.
+
+The receipt is
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/bounded-attention-receipt-v1.json`,
+SHA-256 `9749560bf4b4db6b982a51ac4edc4128bddcefcf0a4dd2e5473e91a83e394601`.
+It binds 46 files: the final probe and native objects/binary, pinned oracle and
+sources, exact guarded invocations, raw logs and the CPU recomputation script.
+The successful qualification consumed binary `wan_s2v_bounded_attention_benchmark-v3`;
+the initial NamedTuple-access compile failure and superseded v2 build are
+retained as history, not runtime evidence. Full-file oracle hashes are checked
+before parsing/slicing, under the explicit immutable-fixture assumption.
+Refresh after code, binary/native objects, fixture/input, precision, device or
+runtime, queue, shape or lifetime changes. Full-query occupancy, real BF16 block
+numerics, the previously open stack drift and full generation remain open.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In
@@ -569,6 +667,10 @@ GEMM remain the higher-impact profiling candidates.
    improve input reuse and avoid expansion, but it changes matrix shape or the
    reduction tree. BF16-to-F32 conversion is exact; a new accumulation tree is
    not necessarily bitwise equal. Qualify each shape before replacing MPS.
+   Park another direct-tiled comparison until there is a new backend or premise:
+   the existing 5,120-to-13,824 probe at 64/512/2,048 rows already found MPS
+   6.77--20.29 times faster (see [projection evidence](video-mps-projection.md)).
+   That comparison checks native tolerance, not wide-shape upstream parity.
 
 These are hypotheses about latency. Their logical byte counts are not measured
 memory-controller traffic. A larger dispatch or fewer command segments has
