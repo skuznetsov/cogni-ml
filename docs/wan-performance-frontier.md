@@ -450,6 +450,84 @@ cost. Both A/A arms use the reused layout, so that run alone cannot establish
 a speedup from coloring. Refresh on the source, lifetime, shape/input/weight,
 precision, queue/device/runtime or memory-policy changes listed above.
 
+## Bounded FFN bias/GELU epilogue qualification
+
+Full video generation remains deferred. The standalone
+[`wan_s2v_ffn_epilogue_benchmark.cr`](../examples/wan_s2v_ffn_epilogue_benchmark.cr)
+compares the existing MPS bias dispatch followed by approximate GELU against
+one fused, in-place dispatch. It keeps the F32 bias sum, GELU expression order
+and `abs(v) >= 10` saturation branch. Production code and defaults are unchanged;
+rollback is to stop using the standalone candidate.
+
+On Apple M2 Max, the final v3 executable processes 4,096 x 13,824 F32 values
+(216 MiB per arm). One warmup AB pair precedes AB/BA/AB measured pairs for
+each source bias dtype. GPU fill, comparisons, trace checks and corruption
+control are outside timed arms. Most inputs are deterministic values in
+`[-4,4)`; the first 16 rows cover cancellation, signed zero, adjacent F32 values
+around +/-10 and large finite magnitudes.
+
+| Source bias | Existing GPU median | Fused GPU median | Fused / existing | Pair wins |
+| --- | ---: | ---: | ---: | ---: |
+| F32 | 3.819375 ms | 1.892625 ms | 0.49553 | 3/3 |
+| BF16 | 3.570542 ms | 1.777042 ms | 0.49770 | 3/3 |
+
+Both dtypes have zero bit differences, nonfinite values and strict-tolerance
+violations for every warmup/measured output and the optional pre-GELU trace
+and trace-path final output. The one-value `+1` control triggers exactly one
+bit and tolerance failure. A separate 17-row run exercises the same edge rows
+and checks. Each timed arm has one terminal wait, zero inter-operator host
+waits, zero activation readbacks and zero encode-time tracked MetalBuffer
+allocations. These are isolated kernel timings; the trace variant is checked
+for correctness but not timed. They do not establish a full-block speedup.
+
+The optional `--upstream-fixture=PATH` mode uses the immutable pinned
+`wan-official-block0/wan-official.json` manifest and BF16 sidecar. It loads only
+`blocks.0.ffn.0.weight` and `.bias`, supplies the upstream `ffn_mod` input, and
+runs one 5,120-to-13,824 MPS projection at B=2, seq=2. Six separate GPU metric
+buffers check both pre-GELU paths and both final outputs against each other
+and the corresponding upstream arrays. All six checks pass at the unchanged
+`2e-5 + 2e-5*abs(reference)` finite gate. Pre-GELU output is bitwise equal to
+upstream; fused final output is bitwise equal to the current native path.
+Both final paths differ from upstream at 4,578 of 55,296 values, with maximum
+absolute error `4.7683716e-7`, normalized error `0.00873967` and zero strict
+violations. The existing small GELU difference is preserved.
+
+This qualifies the projection/bias/GELU slice given fixed upstream `ffn_mod`,
+not its production earlier in the block, a full model, or an official F32-source
+checkpoint. Manifest and sidecar hashes are verified, but inputs must remain
+immutable throughout the run: hashing and consumption use separate file reads,
+not a transaction against concurrent metadata-preserving modification.
+
+DoD commands after the guarded release build are:
+
+```sh
+wan_s2v_ffn_epilogue_benchmark-v3 --rows=17 --trace-pre-gelu
+wan_s2v_ffn_epilogue_benchmark-v3 --trace-pre-gelu
+wan_s2v_ffn_epilogue_benchmark-v3 --upstream-fixture=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-official-block0/wan-official.json
+```
+
+All three were run serially through the cache-aware guard with a 1,536 MiB
+owned-group footprint stop cap, 64 MiB swap-growth cap, 90 s deadline and
+unchanged 15% policy floor, and exited 0. The synthetic explicit allocation
+cap is 1 GiB; optional traces use 679,560,212 bytes at the default shape. The
+upstream slice uses 426,110,072 explicit bytes including its F32 MPS weight
+stage. Opaque MPS/driver storage is not in those explicit counts, and samples
+can miss the peak of short runs; the sampled footprint is not an actual-peak
+claim. No sampled swap growth occurred. Builds used the same memory/swap
+limits with a 180 s deadline. The v2 constructor-type failure was corrected
+before the successful v3 build; no v2 GPU run was made.
+
+External `wan-self-attention/ffn-epilogue-receipt-v1.json` (SHA-256
+`e110da994d742c467c432da8fcbec64167b27d6a282b2dd94d466a20524c5884`)
+binds source, executables, native objects, actual commands, raw logs, fixture
+identities and the recomputation script. Correlated separate-agent review is
+ROBUST for synthetic epilogue timing and the immutable fixed-input upstream
+slice. Requalify after source/native-object, input/shape/weight/precision,
+device/runtime/queue or memory-policy changes. Integration needs the existing
+whole-block numerical and latency gates; short kernel evidence cannot choose
+the dominant complete-block bottleneck. Long-key self-attention and large
+GEMM remain the higher-impact profiling candidates.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In
@@ -484,6 +562,8 @@ precision, queue/device/runtime or memory-policy changes listed above.
    Preserve the rounded F32 bias result and the current GELU operation order;
    coefficient/FMA changes still require bitwise intermediate and block checks.
    Traces must continue to expose the pre-GELU value when requested.
+   The bounded qualification above confirms the isolated candidate; full-block
+   integration and latency remain open.
 4. **BF16/F32 GEMM and paired projections.** Q/K/V are currently separate
    linear calls. Packing projections or using native mixed-storage GEMM may
    improve input reuse and avoid expansion, but it changes matrix shape or the
