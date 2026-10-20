@@ -22,6 +22,12 @@ private WAN_BOUNDED_MANIFEST_SHA256    = "7586da395e4acedcd667639c91350119135183
 private WAN_BOUNDED_EXPECTED_SHA256    = "8bf37c04b5effec694ec888a0a3c052160e827fcb7e0fb3603f5bfd939a709ef"
 private WAN_BOUNDED_FORMULA            = "avalanche32(native_flat_index + salt*0x9e3779b9); ((hash & 1023) - 512) / 256"
 private WAN_BOUNDED_MANIFEST_SCHEMA    = "wan_s2v_self_attention_reference_v1"
+private WAN_BOUNDED_SHARED_KV_SOURCE   = {{ read_file("#{__DIR__}/support/wan_s2v_shared_kv_attention.metal") }}
+private WAN_BOUNDED_SHARED_KV_BYTES    = 2_i64 * 32 * WAN_BOUNDED_HEAD_DIM * sizeof(Float32)
+
+lib WanBoundedAttentionLimits
+  fun max_threadgroup_memory_length = wan_bounded_max_threadgroup_memory_length(handle : Pointer(Void)) : Int64
+end
 
 private WAN_BOUNDED_PROBE_SOURCE = <<-METAL
   #include <metal_stdlib>
@@ -286,12 +292,12 @@ private def wan_bounded_qcache_pipeline(source : String) : ML::Metal::ComputePip
   ML::Metal::PipelineCache.get(name) { ML::Metal::ComputePipeline.new(name, source) }
 end
 
-private def wan_bounded_qcache_range(encoder : ML::Metal::ComputeEncoder,
+private def wan_bounded_native_range(encoder : ML::Metal::ComputeEncoder,
                                      pipeline : ML::Metal::ComputePipeline,
                                      q : ML::MetalBuffer, k : ML::MetalBuffer,
                                      v : ML::MetalBuffer, output : ML::MetalBuffer,
                                      query_rows : Int32, first_tile : Int32,
-                                     tile_count : Int32) : Nil
+                                     tile_count : Int32, threads : Int32 = 32) : Nil
   scale = 1_f32 / Math.sqrt(WAN_BOUNDED_HEAD_DIM.to_f32)
   params = StaticArray[query_rows.to_u32, WAN_BOUNDED_K_ROWS.to_u32,
     WAN_BOUNDED_HEADS.to_u32, scale.unsafe_as(UInt32), first_tile.to_u32]
@@ -299,7 +305,7 @@ private def wan_bounded_qcache_range(encoder : ML::Metal::ComputeEncoder,
   encoder.set_buffer(q, 0).set_buffer(k, 1).set_buffer(v, 2)
   encoder.set_buffer(output, 3, ML::Metal::BufferAccess::Write)
   encoder.set_bytes(params.to_unsafe.as(Void*), sizeof(typeof(params)), 4)
-  encoder.dispatch_threadgroups({tile_count, 1, 1}, {32, 1, 1})
+  encoder.dispatch_threadgroups({tile_count, 1, 1}, {threads, 1, 1})
 end
 
 private def wan_bounded_qcache_attention(chain : ML::Metal::MPSCommandChain,
@@ -311,8 +317,33 @@ private def wan_bounded_qcache_attention(chain : ML::Metal::MPSCommandChain,
   first_tile = 0
   while first_tile < total_tiles
     count = Math.min(WAN_BOUNDED_GROUPS_PER_SEGMENT, total_tiles - first_tile)
-    wan_bounded_qcache_range(chain.encoder, pipeline, q, k, v, output,
+    wan_bounded_native_range(chain.encoder, pipeline, q, k, v, output,
       query_rows, first_tile, count)
+    first_tile += count
+    unless first_tile == total_tiles
+      chain.pause!
+      chain.continue_async!
+      chain.resume!
+    end
+  end
+end
+
+private def wan_bounded_shared_kv_attention(chain : ML::Metal::MPSCommandChain,
+                                            pipeline : ML::Metal::ComputePipeline,
+                                            simd_groups : Int32,
+                                            q : ML::MetalBuffer, k : ML::MetalBuffer,
+                                            v : ML::MetalBuffer, output : ML::MetalBuffer,
+                                            query_rows : Int32) : Nil
+  # Keep the existing upper bound on eight-query SIMD groups per submission.
+  # Tail-only groups still execute the barriers and count toward this budget.
+  groups_per_segment = WAN_BOUNDED_GROUPS_PER_SEGMENT // simd_groups
+  query_rows_per_group = 8 * simd_groups
+  total_tiles = ((query_rows + query_rows_per_group - 1) // query_rows_per_group) * WAN_BOUNDED_HEADS
+  first_tile = 0
+  while first_tile < total_tiles
+    count = Math.min(groups_per_segment, total_tiles - first_tile)
+    wan_bounded_native_range(chain.encoder, pipeline, q, k, v, output,
+      query_rows, first_tile, count, simd_groups * 32)
     first_tile += count
     unless first_tile == total_tiles
       chain.pause!
@@ -410,7 +441,7 @@ private def wan_bounded_validate_pair(expected : ML::MetalBuffer,
     baseline_passed = wan_bounded_emit_check("baseline_vs_upstream", baseline_result, false)
     candidate_passed = wan_bounded_emit_check("candidate_vs_upstream", candidate_result, false)
     pair_passed = wan_bounded_emit_check("candidate_vs_baseline", pair_result,
-      comparison == "tiled-q-cache")
+      comparison != "mps-vs-tiled")
     passed = baseline_passed && candidate_passed && pair_passed
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_validation_batch_v1",
@@ -440,7 +471,9 @@ private def wan_bounded_run_arm(backend : String,
                                 q : ML::MetalBuffer, k : ML::MetalBuffer,
                                 v : ML::MetalBuffer, output : ML::MetalBuffer,
                                 mps_workspace : ML::Video::WanAttentionMPSChunkWorkspace?,
-                                qcache_pipeline : ML::Metal::ComputePipeline?)
+                                qcache_pipeline : ML::Metal::ComputePipeline?,
+                                shared_kv_pipeline : ML::Metal::ComputePipeline?,
+                                shared_kv_simd_groups : Int32)
   chain = ML::Metal::MPSCommandChain.new
   begin
     allocation_count = ML::MetalBuffer.video_spec_allocations
@@ -455,6 +488,10 @@ private def wan_bounded_run_arm(backend : String,
     when "tiled_q_cache"
       wan_bounded_qcache_attention(chain, qcache_pipeline.not_nil!, q, k, v,
         output, query_rows)
+    when "shared_kv_sg2", "shared_kv_sg4"
+      raise "shared K/V backend/group mismatch" unless backend == "shared_kv_sg#{shared_kv_simd_groups}"
+      wan_bounded_shared_kv_attention(chain, shared_kv_pipeline.not_nil!, shared_kv_simd_groups,
+        q, k, v, output, query_rows)
     else
       raise ArgumentError.new("Unknown bounded attention backend: #{backend}")
     end
@@ -494,18 +531,23 @@ query_rows = 256
 query_start = 0
 comparison = "mps-vs-tiled"
 OptionParser.parse do |parser|
-  parser.banner = "Usage: wan_s2v_bounded_attention_benchmark --fixture=DIR [--query-rows=N] [--query-start=N] [--comparison=mps-vs-tiled|tiled-q-cache]"
+  parser.banner = "Usage: wan_s2v_bounded_attention_benchmark --fixture=DIR [--query-rows=N] [--query-start=N] [--comparison=MODE]"
   parser.on("--fixture=DIR", "Pinned full-query upstream attention fixture directory (required)") { |value| fixture_dir = value }
   parser.on("--query-rows=N", "Selected query rows (1..#{WAN_BOUNDED_QUERY_LIMIT}; default 256)") { |value| query_rows = value.to_i }
   parser.on("--query-start=N", "First full-sequence query row (default 0)") { |value| query_start = value.to_i }
-  parser.on("--comparison=MODE", "mps-vs-tiled or tiled-q-cache") { |value| comparison = value }
+  parser.on("--comparison=MODE", "mps-vs-tiled, tiled-q-cache, q-cache-vs-shared-kv-sg2 or q-cache-vs-shared-kv-sg4") { |value| comparison = value }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 raise ArgumentError.new("--query-rows must be within 1..#{WAN_BOUNDED_QUERY_LIMIT}") unless query_rows >= 1 && query_rows <= WAN_BOUNDED_QUERY_LIMIT
 raise ArgumentError.new("--query-start and --query-rows exceed full query extent") unless query_start >= 0 && query_start.to_i64 + query_rows <= WAN_BOUNDED_Q_ROWS
-unless {"mps-vs-tiled", "tiled-q-cache"}.includes?(comparison)
-  raise ArgumentError.new("--comparison must be mps-vs-tiled or tiled-q-cache")
+unless {"mps-vs-tiled", "tiled-q-cache", "q-cache-vs-shared-kv-sg2", "q-cache-vs-shared-kv-sg4"}.includes?(comparison)
+  raise ArgumentError.new("Unsupported --comparison mode")
 end
+shared_kv_simd_groups = case comparison
+                        when "q-cache-vs-shared-kv-sg2" then 2
+                        when "q-cache-vs-shared-kv-sg4" then 4
+                        else                                 0
+                        end
 
 fixture_dir = File.expand_path(fixture_dir)
 fixture = wan_bounded_validate_fixture!(fixture_dir)
@@ -540,6 +582,36 @@ wan_bounded_emit({
   scope: "selected-query attention primitive only; no full block/model/video throughput inference",
 }.to_json)
 
+# Check the compiled candidate on the actual bridge device before allocating
+# large input buffers. No dynamic threadgroup storage is added at dispatch.
+shared_kv_pipeline = nil.as(ML::Metal::ComputePipeline?)
+if shared_kv_simd_groups > 0
+  name = "wan_bounded_shared_kv_attention_#{WAN_BOUNDED_HEAD_DIM}_sg#{shared_kv_simd_groups}"
+  shared_kv_pipeline = ML::Metal::ComputePipeline.new(name, WAN_BOUNDED_SHARED_KV_SOURCE)
+  device = ML::Metal::Device.instance
+  memory_limit = WanBoundedAttentionLimits.max_threadgroup_memory_length(device.device_handle)
+  static_bytes = shared_kv_pipeline.static_threadgroup_memory_length
+  width = shared_kv_pipeline.thread_execution_width
+  max_threads = shared_kv_pipeline.max_total_threads_per_threadgroup
+  required_threads = shared_kv_simd_groups * 32
+  unless width == 32 && max_threads >= required_threads &&
+         static_bytes >= WAN_BOUNDED_SHARED_KV_BYTES && static_bytes <= memory_limit
+    raise "shared K/V pipeline exceeds the device or pipeline capability limits"
+  end
+  wan_bounded_emit({
+    schema: "wan_s2v_bounded_attention_shared_kv_capabilities_v1",
+    kernel: name, kernel_source_sha256: Digest::SHA256.hexdigest(WAN_BOUNDED_SHARED_KV_SOURCE),
+    device_max_threadgroup_memory_bytes: memory_limit,
+    pipeline_static_threadgroup_memory_bytes: static_bytes,
+    planned_threadgroup_memory_bytes: WAN_BOUNDED_SHARED_KV_BYTES,
+    thread_execution_width: width, pipeline_max_threads: max_threads,
+    threads_per_threadgroup: required_threads, simd_groups_per_threadgroup: shared_kv_simd_groups,
+    max_threadgroups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT // shared_kv_simd_groups,
+    max_simd_groups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
+    passed: true,
+  }.to_json)
+end
+
 arena = ML::Video::Arena.new
 mps_workspace = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
 begin
@@ -555,8 +627,10 @@ begin
 
   baseline_backend, candidate_backend = if comparison == "mps-vs-tiled"
                                           {"mps_chunk128", "native_tiled"}
-                                        else
+                                        elsif comparison == "tiled-q-cache"
                                           {"native_tiled", "tiled_q_cache"}
+                                        else
+                                          {"tiled_q_cache", "shared_kv_sg#{shared_kv_simd_groups}"}
                                         end
   baseline_chunk_q = nil.as(ML::MetalBuffer?)
   baseline_chunk_a = nil.as(ML::MetalBuffer?)
@@ -576,7 +650,7 @@ begin
   ML::Video::MetalOps.tiled_attention_pipeline(WAN_BOUNDED_HEAD_DIM)
   ML::Video::MetalOps.pipeline("video_copy_f32")
   qcache_pipeline = nil.as(ML::Metal::ComputePipeline?)
-  if comparison == "tiled-q-cache"
+  if comparison != "mps-vs-tiled"
     qcache_source = wan_bounded_qcache_source
     qcache_pipeline = wan_bounded_qcache_pipeline(qcache_source)
   end
@@ -618,6 +692,9 @@ begin
     input_fill_waits: 1, input_fill_host_wall_seconds: setup_seconds,
     mps_chunk_rows: comparison == "mps-vs-tiled" ? WAN_BOUNDED_CHUNK_ROWS : nil,
     native_groups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
+    shared_kv_simd_groups_per_threadgroup: shared_kv_simd_groups,
+    shared_kv_threadgroup_memory_bytes: shared_kv_simd_groups > 0 ? WAN_BOUNDED_SHARED_KV_BYTES : 0_i64,
+    both_arms_cache_q: shared_kv_simd_groups > 0,
     fixture_manifest_path: fixture[:manifest_path], fixture_manifest_sha256: fixture[:manifest_sha256],
     source_checkpoint_weights_loaded: false,
   }.to_json)
@@ -628,7 +705,7 @@ begin
   warmup_order.each do |backend|
     output = backend == baseline_backend ? baseline_output : candidate_output
     result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-      mps_workspace, qcache_pipeline)
+      mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups)
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_arm_v1", phase: "warmup",
       comparison: comparison, pair: 0, pair_order: "AB", backend: backend,
@@ -655,7 +732,7 @@ begin
     order.each do |backend|
       output = backend == baseline_backend ? baseline_output : candidate_output
       result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-        mps_workspace, qcache_pipeline)
+        mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups)
       if backend == baseline_backend
         baseline_wall_samples << result[:arm_wall_seconds]
       else

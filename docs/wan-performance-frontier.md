@@ -626,6 +626,113 @@ Refresh after code, binary/native objects, fixture/input, precision, device or
 runtime, queue, shape or lifetime changes. Full-query occupancy, real BF16 block
 numerics, the previously open stack drift and full generation remain open.
 
+## Shared K/V tile probe
+
+The bounded-query/full-key F32 experiment compares the Q-fragment-hoist baseline
+against two or four SIMD groups sharing one 32-by-128 K tile and one V tile.
+Both arms cache Q.
+The two staged tiles require 32 KiB of static threadgroup memory, with no
+additional MetalBuffer. Query rows in a threadgroup share the same head;
+cooperative loads retain exact F32 values. Each row retains the original
+ascending key, score, softmax and PV reduction order. Uniform barriers protect
+load visibility and tile reuse, including fully masked query groups at a tail.
+This is a probe-only performance rewrite; removing its comparison mode is the
+rollback. Model kernels and application defaults remain unchanged.
+
+The prediction is lower native arm wall time through reduced K/V loading. It
+is falsified by strict upstream or native-bitwise failure, a nonfinite value,
+an omitted write, or any of the three primary pairs failing to improve. Cache
+reuse may already remove most device traffic, while staging, register pressure
+and barriers may cost more than they save. A primitive win cannot establish a
+whole-block, MPS-relative or generation improvement.
+
+Before dispatch, query the actual device's threadgroup-memory limit and each
+pipeline's static memory, execution width and maximum threads. Require 32-lane
+SIMD groups, enough static storage and 64/128 supported threads. Divide the
+existing 320-SIMD-group segment budget by groups per threadgroup; grouping must
+not multiply work per submission. Keep one terminal wait and no tracked encode
+MetalBuffer allocations. The existing 15% cache-aware floor, 5 GiB owned-group
+cap, 64 MiB swap-growth limit and 90 s runtime deadline remain in force.
+
+The DoD is a release build followed by guarded
+`--comparison=q-cache-vs-shared-kv-sg2` and `--comparison=q-cache-vs-shared-kv-sg4`
+runs of the bounded attention probe using the pinned fixture. Use Q=256/start=0
+for one AB warmup and three AB/BA/AB measured pairs. Also check Q=257/start=36,351
+for each grouping, with timing admission disabled. All pairs must pass the
+unchanged finite upstream tolerance and bitwise equality to the Q baseline;
+the seeded one-value control must fail exactly once. Do not run the full block
+or model for this qualification. Record source/object/binary identities and
+recompute timing and guard results from raw logs before any admission claim.
+
+### Observed shared-tile result on M2 Max, 2026-10-20
+
+Both shared-tile variants pass the numerical gate but are **rejected as
+speedups** in the primary Q=256/start=0 cohort:
+
+| Shared SIMD groups | Q-cache baseline median | Shared K/V median | Candidate/baseline | Candidate wins |
+| --- | ---: | ---: | ---: | ---: |
+| 2 | 172.302000 ms | 476.170458 ms | 2.76358 | 0/3 |
+| 4 | 171.949417 ms | 207.044208 ms | 1.20410 | 0/3 |
+
+Each row is its own paired cohort, with one AB warmup and AB/BA/AB measured
+pairs. GPU command-root intervals agree in direction in every primary pair.
+The four-group variant remains 20.410% slower; do not promote it or sweep more
+group counts on the assumption that staging must help. Both variants also pass
+the separate final-257-query correctness check, including fully masked SIMD
+groups reaching both barriers. Tail timings are diagnostic only.
+
+All 48 finite numerical checks pass at the unchanged tolerance, and all 16
+candidate-vs-baseline checks are bitwise identical. The largest upstream
+absolute error is `8.493662e-7`, with tolerance ratio `0.039907727`. NaN output
+initialization guards omitted writes; all four seeded one-value controls
+produce exactly one bit difference and one strict violation. Every timed arm
+reports one terminal wait and zero tracked encode-time MetalBuffer allocations.
+Only compact diagnostic metrics are read back after separate validation waits.
+
+The actual device limit is 32,768 bytes of threadgroup memory, and both compiled
+pipelines report exactly that amount of static storage. Pipeline execution width is 32,
+with maximum 448 threads; launches use 64 or 128. Four segments at Q=256 and
+five at Q=257 retain at most 320 SIMD groups per submission in both arms.
+There are 1,144 key tiles and two threadgroup barriers per tile. Staging,
+occupancy and barrier costs are plausible explanations for the slowdown, but
+no hardware cache, occupancy or stall-counter profile was collected. The
+measurements reject this staging design at this geometry; they do not isolate
+the physical cause or reject all K/V reuse designs.
+
+The explicit allocation plan remains 1,520,435,260 bytes at Q=256 and
+1,520,517,180 bytes at Q=257. Runtime guards all exit 0, with a largest sampled
+owned-group footprint of 1,538,540,192 bytes (1.433 GiB), minimum sampled cache
+headroom estimate of 25,794,625,536 bytes (24.023 GiB), minimum pressure query
+82%, no sampled swap growth and zero live owned processes at completion.
+The 15% cache-aware floor, 5 GiB runtime cap, 64 MiB swap-growth cap and 90 s
+deadline stay unchanged. These short sampled runs do not establish an actual
+memory peak or immediately reclaimable cache. Both guarded build steps also
+exit 0 under their 1,536 MiB cap and 180 s deadline.
+
+Building this standalone probe additionally requires the probe-only
+[`wan_s2v_bounded_attention_limits.mm`](../examples/support/wan_s2v_bounded_attention_limits.mm)
+helper. Compile it with `xcrun clang++ -std=c++17 -O3 -fobjc-arc -c`, and append
+its object to the existing native bridge link flags when building the Crystal
+executable. It reads the existing device's capability without creating a
+device, queue, buffer or command. A standard Makefile target was not qualified;
+the exact successful compile and link commands are in the bound invocation
+records. The tested executable is
+`wan_s2v_bounded_attention_benchmark-shared-kv-v1`.
+
+The external receipt is
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/shared-kv-attention-receipt-v1.json`,
+SHA-256 `3a5e75e639b0dfb0c585cffcb65b23b52f5d52533d87788994548d73adacc40f`.
+It binds 45 files: source/native objects/executable, pinned oracle and sources,
+both build and four runtime invocations, raw logs and a CPU recomputation
+script. Source and evidence reviews return ROBUST within this bounded probe's
+scope. They are correlated mini-Quadrum checks, not independent hardware
+evidence. Refresh after the source, binary/native objects,
+fixture/input, shape, precision, device/runtime, queue or lifetime changes.
+No model kernels or defaults changed, and no full block, model or video ran.
+MPS remains the evaluated block baseline; its latency was not measured in this
+new paired cohort. Full-query occupancy, real BF16 block numerics and the open
+stack drift retain their separate gates.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In
@@ -638,21 +745,17 @@ numerics, the previously open stack drift and full generation remain open.
    Text K/V caching has the same conditional argument but costs 1.5625 GiB for
    40 layers and two branches while eliminating only 0.11% of counted FLOPs;
    prioritize the smaller cache under the current memory constraints.
-2. **Share K/V tiles across more query groups.** The existing
+2. **Native attention operand reuse.** The existing
    [F32 tiled kernel](../src/ml/video/kernels/attention_tiled.metal) shares each
    key/value matrix operand within an eight-query SIMD group, with zero
-   threadgroup storage. Staging one K/V tile across two or four such groups
-   could reduce repeated loads. K=32, D=128 and two F32 tiles would add 32 KiB
-   of threadgroup storage; double buffering would need 64 KiB. Check device
-   limits and occupancy before implementation. All SIMD groups, including
-   fully masked tail groups, must reach both tile barriers. Preserve
-   each row's ascending key reduction, then check bitwise parity to the old
-   native kernel, strict full-shape upstream parity and the real full block.
-   The existing native tiled reduction is not automatically a qualified
-   replacement for the MPSGraph long-key path. Its segmentation budget counts
-   threadgroups, so changing queries per group also changes work per segment.
-   Q loads are textually inside the key loop, but compiler hoisting is unknown;
-   explicitly keeping Q matrices alive can increase register pressure.
+   threadgroup storage. Q-fragment hoisting passes the bounded primitive speed
+   gate above; 32 KiB staging across two or four groups fails it. Park this
+   staging design unless a new premise addresses its measured regression.
+   Reusing K/V fragments across two query tiles within one SIMD group is an
+   unmeasured alternative: it avoids inter-group barriers but increases live
+   register state. It needs a new bounded probe with unchanged per-row key
+   reduction, native bit identity and strict upstream checks. Even a native
+   primitive win needs separate MPS-relative and whole-block gates.
 3. **FFN bias/GELU epilogue.** A post-MPS bias-plus-GELU kernel could remove one
    full FFN-intermediate read/write, about 3.77 GiB of logical traffic per block,
    and one dispatch, while retaining the MPS dot-product reduction. GELU already
