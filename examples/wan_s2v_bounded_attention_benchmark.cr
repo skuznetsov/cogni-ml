@@ -24,6 +24,8 @@ private WAN_BOUNDED_FORMULA            = "avalanche32(native_flat_index + salt*0
 private WAN_BOUNDED_MANIFEST_SCHEMA    = "wan_s2v_self_attention_reference_v1"
 private WAN_BOUNDED_SHARED_KV_SOURCE   = {{ read_file("#{__DIR__}/support/wan_s2v_shared_kv_attention.metal") }}
 private WAN_BOUNDED_SHARED_KV_BYTES    = 2_i64 * 32 * WAN_BOUNDED_HEAD_DIM * sizeof(Float32)
+private WAN_BOUNDED_REGISTER_KV_SOURCE = {{ read_file("#{__DIR__}/support/wan_s2v_register_kv_attention.metal") }}
+private WAN_BOUNDED_REGISTER_Q_TILES   = 2
 
 lib WanBoundedAttentionLimits
   fun max_threadgroup_memory_length = wan_bounded_max_threadgroup_memory_length(handle : Pointer(Void)) : Int64
@@ -353,6 +355,29 @@ private def wan_bounded_shared_kv_attention(chain : ML::Metal::MPSCommandChain,
   end
 end
 
+private def wan_bounded_register_kv_attention(chain : ML::Metal::MPSCommandChain,
+                                              pipeline : ML::Metal::ComputePipeline,
+                                              q : ML::MetalBuffer, k : ML::MetalBuffer,
+                                              v : ML::MetalBuffer, output : ML::MetalBuffer,
+                                              query_rows : Int32) : Nil
+  # Bound work by eight-query tile equivalents, including masked tail tiles.
+  groups_per_segment = WAN_BOUNDED_GROUPS_PER_SEGMENT // WAN_BOUNDED_REGISTER_Q_TILES
+  rows_per_group = 8 * WAN_BOUNDED_REGISTER_Q_TILES
+  total_tiles = ((query_rows + rows_per_group - 1) // rows_per_group) * WAN_BOUNDED_HEADS
+  first_tile = 0
+  while first_tile < total_tiles
+    count = Math.min(groups_per_segment, total_tiles - first_tile)
+    wan_bounded_native_range(chain.encoder, pipeline, q, k, v, output,
+      query_rows, first_tile, count)
+    first_tile += count
+    unless first_tile == total_tiles
+      chain.pause!
+      chain.continue_async!
+      chain.resume!
+    end
+  end
+end
+
 private def wan_bounded_encode_fill(encoder : ML::Metal::ComputeEncoder,
                                     pipeline : ML::Metal::ComputePipeline,
                                     buffer : ML::MetalBuffer, count : Int32,
@@ -441,7 +466,7 @@ private def wan_bounded_validate_pair(expected : ML::MetalBuffer,
     baseline_passed = wan_bounded_emit_check("baseline_vs_upstream", baseline_result, false)
     candidate_passed = wan_bounded_emit_check("candidate_vs_upstream", candidate_result, false)
     pair_passed = wan_bounded_emit_check("candidate_vs_baseline", pair_result,
-      comparison != "mps-vs-tiled")
+      !comparison.starts_with?("mps-vs-"))
     passed = baseline_passed && candidate_passed && pair_passed
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_validation_batch_v1",
@@ -473,7 +498,8 @@ private def wan_bounded_run_arm(backend : String,
                                 mps_workspace : ML::Video::WanAttentionMPSChunkWorkspace?,
                                 qcache_pipeline : ML::Metal::ComputePipeline?,
                                 shared_kv_pipeline : ML::Metal::ComputePipeline?,
-                                shared_kv_simd_groups : Int32)
+                                shared_kv_simd_groups : Int32,
+                                register_kv_pipeline : ML::Metal::ComputePipeline?)
   chain = ML::Metal::MPSCommandChain.new
   begin
     allocation_count = ML::MetalBuffer.video_spec_allocations
@@ -491,6 +517,9 @@ private def wan_bounded_run_arm(backend : String,
     when "shared_kv_sg2", "shared_kv_sg4"
       raise "shared K/V backend/group mismatch" unless backend == "shared_kv_sg#{shared_kv_simd_groups}"
       wan_bounded_shared_kv_attention(chain, shared_kv_pipeline.not_nil!, shared_kv_simd_groups,
+        q, k, v, output, query_rows)
+    when "register_kv_q2"
+      wan_bounded_register_kv_attention(chain, register_kv_pipeline.not_nil!,
         q, k, v, output, query_rows)
     else
       raise ArgumentError.new("Unknown bounded attention backend: #{backend}")
@@ -535,14 +564,16 @@ OptionParser.parse do |parser|
   parser.on("--fixture=DIR", "Pinned full-query upstream attention fixture directory (required)") { |value| fixture_dir = value }
   parser.on("--query-rows=N", "Selected query rows (1..#{WAN_BOUNDED_QUERY_LIMIT}; default 256)") { |value| query_rows = value.to_i }
   parser.on("--query-start=N", "First full-sequence query row (default 0)") { |value| query_start = value.to_i }
-  parser.on("--comparison=MODE", "mps-vs-tiled, tiled-q-cache, q-cache-vs-shared-kv-sg2 or q-cache-vs-shared-kv-sg4") { |value| comparison = value }
+  parser.on("--comparison=MODE", "mps-vs-tiled, tiled-q-cache, q-cache-vs-shared-kv-sg2, q-cache-vs-shared-kv-sg4, q-cache-vs-register-kv-q2 or mps-vs-register-kv-q2") { |value| comparison = value }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 raise ArgumentError.new("--query-rows must be within 1..#{WAN_BOUNDED_QUERY_LIMIT}") unless query_rows >= 1 && query_rows <= WAN_BOUNDED_QUERY_LIMIT
 raise ArgumentError.new("--query-start and --query-rows exceed full query extent") unless query_start >= 0 && query_start.to_i64 + query_rows <= WAN_BOUNDED_Q_ROWS
-unless {"mps-vs-tiled", "tiled-q-cache", "q-cache-vs-shared-kv-sg2", "q-cache-vs-shared-kv-sg4"}.includes?(comparison)
+unless {"mps-vs-tiled", "tiled-q-cache", "q-cache-vs-shared-kv-sg2", "q-cache-vs-shared-kv-sg4", "q-cache-vs-register-kv-q2", "mps-vs-register-kv-q2"}.includes?(comparison)
   raise ArgumentError.new("Unsupported --comparison mode")
 end
+mps_baseline = comparison.starts_with?("mps-vs-")
+register_kv_enabled = comparison.ends_with?("register-kv-q2")
 shared_kv_simd_groups = case comparison
                         when "q-cache-vs-shared-kv-sg2" then 2
                         when "q-cache-vs-shared-kv-sg4" then 4
@@ -554,7 +585,7 @@ fixture = wan_bounded_validate_fixture!(fixture_dir)
 query_values = query_rows.to_i64 * WAN_BOUNDED_CHANNELS
 kv_values = WAN_BOUNDED_K_ROWS.to_i64 * WAN_BOUNDED_CHANNELS
 chunk_values = WAN_BOUNDED_CHUNK_ROWS.to_i64 * WAN_BOUNDED_CHANNELS
-mps_scratch_values = comparison == "mps-vs-tiled" ? chunk_values * 3 : 0_i64
+mps_scratch_values = mps_baseline ? chunk_values * 3 : 0_i64
 metrics_values = 15_i64
 # Four query-sized F32 buffers: Q, expected BHQD slice, baseline and candidate.
 explicit_plan_bytes = (query_values * 4 + kv_values * 2 + mps_scratch_values + metrics_values) * sizeof(Float32)
@@ -612,6 +643,29 @@ if shared_kv_simd_groups > 0
   }.to_json)
 end
 
+register_kv_pipeline = nil.as(ML::Metal::ComputePipeline?)
+if register_kv_enabled
+  name = "wan_bounded_register_kv_attention_#{WAN_BOUNDED_HEAD_DIM}_q#{WAN_BOUNDED_REGISTER_Q_TILES}"
+  register_kv_pipeline = ML::Metal::ComputePipeline.new(name, WAN_BOUNDED_REGISTER_KV_SOURCE)
+  static_bytes = register_kv_pipeline.static_threadgroup_memory_length
+  width = register_kv_pipeline.thread_execution_width
+  max_threads = register_kv_pipeline.max_total_threads_per_threadgroup
+  unless width == 32 && max_threads >= 32 && static_bytes == 0
+    raise "register K/V pipeline exceeds the admitted capability limits"
+  end
+  wan_bounded_emit({
+    schema: "wan_s2v_bounded_attention_register_kv_capabilities_v1",
+    kernel: name, kernel_source_sha256: Digest::SHA256.hexdigest(WAN_BOUNDED_REGISTER_KV_SOURCE),
+    pipeline_static_threadgroup_memory_bytes: static_bytes,
+    thread_execution_width: width, pipeline_max_threads: max_threads,
+    threads_per_threadgroup: 32, simd_groups_per_threadgroup: 1,
+    query_tiles_per_simd_group: WAN_BOUNDED_REGISTER_Q_TILES,
+    max_threadgroups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT // WAN_BOUNDED_REGISTER_Q_TILES,
+    max_eight_query_tiles_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
+    passed: true,
+  }.to_json)
+end
+
 arena = ML::Video::Arena.new
 mps_workspace = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
 begin
@@ -625,7 +679,9 @@ begin
   metrics_candidate = arena.alloc("bounded_metrics_candidate_upstream", 5)
   metrics_pair = arena.alloc("bounded_metrics_candidate_baseline", 5)
 
-  baseline_backend, candidate_backend = if comparison == "mps-vs-tiled"
+  baseline_backend, candidate_backend = if register_kv_enabled
+                                          {mps_baseline ? "mps_chunk128" : "tiled_q_cache", "register_kv_q2"}
+                                        elsif comparison == "mps-vs-tiled"
                                           {"mps_chunk128", "native_tiled"}
                                         elsif comparison == "tiled-q-cache"
                                           {"native_tiled", "tiled_q_cache"}
@@ -635,7 +691,7 @@ begin
   baseline_chunk_q = nil.as(ML::MetalBuffer?)
   baseline_chunk_a = nil.as(ML::MetalBuffer?)
   baseline_chunk_b = nil.as(ML::MetalBuffer?)
-  if comparison == "mps-vs-tiled"
+  if mps_baseline
     baseline_chunk_q = arena.alloc("bounded_mps_chunk_q", chunk_values.to_i32)
     baseline_chunk_a = arena.alloc("bounded_mps_chunk_output_a", chunk_values.to_i32)
     baseline_chunk_b = arena.alloc("bounded_mps_chunk_output_b", chunk_values.to_i32)
@@ -650,12 +706,12 @@ begin
   ML::Video::MetalOps.tiled_attention_pipeline(WAN_BOUNDED_HEAD_DIM)
   ML::Video::MetalOps.pipeline("video_copy_f32")
   qcache_pipeline = nil.as(ML::Metal::ComputePipeline?)
-  if comparison != "mps-vs-tiled"
+  unless mps_baseline
     qcache_source = wan_bounded_qcache_source
     qcache_pipeline = wan_bounded_qcache_pipeline(qcache_source)
   end
 
-  if comparison == "mps-vs-tiled"
+  if mps_baseline
     mps_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1,
       query_rows, WAN_BOUNDED_K_ROWS, WAN_BOUNDED_HEADS, WAN_BOUNDED_HEAD_DIM,
       WAN_BOUNDED_CHUNK_ROWS, q, k, v, baseline_output,
@@ -690,11 +746,14 @@ begin
     key_rows: WAN_BOUNDED_K_ROWS, heads: WAN_BOUNDED_HEADS, head_dim: WAN_BOUNDED_HEAD_DIM,
     explicit_buffer_bytes: actual_explicit_bytes, explicit_buffer_cap_bytes: WAN_BOUNDED_EXPLICIT_CAP,
     input_fill_waits: 1, input_fill_host_wall_seconds: setup_seconds,
-    mps_chunk_rows: comparison == "mps-vs-tiled" ? WAN_BOUNDED_CHUNK_ROWS : nil,
+    mps_chunk_rows: mps_baseline ? WAN_BOUNDED_CHUNK_ROWS : nil,
     native_groups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
     shared_kv_simd_groups_per_threadgroup: shared_kv_simd_groups,
     shared_kv_threadgroup_memory_bytes: shared_kv_simd_groups > 0 ? WAN_BOUNDED_SHARED_KV_BYTES : 0_i64,
-    both_arms_cache_q: shared_kv_simd_groups > 0,
+    both_arms_cache_q: shared_kv_simd_groups > 0 || (register_kv_enabled && !mps_baseline),
+    register_kv_query_tiles_per_simd_group: register_kv_enabled ? WAN_BOUNDED_REGISTER_Q_TILES : 0,
+    register_kv_max_threadgroups_per_segment: register_kv_enabled ? WAN_BOUNDED_GROUPS_PER_SEGMENT // WAN_BOUNDED_REGISTER_Q_TILES : 0,
+    max_eight_query_tiles_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
     fixture_manifest_path: fixture[:manifest_path], fixture_manifest_sha256: fixture[:manifest_sha256],
     source_checkpoint_weights_loaded: false,
   }.to_json)
@@ -705,7 +764,7 @@ begin
   warmup_order.each do |backend|
     output = backend == baseline_backend ? baseline_output : candidate_output
     result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-      mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups)
+      mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups, register_kv_pipeline)
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_arm_v1", phase: "warmup",
       comparison: comparison, pair: 0, pair_order: "AB", backend: backend,
@@ -732,7 +791,7 @@ begin
     order.each do |backend|
       output = backend == baseline_backend ? baseline_output : candidate_output
       result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-        mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups)
+        mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups, register_kv_pipeline)
       if backend == baseline_backend
         baseline_wall_samples << result[:arm_wall_seconds]
       else

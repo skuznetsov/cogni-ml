@@ -733,6 +733,102 @@ MPS remains the evaluated block baseline; its latency was not measured in this
 new paired cohort. Full-query occupancy, real BF16 block numerics and the open
 stack drift retain their separate gates.
 
+## Register-level K/V reuse probe
+
+The tested design lets one SIMD group own two independent
+eight-query tiles of the same head. Load each K fragment once for both score
+accumulators and each V fragment once for both output accumulators. Both query
+tiles cache Q. Preserve each row's ascending key, score, online-softmax and PV
+reduction order, F32 storage and F32 arithmetic. This probe uses no threadgroup
+staging, barriers, host waits between operators or additional MetalBuffer.
+Only the standalone benchmark and its new kernel may change; model kernels
+and defaults remain unchanged. Removing the new comparison mode is rollback.
+
+The prediction is lower Q=256/start=0 native arm wall time than the Q-cache
+baseline. The main falsifier is register pressure/spilling or lower occupancy
+erasing K/V-load savings; source-level reuse alone does not prove physical
+traffic savings. Reject on any numerical/nonfinite/omitted-write failure,
+native bit mismatch, or any of three primary measured pairs failing to win.
+Check pipeline width 32, support for 32 threads and zero static threadgroup
+storage before allocating large buffers. Retain at most 320 eight-query tile
+equivalents per submission: the candidate gets 160 sixteen-query groups.
+
+DoD: a guarded release build, then `--comparison=q-cache-vs-register-kv-q2`
+with the pinned full-K=36,608/H=40/D=128 upstream oracle at Q=256/start=0 and
+Q=257/start=36,351. Require one AB warmup and three AB/BA/AB pairs, strict
+finite upstream checks, native bit identity, NaN output sentinels and a seeded
+one-value error control. Q=257 is correctness-only. Each timed arm retains one
+terminal wait and zero tracked encode-time MetalBuffer allocations; diagnostic
+validation waits and metric readbacks remain outside timing. If the primary
+native speed gate passes, also pair the candidate directly against MPS
+chunk-128 at Q=256 before any MPS-relative claim. Do not run a complete block,
+model or video. Retain the cache-aware 15% floor, 5 GiB owned-group runtime cap,
+64 MiB swap-growth cap and 90 s deadline, serial execution and source/binary/
+oracle/raw-log bindings. A primitive win leaves real BF16 block numerics,
+whole-query occupancy, stack drift and generation throughput unqualified.
+
+### Observed register-reuse result on M2 Max, 2026-10-20
+
+The primary Q=256/start=0 cohort passes the numerical gate but is **rejected
+as a speedup**:
+
+| Q-cache baseline median | Register K/V median | Candidate/baseline | Candidate wins |
+| ---: | ---: | ---: | ---: |
+| 171.445833 ms | 244.636000 ms | 1.42690 | 0/3 |
+
+One AB warmup and three AB/BA/AB measured pairs show a 42.690% regression.
+The separate Q=257/start=36,351 check also passes correctness; its timing is
+diagnostic only. All 24 finite checks pass at the unchanged tolerance, including
+eight candidate-vs-baseline checks with bitwise identity. The largest upstream
+absolute error is `8.493662e-7`, with tolerance ratio `0.039907727`. Both seeded
+one-value controls produce exactly one bit difference and one strict violation.
+NaN output initialization covers omitted writes; there is no separate logged
+NaN-injection control.
+
+The pipeline reports execution width 32, maximum 384 threads and zero static
+threadgroup storage; launches use one 32-thread SIMD group. Four segments at
+Q=256 and five at Q=257 preserve the 320 eight-query tile-equivalent cap per
+submission. Every timed arm reports one terminal wait and zero tracked
+encode-time MetalBuffer allocations. Diagnostic validation waits and compact
+metric readbacks are excluded from timing.
+
+This mapping has no threadgroup barriers, so barriers alone cannot explain
+the regressions across the two reuse designs. Doubling live query, score and
+output state may hurt register pressure, scheduling or latency hiding, but no
+hardware-counter profile identifies the cause. Pipeline maximum threads are
+not an occupancy measurement. Source-level K/V reuse does not prove lower
+physical memory traffic. Park further query-group sweeps without a new premise.
+
+The explicit allocation plan remains 1,520,435,260 bytes at Q=256 and
+1,520,517,180 bytes at Q=257. The guarded release build and both runtime runs
+exit 0. Runtime samples show a largest owned-group footprint of 1,536,737,976
+bytes (1.431 GiB), minimum cache-headroom estimate of 24,702,353,408 bytes
+(23.006 GiB), minimum pressure query 83%, no swap growth and empty final owned
+groups. The 15% cache-aware floor, 5 GiB runtime cap, 64 MiB swap-growth cap and
+90 s deadline remain unchanged. The build uses the existing 1,536 MiB cap and
+180 s deadline. Sampling does not establish an actual memory peak or immediately
+reclaimable cache.
+
+The tested executable is `wan_s2v_bounded_attention_benchmark-register-kv-v1`.
+It reuses the unchanged probe-only capability-helper object described above;
+the exact release-build and runtime commands are in the bound invocation
+records. The conditional `mps-vs-register-kv-q2` path compiles but was not run
+because the native speed gate failed. It remains runtime-unqualified, and this
+cohort supports no MPS-relative claim.
+
+The external receipt is
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/register-kv-attention-receipt-v1.json`,
+SHA-256 `c1995f20e726d2f85c034269047f0c419169c4733eda8d02f1ed954bf6a7d012`.
+It binds 37 files, including source/native objects/executable, the pinned
+oracle and its sources, build and runtime invocations, raw logs and a CPU
+recomputation script. Source review and a separate raw-evidence recomputation
+return ROBUST for this bounded negative finding; the performance hypothesis
+is BROKEN at Q=256/start=0. These same-lineage mini-Quadrum reviews are
+correlated. Refresh after source, binary/native objects, fixture/input, shape,
+precision, device/runtime, queue or lifetime changes. No model kernels or
+defaults changed, and no complete block, model or video ran. Real BF16 block
+numerics, full-query occupancy and stack drift retain their separate gates.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In
@@ -751,11 +847,12 @@ stack drift retain their separate gates.
    threadgroup storage. Q-fragment hoisting passes the bounded primitive speed
    gate above; 32 KiB staging across two or four groups fails it. Park this
    staging design unless a new premise addresses its measured regression.
-   Reusing K/V fragments across two query tiles within one SIMD group is an
-   unmeasured alternative: it avoids inter-group barriers but increases live
-   register state. It needs a new bounded probe with unchanged per-row key
-   reduction, native bit identity and strict upstream checks. Even a native
-   primitive win needs separate MPS-relative and whole-block gates.
+   Register reuse across two query tiles also fails the bounded speed gate
+   above, despite bitwise identity and no barriers. Park further grouping
+   sweeps; a matched hardware-counter profile could discriminate occupancy,
+   spills, scheduling and cache effects before another attention rewrite.
+   Prioritize the static audio K/V reuse probe instead. Even a native primitive
+   win needs separate MPS-relative and whole-block gates.
 3. **FFN bias/GELU epilogue.** A post-MPS bias-plus-GELU kernel could remove one
    full FFN-intermediate read/write, about 3.77 GiB of logical traffic per block,
    and one dispatch, while retaining the MPS dot-product reduction. GELU already
