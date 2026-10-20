@@ -78,8 +78,8 @@ describe "Opt-in prepared MPSGraph SDPA" do
         ML::Video::WanAttentionMPSChunkWorkspace.new(2, 2, 2, 1, 64, 1,
           q, k, v, output, scratch_q, scratch_a, scratch_b)
       end
-      expect_raises(ArgumentError, "1..512") do
-        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 2, 2, 1, 64, 513,
+      expect_raises(ArgumentError, "1..1024") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 2, 2, 1, 64, 1025,
           q, k, v, output, scratch_q, scratch_a, scratch_b)
       end
       expect_raises(ArgumentError, "pairwise disjoint") do
@@ -274,90 +274,91 @@ describe "Opt-in prepared MPSGraph SDPA" do
     long_case = cases.find { |c| c["name"].as_s == "b1-q64-k36608-h40-d128" }
     raise "missing pinned long-key attention case" unless long_case
     source_rows = 64
-    full_rows = 777
-    chunk_rows = 512
-    channels = long_case["heads"].as_i * long_case["dim"].as_i
-    source_count = source_rows * channels
-    full_count = full_rows * channels
-    kv_count = long_case["key_rows"].as_i * channels
-    arena = ML::Video::Arena.new
-    chain : ML::Metal::MPSCommandChain? = nil
-    workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
-    begin
-      q_source = mps_attention_fixture_tensor(arena, "chunk_q_source",
-        long_case["q"], source_count)
-      expected_source = mps_attention_fixture_tensor(arena, "chunk_expected_source",
-        long_case["expected"], source_count)
-      k = mps_attention_fixture_tensor(arena, "chunk_k", long_case["k"], kv_count)
-      v = mps_attention_fixture_tensor(arena, "chunk_v", long_case["v"], kv_count)
-      q = arena.alloc("chunk_q", full_count)
-      expected = arena.alloc("chunk_expected", full_count)
-      output = arena.alloc("chunk_output", full_count)
-      first_output = arena.alloc("chunk_first_output", full_count)
-      chunk_q = arena.alloc("chunk_q_scratch", chunk_rows * channels)
-      chunk_output_a = arena.alloc("chunk_output_a", chunk_rows * channels)
-      chunk_output_b = arena.alloc("chunk_output_b", chunk_rows * channels)
-      mps_attention_repeat_rows!(q_source, q, source_rows, full_rows, channels,
-        chunk_rows, 7)
-      mps_attention_repeat_rows!(expected_source, expected, source_rows,
-        full_rows, channels, chunk_rows, 7)
-      mps_attention_fill_nan!(output, full_count)
-      mps_attention_fill_nan!(first_output, full_count)
-      workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, full_rows,
-        long_case["key_rows"].as_i, long_case["heads"].as_i,
-        long_case["dim"].as_i, chunk_rows, q, k, v, output, chunk_q,
-        chunk_output_a, chunk_output_b)
-      workspace.scratch_bytes.should eq(chunk_rows.to_i64 * channels * sizeof(Float32) * 3)
-      chain = ML::Metal::MPSCommandChain.new
-      allocations_before = ML::MetalBuffer.video_spec_allocations
-      device = ML::Metal::Device.instance
-      current_before = device.current_allocated_size
-      recommended = device.recommended_working_set_size
-      full_bytes = full_count.to_i64 * sizeof(Float32)
+    [512, 1024].each do |chunk_rows|
+      full_rows = chunk_rows + 265
+      channels = long_case["heads"].as_i * long_case["dim"].as_i
+      source_count = source_rows * channels
+      full_count = full_rows * channels
+      kv_count = long_case["key_rows"].as_i * channels
+      arena = ML::Video::Arena.new
+      chain : ML::Metal::MPSCommandChain? = nil
+      workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+      begin
+        q_source = mps_attention_fixture_tensor(arena, "chunk_q_source",
+          long_case["q"], source_count)
+        expected_source = mps_attention_fixture_tensor(arena, "chunk_expected_source",
+          long_case["expected"], source_count)
+        k = mps_attention_fixture_tensor(arena, "chunk_k", long_case["k"], kv_count)
+        v = mps_attention_fixture_tensor(arena, "chunk_v", long_case["v"], kv_count)
+        q = arena.alloc("chunk_q", full_count)
+        expected = arena.alloc("chunk_expected", full_count)
+        output = arena.alloc("chunk_output", full_count)
+        first_output = arena.alloc("chunk_first_output", full_count)
+        chunk_q = arena.alloc("chunk_q_scratch", chunk_rows * channels)
+        chunk_output_a = arena.alloc("chunk_output_a", chunk_rows * channels)
+        chunk_output_b = arena.alloc("chunk_output_b", chunk_rows * channels)
+        mps_attention_repeat_rows!(q_source, q, source_rows, full_rows, channels,
+          chunk_rows, 7)
+        mps_attention_repeat_rows!(expected_source, expected, source_rows,
+          full_rows, channels, chunk_rows, 7)
+        mps_attention_fill_nan!(output, full_count)
+        mps_attention_fill_nan!(first_output, full_count)
+        workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, full_rows,
+          long_case["key_rows"].as_i, long_case["heads"].as_i,
+          long_case["dim"].as_i, chunk_rows, q, k, v, output, chunk_q,
+          chunk_output_a, chunk_output_b)
+        workspace.scratch_bytes.should eq(chunk_rows.to_i64 * channels * sizeof(Float32) * 3)
+        chain = ML::Metal::MPSCommandChain.new
+        allocations_before = ML::MetalBuffer.video_spec_allocations
+        device = ML::Metal::Device.instance
+        current_before = device.current_allocated_size
+        recommended = device.recommended_working_set_size
+        full_bytes = full_count.to_i64 * sizeof(Float32)
 
-      workspace.encode(chain.not_nil!)
-      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output,
-        first_output, full_bytes)
-      workspace.encode(chain.not_nil!)
-      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
-        "chunked MPS encode allocated MetalBuffers"
-      chain.not_nil!.wait_count.should eq(0)
-      chain.not_nil!.commit_and_wait
-      chain.not_nil!.wait_count.should eq(1)
+        workspace.encode(chain.not_nil!)
+        ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output,
+          first_output, full_bytes)
+        workspace.encode(chain.not_nil!)
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
+          "chunked MPS encode allocated MetalBuffers"
+        chain.not_nil!.wait_count.should eq(0)
+        chain.not_nil!.commit_and_wait
+        chain.not_nil!.wait_count.should eq(1)
 
-      output_ptr = output.contents.as(Pointer(Float32))
-      expected_ptr = expected.contents.as(Pointer(Float32))
-      violations = 0
-      worst_ratio = 0.0_f64
-      max_abs = 0.0_f64
-      full_count.times do |i|
-        actual = output_ptr[i]
-        reference = expected_ptr[i]
-        delta = (actual - reference).abs.to_f64
-        ratio = delta / (2e-5 + 2e-5 * reference.abs)
-        violations += 1 unless actual.finite? && reference.finite? && ratio <= 1.0
-        worst_ratio = Math.max(worst_ratio, ratio)
-        max_abs = Math.max(max_abs, delta)
+        output_ptr = output.contents.as(Pointer(Float32))
+        expected_ptr = expected.contents.as(Pointer(Float32))
+        violations = 0
+        worst_ratio = 0.0_f64
+        max_abs = 0.0_f64
+        full_count.times do |i|
+          actual = output_ptr[i]
+          reference = expected_ptr[i]
+          delta = (actual - reference).abs.to_f64
+          ratio = delta / (2e-5 + 2e-5 * reference.abs)
+          violations += 1 unless actual.finite? && reference.finite? && ratio <= 1.0
+          worst_ratio = Math.max(worst_ratio, ratio)
+          max_abs = Math.max(max_abs, delta)
+        end
+        violations.should eq(0),
+          "chunked Q#{full_rows}/K#{long_case["key_rows"].as_i} strict mismatches=#{violations}, " +
+          "worst_ratio=#{worst_ratio}, max_abs=#{max_abs}"
+        mps_attention_copy_equal?(output, first_output, full_count).should be_true,
+          "reusing one chunk workspace changed output bits"
+        puts "WAN_MPS_SDPA_CHUNK_COST query_rows=#{full_rows} chunk_rows=#{chunk_rows} " +
+             "chunks=#{(full_rows + chunk_rows - 1) // chunk_rows} " +
+             "gpu_seconds=#{chain.not_nil!.gpu_elapsed_seconds} " +
+             "current_allocated_before=#{current_before} " +
+             "current_allocated_after=#{device.current_allocated_size} " +
+             "recommended_working_set=#{recommended} peak_allocated=unavailable " +
+             "segments=#{chain.not_nil!.segment_count} waits=#{chain.not_nil!.wait_count}"
+      ensure
+        chain.try do |active|
+          active.commit_and_wait unless active.completed?
+          active.release
+        end
+        workspace.try(&.release)
+        arena.release
       end
-      violations.should eq(0),
-        "chunked Q#{full_rows}/K#{long_case["key_rows"].as_i} strict mismatches=#{violations}, " +
-        "worst_ratio=#{worst_ratio}, max_abs=#{max_abs}"
-      mps_attention_copy_equal?(output, first_output, full_count).should be_true,
-        "reusing one chunk workspace changed output bits"
-      puts "WAN_MPS_SDPA_CHUNK_COST query_rows=#{full_rows} chunk_rows=#{chunk_rows} " +
-           "chunks=#{(full_rows + chunk_rows - 1) // chunk_rows} " +
-           "gpu_seconds=#{chain.not_nil!.gpu_elapsed_seconds} " +
-           "current_allocated_before=#{current_before} " +
-           "current_allocated_after=#{device.current_allocated_size} " +
-           "recommended_working_set=#{recommended} peak_allocated=unavailable " +
-           "segments=#{chain.not_nil!.segment_count} waits=#{chain.not_nil!.wait_count}"
-    ensure
-      chain.try do |active|
-        active.commit_and_wait unless active.completed?
-        active.release
-      end
-      workspace.try(&.release)
-      arena.release
     end
 
     # On a small case, mutate the same caller Q backing on GPU between two

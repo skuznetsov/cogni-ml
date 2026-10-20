@@ -17,7 +17,7 @@ private HEAD_DIM                =    128
 private FFN                     = 13_824
 private FRAMES                  =     21
 private SPATIAL                 =  1_664
-private CHUNK_Q                 =    512
+private BASELINE_CHUNK_Q        =    512
 private MAX_EXPLICIT_BUDGET     = 16_i64 * 1024 * 1024 * 1024
 private OPAQUE_RESERVE          = 1_i64 * 1024 * 1024 * 1024
 private EXPECTED_WEIGHTS_BYTES  = 1_017_447_344_i64
@@ -82,7 +82,7 @@ private BENCH_METAL = <<-METAL
   }
 METAL
 
-private record ArmResult, groups : Int32, order : String, warmup : Bool,
+private record ArmResult, groups : Int32, query_chunk : Int32, order : String, warmup : Bool,
   host_wall_seconds : Float64, encode_cpu_seconds : Float64,
   gpu_elapsed_seconds : Float64, segments : Int32, terminal_waits : Int32,
   encode_metal_buffer_allocations : Int64
@@ -129,7 +129,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
   raise "Full block arm did not segment its command chain" unless chain.segment_count > 0
-  result = ArmResult.new(groups, order, warmup, wall_seconds, encode_seconds,
+  result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
     chain.gpu_elapsed_seconds, chain.segment_count, chain.wait_count, allocations)
   chain.release
   result
@@ -187,9 +187,13 @@ end
 
 weights_path = ""
 pairs = 3
+comparison_mode = "cross-segments"
+candidate_chunk = 256
 OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
+  parser.on("--comparison=MODE", "cross-segments (default) or self-chunks") { |value| comparison_mode = value }
+  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -198,6 +202,12 @@ OptionParser.parse do |parser|
 end
 raise ArgumentError.new("--weights is required") if weights_path.empty?
 raise ArgumentError.new("--pairs must be within 1..3") unless (1..3).includes?(pairs)
+raise ArgumentError.new("--comparison must be cross-segments or self-chunks") unless {"cross-segments", "self-chunks"}.includes?(comparison_mode)
+raise ArgumentError.new("--candidate-self-chunk must be 128, 256 or 1024") unless {128, 256, 1024}.includes?(candidate_chunk)
+compare_self_chunks = comparison_mode == "self-chunks"
+require_exact = !compare_self_chunks
+candidate_groups = compare_self_chunks ? 320 : 1024
+candidate_chunk = BASELINE_CHUNK_Q unless compare_self_chunks
 weights_path = File.expand_path(weights_path)
 raise ArgumentError.new("Missing safetensors file #{weights_path}") unless File.file?(weights_path)
 raise ArgumentError.new("Unexpected official block sidecar length") unless File.size(weights_path) == EXPECTED_WEIGHTS_BYTES
@@ -222,6 +232,7 @@ inputs : ML::Video::Arena? = nil
 projection_stage : ML::Video::WanS2VMPSLinearStage? = nil
 projection_workspace : ML::Video::WanS2VMPSLinearWorkspace? = nil
 attention_workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+candidate_attention_workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
 begin
   explicit_io_counts = [
     FULL_VALUES, 12_i64 * DIM, 3_i64 * FULL_SEQ,
@@ -232,7 +243,8 @@ begin
   block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg)
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
-  attention_workspace_bytes = 3_i64 * CHUNK_Q * DIM * sizeof(Float32)
+  attention_workspace_bytes = 3_i64 * BASELINE_CHUNK_Q * DIM * sizeof(Float32)
+  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks
   explicit_nonweight_bytes = checked_sum([
     input_bytes, block_scratch_bytes, tiny_audio_scratch_bytes,
     projection_stage_bytes, attention_workspace_bytes,
@@ -253,8 +265,10 @@ begin
         unused_audio_plan_scratch_bytes: tiny_audio_scratch_bytes, input_output_bytes: input_bytes,
         projection_stage_bytes: projection_stage_bytes, self_attention_chunk_bytes: attention_workspace_bytes,
         opaque_mps_reserve_bytes: OPAQUE_RESERVE, estimated_bytes: total_estimate,
-        budget_bytes: MAX_EXPLICIT_BUDGET, attention_backend: "mps_chunked_512",
-        cross_groups_per_segment: [320, 1024], scope: "one real block-0 forward, synthetic inputs; not video quality or full-stack qualification"}.to_json)
+        budget_bytes: MAX_EXPLICIT_BUDGET, attention_backend: "mps_chunked",
+        comparison_mode: comparison_mode, baseline_query_chunk: BASELINE_CHUNK_Q,
+        candidate_query_chunk: candidate_chunk, exact_required: require_exact,
+        cross_groups_per_segment: [320, candidate_groups], scope: "one real block-0 forward, synthetic inputs; not video quality or full-stack qualification"}.to_json)
   STDOUT.flush
 
   weight_arena = ML::Video::Arena.new
@@ -273,8 +287,8 @@ begin
   positions = inputs.not_nil!.alloc("positions", 3 * FULL_SEQ)
   context = inputs.not_nil!.alloc("context", FULL_CONTEXT * DIM)
   local_audio = inputs.not_nil!.alloc("unused_local_audio", audio_cfg.audio_rows * DIM)
-  output_320 = inputs.not_nil!.alloc("output_320", FULL_VALUES.to_i32)
-  output_1024 = inputs.not_nil!.alloc("output_1024", FULL_VALUES.to_i32)
+  output_baseline = inputs.not_nil!.alloc("output_baseline", FULL_VALUES.to_i32)
+  output_candidate = inputs.not_nil!.alloc("output_candidate", FULL_VALUES.to_i32)
   metrics = inputs.not_nil!.alloc("comparison_metrics", 5)
 
   projection_stage = ML::Video::WanS2VMPSLinearStage.new(
@@ -282,14 +296,24 @@ begin
   projection_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(
     plan_cfg, audio_cfg, scratch.not_nil!, audio_scratch.not_nil!, context,
     local_audio, projection_stage.not_nil!)
-  chunk_q = scratch.not_nil!.alloc("chunk_q", CHUNK_Q * DIM)
-  chunk_a = scratch.not_nil!.alloc("chunk_a", CHUNK_Q * DIM)
-  chunk_b = scratch.not_nil!.alloc("chunk_b", CHUNK_Q * DIM)
+  chunk_q = scratch.not_nil!.alloc("chunk_q", BASELINE_CHUNK_Q * DIM)
+  chunk_a = scratch.not_nil!.alloc("chunk_a", BASELINE_CHUNK_Q * DIM)
+  chunk_b = scratch.not_nil!.alloc("chunk_b", BASELINE_CHUNK_Q * DIM)
   attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
-    1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, CHUNK_Q,
+    1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, BASELINE_CHUNK_Q,
     scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
     scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
     chunk_q, chunk_a, chunk_b)
+  if compare_self_chunks
+    candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
+      1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
+      scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
+      scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
+      scratch.not_nil!.alloc("candidate_chunk_q", candidate_chunk * DIM),
+      scratch.not_nil!.alloc("candidate_chunk_a", candidate_chunk * DIM),
+      scratch.not_nil!.alloc("candidate_chunk_b", candidate_chunk * DIM))
+  end
+  candidate_attention = candidate_attention_workspace || attention_workspace.not_nil!
 
   fill = ML::Metal::ComputePipeline.new("wan_full_block_fill_f32", BENCH_METAL)
   positions_fill = ML::Metal::ComputePipeline.new("wan_full_block_fill_positions", BENCH_METAL)
@@ -303,13 +327,13 @@ begin
   setup_encoder.end_encoding
   setup.commit_and_wait
 
-  warm_320 = encode_arm(320, "warmup", true, x, modulation, positions,
-    context, output_320, weight_arena.not_nil!, scratch.not_nil!, cfg,
+  warm_baseline = encode_arm(320, "A", true, x, modulation, positions,
+    context, output_baseline, weight_arena.not_nil!, scratch.not_nil!, cfg,
     projection_workspace.not_nil!, attention_workspace.not_nil!)
-  warm_1024 = encode_arm(1024, "warmup", true, x, modulation, positions,
-    context, output_1024, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, attention_workspace.not_nil!)
-  warm_compare = validate_pair(output_320, output_1024, metrics, zero, compare)
+  warm_candidate = encode_arm(candidate_groups, "B", true, x, modulation, positions,
+    context, output_candidate, weight_arena.not_nil!, scratch.not_nil!, cfg,
+    projection_workspace.not_nil!, candidate_attention)
+  warm_compare = validate_pair(output_baseline, output_candidate, metrics, zero, compare)
   puts({schema: "wan_s2v_full_block_warm_comparison_v1", compared_values: FULL_VALUES,
         bit_differences: warm_compare[:bit_differences],
         tolerance_violations: warm_compare[:tolerance_violations], nonfinite: warm_compare[:nonfinite],
@@ -317,13 +341,14 @@ begin
         tolerance: "2e-5+2e-5*abs(reference)",
         exact_equal: warm_compare[:bit_differences] == 0,
         strict_pass: warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0,
+        comparison_mode: comparison_mode, exact_required: require_exact,
         comparison_outside_timed_arms: true}.to_json)
   STDOUT.flush
-  unless warm_compare[:bit_differences] == 0 && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
-    raise "Warmup cross-segmentation outputs failed exact/strict comparison"
+  unless (!require_exact || warm_compare[:bit_differences] == 0) && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
+    raise "Warmup block outputs failed the required comparison"
   end
-  {warm_320, warm_1024}.each do |arm|
-    puts({schema: "wan_s2v_full_block_arm_v1", groups_per_segment: arm.groups,
+  {warm_baseline, warm_candidate}.each do |arm|
+    puts({schema: "wan_s2v_full_block_arm_v1", groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
           order: arm.order, warmup: arm.warmup, host_wall_seconds: arm.host_wall_seconds,
           encode_cpu_seconds: arm.encode_cpu_seconds, gpu_elapsed_seconds: arm.gpu_elapsed_seconds,
           command_segments: arm.segments, terminal_waits: arm.terminal_waits,
@@ -332,14 +357,17 @@ begin
   end
 
   pairs.times do |pair|
-    order = pair.even? ? {320, 1024} : {1024, 320}
-    order.each do |groups|
-      output = groups == 320 ? output_320 : output_1024
-      arm = encode_arm(groups, groups == 320 ? "A" : "B", false,
+    order = pair.even? ? {true, false} : {false, true}
+    order.each do |baseline|
+      output = baseline ? output_baseline : output_candidate
+      attention = baseline ? attention_workspace.not_nil! : candidate_attention
+      groups = baseline ? 320 : candidate_groups
+      arm = encode_arm(groups, baseline ? "A" : "B", false,
         x, modulation, positions, context, output, weight_arena.not_nil!,
-        scratch.not_nil!, cfg, projection_workspace.not_nil!, attention_workspace.not_nil!)
+        scratch.not_nil!, cfg, projection_workspace.not_nil!, attention)
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
-            groups_per_segment: arm.groups, order: arm.order, warmup: false,
+            groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
+            order: arm.order, warmup: false,
             host_wall_seconds: arm.host_wall_seconds, encode_cpu_seconds: arm.encode_cpu_seconds,
             gpu_elapsed_seconds: arm.gpu_elapsed_seconds, command_segments: arm.segments,
             terminal_waits: arm.terminal_waits,
@@ -347,24 +375,29 @@ begin
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
     end
-    comparison = validate_pair(output_320, output_1024, metrics, zero, compare)
+    comparison = validate_pair(output_baseline, output_candidate, metrics, zero, compare)
     puts({schema: "wan_s2v_full_block_comparison_v1", pair: pair,
           compared_values: FULL_VALUES, bit_differences: comparison[:bit_differences],
           tolerance_violations: comparison[:tolerance_violations], nonfinite: comparison[:nonfinite],
           max_abs: comparison[:max_abs], max_normalized_error: comparison[:max_ratio],
           tolerance: "2e-5+2e-5*abs(reference)", exact_equal: comparison[:bit_differences] == 0,
           strict_pass: comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0,
+          comparison_mode: comparison_mode, exact_required: require_exact,
           comparison_outside_timed_arms: true}.to_json)
-    raise "Cross-segmentation output comparison failed" unless comparison[:bit_differences] == 0 && comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0
+    raise "Block output comparison failed" unless (!require_exact || comparison[:bit_differences] == 0) && comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0
     STDOUT.flush
   end
 
   control = ML::Metal::CommandBuffer.new
   control_encoder = ML::Metal::ComputeEncoder.new(control)
-  control_encoder.set_pipeline(corrupt).set_buffer(output_1024, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
+  # Establish identical GPU backings before the one-value negative control;
+  # different query chunks need only pass the existing strict numerical gate.
+  ML::Video::MetalOps.copy(control_encoder, output_candidate, output_baseline,
+    FULL_VALUES.to_i32)
+  control_encoder.set_pipeline(corrupt).set_buffer(output_candidate, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
   control_encoder.set_pipeline(zero).set_buffer(metrics, 0, ML::Metal::BufferAccess::Write)
     .set_value(5_u32, 1).dispatch_1d(5)
-  control_encoder.set_pipeline(compare).set_buffer(output_320, 0).set_buffer(output_1024, 1)
+  control_encoder.set_pipeline(compare).set_buffer(output_baseline, 0).set_buffer(output_candidate, 1)
     .set_buffer(metrics, 2, ML::Metal::BufferAccess::ReadWrite)
     .set_value(FULL_VALUES.to_u32, 3).dispatch_1d(FULL_VALUES.to_i32)
   control_encoder.end_encoding
@@ -377,6 +410,7 @@ begin
         control_outside_timed_arms: true}.to_json)
   raise "Full-block comparator failed its positive corruption control" unless control_rejected
 ensure
+  candidate_attention_workspace.try(&.release)
   attention_workspace.try(&.release)
   projection_workspace.try(&.release_after_terminal_wait!)
   projection_stage.try(&.release_after_terminal_wait!)

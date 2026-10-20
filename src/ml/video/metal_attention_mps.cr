@@ -300,7 +300,9 @@ module ML::Video
   # fixed caller-owned buffers; every span reuses one prepared graph plan and
   # the same serial command chain, with no wait or MetalBuffer allocation.
   class WanAttentionMPSChunkWorkspace
-    MAX_CHUNK_ROWS = 512
+    # The caller still selects the query chunk and owns its scratch/memory
+    # admission. A larger maximum does not change any pipeline default.
+    MAX_CHUNK_ROWS = 1024
 
     getter batches : Int32
     getter query_rows : Int32

@@ -30992,3 +30992,32 @@ Refresh after source/toolchain/device/model/workload changes.
   docs/wan-block-benchmark.md. Refresh on code/lifetime, inputs/weights, geometry,
   precision, device/runtime or queue-isolation changes. Strict stack drift and
   full cold/repeat video generation remain open.
+
+### 2026-10-20 — Isolated long-key Wan attention and whole-block chunk tuning
+
+- Nontrivial GPU Q/K/V at B=1, Q=K=36,608, H=40, D=128 now have a complete
+  pinned F32 PyTorch MPS output oracle. Input fill and comparison are outside
+  attention timing. The prepared workspace admits up to 1,024 rows; production
+  callers retain their existing defaults. Tail/replay upstream specs pass 2/0.
+- Separate AB/BA/AB cohorts give 512-to-candidate medians 25.4884→16.9625 s
+  (128), 23.5564→19.4015 s (256), and 26.2424→28.3771 s (1,024). Each candidate
+  is bit-identical to its paired baseline; every pinned reference-oracle check
+  passes the unchanged strict gate (max abs 1.8328428e-6). Error controls reject
+  one changed value. The 1,024 candidate loses all three pairs; fewer graph
+  calls are insufficient grounds for promotion. Separate cohorts do not prove
+  a controlled 128-versus-256 ranking or global optimality.
+- The 128 candidate wins all three complete block-0 pairs on real BF16 weights
+  and synthetic GPU inputs: host medians 36.0253→27.0151 s, 25.01% lower time.
+  Warmup and paired outputs are bit-identical across 187,432,960 values and the
+  corruption control passes. Each arm has one terminal wait and zero explicit
+  encode buffer allocations; source preserves asynchronous GPU-only operators.
+  Both experiment memory minima are 31%, with a configured 15% guard floor.
+  The paused older video process was resumed. No video/default claim is made.
+- Correlated mini-Quadrumvirate verdict ROBUST covers the bounded comparisons.
+  Next: test prepared head-major K/V reuse and explicit MPSGraph attention,
+  then native F32 tiled K/V reuse. SonicBoom's conditional identity accumulator
+  rescale is a separate strict-gate hypothesis; its CUDA LLM decode numbers do
+  not establish a Wan speedup. Per-operator exclusive costs, known strict stack
+  drift and full cold/repeat video remain open. Reproduction, hashes, scope and
+  source links: docs/wan-self-attention-benchmark.md. Refresh after code/lifetime,
+  inputs/weights, geometry, precision, device/runtime or queue-isolation changes.

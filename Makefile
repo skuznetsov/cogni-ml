@@ -99,6 +99,10 @@ $(BUILD_DIR)/wan_s2v_full_block_benchmark: examples/wan_s2v_full_block_benchmark
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
+$(BUILD_DIR)/wan_s2v_self_attention_benchmark: examples/wan_s2v_self_attention_benchmark.cr $(WAN_BENCHMARK_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"

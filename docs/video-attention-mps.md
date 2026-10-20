@@ -1,12 +1,14 @@
 # Prepared query-chunked Wan attention
 
 `WanAttentionMPSChunkWorkspace` is an opt-in B=1 self-attention route. It keeps
-full F32 Q/K/V/output resident, copies at most 512 query rows into fixed GPU
+full F32 Q/K/V/output resident, copies at most 1,024 query rows into fixed GPU
 scratch, runs a prepared MPSGraph SDPA executable, and copies valid result rows
 back on the same native command chain. The final short chunk is padded on GPU.
 K/V remain global: chunks do not restrict the attention window.
 
-Three caller-owned chunk buffers cost 31,457,280 bytes at C=5,120 and 512 rows.
+The caller chooses 1..1,024 query rows; existing callers retain 512 by default.
+Three caller-owned chunk buffers cost 31,457,280 bytes at C=5,120 and 512 rows,
+or 62,914,560 bytes at 1,024 rows. Admission must account for the chosen size.
 MPSGraph may allocate private workspace; explicit buffer counts and current
 allocation snapshots do not establish a private-memory peak. There is no CPU
 activation copy or intermediate host wait. All views and plans must outlive
@@ -22,15 +24,17 @@ weights so earlier accidental phase encoding would fail with a different error.
 The unchanged numerical gate is `2e-5 + 2e-5*abs(reference)`, with finite operands.
 `spec/video_attention_mps_spec.cr` compares six complete pinned PyTorch 2.8.0 MPS
 SDPA cases, including K=36,608, near ties, sharp logits, B=2 and single-key
-attention. Its chunked Q=777/K=36,608 case uses different query rows in successive
-chunks, covers the short tail, initializes output to NaN, and compares every
+attention. Its chunked Q=777 and Q=1,289 / K=36,608 cases exercise 512- and
+1,024-row chunks. They use different query rows in successive chunks, cover the
+short tail, initialize output to NaN, and compare every
 result to the correspondingly indexed oracle. GPU A/B/A input mutation checks
 and a later completed-chain reuse reject stale prepared bindings. Alias, offset,
 alignment, overflow and lifetime guards are also exercised.
 
-The focused spec completes two examples without failures, errors or pending
-cases. The shared-scratch transformer/long-key regression completes eight
-examples without failures, errors or pending cases. Each attention request has
+The focused spec, rerun with both chunk sizes, completes two examples without
+failures, errors or pending cases. The earlier shared-scratch transformer/long-key
+regression completed eight examples without failures, errors or pending cases.
+Each attention request has
 one terminal wait and zero explicit MetalBuffer allocations during encoding.
 The actual 40-layer BF16 stack comparison stays numerically rejected; its fresh
 query-chunked receipt is recorded in `docs/video-numerical-drift.md` for the
@@ -61,3 +65,6 @@ The stack comparison selects `WAN_S2V_MPS_CHUNK_ATTENTION=1` in addition to
 prepared projections. Source, device/runtime, geometry, checkpoint, fixed buffer
 identity or arithmetic changes invalidate the corresponding evidence and require
 fresh checks. Visible quality and complete cold/repeat video timing remain open.
+
+The nontrivial full-geometry upstream comparison and isolated attention timing
+are described in [wan-self-attention-benchmark.md](wan-self-attention-benchmark.md).
