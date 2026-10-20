@@ -10,8 +10,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "examples/support/wan_memory_guard.py"
 SPEC = importlib.util.spec_from_file_location("wan_memory_guard", MODULE_PATH)
@@ -153,6 +154,180 @@ class ContainmentSpec(unittest.TestCase):
             poll_interval_sec=0.02,
             terminate_grace_sec=0.15,
         )
+
+    def test_terminated_waitable_leader_does_not_require_getpgid(self):
+        child = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"],
+                                 start_new_session=True)
+        try:
+            deadline = time.monotonic() + 3
+            while guard._peek_child_exit(child.pid) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            # Darwin returns ESRCH for the unreaped zombie. Simulate that
+            # behavior on every platform while the real waitable PID is held.
+            with patch.object(guard.os, "getpgid", side_effect=ProcessLookupError):
+                guard._terminate_owned_group(child, 0.0)
+            self.assertIsNone(child.returncode)
+            self.assertEqual(child.wait(), 7)
+        finally:
+            if child.returncode is None:
+                child.kill()
+                child.wait()
+
+    def test_reaped_or_unwaitable_leader_never_signals_a_group(self):
+        for returncode in (None, 0):
+            with self.subTest(returncode=returncode):
+                child = SimpleNamespace(pid=101, returncode=returncode)
+                with patch.object(guard, "_peek_child_exit",
+                                  side_effect=guard.TelemetryError("not our waitable child")), \
+                        patch.object(guard.os, "killpg") as killpg:
+                    with self.assertRaises((RuntimeError, guard.TelemetryError)):
+                        guard._signal_owned_group(child, signal.SIGKILL)
+                    killpg.assert_not_called()
+
+    def test_live_leader_with_changed_pgid_never_signals_a_group(self):
+        child = SimpleNamespace(pid=101, returncode=None)
+        with patch.object(guard, "_peek_child_exit", return_value=None), \
+                patch.object(guard.os, "getpgid", return_value=202), \
+                patch.object(guard.os, "killpg") as killpg:
+            with self.assertRaisesRegex(RuntimeError, "original process group"):
+                guard._signal_owned_group(child, signal.SIGKILL)
+            killpg.assert_not_called()
+
+    def test_exited_leader_still_contains_term_resistant_descendant(self):
+        self.check_exited_leader_cleanup(process_listing_unavailable=False)
+
+    def test_exited_leader_cleanup_survives_process_listing_failure(self):
+        self.check_exited_leader_cleanup(process_listing_unavailable=True)
+
+    def check_exited_leader_cleanup(self, *, process_listing_unavailable):
+        ready = self.root / "descendant.pid"
+        grandchild_code = (
+            "import os,pathlib,signal,sys,time; "
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)"
+        )
+        leader_code = (
+            "import pathlib,subprocess,sys,time; "
+            "subprocess.Popen([sys.executable,'-c',sys.argv[1],sys.argv[2]]); "
+            "p=pathlib.Path(sys.argv[2]); "
+            "exec('while not p.exists(): time.sleep(.01)')"
+        )
+        sentinel = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(30)"],
+                                    start_new_session=True)
+        child = subprocess.Popen([sys.executable, "-c", leader_code, grandchild_code, str(ready)],
+                                 start_new_session=True)
+        try:
+            deadline = time.monotonic() + 3
+            while guard._peek_child_exit(child.pid) is None:
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            descendant = int(ready.read_text())
+            with patch.object(guard.os, "getpgid", side_effect=ProcessLookupError):
+                if process_listing_unavailable:
+                    with patch.object(guard, "process_group_members",
+                                      side_effect=guard.TelemetryError("injected ps outage")):
+                        with self.assertRaises(guard.TelemetryError):
+                            guard._terminate_owned_group(child, 0.05)
+                else:
+                    guard._terminate_owned_group(child, 0.05)
+            deadline = time.monotonic() + 3
+            while not guard.process_is_gone_or_zombie(descendant):
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+            self.assertIsNone(sentinel.poll(), "cleanup must leave another session alone")
+            self.assertIsNone(child.returncode, "do not reap before group cleanup")
+            self.assertEqual(child.wait(), 0)
+        finally:
+            if child.returncode is None:
+                # This test created and still pins this original session group.
+                guard._terminate_owned_group(child, 0.05)
+                child.wait(timeout=3)
+            sentinel.terminate()
+            sentinel.wait()
+
+    def test_cleanup_identity_failure_is_logged_without_a_success_record(self):
+        command = [sys.executable, "-c", "import time;time.sleep(30)"]
+        signal_group = guard._signal_owned_group
+        calls = 0
+
+        def fail_once(child, signum):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise guard.TelemetryError("injected identity loss")
+            return signal_group(child, signum)
+
+        with patch.object(guard, "_signal_owned_group", side_effect=fail_once):
+            result = self.run_with_provider(command, lambda _group, _deadline: sample(),
+                                            timeout=0.1, name="identity-loss.log")
+        self.assertEqual(result, guard.EXIT_TELEMETRY)
+        log = (self.root / "identity-loss.log").read_text()
+        self.assertIn('"event":"cleanup_failed"', log)
+        self.assertNotIn('"event":"finished"', log)
+
+    def test_persistent_identity_loss_returns_without_waiting_or_signaling(self):
+        child = SimpleNamespace(pid=101, returncode=None,
+                                wait=Mock(side_effect=AssertionError("must preserve identity pin")))
+        with patch.object(guard.subprocess, "Popen", return_value=child), \
+                patch.object(guard, "_peek_child_exit",
+                             side_effect=guard.TelemetryError("persistent identity loss")), \
+                patch.object(guard.os, "killpg") as killpg:
+            result = self.run_with_provider(["not-launched"], lambda _group, _deadline: sample(),
+                                            name="persistent-identity.log")
+        self.assertEqual(result, guard.EXIT_TELEMETRY)
+        killpg.assert_not_called()
+        child.wait.assert_not_called()
+        log = (self.root / "persistent-identity.log").read_text()
+        self.assertIn('"event":"cleanup_incomplete"', log)
+        self.assertIn('"phase":"group_termination"', log)
+        self.assertNotIn('"event":"finished"', log)
+
+    def test_uninterruptible_reap_never_uses_an_unbounded_wait(self):
+        child = SimpleNamespace(pid=101, returncode=None,
+                                wait=Mock(side_effect=subprocess.TimeoutExpired("not-launched", 2)))
+        with patch.object(guard.subprocess, "Popen", return_value=child), \
+                patch.object(guard, "_terminate_owned_group"), \
+                patch.object(guard, "_signal_owned_group"):
+            result = self.run_with_provider(["not-launched"],
+                                            lambda group, _deadline: sample(
+                                                available=40 * GIB if group is None else 9 * GIB),
+                                            name="uninterruptible.log")
+        self.assertEqual(result, guard.EXIT_TELEMETRY)
+        self.assertGreater(child.wait.call_count, 0)
+        self.assertTrue(all(call.kwargs.get("timeout", 0) > 0
+                            for call in child.wait.call_args_list))
+        log = (self.root / "uninterruptible.log").read_text()
+        self.assertIn('"event":"cleanup_incomplete"', log)
+        self.assertIn('"phase":"leader_reap"', log)
+        self.assertNotIn('"event":"finished"', log)
+
+    def test_live_descendant_after_sigkill_is_not_successful_cleanup(self):
+        child = SimpleNamespace(pid=101, returncode=None)
+
+        def reap_leader(*, timeout):
+            child.returncode = 0
+            return 0
+
+        child.wait = Mock(side_effect=reap_leader)
+        with patch.object(guard.subprocess, "Popen", return_value=child), \
+                patch.object(guard, "process_group_members",
+                             return_value=[guard.GroupProcess(202, "U")]), \
+                patch.object(guard, "_peek_child_exit", return_value=0), \
+                patch.object(guard, "_signal_owned_group") as signal_group:
+            started = time.monotonic()
+            result = self.run_with_provider(["not-launched"],
+                                            lambda group, _deadline: sample(
+                                                available=40 * GIB if group is None else 9 * GIB),
+                                            name="live-after-kill.log")
+        self.assertEqual(result, guard.EXIT_TELEMETRY)
+        child.wait.assert_not_called()
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertIn(signal.SIGKILL, [call.args[1] for call in signal_group.call_args_list])
+        log = (self.root / "live-after-kill.log").read_text()
+        self.assertIn('"event":"cleanup_incomplete"', log)
+        self.assertIn('"phase":"group_termination"', log)
+        self.assertNotIn('"event":"finished"', log)
 
     def test_low_physical_headroom_blocks_command_before_launch(self):
         marker = self.root / "should-not-exist"

@@ -31133,3 +31133,25 @@ Refresh after source/toolchain/device/model/workload changes.
   gates, mini-Quadrum, serial admission and 15% floor; no automatic video restart.
   Refresh on source/lifetime, geometry/inputs/weights/precision, device/runtime,
   queue conditions or memory-policy changes. Known 40-layer drift remains open.
+
+### 2026-10-20 — Bound Darwin guard cleanup and verify group quiescence
+
+- A memory-floor stop exposed Darwin `getpgid` returning ESRCH for an unreaped
+  zombie. WNOWAIT still proves the owned child identity and pins its original
+  PGID; cleanup now uses that fact without depending on process-list availability
+  to authorize the signal. A verified zombie-only group is skipped because
+  Darwin can return EPERM when signaling it. No foreign group is signaled.
+- SIGKILL delivery alone does not establish containment. A bounded post-kill
+  check requires an empty/zombie-only group and an exited waitable leader before
+  reaping. Missing identity/telemetry or a still-live descendant returns 77 with
+  incomplete-cleanup evidence and no success record. All cleanup waits are bounded;
+  this supersedes the older unbounded-reaping limitation above. Sampled memory
+  limits and deliberate setsid/setpgid escapes remain outside the guarantee.
+- CPU regression tests pass 25/0 on Python 3.11 and 3.15, including ps outage
+  with a real TERM-resistant descendant and an untouched independent session,
+  persistent identity loss, bounded reaping and a simulated live descendant
+  after SIGKILL. A live-telemetry CPU timeout returns 124; an injected 15% floor
+  violation returns 76; both owned groups are subsequently absent. Correlated
+  adversary review is ROBUST within this scope. Source/log hashes are in external
+  `wan-self-attention/guard-cleanup-cpu-receipt-v5.json`. Refresh after guard logic,
+  process-ownership semantics, Python/macOS ABI or memory-policy changes.

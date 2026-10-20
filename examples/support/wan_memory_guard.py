@@ -5,8 +5,8 @@ This is a launcher for one explicitly supplied command. It does not reserve
 memory: a spike between samples can exceed a limit, and a descendant that
 deliberately calls setsid() or setpgid() can escape the process group. It never
 signals a process outside the new session/process group it created.
-The timeout triggers termination; it does not guarantee wrapper return while a
-child is stuck in an uninterruptible kernel/driver state awaiting reaping.
+Cleanup waits are bounded. Lost process identity or an uninterruptible child is
+reported as incomplete cleanup, never as successful containment.
 """
 
 from __future__ import annotations
@@ -407,16 +407,35 @@ def _peek_child_exit(pid: int):
 def _signal_owned_group(child: subprocess.Popen, signum: int) -> None:
     # The session leader remains our unreaped child until cleanup completes.
     # Keeping it waitable with WNOWAIT prevents PID/PGID reuse in this interval.
-    if child.pid <= 1:
+    if child.pid <= 1 or child.returncode is not None:
         raise RuntimeError("refusing to signal invalid child process group")
-    try:
-        current_pgid = os.getpgid(child.pid)
-    except ProcessLookupError:
-        # An unreaped child should remain queryable. Fail closed rather than
-        # risk signaling a PGID whose identity can no longer be established.
-        raise RuntimeError("session leader identity disappeared before group signal")
-    if current_pgid != child.pid:
-        raise RuntimeError("session leader no longer owns its original process group")
+    leader_exit = _peek_child_exit(child.pid)
+    if leader_exit is None:
+        try:
+            current_pgid = os.getpgid(child.pid)
+        except ProcessLookupError:
+            # Darwin cannot query the PGID of an unreaped zombie. Recheck
+            # without reaping to distinguish that race from lost identity.
+            leader_exit = _peek_child_exit(child.pid)
+            if leader_exit is None:
+                raise RuntimeError("session leader identity disappeared before group signal")
+        else:
+            if current_pgid != child.pid:
+                raise RuntimeError("session leader no longer owns its original process group")
+    # Popen created this child with start_new_session=True, so its original
+    # PGID is its pinned PID even when getpgid cannot query an exited child.
+    # Process-list availability is not part of that identity proof. Darwin can
+    # return EPERM for a zombie-only group, so skip it when that state can be
+    # observed. A ps outage must still allow a signal to the pinned group.
+    if leader_exit is not None:
+        try:
+            members = process_group_members(child.pid)
+        except TelemetryError:
+            pass
+        else:
+            if not any(not member.state.startswith("Z") for member in members):
+                return
+    # Keep the child unreaped through the final group signal.
     try:
         os.killpg(child.pid, signum)
     except ProcessLookupError:
@@ -429,17 +448,30 @@ def _terminate_owned_group(child: subprocess.Popen, grace_sec: float) -> None:
     while time.monotonic() < deadline:
         try:
             members = process_group_members(child.pid)
-            # An empty or leaderless ps sample is uncertain telemetry; keep the
-            # pinned group alive until the grace period ends, then signal only
-            # the verified original PGID.
-            if members and any(item.pid == child.pid for item in members) and not any(
-                    not item.state.startswith("Z") for item in members):
-                return
+            if not any(not item.state.startswith("Z") for item in members):
+                # A missing leader alone is not evidence that descendants
+                # stopped. An empty/zombie-only group plus its waitable exit is.
+                if _peek_child_exit(child.pid) is not None:
+                    return
         except TelemetryError:
-            # The leader stays unreaped; SIGKILL remains limited to its PGID.
+            # The final signal revalidates waitability and original identity.
             break
         time.sleep(min(0.025, max(0.0, deadline - time.monotonic())))
     _signal_owned_group(child, signal.SIGKILL)
+    # Delivering SIGKILL is not proof that every descendant has stopped. Keep
+    # the leader unreaped until the original group is observed quiescent.
+    deadline = time.monotonic() + max(0.1, grace_sec)
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            members = process_group_members(child.pid)
+            if (not any(not item.state.startswith("Z") for item in members) and
+                    _peek_child_exit(child.pid) is not None):
+                return
+        except TelemetryError as error:
+            last_error = error
+        time.sleep(min(0.025, max(0.0, deadline - time.monotonic())))
+    raise TelemetryError("owned process group did not become verifiably quiescent after SIGKILL") from last_error
 
 
 def run_guarded(command: list[str], *, max_footprint_bytes: int,
@@ -550,21 +582,25 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
             child.wait(timeout=max(2.0, terminate_grace_sec + 1.0))
             _log(stream, "finished", returncode=result_code)
             return result_code
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            _log(stream, "cleanup_failed", detail=type(error).__name__,
+                 reason="owned command did not reach verified termination and reaping")
+            return EXIT_TELEMETRY
         finally:
             if child is not None and child.returncode is None:
                 try:
                     _terminate_owned_group(child, terminate_grace_sec)
-                except (OSError, RuntimeError, TelemetryError):
-                    pass
-                try:
-                    child.wait(timeout=max(2.0, terminate_grace_sec + 1.0))
-                except subprocess.TimeoutExpired:
-                    # The final signal is still restricted to the unreaped group.
+                except (OSError, RuntimeError) as error:
+                    # Do not reap away the identity pin after group cleanup
+                    # failed, or attempt an unbounded wait on a live child.
+                    _log(stream, "cleanup_incomplete", phase="group_termination",
+                         detail=type(error).__name__, pid=child.pid, leader_reaped=False)
+                else:
                     try:
-                        _signal_owned_group(child, signal.SIGKILL)
-                    except (OSError, RuntimeError):
-                        pass
-                    child.wait()
+                        child.wait(timeout=max(2.0, terminate_grace_sec + 1.0))
+                    except subprocess.TimeoutExpired:
+                        _log(stream, "cleanup_incomplete", phase="leader_reap",
+                             detail="TimeoutExpired", pid=child.pid, leader_reaped=False)
             for signum, previous in previous_handlers.items():
                 signal.signal(signum, previous)
 
