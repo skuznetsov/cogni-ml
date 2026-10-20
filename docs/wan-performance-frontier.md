@@ -349,13 +349,69 @@ External `wan-self-attention/scratch-reuse-receipt-v1.json` (SHA-256
 `3556473680210b58274f8315bb78a260c9309b46558e699e6f866f2d9626aa2a`)
 binds source, executable, native objects, actual invocations, fixture and logs.
 Correlated separate-agent source and log review is ROBUST within that scope.
-Full-spatial execution, MPSGraph self attention, colored audio integration,
-latency and video quality are unqualified. Do not use this layout with combined
+That receipt does not qualify full-spatial execution, MPSGraph self attention,
+colored audio integration, latency or video quality. Do not use this layout with combined
 audio/reused-scratch maps: their additional aliases need a separate lifetime
-proof. Next: qualify the MPSGraph attention bindings before adding compact
-whole-block profiling. Refresh after source/lifetime, geometry/input/weight or
+proof. The short MPSGraph qualification below advances the next probe.
+Refresh after source/lifetime, geometry/input/weight or
 precision, queue/device/runtime or memory-policy changes. The known 40-layer
 drift remains open.
+
+## MPSGraph scratch qualification and compact profiling plan
+
+The same-object scratch layout also passes the pinned real-width short fixture
+with MPSGraph SDPA, fixed MPS projections and segmented commands: BF16 query
+chunks of one and three rows, and F32 chunks of one row. Each case passes 15/0,
+including 24 block intermediates, exact default-layout bits, same-chain repeats,
+chained inputs and replay on a second completed chain. One-row chunks exercise
+multiple graph calls; three-row chunks exercise padding at the two-token tail.
+Each layout owns its chunk workspace. Reusing the original workspace with the
+aliased scratch rejects changed bindings before dispatch.
+
+The MPS workspace accepts B=1. These tests validate the original pinned B=2
+fixture first, then select its first batch from six input arrays and all 35
+checkpoint arrays. Weights remain unchanged. The marker hashes the same bytes
+that were parsed and explicitly records that this is a derived B=1 oracle,
+not a fresh B=1 upstream execution. The native B=2 BF16 regression also passes
+15/0. All four runs retain the unchanged finite upstream tolerance, zero
+explicit MetalBuffer allocations during encode and one terminal wait per chain.
+Minimum sampled free-plus-speculative reserve is 18.59%; swap growth is zero.
+The allocation counter excludes framework/GC allocations and the guard is
+sampled, not a hard limit between polls.
+
+`wan_s2v_full_block_benchmark` now accepts opt-in `--reuse-block-scratch`
+for both arms, warmups and timed encodes. It checks prepared scratch bytes
+against the selected plan. `--plan-only` verifies the pinned sidecar and prints
+the full-shape plan before any GPU setup or dispatch. Successful plan-only
+executions for profile replay (36,608 tokens, chunk 128) report:
+
+| Bytes | Default layout | Reused layout |
+| --- | ---: | ---: |
+| Block scratch | 8,792,855,040 | 5,044,195,840 |
+| Estimated total, including 1 GiB opaque MPS reserve | 13,443,721,748 | 9,695,062,548 |
+
+The plan-only logs contain one JSON record each and no Metal initialization.
+These are CPU memory plans, not full-spatial GPU allocations or speed
+measurements. The attempted compact phase-root run was blocked before starting
+a child: free-plus-speculative memory was 17,030,709,248 bytes, below the
+21,045,339,751 bytes required for the unchanged 15% floor plus a 10 GiB process
+budget. No full-block timing follows from that attempt.
+
+External `wan-self-attention/scratch-mps-receipt-v1.json` (SHA-256
+`bcc0508689419bf782b630503dccb05f09200d4e788ab4906c7ee195ce7dfee6`)
+binds current source, both executables, native objects, actual invocations,
+derived-oracle provenance and raw logs, including failed/blocked attempts.
+Correlated separate-agent source, log and bound-hash review is ROBUST within
+the short-fixture and CPU-plan scope.
+DoD signals are four guarded 15/0 runs and two successful plan-only runs with
+the exact scratch difference of 3,748,659,200 bytes. Full-spatial GPU execution,
+latency, audio coloring and video quality remain unqualified; the known
+40-layer drift remains open. Next: one guarded compact
+`--comparison=profile-replay --phase-roots --candidate-self-chunk=128 --pairs=1`
+run to attribute the four block phases, then choose the dominant measured
+cost. Both A/A arms use the reused layout, so that run alone cannot establish
+a speedup from coloring. Refresh on the source, lifetime, shape/input/weight,
+precision, queue/device/runtime or memory-policy changes listed above.
 
 ## Other candidates, in order of investigation
 

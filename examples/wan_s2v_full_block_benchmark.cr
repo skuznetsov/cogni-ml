@@ -134,7 +134,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        linear : ML::Video::WanS2VMPSLinearWorkspace,
                        attention : ML::Video::WanAttentionMPSChunkWorkspace,
                        precompute_rope : Bool = false,
-                       phase_roots : Bool = false) : ArmResult
+                       phase_roots : Bool = false,
+                       reuse_scratch : Bool = false) : ArmResult
   wall_started = Time.instant
   chain = ML::Metal::MPSCommandChain.new
   chain.enable_phase_root_profile! if phase_roots
@@ -143,7 +144,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
     output, weights, scratch, cfg, weight_prefix: "block.", tiled_attention: true,
     execution_chain: chain, mps_workspace: linear, attention_workspace: attention,
-    cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope)
+    cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope,
+    reuse_scratch: reuse_scratch)
   encode_seconds = (Time.instant - encode_started).total_seconds
   # Diagnostic phase roots are source-bound to this block. Do no suffix or
   # audio work on the chain before the existing terminal wait.
@@ -216,13 +218,17 @@ pairs = 3
 comparison_mode = "cross-segments"
 candidate_chunk = 256
 phase_roots_requested = false
+reuse_block_scratch = false
+plan_only = false
 OptionParser.parse do |parser|
-  parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3]"
+  parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3] [--plan-only]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
   parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, rope, or profile-replay (same-config A/A root diagnostics)") { |value| comparison_mode = value }
   parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout, attention-graph, rope and profile-replay require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
   parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
+  parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
+  parser.on("--plan-only", "Print the full-shape memory plan and exit before GPU setup or dispatch") { plan_only = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -281,7 +287,10 @@ begin
     2_i64 * FULL_VALUES, 5_i64,
   ]
   input_bytes = checked_sum(explicit_io_counts) * sizeof(Float32)
-  block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: compare_rope)
+  default_block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: compare_rope)
+  block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg,
+    precompute_rope: compare_rope, reuse_scratch: reuse_block_scratch)
+  block_scratch_bytes_saved = default_block_scratch_bytes - block_scratch_bytes
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
   attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
@@ -300,12 +309,17 @@ begin
   total_estimate = plan.peak_bytes
   raise ArgumentError.new("Full block exceeds the #{explicit_budget_bytes} byte explicit-plus-reserve budget for #{comparison_mode}: #{total_estimate}") if total_estimate > explicit_budget_bytes
 
-  puts({schema: "wan_s2v_full_block_memory_plan_v1", status: "admitted_for_benchmark",
+  puts({schema: "wan_s2v_full_block_memory_plan_v1",
+        status: plan_only ? "plan_only" : "admitted_for_benchmark", plan_only: plan_only,
         sequence_tokens: FULL_SEQ, video_tokens: FULL_VIDEO_TOKENS, context_tokens: FULL_CONTEXT,
         dim: DIM, heads: HEADS, head_dim: HEAD_DIM, ffn_dim: FFN,
         weight_dtype: "BF16", operator_math: "F32", checkpoint_bytes: File.size(weights_path),
         checkpoint_sha256: weights_sha, bound_tensors: bindings.size,
         resident_weight_bytes: plan.destination_bytes, block_scratch_bytes: block_scratch_bytes,
+        reuse_block_scratch: reuse_block_scratch,
+        block_scratch_layout: reuse_block_scratch ? "lifetime-aliased" : "unaliased",
+        default_block_scratch_bytes: default_block_scratch_bytes,
+        block_scratch_bytes_saved: block_scratch_bytes_saved,
         unused_audio_plan_scratch_bytes: tiny_audio_scratch_bytes, input_output_bytes: input_bytes,
         projection_stage_bytes: projection_stage_bytes,
         self_attention_chunk_bytes: attention_workspace_bytes - prepared_kv_bytes,
@@ -321,7 +335,8 @@ begin
         budget_bytes: explicit_budget_bytes,
         budget_limit_gib: explicit_budget_bytes / (1024_i64 * 1024 * 1024),
         attention_backend: "mps_chunked",
-        comparison_mode: comparison_mode, baseline_precompute_rope: false,
+        comparison_mode: comparison_mode,
+        baseline_precompute_rope: false,
         candidate_precompute_rope: compare_rope,
         rope_coefficients_built_per_candidate_encode: compare_rope,
         baseline_query_chunk: baseline_chunk,
@@ -335,6 +350,7 @@ begin
         exact_required: require_exact,
         cross_groups_per_segment: [320, candidate_groups], scope: "one real block-0 forward, synthetic inputs; not video quality or full-stack qualification"}.to_json)
   STDOUT.flush
+  exit if plan_only
 
   weight_arena = ML::Video::Arena.new
   scratch = ML::Video::Arena.new
@@ -345,7 +361,9 @@ begin
   ML::Video::WanS2VAudioInjector.prepare!
   ML::Video::MetalOps.prepare_tiled_attention!
 
-  ML::Video::WanS2VBlock.prepare_scratch!(scratch.not_nil!, cfg, precompute_rope: compare_rope)
+  ML::Video::WanS2VBlock.prepare_scratch!(scratch.not_nil!, cfg,
+    precompute_rope: compare_rope, reuse_scratch: reuse_block_scratch)
+  raise "Prepared block scratch differs from its memory plan" unless scratch.not_nil!.resident_bytes == block_scratch_bytes
   ML::Video::WanS2VAudioInjector.prepare_scratch!(audio_scratch.not_nil!, audio_cfg)
   x = inputs.not_nil!.alloc("x", FULL_VALUES.to_i32)
   modulation = inputs.not_nil!.alloc("modulation", 12 * DIM)
@@ -400,11 +418,13 @@ begin
 
   warm_baseline = encode_arm(320, "A", true, x, modulation, positions,
     context, output_baseline, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, attention_workspace.not_nil!)
+    projection_workspace.not_nil!, attention_workspace.not_nil!,
+    reuse_scratch: reuse_block_scratch)
   warm_candidate = encode_arm(candidate_groups, "B", true, x, modulation, positions,
     context, output_candidate, weight_arena.not_nil!, scratch.not_nil!, cfg,
     projection_workspace.not_nil!, candidate_attention, precompute_rope: compare_rope,
-    phase_roots: compare_profile_replay && phase_roots_requested)
+    phase_roots: compare_profile_replay && phase_roots_requested,
+    reuse_scratch: reuse_block_scratch)
   if compare_profile_replay
     baseline_root_count = warm_baseline.segments
     candidate_profile = warm_candidate.phase_root_profile.not_nil!
@@ -421,6 +441,11 @@ begin
         exact_equal: warm_compare[:bit_differences] == 0,
         strict_pass: warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0,
         comparison_mode: comparison_mode, exact_required: require_exact,
+        reuse_block_scratch: reuse_block_scratch,
+        block_scratch_layout: reuse_block_scratch ? "lifetime-aliased" : "unaliased",
+        block_scratch_bytes: block_scratch_bytes,
+        default_block_scratch_bytes: default_block_scratch_bytes,
+        block_scratch_bytes_saved: block_scratch_bytes_saved,
         baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
         candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
         baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
@@ -442,6 +467,11 @@ begin
           command_segments: arm.segments, terminal_waits: arm.terminal_waits,
           encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,
           comparison_mode: comparison_mode,
+          reuse_block_scratch: reuse_block_scratch,
+          block_scratch_layout: reuse_block_scratch ? "lifetime-aliased" : "unaliased",
+          block_scratch_bytes: block_scratch_bytes,
+          default_block_scratch_bytes: default_block_scratch_bytes,
+          block_scratch_bytes_saved: block_scratch_bytes_saved,
           kv_layout: compare_attention_graph || (arm.order == "B" && compare_kv_layout) ? "B,H,K,D" : "B,K,H,D",
           baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
           query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
@@ -471,7 +501,8 @@ begin
         x, modulation, positions, context, output, weight_arena.not_nil!,
         scratch.not_nil!, cfg, projection_workspace.not_nil!, attention,
         precompute_rope: compare_rope && !baseline,
-        phase_roots: compare_profile_replay && !baseline && phase_roots_requested)
+        phase_roots: compare_profile_replay && !baseline && phase_roots_requested,
+        reuse_scratch: reuse_block_scratch)
       if baseline
         baseline_root_count = arm.segments
       elsif profile = arm.phase_root_profile
@@ -488,6 +519,11 @@ begin
             terminal_waits: arm.terminal_waits,
             encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,
             comparison_mode: comparison_mode,
+            reuse_block_scratch: reuse_block_scratch,
+            block_scratch_layout: reuse_block_scratch ? "lifetime-aliased" : "unaliased",
+            block_scratch_bytes: block_scratch_bytes,
+            default_block_scratch_bytes: default_block_scratch_bytes,
+            block_scratch_bytes_saved: block_scratch_bytes_saved,
             kv_layout: compare_attention_graph || (!baseline && compare_kv_layout) ? "B,H,K,D" : "B,K,H,D",
             baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
             query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
@@ -517,6 +553,11 @@ begin
           tolerance: "2e-5+2e-5*abs(reference)", exact_equal: comparison[:bit_differences] == 0,
           strict_pass: comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0,
           comparison_mode: comparison_mode, exact_required: require_exact,
+          reuse_block_scratch: reuse_block_scratch,
+          block_scratch_layout: reuse_block_scratch ? "lifetime-aliased" : "unaliased",
+          block_scratch_bytes: block_scratch_bytes,
+          default_block_scratch_bytes: default_block_scratch_bytes,
+          block_scratch_bytes_saved: block_scratch_bytes_saved,
           baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
           candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
           layout_preparation_inside_block_encode: compare_attention_graph || compare_kv_layout,

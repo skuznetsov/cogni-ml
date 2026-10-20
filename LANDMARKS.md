@@ -31238,3 +31238,35 @@ Refresh after source/toolchain/device/model/workload changes.
   physical/pressure floor; no automatic video restart or unrelated process kills.
   Refresh on source/lifetime, geometry/inputs/weights/precision, queue/device/runtime
   or memory-policy changes. Temporary files stay on /opt/mldata_ssd/.
+
+### 2026-10-20 — Qualify short MPSGraph scratch reuse and expose compact full-block plans
+
+- Opt-in block scratch reuse passes the short real-width MPSGraph SDPA oracle
+  for BF16 chunks 1 and 3 and F32 chunk 1; native B=2 BF16 regression also passes.
+  Each guarded case is 15/0, with 24 strict/bit-equal block traces, exact repeats,
+  chained inputs and second-chain replay, zero explicit encode MetalBuffer
+  allocations and one terminal wait per chain. No production math or waits change.
+- MPSGraph B=1 evidence selects the first batch after validating the pinned B=2
+  fixture, including six inputs and 35 checkpoints. The same read supplies JSON
+  and its parent SHA; weights are unchanged. This is not a fresh upstream B=1
+  execution. Workspaces bind to their own layouts; a stale workspace rejects.
+  Minimum sampled reserve is 18.59%, no swap growth; guard sampling and framework
+  allocations retain their existing limits.
+- Full-block benchmark opt-in --reuse-block-scratch reaches both arms and all
+  warm/timed encodes; --plan-only exits before GPU setup. Both CPU plan runs
+  pass: estimated total 13,443,721,748 -> 9,695,062,548 bytes, including 1 GiB
+  opaque MPS reserve. Scratch saving is 3,748,659,200 bytes. Full-spatial GPU
+  savings and latency are not measured. Compact profile startup was blocked
+  with 17,030,709,248 free/spec bytes versus 21,045,339,751 required, no child.
+- External wan-self-attention/scratch-mps-receipt-v1.json binds source, executables,
+  native objects, commands, oracle and raw logs including failed/blocked attempts.
+  Correlated source/log/hash review is ROBUST for short fixtures and CPU plans.
+  Defaults remain unchanged. Audio coloring/full video and known 40-layer drift
+  remain open. Do not apply block colors to compound audio scratch without proof.
+- Continuation: exact Wan acceleration; next falsifier is one guarded compact
+  full-block profile replay (four phase-root intervals, no new production waits),
+  then optimization of the dominant measured cost. A/A profiling does not measure
+  layout speedup. Standing authority: serial owned probes, strict unchanged gate,
+  mini-Quadrum and 15% floor, no video restart or unrelated process termination.
+  Refresh on source/lifetime, geometry/input/weight/dtype, queue/device/runtime or
+  memory-policy changes. Temp/build/evidence stay on /opt/mldata_ssd/.

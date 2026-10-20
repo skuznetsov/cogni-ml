@@ -187,9 +187,10 @@ private def wan_audio_checkpoint_size(name : String, cfg : JSON::Any) : Int32
   end
 end
 
-private def wan_fixture : JSON::Any
+private def wan_fixture : Tuple(JSON::Any, String)
   path = ENV["WAN_S2V_BLOCK_FIXTURE"]? || raise "Set WAN_S2V_BLOCK_FIXTURE to the pinned MPS oracle fixture"
-  JSON.parse(File.read(path))
+  source = File.read(path)
+  {JSON.parse(source), Digest::SHA256.hexdigest(source)}
 end
 
 private def wan_fixture_path : String
@@ -218,6 +219,71 @@ private def wan_sha256_file(path : String) : String
   digest.final.hexstring
 end
 
+# The pinned oracle executes B=2 with independent batch members. Selecting its
+# first contiguous batch changes neither a token/head reduction nor the weights.
+# Keep the original two-batch prechecks and label this projection explicitly;
+# it is not a new upstream execution at B=1.
+private def wan_first_batch_fixture(fixture : JSON::Any, parent_sha256 : String) : JSON::Any
+  cfg = fixture["config"]
+  cfg["batches"].as_i.should eq(2)
+  dim = cfg["dim"].as_i
+  seq = cfg["seq"].as_i
+  frames = cfg["video_frames"].as_i
+  sizes = {
+    "x"            => seq * dim,
+    "modulation"   => 12 * dim,
+    "positions"    => seq * 3,
+    "context"      => cfg["context_tokens"].as_i * dim,
+    "local_audio"  => frames * cfg["audio_tokens"].as_i * dim,
+    "global_audio" => frames * dim,
+  }
+  fixture["inputs"].as_h.keys.sort.should eq(sizes.keys.sort)
+  projected = JSON.parse(fixture.to_json)
+  sizes.each do |name, count|
+    values = fixture["inputs"][name].as_a
+    values.size.should eq(2 * count), "first-batch input shape #{name}"
+    projected["inputs"].as_h[name] = JSON::Any.new(values[0, count])
+  end
+  fixture["expected"].as_h.each do |name, value|
+    count = if ML::Video::WanS2VBlock::CHECKPOINTS.has_key?(name)
+              wan_checkpoint_size(name, cfg)
+            else
+              ML::Video::WanS2VAudioInjector::CHECKPOINTS.has_key?(name).should be_true
+              wan_audio_checkpoint_size(name, cfg)
+            end
+    values = value.as_a
+    values.size.should eq(count), "first-batch checkpoint shape #{name}"
+    (count % 2).should eq(0)
+    projected["expected"].as_h[name] = JSON::Any.new(values[0, count // 2])
+  end
+  projected["config"].as_h["batches"] = JSON::Any.new(1_i64)
+  puts({schema: "wan_s2v_first_batch_projection_v1",
+        parent_sha256: parent_sha256, parent_batches: 2,
+        selected_batch: 0, projected_batches: 1, neural_weights_changed: false,
+        fresh_upstream_execution: false, input_arrays: sizes.size,
+        checkpoint_arrays: fixture["expected"].as_h.size}.to_json)
+  projected
+end
+
+# Test-only fixed bindings. Chunk 1 exercises repeated graph calls on the short
+# fixture; chunk 3 exercises its padded tail. Setup never enters block encode.
+private def wan_prepare_mps_self_attention(
+  cfg : ML::Video::WanS2VConfig, scratch : ML::Video::Arena,
+  attention_scratch : ML::Video::Arena,
+) : ML::Video::WanAttentionMPSChunkWorkspace?
+  return nil unless ENV["WAN_S2V_MPS_SELF_ATTENTION"]? == "1"
+  chunk_rows = ENV["WAN_S2V_MPS_SELF_ATTENTION_CHUNK_ROWS"]?.try(&.to_i32) || 1
+  unless 1 <= chunk_rows <= ML::Video::WanAttentionMPSChunkWorkspace::MAX_CHUNK_ROWS
+    raise ArgumentError.new("MPS self-attention fixture chunk rows are out of range")
+  end
+  count = (chunk_rows.to_i64 * cfg.dim).to_i32
+  ML::Video::WanAttentionMPSChunkWorkspace.new(
+    cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, chunk_rows,
+    scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
+    scratch["wan_b_self_attn"], attention_scratch.alloc("chunk_q", count),
+    attention_scratch.alloc("chunk_out_a", count), attention_scratch.alloc("chunk_out_b", count))
+end
+
 # A separate block-only Arena keeps the existing audio/reused-scratch contract
 # unchanged. Replay all intermediates before any colored slot is overwritten.
 private def wan_check_reused_block_scratch(
@@ -226,11 +292,14 @@ private def wan_check_reused_block_scratch(
   weights : ML::Video::Arena, audio_scratch : ML::Video::Arena,
   original_trace : Hash(String, ML::MetalBuffer), original_chained : ML::MetalBuffer,
   tiled_attention : Bool, precompute_rope : Bool, groups : Int32,
+  original_attention : ML::Video::WanAttentionMPSChunkWorkspace?,
 ) : Nil
   scratch = ML::Video::Arena.new
+  attention_scratch = ML::Video::Arena.new
   outputs = ML::Video::Arena.new
   traces = ML::Video::Arena.new
   workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+  attention = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
   chain = nil.as(ML::Metal::MPSCommandChain?)
   begin
     ML::Video::WanS2VBlock.prepare_scratch!(scratch, cfg,
@@ -240,6 +309,14 @@ private def wan_check_reused_block_scratch(
     if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
       workspace = ML::Video::WanS2VMPSLinearWorkspace.new(cfg, audio_cfg,
         scratch, audio_scratch, inputs["context"], inputs["local_audio"])
+    end
+    attention = wan_prepare_mps_self_attention(cfg, scratch, attention_scratch)
+    if original = original_attention
+      expect_raises(ArgumentError, "Prepared Wan attention shape or caller buffers changed") do
+        original.validate_for!(cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim,
+          scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
+          scratch["wan_b_self_attn"])
+      end
     end
     first = outputs.alloc("first", cfg.values)
     repeat = outputs.alloc("repeat", cfg.values)
@@ -354,14 +431,17 @@ private def wan_check_reused_block_scratch(
     ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
       inputs["positions"], inputs["context"], first, weights, scratch, cfg, trace,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      attention_workspace: attention,
       cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
     ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
       inputs["positions"], inputs["context"], repeat, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      attention_workspace: attention,
       cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
     ML::Video::WanS2VBlock.encode(active.encoder, first, inputs["modulation"],
       inputs["positions"], inputs["context"], chained, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      attention_workspace: attention,
       cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
     active.wait_count.should eq(0)
@@ -376,6 +456,7 @@ private def wan_check_reused_block_scratch(
     ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
       inputs["positions"], inputs["context"], replayed, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      attention_workspace: attention,
       cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
     active.wait_count.should eq(0)
@@ -399,20 +480,24 @@ private def wan_check_reused_block_scratch(
       original_chained.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
     replayed.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)).should eq(
       first.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
-    puts({schema: "wan_s2v_scratch_reuse_fixture_v1", dtype: wan_resident_weight_dtype.to_s,
+    puts({schema: "wan_s2v_scratch_reuse_fixture_v2", dtype: wan_resident_weight_dtype.to_s,
           traced_checkpoints: trace.size, strict_pass: true, default_bit_differences: 0,
           repeat_bit_differences: 0, chained_bit_differences: 0, completed_chain_replay_bit_differences: 0,
           encode_metal_buffer_allocations: 0, completed_chains: 2, terminal_waits_per_chain: 1,
           resident_scratch_bytes: scratch.resident_bytes,
           default_scratch_bytes: ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: precompute_rope),
           precompute_rope: precompute_rope, mps_projections: !workspace.nil?,
+          self_attention_backend: attention ? "mpsgraph_sdpa_chunked" : "native",
+          attention_chunk_rows: attention.try(&.chunk_rows), attention_scratch_bytes: attention_scratch.resident_bytes,
           scope: "real-width short block fixture; not full spatial geometry or video"}.to_json)
   ensure
     if active = chain
       active.commit_and_wait unless active.completed?
       active.release if active.completed?
     end
+    attention.try(&.release)
     workspace.try(&.release_after_terminal_wait!)
+    attention_scratch.release
     traces.release
     outputs.release
     scratch.release
@@ -424,6 +509,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   inputs = ML::Video::Arena.new
   weights = ML::Video::Arena.new
   scratch = ML::Video::Arena.new
+  attention_scratch = ML::Video::Arena.new
   traces = ML::Video::Arena.new
   output = ML::Video::Arena.new
   checkpoint_file = nil.as(ML::Video::CheckpointFile?)
@@ -431,6 +517,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   execution_chain = nil.as(ML::Metal::MPSCommandChain?)
   phase_root_chain = nil.as(ML::Metal::MPSCommandChain?)
   mps_workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+  attention_workspace = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
   begin
     fixture["inputs"].as_h.each do |name, values|
       inputs.upload(name, wan_json_f32(values))
@@ -457,6 +544,11 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       spatial_tokens: config_json["spatial_tokens"].as_i,
       audio_tokens: config_json["audio_tokens"].as_i,
     )
+    if ENV["WAN_S2V_MPS_SELF_ATTENTION"]? == "1"
+      unless block_cfg.batches == 1 && ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
+        raise ArgumentError.new("MPS self-attention fixture requires B=1 and segmented commands")
+      end
+    end
 
     if weight_manifest = fixture["weights_file"]?
       fixture["upstream"]["fixture_mode"].as_s.should eq("production_width")
@@ -539,6 +631,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     ML::Video::MetalOps.prepare_tiled_attention! if tiled_attention
     ML::Video::WanS2VBlock.prepare_scratch!(scratch, block_cfg, precompute_rope: precompute_rope)
     ML::Video::WanS2VAudioInjector.prepare_scratch!(scratch, audio_cfg)
+    attention_workspace = wan_prepare_mps_self_attention(block_cfg, scratch, attention_scratch)
     if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
       mps_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(block_cfg, audio_cfg,
         scratch, scratch, inputs["context"], inputs["local_audio"])
@@ -660,6 +753,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       block_output, audio_output, weights, scratch, block_cfg, audio_cfg,
       block_trace, audio_trace, tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
+      attention_workspace: attention_workspace,
       cross_attention_groups_per_segment: cross_attention_groups_per_segment,
       precompute_rope: precompute_rope)
     if active = execution_chain
@@ -671,6 +765,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       repeat_block_output, repeat_audio_output, weights, scratch, block_cfg, audio_cfg,
       tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
+      attention_workspace: attention_workspace,
       cross_attention_groups_per_segment: cross_attention_groups_per_segment,
       precompute_rope: precompute_rope,
     )
@@ -682,6 +777,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       inputs["context"], chained_block_output, weights, scratch, block_cfg,
       tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
+      attention_workspace: attention_workspace,
       cross_attention_groups_per_segment: cross_attention_groups_per_segment,
       precompute_rope: precompute_rope,
     )
@@ -709,6 +805,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
         inputs["context"], profile_output, weights, scratch, block_cfg,
         tiled_attention: tiled_attention, execution_chain: active,
         mps_workspace: mps_workspace,
+        attention_workspace: attention_workspace,
         cross_attention_groups_per_segment: cross_attention_groups_per_segment,
         precompute_rope: precompute_rope,
       )
@@ -749,7 +846,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     if ENV["WAN_S2V_SCRATCH_REUSE"]? == "1"
       wan_check_reused_block_scratch(fixture, block_cfg, audio_cfg, inputs, weights, scratch,
         block_trace, chained_block_output, tiled_attention, precompute_rope,
-        cross_attention_groups_per_segment)
+        cross_attention_groups_per_segment, attention_workspace)
     end
 
     prepared_weights.try(&.release)
@@ -786,7 +883,9 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     end
     prepared_weights.try(&.release)
     checkpoint_file.try(&.close)
+    attention_workspace.try(&.release)
     mps_workspace.try(&.release_after_terminal_wait!)
+    attention_scratch.release
     output.release
     traces.release
     scratch.release
@@ -864,7 +963,7 @@ describe ML::Video::WanS2VBlock do
     end
   end
 
-  it "matches pinned block/audio checkpoints including distinct multi-head RoPE positions and optional phase-root profiling" do
+  it "matches pinned block/audio checkpoints with optional first-batch MPSGraph and phase-root probes" do
     if ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
       ENV["WAN_S2V_SEGMENTED_COMMANDS"]?.should eq("1"),
         "WAN_S2V_PHASE_ROOT_PROFILE requires WAN_S2V_SEGMENTED_COMMANDS=1"
@@ -872,7 +971,7 @@ describe ML::Video::WanS2VBlock do
     unless ENV["WAN_S2V_BLOCK_FIXTURE"]?
       pending "MPS oracle fixture is external; set WAN_S2V_BLOCK_FIXTURE"
     end
-    fixture = wan_fixture
+    fixture, fixture_sha256 = wan_fixture
     fixture["upstream"]["revision"].as_s.should eq("1ea34ff48f87168174e12956e200b1d908b1c5ff")
     fixture["upstream"]["diffusers_version"].as_s.should eq("0.31.0")
     fixture["upstream"]["oracle_device"].as_s.should eq("mps")
@@ -937,6 +1036,10 @@ describe ML::Video::WanS2VBlock do
     end
     required_checkpoints = ML::Video::WanS2VBlock::CHECKPOINTS.keys + ML::Video::WanS2VAudioInjector::CHECKPOINTS.keys
     fixture["expected"].as_h.keys.sort.should eq(required_checkpoints.sort)
+    if ENV["WAN_S2V_MPS_SELF_ATTENTION"]? == "1"
+      fixture = wan_first_batch_fixture(fixture, fixture_sha256)
+      config = fixture["config"]
+    end
     snapshots = wan_run_fixture(fixture)
     checkpoint_failures = [] of String
     fixture["expected"].as_h.each do |name, expected|
