@@ -151,6 +151,8 @@ private def wan_real_stack_encode_branch(
   cfg : ML::Video::WanS2VTransformerConfig,
   tiled_attention : Bool,
   mps_workspace : ML::Video::WanS2VMPSLinearWorkspace? = nil,
+  execution_chain : ML::Metal::MPSCommandChain? = nil,
+  attention_workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil,
 ) : ML::MetalBuffer
   block_cfg = cfg.block_config
   audio_cfg = cfg.audio_config
@@ -158,6 +160,9 @@ private def wan_real_stack_encode_branch(
   current = input
   spare = alternate
   cfg.layers.times do |layer|
+    if active = execution_chain
+      encoder = active.encoder
+    end
     injected = injection_index < cfg.injection_ids.size && cfg.injection_ids[injection_index] == layer
     layer_key = layer.to_s.rjust(2, '0')
     block_trace = {"output" => traces["#{branch}.block.#{layer_key}"]}
@@ -168,6 +173,7 @@ private def wan_real_stack_encode_branch(
         block_output, spare, weights, scratch, block_cfg, audio_cfg,
         block_trace, audio_trace, "block.#{layer}.", "audio.#{injection_index}.", tiled_attention,
         mps_workspace: mps_workspace,
+        execution_chain: execution_chain, attention_workspace: attention_workspace,
       )
       injection_index += 1
     else
@@ -175,6 +181,7 @@ private def wan_real_stack_encode_branch(
         encoder, current, modulation, positions, context, spare, weights, scratch,
         block_cfg, block_trace, "block.#{layer}.", tiled_attention,
         mps_workspace: mps_workspace,
+        execution_chain: execution_chain, attention_workspace: attention_workspace,
       )
     end
     current, spare = spare, current
@@ -267,6 +274,9 @@ describe ML::Video::WanS2VTransformer do
     mps_stage = nil.as(ML::Video::WanS2VMPSLinearStage?)
     normal_mps = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
     drop_mps = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+    normal_attention = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
+    drop_attention = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
+    raw_chain = nil.as(ML::Metal::MPSCommandChain?)
     raw_command = nil.as(ML::Metal::CommandBuffer?)
     raw_encoder = nil.as(ML::Metal::ComputeEncoder?)
     encoder_open = false
@@ -361,6 +371,21 @@ describe ML::Video::WanS2VTransformer do
         normal_mps.not_nil!.plan_count.should eq(15)
         drop_mps.not_nil!.plan_count.should eq(15)
       end
+      use_chunk_attention = ENV["WAN_S2V_MPS_CHUNK_ATTENTION"]? == "1"
+      if use_chunk_attention
+        chunk_rows = 512
+        chunk_q = scratch.alloc("attention_chunk_q", chunk_rows * cfg.dim)
+        chunk_a = scratch.alloc("attention_chunk_a", chunk_rows * cfg.dim)
+        chunk_b = scratch.alloc("attention_chunk_b", chunk_rows * cfg.dim)
+        normal_attention = ML::Video::WanAttentionMPSChunkWorkspace.new(1,
+          cfg.sequence_tokens, cfg.sequence_tokens, cfg.heads, cfg.dim // cfg.heads,
+          chunk_rows, scratch["wan_b_self_q"], scratch["wan_b_self_k"],
+          scratch["wan_b_self_v"], scratch["wan_b_self_attn"], chunk_q, chunk_a, chunk_b)
+        drop_attention = ML::Video::WanAttentionMPSChunkWorkspace.new(1,
+          drop_cfg.sequence_tokens, drop_cfg.sequence_tokens, cfg.heads, cfg.dim // cfg.heads,
+          chunk_rows, scratch["wan_b_self_q"], scratch["wan_b_self_k"],
+          scratch["wan_b_self_v"], scratch["wan_b_self_attn"], chunk_q, chunk_a, chunk_b)
+      end
 
       outputs.alloc("alternate", max_values)
       outputs.alloc("block_output", max_values)
@@ -410,26 +435,42 @@ describe ML::Video::WanS2VTransformer do
       ML::Video::MetalOps.prepare_tiled_attention! if tiled_attention
 
       before_encode_allocations = ML::MetalBuffer.video_spec_allocations
-      command = ML::Metal::CommandBuffer.new
-      raw_command = command
-      encoder = ML::Metal::ComputeEncoder.new(command)
-      raw_encoder = encoder
-      encoder_open = true
+      if use_chunk_attention
+        raw_chain = ML::Metal::MPSCommandChain.new
+        encoder = raw_chain.not_nil!.encoder
+      else
+        command = ML::Metal::CommandBuffer.new
+        raw_command = command
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        raw_encoder = encoder
+        encoder_open = true
+      end
       prepared.not_nil!.encode(encoder)
       normal_final = wan_real_stack_encode_branch(encoder, "normal",
         inputs["normal.sequence"], outputs["alternate"], outputs["block_output"],
         modulation_buffer, positions_buffer, context_buffer, local_audio, global_audio,
-        weights, scratch, trace_buffers, cfg, tiled_attention, normal_mps)
+        weights, scratch, trace_buffers, cfg, tiled_attention, normal_mps,
+        raw_chain, normal_attention)
+      if active = raw_chain
+        encoder = active.encoder
+      end
       drop_final = wan_real_stack_encode_branch(encoder, "drop",
         inputs["drop.sequence"], outputs["alternate"], outputs["block_output"],
         modulation_buffer, inputs["drop_positions"], context_buffer, local_audio, global_audio,
-        weights, scratch, trace_buffers, drop_cfg, tiled_attention, drop_mps)
+        weights, scratch, trace_buffers, drop_cfg, tiled_attention, drop_mps,
+        raw_chain, drop_attention)
       normal_final.valid?.should be_true
       drop_final.valid?.should be_true
-      encoder.end_encoding
-      encoder_open = false
-      command.commit
-      command.wait
+      if active = raw_chain
+        active.wait_count.should eq(0)
+        active.commit_and_wait
+        active.wait_count.should eq(1)
+      else
+        encoder.end_encoding
+        encoder_open = false
+        raw_command.not_nil!.commit
+        raw_command.not_nil!.wait
+      end
       ML::MetalBuffer.video_spec_allocations.should eq(before_encode_allocations),
         "native encoding must not allocate Metal buffers"
 
@@ -451,6 +492,8 @@ describe ML::Video::WanS2VTransformer do
           strict_gate_passed: metrics.all? { |point| point[:violations] == 0 },
           tiled_attention: tiled_attention,
           projection_backend: use_mps ? "prepared_mps_f32" : "scalar_f32",
+          self_attention_backend: use_chunk_attention ? "prepared_mps_chunk512" : (tiled_attention ? "tiled" : "scalar"),
+          native_execution_chain: use_chunk_attention,
           terminal_host_waits: 1,
           encode_metal_buffer_allocations: ML::MetalBuffer.video_spec_allocations - before_encode_allocations,
           points: metrics,
@@ -464,6 +507,10 @@ describe ML::Video::WanS2VTransformer do
     ensure
       # An encode failure must not leave an unsubmitted encoder retaining
       # scratch, or release prepared plans while a committed command is live.
+      if active = raw_chain
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
       if active = raw_command
         if active.committed?
           active.wait unless active.completed?
@@ -473,6 +520,8 @@ describe ML::Video::WanS2VTransformer do
         end
       end
       prepared.try(&.release)
+      normal_attention.try(&.release)
+      drop_attention.try(&.release)
       normal_mps.try(&.release_after_terminal_wait!)
       drop_mps.try(&.release_after_terminal_wait!)
       mps_stage.try(&.release_after_terminal_wait!)

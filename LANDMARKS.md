@@ -30939,3 +30939,22 @@ Refresh after source/toolchain/device/model/workload changes.
   docs/video-numerical-drift.md; raw artifacts remain in external wan-full
   scratch. Refresh on implementation, checkpoint/input, geometry, precision,
   device/runtime or lifetime changes. Full cold/repeat video remains open.
+
+### 2026-10-19 — Prepared query-chunked Wan self-attention
+
+- Opt-in B1 MPSGraph SDPA reuses three fixed GPU chunk buffers and global K/V;
+  chunk offsets, padded tails, changed-input A/B/A and completed-chain reuse
+  pass the unchanged strict oracle gate. The focused spec has 2/0 examples and
+  the transformer/long-key regression 8/0, without errors or pending cases.
+- Q=K=36,608, H=40, D=128 completes 72 chunks and checks all 187,432,960
+  analytical outputs exactly on GPU, with 13 command segments, one terminal
+  wait and zero explicit encode buffer allocations. This is not actual-weight
+  full-spatial upstream parity or a video benchmark.
+- The fresh 40-layer exact-prefix comparison retains 104 finite checkpoints
+  but rejects 21/31,948,800 values (max 2.899170e-4) at unchanged tolerances.
+  Its separate drift ledger preserves this rejection for the authorized
+  experiment. Correlated mini-Quadrumvirate verdict ROBUST is limited to the
+  workspace, guards and recorded evidence; strict stack parity remains open.
+- Source, geometry, runtime and lifetime refresh rules and raw evidence:
+  docs/video-attention-mps.md and docs/video-numerical-drift.md. Tiled remains
+  default/rollback. Full cold/repeat video generation remains open.

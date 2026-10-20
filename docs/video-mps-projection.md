@@ -71,10 +71,12 @@ it. Scalar projection remains the default and rollback.
 
 The official small-sequence block/injector fixture passes all six examples
 with both F32 and BF16 resident parameters using prepared MPS projections,
-tiled attention and asynchronous continuations. The refreshed 40-layer
+tiled attention and asynchronous continuations. The tiled-attention 40-layer
 exact-prefix comparison captures all 104 points but still fails the unchanged
 strict gate: 23 values out of 31,948,800, maximum absolute drift 2.059937e-4.
 See `docs/video-numerical-drift.md`.
+The later optional query-chunked attention route has its own fresh stack receipt
+and bounded completion evidence in `docs/video-attention-mps.md`.
 
 The full-spatial block originally failed Metal completion with `Impacting
 Interactivity`. A controlled full-attention discriminator at Q=K=36,608,

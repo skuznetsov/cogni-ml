@@ -1,5 +1,6 @@
 require "./metal_ops"
 require "./metal_attention"
+require "./metal_attention_mps"
 require "./checkpoint"
 require "./metal_mps_command_chain"
 require "./metal_linear_mps"
@@ -287,7 +288,8 @@ module ML::Video
                     weight_prefix : String = "",
                     tiled_attention : Bool = false,
                     execution_chain : ML::Metal::MPSCommandChain? = nil,
-                    mps_workspace : WanS2VMPSLinearWorkspace? = nil) : Nil
+                    mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                    attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : Nil
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       if active = execution_chain
         e = active.encoder
@@ -299,6 +301,12 @@ module ML::Video
       ff_count = (rows.to_i64 * cfg.ffn_dim)
       validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
       validate_trace!(trace, x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
+      if workspace = attention_workspace
+        raise ArgumentError.new("Prepared Wan attention requires an execution chain") unless execution_chain
+        workspace.validate_for!(cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim,
+          scratch["wan_b_self_q"], scratch["wan_b_self_k"],
+          scratch["wan_b_self_v"], scratch["wan_b_self_attn"])
+      end
 
       norm1 = scratch["wan_b_norm1"]
       mod1 = norm1
@@ -349,7 +357,11 @@ module ML::Video
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
       e = continue_phase(e, execution_chain)
-      if tiled_attention && (active = execution_chain)
+      if workspace = attention_workspace
+        active = execution_chain.not_nil!
+        workspace.encode(active)
+        e = active.encoder
+      elsif tiled_attention && (active = execution_chain)
         MetalOps.attention_tiled(active, self_qr, self_kr, self_v, self_attn,
           cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches)
         e = active.encoder
@@ -447,11 +459,13 @@ module ML::Video
                                audio_weight_prefix : String = "",
                                tiled_attention : Bool = false,
                                execution_chain : ML::Metal::MPSCommandChain? = nil,
-                               mps_workspace : WanS2VMPSLinearWorkspace? = nil) : Nil
+                               mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                               attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : Nil
       validate_audio_pair!(cfg, audio_cfg)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg,
-        block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace)
+        block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace,
+        attention_workspace)
       if active = execution_chain
         e = active.encoder
       end

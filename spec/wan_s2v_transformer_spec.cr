@@ -103,6 +103,65 @@ describe ML::Video::WanS2VTransformerConfig do
     ML::Video::WanS2VBlock.validate_attention_backend!(128, true)
   end
 
+  it "rejects prepared attention before dispatching earlier transformer phases" do
+    cfg = ML::Video::WanS2VTransformerConfig.new(
+      context_tokens: 3, dim: 128, heads: 2, ffn_dim: 256, layers: 1,
+      video_frames: 2, spatial_tokens: 16, latent_height: 8, latent_width: 8,
+      injection_ids: [0], text_dim: 4, text_tokens: 3, freq_dim: 4,
+      in_dim: 4, out_dim: 2, audio_dim: 8, patch_tile_rows: 4,
+      drop_motion_frames: true)
+    scratch = ML::Video::Arena.new
+    inputs = ML::Video::Arena.new
+    absent_weights = ML::Video::Arena.new
+    chain : ML::Metal::MPSCommandChain? = nil
+    workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+    begin
+      ML::Video::WanS2VBlock.prepare_scratch!(scratch, cfg.block_config)
+      chunk_count = 4 * cfg.dim
+      workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1,
+        cfg.sequence_tokens, cfg.sequence_tokens, cfg.heads, cfg.dim // cfg.heads, 4,
+        scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
+        scratch["wan_b_self_attn"], inputs.alloc("chunk_q", chunk_count),
+        inputs.alloc("chunk_a", chunk_count), inputs.alloc("chunk_b", chunk_count))
+      unused = inputs.alloc("unused", 1)
+      chain = ML::Metal::MPSCommandChain.new
+      # No checkpoint parameters exist. A misplaced preflight would enter
+      # patch projection and fail on missing weights instead of this guard.
+      expect_raises(ArgumentError, "requires an execution chain") do
+        ML::Video::WanS2VTransformer.encode(chain.not_nil!.encoder,
+          unused, unused, unused, unused, unused, unused, unused, unused,
+          unused, unused, unused, unused, unused, unused, unused, unused, unused,
+          absent_weights, scratch, scratch, scratch, cfg, 0,
+          attention_workspace: workspace)
+      end
+      different_scratch = ML::Video::Arena.new
+      begin
+        ML::Video::WanS2VBlock.prepare_scratch!(different_scratch, cfg.block_config)
+        expect_raises(ArgumentError, "shape or caller buffers changed") do
+          ML::Video::WanS2VTransformer.encode(chain.not_nil!.encoder,
+            unused, unused, unused, unused, unused, unused, unused, unused,
+            unused, unused, unused, unused, unused, unused, unused, unused, unused,
+            absent_weights, scratch, different_scratch, scratch, cfg, 0,
+            execution_chain: chain, attention_workspace: workspace)
+        end
+        chain.not_nil!.wait_count.should eq(0)
+        chain.not_nil!.commit_and_wait
+        chain.not_nil!.wait_count.should eq(1)
+      ensure
+        different_scratch.release
+      end
+    ensure
+      chain.try do |active|
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
+      workspace.try(&.release)
+      absent_weights.release
+      inputs.release
+      scratch.release
+    end
+  end
+
   it "prepares one exclusive block and injector workspace with exact union accounting" do
     cfg = ML::Video::WanS2VTransformerConfig.new(
       context_tokens: 3, dim: 16, heads: 2, ffn_dim: 32, layers: 2,

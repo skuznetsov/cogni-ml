@@ -64,24 +64,29 @@ It isolates the stack; it does not check native prefix conditioning or the
 
 The refreshed comparison uses prepared MPS F32 projections with the actual
 typed-bias kernel and a shared F32 expansion stage; resident weights remain
-BF16. All 104 captured points are finite. The unchanged gate rejects 23 of
-31,948,800 compared values. The maximum absolute difference across the points
-is 2.059937e-4; the worst normalized error is 2.134. The first rejected block
-is `normal.block.11` (12 values, maximum absolute difference 4.094839e-5).
+BF16. The selected experimental self-attention route is prepared MPSGraph
+SDPA with 512 query rows per chunk and the full resident K/V. All 104 captured
+points are finite. The unchanged gate rejects 21 of 31,948,800 compared values.
+The maximum absolute difference across the points is 2.899170e-4; the worst
+normalized error is 2.929. The first rejected block is `normal.block.11`
+(9 values, maximum absolute difference 1.068115e-4).
 The strict spec reports one numerical failure, zero errors or pending cases;
 the complete comparison is written before the assertion. It records one
 terminal host wait and zero explicit MetalBuffer allocations during encoding.
 The previous scalar route had 205 rejected values and maximum drift 4.959106e-4;
-its separate historical ledger is preserved and does not bound the MPS route.
+the prepared-projection/tiled-attention route had 23 rejected values and maximum
+drift 2.059937e-4. Their historical ledgers are preserved; neither bounds the
+selected query-chunked arithmetic route.
 
 The external `s2v-real-stack-drift-ledger.json` records every point, exact
 implementation and fixture hashes, configuration and source revisions. Its
-SHA256 is `cf461cf1f5b5bcad2aa2167057e0a39a36880f30324d3e43a692db98d4fec702`.
-The corresponding log is `s2v-real-stack-40-mps-g320-native.log`. Rebuilding
-after changing long-attention command boundaries preserves all reported drift
-metrics; this reduced fixture does not exercise those asynchronous boundaries.
-This is a second
-recorded numerical exception for experimentation, not strict stack parity.
+SHA256 is `6bf8e632c64e9c79c557dfb44b37ecaf33d7b8de4a5d15125d7971a28b678316`.
+The corresponding log is `s2v-real-stack-40-mps-chunk-native.log`. This run uses
+the native execution chain, including prepared Graph continuation. Its reduced
+sequence fits one query chunk and therefore does not qualify the complete
+36,608-query diffusion path. Separate strict attention tests cover chunk offsets,
+padding, changed inputs and completed-chain reuse. This is a second recorded
+numerical exception for experimentation, not strict stack parity.
 The local BF16 tensor shapes, dtypes, shard mapping and index hash were
 checked; full shard payload hashes were not computed.
 

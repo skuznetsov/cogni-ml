@@ -1,0 +1,63 @@
+# Prepared query-chunked Wan attention
+
+`WanAttentionMPSChunkWorkspace` is an opt-in B=1 self-attention route. It keeps
+full F32 Q/K/V/output resident, copies at most 512 query rows into fixed GPU
+scratch, runs a prepared MPSGraph SDPA executable, and copies valid result rows
+back on the same native command chain. The final short chunk is padded on GPU.
+K/V remain global: chunks do not restrict the attention window.
+
+Three caller-owned chunk buffers cost 31,457,280 bytes at C=5,120 and 512 rows.
+MPSGraph may allocate private workspace; explicit buffer counts and current
+allocation snapshots do not establish a private-memory peak. There is no CPU
+activation copy or intermediate host wait. All views and plans must outlive
+terminal completion. A prepared workspace may serve a fresh request only after
+the preceding chain completes. Tiled attention remains the default and rollback.
+
+Block and transformer entrypoints validate the chain, dimensions and exact
+scratch bindings before dispatch. The transformer's guard regression uses empty
+weights so earlier accidental phase encoding would fail with a different error.
+
+## Executed checks
+
+The unchanged numerical gate is `2e-5 + 2e-5*abs(reference)`, with finite operands.
+`spec/video_attention_mps_spec.cr` compares six complete pinned PyTorch 2.8.0 MPS
+SDPA cases, including K=36,608, near ties, sharp logits, B=2 and single-key
+attention. Its chunked Q=777/K=36,608 case uses different query rows in successive
+chunks, covers the short tail, initializes output to NaN, and compares every
+result to the correspondingly indexed oracle. GPU A/B/A input mutation checks
+and a later completed-chain reuse reject stale prepared bindings. Alias, offset,
+alignment, overflow and lifetime guards are also exercised.
+
+The focused spec completes two examples without failures, errors or pending
+cases. The shared-scratch transformer/long-key regression completes eight
+examples without failures, errors or pending cases. Each attention request has
+one terminal wait and zero explicit MetalBuffer allocations during encoding.
+The actual 40-layer BF16 stack comparison stays numerically rejected; its fresh
+query-chunked receipt is recorded in `docs/video-numerical-drift.md` for the
+user-authorized experiment, rather than promoted to strict parity.
+
+A separate full-shape probe executes all 72 query chunks at B=1,
+Q=K=36,608, H=40, D=128. GPU-filled zero Q/K and binary-exact row-constant V
+produce a known analytical result. All 187,432,960 output values pass the GPU
+scan exactly, including the last chunk. It completes 13 command segments and
+one terminal wait with zero explicit encode allocations. Explicit buffers use
+3,036,241,920 bytes; current device allocation moves from 3,036,659,712 to
+3,047,129,088 bytes. Its summed command GPU interval is 11.961 seconds; this is
+not a wall-clock video latency or a matched end-to-end speedup. The control does
+not establish full-shape upstream parity with actual model activations.
+
+## Evidence and refresh
+
+External evidence remains under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-full/`:
+`attention-mps-chunk-native.log`, `wan-transformer-attention-chunk-native.log`,
+`attention-full-mps-chunk-native.log`, their build logs, and the full-shape probe
+source `attention-full-mps-chunk-probe.cr`. All GPU runs were serialized under
+`scripts/run_safe.sh` with a 15% free-memory floor.
+
+Build the focused spec with `make spec_wan`'s prepared bridge objects; set
+`WAN_ATTENTION_MPS_FIXTURE` to the pinned `attention-tiled-qualified/manifest.json`.
+The stack comparison selects `WAN_S2V_MPS_CHUNK_ATTENTION=1` in addition to
+prepared projections. Source, device/runtime, geometry, checkpoint, fixed buffer
+identity or arithmetic changes invalidate the corresponding evidence and require
+fresh checks. Visible quality and complete cold/repeat video timing remain open.

@@ -246,9 +246,11 @@ module ML::Video
                            audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                            tiled_attention : Bool = false,
                            execution_chain : ML::Metal::MPSCommandChain? = nil,
-                           mps_workspace : WanS2VMPSLinearWorkspace? = nil) : ML::MetalBuffer
+                           mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                           attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
+      validate_attention_workspace!(cfg, block_scratch, execution_chain, attention_workspace)
       if active = execution_chain
         e = active.encoder
       end
@@ -292,7 +294,7 @@ module ML::Video
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
             layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
-            execution_chain, mps_workspace)
+            execution_chain, mps_workspace, attention_workspace)
           if active = execution_chain
             e = active.encoder
           end
@@ -305,7 +307,7 @@ module ML::Video
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
             layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
-            execution_chain, mps_workspace)
+            execution_chain, mps_workspace, attention_workspace)
           if active = execution_chain
             e = active.encoder
           end
@@ -360,9 +362,11 @@ module ML::Video
                     audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                     tiled_attention : Bool = false,
                     execution_chain : ML::Metal::MPSCommandChain? = nil,
-                    mps_workspace : WanS2VMPSLinearWorkspace? = nil) : ML::MetalBuffer
+                    mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                    attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
+      validate_attention_workspace!(cfg, block_scratch, execution_chain, attention_workspace)
       if active = execution_chain
         e = active.encoder
       end
@@ -373,13 +377,25 @@ module ML::Video
       hidden = encode_layers(e, sequence, alternate, modulation, positions,
         projected_context, local_audio, global_audio, weights, block_scratch,
         audio_scratch, cfg, trace_layer, block_trace, audio_trace, tiled_attention,
-        execution_chain, mps_workspace)
+        execution_chain, mps_workspace, attention_workspace)
       if active = execution_chain
         e = active.encoder
       end
       encode_head(e, hidden, time_embedding, prediction, latent_output, weights,
         cfg, cfg.video_frames, cfg.latent_height, cfg.latent_width)
       latent_output
+    end
+
+    private def self.validate_attention_workspace!(cfg : WanS2VTransformerConfig,
+                                                   block_scratch : Arena,
+                                                   chain : ML::Metal::MPSCommandChain?,
+                                                   workspace : WanAttentionMPSChunkWorkspace?) : Nil
+      return unless workspace
+      raise ArgumentError.new("Prepared Wan attention requires an execution chain") unless chain
+      workspace.validate_for!(cfg.batches, cfg.sequence_tokens, cfg.sequence_tokens,
+        cfg.heads, cfg.dim // cfg.heads, block_scratch["wan_b_self_q"],
+        block_scratch["wan_b_self_k"], block_scratch["wan_b_self_v"],
+        block_scratch["wan_b_self_attn"])
     end
 
     # The first official request has no pose video. Wan's host path still
