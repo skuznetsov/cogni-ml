@@ -150,6 +150,7 @@ private def wan_real_stack_encode_branch(
   traces : Hash(String, ML::MetalBuffer),
   cfg : ML::Video::WanS2VTransformerConfig,
   tiled_attention : Bool,
+  mps_workspace : ML::Video::WanS2VMPSLinearWorkspace? = nil,
 ) : ML::MetalBuffer
   block_cfg = cfg.block_config
   audio_cfg = cfg.audio_config
@@ -166,12 +167,14 @@ private def wan_real_stack_encode_branch(
         encoder, current, modulation, positions, context, local_audio, global_audio,
         block_output, spare, weights, scratch, block_cfg, audio_cfg,
         block_trace, audio_trace, "block.#{layer}.", "audio.#{injection_index}.", tiled_attention,
+        mps_workspace: mps_workspace,
       )
       injection_index += 1
     else
       ML::Video::WanS2VBlock.encode(
         encoder, current, modulation, positions, context, spare, weights, scratch,
         block_cfg, block_trace, "block.#{layer}.", tiled_attention,
+        mps_workspace: mps_workspace,
       )
     end
     current, spare = spare, current
@@ -261,6 +264,12 @@ describe ML::Video::WanS2VTransformer do
     outputs = ML::Video::Arena.new
     trace_buffers = {} of String => ML::MetalBuffer
     prepared = nil.as(ML::Video::PreparedWeights?)
+    mps_stage = nil.as(ML::Video::WanS2VMPSLinearStage?)
+    normal_mps = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+    drop_mps = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+    raw_command = nil.as(ML::Metal::CommandBuffer?)
+    raw_encoder = nil.as(ML::Metal::ComputeEncoder?)
+    encoder_open = false
     begin
       fixture_full_path = File.expand_path(fixture_path)
       traces_meta = fixture["traces"]
@@ -341,6 +350,17 @@ describe ML::Video::WanS2VTransformer do
       ML::Video::WanS2VAudioInjector.prepare!
       ML::Video::WanS2VBlock.prepare_scratch!(scratch, scratch_cfg)
       ML::Video::WanS2VAudioInjector.prepare_scratch!(scratch, audio_scratch_cfg)
+      use_mps = ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
+      if use_mps
+        mps_stage = ML::Video::WanS2VMPSLinearStage.new(
+          ML::Video::WanS2VMPSLinearStage.required_weight_count(cfg.dim, cfg.ffn_dim))
+        normal_mps = ML::Video::WanS2VMPSLinearWorkspace.new(scratch_cfg,
+          audio_scratch_cfg, scratch, scratch, inputs["context"], inputs["local_audio"], mps_stage)
+        drop_mps = ML::Video::WanS2VMPSLinearWorkspace.new(drop_cfg.block_config,
+          drop_cfg.audio_config, scratch, scratch, inputs["context"], inputs["local_audio"], mps_stage)
+        normal_mps.not_nil!.plan_count.should eq(15)
+        drop_mps.not_nil!.plan_count.should eq(15)
+      end
 
       outputs.alloc("alternate", max_values)
       outputs.alloc("block_output", max_values)
@@ -360,6 +380,7 @@ describe ML::Video::WanS2VTransformer do
         trace_buffers[name] = outputs.alloc("trace.#{name}", wan_real_stack_count(wan_real_stack_shape(entry["shape"])))
       end
       reserve_bytes = inputs.resident_bytes + scratch.resident_bytes + outputs.resident_bytes
+      reserve_bytes += mps_stage.not_nil!.resident_bytes if mps_stage
       estimated_weight_bytes = bindings.sum do |binding|
         binding.shape.reduce(1_i64) { |product, dimension| product * dimension } * 2_i64
       end
@@ -390,19 +411,23 @@ describe ML::Video::WanS2VTransformer do
 
       before_encode_allocations = ML::MetalBuffer.video_spec_allocations
       command = ML::Metal::CommandBuffer.new
+      raw_command = command
       encoder = ML::Metal::ComputeEncoder.new(command)
+      raw_encoder = encoder
+      encoder_open = true
       prepared.not_nil!.encode(encoder)
       normal_final = wan_real_stack_encode_branch(encoder, "normal",
         inputs["normal.sequence"], outputs["alternate"], outputs["block_output"],
         modulation_buffer, positions_buffer, context_buffer, local_audio, global_audio,
-        weights, scratch, trace_buffers, cfg, tiled_attention)
+        weights, scratch, trace_buffers, cfg, tiled_attention, normal_mps)
       drop_final = wan_real_stack_encode_branch(encoder, "drop",
         inputs["drop.sequence"], outputs["alternate"], outputs["block_output"],
         modulation_buffer, inputs["drop_positions"], context_buffer, local_audio, global_audio,
-        weights, scratch, trace_buffers, drop_cfg, tiled_attention)
+        weights, scratch, trace_buffers, drop_cfg, tiled_attention, drop_mps)
       normal_final.valid?.should be_true
       drop_final.valid?.should be_true
       encoder.end_encoding
+      encoder_open = false
       command.commit
       command.wait
       ML::MetalBuffer.video_spec_allocations.should eq(before_encode_allocations),
@@ -425,6 +450,9 @@ describe ML::Video::WanS2VTransformer do
           all_values_finite: metrics.all? { |point| point[:non_finite] == 0 },
           strict_gate_passed: metrics.all? { |point| point[:violations] == 0 },
           tiled_attention: tiled_attention,
+          projection_backend: use_mps ? "prepared_mps_f32" : "scalar_f32",
+          terminal_host_waits: 1,
+          encode_metal_buffer_allocations: ML::MetalBuffer.video_spec_allocations - before_encode_allocations,
           points: metrics,
         }.to_json)
       end
@@ -434,7 +462,20 @@ describe ML::Video::WanS2VTransformer do
           "#{point[:name]}: violations=#{point[:violations]}, max_abs=#{point[:max_abs]}, worst normalized error=#{point[:max_normalized_error]}"
       end
     ensure
+      # An encode failure must not leave an unsubmitted encoder retaining
+      # scratch, or release prepared plans while a committed command is live.
+      if active = raw_command
+        if active.committed?
+          active.wait unless active.completed?
+        else
+          raw_encoder.try(&.end_encoding) if encoder_open
+          active.discard
+        end
+      end
       prepared.try(&.release)
+      normal_mps.try(&.release_after_terminal_wait!)
+      drop_mps.try(&.release_after_terminal_wait!)
+      mps_stage.try(&.release_after_terminal_wait!)
       outputs.release
       scratch.release
       weights.release

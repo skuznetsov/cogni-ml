@@ -196,6 +196,15 @@ describe ML::Video::WanS2VTransformer do
     block_scratch = ML::Video::Arena.new
     audio_scratch = ML::Video::Arena.new
     output = ML::Video::Arena.new
+    mps_stage = nil.as(ML::Video::WanS2VMPSLinearStage?)
+    layer_mps_workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+    full_mps_workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+    mps_layer_command = nil.as(ML::Metal::CommandBuffer?)
+    mps_layer_encoder = nil.as(ML::Metal::ComputeEncoder?)
+    mps_layer_encoder_open = false
+    mps_full_command = nil.as(ML::Metal::CommandBuffer?)
+    mps_full_encoder = nil.as(ML::Metal::ComputeEncoder?)
+    mps_full_encoder_open = false
     begin
       fixture["inputs"].as_h.each do |name, values|
         inputs.upload(name, wan_transformer_f32(values))
@@ -250,6 +259,14 @@ describe ML::Video::WanS2VTransformer do
       one_layer_audio_trace = {"audio_output" => one_layer_audio_trace_output}
       local_audio = inputs["local_audio"]
       global_audio = inputs["global_audio"]
+      if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
+        mps_stage = ML::Video::WanS2VMPSLinearStage.new(
+          ML::Video::WanS2VMPSLinearStage.required_weight_count(cfg.dim, cfg.ffn_dim))
+        layer_mps_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(
+          one_layer_cfg.block_config, one_layer_cfg.audio_config,
+          block_scratch, audio_scratch, raw_context, local_audio, mps_stage)
+        layer_mps_workspace.not_nil!.plan_count.should eq(15)
+      end
 
       future_weight_name = "block.1.self_q_weight"
       future_weight = weights.buffers[future_weight_name]
@@ -270,14 +287,20 @@ describe ML::Video::WanS2VTransformer do
       end
 
       layer_command = ML::Metal::CommandBuffer.new
+      mps_layer_command = layer_command
       layer_encoder = ML::Metal::ComputeEncoder.new(layer_command)
+      mps_layer_encoder = layer_encoder
+      mps_layer_encoder_open = true
       ML::Video::WanS2VTransformer.encode_layers(layer_encoder, raw_sequence, one_layer_alternate,
         raw_modulation, positions, raw_context, local_audio, global_audio, weights,
         block_scratch, audio_scratch, one_layer_cfg, 0, one_layer_trace,
-        one_layer_audio_trace, tiled_attention: tiled_attention)
+        one_layer_audio_trace, tiled_attention: tiled_attention,
+        mps_workspace: layer_mps_workspace)
       layer_encoder.end_encoding
+      mps_layer_encoder_open = false
       layer_command.commit
       layer_command.wait
+      layer_mps_workspace.try(&.release_after_terminal_wait!)
       wan_transformer_gate("distinct block 0 output", one_layer_trace_output.read(cfg.rows * cfg.dim), fixture["expected"]["block0_output"])
       wan_transformer_gate("audio injection 0 output", one_layer_audio_trace_output.read(cfg.rows * cfg.dim), fixture["expected"]["audio0_output"])
 
@@ -292,6 +315,12 @@ describe ML::Video::WanS2VTransformer do
       block1_trace = {"output" => block1_trace_output}
       audio1_trace_output = output.alloc("audio1_trace_output", cfg.rows * cfg.dim)
       audio1_trace = {"audio_output" => audio1_trace_output}
+      if stage = mps_stage
+        full_mps_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(
+          cfg.block_config, cfg.audio_config, block_scratch, audio_scratch,
+          projected_context, local_audio, stage)
+        full_mps_workspace.not_nil!.plan_count.should eq(15)
+      end
 
       alias_buffer = output.alloc("alias_guard", Math.max(cfg.batches * cfg.in_dim * cfg.video_frames * cfg.latent_height * cfg.latent_width,
         cfg.rows * cfg.dim))
@@ -310,7 +339,10 @@ describe ML::Video::WanS2VTransformer do
       rejected.discard
 
       full_command = ML::Metal::CommandBuffer.new
+      mps_full_command = full_command
       full_encoder = ML::Metal::ComputeEncoder.new(full_command)
+      mps_full_encoder = full_encoder
+      mps_full_encoder_open = true
       before_encode = ML::MetalBuffer.video_spec_allocations
       ML::Video::WanS2VTransformer.encode(full_encoder,
         inputs["video_latents"], inputs["condition_latents"],
@@ -320,11 +352,14 @@ describe ML::Video::WanS2VTransformer do
         latent_output, weights, transformer_scratch, block_scratch, audio_scratch,
         cfg, fixture["config"]["motion_frames"].as_i,
         trace_layer: 1, block_trace: block1_trace, audio_trace: audio1_trace,
-        tiled_attention: tiled_attention)
+        tiled_attention: tiled_attention, mps_workspace: full_mps_workspace)
       full_encoder.end_encoding
+      mps_full_encoder_open = false
       ML::MetalBuffer.video_spec_allocations.should eq(before_encode), "transformer forward must allocate no GPU buffers"
       full_command.commit
       full_command.wait
+      full_mps_workspace.try(&.release_after_terminal_wait!)
+      mps_stage.try(&.release_after_terminal_wait!)
 
       wan_transformer_gate("full projected UMT5 context", projected_context.read(cfg.batches * cfg.text_tokens * cfg.dim), fixture["expected"]["projected_context"])
       wan_transformer_gate("full timestep embedding", time_embedding.read(cfg.batches * cfg.dim), fixture["expected"]["time_embedding"])
@@ -412,6 +447,25 @@ describe ML::Video::WanS2VTransformer do
         drop_latent_output.read(drop_cfg.batches * drop_cfg.out_dim * drop_cfg.video_frames * drop_cfg.latent_height * drop_cfg.latent_width),
         drop_expected["latent_output"])
     ensure
+      if active = mps_full_command
+        if active.committed?
+          active.wait unless active.completed?
+        else
+          mps_full_encoder.try(&.end_encoding) if mps_full_encoder_open
+          active.discard
+        end
+      end
+      if active = mps_layer_command
+        if active.committed?
+          active.wait unless active.completed?
+        else
+          mps_layer_encoder.try(&.end_encoding) if mps_layer_encoder_open
+          active.discard
+        end
+      end
+      full_mps_workspace.try(&.release_after_terminal_wait!)
+      layer_mps_workspace.try(&.release_after_terminal_wait!)
+      mps_stage.try(&.release_after_terminal_wait!)
       output.release
       audio_scratch.release
       block_scratch.release

@@ -1,6 +1,7 @@
 require "spec"
 require "json"
 require "../src/ml/video/wan_t5"
+require "../src/ml/video/metal_linear_mps"
 require "../src/ml/video/metal_linear_tiled"
 require "./support/video_allocation_counter"
 
@@ -144,6 +145,7 @@ describe "Wan T5 persistent MPS projection" do
       command = nil.as(ML::Metal::CommandBuffer?)
       begin
         ML::Video::WanT5.prepare!
+        ML::Video::MetalLinearMPS.prepare!
         ML::Video::MetalLinearTiled.prepare!
         cfg = ML::Video::WanT5Config.new(vocab: 8, dim: 8, ffn_dim: 16, heads: 1,
           layers: 1, batches: 1, tokens: rows)
@@ -158,15 +160,8 @@ describe "Wan T5 persistent MPS projection" do
         bias_f32 = arena.upload("bias_f32", b_values)
         bias_bf16 = video_linear_mps_resident(arena, "bias_bf16", b_values,
           ML::Video::WeightDType::BF16)
-        bias_f32_rows = arena.upload("bias_f32_rows", Array(Float32).new(rows * out_dim) do |index|
-          b_values[index % out_dim]
-        end)
-        bias_bf16_rows = arena.upload("bias_bf16_rows", Array(Float32).new(rows * out_dim) do |index|
-          video_linear_mps_bf16(b_values[index % out_dim])
-        end)
         stage = arena.alloc("weight_stage_f32", in_dim * out_dim)
         projected = arena.alloc("projected", rows * out_dim)
-        biased = arena.alloc("biased", rows * out_dim)
         mps_outputs = Array(ML::MetalBuffer).new(4) do |index|
           arena.alloc("mps_#{index}", rows * out_dim)
         end
@@ -188,13 +183,11 @@ describe "Wan T5 persistent MPS projection" do
         selected.each_with_index do |(item, weight_dtype, bias_dtype), case_index|
           weight = weight_dtype.bf16? ? weight_bf16 : weight_f32
           bias = bias_dtype.bf16? ? bias_bf16 : bias_f32
-          bias_rows = bias_dtype.bf16? ? bias_bf16_rows : bias_f32_rows
           expected = video_linear_mps_values(item["output"])
 
-          ML::Video::WanT5.mps_projection(encoder, x, weight, projected, rows,
-            in_dim, out_dim, weight_dtype, plan.not_nil!, stage)
-          ML::Video::MetalOps.add(encoder, projected, bias_rows, biased, rows * out_dim)
-          ML::Video::MetalOps.copy(encoder, biased, mps_outputs[case_index], rows * out_dim)
+          ML::Video::MetalLinearMPS.project(encoder, x, weight, bias, projected, rows,
+            in_dim, out_dim, weight_dtype, bias_dtype, plan.not_nil!, stage)
+          ML::Video::MetalOps.copy(encoder, projected, mps_outputs[case_index], rows * out_dim)
 
           ML::Video::MetalOps.linear(encoder, x, weight, bias, scalar_outputs[case_index],
             rows, in_dim, out_dim, weight_dtype: weight_dtype, bias_dtype: bias_dtype)
@@ -276,7 +269,7 @@ describe "Wan T5 persistent MPS projection" do
     matrix_count = in_dim.to_i64 * out_dim
     output_count = rows.to_i64 * out_dim
     planned_bytes = matrix_count * 2 + matrix_count * 4 +
-                    rows.to_i64 * in_dim * 4 + 3_i64 * output_count * 4 + out_dim.to_i64 * 4
+                    rows.to_i64 * in_dim * 4 + 2_i64 * output_count * 4 + out_dim.to_i64 * 4
     budget_bytes = budget_mib.to_i64 * 1024 * 1024
     unless planned_bytes > 0 && planned_bytes <= budget_bytes
       raise ArgumentError.new("Cost probe buffers exceed the explicit memory cap")
@@ -286,6 +279,7 @@ describe "Wan T5 persistent MPS projection" do
     plan = nil.as(ML::Video::WanT5MPSLinearPlan?)
     begin
       ML::Video::WanT5.prepare!
+      ML::Video::MetalLinearMPS.prepare!
       ML::Video::MetalLinearTiled.prepare!
       cfg = ML::Video::WanT5Config.new(vocab: 8, dim: 8, ffn_dim: 16, heads: 1,
         layers: 1, batches: 1, tokens: rows)
@@ -298,16 +292,15 @@ describe "Wan T5 persistent MPS projection" do
       stage = arena.alloc("weight_stage_f32", matrix_count.to_i32)
       projected = arena.alloc("mps_output", output_count.to_i32)
       tiled = arena.alloc("tiled_output", output_count.to_i32)
-      bias_rows = arena.upload("bias_rows", Array(Float32).new(output_count.to_i32, 0_f32))
       plan = ML::Video::WanT5MPSLinearPlan.new(cfg, in_dim, out_dim, x, stage, projected)
 
       measure_mps = -> do
         command = ML::Metal::CommandBuffer.new
         encoder = ML::Metal::ComputeEncoder.new(command)
         allocations = ML::MetalBuffer.video_spec_allocations
-        ML::Video::WanT5.mps_projection(encoder, x, weight, projected, rows,
-          in_dim, out_dim, ML::Video::WeightDType::BF16, plan.not_nil!, stage)
-        ML::Video::MetalOps.add(encoder, projected, bias_rows, projected, output_count.to_i32)
+        ML::Video::MetalLinearMPS.project(encoder, x, weight, bias, projected, rows,
+          in_dim, out_dim, ML::Video::WeightDType::BF16, ML::Video::WeightDType::F32,
+          plan.not_nil!, stage)
         encoder.end_encoding
         ML::MetalBuffer.video_spec_allocations.should(eq(allocations),
           "MPS cost encode allocated Metal buffers")

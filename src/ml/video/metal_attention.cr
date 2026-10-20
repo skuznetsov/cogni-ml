@@ -79,12 +79,15 @@ module ML::Video::MetalOps
   # read and no buffer is allocated or rebound with an offset. The caller must
   # retain q/k/v/y (normally by retaining their Arena) until its single terminal
   # wait. The final segment leaves the current encoder open for subsequent work.
+  # Keep long-key command roots short: 4096 groups failed Metal completion at
+  # Wan's full sequence length on M2 Max; 320 completed the same full geometry.
+  # This changes submission boundaries only, never a query's reduction order.
   def self.attention_tiled(chain : ML::Metal::MPSCommandChain,
                            q : ML::MetalBuffer, k : ML::MetalBuffer,
                            v : ML::MetalBuffer, y : ML::MetalBuffer,
                            q_rows : Int32, k_rows : Int32, heads : Int32,
                            head_dim : Int32, batches : Int32 = 1,
-                           groups_per_segment : Int32 = 4096) : Nil
+                           groups_per_segment : Int32 = 320) : Nil
     unless groups_per_segment > 0
       raise ArgumentError.new("Tiled video attention segment size must be positive")
     end

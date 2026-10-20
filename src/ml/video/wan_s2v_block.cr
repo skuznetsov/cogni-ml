@@ -2,6 +2,7 @@ require "./metal_ops"
 require "./metal_attention"
 require "./checkpoint"
 require "./metal_mps_command_chain"
+require "./metal_linear_mps"
 
 module ML::Video
   # Copyright 2024-2025 The Alibaba Wan Team Authors.
@@ -285,7 +286,8 @@ module ML::Video
                     trace : Hash(String, ML::MetalBuffer)? = nil,
                     weight_prefix : String = "",
                     tiled_attention : Bool = false,
-                    execution_chain : ML::Metal::MPSCommandChain? = nil) : Nil
+                    execution_chain : ML::Metal::MPSCommandChain? = nil,
+                    mps_workspace : WanS2VMPSLinearWorkspace? = nil) : Nil
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       if active = execution_chain
         e = active.encoder
@@ -332,7 +334,8 @@ module ML::Video
       encode_modulate(e, norm1, modulation, weights[key(weight_prefix, "block_modulation")], mod1,
         cfg, 0, 1, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_mod", mod1, n)
-      encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim, weight_prefix)
+      encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim,
+        weight_prefix, mps_workspace)
       trace_copy(e, trace, "self_q", self_q, n)
       trace_copy(e, trace, "self_k", self_k, n)
       trace_copy(e, trace, "self_v", self_v, n)
@@ -355,7 +358,8 @@ module ML::Video
           cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
       end
       trace_copy(e, trace, "self_attention", self_attn, n)
-      linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim, weight_prefix)
+      linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.self_o")
       trace_copy(e, trace, "self_projection", self_proj, n)
       encode_gated_residual(e, x, self_proj, modulation, weights[key(weight_prefix, "block_modulation")], self_res,
         cfg, 2, weights.dtype(key(weight_prefix, "block_modulation")))
@@ -367,9 +371,12 @@ module ML::Video
         rows, dim, EPS, affine: true, weight_dtype: weights.dtype(key(weight_prefix, "norm3_weight")),
         bias_dtype: weights.dtype(key(weight_prefix, "norm3_bias")))
       trace_copy(e, trace, "cross_norm", cross_norm, n)
-      linear(e, cross_norm, weights, "cross_q_weight", "cross_q_bias", cross_q, rows, dim, dim, weight_prefix)
-      linear(e, context, weights, "cross_k_weight", "cross_k_bias", cross_k, ctx_rows, dim, dim, weight_prefix)
-      linear(e, context, weights, "cross_v_weight", "cross_v_bias", cross_v, ctx_rows, dim, dim, weight_prefix)
+      linear(e, cross_norm, weights, "cross_q_weight", "cross_q_bias", cross_q, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.cross_q")
+      linear(e, context, weights, "cross_k_weight", "cross_k_bias", cross_k, ctx_rows, dim, dim,
+        weight_prefix, mps_workspace, "block.cross_k")
+      linear(e, context, weights, "cross_v_weight", "cross_v_bias", cross_v, ctx_rows, dim, dim,
+        weight_prefix, mps_workspace, "block.cross_v")
       trace_copy(e, trace, "cross_q", cross_q, n)
       trace_copy(e, trace, "cross_k", cross_k, ctx_rows.to_i64 * dim)
       trace_copy(e, trace, "cross_v", cross_v, ctx_rows.to_i64 * dim)
@@ -386,7 +393,8 @@ module ML::Video
           cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
       end
       trace_copy(e, trace, "cross_attention", cross_attn, n)
-      linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim, weight_prefix)
+      linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.cross_o")
       trace_copy(e, trace, "cross_projection", cross_proj, n)
       MetalOps.add(e, self_res, cross_proj, cross_res, n.to_i32)
       trace_copy(e, trace, "cross_residual", cross_res, n)
@@ -399,12 +407,14 @@ module ML::Video
       encode_modulate(e, ffn_norm, modulation, weights[key(weight_prefix, "block_modulation")], ffn_mod,
         cfg, 3, 4, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "ffn_mod", ffn_mod, n)
-      linear(e, ffn_mod, weights, "ffn_in_weight", "ffn_in_bias", ffn_in, rows, dim, cfg.ffn_dim, weight_prefix)
+      linear(e, ffn_mod, weights, "ffn_in_weight", "ffn_in_bias", ffn_in, rows, dim, cfg.ffn_dim,
+        weight_prefix, mps_workspace, "block.ffn_in")
       trace_copy(e, trace, "ffn_in", ffn_in, ff_count)
       MetalOps.gelu(e, ffn_in, ffn_gelu, ff_count.to_i32, approximate: true)
       trace_copy(e, trace, "ffn_gelu", ffn_gelu, ff_count)
       e = continue_phase(e, execution_chain)
-      linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim, weight_prefix)
+      linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim,
+        weight_prefix, mps_workspace, "block.ffn_out")
       trace_copy(e, trace, "ffn_out", ffn_out, n)
       e = continue_phase(e, execution_chain)
       encode_gated_residual(e, cross_res, ffn_out, modulation, weights[key(weight_prefix, "block_modulation")], y,
@@ -436,16 +446,18 @@ module ML::Video
                                block_weight_prefix : String = "",
                                audio_weight_prefix : String = "",
                                tiled_attention : Bool = false,
-                               execution_chain : ML::Metal::MPSCommandChain? = nil) : Nil
+                               execution_chain : ML::Metal::MPSCommandChain? = nil,
+                               mps_workspace : WanS2VMPSLinearWorkspace? = nil) : Nil
       validate_audio_pair!(cfg, audio_cfg)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg,
-        block_trace, block_weight_prefix, tiled_attention, execution_chain)
+        block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace)
       if active = execution_chain
         e = active.encoder
       end
       WanS2VAudioInjector.encode(e, block_output, local_audio, global_audio, y,
-        weights, scratch, audio_cfg, audio_trace, audio_weight_prefix, tiled_attention)
+        weights, scratch, audio_cfg, audio_trace, audio_weight_prefix, tiled_attention,
+        mps_workspace)
     end
 
     def self.validate_attention_backend!(head_dim : Int32, tiled_attention : Bool) : Nil
@@ -481,21 +493,33 @@ module ML::Video
     private def self.encode_qkv(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                                 q : ML::MetalBuffer, k : ML::MetalBuffer, v : ML::MetalBuffer,
                                 w : Arena, rows : Int32, dim : Int32,
-                                weight_prefix : String) : Nil
-      linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim, weight_prefix)
-      linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim, weight_prefix)
-      linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim, weight_prefix)
+                                weight_prefix : String,
+                                mps_workspace : WanS2VMPSLinearWorkspace?) : Nil
+      linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.self_q")
+      linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.self_k")
+      linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim,
+        weight_prefix, mps_workspace, "block.self_v")
     end
 
     private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                             weights : Arena, weight_name : String, bias_name : String,
                             y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
-                            out_dim : Int32, weight_prefix : String = "") : Nil
+                            out_dim : Int32, weight_prefix : String = "",
+                            mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                            mps_plan_name : String? = nil) : Nil
       weight_key = key(weight_prefix, weight_name)
       bias_key = key(weight_prefix, bias_name)
-      MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
-        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
-        bias_dtype: weights.dtype(bias_key))
+      if workspace = mps_workspace
+        plan_name = mps_plan_name || raise ArgumentError.new("Wan MPS projection requires a named prepared plan")
+        workspace.project(e, plan_name, x, weights[weight_key], weights[bias_key], y,
+          rows, in_dim, out_dim, weights.dtype(weight_key), weights.dtype(bias_key))
+      else
+        MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
+          rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
+          bias_dtype: weights.dtype(bias_key))
+      end
     end
 
     private def self.key(prefix : String, name : String) : String
@@ -785,7 +809,8 @@ module ML::Video
                     cfg : WanS2VAudioConfig,
                     trace : Hash(String, ML::MetalBuffer)? = nil,
                     weight_prefix : String = "",
-                    tiled_attention : Bool = false) : Nil
+                    tiled_attention : Bool = false,
+                    mps_workspace : WanS2VMPSLinearWorkspace? = nil) : Nil
       WanS2VBlock.validate_attention_backend!(cfg.head_dim, tiled_attention)
       validate_inputs!(x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
       validate_trace!(trace, x, local_audio, global_audio, y, weights, scratch, cfg, weight_prefix)
@@ -822,7 +847,8 @@ module ML::Video
       e.dispatch_1d(global_count.to_i32)
       trace_copy(e, trace, "global_silu", global_silu, global_count)
       linear(e, global_silu, weights, "adain_weight", "adain_bias",
-        adain_proj, cfg.frame_rows, cfg.dim, 2 * cfg.dim, weight_prefix)
+        adain_proj, cfg.frame_rows, cfg.dim, 2 * cfg.dim, weight_prefix,
+        mps_workspace, "audio.adain")
       trace_copy(e, trace, "adain_projection", adain_proj, cfg.frame_rows.to_i64 * 2 * cfg.dim)
       e.set_pipeline(pipeline("wan_audio_adain"))
       e.set_buffer(normed, 0).set_buffer(adain_proj, 1).set_buffer(adain, 2, ML::Metal::BufferAccess::Write)
@@ -832,11 +858,11 @@ module ML::Video
       trace_copy(e, trace, "adain_video", adain, video_count)
 
       linear(e, adain, weights, "audio_q_weight", "audio_q_bias", q,
-        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix)
+        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix, mps_workspace, "audio.q")
       linear(e, local_audio, weights, "audio_k_weight", "audio_k_bias", k,
-        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix)
+        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix, mps_workspace, "audio.k")
       linear(e, local_audio, weights, "audio_v_weight", "audio_v_bias", v,
-        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix)
+        cfg.audio_rows, cfg.dim, cfg.dim, weight_prefix, mps_workspace, "audio.v")
       trace_copy(e, trace, "audio_q", q, video_count)
       trace_copy(e, trace, "audio_k", k, audio_count)
       trace_copy(e, trace, "audio_v", v, audio_count)
@@ -850,7 +876,7 @@ module ML::Video
         cfg.heads, cfg.head_dim, cfg.frame_rows, tiled_attention)
       trace_copy(e, trace, "audio_attention", attn, video_count)
       linear(e, attn, weights, "audio_o_weight", "audio_o_bias", proj,
-        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix)
+        cfg.gathered_rows, cfg.dim, cfg.dim, weight_prefix, mps_workspace, "audio.o")
       trace_copy(e, trace, "audio_projection", proj, video_count)
       e.set_pipeline(pipeline("wan_audio_scatter"))
       e.set_buffer(x, 0).set_buffer(proj, 1).set_buffer(y, 2, ML::Metal::BufferAccess::Write)
@@ -863,12 +889,20 @@ module ML::Video
     private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                             weights : Arena, weight_name : String, bias_name : String,
                             y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
-                            out_dim : Int32, weight_prefix : String = "") : Nil
+                            out_dim : Int32, weight_prefix : String = "",
+                            mps_workspace : WanS2VMPSLinearWorkspace? = nil,
+                            mps_plan_name : String? = nil) : Nil
       weight_key = key(weight_prefix, weight_name)
       bias_key = key(weight_prefix, bias_name)
-      MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
-        rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
-        bias_dtype: weights.dtype(bias_key))
+      if workspace = mps_workspace
+        plan_name = mps_plan_name || raise ArgumentError.new("Wan MPS projection requires a named prepared plan")
+        workspace.project(e, plan_name, x, weights[weight_key], weights[bias_key], y,
+          rows, in_dim, out_dim, weights.dtype(weight_key), weights.dtype(bias_key))
+      else
+        MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
+          rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
+          bias_dtype: weights.dtype(bias_key))
+      end
     end
 
     private def self.key(prefix : String, name : String) : String

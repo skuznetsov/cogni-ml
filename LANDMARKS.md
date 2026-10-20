@@ -30911,3 +30911,31 @@ Refresh after source/toolchain/device/model/workload changes.
   Real asynchronous device-I/O failure injection, multi-gigabyte throughput,
   complete pipeline memory and generation speed remain open. Source files must
   remain immutable; refresh triggers and reproduction: docs/video-stage-io.md.
+
+### 2026-10-19 — Prepared Wan MPS projections and bounded attention commands
+
+- Optional fixed-buffer MPS F32 projections expand resident BF16 parameters in
+  one reusable 283,115,520-byte stage and apply the original typed bias on GPU.
+  Ten block and five audio-injector plans are prepared before encoding. Scalar
+  projection remains the default and rollback; callers retain all plans and
+  buffers through terminal completion.
+- Production typed-bias projection fixtures pass all four source dtype pairs;
+  the official block/injector gate passes six examples in each F32/BF16 mode.
+  Shared-scratch head-128 transformer composition and long-key attention pass
+  seven examples with no failures/errors/pending. Four local resident-weight
+  pairs give MPS/tiled median ratios of 6.77, 17.65 and 20.29 at 64/512/2048 rows;
+  these are component intervals, not generation speed.
+- At Q=K=36,608, H=40, D=128, 4,096 query/head groups per command root fail Metal
+  completion, while 320 complete and produce 187,432,960 exact analytical output
+  values. The chain overload now defaults to 320, preserving key reductions.
+  One real block 0 plus injector 0 completes with finite GPU-scanned outputs,
+  1,148 segments and one terminal wait; its summed GPU interval is 36.952 s.
+- A fresh exact-prefix 40-layer comparison retains all 104 finite checkpoints,
+  but 23 of 31,948,800 values fail the unchanged strict gate (max 2.059937e-4).
+  It stays rejected and recorded for the explicitly authorized experiment.
+  Correlated mini-Quadrumvirate verdict ROBUST applies to the bounded projection,
+  composition and command-boundary claims, not strict stack parity or video.
+- Evidence, commands and numerical scope: docs/video-mps-projection.md and
+  docs/video-numerical-drift.md; raw artifacts remain in external wan-full
+  scratch. Refresh on implementation, checkpoint/input, geometry, precision,
+  device/runtime or lifetime changes. Full cold/repeat video remains open.

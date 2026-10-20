@@ -245,7 +245,8 @@ module ML::Video
                            block_trace : Hash(String, ML::MetalBuffer)? = nil,
                            audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                            tiled_attention : Bool = false,
-                           execution_chain : ML::Metal::MPSCommandChain? = nil) : ML::MetalBuffer
+                           execution_chain : ML::Metal::MPSCommandChain? = nil,
+                           mps_workspace : WanS2VMPSLinearWorkspace? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
       if active = execution_chain
@@ -291,19 +292,20 @@ module ML::Video
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
             layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
-            execution_chain)
+            execution_chain, mps_workspace)
           if active = execution_chain
             e = active.encoder
           end
           WanS2VAudioInjector.encode(e, spare, local_audio, global_audio, current,
             weights, audio_scratch, audio_cfg,
-            layer_trace ? audio_trace : nil, "audio.#{injector_index}.", tiled_attention)
+            layer_trace ? audio_trace : nil, "audio.#{injector_index}.", tiled_attention,
+            mps_workspace)
           injector_index += 1
         else
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
             layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
-            execution_chain)
+            execution_chain, mps_workspace)
           if active = execution_chain
             e = active.encoder
           end
@@ -357,7 +359,8 @@ module ML::Video
                     block_trace : Hash(String, ML::MetalBuffer)? = nil,
                     audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                     tiled_attention : Bool = false,
-                    execution_chain : ML::Metal::MPSCommandChain? = nil) : ML::MetalBuffer
+                    execution_chain : ML::Metal::MPSCommandChain? = nil,
+                    mps_workspace : WanS2VMPSLinearWorkspace? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
       if active = execution_chain
@@ -370,7 +373,7 @@ module ML::Video
       hidden = encode_layers(e, sequence, alternate, modulation, positions,
         projected_context, local_audio, global_audio, weights, block_scratch,
         audio_scratch, cfg, trace_layer, block_trace, audio_trace, tiled_attention,
-        execution_chain)
+        execution_chain, mps_workspace)
       if active = execution_chain
         e = active.encoder
       end
