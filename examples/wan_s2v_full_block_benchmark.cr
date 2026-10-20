@@ -8,26 +8,26 @@ require "../src/ml/video/metal_mps_command_chain"
 require "../src/ml/video/metal_attention_mps"
 require "../spec/support/video_allocation_counter"
 
-private FULL_SEQ                = 36_608
-private FULL_VIDEO_TOKENS       = 34_944
-private FULL_CONTEXT            =    512
-private DIM                     =  5_120
-private HEADS                   =     40
-private HEAD_DIM                =    128
-private FFN                     = 13_824
-private FRAMES                  =     21
-private SPATIAL                 =  1_664
-private BASELINE_CHUNK_Q        =    512
-private KV_LAYOUT_CHUNK_Q       =    128
-private EXPLICIT_SCORE_TILE_MULTIPLIER = 3_i64
-private EXPLICIT_SCORE_TILE_BYTES = FULL_SEQ.to_i64 * DIM.to_i64 * sizeof(Float32)
-private EXPLICIT_SCORE_RESERVE_BYTES = EXPLICIT_SCORE_TILE_MULTIPLIER * EXPLICIT_SCORE_TILE_BYTES
-private MAX_EXPLICIT_BUDGET     = 16_i64 * 1024 * 1024 * 1024
-private MAX_ATTENTION_GRAPH_BUDGET = 18_i64 * 1024 * 1024 * 1024
-private OPAQUE_RESERVE          = 1_i64 * 1024 * 1024 * 1024
-private EXPECTED_WEIGHTS_BYTES  = 1_017_447_344_i64
-private EXPECTED_WEIGHTS_SHA256 = "c172519063c1c34fb36f7f930429ca7db655a0e335524d7487525db1df5ad220"
-private FULL_VALUES             = FULL_SEQ.to_i64 * DIM
+private FULL_SEQ                       = 36_608
+private FULL_VIDEO_TOKENS              = 34_944
+private FULL_CONTEXT                   =    512
+private DIM                            =  5_120
+private HEADS                          =     40
+private HEAD_DIM                       =    128
+private FFN                            = 13_824
+private FRAMES                         =     21
+private SPATIAL                        =  1_664
+private BASELINE_CHUNK_Q               =    512
+private KV_LAYOUT_CHUNK_Q              =    128
+private EXPLICIT_SCORE_TILE_MULTIPLIER =  3_i64
+private EXPLICIT_SCORE_TILE_BYTES      = FULL_SEQ.to_i64 * DIM.to_i64 * sizeof(Float32)
+private EXPLICIT_SCORE_RESERVE_BYTES   = EXPLICIT_SCORE_TILE_MULTIPLIER * EXPLICIT_SCORE_TILE_BYTES
+private MAX_EXPLICIT_BUDGET            = 16_i64 * 1024 * 1024 * 1024
+private MAX_ATTENTION_GRAPH_BUDGET     = 18_i64 * 1024 * 1024 * 1024
+private OPAQUE_RESERVE                 = 1_i64 * 1024 * 1024 * 1024
+private EXPECTED_WEIGHTS_BYTES         = 1_017_447_344_i64
+private EXPECTED_WEIGHTS_SHA256        = "c172519063c1c34fb36f7f930429ca7db655a0e335524d7487525db1df5ad220"
+private FULL_VALUES                    = FULL_SEQ.to_i64 * DIM
 
 private BENCH_METAL = <<-METAL
   #include <metal_stdlib>
@@ -118,7 +118,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        output : ML::MetalBuffer, weights : ML::Video::Arena,
                        scratch : ML::Video::Arena, cfg : ML::Video::WanS2VConfig,
                        linear : ML::Video::WanS2VMPSLinearWorkspace,
-                       attention : ML::Video::WanAttentionMPSChunkWorkspace) : ArmResult
+                       attention : ML::Video::WanAttentionMPSChunkWorkspace,
+                       precompute_rope : Bool = false) : ArmResult
   wall_started = Time.instant
   chain = ML::Metal::MPSCommandChain.new
   allocations_before = ML::MetalBuffer.video_spec_allocations
@@ -126,7 +127,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
     output, weights, scratch, cfg, weight_prefix: "block.", tiled_attention: true,
     execution_chain: chain, mps_workspace: linear, attention_workspace: attention,
-    cross_attention_groups_per_segment: groups)
+    cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope)
   encode_seconds = (Time.instant - encode_started).total_seconds
   chain.commit_and_wait
   wall_seconds = (Time.instant - wall_started).total_seconds
@@ -197,8 +198,8 @@ candidate_chunk = 256
 OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
-  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, or attention-graph (attention-graph uses head-major K/V and query chunk 128 in both arms)") { |value| comparison_mode = value }
-  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout and attention-graph require 128") { |value| candidate_chunk = value.to_i }
+  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, or rope (rope holds chunk 128 and cross groups 320)") { |value| comparison_mode = value }
+  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout, attention-graph and rope require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -207,20 +208,22 @@ OptionParser.parse do |parser|
 end
 raise ArgumentError.new("--weights is required") if weights_path.empty?
 raise ArgumentError.new("--pairs must be within 1..3") unless (1..3).includes?(pairs)
-raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, or attention-graph") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph"}.includes?(comparison_mode)
+raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, attention-graph, or rope") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph", "rope"}.includes?(comparison_mode)
 raise ArgumentError.new("--candidate-self-chunk must be 128, 256 or 1024") unless {128, 256, 1024}.includes?(candidate_chunk)
 compare_self_chunks = comparison_mode == "self-chunks"
 compare_kv_layout = comparison_mode == "kv-layout"
 compare_attention_graph = comparison_mode == "attention-graph"
+compare_rope = comparison_mode == "rope"
+raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
 explicit_budget_bytes = compare_attention_graph ? MAX_ATTENTION_GRAPH_BUDGET : MAX_EXPLICIT_BUDGET
-if compare_kv_layout || compare_attention_graph
+if compare_kv_layout || compare_attention_graph || compare_rope
   raise ArgumentError.new("--comparison=#{comparison_mode} requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
 end
 require_exact = !(compare_self_chunks || compare_kv_layout || compare_attention_graph)
-candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph) ? 320 : 1024
-baseline_chunk = (compare_kv_layout || compare_attention_graph) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
-candidate_chunk = (compare_kv_layout || compare_attention_graph) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
+candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_rope) ? 320 : 1024
+baseline_chunk = (compare_kv_layout || compare_attention_graph || compare_rope) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
+candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_rope) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
 weights_path = File.expand_path(weights_path)
 raise ArgumentError.new("Missing safetensors file #{weights_path}") unless File.file?(weights_path)
 raise ArgumentError.new("Unexpected official block sidecar length") unless File.size(weights_path) == EXPECTED_WEIGHTS_BYTES
@@ -253,7 +256,7 @@ begin
     2_i64 * FULL_VALUES, 5_i64,
   ]
   input_bytes = checked_sum(explicit_io_counts) * sizeof(Float32)
-  block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg)
+  block_scratch_bytes = ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: compare_rope)
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
   attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
@@ -293,7 +296,10 @@ begin
         budget_bytes: explicit_budget_bytes,
         budget_limit_gib: explicit_budget_bytes / (1024_i64 * 1024 * 1024),
         attention_backend: "mps_chunked",
-        comparison_mode: comparison_mode, baseline_query_chunk: baseline_chunk,
+        comparison_mode: comparison_mode, baseline_precompute_rope: false,
+        candidate_precompute_rope: compare_rope,
+        rope_coefficients_built_per_candidate_encode: compare_rope,
+        baseline_query_chunk: baseline_chunk,
         candidate_query_chunk: candidate_chunk,
         baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
         candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
@@ -310,11 +316,11 @@ begin
   audio_scratch = ML::Video::Arena.new
   inputs = ML::Video::Arena.new
   prepared = ML::Video::PreparedWeights.new(plan, weight_arena.not_nil!)
-  ML::Video::WanS2VBlock.prepare!
+  ML::Video::WanS2VBlock.prepare!(precompute_rope: compare_rope)
   ML::Video::WanS2VAudioInjector.prepare!
   ML::Video::MetalOps.prepare_tiled_attention!
 
-  ML::Video::WanS2VBlock.prepare_scratch!(scratch.not_nil!, cfg)
+  ML::Video::WanS2VBlock.prepare_scratch!(scratch.not_nil!, cfg, precompute_rope: compare_rope)
   ML::Video::WanS2VAudioInjector.prepare_scratch!(audio_scratch.not_nil!, audio_cfg)
   x = inputs.not_nil!.alloc("x", FULL_VALUES.to_i32)
   modulation = inputs.not_nil!.alloc("modulation", 12 * DIM)
@@ -372,7 +378,7 @@ begin
     projection_workspace.not_nil!, attention_workspace.not_nil!)
   warm_candidate = encode_arm(candidate_groups, "B", true, x, modulation, positions,
     context, output_candidate, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, candidate_attention)
+    projection_workspace.not_nil!, candidate_attention, precompute_rope: compare_rope)
   warm_compare = validate_pair(output_baseline, output_candidate, metrics, zero, compare)
   puts({schema: "wan_s2v_full_block_warm_comparison_v1", compared_values: FULL_VALUES,
         bit_differences: warm_compare[:bit_differences],
@@ -409,6 +415,8 @@ begin
           prepared_kv_pair_shared_between_arms: compare_attention_graph,
           prepared_kv_buffer_bytes_refreshed_per_encode: compare_attention_graph || (arm.order == "B" && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
           explicit_qk_softmax_pv: compare_attention_graph && arm.order == "B",
+          precompute_rope: compare_rope && arm.order == "B",
+          rope_coefficient_build_inside_block_encode: compare_rope && arm.order == "B",
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
   STDOUT.flush
@@ -421,7 +429,8 @@ begin
       groups = baseline ? 320 : candidate_groups
       arm = encode_arm(groups, baseline ? "A" : "B", false,
         x, modulation, positions, context, output, weight_arena.not_nil!,
-        scratch.not_nil!, cfg, projection_workspace.not_nil!, attention)
+        scratch.not_nil!, cfg, projection_workspace.not_nil!, attention,
+        precompute_rope: compare_rope && !baseline)
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
             groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
             order: arm.order, warmup: false,
@@ -438,6 +447,8 @@ begin
             prepared_kv_pair_shared_between_arms: compare_attention_graph,
             prepared_kv_buffer_bytes_refreshed_per_encode: compare_attention_graph || (!baseline && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
             explicit_qk_softmax_pv: compare_attention_graph && !baseline,
+            precompute_rope: compare_rope && !baseline,
+            rope_coefficient_build_inside_block_encode: compare_rope && !baseline,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
     end

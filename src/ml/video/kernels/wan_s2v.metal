@@ -100,6 +100,67 @@ kernel void wan_rope_f32(
     y[offset + 1] = real * sine + imag * cosine;
 }
 
+// Optional final coefficient table for one Wan block encode. The table is
+// indexed by [batch, token, complex-pair]; heads share the same three-axis
+// position and therefore reuse these coefficients during both rotations.
+kernel void wan_rope_table_build_f32(
+    device const float *positions [[buffer(0)]],
+    device float *cosine_table [[buffer(1)]], device float *sine_table [[buffer(2)]],
+    device const float *frequency_hi [[buffer(3)]],
+    device const float *frequency_lo [[buffer(4)]],
+    constant uint &batches [[buffer(5)]], constant uint &seq [[buffer(6)]],
+    constant uint &head_dim [[buffer(7)]], uint id [[thread_position_in_grid]]) {
+    const uint pairs = head_dim / 2;
+    const uint total = batches * seq * pairs;
+    if (id >= total) return;
+    const uint pair = id % pairs;
+    const uint row = id / pairs;
+    const uint token = row % seq;
+    const uint batch = row / seq;
+    const uint axis0 = (pairs / 3) + (pairs % 3);
+    const uint axis1 = pairs / 3;
+    const uint axis = pair < axis0 ? 0 : (pair < axis0 + axis1 ? 1 : 2);
+    const float position = positions[(batch * seq + token) * 3 + axis];
+    // Keep the exact two-F32 phase construction and precise trig expression
+    // used by wan_rope_f32; only the coefficient lifetime is changed.
+    const float frequency = frequency_hi[pair];
+    const float phase_hi = position * frequency;
+    const float product_residual = fma(position, frequency, -phase_hi);
+    const float phase_tail = fma(position, frequency_lo[pair], product_residual);
+    const float phase_sum = phase_hi + phase_tail;
+    const float phase_virtual = phase_sum - phase_hi;
+    const float phase_residual = (phase_hi - (phase_sum - phase_virtual)) +
+                                 (phase_tail - phase_virtual);
+    const float cos_hi = precise::cos(phase_sum);
+    const float sin_hi = precise::sin(phase_sum);
+    const float cos_lo = precise::cos(phase_residual);
+    const float sin_lo = precise::sin(phase_residual);
+    cosine_table[id] = cos_hi * cos_lo - sin_hi * sin_lo;
+    sine_table[id] = sin_hi * cos_lo + cos_hi * sin_lo;
+}
+
+kernel void wan_rope_table_apply_f32(
+    device const float *x [[buffer(0)]],
+    device const float *cosine_table [[buffer(1)]],
+    device const float *sine_table [[buffer(2)]], device float *y [[buffer(3)]],
+    constant uint &batches [[buffer(4)]], constant uint &seq [[buffer(5)]],
+    constant uint &heads [[buffer(6)]], constant uint &head_dim [[buffer(7)]],
+    uint id [[thread_position_in_grid]]) {
+    const uint pairs = head_dim / 2;
+    const uint total = batches * seq * heads * pairs;
+    if (id >= total) return;
+    const uint pair = id % pairs;
+    const uint token_head = id / pairs;
+    const uint row = token_head / heads;
+    const uint table_at = row * pairs + pair;
+    const uint offset = token_head * head_dim + pair * 2;
+    const float real = x[offset], imag = x[offset + 1];
+    const float cosine = cosine_table[table_at];
+    const float sine = sine_table[table_at];
+    y[offset] = real * cosine - imag * sine;
+    y[offset + 1] = real * sine + imag * cosine;
+}
+
 kernel void wan_audio_gather(
     device const float *x [[buffer(0)]], device float *gathered [[buffer(1)]],
     constant uint &batches [[buffer(2)]], constant uint &seq [[buffer(3)]],

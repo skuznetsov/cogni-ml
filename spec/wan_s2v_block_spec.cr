@@ -320,7 +320,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       end
     end
 
-    ML::Video::WanS2VBlock.prepare!
+    precompute_rope = ENV["WAN_S2V_PRECOMPUTE_ROPE"]? == "1"
+    ML::Video::WanS2VBlock.prepare!(precompute_rope: precompute_rope)
     ML::Video::WanS2VAudioInjector.prepare!
     tiled_attention = ENV["WAN_S2V_TILED_ATTENTION"]? == "1"
     segmented_commands = ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
@@ -330,7 +331,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       raise ArgumentError.new("Wan cross-attention segment overrides require tiled segmented commands")
     end
     ML::Video::MetalOps.prepare_tiled_attention! if tiled_attention
-    ML::Video::WanS2VBlock.prepare_scratch!(scratch, block_cfg)
+    ML::Video::WanS2VBlock.prepare_scratch!(scratch, block_cfg, precompute_rope: precompute_rope)
     ML::Video::WanS2VAudioInjector.prepare_scratch!(scratch, audio_cfg)
     if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
       mps_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(block_cfg, audio_cfg,
@@ -451,7 +452,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       block_output, audio_output, weights, scratch, block_cfg, audio_cfg,
       block_trace, audio_trace, tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
-      cross_attention_groups_per_segment: cross_attention_groups_per_segment)
+      cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+      precompute_rope: precompute_rope)
     if active = execution_chain
       encoder = active.encoder
     end
@@ -462,6 +464,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
       cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+      precompute_rope: precompute_rope,
     )
     if active = execution_chain
       encoder = active.encoder
@@ -472,6 +475,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       tiled_attention: tiled_attention, execution_chain: execution_chain,
       mps_workspace: mps_workspace,
       cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+      precompute_rope: precompute_rope,
     )
     ML::MetalBuffer.video_spec_allocations.should eq(allocation_start),
       "Wan encode must not allocate MetalBuffers after setup"

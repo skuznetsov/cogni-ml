@@ -190,10 +190,15 @@ module ML::Video
     end
 
     # Call during model setup. Compilation is intentionally kept out of encode.
-    def self.prepare! : Nil
+    def self.prepare!(precompute_rope : Bool = false) : Nil
       MetalOps.prepare!
       {"wan_modulate_segments", "wan_segment_add", "wan_rope_f32"}.each do |name|
         pipeline(name)
+      end
+      if precompute_rope
+        {"wan_rope_table_build_f32", "wan_rope_table_apply_f32"}.each do |name|
+          pipeline(name)
+        end
       end
       {"video_linear_f32", "video_norm_f32", "video_modulate_f32", "video_add_f32",
        "video_gelu_f32", "video_attention_f32", "video_copy_f32"}.each do |name|
@@ -203,23 +208,43 @@ module ML::Video
 
     # Allocate every temporary before command encoding. The same Arena can be
     # reused across serial invocations after the previous command has completed.
-    def self.prepare_scratch!(arena : Arena, cfg : WanS2VConfig) : Nil
+    def self.prepare_scratch!(arena : Arena, cfg : WanS2VConfig,
+                              precompute_rope : Bool = false) : Nil
       arena.upload("wan_b_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
+      prepare_rope_scratch!(arena, cfg, precompute_rope: precompute_rope)
+      rope_tables = rope_table_names(cfg)
+      scratch_plan(cfg, precompute_rope: precompute_rope).each do |name, count|
+        next if rope_tables.includes?(name)
+        arena.alloc(name, count)
+      end
+    end
+
+    # Prepare only RoPE constants and, when requested, the per-encode final
+    # coefficient tables. This also supports the bounded RoPE pair benchmark
+    # without allocating the rest of a block's scratch plan.
+    def self.prepare_rope_scratch!(arena : Arena, cfg : WanS2VConfig,
+                                   precompute_rope : Bool = false) : Nil
       frequency_hi, frequency_lo = rope_frequencies(cfg)
       frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       arena.upload(frequency_hi_name, frequency_hi)
       arena.upload(frequency_lo_name, frequency_lo)
-      scratch_plan(cfg).each { |name, count| arena.alloc(name, count) }
+      if precompute_rope
+        count = rope_table_values(cfg)
+        cosine_name, sine_name = rope_table_names(cfg)
+        arena.alloc(cosine_name, count)
+        arena.alloc(sine_name, count)
+      end
     end
 
     # Unique backing allocations after lifetime aliases. Operations are
     # enqueued serially: normalization/modulation and RoPE are elementwise
     # in-place; cross-attention and FFN each reuse their consumed phase buffers.
-    def self.scratch_plan(cfg : WanS2VConfig) : Array(Tuple(String, Int32))
+    def self.scratch_plan(cfg : WanS2VConfig,
+                          precompute_rope : Bool = false) : Array(Tuple(String, Int32))
       n = cfg.values
       ff = cfg.rows * cfg.ffn_dim
       ctx = cfg.context_rows
-      [
+      plan = [
         {"wan_b_norm1", n},
         {"wan_b_self_q", n}, {"wan_b_self_k", n}, {"wan_b_self_v", n},
         {"wan_b_self_attn", n}, {"wan_b_self_proj", n}, {"wan_b_self_res", n},
@@ -227,11 +252,19 @@ module ML::Video
         {"wan_b_cross_v", ctx * cfg.dim},
         {"wan_b_ffn_in", ff}, {"wan_b_ffn_out", n},
       ]
+      if precompute_rope
+        count = rope_table_values(cfg)
+        cosine_name, sine_name = rope_table_names(cfg)
+        plan << {cosine_name, count}
+        plan << {sine_name, count}
+      end
+      plan
     end
 
-    def self.scratch_bytes(cfg : WanS2VConfig) : Int64
+    def self.scratch_bytes(cfg : WanS2VConfig,
+                           precompute_rope : Bool = false) : Int64
       # Includes the shared zero-bias vector and both FP32 RoPE frequency parts.
-      values = scratch_plan(cfg).sum { |_, count| count.to_i64 }
+      values = scratch_plan(cfg, precompute_rope: precompute_rope).sum { |_, count| count.to_i64 }
       (values + cfg.dim + cfg.head_dim) * sizeof(Float32)
     end
 
@@ -290,7 +323,8 @@ module ML::Video
                     execution_chain : ML::Metal::MPSCommandChain? = nil,
                     mps_workspace : WanS2VMPSLinearWorkspace? = nil,
                     attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
-                    cross_attention_groups_per_segment : Int32 = 320) : Nil
+                    cross_attention_groups_per_segment : Int32 = 320,
+                    precompute_rope : Bool = false) : Nil
       validate_cross_attention_groups_per_segment!(
         cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
@@ -302,7 +336,8 @@ module ML::Video
       ctx_rows = cfg.context_rows
       dim = cfg.dim
       ff_count = (rows.to_i64 * cfg.ffn_dim)
-      validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
+      validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg,
+        weight_prefix, precompute_rope)
       validate_trace!(trace, x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
       if workspace = attention_workspace
         raise ArgumentError.new("Prepared Wan attention requires an execution chain") unless execution_chain
@@ -355,8 +390,14 @@ module ML::Video
       trace_copy(e, trace, "self_q_norm", self_qn, n)
       norm_rms(e, self_k, weights[key(weight_prefix, "self_norm_k_weight")], weights.dtype(key(weight_prefix, "self_norm_k_weight")),
         scratch["wan_b_zero_bias"], self_kn, rows, dim)
-      encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
-      encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
+      if precompute_rope
+        encode_rope_pair(e, self_qn, self_kn, positions, self_qr, self_kr, cfg, scratch,
+          precompute_rope: true)
+      else
+        # Keep the default inline path and its two original dispatches intact.
+        encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
+        encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
+      end
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
       e = continue_phase(e, execution_chain)
@@ -465,7 +506,8 @@ module ML::Video
                                execution_chain : ML::Metal::MPSCommandChain? = nil,
                                mps_workspace : WanS2VMPSLinearWorkspace? = nil,
                                attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
-                               cross_attention_groups_per_segment : Int32 = 320) : Nil
+                               cross_attention_groups_per_segment : Int32 = 320,
+                               precompute_rope : Bool = false) : Nil
       validate_cross_attention_groups_per_segment!(
         cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_audio_pair!(cfg, audio_cfg)
@@ -473,7 +515,8 @@ module ML::Video
       encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg,
         block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace,
         attention_workspace,
-        cross_attention_groups_per_segment: cross_attention_groups_per_segment)
+        cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+        precompute_rope: precompute_rope)
       if active = execution_chain
         e = active.encoder
       end
@@ -607,6 +650,105 @@ module ML::Video
       e.dispatch_1d(cfg.batches * cfg.seq * cfg.heads * (cfg.head_dim // 2))
     end
 
+    # Standalone Q/K pair path used by the full-shape RoPE probe. The default
+    # retains the original inline kernel; opt-in mode builds one final F32
+    # cosine/sine table and reuses it for both rotations in this encoder.
+    def self.encode_rope_pair(e : ML::Metal::ComputeEncoder,
+                              q : ML::MetalBuffer, k : ML::MetalBuffer,
+                              positions : ML::MetalBuffer,
+                              qr : ML::MetalBuffer, kr : ML::MetalBuffer,
+                              cfg : WanS2VConfig, scratch : Arena,
+                              precompute_rope : Bool = false) : Nil
+      validate_rope_pair!(q, k, positions, qr, kr, cfg, scratch, precompute_rope)
+      unless precompute_rope
+        encode_rope(e, q, positions, qr, cfg, scratch)
+        encode_rope(e, k, positions, kr, cfg, scratch)
+        return
+      end
+
+      cosine_name, sine_name = rope_table_names(cfg)
+      cosine = scratch[cosine_name]
+      sine = scratch[sine_name]
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+      e.set_pipeline(pipeline("wan_rope_table_build_f32"))
+      e.set_buffer(positions, 0)
+      e.set_buffer(cosine, 1, ML::Metal::BufferAccess::Write)
+      e.set_buffer(sine, 2, ML::Metal::BufferAccess::Write)
+      e.set_buffer(scratch[frequency_hi_name], 3).set_buffer(scratch[frequency_lo_name], 4)
+      e.set_value(cfg.batches.to_u32, 5).set_value(cfg.seq.to_u32, 6)
+      e.set_value(cfg.head_dim.to_u32, 7)
+      e.dispatch_1d(rope_table_values(cfg))
+      encode_rope_table_apply(e, q, cosine, sine, qr, cfg)
+      encode_rope_table_apply(e, k, cosine, sine, kr, cfg)
+    end
+
+    private def self.encode_rope_table_apply(e : ML::Metal::ComputeEncoder,
+                                             x : ML::MetalBuffer,
+                                             cosine : ML::MetalBuffer,
+                                             sine : ML::MetalBuffer,
+                                             y : ML::MetalBuffer,
+                                             cfg : WanS2VConfig) : Nil
+      e.set_pipeline(pipeline("wan_rope_table_apply_f32"))
+      e.set_buffer(x, 0).set_buffer(cosine, 1).set_buffer(sine, 2)
+      e.set_buffer(y, 3, ML::Metal::BufferAccess::Write)
+      e.set_value(cfg.batches.to_u32, 4).set_value(cfg.seq.to_u32, 5)
+      e.set_value(cfg.heads.to_u32, 6).set_value(cfg.head_dim.to_u32, 7)
+      e.dispatch_1d(cfg.batches * cfg.seq * cfg.heads * (cfg.head_dim // 2))
+    end
+
+    private def self.validate_rope_pair!(q : ML::MetalBuffer, k : ML::MetalBuffer,
+                                         positions : ML::MetalBuffer,
+                                         qr : ML::MetalBuffer, kr : ML::MetalBuffer,
+                                         cfg : WanS2VConfig, scratch : Arena,
+                                         precompute_rope : Bool) : Nil
+      n = cfg.values.to_i64
+      MetalOps.check(q, n)
+      MetalOps.check(k, n)
+      MetalOps.check(qr, n)
+      MetalOps.check(kr, n)
+      MetalOps.check(positions, cfg.batches.to_i64 * cfg.seq * 3)
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+      MetalOps.check(prepared_rope_buffer!(scratch, frequency_hi_name), cfg.head_dim // 2)
+      MetalOps.check(prepared_rope_buffer!(scratch, frequency_lo_name), cfg.head_dim // 2)
+      if precompute_rope
+        cosine_name, sine_name = rope_table_names(cfg)
+        table_values = rope_table_values(cfg)
+        MetalOps.check(prepared_rope_buffer!(scratch, cosine_name), table_values)
+        MetalOps.check(prepared_rope_buffer!(scratch, sine_name), table_values)
+      end
+
+      # Only the corresponding input/output pair may be in place. Every other
+      # overlap is rejected before a pipeline is bound or a dispatch is added.
+      MetalOps.inplace_or_distinct(q, qr)
+      MetalOps.inplace_or_distinct(k, kr)
+      reject_overlap!(q, k)
+      reject_overlap!(q, positions)
+      reject_overlap!(k, positions)
+      reject_overlap!(qr, kr)
+      reject_overlap!(qr, k)
+      reject_overlap!(kr, q)
+      reject_overlap!(qr, positions)
+      reject_overlap!(kr, positions)
+      scratch.buffers.each do |name, temporary|
+        reject_overlap!(temporary, q) unless name == "wan_b_self_q" && same_storage?(temporary, q)
+        reject_overlap!(temporary, qr) unless name == "wan_b_self_q" && same_storage?(temporary, qr)
+        reject_overlap!(temporary, k) unless name == "wan_b_self_k" && same_storage?(temporary, k)
+        reject_overlap!(temporary, kr) unless name == "wan_b_self_k" && same_storage?(temporary, kr)
+        reject_overlap!(temporary, positions)
+        scratch.buffers.each do |other_name, other|
+          reject_overlap!(temporary, other) if name < other_name
+        end
+      end
+    end
+
+    private def self.same_storage?(a : ML::MetalBuffer, b : ML::MetalBuffer) : Bool
+      a.handle == b.handle || a.contents == b.contents
+    end
+
+    private def self.prepared_rope_buffer!(scratch : Arena, name : String) : ML::MetalBuffer
+      scratch.buffers[name]? || raise ArgumentError.new("Missing prepared Wan RoPE buffer #{name}")
+    end
+
     # Frequency constants depend on theta and the per-axis pair partitions.
     # Keying setup buffers by that identity makes a reused Arena fail closed if
     # an encoder is accidentally given a different RoPE configuration.
@@ -614,6 +756,18 @@ module ML::Video
       axis0, axis1, axis2 = cfg.rope_axis_dims
       identity = "#{cfg.theta}_#{cfg.head_dim}_#{axis0}_#{axis1}_#{axis2}"
       {"wan_b_rope_freq_hi_#{identity}", "wan_b_rope_freq_lo_#{identity}"}
+    end
+
+    private def self.rope_table_names(cfg : WanS2VConfig) : {String, String}
+      axis0, axis1, axis2 = cfg.rope_axis_dims
+      identity = "#{cfg.batches}_#{cfg.seq}_#{cfg.context_tokens}_#{cfg.dim}_#{cfg.heads}_#{cfg.head_dim}_" +
+                 "#{cfg.ffn_dim}_#{cfg.split}_#{cfg.theta}_#{cfg.video_frames}_#{cfg.spatial_tokens}_" +
+                 "#{axis0}_#{axis1}_#{axis2}"
+      {"wan_b_rope_cos_#{identity}", "wan_b_rope_sin_#{identity}"}
+    end
+
+    private def self.rope_table_values(cfg : WanS2VConfig) : Int32
+      WanS2VShape.count("RoPE coefficient table", cfg.batches, cfg.seq, cfg.head_dim // 2)
     end
 
     # Wan builds these inverse frequencies in FP64 before constructing its
@@ -650,7 +804,8 @@ module ML::Video
     private def self.validate_inputs!(x : ML::MetalBuffer, modulation : ML::MetalBuffer,
                                       positions : ML::MetalBuffer, context : ML::MetalBuffer,
                                       y : ML::MetalBuffer, weights : Arena, scratch : Arena,
-                                      cfg : WanS2VConfig, weight_prefix : String = "") : Nil
+                                      cfg : WanS2VConfig, weight_prefix : String = "",
+                                      precompute_rope : Bool = false) : Nil
       n = cfg.values.to_i64
       dim = cfg.dim.to_i64
       ctx = cfg.context_rows.to_i64 * dim
@@ -669,6 +824,12 @@ module ML::Video
       frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
       MetalOps.check(scratch[frequency_hi_name], cfg.head_dim // 2)
       MetalOps.check(scratch[frequency_lo_name], cfg.head_dim // 2)
+      if precompute_rope
+        cosine_name, sine_name = rope_table_names(cfg)
+        table_values = rope_table_values(cfg)
+        MetalOps.check(prepared_rope_buffer!(scratch, cosine_name), table_values)
+        MetalOps.check(prepared_rope_buffer!(scratch, sine_name), table_values)
+      end
       {
         {"self_q_weight", weight_count}, {"self_q_bias", dim},
         {"self_k_weight", weight_count}, {"self_k_bias", dim},

@@ -31087,3 +31087,49 @@ Refresh after source/toolchain/device/model/workload changes.
   explicit-graph-bindings-v1.json and user-memory-release-20261020.json.
   Refresh after code/lifetime, inputs/weights, geometry, precision, device/runtime,
   memory admission or queue-isolation changes. Known strict stack drift stays open.
+
+### 2026-10-20 — Guarded Wan cost map and shared-RoPE rejection
+
+- New serial launcher checks the configured 15% pressure floor, conservative
+  free-plus-speculative physical reserve plus the requested footprint budget,
+  summed process-group physical footprint, swap growth and a monotonic deadline.
+  It pins its owned process-group identity through cleanup, fails closed on
+  telemetry/identity loss, and never resumes the terminated video process.
+  CPU guard tests pass 16/0 on Python 3.11 and 3.15; a live bounded CPU smoke
+  passes. Limits are sampled, exclude deliberate session/group escapes, and
+  cannot bound reaping time for an uninterruptible kernel/driver task.
+- Source-derived main-block work is 49.76390701056 TFLOPs at B1 N36,608 C5,120
+  H40 D128 M512 F13,824, excluding audio/norm/trig/elementwise work. Self QK/PV
+  accounts for 55.15% of these FLOPs, not a measured latency fraction. The ten
+  dense matrices contain 351,272,960 values. Cost formulas and GPU measurements
+  are separate evidence classes; see docs/wan-performance-frontier.md.
+- Opt-in RoPE coefficients preserve the original F32 hi/lo phase, precise trig
+  and rotation order while sharing one 17.875 MiB GPU table over heads and Q/K.
+  It refreshes positions every encode, keys scratch by configuration, validates
+  extents/aliases before dispatch, and adds no model-path host wait/readback.
+  Focused tests pass 3/0; pinned official BF16 and F32 block/injector intermediate
+  fixtures pass 6/0 each. Small fixture geometry does not close full-stack drift.
+- Full-shape synthetic RoPE pairs are bit-identical over 374,865,920 Q/K values
+  in warmup and all three pairs; the corruption control rejects exactly one
+  changed value. However AB/BA/AB wall medians are 8.206375 ms inline versus
+  8.378292 ms with the table, 2.095% slower, with all three candidate pairs losing.
+  The speedup route is rejected, default stays inline, and no full-block GPU
+  timing/video is launched. An 80-fold phase-count reduction is not a latency
+  gain. Each prepared encode has zero explicit Metal-buffer allocations and one
+  terminal wait; host config-key/framework allocations are outside that counter.
+- Evidence is in the external wan-self-attention directory: rope-bindings-v1.json
+  and rope-qualified-summary-v1.json bind source/binaries/raw logs. Admitted
+  probes show no swap growth and sampled physical reserve stays above 15%.
+  Correlated receipt review recomputes all outcomes and returns ROBUST within
+  scope. rope-binding-supplement-v1.json binds the separately built full-block
+  benchmark and its mismatched-chunk CLI rejection; it has no GPU block timing.
+  A previously rejected launch only established low conservative reserve, not
+  OOM or a Wan leak; other projects were untouched when headroom recovered.
+- Active goal remains exact Wan acceleration. Next discriminator: attribute
+  existing asynchronous command-root intervals to stages, reporting interval
+  union/envelope/overlap after the existing terminal wait. Then choose long-key
+  native K/V sharing or a projection path from measured costs. Static audio K/V
+  reuse and FFN epilogue fusion are secondary hypotheses. Keep unchanged strict
+  gates, mini-Quadrum, serial admission and 15% floor; no automatic video restart.
+  Refresh on source/lifetime, geometry/inputs/weights/precision, device/runtime,
+  queue conditions or memory-policy changes. Known 40-layer drift remains open.
