@@ -25,6 +25,14 @@ commits the final root and performs one terminal host wait, checks every
 tracked root, and sums their GPU timestamps. Only afterward may callers finish
 I/O and release plans, Arenas, views, and pools. No finalizer silently waits.
 
+Completed roots are reduced to ordered status, error and timing summaries by
+completion callbacks. Pointer-identity tracking holds each root strongly only
+until completion is observed. A post-wait fallback records any remaining roots
+under the same lock; late callbacks cannot record them twice. The summaries
+remain proportional to the number of roots, and roots still in flight can
+accumulate if CPU submission outruns GPU execution. This change does not
+establish bounded memory for a multi-million-root request.
+
 Source inode, size, and modification time are checked before enqueue. This
 assumes immutable local checkpoint files; it is not a file lock or a defense
 against concurrent adversarial mutation. An asynchronous I/O error is latched
@@ -52,7 +60,14 @@ The evidence for the initial focused gate is in external scratch at
 `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-full/`:
 `stage-specs-build.log`, `stage-specs-native.log`, and the broader
 `staging-common-build.log` / `staging-common-native.log` (23 examples, zero
-failures/errors/pending). Refresh the gate after
+failures/errors/pending). The completed-root retirement change passed
+`chain-retirement-native.log` (three examples, including 2,048 retired fake roots
+and a real three-root GPU chain) and `chain-retirement-staging.log` (25 examples,
+zero failures/errors/pending). The GPU check preserves exact output, one terminal
+host wait and zero tracked GPU-buffer allocations during encoding. The callback
+and fallback probes exercise both sequential delivery orders; a truly concurrent
+callback/fallback race is supported by the shared-lock inspection rather than
+an injected race test. Refresh the gate after
 changing platform/runtime, command continuation behavior, stage ordering,
 source immutability, pool layout, or ownership lifetimes. The bounded serial
 contract does not authorize concurrent use of a pool.
