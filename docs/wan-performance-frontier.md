@@ -259,17 +259,53 @@ the corrected invocation passed without a source change. Correlated read-only
 adversary review is ROBUST for the fresh short-fixture replay, with no claim
 about full-spatial timings, profiler overhead or exclusive per-kernel costs.
 
-Do not lower the reserve to force that launch. Instead test query chunks 64 and
-96 against 128 in the standalone full-geometry SDPA probe. Query rows are
-independent with the complete K/V set, so this preserves the mathematical
-attention problem. Smaller graph working sets may improve latency; increased
-packing/submission overhead or a changed F32 kernel may reject the candidate.
-The opt-in `small-chunks` mode must keep all full-output oracle and native
-baseline comparisons, the one-value corruption control, three AB/BA/AB pairs,
-zero encode-time Metal allocations and the existing terminal wait. It must
-reject an unsupported candidate before fixture/GPU work. Only an all-pairs
-primitive win can advance to a full-block comparison; it does not promote a
-production default or establish video throughput.
+### Smaller query chunks: 64 rejected, 96 incomplete
+
+The opt-in `small-chunks` mode compares 64 or 96 query rows against 128 with
+the complete K/V set, the same GPU-filled inputs and full-output upstream plus
+native baseline checks. It rejects other candidates before fixture/GPU work.
+The default chunk-size and other comparison modes retain their existing paths.
+The full geometry is B=1, Q=K=36,608, H=40, D=128 (187,432,960 output values).
+
+| AB/BA/AB pair | Chunk 128 | Chunk 64 | Baseline minus candidate |
+| --- | ---: | ---: | ---: |
+| AB | 8.544911 s | 9.874381 s | -1.329470 s |
+| BA | 9.141665 s | 9.955952 s | -0.814287 s |
+| AB | 10.090853 s | 12.138794 s | -2.047941 s |
+| Median | 9.141665 s | 9.955952 s | **8.91% slower** |
+
+Chunk 64 loses all three pairs and is rejected as an acceleration. All eight
+warmup/measured full-output checks have zero strict/nonfinite violations and
+bit-identical native baseline outputs. The maximum upstream absolute error is
+1.8328428e-6 (maximum tolerance ratio 0.08037424); upstream bit identity is not
+claimed. The final one-value corruption control rejects exactly that value.
+Each timed arm has one terminal wait and zero explicit encode-time Metal-buffer
+allocations; validation is separate from timing. The guard finishes with exit 0,
+minimum free-plus-speculative reserve 15,801,204,736 bytes (22.99% of RAM), peak
+sampled group footprint 4,886,873,696 bytes and no swap growth.
+
+Chunk 96 is **incomplete**, with seven timed arms and six completed validations.
+Those completed checks pass, but there is no final pair, decision or corruption
+control. Free-plus-speculative bytes reached 10,251,468,800, below the unchanged
+15% floor of 10,307,921,511. The old guard then hit the Darwin zombie-cleanup
+bug documented above; its original group was subsequently verified absent.
+Commit `86cc46fc` fixes that separate guard defect. Partial 96 timings are not
+eligible for a speed verdict, and the headroom decline does not establish a
+Wan leak. No production default or video-throughput claim follows either run.
+
+Chunk 64 doubles query-chunk calls and command segments (48 to 96), and its CPU
+encode counter rises to seconds. Submission/copy/framework overhead is a
+hypothesis; overlapping host/GPU counters cannot be subtracted to localize it.
+The next discriminator is existing-root attribution with less scratch memory,
+or the native tiled-attention path under the smaller memory budget.
+
+External `wan-self-attention/small-chunks-qualified-summary-v2.json` (SHA-256
+`1cf93cfc30db578d794d169b5f615307f7f99013136f26a3d0696f097b0f5b2c`)
+binds the raw logs, executable, attention backend, build/CLI guards and fixture.
+Its v1 recomputation verifies pair membership, statistics, every validation and
+negative control. Correlated receipt/source review is ROBUST for the bounded
+64 rejection and the incomplete 96 classification. Refresh after source,
+shape, inputs/precision, device/runtime/queue or memory-policy changes.
 
 ## Other candidates, in order of investigation
 

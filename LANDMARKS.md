@@ -31180,3 +31180,27 @@ Refresh after source/toolchain/device/model/workload changes.
   profiler-overhead or video-throughput claim follows. Default remains off.
   Refresh after source, resource lifetime, queue/device/runtime, geometry,
   weights/precision or memory-policy changes; known 40-layer drift remains open.
+
+### 2026-10-20 — Reject smaller 64-row Wan SDPA chunks; leave 96 incomplete
+
+- Opt-in standalone `--comparison=small-chunks --candidate=64|96` retains
+  full K/V, GPU-filled inputs and strict full-output upstream/native checks.
+  Unsupported candidates reject before fixture/GPU work. Existing defaults
+  and production behavior are unchanged.
+- Full-shape 64-vs-128 AB/BA/AB pairs lose all three: wall medians 9.955952 s
+  versus 9.141665 s (8.91% slower). All eight warmup/measured validations over
+  187,432,960 values are bit-identical to native baseline, strict/nonfinite 0;
+  upstream max abs 1.8328428e-6, ratio 0.08037424. One-value corruption rejects
+  exactly one value. Each timed arm waits once and allocates no MetalBuffers.
+  Guard exit 0, minimum physical reserve 22.99%, no swap growth. Speedup rejected.
+- Candidate 96 stops at the 15% physical floor after seven timed arms and six
+  successful validations; no final decision/corruption control, so no speed
+  verdict. Old Darwin cleanup failure is separately fixed in `86cc46fc`; the
+  original group is absent. Do not infer a Wan leak from global headroom decline.
+- External `wan-self-attention/small-chunks-qualified-summary-v2.json` binds
+  source/backend/binary/fixture and raw records. Correlated source/receipt audit
+  is ROBUST for these bounded conclusions. CPU encode inflation is not an
+  exclusive GPU bottleneck diagnosis; no full-block or video claim follows.
+  Next: reduce scratch through proven lifetimes to admit whole-block profiling,
+  or test existing native attention. Refresh on source/shape/input/precision,
+  device/runtime/queue or memory-policy changes. Keep 15% floor and strict gate.
