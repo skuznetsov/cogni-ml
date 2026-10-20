@@ -8,6 +8,50 @@ Only independent query rows are split. Every query retains all keys and values.
 The unchanged gate is `abs(actual-reference) <= 2e-5 + 2e-5*abs(reference)`,
 with finite operands. The production defaults are unchanged by this experiment.
 
+## Explicit-graph frontier
+
+Status: optional experiment implemented. Standalone strict fixture checks pass
+and the three timed pairs improve; the whole-block warmup fails the unchanged
+numerical gate before measured pairs. Promotion is rejected and defaults remain
+unchanged. Further GPU diagnosis is suspended after the memory incident below.
+Both arms use query chunk 128, cross segments 320, and the same caller-owned
+prepared head-major K/V pair. Each encode refreshes that pair on GPU; each arm
+finishes at its existing terminal wait before the other arm may reuse it.
+Sharing across overlapping workspace encodes is forbidden by the caller
+contract; per-workspace lifetime checks cannot enforce cross-workspace ownership.
+
+The opt-in `explicit_qk_softmax_pv` plan/workspace argument requires head-major
+K/V and defaults to false. Its graph follows PyTorch 2.8.0's F32 MPS math path:
+transpose the final two K dimensions, QK matmul, add the upstream `1e-20f`
+macOS 15+ workaround, multiply by F32 `1/sqrt(head_dim)`, softmax over keys,
+then PV matmul. Only the context tensor is exported. This matches the selected
+operation sequence, not PyTorch's dispatch selection or opaque compiler lowering.
+The pinned source is [PyTorch Attention.mm](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/src/ATen/native/mps/operations/Attention.mm),
+SHA-256 `167ee89bddb489c154b5d5ca72cf042745443f557d624fc48175f2d29f45a351`.
+
+The strongest failure modes are changed reduction rounding, opaque score-memory
+growth, and accidental sharing before completion. Before production changes,
+new API/fixture specs must fail against the old implementation. Qualification
+requires all six pinned fixture cases, changed-input/tail/reuse guards, the
+full-geometry strict upstream oracle, and the real BF16 whole-block regression.
+Only then run three AB/BA/AB timed pairs at standalone and whole-block scope.
+All three savings and the median must improve for performance admission.
+No tolerance change, new host wait/readback, or explicit encode allocation is
+admitted. The default SDPA path is the rollback.
+
+A score tile at B=1,H=40,Q=128,K=36,608 occupies 749,731,840 bytes.
+Preflight adds three such tiles to the existing opaque reserve before graph
+creation. This conservative heuristic is not a driver-allocation bound. The
+standalone graph-comparison cap is 12 GiB; other standalone modes retain 8 GiB.
+Adding the three tiles makes the whole-block estimate 16.012 GiB, so that
+comparison alone has an 18 GiB cap; existing block modes retain 16 GiB.
+Explicit shared K/V is counted once.
+The executed GPU runs were serial under the configured 15% `memory_pressure -Q`
+guard and the paused-client quiescence observer. That percentage and the RSS
+limit did not bound physical footprint or swap; they cannot certify 15% unused
+physical memory. A numerical or memory failure rejects promotion and preserves
+the failed probe for analysis. New heavy runs require stronger memory admission.
+
 ## Head-major K/V frontier
 
 Status: implemented as an optional path; bounded correctness checks pass, but
@@ -33,8 +77,9 @@ output comparison against the pinned reference. Performance admission requires
 three AB/BA/AB pairs of the whole real-weight block with both arms using 128-row
 query chunks and 320-row cross segments. Preparation is inside each timed arm;
 allocations, input fill and output checking remain outside. Every pair must
-improve and the median must improve, with zero explicit encode allocations,
-one terminal wait, and the existing 15% free-memory floor. A failed numerical
+improve and the median must improve, with zero explicit encode allocations
+and one terminal wait. Historical runs used the configured 15% pressure guard;
+new runs also require the stronger admission described below. A failed numerical
 gate or a slower whole block rejects promotion without changing tolerances.
 
 ## Admission and measurement
@@ -63,15 +108,18 @@ source/generator/output hashes and runtime; native validation checks all
 187,432,960 output values against it. Manifest/source consistency is local
 provenance, not independent attestation or a complete model quality gate.
 
-All runs are serialized with a 15% system free-memory floor and per-process RSS
-guard. Explicit buffers are admitted before allocation; the opaque MPS reserve
+Runs used a configured 15% `memory_pressure -Q` threshold and a process-tree RSS
+guard. Neither is a bound on physical footprint or swap. Explicit buffers are
+admitted before allocation; the opaque MPS reserve
 is a heuristic, not a bound on driver/private allocations. A fully materialized
 F32 score tile would occupy 0.698/1.396/2.793/5.586 GiB for the four chunk sizes;
 these are risk estimates, not measured MPS peaks. The guard's half-second tick
 counter is not wall time or a strict real-time timeout.
 
-The older video process is paused only for serial probes, with a cleanup trap
-that resumes it. CPU STOP alone does not drain its submitted GPU work. A read-only
+During the recorded cohorts the older video process was paused for serial probes,
+with a cleanup trap that resumed it. It was subsequently terminated with explicit
+user authorization after the memory incident below; automatic restart is forbidden.
+CPU STOP alone does not drain submitted GPU work. A read-only
 AGX client observer requires three stable submission/completion-counter samples
 spaced by two seconds after STOP. This establishes observed target-client
 quiescence, not system-wide GPU idleness. Other applications remain untouched.
@@ -114,9 +162,11 @@ The full-block checkpoint is the previously qualified BF16 block-0 extraction:
 1,017,447,344 bytes, SHA-256
 `c172519063c1c34fb36f7f930429ca7db655a0e335524d7487525db1df5ad220`.
 
-Build with the external scratch directory and the existing Metal bridge objects:
+Historical build command, retained as provenance. Builds and GPU probes are
+currently suspended pending stronger memory admission; this is not a replay
+procedure.
 
-```sh
+```text
 export TMPDIR=/opt/mldata_ssd/cogni-ml/video-scene-20261019/tmp
 export CRYSTAL_CACHE_DIR=/opt/mldata_ssd/cogni-ml/crystal-cache
 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-block-benchmark \
@@ -124,10 +174,10 @@ make BUILD_DIR=/opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-block-ben
   /opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-block-benchmark/wan_s2v_full_block_benchmark
 ```
 
-After serializing GPU access and establishing the memory guard, create the
-oracle and run each candidate separately:
+Historical oracle/candidate invocations follow. The old guard shown here cannot
+bound footprint or swap; do not execute these commands as an admission procedure.
 
-```sh
+```text
 env PYTORCH_ENABLE_MPS_FALLBACK=0 \
   python examples/support/wan_s2v_self_attention_benchmark_reference.py \
   --output=/path/to/reference --query-chunk-rows=128
@@ -140,8 +190,8 @@ env COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
   --comparison=self-chunks --candidate-self-chunk=128 --pairs=3
 ```
 
-Use a PyTorch build with MPS support for the oracle, with CPU fallback disabled.
-Repeat the standalone command with 256 and 1,024. The `run_safe.sh` timeout
+The oracle used PyTorch with MPS support and CPU fallback disabled; standalone
+candidates also included 256 and 1,024. The `run_safe.sh` timeout
 argument uses its existing tick semantics; it is not a strict wall deadline.
 Require every warmup/measured validation, all three pairs, the injected-error
 control and a successful process exit before admitting a result. The discarded
@@ -263,19 +313,19 @@ alias/extent/in-flight guards. The official upstream BF16 block/injector
 intermediate regression passes 6/0 examples at its smaller sequence geometry.
 Every timed arm has one terminal wait and zero explicit encode MetalBuffer
 allocations; production source adds no intermediate host wait or activation
-readback. Private MPS allocations remain outside that counter. Sampled free
-memory minima are 40% (focused spec), 58% (block regression), 34% (attention)
-and 29% (whole block), above the explicitly configured 15% floor. The older
-video process is resumed after each serial probe.
+readback. Private MPS allocations remain outside that counter. Sampled pressure
+metric minima were 40% (focused spec), 58% (block regression), 34% (attention)
+and 29% (whole block), above the configured 15% telemetry threshold, without
+certifying physical headroom. The older video process was resumed after those
+serial probes and was later terminated with explicit user authorization.
 
 The correlated mini-Quadrumvirate adversary verdict is ROBUST for the stated
 code/lifetime and bounded correctness claims; the speedup claim is VULNERABLE
 and promotion is rejected. The known strict 40-layer drift remains open.
 
-Run the existing build command, then serialize GPU access using the external
-`with-wan-paused.sh` controller described above and execute these guarded arms:
+Historical head-major invocations, not a replay procedure:
 
-```sh
+```text
 env COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
   scripts/run_safe.sh /path/to/wan_s2v_self_attention_benchmark 1800 16384 \
   --fixture=/path/to/reference-v1 --comparison=kv-layout --candidate=128
@@ -284,6 +334,10 @@ env COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
   --weights=/path/to/wan-official.weights.safetensors \
   --comparison=kv-layout --candidate-self-chunk=128 --pairs=3
 ```
+
+The old external `with-wan-paused.sh` controller hardcodes the terminated video
+PID and must not be reused. A future replay needs the separate footprint/swap
+admission gate and a fresh queue-isolation check.
 
 The standalone DoD requires all eight strict oracle/baseline checks, zero
 nonfinites, a rejected corruption control and successful exit. The whole-block
@@ -417,8 +471,108 @@ The [PyTorch 2.8 MPS path](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/s
 used by the oracle instead executes an explicit QK/scale/softmax/PV graph with
 contiguous head-major K/V. The compiled MPSGraph's physical memory behavior is
 opaque, so repeated physical transposes are not established. The next hypothesis
-is a matched explicit QK/scale/softmax/PV graph using the prepared K/V, followed
-by native F32 tiled attention with K/V reuse. Keep the same
+was a matched explicit QK/scale/softmax/PV graph using the prepared K/V. Its
+standalone result and whole-block rejection are recorded below. Native F32 tiled
+attention with K/V reuse remains a separate candidate. Keep the same
 strict gate, prepared buffers, terminal boundary and whole-block discriminator.
 Stage IDs on existing asynchronous roots can separately test submission and
 projection hypotheses; the current aggregate does not rank non-attention costs.
+
+## Explicit-graph measurements: 2026-10-20
+
+Both arms use the same caller-owned head-major K/V pair, refresh it inside every
+timed encode, use query chunk 128 and finish serially at one terminal wait.
+Cross segmentation remains 320 in the full block. Input fill, output validation,
+buffer allocation and graph preparation are outside the timed arms.
+
+| Standalone pair | MPSGraph SDPA | Explicit graph | Saved |
+| --- | ---: | ---: | ---: |
+| AB | 18.338896 s | 11.670051 s | 6.668844 s |
+| BA | 17.060943 s | 11.678053 s | 5.382890 s |
+| AB | 16.666125 s | 12.028706 s | 4.637419 s |
+| Median | 17.060943 s | 11.678053 s | 31.55% lower median |
+
+All eight standalone full-output checks pass the unchanged pinned PyTorch gate
+over 187,432,960 values per check, with no nonfinites. All four explicit outputs
+are bit-identical to this fixture oracle. The SDPA control differs from the
+oracle by at most `1.8328428e-6`, normalized gate error `0.08037424`; candidate
+versus SDPA also passes. The corruption control rejects exactly one changed
+value. This is bounded evidence for these deterministic Q/K/V inputs, not a
+general claim of bit identity to upstream on projected model activations.
+
+The real BF16 block-0 experiment exits 1 during warmup: **5,085 / 187,432,960**
+values violate the unchanged `2e-5 + 2e-5*abs(reference)` gate. Maximum absolute
+error is `6.0796738e-5`, maximum normalized error `2.5658143`, and nonfinite count
+is zero. There are 184,471,886 bit differences. The reference here is the same
+run's native SDPA block, not a full-geometry upstream block oracle. The harness
+stops before any measured arm records or corruption control. There are **zero
+measured block pairs** and no admissible whole-block speedup result.
+
+Arithmetic differences amplified by later projections are a hypothesis, not an
+established cause. The next numerical discriminator is a separate same-input
+trace at `self_attention`, then `self_projection` and `self_residual` if needed,
+plus SDPA A/A replay to distinguish state reuse from arithmetic. Its external
+generator was written but not executed; no trace or A/A result exists. Tolerances
+remain unchanged, the default stays SDPA, and the known strict stack rejection
+remains open.
+
+The focused upstream attention/reuse/guard spec passes 7/0 examples. The existing
+official BF16 block/audio regression passes 6/0 examples at its smaller fixture
+geometry; it does not qualify the rejected full-shape graph substitution.
+The old API fails the added spec at compile time, and both rebuilt benchmark
+argument guards reject unequal query chunks before GPU initialization. Every
+standalone timed arm records one terminal wait and zero explicit MetalBuffer
+allocations inside encoding. Model activations remain on GPU; compact diagnostic
+metrics are read only after separate validation chains.
+
+The explicit path has 573 command segments versus 48 for SDPA. Its host time
+inside encoding is about 10.3–10.8 s, versus roughly 0.05–0.64 s for SDPA, and
+is already included in the wall times above. Encoding may overlap submitted GPU
+work or block inside framework calls; this is not an exclusive CPU cost. Summed
+continued-command GPU intervals can overlap and must not be added to wall time.
+
+Preflight explicit-plus-reserve estimates are 10,410,262,576 bytes for standalone
+and 17,192,380,948 bytes for the block, beneath their respective 12/18 GiB caps.
+These are not measured driver peaks. The minimum sampled `memory_pressure -Q`
+percentages are 30% (focused spec), 30% (block regression), 31% (standalone) and
+27% (full block). They did not establish safe physical headroom.
+
+After these probes, the user reported renewed memory growth in the resumed older
+full-video process (PID 34536), then explicitly authorized its termination at
+step 19/40. Before termination, `vmmap -summary` reported footprint 32.1 GiB and
+30.9 GiB writable memory swapped out, despite `ps` RSS around 45 MiB.
+`memory_pressure -Q` reported 76% nearby, illustrating why that guard plus RSS
+is insufficient. The process and its AGX client were confirmed absent afterward.
+Other projects were untouched. No further GPU probe or build was launched;
+strengthening footprint/swap admission precedes any new heavy run. These
+observations do not establish a leak or attribute total host memory to Wan.
+
+The historical CLI settings were `--comparison=attention-graph --candidate=128`
+for standalone attention and `--comparison=attention-graph
+--candidate-self-chunk=128 --pairs=3` for the block. They are provenance, not a
+replay procedure: the former pressure/RSS guard is insufficient. Do not replay
+these runs until a separate footprint/swap admission gate has been implemented
+and checked, followed by queue isolation. No replacement admission gate has
+been implemented by this change.
+
+Raw logs are `explicit-graph-attention-v1.log`,
+`explicit-graph-block-guard-v1.log`, `explicit-graph-self-v1.log` and
+`explicit-graph-full-block-v1.log` in the evidence directory above. Each has
+separate memory and target-client observation receipts. The independently
+recomputed `explicit-graph-qualified-summary-v1.json` records the rejected
+whole-block qualification, descriptive standalone result and raw hashes;
+its name does not imply whole-block admission. `explicit-graph-bindings-v1.json`
+pins the five measured source files, bridge object and four executables against
+base commit `060c4b37e46d0953339a5d91765f20e043b0c4bc`. All remain unchanged
+after measurement. `user-memory-release-20261020.json` confirms termination.
+The subsequent CPU receipt check verifies all ten bound source/binary files,
+all twenty raw-receipt hashes and the reported medians; it performs no GPU or
+build operation. Its receipt is `explicit-graph-cpu-receipt-check-v1.json`.
+The updated summary SHA-256 is
+`65ab6514dec0dff77b6b676a510cab9ac328ec5c2942e408b6bc8c225ad3bb78`.
+
+Correlated mini-Quadrumvirate review supports the bounded standalone comparison
+and rejection decision. Numerical admission of the whole-block candidate is
+BROKEN; a whole-block performance claim has no measured evidence. Refresh all
+qualification after source, input, geometry, device/runtime, memory admission or
+queue-isolation changes. Full-video speed and quality remain unmeasured here.

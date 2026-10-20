@@ -19,7 +19,11 @@ private FRAMES                  =     21
 private SPATIAL                 =  1_664
 private BASELINE_CHUNK_Q        =    512
 private KV_LAYOUT_CHUNK_Q       =    128
+private EXPLICIT_SCORE_TILE_MULTIPLIER = 3_i64
+private EXPLICIT_SCORE_TILE_BYTES = FULL_SEQ.to_i64 * DIM.to_i64 * sizeof(Float32)
+private EXPLICIT_SCORE_RESERVE_BYTES = EXPLICIT_SCORE_TILE_MULTIPLIER * EXPLICIT_SCORE_TILE_BYTES
 private MAX_EXPLICIT_BUDGET     = 16_i64 * 1024 * 1024 * 1024
+private MAX_ATTENTION_GRAPH_BUDGET = 18_i64 * 1024 * 1024 * 1024
 private OPAQUE_RESERVE          = 1_i64 * 1024 * 1024 * 1024
 private EXPECTED_WEIGHTS_BYTES  = 1_017_447_344_i64
 private EXPECTED_WEIGHTS_SHA256 = "c172519063c1c34fb36f7f930429ca7db655a0e335524d7487525db1df5ad220"
@@ -193,8 +197,8 @@ candidate_chunk = 256
 OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
-  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, or kv-layout (both layouts use query chunk 128)") { |value| comparison_mode = value }
-  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout requires 128") { |value| candidate_chunk = value.to_i }
+  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, or attention-graph (attention-graph uses head-major K/V and query chunk 128 in both arms)") { |value| comparison_mode = value }
+  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout and attention-graph require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -203,17 +207,20 @@ OptionParser.parse do |parser|
 end
 raise ArgumentError.new("--weights is required") if weights_path.empty?
 raise ArgumentError.new("--pairs must be within 1..3") unless (1..3).includes?(pairs)
-raise ArgumentError.new("--comparison must be cross-segments, self-chunks, or kv-layout") unless {"cross-segments", "self-chunks", "kv-layout"}.includes?(comparison_mode)
+raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, or attention-graph") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph"}.includes?(comparison_mode)
 raise ArgumentError.new("--candidate-self-chunk must be 128, 256 or 1024") unless {128, 256, 1024}.includes?(candidate_chunk)
 compare_self_chunks = comparison_mode == "self-chunks"
 compare_kv_layout = comparison_mode == "kv-layout"
-if compare_kv_layout
-  raise ArgumentError.new("--comparison=kv-layout requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
+compare_attention_graph = comparison_mode == "attention-graph"
+raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
+explicit_budget_bytes = compare_attention_graph ? MAX_ATTENTION_GRAPH_BUDGET : MAX_EXPLICIT_BUDGET
+if compare_kv_layout || compare_attention_graph
+  raise ArgumentError.new("--comparison=#{comparison_mode} requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
 end
-require_exact = !(compare_self_chunks || compare_kv_layout)
-candidate_groups = (compare_self_chunks || compare_kv_layout) ? 320 : 1024
-baseline_chunk = compare_kv_layout ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
-candidate_chunk = compare_kv_layout ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
+require_exact = !(compare_self_chunks || compare_kv_layout || compare_attention_graph)
+candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph) ? 320 : 1024
+baseline_chunk = (compare_kv_layout || compare_attention_graph) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
+candidate_chunk = (compare_kv_layout || compare_attention_graph) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
 weights_path = File.expand_path(weights_path)
 raise ArgumentError.new("Missing safetensors file #{weights_path}") unless File.file?(weights_path)
 raise ArgumentError.new("Unexpected official block sidecar length") unless File.size(weights_path) == EXPECTED_WEIGHTS_BYTES
@@ -250,19 +257,20 @@ begin
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
   attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
-  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout
-  prepared_kv_bytes = compare_kv_layout ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
+  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout || compare_attention_graph
+  prepared_kv_bytes = compare_kv_layout || compare_attention_graph ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
   attention_workspace_bytes += prepared_kv_bytes
+  explicit_score_reserve_bytes = compare_attention_graph ? EXPLICIT_SCORE_RESERVE_BYTES : 0_i64
   explicit_nonweight_bytes = checked_sum([
     input_bytes, block_scratch_bytes, tiny_audio_scratch_bytes,
     projection_stage_bytes, attention_workspace_bytes,
   ])
-  reserve_bytes = explicit_nonweight_bytes + OPAQUE_RESERVE
+  reserve_bytes = explicit_nonweight_bytes + explicit_score_reserve_bytes + OPAQUE_RESERVE
   files = [checkpoint]
-  plan = ML::Video::WeightPlan.new(files, bindings, MAX_EXPLICIT_BUDGET,
+  plan = ML::Video::WeightPlan.new(files, bindings, explicit_budget_bytes,
     reserve_bytes, ML::Video::WeightDType::BF16, require_all: true)
   total_estimate = plan.peak_bytes
-  raise ArgumentError.new("Full block exceeds the 16 GiB explicit-plus-reserve budget: #{total_estimate}") if total_estimate > MAX_EXPLICIT_BUDGET
+  raise ArgumentError.new("Full block exceeds the #{explicit_budget_bytes} byte explicit-plus-reserve budget for #{comparison_mode}: #{total_estimate}") if total_estimate > explicit_budget_bytes
 
   puts({schema: "wan_s2v_full_block_memory_plan_v1", status: "admitted_for_benchmark",
         sequence_tokens: FULL_SEQ, video_tokens: FULL_VIDEO_TOKENS, context_tokens: FULL_CONTEXT,
@@ -274,15 +282,25 @@ begin
         projection_stage_bytes: projection_stage_bytes,
         self_attention_chunk_bytes: attention_workspace_bytes - prepared_kv_bytes,
         prepared_kv_buffer_bytes: prepared_kv_bytes,
+        prepared_kv_pair_shared_between_arms: compare_attention_graph,
+        prepared_kv_buffer_bytes_refreshed_per_arm_encode: compare_attention_graph ? prepared_kv_bytes : (compare_kv_layout ? prepared_kv_bytes : 0_i64),
         self_attention_chunk_and_prepared_kv_bytes: attention_workspace_bytes,
+        explicit_score_tile_bytes: compare_attention_graph ? EXPLICIT_SCORE_TILE_BYTES : 0_i64,
+        explicit_score_tile_multiplier: compare_attention_graph ? EXPLICIT_SCORE_TILE_MULTIPLIER : 0_i64,
+        explicit_score_additional_reserve_bytes: explicit_score_reserve_bytes,
+        explicit_score_reserve_is_heuristic: true,
         opaque_mps_reserve_bytes: OPAQUE_RESERVE, estimated_bytes: total_estimate,
-        budget_bytes: MAX_EXPLICIT_BUDGET, attention_backend: "mps_chunked",
+        budget_bytes: explicit_budget_bytes,
+        budget_limit_gib: explicit_budget_bytes / (1024_i64 * 1024 * 1024),
+        attention_backend: "mps_chunked",
         comparison_mode: comparison_mode, baseline_query_chunk: baseline_chunk,
         candidate_query_chunk: candidate_chunk,
-        baseline_kv_layout: "B,K,H,D",
-        candidate_kv_layout: compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
+        baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
+        candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
         query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
-        layout_preparation_inside_block_encode: compare_kv_layout,
+        layout_preparation_inside_block_encode: compare_attention_graph || compare_kv_layout,
+        baseline_explicit_qk_softmax_pv: false,
+        candidate_explicit_qk_softmax_pv: compare_attention_graph,
         exact_required: require_exact,
         cross_groups_per_segment: [320, candidate_groups], scope: "one real block-0 forward, synthetic inputs; not video quality or full-stack qualification"}.to_json)
   STDOUT.flush
@@ -315,14 +333,16 @@ begin
   chunk_q = scratch.not_nil!.alloc("chunk_q", baseline_chunk * DIM)
   chunk_a = scratch.not_nil!.alloc("chunk_a", baseline_chunk * DIM)
   chunk_b = scratch.not_nil!.alloc("chunk_b", baseline_chunk * DIM)
+  candidate_prepared_k = (compare_kv_layout || compare_attention_graph) ? scratch.not_nil!.alloc("shared_prepared_k_bhkd", FULL_VALUES.to_i32) : nil
+  candidate_prepared_v = (compare_kv_layout || compare_attention_graph) ? scratch.not_nil!.alloc("shared_prepared_v_bhkd", FULL_VALUES.to_i32) : nil
   attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
     1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, baseline_chunk,
     scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
     scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
-    chunk_q, chunk_a, chunk_b)
-  if compare_self_chunks || compare_kv_layout
-    candidate_prepared_k = compare_kv_layout ? scratch.not_nil!.alloc("candidate_prepared_k_bhkd", FULL_VALUES.to_i32) : nil
-    candidate_prepared_v = compare_kv_layout ? scratch.not_nil!.alloc("candidate_prepared_v_bhkd", FULL_VALUES.to_i32) : nil
+    chunk_q, chunk_a, chunk_b,
+    compare_attention_graph ? candidate_prepared_k : nil,
+    compare_attention_graph ? candidate_prepared_v : nil)
+  if compare_self_chunks || compare_kv_layout || compare_attention_graph
     candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
       1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
       scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
@@ -330,7 +350,8 @@ begin
       scratch.not_nil!.alloc("candidate_chunk_q", candidate_chunk * DIM),
       scratch.not_nil!.alloc("candidate_chunk_a", candidate_chunk * DIM),
       scratch.not_nil!.alloc("candidate_chunk_b", candidate_chunk * DIM),
-      candidate_prepared_k, candidate_prepared_v)
+      candidate_prepared_k, candidate_prepared_v,
+      explicit_qk_softmax_pv: compare_attention_graph)
   end
   candidate_attention = candidate_attention_workspace || attention_workspace.not_nil!
 
@@ -361,10 +382,13 @@ begin
         exact_equal: warm_compare[:bit_differences] == 0,
         strict_pass: warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0,
         comparison_mode: comparison_mode, exact_required: require_exact,
-        baseline_kv_layout: "B,K,H,D",
-        candidate_kv_layout: compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
+        baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
+        candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
         baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
-        layout_preparation_inside_block_encode: compare_kv_layout,
+        layout_preparation_inside_block_encode: compare_attention_graph || compare_kv_layout,
+        prepared_kv_pair_shared_between_arms: compare_attention_graph,
+        baseline_explicit_qk_softmax_pv: false,
+        candidate_explicit_qk_softmax_pv: compare_attention_graph,
         comparison_outside_timed_arms: true}.to_json)
   STDOUT.flush
   unless (!require_exact || warm_compare[:bit_differences] == 0) && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
@@ -377,11 +401,14 @@ begin
           command_segments: arm.segments, terminal_waits: arm.terminal_waits,
           encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,
           comparison_mode: comparison_mode,
-          kv_layout: arm.order == "B" && compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
+          kv_layout: compare_attention_graph || (arm.order == "B" && compare_kv_layout) ? "B,H,K,D" : "B,K,H,D",
           baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
           query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
-          layout_preparation_inside_block_encode: arm.order == "B" && compare_kv_layout,
-          prepared_kv_buffer_bytes: arm.order == "B" && compare_kv_layout ? prepared_kv_bytes : 0_i64,
+          layout_preparation_inside_block_encode: compare_attention_graph || (arm.order == "B" && compare_kv_layout),
+          prepared_kv_buffer_bytes: compare_attention_graph || (arm.order == "B" && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
+          prepared_kv_pair_shared_between_arms: compare_attention_graph,
+          prepared_kv_buffer_bytes_refreshed_per_encode: compare_attention_graph || (arm.order == "B" && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
+          explicit_qk_softmax_pv: compare_attention_graph && arm.order == "B",
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
   STDOUT.flush
@@ -403,11 +430,14 @@ begin
             terminal_waits: arm.terminal_waits,
             encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,
             comparison_mode: comparison_mode,
-            kv_layout: baseline ? "B,K,H,D" : (compare_kv_layout ? "B,H,K,D" : "B,K,H,D"),
+            kv_layout: compare_attention_graph || (!baseline && compare_kv_layout) ? "B,H,K,D" : "B,K,H,D",
             baseline_query_chunk_rows: baseline_chunk, candidate_query_chunk_rows: candidate_chunk,
             query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
-            layout_preparation_inside_block_encode: !baseline && compare_kv_layout,
-            prepared_kv_buffer_bytes: !baseline && compare_kv_layout ? prepared_kv_bytes : 0_i64,
+            layout_preparation_inside_block_encode: compare_attention_graph || (!baseline && compare_kv_layout),
+            prepared_kv_buffer_bytes: compare_attention_graph || (!baseline && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
+            prepared_kv_pair_shared_between_arms: compare_attention_graph,
+            prepared_kv_buffer_bytes_refreshed_per_encode: compare_attention_graph || (!baseline && compare_kv_layout) ? prepared_kv_bytes : 0_i64,
+            explicit_qk_softmax_pv: compare_attention_graph && !baseline,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
     end
@@ -419,6 +449,12 @@ begin
           tolerance: "2e-5+2e-5*abs(reference)", exact_equal: comparison[:bit_differences] == 0,
           strict_pass: comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0,
           comparison_mode: comparison_mode, exact_required: require_exact,
+          baseline_kv_layout: compare_attention_graph ? "B,H,K,D" : "B,K,H,D",
+          candidate_kv_layout: compare_attention_graph || compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
+          layout_preparation_inside_block_encode: compare_attention_graph || compare_kv_layout,
+          prepared_kv_pair_shared_between_arms: compare_attention_graph,
+          baseline_explicit_qk_softmax_pv: false,
+          candidate_explicit_qk_softmax_pv: compare_attention_graph,
           comparison_outside_timed_arms: true}.to_json)
     raise "Block output comparison failed" unless (!require_exact || comparison[:bit_differences] == 0) && comparison[:tolerance_violations] == 0 && comparison[:nonfinite] == 0
     STDOUT.flush

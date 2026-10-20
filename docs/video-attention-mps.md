@@ -16,6 +16,16 @@ call, never stale activations across blocks or diffusion steps. Omitting both
 buffers retains the original graph path. Direct `transpose_kv!` callers must
 serialize access and retain all four bindings through terminal completion.
 
+The final `explicit_qk_softmax_pv: true` argument selects a prepared F32
+QK/scale/softmax/PV graph instead of the SDPA graph operator. It requires the
+head-major pair and follows the pinned PyTorch MPS math sequence, including its
+`1e-20f` addition before scaling. The default is false. Both graph variants
+use the same ownership, scratch and terminal-completion rules. Workspaces that
+share a writable prepared K/V pair must be serialized by the caller through
+terminal completion; their separate in-flight guards do not enforce mutual
+exclusion. The new mode's qualification and score-workspace admission are
+tracked in [wan-self-attention-benchmark.md](wan-self-attention-benchmark.md).
+
 The caller chooses 1..1,024 query rows; existing callers retain 512 by default.
 Three caller-owned chunk buffers cost 31,457,280 bytes at C=5,120 and 512 rows,
 or 62,914,560 bytes at 1,024 rows. Admission must account for the chosen size.
@@ -41,8 +51,8 @@ result to the correspondingly indexed oracle. GPU A/B/A input mutation checks
 and a later completed-chain reuse reject stale prepared bindings. Alias, offset,
 alignment, overflow and lifetime guards are also exercised.
 
-The focused spec now completes five examples without failures, errors or pending
-cases. The added checks cover exact B=2 head-major indexing, separately changed
+The earlier head-major cohort completed five examples without failures, errors
+or pending cases. Those checks cover exact B=2 head-major indexing, separately changed
 K and V in one chain, restored inputs and reuse after a completed chain, plus
 alias/extent and in-flight reuse/release guards. The official BF16 block fixture
 also passes six regression examples at its pinned upstream intermediate gate.
@@ -50,6 +60,13 @@ The earlier shared-scratch transformer/long-key
 regression completed eight examples without failures, errors or pending cases.
 Each attention request has
 one terminal wait and zero explicit MetalBuffer allocations during encoding.
+The explicit-graph cohort subsequently passes seven focused examples and the
+same six official BF16 regression examples. Full-shape synthetic attention is
+bit-identical to its pinned PyTorch oracle, but the real-weight full-block A/B
+warmup rejects the graph substitution at 5,085 values under the unchanged gate.
+No measured block pair or speedup is admitted. The explicit graph remains
+experimental with its default false; details and source bindings are in the
+benchmark document above.
 The actual 40-layer BF16 stack comparison stays numerically rejected; its fresh
 query-chunked receipt is recorded in `docs/video-numerical-drift.md` for the
 user-authorized experiment, rather than promoted to strict parity.
@@ -71,7 +88,10 @@ External evidence remains under
 `attention-mps-chunk-native.log`, `wan-transformer-attention-chunk-native.log`,
 `attention-full-mps-chunk-native.log`, their build logs, and the full-shape probe
 source `attention-full-mps-chunk-probe.cr`. All GPU runs were serialized under
-`scripts/run_safe.sh` with a 15% free-memory floor.
+`scripts/run_safe.sh` with a configured 15% `memory_pressure -Q` threshold.
+That telemetry plus RSS does not bound footprint or swap. After the later memory
+incident the old video process was terminated with explicit user authorization;
+heavy runs are suspended pending stronger memory admission.
 
 Build the focused spec with `make spec_wan`'s prepared bridge objects; set
 `WAN_ATTENTION_MPS_FIXTURE` to the pinned `attention-tiled-qualified/manifest.json`.

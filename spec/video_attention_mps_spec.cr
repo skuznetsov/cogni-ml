@@ -19,6 +19,92 @@ private def mps_attention_fixture_tensor(arena : ML::Video::Arena,
   buffer
 end
 
+describe "Explicit QK-softmax-PV outputs" do
+  it "matches the full pinned output for all six upstream fixtures after same-chain K/V transpose" do
+    fixture_path = ENV["WAN_ATTENTION_MPS_FIXTURE"]?
+    pending! "Set WAN_ATTENTION_MPS_FIXTURE to the qualified MPS fixture manifest" unless fixture_path
+    fixture = JSON.parse(File.read(fixture_path))
+    fixture["torch"].as_s.should eq("2.8.0")
+    fixture["device"].as_s.should eq("mps")
+    fixture["fallback_disabled"].as_bool.should be_true
+    cases = fixture["cases"].as_a
+    cases.size.should eq(6)
+
+    ML::Video::MetalAttentionMPS.prepare_head_major_kv!
+    cases.each do |c|
+      batches = c["batches"].as_i
+      query_rows = c["query_rows"].as_i
+      key_rows = c["key_rows"].as_i
+      heads = c["heads"].as_i
+      head_dim = c["dim"].as_i
+      query_count = batches * query_rows * heads * head_dim
+      kv_count = batches * key_rows * heads * head_dim
+      arena = ML::Video::Arena.new
+      chain : ML::Metal::MPSCommandChain? = nil
+      plan : ML::Video::WanAttentionMPSPlan? = nil
+      workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+      begin
+        q = mps_attention_fixture_tensor(arena, "explicit_q", c["q"], query_count)
+        k = mps_attention_fixture_tensor(arena, "explicit_k", c["k"], kv_count)
+        v = mps_attention_fixture_tensor(arena, "explicit_v", c["v"], kv_count)
+        expected = mps_attention_fixture_tensor(arena, "explicit_expected",
+          c["expected"], query_count)
+        output = arena.alloc("explicit_output", query_count)
+        prepared_k = arena.alloc("explicit_prepared_k", kv_count)
+        prepared_v = arena.alloc("explicit_prepared_v", kv_count)
+
+        if batches == 1
+          chunk_rows = Math.min(query_rows, 16)
+          chunk_count = chunk_rows * heads * head_dim
+          workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1,
+            query_rows, key_rows, heads, head_dim, chunk_rows, q, k, v, output,
+            arena.alloc("explicit_chunk_q", chunk_count),
+            arena.alloc("explicit_chunk_output_a", chunk_count),
+            arena.alloc("explicit_chunk_output_b", chunk_count), prepared_k,
+            prepared_v, explicit_qk_softmax_pv: true)
+          workspace.explicit_qk_softmax_pv?.should be_true
+        else
+          output_b = arena.alloc("explicit_output_b", query_count)
+          plan = ML::Video::WanAttentionMPSPlan.new(batches, query_rows,
+            key_rows, heads, head_dim, q, prepared_k, prepared_v, output,
+            output_b, head_major_kv: true, explicit_qk_softmax_pv: true)
+          plan.explicit_qk_softmax_pv?.should be_true
+        end
+
+        chain = ML::Metal::MPSCommandChain.new
+        allocations_before = ML::MetalBuffer.video_spec_allocations
+        if active_workspace = workspace
+          active_workspace.encode(chain.not_nil!)
+        else
+          ML::Video::MetalAttentionMPS.transpose_kv!(chain.not_nil!, k, v,
+            prepared_k, prepared_v, batches, key_rows, heads, head_dim)
+          plan.not_nil!.encode(chain.not_nil!, 0)
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
+          "#{c["name"].as_s}: explicit encode allocated MetalBuffers"
+        chain.not_nil!.wait_count.should eq(0)
+        chain.not_nil!.commit_and_wait
+        chain.not_nil!.wait_count.should eq(1)
+
+        mps_attention_assert_strict!(output, expected, query_count,
+          "#{c["name"].as_s}: explicit QK-softmax-PV vs pinned upstream")
+        puts "WAN_MPS_EXPLICIT_QK_SOFTMAX_PV case=#{c["name"].as_s} " +
+             "query_rows=#{query_rows} key_rows=#{key_rows} heads=#{heads} " +
+             "head_dim=#{head_dim} output_values=#{query_count} " +
+             "waits=#{chain.not_nil!.wait_count}"
+      ensure
+        chain.try do |active|
+          active.commit_and_wait unless active.completed?
+          active.release
+        end
+        workspace.try(&.release)
+        plan.try(&.release)
+        arena.release
+      end
+    end
+  end
+end
+
 private def mps_attention_copy_equal?(left : ML::MetalBuffer,
                                       right : ML::MetalBuffer,
                                       count : Int32) : Bool
@@ -89,6 +175,35 @@ private def mps_attention_negate_buffer!(chain : ML::Metal::MPSCommandChain,
     .set_buffer(buffer, 0, ML::Metal::BufferAccess::ReadWrite)
     .set_value(count.to_u32, 1)
     .dispatch_1d(count)
+end
+
+describe "Explicit QK-softmax-PV admission" do
+  it "rejects the explicit graph without prepared K/V before pipeline preparation" do
+    arena = ML::Video::Arena.new
+    begin
+      q = arena.alloc("explicit_guard_q", 64)
+      k = arena.alloc("explicit_guard_k", 64)
+      v = arena.alloc("explicit_guard_v", 64)
+      output = arena.alloc("explicit_guard_output", 64)
+      scratch_q = arena.alloc("explicit_guard_scratch_q", 64)
+      scratch_a = arena.alloc("explicit_guard_scratch_a", 64)
+      scratch_b = arena.alloc("explicit_guard_scratch_b", 64)
+
+      # The constructor must reject the missing pair before preparing the
+      # chunk or transpose pipelines, even if a previous test populated them.
+      ML::Metal::PipelineCache.clear
+      ML::Metal::PipelineCache.entry_count.should eq(0)
+      expect_raises(ArgumentError, "explicit QK-softmax-PV requires head-major K/V") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
+          q, k, v, output, scratch_q, scratch_a, scratch_b,
+          explicit_qk_softmax_pv: true)
+      end
+      ML::Metal::PipelineCache.entry_count.should eq(0),
+        "invalid explicit attention prepared a Metal pipeline before rejecting K/V"
+    ensure
+      arena.release
+    end
+  end
 end
 
 describe "Head-major MPS K/V preparation" do
@@ -188,8 +303,10 @@ describe "Head-major MPS K/V preparation" do
       chunk_output_b = arena.alloc("head_major_chunk_output_b", chunk_count)
       workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
         key_rows, heads, head_dim, chunk_rows, q, k, v, output, chunk_q,
-        chunk_output_a, chunk_output_b, prepared_k, prepared_v)
+        chunk_output_a, chunk_output_b, prepared_k, prepared_v,
+        explicit_qk_softmax_pv: true)
       workspace.head_major_kv?.should be_true
+      workspace.explicit_qk_softmax_pv?.should be_true
       expected_scratch = chunk_rows.to_i64 * channels * sizeof(Float32) * 3 +
                          kv_count.to_i64 * sizeof(Float32) * 2
       workspace.scratch_bytes.should eq(expected_scratch)
@@ -293,7 +410,9 @@ describe "Head-major MPS K/V preparation" do
       scratch_a = arena.alloc("inflight_scratch_a", 64)
       scratch_b = arena.alloc("inflight_scratch_b", 64)
       workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64,
-        1, q, k, v, output, scratch_q, scratch_a, scratch_b, prepared_k, prepared_v)
+        1, q, k, v, output, scratch_q, scratch_a, scratch_b, prepared_k, prepared_v,
+        explicit_qk_softmax_pv: true)
+      workspace.explicit_qk_softmax_pv?.should be_true
       chain = ML::Metal::MPSCommandChain.new
       workspace.encode(chain.not_nil!)
       chain.not_nil!.completed?.should be_false

@@ -31050,3 +31050,40 @@ Refresh after source/toolchain/device/model/workload changes.
   corrections and refresh triggers: docs/wan-self-attention-benchmark.md.
   Refresh on code/lifetime, inputs/weights, geometry, precision, device/runtime
   or queue-isolation changes. Full cold/repeat video speed and quality remain open.
+
+### 2026-10-20 — Explicit Wan attention: local gain, full-block rejection
+
+- Added an opt-in F32 QK/epsilon/scale/softmax/PV graph on the same prepared
+  head-major K/V as SDPA; default false. Fixed query128/cross320, per-encode GPU
+  K/V refresh, caller-serialized shared buffers, no new operator host waits or
+  activation readbacks. Focused upstream/lifetime checks pass 7/0 and existing
+  official BF16 block/audio regression passes 6/0 at its smaller fixture geometry.
+- At B1 Q=K36,608 H40 D128, standalone AB/BA/AB host medians are 17.060943 to
+  11.678053 s (31.55% lower; all three pairs win). Every one of eight full-output
+  checks passes; four explicit outputs are bit-identical to the pinned PyTorch
+  oracle. The corruption control rejects one changed value. Each timed arm has
+  one terminal wait and zero explicit encode allocations. This is descriptive
+  local evidence, not full-video throughput or exclusive CPU/GPU attribution.
+- Full BF16 block warmup rejects: 5,085/187,432,960 violations, max absolute
+  6.0796738e-5, normalized 2.5658143, no nonfinites. There are zero measured block
+  pairs; no block speedup or promotion is admitted. Numerical admission is BROKEN
+  within this tested scope; the rejection decision is ROBUST under correlated
+  mini-Quadrumvirate review. Do not widen tolerances. The projection-amplification
+  hypothesis needs same-input self_attention/projection/residual traces and A/A
+  replay; their external generator is unexecuted, so cause remains unresolved.
+- User reported memory growth, then explicitly authorized termination of the
+  resumed original video PID34536 at step19/40. vmmap reported footprint32.1GiB
+  and writable swap30.9GiB despite ps RSS about45MiB; memory_pressure -Q reported
+  76% nearby. The 15% telemetry threshold plus RSS cannot certify physical
+  headroom. Process and its AGX client are absent; no automatic restart, no new
+  GPU/build probes. Strengthen footprint/swap admission before new heavy runs.
+  Other projects were untouched. This does not establish a leak.
+- Active frontier: CPU-only performance analysis while retaining the numerical
+  rejection. Next falsifiers: first strict trace crossing and A/A replay after
+  memory admission is repaired; then all three whole-block pairs if gates pass.
+  Native F32 tiled K/V reuse and fewer command submissions remain candidates.
+  Source, commands, raw hashes and refresh triggers: docs/wan-self-attention-benchmark.md;
+  external evidence includes explicit-graph-qualified-summary-v1.json,
+  explicit-graph-bindings-v1.json and user-memory-release-20261020.json.
+  Refresh after code/lifetime, inputs/weights, geometry, precision, device/runtime,
+  memory admission or queue-isolation changes. Known strict stack drift stays open.

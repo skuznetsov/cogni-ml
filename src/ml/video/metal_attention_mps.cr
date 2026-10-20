@@ -187,6 +187,11 @@ end
       heads : Int32, head_dim : Int32, q : Pointer(Void), k : Pointer(Void),
       v : Pointer(Void), output_a : Pointer(Void), output_b : Pointer(Void),
     ) : Pointer(Void)
+    fun plan_create_head_major_kv_explicit = gs_wan_attention_mps_plan_create_head_major_kv_explicit(
+      device : Pointer(Void), batches : Int32, query_rows : Int32, key_rows : Int32,
+      heads : Int32, head_dim : Int32, q : Pointer(Void), k : Pointer(Void),
+      v : Pointer(Void), output_a : Pointer(Void), output_b : Pointer(Void),
+    ) : Pointer(Void)
     fun encode = gs_wan_attention_mps_encode(plan : Pointer(Void),
                                              command : Pointer(Void), output_slot : Int32) : Int32
     fun copy = gs_wan_attention_mps_copy(command : Pointer(Void),
@@ -198,9 +203,10 @@ end
 {% end %}
 
 module ML::Video
-  # Opt-in prepared MPSGraph SDPA. Q and both result backings are fixed
-  # caller-owned shared F32 BTHD buffers. K/V are BTHD by default; the optional
-  # head-major entrypoint binds caller-owned shared F32 BHTD K/V. The caller
+  # Opt-in prepared MPSGraph attention. Q and both result backings are fixed
+  # caller-owned shared F32 BTHD buffers. K/V are BTHD by default; optional
+  # head-major plans bind caller-owned shared F32 BHTD K/V and may select an
+  # explicit QK/scale/softmax/PV graph instead of the SDPA operation. The caller
   # must keep every binding valid and immutable until the chain's terminal wait.
   # The executable targets only context; MPSGraph may keep private workspace
   # outside MetalBuffer accounting.
@@ -211,12 +217,17 @@ module ML::Video
     getter heads : Int32
     getter head_dim : Int32
 
+    def explicit_qk_softmax_pv? : Bool
+      @explicit_qk_softmax_pv
+    end
+
     @q : ML::MetalBuffer
     @k : ML::MetalBuffer
     @v : ML::MetalBuffer
     @output_a : ML::MetalBuffer
     @output_b : ML::MetalBuffer
     @head_major_kv : Bool
+    @explicit_qk_softmax_pv : Bool
     @handle : Pointer(Void)
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -225,8 +236,13 @@ module ML::Video
                    @heads : Int32, @head_dim : Int32, @q : ML::MetalBuffer,
                    @k : ML::MetalBuffer, @v : ML::MetalBuffer,
                    @output_a : ML::MetalBuffer, @output_b : ML::MetalBuffer,
-                   head_major_kv : Bool = false)
+                   head_major_kv : Bool = false,
+                   explicit_qk_softmax_pv : Bool = false)
       @head_major_kv = head_major_kv
+      @explicit_qk_softmax_pv = explicit_qk_softmax_pv
+      if @explicit_qk_softmax_pv && !@head_major_kv
+        raise ArgumentError.new("explicit QK-softmax-PV requires head-major K/V")
+      end
       @handle = Pointer(Void).null
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
@@ -248,7 +264,12 @@ module ML::Video
       end
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         device = ML::Metal::Device.instance.device_handle
-        @handle = if @head_major_kv
+        @handle = if @explicit_qk_softmax_pv
+                    WanAttentionMPSFFI.plan_create_head_major_kv_explicit(device,
+                      @batches, @query_rows, @key_rows, @heads, @head_dim,
+                      @q.handle, @k.handle, @v.handle, @output_a.handle,
+                      @output_b.handle)
+                  elsif @head_major_kv
                     WanAttentionMPSFFI.plan_create_head_major_kv(device,
                       @batches, @query_rows, @key_rows, @heads, @head_dim,
                       @q.handle, @k.handle, @v.handle, @output_a.handle,
@@ -412,6 +433,8 @@ module ML::Video
   # path refreshes caller-owned prepared K/V on every encode before reusing the
   # same graph plan. Query and context scratch also stay caller-owned; each span
   # uses the same serial command chain, with no wait or MetalBuffer allocation.
+  # Callers sharing prepared K/V across workspaces must serialize their encodes
+  # through each chain's terminal wait.
   class WanAttentionMPSChunkWorkspace
     # The caller still selects the query chunk and owns its scratch/memory
     # admission. A larger maximum does not change any pipeline default.
@@ -433,6 +456,7 @@ module ML::Video
     @chunk_output_b : ML::MetalBuffer
     @head_major_k : ML::MetalBuffer?
     @head_major_v : ML::MetalBuffer?
+    @explicit_qk_softmax_pv : Bool
     @plan : WanAttentionMPSPlan
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -452,6 +476,10 @@ module ML::Video
       !@head_major_k.nil?
     end
 
+    def explicit_qk_softmax_pv? : Bool
+      @explicit_qk_softmax_pv
+    end
+
     def initialize(@batches : Int32, @query_rows : Int32, @key_rows : Int32,
                    @heads : Int32, @head_dim : Int32, @chunk_rows : Int32,
                    @q : ML::MetalBuffer, @k : ML::MetalBuffer, @v : ML::MetalBuffer,
@@ -459,15 +487,20 @@ module ML::Video
                    @chunk_output_a : ML::MetalBuffer,
                    @chunk_output_b : ML::MetalBuffer,
                    head_major_k : ML::MetalBuffer? = nil,
-                   head_major_v : ML::MetalBuffer? = nil)
+                   head_major_v : ML::MetalBuffer? = nil,
+                   explicit_qk_softmax_pv : Bool = false)
       @head_major_k = head_major_k
       @head_major_v = head_major_v
+      @explicit_qk_softmax_pv = explicit_qk_softmax_pv
       raise ArgumentError.new("MPS attention chunk workspace supports B=1 only") unless @batches == 1
       unless @chunk_rows > 0 && @chunk_rows <= MAX_CHUNK_ROWS
         raise ArgumentError.new("MPS attention chunk rows must be within 1..#{MAX_CHUNK_ROWS}")
       end
       if @head_major_k.nil? != @head_major_v.nil?
         raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+      end
+      if @explicit_qk_softmax_pv && @head_major_k.nil?
+        raise ArgumentError.new("explicit QK-softmax-PV requires head-major K/V")
       end
 
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
@@ -520,7 +553,7 @@ module ML::Video
         MetalAttentionMPS.prepare_head_major_kv!
         @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
           @head_dim, @chunk_q, prepared_k, prepared_v, @chunk_output_a,
-          @chunk_output_b, true)
+          @chunk_output_b, true, @explicit_qk_softmax_pv)
       else
         @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
           @head_dim, @chunk_q, @k, @v, @chunk_output_a, @chunk_output_b)

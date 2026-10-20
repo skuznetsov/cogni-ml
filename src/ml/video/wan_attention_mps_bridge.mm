@@ -1,7 +1,7 @@
-// Prepared opt-in unmasked SDPA experiment. Q and context use caller-owned F32
-// BTHD buffers. K/V are BTHD by default or caller-prepared BHTD on the separate
-// head-major entrypoint. MPSGraph may allocate private internal workspace, so
-// this bridge makes no memory-efficiency claim.
+// Prepared opt-in unmasked MPSGraph attention experiment. Q and context use
+// caller-owned F32 BTHD buffers. K/V are BTHD by default or caller-prepared
+// BHTD on a head-major entrypoint. MPSGraph may allocate private internal
+// workspace, so this bridge makes no memory-efficiency claim.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
@@ -76,9 +76,11 @@ static void *wan_attention_mps_plan_create_impl(
     void *deviceHandle, int32_t batches, int32_t queryRows,
     int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
     void *kHandle, void *vHandle, void *outputAHandle,
-    void *outputBHandle, bool headMajorKV) {
+    void *outputBHandle, bool headMajorKV, bool explicitQKSoftmaxPV) {
   if (!deviceHandle || !qHandle || !kHandle || !vHandle || !outputAHandle ||
       !outputBHandle)
+    return nullptr;
+  if (explicitQKSoftmaxPV && !headMajorKV)
     return nullptr;
   if (@available(macOS 15.0, *)) {
     @autoreleasepool {
@@ -163,18 +165,58 @@ static void *wan_attention_mps_plan_create_impl(
                                             withDimension:2
                                                      name:@"wan_v_bhtd"];
         const float scale = 1.0f / sqrtf((float)headDim);
-        MPSGraphTensor *contextHeads =
-            [graph scaledDotProductAttentionWithQueryTensor:qh
-                                                   keyTensor:kh
-                                                 valueTensor:vh
-                                                       scale:scale
-                                                        name:@"wan_sdpa_bhqd"];
+        MPSGraphTensor *contextHeads = nil;
+        MPSGraphTensor *keyTranspose = nil;
+        MPSGraphTensor *queryKey = nil;
+        MPSGraphTensor *queryKeyWithEpsilon = nil;
+        MPSGraphTensor *scaleTensor = nil;
+        MPSGraphTensor *scaledQueryKey = nil;
+        MPSGraphTensor *probabilities = nil;
+        if (explicitQKSoftmaxPV) {
+          keyTranspose = [graph transposeTensor:k
+                                      dimension:2
+                                  withDimension:3
+                                           name:@"wan_k_transpose_bhdq"];
+          queryKey = [graph matrixMultiplicationWithPrimaryTensor:qh
+                                                 secondaryTensor:keyTranspose
+                                                            name:@"wan_qk_bhqk"];
+          // Match PyTorch 2.8.0's MPS attention workaround for the MPSGraph
+          // SDPA optimizer/leak behavior: add F32 epsilon before scaling.
+          MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
+                                                        shape:@[ @1 ]
+                                                     dataType:MPSDataTypeFloat32];
+          queryKeyWithEpsilon = [graph additionWithPrimaryTensor:queryKey
+                                                 secondaryTensor:epsilon
+                                                            name:@"wan_qk_epsilon_bhqk"];
+          scaleTensor = [graph constantWithScalar:scale
+                                            shape:@[ @1 ]
+                                         dataType:MPSDataTypeFloat32];
+          scaledQueryKey = [graph multiplicationWithPrimaryTensor:queryKeyWithEpsilon
+                                                  secondaryTensor:scaleTensor
+                                                             name:@"wan_scaled_qk_bhqk"];
+          probabilities = [graph softMaxWithTensor:scaledQueryKey
+                                               axis:3
+                                               name:@"wan_probabilities_bhqk"];
+          contextHeads = [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                                      secondaryTensor:vh
+                                                                 name:@"wan_context_bhqd"];
+        } else {
+          contextHeads =
+              [graph scaledDotProductAttentionWithQueryTensor:qh
+                                                     keyTensor:kh
+                                                   valueTensor:vh
+                                                         scale:scale
+                                                          name:@"wan_sdpa_bhqd"];
+        }
         MPSGraphTensor *context = [graph transposeTensor:contextHeads
                                                dimension:1
                                            withDimension:2
                                                     name:@"wan_context_bthd"];
         if (!graph || !q || !k || !v || !qh || !kh || !vh || !contextHeads ||
-            !context)
+            !context ||
+            (explicitQKSoftmaxPV &&
+             (!keyTranspose || !queryKey || !queryKeyWithEpsilon ||
+              !scaleTensor || !scaledQueryKey || !probabilities)))
           return nullptr;
 
         MPSGraphTensorShapedTypeDictionary *feeds = @{
@@ -262,7 +304,7 @@ extern "C" void *gs_wan_attention_mps_plan_create(
     void *outputBHandle) {
   return wan_attention_mps_plan_create_impl(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
-      kHandle, vHandle, outputAHandle, outputBHandle, false);
+      kHandle, vHandle, outputAHandle, outputBHandle, false, false);
 }
 
 // Opt-in path for caller-prepared contiguous BHTD K/V. Q and context remain
@@ -274,7 +316,18 @@ extern "C" void *gs_wan_attention_mps_plan_create_head_major_kv(
     void *outputBHandle) {
   return wan_attention_mps_plan_create_impl(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
-      kHandle, vHandle, outputAHandle, outputBHandle, true);
+      kHandle, vHandle, outputAHandle, outputBHandle, true, false);
+}
+
+// Opt-in explicit F32 QK/scale/softmax/PV graph on caller-prepared BHTD K/V.
+extern "C" void *gs_wan_attention_mps_plan_create_head_major_kv_explicit(
+    void *deviceHandle, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
+    void *kHandle, void *vHandle, void *outputAHandle,
+    void *outputBHandle) {
+  return wan_attention_mps_plan_create_impl(
+      deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
+      kHandle, vHandle, outputAHandle, outputBHandle, true, true);
 }
 
 extern "C" int32_t gs_wan_attention_mps_encode(void *planHandle,
