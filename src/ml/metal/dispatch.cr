@@ -69,6 +69,10 @@ module ML
         raise "Metal disabled (cpu_only)"
       end
 
+      def encode_wan_t5_mps_fc2(plan : Pointer(Void)) : Nil
+        raise "Metal disabled (cpu_only)"
+      end
+
       def end_encoding : Nil
       end
     end
@@ -170,6 +174,12 @@ require "./device"
 require "../core/tensor"
 require "./pipeline_selection_trace"
 
+# Opt-in Wan UMT5 seam. Its object is linked only by the Wan target; unused
+# declarations do not add MPS dependencies to ordinary Metal callers.
+lib WanT5MPSFFI
+  fun encode = gs_wan_t5_mps_fc2_encode(plan : Void*, command : Void*, encoder : Void*) : Int32
+end
+
 module ML
   module Metal
     enum BufferAccess
@@ -206,6 +216,15 @@ module ML
         raise "Failed to create compute encoder" if @encoder.null?
         @pipeline = nil
         @ended = false
+      end
+
+      # The opaque setup plan borrows this exact command/encoder pair. It may
+      # neither submit nor close it; ordinary native dispatches can follow.
+      def encode_wan_t5_mps_fc2(plan : Pointer(Void)) : Nil
+        raise ArgumentError.new("Wan T5 MPS requires an open encoder and live plan") if @ended || plan.null?
+        status = WanT5MPSFFI.encode(plan, @cmd_buffer, @encoder)
+        raise "Wan T5 MPS encode rejected (#{status})" unless status == 0
+        @pipeline = nil
       end
 
       # Insert memory barrier between dependent dispatches (concurrent encoder only)
