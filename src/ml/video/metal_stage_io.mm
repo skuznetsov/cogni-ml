@@ -10,6 +10,7 @@
 @property(nonatomic, strong) id<MTLBuffer> buffer;
 @property(nonatomic, strong) id<MTLIOFileHandle> source;
 @property(nonatomic) NSUInteger offset;
+@property(nonatomic) NSUInteger destinationOffset;
 @property(nonatomic) NSUInteger bytes;
 @property(nonatomic, copy) NSString *path;
 @property(nonatomic, strong) NSDictionary *identity;
@@ -20,6 +21,7 @@
 @interface CogniStagePlan : NSObject
 @property(nonatomic, weak) CogniStageIO *owner;
 @property(nonatomic, strong) NSArray<CogniStageLoad *> *loads;
+@property(nonatomic, strong) NSArray<NSArray<CogniStageLoad *> *> *batches;
 @end
 @implementation CogniStagePlan
 @end
@@ -35,6 +37,9 @@
 @property(nonatomic, strong) NSMutableArray<CogniStagePlan *> *plans;
 @property(nonatomic) uint64_t retired;
 @property(nonatomic) uint64_t nextRetired;
+@property(nonatomic, strong) CogniStagePlan *loadingPlan;
+@property(nonatomic) NSUInteger nextBatch;
+@property(nonatomic) int32_t stageCount;
 @property(nonatomic) BOOL open;
 @property(nonatomic) BOOL finished;
 @end
@@ -64,8 +69,10 @@ extern "C" void *gs_stage_io_create(void *deviceHandle) {
 
 extern "C" void *gs_stage_io_plan(void *handle, void **buffers,
                                    const char **paths, const int64_t *offsets,
-                                   const int64_t *sizes, int32_t count) {
-  if (!handle || !buffers || !paths || !offsets || !sizes || count <= 0)
+                                   const int64_t *sizes, int32_t count,
+                                   int64_t maxBatchBytes) {
+  if (!handle || !buffers || !paths || !offsets || !sizes || count <= 0 ||
+      maxBatchBytes <= 0 || (uint64_t)maxBatchBytes > NSUIntegerMax)
     return nullptr;
   @autoreleasepool {
     CogniStageIO *owner = (__bridge CogniStageIO *)handle;
@@ -104,6 +111,7 @@ extern "C" void *gs_stage_io_plan(void *handle, void **buffers,
       load.buffer = buffer;
       load.source = source;
       load.offset = (NSUInteger)offsets[i];
+      load.destinationOffset = 0;
       load.bytes = (NSUInteger)sizes[i];
       load.path = path;
       load.identity = @{
@@ -113,15 +121,53 @@ extern "C" void *gs_stage_io_plan(void *handle, void **buffers,
       };
       [loads addObject:load];
     }
+    // Validate the entire logical stage above, before splitting it. In
+    // particular, overlap between different batches must still be rejected.
+    // Destination offsets let even a single multi-GB tensor be bounded.
+    NSMutableArray<NSArray<CogniStageLoad *> *> *batches = [NSMutableArray new];
+    NSMutableArray<CogniStageLoad *> *batch = [NSMutableArray new];
+    NSUInteger batchBytes = 0;
+    for (CogniStageLoad *load in loads) {
+      NSUInteger consumed = 0;
+      while (consumed < load.bytes) {
+        NSUInteger bytes = MIN(load.bytes - consumed, (NSUInteger)maxBatchBytes - batchBytes);
+        CogniStageLoad *part = [CogniStageLoad new];
+        part.buffer = load.buffer;
+        part.source = load.source;
+        part.offset = load.offset + consumed;
+        part.destinationOffset = consumed;
+        part.bytes = bytes;
+        part.path = load.path;
+        part.identity = load.identity;
+        [batch addObject:part];
+        batchBytes += bytes;
+        consumed += bytes;
+        if (batchBytes == (NSUInteger)maxBatchBytes) {
+          [batches addObject:[batch copy]];
+          batch = [NSMutableArray new];
+          batchBytes = 0;
+        }
+      }
+    }
+    if (batch.count) [batches addObject:[batch copy]];
+    if (batches.count > INT32_MAX) return nullptr;
     CogniStagePlan *plan = [CogniStagePlan new];
     plan.owner = owner;
     plan.loads = loads;
+    plan.batches = batches;
     [owner.plans addObject:plan];
     return (__bridge_retained void *)plan;
   }
 }
 
-extern "C" int32_t gs_stage_io_begin(void *handle, void *planHandle, void *rootHandle) {
+extern "C" int32_t gs_stage_io_plan_batch_count(void *handle) {
+  if (!handle) return 0;
+  CogniStagePlan *plan = (__bridge CogniStagePlan *)handle;
+  return (int32_t)plan.batches.count;
+}
+
+extern "C" int32_t gs_stage_io_begin_batch(void *handle, void *planHandle,
+                                            int32_t batchIndex, void *rootHandle) {
   if (!handle || !planHandle || !rootHandle) return -1;
   @autoreleasepool {
     CogniStageIO *owner = (__bridge CogniStageIO *)handle;
@@ -129,22 +175,31 @@ extern "C" int32_t gs_stage_io_begin(void *handle, void *planHandle, void *rootH
     id<MTLCommandBuffer> root = (__bridge id<MTLCommandBuffer>)rootHandle;
     if (owner.finished || owner.open || plan.owner != owner ||
         root.commandQueue.device != owner.device || root.status != MTLCommandBufferStatusNotEnqueued ||
-        owner.retired > UINT64_MAX - 2) return -1;
+        owner.retired > UINT64_MAX - 2 || batchIndex < 0 ||
+        (NSUInteger)batchIndex >= plan.batches.count || owner.stageCount == INT32_MAX ||
+        owner.commands.count == INT32_MAX) return -1;
+    if (batchIndex == 0) {
+      if (owner.loadingPlan) return -1;
+    } else if (owner.loadingPlan != plan || owner.nextBatch != (NSUInteger)batchIndex) {
+      return -1;
+    }
     // Recheck the immutable-file contract before enqueuing any part of a
     // stage. MetalIO may cache a handle's original bytes after truncation.
     // This is an identity guard, not a lock against concurrent file mutation.
-    for (CogniStageLoad *load in plan.loads) {
-      NSDictionary *attributes = [[NSFileManager defaultManager]
-          attributesOfItemAtPath:load.path error:nil];
-      for (NSString *key in load.identity)
-        if (![attributes[key] isEqual:load.identity[key]]) return -4;
+    if (batchIndex == 0) {
+      for (CogniStageLoad *load in plan.loads) {
+        NSDictionary *attributes = [[NSFileManager defaultManager]
+            attributesOfItemAtPath:load.path error:nil];
+        for (NSString *key in load.identity)
+          if (![attributes[key] isEqual:load.identity[key]]) return -4;
+      }
     }
     id<MTLIOCommandBuffer> command = [owner.queue commandBuffer];
     if (!command) return -2;
     uint64_t ready = owner.retired + 1;
     if (owner.retired) [command waitForEvent:owner.event value:owner.retired];
-    for (CogniStageLoad *load in plan.loads)
-      [command loadBuffer:load.buffer offset:0 size:load.bytes sourceHandle:load.source
+    for (CogniStageLoad *load in plan.batches[(NSUInteger)batchIndex])
+      [command loadBuffer:load.buffer offset:load.destinationOffset size:load.bytes sourceHandle:load.source
           sourceHandleOffset:load.offset];
 
     // Readiness is published by the I/O completion notification, after status
@@ -163,6 +218,14 @@ extern "C" int32_t gs_stage_io_begin(void *handle, void *planHandle, void *rootH
     [owner.commands addObject:command];
     owner.open = YES;
     owner.nextRetired = ready + 1;
+    if ((NSUInteger)batchIndex + 1 == plan.batches.count) {
+      owner.loadingPlan = nil;
+      owner.nextBatch = 0;
+      owner.stageCount += 1;
+    } else {
+      owner.loadingPlan = plan;
+      owner.nextBatch = (NSUInteger)batchIndex + 1;
+    }
     [root encodeWaitForEvent:owner.event value:ready];
     [command commit];
     return 0;
@@ -183,14 +246,21 @@ extern "C" int32_t gs_stage_io_retire(void *handle, void *rootHandle) {
 
 // Call only after the compute chain's existing terminal completion. Every I/O
 // completion published readiness before that chain could pass its stage wait.
-extern "C" int32_t gs_stage_io_finish(void *handle, int32_t *stages) {
-  if (!handle || !stages) return -1;
+extern "C" int32_t gs_stage_io_finish(void *handle, int32_t *stages, int32_t *batches) {
+  if (!handle || !stages || !batches) return -1;
   CogniStageIO *owner = (__bridge CogniStageIO *)handle;
   if (owner.open) return -1;
   for (id<MTLIOCommandBuffer> command in owner.commands)
     if (command.status == MTLIOStatusPending) return -2;
+  if (owner.loadingPlan || owner.nextBatch) {
+    // Submitted batches have drained, so ownership may end safely, but a
+    // logical stage interrupted by enqueue failure must never admit output.
+    int32_t expected = 0;
+    owner->failure.compare_exchange_strong(expected, -5, std::memory_order_acq_rel);
+  }
   owner.finished = YES;
-  *stages = (int32_t)owner.commands.count;
+  *stages = owner.stageCount;
+  *batches = (int32_t)owner.commands.count;
   return owner->failure.load(std::memory_order_acquire);
 }
 

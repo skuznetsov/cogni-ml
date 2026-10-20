@@ -3,10 +3,11 @@ require "./metal_mps_command_chain"
 {% unless flag?(:cpu_only) %}
   lib MetalStageIOFFI
     fun create = gs_stage_io_create(device : Void*) : Void*
-    fun plan = gs_stage_io_plan(owner : Void*, buffers : Void**, paths : UInt8**, offsets : Int64*, sizes : Int64*, count : Int32) : Void*
-    fun begin = gs_stage_io_begin(owner : Void*, plan : Void*, root : Void*) : Int32
+    fun plan = gs_stage_io_plan(owner : Void*, buffers : Void**, paths : UInt8**, offsets : Int64*, sizes : Int64*, count : Int32, max_batch_bytes : Int64) : Void*
+    fun plan_batch_count = gs_stage_io_plan_batch_count(plan : Void*) : Int32
+    fun begin_batch = gs_stage_io_begin_batch(owner : Void*, plan : Void*, batch : Int32, root : Void*) : Int32
     fun retire = gs_stage_io_retire(owner : Void*, root : Void*) : Int32
-    fun finish = gs_stage_io_finish(owner : Void*, stages : Int32*) : Int32
+    fun finish = gs_stage_io_finish(owner : Void*, stages : Int32*, batches : Int32*) : Int32
     fun release_plan = gs_stage_io_release_plan(plan : Void*) : Int32
     fun release = gs_stage_io_release(owner : Void*) : Int32
   end
@@ -33,8 +34,9 @@ module ML::Video
     getter native : Pointer(Void)
     getter loads : Array(StageLoad)
     getter owner : StageIO
+    getter batch_count : Int32
 
-    def initialize(@owner, @native, loads : Array(StageLoad))
+    def initialize(@owner, @native, loads : Array(StageLoad), @batch_count)
       @loads = loads.dup
     end
 
@@ -58,8 +60,11 @@ module ML::Video
     getter? open : Bool = false
     getter? finished : Bool = false
     getter stage_count : Int32 = 0
+    getter batch_count : Int32 = 0
+    getter max_batch_bytes : Int64
 
-    def initialize
+    def initialize(@max_batch_bytes : Int64 = 512_i64 * 1024 * 1024)
+      raise ArgumentError.new("Stage I/O batch limit must be positive") unless @max_batch_bytes > 0
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
@@ -80,9 +85,9 @@ module ML::Video
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
-        native = MetalStageIOFFI.plan(@native, handles.to_unsafe, paths.to_unsafe, offsets.to_unsafe, sizes.to_unsafe, loads.size)
+        native = MetalStageIOFFI.plan(@native, handles.to_unsafe, paths.to_unsafe, offsets.to_unsafe, sizes.to_unsafe, loads.size, @max_batch_bytes)
         raise ArgumentError.new("Invalid stage I/O plan: source bounds, device, storage or destination overlap") if native.null?
-        result = StageIOPlan.new(self, native, loads)
+        result = StageIOPlan.new(self, native, loads, MetalStageIOFFI.plan_batch_count(native))
         @plans << result
         result
       {% end %}
@@ -95,14 +100,22 @@ module ML::Video
       raise ArgumentError.new("A stage is already open") if @open
       raise ArgumentError.new("Stage plan belongs to another I/O owner or was released") unless plan.owner.same?(self) && !plan.native.null?
       bind_chain!(chain)
-      root = chain.root_handle
-      {% unless flag?(:cpu_only) %}
-        status = MetalStageIOFFI.begin(@native, plan.native, root)
-        raise ArgumentError.new("Stage I/O source changed before enqueue") if status == -4
-        raise "Unable to encode stage I/O (#{status})" unless status == 0
-      {% end %}
-      @started = true
-      @open = true
+      plan.batch_count.times do |batch|
+        root = chain.root_handle
+        {% unless flag?(:cpu_only) %}
+          status = MetalStageIOFFI.begin_batch(@native, plan.native, batch, root)
+          raise ArgumentError.new("Stage I/O source changed before enqueue") if status == -4
+          raise "Unable to encode stage I/O batch (#{status})" unless status == 0
+        {% end %}
+        @started = true
+        @open = true
+        unless batch == plan.batch_count - 1
+          # Bound each readiness wait as well as each I/O submission. Retire
+          # this load-only root before the next batch, without a host wait.
+          retire!(chain)
+          chain.continue_async!
+        end
+      end
     end
 
     def retire!(chain : ML::Metal::MPSCommandChain) : Nil
@@ -124,7 +137,7 @@ module ML::Video
       raise ArgumentError.new("Complete the compute chain before checking stage I/O") unless chain.completed?
       status = 0
       {% unless flag?(:cpu_only) %}
-        status = MetalStageIOFFI.finish(@native, pointerof(@stage_count))
+        status = MetalStageIOFFI.finish(@native, pointerof(@stage_count), pointerof(@batch_count))
       {% end %}
       raise "Stage I/O has not drained after compute completion" if status == -2
       @finished = true

@@ -19,6 +19,16 @@ The next I/O stage waits for the previous GPU retirement before overwriting
 the shared storage. I/O completion notifications publish readiness to a Metal
 shared event; they neither wait on the host nor download activations.
 
+Each logical plan is split before submission into I/O batches of at most
+512 MiB. A tensor can span batches through exact source and destination byte
+offsets. The entire logical plan's bounds, destination overlap and source
+identity are validated before its first batch is submitted. Between batches,
+the compute chain waits for readiness, encodes retirement and continues
+asynchronously. Consumers start after the final readiness wait. This bounds
+each root's I/O wait without adding a host wait or changing neural arithmetic.
+`stage_count` counts logical plans submitted in full; `batch_count` counts
+physical I/O submissions. Batch metadata and views remain retained until drain.
+
 `MPSCommandChain` refreshes the current native command buffer after MPSGraph
 continuations. Borrowed encoders are invalid after pause/resume. Completion
 commits the final root and performs one terminal host wait, checks every
@@ -71,3 +81,24 @@ an injected race test. Refresh the gate after
 changing platform/runtime, command continuation behavior, stage ordering,
 source immutability, pool layout, or ownership lifetimes. The bounded serial
 contract does not authorize concurrent use of a pool.
+
+The bounded-batch regression passes 27 examples in
+`staging-batches-native.log`. It checks twelve aliased reloads split into three
+batches each, exact odd byte ranges spanning two destination buffers and four
+batches, cross-batch overlap rejection, and changed-source rejection before any
+batch is submitted. These checks preserve one terminal host wait and zero
+tracked GPU-buffer allocations during encoding.
+An interrupted logical stage is rejected after its submitted batches drain;
+terminal drain permits safe owner release but never admits the partial output.
+The partial-stage falsifier failed before that guard with an erroneous success
+status (`staging-partial-before.log`) and passes with the guard.
+
+The real T5 staging-only probe previously timed out on its first readiness
+wait with all 11,361,820,672 checkpoint bytes in one I/O command
+(`t5-stage-io-probe-native.log`). With 512 MiB batches it completed in 12.39 s
+external wall time, using 22 I/O submissions, 22 compute roots and one terminal
+host wait, with no swaps (`t5-stage-io-batches-512-native.log`). All 484 sampled
+first/last UInt32 values from the 242 tensors matched their source file. This
+is sampled payload verification, not a full checkpoint checksum or model
+parity test. The observed timeout was removed for this probe; neither an Apple
+watchdog policy nor a complete-request timing is established by it.
