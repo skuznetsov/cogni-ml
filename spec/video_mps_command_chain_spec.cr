@@ -60,4 +60,82 @@ describe ML::Metal::MPSCommandChain do
       arena.release
     end
   end
+
+  it "profiles existing roots after one terminal wait without changing native output or allocations" do
+    arena = ML::Video::Arena.new
+    chain = nil.as(ML::Metal::MPSCommandChain?)
+    begin
+      source = arena.upload("profile_source", Array(Float32).new(4097) { |i| i.to_f32 })
+      a = arena.alloc("profile_a", 4097)
+      b = arena.alloc("profile_b", 4097)
+      output = arena.alloc("profile_output", 4097)
+      pipeline = ML::Metal::ComputePipeline.new("mps_chain_profile_increment", <<-METAL)
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void mps_chain_profile_increment(device const float *x [[buffer(0)]],
+                                                device float *y [[buffer(1)]],
+                                                uint i [[thread_position_in_grid]]) {
+          if (i < 4097) y[i] = x[i] + 1.0f;
+        }
+        METAL
+      expected = Array(Float32).new(4097) { |i| i.to_f32 + 4.0_f32 }
+      baseline = nil.as(Array(Float32)?)
+      names = {"self_prepare", "self_attention_projection_residual",
+               "cross_attention_projection_residual"}
+
+      {false, true}.each do |profiled|
+        before = ML::MetalBuffer.video_spec_allocations
+        c = ML::Metal::MPSCommandChain.new
+        chain = c
+        c.enable_phase_root_profile! if profiled
+        { {source, a}, {a, b}, {b, a}, {a, output} }.each_with_index do |buffers, i|
+          c.encoder.set_pipeline(pipeline).set_buffer(buffers[0], 0)
+            .set_buffer(buffers[1], 1).dispatch_1d(4097)
+          if i < 3
+            end_count = profiled ? c.record_phase_root_boundary!(names[i]) : nil
+            c.pause!
+            c.continue_async!
+            c.resume!
+            c.verify_phase_root_continuation!(end_count.not_nil!) if profiled
+          end
+        end
+        c.finish_phase_root_profile! if profiled
+        expect_raises(ArgumentError) { c.phase_root_profile }
+        c.wait_count.should eq(0)
+        ML::MetalBuffer.video_spec_allocations.should eq(before)
+        # There is deliberately no same-root caller suffix before the sole wait.
+        c.commit_and_wait
+        c.wait_count.should eq(1)
+        c.segment_count.should eq(4)
+        ML::MetalBuffer.video_spec_allocations.should eq(before)
+        if profiled
+          profile = c.phase_root_profile
+          profile.root_count.should eq(4)
+          profile.root_duration_seconds.should eq(c.gpu_elapsed_seconds)
+          profile.phase_union_seconds.keys.should eq(names.to_a + ["ffn"])
+          profile.phase_union_seconds.values.each { |seconds| seconds.should be > 0.0 }
+          profile.union_seconds.should be > 0.0
+          profile.envelope_seconds.should be >= profile.union_seconds
+          profile.overlap_seconds.should be >= 0.0
+          c.wait_count.should eq(1)
+          ML::MetalBuffer.video_spec_allocations.should eq(before)
+        end
+        actual = output.read(4097)
+        actual.should eq(expected)
+        if profiled
+          actual.map(&.unsafe_as(UInt32)).should eq(baseline.not_nil!.map(&.unsafe_as(UInt32)))
+        else
+          baseline = actual
+        end
+        c.release
+        chain = nil
+      end
+    ensure
+      if c = chain
+        c.commit_and_wait unless c.completed?
+        c.release
+      end
+      arena.release
+    end
+  end
 end

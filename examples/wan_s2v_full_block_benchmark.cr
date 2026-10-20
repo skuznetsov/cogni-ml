@@ -90,7 +90,21 @@ METAL
 private record ArmResult, groups : Int32, query_chunk : Int32, order : String, warmup : Bool,
   host_wall_seconds : Float64, encode_cpu_seconds : Float64,
   gpu_elapsed_seconds : Float64, segments : Int32, terminal_waits : Int32,
-  encode_metal_buffer_allocations : Int64
+  encode_metal_buffer_allocations : Int64,
+  phase_root_profile : ML::Video::MPSCommandPhaseProfile?
+
+private def phase_root_profile_json(profile : ML::Video::MPSCommandPhaseProfile)
+  {
+    root_count:                profile.root_count,
+    root_duration_sum_seconds: profile.root_duration_seconds,
+    envelope_seconds:          profile.envelope_seconds,
+    union_seconds:             profile.union_seconds,
+    overlap_seconds:           profile.overlap_seconds,
+    phase_union_seconds:       profile.phase_union_seconds,
+    attribution_scope:         "one WanS2VBlock.encode with no same-root caller prelude, suffix, or audio work",
+    interval_interpretation:   "roots and phases may overlap in GPU time; phase unions are not additive",
+  }
+end
 
 private def sha256_file(path : String) : String
   digest = Digest::SHA256.new
@@ -119,9 +133,11 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        scratch : ML::Video::Arena, cfg : ML::Video::WanS2VConfig,
                        linear : ML::Video::WanS2VMPSLinearWorkspace,
                        attention : ML::Video::WanAttentionMPSChunkWorkspace,
-                       precompute_rope : Bool = false) : ArmResult
+                       precompute_rope : Bool = false,
+                       phase_roots : Bool = false) : ArmResult
   wall_started = Time.instant
   chain = ML::Metal::MPSCommandChain.new
+  chain.enable_phase_root_profile! if phase_roots
   allocations_before = ML::MetalBuffer.video_spec_allocations
   encode_started = Time.instant
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
@@ -129,14 +145,18 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
     execution_chain: chain, mps_workspace: linear, attention_workspace: attention,
     cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope)
   encode_seconds = (Time.instant - encode_started).total_seconds
+  # Diagnostic phase roots are source-bound to this block. Do no suffix or
+  # audio work on the chain before the existing terminal wait.
   chain.commit_and_wait
   wall_seconds = (Time.instant - wall_started).total_seconds
+  phase_profile = phase_roots ? chain.phase_root_profile : nil
   allocations = ML::MetalBuffer.video_spec_allocations - allocations_before
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
   raise "Full block arm did not segment its command chain" unless chain.segment_count > 0
   result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
-    chain.gpu_elapsed_seconds, chain.segment_count, chain.wait_count, allocations)
+    chain.gpu_elapsed_seconds, chain.segment_count, chain.wait_count, allocations,
+    phase_profile)
   chain.release
   result
 rescue ex
@@ -195,12 +215,14 @@ weights_path = ""
 pairs = 3
 comparison_mode = "cross-segments"
 candidate_chunk = 256
+phase_roots_requested = false
 OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
-  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, or rope (rope holds chunk 128 and cross groups 320)") { |value| comparison_mode = value }
-  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout, attention-graph and rope require 128") { |value| candidate_chunk = value.to_i }
+  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, rope, or profile-replay (same-config A/A root diagnostics)") { |value| comparison_mode = value }
+  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout, attention-graph, rope and profile-replay require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
+  parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -208,22 +230,25 @@ OptionParser.parse do |parser|
 end
 raise ArgumentError.new("--weights is required") if weights_path.empty?
 raise ArgumentError.new("--pairs must be within 1..3") unless (1..3).includes?(pairs)
-raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, attention-graph, or rope") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph", "rope"}.includes?(comparison_mode)
+raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, attention-graph, rope, or profile-replay") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph", "rope", "profile-replay"}.includes?(comparison_mode)
 raise ArgumentError.new("--candidate-self-chunk must be 128, 256 or 1024") unless {128, 256, 1024}.includes?(candidate_chunk)
 compare_self_chunks = comparison_mode == "self-chunks"
 compare_kv_layout = comparison_mode == "kv-layout"
 compare_attention_graph = comparison_mode == "attention-graph"
 compare_rope = comparison_mode == "rope"
+compare_profile_replay = comparison_mode == "profile-replay"
+raise ArgumentError.new("--comparison=profile-replay requires --phase-roots") if compare_profile_replay && !phase_roots_requested
+raise ArgumentError.new("--phase-roots is supported only with --comparison=profile-replay") if phase_roots_requested && !compare_profile_replay
 raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
 explicit_budget_bytes = compare_attention_graph ? MAX_ATTENTION_GRAPH_BUDGET : MAX_EXPLICIT_BUDGET
-if compare_kv_layout || compare_attention_graph || compare_rope
+if compare_kv_layout || compare_attention_graph || compare_rope || compare_profile_replay
   raise ArgumentError.new("--comparison=#{comparison_mode} requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
 end
 require_exact = !(compare_self_chunks || compare_kv_layout || compare_attention_graph)
-candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_rope) ? 320 : 1024
-baseline_chunk = (compare_kv_layout || compare_attention_graph || compare_rope) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
-candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_rope) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
+candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_rope || compare_profile_replay) ? 320 : 1024
+baseline_chunk = (compare_kv_layout || compare_attention_graph || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
+candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
 weights_path = File.expand_path(weights_path)
 raise ArgumentError.new("Missing safetensors file #{weights_path}") unless File.file?(weights_path)
 raise ArgumentError.new("Unexpected official block sidecar length") unless File.size(weights_path) == EXPECTED_WEIGHTS_BYTES
@@ -260,7 +285,7 @@ begin
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
   attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
-  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout || compare_attention_graph
+  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_profile_replay
   prepared_kv_bytes = compare_kv_layout || compare_attention_graph ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
   attention_workspace_bytes += prepared_kv_bytes
   explicit_score_reserve_bytes = compare_attention_graph ? EXPLICIT_SCORE_RESERVE_BYTES : 0_i64
@@ -348,7 +373,7 @@ begin
     chunk_q, chunk_a, chunk_b,
     compare_attention_graph ? candidate_prepared_k : nil,
     compare_attention_graph ? candidate_prepared_v : nil)
-  if compare_self_chunks || compare_kv_layout || compare_attention_graph
+  if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_profile_replay
     candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
       1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
       scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
@@ -378,7 +403,15 @@ begin
     projection_workspace.not_nil!, attention_workspace.not_nil!)
   warm_candidate = encode_arm(candidate_groups, "B", true, x, modulation, positions,
     context, output_candidate, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, candidate_attention, precompute_rope: compare_rope)
+    projection_workspace.not_nil!, candidate_attention, precompute_rope: compare_rope,
+    phase_roots: compare_profile_replay && phase_roots_requested)
+  if compare_profile_replay
+    baseline_root_count = warm_baseline.segments
+    candidate_profile = warm_candidate.phase_root_profile.not_nil!
+    unless baseline_root_count == warm_candidate.segments && candidate_profile.root_count == baseline_root_count
+      raise "Profile-replay warmup command-root counts differ"
+    end
+  end
   warm_compare = validate_pair(output_baseline, output_candidate, metrics, zero, compare)
   puts({schema: "wan_s2v_full_block_warm_comparison_v1", compared_values: FULL_VALUES,
         bit_differences: warm_compare[:bit_differences],
@@ -395,6 +428,8 @@ begin
         prepared_kv_pair_shared_between_arms: compare_attention_graph,
         baseline_explicit_qk_softmax_pv: false,
         candidate_explicit_qk_softmax_pv: compare_attention_graph,
+        phase_root_diagnostics_enabled: compare_profile_replay && phase_roots_requested,
+        profile_replay_is_not_a_speed_comparison: compare_profile_replay,
         comparison_outside_timed_arms: true}.to_json)
   STDOUT.flush
   unless (!require_exact || warm_compare[:bit_differences] == 0) && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
@@ -417,12 +452,17 @@ begin
           explicit_qk_softmax_pv: compare_attention_graph && arm.order == "B",
           precompute_rope: compare_rope && arm.order == "B",
           rope_coefficient_build_inside_block_encode: compare_rope && arm.order == "B",
+          phase_root_diagnostics_enabled: arm.phase_root_profile != nil,
+          phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
+          profile_replay_is_not_a_speed_comparison: compare_profile_replay,
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
   STDOUT.flush
 
   pairs.times do |pair|
     order = pair.even? ? {true, false} : {false, true}
+    baseline_root_count = nil.as(Int32?)
+    candidate_root_count = nil.as(Int32?)
     order.each do |baseline|
       output = baseline ? output_baseline : output_candidate
       attention = baseline ? attention_workspace.not_nil! : candidate_attention
@@ -430,7 +470,16 @@ begin
       arm = encode_arm(groups, baseline ? "A" : "B", false,
         x, modulation, positions, context, output, weight_arena.not_nil!,
         scratch.not_nil!, cfg, projection_workspace.not_nil!, attention,
-        precompute_rope: compare_rope && !baseline)
+        precompute_rope: compare_rope && !baseline,
+        phase_roots: compare_profile_replay && !baseline && phase_roots_requested)
+      if baseline
+        baseline_root_count = arm.segments
+      elsif profile = arm.phase_root_profile
+        unless profile.root_count == arm.segments
+          raise "Profile-replay root summary count differs from command segment count"
+        end
+        candidate_root_count = profile.root_count
+      end
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
             groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
             order: arm.order, warmup: false,
@@ -449,8 +498,16 @@ begin
             explicit_qk_softmax_pv: compare_attention_graph && !baseline,
             precompute_rope: compare_rope && !baseline,
             rope_coefficient_build_inside_block_encode: compare_rope && !baseline,
+            phase_root_diagnostics_enabled: arm.phase_root_profile != nil,
+            phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
+            profile_replay_is_not_a_speed_comparison: compare_profile_replay,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
+    end
+    if compare_profile_replay
+      unless baseline_root_count == candidate_root_count && baseline_root_count == warm_baseline.segments
+        raise "Profile-replay command-root counts differ"
+      end
     end
     comparison = validate_pair(output_baseline, output_candidate, metrics, zero, compare)
     puts({schema: "wan_s2v_full_block_comparison_v1", pair: pair,

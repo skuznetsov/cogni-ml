@@ -66,6 +66,7 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
           terminalFallback:(BOOL)terminalFallback;
 - (NSArray<CogniMPSCommandRootSummary *> *)finishPendingRoots;
 - (NSArray<CogniMPSCommandRootSummary *> *)summariesSnapshot;
+- (CogniMPSCommandRootSummary *)summaryAtSequence:(NSUInteger)sequence;
 - (NSUInteger)pendingCount;
 - (NSUInteger)summaryCount;
 @end
@@ -192,6 +193,14 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
   return copy;
 }
 
+- (CogniMPSCommandRootSummary *)summaryAtSequence:(NSUInteger)sequence {
+  [self.lock lock];
+  CogniMPSCommandRootSummary *summary =
+      sequence < self.summaries.count ? self.summaries[sequence] : nil;
+  [self.lock unlock];
+  return summary;
+}
+
 - (NSUInteger)pendingCount {
   [self.lock lock];
   NSUInteger count = self.pendingRoots.count;
@@ -284,6 +293,48 @@ extern "C" int32_t gs_mps_chain_continue(void *handle) {
   if (chain.finished)
     return -1;
   [chain.command commitAndContinue];
+  return 0;
+}
+
+// Cursor sampling observes the current root identity but does not commit,
+// continue, encode, allocate a Metal resource, or wait for GPU work.
+extern "C" int32_t gs_mps_chain_root_count(void *handle, int32_t *count) {
+  if (!handle || !count)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  if (chain.finished)
+    return -2;
+  [chain.command rememberCurrentRoot];
+  NSUInteger rootCount = chain.command.rootTracker.summaryCount;
+  if (rootCount > (NSUInteger)INT32_MAX)
+    return -3;
+  *count = (int32_t)rootCount;
+  return 0;
+}
+
+// Timing summaries are deliberately exposed only after the existing terminal
+// wait. This is a read of compact CPU metadata, not an additional sync point.
+extern "C" int32_t gs_mps_chain_root_timing(void *handle, int32_t sequence,
+                                            int32_t *completed,
+                                            int32_t *hasError,
+                                            double *gpuStart,
+                                            double *gpuEnd) {
+  if (!handle || sequence < 0 || !completed || !hasError || !gpuStart ||
+      !gpuEnd)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  if (!chain.finished)
+    return -2;
+  CogniMPSCommandRootSummary *summary =
+      [chain.command.rootTracker summaryAtSequence:(NSUInteger)sequence];
+  if (!summary || summary.sequence != (NSUInteger)sequence)
+    return -3;
+  if (!summary.recorded)
+    return -4;
+  *completed = summary.status == MTLCommandBufferStatusCompleted ? 1 : 0;
+  *hasError = summary.hasError ? 1 : 0;
+  *gpuStart = summary.gpuStartTime;
+  *gpuEnd = summary.gpuEndTime;
   return 0;
 }
 

@@ -228,6 +228,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   checkpoint_file = nil.as(ML::Video::CheckpointFile?)
   prepared_weights = nil.as(ML::Video::PreparedWeights?)
   execution_chain = nil.as(ML::Metal::MPSCommandChain?)
+  phase_root_chain = nil.as(ML::Metal::MPSCommandChain?)
   mps_workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
   begin
     fixture["inputs"].as_h.each do |name, values|
@@ -325,6 +326,10 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     ML::Video::WanS2VAudioInjector.prepare!
     tiled_attention = ENV["WAN_S2V_TILED_ATTENTION"]? == "1"
     segmented_commands = ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
+    phase_root_profile = ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
+    if phase_root_profile && !segmented_commands
+      raise ArgumentError.new("Wan phase-root profiling requires segmented commands")
+    end
     cross_attention_groups_per_segment =
       ENV["WAN_S2V_CROSS_ATTENTION_GROUPS_PER_SEGMENT"]?.try(&.to_i32) || 320
     if cross_attention_groups_per_segment != 320 && (!tiled_attention || !segmented_commands)
@@ -343,6 +348,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     repeat_block_output = output.alloc("repeat_block_output", block_cfg.values)
     repeat_audio_output = output.alloc("repeat_audio_output", audio_cfg.values)
     chained_block_output = output.alloc("chained_block_output", block_cfg.values)
+    phase_root_block_output = nil.as(ML::MetalBuffer?)
+    phase_root_block_output = output.alloc("phase_root_block_output", block_cfg.values) if phase_root_profile
     {inputs, scratch, traces, output}.each do |arena|
       arena.buffers.each_key do |name|
         arena.dtype(name).should eq(ML::Video::WeightDType::F32),
@@ -489,6 +496,55 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       command.not_nil!.commit
       command.not_nil!.wait
     end
+
+    if phase_root_profile
+      active = ML::Metal::MPSCommandChain.new
+      phase_root_chain = active
+      active.enable_phase_root_profile!
+      profile_output = phase_root_block_output || raise "phase-root output was not allocated"
+      profile_allocations = ML::MetalBuffer.video_spec_allocations
+      ML::Video::WanS2VBlock.encode(
+        active.encoder, inputs["x"], inputs["modulation"], inputs["positions"],
+        inputs["context"], profile_output, weights, scratch, block_cfg,
+        tiled_attention: tiled_attention, execution_chain: active,
+        mps_workspace: mps_workspace,
+        cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+        precompute_rope: precompute_rope,
+      )
+      ML::MetalBuffer.video_spec_allocations.should eq(profile_allocations),
+        "phase-root block encode must not allocate MetalBuffers"
+      active.wait_count.should eq(0), "phase-root block encoding must not wait"
+      active.commit_and_wait
+      active.wait_count.should eq(1), "phase-root profile must use one terminal wait"
+      active.segment_count.should be > 1, "phase-root profile must span segmented commands"
+
+      profile = active.phase_root_profile
+      profile.root_count.should eq(active.segment_count)
+      profile.root_count.should be > 1
+      profile.phase_union_seconds.keys.sort.should eq([
+        "cross_attention_projection_residual",
+        "ffn",
+        "self_attention_projection_residual",
+        "self_prepare",
+      ])
+      [
+        profile.root_duration_seconds,
+        profile.envelope_seconds,
+        profile.union_seconds,
+        profile.overlap_seconds,
+      ].each { |seconds| seconds.finite?.should be_true }
+      profile.root_duration_seconds.should be > 0.0
+      profile.envelope_seconds.should be > 0.0
+      profile.union_seconds.should be > 0.0
+      profile.overlap_seconds.should be >= 0.0
+      profile.phase_union_seconds.values.each do |seconds|
+        seconds.finite?.should be_true
+        seconds.should be > 0.0
+      end
+      active.release
+      phase_root_chain = nil
+    end
+
     prepared_weights.try(&.release)
     checkpoint_file.try(&.close)
 
@@ -498,12 +554,26 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     snapshots["repeat_block_output"] = repeat_block_output.read((repeat_block_output.size // 4).to_i).map(&.to_f32)
     snapshots["repeat_audio_output"] = repeat_audio_output.read((repeat_audio_output.size // 4).to_i).map(&.to_f32)
     snapshots["chained_block_output"] = chained_block_output.read((chained_block_output.size // 4).to_i).map(&.to_f32)
+    if profile_output = phase_root_block_output
+      snapshots["phase_root_block_output"] = profile_output.read((profile_output.size // 4).to_i).map(&.to_f32)
+      original_output = block_output.read((block_output.size // 4).to_i).map(&.to_f32)
+      snapshots["phase_root_block_output"].map(&.unsafe_as(UInt32)).should eq(
+        original_output.map(&.unsafe_as(UInt32))),
+        "isolated profiled block output must be bit-identical to the original block_output buffer"
+      passed, detail = wan_comparison(
+        "phase_root_block_output", snapshots["phase_root_block_output"], fixture["expected"]["output"])
+      passed.should be_true, detail
+    end
     if snapshot_path = ENV["WAN_S2V_SNAPSHOT_DUMP"]?
       File.write(snapshot_path, wan_snapshot_json(snapshots).to_json)
     end
     snapshots
   ensure
     if active = execution_chain
+      active.commit_and_wait unless active.completed?
+      active.release if active.completed?
+    end
+    if active = phase_root_chain
       active.commit_and_wait unless active.completed?
       active.release if active.completed?
     end
@@ -565,7 +635,11 @@ describe ML::Video::WanS2VAudioConfig do
 end
 
 describe ML::Video::WanS2VBlock do
-  it "matches pinned block/audio checkpoints including distinct multi-head RoPE positions" do
+  it "matches pinned block/audio checkpoints including distinct multi-head RoPE positions and optional phase-root profiling" do
+    if ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
+      ENV["WAN_S2V_SEGMENTED_COMMANDS"]?.should eq("1"),
+        "WAN_S2V_PHASE_ROOT_PROFILE requires WAN_S2V_SEGMENTED_COMMANDS=1"
+    end
     unless ENV["WAN_S2V_BLOCK_FIXTURE"]?
       pending "MPS oracle fixture is external; set WAN_S2V_BLOCK_FIXTURE"
     end

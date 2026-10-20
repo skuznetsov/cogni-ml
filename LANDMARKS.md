@@ -31155,3 +31155,28 @@ Refresh after source/toolchain/device/model/workload changes.
   adversary review is ROBUST within this scope. Source/log hashes are in external
   `wan-self-attention/guard-cleanup-cpu-receipt-v5.json`. Refresh after guard logic,
   process-ownership semantics, Python/macOS ABI or memory-policy changes.
+
+### 2026-10-20 — Qualify opt-in Wan command-root phase diagnostics
+
+- Existing asynchronous roots can be partitioned into self preparation,
+  self attention/projection/residual, cross attention/projection/residual and
+  FFN without adding dispatches, submissions, model waits or activation reads.
+  Enable only on a fresh chain immediately around one direct block. Same-root
+  caller prelude/suffix or audio work cannot be attributed exclusively.
+- Read compact completed-root timestamps only after the existing terminal wait.
+  Report union, envelope and overlap rather than adding overlapping phase spans.
+  Validate root status, finite intervals, partition coverage and reconciliation
+  with the native duration sum. The large-epoch union regression is covered.
+- Current-source CPU interval/root-retention checks pass 11/0; native GPU chain
+  checks pass 2/0. Pinned real-width short fixtures pass 6/0 each with BF16/F32,
+  including a fresh profiled replay bit-identical to the completed baseline and
+  within unchanged upstream tolerances. Encode allocates no explicit MetalBuffer
+  and uses one terminal wait. Correlated source review is ROBUST within scope.
+- External `wan-self-attention/phase-profile-receipt-v2.json` binds sources,
+  binaries, objects and logs; the attached invocation manifest preserves the
+  profile=1 and dtype flags absent from quiet spec stdout. Full-spatial v2 replay
+  was rejected before spawn: 14.4 GiB conservative free reserve versus 23.6 GiB
+  needed for a 14 GiB process budget plus the 15% floor. No full-shape phase timing,
+  profiler-overhead or video-throughput claim follows. Default remains off.
+  Refresh after source, resource lifetime, queue/device/runtime, geometry,
+  weights/precision or memory-policy changes; known 40-layer drift remains open.

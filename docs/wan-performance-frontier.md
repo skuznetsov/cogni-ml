@@ -35,8 +35,15 @@ telemetry stops the owned group; a monotonic timeout and wrapper SIGINT/SIGTERM
 also clean it up. The unreaped session leader pins the group's identity until
 cleanup. This covers the group, not descendants that deliberately escape with
 `setsid` or `setpgid`, and cannot prevent a between-sample allocation spike.
-Timeout initiates termination, rather than bounding wrapper return: an
-uninterruptible kernel/driver task may delay reaping even after SIGKILL.
+Cleanup keeps the leader unreaped through bounded group-quiescence checks.
+Darwin cannot query a zombie's PGID, so WNOWAIT pins its original identity;
+a process-list outage does not prevent signaling that pinned group. A live
+descendant after SIGKILL or unverifiable cleanup returns 77 with an incomplete
+record, without reaping away the pin or claiming success. There is no unbounded
+cleanup wait. The CPU cleanup suite passes 25/0 on Python 3.11 and 3.15;
+live-telemetry timeout and injected-floor probes leave their owned groups absent.
+Source/log bindings are in `wan-self-attention/guard-cleanup-cpu-receipt-v5.json`
+under the external evidence directory used below.
 
 The CPU-only guard check is:
 
@@ -190,6 +197,80 @@ reuse across layers is a later possible saving. Reuse across diffusion steps or
 CFG branches requires a separate caller-lifetime proof. Buffer identity alone
 does not establish unchanged positions, including FramePack offsets.
 
+## Diagnostic: existing command-root intervals
+
+The opt-in diagnostic labels four coarse phases at existing command-chain
+boundaries: self preparation, self attention plus output projection/residual,
+cross attention plus projections/residual, and FFN. The last phase includes
+the existing post-GELU and post-output-projection continuations. It must not add
+dispatches, submissions, waits, activation readback or Metal-buffer allocations.
+Root metadata is consumed only after the existing terminal wait, outside the
+arm's wall measurement. The default remains off.
+
+The experiment requires a fresh benchmark-owned command root immediately before
+the block. A root shared with preceding or following caller work cannot be
+attributed exclusively to that block. Phase ranges use the exclusive root count
+before each continuation; the next phase starts at that same sequence index.
+Every root must be assigned once, have a completed status and valid positive
+GPU timestamps, and the root-duration sum must reconcile with the existing
+native aggregate. Missing metadata rejects attribution.
+
+Report the interval envelope, interval union, `sum(duration)-union` overlap
+excess and `envelope-union` gaps. Per-phase unions are separate diagnostics;
+they cannot be added to infer block latency when roots overlap. Root spans can
+also contain idle gaps, so they are not per-kernel execution times.
+
+The falsifiers are CPU interval/partition counterexamples, then a guarded
+`--comparison=profile-replay --phase-roots --pairs=1` full-block A/A replay.
+Both arms must use query chunk 128, cross groups 320, the original K/V layout,
+SDPA and inline RoPE; only B records phases. Require bit-identical outputs,
+matching root/segment counts, one terminal wait and zero explicit encode-time
+Metal allocations. Keep the pinned upstream intermediate gate and the 15%
+memory reserve. This diagnostic cohort is not a speedup/overhead benchmark.
+
+### Bounded fallback while full-block headroom is unavailable
+
+The profiler's CPU interval/partition tests pass 9/0, including a large-epoch
+counterexample that first rejected the unparenthesized union calculation.
+The native four-root A/A test passes with bit-identical outputs, unchanged root
+counts, one terminal wait and zero explicit Metal-buffer allocations. Existing
+root identity/retention tests pass 2/0. The pinned intermediate fixture passes
+6/0 each with BF16 and F32 weights, both with profiling disabled and in a
+separate profiling-enabled replay. The latter uses a fresh chain around one
+direct block, terminal-waits immediately after it, verifies the four named phase
+ranges, and checks bit-identical output against the unprofiled block plus the
+unchanged upstream gate. It does not attribute a shared block/audio root. These
+are short-sequence fixtures at the model's real width. A full-spatial block
+profile-replay launch was rejected before spawning by the physical-headroom
+guard; no phase timings have been measured on that geometry. The latest attempt
+had 15,469,756,416 free-plus-speculative bytes, below the 25,340,307,047 bytes
+required for its 14 GiB process budget plus the unchanged 15% physical reserve.
+This is a conservative admission result, not an OOM measurement.
+
+The current-source qualification is indexed by external
+`wan-self-attention/phase-profile-receipt-v2.json` (SHA-256
+`354c9ece2f8f6f4d063956d3593b508045f35549cee1e9b186f7986ebadeaadf`).
+It binds the source, native objects, binaries, raw logs, guard outcomes and
+`phase-profile-invocations-v2.json`, which preserves the actual profile-enabled
+BF16/F32 command environments. Quiet spec stdout alone does not establish those
+flags. The combined interval/root-retention CPU suite passes 11/0 and the GPU
+chain suite passes 2/0. An initial CPU link invocation omitted native link flags;
+the corrected invocation passed without a source change. Correlated read-only
+adversary review is ROBUST for the fresh short-fixture replay, with no claim
+about full-spatial timings, profiler overhead or exclusive per-kernel costs.
+
+Do not lower the reserve to force that launch. Instead test query chunks 64 and
+96 against 128 in the standalone full-geometry SDPA probe. Query rows are
+independent with the complete K/V set, so this preserves the mathematical
+attention problem. Smaller graph working sets may improve latency; increased
+packing/submission overhead or a changed F32 kernel may reject the candidate.
+The opt-in `small-chunks` mode must keep all full-output oracle and native
+baseline comparisons, the one-value corruption control, three AB/BA/AB pairs,
+zero encode-time Metal allocations and the existing terminal wait. It must
+reject an unsupported candidate before fixture/GPU work. Only an all-pairs
+primitive win can advance to a full-block comparison; it does not promote a
+production default or establish video throughput.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In
@@ -204,14 +285,19 @@ does not establish unchanged positions, including FramePack offsets.
    prioritize the smaller cache under the current memory constraints.
 2. **Share K/V tiles across more query groups.** The existing
    [F32 tiled kernel](../src/ml/video/kernels/attention_tiled.metal) shares each
-   key/value tile within an eight-query SIMD group. Sharing one tile across
-   two or four such groups could reduce repeated loads. K=32, D=128 and two
-   F32 tiles already need 32 KiB of threadgroup storage; double buffering needs
-   64 KiB. Check device limits and occupancy before implementation. Preserve
+   key/value matrix operand within an eight-query SIMD group, with zero
+   threadgroup storage. Staging one K/V tile across two or four such groups
+   could reduce repeated loads. K=32, D=128 and two F32 tiles would add 32 KiB
+   of threadgroup storage; double buffering would need 64 KiB. Check device
+   limits and occupancy before implementation. All SIMD groups, including
+   fully masked tail groups, must reach both tile barriers. Preserve
    each row's ascending key reduction, then check bitwise parity to the old
    native kernel, strict full-shape upstream parity and the real full block.
    The existing native tiled reduction is not automatically a qualified
-   replacement for the MPSGraph long-key path.
+   replacement for the MPSGraph long-key path. Its segmentation budget counts
+   threadgroups, so changing queries per group also changes work per segment.
+   Q loads are textually inside the key loop, but compiler hoisting is unknown;
+   explicitly keeping Q matrices alive can increase register pressure.
 3. **FFN bias/GELU epilogue.** A post-MPS bias-plus-GELU kernel could remove one
    full FFN-intermediate read/write, about 3.77 GiB of logical traffic per block,
    and one dispatch, while retaining the MPS dot-product reduction. GELU already

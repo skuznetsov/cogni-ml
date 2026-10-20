@@ -400,7 +400,7 @@ module ML::Video
       end
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
-      e = continue_phase(e, execution_chain)
+      e = continue_phase(e, execution_chain, "self_prepare")
       if workspace = attention_workspace
         active = execution_chain.not_nil!
         workspace.encode(active)
@@ -420,7 +420,7 @@ module ML::Video
       encode_gated_residual(e, x, self_proj, modulation, weights[key(weight_prefix, "block_modulation")], self_res,
         cfg, 2, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_residual", self_res, n)
-      e = continue_phase(e, execution_chain)
+      e = continue_phase(e, execution_chain, "self_attention_projection_residual")
 
       # text/context cross attention (norm3 is affine; no RoPE)
       MetalOps.norm(e, self_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], cross_norm,
@@ -455,7 +455,7 @@ module ML::Video
       trace_copy(e, trace, "cross_projection", cross_proj, n)
       MetalOps.add(e, self_res, cross_proj, cross_res, n.to_i32)
       trace_copy(e, trace, "cross_residual", cross_res, n)
-      e = continue_phase(e, execution_chain)
+      e = continue_phase(e, execution_chain, "cross_attention_projection_residual")
 
       # feed-forward branch: norm2, segmented AdaLN, tanh GELU, gated residual
       MetalOps.norm(e, cross_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], ffn_norm,
@@ -477,14 +477,23 @@ module ML::Video
       encode_gated_residual(e, cross_res, ffn_out, modulation, weights[key(weight_prefix, "block_modulation")], y,
         cfg, 5, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "output", y, n)
+      if active = execution_chain
+        active.finish_phase_root_profile! if active.phase_root_profile_enabled?
+      end
     end
 
     private def self.continue_phase(e : ML::Metal::ComputeEncoder,
-                                    chain : ML::Metal::MPSCommandChain?) : ML::Metal::ComputeEncoder
+                                    chain : ML::Metal::MPSCommandChain?,
+                                    phase_name : String? = nil) : ML::Metal::ComputeEncoder
       return e unless active = chain
+      phase_end_count = nil.as(Int32?)
+      if name = phase_name
+        phase_end_count = active.record_phase_root_boundary!(name) if active.phase_root_profile_enabled?
+      end
       active.pause!
       active.continue_async!
       active.resume!
+      active.verify_phase_root_continuation!(phase_end_count.not_nil!) if phase_end_count
       active.encoder
     end
 
