@@ -2,10 +2,40 @@
 
 The experiment isolates prepared MPSGraph self-attention at B=1,
 Q=K=36,608, H=40, D=128 from input initialization and output validation.
-The baseline query chunk is 512; candidates are 128, 256 and 1,024.
+The query-chunk experiment uses baseline 512 and candidates 128, 256 and 1,024;
+the later K/V-layout ablation holds both arms at 128.
 Only independent query rows are split. Every query retains all keys and values.
 The unchanged gate is `abs(actual-reference) <= 2e-5 + 2e-5*abs(reference)`,
 with finite operands. The production defaults are unchanged by this experiment.
+
+## Head-major K/V frontier
+
+Status: implemented as an optional path; bounded correctness checks pass, but
+the three-pair performance admission fails. The candidate prepares shared F32
+K/V from BTHD to BHTD with one fused GPU dispatch
+at the beginning of every chunk-workspace `encode` call. All query chunks in
+that call consume the same prepared buffers. Q and output layouts, SDPA math,
+precision and the strict gate above remain unchanged. This tests a layout and
+reuse hypothesis; the existing opaque MPSGraph executable does not establish
+how many physical transposes its compiler currently performs.
+
+The caller allocates and owns both extra full-size K/V buffers before encoding;
+their combined 1,499,463,680 bytes at this geometry count toward admission and
+workspace scratch. The optional pair must be disjoint from all original and
+chunk buffers, remain live until terminal completion, and cannot be shared by
+in-flight chains. Each encode refreshes both inputs; there is no cross-call
+activation cache. Legacy workspace construction is the rollback and remains the
+default.
+
+The falsifiers are exact transpose-layout checks, changed-K/V ABA reuse in one
+chain and after completion, alias/extent/lifetime rejection, and strict full
+output comparison against the pinned reference. Performance admission requires
+three AB/BA/AB pairs of the whole real-weight block with both arms using 128-row
+query chunks and 320-row cross segments. Preparation is inside each timed arm;
+allocations, input fill and output checking remain outside. Every pair must
+improve and the median must improve, with zero explicit encode allocations,
+one terminal wait, and the existing 15% free-memory floor. A failed numerical
+gate or a slower whole block rejects promotion without changing tolerances.
 
 ## Admission and measurement
 
@@ -58,7 +88,12 @@ full-geometry upstream block oracle.
 The original cross-segmentation mode still requires bit identity.
 
 A standalone attention improvement admits a candidate for whole-block testing;
-it does not establish a full-video speedup. The block excludes the audio injector.
+it does not establish a full-video speedup. The explicitly requested K/V-layout
+experiment also runs the whole-block discriminator if standalone timing is
+inconclusive. `--comparison=kv-layout --candidate-self-chunk=128` holds both
+query chunks at 128 and both text cross-attention segment groups at 320. Only
+the candidate prepares and uses head-major K/V; preparation is charged inside
+its block encode. The block excludes the audio injector.
 The known strict 40-layer stack drift remains recorded separately in
 `video-numerical-drift.md`; this experiment cannot erase that rejection.
 
@@ -113,7 +148,7 @@ control and a successful process exit before admitting a result. The discarded
 `self-chunk-128-v1.log` predates the current-pair BA comparison fix and is not
 selection evidence.
 
-## Measured results: 2026-10-20
+## Query-chunk measurements: 2026-10-20
 
 The machine was an Apple M2 Max with 64 GiB unified memory on macOS 26.6.2.
 Each row below is a separate AB/BA/AB cohort with its own 512-row baseline;
@@ -182,6 +217,106 @@ exits, with independent recomputation of pair membership and statistics.
 The focused attention spec passes two examples with both chunk sizes, tail
 padding, changed-input replay and the pinned upstream fixtures. It is not a
 fresh complete-stack parity check.
+
+## Head-major K/V measurements: 2026-10-20
+
+The optional path prepares K/V once per workspace encode and reuses it across
+all 286 query chunks. Both arms use 128 rows and the full block keeps cross
+segments at 320. Preparation is included in each candidate's timed encode;
+allocation, input initialization and comparison are outside. These are fresh
+within-run comparisons on the machine above. The earlier chunk-size cohorts
+have different host state and are not controls for this change.
+
+| Attention pair | Legacy K/V | Prepared K/V | Saved |
+| --- | ---: | ---: | ---: |
+| AB | 15.372098 s | 15.333370 s | 0.038728 s |
+| BA | 15.809275 s | 15.012460 s | 0.796815 s |
+| AB | 13.870758 s | 14.484962 s | -0.614203 s |
+| Median | 15.372098 s | 15.012460 s | 2.34% lower median |
+
+| Whole block pair | Legacy K/V | Prepared K/V | Saved |
+| --- | ---: | ---: | ---: |
+| AB | 18.227773 s | 18.091101 s | 0.136672 s |
+| BA | 18.224448 s | 17.990366 s | 0.234082 s |
+| AB | 18.432724 s | 19.068676 s | -0.635952 s |
+| Median | 18.227773 s | 18.091101 s | 0.75% lower median |
+
+Both cohorts win only two of three pairs, so neither meets the predeclared
+admission rule. The full-block result does not establish a stable speedup.
+The path remains optional and production defaults are unchanged. The extra
+prepared pair costs 1,499,463,680 bytes (1.396 GiB), making default promotion
+particularly unjustified by this result. Opaque MPSGraph compilation prevents
+attributing the result to an exact physical transpose count or exclusive cost.
+
+All eight standalone warmup/measured outputs pass the unchanged pinned F32 MPS
+upstream gate across all 187,432,960 values: no nonfinites or violations, max
+absolute error `1.8328428e-6`, max normalized gate error `0.08037424`. Candidate
+outputs are bit-identical to their native controls. Warmup and all three whole
+block pairs are also bit-identical across every output value; both corruption
+controls reject exactly one changed value. The block uses real BF16 block-0
+weights with synthetic GPU activations and excludes the audio injector. It is
+not a full-spatial upstream block oracle or a full-stack/video quality check.
+
+The focused attention spec passes 5/0 examples, covering exact B=2 transpose
+mapping, separately changed K/V, restored inputs, completed-chain reuse, and
+alias/extent/in-flight guards. The official upstream BF16 block/injector
+intermediate regression passes 6/0 examples at its smaller sequence geometry.
+Every timed arm has one terminal wait and zero explicit encode MetalBuffer
+allocations; production source adds no intermediate host wait or activation
+readback. Private MPS allocations remain outside that counter. Sampled free
+memory minima are 40% (focused spec), 58% (block regression), 34% (attention)
+and 29% (whole block), above the explicitly configured 15% floor. The older
+video process is resumed after each serial probe.
+
+The correlated mini-Quadrumvirate adversary verdict is ROBUST for the stated
+code/lifetime and bounded correctness claims; the speedup claim is VULNERABLE
+and promotion is rejected. The known strict 40-layer drift remains open.
+
+Run the existing build command, then serialize GPU access using the external
+`with-wan-paused.sh` controller described above and execute these guarded arms:
+
+```sh
+env COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
+  scripts/run_safe.sh /path/to/wan_s2v_self_attention_benchmark 1800 16384 \
+  --fixture=/path/to/reference-v1 --comparison=kv-layout --candidate=128
+env COGNI_RUN_SAFE_MIN_FREE_PCT=15 RUN_SAFE_PASSTHROUGH_STDIO=1 \
+  scripts/run_safe.sh /path/to/wan_s2v_full_block_benchmark 1800 24576 \
+  --weights=/path/to/wan-official.weights.safetensors \
+  --comparison=kv-layout --candidate-self-chunk=128 --pairs=3
+```
+
+The standalone DoD requires all eight strict oracle/baseline checks, zero
+nonfinites, a rejected corruption control and successful exit. The whole-block
+DoD requires warmup plus all three complete pair comparisons, the same control
+and successful exit. Performance additionally requires every paired saving and
+the median to improve; that separate gate fails here. Argument guards reject a
+256-row K/V-layout comparison before GPU setup in both rebuilt executables.
+Additional CPU probes accept the pinned manifest's native `B,Q,H,D` layout
+through an intentionally missing-output boundary and reject a substituted
+`B,K,H,D` fixture layout. These four checks initialize no GPU workspace.
+
+External receipts in the evidence directory above (SHA-256):
+
+| Receipt | SHA-256 |
+| --- | --- |
+| `head-kv-attention-v1.log` | `1a2205778e69b60e949118b447d895e0ba7d6e049b5961be9e2e05e558f82b16` |
+| `head-kv-block-guard-v1.log` | `c803020bcb621b78d563cffe8e1b0dcae2262f75e68fa0bb5056b10861ad290c` |
+| `head-kv-self-v1.log` | `8efaf1a242d715c9e81dd5eeb7ae930e807020883fb372f38deb54fbdf8e14b4` |
+| `head-kv-full-block-v1.log` | `a1707a200cd84b7ce11fabcf8552113a6329879bc5feae11d6e2663f37578a02` |
+
+`head-kv-qualified-summary-v1.json` records independently recomputed pair
+statistics, memory samples, raw log hashes and measured source/binary hashes.
+Its SHA-256 is
+`16952d005c875c31937d531961d48588999e23e99d62636aa7e027b7e3775870`.
+Raw v1 baseline metadata says `B,Q,H,D`; its correct K/V label is `B,K,H,D`
+(Q=K=36,608 here). Committed benchmark emitters correct only that label.
+The semantic input-manifest contract remains `B,Q,H,D` as measured.
+A final formatter change only moves the FFI declaration's closing delimiter and
+adds a trailing comma. The summary records exact reversal checks to measured
+source hashes; measured executables are retained with the suffix
+`-head-kv-measured-v1`. These cosmetic changes have CPU rebuild checks, not new
+GPU timing receipts. The same implementation, runtime, input and queue-isolation
+refresh triggers above apply.
 
 ## Cost map and limits of attribution
 
@@ -275,14 +410,15 @@ also has alternating two-build comparisons and an A/A noise control. Its
 canonical SonicBoom/llama.cpp runs use separate series, so do not describe the
 published cross-runtime numbers as alternating paired measurements.
 
-For Wan, the next major discriminator is K/V layout reuse. The current MPS
-bridge places Q/K/V transposes and opaque SDPA inside each repeated chunk plan.
+For Wan, the head-major K/V ablation above did not establish a stable gain.
+The legacy MPS bridge places Q/K/V transposes and opaque SDPA inside each
+repeated chunk plan; the optional path prepares head-major K/V once per call.
 The [PyTorch 2.8 MPS path](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/src/ATen/native/mps/operations/Attention.mm)
 used by the oracle instead executes an explicit QK/scale/softmax/PV graph with
 contiguous head-major K/V. The compiled MPSGraph's physical memory behavior is
-opaque, so repeated physical transposes are not established. Test a matched
-explicit graph and one GPU K/V preparation per block against the current plan;
-then compare a native F32 tiled attention route with K/V reuse. Keep the same
+opaque, so repeated physical transposes are not established. The next hypothesis
+is a matched explicit QK/scale/softmax/PV graph using the prepared K/V, followed
+by native F32 tiled attention with K/V reuse. Keep the same
 strict gate, prepared buffers, terminal boundary and whole-block discriminator.
 Stage IDs on existing asynchronous roots can separately test submission and
 projection hypotheses; the current aggregate does not rank non-attention costs.

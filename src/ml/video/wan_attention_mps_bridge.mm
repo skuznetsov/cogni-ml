@@ -1,6 +1,7 @@
-// Prepared opt-in unmasked SDPA experiment. The plan binds caller-owned F32
-// BTHD buffers and targets only the BTHD context; MPSGraph may allocate private
-// internal workspace, so this bridge makes no memory-efficiency claim.
+// Prepared opt-in unmasked SDPA experiment. Q and context use caller-owned F32
+// BTHD buffers. K/V are BTHD by default or caller-prepared BHTD on the separate
+// head-major entrypoint. MPSGraph may allocate private internal workspace, so
+// this bridge makes no memory-efficiency claim.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
@@ -71,11 +72,11 @@ static bool wan_attention_mps_disjoint(id<MTLBuffer> a, id<MTLBuffer> b) {
   return aEnd <= bStart || bEnd <= aStart;
 }
 
-extern "C" void *gs_wan_attention_mps_plan_create(
+static void *wan_attention_mps_plan_create_impl(
     void *deviceHandle, int32_t batches, int32_t queryRows,
     int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
     void *kHandle, void *vHandle, void *outputAHandle,
-    void *outputBHandle) {
+    void *outputBHandle, bool headMajorKV) {
   if (!deviceHandle || !qHandle || !kHandle || !vHandle || !outputAHandle ||
       !outputBHandle)
     return nullptr;
@@ -130,7 +131,8 @@ extern "C" void *gs_wan_attention_mps_plan_create(
         NSArray<NSNumber *> *qShape =
             @[ @(batches), @(queryRows), @(heads), @(headDim) ];
         NSArray<NSNumber *> *kvShape =
-            @[ @(batches), @(keyRows), @(heads), @(headDim) ];
+            headMajorKV ? @[ @(batches), @(heads), @(keyRows), @(headDim) ]
+                        : @[ @(batches), @(keyRows), @(heads), @(headDim) ];
         MPSGraph *graph = [MPSGraph new];
         graph.options = MPSGraphOptionsNone;
         MPSGraphTensor *q = [graph placeholderWithShape:qShape
@@ -138,22 +140,28 @@ extern "C" void *gs_wan_attention_mps_plan_create(
                                                    name:@"wan_q_bthd"];
         MPSGraphTensor *k = [graph placeholderWithShape:kvShape
                                                dataType:MPSDataTypeFloat32
-                                                   name:@"wan_k_bthd"];
+                                                   name:headMajorKV ? @"wan_k_bhtd"
+                                                                    : @"wan_k_bthd"];
         MPSGraphTensor *v = [graph placeholderWithShape:kvShape
                                                dataType:MPSDataTypeFloat32
-                                                   name:@"wan_v_bthd"];
+                                                   name:headMajorKV ? @"wan_v_bhtd"
+                                                                    : @"wan_v_bthd"];
         MPSGraphTensor *qh = [graph transposeTensor:q
                                           dimension:1
                                       withDimension:2
                                                name:@"wan_q_bhtd"];
-        MPSGraphTensor *kh = [graph transposeTensor:k
-                                          dimension:1
-                                      withDimension:2
-                                               name:@"wan_k_bhtd"];
-        MPSGraphTensor *vh = [graph transposeTensor:v
-                                          dimension:1
-                                      withDimension:2
-                                               name:@"wan_v_bhtd"];
+        MPSGraphTensor *kh = headMajorKV
+                                 ? k
+                                 : [graph transposeTensor:k
+                                                dimension:1
+                                            withDimension:2
+                                                     name:@"wan_k_bhtd"];
+        MPSGraphTensor *vh = headMajorKV
+                                 ? v
+                                 : [graph transposeTensor:v
+                                                dimension:1
+                                            withDimension:2
+                                                     name:@"wan_v_bhtd"];
         const float scale = 1.0f / sqrtf((float)headDim);
         MPSGraphTensor *contextHeads =
             [graph scaledDotProductAttentionWithQueryTensor:qh
@@ -244,6 +252,29 @@ extern "C" void *gs_wan_attention_mps_plan_create(
     }
   }
   return nullptr;
+}
+
+// Preserve the original BTHD K/V entrypoint and graph unchanged by default.
+extern "C" void *gs_wan_attention_mps_plan_create(
+    void *deviceHandle, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
+    void *kHandle, void *vHandle, void *outputAHandle,
+    void *outputBHandle) {
+  return wan_attention_mps_plan_create_impl(
+      deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
+      kHandle, vHandle, outputAHandle, outputBHandle, false);
+}
+
+// Opt-in path for caller-prepared contiguous BHTD K/V. Q and context remain
+// BTHD, so only Q/context graph transposes are retained.
+extern "C" void *gs_wan_attention_mps_plan_create_head_major_kv(
+    void *deviceHandle, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
+    void *kHandle, void *vHandle, void *outputAHandle,
+    void *outputBHandle) {
+  return wan_attention_mps_plan_create_impl(
+      deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
+      kHandle, vHandle, outputAHandle, outputBHandle, true);
 }
 
 extern "C" int32_t gs_wan_attention_mps_encode(void *planHandle,

@@ -54,6 +54,276 @@ private def mps_attention_fill_nan!(buffer : ML::MetalBuffer, count : Int32) : N
   count.times { |i| ptr[i] = Float32::NAN }
 end
 
+private def mps_attention_assert_strict!(actual : ML::MetalBuffer,
+                                         expected : ML::MetalBuffer,
+                                         count : Int32, label : String) : Nil
+  actual_ptr = actual.contents.as(Pointer(Float32))
+  expected_ptr = expected.contents.as(Pointer(Float32))
+  violations = 0
+  worst_ratio = 0.0_f64
+  count.times do |i|
+    got = actual_ptr[i]
+    reference = expected_ptr[i]
+    ratio = (got - reference).abs.to_f64 / (2e-5 + 2e-5 * reference.abs)
+    violations += 1 unless got.finite? && reference.finite? && ratio <= 1.0
+    worst_ratio = Math.max(worst_ratio, ratio)
+  end
+  violations.should eq(0), "#{label}: strict mismatches=#{violations}, worst_ratio=#{worst_ratio}"
+end
+
+private MPS_ATTENTION_NEGATE_BUFFER_SOURCE = <<-METAL
+  #include <metal_stdlib>
+  using namespace metal;
+  kernel void mps_attention_negate_buffer(device float *buffer [[buffer(0)]],
+                                          constant uint &count [[buffer(1)]],
+                                          uint i [[thread_position_in_grid]]) {
+    if (i < count) buffer[i] = -buffer[i];
+  }
+  METAL
+
+private def mps_attention_negate_buffer!(chain : ML::Metal::MPSCommandChain,
+                                         pipeline : ML::Metal::ComputePipeline,
+                                         buffer : ML::MetalBuffer,
+                                         count : Int32) : Nil
+  chain.encoder.set_pipeline(pipeline)
+    .set_buffer(buffer, 0, ML::Metal::BufferAccess::ReadWrite)
+    .set_value(count.to_u32, 1)
+    .dispatch_1d(count)
+end
+
+describe "Head-major MPS K/V preparation" do
+  it "transposes nontrivial B,K,H,D input into contiguous B,H,K,D buffers" do
+    batches = 2
+    key_rows = 3
+    heads = 2
+    head_dim = 2
+    values = batches * key_rows * heads * head_dim
+    arena = ML::Video::Arena.new
+    chain : ML::Metal::MPSCommandChain? = nil
+    begin
+      k = arena.alloc("transpose_k", values)
+      v = arena.alloc("transpose_v", values)
+      prepared_k = arena.alloc("head_major_k", values)
+      prepared_v = arena.alloc("head_major_v", values)
+      input_k = k.contents.as(Pointer(Float32))
+      input_v = v.contents.as(Pointer(Float32))
+      values.times do |i|
+        input_k[i] = (i + 1).to_f32 / 8.0_f32
+        input_v[i] = -(i + 3).to_f32 / 16.0_f32
+      end
+
+      ML::Video::MetalAttentionMPS.prepare_head_major_kv!
+      chain = ML::Metal::MPSCommandChain.new
+      allocations_before = ML::MetalBuffer.video_spec_allocations
+      ML::Video::MetalAttentionMPS.transpose_kv!(chain.not_nil!, k, v,
+        prepared_k, prepared_v, batches, key_rows, heads, head_dim)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
+        "K/V transpose allocated MetalBuffers during command encoding"
+      chain.not_nil!.wait_count.should eq(0)
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+
+      output_k = prepared_k.contents.as(Pointer(Float32))
+      output_v = prepared_v.contents.as(Pointer(Float32))
+      batches.times do |batch|
+        key_rows.times do |key|
+          heads.times do |head|
+            head_dim.times do |dim|
+              source = ((batch * key_rows + key) * heads + head) * head_dim + dim
+              destination = ((batch * heads + head) * key_rows + key) * head_dim + dim
+              output_k[destination].should eq(input_k[source]),
+                "K transpose mismatch at B=#{batch}, K=#{key}, H=#{head}, D=#{dim}"
+              output_v[destination].should eq(input_v[source]),
+                "V transpose mismatch at B=#{batch}, K=#{key}, H=#{head}, D=#{dim}"
+            end
+          end
+        end
+      end
+    ensure
+      chain.try do |active|
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
+      arena.release
+    end
+  end
+
+  it "refreshes both K and V on every encode and across completed chains" do
+    fixture_path = ENV["WAN_ATTENTION_MPS_FIXTURE"]?
+    pending! "Set WAN_ATTENTION_MPS_FIXTURE to the qualified MPS fixture manifest" unless fixture_path
+    fixture = JSON.parse(File.read(fixture_path))
+    small_case = fixture["cases"].as_a.find { |c| c["name"].as_s == "b1-q9-k65-h2-d64-near-tie" }
+    raise "missing pinned head-major attention case" unless small_case
+    query_rows = small_case["query_rows"].as_i
+    key_rows = small_case["key_rows"].as_i
+    heads = small_case["heads"].as_i
+    head_dim = small_case["dim"].as_i
+    channels = heads * head_dim
+    query_count = query_rows * channels
+    kv_count = key_rows * channels
+    chunk_rows = 4
+    arena = ML::Video::Arena.new
+    chain : ML::Metal::MPSCommandChain? = nil
+    workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+    begin
+      q = mps_attention_fixture_tensor(arena, "head_major_q", small_case["q"], query_count)
+      k = mps_attention_fixture_tensor(arena, "head_major_k_input", small_case["k"], kv_count)
+      v = mps_attention_fixture_tensor(arena, "head_major_v_input", small_case["v"], kv_count)
+      expected = mps_attention_fixture_tensor(arena, "head_major_expected",
+        small_case["expected"], query_count)
+      output = arena.alloc("head_major_output", query_count)
+      output_a = arena.alloc("head_major_output_a", query_count)
+      output_k = arena.alloc("head_major_output_k", query_count)
+      output_v = arena.alloc("head_major_output_v", query_count)
+      output_later_chain = arena.alloc("head_major_output_later_chain", query_count)
+      output_restored = arena.alloc("head_major_output_restored", query_count)
+      reference_k = arena.alloc("head_major_reference_k", query_count)
+      reference_v = arena.alloc("head_major_reference_v", query_count)
+      reference_later_chain = arena.alloc("head_major_reference_later_chain", query_count)
+      prepared_k = arena.alloc("head_major_prepared_k", kv_count)
+      prepared_v = arena.alloc("head_major_prepared_v", kv_count)
+      chunk_count = chunk_rows * channels
+      chunk_q = arena.alloc("head_major_chunk_q", chunk_count)
+      chunk_output_a = arena.alloc("head_major_chunk_output_a", chunk_count)
+      chunk_output_b = arena.alloc("head_major_chunk_output_b", chunk_count)
+      workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
+        key_rows, heads, head_dim, chunk_rows, q, k, v, output, chunk_q,
+        chunk_output_a, chunk_output_b, prepared_k, prepared_v)
+      workspace.head_major_kv?.should be_true
+      expected_scratch = chunk_rows.to_i64 * channels * sizeof(Float32) * 3 +
+                         kv_count.to_i64 * sizeof(Float32) * 2
+      workspace.scratch_bytes.should eq(expected_scratch)
+
+      ML::Video::MetalOps.prepare!
+      negate = ML::Metal::ComputePipeline.new("mps_attention_negate_buffer",
+        MPS_ATTENTION_NEGATE_BUFFER_SOURCE)
+      ML::Video::MetalAttentionMPS.prepare_head_major_kv!
+      allocations_before = ML::MetalBuffer.video_spec_allocations
+      query_bytes = query_count.to_i64 * sizeof(Float32)
+
+      # Keep Q fixed. Change K alone, restore it, then change V alone and
+      # restore it. Each encode must rebuild both prepared layouts from inputs.
+      chain = ML::Metal::MPSCommandChain.new
+      workspace.encode(chain.not_nil!)
+      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output, output_a, query_bytes)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, k, kv_count)
+      workspace.encode(chain.not_nil!)
+      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output, output_k, query_bytes)
+      ML::Video::MetalOps.attention(chain.not_nil!.encoder, q, k, v, reference_k,
+        query_rows, key_rows, heads, head_dim)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, k, kv_count)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, v, kv_count)
+      workspace.encode(chain.not_nil!)
+      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output, output_v, query_bytes)
+      ML::Video::MetalOps.attention(chain.not_nil!.encoder, q, k, v, reference_v,
+        query_rows, key_rows, heads, head_dim)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, v, kv_count)
+      workspace.encode(chain.not_nil!)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
+        "head-major chunk encode allocated MetalBuffers"
+      chain.not_nil!.wait_count.should eq(0)
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+
+      mps_attention_assert_strict!(output_a, expected, query_count,
+        "head-major initial A vs pinned oracle")
+      mps_attention_assert_strict!(output_k, reference_k, query_count,
+        "head-major changed-K vs native SDPA")
+      mps_attention_assert_strict!(output_v, reference_v, query_count,
+        "head-major changed-V vs native SDPA")
+      mps_attention_copy_equal?(output_a, output_k, query_count).should be_false,
+        "changing K did not change head-major output"
+      mps_attention_copy_equal?(output_a, output_v, query_count).should be_false,
+        "changing V did not change head-major output"
+      mps_attention_copy_equal?(output, output_a, query_count).should be_true,
+        "same-chain K/V A→B→A did not restore exact output bits"
+
+      # Reuse only after the first chain's terminal wait. Mutate both KV inputs
+      # on this later chain and independently check the native result.
+      chain.not_nil!.release
+      chain = ML::Metal::MPSCommandChain.new
+      mps_attention_negate_buffer!(chain.not_nil!, negate, k, kv_count)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, v, kv_count)
+      workspace.encode(chain.not_nil!)
+      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output,
+        output_later_chain, query_bytes)
+      ML::Video::MetalOps.attention(chain.not_nil!.encoder, q, k, v,
+        reference_later_chain, query_rows, key_rows, heads, head_dim)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, k, kv_count)
+      mps_attention_negate_buffer!(chain.not_nil!, negate, v, kv_count)
+      workspace.encode(chain.not_nil!)
+      ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, output, output_restored,
+        query_bytes)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before),
+        "retained head-major workspace allocated MetalBuffers on a completed chain"
+      chain.not_nil!.wait_count.should eq(0)
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+      mps_attention_assert_strict!(output_later_chain, reference_later_chain,
+        query_count, "later-chain changed-KV vs native SDPA")
+      mps_attention_assert_strict!(output_restored, expected, query_count,
+        "later-chain restored A vs pinned oracle")
+      mps_attention_copy_equal?(output_later_chain, output_a, query_count).should be_false,
+        "changed KV on a completed-chain reuse did not change output"
+      mps_attention_copy_equal?(output_restored, output_a, query_count).should be_true,
+        "later-chain K/V restoration did not reproduce exact output bits"
+    ensure
+      chain.try do |active|
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
+      workspace.try(&.release)
+      arena.release
+    end
+  end
+
+  it "rejects release and another chain while an encode is in flight" do
+    arena = ML::Video::Arena.new
+    chain : ML::Metal::MPSCommandChain? = nil
+    other_chain : ML::Metal::MPSCommandChain? = nil
+    workspace : ML::Video::WanAttentionMPSChunkWorkspace? = nil
+    begin
+      q = arena.alloc("inflight_q", 64)
+      k = arena.alloc("inflight_k", 64)
+      v = arena.alloc("inflight_v", 64)
+      output = arena.alloc("inflight_output", 64)
+      prepared_k = arena.alloc("inflight_prepared_k", 64)
+      prepared_v = arena.alloc("inflight_prepared_v", 64)
+      scratch_q = arena.alloc("inflight_scratch_q", 64)
+      scratch_a = arena.alloc("inflight_scratch_a", 64)
+      scratch_b = arena.alloc("inflight_scratch_b", 64)
+      workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64,
+        1, q, k, v, output, scratch_q, scratch_a, scratch_b, prepared_k, prepared_v)
+      chain = ML::Metal::MPSCommandChain.new
+      workspace.encode(chain.not_nil!)
+      chain.not_nil!.completed?.should be_false
+
+      expect_raises(ArgumentError, "Complete MPS attention command chain") do
+        workspace.release
+      end
+      other_chain = ML::Metal::MPSCommandChain.new
+      expect_raises(ArgumentError, "cannot span in-flight") do
+        workspace.encode(other_chain.not_nil!)
+      end
+      # The rejected chain must not replace the workspace's recorded owner.
+      workspace.encode(chain.not_nil!)
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+    ensure
+      chain.try do |active|
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
+      other_chain.try do |active|
+        active.commit_and_wait unless active.completed?
+        active.release
+      end
+      workspace.try(&.release)
+      arena.release
+    end
+  end
+end
+
 describe "Opt-in prepared MPSGraph SDPA" do
   it "rejects aliases and overflow before preparing a native graph" do
     arena = ML::Video::Arena.new
@@ -66,6 +336,9 @@ describe "Opt-in prepared MPSGraph SDPA" do
       scratch_q = arena.alloc("scratch_q", 64)
       scratch_a = arena.alloc("scratch_a", 64)
       scratch_b = arena.alloc("scratch_b", 64)
+      prepared_k = arena.alloc("prepared_k", 64)
+      prepared_v = arena.alloc("prepared_v", 64)
+      short_prepared_k = arena.alloc("short_prepared_k", 63)
       expect_raises(ArgumentError) do
         ML::Video::WanAttentionMPSPlan.new(1, 1, 1, 1, 64,
           q, k, v, q, output)
@@ -86,8 +359,37 @@ describe "Opt-in prepared MPSGraph SDPA" do
         ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
           q, k, v, output, scratch_q, scratch_a, scratch_a)
       end
+      expect_raises(ArgumentError, "both prepared K and V") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
+          q, k, v, output, scratch_q, scratch_a, scratch_b, prepared_k, nil)
+      end
+      expect_raises(ArgumentError, "undersized resident video buffer") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
+          q, k, v, output, scratch_q, scratch_a, scratch_b,
+          short_prepared_k, prepared_v)
+      end
+      expect_raises(ArgumentError, "pairwise disjoint") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
+          q, k, v, output, scratch_q, scratch_a, scratch_b, prepared_k, prepared_k)
+      end
+      expect_raises(ArgumentError, "pairwise disjoint") do
+        ML::Video::WanAttentionMPSChunkWorkspace.new(1, 1, 1, 1, 64, 1,
+          q, k, v, output, scratch_q, scratch_a, scratch_b, k, prepared_v)
+      end
 
       chain = ML::Metal::MPSCommandChain.new
+      expect_raises(ArgumentError, "exceeds supported F32 extent") do
+        ML::Video::MetalAttentionMPS.transpose_kv!(chain, k, v, prepared_k,
+          prepared_v, 1, Int32::MAX, 2, 1)
+      end
+      expect_raises(ArgumentError, "pairwise disjoint") do
+        ML::Video::MetalAttentionMPS.transpose_kv!(chain, k, v, k,
+          prepared_v, 1, 1, 1, 1)
+      end
+      expect_raises(ArgumentError, "undersized resident video buffer") do
+        ML::Video::MetalAttentionMPS.transpose_kv!(chain, k, v, short_prepared_k,
+          prepared_v, 1, 64, 1, 1)
+      end
       expect_raises(ArgumentError, "aligned") do
         ML::Video::WanAttentionMPSPlan.copy(chain.not_nil!, q, k, 4_i64,
           1_i64, 0_i64)

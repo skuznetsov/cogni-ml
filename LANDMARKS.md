@@ -31021,3 +31021,32 @@ Refresh after source/toolchain/device/model/workload changes.
   drift and full cold/repeat video remain open. Reproduction, hashes, scope and
   source links: docs/wan-self-attention-benchmark.md. Refresh after code/lifetime,
   inputs/weights, geometry, precision, device/runtime or queue-isolation changes.
+
+### 2026-10-20 — Optional per-block head-major Wan K/V reuse
+
+- One fused GPU dispatch prepares current F32 K/V in caller-owned head-major
+  buffers at every chunk-workspace encode, then all query chunks reuse them.
+  Pairwise extent/alias checks and workspace in-flight guards preserve caller
+  lifetimes. The added pair costs 1,499,463,680 bytes at N=36,608, H=40, D=128;
+  legacy construction remains default and rollback.
+- Focused attention passes 5/0 examples and official upstream BF16 block/injector
+  intermediate regression passes 6/0. Eight full-shape attention oracle checks
+  pass unchanged tolerances (max abs 1.8328428e-6); native controls and all four
+  whole-block comparisons are bit-identical across 187,432,960 output values.
+  Corruption controls reject one changed value. The block uses real weights and
+  synthetic inputs without the audio injector; strict 40-layer drift stays open.
+- Equal-128-row AB/BA/AB medians are 15.372098 to 15.012460 s for attention and
+  18.227773 to 18.091101 s for the full block, but both win only 2/3 pairs.
+  The last full-block pair regresses by 0.635952 s. The predeclared all-pairs
+  performance gate fails, so no stable speedup or default promotion is admitted.
+  Each timed arm has one terminal wait and zero explicit encode allocations;
+  source adds no intermediate host waits/readbacks. Sampled free memory reaches
+  29% at minimum under the explicit 15% guard. The older video process resumes.
+- Correlated mini-Quadrumvirate verdict ROBUST covers bounded correctness and
+  lifetime claims; the speedup claim is VULNERABLE. Next discriminator: explicit
+  QK/scale/softmax/PV versus opaque MPSGraph SDPA, followed by native tiled K/V
+  reuse. Physical transpose count and exclusive operator costs remain unknown.
+  Source/checkpoint hashes, commands, raw receipts, cosmetic post-run metadata
+  corrections and refresh triggers: docs/wan-self-attention-benchmark.md.
+  Refresh on code/lifetime, inputs/weights, geometry, precision, device/runtime
+  or queue-isolation changes. Full cold/repeat video speed and quality remain open.

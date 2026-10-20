@@ -6,6 +6,16 @@ scratch, runs a prepared MPSGraph SDPA executable, and copies valid result rows
 back on the same native command chain. The final short chunk is padded on GPU.
 K/V remain global: chunks do not restrict the attention window.
 
+An optional final pair of `head_major_k` / `head_major_v` buffers enables
+head-major K/V reuse. One fused GPU dispatch converts current BTHD K/V to BHTD
+at the start of **every** workspace `encode`; all query chunks then consume
+those prepared buffers. The pair is caller-owned, shared F32, full-size and
+pairwise disjoint from every original/chunk buffer. At K=36,608, H=40, D=128
+it adds 1,499,463,680 bytes to `scratch_bytes`. This reuses a layout within a
+call, never stale activations across blocks or diffusion steps. Omitting both
+buffers retains the original graph path. Direct `transpose_kv!` callers must
+serialize access and retain all four bindings through terminal completion.
+
 The caller chooses 1..1,024 query rows; existing callers retain 512 by default.
 Three caller-owned chunk buffers cost 31,457,280 bytes at C=5,120 and 512 rows,
 or 62,914,560 bytes at 1,024 rows. Admission must account for the chosen size.
@@ -31,8 +41,12 @@ result to the correspondingly indexed oracle. GPU A/B/A input mutation checks
 and a later completed-chain reuse reject stale prepared bindings. Alias, offset,
 alignment, overflow and lifetime guards are also exercised.
 
-The focused spec, rerun with both chunk sizes, completes two examples without
-failures, errors or pending cases. The earlier shared-scratch transformer/long-key
+The focused spec now completes five examples without failures, errors or pending
+cases. The added checks cover exact B=2 head-major indexing, separately changed
+K and V in one chain, restored inputs and reuse after a completed chain, plus
+alias/extent and in-flight reuse/release guards. The official BF16 block fixture
+also passes six regression examples at its pinned upstream intermediate gate.
+The earlier shared-scratch transformer/long-key
 regression completed eight examples without failures, errors or pending cases.
 Each attention request has
 one terminal wait and zero explicit MetalBuffer allocations during encoding.
@@ -68,3 +82,9 @@ fresh checks. Visible quality and complete cold/repeat video timing remain open.
 
 The nontrivial full-geometry upstream comparison and isolated attention timing
 are described in [wan-self-attention-benchmark.md](wan-self-attention-benchmark.md).
+Its `head-kv-*-v1.log` receipts and `head-kv-qualified-summary-v1.json` live in
+the sibling `evidence/wan-self-attention/` directory. Full attention outputs pass
+the pinned upstream gate and whole-block candidate outputs match the native
+control bit for bit. The head-major layout candidate wins only two of three
+whole-block pairs (medians 18.227773 to 18.091101 seconds), failing performance
+admission while adding 1.396 GiB of explicit buffers. It remains optional.

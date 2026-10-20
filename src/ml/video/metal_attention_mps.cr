@@ -29,12 +29,47 @@ module ML::Video::MetalAttentionMPS
     }
     METAL
 
+  # Read BTHD and write BHTD in one caller-chain dispatch. The output index is
+  # linearized in BHTD order so writes remain contiguous; each thread copies
+  # the matching F32 K and V element.
+  HEAD_MAJOR_KV_TRANSPOSE_SOURCE = <<-METAL
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wan_attention_mps_transpose_head_major_kv(
+        const device float *k [[buffer(0)]],
+        device float *head_major_k [[buffer(1)]],
+        const device float *v [[buffer(2)]],
+        device float *head_major_v [[buffer(3)]],
+        constant uint &batches [[buffer(4)]],
+        constant uint &key_rows [[buffer(5)]],
+        constant uint &heads [[buffer(6)]],
+        constant uint &head_dim [[buffer(7)]],
+        constant uint &count [[buffer(8)]],
+        uint tid [[thread_position_in_grid]]) {
+      if (tid >= count || tid / (head_dim * key_rows * heads) >= batches) return;
+      const uint d = tid % head_dim;
+      const uint key = (tid / head_dim) % key_rows;
+      const uint head = (tid / (head_dim * key_rows)) % heads;
+      const uint batch = tid / (head_dim * key_rows * heads);
+      const uint source = ((batch * key_rows + key) * heads + head) * head_dim + d;
+      head_major_k[tid] = k[source];
+      head_major_v[tid] = v[source];
+    }
+    METAL
+
   def self.prepare! : Nil
     q_negate_pipeline
   end
 
   def self.prepare_chunk! : Nil
     q_tail_zero_pipeline
+  end
+
+  # Compile the fused K/V transpose during setup, before any command-chain
+  # accounting begins.
+  def self.prepare_head_major_kv! : Nil
+    head_major_kv_transpose_pipeline
   end
 
   def self.negate_q!(chain : ML::Metal::MPSCommandChain,
@@ -67,6 +102,47 @@ module ML::Video::MetalAttentionMPS
       .dispatch_1d(count)
   end
 
+  # Convert caller-owned BTHD K/V into caller-owned BHTD buffers in this chain.
+  # The fused dispatch writes each prepared buffer once and introduces no wait
+  # or MetalBuffer allocation. Direct callers must serialize access and retain
+  # all four buffers until terminal completion; the workspace below enforces
+  # reuse of its own buffers across command chains.
+  def self.transpose_kv!(chain : ML::Metal::MPSCommandChain,
+                         k : ML::MetalBuffer, v : ML::MetalBuffer,
+                         prepared_k : ML::MetalBuffer,
+                         prepared_v : ML::MetalBuffer,
+                         batches : Int32, key_rows : Int32,
+                         heads : Int32, head_dim : Int32) : Nil
+    count = checked_elements(batches, key_rows, heads, head_dim)
+    {k, v, prepared_k, prepared_v}.each do |buffer|
+      MetalOps.check(buffer, count)
+      unless buffer.storage_mode == ML::StorageMode::Shared
+        raise ArgumentError.new("MPS attention K/V transpose requires shared F32 buffers")
+      end
+    end
+    buffers = {k, v, prepared_k, prepared_v}
+    buffers.each_with_index do |left, i|
+      buffers.each_with_index do |right, j|
+        next if j <= i
+        if MetalOps.overlap?(left, right)
+          raise ArgumentError.new("MPS attention K/V transpose buffers must be pairwise disjoint")
+        end
+      end
+    end
+    chain.encoder
+      .set_pipeline(head_major_kv_transpose_pipeline)
+      .set_buffer(k, 0, ML::Metal::BufferAccess::Read)
+      .set_buffer(prepared_k, 1, ML::Metal::BufferAccess::Write)
+      .set_buffer(v, 2, ML::Metal::BufferAccess::Read)
+      .set_buffer(prepared_v, 3, ML::Metal::BufferAccess::Write)
+      .set_value(batches.to_u32, 4)
+      .set_value(key_rows.to_u32, 5)
+      .set_value(heads.to_u32, 6)
+      .set_value(head_dim.to_u32, 7)
+      .set_value(count.to_u32, 8)
+      .dispatch_1d(count.to_i32)
+  end
+
   private def self.q_negate_pipeline : ML::Metal::ComputePipeline
     ML::Metal::PipelineCache.get("wan_attention_mps_negate_q") do
       ML::Metal::ComputePipeline.new("wan_attention_mps_negate_q", Q_NEGATE_SOURCE)
@@ -78,6 +154,25 @@ module ML::Video::MetalAttentionMPS
       ML::Metal::ComputePipeline.new("wan_attention_mps_zero_q_tail", Q_TAIL_ZERO_SOURCE)
     end
   end
+
+  private def self.head_major_kv_transpose_pipeline : ML::Metal::ComputePipeline
+    ML::Metal::PipelineCache.get("wan_attention_mps_transpose_head_major_kv") do
+      ML::Metal::ComputePipeline.new("wan_attention_mps_transpose_head_major_kv",
+        HEAD_MAJOR_KV_TRANSPOSE_SOURCE)
+    end
+  end
+
+  private def self.checked_elements(*dimensions : Int32) : Int64
+    raise ArgumentError.new("MPS attention K/V dimensions must be positive") unless dimensions.all? { |n| n > 0 }
+    product = 1_i64
+    dimensions.each do |dimension|
+      if product > Int32::MAX.to_i64 // dimension
+        raise ArgumentError.new("MPS attention K/V transpose exceeds supported F32 extent")
+      end
+      product *= dimension
+    end
+    product
+  end
 end
 
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
@@ -87,6 +182,11 @@ end
                                                        batches : Int32, query_rows : Int32, key_rows : Int32, heads : Int32,
                                                        head_dim : Int32, q : Pointer(Void), k : Pointer(Void), v : Pointer(Void),
                                                        output_a : Pointer(Void), output_b : Pointer(Void)) : Pointer(Void)
+    fun plan_create_head_major_kv = gs_wan_attention_mps_plan_create_head_major_kv(
+      device : Pointer(Void), batches : Int32, query_rows : Int32, key_rows : Int32,
+      heads : Int32, head_dim : Int32, q : Pointer(Void), k : Pointer(Void),
+      v : Pointer(Void), output_a : Pointer(Void), output_b : Pointer(Void),
+    ) : Pointer(Void)
     fun encode = gs_wan_attention_mps_encode(plan : Pointer(Void),
                                              command : Pointer(Void), output_slot : Int32) : Int32
     fun copy = gs_wan_attention_mps_copy(command : Pointer(Void),
@@ -98,10 +198,12 @@ end
 {% end %}
 
 module ML::Video
-  # Opt-in prepared MPSGraph SDPA. Inputs and both result backings are fixed
-  # caller-owned shared F32 BTHD buffers. The caller must keep them valid and
-  # immutable until the chain's terminal wait. The executable targets only
-  # context; MPSGraph may keep private workspace outside MetalBuffer accounting.
+  # Opt-in prepared MPSGraph SDPA. Q and both result backings are fixed
+  # caller-owned shared F32 BTHD buffers. K/V are BTHD by default; the optional
+  # head-major entrypoint binds caller-owned shared F32 BHTD K/V. The caller
+  # must keep every binding valid and immutable until the chain's terminal wait.
+  # The executable targets only context; MPSGraph may keep private workspace
+  # outside MetalBuffer accounting.
   class WanAttentionMPSPlan
     getter batches : Int32
     getter query_rows : Int32
@@ -114,6 +216,7 @@ module ML::Video
     @v : ML::MetalBuffer
     @output_a : ML::MetalBuffer
     @output_b : ML::MetalBuffer
+    @head_major_kv : Bool
     @handle : Pointer(Void)
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -121,7 +224,9 @@ module ML::Video
     def initialize(@batches : Int32, @query_rows : Int32, @key_rows : Int32,
                    @heads : Int32, @head_dim : Int32, @q : ML::MetalBuffer,
                    @k : ML::MetalBuffer, @v : ML::MetalBuffer,
-                   @output_a : ML::MetalBuffer, @output_b : ML::MetalBuffer)
+                   @output_a : ML::MetalBuffer, @output_b : ML::MetalBuffer,
+                   head_major_kv : Bool = false)
+      @head_major_kv = head_major_kv
       @handle = Pointer(Void).null
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
@@ -143,9 +248,16 @@ module ML::Video
       end
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         device = ML::Metal::Device.instance.device_handle
-        @handle = WanAttentionMPSFFI.plan_create(device, @batches, @query_rows,
-          @key_rows, @heads, @head_dim, @q.handle, @k.handle, @v.handle,
-          @output_a.handle, @output_b.handle)
+        @handle = if @head_major_kv
+                    WanAttentionMPSFFI.plan_create_head_major_kv(device,
+                      @batches, @query_rows, @key_rows, @heads, @head_dim,
+                      @q.handle, @k.handle, @v.handle, @output_a.handle,
+                      @output_b.handle)
+                  else
+                    WanAttentionMPSFFI.plan_create(device, @batches, @query_rows,
+                      @key_rows, @heads, @head_dim, @q.handle, @k.handle, @v.handle,
+                      @output_a.handle, @output_b.handle)
+                  end
         raise "Failed to prepare Wan MPSGraph attention plan" if @handle.null?
       {% else %}
         raise ArgumentError.new("MPSGraph attention requires macOS 15 or later")
@@ -296,9 +408,10 @@ module ML::Video
   end
 
   # Bounded B1 attention workspace for query lengths larger than the prepared
-  # graph shape. K/V stay global and resident. Query and context scratch are
-  # fixed caller-owned buffers; every span reuses one prepared graph plan and
-  # the same serial command chain, with no wait or MetalBuffer allocation.
+  # graph shape. Original K/V stay global and resident. An opt-in head-major
+  # path refreshes caller-owned prepared K/V on every encode before reusing the
+  # same graph plan. Query and context scratch also stay caller-owned; each span
+  # uses the same serial command chain, with no wait or MetalBuffer allocation.
   class WanAttentionMPSChunkWorkspace
     # The caller still selects the query chunk and owns its scratch/memory
     # admission. A larger maximum does not change any pipeline default.
@@ -318,15 +431,25 @@ module ML::Video
     @chunk_q : ML::MetalBuffer
     @chunk_output_a : ML::MetalBuffer
     @chunk_output_b : ML::MetalBuffer
+    @head_major_k : ML::MetalBuffer?
+    @head_major_v : ML::MetalBuffer?
     @plan : WanAttentionMPSPlan
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    # Bytes held by the three reusable chunk buffers: Q scratch and the two
-    # prebound MPSGraph result backings. Caller-owned full Q/K/V/output are
-    # accounted by the caller separately.
+    # Bytes held by reusable chunk buffers: Q scratch and two prebound MPSGraph
+    # result backings. When enabled, the full-size head-major K/V buffers are
+    # included too. Original full Q/K/V/output remain caller-accounted.
     def scratch_bytes : Int64
-      checked_elements(1, @chunk_rows, @heads, @head_dim) * sizeof(Float32) * 3
+      bytes = checked_elements(1, @chunk_rows, @heads, @head_dim) * sizeof(Float32) * 3
+      if head_major_kv?
+        bytes += checked_elements(@batches, @key_rows, @heads, @head_dim) * sizeof(Float32) * 2
+      end
+      bytes
+    end
+
+    def head_major_kv? : Bool
+      !@head_major_k.nil?
     end
 
     def initialize(@batches : Int32, @query_rows : Int32, @key_rows : Int32,
@@ -334,10 +457,17 @@ module ML::Video
                    @q : ML::MetalBuffer, @k : ML::MetalBuffer, @v : ML::MetalBuffer,
                    @output : ML::MetalBuffer, @chunk_q : ML::MetalBuffer,
                    @chunk_output_a : ML::MetalBuffer,
-                   @chunk_output_b : ML::MetalBuffer)
+                   @chunk_output_b : ML::MetalBuffer,
+                   head_major_k : ML::MetalBuffer? = nil,
+                   head_major_v : ML::MetalBuffer? = nil)
+      @head_major_k = head_major_k
+      @head_major_v = head_major_v
       raise ArgumentError.new("MPS attention chunk workspace supports B=1 only") unless @batches == 1
       unless @chunk_rows > 0 && @chunk_rows <= MAX_CHUNK_ROWS
         raise ArgumentError.new("MPS attention chunk rows must be within 1..#{MAX_CHUNK_ROWS}")
+      end
+      if @head_major_k.nil? != @head_major_v.nil?
+        raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
       end
 
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
@@ -347,6 +477,15 @@ module ML::Video
       {@k, @v}.each { |buffer| MetalOps.check(buffer, kv_count) }
       {@chunk_q, @chunk_output_a, @chunk_output_b}.each do |buffer|
         MetalOps.check(buffer, chunk_count)
+      end
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        {prepared_k, prepared_v}.each do |buffer|
+          MetalOps.check(buffer, kv_count)
+          unless buffer.storage_mode == ML::StorageMode::Shared
+            raise ArgumentError.new("MPS attention chunk workspace requires shared F32 buffers")
+          end
+        end
       end
 
       all = {@q, @k, @v, @output, @chunk_q, @chunk_output_a, @chunk_output_b}
@@ -363,10 +502,29 @@ module ML::Video
           end
         end
       end
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        all.each do |buffer|
+          if MetalOps.overlap?(buffer, prepared_k) || MetalOps.overlap?(buffer, prepared_v)
+            raise ArgumentError.new("MPS attention chunk workspace buffers must be pairwise disjoint")
+          end
+        end
+        if MetalOps.overlap?(prepared_k, prepared_v)
+          raise ArgumentError.new("MPS attention chunk workspace buffers must be pairwise disjoint")
+        end
+      end
 
       MetalAttentionMPS.prepare_chunk!
-      @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
-        @head_dim, @chunk_q, @k, @v, @chunk_output_a, @chunk_output_b)
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        MetalAttentionMPS.prepare_head_major_kv!
+        @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
+          @head_dim, @chunk_q, prepared_k, prepared_v, @chunk_output_a,
+          @chunk_output_b, true)
+      else
+        @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
+          @head_dim, @chunk_q, @k, @v, @chunk_output_a, @chunk_output_b)
+      end
     end
 
     # Validate the fixed block bindings before any enclosing phase is encoded.
@@ -399,6 +557,14 @@ module ML::Video
       # Requests are serialized through the same caller-owned buffers. A fresh
       # chain is admitted only after the prior request's terminal wait.
       @chain = chain
+
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        # Refresh the prepared layout for every encode because K/V contents may
+        # have changed since the preceding request.
+        MetalAttentionMPS.transpose_kv!(chain, @k, @v, prepared_k, prepared_v,
+          @batches, @key_rows, @heads, @head_dim)
+      end
 
       channels = @heads.to_i64 * @head_dim
       query_offset = 0
@@ -447,9 +613,35 @@ module ML::Video
       {@chunk_q, @chunk_output_a, @chunk_output_b}.each do |buffer|
         MetalOps.check(buffer, chunk_count)
       end
-      {@q, @k, @v, @output, @chunk_q, @chunk_output_a, @chunk_output_b}.each do |buffer|
+      all = {@q, @k, @v, @output, @chunk_q, @chunk_output_a, @chunk_output_b}
+      all.each do |buffer|
         unless buffer.storage_mode == ML::StorageMode::Shared
           raise ArgumentError.new("MPS attention chunk workspace requires shared F32 buffers")
+        end
+      end
+      all.each_with_index do |left, i|
+        all.each_with_index do |right, j|
+          next if j <= i
+          if MetalOps.overlap?(left, right)
+            raise ArgumentError.new("MPS attention chunk workspace buffers must be pairwise disjoint")
+          end
+        end
+      end
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        {prepared_k, prepared_v}.each do |buffer|
+          MetalOps.check(buffer, kv_count)
+          unless buffer.storage_mode == ML::StorageMode::Shared
+            raise ArgumentError.new("MPS attention chunk workspace requires shared F32 buffers")
+          end
+          all.each do |other|
+            if MetalOps.overlap?(other, buffer)
+              raise ArgumentError.new("MPS attention chunk workspace buffers must be pairwise disjoint")
+            end
+          end
+        end
+        if MetalOps.overlap?(prepared_k, prepared_v)
+          raise ArgumentError.new("MPS attention chunk workspace buffers must be pairwise disjoint")
         end
       end
     end

@@ -16,9 +16,11 @@ private SELF_HEAD_DIM                       =    128
 private SELF_CHANNELS                       = SELF_HEADS * SELF_HEAD_DIM
 private SELF_VALUES                         = SELF_Q_ROWS.to_i64 * SELF_CHANNELS
 private SELF_BASELINE_CHUNK_ROWS            = 512
+private SELF_KV_LAYOUT_CHUNK_ROWS           = 128
 private SELF_CHUNK_CHOICES                  = {128, 256, 1024}
 private SELF_FIXTURE_SCHEMA                 = "wan_s2v_self_attention_reference_v1"
 private SELF_BENCHMARK_SCHEMA               = "wan_s2v_self_attention_benchmark_v1"
+private SELF_KV_LAYOUT_BENCHMARK_SCHEMA     = "wan_s2v_self_attention_kv_layout_benchmark_v1"
 private SELF_FORMULA                        = "avalanche32(native_flat_index + salt*0x9e3779b9); ((hash & 1023) - 512) / 256"
 private SELF_PREFLIGHT_LIMIT                = 8_i64 * 1024 * 1024 * 1024
 private SELF_OPAQUE_RESERVE_HEURISTIC_BYTES = 2_i64 * 1024 * 1024 * 1024
@@ -54,13 +56,16 @@ private def self_load_expected(path : String, buffer : ML::MetalBuffer,
   raise ArgumentError.new("Truncated reference output") unless offset == expected_bytes
 end
 
-private def self_expected_explicit_buffer_bytes(candidate_chunk_rows : Int32) : Int64
+private def self_expected_explicit_buffer_bytes(baseline_chunk_rows : Int32,
+                                                candidate_chunk_rows : Int32,
+                                                prepared_kv : Bool) : Int64
   q_values = SELF_Q_ROWS.to_i64 * SELF_CHANNELS
   kv_values = SELF_K_ROWS.to_i64 * SELF_CHANNELS
   full_values = q_values * 4 + kv_values * 2 # Q, K, V, expected, and two backend outputs
-  chunk_values = (SELF_BASELINE_CHUNK_ROWS.to_i64 + candidate_chunk_rows) * SELF_CHANNELS * 3
+  chunk_values = (baseline_chunk_rows.to_i64 + candidate_chunk_rows) * SELF_CHANNELS * 3
   scalar_values = 12_i64 # ten comparator metrics and two corruption-control values
-  (full_values + chunk_values + scalar_values) * sizeof(Float32)
+  prepared_values = prepared_kv ? kv_values * 2 : 0_i64
+  (full_values + chunk_values + prepared_values + scalar_values) * sizeof(Float32)
 end
 
 private def self_fixture_expected_path(fixture_dir : String) : String
@@ -251,15 +256,28 @@ end
 
 fixture_dir = ""
 candidate_chunk_rows = 0
+comparison_mode = "chunk-size"
 OptionParser.parse do |parser|
-  parser.banner = "Usage: crystal run examples/wan_s2v_self_attention_benchmark.cr -- --fixture DIR --candidate 128|256|1024"
+  parser.banner = "Usage: crystal run examples/wan_s2v_self_attention_benchmark.cr -- --fixture DIR --candidate 128|256|1024 [--comparison chunk-size|kv-layout]"
   parser.on("--fixture=DIR", "Fixture directory from wan_s2v_self_attention_benchmark_reference.py") { |value| fixture_dir = value }
-  parser.on("--candidate=ROWS", "Candidate MPS query chunk rows: 128, 256, or 1024 (baseline is 512)") { |value| candidate_chunk_rows = value.to_i }
+  parser.on("--candidate=ROWS", "Candidate MPS query chunk rows: 128, 256, or 1024; kv-layout requires 128 (baseline is 512)") { |value| candidate_chunk_rows = value.to_i }
+  parser.on("--comparison=MODE", "chunk-size (default) or kv-layout (both layouts use query chunk 128)") { |value| comparison_mode = value }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
-unless SELF_CHUNK_CHOICES.includes?(candidate_chunk_rows)
-  raise ArgumentError.new("--candidate must be one of #{SELF_CHUNK_CHOICES.join(", ")}")
+raise ArgumentError.new("--comparison must be chunk-size or kv-layout") unless {"chunk-size", "kv-layout"}.includes?(comparison_mode)
+compare_kv_layout = comparison_mode == "kv-layout"
+if compare_kv_layout
+  raise ArgumentError.new("--comparison=kv-layout requires --candidate=128 so both arms use the same chunk") unless candidate_chunk_rows == SELF_KV_LAYOUT_CHUNK_ROWS
+  baseline_chunk_rows = SELF_KV_LAYOUT_CHUNK_ROWS
+else
+  unless SELF_CHUNK_CHOICES.includes?(candidate_chunk_rows)
+    raise ArgumentError.new("--candidate must be one of #{SELF_CHUNK_CHOICES.join(", ")}")
+  end
+  baseline_chunk_rows = SELF_BASELINE_CHUNK_ROWS
 end
+benchmark_schema = compare_kv_layout ? SELF_KV_LAYOUT_BENCHMARK_SCHEMA : SELF_BENCHMARK_SCHEMA
+baseline_backend = compare_kv_layout ? "baseline_bqhd_chunk128" : "baseline_512"
+candidate_backend = compare_kv_layout ? "candidate_bhkd_chunk128" : "candidate_#{candidate_chunk_rows}"
 
 fixture_dir = File.expand_path(fixture_dir)
 expected_path = self_fixture_expected_path(fixture_dir)
@@ -270,7 +288,8 @@ fixture_torch_version = fixture_manifest["reference"]["torch_version"].as_s
 fixture_wan_attention_sha256 = fixture_manifest["source"]["wan_attention_source_sha256"].as_s
 fixture_adapter_sha256 = fixture_manifest["source"]["wan_s2v_reference_adapter_sha256"].as_s
 fixture_generator_sha256 = fixture_manifest["source"]["generator_sha256"].as_s
-estimated_explicit_bytes = self_expected_explicit_buffer_bytes(candidate_chunk_rows)
+estimated_explicit_bytes = self_expected_explicit_buffer_bytes(baseline_chunk_rows,
+  candidate_chunk_rows, compare_kv_layout)
 estimated_with_opaque_reserve = estimated_explicit_bytes + SELF_OPAQUE_RESERVE_HEURISTIC_BYTES
 raise ArgumentError.new("Self-attention preflight exceeds its 8 GiB explicit-plus-opaque-reserve-heuristic budget") if estimated_with_opaque_reserve > SELF_PREFLIGHT_LIMIT
 
@@ -288,28 +307,32 @@ begin
   k = arena.alloc("k", (SELF_K_ROWS.to_i64 * SELF_CHANNELS).to_i32)
   v = arena.alloc("v", (SELF_K_ROWS.to_i64 * SELF_CHANNELS).to_i32)
   expected = arena.alloc("expected", SELF_VALUES.to_i32)
-  baseline_output = arena.alloc("output_baseline_512", SELF_VALUES.to_i32)
-  candidate_output = arena.alloc("output_candidate_#{candidate_chunk_rows}", SELF_VALUES.to_i32)
+  baseline_output = arena.alloc("output_#{baseline_backend}", SELF_VALUES.to_i32)
+  candidate_output = arena.alloc("output_#{candidate_backend}", SELF_VALUES.to_i32)
   metrics = arena.alloc("metrics", 10)
   control_expected = arena.alloc("control_expected", 1)
   control_actual = arena.alloc("control_actual", 1)
 
-  baseline_chunk_q = arena.alloc("baseline_chunk_q", SELF_BASELINE_CHUNK_ROWS * SELF_CHANNELS)
-  baseline_chunk_a = arena.alloc("baseline_chunk_output_a", SELF_BASELINE_CHUNK_ROWS * SELF_CHANNELS)
-  baseline_chunk_b = arena.alloc("baseline_chunk_output_b", SELF_BASELINE_CHUNK_ROWS * SELF_CHANNELS)
+  baseline_chunk_q = arena.alloc("baseline_chunk_q", baseline_chunk_rows * SELF_CHANNELS)
+  baseline_chunk_a = arena.alloc("baseline_chunk_output_a", baseline_chunk_rows * SELF_CHANNELS)
+  baseline_chunk_b = arena.alloc("baseline_chunk_output_b", baseline_chunk_rows * SELF_CHANNELS)
   candidate_chunk_q = arena.alloc("candidate_chunk_q", candidate_chunk_rows * SELF_CHANNELS)
   candidate_chunk_a = arena.alloc("candidate_chunk_output_a", candidate_chunk_rows * SELF_CHANNELS)
   candidate_chunk_b = arena.alloc("candidate_chunk_output_b", candidate_chunk_rows * SELF_CHANNELS)
+  kv_values = (SELF_K_ROWS.to_i64 * SELF_CHANNELS).to_i32
+  candidate_prepared_k = compare_kv_layout ? arena.alloc("candidate_prepared_k_bhkd", kv_values) : nil
+  candidate_prepared_v = compare_kv_layout ? arena.alloc("candidate_prepared_v_bhkd", kv_values) : nil
   self_load_expected(expected_path, expected, SELF_VALUES * sizeof(Float32))
   control_expected.contents.as(Float32*)[0] = 0.5_f32
   control_actual.contents.as(Float32*)[0] = 0.5_f32
 
   baseline_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
-    1, SELF_Q_ROWS, SELF_K_ROWS, SELF_HEADS, SELF_HEAD_DIM, SELF_BASELINE_CHUNK_ROWS,
+    1, SELF_Q_ROWS, SELF_K_ROWS, SELF_HEADS, SELF_HEAD_DIM, baseline_chunk_rows,
     q, k, v, baseline_output, baseline_chunk_q, baseline_chunk_a, baseline_chunk_b)
   candidate_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
     1, SELF_Q_ROWS, SELF_K_ROWS, SELF_HEADS, SELF_HEAD_DIM, candidate_chunk_rows,
-    q, k, v, candidate_output, candidate_chunk_q, candidate_chunk_a, candidate_chunk_b)
+    q, k, v, candidate_output, candidate_chunk_q, candidate_chunk_a, candidate_chunk_b,
+    candidate_prepared_k, candidate_prepared_v)
   explicit_bytes = arena.resident_bytes
   unless explicit_bytes == estimated_explicit_bytes &&
          explicit_bytes + SELF_OPAQUE_RESERVE_HEURISTIC_BYTES <= SELF_PREFLIGHT_LIMIT
@@ -330,8 +353,8 @@ begin
   setup.wait
   setup_seconds = (Time.instant - setup_started).total_seconds
 
-  baseline_arm = {"baseline_512", SELF_BASELINE_CHUNK_ROWS, baseline_workspace.not_nil!, baseline_output}
-  candidate_arm = {"candidate_#{candidate_chunk_rows}", candidate_chunk_rows, candidate_workspace.not_nil!, candidate_output}
+  baseline_arm = {baseline_backend, baseline_chunk_rows, baseline_workspace.not_nil!, baseline_output}
+  candidate_arm = {candidate_backend, candidate_chunk_rows, candidate_workspace.not_nil!, candidate_output}
   {baseline_arm, candidate_arm}.each do |name, chunk_rows, workspace, output|
     active_chain = ML::Metal::MPSCommandChain.new
     allocations_before = ML::MetalBuffer.video_spec_allocations
@@ -348,9 +371,13 @@ begin
     active_chain.not_nil!.release
     active_chain = nil
 
-    self_emit_json({schema: SELF_BENCHMARK_SCHEMA, phase: "warmup", backend: name,
+    self_emit_json({schema: benchmark_schema, phase: "warmup", comparison_mode: comparison_mode, backend: name,
+                    kv_layout: compare_kv_layout && name == candidate_backend ? "B,H,K,D" : "B,K,H,D",
                     chunk_rows: chunk_rows, query_rows: SELF_Q_ROWS, key_rows: SELF_K_ROWS,
                     heads: SELF_HEADS, head_dim: SELF_HEAD_DIM, compared_values: SELF_VALUES,
+                    query_chunk_rows_equal_between_arms: baseline_chunk_rows == candidate_chunk_rows,
+                    layout_preparation_inside_timed_encode: compare_kv_layout && name == candidate_backend,
+                    prepared_kv_buffer_bytes: compare_kv_layout && name == candidate_backend ? kv_values.to_i64 * sizeof(Float32) * 2 : 0_i64,
                     validation_after_both_arms: true,
                     attention_encode_seconds: encode_seconds,
                     host_attention_wall_seconds_including_terminal_wait: wall_seconds,
@@ -365,12 +392,14 @@ begin
                     fixture_manifest: fixture_manifest_path}.to_json)
   end
 
-  { {"baseline_512", baseline_output}, {"candidate_#{candidate_chunk_rows}", candidate_output} }.each do |name, output|
+  { {baseline_backend, baseline_output}, {candidate_backend, candidate_output} }.each do |name, output|
     validation = self_validate(output, expected, baseline_output, metrics, zero, compare,
       SELF_VALUES.to_i32, SELF_Q_ROWS, SELF_HEADS, SELF_HEAD_DIM)
-    self_emit_json({schema: "wan_s2v_self_attention_validation_v1", phase: "warmup", backend: name,
+    self_emit_json({schema: compare_kv_layout ? "wan_s2v_self_attention_kv_layout_validation_v1" : "wan_s2v_self_attention_validation_v1",
+                    phase: "warmup", comparison_mode: comparison_mode, backend: name,
+                    kv_layout: compare_kv_layout && name == candidate_backend ? "B,H,K,D" : "B,K,H,D",
                     compared_values: SELF_VALUES, upstream: validation[:upstream], vs_baseline: validation[:vs_baseline],
-                    comparison_is_self_for_baseline: name == "baseline_512",
+                    comparison_is_self_for_baseline: name == baseline_backend,
                     validation_host_seconds_including_terminal_wait: validation[:host_seconds],
                     validation_gpu_seconds: validation[:gpu_seconds], validation_terminal_waits: validation[:terminal_waits],
                     validation_after_both_arms: true}.to_json)
@@ -399,13 +428,18 @@ begin
       active_chain.not_nil!.release
       active_chain = nil
 
-      if name == "baseline_512"
+      if name == baseline_backend
         baseline_wall_samples << wall_seconds
       else
         candidate_wall_samples << wall_seconds
       end
-      self_emit_json({schema: SELF_BENCHMARK_SCHEMA, phase: "measured", backend: name,
+      self_emit_json({schema: benchmark_schema, phase: "measured", comparison_mode: comparison_mode, backend: name,
+                      kv_layout: compare_kv_layout && name == candidate_backend ? "B,H,K,D" : "B,K,H,D",
                       candidate_chunk_rows: candidate_chunk_rows, chunk_rows: chunk_rows,
+                      baseline_chunk_rows: baseline_chunk_rows,
+                      query_chunk_rows_equal_between_arms: baseline_chunk_rows == candidate_chunk_rows,
+                      layout_preparation_inside_timed_encode: compare_kv_layout && name == candidate_backend,
+                      prepared_kv_buffer_bytes: compare_kv_layout && name == candidate_backend ? kv_values.to_i64 * sizeof(Float32) * 2 : 0_i64,
                       query_rows: SELF_Q_ROWS, key_rows: SELF_K_ROWS, heads: SELF_HEADS,
                       head_dim: SELF_HEAD_DIM, compared_values: SELF_VALUES,
                       pair_repetition: pair_index + 1, pair_order: pair_order,
@@ -426,13 +460,15 @@ begin
                       wan_s2v_reference_adapter_sha256: fixture_adapter_sha256,
                       generator_sha256: fixture_generator_sha256}.to_json)
     end
-    { {"baseline_512", baseline_output}, {"candidate_#{candidate_chunk_rows}", candidate_output} }.each do |name, output|
+    { {baseline_backend, baseline_output}, {candidate_backend, candidate_output} }.each do |name, output|
       validation = self_validate(output, expected, baseline_output, metrics, zero, compare,
         SELF_VALUES.to_i32, SELF_Q_ROWS, SELF_HEADS, SELF_HEAD_DIM)
-      self_emit_json({schema: "wan_s2v_self_attention_validation_v1", phase: "measured", backend: name,
+      self_emit_json({schema: compare_kv_layout ? "wan_s2v_self_attention_kv_layout_validation_v1" : "wan_s2v_self_attention_validation_v1",
+                      phase: "measured", comparison_mode: comparison_mode, backend: name,
+                      kv_layout: compare_kv_layout && name == candidate_backend ? "B,H,K,D" : "B,K,H,D",
                       pair_repetition: pair_index + 1, pair_order: pair_order,
                       compared_values: SELF_VALUES, upstream: validation[:upstream], vs_baseline: validation[:vs_baseline],
-                      comparison_is_self_for_baseline: name == "baseline_512",
+                      comparison_is_self_for_baseline: name == baseline_backend,
                       validation_host_seconds_including_terminal_wait: validation[:host_seconds],
                       validation_gpu_seconds: validation[:gpu_seconds], validation_terminal_waits: validation[:terminal_waits],
                       validation_after_both_arms: true}.to_json)
@@ -446,9 +482,17 @@ begin
   candidate_median = candidate_sorted[candidate_sorted.size // 2]
   paired_savings = baseline_wall_samples.zip(candidate_wall_samples).map { |baseline, candidate| baseline - candidate }
   candidate_faster = candidate_median < baseline_median && paired_savings.all? { |saving| saving > 0.0 }
-  self_emit_json({schema:                                        "wan_s2v_self_attention_candidate_decision_v1",
-                  baseline_chunk_rows:                           SELF_BASELINE_CHUNK_ROWS,
+  self_emit_json({schema:                                        compare_kv_layout ? "wan_s2v_self_attention_kv_layout_decision_v1" : "wan_s2v_self_attention_candidate_decision_v1",
+                  comparison_mode:                               comparison_mode,
+                  baseline_backend:                              baseline_backend,
+                  candidate_backend:                             candidate_backend,
+                  baseline_kv_layout:                            "B,K,H,D",
+                  candidate_kv_layout:                           compare_kv_layout ? "B,H,K,D" : "B,K,H,D",
+                  baseline_chunk_rows:                           baseline_chunk_rows,
                   candidate_chunk_rows:                          candidate_chunk_rows,
+                  query_chunk_rows_equal_between_arms:           baseline_chunk_rows == candidate_chunk_rows,
+                  layout_preparation_inside_timed_encode:        compare_kv_layout,
+                  prepared_kv_buffer_bytes:                      compare_kv_layout ? kv_values.to_i64 * sizeof(Float32) * 2 : 0_i64,
                   measured_pair_orders:                          ["AB", "BA", "AB"],
                   baseline_host_attention_wall_samples_seconds:  baseline_wall_samples,
                   candidate_host_attention_wall_samples_seconds: candidate_wall_samples,
