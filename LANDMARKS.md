@@ -30958,3 +30958,37 @@ Refresh after source/toolchain/device/model/workload changes.
 - Source, geometry, runtime and lifetime refresh rules and raw evidence:
   docs/video-attention-mps.md and docs/video-numerical-drift.md. Tiled remains
   default/rollback. Full cold/repeat video generation remains open.
+
+### 2026-10-20 — Full-size Wan block segmentation and cost probes
+
+- An optional text cross-attention segment override preserves the default 320,
+  GPU reduction order and caller-owned scratch. Official BF16 block/injector
+  intermediate fixtures pass 6/0 examples at both 320 and 1,024; their geometry
+  is full width with B=2 and sequence length 2, not full spatial upstream parity.
+- At B=1, N=36,608, C=5,120, FF=13,824, H=40, D=128 and text K=512, the real
+  block-0 BF16 weights with synthetic GPU activations give full-block medians
+  27.3868 s (320) and 28.1977 s (1,024). The candidate is slower in all three
+  AB/BA/AB pairs. Warmup and three paired outputs are bit-identical across
+  187,432,960 finite values; the corruption control is rejected. Keep 320.
+  This probe excludes the audio injector and does not qualify video quality.
+- Standalone full-geometry cross medians after CPU-side settling are 0.4307 s
+  (320), 0.2771 s (1,024), and 0.1191 s (MPSGraph query chunks 512). All outputs
+  pass the unchanged 2e-5 + 2e-5*abs(reference) F32 MPS upstream gate; tiled paths
+  are bit-identical. Three rotated rounds retain the same ranking as the initial
+  run. Pausing a CPU submitter does not certify an empty GPU queue; retain the
+  rapid declining-time repeat as confounded evidence, not an absolute baseline.
+- Timed arms have one terminal wait, zero explicit Metal-buffer allocations and
+  no intermediate activation readbacks or host waits. Full-block sampled free
+  memory stays at least 30%; the configured floor is 15%. Projection cache
+  diagnostics have no consistent paired benefit, so do not promote F32 weights.
+  Guard tick counters are not wall time; use monotonic arm timing and external
+  process timing. The original long-running video process is resumed after probes.
+- Correlated mini-Quadrumvirate verdict ROBUST covers retaining 320 and the
+  bounded isolated ranking, not an optimal backend or complete-video speedup.
+  Next: separate long-key self-attention timing from its input fill/output scan,
+  and test MPS text cross attention inside the whole block. DeepInfer fixed-shape
+  graph replay is a hypothesis for host submission, not a demonstrated Metal gain.
+  Reproduction, source/checkpoint provenance, memory and raw receipt paths are in
+  docs/wan-block-benchmark.md. Refresh on code/lifetime, inputs/weights, geometry,
+  precision, device/runtime or queue-isolation changes. Strict stack drift and
+  full cold/repeat video generation remain open.

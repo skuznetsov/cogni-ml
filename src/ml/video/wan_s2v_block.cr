@@ -289,7 +289,10 @@ module ML::Video
                     tiled_attention : Bool = false,
                     execution_chain : ML::Metal::MPSCommandChain? = nil,
                     mps_workspace : WanS2VMPSLinearWorkspace? = nil,
-                    attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : Nil
+                    attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
+                    cross_attention_groups_per_segment : Int32 = 320) : Nil
+      validate_cross_attention_groups_per_segment!(
+        cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       if active = execution_chain
         e = active.encoder
@@ -398,7 +401,8 @@ module ML::Video
         scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
       if tiled_attention && (active = execution_chain)
         MetalOps.attention_tiled(active, cross_qn, cross_kn, cross_v, cross_attn,
-          cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches)
+          cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches,
+          cross_attention_groups_per_segment)
         e = active.encoder
       else
         attention(e, cross_qn, cross_kn, cross_v, cross_attn,
@@ -460,12 +464,16 @@ module ML::Video
                                tiled_attention : Bool = false,
                                execution_chain : ML::Metal::MPSCommandChain? = nil,
                                mps_workspace : WanS2VMPSLinearWorkspace? = nil,
-                               attention_workspace : WanAttentionMPSChunkWorkspace? = nil) : Nil
+                               attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
+                               cross_attention_groups_per_segment : Int32 = 320) : Nil
+      validate_cross_attention_groups_per_segment!(
+        cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_audio_pair!(cfg, audio_cfg)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
       encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg,
         block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace,
-        attention_workspace)
+        attention_workspace,
+        cross_attention_groups_per_segment: cross_attention_groups_per_segment)
       if active = execution_chain
         e = active.encoder
       end
@@ -477,6 +485,17 @@ module ML::Video
     def self.validate_attention_backend!(head_dim : Int32, tiled_attention : Bool) : Nil
       if tiled_attention && !{64, 128}.includes?(head_dim)
         raise ArgumentError.new("Wan tiled attention requires head dimension 64 or 128")
+      end
+    end
+
+    private def self.validate_cross_attention_groups_per_segment!(groups_per_segment : Int32,
+                                                                  tiled_attention : Bool,
+                                                                  execution_chain : ML::Metal::MPSCommandChain?) : Nil
+      unless groups_per_segment > 0
+        raise ArgumentError.new("Wan cross-attention segment size must be positive")
+      end
+      if tiled_attention && groups_per_segment != 320 && !execution_chain
+        raise ArgumentError.new("Wan cross-attention segment override requires an MPS command chain")
       end
     end
 
