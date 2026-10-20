@@ -27,7 +27,7 @@ not a bound on allocations between samples. Do not reuse the old external
 pause/resume controller containing the terminated PID.
 
 [`wan_memory_guard.py`](../examples/support/wan_memory_guard.py) launches only
-the supplied command in a new session. Admission requires `memory_pressure -Q`
+the supplied command in a new session. Default admission requires `memory_pressure -Q`
 at least 15% and free-plus-speculative physical bytes at least 15% of RAM plus
 the requested footprint budget. During execution it samples the process group's
 summed `ri_phys_footprint`, physical headroom and system swap growth. Missing
@@ -63,9 +63,46 @@ python3 examples/support/wan_memory_guard.py \
 Logs use exclusive creation; choose a new path for each attempt. The footprint
 budget is an explicit stop limit rather than a reservation or an estimate of
 model size. Builds also run serially under the guard.
-Free-plus-speculative pages are a conservative reserve, not a measurement of
-all reclaimable RAM. A rejected launch does not establish OOM or a Wan leak;
-inactive, file-backed and compressed pages are separate accounting categories.
+Free-plus-speculative pages are a narrow reserve, not a measurement of all
+reclaimable RAM. A rejected launch does not establish OOM or a Wan leak.
+Inactive and file-backed counters overlap; they are not additive free capacity.
+
+### Opt-in cache-aware admission
+
+The Activity Monitor correction exposes a false interpretation of the strict
+reserve: file cache can be reused even when free-plus-speculative pages are
+small. The explicit `--memory-accounting=file-cache` policy uses
+`vm_stat` printed free bytes plus file-backed bytes. Speculative pages already
+belong to the file-backed counter and must not be added again. Inactive,
+purgeable, anonymous and compressed counters are not additional free capacity.
+The existing `free-speculative` policy remains the default and old receipts
+retain that meaning.
+
+The new quantity is a cache-inclusive headroom estimate, not a reservation or
+proof that every file-backed page is clean, cold or immediately reclaimable.
+Admission requires a 15%-of-RAM policy floor on the selected estimate plus the
+entire requested footprint budget. Runtime checks retain that policy floor,
+pressure query threshold, group footprint, swap growth, timeout and fail-closed
+telemetry.
+The falsifiers are speculative double counting, anonymous inactive memory being
+admitted as cache, missing/inconsistent counters, and a low-cache runtime sample
+failing to terminate the owned child. The CPU guard suite passes 33/0 on Python
+3.11 and 3.15. A live-telemetry child exits 0, with a peak sampled process-group
+footprint of 7,111,088 bytes, minimum cache-inclusive headroom 33,956,118,528
+bytes and no sampled swap growth. This checks collection, policy selection,
+logging and child lifecycle; it does not qualify GPU-load memory behavior.
+Source hashes, commands and v4 CPU/live logs are bound by
+`wan-self-attention/cache-accounting-cpu-receipt-v1.json` (SHA-256
+`a39bf0c404402ffdb94e87ed1feb206e8baa0dedb8075c2b1dcb3ecd1cc3063d`).
+Rollback is omission of the explicit policy flag. Full video generation remains
+deferred by user instruction while performance work continues on bounded probes.
+
+Accounting sources: [Apple's Activity Monitor guide](https://support.apple.com/guide/activity-monitor/view-memory-usage-actmntr1004/mac),
+[vm_stat's printed counters](https://github.com/apple-oss-distributions/system_cmds/blob/main/vm_stat/vm_stat.c),
+[XNU host statistics](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/host.c)
+and [speculative queue accounting](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_resident.c).
+These public source links explain the counters; their main branches are not a
+pinned source audit of the running Darwin build.
 
 ## Arithmetic cost, not a timing profile
 

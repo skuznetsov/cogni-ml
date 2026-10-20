@@ -29,6 +29,9 @@ from typing import Callable, Iterable
 MIB = 1024 * 1024
 RUSAGE_INFO_V2 = 2
 RUNTIME_FLOOR_PCT = 15
+FREE_SPECULATIVE = "free-speculative"
+FILE_CACHE = "file-cache"
+MEMORY_ACCOUNTING_POLICIES = (FREE_SPECULATIVE, FILE_CACHE)
 EXIT_USAGE = 64
 EXIT_ADMISSION = 75
 EXIT_GUARD = 76
@@ -48,6 +51,26 @@ class Telemetry:
     swap_used_bytes: int
     group_footprint_bytes: int
     group_live_processes: int = 1
+    speculative_bytes: int | None = None
+    file_backed_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class VMPageCounts:
+    free_bytes: int
+    speculative_bytes: int
+    file_backed_bytes: int | None
+
+    @property
+    def free_spec_bytes(self) -> int:
+        return self.free_bytes + self.speculative_bytes
+
+    @property
+    def free_file_cache_bytes(self) -> int:
+        # XNU includes speculative pages in its pageable external counter.
+        if self.file_backed_bytes is None:
+            raise TelemetryError("file-cache counters missing")
+        return self.free_bytes + self.file_backed_bytes
 
 
 @dataclass(frozen=True)
@@ -76,16 +99,33 @@ def parse_memory_pressure(text: str) -> int:
     return value
 
 
-def parse_vm_stat(text: str) -> int:
-    """Return free+speculative bytes from vm_stat, using its reported page size."""
+def parse_vm_stat(text: str, *, require_file_cache: bool = False) -> VMPageCounts:
+    """Parse printed free/speculative/file-backed counts without overlap.
+
+    vm_stat prints free_count - speculative_count as "Pages free". File-backed
+    pages already include speculative pages. The file-cache estimate does not
+    establish that all file-backed pages are clean or immediately reclaimable.
+    Cache telemetry is optional for the unchanged free-speculative policy.
+    """
     page_size = _single_int(r"page size of\s*(\d+)\s+bytes", text, "vm_stat page size")
     free_pages = _single_int(r"^Pages free:\s*(\d+)\.?\s*$", text, "vm_stat free pages")
     speculative_pages = _single_int(
         r"^Pages speculative:\s*(\d+)\.?\s*$", text,
         "vm_stat speculative pages")
-    if page_size <= 0 or free_pages < 0 or speculative_pages < 0:
+    if page_size <= 0 or min(free_pages, speculative_pages) < 0:
         raise TelemetryError("vm_stat contains a negative or zero capacity")
-    return (free_pages + speculative_pages) * page_size
+    try:
+        file_backed_pages = _single_int(
+            r"^File-backed pages:\s*(\d+)\.?\s*$", text, "vm_stat file-backed pages")
+        if speculative_pages > file_backed_pages:
+            raise TelemetryError("vm_stat speculative pages exceed file-backed pages")
+        file_backed_bytes = file_backed_pages * page_size
+    except TelemetryError:
+        if require_file_cache:
+            raise
+        file_backed_bytes = None
+    return VMPageCounts(free_pages * page_size, speculative_pages * page_size,
+                        file_backed_bytes)
 
 
 def parse_swap_used(text: str) -> int:
@@ -249,7 +289,7 @@ def collect_telemetry(pgid: int | None, deadline: float | None = None) -> Teleme
         raise TelemetryError("Wan memory guard requires macOS")
     pressure = parse_memory_pressure(_run_text(["/usr/bin/memory_pressure", "-Q"],
                                                deadline=deadline))
-    available = parse_vm_stat(_run_text(["/usr/bin/vm_stat"], deadline=deadline))
+    pages = parse_vm_stat(_run_text(["/usr/bin/vm_stat"], deadline=deadline))
     physical = _physical_memory_bytes(deadline)
     swap = parse_swap_used(_run_text(["/usr/sbin/sysctl", "-n", "vm.swapusage"],
                                      deadline=deadline))
@@ -257,10 +297,14 @@ def collect_telemetry(pgid: int | None, deadline: float | None = None) -> Teleme
         footprint, live = 0, 0
     else:
         footprint, live = _group_usage(pgid)
-    return Telemetry(pressure, available, physical, swap, footprint, live)
+    return Telemetry(pressure, pages.free_spec_bytes, physical, swap, footprint, live,
+                     pages.speculative_bytes, pages.file_backed_bytes)
 
 
-def _validate_sample(sample: Telemetry) -> str | None:
+def _validate_sample(sample: Telemetry,
+                     memory_accounting: str = FREE_SPECULATIVE) -> str | None:
+    if memory_accounting not in MEMORY_ACCOUNTING_POLICIES:
+        return "unknown memory-accounting policy"
     if not isinstance(sample, Telemetry):
         return "telemetry missing"
     values = (sample.pressure_free_pct, sample.free_spec_bytes, sample.physical_bytes,
@@ -278,34 +322,62 @@ def _validate_sample(sample: Telemetry) -> str | None:
         return "swap/footprint telemetry is invalid"
     if sample.group_live_processes < 0:
         return "process-group count is invalid"
+    if memory_accounting == FREE_SPECULATIVE:
+        # Optional cache diagnostics cannot change strict-policy admission.
+        return None
+    cache_values = (sample.speculative_bytes, sample.file_backed_bytes)
+    if all(value is None for value in cache_values):
+        return "file-cache counters missing" if memory_accounting == FILE_CACHE else None
+    if any(not isinstance(value, int) or isinstance(value, bool) for value in cache_values):
+        return "file-cache counters missing or noninteger"
+    if not 0 <= sample.speculative_bytes <= sample.free_spec_bytes:
+        return "speculative/free telemetry is inconsistent"
+    if sample.file_backed_bytes < sample.speculative_bytes:
+        return "speculative bytes exceed file-backed bytes"
+    if _headroom_bytes(sample, FILE_CACHE) > sample.physical_bytes:
+        return "free/file-cache bytes exceed physical memory"
     return None
+
+
+def _headroom_bytes(sample: Telemetry, memory_accounting: str) -> int:
+    if memory_accounting == FREE_SPECULATIVE:
+        return sample.free_spec_bytes
+    assert sample.speculative_bytes is not None and sample.file_backed_bytes is not None
+    return sample.free_spec_bytes - sample.speculative_bytes + sample.file_backed_bytes
 
 
 def _runtime_floor_bytes(sample: Telemetry) -> int:
     return (sample.physical_bytes * RUNTIME_FLOOR_PCT + 99) // 100
 
 
-def assess_startup(sample: Telemetry, max_footprint_bytes: int) -> str | None:
-    invalid = _validate_sample(sample)
+def assess_startup(sample: Telemetry, max_footprint_bytes: int, *,
+                    memory_accounting: str = FREE_SPECULATIVE) -> str | None:
+    invalid = _validate_sample(sample, memory_accounting)
     if invalid:
         return invalid
     if sample.pressure_free_pct < RUNTIME_FLOOR_PCT:
         return f"startup pressure {sample.pressure_free_pct}% is below {RUNTIME_FLOOR_PCT}%"
     required = _runtime_floor_bytes(sample) + max_footprint_bytes
-    if sample.free_spec_bytes < required:
+    if _headroom_bytes(sample, memory_accounting) < required:
+        if memory_accounting == FILE_CACHE:
+            return ("startup headroom estimate (free + file-backed) is below the "
+                    "15%-of-RAM policy floor plus the requested process-tree footprint budget")
         return ("startup headroom is below 15% physical memory plus the requested "
                 "process-tree footprint budget")
     return None
 
 
 def assess_runtime(sample: Telemetry, max_footprint_bytes: int,
-                   max_swap_growth_bytes: int, initial_swap_bytes: int) -> str | None:
-    invalid = _validate_sample(sample)
+                   max_swap_growth_bytes: int, initial_swap_bytes: int, *,
+                   memory_accounting: str = FREE_SPECULATIVE) -> str | None:
+    invalid = _validate_sample(sample, memory_accounting)
     if invalid:
         return invalid
     if sample.pressure_free_pct < RUNTIME_FLOOR_PCT:
         return f"pressure fell below {RUNTIME_FLOOR_PCT}%"
-    if sample.free_spec_bytes < _runtime_floor_bytes(sample):
+    if _headroom_bytes(sample, memory_accounting) < _runtime_floor_bytes(sample):
+        if memory_accounting == FILE_CACHE:
+            return "file-cache headroom estimate fell below the 15%-of-RAM policy floor"
         return "free/speculative bytes fell below the 15% physical-memory floor"
     if sample.group_footprint_bytes > max_footprint_bytes:
         return "process-tree footprint exceeded its requested maximum"
@@ -344,12 +416,14 @@ def _log(stream, event: str, **fields) -> None:
     stream.flush()
 
 
-def _log_sample(stream, sample: Telemetry) -> None:
+def _log_sample(stream, sample: Telemetry, memory_accounting: str) -> None:
     _log(stream, "sample", pressure_free_pct=sample.pressure_free_pct,
          free_spec_bytes=sample.free_spec_bytes, physical_bytes=sample.physical_bytes,
          swap_used_bytes=sample.swap_used_bytes,
          group_footprint_bytes=sample.group_footprint_bytes,
-         group_live_processes=sample.group_live_processes)
+         group_live_processes=sample.group_live_processes,
+         speculative_bytes=sample.speculative_bytes, file_backed_bytes=sample.file_backed_bytes,
+         headroom_bytes=_headroom_bytes(sample, memory_accounting))
 
 
 def _libc_waitid_child_exit(pid: int) -> int | None:
@@ -478,16 +552,22 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
                 max_swap_growth_bytes: int, timeout_sec: float, log_path: Path,
                 telemetry_provider: Callable[[int | None, float | None], Telemetry] = collect_telemetry,
                 poll_interval_sec: float = 0.5,
-                terminate_grace_sec: float = 1.0) -> int:
+                terminate_grace_sec: float = 1.0,
+                memory_accounting: str = FREE_SPECULATIVE) -> int:
     """Run one command in a new session under startup and sampled runtime gates."""
     if (not command or max_footprint_bytes <= 0 or max_swap_growth_bytes < 0 or
             timeout_sec <= 0 or poll_interval_sec <= 0 or terminate_grace_sec < 0):
         raise ValueError("invalid command or nonpositive guard limits")
+    if memory_accounting not in MEMORY_ACCOUNTING_POLICIES:
+        raise ValueError("unknown memory-accounting policy")
     with _open_log(Path(log_path)) as stream:
         _log(stream, "limits", runtime_floor_pct=RUNTIME_FLOOR_PCT,
              max_footprint_bytes=max_footprint_bytes,
              max_swap_growth_bytes=max_swap_growth_bytes, timeout_sec=timeout_sec,
-             startup_rule="memory_pressure -Q >= 15% and free+spec >= 15% physical + footprint budget",
+             memory_accounting=memory_accounting,
+             headroom_formula="printed free + speculative" if memory_accounting == FREE_SPECULATIVE else "printed free + file-backed (includes speculative)",
+             startup_rule="memory_pressure -Q >= 15% and selected headroom >= 15% physical + footprint budget",
+             file_cache_limitation="file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
              limitation="sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape")
         try:
             initial = telemetry_provider(None, None)
@@ -495,12 +575,13 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
             _log(stream, "blocked", reason="telemetry unavailable",
                  detail=type(error).__name__)
             return EXIT_TELEMETRY
-        invalid = _validate_sample(initial)
+        invalid = _validate_sample(initial, memory_accounting)
         if invalid:
             _log(stream, "blocked", reason="telemetry unavailable", detail=invalid)
             return EXIT_TELEMETRY
-        _log_sample(stream, initial)
-        startup_reason = assess_startup(initial, max_footprint_bytes)
+        _log_sample(stream, initial, memory_accounting)
+        startup_reason = assess_startup(initial, max_footprint_bytes,
+                                         memory_accounting=memory_accounting)
         if startup_reason:
             _log(stream, "blocked", reason=startup_reason)
             return EXIT_ADMISSION
@@ -542,7 +623,7 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
                     break
                 try:
                     sample = telemetry_provider(child.pid, deadline)
-                    invalid = _validate_sample(sample)
+                    invalid = _validate_sample(sample, memory_accounting)
                     if invalid:
                         raise TelemetryError(invalid)
                 except Exception as error:
@@ -551,14 +632,15 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
                     _terminate_owned_group(child, terminate_grace_sec)
                     result_code = EXIT_TELEMETRY
                     break
-                _log_sample(stream, sample)
+                _log_sample(stream, sample, memory_accounting)
                 if time.monotonic() >= deadline:
                     _log(stream, "stopping", reason="monotonic timeout")
                     _terminate_owned_group(child, terminate_grace_sec)
                     result_code = EXIT_TIMEOUT
                     break
                 violation = assess_runtime(sample, max_footprint_bytes,
-                                          max_swap_growth_bytes, initial.swap_used_bytes)
+                                          max_swap_growth_bytes, initial.swap_used_bytes,
+                                          memory_accounting=memory_accounting)
                 if violation:
                     _log(stream, "stopping", reason=violation)
                     _terminate_owned_group(child, terminate_grace_sec)
@@ -631,6 +713,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--max-swap-growth-mib", type=_nonnegative_int, required=True)
     parser.add_argument("--timeout-sec", type=_positive_int, required=True)
     parser.add_argument("--log", type=Path, required=True)
+    parser.add_argument("--memory-accounting", choices=MEMORY_ACCOUNTING_POLICIES,
+                        default=FREE_SPECULATIVE,
+                        help="headroom policy: strict free+speculative (default), or free+file-backed estimate")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -640,7 +725,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         return run_guarded(command,
                            max_footprint_bytes=args.max_footprint_mib * MIB,
                            max_swap_growth_bytes=args.max_swap_growth_mib * MIB,
-                           timeout_sec=args.timeout_sec, log_path=args.log)
+                           timeout_sec=args.timeout_sec, log_path=args.log,
+                           memory_accounting=args.memory_accounting)
     except (ValueError, OSError) as error:
         print(f"wan memory guard: {error}", file=sys.stderr)
         return EXIT_USAGE
