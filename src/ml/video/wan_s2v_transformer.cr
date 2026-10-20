@@ -230,8 +230,9 @@ module ML::Video
 
     # Encode the layer stack into an existing serial command encoder. `x` and
     # `alternate` are caller-owned [B,S,C] F32 buffers; all other activations
-    # are resident F32. No buffer is created, uploaded, submitted, waited, or
-    # read here. The returned buffer is the final hidden sequence. Optional
+    # are resident F32. No buffer is created, uploaded, waited, or read here.
+    # The optional execution chain submits separate asynchronous phases and
+    # invalidates borrowed encoders. The returned buffer is the final sequence. Optional
     # trace destinations are caller-owned and copy only the selected layer.
     def self.encode_layers(e : ML::Metal::ComputeEncoder,
                            x : ML::MetalBuffer, alternate : ML::MetalBuffer,
@@ -243,9 +244,13 @@ module ML::Video
                            trace_layer : Int32? = nil,
                            block_trace : Hash(String, ML::MetalBuffer)? = nil,
                            audio_trace : Hash(String, ML::MetalBuffer)? = nil,
-                           tiled_attention : Bool = false) : ML::MetalBuffer
+                           tiled_attention : Bool = false,
+                           execution_chain : ML::Metal::MPSCommandChain? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
+      if active = execution_chain
+        e = active.encoder
+      end
       block_cfg = cfg.block_config
       audio_cfg = cfg.audio_config
       # Per-block checks are prefix-scoped. Protect every resident parameter
@@ -285,7 +290,11 @@ module ML::Video
           # arenas separate and preserve the upstream block-then-inject order.
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
-            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention)
+            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
+            execution_chain)
+          if active = execution_chain
+            e = active.encoder
+          end
           WanS2VAudioInjector.encode(e, spare, local_audio, global_audio, current,
             weights, audio_scratch, audio_cfg,
             layer_trace ? audio_trace : nil, "audio.#{injector_index}.", tiled_attention)
@@ -293,8 +302,18 @@ module ML::Video
         else
           WanS2VBlock.encode(e, current, modulation, positions, context, spare,
             weights, block_scratch, block_cfg,
-            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention)
+            layer_trace ? block_trace : nil, "block.#{layer}.", tiled_attention,
+            execution_chain)
+          if active = execution_chain
+            e = active.encoder
+          end
           current, spare = spare, current
+        end
+        if active = execution_chain
+          active.pause!
+          active.continue_async!
+          active.resume!
+          e = active.encoder
         end
       end
       raise ArgumentError.new("Wan S2V did not consume every audio injection") unless injector_index == cfg.injection_ids.size
@@ -304,7 +323,9 @@ module ML::Video
     # Complete resident-buffer transformer forward. All inputs, output
     # storage, weights, and scratch arenas are caller-owned and must remain
     # alive through encoder completion. This method only enqueues operations;
-    # it does not allocate Metal buffers, upload, submit, wait, or read back.
+    # it does not allocate Metal buffers, upload, wait, or read back. The
+    # optional execution chain permits separate asynchronous submissions;
+    # callers must refresh their borrowed encoder after this method returns.
     # `local_audio` and `global_audio` are the already transformed outputs of
     # the native CausalAudioEncoder/FramePack conditioning stage. A selected
     # trace layer is intended for bounded fixture diagnostics.
@@ -335,16 +356,24 @@ module ML::Video
                     trace_layer : Int32? = nil,
                     block_trace : Hash(String, ML::MetalBuffer)? = nil,
                     audio_trace : Hash(String, ML::MetalBuffer)? = nil,
-                    tiled_attention : Bool = false) : ML::MetalBuffer
+                    tiled_attention : Bool = false,
+                    execution_chain : ML::Metal::MPSCommandChain? = nil) : ML::MetalBuffer
       cfg.validate!
       WanS2VBlock.validate_attention_backend!(cfg.dim // cfg.heads, tiled_attention)
+      if active = execution_chain
+        e = active.encoder
+      end
       encode_patch_inputs(e, video_latents, condition_latents, reference_latents,
         motion_latents, sequence, weights, transformer_scratch, cfg, motion_frames)
       encode_text(e, raw_context, projected_context, text_hidden, weights, cfg)
       encode_time(e, timestep, time_embedding, modulation, weights, transformer_scratch, cfg)
       hidden = encode_layers(e, sequence, alternate, modulation, positions,
         projected_context, local_audio, global_audio, weights, block_scratch,
-        audio_scratch, cfg, trace_layer, block_trace, audio_trace, tiled_attention)
+        audio_scratch, cfg, trace_layer, block_trace, audio_trace, tiled_attention,
+        execution_chain)
+      if active = execution_chain
+        e = active.encoder
+      end
       encode_head(e, hidden, time_embedding, prediction, latent_output, weights,
         cfg, cfg.video_frames, cfg.latent_height, cfg.latent_width)
       latent_output

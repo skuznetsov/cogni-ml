@@ -9,6 +9,9 @@ inline void video_tiled_attention(device const float *q, device const float *k,
     device const float *v, device float *out, constant uint *p,
     uint tile, uint lane) {
   const uint nq = p[0], nk = p[1], heads = p[2], channels = heads * D;
+  // threadgroup_position_in_grid is local to this dispatch. Restore the global
+  // tile so segmented and full-range dispatches share identical indexing.
+  tile += p[4];
   const uint head = tile % heads;
   const uint query_tiles = (nq + 7) / 8;
   const uint batch = tile / (heads * query_tiles);
@@ -84,8 +87,8 @@ inline void video_tiled_attention(device const float *q, device const float *k,
 kernel void video_tiled_attention_##D(device const float *q [[buffer(0)]], \
     device const float *k [[buffer(1)]], device const float *v [[buffer(2)]], \
     device float *out [[buffer(3)]], constant uint *p [[buffer(4)]], \
-    uint tile [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) { \
-  video_tiled_attention<D>(q, k, v, out, p, tile, lane); \
+    uint local_tile [[threadgroup_position_in_grid]], uint lane [[thread_index_in_simdgroup]]) { \
+  video_tiled_attention<D>(q, k, v, out, p, local_tile, lane); \
 }
 VIDEO_TILED_ATTN(64)
 VIDEO_TILED_ATTN(128)

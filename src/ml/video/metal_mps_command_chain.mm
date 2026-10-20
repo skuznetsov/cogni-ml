@@ -4,6 +4,7 @@
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #include <cmath>
+#include <stdio.h>
 #include <stdint.h>
 
 @interface CogniTrackedMPSCommandBuffer : MPSCommandBuffer
@@ -40,6 +41,26 @@
 @end
 @implementation CogniMPSCommandChain
 @end
+
+static NSString *gs_mps_chain_safe_log_text(NSString *value,
+                                            NSUInteger maxCharacters) {
+  if (!value)
+    return @"none";
+  NSUInteger count =
+      value.length < maxCharacters ? value.length : maxCharacters;
+  NSMutableString *safe = [NSMutableString stringWithCapacity:count + 3];
+  for (NSUInteger i = 0; i < count; ++i) {
+    unichar character = [value characterAtIndex:i];
+    if (character < 0x20 || character == 0x7f)
+      character = ' ';
+    else if (character == '"' || character == '\\')
+      character = '_';
+    [safe appendFormat:@"%C", character];
+  }
+  if (value.length > count)
+    [safe appendString:@"..."];
+  return safe;
+}
 
 extern "C" void *gs_mps_chain_create(void *queueHandle) {
   if (!queueHandle)
@@ -97,14 +118,31 @@ extern "C" int32_t gs_mps_chain_finish_wait(void *handle, double *gpuSeconds,
       [chain.command waitUntilCompleted];
       chain.result = 0;
       double elapsed = 0.0;
+      NSUInteger segmentIndex = 0;
       for (id<MTLCommandBuffer> root in chain.command.segments) {
-        if (root.status != MTLCommandBufferStatusCompleted || root.error)
+        MTLCommandBufferStatus status = root.status;
+        NSError *error = root.error;
+        if (status != MTLCommandBufferStatusCompleted || error) {
           chain.result = -2;
+          NSString *domain = gs_mps_chain_safe_log_text(error.domain, 96);
+          NSString *description =
+              gs_mps_chain_safe_log_text(error.localizedDescription, 256);
+          fprintf(
+              stderr,
+              "[MPS_CHAIN_ERROR] segment=%lu status=%ld error_domain=\"%s\" "
+              "error_code=%ld description=\"%s\" gpu_start=%.9f gpu_end=%.9f\n",
+              (unsigned long)segmentIndex, (long)status,
+              domain.UTF8String ?: "none", (long)(error ? error.code : 0),
+              description.UTF8String ?: "none", root.GPUStartTime,
+              root.GPUEndTime);
+          fflush(stderr);
+        }
         double seconds = root.GPUEndTime - root.GPUStartTime;
         if (!std::isfinite(seconds) || seconds < 0.0)
           chain.result = -3;
         else
           elapsed += seconds;
+        ++segmentIndex;
       }
       chain.gpuSeconds = elapsed;
       chain.finished = YES;

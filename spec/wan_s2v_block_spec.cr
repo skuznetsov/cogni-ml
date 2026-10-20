@@ -227,6 +227,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   output = ML::Video::Arena.new
   checkpoint_file = nil.as(ML::Video::CheckpointFile?)
   prepared_weights = nil.as(ML::Video::PreparedWeights?)
+  execution_chain = nil.as(ML::Metal::MPSCommandChain?)
   begin
     fixture["inputs"].as_h.each do |name, values|
       inputs.upload(name, wan_json_f32(values))
@@ -391,30 +392,44 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     rope_guard_command.discard
 
     allocation_start = ML::MetalBuffer.video_spec_allocations
-    command = ML::Metal::CommandBuffer.new
-    encoder = ML::Metal::ComputeEncoder.new(command)
+    execution_chain = ML::Metal::MPSCommandChain.new if ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
+    command = execution_chain ? nil : ML::Metal::CommandBuffer.new
+    encoder = execution_chain.try(&.encoder) || ML::Metal::ComputeEncoder.new(command.not_nil!)
     prepared_weights.try(&.encode(encoder))
     ML::Video::WanS2VBlock.encode_with_audio(
       encoder, inputs["x"], inputs["modulation"], inputs["positions"],
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
       block_output, audio_output, weights, scratch, block_cfg, audio_cfg,
-      block_trace, audio_trace, tiled_attention: tiled_attention)
+      block_trace, audio_trace, tiled_attention: tiled_attention, execution_chain: execution_chain)
+    if active = execution_chain
+      encoder = active.encoder
+    end
     ML::Video::WanS2VBlock.encode_with_audio(
       encoder, inputs["x"], inputs["modulation"], inputs["positions"],
       inputs["context"], inputs["local_audio"], inputs["global_audio"],
       repeat_block_output, repeat_audio_output, weights, scratch, block_cfg, audio_cfg,
-      tiled_attention: tiled_attention,
+      tiled_attention: tiled_attention, execution_chain: execution_chain,
     )
+    if active = execution_chain
+      encoder = active.encoder
+    end
     ML::Video::WanS2VBlock.encode(
       encoder, block_output, inputs["modulation"], inputs["positions"],
       inputs["context"], chained_block_output, weights, scratch, block_cfg,
-      tiled_attention: tiled_attention,
+      tiled_attention: tiled_attention, execution_chain: execution_chain,
     )
-    encoder.end_encoding
     ML::MetalBuffer.video_spec_allocations.should eq(allocation_start),
       "Wan encode must not allocate MetalBuffers after setup"
-    command.commit
-    command.wait
+    if active = execution_chain
+      active.wait_count.should eq(0), "segmented encoding must not wait"
+      active.commit_and_wait
+      active.wait_count.should eq(1), "segmented blocks must share one terminal wait"
+      active.segment_count.should be > 1
+    else
+      encoder.end_encoding
+      command.not_nil!.commit
+      command.not_nil!.wait
+    end
     prepared_weights.try(&.release)
     checkpoint_file.try(&.close)
 
@@ -429,6 +444,10 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     end
     snapshots
   ensure
+    if active = execution_chain
+      active.commit_and_wait unless active.completed?
+      active.release if active.completed?
+    end
     prepared_weights.try(&.release)
     checkpoint_file.try(&.close)
     output.release

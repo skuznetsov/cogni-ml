@@ -1,6 +1,7 @@
 require "./metal_ops"
 require "./metal_attention"
 require "./checkpoint"
+require "./metal_mps_command_chain"
 
 module ML::Video
   # Copyright 2024-2025 The Alibaba Wan Team Authors.
@@ -274,15 +275,21 @@ module ML::Video
     # are contiguous F32 Metal buffers; learned parameters may be F32 or BF16.
     # `modulation` is [B,6,2,C], `positions` is
     # integer-valued F32 [B,S,3], and context is [B,L,C]. No host math, buffer
-    # creation, upload, commit, wait, or read occurs in this method.
+    # creation, upload, wait, or read occurs in this method. An optional chain
+    # permits asynchronous command continuations between expensive phases;
+    # callers must refresh their borrowed encoder after this method returns.
     def self.encode(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
                     modulation : ML::MetalBuffer, positions : ML::MetalBuffer,
                     context : ML::MetalBuffer, y : ML::MetalBuffer,
                     weights : Arena, scratch : Arena, cfg : WanS2VConfig,
                     trace : Hash(String, ML::MetalBuffer)? = nil,
                     weight_prefix : String = "",
-                    tiled_attention : Bool = false) : Nil
+                    tiled_attention : Bool = false,
+                    execution_chain : ML::Metal::MPSCommandChain? = nil) : Nil
       validate_attention_backend!(cfg.head_dim, tiled_attention)
+      if active = execution_chain
+        e = active.encoder
+      end
       n = cfg.values.to_i64
       rows = cfg.rows
       ctx_rows = cfg.context_rows
@@ -338,14 +345,22 @@ module ML::Video
       encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
       trace_copy(e, trace, "self_q_rope", self_qr, n)
       trace_copy(e, trace, "self_k_rope", self_kr, n)
-      attention(e, self_qr, self_kr, self_v, self_attn,
-        cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
+      e = continue_phase(e, execution_chain)
+      if tiled_attention && (active = execution_chain)
+        MetalOps.attention_tiled(active, self_qr, self_kr, self_v, self_attn,
+          cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches)
+        e = active.encoder
+      else
+        attention(e, self_qr, self_kr, self_v, self_attn,
+          cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
+      end
       trace_copy(e, trace, "self_attention", self_attn, n)
       linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "self_projection", self_proj, n)
       encode_gated_residual(e, x, self_proj, modulation, weights[key(weight_prefix, "block_modulation")], self_res,
         cfg, 2, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_residual", self_res, n)
+      e = continue_phase(e, execution_chain)
 
       # text/context cross attention (norm3 is affine; no RoPE)
       MetalOps.norm(e, self_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], cross_norm,
@@ -362,13 +377,20 @@ module ML::Video
         scratch["wan_b_zero_bias"], cross_qn, rows, dim)
       norm_rms(e, cross_k, weights[key(weight_prefix, "cross_norm_k_weight")], weights.dtype(key(weight_prefix, "cross_norm_k_weight")),
         scratch["wan_b_zero_bias"], cross_kn, ctx_rows, dim)
-      attention(e, cross_qn, cross_kn, cross_v, cross_attn,
-        cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
+      if tiled_attention && (active = execution_chain)
+        MetalOps.attention_tiled(active, cross_qn, cross_kn, cross_v, cross_attn,
+          cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches)
+        e = active.encoder
+      else
+        attention(e, cross_qn, cross_kn, cross_v, cross_attn,
+          cfg.seq, cfg.context_tokens, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
+      end
       trace_copy(e, trace, "cross_attention", cross_attn, n)
       linear(e, cross_attn, weights, "cross_o_weight", "cross_o_bias", cross_proj, rows, dim, dim, weight_prefix)
       trace_copy(e, trace, "cross_projection", cross_proj, n)
       MetalOps.add(e, self_res, cross_proj, cross_res, n.to_i32)
       trace_copy(e, trace, "cross_residual", cross_res, n)
+      e = continue_phase(e, execution_chain)
 
       # feed-forward branch: norm2, segmented AdaLN, tanh GELU, gated residual
       MetalOps.norm(e, cross_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], ffn_norm,
@@ -381,11 +403,22 @@ module ML::Video
       trace_copy(e, trace, "ffn_in", ffn_in, ff_count)
       MetalOps.gelu(e, ffn_in, ffn_gelu, ff_count.to_i32, approximate: true)
       trace_copy(e, trace, "ffn_gelu", ffn_gelu, ff_count)
+      e = continue_phase(e, execution_chain)
       linear(e, ffn_gelu, weights, "ffn_out_weight", "ffn_out_bias", ffn_out, rows, cfg.ffn_dim, dim, weight_prefix)
       trace_copy(e, trace, "ffn_out", ffn_out, n)
+      e = continue_phase(e, execution_chain)
       encode_gated_residual(e, cross_res, ffn_out, modulation, weights[key(weight_prefix, "block_modulation")], y,
         cfg, 5, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "output", y, n)
+    end
+
+    private def self.continue_phase(e : ML::Metal::ComputeEncoder,
+                                    chain : ML::Metal::MPSCommandChain?) : ML::Metal::ComputeEncoder
+      return e unless active = chain
+      active.pause!
+      active.continue_async!
+      active.resume!
+      active.encoder
     end
 
     # Encode the block followed by its audio injector using a caller-owned,
@@ -402,10 +435,15 @@ module ML::Video
                                audio_trace : Hash(String, ML::MetalBuffer)? = nil,
                                block_weight_prefix : String = "",
                                audio_weight_prefix : String = "",
-                               tiled_attention : Bool = false) : Nil
+                               tiled_attention : Bool = false,
+                               execution_chain : ML::Metal::MPSCommandChain? = nil) : Nil
       validate_audio_pair!(cfg, audio_cfg)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
-      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg, block_trace, block_weight_prefix, tiled_attention)
+      encode(e, x, modulation, positions, context, block_output, weights, scratch, cfg,
+        block_trace, block_weight_prefix, tiled_attention, execution_chain)
+      if active = execution_chain
+        e = active.encoder
+      end
       WanS2VAudioInjector.encode(e, block_output, local_audio, global_audio, y,
         weights, scratch, audio_cfg, audio_trace, audio_weight_prefix, tiled_attention)
     end

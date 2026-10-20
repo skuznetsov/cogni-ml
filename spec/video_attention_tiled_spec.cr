@@ -33,6 +33,9 @@ describe "Opt-in tiled F32 video attention" do
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, y, 0, 1, 1, 128) }
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, y, 1, 1, 1, 32) }
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, y, Int32::MAX, 1, Int32::MAX, 128, Int32::MAX) }
+      expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled_range(e, q, k, v, y, 1, 1, 1, 128, -1, 1) }
+      expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled_range(e, q, k, v, y, 1, 1, 1, 128, 0, 0) }
+      expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled_range(e, q, k, v, y, 1, 1, 1, 128, 1, 1) }
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, q, 1, 1, 1, 128) }
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, k, 1, 1, 1, 128) }
       expect_raises(ArgumentError) { ML::Video::MetalOps.attention_tiled(e, q, k, v, tiny, 1, 1, 1, 128) }
@@ -72,17 +75,28 @@ describe "Opt-in tiled F32 video attention" do
         reference = tiled_attention_fixture_tensor(a, "expected", c["expected"], count).read(count)
         first = a.alloc("first", count)
         repeated = a.alloc("repeated", count)
+        ranged = a.alloc("ranged", count)
         before = ML::MetalBuffer.video_spec_allocations
         command = ML::Metal::CommandBuffer.new
         e = ML::Metal::ComputeEncoder.new(command)
         ML::Video::MetalOps.attention_tiled(e, q, k, v, first, nq, nk, heads, dim, b)
         ML::Video::MetalOps.attention_tiled(e, q, k, v, repeated, nq, nk, heads, dim, b)
+        groups = b * ((nq + 7) // 8) * heads
+        chunk_size = Math.max(groups // 3, 1)
+        first_tile = 0
+        while first_tile < groups
+          chunk_count = Math.min(chunk_size, groups - first_tile)
+          ML::Video::MetalOps.attention_tiled_range(e, q, k, v, ranged, nq, nk,
+            heads, dim, first_tile, chunk_count, b)
+          first_tile += chunk_count
+        end
         ML::MetalBuffer.video_spec_allocations.should eq(before)
         e.end_encoding
         command.commit
         command.wait
         actual = first.read(count)
         repeated.read(count).map(&.unsafe_as(UInt32)).should eq(actual.map(&.unsafe_as(UInt32)))
+        ranged.read(count).map(&.unsafe_as(UInt32)).should eq(actual.map(&.unsafe_as(UInt32)))
         violations = 0
         worst = 0_f64
         actual.each_with_index do |value, i|
@@ -92,6 +106,28 @@ describe "Opt-in tiled F32 video attention" do
           worst = Math.max(worst, ratio)
         end
         violations.should eq(0), "#{c["name"].as_s}: violations=#{violations}, worst=#{worst}"
+
+        # This fixture crosses query-tile, head and batch boundaries with a
+        # short final query tile. Three chain roots must preserve the same bits
+        # while waiting exactly once and allocating no replacement buffers.
+        if c["name"].as_s == "b2-q13-k97-h3-d64"
+          chained = a.alloc("chained", count)
+          chain = ML::Metal::MPSCommandChain.new
+          begin
+            before = ML::MetalBuffer.video_spec_allocations
+            ML::Video::MetalOps.attention_tiled(chain, q, k, v, chained, nq, nk,
+              heads, dim, b, 5)
+            ML::MetalBuffer.video_spec_allocations.should eq(before)
+            chain.wait_count.should eq(0)
+            chain.commit_and_wait
+            chain.wait_count.should eq(1)
+            chain.segment_count.should eq(3)
+            chained.read(count).map(&.unsafe_as(UInt32)).should eq(actual.map(&.unsafe_as(UInt32)))
+          ensure
+            chain.commit_and_wait unless chain.completed?
+            chain.release
+          end
+        end
       ensure
         a.release
       end
