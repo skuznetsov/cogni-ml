@@ -307,6 +307,56 @@ negative control. Correlated receipt/source review is ROBUST for the bounded
 64 rejection and the incomplete 96 classification. Refresh after source,
 shape, inputs/precision, device/runtime/queue or memory-policy changes.
 
+## Opt-in block scratch lifetime reuse
+
+`WanS2VBlock.prepare_scratch!(..., reuse_scratch: true)` allocates seven
+activation owners instead of twelve. Pass the same flag to direct `encode`;
+the default layout remains unchanged. The four reuse groups are:
+
+| Shared owner | Names with disjoint lifetimes |
+| --- | --- |
+| `norm1` | `norm1`, `self_attn` |
+| `self_k` | `self_k`, `self_proj` |
+| `self_v` | `self_v`, `cross_norm`, `ffn_out` |
+| `self_q` | `self_q`, `ffn_in`; capacity is `max(N*C, N*F)` |
+
+`self_res` must remain separate: putting it in the first group lets cross
+attention overwrite it before the cross residual add. That more aggressive
+proposal is rejected. Each permitted alias shares the exact `MetalBuffer`
+object on the existing tracked serial queue. Partial groups, cross-group
+overlap, distinct wrappers over the same address, and input/output/weight/trace
+overlap reject before dispatch. Stage-pool Arenas reject before allocating.
+The Arena retains a shared allocation until its last name is removed.
+
+At the full target geometry, tested CPU accounting gives 8,792,855,040 bytes
+for default scratch and 5,044,195,840 bytes for reuse: a prospective saving of
+3,748,659,200 bytes (3.49 GiB). This is scratch storage, not total model memory
+or a measured full-shape saving. No extra dispatch, wait or activation read is
+introduced by the layout.
+
+The pinned real-width **short** upstream fixture passes 15/0 with BF16 and
+15/0 with F32 weights, native tiled self attention and fixed MPS projections.
+All 24 block intermediates satisfy the unchanged finite upstream gate and match
+default-layout bits exactly. Same-chain repeats, chained inputs and replay on
+a second completed chain match default bits. Encode makes zero explicit
+MetalBuffer allocations; each test chain uses one terminal wait. The 38-checkpoint
+block/audio checkpoint set also retains its existing gate. Actual short-fixture
+scratch is 651,776 versus 1,061,376 bytes; its dimensions differ from the full
+target. Guards complete without swap growth; minimum sampled physical reserve
+is 21.69% for BF16 and 18.02% for F32, above the unchanged 15% floor.
+
+External `wan-self-attention/scratch-reuse-receipt-v1.json` (SHA-256
+`3556473680210b58274f8315bb78a260c9309b46558e699e6f866f2d9626aa2a`)
+binds source, executable, native objects, actual invocations, fixture and logs.
+Correlated separate-agent source and log review is ROBUST within that scope.
+Full-spatial execution, MPSGraph self attention, colored audio integration,
+latency and video quality are unqualified. Do not use this layout with combined
+audio/reused-scratch maps: their additional aliases need a separate lifetime
+proof. Next: qualify the MPSGraph attention bindings before adding compact
+whole-block profiling. Refresh after source/lifetime, geometry/input/weight or
+precision, queue/device/runtime or memory-policy changes. The known 40-layer
+drift remains open.
+
 ## Other candidates, in order of investigation
 
 1. **Static audio K/V.** In

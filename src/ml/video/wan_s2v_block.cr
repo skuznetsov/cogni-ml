@@ -209,13 +209,20 @@ module ML::Video
     # Allocate every temporary before command encoding. The same Arena can be
     # reused across serial invocations after the previous command has completed.
     def self.prepare_scratch!(arena : Arena, cfg : WanS2VConfig,
-                              precompute_rope : Bool = false) : Nil
+                              precompute_rope : Bool = false,
+                              reuse_scratch : Bool = false) : Nil
+      if reuse_scratch && arena.pooled_allocations?
+        raise ArgumentError.new("Wan S2V scratch reuse requires an unpooled Arena")
+      end
       arena.upload("wan_b_zero_bias", Array(Float32).new(cfg.dim, 0.0_f32))
       prepare_rope_scratch!(arena, cfg, precompute_rope: precompute_rope)
       rope_tables = rope_table_names(cfg)
-      scratch_plan(cfg, precompute_rope: precompute_rope).each do |name, count|
+      scratch_plan(cfg, precompute_rope: precompute_rope, reuse_scratch: reuse_scratch).each do |name, count|
         next if rope_tables.includes?(name)
         arena.alloc(name, count)
+      end
+      if reuse_scratch
+        SCRATCH_REUSE_ALIASES.each { |name, owner| arena.alias_f32(name, owner) }
       end
     end
 
@@ -240,7 +247,8 @@ module ML::Video
     # enqueued serially: normalization/modulation and RoPE are elementwise
     # in-place; cross-attention and FFN each reuse their consumed phase buffers.
     def self.scratch_plan(cfg : WanS2VConfig,
-                          precompute_rope : Bool = false) : Array(Tuple(String, Int32))
+                          precompute_rope : Bool = false,
+                          reuse_scratch : Bool = false) : Array(Tuple(String, Int32))
       n = cfg.values
       ff = cfg.rows * cfg.ffn_dim
       ctx = cfg.context_rows
@@ -252,6 +260,10 @@ module ML::Video
         {"wan_b_cross_v", ctx * cfg.dim},
         {"wan_b_ffn_in", ff}, {"wan_b_ffn_out", n},
       ]
+      if reuse_scratch
+        plan.reject! { |name, _| SCRATCH_REUSE_ALIASES.has_key?(name) }
+        plan.map! { |name, count| {name, name == "wan_b_self_q" ? Math.max(n, ff) : count} }
+      end
       if precompute_rope
         count = rope_table_values(cfg)
         cosine_name, sine_name = rope_table_names(cfg)
@@ -262,9 +274,10 @@ module ML::Video
     end
 
     def self.scratch_bytes(cfg : WanS2VConfig,
-                           precompute_rope : Bool = false) : Int64
+                           precompute_rope : Bool = false,
+                           reuse_scratch : Bool = false) : Int64
       # Includes the shared zero-bias vector and both FP32 RoPE frequency parts.
-      values = scratch_plan(cfg, precompute_rope: precompute_rope).sum { |_, count| count.to_i64 }
+      values = scratch_plan(cfg, precompute_rope: precompute_rope, reuse_scratch: reuse_scratch).sum { |_, count| count.to_i64 }
       (values + cfg.dim + cfg.head_dim) * sizeof(Float32)
     end
 
@@ -290,6 +303,19 @@ module ML::Video
       "cross_proj/cross_res"             => "wan_b_self_proj",
       "ffn_norm/ffn_mod"                 => "wan_b_cross_norm",
       "ffn_gelu"                         => "wan_b_ffn_in",
+    }
+
+    # Opt-in, block-only lifetime reuse on one serial Metal command queue.
+    # These names must refer to the SAME tracked MTLBuffer object, not separate
+    # no-copy wrappers over overlapping memory. self_res stays separate: later
+    # cross_attn rewrites self_attn before the cross residual consumes self_res.
+    # The Q owner is sized for max(hidden, FFN) and is dead before FFN input.
+    SCRATCH_REUSE_ALIASES = {
+      "wan_b_self_attn"  => "wan_b_norm1",
+      "wan_b_self_proj"  => "wan_b_self_k",
+      "wan_b_cross_norm" => "wan_b_self_v",
+      "wan_b_ffn_out"    => "wan_b_self_v",
+      "wan_b_ffn_in"     => "wan_b_self_q",
     }
 
     # Checkpoints are optional preallocated destinations. Accepted names are
@@ -324,7 +350,8 @@ module ML::Video
                     mps_workspace : WanS2VMPSLinearWorkspace? = nil,
                     attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
                     cross_attention_groups_per_segment : Int32 = 320,
-                    precompute_rope : Bool = false) : Nil
+                    precompute_rope : Bool = false,
+                    reuse_scratch : Bool = false) : Nil
       validate_cross_attention_groups_per_segment!(
         cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
@@ -337,7 +364,7 @@ module ML::Video
       dim = cfg.dim
       ff_count = (rows.to_i64 * cfg.ffn_dim)
       validate_inputs!(x, modulation, positions, context, y, weights, scratch, cfg,
-        weight_prefix, precompute_rope)
+        weight_prefix, precompute_rope, reuse_scratch)
       validate_trace!(trace, x, modulation, positions, context, y, weights, scratch, cfg, weight_prefix)
       if workspace = attention_workspace
         raise ArgumentError.new("Prepared Wan attention requires an execution chain") unless execution_chain
@@ -814,7 +841,8 @@ module ML::Video
                                       positions : ML::MetalBuffer, context : ML::MetalBuffer,
                                       y : ML::MetalBuffer, weights : Arena, scratch : Arena,
                                       cfg : WanS2VConfig, weight_prefix : String = "",
-                                      precompute_rope : Bool = false) : Nil
+                                      precompute_rope : Bool = false,
+                                      reuse_scratch : Bool = false) : Nil
       n = cfg.values.to_i64
       dim = cfg.dim.to_i64
       ctx = cfg.context_rows.to_i64 * dim
@@ -865,13 +893,25 @@ module ML::Video
       MetalOps.check(scratch["wan_b_cross_v"], ctx)
       MetalOps.check(scratch["wan_b_ffn_in"], ff)
       MetalOps.check(scratch["wan_b_ffn_out"], n)
-      ensure_disjoint!(y, x, modulation, positions, context, weights, scratch, weight_prefix)
+      if reuse_scratch
+        # A complete declared layout makes the physical byte plan truthful.
+        # Partial groups and same-address/different-wrapper aliases are rejected
+        # before any dispatch or MPS continuation can be submitted.
+        SCRATCH_REUSE_ALIASES.each do |name, owner|
+          unless scratch[name].same?(scratch[owner]) &&
+                 scratch.dtype(name).f32? && scratch.dtype(owner).f32?
+            raise ArgumentError.new("Wan S2V scratch reuse requires complete same-object F32 groups")
+          end
+        end
+      end
+      ensure_disjoint!(y, x, modulation, positions, context, weights, scratch, weight_prefix, reuse_scratch)
     end
 
     private def self.ensure_disjoint!(y : ML::MetalBuffer, x : ML::MetalBuffer,
                                       modulation : ML::MetalBuffer, positions : ML::MetalBuffer,
                                       context : ML::MetalBuffer, weights : Arena,
-                                      scratch : Arena, weight_prefix : String) : Nil
+                                      scratch : Arena, weight_prefix : String,
+                                      reuse_scratch : Bool) : Nil
       scratch.buffers.each do |name, buffer|
         reject_overlap!(buffer, y)
         reject_overlap!(buffer, x)
@@ -882,7 +922,12 @@ module ML::Video
           reject_overlap!(buffer, weight) if weight_name.starts_with?(weight_prefix)
         end
         scratch.buffers.each do |other_name, other|
-          reject_overlap!(buffer, other) if name < other_name
+          next unless name < other_name
+          if reuse_scratch && buffer.same?(other) &&
+             (SCRATCH_REUSE_ALIASES[name]? || name) == (SCRATCH_REUSE_ALIASES[other_name]? || other_name)
+            next
+          end
+          reject_overlap!(buffer, other)
         end
       end
       weights.buffers.each do |weight_name, buffer|

@@ -31204,3 +31204,37 @@ Refresh after source/toolchain/device/model/workload changes.
   Next: reduce scratch through proven lifetimes to admit whole-block profiling,
   or test existing native attention. Refresh on source/shape/input/precision,
   device/runtime/queue or memory-policy changes. Keep 15% floor and strict gate.
+
+### 2026-10-20 — Qualify opt-in block-only scratch lifetime reuse on the short oracle
+
+- Direct Wan block setup/encode can opt into seven activation owners instead of
+  twelve, sharing exact MetalBuffer objects across four consumed-lifetime groups.
+  The default remains unchanged; stage-pool Arenas reject before allocation.
+  Complete same-object F32 groups are required. Cross-group, same-address distinct
+  wrapper, I/O/weight/trace overlap and partial layouts reject before dispatch.
+  Arena aliases retain storage until their final normal/typed name is removed.
+- Refuted route: adding self_res to norm1/self_attn would overwrite it during
+  cross attention before the residual add. Keep that owner disjoint. Correct
+  full-target CPU plan: 8,792,855,040 -> 5,044,195,840 bytes, prospective 3.49 GiB
+  saving. Owner self_q must hold max(N*C, N*F), including narrow-FFN shapes.
+  This is arithmetic, not a measured full-spatial allocation or speedup.
+- Guarded native real-width short upstream fixtures pass 15/0 each for BF16/F32
+  with fixed MPS projections and native tiled self attention. All 24 block traces
+  match default bits and the unchanged strict finite gate; same-chain repeats,
+  chained inputs and a second completed-chain replay also match bits. Encode
+  allocates zero explicit MetalBuffers, with one terminal wait per chain and no
+  new production waits/readbacks. Minimum sampled reserve: 21.69% / 18.02%, swap
+  growth zero. Source/log adversary verdict ROBUST within this scope.
+- External scratch-reuse-receipt-v1.json under wan-self-attention binds current
+  sources/binary/objects, actual invocations, oracle and raw logs. Full geometry,
+  MPSGraph self attention, colored audio integration, latency and full video remain
+  unqualified; known 40-layer drift remains open. Do not apply block-only colors
+  to combined audio/transformer reused-scratch maps without a new lifetime proof.
+- Continuation: active goal exact Wan acceleration; frontier is compact block
+  scratch in src/ml/video/wan_s2v_block.cr and spec/wan_s2v_block_spec.cr. Next
+  falsifier is MPSGraph attention replay using these fixed bindings, then bounded
+  whole-block phase attribution with the reduced plan. Standing authority remains
+  serial GPU/build probes, unchanged upstream tolerances, mini-Quadrum and 15%
+  physical/pressure floor; no automatic video restart or unrelated process kills.
+  Refresh on source/lifetime, geometry/inputs/weights/precision, queue/device/runtime
+  or memory-policy changes. Temporary files stay on /opt/mldata_ssd/.

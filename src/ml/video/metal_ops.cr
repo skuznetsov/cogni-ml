@@ -71,6 +71,12 @@ module ML::Video
       @buffers.has_key?(name) || @typed_buffers.has_key?(name)
     end
 
+    # Setup-only capability query. Lifetime aliases currently require ordinary
+    # allocations; reject unsupported layouts before allocating their owners.
+    def pooled_allocations? : Bool
+      !@stage_pool.nil?
+    end
+
     def alloc(name : String, count : Int32) : ML::MetalBuffer
       raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
       raise ArgumentError.new("Buffer count must be positive") unless count > 0
@@ -89,6 +95,29 @@ module ML::Video
         return view.buffer
       end
       buffer = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32))
+      @buffers[name] = buffer
+      @dtypes[name] = WeightDType::F32
+      buffer
+    end
+
+    # Setup-only alias for a normal F32 allocation. The name shares the exact
+    # MetalBuffer object and backing storage with its owner; removing either
+    # name leaves the storage alive until the final normal or typed reference
+    # is removed. Stage-backed and typed allocations have separate ownership
+    # rules and cannot be aliased through this API.
+    def alias_f32(name : String, owner : String) : ML::MetalBuffer
+      raise ArgumentError.new("Duplicate buffer #{name}") if allocated?(name)
+      buffer = @buffers[owner]?
+      raise ArgumentError.new("Missing F32 alias owner #{owner}") unless buffer
+      raise ArgumentError.new("F32 alias owner is not valid") unless buffer.valid?
+      raise ArgumentError.new("Cannot alias stage-backed F32 owner #{owner}") if pooled_buffer?(buffer)
+
+      owner_dtype = @dtypes[owner]?
+      typed_owner = @typed_buffers.values.any? { |typed| typed.same?(buffer) }
+      unless owner_dtype && owner_dtype.f32? && !typed_owner
+        raise ArgumentError.new("F32 alias owner must be a normal F32 buffer")
+      end
+
       @buffers[name] = buffer
       @dtypes[name] = WeightDType::F32
       buffer
@@ -165,8 +194,13 @@ module ML::Video
         stage_owned ||= release_stage_view_if_unreferenced(typed_buffer)
       end
       unless stage_owned
-        buffer.try(&.release)
-        typed_buffer.try(&.release)
+        if buffer && !named_buffer_references?(buffer)
+          buffer.release
+        end
+        if typed_buffer && !(buffer && typed_buffer.same?(buffer)) &&
+           !named_buffer_references?(typed_buffer)
+          typed_buffer.release
+        end
       end
     end
 
@@ -205,6 +239,11 @@ module ML::Video
 
     private def pooled_buffer?(buffer : ML::MetalBuffer) : Bool
       @stage_views.values.any? { |view| view.buffer.same?(buffer) }
+    end
+
+    private def named_buffer_references?(buffer : ML::MetalBuffer) : Bool
+      @buffers.values.any? { |other| other.same?(buffer) } ||
+        @typed_buffers.values.any? { |other| other.same?(buffer) }
     end
 
     private def release_stage_view_if_unreferenced(buffer : ML::MetalBuffer) : Bool

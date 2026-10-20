@@ -218,6 +218,207 @@ private def wan_sha256_file(path : String) : String
   digest.final.hexstring
 end
 
+# A separate block-only Arena keeps the existing audio/reused-scratch contract
+# unchanged. Replay all intermediates before any colored slot is overwritten.
+private def wan_check_reused_block_scratch(
+  fixture : JSON::Any, cfg : ML::Video::WanS2VConfig,
+  audio_cfg : ML::Video::WanS2VAudioConfig, inputs : ML::Video::Arena,
+  weights : ML::Video::Arena, audio_scratch : ML::Video::Arena,
+  original_trace : Hash(String, ML::MetalBuffer), original_chained : ML::MetalBuffer,
+  tiled_attention : Bool, precompute_rope : Bool, groups : Int32,
+) : Nil
+  scratch = ML::Video::Arena.new
+  outputs = ML::Video::Arena.new
+  traces = ML::Video::Arena.new
+  workspace = nil.as(ML::Video::WanS2VMPSLinearWorkspace?)
+  chain = nil.as(ML::Metal::MPSCommandChain?)
+  begin
+    ML::Video::WanS2VBlock.prepare_scratch!(scratch, cfg,
+      precompute_rope: precompute_rope, reuse_scratch: true)
+    scratch.resident_bytes.should eq(ML::Video::WanS2VBlock.scratch_bytes(cfg,
+      precompute_rope: precompute_rope, reuse_scratch: true))
+    if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
+      workspace = ML::Video::WanS2VMPSLinearWorkspace.new(cfg, audio_cfg,
+        scratch, audio_scratch, inputs["context"], inputs["local_audio"])
+    end
+    first = outputs.alloc("first", cfg.values)
+    repeat = outputs.alloc("repeat", cfg.values)
+    chained = outputs.alloc("chained", cfg.values)
+    replayed = outputs.alloc("replayed", cfg.values)
+    spare = outputs.alloc("spare", cfg.values)
+    trace = {} of String => ML::MetalBuffer
+    ML::Video::WanS2VBlock::CHECKPOINTS.each_key do |name|
+      trace[name] = traces.alloc(name, wan_checkpoint_size(name, fixture["config"]))
+    end
+
+    # Every rejected call stops in validation, before any dispatch/continuation.
+    guard_command = ML::Metal::CommandBuffer.new
+    guard_encoder = ML::Metal::ComputeEncoder.new(guard_command)
+    begin
+      expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+        ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          precompute_rope: precompute_rope)
+      end
+      original = scratch.buffers["wan_b_ffn_out"]
+      begin
+        scratch.buffers["wan_b_ffn_out"] = spare
+        expect_raises(ArgumentError, "Wan S2V scratch reuse requires complete same-object F32 groups") do
+          ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+            inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+            precompute_rope: precompute_rope, reuse_scratch: true)
+        end
+      ensure
+        scratch.buffers["wan_b_ffn_out"] = original
+      end
+      # Regression for the rejected six-buffer-saving proposal: cross_attn
+      # would overwrite self_res before the following residual add consumes it.
+      original = scratch.buffers["wan_b_self_res"]
+      begin
+        scratch.buffers["wan_b_self_res"] = scratch["wan_b_norm1"]
+        expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+          ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+            inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+            precompute_rope: precompute_rope, reuse_scratch: true)
+        end
+      ensure
+        scratch.buffers["wan_b_self_res"] = original
+      end
+      color_c = {"wan_b_self_v", "wan_b_cross_norm", "wan_b_ffn_out"}
+      original_c = color_c.map { |name| scratch[name] }
+      begin
+        color_c.each { |name| scratch.buffers[name] = scratch["wan_b_self_q"] }
+        expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+          ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+            inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+            precompute_rope: precompute_rope, reuse_scratch: true)
+        end
+      ensure
+        color_c.each_with_index { |name, index| scratch.buffers[name] = original_c[index] }
+      end
+      {"wan_b_self_q", "wan_b_self_k"}.each do |input_name|
+        expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+          ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+            inputs["positions"], inputs["context"], scratch[input_name], weights, scratch, cfg,
+            precompute_rope: precompute_rope, reuse_scratch: true)
+        end
+      end
+      expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+        ML::Video::WanS2VBlock.encode(guard_encoder, scratch["wan_b_self_res"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          precompute_rope: precompute_rope, reuse_scratch: true)
+      end
+      expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+        ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          {"norm1" => scratch["wan_b_norm1"]},
+          precompute_rope: precompute_rope, reuse_scratch: true)
+      end
+      expect_raises(ArgumentError, "Wan S2V buffers overlap unsafely") do
+        ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], weights["self_q_weight"], weights, scratch, cfg,
+          precompute_rope: precompute_rope, reuse_scratch: true)
+      end
+      page = LibWanVideoSpecMemory.getpagesize.to_u64
+      bytes = ((cfg.values.to_u64 * 4 + page - 1) // page) * page
+      ptr = Pointer(Void).null
+      LibWanVideoSpecMemory.posix_memalign(pointerof(ptr), page, bytes).should eq(0)
+      first_wrapper = second_wrapper = nil.as(ML::MetalBuffer?)
+      original_a = scratch["wan_b_norm1"]
+      begin
+        first_wrapper = ML::MetalBuffer.wrap_no_copy(ptr, bytes.to_i64)
+        second_wrapper = ML::MetalBuffer.wrap_no_copy(ptr, bytes.to_i64)
+        first_wrapper.handle.should_not eq(second_wrapper.handle)
+        scratch.buffers["wan_b_norm1"] = first_wrapper
+        scratch.buffers["wan_b_self_attn"] = second_wrapper
+        expect_raises(ArgumentError, "Wan S2V scratch reuse requires complete same-object F32 groups") do
+          ML::Video::WanS2VBlock.encode(guard_encoder, inputs["x"], inputs["modulation"],
+            inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+            precompute_rope: precompute_rope, reuse_scratch: true)
+        end
+      ensure
+        scratch.buffers["wan_b_norm1"] = original_a
+        scratch.buffers["wan_b_self_attn"] = original_a
+        first_wrapper.try(&.release)
+        second_wrapper.try(&.release)
+        LibWanVideoSpecMemory.free(ptr)
+      end
+    ensure
+      guard_encoder.end_encoding
+      guard_command.discard
+    end
+
+    active = ML::Metal::MPSCommandChain.new
+    chain = active
+    allocations = ML::MetalBuffer.video_spec_allocations
+    ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+      inputs["positions"], inputs["context"], first, weights, scratch, cfg, trace,
+      tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+    ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+      inputs["positions"], inputs["context"], repeat, weights, scratch, cfg,
+      tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+    ML::Video::WanS2VBlock.encode(active.encoder, first, inputs["modulation"],
+      inputs["positions"], inputs["context"], chained, weights, scratch, cfg,
+      tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    active.wait_count.should eq(0)
+    active.commit_and_wait
+    active.wait_count.should eq(1)
+    active.release
+    chain = nil
+
+    # Reuse the same Arena and fixed MPS bindings after a completed chain.
+    active = ML::Metal::MPSCommandChain.new
+    chain = active
+    ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+      inputs["positions"], inputs["context"], replayed, weights, scratch, cfg,
+      tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    active.wait_count.should eq(0)
+    active.commit_and_wait
+    active.wait_count.should eq(1)
+    active.release
+    chain = nil
+
+    trace.each do |name, buffer|
+      count = wan_checkpoint_size(name, fixture["config"])
+      actual = buffer.read(count).map(&.to_f32)
+      actual.map(&.unsafe_as(UInt32)).should eq(original_trace[name].read(count).map(&.to_f32.unsafe_as(UInt32))),
+        "reused scratch checkpoint #{name} must match default bits"
+      passed, detail = wan_comparison("reused scratch #{name}", actual, fixture["expected"][name])
+      passed.should be_true, detail
+    end
+    original_trace["output"].read(cfg.values).map(&.to_f32.unsafe_as(UInt32)).should eq(
+      first.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
+    repeat.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)).should eq(first.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
+    chained.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)).should eq(
+      original_chained.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
+    replayed.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)).should eq(
+      first.read(cfg.values).map(&.to_f32.unsafe_as(UInt32)))
+    puts({schema: "wan_s2v_scratch_reuse_fixture_v1", dtype: wan_resident_weight_dtype.to_s,
+          traced_checkpoints: trace.size, strict_pass: true, default_bit_differences: 0,
+          repeat_bit_differences: 0, chained_bit_differences: 0, completed_chain_replay_bit_differences: 0,
+          encode_metal_buffer_allocations: 0, completed_chains: 2, terminal_waits_per_chain: 1,
+          resident_scratch_bytes: scratch.resident_bytes,
+          default_scratch_bytes: ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: precompute_rope),
+          precompute_rope: precompute_rope, mps_projections: !workspace.nil?,
+          scope: "real-width short block fixture; not full spatial geometry or video"}.to_json)
+  ensure
+    if active = chain
+      active.commit_and_wait unless active.completed?
+      active.release if active.completed?
+    end
+    workspace.try(&.release_after_terminal_wait!)
+    traces.release
+    outputs.release
+    scratch.release
+  end
+end
+
 private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
   resident_dtype = wan_resident_weight_dtype
   inputs = ML::Video::Arena.new
@@ -545,6 +746,12 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       phase_root_chain = nil
     end
 
+    if ENV["WAN_S2V_SCRATCH_REUSE"]? == "1"
+      wan_check_reused_block_scratch(fixture, block_cfg, audio_cfg, inputs, weights, scratch,
+        block_trace, chained_block_output, tiled_attention, precompute_rope,
+        cross_attention_groups_per_segment)
+    end
+
     prepared_weights.try(&.release)
     checkpoint_file.try(&.close)
 
@@ -635,6 +842,28 @@ describe ML::Video::WanS2VAudioConfig do
 end
 
 describe ML::Video::WanS2VBlock do
+  it "rejects stage-pool scratch reuse before allocating constants or owners" do
+    cfg = ML::Video::WanS2VConfig.new(
+      batches: 1, seq: 2, context_tokens: 1, dim: 8, heads: 1,
+      ffn_dim: 16, split: 1, theta: 10_000.0_f32,
+      video_frames: 1, spatial_tokens: 1)
+    page = LibC.sysconf(LibC::SC_PAGESIZE).to_i64
+    pool = ML::Video::MetalStagePool.new(page * 2, page)
+    scratch = ML::Video::Arena.new(stage_pool: pool, stage_phase: "scratch")
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, "Wan S2V scratch reuse requires an unpooled Arena") do
+        ML::Video::WanS2VBlock.prepare_scratch!(scratch, cfg, reuse_scratch: true)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      scratch.buffers.empty?.should be_true
+      pool.live_view_count.should eq(0)
+    ensure
+      scratch.release
+      pool.release unless pool.released?
+    end
+  end
+
   it "matches pinned block/audio checkpoints including distinct multi-head RoPE positions and optional phase-root profiling" do
     if ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
       ENV["WAN_S2V_SEGMENTED_COMMANDS"]?.should eq("1"),
