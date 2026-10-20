@@ -29,7 +29,9 @@ kernel void wan_vae_conv3d_f32(
     constant uint &pad_h [[buffer(21)]], constant uint &pad_w [[buffer(22)]],
     constant uint &output_t [[buffer(23)]], constant uint &output_h [[buffer(24)]],
     constant uint &output_w [[buffer(25)]], constant uint &weight_bf16 [[buffer(26)]],
-    constant uint &bias_bf16 [[buffer(27)]], uint id [[thread_position_in_grid]]) {
+    constant uint &bias_bf16 [[buffer(27)]], constant uint &output_offset [[buffer(28)]],
+    uint local_id [[thread_position_in_grid]]) {
+    const uint id = output_offset + local_id;
     const uint count = batches * out_channels * output_t * output_h * output_w;
     if (id >= count) return;
     const uint ox = id % output_w;
@@ -203,11 +205,13 @@ kernel void wan_vae_attention_f32(
     device const float *qkv [[buffer(0)]], device float *y [[buffer(1)]],
     constant uint &batches [[buffer(2)]], constant uint &channels [[buffer(3)]],
     constant uint &frames [[buffer(4)]], constant uint &height [[buffer(5)]],
-    constant uint &width [[buffer(6)]],
+    constant uint &width [[buffer(6)]], constant uint &query_offset [[buffer(7)]],
     uint group [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
     uint sg [[simdgroup_index_in_threadgroup]], uint threads [[threads_per_threadgroup]]) {
     const uint spatial = height * width;
+    group += query_offset;
+    if (group >= batches * frames * spatial) return;
     const uint query = group % spatial;
     const uint frame_batch = group / spatial;
     const uint frame = frame_batch % frames;

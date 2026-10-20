@@ -34,6 +34,28 @@ private def vae_sha256(path : String) : String
 end
 
 describe ML::Video::WanVAE do
+  it "plans the pre-projection upsample peak and checks scratch element overflow" do
+    cfg = ML::Video::WanVAEConfig.new(1, 16, 24)
+    previous_count = cfg.batches * cfg.temporal_factor * cfg.output_channels * cfg.height * cfg.width
+    nearest_count = cfg.batches * cfg.temporal_factor * 192 * cfg.height * cfg.width
+    previous_count.should eq(147_456)
+    nearest_count.should eq(294_912)
+    ML::Video::WanVAE.activation_scratch_values(cfg).should eq(nearest_count)
+    ML::Video::WanVAE.activation_scratch_values(
+      ML::Video::WanVAEConfig.new(2, 16, 24)).should eq(589_824)
+    ML::Video::WanVAE.activation_scratch_values(
+      ML::Video::WanVAEConfig.new(1, 512, 832)).should eq(327_155_712)
+    # Posterior channels can exceed the decoder peak in configurable probes.
+    ML::Video::WanVAE.activation_scratch_values(
+      ML::Video::WanVAEConfig.new(1, 8, 8, z_dim: 32_768)).should eq(65_536)
+    ML::Video::WanVAE.activation_scratch_values(
+      ML::Video::WanVAEConfig.new(1, 8, 8, dim: 1, z_dim: 1)).should eq(768)
+    expect_raises(ArgumentError) do
+      ML::Video::WanVAE.activation_scratch_values(
+        ML::Video::WanVAEConfig.new(1, 2048, 2048))
+    end
+  end
+
   it "keeps the 22-latent decode geometry and requires a caller memory plan" do
     dim_mult = [1, 2, 4, 4]
     temporal = [false, true, true]
@@ -136,6 +158,8 @@ describe ML::Video::WanVAE do
     workspace_arena = ML::Video::Arena.new
     inputs = ML::Video::Arena.new
     prepared = nil.as(ML::Video::PreparedWeights?)
+    execution_chain = nil.as(ML::Metal::MPSCommandChain?)
+    command = nil.as(ML::Metal::CommandBuffer?)
     begin
       bindings = ML::Video::WanVAE.checkpoint_bindings(cfg)
       plan = ML::Video::WeightPlan.new([file], bindings,
@@ -168,25 +192,52 @@ describe ML::Video::WanVAE do
       copy_target = inputs.upload("vae.copy_target", [-1_f32, -1_f32, -1_f32, -1_f32, -1_f32, -1_f32])
 
       before = ML::MetalBuffer.video_spec_allocations
-      command = ML::Metal::CommandBuffer.new
-      e = ML::Metal::ComputeEncoder.new(command)
+      if ENV["WAN_VAE_EXECUTION_CHAIN"]? == "1"
+        active = ML::Metal::MPSCommandChain.new
+        execution_chain = active
+        e = active.encoder
+      else
+        active = ML::Metal::CommandBuffer.new
+        command = active
+        e = ML::Metal::ComputeEncoder.new(active)
+      end
       prepared.encode(e)
       ML::Video::WanVAE.copy_frames!(e, copy_source, copy_target, 1, 1,
         4, 1, 1, 1, 6, 3, 2)
-      ML::Video::WanVAE.encode_image(e, image, image_latent, weights, workspace, cfg)
+      ML::Video::WanVAE.encode_image(e, image, image_latent, weights, workspace, cfg,
+        execution_chain: execution_chain)
+      if active = execution_chain
+        e = active.encoder
+      end
       ML::Video::WanVAE.encode_motion(e, motion, motion_latent, weights, workspace, cfg,
-        c["motion_frames"].as_i)
+        c["motion_frames"].as_i, execution_chain: execution_chain)
+      if active = execution_chain
+        e = active.encoder
+      end
       output_frames = ML::Video::WanVAE.decode(e, latent, decoded, weights, workspace, cfg,
-        c["decode_latent_frames"].as_i)
+        c["decode_latent_frames"].as_i, execution_chain: execution_chain)
+      if active = execution_chain
+        e = active.encoder
+      end
       output_frames.should eq(85)
       ML::Video::WanVAE.crop_frames!(e, decoded, delivered, cfg, output_frames,
         c["delivered_source_offset"].as_i, c["deliver_frames"].as_i)
       ML::Video::WanVAE.decode(e, latent, repeated, weights, workspace, cfg,
-        c["decode_latent_frames"].as_i).should eq(output_frames)
-      e.end_encoding
+        c["decode_latent_frames"].as_i, execution_chain: execution_chain).should eq(output_frames)
+      if active = execution_chain
+        e = active.encoder
+      end
       ML::MetalBuffer.video_spec_allocations.should eq(before), "VAE encode/decode must allocate no GPU buffers"
-      command.commit
-      command.wait
+      if active = execution_chain
+        active.wait_count.should eq(0), "VAE chain must defer its only wait until the terminal boundary"
+        active.commit_and_wait
+        active.wait_count.should eq(1), "VAE chain must use one terminal wait"
+        active.segment_count.should be > 1, "VAE chain must continue between completed subphases"
+      else
+        e.end_encoding
+        command.not_nil!.commit
+        command.not_nil!.wait
+      end
 
       actual = {
         "image_latent"  => image_latent.read(cfg.z_dim * cfg.latent_height * cfg.latent_width),
@@ -204,11 +255,23 @@ describe ML::Video::WanVAE do
         actual["decoded"].map(&.unsafe_as(UInt32))), "serial decode must reset temporal history"
       copy_target.read(6).should eq([-1_f32, -1_f32, -1_f32, 20_f32, 30_f32, -1_f32])
     ensure
-      prepared.try(&.release)
-      inputs.release
-      workspace_arena.release
-      weights.release
-      file.close
+      begin
+        if active = execution_chain
+          begin
+            active.commit_and_wait unless active.completed?
+          ensure
+            active.release if active.completed?
+          end
+        end
+      ensure
+        if execution_chain.nil? || execution_chain.not_nil!.completed?
+          prepared.try(&.release)
+          inputs.release
+          workspace_arena.release
+          weights.release
+          file.close
+        end
+      end
     end
   end
 end

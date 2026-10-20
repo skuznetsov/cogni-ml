@@ -1,5 +1,6 @@
 require "./metal_ops"
 require "./checkpoint"
+require "./metal_mps_command_chain"
 
 module ML::Video
   # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
@@ -76,6 +77,7 @@ module ML::Video
       end
       WanVAEShape.count("image input", @batches, 3, 1, @height, @width)
       WanVAEShape.count("latent image", @batches, @z_dim, 1, latent_height, latent_width)
+      WanVAEShape.count("posterior channels", 2, @z_dim)
       WanVAEShape.count("decoder chunk", @batches, temporal_factor, output_channels, @height, @width)
     end
 
@@ -204,6 +206,39 @@ module ML::Video
     end
   end
 
+  # Caller-owned, setup-allocated snapshots for narrowing decoder execution
+  # differences. Captures are GPU copies into supplied buffers; callers read
+  # them only after their command chain reaches its terminal wait.
+  class WanVAETrace
+    getter buffers : Hash(String, ML::MetalBuffer)
+    getter captured_counts : Hash(String, Int32)
+    getter markers : Hash(String, Int32)
+
+    def initialize(@buffers : Hash(String, ML::MetalBuffer))
+      @captured_counts = {} of String => Int32
+      @markers = {} of String => Int32
+    end
+
+    def capture(e : ML::Metal::ComputeEncoder, name : String,
+                source : ML::MetalBuffer, count : Int32) : Nil
+      return unless target = @buffers[name]?
+      raise ArgumentError.new("Wan VAE trace captured #{name} more than once") if @captured_counts.has_key?(name)
+      MetalOps.check(target, count.to_i64)
+      MetalOps.distinct(target, source)
+      WanVAE.trace_copy!(e, source, target, count)
+      @captured_counts[name] = count
+    end
+
+    def mark(name : String, value : Int32) : Nil
+      @markers[name] = value
+    end
+
+    def reset! : Nil
+      @captured_counts.clear
+      @markers.clear
+    end
+  end
+
   module WanVAE
     SOURCE     = {{ read_file("#{__DIR__}/kernels/wan_vae.metal") }}
     SCALE_MEAN = [-0.7571_f32, -0.7089_f32, -0.9113_f32, 0.1075_f32,
@@ -221,6 +256,34 @@ module ML::Video
 
     def self.pipeline(name : String) : ML::Metal::ComputePipeline
       ML::Metal::PipelineCache.get(name) { ML::Metal::ComputePipeline.new(name, SOURCE) }
+    end
+
+    # Largest per-activation workspace requested by the pinned [1, 2, 4, 4]
+    # encoder/decoder graph. Include the raw four-frame RGB staging chunk, the
+    # full-resolution decoder nearest upsample (2*dim channels), the encoder
+    # posterior head (2*z_dim channels), QKV, temporal-convolution, and
+    # temporal-shuffle shape families. Keep this as the single checked planner
+    # used by preparation, execution validation, and callers that plan a shared
+    # phase arena.
+    def self.activation_scratch_values(cfg : WanVAEConfig) : Int32
+      raw_rgb_peak = WanVAEShape.count("raw RGB chunk scratch", cfg.batches,
+        cfg.temporal_factor, 3, cfg.height, cfg.width)
+      encoder_peak = WanVAEShape.count("encoder activation scratch", cfg.batches,
+        cfg.temporal_factor, cfg.dim, cfg.height, cfg.width)
+      decoder_nearest_peak = WanVAEShape.count("decoder nearest scratch", cfg.batches,
+        cfg.temporal_factor, cfg.dim * 2, cfg.height, cfg.width)
+      posterior_channels = WanVAEShape.count("posterior channels", 2, cfg.z_dim)
+      posterior_peak = WanVAEShape.count("posterior scratch", cfg.batches,
+        posterior_channels, 1, cfg.latent_height, cfg.latent_width)
+      qkv_channels = WanVAEShape.count("attention QKV channels", 3, cfg.dim * 4)
+      qkv_peak = WanVAEShape.count("attention QKV scratch", cfg.batches,
+        qkv_channels, 1, cfg.latent_height, cfg.latent_width)
+      decoder_time_conv_channels = WanVAEShape.count("decoder temporal-conv channels", 2, cfg.dim * 4)
+      decoder_time_conv_peak = WanVAEShape.count("decoder temporal-conv scratch", cfg.batches,
+        decoder_time_conv_channels, 2, cfg.height // 4, cfg.width // 4)
+      Math.max(Math.max(raw_rgb_peak, encoder_peak),
+        Math.max(Math.max(decoder_nearest_peak, posterior_peak),
+          Math.max(qkv_peak, decoder_time_conv_peak)))
     end
 
     def self.prepare! : Nil
@@ -317,9 +380,7 @@ module ML::Video
       raise ArgumentError.new("Invalid Wan VAE residency budget") unless budget_bytes > 0 && reserve_bytes >= 0
       raise ArgumentError.new("Wan VAE needs a positive latent frame count") unless max_latent_frames > 0
       specs = encoder_cache_specs(cfg) + decoder_cache_specs(cfg)
-      chunk_frames = cfg.temporal_factor
-      activation_count = WanVAEShape.count("activation scratch", cfg.batches, chunk_frames,
-        cfg.output_channels, cfg.height, cfg.width)
+      activation_count = activation_scratch_values(cfg)
       cache_bytes = specs.reduce(0_i64) do |total, spec|
         # Each cache has two frames and two buffers so a queued update can
         # alternate without mutating the history still read by the command.
@@ -380,8 +441,9 @@ module ML::Video
     # output is contiguous F32 B,Cz,1,H/8,W/8.
     def self.encode_image(e : ML::Metal::ComputeEncoder, image : ML::MetalBuffer,
                           latent : ML::MetalBuffer, weights : Arena,
-                          workspace : WanVAEWorkspace, cfg : WanVAEConfig) : Nil
-      encode_video(e, image, latent, weights, workspace, cfg, 1)
+                          workspace : WanVAEWorkspace, cfg : WanVAEConfig,
+                          execution_chain : ML::Metal::MPSCommandChain? = nil) : Nil
+      encode_video(e, image, latent, weights, workspace, cfg, 1, execution_chain)
       nil
     end
 
@@ -390,17 +452,22 @@ module ML::Video
     def self.encode_motion(e : ML::Metal::ComputeEncoder, video : ML::MetalBuffer,
                            latent : ML::MetalBuffer, weights : Arena,
                            workspace : WanVAEWorkspace, cfg : WanVAEConfig,
-                           frames : Int32 = 73) : Int32
-      encode_video(e, video, latent, weights, workspace, cfg, frames)
+                           frames : Int32 = 73,
+                           execution_chain : ML::Metal::MPSCommandChain? = nil) : Int32
+      encode_video(e, video, latent, weights, workspace, cfg, frames, execution_chain)
     end
 
-    # Stream an input whose frame count is 1+4n. Cache updates remain ordered
-    # inside the caller's command encoder; this path does no host activation
-    # math, allocation, submission, waiting or reading.
+    # Stream an input whose frame count is 1+4n. Without `execution_chain`,
+    # cache updates stay in the caller's encoder. With it, completed VAE
+    # subphases continue asynchronously on the same serial chain. Passing an
+    # execution_chain submits asynchronous continuations; the caller retains
+    # weights/workspace through its terminal wait. This method does no host
+    # activation math, Metal-buffer allocation, wait or read.
     def self.encode_video(e : ML::Metal::ComputeEncoder, video : ML::MetalBuffer,
                           latent : ML::MetalBuffer, weights : Arena,
                           workspace : WanVAEWorkspace, cfg : WanVAEConfig,
-                          frames : Int32) : Int32
+                          frames : Int32,
+                          execution_chain : ML::Metal::MPSCommandChain? = nil) : Int32
       validate_workspace!(workspace, cfg)
       validate_weights!(weights, cfg)
       validate_disjoint_residency!(weights, workspace)
@@ -417,6 +484,7 @@ module ML::Video
       validate_external_buffer!(video, weights, workspace)
       validate_external_buffer!(latent, weights, workspace)
       workspace.reset_cache_state!
+      e = current_encoder(e, execution_chain)
       frame_offset = 0
       latent_offset = 0
       chunk_index = 0
@@ -425,18 +493,25 @@ module ML::Video
         source = workspace.buffer("wan_vae_tmp_4")
         dispatch_copy_frames(e, video, source, cfg.batches, 3, frames, frame_offset,
           cfg.height, cfg.width, chunk_frames, 0, chunk_frames)
+        e = continue_execution!(e, execution_chain)
         value = Activation.new(source, cfg.batches, 3, chunk_frames, cfg.height, cfg.width)
-        value = encode_encoder(e, value, weights, workspace, cfg)
+        value = encode_encoder(e, value, weights, workspace, cfg, execution_chain)
+        e = current_encoder(e, execution_chain)
         value = conv_auto(e, value, weights, workspace, "conv1", cfg.z_dim * 2,
-          1, 1, 1, 1, 1, 1, 0, 0, 0)
+          1, 1, 1, 1, 1, 1, 0, 0, 0, execution_chain: execution_chain)
+        e = continue_execution!(e, execution_chain)
         scaled = workspace.temp(value.buffer, source)
         dispatch_split_scale(e, value.buffer, scaled, workspace, cfg,
           value.frames, value.height, value.width)
+        e = continue_execution!(e, execution_chain)
         dispatch_copy_frames(e, scaled, latent, cfg.batches, cfg.z_dim, value.frames, 0,
           cfg.latent_height, cfg.latent_width, latent_frames, latent_offset, value.frames)
         frame_offset += chunk_frames
         latent_offset += value.frames
         chunk_index += 1
+        if frame_offset < frames
+          e = continue_execution!(e, execution_chain)
+        end
       end
       unless frame_offset == frames && latent_offset == latent_frames
         raise ArgumentError.new("Wan VAE encoder cache produced #{latent_offset} latents, expected #{latent_frames}")
@@ -447,12 +522,38 @@ module ML::Video
     # Decode one latent sequence frame-by-frame. Wan's first upsample3d call is
     # `Rep` and bypasses temporal conv/shuffle. With two temporal upsamplers,
     # 22 latent frames write exactly 85 frames. `decoded` is the raw output;
-    # use crop_frames! for the caller's explicit S2V window/drop policy. No
-    # command submission, wait, or activation read occurs here.
+    # use crop_frames! for the caller's explicit S2V window/drop policy. When
+    # `execution_chain` is supplied, this method submits asynchronous
+    # continuations between completed decoder subphases and latent-frame copies;
+    # the caller retains buffers through one terminal wait. No activation read
+    # or host wait occurs here.
     def self.decode(e : ML::Metal::ComputeEncoder, latent : ML::MetalBuffer,
                     decoded : ML::MetalBuffer, weights : Arena,
                     workspace : WanVAEWorkspace, cfg : WanVAEConfig,
-                    latent_frames : Int32 = 21) : Int32
+                    latent_frames : Int32 = 21,
+                    execution_chain : ML::Metal::MPSCommandChain? = nil,
+                    trace : WanVAETrace? = nil) : Int32
+      output_frames = validate_decode!(latent, decoded, weights, workspace, cfg, latent_frames)
+      validate_trace!(trace, latent, decoded, weights, workspace)
+      trace.try(&.reset!)
+      workspace.reset_cache_state!
+      offset = 0
+      latent_frames.times do |frame|
+        e = current_encoder(e, execution_chain)
+        offset += decode_latent_chunk(e, latent, decoded, weights, workspace, cfg,
+          latent_frames, output_frames, frame, offset, execution_chain, trace)
+        e = current_encoder(e, execution_chain)
+        if frame + 1 < latent_frames
+          e = continue_execution!(e, execution_chain)
+        end
+      end
+      validate_decoded_frame_count!(offset, output_frames)
+      output_frames
+    end
+
+    private def self.validate_decode!(latent : ML::MetalBuffer, decoded : ML::MetalBuffer,
+                                      weights : Arena, workspace : WanVAEWorkspace,
+                                      cfg : WanVAEConfig, latent_frames : Int32) : Int32
       validate_workspace!(workspace, cfg)
       validate_weights!(weights, cfg)
       validate_disjoint_residency!(weights, workspace)
@@ -469,27 +570,64 @@ module ML::Video
       MetalOps.distinct(decoded, latent)
       validate_external_buffer!(latent, weights, workspace)
       validate_external_buffer!(decoded, weights, workspace)
-      workspace.reset_cache_state!
-      offset = 0
-      latent_frames.times do |frame|
-        source = workspace.buffer("wan_vae_tmp_4")
-        dispatch_time_slice(e, latent, source, cfg, latent_frames, frame)
-        value = Activation.new(source, cfg.batches, cfg.z_dim, 1, cfg.latent_height, cfg.latent_width)
-        unscaled = workspace.temp(value.buffer)
-        dispatch_scale(e, value.buffer, unscaled, workspace, cfg, 1,
-          cfg.latent_height, cfg.latent_width, true)
-        value = Activation.new(unscaled, cfg.batches, cfg.z_dim, 1, cfg.latent_height, cfg.latent_width)
-        value = conv_auto(e, value, weights, workspace, "conv2", cfg.z_dim,
-          1, 1, 1, 1, 1, 1, 0, 0, 0)
-        value = decode_decoder(e, value, weights, workspace, cfg)
-        chunk_frames = value.frames
-        dispatch_copy_clamp(e, value, decoded, cfg, output_frames, offset)
-        offset += chunk_frames
-      end
-      unless offset == output_frames
-        raise ArgumentError.new("Wan VAE decoder temporal cache produced #{offset} frames, expected #{output_frames}")
-      end
       output_frames
+    end
+
+    private def self.validate_trace!(trace : WanVAETrace?, latent : ML::MetalBuffer,
+                                     decoded : ML::MetalBuffer, weights : Arena,
+                                     workspace : WanVAEWorkspace) : Nil
+      return unless active = trace
+      targets = [] of ML::MetalBuffer
+      active.buffers.each_value do |target|
+        MetalOps.check(target, 1_i64)
+        MetalOps.distinct(target, latent, decoded)
+        validate_external_buffer!(target, weights, workspace)
+        if targets.any? { |previous| MetalOps.overlap?(previous, target) }
+          raise ArgumentError.new("Wan VAE trace buffers overlap")
+        end
+        targets << target
+      end
+    end
+
+    private def self.trace_activation(e : ML::Metal::ComputeEncoder, trace : WanVAETrace?,
+                                      name : String, frame : Int32, value : Activation) : Nil
+      return unless frame == 1
+      return unless active = trace
+      active.capture(e, name, value.buffer, input_count(value))
+    end
+
+    private def self.decode_latent_chunk(e : ML::Metal::ComputeEncoder,
+                                         latent : ML::MetalBuffer, decoded : ML::MetalBuffer,
+                                         weights : Arena, workspace : WanVAEWorkspace,
+                                         cfg : WanVAEConfig, latent_frames : Int32,
+                                         output_frames : Int32, frame : Int32,
+                                         offset : Int32,
+                                         execution_chain : ML::Metal::MPSCommandChain? = nil,
+                                         trace : WanVAETrace? = nil) : Int32
+      source = workspace.buffer("wan_vae_tmp_4")
+      dispatch_time_slice(e, latent, source, cfg, latent_frames, frame)
+      value = Activation.new(source, cfg.batches, cfg.z_dim, 1, cfg.latent_height, cfg.latent_width)
+      trace_activation(e, trace, "decode.frame1.latent_slice", frame, value)
+      unscaled = workspace.temp(value.buffer)
+      dispatch_scale(e, value.buffer, unscaled, workspace, cfg, 1,
+        cfg.latent_height, cfg.latent_width, true)
+      value = Activation.new(unscaled, cfg.batches, cfg.z_dim, 1, cfg.latent_height, cfg.latent_width)
+      trace_activation(e, trace, "decode.frame1.unscaled", frame, value)
+      value = conv_auto(e, value, weights, workspace, "conv2", cfg.z_dim,
+        1, 1, 1, 1, 1, 1, 0, 0, 0, execution_chain: execution_chain)
+      trace_activation(current_encoder(e, execution_chain), trace, "decode.frame1.conv2", frame, value)
+      value = decode_decoder(e, value, weights, workspace, cfg, execution_chain, trace, frame)
+      e = current_encoder(e, execution_chain)
+      chunk_frames = value.frames
+      trace_activation(e, trace, "decode.frame1.raw_output", frame, value)
+      dispatch_copy_clamp(e, value, decoded, cfg, output_frames, offset)
+      chunk_frames
+    end
+
+    private def self.validate_decoded_frame_count!(actual : Int32, expected : Int32) : Nil
+      unless actual == expected
+        raise ArgumentError.new("Wan VAE decoder temporal cache produced #{actual} frames, expected #{expected}")
+      end
     end
 
     def self.crop_frames!(e : ML::Metal::ComputeEncoder, source : ML::MetalBuffer,
@@ -528,6 +666,14 @@ module ML::Video
         source_offset, height, width, target_frames, target_offset, slice_frames)
     end
 
+    # Diagnostic-only GPU snapshot copy used by WanVAETrace. The caller owns
+    # and allocates both buffers before encoding, and reads the target only
+    # after its command or chain completes.
+    def self.trace_copy!(e : ML::Metal::ComputeEncoder, source : ML::MetalBuffer,
+                         target : ML::MetalBuffer, count : Int32) : Nil
+      dispatch_copy(e, source, target, count)
+    end
+
     private def self.validate_workspace!(workspace : WanVAEWorkspace, cfg : WanVAEConfig) : Nil
       unless workspace.config.batches == cfg.batches && workspace.config.height == cfg.height &&
              workspace.config.width == cfg.width && workspace.config.dim == cfg.dim &&
@@ -536,8 +682,7 @@ module ML::Video
              workspace.config.temporal_downsample == cfg.temporal_downsample
         raise ArgumentError.new("Wan VAE workspace/config mismatch")
       end
-      activation_count = WanVAEShape.count("activation scratch", cfg.batches, cfg.temporal_factor,
-        cfg.output_channels, cfg.height, cfg.width)
+      activation_count = activation_scratch_values(cfg)
       (0...5).each { |index| MetalOps.check(workspace.buffer("wan_vae_tmp_#{index}"), activation_count.to_i64) }
       MetalOps.check(workspace.buffer("wan_vae_scale_mean"), cfg.z_dim.to_i64)
       MetalOps.check(workspace.buffer("wan_vae_scale_inv_std"), cfg.z_dim.to_i64)
@@ -601,10 +746,12 @@ module ML::Video
 
     private def self.encode_encoder(e : ML::Metal::ComputeEncoder, input : Activation,
                                     weights : Arena, workspace : WanVAEWorkspace,
-                                    cfg : WanVAEConfig) : Activation
+                                    cfg : WanVAEConfig,
+                                    execution_chain : ML::Metal::MPSCommandChain? = nil) : Activation
       dims = cfg.encoder_dims
       value = conv_auto(e, input, weights, workspace, "encoder.conv1", dims.first,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, "encoder.conv1")
+        3, 3, 3, 1, 1, 1, 2, 1, 1, "encoder.conv1", execution_chain: execution_chain)
+      e = continue_execution!(e, execution_chain)
       index = 0
       (0...cfg.dim_mult.size).each do |stage|
         in_channels = dims[stage]
@@ -612,37 +759,60 @@ module ML::Video
         cfg.num_res_blocks.times do |block|
           prefix = "encoder.downsamples.#{index}"
           value = residual(e, value, weights, workspace, prefix, in_channels, out_channels,
-            prefix, true)
+            prefix, true, execution_chain)
+          e = continue_execution!(e, execution_chain)
           in_channels = out_channels
           index += 1
         end
         if stage < cfg.dim_mult.size - 1
           prefix = "encoder.downsamples.#{index}"
           value = downsample(e, value, weights, workspace, prefix,
-            cfg.temporal_downsample[stage])
+            cfg.temporal_downsample[stage], execution_chain)
+          e = continue_execution!(e, execution_chain)
           index += 1
         end
       end
       value = residual(e, value, weights, workspace, "encoder.middle.0", dims.last, dims.last,
-        "encoder.middle.0", true)
-      value = attention(e, value, weights, workspace, "encoder.middle.1")
+        "encoder.middle.0", true, execution_chain)
+      e = continue_execution!(e, execution_chain)
+      value = attention(e, value, weights, workspace, "encoder.middle.1", execution_chain)
+      e = current_encoder(e, execution_chain)
+      e = continue_execution!(e, execution_chain)
       value = residual(e, value, weights, workspace, "encoder.middle.2", dims.last, dims.last,
-        "encoder.middle.2", true)
+        "encoder.middle.2", true, execution_chain)
+      e = continue_execution!(e, execution_chain)
       normed = rms_norm(e, value, weights, workspace, "encoder.head.0.gamma", 4)
       activated = silu(e, normed, workspace)
       conv_auto(e, activated, weights, workspace, "encoder.head.2", cfg.z_dim * 2,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, "encoder.head.2")
+        3, 3, 3, 1, 1, 1, 2, 1, 1, "encoder.head.2", execution_chain: execution_chain)
     end
 
     private def self.decode_decoder(e : ML::Metal::ComputeEncoder, input : Activation,
                                     weights : Arena, workspace : WanVAEWorkspace,
-                                    cfg : WanVAEConfig) : Activation
+                                    cfg : WanVAEConfig,
+                                    execution_chain : ML::Metal::MPSCommandChain? = nil,
+                                    trace : WanVAETrace? = nil,
+                                    trace_frame : Int32 = -1) : Activation
       dims = cfg.decoder_dims
       value = conv_auto(e, input, weights, workspace, "decoder.conv1", dims.first,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, "decoder.conv1")
-      value = residual(e, value, weights, workspace, "decoder.middle.0", dims.first, dims.first, "decoder.middle.0", true)
-      value = attention(e, value, weights, workspace, "decoder.middle.1")
-      value = residual(e, value, weights, workspace, "decoder.middle.2", dims.first, dims.first, "decoder.middle.2", true)
+        3, 3, 3, 1, 1, 1, 2, 1, 1, "decoder.conv1", execution_chain: execution_chain)
+      trace_activation(current_encoder(e, execution_chain), trace,
+        "decode.frame1.decoder.conv1", trace_frame, value)
+      e = continue_execution!(e, execution_chain)
+      value = residual(e, value, weights, workspace, "decoder.middle.0", dims.first, dims.first,
+        "decoder.middle.0", true, execution_chain, trace, trace_frame)
+      trace_activation(current_encoder(e, execution_chain), trace,
+        "decode.frame1.decoder.middle.0", trace_frame, value)
+      e = continue_execution!(e, execution_chain)
+      value = attention(e, value, weights, workspace, "decoder.middle.1", execution_chain)
+      e = current_encoder(e, execution_chain)
+      trace_activation(e, trace, "decode.frame1.decoder.middle.1", trace_frame, value)
+      e = continue_execution!(e, execution_chain)
+      value = residual(e, value, weights, workspace, "decoder.middle.2", dims.first, dims.first,
+        "decoder.middle.2", true, execution_chain, trace, trace_frame)
+      trace_activation(current_encoder(e, execution_chain), trace,
+        "decode.frame1.decoder.middle.2", trace_frame, value)
+      e = continue_execution!(e, execution_chain)
       index = 0
       (0...cfg.dim_mult.size).each do |stage|
         source_in = dims[stage]
@@ -650,27 +820,40 @@ module ML::Video
         in_channels = stage >= 1 ? source_in // 2 : source_in
         (cfg.num_res_blocks + 1).times do |block|
           prefix = "decoder.upsamples.#{index}"
-          value = residual(e, value, weights, workspace, prefix, in_channels, out_channels, prefix, true)
+          value = residual(e, value, weights, workspace, prefix, in_channels, out_channels,
+            prefix, true, execution_chain, trace, trace_frame)
+          if trace_frame == 1 && trace
+            trace_activation(current_encoder(e, execution_chain), trace,
+              "decode.frame1.#{prefix}.residual", trace_frame, value)
+          end
+          e = continue_execution!(e, execution_chain)
           in_channels = out_channels
           index += 1
         end
         if stage < cfg.dim_mult.size - 1
           prefix = "decoder.upsamples.#{index}"
           value = upsample(e, value, weights, workspace, prefix,
-            cfg.temporal_downsample.reverse[stage])
+            cfg.temporal_downsample.reverse[stage], execution_chain, trace, trace_frame)
+          e = continue_execution!(e, execution_chain)
           index += 1
         end
       end
       normed = rms_norm(e, value, weights, workspace, "decoder.head.0.gamma", 4)
+      e = continue_execution!(e, execution_chain)
       activated = silu(e, normed, workspace)
+      e = continue_execution!(e, execution_chain)
       conv_auto(e, activated, weights, workspace, "decoder.head.2", 3,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, "decoder.head.2")
+        3, 3, 3, 1, 1, 1, 2, 1, 1, "decoder.head.2", execution_chain: execution_chain)
     end
 
     private def self.residual(e : ML::Metal::ComputeEncoder, input : Activation,
                               weights : Arena, workspace : WanVAEWorkspace,
                               prefix : String, in_channels : Int32, out_channels : Int32,
-                              cache_prefix : String?, cached : Bool) : Activation
+                              cache_prefix : String?, cached : Bool,
+                              execution_chain : ML::Metal::MPSCommandChain? = nil,
+                              trace : WanVAETrace? = nil,
+                              trace_frame : Int32 = -1) : Activation
+      e = current_encoder(e, execution_chain)
       skip = workspace.buffer("wan_vae_tmp_4")
       # The fifth scratch slot doubles as the stable residual path; decoder's
       # latent slice is consumed before residual blocks begin.
@@ -680,20 +863,70 @@ module ML::Video
       copy(e, input.buffer, skip, input_count(input))
       if in_channels != out_channels
         skip_out = conv(e, input, skip, weights, workspace, "#{prefix}.shortcut",
-          out_channels, 1, 1, 1, 1, 1, 1, 0, 0, 0, nil, false)
+          out_channels, 1, 1, 1, 1, 1, 1, 0, 0, 0, nil, false,
+          execution_chain: execution_chain)
         skip = skip_out.buffer
+        e = current_encoder(e, execution_chain)
       end
 
       norm1 = rms_norm(e, input, weights, workspace, "#{prefix}.residual.0.gamma", 4, skip)
       silu1 = silu(e, norm1, workspace, skip)
       conv1_cache = cached ? "#{cache_prefix}.residual.2" : nil
+      if trace_frame == 1 && trace
+        trace_prefix = "decode.frame1.#{cache_prefix}.residual.2"
+        trace_activation(current_encoder(e, execution_chain), trace,
+          "#{trace_prefix}.input", trace_frame, silu1)
+        if cache_name = conv1_cache
+          state = workspace.cache(cache_name)
+          trace.mark("#{trace_prefix}.history_before", state.history)
+          trace.mark("#{trace_prefix}.replicate_before", state.replicate ? 1 : 0)
+          if state.history > 0
+            trace.capture(current_encoder(e, execution_chain), "#{trace_prefix}.cache_before",
+              state.current, state.frame_plane * 2)
+          end
+        end
+      end
       conv1 = conv_auto(e, silu1, weights, workspace, "#{prefix}.residual.2", out_channels,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, conv1_cache, skip)
+        3, 3, 3, 1, 1, 1, 2, 1, 1, conv1_cache, skip, execution_chain: execution_chain)
+      e = current_encoder(e, execution_chain)
+      if trace_frame == 1 && trace
+        trace_prefix = "decode.frame1.#{cache_prefix}.residual.2"
+        trace_activation(e, trace, "#{trace_prefix}.output", trace_frame, conv1)
+        if cache_name = conv1_cache
+          state = workspace.cache(cache_name)
+          trace.capture(e, "#{trace_prefix}.cache_after", state.current, state.frame_plane * 2)
+          trace.mark("#{trace_prefix}.history_after", state.history)
+        end
+      end
       norm2 = rms_norm(e, conv1, weights, workspace, "#{prefix}.residual.3.gamma", 4, skip)
       silu2 = silu(e, norm2, workspace, skip)
       conv2_cache = cached ? "#{cache_prefix}.residual.6" : nil
+      if trace_frame == 1 && trace
+        trace_prefix = "decode.frame1.#{cache_prefix}.residual.6"
+        trace_activation(current_encoder(e, execution_chain), trace,
+          "#{trace_prefix}.input", trace_frame, silu2)
+        if cache_name = conv2_cache
+          state = workspace.cache(cache_name)
+          trace.mark("#{trace_prefix}.history_before", state.history)
+          trace.mark("#{trace_prefix}.replicate_before", state.replicate ? 1 : 0)
+          if state.history > 0
+            trace.capture(current_encoder(e, execution_chain), "#{trace_prefix}.cache_before",
+              state.current, state.frame_plane * 2)
+          end
+        end
+      end
       conv2 = conv_auto(e, silu2, weights, workspace, "#{prefix}.residual.6", out_channels,
-        3, 3, 3, 1, 1, 1, 2, 1, 1, conv2_cache, skip)
+        3, 3, 3, 1, 1, 1, 2, 1, 1, conv2_cache, skip, execution_chain: execution_chain)
+      e = current_encoder(e, execution_chain)
+      if trace_frame == 1 && trace
+        trace_prefix = "decode.frame1.#{cache_prefix}.residual.6"
+        trace_activation(e, trace, "#{trace_prefix}.output", trace_frame, conv2)
+        if cache_name = conv2_cache
+          state = workspace.cache(cache_name)
+          trace.capture(e, "#{trace_prefix}.cache_after", state.current, state.frame_plane * 2)
+          trace.mark("#{trace_prefix}.history_after", state.history)
+        end
+      end
       skip_activation = Activation.new(skip, input.batches, out_channels,
         input.frames, input.height, input.width)
       add(e, conv2, skip_activation, workspace)
@@ -701,34 +934,55 @@ module ML::Video
 
     private def self.attention(e : ML::Metal::ComputeEncoder, input : Activation,
                                weights : Arena, workspace : WanVAEWorkspace,
-                               prefix : String) : Activation
+                               prefix : String,
+                               execution_chain : ML::Metal::MPSCommandChain? = nil) : Activation
       normed = rms_norm(e, input, weights, workspace, "#{prefix}.norm.gamma", 3)
+      e = continue_execution!(e, execution_chain)
       qkv = conv_auto(e, normed, weights, workspace, "#{prefix}.to_qkv", input.channels * 3,
-        1, 1, 1, 1, 1, 1, 0, 0, 0, nil, input.buffer)
+        1, 1, 1, 1, 1, 1, 0, 0, 0, nil, input.buffer, execution_chain: execution_chain)
+      e = continue_execution!(e, execution_chain)
       attended_buffer = workspace.temp(qkv.buffer, input.buffer)
-      e.set_pipeline(pipeline("wan_vae_attention_f32"))
-      e.set_buffer(qkv.buffer, 0).set_buffer(attended_buffer, 1, ML::Metal::BufferAccess::Write)
-      e.set_value(cfg_batches(workspace).to_u32, 2).set_value(input.channels.to_u32, 3)
-      e.set_value(input.frames.to_u32, 4).set_value(input.height.to_u32, 5)
-      e.set_value(input.width.to_u32, 6)
+      MetalOps.check(attended_buffer, input_count(input).to_i64)
       const_threads = Math.min(512, next_power_of_two(input.channels))
       query_count = input.frames * input.height * input.width * cfg_batches(workspace)
-      e.dispatch_threadgroups({query_count, 1, 1}, {const_threads, 1, 1})
+      # A full-resolution spatial SDPA dispatch exceeds Metal's interactivity
+      # limit even when isolated in its own command root. Bound independent
+      # query groups; every query still visits all keys in the original order.
+      query_chunk = execution_chain ? 32 : query_count
+      query_offset = 0
+      while query_offset < query_count
+        groups = Math.min(query_chunk, query_count - query_offset)
+        e.set_pipeline(pipeline("wan_vae_attention_f32"))
+        e.set_buffer(qkv.buffer, 0).set_buffer(attended_buffer, 1, ML::Metal::BufferAccess::Write)
+        e.set_value(cfg_batches(workspace).to_u32, 2).set_value(input.channels.to_u32, 3)
+        e.set_value(input.frames.to_u32, 4).set_value(input.height.to_u32, 5)
+        e.set_value(input.width.to_u32, 6).set_value(query_offset.to_u32, 7)
+        e.dispatch_threadgroups({groups, 1, 1}, {const_threads, 1, 1})
+        query_offset += groups
+        if query_offset < query_count
+          e = continue_execution!(e, execution_chain)
+        end
+      end
+      e = continue_execution!(e, execution_chain)
       attended = Activation.new(attended_buffer, input.batches, input.channels, input.frames, input.height, input.width)
       projected = conv_auto(e, attended, weights, workspace, "#{prefix}.proj", input.channels,
-        1, 1, 1, 1, 1, 1, 0, 0, 0, nil, input.buffer)
+        1, 1, 1, 1, 1, 1, 0, 0, 0, nil, input.buffer, execution_chain: execution_chain)
+      e = continue_execution!(e, execution_chain)
       add(e, projected, input, workspace)
     end
 
     private def self.downsample(e : ML::Metal::ComputeEncoder, input : Activation,
                                 weights : Arena, workspace : WanVAEWorkspace,
-                                prefix : String, temporal : Bool) : Activation
+                                prefix : String, temporal : Bool,
+                                execution_chain : ML::Metal::MPSCommandChain? = nil) : Activation
+      e = current_encoder(e, execution_chain)
       out_height = input.height // 2
       out_width = input.width // 2
       output = workspace.temp(input.buffer)
       conv(e, input, output, weights, workspace, "#{prefix}.resample.1", input.channels,
         1, 3, 3, 1, 2, 2, 0, 0, 0, nil, false,
-        input.frames, out_height, out_width)
+        input.frames, out_height, out_width, execution_chain: execution_chain)
+      e = current_encoder(e, execution_chain)
       spatial = Activation.new(output, input.batches, input.channels, input.frames, out_height, out_width)
       return spatial unless temporal
 
@@ -743,23 +997,44 @@ module ML::Video
       temporal_output = workspace.temp(spatial.buffer, input.buffer)
       conv(e, spatial, temporal_output, weights, workspace, "#{prefix}.time_conv", input.channels,
         3, 1, 1, 2, 1, 1, 0, 0, 0, cache_name, true,
-        nil, nil, nil, false, true)
+        nil, nil, nil, false, true, execution_chain)
     end
 
     private def self.upsample(e : ML::Metal::ComputeEncoder, input : Activation,
                               weights : Arena, workspace : WanVAEWorkspace,
-                              prefix : String, temporal : Bool) : Activation
+                              prefix : String, temporal : Bool,
+                              execution_chain : ML::Metal::MPSCommandChain? = nil,
+                              trace : WanVAETrace? = nil,
+                              trace_frame : Int32 = -1) : Activation
+      e = current_encoder(e, execution_chain)
       value = input
       if temporal
         state = workspace.cache("#{prefix}.time_conv")
         if state.history == 0 && !state.replicate
           state.replicate = true
         else
+          if trace_frame == 1 && trace
+            trace_name = "decode.frame1.#{prefix}.time_conv"
+            trace_activation(e, trace, "#{trace_name}.input", trace_frame, value)
+            trace.mark("#{trace_name}.history_before", state.history)
+            trace.mark("#{trace_name}.replicate_before", state.replicate ? 1 : 0)
+            if state.history > 0
+              trace.capture(e, "#{trace_name}.cache_before", state.current, state.frame_plane * 2)
+            end
+          end
           # Upstream's Rep sentinel uses a cold causal temporal conv. Subsequent
           # calls consume the two cached frames through the same generic conv.
           time_conv = conv_auto(e, value, weights, workspace, "#{prefix}.time_conv",
             value.channels * 2, 3, 1, 1, 1, 1, 1, 2, 0, 0,
-            "#{prefix}.time_conv", nil, state.replicate)
+            "#{prefix}.time_conv", nil, state.replicate, execution_chain: execution_chain)
+          e = current_encoder(e, execution_chain)
+          if trace_frame == 1 && trace
+            trace_name = "decode.frame1.#{prefix}.time_conv"
+            trace_activation(e, trace, "#{trace_name}.output", trace_frame, time_conv)
+            trace.capture(e, "#{trace_name}.cache_after", state.current, state.frame_plane * 2)
+            trace.mark("#{trace_name}.history_after", state.history)
+            trace.mark("#{trace_name}.replicate_after", state.replicate ? 1 : 0)
+          end
           time_frames = time_conv.frames
           shuffled = workspace.temp(time_conv.buffer, value.buffer)
           e.set_pipeline(pipeline("wan_vae_temporal_shuffle_f32"))
@@ -770,8 +1045,12 @@ module ML::Video
           shuffled_frames = time_frames * 2
           shuffle_count = WanVAEShape.count("temporal shuffle", cfg_batches(workspace),
             value.channels, shuffled_frames, value.height, value.width)
+          MetalOps.check(shuffled, shuffle_count.to_i64)
           e.dispatch_1d(shuffle_count)
           value = Activation.new(shuffled, value.batches, value.channels, shuffled_frames, value.height, value.width)
+          if trace_frame == 1 && trace
+            trace_activation(e, trace, "decode.frame1.#{prefix}.time_conv.shuffle", trace_frame, value)
+          end
         end
       end
       upsampled = workspace.temp(value.buffer, input.buffer)
@@ -782,11 +1061,19 @@ module ML::Video
       e.set_value(value.width.to_u32, 6)
       nearest_count = WanVAEShape.count("nearest upsample", cfg_batches(workspace),
         value.channels, value.frames, value.height * 2, value.width * 2)
+      MetalOps.check(upsampled, nearest_count.to_i64)
       e.dispatch_1d(nearest_count)
       upsampled_value = Activation.new(upsampled, value.batches, value.channels, value.frames,
         value.height * 2, value.width * 2)
-      conv_auto(e, upsampled_value, weights, workspace, "#{prefix}.resample.1",
-        value.channels // 2, 1, 3, 3, 1, 1, 1, 0, 1, 1)
+      if trace_frame == 1 && trace
+        trace_activation(e, trace, "decode.frame1.#{prefix}.nearest", trace_frame, upsampled_value)
+      end
+      result = conv_auto(e, upsampled_value, weights, workspace, "#{prefix}.resample.1",
+        value.channels // 2, 1, 3, 3, 1, 1, 1, 0, 1, 1,
+        execution_chain: execution_chain)
+      trace_activation(current_encoder(e, execution_chain), trace,
+        "decode.frame1.#{prefix}.resample", trace_frame, result)
+      result
     end
 
     private def self.rms_norm(e : ML::Metal::ComputeEncoder, input : Activation,
@@ -794,6 +1081,7 @@ module ML::Video
                               gamma_name : String, rank : Int32,
                               forbidden : ML::MetalBuffer? = nil) : Activation
       output = workspace.temp(input.buffer, forbidden)
+      MetalOps.check(output, input_count(input).to_i64)
       gamma = weights[gamma_name]
       weights.check_weight(gamma_name, input.channels.to_i64)
       e.set_pipeline(pipeline("wan_vae_rms_norm_f32"))
@@ -814,6 +1102,7 @@ module ML::Video
                           forbidden : ML::MetalBuffer? = nil) : Activation
       output = workspace.temp(input.buffer, forbidden)
       count = input_count(input)
+      MetalOps.check(output, count.to_i64)
       e.set_pipeline(pipeline("wan_vae_silu_f32"))
       e.set_buffer(input.buffer, 0).set_buffer(output, 1, ML::Metal::BufferAccess::Write)
       e.set_value(count.to_u32, 2)
@@ -829,6 +1118,7 @@ module ML::Video
       end
       output = workspace.temp(left.buffer, right.buffer)
       count = input_count(left)
+      MetalOps.check(output, count.to_i64)
       e.set_pipeline(pipeline("wan_vae_add_f32"))
       e.set_buffer(left.buffer, 0).set_buffer(right.buffer, 1)
       e.set_buffer(output, 2, ML::Metal::BufferAccess::Write).set_value(count.to_u32, 3)
@@ -845,12 +1135,14 @@ module ML::Video
                                cache_name : String? = nil,
                                forbidden : ML::MetalBuffer? = nil,
                                cache_replicate : Bool = false,
-                               cache_last_only : Bool = false) : Activation
+                               cache_last_only : Bool = false,
+                               execution_chain : ML::Metal::MPSCommandChain? = nil) : Activation
+      e = current_encoder(e, execution_chain)
       output = workspace.temp(input.buffer, forbidden)
       conv(e, input, output, weights, workspace, source, out_channels,
         kernel_t, kernel_h, kernel_w, stride_t, stride_h, stride_w,
         pad_t, pad_h, pad_w, cache_name, !cache_name.nil?, nil, nil, nil,
-        cache_replicate, cache_last_only)
+        cache_replicate, cache_last_only, execution_chain)
     end
 
     private def self.conv(e : ML::Metal::ComputeEncoder, input : Activation,
@@ -863,7 +1155,8 @@ module ML::Video
                           output_frames : Int32? = nil, output_height : Int32? = nil,
                           output_width : Int32? = nil,
                           cache_replicate : Bool = false,
-                          cache_last_only : Bool = false) : Activation
+                          cache_last_only : Bool = false,
+                          execution_chain : ML::Metal::MPSCommandChain? = nil) : Activation
       weight_name = "#{source}.weight"
       bias_name = "#{source}.bias"
       weight_count = out_channels.to_i64 * input.channels * kernel_t * kernel_h * kernel_w
@@ -883,27 +1176,59 @@ module ML::Video
       out_w = output_width || ((input.width + 2 * pad_w - kernel_w) // stride_w + 1)
       count = WanVAEShape.count("convolution output", cfg_batches(workspace),
         out_channels, out_t, out_h, out_w)
+      MetalOps.check(input.buffer, input_count(input).to_i64)
       MetalOps.check(output, count.to_i64)
       weight = weights[weight_name]
       bias = weights[bias_name]
-      e.set_pipeline(pipeline("wan_vae_conv3d_f32"))
-      e.set_buffer(input.buffer, 0).set_buffer(cache_buffer, 1)
-      e.set_buffer(weight, 2).set_buffer(weight, 3)
-      e.set_buffer(bias, 4).set_buffer(bias, 5)
-      e.set_buffer(output, 6, ML::Metal::BufferAccess::Write)
-      e.set_value(cfg_batches(workspace).to_u32, 7).set_value(input.channels.to_u32, 8)
-      e.set_value(out_channels.to_u32, 9).set_value(input.frames.to_u32, 10)
-      e.set_value(input.height.to_u32, 11).set_value(input.width.to_u32, 12)
-      e.set_value(cache_frames.to_u32, 13).set_value(kernel_t.to_u32, 14)
-      e.set_value(kernel_h.to_u32, 15).set_value(kernel_w.to_u32, 16)
-      e.set_value(stride_t.to_u32, 17).set_value(stride_h.to_u32, 18)
-      e.set_value(stride_w.to_u32, 19).set_value(effective_pad_t.to_u32, 20)
-      e.set_value(pad_h.to_u32, 21).set_value(pad_w.to_u32, 22)
-      e.set_value(out_t.to_u32, 23).set_value(out_h.to_u32, 24).set_value(out_w.to_u32, 25)
-      e.set_value(weights.dtype(weight_name).bf16? ? 1_u32 : 0_u32, 26)
-      e.set_value(weights.dtype(bias_name).bf16? ? 1_u32 : 0_u32, 27)
-      e.dispatch_1d(count)
+      # In chained execution, split the flattened output range into disjoint
+      # tiles whose estimated convolution work stays below 67,108,864 FMAs.
+      # Each output retains the same accumulation order; the legacy path keeps
+      # a single zero-offset dispatch.
+      fmas_per_output = input.channels.to_i64 * kernel_t * kernel_h * kernel_w
+      max_tile_fmas = 67_108_864_i64
+      max_tiles_per_root = 4
+      tile_outputs = if execution_chain
+                       Math.max(1_i64, max_tile_fmas // fmas_per_output).to_i32
+                     else
+                       count
+                     end
+      tile_outputs = Math.min(tile_outputs, count)
+      # Flush preceding work so this convolution owns at most four tiles in any
+      # command root, including when a residual block calls conv1 then conv2.
+      e = current_encoder(e, execution_chain)
+      e = continue_execution!(e, execution_chain) if execution_chain
+      output_offset = 0
+      tiles_in_root = 0
+      while output_offset < count
+        e = current_encoder(e, execution_chain)
+        tile_count = Math.min(tile_outputs, count - output_offset)
+        e.set_pipeline(pipeline("wan_vae_conv3d_f32"))
+        e.set_buffer(input.buffer, 0).set_buffer(cache_buffer, 1)
+        e.set_buffer(weight, 2).set_buffer(weight, 3)
+        e.set_buffer(bias, 4).set_buffer(bias, 5)
+        e.set_buffer(output, 6, ML::Metal::BufferAccess::Write)
+        e.set_value(cfg_batches(workspace).to_u32, 7).set_value(input.channels.to_u32, 8)
+        e.set_value(out_channels.to_u32, 9).set_value(input.frames.to_u32, 10)
+        e.set_value(input.height.to_u32, 11).set_value(input.width.to_u32, 12)
+        e.set_value(cache_frames.to_u32, 13).set_value(kernel_t.to_u32, 14)
+        e.set_value(kernel_h.to_u32, 15).set_value(kernel_w.to_u32, 16)
+        e.set_value(stride_t.to_u32, 17).set_value(stride_h.to_u32, 18)
+        e.set_value(stride_w.to_u32, 19).set_value(effective_pad_t.to_u32, 20)
+        e.set_value(pad_h.to_u32, 21).set_value(pad_w.to_u32, 22)
+        e.set_value(out_t.to_u32, 23).set_value(out_h.to_u32, 24).set_value(out_w.to_u32, 25)
+        e.set_value(weights.dtype(weight_name).bf16? ? 1_u32 : 0_u32, 26)
+        e.set_value(weights.dtype(bias_name).bf16? ? 1_u32 : 0_u32, 27)
+        e.set_value(output_offset.to_u32, 28)
+        e.dispatch_1d(tile_count)
+        output_offset += tile_count
+        tiles_in_root += 1
+        if output_offset < count && tiles_in_root >= max_tiles_per_root
+          e = continue_execution!(e, execution_chain)
+          tiles_in_root = 0
+        end
+      end
       if cached && cache_name && cache_state
+        e = current_encoder(e, execution_chain)
         cache_after_conv(e, input, cache_name, workspace, cache_replicate, cache_last_only)
       end
       Activation.new(output, cfg_batches(workspace), out_channels, out_t, out_h, out_w)
@@ -939,6 +1264,8 @@ module ML::Video
                                     cfg : WanVAEConfig, frames : Int32,
                                     height : Int32, width : Int32, unscale : Bool) : Nil
       count = WanVAEShape.count("latent scale", cfg.batches, cfg.z_dim, frames, height, width)
+      MetalOps.check(input, count.to_i64)
+      MetalOps.check(output, count.to_i64)
       e.set_pipeline(pipeline("wan_vae_scale_f32"))
       e.set_buffer(input, 0).set_buffer(workspace.buffer("wan_vae_scale_mean"), 1)
       e.set_buffer(workspace.buffer("wan_vae_scale_inv_std"), 2)
@@ -955,6 +1282,10 @@ module ML::Video
                                           height : Int32, width : Int32) : Nil
       count = WanVAEShape.count("posterior mean scaling", cfg.batches, cfg.z_dim,
         frames, height, width)
+      input_count = WanVAEShape.count("posterior split input", cfg.batches,
+        2, cfg.z_dim, frames, height, width)
+      MetalOps.check(input, input_count.to_i64)
+      MetalOps.check(output, count.to_i64)
       e.set_pipeline(pipeline("wan_vae_split_scale_f32"))
       e.set_buffer(input, 0).set_buffer(workspace.buffer("wan_vae_scale_mean"), 1)
       e.set_buffer(workspace.buffer("wan_vae_scale_inv_std"), 2)
@@ -969,6 +1300,9 @@ module ML::Video
                                          frames : Int32, selected : Int32) : Nil
       count = WanVAEShape.count("latent frame slice", cfg.batches, cfg.z_dim,
         1, cfg.latent_height, cfg.latent_width)
+      MetalOps.check(source, WanVAEShape.count("latent slice source", cfg.batches,
+        cfg.z_dim, frames, cfg.latent_height, cfg.latent_width).to_i64)
+      MetalOps.check(target, count.to_i64)
       e.set_pipeline(pipeline("wan_vae_time_slice_f32"))
       e.set_buffer(source, 0).set_buffer(target, 1, ML::Metal::BufferAccess::Write)
       e.set_value(cfg.batches.to_u32, 2).set_value(cfg.z_dim.to_u32, 3)
@@ -1014,6 +1348,8 @@ module ML::Video
                                          output : ML::MetalBuffer, cfg : WanVAEConfig,
                                          target_frames : Int32, offset : Int32) : Nil
       count = input_count(input)
+      MetalOps.check(output, WanVAEShape.count("decoded copy target", cfg.batches,
+        3, target_frames, cfg.height, cfg.width).to_i64)
       e.set_pipeline(pipeline("wan_vae_copy_clamp_chunk_f32"))
       e.set_buffer(input.buffer, 0).set_buffer(output, 1, ML::Metal::BufferAccess::Write)
       e.set_value(cfg.batches.to_u32, 2).set_value(input.channels.to_u32, 3)
@@ -1025,6 +1361,8 @@ module ML::Video
 
     private def self.dispatch_copy(e : ML::Metal::ComputeEncoder, source : ML::MetalBuffer,
                                    target : ML::MetalBuffer, count : Int32) : Nil
+      MetalOps.check(source, count.to_i64)
+      MetalOps.check(target, count.to_i64)
       e.set_pipeline(MetalOps.pipeline("video_copy_f32"))
       e.set_buffer(source, 0).set_buffer(target, 1, ML::Metal::BufferAccess::Write)
       e.set_value(count.to_u32, 2)
@@ -1034,6 +1372,24 @@ module ML::Video
     private def self.copy(e : ML::Metal::ComputeEncoder, source : ML::MetalBuffer,
                           target : ML::MetalBuffer, count : Int32) : Nil
       dispatch_copy(e, source, target, count)
+    end
+
+    private def self.current_encoder(e : ML::Metal::ComputeEncoder,
+                                     execution_chain : ML::Metal::MPSCommandChain?) : ML::Metal::ComputeEncoder
+      if active = execution_chain
+        active.encoder
+      else
+        e
+      end
+    end
+
+    private def self.continue_execution!(e : ML::Metal::ComputeEncoder,
+                                         execution_chain : ML::Metal::MPSCommandChain?) : ML::Metal::ComputeEncoder
+      return e unless active = execution_chain
+      active.pause!
+      active.continue_async!
+      active.resume!
+      active.encoder
     end
 
     private def self.input_count(value : Activation) : Int32
