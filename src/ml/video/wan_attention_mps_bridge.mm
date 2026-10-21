@@ -108,14 +108,12 @@ static void *wan_attention_mps_plan_create_impl(
   if (!deviceHandle || !qHandle || !kHandle || !vHandle || !outputAHandle ||
       !outputBHandle)
     return nullptr;
-  if (explicitQKSoftmaxPV && !headMajorKV)
-    return nullptr;
   if (@available(macOS 15.0, *)) {
     if ((dataType != MPSDataTypeFloat32 && dataType != MPSDataTypeFloat16 &&
          dataType != MPSDataTypeBFloat16) ||
         (elementBytes != 2 && elementBytes != 4) ||
         (dataType == MPSDataTypeFloat32) != (elementBytes == 4) ||
-        (explicitQKSoftmaxPV && dataType != MPSDataTypeFloat32))
+        (explicitQKSoftmaxPV && dataType == MPSDataTypeBFloat16))
       return nullptr;
     @autoreleasepool {
       if (batches <= 0 || queryRows <= 0 || keyRows <= 0 || heads <= 0 ||
@@ -208,30 +206,44 @@ static void *wan_attention_mps_plan_create_impl(
         MPSGraphTensor *queryKeyWithEpsilon = nil;
         MPSGraphTensor *scaleTensor = nil;
         MPSGraphTensor *scaledQueryKey = nil;
+        MPSGraphTensor *softmaxInput = nil;
         MPSGraphTensor *probabilities = nil;
         if (explicitQKSoftmaxPV) {
-          keyTranspose = [graph transposeTensor:k
+          keyTranspose = [graph transposeTensor:kh
                                       dimension:2
                                   withDimension:3
                                            name:@"wan_k_transpose_bhdq"];
           queryKey = [graph matrixMultiplicationWithPrimaryTensor:qh
                                                  secondaryTensor:keyTranspose
                                                             name:@"wan_qk_bhqk"];
-          // Match PyTorch 2.8.0's MPS attention workaround for the MPSGraph
-          // SDPA optimizer/leak behavior: add F32 epsilon before scaling.
-          MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
+          if (dataType == MPSDataTypeFloat32) {
+            // Preserve the legacy explicit F32 graph. The pinned upstream
+            // adds this epsilon only when the QK tensor itself is F32.
+            MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
                                                         shape:@[ @1 ]
                                                      dataType:MPSDataTypeFloat32];
-          queryKeyWithEpsilon = [graph additionWithPrimaryTensor:queryKey
+            queryKeyWithEpsilon = [graph additionWithPrimaryTensor:queryKey
                                                  secondaryTensor:epsilon
                                                             name:@"wan_qk_epsilon_bhqk"];
+          } else {
+            // Match the connected upstream F16 graph, including its observable
+            // cast boundaries. Tensor types do not specify accumulator width.
+            queryKeyWithEpsilon = [graph castTensor:queryKey
+                                           toType:MPSDataTypeFloat32
+                                             name:@"wan_qk_f32_bhqk"];
+          }
           scaleTensor = [graph constantWithScalar:scale
                                             shape:@[ @1 ]
                                          dataType:MPSDataTypeFloat32];
           scaledQueryKey = [graph multiplicationWithPrimaryTensor:queryKeyWithEpsilon
                                                   secondaryTensor:scaleTensor
                                                              name:@"wan_scaled_qk_bhqk"];
-          probabilities = [graph softMaxWithTensor:scaledQueryKey
+          softmaxInput = dataType == MPSDataTypeFloat32
+                             ? scaledQueryKey
+                             : [graph castTensor:scaledQueryKey
+                                          toType:dataType
+                                            name:@"wan_scaled_qk_f16_bhqk"];
+          probabilities = [graph softMaxWithTensor:softmaxInput
                                                axis:3
                                                name:@"wan_probabilities_bhqk"];
           contextHeads = [graph matrixMultiplicationWithPrimaryTensor:probabilities
@@ -253,7 +265,7 @@ static void *wan_attention_mps_plan_create_impl(
             !context || context.dataType != dataType ||
             (explicitQKSoftmaxPV &&
              (!keyTranspose || !queryKey || !queryKeyWithEpsilon ||
-              !scaleTensor || !scaledQueryKey || !probabilities)))
+              !scaleTensor || !scaledQueryKey || !softmaxInput || !probabilities)))
           return nullptr;
 
         MPSGraphTensorShapedTypeDictionary *feeds = @{
@@ -360,6 +372,27 @@ extern "C" void *gs_wan_attention_mps_plan_create_typed(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
       kHandle, vHandle, outputAHandle, outputBHandle, dataType, elementBytes,
       false, false);
+}
+
+// Opt-in connected graph matching the pinned upstream F32/F16 operation and
+// cast sequence. Q/context remain BTHD. headMajorKV selects BTHD (0) or
+// caller-prepared contiguous BHTD (1) K/V; preparation belongs to the caller's
+// existing command chain. This does not change the opaque SDPA defaults.
+extern "C" void *gs_wan_attention_mps_plan_create_connected_typed(
+    void *deviceHandle, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
+    void *kHandle, void *vHandle, void *outputAHandle,
+    void *outputBHandle, int32_t dtype, int32_t headMajorKV) {
+  if ((dtype != 0 && dtype != 1) || (headMajorKV != 0 && headMajorKV != 1))
+    return nullptr;
+  MPSDataType dataType = MPSDataTypeInvalid;
+  uint64_t elementBytes = 0;
+  if (!wan_attention_mps_data_type(dtype, &dataType, &elementBytes))
+    return nullptr;
+  return wan_attention_mps_plan_create_impl(
+      deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
+      kHandle, vHandle, outputAHandle, outputBHandle, dataType, elementBytes,
+      headMajorKV == 1, true);
 }
 
 // Opt-in path for caller-prepared contiguous BHTD K/V. Q and context remain

@@ -1740,3 +1740,148 @@ or synchronization into inference. The opaque SDPA's internal cause remains
 open. Source and raw-evidence adversary review is ROBUST within the fixed-fixture
 observation scope, excluding speed, quality, tails, changed inputs and opaque
 internal-cause claims. The review is correlated, not independent attestation.
+
+### Native connected F16 execution contract (2026-10-21)
+
+Time the connected QK -> F32 scale -> F16 rounding -> softmax -> PV graph in
+the existing native precision profiler, against the unchanged F32 production
+SDPA. Torch is an offline oracle only: cached, source-pinned fixtures are loaded
+before timing, and neither Torch nor Python participates in native execution.
+Keep B=1, K=36,608, H=40, D=128 and 128-row chunks. Admit only opt-in graph
+constructors; preserve all existing defaults and rollback by reverting this
+slice. This is a CAUTION performance change: graph compilation may change
+rounding, hidden workspace, or reuse behavior even with the same operations.
+
+The first discriminator is native Q=128 against dtype-matched upstream and F32
+fixtures with the unchanged finite `2e-5 + 2e-5*abs(reference)` gate. Failed
+candidates may be timed descriptively but cannot replace production F32. Then
+use paired order-reversed Q=8192 runs, a 257-row tail ending at K and changed-Q
+reuse. Prepare inputs, compile plans and validate outside measured arms. Require
+zero tracked MetalBuffer allocations, one existing terminal wait per arm, no
+activation readback, and no intermediate host waits. A possible second lever is
+preparing head-major K/V once on the same GPU chain; any measurement must include
+that preparation when the caller starts with BTHD inputs.
+
+DoD: guarded release build, native profiler plan and malformed-binding controls,
+the strict fixture comparisons above, paired wall/GPU timing, and the legacy
+F32 regression. Inspect source and raw results for benchmark boundary mismatch
+before accepting a speed claim. Keep 15% cache-aware reserve and pressure floors,
+5 GiB process cap, 64 MiB swap-growth cap and 120-second runs; builds use 1.5 GiB
+and 180 seconds. Stop on guard failure and disqualify emitted results from that
+process. Polling does not bound instantaneous peaks. No full block, model,
+Studio or generation is authorized in this slice. Refresh evidence after source,
+OS/GPU/compiler, geometry, fixture, or graph-boundary changes.
+
+### Native connected F16 result: faster locally, rejected at the F32 gate
+
+The opt-in native graph now reproduces the anchored upstream F16 endpoint in
+the existing Crystal profiler. No Torch process was launched for these runs;
+the binary links Metal/MPSGraph and does not link Torch or Python. Python only
+orchestrates the process and samples its memory outside the native timed arm.
+Inputs, conversions, layout preparation and attention remain on the GPU.
+The graph retains QK -> F32 scale -> F16 rounding -> softmax -> PV and the final
+BHTD-to-BTHD context transpose as its target. Tensor dtypes do not establish
+matmul accumulator width.
+
+Completed native wall-time medians on Apple M2 Max, Q=8192, K=36608, H=40,
+D=128, 128-row chunks, one warmup and three measured arms per process:
+
+| Native arm | Forward median (s) | Reverse median (s) | Device allocation after wait (MiB) |
+| --- | ---: | ---: | ---: |
+| Existing opaque F32, resident inputs | 1.837295 | 1.850854 | 2081.875 |
+| Existing opaque F16, resident inputs | 1.190076 | 1.186548 | 1201.125 |
+| Connected F16, BTHD inputs | 0.843248 | 0.835841 | 1915.125 |
+| Connected F16, prepare head-major K/V in arm | 0.845239 | 0.844205 | 2630.125 |
+| Connected F16, F32 input/output boundary | 0.850226 | 0.850866 | 3665.125 |
+
+These are order-reversed, separate-process observations, not randomized
+same-process ABBA or full-block measurements. The connected resident graph is
+2.18x/2.21x faster than opaque F32 and 1.41x/1.42x faster than opaque F16 in
+these two directions. The F32-boundary arm charges GPU narrowing of all Q/K/V
+and widening of the context; its advantage is 2.16x/2.18x versus F32 here.
+Neither comparison establishes video throughput or equivalent F32 accuracy.
+
+All connected F16 checks have zero widened-F32 bit differences and zero
+nonfinite values against the dtype-matched, source-pinned upstream fixtures:
+Q=128, the changed-Q salt-4 reuse check, Q=8192 in both timing orders, and
+Q=257 starting at 36351 with a padded final chunk. BTHD and head-major paths
+pass those coverage points; the F32-boundary arm passes Q=8192 and the tail.
+The fixed K/V inputs are immutable across query chunks; prepared K/V is rebuilt
+on every arm, with its preparation charged rather than reused across requests.
+The unchanged F32 baseline passes; the new connected F32 constructor also
+matches the Q=128 F32 fixture exactly. The separately rebuilt legacy F32 probe
+passes with max absolute error 5.5506825e-7 and zero strict violations.
+
+**Promotion is rejected.** Connected F16 differs from upstream F32 in
+4,607,259/41,943,040 values outside the unchanged finite
+`2e-5 + 2e-5*abs(reference)` gate at Q=8192, with max absolute error
+3.1819195e-4 and max tolerance ratio 14.857483. Matching upstream F16 is a
+different predicate. Existing opaque F16 also fails its dtype-matched gate
+(max error 3.0517578e-4); its smaller F32 drift is not grounds to admit it.
+Native exit 3 denotes dtype-matched success plus F32 rejection; exit 2 denotes
+dtype-matched rejection. Neither is a memory-guard abort. No tolerance or
+production F32 default was changed.
+
+Explicit resident buffers fall from 2077.500 to 1198.750 MiB, but the connected
+F16 graph's additional backend allocations leave only about 8% less current
+device allocation than F32, rather than half the total memory. This is an
+after-wait device counter, not peak workspace or process footprint. Preparing
+head-major K/V costs an extra 715 MiB without an observed timing advantage;
+park that lever for this geometry. The F32-boundary arm retains both storage
+types and is not a memory-saving path.
+
+All 17 precision processes complete without guard abort, covering 57 validation
+arms. Each native arm retains one existing terminal wait and zero tracked
+MetalBuffer allocations. Validation uses a separate existing diagnostic chain
+and reads only 20 metric words; it exports no activations. Six CPU-only plan
+preflights and five existing plus six connected malformed-binding controls
+reject unsupported combinations, short buffers, aliasing and invalid geometry.
+Minimum sampled cache-aware headroom is 25.32%, minimum pressure-free reading
+79%, and sampled swap growth zero. All sampled footprints remain under 5 GiB;
+short processes can finish between polls, so this does not certify instantaneous
+peaks. No owned native profile or guard process remains after completion.
+
+The connected graph uses 129 command roots for 64 chunks versus 11 for opaque
+SDPA. Host encoding takes 0.423-0.427 s versus 0.0022-0.0028 s for F32, while
+summed root GPU spans are 0.835-0.843 s versus 1.837-1.850 s. Encoding and GPU
+work overlap; these figures are not additive and do not isolate kernel time.
+Reducing repeated graph submission and its resource preparation is a concrete
+next profiling target, but no production gain follows until the unchanged F32
+gate and eventual complete-block timing pass. Do not repeat the previously
+rejected all-F32 widening route without a new discriminator.
+
+External evidence lives under `/opt/mldata_ssd/cogni-ml/video-scene-20261019/`
+`evidence/wan-self-attention/native-connected-20261021/`:
+`native-connected-summary-v1.json` aggregates checked raw metrics;
+`native-source-receipt-v1.json` and `source-v1/` pin the executed source,
+objects and binaries; `native-plan-preflights-v1.json` records CPU controls;
+`native-linked-libraries-v1.txt` records the link surface. Per-case
+`*.invocation.json`, `*.log` and `*.guard.jsonl` retain exact argv, native
+results and sampled safety telemetry. Cached oracle manifests retain the
+previous pinned official Wan source and generator hashes. This index supplies
+lineage, not an independent attestation. No full block, model or generation ran.
+
+Native reproduction command from this worktree, using the pinned build and
+cached fixtures (no oracle process):
+
+```sh
+WAN_NATIVE=/opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-block-benchmark/wan_s2v_attention_precision_profile-connected-v1
+WAN_FIXTURES=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/precision-profile-20261020
+WAN_EVIDENCE=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/native-connected-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 examples/support/wan_memory_guard.py \
+  --memory-accounting=file-cache --max-footprint-mib=5120 \
+  --max-swap-growth-mib=64 --timeout-sec=120 --log="$WAN_EVIDENCE/rerun.guard.jsonl" \
+  -- "$WAN_NATIVE" --fixture="$WAN_FIXTURES/oracle-f16-q8192" \
+  --f32-fixture="$WAN_FIXTURES/oracle-f32-q8192" --dtype=f16 \
+  --graph=connected --kv-layout=bthd --mode=resident --query-rows=8192 --samples=3
+```
+
+Expected signal: exit 3, all dtype-matched checks true and F32 checks false,
+one terminal wait and zero tracked allocations per arm, with no guard abort.
+Timing is descriptive and must be refreshed on the contract's decay triggers.
+
+Correlated source/raw-evidence adversary review is ROBUST within this native
+fixture and measurement scope. It cross-checked all 17 aggregate rows and 57
+arm/validation pairs against raw logs, source snapshot hashes, reverse ordering,
+changed-Q reuse and tail masking. It does not qualify production F16 accuracy,
+perceptual quality, instantaneous memory peaks or full-block speed.

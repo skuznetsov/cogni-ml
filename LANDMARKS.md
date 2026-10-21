@@ -31379,3 +31379,42 @@ Refresh after source/toolchain/device/model/workload changes.
   bounded workspace before wider query coverage. Optimize cogni-ml directly;
   Torch remains the upstream oracle. Refresh on graph/targets, inputs/dtype/
   geometry, toolchain/Torch/OS/device/queue or guard changes, or artifact loss.
+
+### 2026-10-21 — Native connected F16 Wan speedup remains outside the F32 gate
+
+- Added an opt-in connected F32/F16 graph to the existing native bridge and
+  precision profiler. Existing opaque and production F32 defaults are unchanged.
+  No Torch runtime participates in native timing; cached official upstream
+  fixtures are the oracle. GPU casts and optional K/V preparation share the
+  existing command chain, with one terminal wait per arm and no activation readback.
+- B1/Q8192/K36608/H40/D128, chunk128, warmup plus three samples in each of two
+  order-reversed process sequences: resident connected F16 medians
+  0.843248/0.835841 s versus opaque F32 1.837295/1.850854 s (2.18x/2.21x).
+  F32-boundary medians 0.850226/0.850866 s include all GPU narrow/widen casts.
+  These are local descriptive observations, not full-block/video throughput.
+- Connected F16 matches dtype-matched upstream fixtures exactly after widening
+  at Q128, changed-Q reuse, Q8192 and a tail257 ending at K. It still fails the
+  unchanged finite 2e-5+2e-5abs F32 gate: 4,607,259/41,943,040 violations,
+  max error 3.1819195e-4, max tolerance ratio 14.857483. Rejected for promotion;
+  F16 parity does not establish F32 parity or unchanged perceptual quality.
+- Head-major preparation is charged every arm and adds 715 MiB with no observed
+  speed gain; park it at this geometry. Connected F16 uses 1915.125 MiB device
+  allocation after wait versus F32 2081.875 MiB despite smaller explicit buffers.
+  Hidden/backend allocations prevent a half-total-memory claim. One existing
+  arm wait and zero tracked MetalBuffer allocations hold; backend allocations
+  are outside that counter. 129 command roots and about 0.42 s encoding expose
+  the next profiling target; encoding/GPU spans overlap and cannot be added.
+- Guarded builds and legacy F32 regression pass (max error 5.5506825e-7).
+  All 17 precision processes and 57 validation arms preserve controls and
+  expected numeric exit codes. No guard abort: sampled headroom >25.31%,
+  pressure free >=79%, swap growth zero; polling does not bound instantaneous
+  peaks. No full block/model/Studio/generation ran. Scratch stays on the SSD.
+- docs/wan-performance-frontier.md and external wan-self-attention/
+  native-connected-20261021/ index tested source/binary pins, cached upstream
+  fixtures, exact invocations, raw results, guards and the aggregate. Next:
+  isolate repeated native graph submission/resource cost with unchanged F32
+  accuracy; do not promote F16 or repeat rejected widening without new evidence.
+  Correlated source/raw-evidence adversary review is ROBUST for these bounded
+  fixture observations and rejection, excluding quality or full-block claims.
+  Refresh on graph/targets, input/dtype/geometry, toolchain/OS/device/queue,
+  guard or fixture changes, or artifact loss.

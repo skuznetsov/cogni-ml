@@ -59,6 +59,21 @@ kernel void precision_convert(device const uchar *input [[buffer(0)]],
     uint i [[thread_position_in_grid]]) {
   if(i<n) store(output,i,dst_type,load(input,i,src_type));
 }
+kernel void precision_transpose_kv(device const uchar *k [[buffer(0)]],
+    device uchar *head_major_k [[buffer(1)]], device const uchar *v [[buffer(2)]],
+    device uchar *head_major_v [[buffer(3)]], constant uint &batches [[buffer(4)]],
+    constant uint &key_rows [[buffer(5)]], constant uint &heads [[buffer(6)]],
+    constant uint &head_dim [[buffer(7)]], constant uint &count [[buffer(8)]],
+    constant uint &type [[buffer(9)]], uint i [[thread_position_in_grid]]) {
+  if(i>=count) return;
+  uint d=i%head_dim, key=(i/head_dim)%key_rows;
+  uint head=(i/(head_dim*key_rows))%heads;
+  uint batch=i/(head_dim*key_rows*heads);
+  if(batch>=batches) return;
+  uint source=((batch*key_rows+key)*heads+head)*head_dim+d;
+  store(head_major_k,i,type,load(k,source,type));
+  store(head_major_v,i,type,load(v,source,type));
+}
 kernel void precision_zero(device atomic_uint *m [[buffer(0)]],
     uint i [[thread_position_in_grid]]) {
   if(i<5u) atomic_store_explicit(m+i,0u,memory_order_relaxed);
@@ -93,18 +108,32 @@ lib WanPrecisionFFI
   fun create = gs_wan_attention_mps_plan_create_typed(device : Void*, batches : Int32,
                                                       query_rows : Int32, key_rows : Int32, heads : Int32, head_dim : Int32,
                                                       q : Void*, k : Void*, v : Void*, a : Void*, b : Void*, dtype : Int32) : Void*
+  fun create_connected = gs_wan_attention_mps_plan_create_connected_typed(device : Void*, batches : Int32,
+                                                                          query_rows : Int32, key_rows : Int32, heads : Int32, head_dim : Int32,
+                                                                          q : Void*, k : Void*, v : Void*, a : Void*, b : Void*, dtype : Int32,
+                                                                          head_major_kv : Int32) : Void*
 end
 
 # Probe-local typed wrapper. Existing production Crystal plans remain F32.
 private class PrecisionPlan
+  getter graph : String
+  getter kv_layout : String
   @handle : Void*
   @chain : ML::Metal::MPSCommandChain? = nil
 
-  def initialize(@buffers : Array(ML::MetalBuffer), type : Int32)
+  def initialize(@buffers : Array(ML::MetalBuffer), type : Int32,
+                 @graph : String, @kv_layout : String)
     q, k, v, a, b = @buffers
-    @handle = WanPrecisionFFI.create(ML::Metal::Device.instance.device_handle,
-      1, PRECISION_CHUNK, PRECISION_K, PRECISION_H, PRECISION_D,
-      q.handle, k.handle, v.handle, a.handle, b.handle, type)
+    device = ML::Metal::Device.instance.device_handle
+    @handle = if @graph == "connected"
+                WanPrecisionFFI.create_connected(device, 1, PRECISION_CHUNK,
+                  PRECISION_K, PRECISION_H, PRECISION_D, q.handle, k.handle,
+                  v.handle, a.handle, b.handle, type, @kv_layout == "head-major" ? 1 : 0)
+              else
+                WanPrecisionFFI.create(device, 1, PRECISION_CHUNK, PRECISION_K,
+                  PRECISION_H, PRECISION_D, q.handle, k.handle, v.handle,
+                  a.handle, b.handle, type)
+              end
     raise "Typed MPSGraph plan unavailable (dtype=#{type})" if @handle.null?
   end
 
@@ -199,7 +228,8 @@ private def precision_load(path : String, buffer : ML::MetalBuffer) : Nil
 end
 
 private def precision_native_guards(buffers : Array(ML::MetalBuffer), short : ML::MetalBuffer,
-                                    type : Int32) : Nil
+                                    type : Int32, graph : String,
+                                    kv_layout : String) : Nil
   q, k, v, a, b = buffers
   device = ML::Metal::Device.instance.device_handle
   # Reject malformed bindings before graph compilation or command submission.
@@ -221,8 +251,39 @@ private def precision_native_guards(buffers : Array(ML::MetalBuffer), short : ML
       raise "Malformed typed attention binding was admitted"
     end
   end
+  connected_rejected_cases = 0
+  if graph == "connected"
+    connected_invalid = [
+      WanPrecisionFFI.create_connected(device, 1, 128, PRECISION_K, 40, 128,
+        q.handle, k.handle, v.handle, a.handle, b.handle, 2,
+        kv_layout == "head-major" ? 1 : 0),
+      WanPrecisionFFI.create_connected(device, 1, 128, PRECISION_K, 40, 128,
+        q.handle, k.handle, v.handle, a.handle, b.handle, type, 2),
+      WanPrecisionFFI.create_connected(device, 1, 128, PRECISION_K, 40, 128,
+        short.handle, k.handle, v.handle, a.handle, b.handle, type,
+        kv_layout == "head-major" ? 1 : 0),
+      WanPrecisionFFI.create_connected(device, 1, 128, PRECISION_K, 40, 128,
+        q.handle, k.handle, k.handle, a.handle, b.handle, type,
+        kv_layout == "head-major" ? 1 : 0),
+      WanPrecisionFFI.create_connected(device, 1, 0, PRECISION_K, 40, 128,
+        q.handle, k.handle, v.handle, a.handle, b.handle, type,
+        kv_layout == "head-major" ? 1 : 0),
+      WanPrecisionFFI.create_connected(device, Int32::MAX, Int32::MAX, Int32::MAX, 40, 128,
+        q.handle, k.handle, v.handle, a.handle, b.handle, type,
+        kv_layout == "head-major" ? 1 : 0),
+    ]
+    connected_invalid.each do |handle|
+      unless handle.null?
+        WanAttentionMPSFFI.plan_release(handle)
+        raise "Malformed connected typed attention binding was admitted"
+      end
+    end
+    connected_rejected_cases = connected_invalid.size
+  end
   puts({schema: "wan_attention_precision_binding_guards_v1", dtype: type,
-        rejected_cases: invalid.size, gpu_commands_submitted: false}.to_json)
+        graph: graph, kv_layout: kv_layout, rejected_cases: invalid.size,
+        connected_rejected_cases: connected_rejected_cases,
+        gpu_commands_submitted: false}.to_json)
 end
 
 private def precision_nan(encoder, pipeline, buffer, n : Int32, type : Int32)
@@ -242,6 +303,16 @@ private def precision_convert(encoder, pipeline, src, dst, n : Int32,
   encoder.set_pipeline(pipeline).set_buffer(src, 0).set_buffer(dst, 1, ML::Metal::BufferAccess::Write)
   encoder.set_value(n.to_u32, 2).set_value(src_type.to_u32, 3)
   encoder.set_value(dst_type.to_u32, 4).dispatch_1d(n)
+end
+
+private def precision_transpose_kv(encoder, pipeline, k, head_major_k, v, head_major_v,
+                                   type : Int32)
+  encoder.set_pipeline(pipeline).set_buffer(k, 0).set_buffer(head_major_k, 1, ML::Metal::BufferAccess::Write)
+  encoder.set_buffer(v, 2).set_buffer(head_major_v, 3, ML::Metal::BufferAccess::Write)
+  encoder.set_value(1_u32, 4).set_value(PRECISION_K.to_u32, 5)
+  encoder.set_value(PRECISION_H.to_u32, 6).set_value(PRECISION_D.to_u32, 7)
+  encoder.set_value((PRECISION_K*PRECISION_C).to_u32, 8).set_value(type.to_u32, 9)
+  encoder.dispatch_1d(PRECISION_K*PRECISION_C)
 end
 
 private def precision_compare(encoder, zero, compare, ref, actual, metrics,
@@ -272,7 +343,8 @@ private def precision_arm(plan, q, k, v, output, cq, ca, sources,
                           converted_output, convert_pipeline, tail_pipeline,
                           rows : Int32, type : Int32, mode : String,
                           phase : String, sample : Int32,
-                          fill_pipeline, query_start : Int32)
+                          fill_pipeline, transpose_pipeline,
+                          head_major_k, head_major_v, query_start : Int32)
   width = type == 0 ? 4_i64 : 2_i64
   before = ML::MetalBuffer.video_spec_allocations
   started = Time.instant
@@ -290,6 +362,10 @@ private def precision_arm(plan, q, k, v, output, cq, ca, sources,
        {src[2], v, PRECISION_K*PRECISION_C} }.each do |source, dest, n|
         precision_convert(chain.encoder, convert_pipeline, source, dest, n, 0, type)
       end
+    end
+    if prepared_k = head_major_k
+      precision_transpose_kv(chain.encoder, transpose_pipeline.not_nil!, k, prepared_k,
+        v, head_major_v.not_nil!, type)
     end
     offset = 0
     while offset < rows
@@ -318,11 +394,13 @@ private def precision_arm(plan, q, k, v, output, cq, ca, sources,
     raise "Precision arm has extra wait" unless chain.wait_count == 1
     {schema: "wan_attention_precision_arm_v1", phase: phase, sample: sample,
      mode: mode, dtype: type, query_rows: rows, key_rows: PRECISION_K, chunk_rows: PRECISION_CHUNK,
+     graph: plan.graph, kv_layout: plan.kv_layout,
+     kv_preparation_included: plan.kv_layout == "head-major",
      completed_wall_seconds: wall, encode_wall_seconds: encode_seconds,
      summed_root_gpu_seconds: chain.gpu_elapsed_seconds, command_roots: chain.segment_count,
      terminal_waits: chain.wait_count, tracked_metal_buffer_allocations: allocations,
      device_current_allocated_bytes_after_wait: ML::Metal::Device.instance.current_allocated_size,
-     boundary: "chain creation through encoding and one terminal wait; conversions included only in f32-boundary mode"}
+     boundary: "chain creation through encoding and one terminal wait; conversions included only in f32-boundary mode; BTHD-to-BHTD K/V transpose included for head-major layout"}
   ensure
     precision_finish(chain)
   end
@@ -331,6 +409,7 @@ end
 private def precision_validate(actual, expected, f32_expected, output_type : Int32,
                                metrics, controls, zero, compare, rows : Int32,
                                label : String, dtype : String, mode : String,
+                               graph : String, kv_layout : String,
                                output, converted_output, nan_pipeline,
                                type : Int32)
   chain = ML::Metal::MPSCommandChain.new
@@ -353,6 +432,7 @@ private def precision_validate(actual, expected, f32_expected, output_type : Int
     plus = precision_metrics(metrics[2]); nan = precision_metrics(metrics[3])
     raise "Precision comparator controls failed" unless plus[:strict_tolerance_violations] > 0 && plus[:nonfinite] == 0 && nan[:nonfinite] > 0
     record = {schema: "wan_attention_precision_validation_v1", label: label, dtype: dtype, mode: mode,
+              graph: graph, kv_layout: kv_layout,
               compared_values: rows.to_i64*PRECISION_C, dtype_matched: matched, versus_f32: drift,
               tolerance: PRECISION_TOLERANCE, positive_control_rejected: true, nan_control_rejected: true,
               diagnostic_terminal_waits: chain.wait_count, metric_words_read: 20,
@@ -373,6 +453,8 @@ mode = "resident"
 rows = 128
 start = 0
 samples = 3
+graph = "opaque"
+kv_layout = "bthd"
 plan_only = false
 OptionParser.parse do |o|
   o.banner = "Usage: wan_s2v_attention_precision_profile --fixture=DIR --f32-fixture=DIR --dtype=f32|f16|bf16"
@@ -382,6 +464,8 @@ OptionParser.parse do |o|
   o.on("--alternate-f32-fixture=DIR", "Salt-4 F32 reference") { |v| alternate_f32_dir = v }
   o.on("--dtype=TYPE", "f32, f16 or bf16") { |v| dtype = v }
   o.on("--mode=MODE", "resident or f32-boundary") { |v| mode = v }
+  o.on("--graph=GRAPH", "opaque or connected; opaque preserves the existing SDPA path") { |v| graph = v }
+  o.on("--kv-layout=LAYOUT", "bthd or head-major; head-major requires the connected graph") { |v| kv_layout = v }
   o.on("--query-rows=N", "128, 257 or 8192") { |v| rows = v.to_i }
   o.on("--query-start=N", "Global query start") { |v| start = v.to_i }
   o.on("--samples=N", "0, 1 or 3 measured arms after warmup") { |v| samples = v.to_i }
@@ -389,6 +473,10 @@ OptionParser.parse do |o|
 end
 type = {"f32" => 0, "f16" => 1, "bf16" => 2}[dtype]? || raise ArgumentError.new("Unsupported dtype")
 raise ArgumentError.new("Unsupported mode") unless {"resident", "f32-boundary"}.includes?(mode)
+raise ArgumentError.new("Unsupported graph") unless {"opaque", "connected"}.includes?(graph)
+raise ArgumentError.new("Unsupported K/V layout") unless {"bthd", "head-major"}.includes?(kv_layout)
+raise ArgumentError.new("Opaque graph requires the existing BTHD K/V layout") if graph == "opaque" && kv_layout != "bthd"
+raise ArgumentError.new("Connected graph supports F32 or F16 only") if graph == "connected" && type == 2
 raise ArgumentError.new("Unsupported query rows") unless {128, 257, 8192}.includes?(rows)
 raise ArgumentError.new("Query range out of bounds") unless start >= 0 && start.to_i64 + rows <= PRECISION_K
 raise ArgumentError.new("Unsupported samples") unless {0, 1, 3}.includes?(samples)
@@ -400,15 +488,19 @@ nq = rows*PRECISION_C
 nkv = PRECISION_K*PRECISION_C
 nc = PRECISION_CHUNK*PRECISION_C
 typed_bytes = (2_i64*nq + 2_i64*nkv + 3_i64*nc)*width
+kv_preparation_bytes = kv_layout == "head-major" ? 2_i64*nkv*width : 0_i64
 reference_bytes = 2_i64*nq*4
 boundary_bytes = mode == "f32-boundary" ? (2_i64*nq + 2_i64*nkv)*4 : 0_i64
 # Four five-word metrics and three scalar comparator controls.
 diagnostic_bytes = 23_i64*4
-explicit_bytes = typed_bytes + reference_bytes + boundary_bytes + diagnostic_bytes
+explicit_bytes = typed_bytes + kv_preparation_bytes + reference_bytes + boundary_bytes + diagnostic_bytes
 raise ArgumentError.new("Precision buffer cap exceeded") if explicit_bytes > 4_i64*1024*1024*1024
-buffer_plan = {schema: "wan_attention_precision_plan_v1", dtype: dtype, mode: mode, query_rows: rows,
+buffer_plan = {schema: "wan_attention_precision_plan_v1", dtype: dtype, mode: mode,
+               graph: graph, kv_layout: kv_layout, query_rows: rows,
                query_start: start, key_rows: PRECISION_K, heads: PRECISION_H, head_dim: PRECISION_D, chunk_rows: PRECISION_CHUNK,
-               typed_attention_bytes: typed_bytes, reference_bytes: reference_bytes, boundary_bytes: boundary_bytes,
+               typed_attention_bytes: typed_bytes, kv_preparation_bytes: kv_preparation_bytes,
+               reference_bytes: reference_bytes, boundary_bytes: boundary_bytes,
+               kv_preparation_in_measured_arm: kv_layout == "head-major",
                diagnostic_bytes: diagnostic_bytes, explicit_buffer_bytes: explicit_bytes,
                opaque_mps_workspace_included: false, model_weights_loaded: false,
                scope: "selected-query full-key attention only; no complete block/model/video"}
@@ -446,24 +538,44 @@ begin
   controls[2].contents.as(Float32*)[0] = Float32::NAN
   sources = nil.as(Array(ML::MetalBuffer)?)
   converted_output = nil.as(ML::MetalBuffer?)
+  prepared_kv = nil.as(Array(ML::MetalBuffer)?)
   if mode == "f32-boundary"
     sources = [arena.alloc("source_q", nq), arena.alloc("source_k", nkv), arena.alloc("source_v", nkv)]
     converted_output = arena.alloc("converted_output", nq)
+  end
+  if kv_layout == "head-major"
+    prepared_kv = [arena.alloc("head_major_k", (nkv.to_i64*width//4).to_i32),
+                   arena.alloc("head_major_v", (nkv.to_i64*width//4).to_i32)]
   end
   raise "Explicit allocation accounting mismatch" unless arena.resident_bytes == explicit_bytes
   pipelines = {} of String => ML::Metal::ComputePipeline
   {"fill", "nan", "tail", "convert", "zero", "compare"}.each do |name|
     pipelines[name] = ML::Metal::ComputePipeline.new("precision_#{name}", PRECISION_SOURCE)
   end
-  precision_native_guards([cq, k, v, ca, cb], metrics[0], type)
-  plan = PrecisionPlan.new([cq, k, v, ca, cb], type)
+  transpose_pipeline = nil.as(ML::Metal::ComputePipeline?)
+  if kv_layout == "head-major"
+    transpose_pipeline = ML::Metal::ComputePipeline.new("precision_transpose_kv", PRECISION_SOURCE)
+  end
+  plan_k = prepared_kv ? prepared_kv.not_nil![0] : k
+  plan_v = prepared_kv ? prepared_kv.not_nil![1] : v
+  plan_buffers = [cq, plan_k, plan_v, ca, cb]
+  precision_native_guards(plan_buffers, metrics[0], type, graph, kv_layout)
+  plan = PrecisionPlan.new(plan_buffers, type, graph, kv_layout)
+  head_major_k = nil.as(ML::MetalBuffer?)
+  head_major_v = nil.as(ML::MetalBuffer?)
+  if buffers = prepared_kv
+    head_major_k = buffers[0]
+    head_major_v = buffers[1]
+  end
   precision_load(fixture[:expected_path], expected)
   precision_load(f32_fixture[:expected_path], f32_expected)
   STDOUT.puts({schema: "wan_attention_precision_setup_v1", plan: buffer_plan, fixture: fixture,
                f32_fixture: f32_fixture, alternate_fixture: alternate, alternate_f32_fixture: alternate_f32,
                device_name: ML::Metal::Device.instance.name, samples: samples, process_id: Process.pid,
-               accumulation_precision: "not specified by the MPSGraph SDPA API",
+               accumulation_precision: "not specified by MPSGraph tensor dtypes or matmul/SDPA APIs",
                input_preparation: "GPU avalanche fill; F16 exact on this fixture, BF16 round-to-nearest-even",
+               input_kv_layout: "BTHD source buffers; head-major mode transposes K and V on each measured chain",
+               graph: graph, kv_layout: kv_layout,
                diagnostic_boundary: "separate chain after measured arm; 20 metric words only",
                production_defaults_changed: false}.to_json)
   STDOUT.flush
@@ -489,14 +601,15 @@ begin
   (samples + 1).times do |i|
     phase = i == 0 ? "warmup" : "measured"
     arm = precision_arm(plan.not_nil!, q, k, v, output, cq, ca, sources, converted_output,
-      pipelines["convert"], pipelines["tail"], rows, type, mode, phase, i, pipelines["fill"], start)
+      pipelines["convert"], pipelines["tail"], rows, type, mode, phase, i,
+      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start)
     STDOUT.puts(arm.to_json); STDOUT.flush
     walls << arm[:completed_wall_seconds] if i > 0
     actual = converted_output || output
     output_type = converted_output ? 0 : type
     ok = precision_validate(actual, expected, f32_expected, output_type, metrics, controls,
       pipelines["zero"], pipelines["compare"], rows, phase + "_" + i.to_s, dtype, mode,
-      output, converted_output, pipelines["nan"], type)
+      graph, kv_layout, output, converted_output, pipelines["nan"], type)
     passed = false unless ok[:matched_passed]
     f32_passed = false unless ok[:f32_passed]
   end
@@ -504,16 +617,19 @@ begin
     precision_load(alt[:expected_path], expected)
     precision_load(alternate_f32.not_nil![:expected_path], f32_expected)
     arm = precision_arm(plan.not_nil!, q, k, v, output, cq, ca, sources, converted_output,
-      pipelines["convert"], pipelines["tail"], rows, type, mode, "changed_query", 0, pipelines["fill"], start)
+      pipelines["convert"], pipelines["tail"], rows, type, mode, "changed_query", 0,
+      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start)
     STDOUT.puts(arm.to_json)
     ok = precision_validate(converted_output || output, expected, f32_expected,
       converted_output ? 0 : type, metrics, controls, pipelines["zero"], pipelines["compare"],
-      rows, "changed_query", dtype, mode, output, converted_output, pipelines["nan"], type)
+      rows, "changed_query", dtype, mode, graph, kv_layout,
+      output, converted_output, pipelines["nan"], type)
     passed = false unless ok[:matched_passed]
     f32_passed = false unless ok[:f32_passed]
   end
   sorted = walls.sort
-  puts({schema: "wan_attention_precision_summary_v1", dtype: dtype, mode: mode, query_rows: rows,
+  puts({schema: "wan_attention_precision_summary_v1", dtype: dtype, mode: mode,
+        graph: graph, kv_layout: kv_layout, query_rows: rows,
         query_start: start, measured_wall_seconds: walls, median_wall_seconds: sorted.empty? ? nil : sorted[sorted.size//2],
         all_dtype_matched_checks_passed: passed, all_strict_f32_checks_passed: f32_passed,
         admitted_at_unchanged_precision: passed && f32_passed,
