@@ -1,5 +1,6 @@
 require "../metal/dispatch"
 require "./mps_command_phase_profile"
+require "./mps_api_profile"
 
 {% unless flag?(:cpu_only) %}
   lib MPSCommandChainFFI
@@ -12,6 +13,26 @@ require "./mps_command_phase_profile"
     fun root_timing = gs_mps_chain_root_timing(chain : Void*, sequence : Int32,
                                                completed : Int32*, has_error : Int32*, gpu_start : Float64*, gpu_end : Float64*) : Int32
     fun release = gs_mps_chain_release(chain : Void*) : Int32
+  end
+
+  lib MPSAPIProfileFFI
+    struct Stats
+      count : UInt64
+      wall_total_ns : UInt64
+      wall_max_ns : UInt64
+      thread_cpu_total_ns : UInt64
+      thread_cpu_max_ns : UInt64
+      nested_count : UInt64
+      nested_wall_total_ns : UInt64
+      nested_thread_cpu_total_ns : UInt64
+      exclusive_wall_total_ns : UInt64
+      exclusive_thread_cpu_total_ns : UInt64
+    end
+
+    fun enable = gs_mps_chain_api_profile_enable(chain : Void*) : Int32
+    fun set_phase = gs_mps_chain_api_profile_set_phase(chain : Void*, phase : Int32) : Int32
+    fun snapshot = gs_mps_chain_api_profile_snapshot(chain : Void*, phase : Int32,
+      operation : Int32, stats : Stats*) : Int32
   end
 {% end %}
 
@@ -26,6 +47,7 @@ module ML::Metal
     @status = 0
     @phase_root_profile_enabled = false
     @phase_root_profile_finished = false
+    @api_profile_enabled = false
     @phase_root_cursor = 0_i32
     @phase_ranges : Array(ML::Video::MPSCommandPhaseRange)? = nil
     getter gpu_elapsed_seconds : Float64 = 0.0
@@ -117,6 +139,29 @@ module ML::Metal
     # block returns, with no suffix or audio work in the final root. Root
     # timestamps cannot separate such same-root work from the named phases.
     def enable_phase_root_profile! : Nil
+      initialize_phase_root_profile!
+    end
+
+    # Enables per-chain MPS API wall/thread-CPU timing. Root ranges are optional
+    # because short diagnostic fixtures may not produce a completed root that
+    # isolates the attention interval from the following projection tail.
+    def enable_api_profile!(phase_roots : Bool = true) : Nil
+      check_live!
+      raise ArgumentError.new("MPS API profiling is already enabled") if @api_profile_enabled
+      raise ArgumentError.new("MPS phase-root profiling is already enabled") if @phase_root_profile_enabled
+      roots = root_count
+      raise ArgumentError.new("MPS API profiling requires one fresh command root") unless roots == 1
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        status = MPSAPIProfileFFI.enable(@native)
+        raise ArgumentError.new("MPS API profiling could not attach to the command chain (#{status})") unless status == 0
+      {% end %}
+      initialize_phase_root_profile! if phase_roots
+      @api_profile_enabled = true
+    end
+
+    private def initialize_phase_root_profile! : Nil
       check_live!
       raise ArgumentError.new("MPS phase-root profiling is already enabled") if @phase_root_profile_enabled
       roots = root_count
@@ -124,6 +169,25 @@ module ML::Metal
       @phase_root_profile_enabled = true
       @phase_root_cursor = 0
       @phase_ranges = [] of ML::Video::MPSCommandPhaseRange
+    end
+
+    def api_profile_enabled? : Bool
+      @api_profile_enabled
+    end
+
+    # Tags subsequent wrapped MPS API calls. Phase 0 is the unassigned/outside
+    # bucket and is set immediately before the existing terminal wait.
+    def set_api_profile_phase!(phase_id : Int32) : Nil
+      check_live!
+      require_api_profile!
+      raise ArgumentError.new("MPS API profile phase is finished") if @phase_root_profile_finished
+      raise ArgumentError.new("MPS API profile phase id is unknown") unless ML::Video::MPSAPIProfile::PHASE_NAMES.has_key?(phase_id)
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        status = MPSAPIProfileFFI.set_phase(@native, phase_id)
+        raise ArgumentError.new("MPS API profile phase update failed (#{status})") unless status == 0
+      {% end %}
     end
 
     def phase_root_profile_enabled? : Bool
@@ -137,9 +201,26 @@ module ML::Metal
       require_phase_root_profile!
       raise ArgumentError.new("MPS phase-root profile is already finished") if @phase_root_profile_finished
       ranges = @phase_ranges || raise ArgumentError.new("MPS phase-root profile ranges are unavailable")
-      raise ArgumentError.new("MPS phase-root profile has too many phase boundaries") if ranges.size >= 3
+      boundary_limit = @api_profile_enabled ? 4 : 3
+      raise ArgumentError.new("MPS phase-root profile has too many phase boundaries") if ranges.size >= boundary_limit
       end_root = root_count
       raise ArgumentError.new("MPS phase-root boundary contains no roots") if end_root <= @phase_root_cursor
+      ranges << ML::Video::MPSCommandPhaseRange.new(name, @phase_root_cursor, end_root)
+      @phase_root_cursor = end_root
+      end_root
+    end
+
+    # Split before the currently open root without ending or continuing it.
+    # The open root remains in the following phase, whose name must disclose
+    # any attention tail that shares that root with projection/residual work.
+    def record_precurrent_root_phase_boundary!(name : String) : Int32
+      check_live!
+      require_phase_root_profile!
+      require_api_profile!
+      raise ArgumentError.new("MPS phase-root profile is already finished") if @phase_root_profile_finished
+      ranges = @phase_ranges || raise ArgumentError.new("MPS phase-root profile ranges are unavailable")
+      raise ArgumentError.new("MPS phase-root profile has too many phase boundaries") if ranges.size >= 4
+      end_root = ML::Video::MPSAPIPhaseBoundary.precurrent_root_end_count(root_count, @phase_root_cursor)
       ranges << ML::Video::MPSCommandPhaseRange.new(name, @phase_root_cursor, end_root)
       @phase_root_cursor = end_root
       end_root
@@ -164,7 +245,8 @@ module ML::Metal
       require_phase_root_profile!
       raise ArgumentError.new("MPS phase-root profile is already finished") if @phase_root_profile_finished
       ranges = @phase_ranges || raise ArgumentError.new("MPS phase-root profile ranges are unavailable")
-      raise ArgumentError.new("MPS phase-root profile requires three continuation boundaries") unless ranges.size == 3
+      expected_boundaries = @api_profile_enabled ? 4 : 3
+      raise ArgumentError.new("MPS phase-root profile has an incomplete phase boundary set") unless ranges.size == expected_boundaries
       end_root = root_count
       raise ArgumentError.new("MPS final phase contains no roots") if end_root <= @phase_root_cursor
       ranges << ML::Video::MPSCommandPhaseRange.new("ffn", @phase_root_cursor, end_root)
@@ -202,6 +284,39 @@ module ML::Metal
       {% end %}
     end
 
+    # Native API stats become valid after the existing terminal wait has
+    # completed. The fixed phase/operation matrix makes missing snapshots a
+    # hard diagnostic failure rather than silently reporting partial totals.
+    def api_profile : ML::Video::MPSAPIProfile
+      require_api_profile!
+      unless @completed && @wait_count == 1
+        raise ArgumentError.new("MPS API profile is available only after the terminal wait")
+      end
+      raise ArgumentError.new("MPS command chain completion failed (#{@status})") unless @status == 0
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        samples = [] of ML::Video::MPSAPIProfileSample
+        ML::Video::MPSAPIProfile::PHASE_NAMES.keys.sort.each do |phase_id|
+          ML::Video::MPSAPIProfile::OPERATION_NAMES.keys.sort.each do |operation_id|
+            raw = MPSAPIProfileFFI::Stats.new
+            status = MPSAPIProfileFFI.snapshot(@native, phase_id, operation_id, pointerof(raw))
+            unless status == 0
+              raise ArgumentError.new("MPS API profile snapshot failed for phase #{phase_id}, operation #{operation_id} (#{status})")
+            end
+            stats = ML::Video::MPSAPITimingStats.new(
+              raw.count, raw.wall_total_ns, raw.wall_max_ns,
+              raw.thread_cpu_total_ns, raw.thread_cpu_max_ns,
+              raw.nested_count, raw.nested_wall_total_ns,
+              raw.nested_thread_cpu_total_ns, raw.exclusive_wall_total_ns,
+              raw.exclusive_thread_cpu_total_ns)
+            samples << ML::Video::MPSAPIProfileSample.new(phase_id, operation_id, stats)
+          end
+        end
+        ML::Video::MPSAPIProfile.build(samples)
+      {% end %}
+    end
+
     def completed? : Bool
       @completed
     end
@@ -235,6 +350,10 @@ module ML::Metal
 
     private def require_phase_root_profile! : Nil
       raise ArgumentError.new("MPS phase-root profiling is not enabled") unless @phase_root_profile_enabled
+    end
+
+    private def require_api_profile! : Nil
+      raise ArgumentError.new("MPS API profiling is not enabled") unless @api_profile_enabled
     end
   end
 end

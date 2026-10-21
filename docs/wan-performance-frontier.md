@@ -2839,3 +2839,171 @@ descriptive A/A pair-order field and is superseded by v2. The refresh checks
 recorded properties and local hashes; it neither replays GPU arrays nor
 authenticates the original execution. Removing these benchmark diagnostics
 leaves the existing production implementation and its default false flag.
+
+### Self-attention/API attribution contract (2026-10-21)
+
+At parent `0a5fb0bb`, the combined self-attention/output-projection/residual
+bucket accounts for roughly 76% of the observed full-block root intervals.
+Host encode elapsed grows while process CPU remains small. Competing causes
+are blocking or descheduling inside framework calls, actual host computation,
+and longer GPU service intervals. Existing measurements do not distinguish
+these or identify the physical cause of chronological drift.
+
+This CAUTION diagnostic adds opt-in metadata and API timers only. Split at an
+existing root boundary without adding `commitAndContinue`: the current root
+contains the final attention output copy and the later projection/residual,
+so that shared tail must be named explicitly instead of assigned to pure
+attention. Preserve legacy unsplit profiling where no such boundary exists.
+Measure existing MPSGraph encode, internal continuation and native projection
+calls with wall and owner-thread CPU time. Nested calls require inclusive and
+exclusive accounting; their inclusive totals must never be added together.
+Wall minus thread CPU includes waiting and thread descheduling, and does not
+prove a particular GPU wait, thermal limit or exclusive kernel busy time.
+
+DoD: source-pinned release builds with rebuilt affected native objects; CPU
+positive/nested/invalid-metadata controls; strict short retained-upstream
+checks at unchanged `2e-5+2e-5*abs(reference)`; a bounded full-shape same-work
+profile-on/off replay with complete bit-exact/finite output comparisons and
+finite/NaN corruption controls. Expected invariants: unchanged root count,
+one existing terminal wait, zero explicit inter-operator completion waits, zero arm activation
+readbacks and zero tracked encode-time MetalBuffer allocations. Keep the 15%
+cache-aware reserve, process cap, swap-growth stop and monotonic deadline.
+No full model, Studio or video generation is included.
+
+The strongest failure modes are a misleading phase label, nested timer double
+counting, profiler overhead masquerading as a speed change, and a thread-local
+collector leaking into another chain. Controls must cover these boundaries.
+This task establishes attribution, not a scheduling optimization or default
+promotion. Rollback disables the diagnostic flags; the existing tensor graph,
+precision and fusion default remain unchanged. Refresh evidence after scoped
+source/object/binary, fixture, geometry/dtype, device/runtime, queue/resource,
+collector/guard changes or artifact loss.
+
+### Self-attention/API attribution result (2026-10-21)
+
+The opt-in `--api-profile` replay preserves the tensor graph and existing
+continuations. Native collectors use fixed per-chain storage and owner-thread
+wall/CPU clocks; disabled collectors take no clock samples. Disabled hooks
+still initialize a scope and check host state; their cost has not been measured
+against the pre-instrumentation binary. Graph and linear bridges also link
+without the optional command-chain object through weak no-op
+hooks. A completed short fixture needs no artificial attention boundary;
+the full-shape replay splits before the already open projection root. That
+root still contains attention tail work, including its output copy, disclosed as
+`self_projection_residual_with_attention_tail`. No command is added to obtain
+this split. Missing, empty, duplicate or inconsistent snapshots fail closed.
+
+The v4 release build rebuilds all three affected native objects, verifies four
+reused objects and pins 409 source files. CPU controls pass 17 examples plus
+two native positive calls, the null-pointer control and the standalone optional
+bridge link. Short real-width retained-upstream checks pass 19 examples each
+at chunk rows 1/3, including 24 strict intermediate checkpoints at unchanged
+finite `2e-5+2e-5*abs(reference)`, exact K/V controls and exact API-profiled
+output. These reuse the retained first-batch upstream oracle; they are not a
+fresh upstream execution or a full-spatial upstream comparison.
+
+The bounded full block uses real block-0 BF16 weights with F32 operator math,
+36,608 tokens, width 5,120, 40 heads of width 128, prepared K/V, query chunk
+128, cross-attention groups 320 and fusion off. There are two warmup arms and
+three measured profile-off/profile-on pairs in AB/BA/AB order. The following
+are the three profile-on arms' GPU root-interval unions in seconds:
+
+| Region | Minimum | Median | Maximum |
+| --- | ---: | ---: | ---: |
+| Self preparation | 0.737 | 0.746 | 0.949 |
+| Self-attention | 8.987 | 9.286 | 12.579 |
+| Self projection/residual, including attention tail | 0.370 | 0.388 | 0.561 |
+| Cross-attention/projection/residual | 0.876 | 0.911 | 1.088 |
+| FFN | 1.339 | 1.470 | 2.031 |
+
+Self-attention accounts for a median 73.01% of each arm's complete root union;
+the projection/residual tail is 3.03%. These are asynchronous root intervals,
+not exclusive kernel busy times or directly additive latency components.
+The envelope exceeds the root union by only 0.397-0.429 ms; this does not
+measure stalls within roots. Profile-on block wall times are 12.341, 12.823
+and 17.274 s. Chronological slowdown persists, so this replay does not estimate
+profiling overhead or establish a treatment speedup.
+
+Host API timers localize the large elapsed spans:
+
+| API entry phase and operation | Calls per arm | Median wall total | Median owner-thread CPU total |
+| --- | ---: | ---: | ---: |
+| Self-attention: MPSGraph encode, inclusive | 286 | 17.018 ms | 11.974 ms |
+| Self-attention: nested `commitAndContinue` | 47 | 0.462 ms | 0.312 ms |
+| Cross phase: `commitAndContinue` | 572 | 11,063.198 ms | 5.317 ms |
+
+Graph encode wall ranges from 7.321 to 37.070 ms. Its inclusive row already
+contains the nested continuation row; exclusive wall median is 16.556 ms.
+The cross-labelled continuation wall ranges from 10.709 to 14.804 s, with
+5.272-16.491 ms owner-thread CPU. The longest single such call per arm is
+0.732-0.927 s. Thus the large host encode elapsed is inside the existing
+superclass continuation call, rather than CPU Graph construction. The phase
+label identifies when the host enters the call: prior self-attention can still be
+queued, so it cannot attribute the elapsed wait exclusively to cross-attention.
+Queue backpressure is a surviving hypothesis; locks and thread descheduling
+are not separated by these clocks. Wall minus CPU is not certified GPU wait.
+Measured profile-on arms record no GC collection, page-in or disk read.
+
+Warmup plus three pairs scan all 187,432,960 output values each: zero bit
+differences, tolerance violations or nonfinite values. The finite/NaN negative
+control is rejected with 2 bit differences, 2 tolerance violations and 1
+nonfinite value. Every arm retains 624 command roots, one existing terminal
+wait, zero tracked encode-time MetalBuffer allocations, no explicit
+inter-operator completion wait and no timed activation readback. Existing
+framework API calls can still block as measured above. Output comparison
+happens after the existing wait, outside arm timing.
+
+The 12 GiB process cap, 15% cache-aware reserve, 64 MiB swap-growth stop and
+600 s monotonic deadline pass. Sampled peak footprint is 10.685 GiB; minimum
+cache-aware headroom is 13.900 GiB (21.72% physical), pressure-free minimum
+62%, swap growth zero and final owned live processes zero. This uses printed
+free plus file-backed pages; speculative pages are not counted twice.
+
+The next useful lever is the actual long-key attention GPU work. Changing
+CPU Graph encode alone cannot explain this block's seconds of latency.
+A follow-up continuation discriminator should associate slow calls with the
+previously submitted root indices and owner-thread stacks, without adding
+waits. It must not promise to recover all continuation wall time: GPU work
+already overlaps host enqueue, and many continuations may only expose the
+cost of draining earlier work. Fusion defaults remain unchanged and off.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/api-wait-split-20261021/`.
+Qualified records are `source-pins-v4.json`, both v4 build receipts,
+`build-v4.*`, `cpu-controls-v2.*`, `upstream-chunk1-v1.*`,
+`upstream-chunk3-v1.*` and `full-block-api-v1.*`. Earlier build v1/v2 and
+CPU control v1 failures are excluded; build v3 is superseded by coherent v4.
+All runtime GPU probes completed successfully. Invocation records retain
+exact guarded commands and SSD temporary/cache paths. No full model, Studio
+or video generation was run.
+
+Correlated MiniQuad source/math/raw-log review is ROBUST for these bounded
+numeric, timing/accounting and sampled resource claims, VULNERABLE for a
+physical wait cause or speedup claim. A CPU adversary found that the first
+external verifier accepted three impossible nested-metadata forms that the
+Crystal validator already rejected. The hardened verifier rejects zero-count
+nonzero nested times, commit child counts exceeding call counts and nested
+times exceeding their commit totals. A positive profile and all three
+malformed controls pass their expected outcomes; the root also repeats the
+three attacks against a copied actual raw profile. Runtime logs and code are
+unchanged. Earlier verifier reports are superseded by the v2 final report
+below for this structural validation boundary; this is not independent
+runtime replication or attestation.
+
+CPU-only evidence refresh with a new exclusive output path:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/api-wait-split-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$evidence_root/verify-api-wait-v1.py" --verify --output "$evidence_root/verification-refresh.json"
+```
+
+Expected signal: `verified=true`, `source_files=409`, `timed_arms=8` and
+`whole_output_comparisons=4`. The executed `verification-final-v2.json` exits
+0; SHA-256 `765d7f5de1f6142381f6017ae738ca95de5e8c3a6ca0690285b907b3f33a70d0`.
+Verifier SHA-256 is
+`0e33b9c6c71b0baa2131105790ddfba25a930bf4d795afbf9074c2d63cdbbae2`.
+It requires the pinned measurement parent to remain an ancestor and every
+scoped source/object/binary/fixture byte hash to match; the current verification
+HEAD is reported separately. This checks retained properties, not fresh GPU
+outputs or authenticated execution. Refresh runtime evidence after the decay
+triggers in the contract above.

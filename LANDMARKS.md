@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-WAN-SELF-API-SPLIT-2026-10-21] Attention dominates; continuation wall is mostly off CPU
+
+- At measurement parent `0a5fb0bb`, add default-off per-chain MPS API
+  wall/owner-thread CPU timers and split root attribution without adding a
+  continuation. Preserve the shared final attention-copy tail in the explicit
+  projection/residual label; retain legacy unsplit diagnostics.
+- Source-pinned v4 release builds pass native positive/null and standalone
+  optional-bridge link controls, 17 CPU examples and 19 retained-upstream
+  examples each at chunk rows 1/3 (24 strict checkpoints, unchanged finite
+  tolerance). This is a retained first-batch oracle, not fresh full-shape
+  upstream execution.
+- Three full-shape profile-on arms give self-attention root-union median
+  9.286 s (73.01%) and projection/residual/tail 0.388 s (3.03%). Graph encode
+  takes 7.321-37.070 ms. The 572 cross-labelled existing continuations take
+  10.709-14.804 s wall but 5.272-16.491 ms owner-thread CPU. Their host entry
+  phase cannot attribute earlier queued work exclusively to cross-attention;
+  backpressure, locks and descheduling are not physically distinguished.
+- Warmup plus three profile-off/on pairs scan 187,432,960 output values each
+  bit-exactly and finitely; corruption rejects 2/2/1. Each arm retains 624
+  roots, one terminal wait, zero tracked encode MetalBuffer allocations and
+  no explicit inter-operator completion wait/timed activation readback.
+  Existing continuation APIs can still block. Sampled peak 10.685 GiB,
+  minimum cache-aware headroom 21.72%, zero swap growth, no live owned child;
+  12 GiB cap/15% floor pass. No model, Studio or video generation is run.
+- Correlated source/math/raw-log MiniQuad review is ROBUST within this bounded
+  scope, VULNERABLE for physical wait cause or speedup. The hardened external
+  verifier rejects all three impossible nested-metadata forms already
+  rejected by Crystal; positive and 3/3 malformed controls pass. Final v2
+  report supersedes earlier verifier reports without changing runtime logs.
+- Chronological slowdown persists; this is attribution, not a speedup or
+  profiling-overhead estimate. Next signal: target actual long-key attention
+  GPU work; associate slow continuations with submitted root indices and
+  thread stacks before treating their wall time as recoverable overhead.
+  Fusion defaults remain off. Evidence, commands, hashes, interpretation and
+  CPU-only refresh: `docs/wan-performance-frontier.md`, self-attention/API
+  attribution result. Refresh on scoped code/build, fixture, geometry/dtype,
+  device/runtime, queue/resource, collector/guard changes or artifact loss.
+
 ### [LM-WAN-KV-PREP-DRIFT-2026-10-21] Same-work drift; isolated fusion is exact and faster
 
 - Benchmark-only diagnostics at parent `0146438e` separate process CPU from
@@ -37,6 +75,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   unknown. Two earlier telemetry-aborted attempts are excluded. Next signal:
   separate attention from projection/residual and time existing native enqueue
   calls without new waits, to discriminate API blocking from host CPU work.
+  That discriminator is now recorded in LM-WAN-SELF-API-SPLIT-2026-10-21.
 - Correlated source/math/raw-log MiniQuad review is ROBUST for the bounded
   separation, VULNERABLE for physical diagnosis or full-block speedup.
   Keep fusion default off. Evidence/commands/pins/exclusions and refresh:

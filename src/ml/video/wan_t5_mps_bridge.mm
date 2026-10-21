@@ -7,6 +7,43 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #include <stdint.h>
 #include <limits>
+#define GS_MPS_API_PROFILE_WEAK_FALLBACK_IMPLEMENTATION
+#include "mps_api_profile.h"
+#undef GS_MPS_API_PROFILE_WEAK_FALLBACK_IMPLEMENTATION
+
+// This bridge is also linked by targets that omit the optional command-chain
+// object. A weak, non-inlined fallback keeps that link self-contained; when
+// the command-chain object is present its strong implementation wins.
+extern "C" __attribute__((weak, noinline)) void
+gs_mps_api_profile_scope_begin(int32_t operation, void *command_context,
+                               gs_mps_api_profile_scope *scope) {
+  (void)operation;
+  (void)command_context;
+  if (scope)
+    *scope = {};
+}
+
+extern "C" __attribute__((weak, noinline)) void
+gs_mps_api_profile_scope_end(gs_mps_api_profile_scope *scope) {
+  (void)scope;
+}
+
+class WanMpsApiProfileScopeGuard {
+public:
+  WanMpsApiProfileScopeGuard(int32_t operation, void *commandContext) {
+    gs_mps_api_profile_scope_begin(operation, commandContext, &scope_);
+  }
+  ~WanMpsApiProfileScopeGuard() {
+    if (scope_.active)
+      gs_mps_api_profile_scope_end(&scope_);
+  }
+  WanMpsApiProfileScopeGuard(const WanMpsApiProfileScopeGuard &) = delete;
+  WanMpsApiProfileScopeGuard &operator=(const WanMpsApiProfileScopeGuard &) =
+      delete;
+
+private:
+  gs_mps_api_profile_scope scope_{};
+};
 
 @interface CogniWanT5FC2Plan : NSObject
 @property(nonatomic, strong) id<MTLDevice> device;
@@ -101,6 +138,9 @@ extern "C" int32_t gs_wan_t5_mps_fc2_encode(
           command.commandQueue.device != plan.device ||
           encoder.device != plan.device) return -2;
       @try {
+        WanMpsApiProfileScopeGuard profileScope(
+            GS_MPS_API_PROFILE_OP_T5_LINEAR_ENCODE,
+            (__bridge void *)command);
         [plan.kernel encodeToCommandEncoder:encoder commandBuffer:command
             sourceArrays:plan.sources destinationArray:plan.output];
       } @catch (NSException *exception) {

@@ -98,6 +98,7 @@ private record ArmResult, groups : Int32, query_chunk : Int32, order : String, w
   gpu_elapsed_seconds : Float64, segments : Int32, terminal_waits : Int32,
   encode_metal_buffer_allocations : Int64,
   phase_root_profile : ML::Video::MPSCommandPhaseProfile?,
+  api_profile : ML::Video::MPSAPIProfile?,
   observation_before : WanHostObservation::Snapshot,
   observation_after : WanHostObservation::Snapshot
 
@@ -111,6 +112,40 @@ private def phase_root_profile_json(profile : ML::Video::MPSCommandPhaseProfile)
     phase_union_seconds:       profile.phase_union_seconds,
     attribution_scope:         "one WanS2VBlock.encode with no same-root caller prelude, suffix, or audio work",
     interval_interpretation:   "roots and phases may overlap in GPU time; phase unions are not additive",
+  }
+end
+
+private def mps_api_profile_json(profile : ML::Video::MPSAPIProfile)
+  {
+    schema: "wan_mps_api_profile_v1",
+    enabled: true,
+    available_after_existing_terminal_wait: true,
+    timing_unit: "nanoseconds",
+    wall_clock: "CLOCK_MONOTONIC",
+    thread_cpu_clock: "CLOCK_THREAD_CPUTIME_ID",
+    phase_attribution: "MPS API wrapper entry phase; phase 0 is outside block phases",
+    timing_semantics: "Graph totals are inclusive; nested fields are nested commitAndContinue spans; graph exclusive subtracts nested spans; commit and linear exclusive equal their own totals",
+    phases: profile.phases.map do |phase|
+      {
+        phase_id: phase.phase_id,
+        name: phase.name,
+        operations: phase.operations.map do |name, stats|
+          {
+            name: name,
+            count: stats.count,
+            wall_total_ns: stats.wall_total_ns,
+            wall_max_ns: stats.wall_max_ns,
+            thread_cpu_total_ns: stats.thread_cpu_total_ns,
+            thread_cpu_max_ns: stats.thread_cpu_max_ns,
+            nested_count: stats.nested_count,
+            nested_wall_total_ns: stats.nested_wall_total_ns,
+            nested_thread_cpu_total_ns: stats.nested_thread_cpu_total_ns,
+            exclusive_wall_total_ns: stats.exclusive_wall_total_ns,
+            exclusive_thread_cpu_total_ns: stats.exclusive_thread_cpu_total_ns,
+          }
+        end,
+      }
+    end,
   }
 end
 
@@ -143,13 +178,18 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        attention : ML::Video::WanAttentionMPSChunkWorkspace,
                        precompute_rope : Bool = false,
                        phase_roots : Bool = false,
+                       api_profile : Bool = false,
                        reuse_scratch : Bool = false,
                        fuse_kv_preparation : Bool = false) : ArmResult
   observation_before = WanHostObservation::Snapshot.capture
   monotonic_begin = WanHostObservation.monotonic_seconds
   wall_started = Time.instant
   chain = ML::Metal::MPSCommandChain.new
-  chain.enable_phase_root_profile! if phase_roots
+  if api_profile
+    chain.enable_api_profile!(phase_roots: true)
+  elsif phase_roots
+    chain.enable_phase_root_profile!
+  end
   allocations_before = ML::MetalBuffer.video_spec_allocations
   encode_started = Time.instant
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
@@ -167,7 +207,21 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   wall_seconds = (wall_ended - wall_started).total_seconds
   monotonic_end = WanHostObservation.monotonic_seconds
   observation_after = WanHostObservation::Snapshot.capture
-  phase_profile = phase_roots ? chain.phase_root_profile : nil
+  phase_profile = chain.phase_root_profile_enabled? ? chain.phase_root_profile : nil
+  api_profile_result = if api_profile
+                         profile = chain.api_profile
+                         expected_graph_calls =
+                           ((cfg.seq.to_i64 + attention.chunk_rows.to_i64 - 1) // attention.chunk_rows.to_i64).to_u64
+                         expected_commit_calls = chain.segment_count.to_i64 - 1
+                         raise "Full-block API profile has no continuation roots" unless expected_commit_calls > 0
+                         # Full-block Wan uses 3 self-QKV, self-O, 3 cross-QKV,
+                         # cross-O, and 2 FFN MPS linear encodes.
+                         profile.validate_full_block_counts!(expected_graph_calls, 10_u64,
+                           expected_commit_calls.to_u64)
+                         profile
+                       else
+                         nil
+                       end
   allocations = ML::MetalBuffer.video_spec_allocations - allocations_before
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
@@ -175,7 +229,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
     (encode_started - wall_started).total_seconds, wait_seconds,
     monotonic_begin, monotonic_end, chain.gpu_elapsed_seconds, chain.segment_count,
-    chain.wait_count, allocations, phase_profile, observation_before, observation_after)
+    chain.wait_count, allocations, phase_profile, api_profile_result,
+    observation_before, observation_after)
   chain.release
   result
 rescue ex
@@ -237,6 +292,7 @@ candidate_chunk = 256
 warmup_order = "AB"
 phase_roots_requested = false
 prepared_kv_requested = false
+api_profile_requested = false
 reuse_block_scratch = false
 plan_only = false
 OptionParser.parse do |parser|
@@ -248,6 +304,7 @@ OptionParser.parse do |parser|
   parser.on("--warmup-order=AB|BA", "K/V control/fusion warmup order; reverse across fresh processes to expose order drift") { |value| warmup_order = value }
   parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
   parser.on("--prepared-kv", "Profile replay with both arms using shared head-major K/V refreshed inside each block encode; requires profile-replay") { prepared_kv_requested = true }
+  parser.on("--api-profile", "Profile candidate MPS API wall/thread CPU spans; requires profile-replay --phase-roots --prepared-kv") { api_profile_requested = true }
   parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
   parser.on("--plan-only", "Print the full-shape memory plan and exit before GPU setup or dispatch") { plan_only = true }
   parser.on("-h", "--help", "Show this help") do
@@ -275,6 +332,8 @@ prepared_kv_for_candidate = compare_kv_layout || prepared_kv_for_both_arms
 raise ArgumentError.new("--comparison=profile-replay requires --phase-roots") if compare_profile_replay && !phase_roots_requested
 raise ArgumentError.new("--phase-roots is supported only with --comparison=profile-replay") if phase_roots_requested && !compare_profile_replay
 raise ArgumentError.new("--prepared-kv is supported only with --comparison=profile-replay") if prepared_kv_requested && !compare_profile_replay
+raise ArgumentError.new("--api-profile is supported only with --comparison=profile-replay") if api_profile_requested && !compare_profile_replay
+raise ArgumentError.new("--api-profile requires --phase-roots and --prepared-kv") if api_profile_requested && !(phase_roots_requested && prepared_kv_requested)
 raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
 raise ArgumentError.new("--comparison=kv-prep-control requires --pairs=3 or 4") if compare_kv_prep_control && !{3, 4}.includes?(pairs)
@@ -486,7 +545,8 @@ begin
       context, output, weight_arena.not_nil!, scratch.not_nil!, cfg,
       projection_workspace.not_nil!, attention,
       precompute_rope: compare_rope && !baseline,
-      phase_roots: compare_profile_replay && !baseline && phase_roots_requested,
+      phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
+      api_profile: compare_profile_replay && !baseline && api_profile_requested,
       reuse_scratch: reuse_block_scratch,
       fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
   end
@@ -523,6 +583,7 @@ begin
         baseline_explicit_qk_softmax_pv: false,
         candidate_explicit_qk_softmax_pv: compare_attention_graph,
         phase_root_diagnostics_enabled: compare_profile_replay && phase_roots_requested,
+        api_profile_diagnostics_enabled: api_profile_requested,
         baseline_self_attention_backend: baseline_self_attention_backend,
         candidate_self_attention_backend: candidate_self_attention_backend,
         cross_attention_backend: "native_tiled",
@@ -573,6 +634,8 @@ begin
           rope_coefficient_build_inside_block_encode: compare_rope && arm.order == "B",
           phase_root_diagnostics_enabled: arm.phase_root_profile != nil,
           phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
+          api_profile_diagnostics_enabled: arm.api_profile != nil,
+          mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
           profile_replay_is_not_a_speed_comparison: compare_profile_replay,
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
@@ -591,7 +654,8 @@ begin
         x, modulation, positions, context, output, weight_arena.not_nil!,
         scratch.not_nil!, cfg, projection_workspace.not_nil!, attention,
         precompute_rope: compare_rope && !baseline,
-        phase_roots: compare_profile_replay && !baseline && phase_roots_requested,
+        phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
+        api_profile: compare_profile_replay && !baseline && api_profile_requested,
         reuse_scratch: reuse_block_scratch,
         fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
       if baseline
@@ -642,6 +706,8 @@ begin
             rope_coefficient_build_inside_block_encode: compare_rope && !baseline,
             phase_root_diagnostics_enabled: arm.phase_root_profile != nil,
             phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
+            api_profile_diagnostics_enabled: arm.api_profile != nil,
+            mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
             profile_replay_is_not_a_speed_comparison: compare_profile_replay,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush

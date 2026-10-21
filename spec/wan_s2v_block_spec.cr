@@ -756,8 +756,15 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     tiled_attention = ENV["WAN_S2V_TILED_ATTENTION"]? == "1"
     segmented_commands = ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
     phase_root_profile = ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
+    api_profile = ENV["WAN_S2V_API_PROFILE"]? == "1"
     if phase_root_profile && !segmented_commands
       raise ArgumentError.new("Wan phase-root profiling requires segmented commands")
+    end
+    if api_profile
+      raise ArgumentError.new("Wan MPS API profiling requires segmented commands") unless segmented_commands
+      raise ArgumentError.new("Wan MPS API profiling requires MPS self-attention") unless ENV["WAN_S2V_MPS_SELF_ATTENTION"]? == "1"
+      raise ArgumentError.new("Wan MPS API profiling requires MPS projections") unless ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
+      raise ArgumentError.new("Use either legacy root profiling or MPS API profiling") if phase_root_profile
     end
     cross_attention_groups_per_segment =
       ENV["WAN_S2V_CROSS_ATTENTION_GROUPS_PER_SEGMENT"]?.try(&.to_i32) || 320
@@ -768,7 +775,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     ML::Video::WanS2VBlock.prepare_scratch!(scratch, block_cfg, precompute_rope: precompute_rope)
     ML::Video::WanS2VAudioInjector.prepare_scratch!(scratch, audio_cfg)
     attention_workspace = wan_prepare_mps_self_attention(block_cfg, scratch, attention_scratch)
-    if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1"
+    if ENV["WAN_S2V_MPS_PROJECTIONS"]? == "1" || api_profile
       mps_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(block_cfg, audio_cfg,
         scratch, scratch, inputs["context"], inputs["local_audio"])
       mps_workspace.not_nil!.plan_count.should eq(15)
@@ -780,6 +787,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     chained_block_output = output.alloc("chained_block_output", block_cfg.values)
     phase_root_block_output = nil.as(ML::MetalBuffer?)
     phase_root_block_output = output.alloc("phase_root_block_output", block_cfg.values) if phase_root_profile
+    api_profile_block_output = nil.as(ML::MetalBuffer?)
+    api_profile_block_output = output.alloc("api_profile_block_output", block_cfg.values) if api_profile
     {inputs, scratch, traces, output}.each do |arena|
       arena.buffers.each_key do |name|
         arena.dtype(name).should eq(ML::Video::WeightDType::F32),
@@ -979,6 +988,41 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       phase_root_chain = nil
     end
 
+    if api_profile
+      active = ML::Metal::MPSCommandChain.new
+      phase_root_chain = active
+      # Short retained-upstream fixtures exercise API timing without assuming
+      # that any MPS root isolates an attention-only interval.
+      active.enable_api_profile!(phase_roots: false)
+      profile_output = api_profile_block_output || raise "MPS API profile output was not allocated"
+      profile_allocations = ML::MetalBuffer.video_spec_allocations
+      ML::Video::WanS2VBlock.encode(
+        active.encoder, inputs["x"], inputs["modulation"], inputs["positions"],
+        inputs["context"], profile_output, weights, scratch, block_cfg,
+        tiled_attention: tiled_attention, execution_chain: active,
+        mps_workspace: mps_workspace,
+        attention_workspace: attention_workspace,
+        cross_attention_groups_per_segment: cross_attention_groups_per_segment,
+        precompute_rope: precompute_rope,
+      )
+      ML::MetalBuffer.video_spec_allocations.should eq(profile_allocations),
+        "API-profiled block encode must not allocate MetalBuffers"
+      active.wait_count.should eq(0), "API profile must not add an encode-time wait"
+      active.commit_and_wait
+      active.wait_count.should eq(1), "API profile must use the existing single terminal wait"
+      active.segment_count.should be > 1, "API profile must span segmented commands"
+      profile = active.api_profile
+      profile.phases.size.should eq(ML::Video::MPSAPIProfile::PHASE_COUNT)
+      profile.phases.each do |phase|
+        phase.operations.size.should eq(ML::Video::MPSAPIProfile::OPERATION_COUNT)
+      end
+      profile.phases.any? do |phase|
+        phase.operations.values.any? { |stats| stats.count > 0 }
+      end.should be_true, "profile must record at least one wrapped MPS API operation"
+      active.release
+      phase_root_chain = nil
+    end
+
     if ENV["WAN_S2V_SCRATCH_REUSE"]? == "1"
       wan_check_reused_block_scratch(fixture, block_cfg, audio_cfg, inputs, weights, scratch,
         block_trace, chained_block_output, tiled_attention, precompute_rope,
@@ -1002,6 +1046,16 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
         "isolated profiled block output must be bit-identical to the original block_output buffer"
       passed, detail = wan_comparison(
         "phase_root_block_output", snapshots["phase_root_block_output"], fixture["expected"]["output"])
+      passed.should be_true, detail
+    end
+    if profile_output = api_profile_block_output
+      snapshots["api_profile_block_output"] = profile_output.read((profile_output.size // 4).to_i).map(&.to_f32)
+      original_output = block_output.read((block_output.size // 4).to_i).map(&.to_f32)
+      snapshots["api_profile_block_output"].map(&.unsafe_as(UInt32)).should eq(
+        original_output.map(&.unsafe_as(UInt32))),
+        "isolated API-profiled output must be bit-identical to the original block output"
+      passed, detail = wan_comparison(
+        "api_profile_block_output", snapshots["api_profile_block_output"], fixture["expected"]["output"])
       passed.should be_true, detail
     end
     if snapshot_path = ENV["WAN_S2V_SNAPSHOT_DUMP"]?

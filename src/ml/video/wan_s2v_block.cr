@@ -379,6 +379,20 @@ module ML::Video
           weights, scratch, cfg, trace, weight_prefix, precompute_rope,
           execution_chain, mps_workspace, attention_workspace)
       end
+      if active = execution_chain
+        if active.api_profile_enabled?
+          unless attention_workspace
+            raise ArgumentError.new("MPS API profiling requires MPS self-attention")
+          end
+          unless linear_workspace = mps_workspace
+            raise ArgumentError.new("MPS API profiling requires an MPS linear workspace")
+          end
+          unless linear_workspace.has_plan?("block.self_o")
+            raise ArgumentError.new("MPS API profiling requires the block self-output MPS linear plan")
+          end
+          active.set_api_profile_phase!(1)
+        end
+      end
 
       norm1 = scratch["wan_b_norm1"]
       mod1 = norm1
@@ -463,13 +477,21 @@ module ML::Video
           cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, cfg.batches, tiled_attention)
       end
       trace_copy(e, trace, "self_attention", self_attn, n)
+      if active = execution_chain
+        if active.api_profile_enabled?
+          active.record_precurrent_root_phase_boundary!("self_attention") if active.phase_root_profile_enabled?
+          active.set_api_profile_phase!(3)
+        end
+      end
       linear(e, self_attn, weights, "self_o_weight", "self_o_bias", self_proj, rows, dim, dim,
         weight_prefix, mps_workspace, "block.self_o")
       trace_copy(e, trace, "self_projection", self_proj, n)
       encode_gated_residual(e, x, self_proj, modulation, weights[key(weight_prefix, "block_modulation")], self_res,
         cfg, 2, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_residual", self_res, n)
-      e = continue_phase(e, execution_chain, "self_attention_projection_residual")
+      self_phase = execution_chain.try(&.api_profile_enabled?) ?
+        "self_projection_residual_with_attention_tail" : "self_attention_projection_residual"
+      e = continue_phase(e, execution_chain, self_phase)
 
       # text/context cross attention (norm3 is affine; no RoPE)
       MetalOps.norm(e, self_res, weights[key(weight_prefix, "norm3_weight")], weights[key(weight_prefix, "norm3_bias")], cross_norm,
@@ -527,6 +549,7 @@ module ML::Video
         cfg, 5, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "output", y, n)
       if active = execution_chain
+        active.set_api_profile_phase!(0) if active.api_profile_enabled?
         active.finish_phase_root_profile! if active.phase_root_profile_enabled?
       end
     end
@@ -585,6 +608,15 @@ module ML::Video
       active.continue_async!
       active.resume!
       active.verify_phase_root_continuation!(phase_end_count.not_nil!) if phase_end_count
+      if active.api_profile_enabled?
+        phase_id = case name
+                   when "self_prepare" then 2
+                   when "self_projection_residual_with_attention_tail" then 4
+                   when "cross_attention_projection_residual" then 5
+                   else nil
+                   end
+        active.set_api_profile_phase!(phase_id) if phase_id
+      end
       active.encoder
     end
 
