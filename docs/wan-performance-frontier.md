@@ -2149,3 +2149,86 @@ rejection of an accuracy-admissible speedup. It independently recomputes the
 18/2/47 process/guard/validation counts and verifies all 92 receipt file hashes.
 It does not qualify causality for the small F16 timing differences, production
 performance, quality or the internal CUDA schedule on Metal.
+
+## Long-key GPU counter profile, 2026-10-21
+
+A bounded PID-attached Instruments capture now exposes two SDPA timeline
+intervals in the unchanged opaque F32 MPSGraph path on M2 Max. The accepted
+case is one Q128 chunk, full K=36,608, H=40, D=128. Shader rows are joined by
+PID and unique temporal containment to one compute encoder, not by a direct
+shader-to-command key; they may be portions of one dispatch. The exported
+command-buffer envelope (61.154542 ms) matches the native root duration within
+43 ns. Absolute native and trace-relative clock epochs are not subtracted.
+No GPU operator, command root, synchronization, tensor readback or production
+default changed. No complete block, model, Studio or generation ran.
+
+Counters are GPU-wide. Excluding overlap with exported foreign-process Active
+intervals leaves 7.912 ms of the first SDPA interval; actual counter intervals
+cover only 3.600 ms (180 samples, 45.50% of selected time). Over that sampled
+coverage, Buffer Read Limiter averages 97.6404%, Buffer Load Utilization
+37.6004%, ALU Limiter 38.2028%, and Compute Occupancy 12.4548%. Means are weighted
+by sample overlap, without extrapolation or zero filling. The second SDPA
+interval has much lower read limiter/utilization, 33.1436%/11.9973%, over
+2.683 ms of coverage (55.95%). This is contrary evidence to generalizing the
+first signature across both observed intervals.
+
+The admitted observation is sampled buffer-read subsystem pressure; K/V-specific
+causality, physical stall fractions/load latency, DRAM saturation, repeatability
+and load/compute-overlap benefit remain open. The exact exported utilization
+label is Buffer Load Utilization; the installed Instruments mapping aliases it
+to the UI's Buffer Read Utilization. Zero observed bandwidth/LLC/MMU counters
+cannot establish absent traffic. The 29.252 ms target gap before SDPA is also
+unattributed; foreign Active work overlaps 5.160 ms of target uncovered ranges.
+Neither the remaining gap nor the counter-filtered slices establish GPU
+idleness or K/V residency waits.
+
+The existing binary/six selected source hashes and cached upstream fixture pins
+match. All 20 arm/validation pairs across seven native runs pass the unchanged
+finite `2e-5 + 2e-5*abs(reference)` gate and +1/NaN controls: zero violations or
+nonfinites, maximum absolute error 1.1473894e-6. Every arm retains one existing
+terminal wait and zero tracked MetalBuffer allocations; diagnostics retain their
+existing separate wait and metric-only readback. Inputs are fixed-salt,
+GPU-generated avalanche data; there is no new Torch runtime. This qualifies
+synthetic primitive parity, not real model activations or video quality.
+
+Native and collector groups have separate 3,072 MiB caps, 120/90 second
+deadlines, 15% cache-aware headroom and pressure floors, and 64 MiB swap-growth
+stops. Admission charges both budgets together. Minimum sampled headroom is
+27.3668%/27.2594%, pressure free at least 75%, swap growth zero; all owned groups
+end with zero live processes. File cache is only a reclaimability estimate,
+and sampled guards cannot certify instantaneous peaks.
+
+Three earlier collector attempts timed out; their native parity checks passed,
+but failed/partial counter exports are excluded. The final single-chunk capture
+exports seven complete tables and 276,320 counter rows. Only its complete
+counter-interval table supplies counter values. The accepted raw trace was
+removed after export/owned-writer termination; older helpers also removed
+failed raw traces. Two malformed exports remain quarantined as `.partial`.
+Untraced Q8192 before/after medians drift from 3.0511 to 2.4066 s; Q128 has only
+a post-capture control. No trace-overhead, throughput or speedup claim follows.
+
+Evidence base: `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/gpu-stalls-20261021/`.
+`GPU_STALL_PROFILE.md` records the scope and next falsifier;
+`gpu-stalls-summary-v1.json`, `stalls-typed-analysis-v3.json` and
+`independent-native-guard-check-v1.json` retain typed results. Exact guarded
+native/collector invocations, templates, sanitized exports and the Apple
+source/SDK audit are retained. `gpu-stalls-raw-receipt-v1.json` indexes hashes;
+it is a curated index, not independent attestation. Receipt SHA256:
+`36f34a4ed6a2b71546de0ffdcab8749c95783bf2a76840e1c7bdb971c4a65ea4`.
+
+DoD commands, with `E` set to the evidence base above:
+`python3 -B "$E/summarize-stalls-v1.py"`, then
+`python3 -B "$E/summarize-stalls-v1.py" --verify`.
+Expected: the original strict native/control runs pass; CPU recomputation
+finds 20 pairs, checks scoped source/binary/fixture pins and sampled guards,
+validates receipt hashes and seven complete XML exports. Correlated adversary
+review is ROBUST for these bounded observations and VULNERABLE for stronger
+K/V causality or throughput claims.
+
+Next falsifier: a bounded native K/V load/compute-overlap A/B, preserving strict
+F32 parity and existing waits, must win untraced complete-attention time with
+staging charged. Prior staging regressions remain contrary evidence; counter
+improvement alone is insufficient. No production route is promoted here.
+Refresh on source/binary, input/fixture, dtype/geometry, device/runtime,
+queue/resource, collector/guard changes or artifact loss. Rollback is this
+documentary commit; the runtime path is unchanged.

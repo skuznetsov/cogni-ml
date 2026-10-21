@@ -31488,3 +31488,32 @@ Refresh after source/toolchain/device/model/workload changes.
   fixture changes or artifact loss. Next: GPU execution/stall attribution,
   preserving strict F32 parity; no new wait or production promotion is admitted.
   Correlated source/raw-evidence adversary review is ROBUST within this scope.
+
+### [LM-WAN-LONG-KEY-GPU-PROFILE-2026-10-21] Sampled buffer-read pressure; K/V cause open
+
+- At scoped native source baseline 81cc9547, one unchanged opaque F32 MPSGraph
+  Q128/full-K36608/H40/D128 capture exposes two SDPA timeline intervals. They
+  share one PID-owned compute encoder by unique temporal containment; dispatch
+  identity is not established. Native/exported root durations agree within 43 ns.
+- Removing visible foreign Active overlap leaves 7.912 ms in the first interval,
+  with only 3.600 ms counter coverage (45.50%). GPU-wide sampled means: read
+  limiter 97.6404%, load utilization 37.6004%, ALU limiter 38.2028%. The second
+  interval's read limiter is only 33.1436%. This supports sampled buffer-read
+  pressure, not K/V-specific causality, a stall fraction or DRAM saturation.
+  The 29.252 ms pre-SDPA gap remains unattributed; zero cache/bandwidth counters
+  cannot establish absent traffic. No throughput or promotion claim follows.
+- All 20 native arm/validation pairs pass unchanged strict upstream tolerance
+  and +1/NaN controls, max absolute error 1.1473894e-6. Existing waits and zero
+  arm-time tracked allocations remain. Minimum sampled cache headroom 27.2594%,
+  pressure free 75%, swap growth zero. No full block/model/Studio/generation.
+- Three failed collectors are excluded; one valid capture retains seven complete
+  XML exports and 276,320 counter rows. Correlated adversary is ROBUST within
+  this observation scope. docs/wan-performance-frontier.md names the external
+  gpu-stalls-20261021 report, exact invocation/guard/source pins, raw receipt
+  and CPU-only recomputation. Receipt SHA256:
+  36f34a4ed6a2b71546de0ffdcab8749c95783bf2a76840e1c7bdb971c4a65ea4.
+- Next: bounded native load/compute-overlap A/B, strict F32 parity, no new waits,
+  untraced complete-attention timing with staging charged. Retain previous
+  staging regressions as contrary evidence. Refresh after source/binary,
+  input/fixture, dtype/geometry, device/runtime, queue/resources, collector/guard
+  changes or artifact loss. Runtime remains unchanged by this documentary commit.
