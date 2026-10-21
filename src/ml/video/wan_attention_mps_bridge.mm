@@ -1,7 +1,8 @@
-// Prepared opt-in unmasked MPSGraph attention experiment. Q and context use
-// caller-owned F32 BTHD buffers. K/V are BTHD by default or caller-prepared
-// BHTD on a head-major entrypoint. MPSGraph may allocate private internal
-// workspace, so this bridge makes no memory-efficiency claim.
+// Prepared opt-in unmasked MPSGraph attention experiment. The legacy path uses
+// caller-owned F32 BTHD buffers; the typed path accepts F32, F16, or BF16 for
+// Q/K/V/context. K/V are BTHD by default or caller-prepared BHTD on a
+// head-major entrypoint. MPSGraph may allocate private internal workspace, so
+// this bridge makes no memory-efficiency claim.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
@@ -72,17 +73,49 @@ static bool wan_attention_mps_disjoint(id<MTLBuffer> a, id<MTLBuffer> b) {
   return aEnd <= bStart || bEnd <= aStart;
 }
 
+static bool wan_attention_mps_data_type(int32_t dtype, MPSDataType *dataType,
+                                        uint64_t *elementBytes) {
+  if (!dataType || !elementBytes)
+    return false;
+  switch (dtype) {
+  case 0: // F32
+    *dataType = MPSDataTypeFloat32;
+    *elementBytes = 4;
+    return true;
+  case 1: // F16
+    *dataType = MPSDataTypeFloat16;
+    *elementBytes = 2;
+    return true;
+  case 2: // BF16
+    if (@available(macOS 14.0, *)) {
+      *dataType = MPSDataTypeBFloat16;
+      *elementBytes = 2;
+      return true;
+    }
+    return false;
+  default:
+    return false;
+  }
+}
+
 static void *wan_attention_mps_plan_create_impl(
     void *deviceHandle, int32_t batches, int32_t queryRows,
     int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
     void *kHandle, void *vHandle, void *outputAHandle,
-    void *outputBHandle, bool headMajorKV, bool explicitQKSoftmaxPV) {
+    void *outputBHandle, MPSDataType dataType, uint64_t elementBytes,
+    bool headMajorKV, bool explicitQKSoftmaxPV) {
   if (!deviceHandle || !qHandle || !kHandle || !vHandle || !outputAHandle ||
       !outputBHandle)
     return nullptr;
   if (explicitQKSoftmaxPV && !headMajorKV)
     return nullptr;
   if (@available(macOS 15.0, *)) {
+    if ((dataType != MPSDataTypeFloat32 && dataType != MPSDataTypeFloat16 &&
+         dataType != MPSDataTypeBFloat16) ||
+        (elementBytes != 2 && elementBytes != 4) ||
+        (dataType == MPSDataTypeFloat32) != (elementBytes == 4) ||
+        (explicitQKSoftmaxPV && dataType != MPSDataTypeFloat32))
+      return nullptr;
     @autoreleasepool {
       if (batches <= 0 || queryRows <= 0 || keyRows <= 0 || heads <= 0 ||
           headDim <= 0)
@@ -99,11 +132,11 @@ static void *wan_attention_mps_plan_create_impl(
           !wan_attention_mps_product(kvShapeValues, 4, &kvElements) ||
           qElements > (uint64_t)INT32_MAX ||
           kvElements > (uint64_t)INT32_MAX ||
-          qElements > UINT64_MAX / sizeof(float) ||
-          kvElements > UINT64_MAX / sizeof(float))
+          qElements > UINT64_MAX / elementBytes ||
+          kvElements > UINT64_MAX / elementBytes)
         return nullptr;
-      const uint64_t qBytes = qElements * sizeof(float);
-      const uint64_t kvBytes = kvElements * sizeof(float);
+      const uint64_t qBytes = qElements * elementBytes;
+      const uint64_t kvBytes = kvElements * elementBytes;
 
       id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
       id<MTLBuffer> qBuffer = (__bridge id<MTLBuffer>)qHandle;
@@ -138,14 +171,14 @@ static void *wan_attention_mps_plan_create_impl(
         MPSGraph *graph = [MPSGraph new];
         graph.options = MPSGraphOptionsNone;
         MPSGraphTensor *q = [graph placeholderWithShape:qShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:dataType
                                                    name:@"wan_q_bthd"];
         MPSGraphTensor *k = [graph placeholderWithShape:kvShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:dataType
                                                    name:headMajorKV ? @"wan_k_bhtd"
                                                                     : @"wan_k_bthd"];
         MPSGraphTensor *v = [graph placeholderWithShape:kvShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:dataType
                                                    name:headMajorKV ? @"wan_v_bhtd"
                                                                     : @"wan_v_bthd"];
         MPSGraphTensor *qh = [graph transposeTensor:q
@@ -213,7 +246,7 @@ static void *wan_attention_mps_plan_create_impl(
                                            withDimension:2
                                                     name:@"wan_context_bthd"];
         if (!graph || !q || !k || !v || !qh || !kh || !vh || !contextHeads ||
-            !context ||
+            !context || context.dataType != dataType ||
             (explicitQKSoftmaxPV &&
              (!keyTranspose || !queryKey || !queryKeyWithEpsilon ||
               !scaleTensor || !scaledQueryKey || !probabilities)))
@@ -221,11 +254,11 @@ static void *wan_attention_mps_plan_create_impl(
 
         MPSGraphTensorShapedTypeDictionary *feeds = @{
           q : [[MPSGraphShapedType alloc] initWithShape:qShape
-                                               dataType:MPSDataTypeFloat32],
+                                               dataType:dataType],
           k : [[MPSGraphShapedType alloc] initWithShape:kvShape
-                                               dataType:MPSDataTypeFloat32],
+                                               dataType:dataType],
           v : [[MPSGraphShapedType alloc] initWithShape:kvShape
-                                               dataType:MPSDataTypeFloat32],
+                                               dataType:dataType],
         };
         MPSGraphExecutable *executable =
             [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
@@ -240,23 +273,23 @@ static void *wan_attention_mps_plan_create_impl(
         MPSGraphTensorData *qData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:qBuffer
                                                     shape:qShape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:dataType];
         MPSGraphTensorData *kData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:kBuffer
                                                     shape:kvShape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:dataType];
         MPSGraphTensorData *vData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:vBuffer
                                                     shape:kvShape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:dataType];
         MPSGraphTensorData *outputAData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:outputABuffer
                                                     shape:qShape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:dataType];
         MPSGraphTensorData *outputBData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:outputBBuffer
                                                     shape:qShape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:dataType];
         if (!qData || !kData || !vData || !outputAData || !outputBData)
           return nullptr;
 
@@ -304,7 +337,25 @@ extern "C" void *gs_wan_attention_mps_plan_create(
     void *outputBHandle) {
   return wan_attention_mps_plan_create_impl(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
-      kHandle, vHandle, outputAHandle, outputBHandle, false, false);
+      kHandle, vHandle, outputAHandle, outputBHandle, MPSDataTypeFloat32, 4,
+      false, false);
+}
+
+// Opt-in typed entrypoint. dtype codes are 0=F32, 1=F16, and 2=BF16; all
+// inputs and both output slots use the selected element type.
+extern "C" void *gs_wan_attention_mps_plan_create_typed(
+    void *deviceHandle, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
+    void *kHandle, void *vHandle, void *outputAHandle,
+    void *outputBHandle, int32_t dtype) {
+  MPSDataType dataType = MPSDataTypeInvalid;
+  uint64_t elementBytes = 0;
+  if (!wan_attention_mps_data_type(dtype, &dataType, &elementBytes))
+    return nullptr;
+  return wan_attention_mps_plan_create_impl(
+      deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
+      kHandle, vHandle, outputAHandle, outputBHandle, dataType, elementBytes,
+      false, false);
 }
 
 // Opt-in path for caller-prepared contiguous BHTD K/V. Q and context remain
@@ -316,7 +367,8 @@ extern "C" void *gs_wan_attention_mps_plan_create_head_major_kv(
     void *outputBHandle) {
   return wan_attention_mps_plan_create_impl(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
-      kHandle, vHandle, outputAHandle, outputBHandle, true, false);
+      kHandle, vHandle, outputAHandle, outputBHandle, MPSDataTypeFloat32, 4,
+      true, false);
 }
 
 // Opt-in explicit F32 QK/scale/softmax/PV graph on caller-prepared BHTD K/V.
@@ -327,7 +379,8 @@ extern "C" void *gs_wan_attention_mps_plan_create_head_major_kv_explicit(
     void *outputBHandle) {
   return wan_attention_mps_plan_create_impl(
       deviceHandle, batches, queryRows, keyRows, heads, headDim, qHandle,
-      kHandle, vHandle, outputAHandle, outputBHandle, true, true);
+      kHandle, vHandle, outputAHandle, outputBHandle, MPSDataTypeFloat32, 4,
+      true, true);
 }
 
 extern "C" int32_t gs_wan_attention_mps_encode(void *planHandle,

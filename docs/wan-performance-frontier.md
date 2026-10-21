@@ -18,6 +18,11 @@ promotion. A fast primitive is insufficient evidence for the complete block.
 The separate [40-layer numerical drift](video-numerical-drift.md) also remains
 open; a block-0 regression cannot close it.
 
+The bounded F32/F16/BF16 attention comparison below retains F32. Both lower
+precision modes fail the unchanged dtype-matched upstream and F32 gates. F16
+has a selected-query latency advantage; BF16 is slower on this M2 Max. Neither
+result establishes video quality or a full-block speedup.
+
 The old 19/40 video process was terminated with user authorization and must not
 be restarted automatically. Earlier pressure-query/RSS guards did not bound
 physical footprint or swap. New probes require admission based on conservative
@@ -1404,15 +1409,16 @@ same-lineage source/raw-evidence adversary review is ROBUST for these bounded
 claims, and VULNERABLE for those stronger attributions. No production default
 or arithmetic changed.
 
-### Proposed precision branch
+### Precision experiment rationale
 
 The [official Wan attention fallback](https://github.com/Wan-Video/Wan2.2/blob/main/wan/modules/attention.py)
 defaults to BF16 and casts Q/K/V before PyTorch SDPA. Our pinned F32 harness
 gate therefore does not establish parity with that official BF16 execution.
-BF16/F16 attention is the first proposed simplification experiment: lower
-storage/operand precision may reduce traffic or select faster kernels. Speed,
-quality and the availability of F32 accumulation on this Metal path remain
-unmeasured. A factor-of-two storage change is not a factor-of-two latency claim.
+BF16/F16 attention is the first simplification experiment: lower storage and
+operand precision may reduce traffic or select faster kernels. The bounded
+measurements below test latency and storage; quality and the availability of
+controlled F32 accumulation on this Metal path remain unmeasured. A factor-of-two
+storage change is not a factor-of-two latency claim.
 
 Keep the F32 mode and its existing strict gate. Qualify any separate dtype
 mode against a pinned dtype-matched upstream oracle with the same finite
@@ -1422,6 +1428,42 @@ can assess the quality effect on detail, motion and lip synchronization.
 Fewer denoising steps, attention sparsity and cross-step reuse remain separate
 quality-changing candidates; this profiler provides no acceptance evidence
 for them. None was implemented or used for generation in this experiment.
+
+### Precision comparison contract, 2026-10-20
+
+This CAUTION experiment compares F32/F16/BF16 MPSGraph SDPA at the same
+B=1, K=36,608, H=40, D=128 and query chunk 128. Only selected query rows run;
+no full block, model, Studio or video generation is admitted. The current
+F32 entrypoints and all production defaults remain unchanged. An opt-in typed
+plan uses matching Q/K/V/context storage. The native implementation is checked
+against execution of the pinned official Wan fallback with an explicit dtype.
+Its result is also compared separately with the unrounded F32 reference.
+Both use the existing finite `2e-5 + 2e-5*abs(reference)` threshold. A mode
+that fails either comparison is reported with that failure; no threshold is
+widened, and dtype-matched parity alone cannot establish F32 accuracy or video
+quality. Accumulator precision is not inferred from the storage dtype.
+
+Resident typed-buffer arms measure the attention path after input preparation.
+Separate F32-boundary arms include GPU Q/K/V conversion and context widening in
+the same command chain, with their additional live buffers counted. Inputs,
+geometry and graph chunking stay fixed. F16 represents this avalanche fixture
+exactly; BF16 rounds some input values. Explicit typed bytes, reference and
+diagnostic storage, and sampled total process footprint are reported separately.
+Opaque MPSGraph workspace is not covered by explicit buffer accounting.
+
+DoD: a guarded release precision probe, CPU plan/rejection checks, small typed
+capability/strict checks, then serial full-key paired runs and a padded tail.
+Each arm must have zero tracked MetalBuffer allocations, one terminal wait,
+no activation readback, finite GPU comparison metrics, and rejected +1/NaN
+controls. Failed numeric gates may still be timed as rejected candidates; they
+cannot change production defaults. The strongest failure mode is mistaking
+lower storage bytes for total memory savings or reporting speed while omitting
+boundary conversion or an accuracy failure. The comparison distinguishes all
+three. Cache-aware reserve and memory-pressure floors remain 15%, swap-growth
+limit 64 MiB; all launches have process-footprint and time budgets, all temporary
+files stay under `/opt/mldata_ssd/`. Rollback is reversion of this isolated
+experiment commit. Evidence expires on dtype implementation, graph, geometry,
+fixture, device, driver or runtime changes.
 
 ### Reproduction and evidence boundary
 
@@ -1440,3 +1482,101 @@ ownership/export pins, and writes `profile-receipt-v1.json`. It is a curated
 index to the observed runs, not another GPU run or an independent proof of
 upstream execution. Re-run it with Python 3.11 from the isolated checkout;
 the guarded GPU commands are retained for deliberate later refresh.
+
+### Precision results, 2026-10-20
+
+The release probe in `examples/wan_s2v_attention_precision_profile.cr` ran on
+Apple M2 Max with B=1, Q=8,192, K=36,608, H=40, D=128 and fixed 128-row query
+chunks. Each process ran one warmup and three measured arms. Five modes ran
+serially in forward order, then reverse order. The oracle executes the pinned
+official `wan_modules_attention.py::attention` fallback on PyTorch 2.8.0 MPS
+with an explicit input dtype and CPU operator fallback disabled. This is
+stronger provenance than the preceding direct-PyTorch F32 fixture, which only
+hashed the official source.
+
+| Mode | Forward median, s | Reverse median, s | Attention buffers, MiB | All explicit buffers, MiB | Sampled process peak range, MiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| F32 resident | 2.072137 | 2.931888 | 1,757.50 | 2,077.50 | 2,145.03–2,145.42 |
+| F16 resident | 1.273433 | 1.803110 | 878.75 | 1,198.75 | 1,264.66–1,267.25 |
+| BF16 resident | 5.719131 | 5.276199 | 878.75 | 1,198.75 | 1,264.52–1,265.89 |
+| F16 with F32 boundary | 1.356436 | 1.420566 | 878.75 | 2,948.75 | 3,014.52–3,016.95 |
+| BF16 with F32 boundary | 5.663267 | 5.673443 | 878.75 | 2,948.75 | 3,012.89–3,013.03 |
+
+Attention buffers include Q/K/V, context and three chunk slots. All-explicit
+bytes also include two F32 references, diagnostics and, in boundary mode,
+resident F32 Q/K/V plus widened context. Thus typed attention storage halves,
+but the resident probe's total explicit storage falls by about 42.3%; the
+boundary probe's total rises by about 41.9%. These allocations do not count
+opaque MPS workspace. Sampled process footprints cover a different accounting
+surface and cannot certify between-sample peaks or model-wide savings.
+
+The within-direction F32/F16 resident median ratios are 1.6272 and 1.6260.
+F32 itself shifts by 41.5% between directions, so retain both observed medians
+instead of treating a single time as stable throughput. The boundary runs
+include all Q/K/V narrowing and context widening on GPU, in the arm's command
+chain. Cross-process drift prevents subtraction of these medians from isolating
+conversion cost. BF16 is slower in both directions despite its smaller buffers;
+no cause such as accumulator width or bandwidth saturation is established.
+
+Every full-size validation arm compares 41,943,040 output values against each
+reference with the unchanged finite `2e-5 + 2e-5*abs(reference)` test. Native
+metrics are identical across the two directions and resident/boundary modes:
+
+| Dtype | Dtype-matched upstream violations | Matched max absolute error | Unrounded F32 violations | F32 max absolute error | Admission |
+| --- | ---: | ---: | ---: | ---: | --- |
+| F32 | 0 | 1.1473894e-6 | 0 | 1.1473894e-6 | Pass within this primitive |
+| F16 | 5,004,258 | 3.0517578e-4 | 90,285 | 1.0111928e-4 | Rejected |
+| BF16 | 30,103,661 | 1.953125e-3 | 30,157,253 | 6.5576285e-4 | Rejected |
+
+The discrepancy is not just intentional BF16 input rounding: F16 represents
+this fixture exactly, yet also fails against its dtype-matched upstream.
+Equivalent high-level SDPA semantics do not guarantee identical low-precision
+intermediates, reduction or output rounding across the two backends. The
+first divergent internal operation is still unknown. BF16 input conversion
+has source-level RNE alignment but no independent buffer-level parity check.
+These are numerical findings, not evidence of visible artifacts or harmless
+quality loss. Neither dtype is admitted at the existing contract.
+
+The 128-row capability controls, 257-row tail ending at K=36,608 and same-plan
+changed-Q controls all executed. F32 passes both gates, including the final
+one-row tail. Lower precision remains finite but fails both gates in these
+controls, so these runs do not qualify candidate tail/reuse correctness.
+Every typed arm has one terminal wait and zero tracked MetalBuffer allocations;
+the Q=8,192 arms have eleven existing command roots. Comparison uses a separate
+diagnostic chain with its existing one-wait boundary, returns twenty metric
+words and rejects +1/NaN controls. Outputs are NaN-poisoned on GPU before
+reuse. No native output activation is read back; oracle fixture serialization
+is separate setup work. No full block, model or video ran.
+
+CPU-only checks accept fifteen memory plans and reject nine invalid option
+combinations before Metal access. Native typed binding checks reject invalid
+dtype, short Q storage, aliased K/V, zero extent and overflowing dimensions
+before command submission. The unchanged legacy F32 entrypoint is separately
+rebuilt with the typed bridge for a bounded Q=128/full-K upstream regression:
+zero violations/nonfinite values, maximum error `5.5506825e-7`, one terminal
+arm wait and zero tracked MetalBuffer allocations. This is not a full-block
+regression.
+
+All main matrix guards completed without a guard abort. Their minimum sampled
+cache-aware headroom is 28.73% of RAM, minimum pressure free percentage is 75%,
+and observed swap growth is zero. These exceed the unchanged 15% floors;
+process caps remain 5,120 MiB and 120 seconds, with a 64 MiB swap-growth stop.
+The oracle uses a separate 4,096 MiB cap; release builds use 1,536 MiB and
+180 seconds. These are sampled guards, not advance memory reservations.
+
+Decision: keep production F32 and the old tolerance. The typed bridge is an
+opt-in experimental entrypoint only. A useful next discriminator is to locate
+the first QK/scale/softmax/PV difference on identical operands before designing
+a mixed-storage path with explicit F32 arithmetic and context. No such path or
+quality-changing approximation is admitted by these results.
+
+Precision command manifests, source/binary/object pins, oracle outputs, raw
+native logs, guards and the CPU receipt are retained under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/precision-profile-20261020/`.
+`native-main-v1.tasks.json` records the mirrored matrix;
+`native-boundaries-v1.tasks.json` records tail/reuse checks;
+`legacy-regression-v1.tasks.json` records the legacy F32 rebuild/control.
+The CPU-only `check-precision-receipt-v1.py` indexes and rechecks those artifacts;
+it is not an independent upstream execution or attestation. Refresh after
+graph/bridge/probe, dtype/geometry/input, compiler/device/runtime/queue or guard
+policy changes, or artifact loss. Temporary files remain on `/opt/mldata_ssd/`.

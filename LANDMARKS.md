@@ -31298,3 +31298,48 @@ Refresh after source/toolchain/device/model/workload changes.
   paired quality evidence. No full generation, Studio or model restart is
   authorized here. Refresh after graph/bridge, geometry/input/precision,
   device/runtime/queue or guard-policy changes; scratch stays on /opt/mldata_ssd/.
+
+### 2026-10-20 — Reject typed F16/BF16 Wan SDPA at the unchanged numerical gate
+
+- Added opt-in typed native SDPA and the bounded precision probe in
+  examples/wan_s2v_attention_precision_profile.cr. No production default or
+  legacy F32 arithmetic changed. Native bindings reject five malformed cases;
+  CPU-only CLI/memory checks accept 15 plans and reject nine invalid options.
+- Actual pinned official Wan attention fallback executes on PyTorch 2.8.0 MPS
+  with explicit dtype and CPU fallback disabled. At B=1, Q=8,192, K=36,608,
+  H=40, D=128, chunk=128, all F32 comparisons pass the unchanged finite
+  2e-5+2e-5abs gate (max absolute error 1.1473894e-6). The 257-row F32 tail and
+  changed-query reuse also pass. The old F32 entrypoint rebuilt with this bridge
+  passes a Q=128/full-K control (max absolute error 5.5506825e-7); this is not
+  full-block or video qualification.
+- Mirrored process medians, each warmup+3 samples: F32 2.072137/2.931888 s;
+  F16 resident 1.273433/1.803110 s; BF16 resident 5.719131/5.276199 s.
+  Within-direction F32/F16 ratios are 1.6272/1.6260, descriptive amid substantial
+  drift. F32-boundary F16 is 1.356436/1.420566 s; BF16 5.663267/5.673443 s.
+  Conversions are included on GPU, but cross-process subtraction does not
+  establish conversion cost. Do not infer full-block throughput or quality.
+- Both lower dtypes fail matched-upstream and unrounded-F32 gates, also on tail
+  and changed inputs. Per full-size arm: F16 matched 5,004,258 violations /
+  max absolute error 3.0517578e-4; F32 reference 90,285 / 1.0111928e-4.
+  BF16 matched 30,103,661 / 1.953125e-3; F32 reference 30,157,253 / 6.5576285e-4.
+  All finite. The first
+  divergent internal operation and accumulator precision remain unknown;
+  BF16 typed input parity has no independent buffer-level check. Keep F32.
+- Typed attention storage halves (1757.50 to 878.75 MiB), but total probe
+  explicit storage is 2077.50/1198.75 MiB with two F32 references. F32-boundary
+  total rises to 2948.75 MiB. Opaque MPS workspace and sampled process footprint
+  are separate surfaces. Main guards stay above 15% (minimum headroom 28.73%,
+  pressure free 75%), observed swap growth zero. One terminal arm wait, zero
+  tracked MetalBuffer allocations; 20-word diagnostic read, no activation readback.
+- docs/wan-performance-frontier.md contains the contract, directional medians,
+  numerical rejection and limitations. External
+  wan-self-attention/precision-profile-20261020/ retains command manifests,
+  source/binary/object pins, official oracle fixtures, raw logs, guards and
+  check-precision-receipt-v1.py. This is a curated evidence index, not attestation.
+  Correlated source/raw-log adversary review is ROBUST for this negative result;
+  lower precision quality or production readiness remains unqualified.
+- Continuation: localize QK/scale/softmax/PV drift on identical inputs before a
+  mixed-storage/F32-arithmetic candidate. No full block, model, Studio or video
+  ran; keep that restriction. Refresh after graph/bridge/probe, input/dtype/
+  geometry, toolchain/device/runtime/queue, guard policy changes or artifact loss.
+  Scratch/build/evidence remain on /opt/mldata_ssd/.
