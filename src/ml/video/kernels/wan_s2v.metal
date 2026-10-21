@@ -100,6 +100,77 @@ kernel void wan_rope_f32(
     y[offset + 1] = real * sine + imag * cosine;
 }
 
+// Fuse the exact inline K RoPE arithmetic and the existing F32/BF16 V bias
+// add into the required BHTD writes. Each thread owns one complex K pair and
+// the matching V pair, so optional logical trace stores cannot race.
+kernel void wan_rope_bias_kv_pack(
+    device float *k [[buffer(0)]], device float *v [[buffer(1)]],
+    device const float *bias_f32 [[buffer(2)]],
+    device const ushort *bias_bf16 [[buffer(3)]],
+    device const float *positions [[buffer(4)]],
+    device const float *frequency_hi [[buffer(5)]],
+    device const float *frequency_lo [[buffer(6)]],
+    device float *head_major_k [[buffer(7)]],
+    device float *head_major_v [[buffer(8)]],
+    constant uint &batches [[buffer(9)]], constant uint &key_rows [[buffer(10)]],
+    constant uint &heads [[buffer(11)]], constant uint &head_dim [[buffer(12)]],
+    constant uint &bias_is_bf16 [[buffer(13)]],
+    constant uint &trace_k [[buffer(14)]], constant uint &trace_v [[buffer(15)]],
+    constant uint &count [[buffer(16)]], uint tid [[thread_position_in_grid]]) {
+    const uint pairs = head_dim / 2;
+    if (tid >= count || tid / (pairs * key_rows * heads) >= batches) return;
+    const uint pair = tid % pairs;
+    const uint key = (tid / pairs) % key_rows;
+    const uint head = (tid / (pairs * key_rows)) % heads;
+    const uint batch = tid / (pairs * key_rows * heads);
+    const uint source = ((batch * key_rows + key) * heads + head) * head_dim + pair * 2;
+
+    const uint axis0 = (pairs / 3) + (pairs % 3);
+    const uint axis1 = pairs / 3;
+    const uint axis = pair < axis0 ? 0 : (pair < axis0 + axis1 ? 1 : 2);
+    const float position = positions[(batch * key_rows + key) * 3 + axis];
+    const float frequency = frequency_hi[pair];
+    const float phase_hi = position * frequency;
+    const float product_residual = fma(position, frequency, -phase_hi);
+    const float phase_tail = fma(position, frequency_lo[pair], product_residual);
+    const float phase_sum = phase_hi + phase_tail;
+    const float phase_virtual = phase_sum - phase_hi;
+    const float phase_residual = (phase_hi - (phase_sum - phase_virtual)) +
+                                 (phase_tail - phase_virtual);
+    const float cos_hi = precise::cos(phase_sum);
+    const float sin_hi = precise::sin(phase_sum);
+    const float cos_lo = precise::cos(phase_residual);
+    const float sin_lo = precise::sin(phase_residual);
+    const float cosine = cos_hi * cos_lo - sin_hi * sin_lo;
+    const float sine = sin_hi * cos_lo + cos_hi * sin_lo;
+    const float real = k[source];
+    const float imag = k[source + 1];
+    const float rotated_real = real * cosine - imag * sine;
+    const float rotated_imag = real * sine + imag * cosine;
+    const uint bias_index = head * head_dim + pair * 2;
+    const float bias_real = bias_is_bf16 != 0
+        ? as_type<float>(uint(bias_bf16[bias_index]) << 16)
+        : bias_f32[bias_index];
+    const float bias_imag = bias_is_bf16 != 0
+        ? as_type<float>(uint(bias_bf16[bias_index + 1]) << 16)
+        : bias_f32[bias_index + 1];
+    const float biased_real = v[source] + bias_real;
+    const float biased_imag = v[source + 1] + bias_imag;
+    const uint destination = tid * 2;
+    head_major_k[destination] = rotated_real;
+    head_major_k[destination + 1] = rotated_imag;
+    head_major_v[destination] = biased_real;
+    head_major_v[destination + 1] = biased_imag;
+    if (trace_k != 0) {
+        k[source] = rotated_real;
+        k[source + 1] = rotated_imag;
+    }
+    if (trace_v != 0) {
+        v[source] = biased_real;
+        v[source + 1] = biased_imag;
+    }
+}
+
 // Optional final coefficient table for one Wan block encode. The table is
 // indexed by [batch, token, complex-pair]; heads share the same three-axis
 // position and therefore reuse these coefficients during both rotations.

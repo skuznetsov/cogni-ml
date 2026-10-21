@@ -6,6 +6,35 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-WAN-KV-PREP-FUSION-2026-10-21] Exact optional fusion; speedup unproven
+
+- At parent `11be5cc7`, add default-off `fuse_kv_preparation` for B=1,
+  head-major MPS attention with a prepared linear workspace and execution
+  chain. K RoPE and source-dtype V bias share the K/V packing dispatch;
+  projection/accumulation remain F32. Prepared outputs are separate from
+  block scratch and refreshed inside every encode, including replay.
+- v4 release checks: 17 examples each at chunk rows 1/3, 24 retained-upstream
+  checkpoints within the unchanged finite tolerance, exact native K/V and
+  replay checks, changed-input/trace/dtype controls and preflight alias guards.
+  Warmup plus three full-spatial block pairs compare all 187,432,960 output
+  values bit-exactly. Finite/NaN negative controls reject corruption.
+- AB/BA/AB wall savings are -3.358%, +11.605%, -18.238%; signs follow arm
+  order and every successive measured arm slows down. Keep default off:
+  correctness is qualified, causal speedup/repeatability are not. The lower
+  unpaired arm median cannot justify promotion.
+- Each arm has 624 segments, one terminal wait, zero tracked encode buffer
+  allocations and no inter-operator host wait/activation readback. Sampled
+  peak footprint 10.686 GiB, minimum cache-aware headroom 15.138 GiB,
+  pressure-free minimum 63%, zero swap growth; 12 GiB cap/15% floor retained.
+- Correlated MiniQuad verdict: ROBUST for this bounded correctness/resource
+  evidence, VULNERABLE for speedup. This is a real-weight block-0 run with
+  synthetic inputs and a retained short upstream fixture; no full-spatial
+  upstream block oracle, full model or video-quality claim. Evidence, exact
+  commands, pins, exclusions and refresh: `docs/wan-performance-frontier.md`,
+  K/V preparation fusion result. Refresh on scoped code/build/device/fixture/
+  geometry/resource drift or artifact loss. Next discriminator: isolate
+  shared timing drift from K/V preparation cost; do not promote from medians.
+
 ### [LM-DRAMA3-GDN-SCAN-2026-10-18] Dense scan rejected; exact serial control retained
 
 - Standalone GPU diagnostic at `e4131aaa`, production dimensions K=V=128,

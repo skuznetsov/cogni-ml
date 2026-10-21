@@ -2545,3 +2545,130 @@ checks also pass for the changed probe/spec. Refresh after scoped source,
 object/binary, weight/fixture, geometry/dtype, device/toolchain/runtime,
 queue/resource or guard changes, or artifact loss. Rollback removes the new
 probe/spec opt-ins and this attribution record; runtime defaults stay intact.
+
+### K/V RoPE and V-bias packing fusion contract (2026-10-21)
+
+At parent `11be5cc7`, the admitted baseline separately applies MPS projection,
+V bias, K RMSNorm, K RoPE and head-major K/V packing. The candidate is an
+opt-in performance rewrite (CAUTION): preserve F32 projection/accumulation,
+K bias/RMSNorm and Q RoPE, then compute the identical K rotation and V bias
+while writing fresh prepared K/V. No reduced precision, new wait, command
+boundary, arm-time MetalBuffer allocation or production default is admitted.
+
+The block flag requires a B=1 head-major MPS attention workspace, prepared MPS
+linear workspace and execution chain; combining it with precomputed RoPE is
+rejected before dispatch. Trace-only stores may preserve existing logical
+checkpoints but must be absent from the measured no-trace arm. Prepared buffers
+remain caller-owned, disjoint and refreshed inside every encode, including
+changed inputs and completed-chain replay. Rollback is the default false flag.
+
+The falsifier is any nonfinite output, violation of the unchanged finite
+`2e-5+2e-5*abs(reference)` gate, lost bit parity against the equivalent native
+path, stale packed K/V, new synchronization/allocation, or a failing resource
+guard. Focused direct-pack tests cover mixed-sign F32/BF16 bias, multiple
+heads, tail lengths, B>1 rejection and changed positions/K/V/bias. Prepared chunk1
+and padded-tail chunk3 must retain all short-block upstream checkpoints, exact
+repeat/chained/replay results and the existing finite/NaN negative control.
+The full-spatial block has a separate exact native A/B check, not a complete
+upstream block oracle or video-quality qualification.
+
+DoD: serial guarded release builds and focused specs, then
+`wan_s2v_full_block_benchmark --comparison=kv-prep-fusion
+--candidate-self-chunk=128 --reuse-block-scratch --pairs=3 --weights=...`
+under `wan_memory_guard.py --memory-accounting=file-cache
+--max-footprint-mib=12288 --max-swap-growth-mib=64 --timeout-sec=600`.
+Expected signal: exact full-output parity, one terminal wait per arm, zero
+tracked encode allocations, all three complete-arm AB/BA/AB savings positive
+and improved median. Failure of the timing gate leaves the candidate opt-in;
+it does not justify loosening correctness or memory limits. The 15% physical
+reserve applies throughout. No full model, Studio or generation is in scope.
+
+### K/V preparation fusion result (2026-10-21)
+
+Implemented `WanS2VBlock.encode(..., fuse_kv_preparation: true)` and the
+corresponding audio-block forwarding flag. The default remains false. One
+native dispatch now rotates normalized K, adds the original F32/BF16 V bias
+and writes both head-major destinations. Q, projection precision, K
+bias/RMSNorm, reduction order, attention geometry and command boundaries are
+unchanged. The no-trace path omits the original row-major K/V stores; optional
+trace stores preserve the existing logical checkpoints. The prepared pair is
+separate from block scratch, refreshed on every encode and counted once in
+the memory plan. This removes two native dispatches and 2,998,927,360 bytes of
+logical activation traffic at the tested shape; it does not reduce the
+allocated scratch budget or establish a measured speedup.
+
+Current v4 release checks pass 17 examples each with MPS chunk rows 1 and 3.
+These include 24 strict retained-upstream block checkpoints, bit-exact
+baseline/repeat/chained/completed-chain replay, and direct preparation checks
+for three geometries, both bias dtypes and all four trace modes with refreshed
+K/V/bias/positions. The D=128 case exercises the actual 22/21/21 RoPE split.
+A GPU comparison of the prepared K/V pair detects separately seeded one-bit
+defects. Invalid resources are rejected before the first native dispatch.
+The upstream fixture is a projection of batch 0 from the pinned B=2 reference;
+no fresh upstream model execution was performed.
+
+The complete native block comparison uses the real block-0 BF16 weights with
+F32 activations/accumulation, B=1, S=36,608, C=5,120, H=40, D=128,
+FFN=13,824 and text context 512. Inputs are synthetic. Both arms use chunk128
+MPSGraph SDPA, head-major K/V, cross groups 320 and compact lifetime-aliased
+scratch. Layout preparation is inside every measured block encode. Phase-root
+profiling is disabled and output validation is outside the timed arms.
+
+| Pair/order | Separate preparation (s) | Fused preparation (s) | Wall-time saving |
+| --- | ---: | ---: | ---: |
+| 0 / AB | 11.512571 | 11.899208 | -3.358% |
+| 1 / BA | 13.867772 | 12.258352 | +11.605% |
+| 2 / AB | 16.752843 | 19.808156 | -18.238% |
+
+The timing gate fails: two pairs regress and the median paired saving is
+-3.358%. All six measured arms slow down in chronological order, so the sign
+also follows arm order. The lower arm-wise B median is not causal evidence of
+an improvement. Keep the flag opt-in; neither a speedup nor a repeatable
+regression intrinsic to the fused kernel is established. A useful next timing
+probe must distinguish this shared drift from preparation cost, rather than
+repeat the same unqualified comparison.
+
+Warmup and all three measured pairs are bit-exact over all 187,432,960 output
+values, finite and within the unchanged `2e-5+2e-5*abs(reference)` gate. The
+finite/NaN corruption control is rejected (2 bit differences, 2 tolerance
+violations, 1 nonfinite). Every arm retains 624 command segments, one terminal
+wait, zero tracked encode MetalBuffer allocations, zero inter-operator host
+waits and zero activation readbacks. This is full-spatial native A/B parity,
+not a full-spatial upstream block oracle or a video-quality test.
+
+The successful run finishes under the original 12 GiB process-tree cap and
+15% policy: sampled peak footprint 10.686 GiB, minimum cache-aware headroom
+15.138 GiB (floor 9.6 GiB), minimum `memory_pressure -Q` 63%, zero swap growth
+and no remaining owned children. The guard includes printed free pages plus
+file-backed pages once; reclaimability is estimated and sampled telemetry
+cannot exclude between-poll spikes. The 11,194,526,228-byte plan includes the
+1,499,463,680-byte prepared pair and 1 GiB opaque MPS reserve.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/kv-prep-fusion-20261021/`.
+Qualified inputs are `source-pins-v4.json`, `crystal-build-receipt-v4.json`,
+`upstream-chunk1-v3.*`, `upstream-chunk3-v3.*` and `full-block-pairs-v2.*`.
+The v4 build verifies the seven unchanged native objects against the parent
+receipt before linking. Earlier build/test setup failures and
+`full-block-pairs-v1` (prepared buffers incorrectly owned by block scratch)
+are excluded. The corrected harness gives the pair separate ownership without
+relaxing any overlap check or changing its byte budget. Correlated MiniQuad
+source/math and raw-log review is ROBUST for bounded correctness and the
+sampled resource contract, VULNERABLE for a speedup claim.
+
+CPU-only evidence refresh, using a new output path:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/kv-prep-fusion-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 "$evidence_root/verify-kv-prep-fusion-v1.py" "$evidence_root/verification-refresh.json"
+```
+
+Expected signal: correctness evidence passes and the timing gate is false.
+The completed `verification-v1.json` refresh exits 0 with those signals;
+SHA-256 `a581130d929f0a2a0768d8cf0f1e3c77ff6e82c0cb6bb79bbb1d297ca390891f`.
+This recomputes raw log metrics and checks local hashes; it does not replay
+GPU arrays or authenticate the original execution. Refresh after scoped
+source/object/binary, fixture/checkpoint, geometry/dtype, device/toolchain,
+queue/resource or guard changes, or artifact loss. Rollback is the default
+false flag; removing the optional implementation and focused probe restores
+the parent surface. Full model, Studio and generation remain outside scope.

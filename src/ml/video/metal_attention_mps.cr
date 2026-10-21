@@ -580,6 +580,72 @@ module ML::Video
     # Splits Q into disjoint spans. The last short span is padded with zeros
     # before Graph execution; only its valid rows are copied to the result.
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
+      begin_encode!(chain)
+
+      if prepared_k = @head_major_k
+        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+        # Refresh the prepared layout for every encode because K/V contents may
+        # have changed since the preceding request.
+        MetalAttentionMPS.transpose_kv!(chain, @k, @v, prepared_k, prepared_v,
+          @batches, @key_rows, @heads, @head_dim)
+      end
+
+      encode_chunks(chain)
+    end
+
+    # Run caller-owned K/V preparation in place of the default head-major
+    # transpose, then execute the same chunk plan. The callback runs on every
+    # encode and must fully write both prepared destinations before returning;
+    # the integrated Wan block supplies a validated writer, but this workspace
+    # cannot prove that an arbitrary callback covers either destination.
+    def encode_with_kv_preparation(chain : ML::Metal::MPSCommandChain,
+                                   &block : ML::Metal::ComputeEncoder, ML::MetalBuffer, ML::MetalBuffer -> Nil) : Nil
+      begin_encode!(chain)
+      prepared_k = @head_major_k || raise ArgumentError.new("K/V preparation requires head-major MPS attention")
+      prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+      yield chain.encoder, prepared_k, prepared_v
+      encode_chunks(chain)
+    end
+
+    # Return the prepared outputs for preflight validation. Actual use still
+    # goes through encode_with_kv_preparation, which writes them on every call.
+    def prepared_kv_buffers!
+      raise "Wan MPS attention chunk workspace has been released" if @released
+      validate_bindings!
+      prepared_k = @head_major_k || raise ArgumentError.new("K/V preparation requires head-major MPS attention")
+      prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
+      {prepared_k, prepared_v}
+    end
+
+    # Admission checks for extra resources used by an in-chain preparation
+    # callback. The workspace already checks its own Q/K/V/output/scratch
+    # bindings; this closes the alias boundary against the enclosing block's
+    # other caller-owned buffers, weights, scratch, and logical traces.
+    def validate_kv_preparation_resources!(x : ML::MetalBuffer,
+                                           modulation : ML::MetalBuffer,
+                                           positions : ML::MetalBuffer,
+                                           context : ML::MetalBuffer,
+                                           output : ML::MetalBuffer,
+                                           weights : Arena, scratch : Arena,
+                                           trace : Hash(String, ML::MetalBuffer)?) : Nil
+      prepared_k, prepared_v = prepared_kv_buffers!
+      {x, modulation, positions, context, output}.each do |buffer|
+        reject_prepared_overlap!(buffer, prepared_k, prepared_v)
+      end
+      weights.buffers.each_value do |buffer|
+        reject_prepared_overlap!(buffer, prepared_k, prepared_v)
+      end
+      scratch.buffers.each_value do |buffer|
+        reject_prepared_overlap!(buffer, prepared_k, prepared_v)
+      end
+      if destinations = trace
+        destinations.each_value do |buffer|
+          reject_prepared_overlap!(buffer, prepared_k, prepared_v)
+        end
+      end
+    end
+
+    private def begin_encode!(chain : ML::Metal::MPSCommandChain) : Nil
       raise "Wan MPS attention chunk workspace has been released" if @released
       validate_bindings!
       chain.encoder
@@ -593,15 +659,17 @@ module ML::Video
       # Requests are serialized through the same caller-owned buffers. A fresh
       # chain is admitted only after the prior request's terminal wait.
       @chain = chain
+    end
 
-      if prepared_k = @head_major_k
-        prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
-        # Refresh the prepared layout for every encode because K/V contents may
-        # have changed since the preceding request.
-        MetalAttentionMPS.transpose_kv!(chain, @k, @v, prepared_k, prepared_v,
-          @batches, @key_rows, @heads, @head_dim)
+    private def reject_prepared_overlap!(buffer : ML::MetalBuffer,
+                                         prepared_k : ML::MetalBuffer,
+                                         prepared_v : ML::MetalBuffer) : Nil
+      if MetalOps.overlap?(buffer, prepared_k) || MetalOps.overlap?(buffer, prepared_v)
+        raise ArgumentError.new("Prepared K/V buffers must be disjoint from block resources")
       end
+    end
 
+    private def encode_chunks(chain : ML::Metal::MPSCommandChain) : Nil
       channels = @heads.to_i64 * @head_dim
       query_offset = 0
       while query_offset < @query_rows

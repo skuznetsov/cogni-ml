@@ -7,6 +7,21 @@ require "digest/sha256"
 require "../src/ml/video/wan_s2v_block"
 require "./support/video_allocation_counter"
 
+# Test-only native-dispatch observation: every block starts with a native
+# normalization dispatch, so rejected fusion admission must leave this at zero.
+struct ML::Metal::ComputeEncoder
+  @@wan_preflight_dispatches : Int64 = 0
+
+  def self.wan_preflight_dispatches : Int64
+    @@wan_preflight_dispatches
+  end
+
+  def dispatch(grid_size : {Int32, Int32, Int32}, threadgroup_size : {Int32, Int32, Int32}) : self
+    @@wan_preflight_dispatches += 1
+    previous_def(grid_size, threadgroup_size)
+  end
+end
+
 lib LibWanVideoSpecMemory
   fun posix_memalign(ptr : Void**, alignment : LibC::SizeT, size : LibC::SizeT) : LibC::Int
   fun getpagesize : LibC::Int
@@ -292,6 +307,43 @@ private def wan_prepare_mps_self_attention(
     prepared_k, prepared_v)
 end
 
+private WAN_KV_PACKED_CHECK_SOURCE = <<-METAL
+  #include <metal_stdlib>
+  using namespace metal;
+  kernel void wan_spec_packed_zero(device atomic_uint *m [[buffer(0)]],
+      uint id [[thread_position_in_grid]]) {
+    if (id < 5u) atomic_store_explicit(m + id, 0u, memory_order_relaxed);
+  }
+  kernel void wan_spec_packed_check(
+      device const float *reference_k [[buffer(0)]],
+      device const float *reference_v [[buffer(1)]],
+      device const float *packed_k [[buffer(2)]],
+      device const float *packed_v [[buffer(3)]],
+      device atomic_uint *m [[buffer(4)]],
+      constant uint &seq [[buffer(5)]], constant uint &heads [[buffer(6)]],
+      constant uint &head_dim [[buffer(7)]], uint id [[thread_position_in_grid]]) {
+    if (id >= seq * heads * head_dim) return;
+    const uint d = id % head_dim;
+    const uint token = (id / head_dim) % seq;
+    const uint head = id / (head_dim * seq);
+    const uint source = (token * heads + head) * head_dim + d;
+    const uint rk = as_type<uint>(reference_k[source]);
+    const uint rv = as_type<uint>(reference_v[source]);
+    const uint ak = as_type<uint>(packed_k[id]);
+    const uint av = as_type<uint>(packed_v[id]);
+    if (rk != ak) atomic_fetch_add_explicit(m, 1u, memory_order_relaxed);
+    if (rv != av) atomic_fetch_add_explicit(m + 1, 1u, memory_order_relaxed);
+    // Qualify both counters with a one-bit defect in the diagnostic register.
+    if (rk != (ak ^ (id == 0u ? 1u : 0u)))
+      atomic_fetch_add_explicit(m + 2, 1u, memory_order_relaxed);
+    if (rv != (av ^ (id == 0u ? 1u : 0u)))
+      atomic_fetch_add_explicit(m + 3, 1u, memory_order_relaxed);
+    if (!isfinite(reference_k[source]) || !isfinite(reference_v[source]) ||
+        !isfinite(packed_k[id]) || !isfinite(packed_v[id]))
+      atomic_fetch_add_explicit(m + 4, 1u, memory_order_relaxed);
+  }
+  METAL
+
 # A separate block-only Arena keeps the existing audio/reused-scratch contract
 # unchanged. Replay all intermediates before any colored slot is overwritten.
 private def wan_check_reused_block_scratch(
@@ -310,6 +362,7 @@ private def wan_check_reused_block_scratch(
   attention = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
   chain = nil.as(ML::Metal::MPSCommandChain?)
   begin
+    fuse_kv_preparation = ENV["WAN_S2V_FUSED_KV_PREPARATION"]? == "1"
     ML::Video::WanS2VBlock.prepare_scratch!(scratch, cfg,
       precompute_rope: precompute_rope, reuse_scratch: true)
     scratch.resident_bytes.should eq(ML::Video::WanS2VBlock.scratch_bytes(cfg,
@@ -319,6 +372,9 @@ private def wan_check_reused_block_scratch(
         scratch, audio_scratch, inputs["context"], inputs["local_audio"])
     end
     attention = wan_prepare_mps_self_attention(cfg, scratch, attention_scratch)
+    packed_metrics = fuse_kv_preparation ? outputs.alloc("packed_metrics", 5) : nil
+    packed_zero = fuse_kv_preparation ? ML::Metal::ComputePipeline.new("wan_spec_packed_zero", WAN_KV_PACKED_CHECK_SOURCE) : nil
+    packed_check = fuse_kv_preparation ? ML::Metal::ComputePipeline.new("wan_spec_packed_check", WAN_KV_PACKED_CHECK_SOURCE) : nil
     if original = original_attention
       expect_raises(ArgumentError, "Prepared Wan attention shape or caller buffers changed") do
         original.validate_for!(cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim,
@@ -435,26 +491,94 @@ private def wan_check_reused_block_scratch(
 
     active = ML::Metal::MPSCommandChain.new
     chain = active
+    guard_dispatches = ML::Metal::ComputeEncoder.wan_preflight_dispatches
+    if fuse_kv_preparation
+      # All fusion admission failures must occur before the first projection.
+      expect_raises(ArgumentError) do
+        ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          tiled_attention: tiled_attention, mps_workspace: workspace,
+          attention_workspace: attention, reuse_scratch: true, fuse_kv_preparation: true)
+      end
+      expect_raises(ArgumentError) do
+        ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          tiled_attention: tiled_attention, execution_chain: active,
+          attention_workspace: attention, reuse_scratch: true, fuse_kv_preparation: true)
+      end
+      expect_raises(ArgumentError) do
+        ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+          inputs["positions"], inputs["context"], first, weights, scratch, cfg,
+          tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+          reuse_scratch: true, fuse_kv_preparation: true)
+      end
+      chunk_rows = attention.not_nil!.chunk_rows
+      {nil, scratch["wan_b_self_res"], inputs["x"], trace["self_k_rope"]}.each do |bad_prepared_k|
+        rejected = ML::Video::WanAttentionMPSChunkWorkspace.new(
+          cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, chunk_rows,
+          scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
+          scratch["wan_b_self_attn"], attention_scratch["chunk_q"],
+          attention_scratch["chunk_out_a"], attention_scratch["chunk_out_b"],
+          bad_prepared_k, bad_prepared_k ? attention_scratch["prepared_v_bhkd"] : nil)
+        begin
+          expect_raises(ArgumentError) do
+            ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
+              inputs["positions"], inputs["context"], first, weights, scratch, cfg, trace,
+              tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
+              attention_workspace: rejected, reuse_scratch: true, fuse_kv_preparation: true)
+          end
+        ensure
+          rejected.release
+        end
+      end
+      active.wait_count.should eq(0)
+      ML::Metal::ComputeEncoder.wan_preflight_dispatches.should eq(guard_dispatches)
+    end
     allocations = ML::MetalBuffer.video_spec_allocations
     ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
       inputs["positions"], inputs["context"], first, weights, scratch, cfg, trace,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
       attention_workspace: attention,
-      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true,
+      fuse_kv_preparation: fuse_kv_preparation)
+    ML::Metal::ComputeEncoder.wan_preflight_dispatches.should be > guard_dispatches
+    if metric_buffer = packed_metrics
+      encoder = active.encoder
+      encoder.set_pipeline(packed_zero.not_nil!)
+        .set_buffer(metric_buffer, 0, ML::Metal::BufferAccess::Write).dispatch_1d(5)
+      encoder.set_pipeline(packed_check.not_nil!)
+        .set_buffer(original_trace["self_k_rope"], 0).set_buffer(original_trace["self_v"], 1)
+        .set_buffer(attention_scratch["prepared_k_bhkd"], 2).set_buffer(attention_scratch["prepared_v_bhkd"], 3)
+        .set_buffer(metric_buffer, 4, ML::Metal::BufferAccess::ReadWrite)
+        .set_value(cfg.seq.to_u32, 5).set_value(cfg.heads.to_u32, 6).set_value(cfg.head_dim.to_u32, 7)
+        .dispatch_1d(cfg.values)
+    end
     ML::Video::WanS2VBlock.encode(active.encoder, inputs["x"], inputs["modulation"],
       inputs["positions"], inputs["context"], repeat, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
       attention_workspace: attention,
-      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true,
+      fuse_kv_preparation: fuse_kv_preparation)
     ML::Video::WanS2VBlock.encode(active.encoder, first, inputs["modulation"],
       inputs["positions"], inputs["context"], chained, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
       attention_workspace: attention,
-      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true,
+      fuse_kv_preparation: fuse_kv_preparation)
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
     active.wait_count.should eq(0)
     active.commit_and_wait
     active.wait_count.should eq(1)
+    if metric_buffer = packed_metrics
+      values = metric_buffer.contents.as(UInt32*)
+      (0...5).map { |i| values[i] }.should eq([0_u32, 0_u32, 1_u32, 1_u32, 0_u32]),
+        "fused prepared K/V must match original logical checkpoints on GPU and reject seeded bit defects"
+      puts({schema: "wan_s2v_fused_kv_prepared_check_v1", values_per_buffer: cfg.values,
+            k_bit_differences: values[0], v_bit_differences: values[1],
+            k_corruption_differences: values[2], v_corruption_differences: values[3],
+            nonfinite: values[4], diagnostic_waits_added: 0,
+            reference: "unfused retained-upstream-qualified row-major checkpoints"}.to_json)
+    end
     active.release
     chain = nil
 
@@ -465,7 +589,8 @@ private def wan_check_reused_block_scratch(
       inputs["positions"], inputs["context"], replayed, weights, scratch, cfg,
       tiled_attention: tiled_attention, execution_chain: active, mps_workspace: workspace,
       attention_workspace: attention,
-      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true)
+      cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope, reuse_scratch: true,
+      fuse_kv_preparation: fuse_kv_preparation)
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
     active.wait_count.should eq(0)
     active.commit_and_wait
@@ -495,6 +620,7 @@ private def wan_check_reused_block_scratch(
           resident_scratch_bytes: scratch.resident_bytes,
           default_scratch_bytes: ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: precompute_rope),
           precompute_rope: precompute_rope, mps_projections: !workspace.nil?,
+          fuse_kv_preparation: fuse_kv_preparation,
           self_attention_backend: attention ? "mpsgraph_sdpa_chunked" : "native",
           self_attention_kv_layout: attention.try { |workspace| workspace.head_major_kv? ? "B,H,K,D" : "B,K,H,D" },
           prepared_kv_refreshed_inside_each_block_encode: attention.try(&.head_major_kv?) || false,

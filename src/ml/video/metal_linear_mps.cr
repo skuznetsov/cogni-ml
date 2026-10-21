@@ -24,7 +24,8 @@ module ML::Video::MetalLinearMPS
                    rows : Int32, input_dim : Int32, output_dim : Int32,
                    weight_dtype : WeightDType, bias_dtype : WeightDType,
                    plan : WanT5MPSLinearPlan,
-                   weight_stage : ML::MetalBuffer) : Nil
+                   weight_stage : ML::MetalBuffer,
+                   apply_bias : Bool = true) : Nil
     MetalOps.dims(rows, input_dim, output_dim)
     MetalOps.check(input, rows.to_i64 * input_dim)
     MetalOps.check_storage(weight, input_dim.to_i64 * output_dim, weight_dtype)
@@ -35,6 +36,7 @@ module ML::Video::MetalLinearMPS
 
     WanT5.mps_projection(e, input, weight, output, rows, input_dim, output_dim,
       weight_dtype, plan, weight_stage)
+    return unless apply_bias
 
     count = rows.to_i64 * output_dim
     raise ArgumentError.new("Wan MPS bias dispatch exceeds Int32") if count > Int32::MAX
@@ -172,16 +174,31 @@ module ML::Video
       @plans.size.to_i32
     end
 
+    def has_plan?(name : String) : Bool
+      !@released && @plans.has_key?(name)
+    end
+
+    def validate_kv_preparation_destinations!(prepared_k : ML::MetalBuffer,
+                                              prepared_v : ML::MetalBuffer) : Nil
+      raise ArgumentError.new("Wan S2V MPS workspace has been released") if @released
+      stage_buffer = @stage.weight_buffer
+      if MetalOps.overlap?(stage_buffer, prepared_k) || MetalOps.overlap?(stage_buffer, prepared_v)
+        raise ArgumentError.new("Prepared K/V buffers must be disjoint from the MPS weight stage")
+      end
+    end
+
     def project(e : ML::Metal::ComputeEncoder, name : String,
                 input : ML::MetalBuffer, weight : ML::MetalBuffer,
                 bias : ML::MetalBuffer, output : ML::MetalBuffer,
                 rows : Int32, input_dim : Int32, output_dim : Int32,
-                weight_dtype : WeightDType, bias_dtype : WeightDType) : Nil
+                weight_dtype : WeightDType, bias_dtype : WeightDType,
+                apply_bias : Bool = true) : Nil
       raise ArgumentError.new("Wan S2V MPS workspace has been released") if @released
       plan = @plans[name]?
       raise ArgumentError.new("Unknown Wan S2V MPS projection plan #{name}") unless plan
       MetalLinearMPS.project(e, input, weight, bias, output, rows, input_dim,
-        output_dim, weight_dtype, bias_dtype, plan, @stage.weight_buffer)
+        output_dim, weight_dtype, bias_dtype, plan, @stage.weight_buffer,
+        apply_bias: apply_bias)
     end
 
     # Release plans after the caller's terminal wait. A shared stage remains

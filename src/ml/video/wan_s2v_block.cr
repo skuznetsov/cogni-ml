@@ -192,7 +192,8 @@ module ML::Video
     # Call during model setup. Compilation is intentionally kept out of encode.
     def self.prepare!(precompute_rope : Bool = false) : Nil
       MetalOps.prepare!
-      {"wan_modulate_segments", "wan_segment_add", "wan_rope_f32"}.each do |name|
+      {"wan_modulate_segments", "wan_segment_add", "wan_rope_f32",
+       "wan_rope_bias_kv_pack"}.each do |name|
         pipeline(name)
       end
       if precompute_rope
@@ -351,7 +352,8 @@ module ML::Video
                     attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
                     cross_attention_groups_per_segment : Int32 = 320,
                     precompute_rope : Bool = false,
-                    reuse_scratch : Bool = false) : Nil
+                    reuse_scratch : Bool = false,
+                    fuse_kv_preparation : Bool = false) : Nil
       validate_cross_attention_groups_per_segment!(
         cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_attention_backend!(cfg.head_dim, tiled_attention)
@@ -371,6 +373,11 @@ module ML::Video
         workspace.validate_for!(cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim,
           scratch["wan_b_self_q"], scratch["wan_b_self_k"],
           scratch["wan_b_self_v"], scratch["wan_b_self_attn"])
+      end
+      if fuse_kv_preparation
+        validate_fused_kv_preparation!(x, modulation, positions, context, y,
+          weights, scratch, cfg, trace, weight_prefix, precompute_rope,
+          execution_chain, mps_workspace, attention_workspace)
       end
 
       norm1 = scratch["wan_b_norm1"]
@@ -408,10 +415,10 @@ module ML::Video
         cfg, 0, 1, weights.dtype(key(weight_prefix, "block_modulation")))
       trace_copy(e, trace, "self_mod", mod1, n)
       encode_qkv(e, mod1, self_q, self_k, self_v, weights, rows, dim,
-        weight_prefix, mps_workspace)
+        weight_prefix, mps_workspace, apply_self_v_bias: !fuse_kv_preparation)
       trace_copy(e, trace, "self_q", self_q, n)
       trace_copy(e, trace, "self_k", self_k, n)
-      trace_copy(e, trace, "self_v", self_v, n)
+      trace_copy(e, trace, "self_v", self_v, n) unless fuse_kv_preparation
       norm_rms(e, self_q, weights[key(weight_prefix, "self_norm_q_weight")], weights.dtype(key(weight_prefix, "self_norm_q_weight")),
         scratch["wan_b_zero_bias"], self_qn, rows, dim)
       trace_copy(e, trace, "self_q_norm", self_qn, n)
@@ -423,14 +430,29 @@ module ML::Video
       else
         # Keep the default inline path and its two original dispatches intact.
         encode_rope(e, self_qn, positions, self_qr, cfg, scratch)
-        encode_rope(e, self_kn, positions, self_kr, cfg, scratch)
+        encode_rope(e, self_kn, positions, self_kr, cfg, scratch) unless fuse_kv_preparation
       end
       trace_copy(e, trace, "self_q_rope", self_qr, n)
-      trace_copy(e, trace, "self_k_rope", self_kr, n)
+      trace_copy(e, trace, "self_k_rope", self_kr, n) unless fuse_kv_preparation
       e = continue_phase(e, execution_chain, "self_prepare")
       if workspace = attention_workspace
         active = execution_chain.not_nil!
-        workspace.encode(active)
+        if fuse_kv_preparation
+          frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+          workspace.encode_with_kv_preparation(active) do |encoder, prepared_k, prepared_v|
+            encode_kv_rope_bias_pack(encoder, self_kn, self_v,
+              weights[key(weight_prefix, "self_v_bias")],
+              weights.dtype(key(weight_prefix, "self_v_bias")), positions,
+              scratch[frequency_hi_name], scratch[frequency_lo_name],
+              prepared_k, prepared_v, cfg,
+              trace ? trace.not_nil!.has_key?("self_k_rope") : false,
+              trace ? trace.not_nil!.has_key?("self_v") : false)
+            trace_copy(encoder, trace, "self_k_rope", self_kr, n)
+            trace_copy(encoder, trace, "self_v", self_v, n)
+          end
+        else
+          workspace.encode(active)
+        end
         e = active.encoder
       elsif tiled_attention && (active = execution_chain)
         MetalOps.attention_tiled(active, self_qr, self_kr, self_v, self_attn,
@@ -509,6 +531,48 @@ module ML::Video
       end
     end
 
+    private def self.validate_fused_kv_preparation!(x : ML::MetalBuffer,
+                                                    modulation : ML::MetalBuffer,
+                                                    positions : ML::MetalBuffer,
+                                                    context : ML::MetalBuffer,
+                                                    y : ML::MetalBuffer,
+                                                    weights : Arena, scratch : Arena,
+                                                    cfg : WanS2VConfig,
+                                                    trace : Hash(String, ML::MetalBuffer)?,
+                                                    weight_prefix : String,
+                                                    precompute_rope : Bool,
+                                                    execution_chain : ML::Metal::MPSCommandChain?,
+                                                    mps_workspace : WanS2VMPSLinearWorkspace?,
+                                                    attention_workspace : WanAttentionMPSChunkWorkspace?) : Nil
+      raise ArgumentError.new("Fused Wan K/V preparation supports B=1 only") unless cfg.batches == 1
+      raise ArgumentError.new("Fused Wan K/V preparation does not support precomputed RoPE") if precompute_rope
+      raise ArgumentError.new("Fused Wan K/V preparation requires an MPS execution chain") unless execution_chain
+      linear_workspace = mps_workspace || raise ArgumentError.new("Fused Wan K/V preparation requires an MPS linear workspace")
+      unless linear_workspace.has_plan?("block.self_v")
+        raise ArgumentError.new("Fused Wan K/V preparation requires the prepared self-V MPS plan")
+      end
+      workspace = attention_workspace || raise ArgumentError.new("Fused Wan K/V preparation requires head-major MPS attention")
+      unless workspace.head_major_kv?
+        raise ArgumentError.new("Fused Wan K/V preparation requires head-major MPS attention")
+      end
+
+      # The prepared outputs must not alias any resource the enclosing block
+      # reads or writes; this runs before the first normalization/projection
+      # dispatch and complements the block's existing workspace checks.
+      workspace.validate_kv_preparation_resources!(x, modulation, positions,
+        context, y, weights, scratch, trace)
+      prepared_k, prepared_v = workspace.prepared_kv_buffers!
+      linear_workspace.validate_kv_preparation_destinations!(prepared_k, prepared_v)
+      frequency_hi_name, frequency_lo_name = rope_frequency_names(cfg)
+      trace_k = trace ? trace.not_nil!.has_key?("self_k_rope") : false
+      trace_v = trace ? trace.not_nil!.has_key?("self_v") : false
+      validate_kv_rope_bias_pack!(scratch["wan_b_self_k"],
+        scratch["wan_b_self_v"], weights[key(weight_prefix, "self_v_bias")],
+        weights.dtype(key(weight_prefix, "self_v_bias")), positions,
+        scratch[frequency_hi_name], scratch[frequency_lo_name], prepared_k,
+        prepared_v, cfg, trace_k, trace_v)
+    end
+
     private def self.continue_phase(e : ML::Metal::ComputeEncoder,
                                     chain : ML::Metal::MPSCommandChain?,
                                     phase_name : String? = nil) : ML::Metal::ComputeEncoder
@@ -543,7 +607,8 @@ module ML::Video
                                mps_workspace : WanS2VMPSLinearWorkspace? = nil,
                                attention_workspace : WanAttentionMPSChunkWorkspace? = nil,
                                cross_attention_groups_per_segment : Int32 = 320,
-                               precompute_rope : Bool = false) : Nil
+                               precompute_rope : Bool = false,
+                               fuse_kv_preparation : Bool = false) : Nil
       validate_cross_attention_groups_per_segment!(
         cross_attention_groups_per_segment, tiled_attention, execution_chain)
       validate_audio_pair!(cfg, audio_cfg)
@@ -552,7 +617,8 @@ module ML::Video
         block_trace, block_weight_prefix, tiled_attention, execution_chain, mps_workspace,
         attention_workspace,
         cross_attention_groups_per_segment: cross_attention_groups_per_segment,
-        precompute_rope: precompute_rope)
+        precompute_rope: precompute_rope,
+        fuse_kv_preparation: fuse_kv_preparation)
       if active = execution_chain
         e = active.encoder
       end
@@ -606,13 +672,14 @@ module ML::Video
                                 q : ML::MetalBuffer, k : ML::MetalBuffer, v : ML::MetalBuffer,
                                 w : Arena, rows : Int32, dim : Int32,
                                 weight_prefix : String,
-                                mps_workspace : WanS2VMPSLinearWorkspace?) : Nil
+                                mps_workspace : WanS2VMPSLinearWorkspace?,
+                                apply_self_v_bias : Bool = true) : Nil
       linear(e, x, w, "self_q_weight", "self_q_bias", q, rows, dim, dim,
         weight_prefix, mps_workspace, "block.self_q")
       linear(e, x, w, "self_k_weight", "self_k_bias", k, rows, dim, dim,
         weight_prefix, mps_workspace, "block.self_k")
       linear(e, x, w, "self_v_weight", "self_v_bias", v, rows, dim, dim,
-        weight_prefix, mps_workspace, "block.self_v")
+        weight_prefix, mps_workspace, "block.self_v", apply_bias: apply_self_v_bias)
     end
 
     private def self.linear(e : ML::Metal::ComputeEncoder, x : ML::MetalBuffer,
@@ -620,14 +687,17 @@ module ML::Video
                             y : ML::MetalBuffer, rows : Int32, in_dim : Int32,
                             out_dim : Int32, weight_prefix : String = "",
                             mps_workspace : WanS2VMPSLinearWorkspace? = nil,
-                            mps_plan_name : String? = nil) : Nil
+                            mps_plan_name : String? = nil,
+                            apply_bias : Bool = true) : Nil
       weight_key = key(weight_prefix, weight_name)
       bias_key = key(weight_prefix, bias_name)
       if workspace = mps_workspace
         plan_name = mps_plan_name || raise ArgumentError.new("Wan MPS projection requires a named prepared plan")
         workspace.project(e, plan_name, x, weights[weight_key], weights[bias_key], y,
-          rows, in_dim, out_dim, weights.dtype(weight_key), weights.dtype(bias_key))
+          rows, in_dim, out_dim, weights.dtype(weight_key), weights.dtype(bias_key),
+          apply_bias: apply_bias)
       else
+        raise ArgumentError.new("Skipping Wan projection bias requires an MPS workspace") unless apply_bias
         MetalOps.linear(e, x, weights[weight_key], weights[bias_key], y,
           rows, in_dim, out_dim, weight_dtype: weights.dtype(weight_key),
           bias_dtype: weights.dtype(bias_key))
@@ -684,6 +754,91 @@ module ML::Video
       e.set_value(cfg.batches.to_u32, 5).set_value(cfg.seq.to_u32, 6)
       e.set_value(cfg.heads.to_u32, 7).set_value(cfg.head_dim.to_u32, 8)
       e.dispatch_1d(cfg.batches * cfg.seq * cfg.heads * (cfg.head_dim // 2))
+    end
+
+    # Validate all source, bias, RoPE, and prepared buffers before any block
+    # dispatch. trace_k/trace_v permit only the corresponding source buffer to
+    # be written in place after its packed output has been produced.
+    def self.validate_kv_rope_bias_pack!(k_norm : ML::MetalBuffer,
+                                         v_unbiased : ML::MetalBuffer,
+                                         v_bias : ML::MetalBuffer,
+                                         v_bias_dtype : WeightDType,
+                                         positions : ML::MetalBuffer,
+                                         frequency_hi : ML::MetalBuffer,
+                                         frequency_lo : ML::MetalBuffer,
+                                         prepared_k : ML::MetalBuffer,
+                                         prepared_v : ML::MetalBuffer,
+                                         cfg : WanS2VConfig,
+                                         trace_k : Bool = false,
+                                         trace_v : Bool = false) : Nil
+      raise ArgumentError.new("Fused Wan K/V preparation supports B=1 only") unless cfg.batches == 1
+      raise ArgumentError.new("Fused Wan K/V preparation requires an even head dimension") if cfg.head_dim.odd?
+      count = cfg.values.to_i64
+      MetalOps.check(k_norm, count)
+      MetalOps.check(v_unbiased, count)
+      MetalOps.check_storage(v_bias, cfg.dim.to_i64, v_bias_dtype)
+      MetalOps.check(positions, cfg.batches.to_i64 * cfg.seq * 3)
+      pairs = cfg.head_dim // 2
+      MetalOps.check(frequency_hi, pairs.to_i64)
+      MetalOps.check(frequency_lo, pairs.to_i64)
+      MetalOps.check(prepared_k, count)
+      MetalOps.check(prepared_v, count)
+      {k_norm, v_unbiased, positions, frequency_hi, frequency_lo,
+       prepared_k, prepared_v}.each do |buffer|
+        unless buffer.storage_mode == ML::StorageMode::Shared
+          raise ArgumentError.new("Fused Wan K/V preparation requires shared F32 buffers")
+        end
+      end
+      unless v_bias.storage_mode == ML::StorageMode::Shared
+        raise ArgumentError.new("Fused Wan V bias requires shared storage")
+      end
+
+      resources = {k_norm, v_unbiased, v_bias, positions, frequency_hi,
+                   frequency_lo, prepared_k, prepared_v}
+      resources.each_with_index do |left, i|
+        resources.each_with_index do |right, j|
+          next if j <= i
+          if MetalOps.overlap?(left, right)
+            raise ArgumentError.new("Fused Wan K/V preparation buffers must be pairwise disjoint")
+          end
+        end
+      end
+    end
+
+    # Pack post-RMSNorm K with inline RoPE and add the source-dtype V bias in
+    # the same dispatch. The two optional in-place stores preserve the logical
+    # row-major self_k_rope/self_v trace checkpoints without affecting the
+    # packed output or adding a conversion pass.
+    def self.encode_kv_rope_bias_pack(e : ML::Metal::ComputeEncoder,
+                                      k_norm : ML::MetalBuffer,
+                                      v_unbiased : ML::MetalBuffer,
+                                      v_bias : ML::MetalBuffer,
+                                      v_bias_dtype : WeightDType,
+                                      positions : ML::MetalBuffer,
+                                      frequency_hi : ML::MetalBuffer,
+                                      frequency_lo : ML::MetalBuffer,
+                                      prepared_k : ML::MetalBuffer,
+                                      prepared_v : ML::MetalBuffer,
+                                      cfg : WanS2VConfig,
+                                      trace_k : Bool = false,
+                                      trace_v : Bool = false) : Nil
+      validate_kv_rope_bias_pack!(k_norm, v_unbiased, v_bias, v_bias_dtype,
+        positions, frequency_hi, frequency_lo, prepared_k, prepared_v, cfg,
+        trace_k, trace_v)
+      count = cfg.batches * cfg.seq * cfg.heads * (cfg.head_dim // 2)
+      e.set_pipeline(pipeline("wan_rope_bias_kv_pack"))
+      e.set_buffer(k_norm, 0, trace_k ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read)
+      e.set_buffer(v_unbiased, 1, trace_v ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read)
+      e.set_buffer(v_bias, 2).set_buffer(v_bias, 3)
+      e.set_buffer(positions, 4).set_buffer(frequency_hi, 5).set_buffer(frequency_lo, 6)
+      e.set_buffer(prepared_k, 7, ML::Metal::BufferAccess::Write)
+      e.set_buffer(prepared_v, 8, ML::Metal::BufferAccess::Write)
+      e.set_value(cfg.batches.to_u32, 9).set_value(cfg.seq.to_u32, 10)
+      e.set_value(cfg.heads.to_u32, 11).set_value(cfg.head_dim.to_u32, 12)
+      e.set_value(v_bias_dtype.bf16? ? 1_u32 : 0_u32, 13)
+      e.set_value(trace_k ? 1_u32 : 0_u32, 14).set_value(trace_v ? 1_u32 : 0_u32, 15)
+      e.set_value(count.to_u32, 16)
+      e.dispatch_1d(count)
     end
 
     # Standalone Q/K pair path used by the full-shape RoPE probe. The default
