@@ -2672,3 +2672,170 @@ source/object/binary, fixture/checkpoint, geometry/dtype, device/toolchain,
 queue/resource or guard changes, or artifact loss. Rollback is the default
 false flag; removing the optional implementation and focused probe restores
 the parent surface. Full model, Studio and generation remain outside scope.
+
+### K/V preparation timing drift diagnostic contract (2026-10-21)
+
+The fusion experiment's chronological slowdown confounds a feature-specific
+latency conclusion. Investigate it before changing production scheduling or
+promoting the opt-in flag. This is a benchmark-only CAUTION change; rollback
+removes the diagnostic modes and leaves the production default false.
+
+Competing explanations and discriminators:
+
+- Same-work A/A with identical prepared-K/V geometry can reproduce an ordering
+  effect without fusion. Balanced AB/BA/BA/AB slots and explicit monotonic arm
+  times expose this confound; an A/A skew does not identify its physical cause.
+- Passive process CPU, GC, page-in/fault, resident and footprint snapshots
+  outside arm timing distinguish increased host work from elapsed blocking.
+  `encode_cpu_seconds` is a legacy name for host elapsed time, not CPU usage.
+  Missing resource counters must stay unknown. Do not force collection.
+- An isolated full-shape native K-RoPE, V-bias and head-major packing A/B probe
+  measures preparation separately. Use the exact production kernels, source
+  bias dtype and one terminal wait per arm, GPU-refresh inputs outside timing,
+  and balance measured slots. A microbenchmark saving cannot promote a full
+  block or video speed claim.
+
+DoD: build source-pinned release diagnostics with verified existing native
+objects; run a CPU-positive sensor control; run strict short retained-upstream
+checks; execute guarded isolated preparation and same-work full-block A/A
+diagnostics. The GPU comparison must scan every K/V or block output, remain
+bit-exact/finite within `2e-5+2e-5*abs(reference)`, and reject a finite/NaN
+corruption control. Preserve one terminal wait, zero inter-operator waits,
+zero activation readbacks and zero tracked MetalBuffer encode allocations.
+The 15% cache-aware reserve, process cap and swap-growth stop remain active.
+No full model, Studio or video generation is authorized by this diagnostic.
+
+The strongest failure mode is attributing shared chronological drift to the
+candidate or to GC/thermal state without discriminating telemetry. A/A and
+the isolated probe are guard checks against that conclusion. Private MPS
+allocation, device contention and clocks remain unmeasured unless a later
+bounded probe explicitly instruments them. Sensor checks, hashes and log
+validators qualify only their executed properties, not a physical diagnosis.
+
+### K/V preparation drift: measured separation (2026-10-21)
+
+At parent `0146438e`, the diagnostics change benchmarks only. A source-pinned
+release build reuses seven native objects after verifying their source/object
+hashes. The CPU-positive sensor reports 99.758 ms user CPU in a 100 ms busy
+loop; missing-group, decreasing-counter and signed-gauge controls pass. The
+short retained-upstream suite passes 17 examples at each chunk size 1/3,
+including 24 strict checkpoints, exact prepared K/V and replay checks. This
+uses the saved B=2 fixture projected to batch 0; it is not a fresh upstream run.
+
+The isolated native probe uses S=36,608, C=5,120, H=40, D=128, source BF16 V
+bias and F32 arithmetic. A encodes the production bias, K RoPE and head-major
+K/V transpose; B encodes the fused preparation. Each fresh process measures
+AB/BA/BA/AB after a warmup; reverse the warmup across the two processes.
+
+| Isolated preparation | Median A wall | Median B wall | Median paired saving |
+| --- | ---: | ---: | ---: |
+| Before full-block A/A | 19.040 ms | 8.931 ms | 53.094% |
+| After full-block A/A | 20.420 ms | 8.879 ms | 56.202% |
+
+All warmup/four-pair comparisons scan 374,865,920 K/V values and are bit-exact
+and finite in both processes. Finite/NaN controls reject 2 differences,
+2 tolerance violations and 1 nonfinite value. The arms use 3 versus 1 native
+dispatch, one root/terminal wait, zero tracked encode buffer allocations,
+zero inter-operator waits and zero activation readbacks. The explicit arena
+is 5,998,304,788 bytes. Input refresh/copy and the roughly 3 GB comparison scan
+are completed outside arm timing; they may affect later device/cache state.
+The saving is about 10-12 ms, not evidence of a full-block or video speedup.
+
+The same-work full-block control has fusion off in both arms: prepared K/V,
+chunk rows 128, cross-attention groups 320, compact scratch and distinct arm
+outputs/chunk temporaries. Warmup order is BA; measured order is AB/BA/BA/AB.
+Chronological measured wall times are 11.818, 12.907, 13.947, 16.959, 19.848,
+22.393, 30.374 and 38.388 s. The corresponding GPU-root duration sum rises
+11.793 -> 38.250 s, and encode host elapsed rises 10.144 -> 32.433 s.
+Process user+system CPU is only 0.268-1.114 s (1.7-3.0% of arm wall time).
+The first four measured arms have no GC collection, page-in or disk read;
+one collection and one page-in/53,248-byte read occur in arm five. These
+counters do not explain the onset. The encoded work requires no fusion for
+this slowdown; the old `encode_cpu_seconds` field cannot identify CPU work.
+
+Warmup and all four full-block comparisons scan 187,432,960 outputs exactly
+and finitely; the finite/NaN control rejects 2/2/1. Every arm retains 624
+segments, one terminal wait, zero tracked encode allocations, zero
+inter-operator waits and zero activation readbacks. Sampled peak footprint
+is 11,472,062,240 bytes under the 12 GiB cap; minimum cache-aware headroom is
+15,265,300,480 bytes, pressure-free minimum 63%, zero swap growth and no
+remaining owned child. The 15% floor is unchanged. These are sampled limits,
+not exclusion of between-poll spikes or a physical GPU-residency certificate.
+
+The optional same-work phase replay completes with the existing root profiler
+enabled only in B, after the timed A/A control. It is a separate three-pair
+AB/BA/AB diagnostic, not a performance comparison. Across its three measured
+B arms, the median phase intervals and median per-arm shares are:
+
+| Root phase | Median interval | Median share of root union |
+| --- | ---: | ---: |
+| Self preparation | 0.907 s | 5.71% |
+| Self-attention, output projection and residual | 12.028 s | 76.29% |
+| Cross-attention, output projection and residual | 1.270 s | 7.96% |
+| FFN | 1.627 s | 9.95% |
+
+Each measured B arm has 624 roots. Root duration sum equals root union in this
+capture; the envelope exceeds the union by only 0.550-0.643 ms. This weakens
+simple starvation between roots as an explanation for this capture. A root
+interval can include internal stalls or other device activity; these are not
+exclusive kernel busy times, and phase unions are not generally additive.
+Measured arms report no process GC collection, page-in or disk read. The
+self-attention phase includes output projection and residual, so it does not
+yet identify an individual slow operator. All four complete output scans are
+bit-exact/finite and the negative control rejects 2/2/1. Sampled peak footprint
+is 11,472,881,416 bytes, minimum cache-aware headroom 15,903,768,576 bytes,
+pressure-free minimum 63%, zero swap growth and no remaining owned child.
+
+Two earlier phase attempts stop on unavailable guard telemetry before emitting
+arms and are excluded. The first also lacks a successful guard cleanup record;
+a later PID/PGID absence snapshot is retained separately, not presented as a
+successful guard cleanup. After these failures, an external observer wraps
+only the guard's error logger to record exception causes. It forwards to the
+unchanged logger and guard entry point without changing limits, deadlines or
+success-path sampling. The completed run's exception trace is empty; the
+cause of the earlier telemetry failures remains unknown.
+
+Correlated MiniQuad source/math and raw-log review is ROBUST for the bounded
+correctness, timing separation and sampled resource evidence, VULNERABLE for
+physical drift diagnosis or a full-block speedup claim. Keep fusion default
+off. The next useful discriminator is to separate self-attention from its
+projection/residual and measure aggregate host elapsed time around the
+existing native enqueue/commit calls, alongside current post-wait root
+intervals. Preserve the command graph and terminal wait count; distinguish
+hidden API blocking from additional CPU work before changing scheduling.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/kv-prep-drift-20261021/`.
+Qualified records are `source-pins-v1.json`, `crystal-build-receipt-v1.json`,
+`build-v1.*`, `host-sensor-v1.*`, `upstream-chunk1-v1.*`,
+`upstream-chunk3-v1.*`, `prep-before-v1.*`, `full-block-control-v1.*`,
+`prep-after-v1.*` and `full-block-phase-observed-v1.*`. The phase observer is
+`guard-error-observer-v1.py`; failed `full-block-phase-replay-v1/v2.*` and
+`phase-v1-cleanup-check.json` remain explicit excluded-attempt evidence.
+Refresh after scoped source/object/binary, fixture/checkpoint, geometry/dtype,
+device/toolchain, queue/resource or guard changes, or artifact loss. Short
+retained-upstream checks and full-shape native A/B equality do not establish
+a full-spatial upstream oracle, full-model gain or video quality. No full
+model, Studio or video generation was run.
+
+CPU-only evidence refresh with a new exclusive output path:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/kv-prep-drift-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$evidence_root/verify-kv-prep-drift-v1.py" --verify --phase-run full-block-phase-observed-v1 --output "$evidence_root/verification-refresh.json"
+```
+
+Expected signal: `passed_core_evidence`, `passed=true`, phase replay `passed`;
+physical-cause, full-block treatment-effect and default-promotion claims stay
+false. The executed `verification-v2.json` exits 0 and checks 270 pinned source
+files, seven core guards plus the phase guard, binary/native/fixture hashes,
+all complete comparisons and corruption controls. SHA-256:
+`f6236222b21ddd781fb36c636f214671c89aa922dc74d24c37f6fdef53529cf6`.
+Chronology is reconstructed from full-block monotonic intervals, not warmup
+print order; preparation uses validated execution slots. Synthetic checks
+reject wrong execution order and overlapping arm intervals. Earlier verifier
+attempts produced no receipt; `verification-v1.json` has an incorrect
+descriptive A/A pair-order field and is superseded by v2. The refresh checks
+recorded properties and local hashes; it neither replays GPU arrays nor
+authenticates the original execution. Removing these benchmark diagnostics
+leaves the existing production implementation and its default false flag.

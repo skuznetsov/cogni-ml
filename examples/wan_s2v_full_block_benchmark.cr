@@ -7,6 +7,7 @@ require "../src/ml/video/wan_s2v_block"
 require "../src/ml/video/metal_mps_command_chain"
 require "../src/ml/video/metal_attention_mps"
 require "../spec/support/video_allocation_counter"
+require "./support/wan_host_observation"
 
 private FULL_SEQ                       = 36_608
 private FULL_VIDEO_TOKENS              = 34_944
@@ -91,10 +92,14 @@ private BENCH_METAL = <<-METAL
 METAL
 
 private record ArmResult, groups : Int32, query_chunk : Int32, order : String, warmup : Bool,
-  host_wall_seconds : Float64, encode_cpu_seconds : Float64,
+  host_wall_seconds : Float64, encode_host_elapsed_seconds : Float64,
+  command_chain_setup_elapsed_seconds : Float64, terminal_wait_elapsed_seconds : Float64,
+  monotonic_begin_seconds : Float64, monotonic_end_seconds : Float64,
   gpu_elapsed_seconds : Float64, segments : Int32, terminal_waits : Int32,
   encode_metal_buffer_allocations : Int64,
-  phase_root_profile : ML::Video::MPSCommandPhaseProfile?
+  phase_root_profile : ML::Video::MPSCommandPhaseProfile?,
+  observation_before : WanHostObservation::Snapshot,
+  observation_after : WanHostObservation::Snapshot
 
 private def phase_root_profile_json(profile : ML::Video::MPSCommandPhaseProfile)
   {
@@ -140,6 +145,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        phase_roots : Bool = false,
                        reuse_scratch : Bool = false,
                        fuse_kv_preparation : Bool = false) : ArmResult
+  observation_before = WanHostObservation::Snapshot.capture
+  monotonic_begin = WanHostObservation.monotonic_seconds
   wall_started = Time.instant
   chain = ML::Metal::MPSCommandChain.new
   chain.enable_phase_root_profile! if phase_roots
@@ -151,18 +158,24 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
     cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope,
     reuse_scratch: reuse_scratch, fuse_kv_preparation: fuse_kv_preparation)
   encode_seconds = (Time.instant - encode_started).total_seconds
+  wait_started = Time.instant
   # Diagnostic phase roots are source-bound to this block. Do no suffix or
   # audio work on the chain before the existing terminal wait.
   chain.commit_and_wait
-  wall_seconds = (Time.instant - wall_started).total_seconds
+  wait_seconds = (Time.instant - wait_started).total_seconds
+  wall_ended = Time.instant
+  wall_seconds = (wall_ended - wall_started).total_seconds
+  monotonic_end = WanHostObservation.monotonic_seconds
+  observation_after = WanHostObservation::Snapshot.capture
   phase_profile = phase_roots ? chain.phase_root_profile : nil
   allocations = ML::MetalBuffer.video_spec_allocations - allocations_before
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
   raise "Full block arm did not segment its command chain" unless chain.segment_count > 0
   result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
-    chain.gpu_elapsed_seconds, chain.segment_count, chain.wait_count, allocations,
-    phase_profile)
+    (encode_started - wall_started).total_seconds, wait_seconds,
+    monotonic_begin, monotonic_end, chain.gpu_elapsed_seconds, chain.segment_count,
+    chain.wait_count, allocations, phase_profile, observation_before, observation_after)
   chain.release
   result
 rescue ex
@@ -221,16 +234,18 @@ weights_path = ""
 pairs = 3
 comparison_mode = "cross-segments"
 candidate_chunk = 256
+warmup_order = "AB"
 phase_roots_requested = false
 prepared_kv_requested = false
 reuse_block_scratch = false
 plan_only = false
 OptionParser.parse do |parser|
-  parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--pairs=1..3] [--plan-only]"
+  parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--comparison=kv-prep-control|kv-prep-fusion --pairs=3|4] [--warmup-order=AB|BA] [--plan-only]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
-  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, kv-prep-fusion, rope, or profile-replay (same-config A/A root diagnostics)") { |value| comparison_mode = value }
-  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; kv-layout, attention-graph, kv-prep-fusion, rope and profile-replay require 128") { |value| candidate_chunk = value.to_i }
-  parser.on("--pairs=N", "AB/BA measured pairs after one warmup of each arm (1..3)") { |value| pairs = value.to_i }
+  parser.on("--comparison=MODE", "cross-segments (default), self-chunks, kv-layout, attention-graph, kv-prep-control, kv-prep-fusion, rope, or profile-replay") { |value| comparison_mode = value }
+  parser.on("--candidate-self-chunk=N", "Candidate query rows for self-chunks: 128, 256 or 1024; K/V, attention-graph, rope and profile-replay modes require 128") { |value| candidate_chunk = value.to_i }
+  parser.on("--pairs=N", "Measured pairs after warmup; K/V control/fusion accept 3 or balanced 4 (other modes retain 1..3)") { |value| pairs = value.to_i }
+  parser.on("--warmup-order=AB|BA", "K/V control/fusion warmup order; reverse across fresh processes to expose order drift") { |value| warmup_order = value }
   parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
   parser.on("--prepared-kv", "Profile replay with both arms using shared head-major K/V refreshed inside each block encode; requires profile-replay") { prepared_kv_requested = true }
   parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
@@ -241,34 +256,39 @@ OptionParser.parse do |parser|
   end
 end
 raise ArgumentError.new("--weights is required") if weights_path.empty?
-raise ArgumentError.new("--pairs must be within 1..3") unless (1..3).includes?(pairs)
-raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, attention-graph, kv-prep-fusion, rope, or profile-replay") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph", "kv-prep-fusion", "rope", "profile-replay"}.includes?(comparison_mode)
+raise ArgumentError.new("--pairs must be within 1..4") unless (1..4).includes?(pairs)
+raise ArgumentError.new("--comparison must be cross-segments, self-chunks, kv-layout, attention-graph, kv-prep-control, kv-prep-fusion, rope, or profile-replay") unless {"cross-segments", "self-chunks", "kv-layout", "attention-graph", "kv-prep-control", "kv-prep-fusion", "rope", "profile-replay"}.includes?(comparison_mode)
+raise ArgumentError.new("--warmup-order must be AB or BA") unless {"AB", "BA"}.includes?(warmup_order)
 raise ArgumentError.new("--candidate-self-chunk must be 128, 256 or 1024") unless {128, 256, 1024}.includes?(candidate_chunk)
 compare_self_chunks = comparison_mode == "self-chunks"
 compare_kv_layout = comparison_mode == "kv-layout"
 compare_attention_graph = comparison_mode == "attention-graph"
+compare_kv_prep_control = comparison_mode == "kv-prep-control"
 compare_kv_prep_fusion = comparison_mode == "kv-prep-fusion"
 compare_rope = comparison_mode == "rope"
 compare_profile_replay = comparison_mode == "profile-replay"
 baseline_self_attention_backend = "mpsgraph_sdpa_chunked"
 candidate_self_attention_backend = compare_attention_graph ? "mpsgraph_explicit_qk_softmax_pv_chunked" : baseline_self_attention_backend
 prepared_kv_replay = compare_profile_replay && prepared_kv_requested
-prepared_kv_for_both_arms = compare_attention_graph || compare_kv_prep_fusion || prepared_kv_replay
+prepared_kv_for_both_arms = compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || prepared_kv_replay
 prepared_kv_for_candidate = compare_kv_layout || prepared_kv_for_both_arms
 raise ArgumentError.new("--comparison=profile-replay requires --phase-roots") if compare_profile_replay && !phase_roots_requested
 raise ArgumentError.new("--phase-roots is supported only with --comparison=profile-replay") if phase_roots_requested && !compare_profile_replay
 raise ArgumentError.new("--prepared-kv is supported only with --comparison=profile-replay") if prepared_kv_requested && !compare_profile_replay
 raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
-raise ArgumentError.new("--comparison=kv-prep-fusion requires --pairs=3") if compare_kv_prep_fusion && pairs != 3
+raise ArgumentError.new("--comparison=kv-prep-control requires --pairs=3 or 4") if compare_kv_prep_control && !{3, 4}.includes?(pairs)
+raise ArgumentError.new("--comparison=kv-prep-fusion requires --pairs=3 or 4") if compare_kv_prep_fusion && !{3, 4}.includes?(pairs)
+raise ArgumentError.new("--pairs=4 is supported only by kv-prep-control and kv-prep-fusion") if pairs == 4 && !(compare_kv_prep_control || compare_kv_prep_fusion)
+raise ArgumentError.new("--warmup-order=BA is supported only by kv-prep-control and kv-prep-fusion") if warmup_order == "BA" && !(compare_kv_prep_control || compare_kv_prep_fusion)
 explicit_budget_bytes = compare_attention_graph ? MAX_ATTENTION_GRAPH_BUDGET : MAX_EXPLICIT_BUDGET
-if compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_rope || compare_profile_replay
+if compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay
   raise ArgumentError.new("--comparison=#{comparison_mode} requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
 end
 require_exact = !(compare_self_chunks || compare_kv_layout || compare_attention_graph)
-candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
-baseline_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
-candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
+candidate_groups = (compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
+baseline_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
+candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : (compare_self_chunks ? candidate_chunk : BASELINE_CHUNK_Q)
 weights_path = File.expand_path(weights_path)
 raise ArgumentError.new("Missing safetensors file #{weights_path}") unless File.file?(weights_path)
 raise ArgumentError.new("Unexpected official block sidecar length") unless File.size(weights_path) == EXPECTED_WEIGHTS_BYTES
@@ -308,7 +328,7 @@ begin
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
   attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
-  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_profile_replay
+  attention_workspace_bytes += 3_i64 * candidate_chunk * DIM * sizeof(Float32) if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
   prepared_kv_bytes = prepared_kv_for_candidate ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
   attention_workspace_bytes += prepared_kv_bytes
   explicit_score_reserve_bytes = compare_attention_graph ? EXPLICIT_SCORE_RESERVE_BYTES : 0_i64
@@ -414,7 +434,7 @@ begin
     chunk_q, chunk_a, chunk_b,
     prepared_kv_for_both_arms ? candidate_prepared_k : nil,
     prepared_kv_for_both_arms ? candidate_prepared_v : nil)
-  if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_fusion || compare_profile_replay
+  if compare_self_chunks || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
     candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
       1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
       scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
@@ -439,16 +459,39 @@ begin
   setup_encoder.end_encoding
   setup.commit_and_wait
 
-  warm_baseline = encode_arm(320, "A", true, x, modulation, positions,
-    context, output_baseline, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, attention_workspace.not_nil!,
-    reuse_scratch: reuse_block_scratch, fuse_kv_preparation: false)
-  warm_candidate = encode_arm(candidate_groups, "B", true, x, modulation, positions,
-    context, output_candidate, weight_arena.not_nil!, scratch.not_nil!, cfg,
-    projection_workspace.not_nil!, candidate_attention, precompute_rope: compare_rope,
-    phase_roots: compare_profile_replay && phase_roots_requested,
-    reuse_scratch: reuse_block_scratch,
-    fuse_kv_preparation: compare_kv_prep_fusion)
+  warmup_labels = warmup_order == "AB" ? ["A", "B"] : ["B", "A"]
+  measured_pair_orders = if pairs == 4
+                           ["AB", "BA", "BA", "AB"]
+                         else
+                           ["AB", "BA", "AB"][0, pairs]
+                         end
+  chronology = warmup_labels + measured_pair_orders.flat_map do |pair_order|
+    pair_order == "AB" ? ["A", "B"] : ["B", "A"]
+  end
+  puts({schema: "wan_s2v_full_block_timing_order_v1",
+        comparison_mode: comparison_mode, warmup_order: warmup_order,
+        measured_pair_orders: measured_pair_orders,
+        chronology: chronology.join(" -> "),
+        chronology_arms: chronology,
+        paired_order_balanced: measured_pair_orders.count("AB") == measured_pair_orders.count("BA")}.to_json)
+  STDOUT.flush
+
+  warm_results = {} of String => ArmResult
+  warmup_labels.each do |label|
+    baseline = label == "A"
+    attention = baseline ? attention_workspace.not_nil! : candidate_attention
+    groups = baseline ? 320 : candidate_groups
+    output = baseline ? output_baseline : output_candidate
+    warm_results[label] = encode_arm(groups, label, true, x, modulation, positions,
+      context, output, weight_arena.not_nil!, scratch.not_nil!, cfg,
+      projection_workspace.not_nil!, attention,
+      precompute_rope: compare_rope && !baseline,
+      phase_roots: compare_profile_replay && !baseline && phase_roots_requested,
+      reuse_scratch: reuse_block_scratch,
+      fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
+  end
+  warm_baseline = warm_results["A"]
+  warm_candidate = warm_results["B"]
   if compare_profile_replay
     baseline_root_count = warm_baseline.segments
     candidate_profile = warm_candidate.phase_root_profile.not_nil!
@@ -492,12 +535,20 @@ begin
     raise "Warmup block outputs failed the required comparison"
   end
   {warm_baseline, warm_candidate}.each do |arm|
-    arm_uses_prepared_kv = compare_attention_graph || compare_kv_prep_fusion || prepared_kv_replay || (arm.order == "B" && compare_kv_layout)
+    arm_uses_prepared_kv = compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || prepared_kv_replay || (arm.order == "B" && compare_kv_layout)
     arm_uses_explicit_qk_softmax_pv = compare_attention_graph && arm.order == "B"
     arm_uses_fused_kv_preparation = compare_kv_prep_fusion && arm.order == "B"
     puts({schema: "wan_s2v_full_block_arm_v1", groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
           order: arm.order, warmup: arm.warmup, host_wall_seconds: arm.host_wall_seconds,
-          encode_cpu_seconds: arm.encode_cpu_seconds, gpu_elapsed_seconds: arm.gpu_elapsed_seconds,
+          encode_cpu_seconds: arm.encode_host_elapsed_seconds,
+          encode_host_elapsed_seconds: arm.encode_host_elapsed_seconds,
+          encode_host_elapsed_semantics: "elapsed host wall time inside the synchronous encode/enqueue call; not process CPU time",
+          command_chain_setup_elapsed_seconds: arm.command_chain_setup_elapsed_seconds,
+          terminal_wait_elapsed_seconds: arm.terminal_wait_elapsed_seconds,
+          monotonic_begin_seconds: arm.monotonic_begin_seconds,
+          monotonic_end_seconds: arm.monotonic_end_seconds,
+          observations: WanHostObservation.between(arm.observation_before, arm.observation_after),
+          gpu_elapsed_seconds: arm.gpu_elapsed_seconds,
           command_segments: arm.segments, terminal_waits: arm.terminal_waits,
           encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,
           comparison_mode: comparison_mode,
@@ -528,10 +579,11 @@ begin
   STDOUT.flush
 
   pairs.times do |pair|
-    order = pair.even? ? {true, false} : {false, true}
+    order = measured_pair_orders[pair]
     baseline_root_count = nil.as(Int32?)
     candidate_root_count = nil.as(Int32?)
-    order.each do |baseline|
+    order.each_char do |label|
+      baseline = label == 'A'
       output = baseline ? output_baseline : output_candidate
       attention = baseline ? attention_workspace.not_nil! : candidate_attention
       groups = baseline ? 320 : candidate_groups
@@ -550,13 +602,21 @@ begin
         end
         candidate_root_count = profile.root_count
       end
-      arm_uses_prepared_kv = compare_attention_graph || compare_kv_prep_fusion || prepared_kv_replay || (!baseline && compare_kv_layout)
+      arm_uses_prepared_kv = compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || prepared_kv_replay || (!baseline && compare_kv_layout)
       arm_uses_explicit_qk_softmax_pv = compare_attention_graph && !baseline
       arm_uses_fused_kv_preparation = compare_kv_prep_fusion && !baseline
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
             groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
             order: arm.order, warmup: false,
-            host_wall_seconds: arm.host_wall_seconds, encode_cpu_seconds: arm.encode_cpu_seconds,
+            host_wall_seconds: arm.host_wall_seconds,
+            encode_cpu_seconds: arm.encode_host_elapsed_seconds,
+            encode_host_elapsed_seconds: arm.encode_host_elapsed_seconds,
+            encode_host_elapsed_semantics: "elapsed host wall time inside the synchronous encode/enqueue call; not process CPU time",
+            command_chain_setup_elapsed_seconds: arm.command_chain_setup_elapsed_seconds,
+            terminal_wait_elapsed_seconds: arm.terminal_wait_elapsed_seconds,
+            monotonic_begin_seconds: arm.monotonic_begin_seconds,
+            monotonic_end_seconds: arm.monotonic_end_seconds,
+            observations: WanHostObservation.between(arm.observation_before, arm.observation_after),
             gpu_elapsed_seconds: arm.gpu_elapsed_seconds, command_segments: arm.segments,
             terminal_waits: arm.terminal_waits,
             encode_metal_buffer_allocations: arm.encode_metal_buffer_allocations,

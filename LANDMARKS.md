@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-WAN-KV-PREP-DRIFT-2026-10-21] Same-work drift; isolated fusion is exact and faster
+
+- Benchmark-only diagnostics at parent `0146438e` separate process CPU from
+  encode host elapsed and add balanced AB/BA/BA/AB preparation/full-block
+  controls. Release objects/sources/binaries are pinned. CPU-positive,
+  missing-counter and signed-gauge controls pass; short retained-upstream
+  checks pass 17 examples each at chunk rows 1/3, including 24 checkpoints.
+- Full-shape isolated preparation saves a median paired 53.094% before and
+  56.202% after the full-block control (roughly 19-20 ms -> 9 ms). Both
+  processes scan all 374,865,920 K/V values exactly and finitely in warmup
+  plus four pairs; finite/NaN controls reject 2/2/1. This ~10-12 ms local
+  saving cannot establish a full-block or video benefit.
+- Same-work full-block A/A with fusion off grows chronologically from
+  11.818 to 38.388 s; GPU-root duration sum grows 11.793 -> 38.250 s.
+  Process CPU is 0.268-1.114 s. The first four measured arms have no GC,
+  page-in or disk read, so those counters do not explain the onset. An
+  obvious per-arm root-retention leak is not supported by source inspection;
+  private framework caches, scheduling, device clocks and competition remain
+  unmeasured. Do not call the host elapsed timer CPU usage or name a physical
+  cause from these observations.
+- All five full-block output comparisons are bit-exact/finite over
+  187,432,960 values; corruption rejects 2/2/1. Each arm has 624 segments,
+  one terminal wait, zero tracked encode allocations and no inter-operator
+  wait/activation readback. The sampled 12 GiB cap/15% cache-aware floor
+  passes with zero swap growth and no remaining owned child.
+- Completed optional phase replay attributes a median 76.29% of root union
+  to self-attention plus projection/residual. Measured root envelopes exceed
+  unions by only 0.550-0.643 ms; internal stalls and exclusive busy time remain
+  unknown. Two earlier telemetry-aborted attempts are excluded. Next signal:
+  separate attention from projection/residual and time existing native enqueue
+  calls without new waits, to discriminate API blocking from host CPU work.
+- Correlated source/math/raw-log MiniQuad review is ROBUST for the bounded
+  separation, VULNERABLE for physical diagnosis or full-block speedup.
+  Keep fusion default off. Evidence/commands/pins/exclusions and refresh:
+  `docs/wan-performance-frontier.md`, K/V preparation drift section. Refresh
+  after scoped source/object/binary, fixture, geometry/dtype, device/toolchain,
+  resource/queue changes or artifact loss. Full model/video remain excluded.
+
 ### [LM-WAN-KV-PREP-FUSION-2026-10-21] Exact optional fusion; speedup unproven
 
 - At parent `11be5cc7`, add default-off `fuse_kv_preparation` for B=1,
@@ -32,8 +70,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   upstream block oracle, full model or video-quality claim. Evidence, exact
   commands, pins, exclusions and refresh: `docs/wan-performance-frontier.md`,
   K/V preparation fusion result. Refresh on scoped code/build/device/fixture/
-  geometry/resource drift or artifact loss. Next discriminator: isolate
-  shared timing drift from K/V preparation cost; do not promote from medians.
+  geometry/resource drift or artifact loss. Follow the newer K/V preparation
+  drift landmark for the next discriminator; do not promote from medians.
 
 ### [LM-DRAMA3-GDN-SCAN-2026-10-18] Dense scan rejected; exact serial control retained
 
