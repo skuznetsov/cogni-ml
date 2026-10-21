@@ -31455,3 +31455,36 @@ Refresh after source/toolchain/device/model/workload changes.
   Next discriminator: GPU execution within the native graph; CPU submission
   has a much smaller ceiling. Refresh on graph/targets, inputs/dtype/geometry,
   toolchain/OS/device/queue/resource lifetime, guards, fixtures or artifact loss.
+
+### 2026-10-21 — Larger Wan attention graph chunks do not qualify a speedup
+
+- Added probe-only `--chunk-rows=128|256`; default and oracle chunk remain 128.
+  Native Q8192/K36608/H40/D128, reversed process order, warmup plus three samples:
+  opaque F32 chunk256 takes 2.36242/2.78515 s versus 2.01344/2.41175 s at 128,
+  17.33%/15.48% slower despite fewer roots. Both pass unchanged strict upstream
+  tolerance, max error 1.1473894e-6. Keep production defaults and chunk128.
+- Diagnostic connected F16 chunk256 takes 0.85038/0.92008 s versus
+  0.86381/0.97708 s, but adds 719.75 MiB reported device-current allocation and
+  still fails the F32 gate with 4,607,259 violations, ratio 14.857483.
+  Timing is descriptive; host observer cost scales with chunk count and late
+  GPU spans drift. Dtype-matched parity does not establish F32 parity or quality.
+- Connected F32 chunk128 passes Q128 changed-input and tail257 bit-exactly;
+  Q8192 exceeds the 3 GiB guard before any arm in both orders (~3.50 GiB sampled).
+  No Q8192 result is admitted, and connected F32 chunk256 was not attempted.
+  Eighteen normal processes / two guard stops / 47 validation pairs preserve
+  one arm wait, zero tracked buffer allocations, separate metric-only validation
+  and unchanged comparator controls. Fifteen-percent floors hold; minimum
+  sampled cache headroom 26.7176%, pressure free 75%, swap growth zero. No full generation.
+- DeepInfer 9bd9cf2 / FlashMLA gitlink 2e5429f audit: streaming online softmax
+  already exists locally; CUDA internal tiling is not an outer MPSGraph chunk.
+  Retain K/V load/compute overlap as a conditional idea for Metal only if a
+  bounded GPU profile exposes relevant stalls. Previous shared/register paths
+  regressed, and Q-hoist's local gain does not establish an MPS-relative win.
+- docs/wan-performance-frontier.md records the contract, results and next
+  discriminator. External wan-self-attention/query-geometry-20261021/ contains
+  exact source/object/binary/fixture pins, raw logs/guards and recomputation.
+  query-geometry-raw-receipt-v1.json pins 92 files; its digest is in the frontier.
+  Refresh on source/target/input/dtype/geometry/runtime/queue/resource/guard/
+  fixture changes or artifact loss. Next: GPU execution/stall attribution,
+  preserving strict F32 parity; no new wait or production promotion is admitted.
+  Correlated source/raw-evidence adversary review is ROBUST within this scope.

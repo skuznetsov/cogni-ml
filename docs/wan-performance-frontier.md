@@ -2019,3 +2019,133 @@ recounts the 20 cases, 73 arm/validation pairs and 162 guard samples. The exact
 internal blocking API, observer overhead, instantaneous peaks and production
 speed remain unqualified. The raw digest manifest addresses the review's
 artifact-mutation gap; verify it before reusing these receipts.
+
+### Native query-geometry investigation contract (2026-10-21)
+
+The next CAUTION probe holds full K36608/H40/D128, GPU-filled dyadic inputs,
+output layout and the existing terminal boundaries fixed. Test graph query
+chunks 128 and 256 in the native precision profiler, including opaque and
+connected F32 where the guard permits. This is a graph-shape experiment, not a
+claim to reproduce a CUDA kernel's internal tile. First measure the already
+available connected F32 graph at chunk128; its Q128 fixture passed previously,
+but Q8192 performance and larger graph shapes remain unqualified. An apparent
+F16 gain still cannot pass the existing F32 promotion rejection by assertion.
+
+The portable motivation is K/V operand reuse in DeepInfer's pinned FlashMLA
+dense prefill path. Larger outer graph chunks may instead leave its internal
+kernel unchanged, increase workspace, select a different rounding path or
+regress completion. The falsifier is unchanged strict upstream comparisons
+plus reversed-order completed-arm timing. Reject a candidate on any numerical,
+completion, NaN-poison coverage, lifetime or memory-guard failure; retain the
+production chunk/default and use the baseline option as rollback.
+
+DoD: guarded native release build; CPU-only argument/plan controls; Q128
+changed-query reuse, tail257 ending at K, and Q8192 one-warmup/three-sample
+forward/reverse runs for viable shapes. The cached pinned upstream fixtures
+remain chunk128 reference computations: query rows are independent with full
+K/V, so candidate graph chunking is deliberately separate from oracle chunking.
+No PyTorch process, block/model/Studio/full generation or new host wait is
+admitted. Require the unchanged finite 2e-5+2e-5abs gate, comparator controls,
+one existing terminal arm wait, zero tracked MetalBuffer allocations and no
+activation readback. Keep 15% reserve/pressure floors, 3 GiB process cap,
+64 MiB swap-growth cap and 120 s timeout (builds 1.5 GiB/180 s). Guard-aborted
+cases supply no performance evidence. Refresh on graph/source, geometry,
+inputs/fixture, device/runtime/toolchain, queue/lifetime or guard changes.
+
+### Query-geometry results and DeepInfer transfer limits (2026-10-21)
+
+The native release profiler now accepts opt-in `--chunk-rows=128|256`.
+The default remains 128, and its metadata distinguishes the candidate graph
+chunk from the pinned upstream fixture chunk of 128. No bridge arithmetic,
+model runtime or production default changed. Eight CPU-only controls check
+the unchanged default, both memory plans and five unsupported chunk values.
+
+Q8192/K36608/H40/D128 uses the same resident dyadic inputs, BTHD layout,
+queue128, eager encoder policy and host observer in each process. Each timing
+is the median of three completed arms after one warmup. The reversed process
+sequence repeats each comparison; later GPU spans drift, so the two sequences
+are reported separately rather than pooled.
+
+| Graph/dtype | Chunk128 forward / reverse (s) | Chunk256 forward / reverse (s) | Chunk256 time change |
+| --- | --- | --- | --- |
+| Opaque F32 SDPA | 2.01344 / 2.41175 | 2.36242 / 2.78515 | +17.33% / +15.48% |
+| Connected F16, diagnostic only | 0.86381 / 0.97708 | 0.85038 / 0.92008 | -1.56% / -5.83% |
+
+Opaque F32 roots fall from 11 to 6, yet completion regresses in both orders.
+Its upstream maximum error is 1.1473894e-6, ratio 0.052908488, zero strict
+violations for both chunks. Fewer command roots are not a GPU speedup proxy.
+Connected F16 roots fall from 129 to 65 and post-wait device-current allocation
+rises by 754,712,576 bytes (719.75 MiB). It is still bit-exact against the
+dtype-matched upstream output and still fails the unchanged F32 gate:
+4,607,259 violations, max error 3.1819195e-4, ratio 14.857483. The small F16
+timing differences are descriptive: reverse sample ranges overlap, per-chunk
+host instrumentation scales with chunk count, and precision already rejects
+promotion. Keep chunk128 and all production defaults; no admissible complete-arm
+speedup is established.
+
+Connected F32 chunk128 passes Q128 changed-input reuse and the final tail257
+bit-for-bit against upstream. At Q8192, both process orders exceed the 3 GiB
+process-tree footprint cap before producing an arm. Guards stop them at
+sampled footprints 3,761,439,872 and 3,764,225,152 bytes, about 3.50 GiB.
+Neither supplies numerical or timing evidence at Q8192. Connected F32 chunk256
+was not attempted after chunk128 exceeded the budget. Larger intermediate
+workspace is not qualified by the explicit Arena count, and these stops do
+not by themselves establish a leak.
+
+The final-source matrix contains 18 normally completed processes, two guard
+stops and 47 arm/validation pairs. It covers Q128 changed-query reuse, tail257
+ending at K, and Q8192 for the viable shapes. All admitted arms retain one
+terminal wait and zero tracked MetalBuffer allocations. Validation retains its
+existing separate wait, reads 20 metric words without activation readback,
+and rejects both +1 and NaN controls. Across 156 samples, minimum cache-aware
+headroom is 26.7176%, pressure free is at least 75%, and swap growth is zero.
+Polling can overshoot the process cap and miss instantaneous peaks. File-cache
+headroom is an estimate of reclaimable capacity. No Torch runtime, complete
+block, model, Studio or generation ran.
+
+The read-only DeepInfer audit pins commit
+[`9bd9cf2`](https://github.com/deepseek-ai/DeepInfer/commit/9bd9cf243fc53ef9afbf8f04d391d989117d6ab9)
+and its FlashMLA gitlink
+[`2e5429f`](https://github.com/deepseek-ai/FlashMLA/tree/2e5429fc5653bab6e081f09477126f731882a6a9).
+Its dense CUDA kernel uses an internal 256Q/128K/128D tile and FP32 QK/PV
+accumulators ([types and tile](https://github.com/deepseek-ai/FlashMLA/blob/2e5429fc5653bab6e081f09477126f731882a6a9/csrc/cuda_kernels/sm100/prefill/dense/fmha_cutlass_fwd_sm100.cuh#L43-L56)).
+It streams online softmax state and interleaves QK/PV stages
+([mainloop](https://github.com/deepseek-ai/FlashMLA/blob/2e5429fc5653bab6e081f09477126f731882a6a9/csrc/cuda_kernels/sm100/prefill/dense/collective/sm100_fmha_fwd_mainloop_tma_warpspecialized.hpp#L397-L711)).
+Streaming K/V and online softmax already exist in the local native tiled path;
+prior shared-K/V staging and register grouping regressed. The remaining
+transfer hypothesis is K/V load/compute overlap, conditional on a bounded GPU
+profile showing corresponding stalls. CUDA TMA, tensor-memory and warp
+pipelines need a different Metal mapping. An outer MPSGraph chunk is not this
+kernel's internal tile, and the chunk sweep does not test that CUDA schedule.
+DeepSeek-specific MLA/sparse attention/cache compression changes Wan's dense
+noncausal operation and is excluded from this strict-parity optimization.
+
+The next discriminator is a bounded native GPU profile separating attention
+kernel execution from copies and exposing memory/compute stalls before another
+staging rewrite. Preserve the F32 gate. The previously bit-exact Q-fragment
+hoist remains a local native-kernel candidate, but its 17.336% Q256 improvement
+was against a native baseline that was 3.4x slower than MPS in a separate cohort;
+it does not establish a replacement or whole-block gain.
+
+Evidence is under the external SSD base in
+`evidence/wan-self-attention/query-geometry-20261021/`:
+`query-geometry-summary-v1.json`, `query-geometry-source-receipt-v1.json`,
+`geometry-preflights-v1.json`, `source-v1/`, and per-case invocations/logs/guards.
+`run-geometry-matrix-v1.py` and the two matrix configs preserve exact serial
+order; `summarize-geometry-v1.py` recomputes aggregate counts and comparisons.
+The source receipt checks eight cached upstream fixture manifests and output
+hashes, unchanged native object lineage, and the executed release binary
+`build/wan-block-benchmark/wan_s2v_attention_precision_profile-geometry-v1`.
+`deepinfer/` retains six official source snapshots, hashes and the audit.
+`query-geometry-raw-receipt-v1.json` pins 92 raw/index/source files; SHA256
+`69d25a529f0cbf04cccf921d07a33c357defdb63cdc3a1e9745887f955e61d40`.
+This is a curated evidence index, not independent attestation. Refresh after
+the contract's source/target, input/fixture, runtime, queue, geometry, guard
+or resource-lifetime changes, or artifact loss.
+
+Correlated source/raw-evidence adversary review is ROBUST for these bounded
+fixture observations, source/control invariants, memory exclusions and the
+rejection of an accuracy-admissible speedup. It independently recomputes the
+18/2/47 process/guard/validation counts and verifies all 92 receipt file hashes.
+It does not qualify causality for the small F16 timing differences, production
+performance, quality or the internal CUDA schedule on Metal.
