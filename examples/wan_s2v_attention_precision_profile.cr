@@ -105,6 +105,10 @@ kernel void precision_compare(device const float *reference [[buffer(0)]],
 METAL
 
 lib WanPrecisionFFI
+  # Darwin _time.h clock IDs; these CPU clocks do not wait for GPU work.
+  fun cpu_clock = clock_gettime_nsec_np(clock_id : UInt32) : UInt64
+  fun profile_queue_create = gs_wan_attention_profile_queue_create(device : Void*, capacity : UInt32) : Void*
+  fun profile_queue_release = gs_wan_attention_profile_queue_release(queue : Void*) : Void
   fun create = gs_wan_attention_mps_plan_create_typed(device : Void*, batches : Int32,
                                                       query_rows : Int32, key_rows : Int32, heads : Int32, head_dim : Int32,
                                                       q : Void*, k : Void*, v : Void*, a : Void*, b : Void*, dtype : Int32) : Void*
@@ -112,6 +116,102 @@ lib WanPrecisionFFI
                                                                           query_rows : Int32, key_rows : Int32, heads : Int32, head_dim : Int32,
                                                                           q : Void*, k : Void*, v : Void*, a : Void*, b : Void*, dtype : Int32,
                                                                           head_major_kv : Int32) : Void*
+end
+
+private class PrecisionQueue
+  @handle : Void* = Pointer(Void).null
+
+  def initialize(@capacity : Int32)
+    if @capacity != 0
+      @handle = WanPrecisionFFI.profile_queue_create(ML::Metal::Device.instance.device_handle, @capacity.to_u32)
+      raise "Precision queue unavailable" if @handle.null?
+    end
+  end
+
+  def chain
+    @capacity == 0 ? ML::Metal::MPSCommandChain.new : ML::Metal::MPSCommandChain.new(@handle)
+  end
+
+  def release
+    WanPrecisionFFI.profile_queue_release(@handle) unless @handle.null?
+    @handle = Pointer(Void).null
+  end
+end
+
+private record PrecisionHostStamp, wall : Time::Instant, thread_ns : UInt64, process_ns : UInt64 do
+  def self.now
+    new(Time.instant, WanPrecisionFFI.cpu_clock(16_u32), WanPrecisionFFI.cpu_clock(12_u32))
+  end
+end
+
+# Opt-in observer, constructed before the arm. No per-chunk records or GPU calls.
+private class PrecisionHostProfile
+  @wall = StaticArray(Float64, 6).new(0.0)
+  @thread = StaticArray(Float64, 6).new(0.0)
+  @process = StaticArray(Float64, 6).new(0.0)
+  @calls = StaticArray(Int32, 6).new(0)
+
+  def initialize(@enabled : Bool)
+  end
+
+  def measure(slot : Int32, & : -> Nil) : Nil
+    if @enabled
+      before = PrecisionHostStamp.now
+      yield
+      after = PrecisionHostStamp.now
+      @wall[slot] += (after.wall - before.wall).total_seconds
+      @thread[slot] += (after.thread_ns - before.thread_ns)*1e-9
+      @process[slot] += (after.process_ns - before.process_ns)*1e-9
+      @calls[slot] += 1
+    else
+      yield
+    end
+  end
+
+  def summary(total_before : PrecisionHostStamp?, total_after : PrecisionHostStamp?)
+    return nil unless @enabled
+    before = total_before.not_nil!; after = total_after.not_nil!
+    {clock:                     "Darwin calling-thread and process CPU clocks; elapsed intervals can include backpressure",
+     total_thread_cpu_seconds:  (after.thread_ns - before.thread_ns)*1e-9,
+     total_process_cpu_seconds: (after.process_ns - before.process_ns)*1e-9,
+     stages:                    {"prepare", "query_copy", "tail", "graph", "output_copy", "final_convert"}.map_with_index do |name, i|
+       {name: name, calls: @calls[i], wall_seconds: @wall[i],
+        thread_cpu_seconds: @thread[i], process_cpu_seconds: @process[i]}
+     end}
+  end
+end
+
+class ML::Metal::MPSCommandChain
+  # Probe-only constructor. The default runtime queue is unchanged. Each arm's
+  # existing terminal wait orders its inputs/outputs with setup and validation.
+  def initialize(queue : Pointer(Void))
+    raise "Missing precision queue" if queue.null?
+    @native = MPSCommandChainFFI.create(queue)
+    raise "Failed to create precision chain" if @native.null?
+    resume!
+  end
+
+  # Read only timestamps already retained by the chain, after its existing wait.
+  def precision_root_timing_summary
+    raise "Root timing requires the existing terminal wait" unless completed? && wait_count == 1
+    raise "Precision root metadata cap exceeded" unless 0 < segment_count <= 256
+    earliest = Float64::INFINITY
+    latest = 0.0
+    gaps = 0.0
+    segment_count.times do |sequence|
+      completed = 0_i32; has_error = 0_i32
+      start = 0.0; finish = 0.0
+      status = MPSCommandChainFFI.root_timing(@native, sequence.to_i32,
+        pointerof(completed), pointerof(has_error), pointerof(start), pointerof(finish))
+      raise "Invalid completed root timing" unless status == 0 && completed == 1 && has_error == 0 &&
+                                                   start.finite? && finish.finite? && start > 0 && finish >= start
+      earliest = Math.min(earliest, start)
+      gaps += Math.max(0.0, start - latest) if sequence > 0
+      latest = Math.max(latest, finish)
+    end
+    {gpu_envelope_seconds: latest - earliest, inter_root_gap_seconds: gaps,
+     boundary: "completed root timestamp envelope; cannot separate same-root CPU/GPU work"}
+  end
 end
 
 # Probe-local typed wrapper. Existing production Crystal plans remain F32.
@@ -137,19 +237,19 @@ private class PrecisionPlan
     raise "Typed MPSGraph plan unavailable (dtype=#{type})" if @handle.null?
   end
 
-  def encode(chain : ML::Metal::MPSCommandChain) : Nil
+  def encode(chain : ML::Metal::MPSCommandChain, *, encoder_paused : Bool = false) : Nil
     raise "Released precision plan" if @handle.null?
     if prior = @chain
       raise "Precision plan overlaps an incomplete chain" unless prior.same?(chain) || prior.completed?
     end
     raise "Invalid precision buffer" unless @buffers.all?(&.valid?)
     @chain = chain
-    chain.pause!
+    chain.pause! unless encoder_paused
     begin
       status = WanAttentionMPSFFI.encode(@handle, chain.handle, 0)
       raise "Typed attention encode failed (#{status})" unless status == 0
     ensure
-      chain.resume!
+      chain.resume! unless encoder_paused
     end
   end
 
@@ -339,53 +439,108 @@ private def precision_finish(chain)
   end
 end
 
+private def precision_expect_paused_rejection(& : -> Nil)
+  begin
+    yield
+  rescue ArgumentError
+    return
+  end
+  raise "Paused encoder guard accepted an invalid operation"
+end
+
+private def precision_paused_guards(chain, plan, q, cq)
+  # Exercise the new explicit state precondition before the existing setup work.
+  # No operation below reaches a native encode/copy and no extra wait is added.
+  precision_expect_paused_rejection do
+    ML::Video::WanAttentionMPSPlan.copy(chain, q, cq, 4_i64, encoder_paused: true)
+  end
+  precision_expect_paused_rejection { plan.encode(chain, encoder_paused: true) }
+  chain.pause!
+  begin
+    precision_expect_paused_rejection { ML::Video::WanAttentionMPSPlan.copy(chain, q, cq, 4_i64) }
+    precision_expect_paused_rejection { plan.encode(chain) }
+    precision_expect_paused_rejection do
+      ML::Video::WanAttentionMPSPlan.copy(chain, q, cq, 3_i64, encoder_paused: true)
+    end
+    precision_expect_paused_rejection do
+      ML::Video::WanAttentionMPSPlan.copy(chain, q, q, 4_i64, encoder_paused: true)
+    end
+  ensure
+    chain.resume!
+  end
+  STDOUT.puts({schema: "wan_attention_precision_paused_guards_v1", rejected_cases: 6,
+               gpu_commands_submitted: false, additional_terminal_waits: 0}.to_json)
+end
+
 private def precision_arm(plan, q, k, v, output, cq, ca, sources,
                           converted_output, convert_pipeline, tail_pipeline,
                           rows : Int32, type : Int32, mode : String,
                           phase : String, sample : Int32,
                           fill_pipeline, transpose_pipeline,
-                          head_major_k, head_major_v, query_start : Int32)
+                          head_major_k, head_major_v, query_start : Int32,
+                          profile_host : Bool, encoder_policy : String,
+                          queue : PrecisionQueue, queue_capacity : Int32)
   width = type == 0 ? 4_i64 : 2_i64
+  paused = encoder_policy == "paused"
+  host = PrecisionHostProfile.new(profile_host)
   before = ML::MetalBuffer.video_spec_allocations
   started = Time.instant
-  chain = ML::Metal::MPSCommandChain.new
+  chain = queue.chain
   begin
     encoding = Time.instant
-    if phase == "changed_query"
-      src = sources
-      precision_fill(chain.encoder, fill_pipeline, src ? src[0] : q, rows*PRECISION_C,
-        (query_start.to_i64*PRECISION_C).to_u32, 4_u32, src ? 0 : type)
-    end
-    if mode == "f32-boundary"
-      src = sources.not_nil!
-      { {src[0], q, rows*PRECISION_C}, {src[1], k, PRECISION_K*PRECISION_C},
-       {src[2], v, PRECISION_K*PRECISION_C} }.each do |source, dest, n|
-        precision_convert(chain.encoder, convert_pipeline, source, dest, n, 0, type)
+    cpu_before = profile_host ? PrecisionHostStamp.now : nil
+    host.measure(0) do
+      if phase == "changed_query"
+        src = sources
+        precision_fill(chain.encoder, fill_pipeline, src ? src[0] : q, rows*PRECISION_C,
+          (query_start.to_i64*PRECISION_C).to_u32, 4_u32, src ? 0 : type)
+      end
+      if mode == "f32-boundary"
+        src = sources.not_nil!
+        { {src[0], q, rows*PRECISION_C}, {src[1], k, PRECISION_K*PRECISION_C},
+         {src[2], v, PRECISION_K*PRECISION_C} }.each do |source, dest, n|
+          precision_convert(chain.encoder, convert_pipeline, source, dest, n, 0, type)
+        end
+      end
+      if prepared_k = head_major_k
+        precision_transpose_kv(chain.encoder, transpose_pipeline.not_nil!, k, prepared_k,
+          v, head_major_v.not_nil!, type)
       end
     end
-    if prepared_k = head_major_k
-      precision_transpose_kv(chain.encoder, transpose_pipeline.not_nil!, k, prepared_k,
-        v, head_major_v.not_nil!, type)
-    end
+    chain.pause! if paused
     offset = 0
     while offset < rows
       valid = Math.min(PRECISION_CHUNK, rows - offset)
       n = valid.to_i64*PRECISION_C
-      ML::Video::WanAttentionMPSPlan.copy(chain, q, cq, n*width, offset.to_i64*PRECISION_C*width)
-      if valid < PRECISION_CHUNK
-        tail_n = (PRECISION_CHUNK - valid)*PRECISION_C
-        chain.encoder.set_pipeline(tail_pipeline).set_buffer(cq, 0, ML::Metal::BufferAccess::Write)
-        chain.encoder.set_value(n.to_u32, 1).set_value(tail_n.to_u32, 2)
-        chain.encoder.set_value(type.to_u32, 3).dispatch_1d(tail_n)
+      host.measure(1) do
+        ML::Video::WanAttentionMPSPlan.copy(chain, q, cq, n*width, offset.to_i64*PRECISION_C*width,
+          encoder_paused: paused)
       end
-      plan.encode(chain)
-      ML::Video::WanAttentionMPSPlan.copy(chain, ca, output, n*width, 0_i64, offset.to_i64*PRECISION_C*width)
+      if valid < PRECISION_CHUNK
+        host.measure(2) do
+          chain.resume! if paused
+          tail_n = (PRECISION_CHUNK - valid)*PRECISION_C
+          chain.encoder.set_pipeline(tail_pipeline).set_buffer(cq, 0, ML::Metal::BufferAccess::Write)
+          chain.encoder.set_value(n.to_u32, 1).set_value(tail_n.to_u32, 2)
+          chain.encoder.set_value(type.to_u32, 3).dispatch_1d(tail_n)
+          chain.pause! if paused
+        end
+      end
+      host.measure(3) { plan.encode(chain, encoder_paused: paused) }
+      host.measure(4) do
+        ML::Video::WanAttentionMPSPlan.copy(chain, ca, output, n*width, 0_i64, offset.to_i64*PRECISION_C*width,
+          encoder_paused: paused)
+      end
       offset += valid
     end
     if mode == "f32-boundary"
-      precision_convert(chain.encoder, convert_pipeline, output, converted_output.not_nil!,
-        rows*PRECISION_C, type, 0)
+      host.measure(5) do
+        chain.resume! if paused
+        precision_convert(chain.encoder, convert_pipeline, output, converted_output.not_nil!,
+          rows*PRECISION_C, type, 0)
+      end
     end
+    cpu_after = profile_host ? PrecisionHostStamp.now : nil
     encode_seconds = (Time.instant - encoding).total_seconds
     chain.commit_and_wait
     wall = (Time.instant - started).total_seconds
@@ -395,9 +550,14 @@ private def precision_arm(plan, q, k, v, output, cq, ca, sources,
     {schema: "wan_attention_precision_arm_v1", phase: phase, sample: sample,
      mode: mode, dtype: type, query_rows: rows, key_rows: PRECISION_K, chunk_rows: PRECISION_CHUNK,
      graph: plan.graph, kv_layout: plan.kv_layout,
+     encoder_policy: encoder_policy,
+     queue_capacity: queue_capacity == 0 ? "default64" : queue_capacity.to_s,
+     expected_compute_encoder_creations: paused ? 1 + (rows % PRECISION_CHUNK == 0 ? 0 : 1) + (mode == "f32-boundary" ? 1 : 0) : 1 + 3*((rows + PRECISION_CHUNK - 1)//PRECISION_CHUNK),
      kv_preparation_included: plan.kv_layout == "head-major",
      completed_wall_seconds: wall, encode_wall_seconds: encode_seconds,
      summed_root_gpu_seconds: chain.gpu_elapsed_seconds, command_roots: chain.segment_count,
+     host_profile: host.summary(cpu_before, cpu_after),
+     root_timing: profile_host ? chain.precision_root_timing_summary : nil,
      terminal_waits: chain.wait_count, tracked_metal_buffer_allocations: allocations,
      device_current_allocated_bytes_after_wait: ML::Metal::Device.instance.current_allocated_size,
      boundary: "chain creation through encoding and one terminal wait; conversions included only in f32-boundary mode; BTHD-to-BHTD K/V transpose included for head-major layout"}
@@ -453,6 +613,9 @@ mode = "resident"
 rows = 128
 start = 0
 samples = 3
+profile_host = false
+encoder_policy = "eager"
+queue_capacity = 0
 graph = "opaque"
 kv_layout = "bthd"
 plan_only = false
@@ -469,10 +632,18 @@ OptionParser.parse do |o|
   o.on("--query-rows=N", "128, 257 or 8192") { |v| rows = v.to_i }
   o.on("--query-start=N", "Global query start") { |v| start = v.to_i }
   o.on("--samples=N", "0, 1 or 3 measured arms after warmup") { |v| samples = v.to_i }
+  o.on("--profile-host=BOOL", "Opt-in CPU/wall stage clocks and completed-root timeline") do |v|
+    raise ArgumentError.new("Unsupported host profiling flag") unless {"true", "false"}.includes?(v)
+    profile_host = v == "true"
+  end
+  o.on("--encoder-policy=POLICY", "eager or paused; paused avoids empty compute encoders between blits/Graph") { |v| encoder_policy = v }
+  o.on("--queue-capacity=N", "0 (unchanged default), 32, 64 or 128; probe-only queue ablation") { |v| queue_capacity = v.to_i }
   o.on("--plan-only", "Print memory plan without Metal/fixture access") { plan_only = true }
 end
 type = {"f32" => 0, "f16" => 1, "bf16" => 2}[dtype]? || raise ArgumentError.new("Unsupported dtype")
 raise ArgumentError.new("Unsupported mode") unless {"resident", "f32-boundary"}.includes?(mode)
+raise ArgumentError.new("Unsupported encoder policy") unless {"eager", "paused"}.includes?(encoder_policy)
+raise ArgumentError.new("Unsupported queue capacity") unless {0, 32, 64, 128}.includes?(queue_capacity)
 raise ArgumentError.new("Unsupported graph") unless {"opaque", "connected"}.includes?(graph)
 raise ArgumentError.new("Unsupported K/V layout") unless {"bthd", "head-major"}.includes?(kv_layout)
 raise ArgumentError.new("Opaque graph requires the existing BTHD K/V layout") if graph == "opaque" && kv_layout != "bthd"
@@ -496,6 +667,9 @@ diagnostic_bytes = 23_i64*4
 explicit_bytes = typed_bytes + kv_preparation_bytes + reference_bytes + boundary_bytes + diagnostic_bytes
 raise ArgumentError.new("Precision buffer cap exceeded") if explicit_bytes > 4_i64*1024*1024*1024
 buffer_plan = {schema: "wan_attention_precision_plan_v1", dtype: dtype, mode: mode,
+               profile_host: profile_host,
+               encoder_policy: encoder_policy,
+               queue_capacity: queue_capacity,
                graph: graph, kv_layout: kv_layout, query_rows: rows,
                query_start: start, key_rows: PRECISION_K, heads: PRECISION_H, head_dim: PRECISION_D, chunk_rows: PRECISION_CHUNK,
                typed_attention_bytes: typed_bytes, kv_preparation_bytes: kv_preparation_bytes,
@@ -516,6 +690,7 @@ alternate_f32 = alternate_f32_dir.empty? ? nil : precision_fixture(alternate_f32
 
 arena = ML::Video::Arena.new
 plan = nil.as(PrecisionPlan?)
+queue = nil.as(PrecisionQueue?)
 passed = true
 f32_passed = true
 begin
@@ -561,6 +736,7 @@ begin
   plan_buffers = [cq, plan_k, plan_v, ca, cb]
   precision_native_guards(plan_buffers, metrics[0], type, graph, kv_layout)
   plan = PrecisionPlan.new(plan_buffers, type, graph, kv_layout)
+  queue = PrecisionQueue.new(queue_capacity)
   head_major_k = nil.as(ML::MetalBuffer?)
   head_major_v = nil.as(ML::MetalBuffer?)
   if buffers = prepared_kv
@@ -581,6 +757,7 @@ begin
   STDOUT.flush
   setup = ML::Metal::MPSCommandChain.new
   begin
+    precision_paused_guards(setup, plan.not_nil!, q, cq) if encoder_policy == "paused"
     if src = sources
       precision_fill(setup.encoder, pipelines["fill"], src[0], nq, (start.to_i64*PRECISION_C).to_u32, 1_u32, 0)
       precision_fill(setup.encoder, pipelines["fill"], src[1], nkv, 0_u32, 2_u32, 0)
@@ -602,7 +779,8 @@ begin
     phase = i == 0 ? "warmup" : "measured"
     arm = precision_arm(plan.not_nil!, q, k, v, output, cq, ca, sources, converted_output,
       pipelines["convert"], pipelines["tail"], rows, type, mode, phase, i,
-      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start)
+      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start, profile_host, encoder_policy,
+      queue.not_nil!, queue_capacity)
     STDOUT.puts(arm.to_json); STDOUT.flush
     walls << arm[:completed_wall_seconds] if i > 0
     actual = converted_output || output
@@ -618,7 +796,8 @@ begin
     precision_load(alternate_f32.not_nil![:expected_path], f32_expected)
     arm = precision_arm(plan.not_nil!, q, k, v, output, cq, ca, sources, converted_output,
       pipelines["convert"], pipelines["tail"], rows, type, mode, "changed_query", 0,
-      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start)
+      pipelines["fill"], transpose_pipeline, head_major_k, head_major_v, start, profile_host, encoder_policy,
+      queue.not_nil!, queue_capacity)
     STDOUT.puts(arm.to_json)
     ok = precision_validate(converted_output || output, expected, f32_expected,
       converted_output ? 0 : type, metrics, controls, pipelines["zero"], pipelines["compare"],
@@ -640,6 +819,7 @@ ensure
   begin
     plan.try(&.release)
   ensure
+    queue.try(&.release)
     arena.release
   end
 end

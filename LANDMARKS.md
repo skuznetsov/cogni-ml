@@ -31418,3 +31418,40 @@ Refresh after source/toolchain/device/model/workload changes.
   fixture observations and rejection, excluding quality or full-block claims.
   Refresh on graph/targets, input/dtype/geometry, toolchain/OS/device/queue,
   guard or fixture changes, or artifact loss.
+
+### 2026-10-21 — Wan native encode wall is dominated by queue backpressure
+
+- Native connected F16 Q8192/K36608/H40/D128, chunk128: explicit queue-capacity
+  32/64/128 controls yield encode medians 638/425/5 ms, while completed arms
+  remain about 0.84 s in both process orders. Calling-thread CPU is 4-11 ms,
+  not the apparent 0.42 s encode interval. Metal's default queue cap is 64;
+  cumulative root count is 129. Capacity mostly relocates waiting to the
+  existing terminal boundary; no complete-arm speedup is established.
+- Added opt-in CPU stage clocks, completed-root metadata and probe-only queue
+  controls. A paused-encoder policy avoids 192 empty compute encoders and
+  reduces copy-stage CPU from about 0.9 to 0.45 ms at queue128, but total CPU
+  and arm latency have no stable gain. Keep both scheduling controls opt-in.
+  Production plan encoding and all defaults remain unchanged. Observer CPU
+  cost is included; on/off controls show late GPU drift and cannot establish
+  observer wall overhead. No specific cause is assigned to that drift.
+- Final-source guarded native probes: 20 processes, 73 validated arms; F16 is
+  bit-exact against dtype-matched upstream including changed-Q and tail257.
+  Q8192 F32 rejection remains 4,607,259 violations / max error 3.1819195e-4;
+  do not promote F16 or widen the finite 2e-5+2e-5abs gate. Paused F32 and
+  rebuilt legacy F32 pass; legacy max error 5.5506825e-7. Six paused-state/
+  alignment/alias controls and five CPU CLI controls pass. One existing arm
+  wait, separate existing validation wait, zero tracked buffer allocations,
+  and no activation readback. No full block/model/Studio/generation or Torch.
+- All final guard runs finish normally with 15% floors, 3 GiB runtime and
+  64 MiB swap-growth caps. Minimum sampled cache-aware headroom 19.60%,
+  pressure free >=79%, sampled swap growth zero. Polling is not peak proof.
+- docs/wan-performance-frontier.md and external wan-self-attention/
+  native-encode-20261021/{native-encode-summary-v1.json,
+  native-encode-source-receipt-v1.json,source-v1/} index exact source/binary
+  pins, native argv/order, upstream fixture lineage, raw checks and guards.
+  native-encode-raw-receipt-v1.json pins all 80 raw files/indices; its digest
+  is recorded in the frontier document. Correlated raw/source adversary
+  review is ROBUST for bounded attribution, invariants and no-speedup finding.
+  Next discriminator: GPU execution within the native graph; CPU submission
+  has a much smaller ceiling. Refresh on graph/targets, inputs/dtype/geometry,
+  toolchain/OS/device/queue/resource lifetime, guards, fixtures or artifact loss.

@@ -1885,3 +1885,137 @@ fixture and measurement scope. It cross-checked all 17 aggregate rows and 57
 arm/validation pairs against raw logs, source snapshot hashes, reverse ordering,
 changed-Q reuse and tail masking. It does not qualify production F16 accuracy,
 perceptual quality, instantaneous memory peaks or full-block speed.
+
+### Native command encoding investigation contract (2026-10-21)
+
+The connected F16 graph spends about 0.42 s in the host encoding boundary for
+64 chunks; those wall seconds may include GPU backpressure rather than CPU
+computation. Inputs, graph target/cast order, chunk128 and K36608/H40/D128 stay
+fixed. First distinguish executable calls from copy/chain bookkeeping and
+on-thread CPU time from elapsed time. Existing tensor-data bindings and compiled
+executables are already retained, so their repeated construction is not an
+established cause. Do not remove lifetime/overlap guards to chase a proxy.
+
+CAUTION: any scheduling or resource-lifetime change remains opt-in until it
+preserves native upstream comparisons and improves the complete measured arm.
+Keep production defaults, the unchanged finite 2e-5+2e-5abs F32 gate, and the
+existing F16 promotion rejection. Rollback is the preceding atomic commit or
+the baseline option. No full block/model/Studio/generation or Torch runtime.
+
+DoD: guarded native release build; Q128 with changed-Q reuse and tail257 ending
+at K; order-reversed Q8192 resident runs with one warmup plus three samples;
+the legacy F32 regression; source/raw adversary review. Use opt-in timing and
+an uninstrumented control to bound observer cost. Require one existing terminal
+wait, no intermediate host wait/activation readback, zero tracked buffer
+allocations, unchanged precision metrics and comparator controls. Use the
+existing file-cache memory guard with 15% reserve/pressure floors, 3 GiB process
+cap for resident probes, 64 MiB swap-growth cap and 120 s timeout; builds retain
+1.5 GiB/180 s limits. Disqualify guard-aborted runs. Sampled limits cannot bound
+instantaneous peaks. Refresh on source, runtime/device/toolchain, graph target,
+geometry/inputs, queue/resource lifetime or guard changes.
+
+The initial opt-in CPU-clock probe finds only 8-10 ms of calling-thread CPU
+inside about 427 ms encode wall. The default Cogni queue uses `newCommandQueue`;
+the installed Metal SDK documents a limit of 64 non-completed buffers, while
+this arm records 129 cumulative roots. Test that backpressure hypothesis with
+probe-only queues capped at 32/64/128, holding the graph and all GPU arithmetic
+fixed. A change in encode wall without a completed-arm gain is a scheduling
+diagnostic, not an inference speedup. Queue-cap experiments remain opt-in.
+
+### Native command encoding result (2026-10-21, bounded)
+
+The principal cause of the 0.42 s encode interval is command-queue admission
+backpressure, not 0.42 s of CPU computation. The installed Metal SDK documents
+64 non-completed command buffers for `newCommandQueue`; a probe-only factory
+varies this limit without changing the graph, arithmetic or root sequence.
+For resident connected F16, Q8192/K36608/H40/D128, chunk128, the two directions
+of a reversed process sequence give these medians (one warmup, three samples):
+
+| Queue capacity | Encode wall A / B (ms) | Completed arm A / B (ms) | Calling-thread CPU A / B (ms) |
+| --- | --- | --- | --- |
+| 32 | 638.29 / 637.85 | 845.05 / 846.12 | 10.95 / 8.56 |
+| 64 | 426.00 / 423.32 | 842.83 / 838.10 | 8.36 / 6.28 |
+| 128 | 4.98 / 5.69 | 839.39 / 838.32 | 4.36 / 5.69 |
+
+All three use 129 cumulative command roots. Completed GPU root gaps sum to
+about 0.07 ms, while GPU spans sum to about 0.84 s. The timestamps exclude the
+delay before the first root and do not isolate individual kernels or the exact
+blocking API. The capacity ablation establishes the queue-admission component;
+increasing capacity mostly moves waiting to the existing terminal boundary.
+There is no established complete-arm speedup to promote. Do not add encode and
+GPU time or rank candidates by encode wall alone.
+
+An explicit `--encoder-policy=paused` probe keeps the compute encoder closed
+across blits and graph calls. `WanAttentionMPSPlan.copy(..., encoder_paused:
+true)` exposes the same checked precondition; the production plan's encode
+method and every existing default stay unchanged. At Q8192 this avoids 192
+otherwise empty compute-encoder creations (193 to 1, derived from call sites,
+not a native creation counter). The command-root count remains 129.
+With queue128, median query-copy plus output-copy calling-thread CPU falls from
+0.872/0.918 ms to 0.461/0.434 ms in the two orders. Total CPU improvement is
+variable, and complete-arm times are 840.01/840.79 ms versus eager
+839.39/838.32 ms. Keep this small scheduling experiment opt-in. It does not
+qualify a production or video-throughput improvement.
+
+`--profile-host=true` adds preallocated stage accumulators, Darwin calling-thread
+and process CPU clocks, and a root timestamp summary read after the existing
+wait. It creates no per-chunk records and submits no GPU work. CPU values
+include observer cost; process CPU covers all process threads. The observer is
+off by default. The on/off reversed controls show later GPU spans drifting to
+0.90-0.96 s, so these wall measurements cannot establish observer overhead or
+attribute the drift to a particular cause. The explicit capacity controls above
+remain close to 0.84 s in both directions.
+
+Twenty final-source precision processes complete normally, covering 73
+arm/validation pairs. All F16 arms match the dtype-matched pinned upstream
+fixtures bit-for-bit after widening, including changed-Q reuse and a tail257
+ending at K. Queue and encoder policy preserve the existing Q8192 F32 rejection
+exactly: 4,607,259 violations, max error 3.1819195e-4, ratio 14.857483. The
+unchanged finite `2e-5 + 2e-5*abs(reference)` gate still rejects F16 promotion.
+The paused opaque F32 control passes both gates; the separately rebuilt legacy
+F32 probe passes with max error 5.5506825e-7 and zero strict violations.
+Positive/+1 and NaN comparator controls pass. Five CPU-only CLI controls and
+six paused-state/alignment/alias rejection controls pass. Existing buffer,
+lifetime and native binding guards remain in place.
+
+Every measured arm retains one existing terminal wait and zero tracked
+MetalBuffer allocations; validation retains its separate existing wait and
+reads only 20 metric words. No activation readback or new synchronization was
+added. All final runs use the 15% reserve/pressure policy, 3 GiB process cap,
+64 MiB swap-growth cap and 120 s timeout. Minimum sampled cache-aware headroom
+is 19.60%, pressure free is at least 79%, and sampled swap growth is zero.
+No guard abort occurs. Polling does not certify instantaneous peaks. No full
+block, model, Studio, generation or Torch runtime ran.
+
+Evidence is under the same external SSD base, in
+`evidence/wan-self-attention/native-encode-20261021/`:
+`native-encode-summary-v1.json`, `native-encode-source-receipt-v1.json`,
+`source-v1/`, `native-encode-preflights-v1.json`, and per-case invocations, logs
+and guards. `native-encode-raw-receipt-v1.json` pins 80 raw files and indices;
+its SHA256 is `ba310dd90779dc88d9aff808edfc22394d7c625183bf2dee94e79199078505f2`.
+`paired-matrix-v1.json` and `run-encode-matrix-v1.py` preserve exact
+serial order and checks; cached oracle manifests retain upstream provenance.
+Build invocations include the probe-only queue object, compiled with
+`clang++ -std=c++17 -fobjc-arc -fPIC -c
+examples/support/wan_attention_profile_queue.mm`. It is linked only into the
+precision profiler, not the model runtime. The executed profiler is
+`build/wan-block-benchmark/wan_s2v_attention_precision_profile-encode-v3`
+under the external base. Use the preceding guarded native reproduction with
+this binary, 3072 MiB instead of 5120 MiB, and explicit
+`--profile-host=true --encoder-policy=eager --queue-capacity=64` or `128`.
+Expected exit remains 3 for connected F16, with every dtype-matched comparison
+true and every F32 comparison false.
+
+The next useful discriminator is GPU execution inside the native graph, not
+another attempt to eliminate hundreds of milliseconds of presumed CPU work.
+Refresh these observations on the contract's source, target, input, runtime,
+queue, geometry, fixture and guard changes. This receipt is an evidence index,
+not independent attestation or production qualification.
+
+Correlated source/raw-evidence adversary review is ROBUST for the bounded
+queue-backpressure attribution, unchanged explicit synchronization and fixture
+checks, and the rejection of a stable complete-arm speedup. It independently
+recounts the 20 cases, 73 arm/validation pairs and 162 guard samples. The exact
+internal blocking API, observer overhead, instantaneous peaks and production
+speed remain unqualified. The raw digest manifest addresses the review's
+artifact-mutation gap; verify it before reusing these receipts.

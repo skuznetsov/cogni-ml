@@ -323,7 +323,8 @@ module ML::Video
     def self.copy(chain : ML::Metal::MPSCommandChain,
                   source : ML::MetalBuffer, destination : ML::MetalBuffer,
                   byte_count : Int64, source_offset_bytes : Int64 = 0,
-                  destination_offset_bytes : Int64 = 0) : Nil
+                  destination_offset_bytes : Int64 = 0, *,
+                  encoder_paused : Bool = false) : Nil
       validate_copy_region!(source, source_offset_bytes, byte_count)
       validate_copy_region!(destination, destination_offset_bytes, byte_count)
       unless source.storage_mode == ML::StorageMode::Shared &&
@@ -335,14 +336,16 @@ module ML::Video
         raise ArgumentError.new("MPS attention copy active ranges must be disjoint")
       end
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
-        chain.pause!
+        # A sequence containing only blits/Graph calls can keep the encoder
+        # paused. chain.handle still rejects an open/completed/released chain.
+        chain.pause! unless encoder_paused
         status = -1
         begin
           status = WanAttentionMPSFFI.copy(chain.handle, source.handle,
             destination.handle, source_offset_bytes.to_u64,
             destination_offset_bytes.to_u64, byte_count.to_u64)
         ensure
-          chain.resume!
+          chain.resume! unless encoder_paused
         end
         raise "MPS attention native copy rejected (#{status})" unless status == 0
       {% else %}
