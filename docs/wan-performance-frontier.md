@@ -829,7 +829,244 @@ precision, device/runtime, queue or lifetime changes. No model kernels or
 defaults changed, and no complete block, model or video ran. Real BF16 block
 numerics, full-query occupancy and stack drift retain their separate gates.
 
-## Other candidates, in order of investigation
+## Static audio K/V cache: bounded qualification contract
+
+This contract was sealed before measurement; bounded results follow below.
+This is ordinary exact reuse, not an LTP/WBA promotion. The trigger is repeated
+serial use of unchanged local audio and one injector's weights/configuration.
+The corridor is that injector's K projection,
+K RMS normalization and V projection. Cache normalized K and V in caller-owned
+F32 device storage. Preserve the existing BF16-resident weights, F32 MPS
+projection/accumulation, bias and norm order. The changing video queries,
+attention and output projection remain outside this cache.
+
+The cache key must bind request/audio/weight revisions, injector identity,
+geometry, dtype, buffer bindings and numerical configuration. Pointer identity
+alone is insufficient. In-place mutation requires advancing the corresponding
+revision before the next encode; this caller obligation cannot be detected by
+a pointer-only host check without additional GPU validation. No automatic
+cross-request, concurrent-chain or CFG sharing is admitted. A cache hit may
+reuse the existing immutable result only while all producing buffers, plans,
+weights and cache storage remain alive and ordered on the same serial chain.
+An aborted/discarded producer invalidates its cache state; a host-side key is
+not proof that GPU work completed. Release follows the caller's terminal wait.
+
+The first probe uses one injector, B=1/F=21/T=5/C=5,120/H=40/D=128, with
+selected original BF16 checkpoint tensors. K plus V require 4,300,800 bytes;
+twelve independent injectors would require 51,609,600 bytes (49.22 MiB) for one
+conditioning identity. That is a capacity estimate, not a production cache.
+Use the pinned original upstream K/V/norm modules on MPS at the same inputs
+and weights, with CPU fallback disabled. Bind all oracle bytes and sources.
+
+DoD: guarded release build and a bounded GPU probe comparing eight complete
+K/V recomputations against one cache fill plus seven hits. Charge the initial
+fill and identical downstream GPU copies/consumption to their respective arms;
+also report fill/hit counts and CPU encoding versus terminal-wait intervals.
+Use one AB warmup and three AB/BA/AB measured pairs. Require the unchanged
+finite upstream tolerance `2e-5 + 2e-5*abs(reference)` for raw K, normalized K
+and V, plus native bit identity. Exercise same-address audio and weight/bias
+mutation with revised keys, request/injector/config revision changes, explicit
+invalidation and a fresh command chain. Seed one-value and nonfinite validation
+controls and initialize outputs with NaNs to expose omitted writes.
+
+Each timed arm retains one terminal wait, zero activation readbacks and zero
+tracked encode-time MetalBuffer allocations. Diagnostic metric readbacks occur
+after separate validation commands. Reuse buffers allocated during setup; no
+model/Studio/full-block/video run is permitted. Retain serial execution, the
+15% cache-aware memory floor, a 3 GiB owned-group runtime/oracle cap, 64 MiB
+swap-growth cap and 120 s deadline; builds use 1,536 MiB and 180 s. Stop on any
+guard/numerical/lifecycle failure. Rollback removes the standalone probe;
+production kernels, transformer routing and defaults remain unchanged.
+
+The local potential is repeated projection/norm work avoided after charging
+fill, consumption, key checks and storage. A primitive win cannot establish
+global descent: audio K/V contributes a small fraction of counted model FLOPs,
+and lifetime, memory pressure, queue/encode overhead and the actual dominant
+full-request phase still require separate evidence. Reject a global speedup
+claim until that complete corridor is measured. The strongest failure modes
+are stale same-address contents and uncharged fill/consumer costs, rather than
+the algebra of reuse itself.
+
+### Bounded audio K/V result, 2026-10-20
+
+**VERIFIED within the fixed-input injector-0 primitive; adversary: ROBUST in
+that scope.** A guarded release build and original-upstream oracle export
+passed, followed by one AB warmup and three AB/BA/AB measured pairs. Each arm
+performs eight uses at B=1/F=21/T=5/C=5,120/H=40, with original BF16-resident
+weights and F32 MPS projection. Recompute performs eight fills; cached performs
+one fill and seven hits. Identical K/V GPU-copy consumers are charged after
+every use. The input repeats the pinned five-row fixture with GPU-generated
+row offsets, exercising the full 105-row geometry; it is not a captured
+21-frame encoder output or a representative-input quality study.
+
+| Independently computed median, ms | Recompute | Cached |
+| --- | ---: | ---: |
+| Completed arm wall time | 21.136250 | 3.263417 |
+| Sum of completed command-root GPU intervals | 20.267417 | 2.666376 |
+| Host encode interval | 0.181875 | 0.211458 |
+| Terminal-wait interval | 20.847666 | 3.128542 |
+
+Completed wall time is **6.48x faster / 84.56% lower**, with 3/3 paired wins;
+individual wall ratios are 5.18x, 6.48x and 6.38x. CPU encoding's median did
+not improve. Each row is a separate median and the rows need not add up.
+GPU-root intervals are not per-kernel active time. Three pairs on one device
+do not establish a latency distribution or whole-video speedup.
+
+Raw K and V are bit-identical to the pinned original upstream MPS modules.
+Normalized K has 232,526 values with differing bit patterns, maximum absolute
+error `9.536743e-7`, maximum tolerance ratio `0.008825604`, zero strict
+violations and zero nonfinite values. The finite tolerance remains
+`2e-5 + 2e-5*abs(reference)`. All eight native K/V comparisons across warmup
+and measured pairs are bit-identical. Same-address mutations of audio and all
+five selected weight tensors expose stale results when revisions are omitted;
+advancing the relevant revision forces refill, with twelve bit-identical K/V
+checks. Independent `+1` and NaN controls each produce exactly one strict
+violation. Host checks cover changed request/audio/weight/injector/config keys,
+fresh chains and bindings, explicit clear, discarded producers, caller-array
+snapshotting and rejection of replacing an incomplete producer.
+
+Each timed arm has one command root, one terminal wait, zero inter-operator
+waits, zero activation readbacks and zero tracked encode-time MetalBuffer
+allocations. GPU comparison/metric readbacks and oracle fixture export are
+explicit diagnostic boundaries outside these arms. The MetalBuffer counter
+does not cover Objective-C/MPS allocations. The release helper relies on the
+caller to drain work first; the audited CLI honors that obligation, including
+its exceptional timed-arm path. This does not qualify a general production
+cache API or cross-step/CFG sharing.
+
+Runtime peak sampled owned-group footprint is 272,352,096 bytes (259.74 MiB),
+minimum cache-inclusive headroom 27,838,971,904 bytes (25.93 GiB), minimum
+pressure percentage 82%, and sampled swap growth zero. Oracle and successful
+build sampled peaks are 1,343,718,936 and 518,112,240 bytes. All guards retain
+the 15% floor and their declared caps, and every process group drains to zero.
+These are sampled bounds, not continuous peak measurements. Initial build
+attempts exposed a CLI nil-narrowing and a NamedTuple-access compile error;
+both were repaired before the successful release build and sole GPU run.
+
+Production cache remains disabled. No full block, model, Studio or video ran.
+Rollback removes the three standalone probe/oracle files and this contract;
+production routing and kernels are unchanged. Requalify after changes to
+source/native objects, oracle/weights/input, geometry, precision, identity or
+lifetime rules, device/runtime or queue behavior. The next falsifier is the
+bounded submission-cadence experiment below, not a full generation run.
+
+The external receipt and raw-log recomputation scripts are under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/`.
+`audio-kv-receipt-v1.json` binds the final sources, native objects and binary,
+oracle bytes, exact guarded invocations, raw logs, arithmetic and historical
+runner anchors (86 file bindings; SHA-256
+`ec66010ae21109ebc33196ae674763418ebf7099ea62e5e1fa3e89aac9b6c56e`).
+Recheck it without a GPU/model run using:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/check-audio-kv-receipt-v1.py --verify
+```
+
+The executed runtime DoD is the command vector in
+`audio-kv-pairs-v1.invocation.json`: `wan_memory_guard.py` with file-cache
+accounting, 3,072 MiB group cap, 64 MiB swap-growth cap and 120 s deadline,
+running `wan_s2v_audio_kv_benchmark-v3 --reference=.../reference.json`.
+Expected signal: exit zero, all gates passed, 3/3 paired wall wins and complete
+group cleanup. The receipt is an evidence index; its hash checks do not replace
+the numerical, lifecycle, timing and guard observations above.
+
+### Whole-request introspection, 2026-10-20
+
+The strongest surviving omission is submission cost, rather than another
+unqualified attention tile sweep. Source inspection of the historical runner
+and its receipt confirms MPS projections, MPS chunked self-attention at 512
+queries, and native text cross-attention with 320 groups per segment. The
+slow run already selected those routes; missing MPS routing is refuted.
+Its working canvas is 512x832, latent grid 64x104 and delivered crop 480p.
+With motion tokens dropped, `(21+1)*32*52 = 36,608` sequence tokens, matching
+the receipt. The alternative calculation using the delivered crop was wrong
+and is rejected. Motion-drop does not imply a smaller sequence than this target.
+
+The runner reports `queued denoise_step` before its sole final
+`commit_and_wait`. Those timestamps include host encoding, scheduling,
+submission backpressure and any GPU progress already made; they are neither
+completed-step timestamps nor measurements of pure CPU encoding. The killed
+19/40 run produced no completed raw video output. A recorded main-thread
+sample in `continue_async! -> commitAndContinue -> AGX queue semaphore` supports
+submission backpressure as a hypothesis, not a GPU-time percentage or a claim
+that the GPU was idle. Do not extrapolate a qualified generation rate from it.
+
+For 40 steps, two CFG forwards per step and 40 blocks, source/arithmetic counts
+are 3,200 block calls, 36,800 MPS projection calls and 230,400 self-attention
+MPSGraph encodes at chunk 512. These plans are prepared and reused, not
+recompiled per chunk. Native text cross-attention has
+`ceil(36,608/8)*40 = 183,040` query/head groups per block. At 320 groups per
+segment, there are 572 dispatches and 571 explicit continuations per block,
+or **1,827,200 continuations** for that operation alone per request. These are
+source counts, not measured driver/kernel times; audio, other layer boundaries
+and implementation-private MPS continuations add work.
+
+Investigate these levers in this order:
+
+1. **Separate dispatch geometry from submission cadence.** Retain the same
+   320-group kernel dispatches, inputs, reduction order and serial dependencies;
+   compare one, two and four dispatches per command root in a bounded K=512
+   cross-attention probe. Count roots and measure CPU encode, terminal-wait and
+   completed GPU-root intervals separately. An equal-work speedup with unchanged
+   outputs supports the scheduling hypothesis. No gain or Metal completion
+   failure rejects it. The old 4,096-group long-key completion failure is a
+   relevant guard: grouping dispatches may still make a root too long. Do not
+   change the production cadence before qualification or conflate this probe
+   with increasing groups per dispatch. Cross-attention's 0.77% FLOP share is
+   not evidence that its million submissions are cheap.
+2. **Account for host tracking objects.** The command-chain tracker releases
+   completed Metal roots, but retains one CPU summary per root until final
+   completion; it also installs callbacks and uses a lock. The tracked
+   MetalBuffer-allocation counter does not cover these Objective-C objects or
+   opaque MPS resources. A bounded many-root CPU/allocation profile can test
+   scaling. Aggregate normal-run summaries while retaining detailed records
+   only for profiling is a possible later design, requiring preservation of
+   error reporting, pending-root ownership and timing semantics. No latency or
+   memory saving is claimed from source inspection alone.
+3. **Profile the dominant math against the actual backend.** Self QK/PV accounts
+   for 55.15% of counted block FLOPs; dense projections account for 44.08%.
+   Use a bounded completed-work profile to distinguish kernel execution,
+   submission stalls, copies, BF16 expansion and opaque MPS work before a new
+   backend rewrite. Native direct BF16 GEMM and shared/register K/V grouping
+   already regressed; repeating them without a changed premise is not progress.
+   A library GEMM/layout or attention backend is a new hypothesis, but different
+   reduction order must pass the same strict upstream gate. The faster explicit
+   QK/softmax/PV route remains rejected by its real-block numerical failures.
+4. **Keep exact static reuse proportionate.** Audio K/V caching can remove at
+   most 1,872 of 1,920 such projection calls across two separately conditioned
+   branches (39/40 saved per branch). It avoids about 294.44 GB of logical
+   BF16-read/F32-stage-write traffic; this is not measured DRAM traffic. Its
+   maximum saved 10.3054 TFLOP is only **0.00647%** of the counted 159,244.5
+   TFLOP request arithmetic, excluding audio's other operators and the rest of
+   the pipeline. Capacity is 49.22 MiB per branch, 98.44 MiB for two branches.
+   A projection-only speedup cannot be multiplied into a whole-video speedup.
+
+Mathematically, the existing tiled attention already exploits the low-rank
+Q/K head factors; softmax does not preserve that factorization. A surrogate,
+sparse/window attention, skipped diffusion step or reused changing activation
+would change the algorithm and needs a separate quality contract. It is not
+an exact counterpart of parallelizing a GDN recurrence and is not admitted by
+the current unchanged-tolerance task. Prefer eliminating repeated fixed work
+and scheduling overhead first; even eliminating all counted dense projections
+would leave the 55.15% self-attention arithmetic.
+
+The arithmetic magnitude also limits the promise of local fusions. For this
+unchanged dense algorithm, 159,244.5 TFLOP would take 15,924.45 seconds at a
+hypothetical sustained 10 TFLOP/s, or 1,592.45 seconds at 100 TFLOP/s. These
+illustrations are not device peaks, measured throughput or a runtime forecast;
+they exclude other work. They become lower bounds only if the stated rate
+bounds effective throughput for this workload. A proved exact reduction in
+work invalidates the count and requires recomputation. Submission improvements
+can recover throughput, but a small epilogue or static cache alone cannot
+remove the dense attention obligation. Do not infer achieved throughput from
+the old queued milestones.
+
+The historical runner/source/receipt/log and the arithmetic inputs must remain
+bound in the bounded cache evidence packet. Refresh these counts if geometry,
+CFG branches, steps, injection sites, chunk/segment cadence or backend routing
+changes. No full block, model, Studio or video run is authorized by this audit.
+
+## Additional candidates and their current gates
 
 1. **Static audio K/V.** In
    [the audio injector](../src/ml/video/wan_s2v_block.cr), K/V projections and K
@@ -837,7 +1074,8 @@ numerics, full-query occupancy and stack drift retain their separate gates.
    Twelve injection sites at 21 frames, five audio tokens and C=5,120 need
    51,609,600 bytes (49.22 MiB) for normalized K and V. Reuse is conditional on
    proving audio/weight/configuration identity across steps and CFG branches.
-   Require byte comparisons to recomputation and mutation/invalidation controls.
+   The bounded qualification above passes byte comparisons and mutation controls;
+   persistent request integration and cross-branch identity remain unqualified.
    Text K/V caching has the same conditional argument but costs 1.5625 GiB for
    40 layers and two branches while eliminating only 0.11% of counted FLOPs;
    prioritize the smaller cache under the current memory constraints.
@@ -851,7 +1089,7 @@ numerics, full-query occupancy and stack drift retain their separate gates.
    above, despite bitwise identity and no barriers. Park further grouping
    sweeps; a matched hardware-counter profile could discriminate occupancy,
    spills, scheduling and cache effects before another attention rewrite.
-   Prioritize the static audio K/V reuse probe instead. Even a native primitive
+   Prioritize the bounded submission-cadence probe next. Even a native primitive
    win needs separate MPS-relative and whole-block gates.
 3. **FFN bias/GELU epilogue.** A post-MPS bias-plus-GELU kernel could remove one
    full FFN-intermediate read/write, about 3.77 GiB of logical traffic per block,
@@ -875,6 +1113,8 @@ numerics, full-query occupancy and stack drift retain their separate gates.
 These are hypotheses about latency. Their logical byte counts are not measured
 memory-controller traffic. A larger dispatch or fewer command segments has
 already failed to improve complete-block latency in a prior comparison.
+That comparison changed dispatch geometry and segmentation together; it does
+not settle the separate fixed-geometry submission-cadence hypothesis.
 
 ## Which mathematical rewrites are legal
 
