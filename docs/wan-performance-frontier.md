@@ -1280,3 +1280,163 @@ GPU measurements. The independent CPU formula check confirms 49,763,907,010,560
 counted FLOPs, 351,272,960 dense weights and 18,743,296 table bytes.
 Recompute after topology or geometry changes. Requalify performance/numerics
 after kernel, lifetime, input, weight, precision, device/runtime or queue changes.
+
+## Long-key MPS attribution experiment, 2026-10-20
+
+The current task profiles the already-qualified opt-in MPSGraph SDPA path with
+query chunk 128. It does not run a block, model, Studio or video generation.
+The production default is unchanged. The source-level default generic kernel
+is not the baseline of the existing MPS block measurements; re-testing that
+generic route or the already-slower native tiled alternatives would not explain
+the remaining MPS cost.
+
+This CAUTION probe keeps B=1, K=36,608, H=40, D=128 and F32 math. Selected query
+prefixes of 128/256/512/1,024/4,096/8,192 rows use the same avalanche inputs and
+the pinned full-query F32 SDPA reference. A 257-row tail slice exercises padding.
+The oracle directly runs F32 PyTorch MPS SDPA with the same core semantics as
+the real-stack harness adapter; it hashes but does not execute the official
+attention module or adapter. It retains BHQD for fixture export, whereas the
+harness adapter returns BQHD. The official BF16 fallback is outside this gate.
+The fixed 128-row graph shape, resident K/V, Q-copy/SDPA/output-copy sequence and existing
+command-root transitions are preserved. No synchronization or extra root is
+inserted to manufacture timing boundaries. Host call intervals include backend
+scheduling/backpressure. Completed GPU-root intervals are not kernel timings
+and cannot assign operations sharing a root to separate phases.
+
+The competing explanations are device computation/memory work, repeated
+layout/materialization work, and host submission/backpressure. A query-count
+sweep alone cannot distinguish them: all can scale with the number of chunks.
+The discriminating probe is a bounded Instruments Metal System Trace of an
+otherwise identical arm, if the installed runtime exposes sufficiently detailed
+events. Untraced samples supply timing claims. If the trace cannot separate
+internal MPS operations, attribution remains open rather than being inferred
+from FLOPs or encode-versus-wait subtraction. Head-major K/V, explicit
+QK/softmax/PV and rejected chunk shapes remain parked under their prior gates.
+
+DoD: guarded release build of `examples/wan_s2v_self_attention_profile.cr`,
+CPU plan checks, serial guarded selected-query profiles, and an available
+bounded Metal trace. Each warm/measured arm must pass the unchanged finite
+`2e-5 + 2e-5*abs(reference)` comparison against that pinned F32 oracle,
+with rejected +1/NaN controls, exactly one terminal arm wait, zero tracked
+MetalBuffer allocations and no inter-operator readback. A profile-off control
+checks the effect of host clocks; a padded tail checks unwritten outputs.
+Setup fills, fixture loading and diagnostic commands are outside arm timing.
+Only compact comparison metrics return after the diagnostic terminal wait.
+
+The strongest failure mode is treating opaque overlapping root spans as an
+exclusive GPU-kernel breakdown or extrapolating selected queries to a full
+block/video. Both claims are excluded. Build budget is 1,536 MiB/180 seconds;
+native probe budget is 5,120 MiB/120 seconds. The first trace collector used
+2,048 MiB/90 seconds; its bounded retry used 3,072 MiB/90 seconds and a shorter
+four-second recording. Every launcher retains the sampled cache-aware
+15%-of-RAM reserve, memory-pressure floor and 64 MiB swap-growth stop. These
+guards are not reservations. All temporary and trace files stay under
+`/opt/mldata_ssd/`. Rollback is reversion of the isolated probe commit; no
+production path changes. Refresh the profile after graph, bridge, geometry,
+fixture, device, driver, runtime or queue changes.
+
+### Selected-query results
+
+The release probe ran on Apple M2 Max. Each untraced process used one warmup
+and three measured arms. The initial v2 sweep held the graph shape and full
+K/V fixed:
+
+| Selected query rows | Median completed wall time, ms |
+| ---: | ---: |
+| 128 | 29.854 |
+| 256 | 66.719 |
+| 512 | 128.522 |
+| 1,024 | 258.983 |
+| 4,096 | 1,048.458 |
+| 8,192 | 2,057.606 |
+
+The final v3 source corrects overlap accounting for nested root intervals and
+adds timing-boundary metadata. Its GPU operators are unchanged. Fresh v3
+qualification measured **1,984.888 ms** for 8,192 query rows, with median host
+encoding **2.938 ms** and completed-root envelope **1,984.276 ms**. The eleven
+roots had a median total of about 6.54 microseconds of uncovered gaps.
+The v2/v3 timing difference is not an optimization result. A final 257-row
+tail at query start 36,351 passed at 98.750 ms. Two profile-off controls at
+1,024 rows measured 256.505/257.518 ms; a profile-on repeat measured 253.311 ms.
+Those observations do not establish an overhead difference beyond run variation.
+
+Across twelve untraced processes, 48 warm/measured validation arms compared
+532,193,280 values. Including the two trace-target processes gives 54 arms and
+741,908,480 values. Every arm passed the finite unchanged tolerance, rejected
+both comparator controls, recorded one terminal arm wait and zero tracked
+MetalBuffer allocations. Maximum absolute error was `1.1473894e-6`, maximum
+error/tolerance ratio `0.052908488`. Only fifteen metric words returned after
+each separate diagnostic chain; output activations stayed on GPU. Opaque MPS
+allocations are outside the tracked-allocation claim.
+
+The explicit 8,192-row buffer plan is 1,917.5 MiB, including full K/V and
+comparison storage. Sampled process footprints, pressure, reserve and swap
+are recorded separately in the evidence below. Such sampling cannot certify
+the peak between polls, nor reserve reclaimable cache in advance.
+
+### Bounded Instruments evidence and decision
+
+The initial twelve-second recording exceeded its collector's 2,048 MiB
+process-tree cap; the guard stopped it with exit 76. Its native target passed,
+but no trace was accepted. The owned process group was checked empty and its
+raw trace removed. The four-second retry at 4,096 query rows completed under
+the separate 3,072 MiB collector budget; its sampled collector peak was
+1,172.15 MiB. Raw trace data was removed after four bounded table exports.
+Neither collector nor native runs triggered the 15% reserve/pressure or
+64 MiB swap-growth stops. No full generation or full block was launched.
+
+The typed parser checks the four export hashes, exact table schemas, target
+PID/process ownership and nanosecond units. Among 183 target Shader Timeline
+rows, 157 have the `sdpa_tile_fwd_8x8x8_noEdgeCheck` label. Their interval union
+is 834,337,582 ns, versus 834,388,624 ns for all observed shader labels. These
+are sampled interval coverages, not exclusive kernel runtimes or an exact
+percentage of attention latency. Rows lack the ownership needed to join a
+shader to a particular root/graph phase. Fourteen `ndArrayIdentity` rows do
+not establish repeated physical K/V transpose cost. Ten `video_linear_f32`
+and two `video_norm_mixed` rows remain unexplained: Arena setup compiles those
+pipelines, but no dispatch is present in this profiler's source path. They
+must not be assigned to an attention phase from their names alone.
+
+The evidence prioritizes work inside the GPU SDPA path over additional host
+submission batching. It does not distinguish arithmetic from bandwidth,
+prove a layout bottleneck, or extrapolate to full-block/video latency. The
+same-lineage source/raw-evidence adversary review is ROBUST for these bounded
+claims, and VULNERABLE for those stronger attributions. No production default
+or arithmetic changed.
+
+### Proposed precision branch
+
+The [official Wan attention fallback](https://github.com/Wan-Video/Wan2.2/blob/main/wan/modules/attention.py)
+defaults to BF16 and casts Q/K/V before PyTorch SDPA. Our pinned F32 harness
+gate therefore does not establish parity with that official BF16 execution.
+BF16/F16 attention is the first proposed simplification experiment: lower
+storage/operand precision may reduce traffic or select faster kernels. Speed,
+quality and the availability of F32 accumulation on this Metal path remain
+unmeasured. A factor-of-two storage change is not a factor-of-two latency claim.
+
+Keep the F32 mode and its existing strict gate. Qualify any separate dtype
+mode against a pinned dtype-matched upstream oracle with the same finite
+tolerance; do not widen the F32 tolerance or disguise intentional rounding as
+an implementation error. Only a later paired, same-input video comparison
+can assess the quality effect on detail, motion and lip synchronization.
+Fewer denoising steps, attention sparsity and cross-step reuse remain separate
+quality-changing candidates; this profiler provides no acceptance evidence
+for them. None was implemented or used for generation in this experiment.
+
+### Reproduction and evidence boundary
+
+The retained command manifests, raw JSON logs, guards, typed trace exports,
+source snapshots and receipt are under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/long-key-profile-20261020/`.
+`build-v3.invocation.json` records the release command and reused object paths;
+the receipt pins the object bytes.
+`native-q8192-v3.invocation.json` binds the final untraced run. The v2 snapshot
+was reconstructed by reversing only the final metadata correction; it is not
+a build-time source capture. The final v3 snapshot matches the current probe source.
+
+The CPU-only `check-profile-receipt-v1.py` rechecks artifact/source hashes,
+strict raw validation records, root-interval unions, guard exits and trace
+ownership/export pins, and writes `profile-receipt-v1.json`. It is a curated
+index to the observed runs, not another GPU run or an independent proof of
+upstream execution. Re-run it with Python 3.11 from the isolated checkout;
+the guarded GPU commands are retained for deliberate later refresh.

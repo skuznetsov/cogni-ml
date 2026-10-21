@@ -31270,3 +31270,31 @@ Refresh after source/toolchain/device/model/workload changes.
   mini-Quadrum and 15% floor, no video restart or unrelated process termination.
   Refresh on source/lifetime, geometry/input/weight/dtype, queue/device/runtime or
   memory-policy changes. Temp/build/evidence stay on /opt/mldata_ssd/.
+
+### 2026-10-20 — Bound long-key Wan attention cost to the GPU SDPA path
+
+- Added the selected-query profiler in examples/wan_s2v_self_attention_profile.cr.
+  At K=36,608/H=40/D=128, fixed F32 MPS chunk 128, final Q=8,192 measured
+  1.984888 s median wall versus 2.938 ms host encoding. This is a primitive
+  measurement, not a full-block/video estimate or a production-default change.
+- All 54 warm/measured arms pass the unchanged finite 2e-5+2e-5abs F32 oracle
+  gate, including a 257-row tail and comparator +1/NaN rejection controls;
+  maximum error 1.1473894e-6. One terminal arm wait, zero tracked MetalBuffer
+  allocations; fifteen diagnostic metric words return after a separate wait.
+  The direct PyTorch MPS fixture hashes but does not execute official Wan code.
+- A four-second PID-owned Instruments retry shows dominant sampled SDPA-label
+  coverage. It cannot assign exclusive kernel/phase runtime or distinguish
+  compute from bandwidth. Unexplained app-named shader rows remain open.
+  Initial collector cap stopped at 2 GiB; retry passed at 3 GiB. All probes
+  retained the sampled 15% reserve/pressure floor and no swap growth.
+- docs/wan-performance-frontier.md holds the measurements and excluded claims.
+  External wan-self-attention/long-key-profile-20261020/profile-receipt-v1.json
+  binds source/binary/object hashes, raw strict checks, invocations and guards.
+  Correlated raw-evidence review is ROBUST within that bounded scope.
+- Continuation: prioritize the SDPA device path over further host batching.
+  BF16/F16 is a proposed next experiment motivated by the official BF16 fallback;
+  speed, video quality and F32 accumulation support are not qualified. Keep the
+  F32 gate; a separate dtype needs a dtype-matched upstream gate and later
+  paired quality evidence. No full generation, Studio or model restart is
+  authorized here. Refresh after graph/bridge, geometry/input/precision,
+  device/runtime/queue or guard-policy changes; scratch stays on /opt/mldata_ssd/.
