@@ -31517,3 +31517,34 @@ Refresh after source/toolchain/device/model/workload changes.
   staging regressions as contrary evidence. Refresh after source/binary,
   input/fixture, dtype/geometry, device/runtime, queue/resources, collector/guard
   changes or artifact loss. Runtime remains unchanged by this documentary commit.
+
+### [LM-WAN-KV-FRAGMENT-LOOKAHEAD-2026-10-21] Native gain; MPS remains faster
+
+- Probe-only F32 fragment lookahead at parent `9205352e` retains Q-cache's
+  one-SIMD-group/eight-query mapping, ascending QK/softmax/PV order, zero static
+  threadgroup bytes and 320-group segments. No production route changes.
+- On M2 Max, unprofiled Q256/K36608/H40/D128 AB/BA/AB pairs reduce complete arm
+  wall median from 174.420042 to 131.391333 ms (24.6696%, 3/3 wins). Native-pair
+  outputs are bit-identical; Q257/start36351 partial query-tile parity passes.
+  Direct MPS control is faster: 65.552417 vs 127.231875 ms, so no promotion.
+- All 36 strict checks and three +1/NaN controls pass unchanged tolerance.
+  All 24 arms retain one terminal wait and zero tracked arm-time allocations;
+  diagnostics retain their separate metric-only wait. Fifteen-percent guards
+  pass, sampled swap growth is zero, and every owned process ends. No model,
+  full block, Studio, generation, Torch runtime or profiler runs in this slice.
+- Correlated source/raw adversary is ROBUST for this bounded native improvement.
+  Physical load/compute overlap, compiler scheduling and register count remain
+  open; partial key tiles are untested at fixed K divisible by 32. Synthetic
+  fixture parity does not establish real-activation parity or video quality.
+- `docs/wan-performance-frontier.md` records the contract, exact evidence base,
+  source/object/fixture lineage, reproducible CPU verification and limitations.
+  External evidence lives in `wan-self-attention/kv-prefetch-20261021/` under
+  `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/`.
+- Public fal research separates cheaper steps, fewer steps and serving startup.
+  FLUX 3 Max's hardware/steps/precision are undisclosed; Ideogram's FP4/CFG/
+  timestep distillation is not evidence for FLUX internals or a portable Metal
+  multiplier. Next: bounded full-block attribution using the strongest path;
+  a distilled checkpoint/guidance change needs separate quality qualification.
+  Refresh on scoped source/binary/input/fixture/geometry/dtype/device/runtime/
+  queue/resources/guard changes or artifact loss. Rollback removes probe modes
+  and kernel; existing production defaults remain.

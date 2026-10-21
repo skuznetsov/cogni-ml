@@ -2232,3 +2232,145 @@ improvement alone is insufficient. No production route is promoted here.
 Refresh on source/binary, input/fixture, dtype/geometry, device/runtime,
 queue/resource, collector/guard changes or artifact loss. Rollback is this
 documentary commit; the runtime path is unchanged.
+
+## Bounded K/V fragment lookahead, 2026-10-21
+
+The CAUTION experiment is probe-only F32 software pipelining: one SIMD
+group still owns one eight-query tile, caches Q, and uses the same ascending
+QK, online-softmax and PV arithmetic as the Q-cache baseline. Load one next
+K/V fragment before the current matrix multiply, without shared staging,
+another query accumulator, a barrier, a buffer or a host wait. The strongest
+failure modes are changed arithmetic, invalid tail indexing, compiler sinking
+of loads, and extra live state offsetting any latency benefit. Source ordering
+alone cannot establish physical overlap. The opaque MPS profile only motivates
+this test; it does not attribute native-kernel stalls to K/V.
+
+DoD: build a uniquely named release benchmark from pinned current sources,
+then run `--comparison=q-cache-vs-prefetch-kv --query-rows=256 --query-start=0`
+with the pinned full-K upstream fixture. One AB warmup and three AB/BA/AB pairs
+must preserve finite `2e-5+2e-5*abs(reference)` upstream tolerance, native-pair
+bit identity, NaN output sentinels, +1/NaN negative controls, zero tracked
+arm-time MetalBuffer allocations and one existing terminal wait per arm.
+Keep the 320-group segment limit; validation retains its existing separate
+wait and reads metrics only. Test Q257/start36351 for the partial query tile;
+its timings are diagnostic. No Torch runtime, profiler, block, model, Studio
+or full generation is admitted.
+
+All three primary pairs and their median must improve complete arm wall time
+before a direct `mps-vs-prefetch-kv` cohort is useful. The latter is required
+before any MPS-relative claim. A failed speed gate rejects this formulation;
+do not sweep more staging variants without a new premise. Build/runtime
+guards retain 15% cache-aware headroom and pressure floors, 64 MiB swap-growth
+stops, 1.5/3 GiB owned-process caps and 180/120 second deadlines. Run heavy
+jobs serially; account for setup and private workspace separately. Rollback
+is removal of the new probe modes/kernel; production routes stay unchanged.
+
+### Unprofiled result and promotion boundary
+
+At parent `9205352e`, the new release benchmark ran on Apple M2 Max with full
+K=36,608, H=40, D=128. Each cohort has one AB warmup and three measured
+AB/BA/AB pairs in one process. The measured interval includes command encoding,
+submission and the existing terminal wait; setup fill and diagnostics are
+outside it. These are selected-query attention timings, not block or video
+throughput. Inputs are fixed-salt GPU avalanche data, not model activations.
+
+| Cohort | Baseline median | Candidate median | Interpretation |
+| --- | ---: | ---: | --- |
+| Q256/start0, Q-cache vs fragment lookahead | 174.420042 ms | 131.391333 ms | 24.6696% lower wall time, 3/3 paired wins |
+| Q257/start36351, same native pair | 214.309125 ms | 164.880125 ms | Partial query-tile parity diagnostic only |
+| Q256/start0, MPS chunk128 vs lookahead | 65.552417 ms | 127.231875 ms | Candidate 1.9409x slower, 0/3 paired wins |
+
+All 36 checks across 12 validation batches pass the unchanged finite upstream
+gate. The native pairs are bit-identical in all eight Q256/Q257 batches.
+Maximum upstream absolute error is 8.493662e-7 and maximum tolerance ratio
+0.039907727 (limit 1). Each of three negative controls rejects exactly one +1
+and one NaN: two bit differences, two violations, one nonfinite output.
+All 24 arms, including warmups, retain one terminal wait and zero tracked
+arm-time MetalBuffer allocations. Each validation batch and negative control
+retains its existing separate wait and reads metrics only. No production
+source/default, dtype, reduction order or synchronization boundary changed.
+
+The mapping remains one SIMD group/eight-query tile, 32 threads, and at most
+320 groups per segment: four segments at Q256, five at Q257. The candidate
+reports SIMD width 32, maximum supported threads 448 and zero static
+threadgroup bytes. These properties do not measure register use or occupancy.
+K=36,608 is divisible by 32: Q257 covers a partial query tile, not a partial
+key tile. The explicit buffer plans are 1,520,435,260 bytes (primary),
+1,520,517,180 (tail) and 1,528,299,580 (MPS control); these include both arms
+and shared inputs/diagnostics, but exclude opaque MPS private workspace.
+
+Build and runtime guards pass with zero sampled swap growth and zero final
+owned live processes. Runtime peak sampled group footprints are below 1.551 GB,
+minimum cache-aware headroom is 20,517,928,960 bytes (29.857516% of physical
+memory) and pressure free is at least 78%. Fifteen-percent floors, caps and
+deadlines remain enforced. File-cache
+reclaimability is an estimate; sampled guards do not certify instantaneous
+peaks. Only one bounded benchmark process runs at a time.
+
+The scoped source/raw-record adversary verdict is ROBUST for the native
+selected-query improvement and parity. Physical load/compute overlap and the
+cause of the gain remain unproved: source lookahead can be rescheduled by the
+compiler. The direct MPS result rejects replacement of the practical baseline.
+Keep the kernel probe-only; no full block/model/Studio/generation ran.
+
+Evidence base: `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/kv-prefetch-20261021/`.
+`source-preflight-v1.json`, `build-launch-v1.json` and per-case invocation/log/
+guard files retain exact lineage. The old register-K/V source pin for the MPS
+bridge was stale; preflight rejected it before launch. The linked connected
+bridge object/source instead match the later query-geometry receipt; Crystal
+sources were rebuilt at their current pins. The full upstream fixture manifest
+and 749,731,840-byte output are hashed before loading the selected rows.
+
+CPU-only DoD, with `E` set to the evidence base above:
+`/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$E/summarize-prefetch-v1.py" --verify`.
+Observed exit 0: raw receipt, pinned hashes, run records, medians and summary
+recompute exactly. The verifier derives medians from measured arms rather than
+trusting decision records; it checks source/object/binary/fixture pins, strict
+results, negative controls, waits, tracked allocations and sampled guards.
+`crystal tool format --check examples/wan_s2v_bounded_attention_benchmark.cr`
+and `git diff --check` also pass. SHA256 pins:
+
+- Verifier: `09b7caaa25c4d6e1aeac220c9a0e9b5764290f1229d054cfba0240dd282d6093`.
+- Raw receipt: `9b96c43dfa00dd386622997709734ee48da53a77e10ab4eafe7fe0268f5ed448`.
+- Summary: `0cd9a221136ad0bf5519f5da8a0460f095638ac5687e889254d75187fa67d274`.
+
+These local hashes identify retained evidence; they are not independent
+attestation. The reproducible check remains conditional on the recorded
+fixture and source provenance and on availability of the external artifacts.
+
+### Relevant public fal research, checked 2026-10-21
+
+The [FLUX 3 Max landing page](https://fal.ai/flux-3-max) reports an average
+12.45 s for a 10 s 16:9 clip at 720p/768p, versus 126.44 s for its base model.
+It names post-training, inference optimization and systems engineering, but
+does not disclose the hardware/count, step count or precision for that timing.
+This is a vendor result for another checkpoint/workload, not a Wan/Metal target
+derived from comparable hardware or a same-trajectory experiment.
+
+The [H3 Max infrastructure article](https://blog.fal.ai/h3-max-built-with-fal-inference-and-training/)
+explicitly attributes model work to fewer sampling steps and cheaper steps;
+its request-execution charts use GB200s. It separates warm execution from
+queueing/cold starts. The [Ideogram v4 technical article](https://blog.fal.ai/serving-sub-second-ideogram-v4-without-quality-loss/)
+describes FP4, fused GEMM epilogues, quantization-aware distillation, guidance
+distillation from two branches to one, and few-step distribution matching.
+Those are documented Ideogram methods, not established FLUX 3 Max internals.
+The [epilogue tutorial](https://blog.fal.ai/crafting-efficient-kernels-with-epilogue-fusion/)
+contains BF16 CUTLASS examples and gate/up interleaving during weight packing.
+Wan's FFN uses GELU, so its concrete pattern must be checked before adaptation.
+
+The [Ulysses overlap experiment](https://blog.fal.ai/ulysses-unbound-experiments-in-communication-computation-overlap/)
+reports about 23–25% lower pre-attention latency but only about 3% end-to-end
+gain on its multi-B200 workload. Its communication overlap is a different
+transport boundary from single-GPU fragment lookahead. [FlashPack](https://github.com/fal-ai/flashpack)
+is public loading code; improving cold weight loading does not imply faster
+warm denoising. CUDA/NVFP4/NVLink implementations cannot be copied into Metal.
+
+Next controlled discriminator: measure the strongest attention path in the
+bounded full block, including packing and surrounding operations, before
+choosing another kernel rewrite. Fusion/packing must preserve the current
+strict gate and include their preparation cost. A few-step/distilled checkpoint
+or guidance change is a separate quality-qualified branch, not an exemption
+from the existing intermediate tolerance. No portable fal speed multiplier is
+claimed. Refresh numerical/performance evidence after scoped source/binary,
+input/fixture, geometry/dtype, device/toolchain/runtime, queue/resource or guard
+changes, or artifact loss; refresh public research when its sources change.

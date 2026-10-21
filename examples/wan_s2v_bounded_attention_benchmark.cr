@@ -26,6 +26,7 @@ private WAN_BOUNDED_SHARED_KV_SOURCE   = {{ read_file("#{__DIR__}/support/wan_s2
 private WAN_BOUNDED_SHARED_KV_BYTES    = 2_i64 * 32 * WAN_BOUNDED_HEAD_DIM * sizeof(Float32)
 private WAN_BOUNDED_REGISTER_KV_SOURCE = {{ read_file("#{__DIR__}/support/wan_s2v_register_kv_attention.metal") }}
 private WAN_BOUNDED_REGISTER_Q_TILES   = 2
+private WAN_BOUNDED_PREFETCH_KV_SOURCE = {{ read_file("#{__DIR__}/support/wan_s2v_prefetch_kv_attention.metal") }}
 
 lib WanBoundedAttentionLimits
   fun max_threadgroup_memory_length = wan_bounded_max_threadgroup_memory_length(handle : Pointer(Void)) : Int64
@@ -116,6 +117,13 @@ private WAN_BOUNDED_PROBE_SOURCE = <<-METAL
   kernel void wan_bounded_attention_corrupt_one(
       device float *output [[buffer(0)]], uint index [[thread_position_in_grid]]) {
     if (index == 0u) output[0] += 1.0f;
+  }
+
+  // The existing single-wait negative-control chain checks that non-finite
+  // candidate output is rejected by the strict upstream comparator.
+  kernel void wan_bounded_attention_nan_one(
+      device float *output [[buffer(0)]], uint index [[thread_position_in_grid]]) {
+    if (index == 0u) output[1] = as_type<float>(0x7fc00000u);
   }
 METAL
 
@@ -499,7 +507,8 @@ private def wan_bounded_run_arm(backend : String,
                                 qcache_pipeline : ML::Metal::ComputePipeline?,
                                 shared_kv_pipeline : ML::Metal::ComputePipeline?,
                                 shared_kv_simd_groups : Int32,
-                                register_kv_pipeline : ML::Metal::ComputePipeline?)
+                                register_kv_pipeline : ML::Metal::ComputePipeline?,
+                                prefetch_kv_pipeline : ML::Metal::ComputePipeline?)
   chain = ML::Metal::MPSCommandChain.new
   begin
     allocation_count = ML::MetalBuffer.video_spec_allocations
@@ -520,6 +529,11 @@ private def wan_bounded_run_arm(backend : String,
         q, k, v, output, query_rows)
     when "register_kv_q2"
       wan_bounded_register_kv_attention(chain, register_kv_pipeline.not_nil!,
+        q, k, v, output, query_rows)
+    when "prefetch_kv"
+      # Match the Q-cache baseline's one-SIMD-group, eight-query-tile mapping
+      # and 320-tile-equivalent segment bound.
+      wan_bounded_qcache_attention(chain, prefetch_kv_pipeline.not_nil!,
         q, k, v, output, query_rows)
     else
       raise ArgumentError.new("Unknown bounded attention backend: #{backend}")
@@ -564,16 +578,17 @@ OptionParser.parse do |parser|
   parser.on("--fixture=DIR", "Pinned full-query upstream attention fixture directory (required)") { |value| fixture_dir = value }
   parser.on("--query-rows=N", "Selected query rows (1..#{WAN_BOUNDED_QUERY_LIMIT}; default 256)") { |value| query_rows = value.to_i }
   parser.on("--query-start=N", "First full-sequence query row (default 0)") { |value| query_start = value.to_i }
-  parser.on("--comparison=MODE", "mps-vs-tiled, tiled-q-cache, q-cache-vs-shared-kv-sg2, q-cache-vs-shared-kv-sg4, q-cache-vs-register-kv-q2 or mps-vs-register-kv-q2") { |value| comparison = value }
+  parser.on("--comparison=MODE", "mps-vs-tiled, tiled-q-cache, q-cache-vs-shared-kv-sg2, q-cache-vs-shared-kv-sg4, q-cache-vs-register-kv-q2, mps-vs-register-kv-q2, q-cache-vs-prefetch-kv or mps-vs-prefetch-kv") { |value| comparison = value }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 raise ArgumentError.new("--query-rows must be within 1..#{WAN_BOUNDED_QUERY_LIMIT}") unless query_rows >= 1 && query_rows <= WAN_BOUNDED_QUERY_LIMIT
 raise ArgumentError.new("--query-start and --query-rows exceed full query extent") unless query_start >= 0 && query_start.to_i64 + query_rows <= WAN_BOUNDED_Q_ROWS
-unless {"mps-vs-tiled", "tiled-q-cache", "q-cache-vs-shared-kv-sg2", "q-cache-vs-shared-kv-sg4", "q-cache-vs-register-kv-q2", "mps-vs-register-kv-q2"}.includes?(comparison)
+unless {"mps-vs-tiled", "tiled-q-cache", "q-cache-vs-shared-kv-sg2", "q-cache-vs-shared-kv-sg4", "q-cache-vs-register-kv-q2", "mps-vs-register-kv-q2", "q-cache-vs-prefetch-kv", "mps-vs-prefetch-kv"}.includes?(comparison)
   raise ArgumentError.new("Unsupported --comparison mode")
 end
 mps_baseline = comparison.starts_with?("mps-vs-")
 register_kv_enabled = comparison.ends_with?("register-kv-q2")
+prefetch_kv_enabled = comparison.ends_with?("prefetch-kv")
 shared_kv_simd_groups = case comparison
                         when "q-cache-vs-shared-kv-sg2" then 2
                         when "q-cache-vs-shared-kv-sg4" then 4
@@ -666,6 +681,29 @@ if register_kv_enabled
   }.to_json)
 end
 
+prefetch_kv_pipeline = nil.as(ML::Metal::ComputePipeline?)
+if prefetch_kv_enabled
+  name = "wan_bounded_attention_prefetch_kv_#{WAN_BOUNDED_HEAD_DIM}"
+  prefetch_kv_pipeline = ML::Metal::ComputePipeline.new(name, WAN_BOUNDED_PREFETCH_KV_SOURCE)
+  static_bytes = prefetch_kv_pipeline.static_threadgroup_memory_length
+  width = prefetch_kv_pipeline.thread_execution_width
+  max_threads = prefetch_kv_pipeline.max_total_threads_per_threadgroup
+  unless width == 32 && max_threads >= 32 && static_bytes == 0
+    raise "prefetch K/V pipeline exceeds the admitted capability limits"
+  end
+  wan_bounded_emit({
+    schema: "wan_s2v_bounded_attention_prefetch_kv_capabilities_v1",
+    kernel: name, kernel_source_sha256: Digest::SHA256.hexdigest(WAN_BOUNDED_PREFETCH_KV_SOURCE),
+    pipeline_static_threadgroup_memory_bytes: static_bytes,
+    thread_execution_width: width, pipeline_max_threads: max_threads,
+    threads_per_threadgroup: 32, simd_groups_per_threadgroup: 1,
+    query_tiles_per_simd_group: 1,
+    max_threadgroups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
+    max_eight_query_tiles_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
+    passed: true,
+  }.to_json)
+end
+
 arena = ML::Video::Arena.new
 mps_workspace = nil.as(ML::Video::WanAttentionMPSChunkWorkspace?)
 begin
@@ -685,6 +723,8 @@ begin
                                           {"mps_chunk128", "native_tiled"}
                                         elsif comparison == "tiled-q-cache"
                                           {"native_tiled", "tiled_q_cache"}
+                                        elsif prefetch_kv_enabled
+                                          {mps_baseline ? "mps_chunk128" : "tiled_q_cache", "prefetch_kv"}
                                         else
                                           {"tiled_q_cache", "shared_kv_sg#{shared_kv_simd_groups}"}
                                         end
@@ -703,6 +743,7 @@ begin
   zero_pipeline = ML::Metal::ComputePipeline.new("wan_bounded_attention_zero", WAN_BOUNDED_PROBE_SOURCE)
   compare_pipeline = ML::Metal::ComputePipeline.new("wan_bounded_attention_compare", WAN_BOUNDED_PROBE_SOURCE)
   corrupt_pipeline = ML::Metal::ComputePipeline.new("wan_bounded_attention_corrupt_one", WAN_BOUNDED_PROBE_SOURCE)
+  nan_corrupt_pipeline = ML::Metal::ComputePipeline.new("wan_bounded_attention_nan_one", WAN_BOUNDED_PROBE_SOURCE)
   ML::Video::MetalOps.tiled_attention_pipeline(WAN_BOUNDED_HEAD_DIM)
   ML::Video::MetalOps.pipeline("video_copy_f32")
   qcache_pipeline = nil.as(ML::Metal::ComputePipeline?)
@@ -750,9 +791,12 @@ begin
     native_groups_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
     shared_kv_simd_groups_per_threadgroup: shared_kv_simd_groups,
     shared_kv_threadgroup_memory_bytes: shared_kv_simd_groups > 0 ? WAN_BOUNDED_SHARED_KV_BYTES : 0_i64,
-    both_arms_cache_q: shared_kv_simd_groups > 0 || (register_kv_enabled && !mps_baseline),
+    both_arms_cache_q: shared_kv_simd_groups > 0 ||
+                       ((register_kv_enabled || prefetch_kv_enabled) && !mps_baseline),
     register_kv_query_tiles_per_simd_group: register_kv_enabled ? WAN_BOUNDED_REGISTER_Q_TILES : 0,
     register_kv_max_threadgroups_per_segment: register_kv_enabled ? WAN_BOUNDED_GROUPS_PER_SEGMENT // WAN_BOUNDED_REGISTER_Q_TILES : 0,
+    prefetch_kv_query_tiles_per_simd_group: prefetch_kv_enabled ? 1 : 0,
+    prefetch_kv_max_threadgroups_per_segment: prefetch_kv_enabled ? WAN_BOUNDED_GROUPS_PER_SEGMENT : 0,
     max_eight_query_tiles_per_segment: WAN_BOUNDED_GROUPS_PER_SEGMENT,
     fixture_manifest_path: fixture[:manifest_path], fixture_manifest_sha256: fixture[:manifest_sha256],
     source_checkpoint_weights_loaded: false,
@@ -764,7 +808,8 @@ begin
   warmup_order.each do |backend|
     output = backend == baseline_backend ? baseline_output : candidate_output
     result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-      mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups, register_kv_pipeline)
+      mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups,
+      register_kv_pipeline, prefetch_kv_pipeline)
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_arm_v1", phase: "warmup",
       comparison: comparison, pair: 0, pair_order: "AB", backend: backend,
@@ -791,7 +836,8 @@ begin
     order.each do |backend|
       output = backend == baseline_backend ? baseline_output : candidate_output
       result = wan_bounded_run_arm(backend, query_rows, q, k, v, output,
-        mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups, register_kv_pipeline)
+        mps_workspace, qcache_pipeline, shared_kv_pipeline, shared_kv_simd_groups,
+        register_kv_pipeline, prefetch_kv_pipeline)
       if backend == baseline_backend
         baseline_wall_samples << result[:arm_wall_seconds]
       else
@@ -852,19 +898,21 @@ begin
     ML::Video::MetalOps.copy(e, baseline_output, candidate_output, query_values.to_i32)
     e.set_pipeline(corrupt_pipeline)
       .set_buffer(candidate_output, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
+    e.set_pipeline(nan_corrupt_pipeline)
+      .set_buffer(candidate_output, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
     wan_bounded_encode_compare(e, zero_pipeline, compare_pipeline,
       baseline_output, candidate_output, metrics_pair, query_values.to_i32,
       query_rows, false)
     control.commit_and_wait
     raise "attention corruption control did not use one terminal wait" unless control.wait_count == 1
     control_metrics = wan_bounded_read_metrics(metrics_pair)
-    unless control_metrics[:bit_differences] == 1 && control_metrics[:tolerance_violations] == 1 &&
-           control_metrics[:nonfinite] == 0
-      raise "attention corruption control did not reject exactly one +1 candidate value"
+    unless control_metrics[:bit_differences] == 2 && control_metrics[:tolerance_violations] == 2 &&
+           control_metrics[:nonfinite] == 1
+      raise "attention corruption control did not reject one +1 value and one NaN"
     end
     wan_bounded_emit({
       schema: "wan_s2v_bounded_attention_negative_control_v1",
-      corrupted_values: 1, corruption: "candidate[0] += 1.0f",
+      corrupted_values: 2, corruption: "candidate[0] += 1.0f; candidate[1] = quiet_NaN()",
       compared_values: query_values, bit_differences: control_metrics[:bit_differences],
       strict_tolerance_violations: control_metrics[:tolerance_violations],
       nonfinite: control_metrics[:nonfinite], terminal_waits: control.wait_count,
