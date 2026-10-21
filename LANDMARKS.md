@@ -31343,3 +31343,39 @@ Refresh after source/toolchain/device/model/workload changes.
   ran; keep that restriction. Refresh after graph/bridge/probe, input/dtype/
   geometry, toolchain/device/runtime/queue, guard policy changes or artifact loss.
   Scratch/build/evidence remain on /opt/mldata_ssd/.
+
+### 2026-10-21 — Anchor native F16 Wan attention and bound the localization claim
+
+- Bounded B1/Q128/K36608/H40/D128 probes share the same GPU Q/K/V with the
+  pinned official Wan/PyTorch 2.8.0 MPS oracle. Native connected F16 QK-scale-
+  softmax-PV, tapped P/Y, and isolated PV from actual upstream P have exactly
+  equal finite values. The comparator does not distinguish signed-zero bits.
+  One compact metric read per process; no activation exports or production waits.
+- Existing opaque native F16 SDPA still fails the unchanged finite
+  2e-5+2e-5abs gate: 78,311/655,360 violations, max error 9.1552734375e-5.
+  GPU identity/+1/NaN controls pass. Production defaults remain F32.
+- Native QK and isolated scale/round/softmax match materialized Torch by value.
+  Connected prefixes first differ at exposed F32 scaling, and connected P and
+  actual upstream P share 113 violations versus separately materialized P.
+  Target/materialization context affects the observable result. Fusion/wider
+  intermediates remain hypotheses; opaque SDPA's first causal stage is OPEN.
+  Do not mistake an exposed prefix for a tap inside that opaque operation.
+- An exposed all-F32 arithmetic graph fails both endpoints. Widening is not a
+  demonstrated repair. The existing native Crystal F32 Q128/full-K regression
+  rebuild passes with zero strict violations, max error 5.5506825e-7.
+- docs/wan-performance-frontier.md and external wan-self-attention/
+  f16-stages-20261021/stage-receipt-v3.json index exact commands, source/binary
+  pins, raw metrics and guards. Serial probes retain 15% reserve/pressure,
+  5,120 MiB process / 64 MiB swap-growth / 120s caps. Private buffer admission
+  is diagnostic-only; public constructors still reject it. No full generation.
+  Monolithic stages-v2 exceeded its process cap and is disqualified; final
+  QK/scale, rounding and softmax probes run in separate processes. Historical
+  wide-v1 retains its executed source pins; its generic stage-order label is
+  quarantined, and it was not replayed with the final driver.
+- Correlated source/raw-evidence adversary review is ROBUST for the fixed-fixture
+  observations, excluding opaque internal-cause, speed and quality qualification.
+  Next falsifier: benchmark the anchored connected native graph, then strict
+  tails/changed-input parity and
+  bounded workspace before wider query coverage. Optimize cogni-ml directly;
+  Torch remains the upstream oracle. Refresh on graph/targets, inputs/dtype/
+  geometry, toolchain/Torch/OS/device/queue or guard changes, or artifact loss.

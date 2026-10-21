@@ -103,7 +103,8 @@ static void *wan_attention_mps_plan_create_impl(
     int32_t keyRows, int32_t heads, int32_t headDim, void *qHandle,
     void *kHandle, void *vHandle, void *outputAHandle,
     void *outputBHandle, MPSDataType dataType, uint64_t elementBytes,
-    bool headMajorKV, bool explicitQKSoftmaxPV) {
+    bool headMajorKV, bool explicitQKSoftmaxPV,
+    bool allowPrivateBindings = false) {
   if (!deviceHandle || !qHandle || !kHandle || !vHandle || !outputAHandle ||
       !outputBHandle)
     return nullptr;
@@ -147,8 +148,11 @@ static void *wan_attention_mps_plan_create_impl(
       NSArray<id<MTLBuffer>> *allBuffers =
           @[ qBuffer, kBuffer, vBuffer, outputABuffer, outputBBuffer ];
       for (id<MTLBuffer> buffer in allBuffers) {
+        // Only the same-stream Torch diagnostic opts into private GPU storage.
+        // Every public production constructor keeps the original shared-only gate.
         if (buffer.device != device ||
-            buffer.storageMode != MTLStorageModeShared)
+            (buffer.storageMode != MTLStorageModeShared &&
+             !(allowPrivateBindings && buffer.storageMode == MTLStorageModePrivate)))
           return nullptr;
       }
       if (qBuffer.length < qBytes || outputABuffer.length < qBytes ||

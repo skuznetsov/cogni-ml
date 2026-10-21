@@ -1580,3 +1580,163 @@ The CPU-only `check-precision-receipt-v1.py` indexes and rechecks those artifact
 it is not an independent upstream execution or attestation. Refresh after
 graph/bridge/probe, dtype/geometry/input, compiler/device/runtime/queue or guard
 policy changes, or artifact loss. Temporary files remain on `/opt/mldata_ssd/`.
+
+### F16 stage-localization contract, 2026-10-21
+
+This bounded CAUTION diagnostic keeps B=1, Q=128, K=36,608, H=40 and D=128.
+It runs no complete block, model or generation and changes no production
+entrypoint or default. The hypothesis is that an observable QK, scaling,
+softmax or PV boundary explains the rejected F16 endpoint. The falsifier is
+failure to anchor the diagnostic decomposition to the stock endpoint: in that
+case, its first differing stage is scoped to that decomposition, not to hidden
+MPSGraph SDPA internals.
+
+Both implementations borrow the same resident, contiguous, zero-offset Torch
+MPS storage, with native encoding on the Torch serial queue and command stream.
+Storage bindings remain alive through a single terminal metric read. Neither
+activation exports nor intermediate host waits are admitted. GPU comparisons
+retain the finite `2e-5 + 2e-5*abs(reference)` gate and +1/NaN rejection controls.
+The stock pinned Wan fallback is anchored to Torch's actual MPS math endpoint;
+its returned probabilities also permit an isolated PV check. Exposing targets
+can change compilation, so tapped and untapped endpoint controls are required.
+Accumulator precision is not inferred from tensor storage or a matching output.
+
+DoD is a guarded diagnostic build and full-key Q=128 run with byte-identical
+shared input bindings, compact GPU metrics, explicit stage/endpoint provenance,
+and no intermediate host synchronization. Guards retain the 15% cache-aware
+reserve and pressure floors, 64 MiB swap-growth stop, process and time budgets.
+Scratch, build products and evidence stay under `/opt/mldata_ssd/`. Rollback is
+reverting only this diagnostic commit. Evidence expires on graph/target set,
+dtype/input/geometry, compiler, Torch/OS/device or command-stream changes.
+
+#### Observed F16 localization result
+
+The candidate is native Metal/MPSGraph code in
+`examples/support/wan_attention_f16_stages_bridge.mm`. Python supplies the
+pinned upstream oracle and borrows the same GPU allocations for the candidate;
+it is not an alternative inference implementation or a performance benchmark.
+The endpoint and split-stage phases use the geometry above, native GPU input
+fill and GPU comparisons. Each process read only its final compact metric table. No
+production GPU synchronization or arithmetic changed.
+Successful process and guard completion establishes a usable diagnostic;
+`candidate_comparisons_passed` remains false because the opaque candidate and
+materialized-prefix comparisons intentionally retain their measured failures.
+
+The endpoint phase anchors the actual pinned Wan fallback to the probabilities
+and output returned by PyTorch 2.8.0's MPS math SDPA operator. Wan's output,
+the native connected F16 decomposition's output, its tapped probabilities and
+output, and isolated native PV using upstream probabilities all have exact
+finite value equality. The comparator checks values after dtype conversion,
+not raw bits; signed-zero identity is not established.
+Adding the probability target did not change this endpoint on this fixture.
+The production opaque F16 SDPA graph instead has 78,311 strict violations among
+655,360 output values, with maximum absolute error `9.1552734375e-5` and maximum
+tolerance ratio `4.492565155`. Its previous rejection reproduces. Identity,
++1 and NaN comparator controls pass; the latter two reject all output values.
+
+The split-stage phases compare connected native prefixes with separately
+materialized Torch operations on the same inputs. Each score/probability tensor contains
+187,432,960 values:
+
+| Native boundary versus materialized reference | Strict violations | Maximum absolute error |
+| --- | ---: | ---: |
+| QK | 0, exactly equal values | 0 |
+| Connected QK through F32 scaling | 149,043,779 | 0.002762317657470703 |
+| Isolated F32 scaling of the same F16 QK | 0, exactly equal values | 0 |
+| Connected prefix through F16 scaled logits | 48,782,605 | 0.00390625 |
+| Isolated scaling and F16 rounding | 0, exactly equal values | 0 |
+| Connected prefix through softmax | 113 | 6.103515625e-5 |
+| Isolated softmax of the same F16 logits | 0, exactly equal values | 0 |
+
+The actual upstream probabilities have the same 113 violations against that
+separately materialized reference, while matching the connected native prefix
+exactly by value in the endpoint phase. Thus the first differing *observable
+prefix* is F32 scaling after QK, and isolated scaling is exact. This supports a graph
+context/materialization boundary; retaining wider intermediates or fusion is
+a hypothesis, not an identified compiler transformation. It does not expose
+the opaque SDPA's internal QK, scale or softmax, and does not identify its first
+causal divergence. The isolated explicit native PV applied to actual upstream P
+reproduces upstream Y; this does not validate opaque SDPA's internal PV.
+
+A historical `wide-v1` native graph widening QK, softmax and PV to F32 before
+casting the output to F16 fails against both upstream (72,236 violations) and opaque SDPA
+(5,004). Merely widening the exposed graph does not reproduce either endpoint;
+tensor storage and endpoint similarity do not establish accumulator precision.
+Production remains F32. No lower-precision quality or speed claim is admitted.
+
+#### Reproduction and safety boundary
+
+The external evidence directory is
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/f16-stages-20261021/`.
+It retains `build-v6.invocation.json`, the four final invocation/JSON/log/guard
+sets (`endpoints-v3`, `qk-scale-v3`, `round-v3`, `softmax-v3`), the rebuilt
+legacy F32 regression, and `stage-receipt-v3.json` with source/binary pins and
+sampled guard summaries.
+The receipt indexes executed evidence; it is not independent attestation.
+The historical `wide-v1` numeric result is pinned to `source-v1/` and its
+executed driver, not the final driver. Its generic stage-order label incorrectly
+includes intermediate F16 rounding; that label is quarantined. Native kind 12
+source defines its arithmetic. The optional wide phase was not replayed.
+
+The monolithic `stages-v2` process was guard-stopped at a sampled footprint of
+6,347,671,088 bytes, exceeding its 5 GiB cap. Its emitted JSON is disqualified
+as a successful run. The final driver splits QK/scaling, rounding and softmax
+into separate processes; the first two skip the upstream SDPA endpoint, and the
+softmax phase reuses the consumed QK buffer for rounded logits. This bounds the
+diagnostic's simultaneous tensors without changing the candidate graphs or
+adding intermediate host waits.
+
+CPU-only plans run without importing Torch:
+
+```sh
+python3 -S examples/support/wan_s2v_attention_f16_stages.py --plan-only --phase=endpoints
+python3 -S examples/support/wan_s2v_attention_f16_stages.py --plan-only --phase=qk-scale
+python3 -S examples/support/wan_s2v_attention_f16_stages.py --plan-only --phase=round
+python3 -S examples/support/wan_s2v_attention_f16_stages.py --plan-only --phase=softmax
+python3 -S examples/support/wan_s2v_attention_f16_stages.py --plan-only --phase=wide
+```
+
+For a GPU phase, use the built library and pinned Torch 2.8.0 environment from
+the invocation records. The driver itself does not implement memory monitoring;
+the external guard is required. Use a fresh output name for each run:
+
+```sh
+python3 examples/support/wan_memory_guard.py \
+  --memory-accounting=file-cache --max-footprint-mib=5120 \
+  --max-swap-growth-mib=64 --timeout-sec=120 --log="$stage_guard_log" -- \
+  "$stage_torch_python" examples/support/wan_s2v_attention_f16_stages.py \
+  --phase=endpoints --library="$stage_library" --output="$stage_output"
+```
+
+The same guard applies to every phase, retaining the 15% reserve
+and pressure floors. Builds use 1,536 MiB / 180 seconds. File-cache headroom is
+an estimate of reclaimable memory and polling can miss intervening spikes;
+sampled footprints are not proven instantaneous maxima. No full block, model,
+Studio or generation ran. The diagnostic alone opts into private GPU buffers
+on the Torch stream; every existing public constructor still requires shared
+buffers, including a measured private-buffer rejection control.
+
+The production bridge object and the existing Crystal F32 profiler were rebuilt.
+The legacy Q=128/full-key control passes with zero strict violations and maximum
+absolute error `5.5506825e-7` against its cached upstream fixture; this is a
+native regression check, not a fresh full-model upstream execution. The failed
+monolithic attempt is retained separately from accepted guarded runs. The
+four final processes finish with guard return code zero, minimum sampled
+cache-aware headroom 25.01%, minimum pressure-free percentage 78 and unchanged
+swap. The short split processes finish between footprint samples: their small
+recorded process footprints do not measure peak GPU workspace or establish
+that the process stayed below its cap between polls. The
+historical wide diagnostic's sampled footprint reached about
+4,739 MiB, leaving only about 381 MiB below its cap; its explicit tensor
+estimate excludes substantial framework workspace. It is not a low-memory
+inference candidate.
+
+The next optimization belongs in the native probe: time a connected F16 graph
+that preserves the anchored endpoint, then test tails and changed inputs before
+considering wider query coverage. It must beat the current F32 path and pass
+the unchanged upstream gate with bounded workspace. The exposed single-stage
+cuts are diagnostic observations, not a recipe for inserting materialization
+or synchronization into inference. The opaque SDPA's internal cause remains
+open. Source and raw-evidence adversary review is ROBUST within the fixed-fixture
+observation scope, excluding speed, quality, tails, changed inputs and opaque
+internal-cause claims. The review is correlated, not independent attestation.
