@@ -2374,3 +2374,174 @@ from the existing intermediate tolerance. No portable fal speed multiplier is
 claimed. Refresh numerical/performance evidence after scoped source/binary,
 input/fixture, geometry/dtype, device/toolchain/runtime, queue/resource or guard
 changes, or artifact loss; refresh public research when its sources change.
+
+## Full-block prepared-K/V MPS attribution contract, 2026-10-21
+
+Measure one real-weight block-0 forward at B=1, N=36,608, C=5,120,
+H=40, D=128, FFN=13,824 and text K=512. This CAUTION diagnostic uses
+BF16-resident parameters, F32 operator math, lifetime-aliased scratch and
+MPSGraph SDPA self-attention with 128-query chunks and head-major K/V.
+Text cross-attention remains the existing native tiled path with 320 groups
+per segment. Weight loading, plan creation and synthetic input fill are setup;
+Q/K/V projections, norms, RoPE, a fresh K/V layout transform on every encode,
+all attention chunks, output copies, cross-attention and FFN are charged to the
+complete arm. No full model, audio injector, Studio or video generation runs.
+
+The smallest probe extension is `--comparison=profile-replay --prepared-kv
+--candidate-self-chunk=128 --reuse-block-scratch --phase-roots --pairs=1`.
+Both A/A arms select the same prepared-K/V path. Only B collects the existing
+asynchronous root intervals; A supplies unprofiled complete-arm controls.
+No new model-path wait, command boundary, activation readback or MetalBuffer
+allocation is admitted. Existing terminal diagnostics read compact metrics
+only. Root phase unions are overlapping diagnostics, not additive kernel costs.
+Pair differences cannot establish an algorithmic speedup because both arms
+compute the same graph and B adds observation overhead.
+
+DoD: build a fresh release probe from pinned sources/objects; qualify the
+prepared-K/V path on the pinned upstream real-width short-block fixture and
+retain the full-key attention oracle qualification. Under the full-size run,
+A/A outputs must be bit-identical and pass the unchanged finite
+`2e-5+2e-5*abs(reference)` gate. A +1 and NaN control must reject exactly those
+two outputs in the existing single control wait. All arms retain one terminal
+wait and zero tracked arm-time MetalBuffer allocations. Phase root counts must
+match the unprofiled graph. Short upstream fixtures, full-key attention checks
+and full-block self-parity remain distinct evidence scopes; this does not
+create a full-spatial upstream block oracle.
+
+Strongest failure modes: preparation omitted from the timed interval, stale
+packed K/V, an unintended explicit QK/softmax/PV backend, scratch alias damage,
+or overlapping root intervals misattributed as kernel costs. Check live
+source/binary routing, upstream intermediate parity, exact A/A comparison,
+per-encode preparation metadata and the validated root-profile summary. The
+current probe validates individual intervals internally but exports their
+summary only. Choose a fusion target
+only when its measured parent phase and source-level memory/dispatch pattern
+support it; isolate the candidate before any speedup claim.
+
+Builds and GPU probes run serially. The existing cache-aware headroom estimate
+and pressure query retain 15% floors, with admission charging the whole owned
+process cap, a 64 MiB swap-growth stop and monotonic deadlines. Compute the
+new memory plan before launch, including prepared K/V and the heuristic opaque
+MPS reserve; reject insufficient headroom without shrinking accounting to
+force admission. Stop after the first valid attribution unless variance or a
+failed control needs a discriminating follow-up. Evidence and build outputs
+stay under `/opt/mldata_ssd/cogni-ml/video-scene-20261019/`; rollback removes
+the probe/spec opt-ins. Production defaults and numerical tolerances remain.
+
+### Full-block observations and selected fusion experiment
+
+At parent `9de71191`, fresh release builds used seven freshly compiled native
+bridges, Crystal 1.22.0/LLVM 23.1.3, Apple clang 21.0.0 and macOS 26.6.2 on
+M2 Max with 64 GiB physical memory. The prepared-K/V plan estimates
+11,194,526,228 B including its heuristic 1 GiB opaque reserve. Its single
+shared prepared pair occupies 1,499,463,680 B and is refreshed inside every arm.
+The new probe flag selects this path in both profile-replay arms; it changes
+no production default, arithmetic kernel or model-path synchronization.
+
+One warmup per arm and one measured A/A pair completed. Wall times were
+18.456799/20.191059 s for warm A/B and **22.392418/22.336865 s** for measured
+A/B. Measured A/B summed GPU root durations were 22.349545/22.274099 s.
+Host encode times were 19.783769/19.761098 s; these include submission
+backpressure and are not isolated CPU compute costs. The warmup drift and
+same-configuration comparison establish neither a stable latency distribution
+nor a speedup. All preparation, including K/V layout conversion, was charged.
+
+Measured B's 624 roots have a 22.274733 s envelope, 22.274099 s interval union
+and zero observed overlap. Warm B has the same broad ranking. These are
+coarse source-bound phases, not individual kernel times:
+
+| Phase | Measured union, s | Share of reported root union |
+| --- | ---: | ---: |
+| Self preparation: norm, modulation, projections, Q/K norm and RoPE | 1.263346 | 5.67% |
+| Fresh K/V packing, self-attention, output projection and residual | 17.209883 | 77.26% |
+| Text cross-attention, projections and residual | 1.642163 | 7.37% |
+| FFN | 2.158707 | 9.69% |
+
+The phase shares describe this no-overlap observation only. In general, root
+and phase intervals may overlap and their unions must not be added. The large
+self-attention phase contains 286 SDPA query chunks as well as surrounding
+work; the profile does not isolate transpose cost or imply that its entire
+17.21 s is fusible. Individual root intervals are not exported by this probe.
+
+Both warm and measured block comparisons are bit-exact across all
+187,432,960 output values: zero tolerance violations and nonfinite values.
+The finite +1/NaN control rejects exactly two differences, two tolerance
+violations and one nonfinite value in its existing single wait. All four arms
+retain 624 command segments, one terminal wait, zero tracked arm-time
+MetalBuffer allocations, zero inter-operator waits and zero activation
+readbacks. No full model, video generation or profiler runs in this experiment.
+
+The separate retained upstream scopes remain explicit:
+
+- Prepared chunk1 and padded-tail chunk3 each pass 15 examples with zero
+  failures/errors/pending. Each reports all 24 strict real-width short-block
+  checkpoint comparisons passing, with bit-exact default/repeat/chained replay
+  and zero tracked encode allocations. The parent fixture hash is
+  `fb7943d637bc8a6853707cd2ed284595e6744c4368083c36993fd1dd26d78da9`;
+  first-batch projection changes no weights and executes no fresh upstream run.
+- The rebuilt full-Q/K36608 attention probe passes eight full-output upstream
+  checks (two warm and six measured), max absolute error `1.8328428e-6`, max
+  tolerance ratio `0.08037424`, and bit-exact agreement between K/V layouts.
+  The unchanged finite strict gate remains `2e-5+2e-5*abs(reference)`.
+  Its AB/BA/AB complete-attention savings are +0.420292, +0.972046 and
+  -1.461543 s. One losing pair rejects layout promotion despite a lower median.
+- Full-size block A/A is a distinct same-path check. There is no full-spatial
+  upstream block oracle, end-to-end quality claim or evidence of physical
+  load/compute overlap. Python performs orchestration and CPU-only evidence
+  checks; no PyTorch runtime participates in the native measured path.
+
+The first full-block attempt rejects admission before spawning: cache-aware
+headroom 20,464,107,520 B is below the 23,192,823,398 B required for the whole
+12 GiB process cap plus 15% physical reserve. The later attempt starts with
+27,569,373,184 B, including 17,622,253,568 B of file-backed pages. Accounting
+is printed free plus file-backed, with speculative pages included once.
+Across its 124 samples, peak owned process footprint is 11,235,903,240 B,
+minimum headroom 16,695,230,464 B (24.2948% physical), minimum pressure-free
+63%, swap growth zero and final owned process count zero. File-backed bytes
+remain a reclaimability estimate; sampling cannot exclude between-poll spikes.
+
+The selected next **proposed** fusion is a K/V preparation epilogue. Preserve
+the existing F32 K/V projections, K bias and K RMSNorm. Fold the existing K
+RoPE arithmetic into the required head-major K write, and add V's BF16 bias
+while writing head-major V. This removes standalone K RoPE and V bias
+read/write passes: 2,998,927,360 B of logical traffic and two dispatches at
+this shape. It preserves the required K/V transpose reads/writes and
+1,499,463,680 B of prepared storage; this is not direct MPS projection into
+head-major buffers. No time saving is inferred from byte counts.
+
+The future opt-in probe must preserve F32 arithmetic order, per-encode refresh,
+buffer lifetimes, existing command boundaries and the single terminal wait.
+Validate packed K/V and downstream checkpoints against identical upstream
+inputs. Then require unchanged strict full-block parity and repeatable
+AB/BA/AB complete-arm improvement with all preparation charged. Reject on a
+nonfinite value, any tolerance violation, new wait/allocation or nonrepeatable
+timing. FFN bias+GELU is the simpler fallback (4,048,551,936 B logical traffic
+and one dispatch removed); its measured parent is only 2.158707 s. Neither
+fusion is implemented or promoted by this diagnostic commit.
+
+Correlated MiniQuad source/math and raw-log adversary review is ROBUST within
+these evidence scopes. Evidence is under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/full-block-mps-20261021/`.
+`source-pins-v2.json`, native/build receipts, exact invocations, raw logs and
+guards identify the qualified runs; `verification-v1.json` contains the
+CPU-only evidence recomputation from pinned logs, not a replay of GPU output
+arrays. `raw-evidence-receipt-v1.json` pins 66 artifacts;
+SHA256 `143a7118654561487eb08524f8d4bc323d7afc9f5f83fd287e9d93cba43e8f53`.
+The full-key binary digest is a post-run snapshot; its fresh build invocation
+and native object receipts are retained. Failed admission and helper parsing
+attempts are explicitly excluded in the receipt.
+
+CPU-only refresh, using an output path that does not already exist:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/full-block-mps-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 "$evidence_root/verify-full-block-v1.py" "$evidence_root/verification-refresh.json"
+```
+
+Expected signal: `passed: true`, all pinned source/object/binary/fixture hashes
+match, strict upstream and exact A/A checks pass, controls reject corruption
+and guards remain within their limits. `git diff --check` and Crystal format
+checks also pass for the changed probe/spec. Refresh after scoped source,
+object/binary, weight/fixture, geometry/dtype, device/toolchain/runtime,
+queue/resource or guard changes, or artifact loss. Rollback removes the new
+probe/spec opt-ins and this attribution record; runtime defaults stay intact.

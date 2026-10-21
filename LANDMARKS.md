@@ -31548,3 +31548,43 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on scoped source/binary/input/fixture/geometry/dtype/device/runtime/
   queue/resources/guard changes or artifact loss. Rollback removes probe modes
   and kernel; existing production defaults remain.
+
+### [LM-WAN-FULL-BLOCK-MPS-PREPARED-KV-2026-10-21] Self-attention dominates; fusion candidate selected
+
+- At parent `9de71191`, a fresh native M2 Max block-0 probe uses BF16 resident
+  weights, F32 math, N36608/C5120/H40/D128, chunk128 MPSGraph SDPA and compact
+  scratch. Both replay arms refresh one shared 1,499,463,680 B head-major K/V
+  pair inside the timed block; native text cross-attention remains unchanged.
+- Measured same-path A/A wall times are 22.392418/22.336865 s. These establish
+  a bounded baseline, not an algorithmic speedup or stable latency distribution.
+  B root union is 22.274099 s: self-prepare 1.263346 s, self-attention/packing/
+  projection/residual 17.209883 s (77.26%), cross 1.642163 s, FFN 2.158707 s.
+  All 624 roots reconcile; zero observed overlap does not make general phase
+  unions additive. Individual transpose/kernel time remains unidentified.
+- Warm and measured outputs match all 187,432,960 values bit-exactly. All four
+  arms retain one terminal wait and zero tracked encode MetalBuffer allocations
+  or activation readbacks. The +1/NaN control rejects 2/2/1. Prepared chunk1 and
+  padded-tail chunk3 each pass 15/0 and 24 strict retained-upstream checkpoint
+  checks. Separate full-key attention upstream checks pass at max abs
+  1.8328428e-6; layout promotion is rejected because one of three timing pairs
+  loses. No full-spatial upstream block or video-quality claim follows.
+- The first block attempt rejects admission before spawn; the later run passes
+  the same 12 GiB cap plus 15% startup reserve. Cache-aware accounting includes
+  file-backed pages once. Peak sampled footprint is 11.24 GB, minimum headroom
+  16.70 GB (24.2948%), pressure-free minimum 63%, swap growth zero and final
+  owned process count zero. Cache reclaimability and sampled spikes stay open.
+- Next proposed fusion: keep K/V projections and K RMSNorm, fold K RoPE and V
+  bias into head-major packing. It can remove two dispatches and 2.999 GB of
+  logical traffic, while retaining the 1.499 GB prepared pair; speed benefit is
+  unmeasured. Falsifier: unchanged strict intermediate/full-block parity and
+  repeatable full-block AB/BA/AB improvement with preparation charged, no new
+  waits or allocations. FFN bias+GELU is the simpler fallback. No fusion or
+  runtime promotion is included here; no full model/Studio/generation runs.
+- Correlated MiniQuad adversary is ROBUST in these scopes. The frontier doc
+  records exact source/object/binary/fixture lineage, controls, raw guards and
+  CPU-only evidence recomputation from pinned logs under external
+  `wan-self-attention/full-block-mps-20261021/`.
+  Receipt SHA256: 143a7118654561487eb08524f8d4bc323d7afc9f5f83fd287e9d93cba43e8f53.
+  Refresh on scoped source/binary/fixture/geometry/dtype/device/runtime/queue/
+  resource/guard change or artifact loss. Rollback removes probe/spec opt-ins;
+  production defaults and strict tolerances remain unchanged.

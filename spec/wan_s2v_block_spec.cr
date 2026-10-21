@@ -271,17 +271,25 @@ private def wan_prepare_mps_self_attention(
   cfg : ML::Video::WanS2VConfig, scratch : ML::Video::Arena,
   attention_scratch : ML::Video::Arena,
 ) : ML::Video::WanAttentionMPSChunkWorkspace?
+  prepared_kv = ENV["WAN_S2V_MPS_PREPARED_KV"]? == "1"
+  if prepared_kv && ENV["WAN_S2V_MPS_SELF_ATTENTION"]? != "1"
+    raise ArgumentError.new("MPS prepared K/V fixture requires WAN_S2V_MPS_SELF_ATTENTION=1")
+  end
   return nil unless ENV["WAN_S2V_MPS_SELF_ATTENTION"]? == "1"
   chunk_rows = ENV["WAN_S2V_MPS_SELF_ATTENTION_CHUNK_ROWS"]?.try(&.to_i32) || 1
   unless 1 <= chunk_rows <= ML::Video::WanAttentionMPSChunkWorkspace::MAX_CHUNK_ROWS
     raise ArgumentError.new("MPS self-attention fixture chunk rows are out of range")
   end
   count = (chunk_rows.to_i64 * cfg.dim).to_i32
+  prepared_count = (cfg.seq.to_i64 * cfg.dim).to_i32
+  prepared_k = prepared_kv ? attention_scratch.alloc("prepared_k_bhkd", prepared_count) : nil
+  prepared_v = prepared_kv ? attention_scratch.alloc("prepared_v_bhkd", prepared_count) : nil
   ML::Video::WanAttentionMPSChunkWorkspace.new(
     cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, chunk_rows,
     scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
     scratch["wan_b_self_attn"], attention_scratch.alloc("chunk_q", count),
-    attention_scratch.alloc("chunk_out_a", count), attention_scratch.alloc("chunk_out_b", count))
+    attention_scratch.alloc("chunk_out_a", count), attention_scratch.alloc("chunk_out_b", count),
+    prepared_k, prepared_v)
 end
 
 # A separate block-only Arena keeps the existing audio/reused-scratch contract
@@ -488,6 +496,8 @@ private def wan_check_reused_block_scratch(
           default_scratch_bytes: ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: precompute_rope),
           precompute_rope: precompute_rope, mps_projections: !workspace.nil?,
           self_attention_backend: attention ? "mpsgraph_sdpa_chunked" : "native",
+          self_attention_kv_layout: attention.try { |workspace| workspace.head_major_kv? ? "B,H,K,D" : "B,K,H,D" },
+          prepared_kv_refreshed_inside_each_block_encode: attention.try(&.head_major_kv?) || false,
           attention_chunk_rows: attention.try(&.chunk_rows), attention_scratch_bytes: attention_scratch.resident_bytes,
           scope: "real-width short block fixture; not full spatial geometry or video"}.to_json)
   ensure
