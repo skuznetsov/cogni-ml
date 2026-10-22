@@ -757,6 +757,8 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
     segmented_commands = ENV["WAN_S2V_SEGMENTED_COMMANDS"]? == "1"
     phase_root_profile = ENV["WAN_S2V_PHASE_ROOT_PROFILE"]? == "1"
     api_profile = ENV["WAN_S2V_API_PROFILE"]? == "1"
+    continuation_trace = ENV["WAN_S2V_CONTINUATION_TRACE"]? == "1"
+    raise ArgumentError.new("Wan continuation tracing requires API profiling") if continuation_trace && !api_profile
     if phase_root_profile && !segmented_commands
       raise ArgumentError.new("Wan phase-root profiling requires segmented commands")
     end
@@ -994,6 +996,7 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       # Short retained-upstream fixtures exercise API timing without assuming
       # that any MPS root isolates an attention-only interval.
       active.enable_api_profile!(phase_roots: false)
+      active.enable_continuation_trace! if continuation_trace
       profile_output = api_profile_block_output || raise "MPS API profile output was not allocated"
       profile_allocations = ML::MetalBuffer.video_spec_allocations
       ML::Video::WanS2VBlock.encode(
@@ -1019,6 +1022,14 @@ private def wan_run_fixture(fixture : JSON::Any) : Hash(String, Array(Float32))
       profile.phases.any? do |phase|
         phase.operations.values.any? { |stats| stats.count > 0 }
       end.should be_true, "profile must record at least one wrapped MPS API operation"
+      if continuation_trace
+        trace = active.continuation_trace
+        trace.roots.size.should eq(active.segment_count)
+        trace.events.size.should eq(active.segment_count - 1)
+        puts({schema: "wan_mps_continuation_trace_upstream_control_v1",
+              event_count: trace.info.event_count, root_count: trace.info.root_count,
+              failed: trace.info.failed, terminal_waits: active.wait_count}.to_json)
+      end
       active.release
       phase_root_chain = nil
     end

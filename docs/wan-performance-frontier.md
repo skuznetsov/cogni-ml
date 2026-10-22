@@ -3007,3 +3007,185 @@ scoped source/object/binary/fixture byte hash to match; the current verification
 HEAD is reported separately. This checks retained properties, not fresh GPU
 outputs or authenticated execution. Refresh runtime evidence after the decay
 triggers in the contract above.
+
+### Continuation/root correlation contract (2026-10-21)
+
+At parent `de7350ab`, long continuation calls are observed in the host cross
+phase while earlier self-attention roots may still be outstanding. Aggregate
+wall/owner-thread CPU clocks cannot distinguish queue admission backpressure,
+framework locks and CPU descheduling. This CAUTION diagnostic preserves the
+tensor graph, precision, root segmentation and single existing terminal wait.
+
+Add a default-off bounded continuation trace: entry/exit host timestamps in a
+documented GPU-compatible clock domain, owner-thread CPU spans, phase/nesting,
+and current-root identities/statuses. Join these with existing root GPU times
+and completion callbacks after the terminal wait. A tracked root is not thereby
+submitted; callback delivery is not the instant of GPU completion. A separate
+owned-process stack sample may identify the blocking framework call, but is
+diagnostic and cannot establish an unprofiled speedup. No activation readback,
+additional completion wait, GPU event, command or scheduled callback is added.
+
+H1 predicts long continuation calls overlap earlier submitted GPU intervals
+and that root admission/completion progress bounds the backlog. H2 predicts
+owner-thread stacks in a host lock unrelated to queue admission. H3 predicts
+descheduling without a stable blocking stack. Temporal overlap alone cannot
+choose H1. Fail closed on unknown clocks, missing/overflowed records, invalid
+root identities, timestamp/order contradictions or partial sampling evidence.
+
+DoD: source-pinned release build; positive and malformed CPU trace controls;
+retained short upstream checks at chunk rows 1/3 with the unchanged finite
+`2e-5+2e-5*abs(reference)` tolerance; bounded full-shape profile replay with
+complete bit/finite output checks and unchanged root/wait/allocation ledgers;
+analyzed raw per-call/root timeline and, if available, owned-thread stack
+evidence. Preserve the 12 GiB process cap, 15% cache-aware reserve, 64 MiB
+swap-growth stop and 600 s monotonic deadline. No full model, Studio or video
+generation. Rollback disables the trace/profile flags. Refresh after scoped
+source/build, fixture, geometry/dtype, runtime/device, queue/resource, clock,
+sampler/collector or guard changes, or evidence loss. The strongest guard is
+that instrumentation leaves full outputs and command counts unchanged while
+rejecting a deliberately broken timeline; a correlation remains provisional
+until a stack or controlled backlog discriminator supports its mechanism.
+
+### Continuation/root correlation results (2026-10-21)
+
+The bounded probe supports queue-admission backpressure inside
+`commitAndContinue`. The bridge creates the default Metal queue with
+`newCommandQueue` (`src/ml/metal/bridge.mm:355`). Apple documents a limit of
+64 uncompleted command buffers for
+[makeCommandQueue()](https://developer.apple.com/documentation/metal/mtldevice/makecommandqueue()).
+The installed MPS header says that continuation commits the current root and
+creates the next buffer on that queue. This is a mechanism explanation for
+the sampled window, not proof of every call's cause or a speedup claim.
+
+The release v3 binary retains BF16 resident block-0 weights and F32 math at
+N36608/C5120/H40/D128, with prepared K/V refreshed inside every timed arm.
+Profile replay preserves the graph, chunk128 geometry and cross groups320.
+Each traced B arm records 623 continuation calls and 624 roots. Three
+measured AB/BA/AB pairs give the following slow-call observations:
+
+| Pair | Calls over 1 ms | Their host wall sum | Their owner-thread CPU sum | First slow call wall |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 202 | 14.599701 s | 4.258461 ms | 1.020266 s |
+| 1 | 307 | 14.556389 s | 6.118294 ms | 0.948036 s |
+| 2 | 522 | 17.225644 s | 10.855296 ms | 1.106499 s |
+
+All 1,031 measured calls over 1 ms occur in the host cross phase and enter
+with 63 earlier callback completions still unobserved. The current outgoing
+root makes a 64-root admission candidate. For 1,030 calls, 63 earlier GPU
+intervals have not ended; pair1/serial338 has 62 because one GPU interval
+ended before its callback was observed. That call takes 5.416 ms with
+19.250 us owner CPU. Callback backlog must not be equated with GPU backlog.
+The first slow call in every measured arm is serial64/root63; its owner CPU
+is only 36.042--46.541 us.
+
+A separate diagnostic run starts `/usr/bin/sample PID 4 1` at the first
+measured-B marker. PID27875 and native owner TID335982823 match its process
+and thread headers. All 3,385 owner-thread samples show this ordered stack:
+
+```text
+CogniTrackedMPSCommandBuffer commitAndContinue
+  AGXG14XFamilyCommandQueue commandBuffer
+    _MTLCommandBuffer initWithQueue:retainedReferences:synchronousDebugMode:
+      _dispatch_semaphore_wait_slow
+        semaphore_wait_trap
+```
+
+This directly locates the sampled blocking path at acquisition of the next
+Metal command buffer. The 63-prior-root boundary and documented queue limit
+support queue-capacity backpressure; the sample does not establish an exact
+submission instant, the semaphore's private implementation, or every call's
+cause. Sampling perturbs execution and is excluded from speed evidence. Its
+wrapper finish timestamp is an upper bound taken after process completion,
+not the end of the sample window; wrapper monotonic timestamps are never
+subtracted from Mach/GPU timestamps.
+
+The host phase name is not exclusive GPU-work attribution. Earlier
+self-attention GPU intervals overlap 12.568602/12.460594/14.493401 s of the
+slow cross-phase calls in the three measured arms. Adding that host wall
+time to the earlier GPU work would count the same elapsed time twice.
+Measured B root unions are 16.951891/16.873181/19.532099 s; their envelopes
+contain only 0.476743/0.501359/0.621149 ms outside those intervals. These
+are inter-root coverage gaps, not hardware utilization or a measurement of
+idle cycles inside a root. The self-attention root range remains the largest
+GPU range: 12.462699--14.495810 s. The next lever is its actual GPU work;
+raising queue capacity alone does not remove that work. Do not infer a
+latency benefit from this diagnostic A/B replay or its host timing drift.
+
+All four full-block comparisons check 187,432,960 values and pass bit-exact
+and finite equality. The separate sampled replay also passes both complete
+comparisons. Both retained-upstream runs, chunk1 and padded-tail chunk3,
+pass 19 examples and 24 strict checkpoints each at the unchanged finite
+`2e-5+2e-5*abs(reference)` tolerance. These are short real-width upstream
+fixtures; the full-spatial block uses synthetic activations. No full-spatial
+upstream, full-model or video-quality claim follows. CPU controls pass
+24 examples, the native positive/three malformed controls, optional linking,
+and the external positive/nine malformed timeline/sample controls.
+
+Every runtime arm retains 624 roots, one existing terminal wait, zero tracked
+encode MetalBuffer allocations, zero inter-operator host waits and zero
+activation readbacks. Trace extraction uses the existing completed wait.
+There are no added GPU commands, explicit waits, events or callbacks. Trace
+enable allocates a fixed CPU record buffer and acquires the existing tracker
+lock before encoding; metadata snapshots use that lock after completion.
+The measured continuation/completion paths add no lock acquisition, but
+enabled status reads can extend existing lock holds. Disabled trace state
+and atomic checks also have a cost; zero overhead is not claimed.
+
+Full and sampled guards pass the unchanged 12 GiB process-tree cap, 15%
+cache-aware floor, 64 MiB swap-growth stop and 600 s deadline. Sampled peak
+footprints are 10.682985/10.690065 GiB; minimum cache-aware headroom is
+13.694763/15.325394 GiB (21.3981%/23.9459% physical). Swap growth is zero
+and final owned live-process counts are zero. Printed free plus file-backed
+pages count cache once; speculative pages are not added a second time.
+Sampling does not exclude spikes between observations.
+
+Earlier evidence is retained without promotion: v2/chunk3 rejects an overly
+strict cross-clock diagnostic enclosure; v3 adds an enable-time resolution
+guard and a 2 us timestamp-quantization bound with a rejecting control. This
+does not change tensor tolerances. The first v3 full-block attempt fails
+guard telemetry when `ps` times out and cleanup identity disappears; it is
+not a successful full run. A fresh process listing independently confirms
+the owned PID/group absent before the v4 retry. The retry changes no source,
+binary, guard, limits or geometry. Verifier report versions before v4 are
+superseded: root review corrected a sample TID join taken from another
+process and a duplicate event-count key; controls now reject a stray TID
+token and reversed sampled stack. No runtime evidence was rewritten.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/continuation-correlation-20261021/`.
+Qualified files are `source-pins-v3.json`, both v3 build receipts,
+`build-trace-v3.*`, `cpu-controls-v3.*`, `upstream-chunk1-v3.*`,
+`upstream-chunk3-v3.*`, `full-block-trace-v4.*` and
+`full-block-trace-sampled-v4.*`, including retry receipts and the raw sample.
+The corrected frozen CPU verifier SHA-256 is
+`09d75dbf30800973f697e4ce36ff651d491041a83ad4469cd80b831d4c0a572c`.
+It binds all 412 scoped source files, native objects, release binaries,
+fixtures, launchers, guard settings and raw evidence. It requires the pinned
+measurement parent to remain an ancestor and the original frontier document
+snapshot to remain an exact prefix. Append-only reporting is allowed; it
+does not attest authentic execution or establish a mechanism automatically.
+
+CPU-only refresh, choosing a new exclusive output path:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/continuation-correlation-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$evidence_root/verify-continuation-correlation-v1.py" --controls-only --output "$evidence_root/controls-refresh.json"
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$evidence_root/verify-continuation-correlation-v1.py" --verify --output "$evidence_root/verification-refresh.json"
+```
+
+Expected signals: controls accept the positive trace/sample and reject nine
+malformed controls; verification reports `verified=true`, `source_files=412`,
+`measured_B_arms=3` and `trace_events_per_measured_B=623`. Root execution of
+both commands passes in `verifier-controls-root-v1.json` and
+`verified-report-root-v1.json`. Refresh runtime evidence at the contract's
+decay triggers. Rollback disables the diagnostic flags; queue capacity,
+production defaults, tensor math and segmentation remain unchanged.
+
+Final correlated MiniQuad review is ROBUST for the scoped instrumentation,
+retained checks, continuation/root correlation and sampled wait-path claim.
+It is VULNERABLE if generalized to a cause for every slow call. The separate
+sample cannot attribute individual calls in the unsampled run, and the
+64-buffer mechanism has no direct semaphore-capacity measurement. Independent
+recomputation within the same agent lineage agrees with the raw counts; it
+is not an independent runtime replication. Crystal formatting and
+`git diff --check` pass for the final implementation.

@@ -31694,3 +31694,50 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on scoped source/binary/fixture/geometry/dtype/device/runtime/queue/
   resource/guard change or artifact loss. Rollback removes probe/spec opt-ins;
   production defaults and strict tolerances remain unchanged.
+
+### [LM-WAN-CONTINUATION-QUEUE-ADMISSION-2026-10-21] Slow continuation calls drain earlier GPU work
+
+- At parent `de7350ab`, an opt-in fixed-capacity native trace associates
+  623 continuations with 624 roots in the unchanged full-shape block0 path.
+  Host/callback timestamps use Mach ticks, compatible with Metal GPU seconds;
+  aggregate CLOCK_MONOTONIC enclosure allows measured timestamp quantization,
+  not any wider tensor tolerance. Snapshots follow the existing terminal wait.
+- In three successful measured replays, all 1,031 calls over 1 ms have 63
+  earlier callbacks unobserved. GPU-incomplete count is 63 for 1,030 and 62
+  for one; callback delivery and GPU completion differ. Their host wall sums
+  are 14.600/14.556/17.226 s versus owner CPU 4.258/6.118/10.855 ms.
+  Earlier self-attention overlaps most of this time, despite the host cross
+  phase label. Do not add host waits to earlier GPU intervals.
+- A separate owned-process sample joins PID27875/TID335982823: all 3,385
+  owner samples reach the Metal command-buffer constructor's semaphore wait
+  inside continuation. Together with the default queue's documented 64-buffer
+  limit, this supports queue-admission backpressure in the sampled window.
+  It does not prove every call's cause, exclusive GPU wait or a speedup.
+  Root envelope-minus-union is only 0.477--0.621 ms; that measures root coverage,
+  not hardware utilization or idle cycles inside a root. Self-attention GPU
+  work remains the next lever; queue enlargement alone does not remove it.
+- All four main and two sampled full-output comparisons pass bit-exact and
+  finite checks on 187,432,960 values each. Short upstream chunk1/chunk3 each
+  pass 19 examples/24 checkpoints at unchanged finite 2e-5+2e-5*abs(reference).
+  CPU trace/native/optional-link and malformed metadata controls pass. Every
+  arm retains one terminal wait, 624 roots and zero tracked encode MetalBuffer
+  allocations, inter-operator waits or activation readbacks. No GPU command,
+  event, explicit wait or callback is added. Active trace can perturb timing.
+- Full/sample guards preserve 12 GiB cap, 15% cache-aware reserve, 64 MiB
+  swap-growth stop and 600 s deadline. Peak sampled footprint <=10.691 GiB,
+  minimum cache-aware headroom >=21.398%, swap growth zero, owned live processes
+  zero at exit. Cache is counted once. No model, Studio or generation runs.
+- The failed v3 full run (`ps` telemetry timeout/cleanup identity loss) is
+  excluded; owned-group absence is independently checked before the successful
+  v4 same-source/binary/guard retry. Root review corrects verifier sample-TID
+  provenance and a duplicate count key; malformed sample controls reject both
+  wrong identity and reversed stack order. Prior report versions are superseded.
+- `docs/wan-performance-frontier.md` records raw source/build/fixture/guard
+  lineage and CPU-only refresh under external
+  `wan-self-attention/continuation-correlation-20261021/`. Refresh on scoped
+  source/build/input/geometry/dtype/device/runtime/queue/clock/collector/guard
+  change or evidence loss. Rollback disables diagnostics; production queue,
+  precision and segmentation defaults are unchanged. Final correlated MiniQuad
+  review is ROBUST for the bounded correlation and sampled wait path; a cause
+  for every slow call remains unproven. The sampled replay is a separate run,
+  and no direct semaphore-capacity counter is available.

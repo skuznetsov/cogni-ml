@@ -5,10 +5,13 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #define GS_MPS_API_PROFILE_IMPLEMENTATION
 #include "mps_api_profile.h"
+#include <mach/mach_time.h>
+#include <atomic>
 #include <cmath>
 #include <limits.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
@@ -16,6 +19,12 @@
 
 static_assert(sizeof(gs_mps_api_profile_stats) == 10 * sizeof(uint64_t),
               "MPS API profile stats FFI layout changed");
+static_assert(sizeof(gs_mps_chain_trace_info) == 8 * sizeof(uint64_t),
+              "MPS chain trace info FFI layout changed");
+static_assert(sizeof(gs_mps_chain_trace_event) == 12 * sizeof(uint64_t),
+              "MPS chain trace event FFI layout changed");
+static_assert(sizeof(gs_mps_chain_trace_root) == 7 * sizeof(uint64_t),
+              "MPS chain trace root FFI layout changed");
 
 static const uint32_t kGsMpsApiProfileMaxGraphDepth = 16;
 
@@ -39,12 +48,22 @@ struct GsMpsApiProfileData {
   void *commandWrapper;
   void *currentRoot;
   uint64_t nextSerial;
+  gs_mps_chain_trace_event *traceEvents;
+  uint64_t traceOwnerThreadId;
+  uint64_t traceTimebaseNumer;
+  uint64_t traceTimebaseDenom;
+  uint64_t traceStartMachTicks;
+  uint64_t traceEventCount;
+  uint64_t traceRootCount;
+  uint64_t traceLastRootSequence;
   uint32_t phase;
   uint32_t graphDepth;
   uint32_t activeScopeDepth;
   bool enabled;
   bool failed;
   bool tlsAttached;
+  bool traceEnabled;
+  bool traceFailed;
 };
 static_assert(std::is_trivial<GsMpsApiProfileData>::value,
               "MPS API profile storage must remain POD for Objective-C ivars");
@@ -135,6 +154,10 @@ public:
     if (scope_.active)
       gs_mps_api_profile_scope_end(&scope_);
   }
+  uint64_t serial() const { return scope_.serial; }
+  uint64_t parentGraphSerial() const { return scope_.parent_graph_serial; }
+  uint32_t phase() const { return scope_.phase; }
+  uint32_t nestedInGraph() const { return scope_.nested_in_graph; }
   GsMpsApiProfileScopeGuard(const GsMpsApiProfileScopeGuard &) = delete;
   GsMpsApiProfileScopeGuard &operator=(const GsMpsApiProfileScopeGuard &) = delete;
 
@@ -145,6 +168,86 @@ private:
 static void gs_mps_api_profile_fail(GsMpsApiProfileData *data) {
   if (data)
     data->failed = true;
+}
+
+static void gs_mps_chain_trace_fail(GsMpsApiProfileData *data) {
+  if (!data)
+    return;
+  data->traceFailed = true;
+  data->failed = true;
+}
+
+static bool gs_mps_chain_trace_event_valid(
+    const GsMpsApiProfileData *data,
+    const gs_mps_chain_trace_event *event) {
+  const uint32_t validFlags =
+      GS_MPS_CHAIN_TRACE_EVENT_NESTED_IN_GRAPH |
+      GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID |
+      GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID |
+      GS_MPS_CHAIN_TRACE_EVENT_AFTER_ROOT_VALID;
+  if (!data || !event || !data->traceEnabled || data->traceFailed ||
+      !data->traceEvents || event->serial == 0 || event->begin_mach_ticks == 0 ||
+      event->end_mach_ticks <= event->begin_mach_ticks ||
+      event->begin_thread_cpu_ns == 0 ||
+      event->end_thread_cpu_ns < event->begin_thread_cpu_ns ||
+      event->api_scope_serial == 0 ||
+      event->phase >= GS_MPS_API_PROFILE_PHASE_COUNT ||
+      event->graph_depth > kGsMpsApiProfileMaxGraphDepth ||
+      (event->flags & ~validFlags) != 0 ||
+      (event->flags & (GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID |
+                       GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID |
+                       GS_MPS_CHAIN_TRACE_EVENT_AFTER_ROOT_VALID)) !=
+          (GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID |
+           GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID |
+           GS_MPS_CHAIN_TRACE_EVENT_AFTER_ROOT_VALID) ||
+      event->before_root_sequence == UINT64_MAX ||
+      event->after_root_sequence != event->before_root_sequence + 1 ||
+      event->after_root_sequence >= data->traceRootCount)
+    return false;
+  const bool nested =
+      (event->flags & GS_MPS_CHAIN_TRACE_EVENT_NESTED_IN_GRAPH) != 0;
+  if (nested != (event->parent_graph_serial != 0) ||
+      nested != (event->graph_depth != 0) ||
+      (nested && event->parent_graph_serial >= event->api_scope_serial) ||
+      event->before_root_status >
+          (uint32_t)MTLCommandBufferStatusEnqueued ||
+      event->before_root_status_after_call <
+          (uint32_t)MTLCommandBufferStatusCommitted ||
+      event->before_root_status_after_call >
+          (uint32_t)MTLCommandBufferStatusCompleted ||
+      event->after_root_status >
+          (uint32_t)MTLCommandBufferStatusEnqueued)
+    return false;
+  return true;
+}
+
+static bool gs_mps_chain_trace_append(GsMpsApiProfileData *data,
+                                      const gs_mps_chain_trace_event *event) {
+  if (!data || !event ||
+      data->traceEventCount >= GS_MPS_CHAIN_TRACE_EVENT_CAPACITY ||
+      event->serial != data->traceEventCount + 1 ||
+      event->after_root_sequence != data->traceLastRootSequence ||
+      (data->traceEventCount == 0
+           ? event->before_root_sequence != 0 ||
+                 event->begin_mach_ticks < data->traceStartMachTicks
+           : event->before_root_sequence !=
+                     data->traceEvents[data->traceEventCount - 1]
+                         .after_root_sequence ||
+                 event->begin_mach_ticks <
+                     data->traceEvents[data->traceEventCount - 1]
+                         .end_mach_ticks ||
+                 event->begin_thread_cpu_ns <
+                     data->traceEvents[data->traceEventCount - 1]
+                         .end_thread_cpu_ns ||
+                 event->api_scope_serial <=
+                     data->traceEvents[data->traceEventCount - 1]
+                         .api_scope_serial) ||
+      !gs_mps_chain_trace_event_valid(data, event)) {
+    gs_mps_chain_trace_fail(data);
+    return false;
+  }
+  data->traceEvents[data->traceEventCount++] = *event;
+  return true;
 }
 
 extern "C" void gs_mps_api_profile_scope_begin(
@@ -443,6 +546,87 @@ extern "C" int32_t gs_mps_api_profile_cpu_probe(uint64_t *wallNs,
   return 0;
 }
 
+extern "C" int32_t gs_mps_chain_api_trace_self_test(
+    uint64_t *positiveEvents, uint64_t *rejectedControls) {
+  if (!positiveEvents || !rejectedControls)
+    return -1;
+  *positiveEvents = 0;
+  *rejectedControls = 0;
+  if (gs_mps_api_profile_current != nullptr)
+    return -2;
+
+  gs_mps_chain_trace_event eventStorage[1]{};
+  GsMpsApiProfileData data{};
+  data.owner = pthread_self();
+  data.traceEvents = eventStorage;
+  data.traceEnabled = true;
+  data.traceRootCount = 2;
+  data.traceLastRootSequence = 1;
+
+  gs_mps_chain_trace_event event{};
+  event.serial = 1;
+  event.begin_mach_ticks = mach_absolute_time();
+  if (event.begin_mach_ticks == 0 ||
+      !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
+                                   &event.begin_thread_cpu_ns))
+    return -3;
+  volatile uint64_t burn = 1;
+  gs_mps_api_profile_probe_burn(&burn, 100000);
+  event.end_mach_ticks = mach_absolute_time();
+  if (event.end_mach_ticks == 0 ||
+      !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
+                                   &event.end_thread_cpu_ns))
+    return -4;
+  event.api_scope_serial = 7;
+  event.parent_graph_serial = 6;
+  event.before_root_sequence = 0;
+  event.after_root_sequence = 1;
+  event.phase = GS_MPS_API_PROFILE_PHASE_SELF_ATTENTION;
+  event.graph_depth = 1;
+  event.before_root_status = MTLCommandBufferStatusEnqueued;
+  event.before_root_status_after_call = MTLCommandBufferStatusCommitted;
+  event.after_root_status = MTLCommandBufferStatusEnqueued;
+  event.flags = GS_MPS_CHAIN_TRACE_EVENT_NESTED_IN_GRAPH |
+                GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID |
+                GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID |
+                GS_MPS_CHAIN_TRACE_EVENT_AFTER_ROOT_VALID;
+  if (!gs_mps_chain_trace_append(&data, &event) ||
+      data.traceEventCount != 1 || data.traceFailed)
+    return -5;
+
+  uint64_t rejected = 0;
+  gs_mps_chain_trace_event malformed = event;
+  malformed.end_mach_ticks = malformed.begin_mach_ticks - 1;
+  if (gs_mps_chain_trace_event_valid(&data, &malformed))
+    return -6;
+  ++rejected;
+  malformed = event;
+  malformed.end_thread_cpu_ns = malformed.begin_thread_cpu_ns - 1;
+  if (gs_mps_chain_trace_event_valid(&data, &malformed))
+    return -7;
+  ++rejected;
+
+  GsMpsApiProfileData overflow{};
+  overflow.owner = pthread_self();
+  overflow.traceEvents = eventStorage;
+  overflow.traceEnabled = true;
+  overflow.traceRootCount = 2;
+  overflow.traceLastRootSequence = 1;
+  overflow.traceEventCount = GS_MPS_CHAIN_TRACE_EVENT_CAPACITY;
+  malformed = event;
+  malformed.serial = GS_MPS_CHAIN_TRACE_EVENT_CAPACITY + 1;
+  if (gs_mps_chain_trace_append(&overflow, &malformed) ||
+      !overflow.traceFailed || !overflow.failed)
+    return -8;
+  ++rejected;
+
+  if (rejected != 3)
+    return -9;
+  *positiveEvents = data.traceEventCount;
+  *rejectedControls = rejected;
+  return 0;
+}
+
 static NSString *gs_mps_chain_safe_log_text(NSString *value,
                                             NSUInteger maxCharacters) {
   if (!value)
@@ -476,6 +660,11 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
 @property(nonatomic, copy) NSString *errorDomain;
 @property(nonatomic, copy) NSString *errorDescription;
 @property(nonatomic) BOOL recorded;
+@property(nonatomic) BOOL traceCaptured;
+@property(nonatomic) uint64_t traceTrackedOrObservedMachTicks;
+@property(nonatomic) uint64_t traceCompletionObservedMachTicks;
+@property(nonatomic) MTLCommandBufferStatus traceStatusAtTrackOrEnable;
+@property(nonatomic) uint32_t traceCompletionSource;
 @end
 @implementation CogniMPSCommandRootSummary
 @end
@@ -487,6 +676,10 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
 @end
 
 @interface CogniMPSCommandRootTracker : NSObject
+{
+@private
+  std::atomic<bool> _traceEnabled;
+}
 @property(nonatomic, strong) NSLock *lock;
 @property(nonatomic, strong) NSMutableArray<CogniMPSCommandRootSummary *> *summaries;
 // Strong pointer-identity keys own roots only until completion is observed.
@@ -497,7 +690,10 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
 @property(nonatomic) NSUInteger maxPendingRoots;
 @property(nonatomic) NSUInteger callbackRecords;
 @property(nonatomic) NSUInteger terminalFallbackRecords;
-- (void)trackRoot:(id<MTLCommandBuffer>)root;
+- (NSUInteger)trackRoot:(id<MTLCommandBuffer>)root;
+- (BOOL)enableTraceForRoot:(id<MTLCommandBuffer>)root
+           observationTicks:(uint64_t *)ticks;
+- (void)disableTraceCapture;
 - (void)recordCompletedRoot:(id<MTLCommandBuffer>)root
           terminalFallback:(BOOL)terminalFallback;
 - (NSArray<CogniMPSCommandRootSummary *> *)finishPendingRoots;
@@ -511,6 +707,7 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
 - (instancetype)init {
   self = [super init];
   if (self) {
+    _traceEnabled.store(false, std::memory_order_relaxed);
     self.lock = [NSLock new];
     self.summaries = [NSMutableArray new];
     self.pendingRoots = [[NSMapTable alloc]
@@ -526,19 +723,24 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
   return self;
 }
 
-- (void)trackRoot:(id<MTLCommandBuffer>)root {
+- (NSUInteger)trackRoot:(id<MTLCommandBuffer>)root {
   if (!root)
-    return;
+    return NSNotFound;
 
   [self.lock lock];
   if ([self.seenRoots containsObject:root]) {
     [self.lock unlock];
-    return;
+    return NSNotFound;
   }
 
   [self.seenRoots addObject:root];
   CogniMPSCommandRootSummary *summary = [CogniMPSCommandRootSummary new];
   summary.sequence = self.summaries.count;
+  if (_traceEnabled.load(std::memory_order_acquire)) {
+    summary.traceCaptured = YES;
+    summary.traceTrackedOrObservedMachTicks = mach_absolute_time();
+    summary.traceStatusAtTrackOrEnable = root.status;
+  }
   [self.summaries addObject:summary];
   [self.pendingRoots setObject:summary forKey:root];
   NSUInteger pendingCount = self.pendingRoots.count;
@@ -554,12 +756,52 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
     CogniMPSCommandRootTracker *tracker = weakTracker;
     [tracker recordCompletedRoot:completedRoot terminalFallback:NO];
   }];
+  return summary.sequence;
+}
+
+- (BOOL)enableTraceForRoot:(id<MTLCommandBuffer>)root
+           observationTicks:(uint64_t *)ticks {
+  if (!root || !ticks)
+    return NO;
+  *ticks = 0;
+  [self.lock lock];
+  CogniMPSCommandRootSummary *summary =
+      self.summaries.count == 1 ? self.summaries.firstObject : nil;
+  if (!summary || summary.recorded || summary.traceCaptured ||
+      [self.pendingRoots objectForKey:root] != summary) {
+    [self.lock unlock];
+    return NO;
+  }
+  const MTLCommandBufferStatus status = root.status;
+  const uint64_t observedTicks = mach_absolute_time();
+  if (observedTicks == 0) {
+    [self.lock unlock];
+    return NO;
+  }
+  summary.traceCaptured = YES;
+  summary.traceTrackedOrObservedMachTicks = observedTicks;
+  summary.traceStatusAtTrackOrEnable = status;
+  *ticks = observedTicks;
+  _traceEnabled.store(true, std::memory_order_release);
+  [self.lock unlock];
+  return YES;
+}
+
+- (void)disableTraceCapture {
+  _traceEnabled.store(false, std::memory_order_release);
 }
 
 - (void)recordCompletedRoot:(id<MTLCommandBuffer>)root
           terminalFallback:(BOOL)terminalFallback {
   if (!root)
     return;
+
+  // This is sampled at entry to the existing completion callback (or the
+  // existing post-wait fallback). The atomic flag keeps the default path free
+  // of clock reads and does not add a callback or tracker lock.
+  uint64_t traceCompletionTicks = 0;
+  if (_traceEnabled.load(std::memory_order_acquire))
+    traceCompletionTicks = mach_absolute_time();
 
   [self.lock lock];
   CogniMPSCommandRootSummary *summary =
@@ -574,6 +816,12 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
   summary.status = root.status;
   summary.gpuStartTime = root.GPUStartTime;
   summary.gpuEndTime = root.GPUEndTime;
+  if (summary.traceCaptured) {
+    summary.traceCompletionObservedMachTicks = traceCompletionTicks;
+    summary.traceCompletionSource = terminalFallback
+                                        ? GS_MPS_CHAIN_TRACE_COMPLETION_TERMINAL_FALLBACK
+                                        : GS_MPS_CHAIN_TRACE_COMPLETION_CALLBACK;
+  }
   NSError *error = root.error;
   summary.hasError = error != nil;
   if (error) {
@@ -656,6 +904,7 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
 @property(nonatomic, strong) CogniMPSCommandRootTracker *rootTracker;
 @property(nonatomic, strong) id<MTLCommandBuffer> lastRoot;
 @property(nonatomic, assign) GsMpsApiProfileData *profileData;
+@property(nonatomic) NSUInteger lastRootSequence;
 - (void)rememberCurrentRoot;
 @end
 
@@ -675,16 +924,81 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
   self.lastRoot = root;
   if (self.profileData)
     self.profileData->currentRoot = (__bridge void *)root;
-  [self.rootTracker trackRoot:root];
+  NSUInteger sequence = [self.rootTracker trackRoot:root];
+  self.lastRootSequence = sequence;
+  GsMpsApiProfileData *profile = self.profileData;
+  if (profile && profile->traceEnabled) {
+    if (sequence == NSNotFound || sequence != profile->traceRootCount) {
+      gs_mps_chain_trace_fail(profile);
+    } else {
+      ++profile->traceRootCount;
+      profile->traceLastRootSequence = sequence;
+    }
+  }
 }
 - (void)commitAndContinue {
   [self rememberCurrentRoot];
+  GsMpsApiProfileData *traceProfile = self.profileData;
+  const bool traceActive = traceProfile && traceProfile->traceEnabled;
+  gs_mps_chain_trace_event traceEvent{};
+  id<MTLCommandBuffer> priorRoot = self.lastRoot;
+  if (traceActive) {
+    if (traceProfile->traceFailed || traceProfile->failed ||
+        !pthread_equal(traceProfile->owner, pthread_self()) || !priorRoot ||
+        self.lastRootSequence == NSNotFound ||
+        self.lastRootSequence >= traceProfile->traceRootCount) {
+      gs_mps_chain_trace_fail(traceProfile);
+    } else {
+      traceEvent.serial = traceProfile->traceEventCount + 1;
+      traceEvent.before_root_sequence = self.lastRootSequence;
+      traceEvent.before_root_status = (uint32_t)priorRoot.status;
+      traceEvent.flags |= GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID;
+    }
+  }
   {
     GsMpsApiProfileScopeGuard profileScope(
         GS_MPS_API_PROFILE_OP_COMMIT_AND_CONTINUE, (__bridge void *)self);
+    bool traceStartValid = false;
+    if (traceActive && !traceProfile->traceFailed) {
+      traceEvent.phase = profileScope.phase();
+      traceEvent.graph_depth = traceProfile->graphDepth;
+      traceEvent.api_scope_serial = profileScope.serial();
+      traceEvent.parent_graph_serial = profileScope.parentGraphSerial();
+      if (profileScope.nestedInGraph())
+        traceEvent.flags |= GS_MPS_CHAIN_TRACE_EVENT_NESTED_IN_GRAPH;
+      traceEvent.begin_mach_ticks = mach_absolute_time();
+      traceStartValid =
+          traceEvent.begin_mach_ticks != 0 &&
+          gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
+                                      &traceEvent.begin_thread_cpu_ns);
+      if (!traceStartValid || traceEvent.api_scope_serial == 0)
+        gs_mps_chain_trace_fail(traceProfile);
+    }
     [super commitAndContinue];
+    if (traceActive && traceStartValid) {
+      traceEvent.end_mach_ticks = mach_absolute_time();
+      traceEvent.before_root_status_after_call = (uint32_t)priorRoot.status;
+      traceEvent.flags |=
+          GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID;
+      if (traceEvent.end_mach_ticks == 0 ||
+          !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
+                                       &traceEvent.end_thread_cpu_ns))
+        gs_mps_chain_trace_fail(traceProfile);
+    }
   }
   [self rememberCurrentRoot];
+  if (traceActive && !traceProfile->traceFailed) {
+    id<MTLCommandBuffer> afterRoot = self.lastRoot;
+    if (!afterRoot || self.lastRootSequence == NSNotFound) {
+      gs_mps_chain_trace_fail(traceProfile);
+    } else {
+      traceEvent.after_root_sequence = self.lastRootSequence;
+      traceEvent.after_root_status = (uint32_t)afterRoot.status;
+      traceEvent.flags |= GS_MPS_CHAIN_TRACE_EVENT_AFTER_ROOT_VALID;
+      if (!gs_mps_chain_trace_append(traceProfile, &traceEvent))
+        gs_mps_chain_trace_fail(traceProfile);
+    }
+  }
 }
 @end
 
@@ -762,6 +1076,175 @@ extern "C" int32_t gs_mps_chain_api_profile_snapshot(
       data->failed || data->activeScopeDepth != 0 || data->graphDepth != 0)
     return -2;
   *stats = data->stats[phase][operation];
+  return 0;
+}
+
+extern "C" int32_t gs_mps_chain_api_trace_enable(void *handle) {
+  if (!handle)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  GsMpsApiProfileData *data = &chain->apiProfile;
+  if (chain.finished || !data->enabled || !data->tlsAttached || data->failed ||
+      data->traceEnabled || data->activeScopeDepth != 0 ||
+      data->graphDepth != 0 || gs_mps_api_profile_current != data ||
+      !pthread_equal(data->owner, pthread_self()))
+    return -2;
+  if (chain.command.rootTracker.summaryCount != 1 ||
+      chain.command.lastRootSequence != 0 ||
+      chain.command.rootCommandBuffer == nil)
+    return -3;
+
+  mach_timebase_info_data_t timebase{};
+  timespec monotonicResolution{};
+  uint64_t ownerThreadId = 0;
+  uint64_t threadCpuPreflight = 0;
+  if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.numer == 0 ||
+      timebase.denom == 0 ||
+      clock_getres(CLOCK_MONOTONIC, &monotonicResolution) != 0 ||
+      monotonicResolution.tv_sec != 0 || monotonicResolution.tv_nsec <= 0 ||
+      monotonicResolution.tv_nsec > 1000 ||
+      pthread_threadid_np(pthread_self(), &ownerThreadId) != 0 ||
+      ownerThreadId == 0 ||
+      !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
+                                   &threadCpuPreflight))
+    return -4;
+
+  gs_mps_chain_trace_event *events = static_cast<gs_mps_chain_trace_event *>(
+      calloc(GS_MPS_CHAIN_TRACE_EVENT_CAPACITY, sizeof(*events)));
+  if (!events)
+    return -5;
+
+  data->traceEvents = events;
+  data->traceOwnerThreadId = ownerThreadId;
+  data->traceTimebaseNumer = timebase.numer;
+  data->traceTimebaseDenom = timebase.denom;
+  data->traceStartMachTicks = 0;
+  data->traceRootCount = 1;
+  data->traceLastRootSequence = 0;
+  uint64_t traceStartTicks = 0;
+  if (![chain.command.rootTracker
+          enableTraceForRoot:chain.command.rootCommandBuffer
+           observationTicks:&traceStartTicks]) {
+    free(data->traceEvents);
+    data->traceEvents = nullptr;
+    data->traceOwnerThreadId = 0;
+    data->traceTimebaseNumer = 0;
+    data->traceTimebaseDenom = 0;
+    data->traceStartMachTicks = 0;
+    data->traceRootCount = 0;
+    data->traceLastRootSequence = 0;
+    return -6;
+  }
+  data->traceStartMachTicks = traceStartTicks;
+  data->traceEnabled = true;
+  return 0;
+}
+
+extern "C" int32_t gs_mps_chain_api_trace_info(
+    void *handle, gs_mps_chain_trace_info *info) {
+  if (!handle || !info)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  GsMpsApiProfileData *data = &chain->apiProfile;
+  if (!chain.finished || !data->enabled || data->tlsAttached ||
+      !data->traceEnabled || data->traceFailed || data->failed ||
+      data->activeScopeDepth != 0 || data->graphDepth != 0 ||
+      !data->traceEvents || data->traceEventCount >
+                                GS_MPS_CHAIN_TRACE_EVENT_CAPACITY ||
+      data->traceRootCount == 0 ||
+      data->traceRootCount != data->traceEventCount + 1 ||
+      data->traceLastRootSequence != data->traceEventCount ||
+      data->traceTimebaseNumer == 0 || data->traceTimebaseDenom == 0 ||
+      data->traceStartMachTicks == 0)
+    return -2;
+  const NSUInteger rootCount = chain.command.rootTracker.summaryCount;
+  if (rootCount != data->traceRootCount ||
+      rootCount > GS_MPS_CHAIN_TRACE_EVENT_CAPACITY + 1)
+    return -3;
+  info->owner_thread_id = data->traceOwnerThreadId;
+  info->mach_timebase_numer = data->traceTimebaseNumer;
+  info->mach_timebase_denom = data->traceTimebaseDenom;
+  info->trace_start_mach_ticks = data->traceStartMachTicks;
+  info->event_capacity = GS_MPS_CHAIN_TRACE_EVENT_CAPACITY;
+  info->event_count = data->traceEventCount;
+  info->root_count = data->traceRootCount;
+  info->failed = data->traceFailed ? 1 : 0;
+  return 0;
+}
+
+extern "C" int32_t gs_mps_chain_api_trace_event(
+    void *handle, uint64_t index, gs_mps_chain_trace_event *event) {
+  if (!handle || !event)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  GsMpsApiProfileData *data = &chain->apiProfile;
+  if (!chain.finished || !data->traceEnabled || data->traceFailed ||
+      data->failed || !data->traceEvents ||
+      data->traceEventCount > GS_MPS_CHAIN_TRACE_EVENT_CAPACITY ||
+      data->traceRootCount != data->traceEventCount + 1 ||
+      data->traceLastRootSequence != data->traceEventCount)
+    return -2;
+  if (index >= data->traceEventCount)
+    return -3;
+  *event = data->traceEvents[index];
+  if (!gs_mps_chain_trace_event_valid(data, event) ||
+      event->serial != index + 1 ||
+      (index == 0 ? event->before_root_sequence != 0
+                  : data->traceEvents[index - 1].after_root_sequence !=
+                        event->before_root_sequence) ||
+      (index + 1 < data->traceEventCount
+           ? data->traceEvents[index + 1].before_root_sequence !=
+                 event->after_root_sequence
+           : event->after_root_sequence != data->traceLastRootSequence))
+    return -4;
+  return 0;
+}
+
+extern "C" int32_t gs_mps_chain_api_trace_root(
+    void *handle, uint64_t index, gs_mps_chain_trace_root *root) {
+  if (!handle || !root)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  GsMpsApiProfileData *data = &chain->apiProfile;
+  if (!chain.finished || !data->traceEnabled || data->traceFailed ||
+      data->failed || index >= data->traceRootCount ||
+      data->traceRootCount != data->traceEventCount + 1 ||
+      data->traceLastRootSequence != data->traceEventCount)
+    return -2;
+  CogniMPSCommandRootSummary *summary =
+      [chain.command.rootTracker summaryAtSequence:(NSUInteger)index];
+  if (!summary || summary.sequence != (NSUInteger)index ||
+      !summary.traceCaptured || !summary.recorded ||
+      summary.traceTrackedOrObservedMachTicks == 0 ||
+      summary.traceCompletionObservedMachTicks == 0 ||
+      summary.traceCompletionObservedMachTicks <
+          summary.traceTrackedOrObservedMachTicks ||
+      summary.traceCompletionSource <
+          GS_MPS_CHAIN_TRACE_COMPLETION_CALLBACK ||
+      summary.traceCompletionSource >
+          GS_MPS_CHAIN_TRACE_COMPLETION_TERMINAL_FALLBACK ||
+      summary.status != MTLCommandBufferStatusCompleted || summary.hasError ||
+      !std::isfinite(summary.gpuStartTime) ||
+      !std::isfinite(summary.gpuEndTime) || summary.gpuStartTime <= 0.0 ||
+      summary.gpuEndTime <= summary.gpuStartTime)
+    return -3;
+
+  root->sequence = summary.sequence;
+  root->tracked_or_observed_mach_ticks =
+      summary.traceTrackedOrObservedMachTicks;
+  root->completion_observed_mach_ticks =
+      summary.traceCompletionObservedMachTicks;
+  const double gpuStartTime = summary.gpuStartTime;
+  const double gpuEndTime = summary.gpuEndTime;
+  memcpy(&root->gpu_start_time_bits, &gpuStartTime,
+         sizeof(root->gpu_start_time_bits));
+  memcpy(&root->gpu_end_time_bits, &gpuEndTime,
+         sizeof(root->gpu_end_time_bits));
+  root->status_at_track_or_enable =
+      (uint32_t)summary.traceStatusAtTrackOrEnable;
+  root->final_status = (uint32_t)summary.status;
+  root->has_error = summary.hasError ? 1 : 0;
+  root->completion_source = summary.traceCompletionSource;
   return 0;
 }
 
@@ -886,6 +1369,8 @@ extern "C" int32_t gs_mps_chain_finish_wait(void *handle, double *gpuSeconds,
       // one terminal wait; it does not add a synchronization boundary.
       NSArray<CogniMPSCommandRootSummary *> *summaries =
           [chain.command.rootTracker finishPendingRoots];
+      if (profile->traceEnabled)
+        [chain.command.rootTracker disableTraceCapture];
       chain.result = 0;
       double elapsed = 0.0;
       for (CogniMPSCommandRootSummary *summary in summaries) {
@@ -932,6 +1417,8 @@ extern "C" int32_t gs_mps_chain_release(void *handle) {
     profile->failed = true;
     return -2;
   }
+  free(profile->traceEvents);
+  profile->traceEvents = nullptr;
   chain.command.profileData = nullptr;
   CFRelease(handle);
   return 0;

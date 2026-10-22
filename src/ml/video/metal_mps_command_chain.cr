@@ -1,6 +1,7 @@
 require "../metal/dispatch"
 require "./mps_command_phase_profile"
 require "./mps_api_profile"
+require "./mps_continuation_trace"
 
 {% unless flag?(:cpu_only) %}
   lib MPSCommandChainFFI
@@ -32,7 +33,55 @@ require "./mps_api_profile"
     fun enable = gs_mps_chain_api_profile_enable(chain : Void*) : Int32
     fun set_phase = gs_mps_chain_api_profile_set_phase(chain : Void*, phase : Int32) : Int32
     fun snapshot = gs_mps_chain_api_profile_snapshot(chain : Void*, phase : Int32,
-      operation : Int32, stats : Stats*) : Int32
+                                                     operation : Int32, stats : Stats*) : Int32
+  end
+
+  lib MPSContinuationTraceFFI
+    struct Info
+      owner_thread_id : UInt64
+      mach_timebase_numer : UInt64
+      mach_timebase_denom : UInt64
+      trace_start_mach_ticks : UInt64
+      event_capacity : UInt64
+      event_count : UInt64
+      root_count : UInt64
+      failed : UInt64
+    end
+
+    struct Event
+      serial : UInt64
+      begin_mach_ticks : UInt64
+      end_mach_ticks : UInt64
+      begin_thread_cpu_ns : UInt64
+      end_thread_cpu_ns : UInt64
+      api_scope_serial : UInt64
+      parent_graph_serial : UInt64
+      before_root_sequence : UInt64
+      after_root_sequence : UInt64
+      phase : UInt32
+      graph_depth : UInt32
+      before_root_status : UInt32
+      before_root_status_after_call : UInt32
+      after_root_status : UInt32
+      flags : UInt32
+    end
+
+    struct Root
+      sequence : UInt64
+      tracked_or_observed_mach_ticks : UInt64
+      completion_observed_mach_ticks : UInt64
+      gpu_start_time_bits : UInt64
+      gpu_end_time_bits : UInt64
+      status_at_track_or_enable : UInt32
+      final_status : UInt32
+      has_error : UInt32
+      completion_source : UInt32
+    end
+
+    fun enable = gs_mps_chain_api_trace_enable(chain : Void*) : Int32
+    fun info = gs_mps_chain_api_trace_info(chain : Void*, info : Info*) : Int32
+    fun event = gs_mps_chain_api_trace_event(chain : Void*, index : UInt64, event : Event*) : Int32
+    fun root = gs_mps_chain_api_trace_root(chain : Void*, index : UInt64, root : Root*) : Int32
   end
 {% end %}
 
@@ -48,6 +97,7 @@ module ML::Metal
     @phase_root_profile_enabled = false
     @phase_root_profile_finished = false
     @api_profile_enabled = false
+    @continuation_trace_enabled = false
     @phase_root_cursor = 0_i32
     @phase_ranges : Array(ML::Video::MPSCommandPhaseRange)? = nil
     getter gpu_elapsed_seconds : Float64 = 0.0
@@ -173,6 +223,70 @@ module ML::Metal
 
     def api_profile_enabled? : Bool
       @api_profile_enabled
+    end
+
+    # The fixed native trace buffer is allocated once before block encoding.
+    # Enabling it does not enqueue work or change continuation boundaries.
+    def enable_continuation_trace! : Nil
+      check_live!
+      require_api_profile!
+      raise ArgumentError.new("MPS continuation tracing is already enabled") if @continuation_trace_enabled
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        status = MPSContinuationTraceFFI.enable(@native)
+        raise ArgumentError.new("MPS continuation trace could not attach (#{status})") unless status == 0
+      {% end %}
+      @continuation_trace_enabled = true
+    end
+
+    def continuation_trace : ML::Video::MPSContinuationTrace
+      unless @continuation_trace_enabled && @completed && @wait_count == 1 && @status == 0
+        raise ArgumentError.new("MPS continuation trace requires enable and the successful existing terminal wait")
+      end
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raw_info = MPSContinuationTraceFFI::Info.new
+        status = MPSContinuationTraceFFI.info(@native, pointerof(raw_info))
+        raise ArgumentError.new("MPS continuation trace info failed (#{status})") unless status == 0
+        unless raw_info.failed == 0 && raw_info.event_capacity == ML::Video::MPSContinuationTrace::CAPACITY &&
+               raw_info.event_count > 0 && raw_info.event_count <= raw_info.event_capacity &&
+               raw_info.root_count == raw_info.event_count + 1 && raw_info.root_count == @segment_count
+          raise ArgumentError.new("MPS continuation trace has invalid native counts")
+        end
+        info = ML::Video::MPSContinuationTraceInfo.new(raw_info.owner_thread_id,
+          raw_info.mach_timebase_numer, raw_info.mach_timebase_denom,
+          raw_info.trace_start_mach_ticks, raw_info.event_capacity,
+          raw_info.event_count, raw_info.root_count, raw_info.failed)
+        events = Array(ML::Video::MPSContinuationTraceEvent).new(raw_info.event_count.to_i)
+        raw_info.event_count.times do |index|
+          raw = MPSContinuationTraceFFI::Event.new
+          status = MPSContinuationTraceFFI.event(@native, index, pointerof(raw))
+          raise ArgumentError.new("MPS continuation trace event #{index} failed (#{status})") unless status == 0
+          events << ML::Video::MPSContinuationTraceEvent.new(raw.serial,
+            raw.begin_mach_ticks, raw.end_mach_ticks,
+            raw.begin_thread_cpu_ns, raw.end_thread_cpu_ns,
+            raw.api_scope_serial, raw.parent_graph_serial,
+            raw.before_root_sequence, raw.after_root_sequence, raw.phase,
+            raw.graph_depth, raw.before_root_status, raw.before_root_status_after_call,
+            raw.after_root_status, raw.flags)
+        end
+        roots = Array(ML::Video::MPSContinuationTraceRoot).new(raw_info.root_count.to_i)
+        raw_info.root_count.times do |index|
+          raw = MPSContinuationTraceFFI::Root.new
+          status = MPSContinuationTraceFFI.root(@native, index, pointerof(raw))
+          raise ArgumentError.new("MPS continuation trace root #{index} failed (#{status})") unless status == 0
+          roots << ML::Video::MPSContinuationTraceRoot.new(raw.sequence,
+            raw.tracked_or_observed_mach_ticks, raw.completion_observed_mach_ticks,
+            raw.gpu_start_time_bits, raw.gpu_end_time_bits,
+            raw.status_at_track_or_enable, raw.final_status, raw.has_error,
+            raw.completion_source)
+        end
+        result = ML::Video::MPSContinuationTrace.build(info, events, roots)
+        result.validate_api_profile!(api_profile)
+        result
+      {% end %}
     end
 
     # Tags subsequent wrapped MPS API calls. Phase 0 is the unassigned/outside

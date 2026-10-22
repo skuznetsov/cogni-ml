@@ -99,6 +99,7 @@ private record ArmResult, groups : Int32, query_chunk : Int32, order : String, w
   encode_metal_buffer_allocations : Int64,
   phase_root_profile : ML::Video::MPSCommandPhaseProfile?,
   api_profile : ML::Video::MPSAPIProfile?,
+  continuation_trace : ML::Video::MPSContinuationTrace?,
   observation_before : WanHostObservation::Snapshot,
   observation_after : WanHostObservation::Snapshot
 
@@ -117,35 +118,48 @@ end
 
 private def mps_api_profile_json(profile : ML::Video::MPSAPIProfile)
   {
-    schema: "wan_mps_api_profile_v1",
-    enabled: true,
+    schema:                                 "wan_mps_api_profile_v1",
+    enabled:                                true,
     available_after_existing_terminal_wait: true,
-    timing_unit: "nanoseconds",
-    wall_clock: "CLOCK_MONOTONIC",
-    thread_cpu_clock: "CLOCK_THREAD_CPUTIME_ID",
-    phase_attribution: "MPS API wrapper entry phase; phase 0 is outside block phases",
-    timing_semantics: "Graph totals are inclusive; nested fields are nested commitAndContinue spans; graph exclusive subtracts nested spans; commit and linear exclusive equal their own totals",
-    phases: profile.phases.map do |phase|
+    timing_unit:                            "nanoseconds",
+    wall_clock:                             "CLOCK_MONOTONIC",
+    thread_cpu_clock:                       "CLOCK_THREAD_CPUTIME_ID",
+    phase_attribution:                      "MPS API wrapper entry phase; phase 0 is outside block phases",
+    timing_semantics:                       "Graph totals are inclusive; nested fields are nested commitAndContinue spans; graph exclusive subtracts nested spans; commit and linear exclusive equal their own totals",
+    phases:                                 profile.phases.map do |phase|
       {
-        phase_id: phase.phase_id,
-        name: phase.name,
+        phase_id:   phase.phase_id,
+        name:       phase.name,
         operations: phase.operations.map do |name, stats|
           {
-            name: name,
-            count: stats.count,
-            wall_total_ns: stats.wall_total_ns,
-            wall_max_ns: stats.wall_max_ns,
-            thread_cpu_total_ns: stats.thread_cpu_total_ns,
-            thread_cpu_max_ns: stats.thread_cpu_max_ns,
-            nested_count: stats.nested_count,
-            nested_wall_total_ns: stats.nested_wall_total_ns,
-            nested_thread_cpu_total_ns: stats.nested_thread_cpu_total_ns,
-            exclusive_wall_total_ns: stats.exclusive_wall_total_ns,
+            name:                          name,
+            count:                         stats.count,
+            wall_total_ns:                 stats.wall_total_ns,
+            wall_max_ns:                   stats.wall_max_ns,
+            thread_cpu_total_ns:           stats.thread_cpu_total_ns,
+            thread_cpu_max_ns:             stats.thread_cpu_max_ns,
+            nested_count:                  stats.nested_count,
+            nested_wall_total_ns:          stats.nested_wall_total_ns,
+            nested_thread_cpu_total_ns:    stats.nested_thread_cpu_total_ns,
+            exclusive_wall_total_ns:       stats.exclusive_wall_total_ns,
             exclusive_thread_cpu_total_ns: stats.exclusive_thread_cpu_total_ns,
           }
         end,
       }
     end,
+  }
+end
+
+private def mps_continuation_trace_json(trace : ML::Video::MPSContinuationTrace)
+  {
+    schema:                                 "wan_mps_continuation_trace_v1",
+    available_after_existing_terminal_wait: true,
+    host_clock:                             "mach_absolute_time",
+    gpu_clock:                              "Metal host seconds",
+    timing_interpretation:                  "root tracking, submission bounded by continuation, GPU completion, and callback observation are distinct; overlap alone does not establish the cause of waiting",
+    info:                                   trace.info,
+    events:                                 trace.events,
+    roots:                                  trace.roots,
   }
 end
 
@@ -179,8 +193,14 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        precompute_rope : Bool = false,
                        phase_roots : Bool = false,
                        api_profile : Bool = false,
+                       continuation_trace : Bool = false,
                        reuse_scratch : Bool = false,
                        fuse_kv_preparation : Bool = false) : ArmResult
+  if continuation_trace
+    puts({schema: "wan_s2v_full_block_arm_begin_v1", order: order, warmup: warmup,
+          continuation_trace_requested: true}.to_json)
+    STDOUT.flush
+  end
   observation_before = WanHostObservation::Snapshot.capture
   monotonic_begin = WanHostObservation.monotonic_seconds
   wall_started = Time.instant
@@ -190,6 +210,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   elsif phase_roots
     chain.enable_phase_root_profile!
   end
+  chain.enable_continuation_trace! if continuation_trace
   allocations_before = ML::MetalBuffer.video_spec_allocations
   encode_started = Time.instant
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
@@ -222,6 +243,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        else
                          nil
                        end
+  trace = continuation_trace ? chain.continuation_trace : nil
   allocations = ML::MetalBuffer.video_spec_allocations - allocations_before
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
@@ -229,7 +251,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
     (encode_started - wall_started).total_seconds, wait_seconds,
     monotonic_begin, monotonic_end, chain.gpu_elapsed_seconds, chain.segment_count,
-    chain.wait_count, allocations, phase_profile, api_profile_result,
+    chain.wait_count, allocations, phase_profile, api_profile_result, trace,
     observation_before, observation_after)
   chain.release
   result
@@ -293,6 +315,7 @@ warmup_order = "AB"
 phase_roots_requested = false
 prepared_kv_requested = false
 api_profile_requested = false
+continuation_trace_requested = false
 reuse_block_scratch = false
 plan_only = false
 OptionParser.parse do |parser|
@@ -305,6 +328,7 @@ OptionParser.parse do |parser|
   parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
   parser.on("--prepared-kv", "Profile replay with both arms using shared head-major K/V refreshed inside each block encode; requires profile-replay") { prepared_kv_requested = true }
   parser.on("--api-profile", "Profile candidate MPS API wall/thread CPU spans; requires profile-replay --phase-roots --prepared-kv") { api_profile_requested = true }
+  parser.on("--continuation-trace", "Correlate candidate continuation calls and command-root GPU intervals; requires --api-profile") { continuation_trace_requested = true }
   parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
   parser.on("--plan-only", "Print the full-shape memory plan and exit before GPU setup or dispatch") { plan_only = true }
   parser.on("-h", "--help", "Show this help") do
@@ -334,6 +358,7 @@ raise ArgumentError.new("--phase-roots is supported only with --comparison=profi
 raise ArgumentError.new("--prepared-kv is supported only with --comparison=profile-replay") if prepared_kv_requested && !compare_profile_replay
 raise ArgumentError.new("--api-profile is supported only with --comparison=profile-replay") if api_profile_requested && !compare_profile_replay
 raise ArgumentError.new("--api-profile requires --phase-roots and --prepared-kv") if api_profile_requested && !(phase_roots_requested && prepared_kv_requested)
+raise ArgumentError.new("--continuation-trace requires --api-profile") if continuation_trace_requested && !api_profile_requested
 raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
 raise ArgumentError.new("--comparison=kv-prep-control requires --pairs=3 or 4") if compare_kv_prep_control && !{3, 4}.includes?(pairs)
@@ -547,6 +572,7 @@ begin
       precompute_rope: compare_rope && !baseline,
       phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
       api_profile: compare_profile_replay && !baseline && api_profile_requested,
+      continuation_trace: compare_profile_replay && !baseline && continuation_trace_requested,
       reuse_scratch: reuse_block_scratch,
       fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
   end
@@ -636,6 +662,7 @@ begin
           phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
           api_profile_diagnostics_enabled: arm.api_profile != nil,
           mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
+          mps_continuation_trace: arm.continuation_trace.try { |trace| mps_continuation_trace_json(trace) },
           profile_replay_is_not_a_speed_comparison: compare_profile_replay,
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
@@ -656,6 +683,7 @@ begin
         precompute_rope: compare_rope && !baseline,
         phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
         api_profile: compare_profile_replay && !baseline && api_profile_requested,
+        continuation_trace: compare_profile_replay && !baseline && continuation_trace_requested,
         reuse_scratch: reuse_block_scratch,
         fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
       if baseline
@@ -708,6 +736,7 @@ begin
             phase_root_profile: arm.phase_root_profile.try { |profile| phase_root_profile_json(profile) },
             api_profile_diagnostics_enabled: arm.api_profile != nil,
             mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
+            mps_continuation_trace: arm.continuation_trace.try { |trace| mps_continuation_trace_json(trace) },
             profile_replay_is_not_a_speed_comparison: compare_profile_replay,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
