@@ -229,10 +229,13 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   monotonic_end = WanHostObservation.monotonic_seconds
   observation_after = WanHostObservation::Snapshot.capture
   phase_profile = chain.phase_root_profile_enabled? ? chain.phase_root_profile : nil
+  if profile = phase_profile
+    raise "Full-block phase-root count differs from command segment count" unless profile.root_count == chain.segment_count
+  end
   api_profile_result = if api_profile
                          profile = chain.api_profile
                          expected_graph_calls =
-                           ((cfg.seq.to_i64 + attention.chunk_rows.to_i64 - 1) // attention.chunk_rows.to_i64).to_u64
+                           (((cfg.seq.to_i64 + attention.chunk_rows.to_i64 - 1) // attention.chunk_rows.to_i64) * attention.group_count.to_i64).to_u64
                          expected_commit_calls = chain.segment_count.to_i64 - 1
                          raise "Full-block API profile has no continuation roots" unless expected_commit_calls > 0
                          # Full-block Wan uses 3 self-QKV, self-O, 3 cross-QKV,
@@ -319,6 +322,7 @@ phase_roots_requested = false
 prepared_kv_requested = false
 api_profile_requested = false
 continuation_trace_requested = false
+profile_identical_arms_requested = false
 reuse_block_scratch = false
 plan_only = false
 OptionParser.parse do |parser|
@@ -331,10 +335,11 @@ OptionParser.parse do |parser|
   parser.on("--candidate-heads-per-group=N", "head-groups only: positive divisor of 40; 40 is the all-head chunk control") { |value| candidate_heads_per_group = value.to_i }
   parser.on("--pairs=N", "Measured pairs after warmup; K/V control/fusion and head-groups accept balanced 4") { |value| pairs = value.to_i }
   parser.on("--warmup-order=AB|BA", "K/V control/fusion or head-groups warmup order; reverse across fresh processes to expose order drift") { |value| warmup_order = value }
-  parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay") { phase_roots_requested = true }
+  parser.on("--phase-roots", "Report asynchronous command-root intervals; requires profile-replay or --profile-identical-arms") { phase_roots_requested = true }
   parser.on("--prepared-kv", "Profile replay with both arms using shared head-major K/V refreshed inside each block encode; requires profile-replay") { prepared_kv_requested = true }
-  parser.on("--api-profile", "Profile candidate MPS API wall/thread CPU spans; requires profile-replay --phase-roots --prepared-kv") { api_profile_requested = true }
-  parser.on("--continuation-trace", "Correlate candidate continuation calls and command-root GPU intervals; requires --api-profile") { continuation_trace_requested = true }
+  parser.on("--api-profile", "Profile MPS API wall/thread CPU spans; requires phase roots and prepared K/V in profile-replay or --profile-identical-arms") { api_profile_requested = true }
+  parser.on("--continuation-trace", "Correlate profiled continuation calls and command-root GPU intervals; requires --api-profile") { continuation_trace_requested = true }
+  parser.on("--profile-identical-arms", "Instrument both equal-geometry head-groups arms with existing phase/API/continuation diagnostics; requires --phase-roots") { profile_identical_arms_requested = true }
   parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
   parser.on("--plan-only", "Print the full-shape memory plan and exit before GPU setup or dispatch") { plan_only = true }
   parser.on("-h", "--help", "Show this help") do
@@ -372,11 +377,20 @@ candidate_self_attention_backend = compare_attention_graph ? "mpsgraph_explicit_
 prepared_kv_replay = compare_profile_replay && prepared_kv_requested
 prepared_kv_for_both_arms = compare_head_groups || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || prepared_kv_replay
 prepared_kv_for_candidate = compare_kv_layout || prepared_kv_for_both_arms
+if profile_identical_arms_requested
+  raise ArgumentError.new("--profile-identical-arms requires --comparison=head-groups") unless compare_head_groups
+  raise ArgumentError.new("--profile-identical-arms requires --phase-roots") unless phase_roots_requested
+  requested_baseline_chunk = baseline_chunk_requested || KV_LAYOUT_CHUNK_Q
+  unless requested_baseline_chunk == candidate_chunk && baseline_heads_per_group == candidate_heads_per_group
+    raise ArgumentError.new("--profile-identical-arms requires equal head-group and query-chunk geometry")
+  end
+end
+profile_mode_allowed = compare_profile_replay || profile_identical_arms_requested
 raise ArgumentError.new("--comparison=profile-replay requires --phase-roots") if compare_profile_replay && !phase_roots_requested
-raise ArgumentError.new("--phase-roots is supported only with --comparison=profile-replay") if phase_roots_requested && !compare_profile_replay
+raise ArgumentError.new("--phase-roots requires profile-replay or --profile-identical-arms") if phase_roots_requested && !profile_mode_allowed
 raise ArgumentError.new("--prepared-kv is supported only with --comparison=profile-replay") if prepared_kv_requested && !compare_profile_replay
-raise ArgumentError.new("--api-profile is supported only with --comparison=profile-replay") if api_profile_requested && !compare_profile_replay
-raise ArgumentError.new("--api-profile requires --phase-roots and --prepared-kv") if api_profile_requested && !(phase_roots_requested && prepared_kv_requested)
+raise ArgumentError.new("--api-profile requires profile-replay or --profile-identical-arms") if api_profile_requested && !profile_mode_allowed
+raise ArgumentError.new("--api-profile requires --phase-roots and prepared K/V on both arms") if api_profile_requested && !(phase_roots_requested && prepared_kv_for_both_arms)
 raise ArgumentError.new("--continuation-trace requires --api-profile") if continuation_trace_requested && !api_profile_requested
 raise ArgumentError.new("--comparison=rope requires --pairs=3") if compare_rope && pairs != 3
 raise ArgumentError.new("--comparison=attention-graph requires --pairs=3") if compare_attention_graph && pairs != 3
@@ -388,7 +402,7 @@ explicit_budget_bytes = compare_attention_graph ? MAX_ATTENTION_GRAPH_BUDGET : M
 if compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay
   raise ArgumentError.new("--comparison=#{comparison_mode} requires --candidate-self-chunk=128 so both arms use the same chunk") unless candidate_chunk == KV_LAYOUT_CHUNK_Q
 end
-require_exact = !(compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph)
+require_exact = profile_identical_arms_requested || !(compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph)
 candidate_groups = (compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
 baseline_chunk = (compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
 baseline_chunk = baseline_chunk_requested.not_nil! if compare_head_groups && baseline_chunk_requested
@@ -478,6 +492,7 @@ begin
         budget_limit_gib: explicit_budget_bytes / (1024_i64 * 1024 * 1024),
         attention_backend: "mps_chunked",
         comparison_mode: comparison_mode,
+        profile_identical_arms_requested: profile_identical_arms_requested,
         baseline_precompute_rope: false,
         candidate_precompute_rope: compare_rope,
         rope_coefficients_built_per_candidate_encode: compare_rope,
@@ -601,15 +616,15 @@ begin
       context, output, weight_arena.not_nil!, scratch.not_nil!, cfg,
       projection_workspace.not_nil!, attention,
       precompute_rope: compare_rope && !baseline,
-      phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
-      api_profile: compare_profile_replay && !baseline && api_profile_requested,
-      continuation_trace: compare_profile_replay && !baseline && continuation_trace_requested,
+      phase_roots: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && phase_roots_requested && !api_profile_requested,
+      api_profile: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && api_profile_requested,
+      continuation_trace: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && continuation_trace_requested,
       reuse_scratch: reuse_block_scratch,
       fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
   end
   warm_baseline = warm_results["A"]
   warm_candidate = warm_results["B"]
-  if compare_profile_replay
+  if profile_mode_allowed
     baseline_root_count = warm_baseline.segments
     candidate_profile = warm_candidate.phase_root_profile.not_nil!
     unless baseline_root_count == warm_candidate.segments && candidate_profile.root_count == baseline_root_count
@@ -639,14 +654,14 @@ begin
         prepared_kv_pair_shared_between_arms: prepared_kv_for_both_arms,
         baseline_explicit_qk_softmax_pv: false,
         candidate_explicit_qk_softmax_pv: compare_attention_graph,
-        phase_root_diagnostics_enabled: compare_profile_replay && phase_roots_requested,
+        phase_root_diagnostics_enabled: profile_mode_allowed && phase_roots_requested,
         api_profile_diagnostics_enabled: api_profile_requested,
         baseline_self_attention_backend: baseline_self_attention_backend,
         candidate_self_attention_backend: candidate_self_attention_backend,
         cross_attention_backend: "native_tiled",
         baseline_fuse_kv_preparation: false,
         candidate_fuse_kv_preparation: compare_kv_prep_fusion,
-        profile_replay_is_not_a_speed_comparison: compare_profile_replay,
+        profile_replay_is_not_a_speed_comparison: profile_mode_allowed,
         comparison_outside_timed_arms: true}.to_json)
   STDOUT.flush
   unless (!require_exact || warm_compare[:bit_differences] == 0) && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
@@ -697,7 +712,8 @@ begin
           api_profile_diagnostics_enabled: arm.api_profile != nil,
           mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
           mps_continuation_trace: arm.continuation_trace.try { |trace| mps_continuation_trace_json(trace) },
-          profile_replay_is_not_a_speed_comparison: compare_profile_replay,
+          profile_identical_arms_requested: profile_identical_arms_requested,
+          profile_replay_is_not_a_speed_comparison: profile_mode_allowed,
           inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
   end
   STDOUT.flush
@@ -715,9 +731,9 @@ begin
         x, modulation, positions, context, output, weight_arena.not_nil!,
         scratch.not_nil!, cfg, projection_workspace.not_nil!, attention,
         precompute_rope: compare_rope && !baseline,
-        phase_roots: compare_profile_replay && !baseline && phase_roots_requested && !api_profile_requested,
-        api_profile: compare_profile_replay && !baseline && api_profile_requested,
-        continuation_trace: compare_profile_replay && !baseline && continuation_trace_requested,
+        phase_roots: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && phase_roots_requested && !api_profile_requested,
+        api_profile: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && api_profile_requested,
+        continuation_trace: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && continuation_trace_requested,
         reuse_scratch: reuse_block_scratch,
         fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
       if baseline
@@ -774,11 +790,12 @@ begin
             api_profile_diagnostics_enabled: arm.api_profile != nil,
             mps_api_profile: arm.api_profile.try { |profile| mps_api_profile_json(profile) },
             mps_continuation_trace: arm.continuation_trace.try { |trace| mps_continuation_trace_json(trace) },
-            profile_replay_is_not_a_speed_comparison: compare_profile_replay,
+            profile_identical_arms_requested: profile_identical_arms_requested,
+            profile_replay_is_not_a_speed_comparison: profile_mode_allowed,
             inter_operator_host_waits: 0, activation_readbacks: 0}.to_json)
       STDOUT.flush
     end
-    if compare_profile_replay
+    if profile_mode_allowed
       unless baseline_root_count == candidate_root_count && baseline_root_count == warm_baseline.segments
         raise "Profile-replay command-root counts differ"
       end

@@ -31915,7 +31915,7 @@ Refresh after source/toolchain/device/model/workload changes.
 - Direct raw-row arithmetic gives B-relative-to-A contrasts -0.27797% and
   -1.20564%, or -0.74289% using equal process mean-log weighting. The mean
   chronological second/first contrast is +3.53286%. Last-four/first-four
-  geometric latency rises +13.51451%/+12.34978%; GPU interval envelopes rise
+  geometric latency rises +13.51451%/+12.34978%; summed GPU root intervals rise
   +13.49633%/+12.36186%. Sixteen measured durations span 11.310708-14.653707 s,
   CV 7.15570%/6.62414%. These are descriptive observations in two process
   clusters, not a calibrated noise bound, causal warmup effect or correction
@@ -31942,7 +31942,7 @@ Refresh after source/toolchain/device/model/workload changes.
   cleanup. The excluded attempt and host change prevent a causal order claim.
 - Timed-arm observations show no page-ins or disk reads, one GC collection per
   process and 5.395013/3.579420 s actual process CPU versus
-  91.461990/87.797338 s encode/enqueue elapsed time. GPU-envelope growth does
+  91.461990/87.797338 s encode/enqueue elapsed time. GPU-root-interval growth does
   not distinguish frequency, host contention and queue/resource behavior.
   Next discriminator: phase/continuation attribution of identical-arm drift
   under matched host/device conditions before promoting a stable chunk win.
@@ -31959,3 +31959,63 @@ Refresh after source/toolchain/device/model/workload changes.
   changes or artifact loss; OS/SDK/driver/device, shape/dtype/order,
   queue/resources or host-condition changes require fresh matched timings.
   A documentation commit preserves the pinned ancestor and scoped bytes.
+
+### [LM-WAN-G4-C128-PHASE-DRIFT-2026-10-22] Phase attribution separates GPU work from continuation spans
+
+- At parent `49cadb4023043d5ad3bbfd4f0b0e68418adf2517`, add benchmark-only
+  `--profile-identical-arms` for equal-geometry head-groups A/A diagnostics.
+  Instrument both arms using existing phase/API/continuation collectors;
+  validate 2,860 G4/C128 Graph encodes and matching root counts. Engine,
+  kernels, command boundaries, precision, queue policy and waits are unchanged.
+  Malformed CLI controls reject before GPU setup, legacy plans remain valid,
+  release build passes and pure profiler specs pass 22 examples. The opt-in
+  identical-arm diagnostic adds bit equality to the unchanged finite tolerance.
+- Two fresh sequential block-0 processes use G4/C128, AB/BA warmups and four
+  measured AB/BA/BA/AB pairs each. Real BF16 weights, F32 math, synthetic GPU
+  inputs, N36608/H40/D128, native cross-attention and timed K/V preparation
+  remain fixed. Last-four/first-four geometric host drift is +2.81687%/+5.56178%;
+  completed-root GPU interval-sum drift is +2.77858%/+5.52162%. Earlier
+  unprofiled 12-13% drift is not reproduced at its former magnitude; no causal
+  profile/unprofiled or warmup-order comparison follows.
+- Authoritative phase-union growth, AB/BA: self preparation
+  +18.32288%/+7.28358%, self attention +0.37916%/+4.35919%, FFN
+  +10.57225%/+11.47429%. Attention remains 7.5-7.9 s, the largest absolute
+  cost, but only BA's largest drift contribution. No single phase explains
+  both processes. Phase unions can overlap and are not generally additive.
+- Each arm records 881 roots/880 continuations. All sixteen measured arms
+  first exceed 1 ms at continuation 64: 63 earlier tracked roots have GPU end
+  and callback observation after entry, largely because they have not started.
+  This is consistent with queue pressure, not proof of hardware occupancy,
+  queue capacity, driver wait cause or thermal drift. Cross-tagged host spans
+  overlap prior self-attention roots for a mean 1.64057/1.68223 s and the
+  projection tail for 0.22020/0.23546 s. These are overlapping work, not
+  additive overhead. Self Graph encoding excluding nested continuations is
+  only 0.061007/0.065940 s; wall-minus-owner-CPU gaps are not recoverable savings.
+- All ten complete comparisons are finite and bit-exact over 187,432,960
+  values each. Retained upstream short gates pass 20 examples/24 checkpoints;
+  full-K Q8192/K36608/H40/D128 max absolute error is 1.1399388e-6, including
+  changed-K/V reuse and finite +1/NaN controls. No fresh upstream runtime,
+  full-spatial block oracle or video-quality claim. Twenty arms retain one
+  terminal wait and zero inter-operator waits, activation readbacks or tracked
+  encode MetalBuffer allocations. Both guards cover all native observations,
+  finish normally and leave no owned group alive. Sampled peak 10.530870 GiB,
+  minimum cache-aware reserve 29.66325%, zero swap growth; unchanged
+  12 GiB/600 s budget, 15% floor and 64 MiB swap-growth cap. No full generation.
+- Evidence and CPU refresh command: `docs/wan-performance-frontier.md`,
+  external `wan-self-attention/g4-c128-phase-drift-20261022/`. Contract v1,
+  pins v2, source-pinned build and 30 raw stage files are authenticated by
+  `verify-phase-drift-v1.py`; canonical report SHA256
+  `4ee14efcd939ad7f67a9001f97e0fccbe9fef7bc993b3326f9a66e9c12223bbe`.
+  Root arithmetic and correlated MiniQuad review agree; six semantic attacks
+  reject. ROBUST for the scoped measurements, VULNERABLE for a common causal
+  mechanism or stable speed claim. An excluded launcher failure happened
+  before native invocation and remains preserved. Correct the prior durable
+  `gpu_elapsed_seconds` label to a completed-root sum, preserving raw receipts.
+- Defaults stay unchanged. Next signal: optimize GPU self-attention for
+  absolute cost; use matched host/device conditions to separate preparation
+  and FFN drift from device-state effects. Refresh integrity on scoped source,
+  build, fixture, collector/guard changes or artifact loss; new matched timings
+  are required after OS/SDK/driver/device, dtype/shape/order, queue/resource or
+  host-state changes. Rollback removes only the opt-in benchmark adapter and
+  its documentation; the pinned parent and scoped source bytes bind evidence
+  across documentation-only or source-preserving commits.

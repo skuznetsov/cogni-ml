@@ -3787,10 +3787,13 @@ The sixteen measured blocks span 11.310708-14.653707 s. Within-process
 population CV is 7.15570%/6.62414%; last/first endpoint changes are
 +19.00612%/+17.93433%. The first/last-four geometric comparison in the table
 uses all eight observations per process, rather than selecting endpoints.
-The existing GPU interval envelope shows +13.49633%/+12.36186% late/early
-changes and an equal-process label contrast of -0.72347%. It is an interval
-containing queue and encoding gaps, not summed kernel execution time or proof
-of a GPU frequency/thermal cause.
+The existing sum of completed command-root GPU intervals shows
++13.49633%/+12.36186% late/early changes and an equal-process label contrast
+of -0.72347%. The phase investigation below corrects the previous envelope
+label: `gs_mps_chain_finish_wait` sums each root's end-minus-start timestamp.
+This is not summed kernel execution time or proof of a GPU frequency/thermal
+cause. The immutable A/A receipts retain their earlier field labels; the
+numerical observations are unchanged.
 
 Existing host observations record zero page-ins and zero process disk-read
 bytes during all sixteen measured arms. Each process records one GC collection
@@ -3877,3 +3880,177 @@ pinned source parent remains an ancestor and all scoped bytes match. Changing
 OS/SDK/driver/device, dtype/shape/order, queue/resource policy or host conditions
 requires new matched measurements before transferring timing conclusions.
 On a failed refresh, reopen dependent claims and keep defaults unchanged.
+
+## G4/C128 phase and continuation drift contract, 2026-10-22
+
+At parent `49cadb40`, the previous identical-arm control exposes temporal
+growth without phase attribution. Existing diagnostics admit only G40 profile
+replay and instrument only B. Add a benchmark-only `--profile-identical-arms`
+adapter restricted to equal head-group/chunk geometry in `head-groups` mode.
+Reuse existing root ranges, API wall/owner-thread CPU timers and fixed-capacity
+continuation traces on both arms. No kernels, precision, command boundaries,
+queue policy or waits change. This is a CAUTION diagnostic; rollback disables
+the flag or removes the benchmark adapter.
+
+DoD: CPU-only malformed-option controls reject unequal geometry and unsupported
+modes before GPU setup; source-pinned release build and retained-upstream short
+and full-key gates pass. Two sequential G4/C128 full-block processes use warmup
+AB/BA and four measured AB/BA/BA/AB pairs. Both arms must retain one terminal
+wait, zero inter-operator waits/readbacks/encode MetalBuffer allocations and
+pass complete finite output comparisons at the original 2e-5+2e-5*abs(reference)
+gate. This opt-in identical-arm diagnostic additionally requires bit-exact A/A
+output; existing unprofiled modes retain their acceptance policy. Require
+complete guard/native coverage under the unchanged 12 GiB/600 s,
+15% cache-aware floor and 64 MiB swap-growth cap. No full generation.
+
+Discriminate phase-root interval growth from host continuation wall time and
+owner-thread CPU, then correlate slow calls with prior GPU intervals and
+callback backlog. Phase unions can overlap and are not additive; a host cross
+phase wait may expose outstanding self-attention work. This is the strongest
+attribution failure to guard against. Profiled timing is diagnostic and cannot
+establish an unprofiled speedup, thermal cause or hardware utilization. Preserve
+incomplete attempts explicitly and do not repair missing receipts.
+
+### Observed phase and continuation drift
+
+The release build changes only the benchmark adapter, group-aware expected
+Graph-encode count and symmetric phase-root count validation. G4 means four
+heads per group: ten groups times 286 query chunks produce 2,860 Graph encodes,
+not the 286 expected by the earlier G40-only diagnostic. Both arms now use the
+same existing diagnostics. No engine, kernel, command-boundary, queue-policy
+or precision changes accompany this measurement.
+
+Both fresh processes finish with ten fully profiled arms each, including
+warmups. The sixteen measured block durations span 10.027263-11.170112 s.
+Last-four/first-four geometric host latency grows **2.81687% / 5.56178%** for
+AB/BA warmup processes. The corresponding completed-root GPU interval sums
+grow **2.77858% / 5.52162%**. These are sequential process clusters, not
+independent host replications or a causal warmup-order comparison. The earlier
+unprofiled 12-13% drift is not reproduced at its former magnitude; this is not
+evidence that profiling fixes it or that the earlier cause is identified.
+
+The table shows authoritative named phase interval unions. Seconds are
+arithmetic means of the first and last four measured arms; percentage changes
+use the predeclared geometric comparison.
+
+| Phase | AB early / late seconds | AB change | BA early / late seconds | BA change |
+| --- | ---: | ---: | ---: | ---: |
+| Self preparation | 0.582244 / 0.688059 | +18.32288% | 0.683504 / 0.733270 | +7.28358% |
+| Self attention | 7.542541 / 7.571027 | +0.37916% | 7.560000 / 7.889627 | +4.35919% |
+| Self projection/residual with attention tail | 0.212428 / 0.228014 | +7.37822% | 0.223729 / 0.247230 | +10.65073% |
+| Cross attention/projection/residual | 0.781275 / 0.799986 | +2.43706% | 0.790524 / 0.829524 | +4.95445% |
+| FFN | 1.090741 / 1.204706 | +10.57225% | 1.182352 / 1.315898 | +11.47429% |
+
+Self attention remains the largest absolute cost, about 7.5-7.9 s. It does not
+explain the first process's drift: self preparation and FFN grow more there.
+In the second process, self attention contributes the largest absolute phase
+increment, while FFN again grows proportionally faster. There is no single
+phase-only explanation common to both processes. Phase unions may overlap in
+general; these particular traces report zero root overlap. The largest
+measured difference between overall envelope and interval union is 1.028 ms.
+Neither short gaps nor long root intervals measure hardware utilization or
+prove that kernels continuously execute inside a root.
+
+Each arm records 881 completed roots and 880 continuation events. In every
+measured arm the first call longer than 1 ms is serial 64, with 63 earlier
+tracked roots whose GPU end and completion observation both follow call
+entry. This repeatable boundary is consistent with bounded queue pressure;
+the trace does not expose hardware queue occupancy, a driver wait reason or
+the cause of the time trend. Callback observation is not GPU completion time.
+
+Across measured arms, mean continuation wall-minus-owner-thread-CPU time is
+8.89858 / 9.15996 s per block. This proxy includes driver waiting or owner
+descheduling; it is not an additional cost to add to GPU execution. Self
+Graph encoding excluding nested continuation calls averages only
+0.061007 / 0.065940 s. Inclusive Graph time already contains its nested
+continuations and must not be counted again as command-construction work.
+
+For this source-bound block only, infer closure-root ranges from continuation
+entry phases and the explicit phase boundaries. Phase 3 maps to
+`self_projection_residual_with_attention_tail`, not a pure projection root;
+the last terminal root belongs to FFN. Reconstructed unions match every
+authoritative phase union in all sixteen measured arms. This checked mapping
+supports interval correlation, not kernel ownership. Cross-phase host
+continuation spans overlap earlier self-attention roots for a mean
+1.64057 / 1.68223 s, the self-attention/projection tail for
+0.22020 / 0.23546 s and cross-phase roots for 0.55615 / 0.56794 s.
+Charging the whole 2.41331 / 2.48206 s cross-phase wall-minus-CPU proxy to
+cross-attention would misattribute outstanding self-stage work.
+
+Measured native observations report zero page-ins, process disk-read bytes and
+GC collections in both processes. Actual user+system CPU totals
+2.752584 / 2.849925 s across eight measured arms, while each arm spends roughly
+nine seconds inside synchronous encode/enqueue. These observations do not
+support cold reads, GC pauses or busy CPU graph construction as the dominant
+drift explanation. Frequency, bandwidth/resource contention and driver
+scheduling remain hypotheses, not measured causes.
+
+All ten full-output comparisons are bit-exact and finite over 187,432,960
+values each. All twenty arms retain one existing terminal wait and zero
+inter-operator waits, activation readbacks or tracked encode MetalBuffer
+allocations. Fresh native qualification against retained upstream fixtures
+passes 20 short-block examples with 24 intermediate checkpoints and full-key
+Q8192/K36608/H40/D128. Candidate maximum absolute error stays 1.1399388e-6,
+normalized error 0.05249706; changed-K/V workspace reuse and finite +1/NaN
+controls pass. This is neither a fresh upstream runtime nor a full-spatial
+upstream block or video-quality comparison. Pure profiler specs pass 22
+examples; five invalid CLI configurations reject before GPU setup, and both
+legacy plan-mode compatibility controls pass.
+
+Both guards finish successfully with coverage through the final native sample
+and zero live owned processes. Sampled peak footprint is 10.530870 GiB,
+minimum cache-aware reserve 29.66325%, and swap growth zero. The 12 GiB/600 s
+budget, 15% floor, 64 MiB swap-growth cap and bounded ps telemetry remain
+unchanged. Sampling does not bound between-poll spikes. No full generation,
+model service or Studio is started.
+
+Decision: keep production defaults unchanged. The largest absolute performance
+lever remains GPU self-attention. For drift attribution, next separate the
+self-preparation/FFN GPU work from device-state effects under matched host
+conditions. Reducing CPU enqueue time cannot be credited with recovering the
+roughly nine seconds already overlapping submitted GPU work.
+
+Evidence is external under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-c128-phase-drift-20261022/`.
+`phase-contract-v1.json` freezes the experiment before GPU work, while
+`phase-pins-v2.json` binds 413 source files, 12 reused build artifacts, four
+fixtures and 16 launch dependencies. The source-pinned release binary SHA256
+is `06c0aef3d320aac3e5dea3103d0dac5b30aa208190d06c5e7be74124ca553f50`.
+`verify-phase-drift-v1.py` authenticates this lineage, raw stage files, guard
+coverage, chronology, geometry, API counts, trace reconstruction and numerical
+gates. Its SHA256 is
+`1772035f8570eb905d222e7616ef9055c8da0cc77f3011bbb4d5d15a8bf2bf35`;
+canonical `phase-drift-v1.report.json` SHA256 is
+`4ee14efcd939ad7f67a9001f97e0fccbe9fef7bc993b3326f9a66e9c12223bbe`.
+`phase-drift-root-precommit-v1.report.json` reproduces the canonical report
+except its creation time. `root-crosscheck-v1.json` confirms all 30 raw-file
+digests and the separate arithmetic agree with that refresh.
+The six CPU semantic attacks reject missing trace/root data, wrong geometry,
+premature guard finish and finite/nonfinite comparison failures. Root's
+separate `root-phase-arithmetic-v1.py` and read-only correlated MiniQuad review
+independently recompute the phase changes and interval overlaps. The scoped
+verdict is ROBUST for these observations; a common drift mechanism or an
+explanation of the earlier unprofiled drift remains VULNERABLE.
+
+An initial launcher failed before creating a native invocation: a pin-check
+loop overwrote the requested stage name. Its supervisor receipts and
+`prelaunch-failure-v1.json` remain preserved and hash-bound by pins v2; it is
+excluded from GPU timing and memory samples. The frozen contract also retains
+the inherited `secondary_gpu_envelope` label. Source inspection corrects that
+field to a completed-root duration sum; neither contract nor raw observations
+are rewritten, and the numerical comparisons are unchanged.
+
+CPU-only refresh, using an unused report path, launches no GPU work:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-c128-phase-drift-20261022/verify-phase-drift-v1.py --output phase-drift-refresh-UNIQUE.report.json
+```
+
+Compare the refreshed raw-file digests with the canonical report. Scoped
+source/build/fixture/collector/guard changes or artifact loss require integrity
+refresh; documentation-only commits preserve the certificate while the pinned
+parent is an ancestor and scoped bytes match. OS/SDK/driver/device, dtype,
+shape/order, queue/resource policy or host-state changes require new matched
+measurements before transferring timing conclusions. A failed refresh reopens
+dependent claims and leaves defaults unchanged. Rollback removes only the
+opt-in benchmark adapter and its documentation.
