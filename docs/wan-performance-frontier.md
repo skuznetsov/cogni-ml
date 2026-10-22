@@ -4938,3 +4938,178 @@ not a memory reservation.
 Refresh on relevant source, inputs, layout or backend changes; rerun matched
 timings on host/runtime/device changes. The return frontier is reduced-step
 short-video testing only after packed-model admission and trajectory checks.
+
+### Quantized arithmetic falsifier contract (2026-10-22)
+
+Active bounded hypothesis: eliminate the full decoded-weight intermediate,
+then test whether factoring the canonical Gaussian mean/scale avoids useful
+per-weight work without failing the existing F32 gate. For each normalization
+group, real arithmetic gives
+`sum(x*w) = mean*sum(x) + sigma*sum(x*L[code]) + sum(x*correction)`.
+The decoder instead rounds `mean + sigma*L[code]` per weight, so the real-number
+identity is not an F32 equivalence certificate. BF16 absolute replacements use
+the actual rounded base in any delta; F16-delta mode retains its separately
+rounded reconstruction. Raw BF16 records retain a dense fallback.
+
+Before a tiled production consumer, add an opt-in native diagnostic over the
+four distinct seeded input rows, all 13824 outputs and all 5120 channels.
+Use the immutable positional fixture's 1024-value records at policies .20/.50,
+both correction modes, including the mixed p4/p5 and p4-only arms. Compare:
+
+1. The oracle's decoded F32 weights with a native F32 dot reduction control.
+2. Fused per-weight reconstruction and dot with the same native reduction.
+3. Code-domain mean/scale factoring with the actual positional corrections.
+
+An optional fourth diagnostic computes the 16/32-entry affine reconstruction
+table once per normalization group, in the decoder's exact F32 multiply-then-add
+order, then gathers by code before the same dot reduction. This removes
+repeated affine reconstruction without requiring a real-number reassociation.
+The factored route, in contrast, also omits the dense per-weight F32 rounding
+residual unless it is explicitly represented; sparse escape deltas do not
+make that route bit-exact.
+
+Every output is compared on GPU against its independent same-format MPS
+oracle at finite `2e-5 + 2e-5*abs(reference)`; compare candidate/control directly
+to localize a reduction failure. A failing experimental arm is reported as a
+refuted route, never admitted by widening tolerance. Positive +1 and NaN
+comparator controls must reject. One terminal completion per diagnostic arm,
+zero inter-operator waits/activation readbacks/tracked encode allocations;
+preallocate before encode. Uploads and terminal scalar metrics are outside
+the native chain. Keep the sampled 15% reserve, 64 MiB swap cap, 4 GiB process
+budget and a bounded deadline. No full model or generation.
+
+This CAUTION change is isolated to the probe and removable without changing
+production kernels/loaders/defaults. DoD is a guarded release build and a
+source/fixture-bound native report that discriminates the three paths,
+including any rejected path. Strongest failure: numerical reassociation or
+incorrect sparse-replacement semantics masquerading as a codec improvement.
+Four-row diagnostic timing cannot establish 4480-row GEMM performance; a
+matched tiled consumer comparison remains necessary for any speed claim.
+
+#### Exact codebook arithmetic and candidate limits
+
+Let `fl` denote F32 rounding and let the canonical decoder produce
+`D_g[c] = fl(mean_g + fl(sigma_g * L[c]))` for each 256-weight normalization
+group. A local table of the 16/32 possible `D_g` values costs 64/128 bytes.
+Gathering from that table preserves the base weight bits when the decoder's
+explicit multiply-then-add order and disabled contraction are retained.
+Apply absolute BF16 replacements or separately rounded F16 deltas afterward,
+then use the same multiply/reduction schedule as the control. This is still
+logical dequantization, but it can occur inside a consumer without a global
+283,115,520-byte F32 weight stage. Building the table amortizes 256 affine
+reconstructions into 16/32 entries per group; it does not reduce the GEMM's
+multiply/accumulate count or establish a throughput improvement.
+
+Factoring `mean*sum(x) + sigma*sum(x*L)` instead changes arithmetic. The exact
+real-valued difference from the current decoded base is the dense per-code
+residual `R_g[c] = D_g[c] - (mean_g + sigma_g*L[c])`. Sparse outlier sidecars
+do not represent that dense residual. The first stored group already has
+nonzero residuals at every p4/p5 level (16/32), with maximum absolute values
+`9.090745933804101e-10` / `6.272422581332648e-10`. These tiny weight errors
+and the changed dot reduction still require the unchanged projection gate.
+The real-arithmetic mean component has rank at most 20 for K=5120, but that
+does not make the nonlinear coded component low rank.
+
+A genuinely code-domain real dot can accumulate weighted code buckets
+`H[c] = sum(x_i where code_i==c)`, then compute `sum(D[c]*H[c])` and apply
+corrections. That avoids reconstructing each weight, but changes F32 sum order
+and adds bucket clearing, scatter/reduction and possible contention. No Metal
+histogram implementation or performance result is admitted here.
+
+Exact rational analysis of the pinned finite F32 Gaussian LUTs confirms global
+complement antisymmetry. Their Walsh bases have exactly 8/16 nonzero terms,
+all odd-cardinality masks; no additional terms vanish. A direct signed-feature
+expansion therefore needs 2048/4096 signed terms per 256-weight group, versus
+256 direct LUT-weighted terms, before parity-feature generation. It is not the
+ordinary 4/5 integer-bitplane dot. This count is a reason to prioritize the
+local rounded codebook, not a proof that every bitwise algorithm is slower.
+
+Primary references:
+[FLUTE](https://arxiv.org/abs/2407.10960) fuses GPU lookup-table dequantization
+with matrix multiplication and reorders weights for hardware fragments;
+[T-MAC](https://arxiv.org/abs/2407.00088) replaces low-bit CPU dot products with
+activation-table lookups over bitplanes. Their device, batch, reduction and
+precision choices do not establish Metal/Wan speed or our unchanged parity.
+In particular, do not copy lower-precision tables/partial accumulations or
+discard Gaussian basis terms under this exact-path contract.
+
+Tiny-LUT CPU evidence is `lut_math.py` / `lut-math-v1.json` in
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-dot-20261022/`.
+Report SHA256:
+`b4ce9160e51e43726c18ee82a829c15191faecb9807a4e7d031e6c92f53507fa`.
+It uses exact rational coefficients, checks every reconstructed LUT entry,
+binds LUT/packed inputs to the source manifest and performs no GPU work.
+
+#### Native arithmetic falsifier result
+
+`examples/wan_qbit_dot_probe.cr` executes the four distinct seeded upstream
+input rows at the actual 5120 -> 13824 projection dimensions. It consumes the
+immutable positional records at tile1024, thresholds .20/.50, both correction
+modes; .20 includes mixed p4/p5 records and .50 is p4-only. No PyTorch executes
+in the native path. The reference is the saved same-format MPS projection of
+the identical weights, inputs and bias, not the original BF16 projection.
+
+Each arm checks 55,296 output values per method, totaling 221,184 per method
+over four arms. All four methods have zero nonfinite outputs and zero
+violations of finite `2e-5 + 2e-5*abs(reference)` against the MPS oracle:
+
+| Threshold / correction mode | Native dense vs MPS violations | Fused decode vs dense bit differences | Local codebook vs fused bit differences | Factored vs dense bit differences / tolerance violations |
+| --- | ---: | ---: | ---: | ---: |
+| .20 / BF16 replacement | 0 | 0 | 0 | 43,367 / 0 |
+| .20 / F16 delta | 0 | 0 | 0 | 43,363 / 0 |
+| .50 / BF16 replacement | 0 | 0 | 0 | 43,311 / 0 |
+| .50 / F16 delta | 0 | 0 | 0 | 43,286 / 0 |
+
+The native reducer differs in low bits from MPS even for the dense control;
+it remains within the unchanged gate. The fused reconstruction and rounded
+local codebook are bit-exact against their same-reduction controls. Factoring
+changes output bits but is not refuted by this bounded fixture; this is not an
+identity over F32 or evidence about unseen denoising activations. Raw BF16
+record handling exists but is not exercised by these selected fixture arms.
+
++1/NaN positive comparator controls reject in every arm. All explicit buffers
+are allocated before encoding (322.586 MiB, including the diagnostic dense
+control); encode-time tracked MetalBuffer allocations, device activation
+readbacks and inter-operator host waits are zero. Each arm encodes all four
+paths and GPU comparisons before one terminal completion. Source-level checks
+and source-bound receipts support these scoped statements; the buffer counter
+does not instrument opaque runtime allocations.
+
+Definitive build-v2/native-v2 and CPU verification exit zero with unchanged
+prelaunch-pinned files (233 build, 325 native). Native-v1 stopped before GPU
+execution on an incorrect nesting of `geometry.projection_rows_saved`; the
+fixed source was rebuilt and rerun as v2. Native sampled peak is 399.423 MiB,
+minimum cache-aware headroom 32.152 GiB, minimum pressure-free 78%, swap growth
+zero, and no owned processes remain. The guard retains its 15% reserve,
+4 GiB process-tree budget, 64 MiB swap-growth limit and 300-second deadline.
+
+External evidence:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-dot-20261022/`.
+`summary-v1.json` SHA256
+`639e02d9b6923cd46bfdbda358341ba988837d840590432ddd1fcab09a93807d`
+binds the receipts, guard samples, all gates and exact-LUT math report. Native
+binary SHA256 is
+`6bceb973d24a8d8559a0d65447d129a323feb6cd8fcb2417ba2b06072c5a8e62`.
+Probe source SHA256 is
+`89bffc1575564dfc2e8de7c82659995c940835ceb457e8b2cb25f95965026b73`.
+
+CPU-only source/receipt/result refresh (fresh output name):
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B \
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-dot-20261022/verify.py \
+  --build v2 --native v2 --output summary-refresh-UNIQUE.json
+```
+
+The summary exposes rejected gates as data; probe exit zero alone does not
+admit an experimental path. For this run all sixteen MPS gates are true.
+Correlated Mini-Quad verdict is ROBUST for these bounded projection gates and
+same-reduction output equivalence; elementwise full-weight equivalence, unseen
+activations, raw fallback coverage and throughput are not established by this
+projection-output test.
+Refresh after relevant source/fixture/decoder/backend changes. No timing,
+4480-row GEMM, full block, resident-model savings or video quality was measured.
+Next discriminator: a tiled fused consumer using rounded local codebooks,
+reusing decoded fragments across input rows, measured against staged MPS at
+4480 rows with the same numerical gate and a guarded process budget. Preserve
+the exact control when exploring the factored variant.

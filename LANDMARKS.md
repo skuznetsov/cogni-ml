@@ -32144,3 +32144,37 @@ Refresh after source/toolchain/device/model/workload changes.
   Reduced-step video comparison remains the return frontier after packed-model
   admission and real trajectory checks. Refresh after relevant source, layout,
   weights, inputs or backend changes; matched timing needs a quiet current host.
+
+## Wan quantized arithmetic falsifier (2026-10-22)
+
+- The canonical Gaussian LUT is nonlinear in its p4/p5 code. Exact rational
+  Walsh analysis finds 8/16 nonzero odd-parity components, not 4/5 ordinary
+  integer bitplanes. Factoring mean/scale omits dense F32 rounding residuals;
+  sparse outlier corrections do not restore that identity. A rounded per-group
+  `D[c]=fl(mean+fl(sigma*L[c]))` table instead preserves decoder values at
+  64/128 local bytes per 256 weights, with the same explicit operation order.
+- Opt-in `examples/wan_qbit_dot_probe.cr` tests four distinct seeded upstream
+  rows, actual 5120 -> 13824 projection dimensions, tile1024 policies .20/.50,
+  BF16-replacement/F16-delta modes. All four native methods pass the unchanged
+  finite 2e-5 + 2e-5*abs(reference) gate against their saved same-format MPS
+  oracle (221,184 outputs per method across four arms). Fused reconstruction
+  and local rounded codebooks are bit-exact to the same-reduction control.
+  Factoring changes output bits but passes this fixture; it remains a candidate
+  requiring broader numerical evidence. Selected arms do not exercise raw BF16.
+- Source-bound build-v2/native-v2 and CPU verification pass; +1/NaN comparator
+  controls reject. Zero tracked encode buffer allocations, intermediate host
+  waits or device activation readbacks, one terminal completion per arm.
+  Sampled peak 399.423 MiB, cache-aware reserve minimum 32.152 GiB, pressure-free
+  minimum 78%, no swap growth or remaining owned processes. No full model/video
+  or speed measurement. The dense control buffer remains in the diagnostic.
+- Evidence and contract: `docs/wan-performance-frontier.md`, external
+  `wan-qbit-dot-20261022/summary-v1.json`, SHA256
+  `639e02d9b6923cd46bfdbda358341ba988837d840590432ddd1fcab09a93807d`.
+  Tiny-LUT exact rational facts are in `lut-math-v1.json` in that directory.
+  Refresh after source, layout, LUT, weights, inputs or backend changes.
+- Next: tiled local-codebook decode + F32 GEMM, reuse fragments across rows;
+  compare the complete consumer against staged MPS at 4480 rows under the same
+  gate and 15% reserve/64 MiB swap stop. Four-row arithmetic parity does not
+  establish throughput, deployed memory reduction or model quality. Reduced-step
+  video remains the return frontier after packed-model admission and trajectory
+  checks; no full generation is authorized by this diagnostic step.
