@@ -8,10 +8,12 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest bounded result: fixed-G4 C128/C1024 pairs with opposite warmups favor
-C128 in both process means, but substantial timing drift prevents a stable
-speedup claim. The next discriminator is an identical-arm drift control; see
-the fixed-G4 query-chunk comparison below. Full generation remains stopped.
+Latest bounded result: identical G4/C128 arms show a 12.35-13.51% increase
+from the first four to the last four measured blocks, with a similar increase
+in the GPU interval envelope. The mean label contrast is only -0.743% for B
+relative to A. This documents temporal drift without identifying its cause;
+the earlier C128/C1024 speedup remains provisional. See the identical-arm
+control below. Full generation remains stopped.
 
 ## What the existing evidence permits
 
@@ -3731,3 +3733,147 @@ documentation commit is admissible while the pinned parent stays an ancestor
 and all scoped bytes match. This refresh authenticates existing results; a new
 performance environment needs fresh paired measurements. Sampling, synthetic
 inputs and retained upstream fixtures remain part of the evidence boundary.
+
+
+## Identical-arm G4/C128 drift control, 2026-10-22
+
+At source parent `9543964d23915a39ed67560281be8802a85ec17e`, reuse the
+unchanged full-block binary/source from the fixed-G4 chunk experiment. Its
+benchmark source SHA256 remains
+`80b9aab09d78d5f86bcacc408f9b21adf6ea3ace3994672cf16baf2c64eab918`.
+Both A and B explicitly select G4/C128, shared head-major K/V refreshed inside
+every encode, lifetime-aliased block scratch and native tiled cross-attention
+at 320 groups per segment. Real block-0 BF16 weights, F32 computation,
+B1/N36608/H40/D128, context 512 and FFN 13824 stay fixed. Inputs and all
+intermediate activations stay on GPU in the measured path. No kernel,
+precision, production default or synchronization code changes.
+
+The falsifier is an observable difference between identical treatments or a
+time trend that survives counterbalanced pair order. The predeclared v3
+contract keeps four measured pairs AB/BA/BA/AB after one warmup pair, with
+warmup AB in one fresh process and BA in another. Each arm has a separate
+native attention workspace/graph identity, equal-size query scratch and output
+binding. Geometry and resource policy match; executable identity is not shared
+between arms. Both processes run sequentially, with an interrupted/excluded
+attempt between them, so warmup order is confounded with process and host
+state. There is no predeclared stability cutoff or independent-host sample.
+
+DoD: both accepted processes finish under the unchanged 12 GiB/600 s,
+15%-of-physical-memory cache-aware guard and 64 MiB swap-growth cap; guard
+coverage includes every native arm interval and its final sample has zero live
+owned processes. Require ten complete-output comparisons to pass the original
+finite `2e-5+2e-5*abs(reference)` gate over 187,432,960 values each, unchanged
+GPU residency/explicit synchronization counters, retained-upstream short and
+full-key qualification, direct raw-row drift arithmetic and hostile receipt
+mutations. Missing final coverage or an exit receipt excludes an attempt;
+complete native output alone is insufficient.
+
+| Warmup | A geometric seconds | B geometric seconds | B relative to A | Last four / first four |
+| --- | ---: | ---: | ---: | ---: |
+| AB | 13.415658 | 13.378366 | -0.27797% | +13.51451% |
+| BA | 12.903537 | 12.747967 | -1.20564% | +12.34978% |
+
+For each process, average the four `log(T_B/T_A)` contrasts, then weight the
+two process means equally. The resulting theta is
+`-0.007456627887890185`, or **-0.74289% B relative to A** using
+`100*expm1(theta)`. This is a descriptive identical-treatment contrast, not
+an optimization. The same calculation for chronological second/first slots
+is +3.94218% and +3.12516%, or +3.53286% with equal process weights. Individual
+pairs are not independent host replications. These observations do not define
+a calibrated noise bound, prove a warmup-order effect, or supply a bias
+correction for the earlier chunk comparison.
+
+The sixteen measured blocks span 11.310708-14.653707 s. Within-process
+population CV is 7.15570%/6.62414%; last/first endpoint changes are
++19.00612%/+17.93433%. The first/last-four geometric comparison in the table
+uses all eight observations per process, rather than selecting endpoints.
+The existing GPU interval envelope shows +13.49633%/+12.36186% late/early
+changes and an equal-process label contrast of -0.72347%. It is an interval
+containing queue and encoding gaps, not summed kernel execution time or proof
+of a GPU frequency/thermal cause.
+
+Existing host observations record zero page-ins and zero process disk-read
+bytes during all sixteen measured arms. Each process records one GC collection
+and roughly 1.1 MiB of cumulative tracked GC allocation during these arms.
+Actual process user+system time totals 5.395013/3.579420 s, versus
+91.461990/87.797338 s of synchronous encode/enqueue elapsed host time and
+15.994888/15.036571 s of terminal waiting. Cold file reads and CPU computation
+are not supported as the dominant explanation for this measured drift.
+Unobserved host contention, GPU frequency and queue/resource behavior remain
+competing hypotheses; this control does not separate them. The next useful
+probe attributes identical-arm drift to existing block phases/continuation
+intervals and matches host/device conditions before another performance
+promotion. Do not repeat C128/C1024 tuning solely from absolute cross-process
+seconds.
+
+All ten accepted full-output comparisons are bit-exact, with zero nonfinite
+values, tolerance violations, maximum absolute error and normalized error.
+All twenty arms, including warmups, retain one existing terminal wait and zero
+inter-operator host waits, activation readbacks or tracked encode MetalBuffer
+allocations. Both accepted guards finish with no live owned processes:
+sampled peak footprint 10.525621 GiB, minimum cache-aware reserve 23.7881%,
+zero swap growth and 493 successful ps queries. The one-second ps cap and
+15% floor remain unchanged. File-backed headroom is a reclaimability estimate;
+sampling does not bound between-poll spikes.
+
+The fresh native short check passes 20 examples and 24 traced checkpoints
+against the retained upstream fixture. Full-key Q8192/K36608/H40/D128 maximum
+absolute error is 1.1399388e-6, normalized error 0.05249706. Changed-K/V replay,
+reuse of the original workspace and finite +1/NaN rejection also pass. These
+are retained-upstream short-block and full-key checks, plus native/native
+full-spatial equality; they are not a fresh upstream runtime, full-spatial
+upstream block oracle, full model run or video-quality assessment.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-c128-aa-drift-20261022/`.
+The v3 contract/pins retain the completed AB-v2 and replacement BA-v3. AB-v1
+was blocked before native launch at the original admission threshold. BA-v2
+has complete native comparisons, but observer coverage ends about 50 s before
+the last native arm and lacks a guard completion/launcher exit receipt; its
+native timings are excluded. A later bounded process snapshot finds no
+matching process, which does not repair the missing interval. The replacement
+starts its unchanged bounded guard in a persistent separate supervisor
+session with redirected output. The lost observer's cause is unknown;
+SIGTERM/SIGINT cleanup support does not protect against abrupt external
+termination. No existing raw files or receipts are repaired or overwritten.
+
+`derive-root-aa-v3.py` independently derives the arithmetic and selected
+row/coverage checks in `root-aa-drift-v3.json`. Earlier analyzer versions are
+retained: v2 stopped before writing a report on a GC field-name mismatch; v3
+uses the actual `gc_collection_count_delta` field. The companion receipt
+verifier supplies complete lineage/guard checks; root arithmetic alone does
+not certify the launch chain. No full generation is run and defaults stay
+unchanged. Rollback removes only this documentation update.
+
+Final `verify-g4-c128-aa-drift-v3.py` SHA256 is
+`b685765b1635732fa32dab9a3536ad79132a75080c3b833bcaf813aabaa6493f`.
+Its `verify-g4-c128-aa-drift-v3.report.json` and the root's separate CPU-only
+precommit refresh have the same SHA256
+`0a166c614ef10bdfdde3246e143a5ba7aca8670241974812a33f5e75e18b2133`.
+The verifier checks 413 scoped source hashes, 15 launch dependencies, 12
+reused-build artifacts, four fixture hashes, contracts, chronology and complete
+guard coverage. The controls-v3 report SHA256 is
+`d4334dd24627e845b707fc6380da5055cdbd20a4b6bdbbdbb0ad03256a343178`:
+both valid warmup fixtures pass and all twelve mutations reject, including
+forged early guard completion after all native results have been written.
+Root report SHA256 is
+`32b7bb93916709dad1d732ea4db06b672fd02f8b8e7a2a3c1416ea5b5006f33e`;
+its independently derived contrasts and temporal drift match the verifier.
+Correlated MiniQuad verdict: ROBUST for the scoped source/receipt, numerical,
+chronology and descriptive arithmetic checks; a stable or causal performance
+claim remains VULNERABLE. Agreement between reviewers is not an additional
+independent measurement.
+
+CPU-only refresh authenticates existing evidence without rerunning GPU work;
+choose an unused output path because reports are exclusive:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-c128-aa-drift-20261022/verify-g4-c128-aa-drift-v3.py /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-c128-aa-drift-20261022/verify-g4-c128-aa-drift-refresh-UNIQUE.report.json
+```
+
+Refresh integrity checks on source/build/fixture/collector/guard changes or
+artifact loss. Documentation-only commits preserve the certificate while the
+pinned source parent remains an ancestor and all scoped bytes match. Changing
+OS/SDK/driver/device, dtype/shape/order, queue/resource policy or host conditions
+requires new matched measurements before transferring timing conclusions.
+On a failed refresh, reopen dependent claims and keep defaults unchanged.

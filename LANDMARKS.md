@@ -31901,3 +31901,61 @@ Refresh after source/toolchain/device/model/workload changes.
   source/build/fixture, OS/SDK/driver/device, dtype/shape/order, queue/resources,
   collector/guard changes or artifact loss. Rollback removes only this
   benchmark selection change and its documentation.
+
+
+### [LM-WAN-G4-C128-AA-DRIFT-2026-10-22] Identical arms expose temporal drift; cause remains open
+
+- At source parent `9543964d23915a39ed67560281be8802a85ec17e`, reuse the
+  unchanged benchmark binary/source for two fresh full block-0 G4/C128 A/A
+  processes. Warmups AB/BA precede four AB/BA/BA/AB measured pairs each. Real
+  BF16 weights, F32 math, GPU synthetic inputs, N36608/H40/D128, native tiled
+  cross-attention and K/V preparation inside every arm remain fixed. Separate
+  arm workspace/graph, chunk scratch and output identities share the same
+  geometry and scratch policy, not executable identity.
+- Direct raw-row arithmetic gives B-relative-to-A contrasts -0.27797% and
+  -1.20564%, or -0.74289% using equal process mean-log weighting. The mean
+  chronological second/first contrast is +3.53286%. Last-four/first-four
+  geometric latency rises +13.51451%/+12.34978%; GPU interval envelopes rise
+  +13.49633%/+12.36186%. Sixteen measured durations span 11.310708-14.653707 s,
+  CV 7.15570%/6.62414%. These are descriptive observations in two process
+  clusters, not a calibrated noise bound, causal warmup effect or correction
+  for the earlier C128/C1024 estimate. Defaults remain unchanged.
+- All ten accepted complete-output comparisons are bit-exact and pass the
+  unchanged finite 2e-5+2e-5*abs(reference) gate over 187,432,960 values each.
+  Fresh native checks against retained upstream fixtures pass 20 short-block
+  examples/24 checkpoints and full-K Q8192/K36608/H40/D128, max absolute error
+  1.1399388e-6, including changed-K/V reuse and finite +1/NaN controls. No fresh
+  upstream runtime, full-spatial upstream block oracle or video-quality claim.
+- All twenty accepted arms retain one terminal wait and zero inter-operator
+  waits, activation readbacks or tracked encode MetalBuffer allocations.
+  Both guards finish with zero live owned processes: 12 GiB/600 s budget,
+  cache-aware 15% floor, sampled peak 10.525621 GiB, minimum reserve 23.7881%,
+  zero swap growth and 493 successful bounded ps queries. Guard sampling
+  does not bound between-poll spikes. No full model, Studio or generation.
+- AB-v1 is admission-blocked before native launch. BA-v2 contains all native
+  outputs but loses observer coverage about 50 s before the final arm and has
+  no completion/exit receipt; exclude its timings and retain forensic hashes.
+  A later no-matching-process snapshot does not repair the lost interval.
+  Completed AB-v2 plus BA-v3 replacement form the accepted cohort; BA-v3 runs
+  the same guard under a separate persistent supervisor session. The loss
+  cause is unknown; abrupt external termination can bypass normal signal
+  cleanup. The excluded attempt and host change prevent a causal order claim.
+- Timed-arm observations show no page-ins or disk reads, one GC collection per
+  process and 5.395013/3.579420 s actual process CPU versus
+  91.461990/87.797338 s encode/enqueue elapsed time. GPU-envelope growth does
+  not distinguish frequency, host contention and queue/resource behavior.
+  Next discriminator: phase/continuation attribution of identical-arm drift
+  under matched host/device conditions before promoting a stable chunk win.
+  Evidence, lineage and refresh belong to `docs/wan-performance-frontier.md`
+  and external `wan-self-attention/g4-c128-aa-drift-20261022/`; root report is
+  `root-aa-drift-v3.json`. Rollback removes only this documentation update.
+- Final verifier-v3 report and root CPU precommit refresh share SHA256
+  `0a166c614ef10bdfdde3246e143a5ba7aca8670241974812a33f5e75e18b2133`.
+  Root arithmetic agrees; both valid fixtures pass and all twelve hostile
+  mutations reject, including premature guard completion. Correlated MiniQuad
+  is ROBUST for scoped integrity, numerical receipts, chronology and descriptive
+  drift arithmetic; a stable/causal speed claim remains VULNERABLE. Use the
+  documented CPU refresh after scoped source/build/fixture/collector/guard
+  changes or artifact loss; OS/SDK/driver/device, shape/dtype/order,
+  queue/resources or host-condition changes require fresh matched timings.
+  A documentation commit preserves the pinned ancestor and scoped bytes.
