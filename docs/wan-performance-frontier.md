@@ -8,13 +8,24 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Current bounded continuation (2026-10-22): the deep Quad audit separates
+Current bounded result (2026-10-22): the opt-in positional decode -> shared
+F32 stage -> MPS seam passes serial reuse and same-format upstream parity.
+Complete-route medians are 60.629 ms packed versus 59.172 ms F32-expansion
+control; pair direction changes with order, so no speedup or latency-equivalence
+claim is admitted. The selected packed matrix is 38.14 MiB including offsets
+and LUTs, with one reusable 270 MiB F32 stage. Next count complete resident
+storage and obtain representative activation/trajectory quality evidence.
+The storage reduction is a separate performance lever: fitting the full
+working set can avoid paging or repeated weight transfers. This bounded
+projection does not measure that capacity benefit under memory pressure.
+No complete model, block or generation is admitted by this projection test.
+The deep Quad audit separates
 packed-model memory admission from custom-GEMM throughput. A source-bound,
 paired predecoded-weight control gives 0.905788 s dense versus 0.057411 s
 direct MPS (15.78x), with all 61,931,520 outputs bit-exact to the saved
-same-format upstream oracle. Neither compute kernel changed. Prioritize a
-packed-weight consumer using one shared F32 stage and existing MPS; custom
-GEMM scheduling is a separate research route. See the final audit and results.
+same-format upstream oracle. Neither compute kernel changed. That motivated
+the packed-weight/shared-stage seam above; custom GEMM scheduling remains a
+separate research route. See the final audit and results.
 
 The opt-in rounded-codebook tiled
 GEMM preserves same-format upstream projection results, including all
@@ -5507,3 +5518,185 @@ frontier after memory and trajectory-quality admission. Refresh numerical
 evidence after source, layout, LUT, weights, inputs, geometry or backend
 changes; refresh paired timing on the current host. No model-quality,
 deployed-memory or whole-video speed claim follows from this projection.
+
+### Packed positional weights through the shared MPS stage: contract (2026-10-22)
+
+Design-sealed, CAUTION: the current wrapper always expands a source matrix;
+passing the stage as that source is correctly rejected as an alias. Add a
+separate preexpanded entry point and one opt-in positional consumer. Keep the
+existing wrapper, checkpoint formats, transformer routing and defaults intact.
+Rollback removes this seam and its diagnostic; no stored format changes.
+
+The consumer preflights positive/addressable dimensions, codec geometry and
+buffer extents, exact prepared-plan input/stage/output identities, live plan
+and buffers, and every cross-operation write/read alias before encoding any
+decode. This includes stage/status versus activations and bias, and output
+versus resident packed inputs. Decode overwrites the shared F32 stage, MPS
+consumes it, then the existing bias kernel runs on the same serial encoder.
+Keep all resources alive through terminal completion. Sharing this stage
+across concurrent command chains is rejected by the caller contract; this
+slice adds no concurrent ownership protocol or immutable payload certificate.
+
+The caller initializes status once before a chain and rejects any nonzero
+error counter at its terminal boundary. The wrapper must never erase prior
+errors. Malformed records retain the existing GPU validation and NaN poison;
+a later valid decode may restore values but cannot rehabilitate a failed
+chain. Host shape/binding/alias rejection must leave the stage and status
+untouched. No buffer allocation, activation readback, submission or completion
+wait is introduced inside the consumer.
+
+Executable falsifiers / DoD:
+
+- `spec/qbit_positional_mps_linear_spec.cr`: small exact controls, A/B/A serial
+  overwrite, F32/BF16 bias, disabled bias, pre-dispatch shape/binding/alias and
+  released-resource rejection, malformed-record poison, sticky errors, and
+  zero tracked encode-time Metal-buffer allocations.
+- `examples/wan_qbit_mps_stage_probe.cr`: M=4480, K=5120, N=13824 with the
+  pinned four seeded upstream rows repeated on GPU. One 283,115,520-byte F32
+  stage, resident distinct packed A/B arms, one-command A/B/A reuse with full
+  stage and output checks, and +1/NaN comparator rejection controls.
+- Counterbalanced ABBA/BAAB, eight warmup and eight measured invocations of
+  the complete packed decode/MPS/bias route versus the unchanged wrapper
+  expanding the identical decoded-QBit F32 matrix, then MPS/bias. Both include
+  stage preparation in their intervals. This is route equivalence, not an
+  original-BF16 quality comparison; compare before and after timing.
+- Release builds and runs through the cache-aware memory guard: 15% reserve,
+  4 GiB owned-process-group limit, 64 MiB swap-growth stop, 240 s build and
+  300 s runtime deadlines. All scratch and receipts stay on the external SSD.
+  A failed guard, nonfinite comparator, malformed status, changed input hash,
+  new in-chain wait/readback/allocation, or changed finite tolerance stops
+  admission. The strict `2e-5 + 2e-5*abs(reference)` gate is unchanged.
+
+Guard-only future: complete packed-model residency, representative activation
+calibration, BF16 distortion/trajectory quality, and reduced diffusion steps.
+No full model, block, Studio or generation is run for this slice. This contract
+and any resulting certificate expire after relevant source, payload, LUT,
+input, plan geometry or Metal/MPS backend changes; rerun the focused controls
+and paired probe before reusing the result.
+
+### Packed positional weights through the shared MPS stage: result (2026-10-22)
+
+The opt-in `QBitPositionalMPSLinear.project` consumer decodes into the caller's
+F32 stage and calls `MetalLinearMPS.project_preexpanded` on the same encoder.
+All composite metadata checks run before decode. The original projection
+wrapper and transformer defaults are unchanged. Prepared plans bind exact
+input/stage/output handles. The caller owns serial use of stage and status,
+keeps packed inputs and LUTs stable while read, and retains all resources
+through terminal completion; the API adds no concurrent ownership mechanism.
+
+Guarded release build-v2, focused spec-v2 and native probe-v2 passed with no
+changed pinned inputs. The focused suite reports `5 examples, 0 failures,
+0 errors, 1 pending`: three new consumer tests and the existing MPS parity
+case executed; only the explicitly disabled legacy full-width cost probe is
+pending. The controls cover F32/BF16/disabled bias, safe read-only input/bias
+aliasing, binding and capacity failures before writes, malformed-record poison,
+sticky errors, and released plans. One composite stage/input alias test fails
+first at plan binding; it does not independently isolate the overlap helper.
+
+The real-weight projection has M=4480, K=5120, N=13824. Its four distinct seeded
+upstream input rows are repeated on GPU, not captured video activations. Both
+packed arms are resident before a single-command A/B/A chain. All 70,778,880
+stage values and 61,931,520 output values per operation match the saved
+upstream oracle for that reconstructed QBit matrix bit-for-bit. A1 and A3 are
+bit-exact; B differs bitwise at every output element. Full pre/post-timing
+comparisons also match, status stays zero, and the +1/NaN comparator controls
+reject both errors.
+The finite gate remains `2e-5 + 2e-5*abs(reference)`. This proves execution of
+the selected quantized values; it does not remove the prior approximately
+6.95% projection relative-L2 error against original BF16 for the selected arm.
+
+Eight warmups precede eight measured invocations, four per route in ABBA/BAAB.
+Each complete interval includes stage preparation, MPS projection and bias.
+The control expands the identical reconstructed QBit matrix from F32; it is
+not the original BF16 model or a direct already-staged MPS-only interval.
+
+| Complete route | Median GPU | Median wall | Median encode |
+| --- | ---: | ---: | ---: |
+| F32 expansion -> stage -> MPS -> bias | 59.172 ms | 59.469 ms | 56.87 us |
+| Packed decode -> stage -> MPS -> bias | 60.629 ms | 60.947 ms | 66.69 us |
+
+The descriptive packed median is 2.46% slower. Individual legacy/packed GPU
+ratios are 1.00838, 1.00943, 0.95463 and 0.94564; the ABBA/BAAB quartet ratios
+are 1.00890/0.95007. Order or drift can explain the small apparent difference.
+No speed advantage, bounded regression guarantee, standalone decode cost or
+whole-model latency follows. The earlier large dense-versus-MPS result remains
+a separate historical experiment, not a speedup measured by this run.
+
+For the selected `positional_tile1024_t050_mode0` matrix, the blob is
+39,715,480 bytes, offsets 276,484 bytes and LUTs 2,048 bytes: 39,994,012 bytes
+(38.1413 MiB, 4.52045 bits/weight), versus 135 MiB original BF16 storage.
+The 270 MiB F32 stage is additional and reusable. The diagnostic deliberately
+retains two 270 MiB oracle matrices and output snapshots; its 1,778,744,088
+explicit buffer bytes are not a deployed-model memory budget. The wrapper
+adds zero tracked encode-time MetalBuffer allocations, in-chain host waits,
+activation readbacks or submissions. Opaque MPS allocations are not covered
+by the MetalBuffer counter. Each diagnostic invocation waits once at its
+terminal boundary; A/B/A itself uses one command and one encoder.
+
+The selected matrix's resident packed storage is 3.53947 times smaller than
+BF16 storage. Reducing the full resident set can improve end-to-end performance
+by avoiding paging or repeated weight transfers, and can make an otherwise
+inadmissible model fit. Count that as a capacity benefit independently of the
+short projection timing. MPS still reads the expanded F32 stage in this path;
+the stage and opaque backend resources remain part of the memory budget.
+No packed full-model residency or pressure-induced speed benefit was measured.
+
+The runtime guard sampled peak group footprint 1.765611 GiB, minimum
+cache-aware headroom 20.669296 GiB (32.2958% of 64 GiB), minimum pressure-free
+76%, no swap growth and zero owned live processes at cleanup. The 4 GiB group
+cap, cache-aware 15% reserve/floor, 64 MiB swap stop and 240/300 s deadlines
+were unchanged. Sampling cannot exclude between-sample spikes. No full model,
+block, Studio or generation ran.
+
+Evidence is on the external SSD under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-mps-stage-20261022-v2`:
+
+- `summary-root-v3.json` SHA256
+  `9f1be33eca718271413b939cd9ae922c24c8519e930ff91e66261884ae4eff4e`;
+- release `probe-v2` SHA256
+  `528871f2694926a35b83d00c6e7c2b66d936afc00aaa3b07edab74df8d91b1ba`;
+- native probe SHA256
+  `fbe60e40be446e1157a9bbfbc54719c827d8103db4955074196c6896659882cc`;
+- focused spec SHA256
+  `34629ba7eed798a51b8014a20914644ca5df3871a228ce05ef8c6e9d4b8b6d70`;
+- post-run CPU verifier SHA256
+  `a6da6621e0132580d9a9ff2f49393c2967c5e0091e963e757024eccbcd4ca170`.
+
+V1 compiled the probe but its spec failed to typecheck a nilable exception
+message. The assertion now converts nil to empty text, which still fails the
+expected-message matcher. A fresh V2 build/spec/probe pins the corrected spec.
+Original V1 harness and receipts remain in the sibling directory without the
+`-v2` suffix. The frozen V2 verifier rejected valid receipts because Crystal
+prints the pending test name rather than its reason, reuse emits exact
+one-command/one-encoder booleans rather than numeric counts, and the prior
+intent path resolves through the external-SSD symlink. The separate
+`verify-postrun-v3.py` adapts only those representations, retains the frozen
+V2 verifier and all original source/binary/receipt hashes, and records both
+verifier hashes. No numerical, status, resource or timing gate was relaxed;
+the GPU records were neither edited nor rerun for these CPU parser repairs.
+The original 21-record sequence is accepted. Twelve targeted mutations of
+copies of those actual records are rejected at the intended checks: nonzero
+status, stage bit drift, stale A3 output, extra wait/allocation, missing post
+gate, widened tolerance, NaN timing, false one-command/one-encoder booleans,
+and optional numeric command/encoder counts of two. These are CPU verifier
+controls; original GPU records remain unchanged. The root rerun is indexed by
+`actual-record-mutations-root.json` (SHA256
+`86c9b40600e9914f4e186d31f7ba8dd04620a94b9f186bba5aa726ae7740d6b2`)
+and its adjacent executable control script.
+CPU-only refresh (use a new output filename):
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B \
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-mps-stage-20261022-v2/verify-postrun-v3.py \
+  --version v2 --output /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-mps-stage-20261022-v2/summary-refresh-UNIQUE.json
+```
+
+Correlated Mini-Quad verdict: ROBUST for the opt-in serial consumer, exact
+same-format parity and the reported scoped observations; VULNERABLE for a
+speedup, concurrent sharing, BF16-equivalent quality or full-model admission.
+Next bounded move is a complete packed-residency inventory including protected
+tensors, T5, shared scratch and opaque MPS resources, then representative
+activation/trajectory gates before enabling packed model inference. Reduced
+8/12/16 versus 40 diffusion steps remains the return frontier after admission.
+Refresh numerical checks after relevant source, representation, LUT, weights,
+input, geometry or backend changes; refresh timing on the current host.

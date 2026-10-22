@@ -15,6 +15,57 @@ module ML::Video::MetalLinearMPS
     end
   end
 
+  # Preflight separately so a producer can reject the whole append before it
+  # writes the shared stage. Plan bindings are identities, not just capacities.
+  def self.validate_preexpanded!(input : ML::MetalBuffer, bias : ML::MetalBuffer,
+                                 output : ML::MetalBuffer, rows : Int32,
+                                 input_dim : Int32, output_dim : Int32,
+                                 bias_dtype : WeightDType, plan : WanT5MPSLinearPlan,
+                                 weight_stage : ML::MetalBuffer) : Nil
+    MetalOps.dims(rows, input_dim, output_dim)
+    unless rows.to_i64 == plan.batches.to_i64 * plan.tokens &&
+           input_dim == plan.input_dim && output_dim == plan.output_dim
+      raise ArgumentError.new("Unsupported preexpanded MPS projection dispatch shape")
+    end
+    MetalOps.check(input, rows.to_i64 * input_dim)
+    MetalOps.check(output, rows.to_i64 * output_dim)
+    MetalOps.check(weight_stage, input_dim.to_i64 * output_dim)
+    MetalOps.check_storage(bias, output_dim.to_i64, bias_dtype)
+    MetalOps.distinct(output, input, bias)
+    MetalOps.distinct(weight_stage, input, bias, output)
+    plan.validate_buffers!(input, weight_stage, output)
+  end
+
+  # Consume a caller-produced, row-major F32 matrix without expanding it again.
+  # Prepare pipelines/plans before encoding. The producer and all consumers of
+  # this stage must append serially to the same caller-owned command chain.
+  # Keep every resource alive through the caller's terminal completion wait.
+  def self.project_preexpanded(e : ML::Metal::ComputeEncoder,
+                               input : ML::MetalBuffer, bias : ML::MetalBuffer,
+                               output : ML::MetalBuffer, rows : Int32,
+                               input_dim : Int32, output_dim : Int32,
+                               bias_dtype : WeightDType, plan : WanT5MPSLinearPlan,
+                               weight_stage : ML::MetalBuffer,
+                               apply_bias : Bool = true) : Nil
+    validate_preexpanded!(input, bias, output, rows, input_dim, output_dim,
+      bias_dtype, plan, weight_stage)
+    {% if flag?(:darwin) && !flag?(:cpu_only) %}
+      e.encode_wan_t5_mps_fc2(plan.handle)
+    {% else %}
+      raise ArgumentError.new("MPS projections require macOS Metal Performance Shaders")
+    {% end %}
+    return unless apply_bias
+
+    count = rows.to_i64 * output_dim
+    e.set_pipeline(pipeline)
+    e.set_buffer(output, 0, ML::Metal::BufferAccess::ReadWrite)
+    e.set_buffer(bias, 1).set_buffer(bias, 2)
+    e.set_value(output_dim.to_u32, 3)
+    e.set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 4)
+    e.set_value(count.to_u32, 5)
+    e.dispatch_1d(count.to_i32)
+  end
+
   # Runs the prepared, rank-three MPSNDArray projection, then adds the resident
   # source-dtype bias on the same open encoder. The plan, stage, inputs, weights,
   # bias, and output must remain alive through the caller's terminal wait.

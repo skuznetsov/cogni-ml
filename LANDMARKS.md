@@ -32229,8 +32229,8 @@ Refresh after source/toolchain/device/model/workload changes.
 - Deep Quad inspected geometry/reuse, representation/exactness and benchmark
   boundaries before another rewrite. Main missed separation: packed-model
   capacity can use the existing shared 270 MiB F32 MPS stage; it does not
-  require a competitive fused GEMM first. Packed loading and a validated
-  preexpanded entry point are still proposed, with serial stage ownership,
+  require a competitive fused GEMM first. At this audit, packed loading and a
+  validated preexpanded entry point were proposed, with serial stage ownership,
   binding identity, fail-closed status and completion lifetime required.
 - New opt-in `dense-timing` predecodes once and pairs unchanged dense F32 and
   direct MPS on the same stage/input/bias. Guarded build-v2/run-v2 plus the
@@ -32260,11 +32260,74 @@ Refresh after source/toolchain/device/model/workload changes.
   negative controls. Old codebook receipts remain historical; their live probe
   pin is now stale. Correlated Mini-Quad is ROBUST within this projection,
   VULNERABLE for deployed memory, real activations, cycle attribution and video.
-- Continuation: test one packed projection through a validated preexpanded MPS
-  consumer, including decode and stage reuse, before whole-model admission.
+- Historical continuation, completed by the following entry: test one packed
+  projection through a validated preexpanded MPS consumer, including decode and
+  stage reuse, before whole-model admission.
   Count complete packed storage, protected tensors, T5, scratch and opaque MPS
   allocations. Custom execution layout/larger F32 tiles are separate research.
   Return to 8/12/16 versus 40 steps after memory and trajectory-quality gates.
   Refresh after source, representation, LUT, weights, inputs, geometry or backend
   changes; paired timing needs a current host. All scratch stays on the external
   SSD; preserve Mini-Quad at material transitions and no full generation.
+
+## Wan packed positional weights through one reusable MPS stage (2026-10-22)
+
+- The opt-in `QBitPositionalMPSLinear.project` seam preflights all metadata,
+  decodes packed positional weights into one caller-owned F32 stage, and
+  appends existing MPS plus bias on the same encoder. Original projection
+  wrapper and transformer defaults remain unchanged. Plan bindings are exact;
+  unsafe write/read aliases and released resources reject before stage/status
+  writes. Status is caller-initialized and sticky; malformed records poison
+  affected values. The caller must serialize stage/status use, retain resources
+  through terminal completion and keep packed inputs/LUTs stable while read.
+- Guarded release build-v2, spec-v2 and probe-v2 pass with unchanged pins.
+  Focused suite: 5 examples, 0 failures, 0 errors, 1 pre-existing disabled cost
+  probe pending; all three new native tests execute. M=4480/K=5120/N=13824
+  repeats four seeded rows on GPU. Both packed arms are resident before one
+  command/encoder A/B/A. All 70,778,880 stage values and 61,931,520 outputs per
+  operation match same-format upstream bit-for-bit; A1=A3, B differs, status
+  zero. Full pre/post-timing gates and +1/NaN comparator rejection pass with
+  unchanged finite `2e-5 + 2e-5*abs(reference)` tolerance.
+- Complete packed decode/MPS/bias median GPU is 60.629 ms versus 59.172 ms
+  for unchanged F32 expansion/MPS/bias on identical reconstructed QBit values.
+  Four ABBA/BAAB pairs have legacy/packed ratios 1.00838, 1.00943, 0.95463 and
+  0.94564. The descriptive 2.46% slowdown changes direction with order; no
+  speedup, latency-equivalence guarantee or standalone decode cost is proven.
+- Selected matrix packed blob+offsets+LUTs totals 39,994,012 bytes /38.1413 MiB
+  /4.52045 bits per weight, versus 135 MiB BF16. One additional 270 MiB F32
+  stage is reusable; two diagnostic 270 MiB oracle matrices are still retained
+  in this probe. Explicit buffers 1,778,744,088 bytes are not model residency.
+  Packed weight storage is 3.53947x smaller: full-set residency could avoid
+  paging/transfers and accelerate the pipeline independently of kernel time.
+  This projection does not measure that capacity benefit; MPS reads F32 stage.
+  No tracked encode-time MetalBuffer allocations, in-chain host waits,
+  submissions or activation readbacks; opaque MPS allocation is not counted.
+- Runtime sampled peak group footprint 1.765611 GiB, minimum cache-aware
+  headroom 20.669296 GiB /32.2958%, minimum pressure-free 76%, zero swap growth
+  and zero owned processes at cleanup. Retain 4 GiB cap, 15% reserve/floor,
+  64 MiB swap stop and bounded deadlines; sampled guards cannot exclude
+  between-sample spikes. No complete model, block, Studio or generation.
+- Evidence: `docs/wan-performance-frontier.md`, external
+  `wan-qbit-mps-stage-20261022-v2/summary-root-v3.json`, SHA256
+  `9f1be33eca718271413b939cd9ae922c24c8519e930ff91e66261884ae4eff4e`.
+  V1 spec typechecking failed on a nilable exception message; V2 freshly pins
+  the corrected assertion. Frozen V2 verifier rejected only pending-name,
+  reuse-field and SSD-path representations. Separate CPU post-run verifier
+  preserves originals and exact source/binary/fixture/receipt pins while
+  adapting those schemas; no substantive gates change. Its SHA256 is
+  `a6da6621e0132580d9a9ff2f49393c2967c5e0091e963e757024eccbcd4ca170`.
+  The accepted actual 21-record sequence also rejects 12 targeted mutations
+  at their intended status/parity/wait/allocation/post-gate/tolerance/timing
+  and reuse-count checks. Root CPU rerun: `actual-record-mutations-root.json`
+  (SHA256 `86c9b40600e9914f4e186d31f7ba8dd04620a94b9f186bba5aa726ae7740d6b2`)
+  and adjacent control script; originals remain unchanged.
+- Correlated Mini-Quad: ROBUST within this serial seam and same-format parity;
+  VULNERABLE for concurrent ownership, deployed memory, real activations, speed
+  or video quality. Prior approximately 6.95% projection relative-L2 error
+  against BF16 remains open. Earlier dense-control receipts are historical;
+  shared wrapper source pins changed in this feature. Refresh after source,
+  representation, LUT, weights, input, geometry or backend changes and rerun
+  timing on the current host. Next count complete packed storage, protected
+  tensors, T5, shared scratch and opaque MPS memory; obtain representative
+  trajectory-quality evidence before model admission. Return to reduced
+  8/12/16 versus 40 steps after those gates, preserving the 15% floor.

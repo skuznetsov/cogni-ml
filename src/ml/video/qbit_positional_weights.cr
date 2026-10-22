@@ -106,6 +106,23 @@ module ML::Video::QBitPositionalWeights
                   lut4 : ML::MetalBuffer, lut5 : ML::MetalBuffer,
                   destination : ML::MetalBuffer, status : ML::MetalBuffer,
                   count : Int32, tile_values : Int32) : Nil
+    validate_decode!(offsets, blob, lut4, lut5, destination, status, count, tile_values)
+    tiles = count // tile_values
+    selected = @@decode.not_nil!
+    e.set_pipeline(selected).set_buffer(offsets, 0).set_buffer(blob, 1)
+      .set_buffer(lut4, 2).set_buffer(lut5, 3)
+      .set_buffer(destination, 4, ML::Metal::BufferAccess::Write)
+      .set_buffer(status, 5, ML::Metal::BufferAccess::ReadWrite)
+      .set_value(tile_values.to_u32, 6).set_value(blob.size.to_u32, 7)
+      .dispatch_threadgroups({tiles, 1, 1}, {256, 1, 1})
+  end
+
+  # A composite consumer must reject host-visible shape/alias/binding errors
+  # before its first dispatch. This checks metadata only, never payload bytes.
+  def self.validate_decode!(offsets : ML::MetalBuffer, blob : ML::MetalBuffer,
+                            lut4 : ML::MetalBuffer, lut5 : ML::MetalBuffer,
+                            destination : ML::MetalBuffer, status : ML::MetalBuffer,
+                            count : Int32, tile_values : Int32) : Nil
     tiles = geometry!(count, tile_values)
     bytes!(offsets, (tiles.to_i64 + 1) * 4); capacity!(blob)
     bytes!(lut4, 1024_i64); bytes!(lut5, 1024_i64)
@@ -114,13 +131,7 @@ module ML::Video::QBitPositionalWeights
       MetalOps.distinct(destination, input); MetalOps.distinct(status, input)
     end
     MetalOps.distinct(destination, status)
-    selected = @@decode || raise ArgumentError.new("Call QBitPositionalWeights.prepare! before encode")
-    e.set_pipeline(selected).set_buffer(offsets, 0).set_buffer(blob, 1)
-      .set_buffer(lut4, 2).set_buffer(lut5, 3)
-      .set_buffer(destination, 4, ML::Metal::BufferAccess::Write)
-      .set_buffer(status, 5, ML::Metal::BufferAccess::ReadWrite)
-      .set_value(tile_values.to_u32, 6).set_value(blob.size.to_u32, 7)
-      .dispatch_threadgroups({tiles, 1, 1}, {256, 1, 1})
+    raise ArgumentError.new("Call QBitPositionalWeights.prepare! before encode") unless @@decode
   end
 
   private def self.geometry!(count : Int32, tile_values : Int32) : Int32
