@@ -4369,3 +4369,97 @@ geometry, dtype or resource/queue-policy changes require fresh numerical and
 matched timing evidence. Scoped artifact/source loss requires integrity refresh;
 a failure reopens dependent claims. Rollback removes this opt-in adapter and
 its packaged source; existing engine defaults remain unchanged.
+
+## Reduced-step short-clip experiment (2026-10-22, in progress)
+
+The requested comparison is 8/12/16 complete UniPC schedules against a
+40-step native control. This is a quality/performance experiment; it does not
+change engine defaults or relax the existing numerical tolerances. Recompute
+the shifted schedule for every count. Truncating the first N steps of the
+40-step schedule is rejected. Compare every sigma, timestep, guidance,
+converted prediction, corrected sample and predicted sample to the pinned
+upstream scheduler at each requested count, including 40.
+
+Use a separate frozen experimental runner because the historical pooled
+runner admits only five seconds at 40 steps. The short contract is two seconds,
+32 delivered frames at 16 fps, 256x448 canvas/delivery, 36 audio-conditioning
+frames, nine noisy latent frames at 32x56, plus one reference latent frame.
+The VAE decodes 37 frames, drops the four motion-prefix frames, and delivers
+the first 32 of the remaining 33. All counts share the same exact reference,
+audio, text tokens, initial-noise bytes, checkpoint files, CFG 4.5, shift 3,
+BF16 weight storage, F32 computation and Metal/MPS backends. Input decoding,
+resizing and schedule setup are preprocessing; all neural inference stays on
+GPU with the existing terminal completion/readback boundary.
+
+CAUTION: the highest-risk confounds are an incomplete schedule, mismatched
+temporal geometry, different random inputs, numerical drift mistaken for a
+step-count effect, and host queueing mistaken for completed GPU time. Keep the
+historical production admission checks intact. The separate experiment must
+identify its source snapshot and the two existing finite native audio/stack
+drift ledgers; the native 40-step result is a relative control, not a claim of
+full upstream-model parity. Preserve the exact algorithm as the default.
+
+Admission first requires a header-only pool/state/reserve estimate and the
+unchanged cache-aware 15%-of-physical-memory floor, pressure check, process cap,
+swap-growth limit and stop deadline. Run at most one owned heavy process. No
+Studio or full five-second generation is authorized by this experiment.
+Rollback removes the external snapshot and the opt-in experiment only.
+
+DoD: fresh pinned-oracle/native scheduler gates at 8/12/16/40 with zero pending
+examples and the unchanged `2e-5 + 2e-5*abs(reference)` finite gate; four
+completed videos with identical input hashes; timings measured through actual
+terminal completion, separated from setup/encoding/export; complete clean
+guard lifetimes; and blinded review of lip sync, identity, motion and temporal
+artifacts. Pixel similarity to 40 steps alone is not perceptual quality.
+Expected denoiser-only upper bounds from call count are 5x, 3.33x and 2.5x;
+end-to-end savings must be measured. One clip/one noise realization cannot
+establish a general quality threshold. Missing memory or outputs leaves this
+experiment in progress, with no speed or quality result. Refresh after source,
+geometry, input, checkpoint, scheduler, backend, device or runtime changes.
+
+### Quantized-weight memory branch (2026-10-22, feasibility only)
+
+The BF16 experiment cannot currently be admitted: the sampled cache-aware
+available memory was 20.85 GiB, while the DiT weight pool alone is 30.18 GiB.
+The user cannot free the requested background memory and asked about QBit
+Gaussian conditional reconstruction or Q4/Q5 instead. Keep the reduced-step
+comparison as the return frontier; no model was launched.
+
+A fresh header-only calculation covers all 1,248 native DiT bindings and all
+242 T5 tensors. The proposed policy quantizes only rank-two block/injector
+linear weights, retaining token/position embeddings, time/conditioning/output
+projections, convolutions, modulation, norms and biases in original BF16.
+That covers 98.381% of DiT elements and 81.510% of T5 elements.
+
+| Proposed resident storage | DiT weight pool, GiB | T5 weight pool, GiB |
+| --- | --- | --- |
+| Existing BF16 | 30.181 | 10.582 |
+| Q4_K, 4.5 bits/quantized weight | 8.843 | 4.383 |
+| Q5_K, 5.5 bits/quantized weight | 10.698 | 4.922 |
+| QBit p4, 4.25 bits/quantized weight | 8.379 | 4.248 |
+| QBit p5, 5.25 bits/quantized weight | 10.234 | 4.787 |
+
+These estimates include block scales/moments, protected BF16 tensors and
+per-buffer page rounding. They exclude a new container's metadata, any future
+outlier sidecars, activation/scratch storage, retained inputs, MPS expansion
+buffers and opaque framework allocations. Serial phases alias their backing;
+DiT and T5 weights are not added together. Quantizing DiT alone leaves T5 as
+another possible peak. None of these rows is a memory-admission receipt.
+Evidence is `quantization-header-estimates.json` in the experiment evidence
+directory above, SHA-256
+`2a1bbfb0ad8fddf21f99cc4491da482dd8ed2070acbc276119f6d86f7311a3f3`.
+
+Native video weights currently accept only F32/BF16. The reusable MPS F32
+matrix-expansion stage is an integration seam for GPU packed-weight decoding;
+it does not yet accept QBit/Q4/Q5. QBit's local scalar codec has the p4/p5
+conditional-mean tables and eight-byte F32 mean/sigma metadata per block.
+The codec's local p4 minimum is not a fundamental QBit limit. Keep activation
+quantization as a separate branch: the weight reduction is the first target,
+and prior attention precision gates are not waived.
+
+Next falsifier: one real full-size projection/block, with identical resident
+inputs, comparing BF16 against GPU-decoded Q4/Q5/QBit weights. Measure output
+error and complete GPU time, including decode, before choosing a format.
+Kernel parity must retain its existing tolerances against the same decoded
+weights; lossy model quality is a separate experiment and must not be presented
+as exact BF16/upstream parity. Preserve the BF16 control and the 15% guard.

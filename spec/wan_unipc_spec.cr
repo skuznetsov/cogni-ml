@@ -30,6 +30,9 @@ describe ML::Video::WanUniPC do
     fixture["source_sha256"].as_s.should eq("0dec8c7ed17f6f2049275c6848113314da6ccec1c8db5bdc89df43c05c6038d9")
     fixture["device"].as_s.should eq("mps")
     steps = fixture["steps"].as_i
+    if expected_steps = ENV["WAN_UNIPC_EXPECT_STEPS"]?
+      steps.should eq(expected_steps.to_i), "Fixture does not contain the requested step count"
+    end
     count = fixture["count"].as_i
     scheduler = ML::Video::WanUniPC.new(count, steps)
     scheduler.sigmas.should eq(fixture["sigmas"].as_a.map(&.as_f.to_f32))
