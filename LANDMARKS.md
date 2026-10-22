@@ -32331,3 +32331,34 @@ Refresh after source/toolchain/device/model/workload changes.
   tensors, T5, shared scratch and opaque MPS memory; obtain representative
   trajectory-quality evidence before model admission. Return to reduced
   8/12/16 versus 40 steps after those gates, preserving the 15% floor.
+
+## Wan QBit no-stage GEMM research and return pointer (2026-10-22)
+
+- Research at source baseline `7c178df1` identifies MPP TensorOps cooperative
+  F32 right inputs as a candidate for decoding QBit directly into thread-private
+  tiles, avoiding the reusable 270 MiB global F32 stage. Apple documents this
+  input among macOS 26 updates and the API across M1-M5; host is M2/26.6.2.
+  Installed headers limit cooperative inputs to SIMD-group scope and static K.
+  F32/non-relaxed API mode is available; compile, precision and performance are
+  untested. M2 has no M5 Neural Accelerator. Classic Steel-style cooperative
+  threadgroup panels remain a second candidate, not a proven speedup.
+- CPU exact-rational falsifier re-run passes rounding, positive/seeded-defect
+  controls and complete inverse reconstruction of inspected scalar tables.
+  Original-label p4/p5 raw centroids need 8/16 Walsh terms; sampled rounded
+  tables can need all 16/32. This rejects a universal original-bit affine
+  simplification, not alternative bases, approximate methods or LUT arithmetic.
+  Eight headers per precision are not a population or projection-quality test.
+  JSON SHA256 `6e8c34617c9a2ff31137ae01629a4482d63d4aecf30e9e153cd3ba4ee87f1ebb`.
+- Return pointer: `docs/wan-qbit-no-stage-research.md` contains primary links,
+  exact scalar semantics, sample limitations, evidence pins and the next
+  bounded experiment. Compile/check one static-K F32 cooperative-input tile;
+  establish competitive dense GEMM before replacing B loading; then strict
+  same-format parity and paired full-projection timing. No GPU/build, model,
+  block, Studio or generation was launched for the research. Existing MPS seam
+  remains rollback; no execution defaults change. The prior BF16 quality gap
+  remains open, independently of same-format parity and packed capacity gains.
+- Preserve no new in-chain waits/readbacks/allocations, unchanged finite
+  `2e-5 + 2e-5*abs(reference)` tolerance, 15% reserve/floor, 4 GiB owned cap and
+  64 MiB swap stop. Correlated Quad scalar verdict is ROBUST only in its tested
+  scope; GPU route/speed claims remain PROPOSED. Refresh on LUT/header/decoder,
+  source/geometry/backend and OS/SDK/device changes before consuming evidence.

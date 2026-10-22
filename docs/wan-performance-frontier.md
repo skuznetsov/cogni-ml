@@ -27,6 +27,15 @@ same-format upstream oracle. Neither compute kernel changed. That motivated
 the packed-weight/shared-stage seam above; custom GEMM scheduling remains a
 separate research route. See the final audit and results.
 
+New no-stage research (2026-10-22): [the focused Quad audit](wan-qbit-no-stage-research.md)
+identifies Metal 4 cooperative F32 inputs to TensorOps as a bounded experiment
+on this M2/macOS 26.6.2 host, with a classic Steel panel loader as a second
+candidate. The input path requires SIMD-group scope and static K; compilation,
+strict output parity and throughput are untested. A CPU-only exact-rational
+probe rejects the original-bit affine simplification for the inspected p4/p5
+tables without ruling out other bases or tolerance-passing methods. No model,
+block, generation or GPU run was launched for this research.
+
 The opt-in rounded-codebook tiled
 GEMM preserves same-format upstream projection results, including all
 61,931,520 outputs of the selected 4480-row arm. It is rejected for speed:
