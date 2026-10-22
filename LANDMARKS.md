@@ -32178,3 +32178,48 @@ Refresh after source/toolchain/device/model/workload changes.
   establish throughput, deployed memory reduction or model quality. Reduced-step
   video remains the return frontier after packed-model admission and trajectory
   checks; no full generation is authorized by this diagnostic step.
+
+## Wan local-codebook GEMM falsifier (2026-10-22)
+
+- Opt-in `QBitCodebookLinear` integrates rounded per-256-group codebooks,
+  positional BF16 replacements/F16 delta additions and raw BF16 records into
+  native F32 simdgroup GEMM. A 16x8 output tile shares each decoded K8 fragment
+  across two row accumulators. Caller-owned buffers and terminal completion;
+  no production default changes. Source/probe contract and results are in
+  `docs/wan-performance-frontier.md`.
+- Guarded release build-v2, four-arm parity-v2 and selected full-shape timing-v2
+  pass unchanged finite 2e-5 + 2e-5*abs(reference). Fused output is bit-exact
+  against saved same-format upstream MPS and same-geometry dense controls for
+  all four 1024/.20,.50 x correction-mode arms at four seeded rows. The timed
+  .50/mode0 arm additionally matches all 61,931,520 outputs at 4480 rows.
+  GPU synthetic raw/p4/p5, both correction modes, tails and malformed-record
+  controls pass; +1/NaN comparator rejects. Same-format parity does not erase
+  the previously measured quantization loss against original BF16 weights.
+- Speed hypothesis rejected for this implementation/arm/shape: four warmed,
+  counterbalanced pairs give median GPU 3.519166 s fused versus 0.060227 s
+  decode -> MPS -> bias (58.43x slower; every pair loses). Dense same-geometry
+  diagnostic is 0.905182 s in one unpaired sample. This suggests investigating
+  custom GEMM tiling/reuse before codebook micro-optimization, but does not
+  establish cycle attribution or general rejection of quantized GEMM.
+- Native measured encoding has zero tracked MetalBuffer allocations,
+  inter-operator host waits or device activation readbacks; one terminal
+  completion per invocation. Timed explicit buffers total 1,207,689,300 bytes,
+  retaining two 270 MiB F32 control matrices. Packed blob plus offsets is
+  39,991,964 logical bytes; no deployed resident-storage claim follows.
+  Sampled timing process peak 1.248 GiB, minimum cache-aware headroom
+  28.605 GiB, minimum pressure-free 77%, zero swap growth and no owned process
+  remains. Retain 15% reserve/floor, 4 GiB process budget, 64 MiB swap-growth
+  stop and bounded deadline. Sampled guard cannot exclude between-sample spikes.
+- Evidence: external `wan-qbit-codebook-gemm-20261022/summary-v2.json`, SHA256
+  `7fc5055c4746d5372731182bdb65a99a5695641855111ca46dd63c0eb7d46ff7`;
+  source/binary/fixture-bound CPU refresh passes. Correlated Mini-Quad verdict
+  ROBUST for these parity/regression observations, VULNERABLE for other arms,
+  real activations, resident-model admission and quality. Refresh after relevant
+  source, LUT, representation, weights, inputs, shape or backend changes.
+- Continuation: paired same-geometry dense-F32 tiled versus direct MPS on the
+  same predecoded weights first; improve row/output reuse if that split confirms
+  the baseline gap, then retest local decode/correction staging. The fixture
+  repeats four seeded rows rather than real denoising activations. Reduced-step
+  video remains the return frontier after packed-model admission and trajectory
+  checks. GPU-only compute, no new in-chain waits, unchanged gates, SSD scratch;
+  no full model, block, Studio or generation was launched or authorized here.

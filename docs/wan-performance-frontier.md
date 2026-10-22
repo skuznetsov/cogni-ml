@@ -8,14 +8,17 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Current bounded continuation (2026-10-22): GPU-built positional QBit records
-pass exact layout, reconstruction and same-format projection checks for all
-18 arms. At the loosest tested policy, 1024-value records use 4.5202 logical
-bits/weight, but decode-to-F32 plus projection is still slower than the paired
-BF16 control. Next distinguish decode fused into the consumer from mean/scale
-factoring and code-domain arithmetic; unchanged numerical gates apply. This
-does not admit a packed full model or video quality. See the final contract,
-results and limitations below.
+Current bounded continuation (2026-10-22): the opt-in rounded-codebook tiled
+GEMM preserves same-format upstream projection results, including all
+61,931,520 outputs of the selected 4480-row arm. It is rejected for speed:
+3.519166 s median GPU time versus 0.060227 s for decode -> MPS -> bias, a
+58.43x slowdown. The same small-tile dense GEMM takes 0.905182 s in one
+diagnostic sample. First pair the dense control against direct MPS, improve
+tiling/reuse if confirmed, then retest codebook and correction overhead.
+Positional records still provide 4.5202 logical bits per
+weight at the loosest tested policy; same-format parity does not remove the
+previously measured quantization loss against BF16. No packed full-model or
+video-quality admission follows. See the final contract and results below.
 
 Earlier bounded attention result: native F32 key-shard attention with compensated PV
 accumulation reduces matched full-block time by 17.79% and 18.02% in two fresh
@@ -5113,3 +5116,168 @@ Next discriminator: a tiled fused consumer using rounded local codebooks,
 reusing decoded fragments across input rows, measured against staged MPS at
 4480 rows with the same numerical gate and a guarded process budget. Preserve
 the exact control when exploring the factored variant.
+
+### Local-codebook tiled GEMM contract (2026-10-22)
+
+CAUTION, opt-in only: integrate the rounded per-normalization-group codebook
+with F32 simdgroup matrix multiplication. The existing decoder-to-MPS path
+remains the control and all production defaults stay unchanged. Rollback is
+removal of the new isolated kernel/wrapper/probe on this worktree.
+
+The first falsifier is the full 5120-channel reduction at four distinct seeded
+upstream rows and all 13824 output channels, across the four tile1024 arms
+(.20/.50, BF16 replacement/F16 delta). The kernel must preserve canonical
+reconstruction, ordered positional corrections and raw BF16 records, using
+F32 operands, accumulators and output. No F16 operand staging or tolerance
+change is admitted. A same-geometry dense-F32 tiled control separates decoder
+effects from matrix-reduction effects. Synthetic controls exercise raw records,
+correction semantics, row tails, malformed records and a comparator +1/NaN.
+The consumer rejects a malformed record by poisoning its entire 8-channel
+output tile and setting status[7]; the synthetic check expects 152 nonfinite
+outputs for 19 rows when the first record is corrupted, with the ninth channel
+remaining finite. This is intentionally a tile-wide failure boundary.
+
+Only after numerical qualification, compare the complete fused projection
+against positional decode -> F32 MPS GEMM -> bias at 4480 rows in one process,
+including both warmup orders and ABBA/BAAB measurements. Each timed invocation
+owns one command-buffer boundary and terminal completion; comparator kernels,
+uploads, pipeline preparation and fixture validation stay outside timing.
+Report wall, GPU and encode time and every trial, not just a best sample.
+The full-shape inputs repeat four seeded rows and do not establish video
+trajectory quality or representative activation locality.
+
+Implementation plan and DoD:
+
+1. `src/ml/video/qbit_codebook_linear.cr` and
+   `src/ml/video/kernels/qbit_codebook_linear.metal`: caller-owned fixed buffers,
+   local rounded codebooks and shared decoded fragments across input rows;
+   bounded row ranges preserve the K traversal. No new waits, activation
+   readbacks or tracked MetalBuffer allocations while encoding.
+2. `examples/wan_qbit_codebook_gemm_probe.cr`: pinned source/positional manifests,
+   GPU reconstruction/projection comparisons and positive rejection controls,
+   then guarded, counterbalanced full-projection timings. The strongest risk
+   is a changed reduction passing a weak local control but missing upstream;
+   finite per-element `2e-5 + 2e-5*abs(reference)` remains mandatory.
+3. A source-bound guarded release build and parity/timing reports must cover
+   the new source files and preserve the existing cache-aware 15% reserve,
+   pressure-free floor 15%, 4 GiB process-tree budget and 64 MiB swap-growth
+   stop. Scratch, build cache and evidence remain under `/opt/mldata_ssd`.
+
+No model loading, full block or generation is part of this contract. Logical
+packed bytes, retained diagnostic capacity and measured process memory must
+be reported separately. A numerical rejection or slower complete consumer is
+a measured result; it does not justify precision relaxation or default enablement.
+
+### Local-codebook tiled GEMM result (2026-10-22)
+
+Implementation: `QBitCodebookLinear` computes 16 rows by 8 output channels
+with two F32 simdgroup accumulators, ascending K8 fragments and one rounded
+codebook per canonical 256-value normalization group. The decoded 8x8 B
+fragment is reused across both row tiles. BF16 replacements, separately
+rounded F16 delta additions and raw BF16 records preserve their decoder
+semantics. The caller owns buffers, status and terminal completion. The
+experimental module is not wired into production defaults.
+
+Guarded release build-v2, parity-v2 and timing-v2 complete with unchanged
+source, binary and fixture pins. At four distinct seeded upstream input rows,
+all four selected tile1024 policies (.20/.50, correction modes 0/1) have zero
+bit differences against their saved same-format upstream MPS output oracle.
+All 70,778,880 reconstructed weights per arm match the independent decoder
+oracle exactly. Fused and same-geometry dense GEMM also match exactly. Current
+four-row MPS launches have shape-dependent rounding differences against the
+saved 4480-row oracle, but pass the unchanged finite
+`2e-5 + 2e-5*abs(reference)` gate (maximum ratio 0.303).
+
+The selected .50/mode0 arm additionally qualifies all 61,931,520 outputs at
+4480 rows, with zero bit differences for fused, dense and staged MPS paths
+against the saved oracle. These inputs repeat four seeded rows 1120 times;
+the weights and projection geometry are real Wan, but the activations are not
+captured from a denoising trajectory. Synthetic 19x256 -> 9 controls cover
+p4/p5/raw records, both correction modes, positions 0/127/255, row/output tails
+and tile-wide malformed-record rejection. Comparator +1/NaN controls reject.
+
+Full consumer timings include status clear, all dispatches, bias, command and
+encoder creation, and one terminal completion. Preparation, uploads,
+comparators and correctness checks are outside timing. Fused and dense paths
+use 70 row-range dispatches on one command buffer; the MPS control decodes the
+whole weight matrix then projects and adds bias on that same boundary.
+Both warmup orders precede the following ABBA/BAAB measurements (A=fused,
+B=decode/MPS). Times are milliseconds; all samples are retained:
+
+| Position | Pair | Order | Route | GPU ms | Wall ms | Encode ms |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| 0 | 0 | ABBA | fused | 3518.005667 | 3518.285041 | 0.068041 |
+| 1 | 0 | ABBA | decode/MPS | 61.078750 | 66.607000 | 0.064667 |
+| 2 | 1 | ABBA | decode/MPS | 59.025375 | 59.349666 | 0.084625 |
+| 3 | 1 | ABBA | fused | 3520.326626 | 3520.633542 | 0.082292 |
+| 4 | 2 | BAAB | decode/MPS | 59.375624 | 64.462250 | 0.076583 |
+| 5 | 2 | BAAB | fused | 3532.482209 | 3532.782667 | 0.069792 |
+| 6 | 3 | BAAB | fused | 3517.693958 | 3518.199458 | 0.200416 |
+| 7 | 3 | BAAB | decode/MPS | 61.261416 | 67.584708 | 0.061916 |
+
+Median GPU times are 3.519166 s fused and 0.060227 s staged (58.43x ratio).
+Individual paired GPU slowdowns range from 57.42x to 59.64x. Median wall times
+are 3.519459 s and 0.065535 s. One same-geometry dense diagnostic takes
+0.905182 s GPU time; it is not a repeated dense-versus-MPS benchmark. These
+results reject a speedup for this implementation rather than quantized GEMM
+in general. CPU encode times are tens to hundreds of microseconds and do not
+explain the seconds of GPU time.
+
+Source inspection identifies costly hypotheses, not measured cycle attribution:
+483,840 threadgroups each traverse 640 K8 fragments; packed decoding and record
+validation repeat for each 16-row tile (280 row tiles). Quantized fragments
+perform 2612 threadgroup barriers versus 1281 for the dense control, and sparse
+corrections use a binary search for each reconstructed value. The poor dense
+diagnostic motivates a paired dense-tiled versus direct-MPS comparison on the
+same predecoded weights before changing the custom schedule. Removing only
+decoder instructions has not been shown sufficient. If that split confirms
+the baseline gap, test larger row/output tiles at unchanged K reduction and
+parity, then compare on-chip codebook/correction staging with the dense control.
+Do not attribute
+the gap to one instruction or promise bandwidth savings without that test.
+
+All valid status words remain zero. Native encoding reports zero tracked
+MetalBuffer allocations, zero intermediate host waits and zero device
+activation readbacks; small metrics/status are read only after the caller's
+terminal completion. The timed arena explicitly retains 1,207,689,300 bytes,
+including a 270 MiB F32 stage and a 270 MiB oracle matrix for controls.
+Logical blob-plus-offset storage is 39,991,964 bytes (4.520214 bpw); it is not
+measured deployed resident storage and excludes global container metadata.
+The original-weight projection error at this policy remains about 6.95%
+relative L2 on the existing fixture. Same-format parity does not qualify that
+lossy path against original BF16 or establish video quality.
+
+The sampled timing guard peaks at 1.248 GiB for the owned process group,
+minimum cache-aware headroom is 28.605 GiB and pressure-free reading 77%.
+Swap growth is zero and no owned process remains. The 4 GiB process budget,
+15% reserve/floor, 64 MiB swap-growth stop and 900 s deadline were retained;
+sampled telemetry cannot exclude between-sample spikes. No full model, block
+or generation was launched.
+
+Evidence is external under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-codebook-gemm-20261022/`:
+
+- `summary-v2.json`, SHA256
+  `7fc5055c4746d5372731182bdb65a99a5695641855111ca46dd63c0eb7d46ff7`;
+- release binary SHA256
+  `b5ee8c0eb3274e1368a9c432664e7df21967a19978ecdeb0e0329ff204fe0065`;
+- kernel SHA256
+  `84f17155b062e87da940ef55a3b7c2bb9611688ef254f4d780ec205abe237cbf`;
+- native probe SHA256
+  `5fc3ac5e3ed2680f9b0e14e64b86b8744184f85f91f6285fac32a07b5df4d31b`.
+
+The receipts pin all four fixture arms, transitive sources, link objects,
+compiler and binary before and after each guarded run. A CPU-only refresh
+rechecks actual receipt hashes, current pinned bytes, numerical records,
+sample ordering, status words and guard telemetry:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B \
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-codebook-gemm-20261022/verify.py \
+  --build v2 --parity v2 --timing v2 --output summary-refresh-UNIQUE.json
+```
+
+Correlated Mini-Quad verdict is ROBUST for same-format parity and this measured
+complete-path regression, VULNERABLE for other timing arms, real activations,
+cycle attribution, resident-model admission and video quality. Refresh after
+relevant source, layout, LUT, weight, input, shape or backend changes.
