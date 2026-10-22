@@ -31821,3 +31821,42 @@ Refresh after source/toolchain/device/model/workload changes.
   source/build/fixture, ps/OS/SDK/driver/device, dtype/shape/order, queue/resources,
   guard/collector changes or evidence loss. Rollback is this telemetry-only
   implementation plus its tests/docs; the existing GPU opt-in remains.
+
+### [LM-WAN-HEAD-CHUNK-FACTORIAL-2026-10-21] Head grouping wins at both matched query chunks
+
+- At parent `8b2675e5`, add opt-in `--baseline-self-chunk` to the full-block
+  head-groups benchmark; validate 128/256/512/1024 before GPU setup. Candidate
+  geometry stays independent and the default remains G40/C128. The old binary
+  rejects the option; the rebuilt harness passes four valid/four invalid
+  plan-only cases. GPU math, precision, synchronization and defaults do not change.
+- Four fresh sequential full block-0 processes use chunk order
+  128/1024/1024/128 and warmups AB/BA/AB/BA, each with four measured AB/BA/BA/AB
+  pairs. Same-chunk A=G40/B=G4 use real BF16 weights, F32 math and synthetic GPU
+  inputs at N36608/H40/D128. K/V preparation is timed inside every full block.
+  Equal-weight process mean-log contrasts give 20.3320% latency reduction at
+  C128 and 32.9311% at C1024; all 16 pairs favor G4. Geometric arm times are
+  21.174331/16.869166 s and 27.155372/18.212806 s respectively.
+- All 20 full-output comparisons pass unchanged finite
+  2e-5+2e-5*abs(reference) over 187,432,960 values each. C128 max absolute error
+  is 2.4795532e-5, normalized 0.70172626; C1024 is bit-exact. Four short native
+  retained-upstream geometries and two full-K/Q8192 probes pass, including
+  changed-K/V replay and finite +1/NaN rejection. No fresh upstream runtime,
+  full-spatial upstream block or video-quality claim follows.
+- All 40 arms retain one terminal wait and zero inter-operator waits,
+  activation readbacks or tracked encode MetalBuffer allocations. Four guards
+  hold 12 GiB/600 s and 15% cache-aware reserve: peak sampled footprint
+  10.684984 GiB, minimum reserve 20.2566%, zero swap growth, 1,538 successful ps
+  queries and zero owned live processes at exit. A below-budget startup is
+  retained/excluded; its replacement runs only after recovery. No full model,
+  Studio or generation runs. Sampling does not bound between-poll spikes.
+- Source/build/fixture/guard pins, raw receipts and CPU-only refresh are in
+  `docs/wan-performance-frontier.md` and external
+  `wan-self-attention/head-group-chunk-factorial-20261022/`. Root v3 SHA256 is
+  `95f8c8f925684b229726332b3d556ecb5b7400073b40ea65e13b525cd19f359a`.
+  Five geometry/order/numerical-summary attacks reject. Correlated MiniQuad is
+  ROBUST within this local comparison; two processes per chunk do not establish
+  production stability or causal cross-process chunk performance. Next signal:
+  compare C128/C1024 with G4 fixed in one process and opposite warmups. Defaults
+  stay unchanged. Refresh on scoped source/build/fixture, OS/SDK/driver/device,
+  dtype/shape/order, queue/resources, collector/guard changes or artifact loss.
+  Rollback removes only the benchmark option and its documentation.

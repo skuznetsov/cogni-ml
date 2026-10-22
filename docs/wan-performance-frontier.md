@@ -3489,3 +3489,130 @@ geometry before selecting a production default. Refresh this evidence after
 scoped source/binary/fixture, ps/OS/SDK/driver, device/dtype/shape, order,
 queue/resource, collector/guard changes or artifact loss. Rollback reverts only
 this telemetry/test/documentation change; the existing attention opt-in remains.
+
+### Head-group and query-chunk factorial comparison (2026-10-21)
+
+The previous comparison coupled head grouping and query chunk size. The new
+opt-in `--baseline-self-chunk=N` isolates G40 versus G4 at C128 and C1024 on the
+native full block. It is accepted only in head-groups mode for 128/256/512/1024;
+the baseline default remains 128. GPU operators, two output buffers, shared
+compact scratch and prepared K/V are unchanged. Rollback removes this harness
+option and its documentation; production attention defaults are unchanged.
+
+The falsifier is a direct equal-chunk pair where G4 is no faster, or a
+geometry-dependent reversal. Execute four fresh processes in chunk order
+128/1024/1024/128 with warmups AB/BA/AB/BA; within each process A=G40 and B=G4,
+both at the declared chunk, followed by AB/BA/BA/AB measured pairs. This
+counterbalances process order and warmup, but does not establish a causal
+chunk-only speedup across processes or eliminate nonlinear host drift.
+
+DoD: the old binary must reject the new baseline option; the new plan-only path
+must report both actual chunk geometries and reject unsupported values or use
+outside head-groups mode before GPU setup. Native retained-upstream probes
+must cover all four attention configurations at full K, including workspace
+reuse and finite +1/NaN rejection. Four complete guarded full-block runs must
+compare all output values at finite `2e-5+2e-5*abs(reference)`, retain one
+existing terminal wait per arm, zero inter-operator waits/readbacks and zero
+tracked encode MetalBuffer allocations. Bind pairs to actual monotonic
+chronology, not JSON labels alone. Seed geometry and pair-order violations
+against the result verifier. A guard-aborted run is excluded, not retried with
+weaker protection.
+
+The strongest risks are opaque MPS scratch at G40/C1024 and host drift that
+mimics a grouping effect. Preserve the 12 GiB/600 s full-block cap, 5 GiB/120 s
+primitive cap, cache-aware 15% reserve, one-second ps timeout and 64 MiB swap
+growth limit. No model, Studio, full generation, precision change, new GPU
+synchronization or default promotion is admitted. Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/head-group-chunk-factorial-20261022/`.
+
+All four fresh processes complete at the same frozen source and release binary,
+using official block-0 BF16 weights, F32 math and synthetic GPU inputs at
+N36608/H40/D128/C5120/FFN13824. K/V preparation is charged inside every timed
+arm. Cross-attention stays native tiled at groups320, and diagnostics are off.
+The 128/1024/1024/128 process order and opposite warmups are preserved:
+
+| Chunk | Warmup | G40 geometric mean (s) | G4 geometric mean (s) | Paired latency reduction |
+| --- | --- | ---: | ---: | ---: |
+| 128 | AB | 22.122403 | 17.440045 | 21.1657% |
+| 1024 | BA | 27.746835 | 18.573550 | 33.0607% |
+| 1024 | AB | 26.576518 | 17.859068 | 32.8013% |
+| 128 | BA | 20.266889 | 16.316973 | 19.4895% |
+
+Each process contains four AB/BA/BA/AB measured pairs after two warmup arms.
+The primary grouping contrast is the mean of `log(T_G40/T_G4)` within each
+process, then an equal-weight mean of its two process contrasts per chunk.
+This gives 20.3320% latency reduction at C128 and 32.9311% at C1024. The
+corresponding pooled geometric arm means are 21.174331/16.869166 s and
+27.155372/18.212806 s. All 16 measured pairs favor G4; within-process pair
+reductions range from 15.4559% to 27.5191% at C128 and 31.0462% to 34.9603%
+at C1024. The eight pairs per chunk are repeated observations in two processes,
+not eight independent hardware replications.
+
+The descriptive interaction is `theta_1024-theta_128 = 0.17214774`, or a
+1.1878533 ratio of G40/G4 time ratios. Grouping has a larger observed relative
+benefit at C1024. Absolute G4/C128 time is lower in this matrix, but the chunk
+contrast spans processes and nonlinear host drift remains possible. Neither a
+causal cache explanation nor a preferred production chunk follows. The next
+discriminator is C128 versus C1024 with G4 fixed in the same process, including
+the complete block and opposite warmups. Default promotion remains excluded.
+
+All 20 complete-output comparisons pass finite
+`2e-5+2e-5*abs(reference)` on 187,432,960 values each. At C128, all ten
+comparisons have maximum absolute error 2.4795532e-5 and maximum normalized
+error 0.70172626; these outputs are not bit-exact. At C1024 all ten comparisons
+are bit-exact. Each process rejects the finite +1/NaN corruption control.
+Four short native retained-upstream configurations each pass 20 examples and
+24 reused-scratch checkpoints. Two full-K/Q8192 probes cover all four
+geometries, changed-K/V workspace replay and finite +1/NaN controls, with
+maximum candidate oracle absolute error 1.1473894e-6. The oracle is retained
+upstream fixture data, not a fresh upstream runtime. Full-block arm agreement
+does not establish full-spatial upstream agreement or video quality.
+
+All 40 timed arms retain one existing terminal wait and zero inter-operator
+host waits, activation readbacks or tracked encode MetalBuffer allocations.
+All four 12 GiB/600 s guards complete with zero owned live processes; all
+1,538 targeted ps queries succeed. Peak sampled footprint is 10.684984 GiB,
+minimum cache-aware reserve 20.2566%, minimum pressure-free 54%, and swap
+growth is zero. The initial C128/AB v1 attempt is retained and excluded: it
+was blocked before spawning at 20.807 GiB headroom versus the unchanged
+21.6 GiB startup requirement. Its v2 replacement starts only after recovery.
+File-backed pages count speculative pages once; sampled guards do not bound
+between-poll spikes or guarantee cache reclaimability. No full model, Studio
+or video generation runs.
+
+`verify-factorial-v3.report.json` binds all ten completed GPU stages, the
+excluded startup attempt, plan/selection controls and 413 scoped source files
+to parent `8b2675e54429d02cb0de71a32d22321e7e522d19`. The modified harness is
+bound through the release build receipt; the twelve reused build artifacts,
+four fixtures and fourteen launch dependencies are rehashed. Its SHA256 is
+`95f8c8f925684b229726332b3d556ecb5b7400073b40ea65e13b525cd19f359a`;
+`verify-factorial-v3.report.attestation.json` binds that report, the verifier,
+controls and raw-receipt manifest. The frozen verifier SHA256 is
+`d074bc68cceabbd41d4434f68c6e2fc11e09f843ed18fe1778e2fe31e4d37ee0`,
+and `factorial-pins-v1.json` is
+`0805adc6225ba8e75b7dbfa613507059b37d76f5f28fe26c0af5c9f796269f6f`.
+
+Correlated MiniQuad review is ROBUST for the harness selection, completed
+local comparisons and receipt validation. Both AB/BA positive fixtures pass;
+all five in-memory attacks reject: wrong matched chunk, cross-pair
+relabel/reorder, same-ID raw-arm reorder, swapped process geometry and a
+strict-pass summary with normalized error above one.
+`verify-factorial-controls-v5.report.json` has SHA256
+`3cc031f68e43338db2c684f658574f85427cd3ea0a642e802300c78a8bc5385b`.
+Early verifier schema-mismatch attempts and superseded reports are retained;
+they do not change raw measurements. Production/default promotion, a causal
+chunk mechanism and full-generation performance remain unsupported.
+
+CPU-only refresh, using a fresh output filename, rechecks source ancestry,
+scoped bytes, build/fixture/guard receipts, chronology, numerical results and
+the captured controls without GPU execution:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/head-group-chunk-factorial-20261022/verify-factorial-v1.py /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/head-group-chunk-factorial-20261022/verified-factorial-refresh.json
+```
+
+Refresh after scoped source/build/fixture, OS/SDK/driver/device, dtype/shape,
+order, queue/resource, collector/guard changes or artifact loss. A later
+documentation commit is admissible only while the pinned parent remains an
+ancestor and every scoped byte still matches. Sampling and retained-fixture
+limitations above remain part of the certificate.

@@ -310,6 +310,7 @@ end
 weights_path = ""
 pairs = 3
 comparison_mode = "cross-segments"
+baseline_chunk_requested : Int32? = nil
 candidate_chunk = 256
 candidate_heads_per_group = HEADS
 warmup_order = "AB"
@@ -323,6 +324,7 @@ OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--comparison=kv-prep-control|kv-prep-fusion|head-groups --pairs=3|4] [--warmup-order=AB|BA] [--plan-only]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
   parser.on("--comparison=MODE", "cross-segments (default), self-chunks, head-groups, kv-layout, attention-graph, kv-prep-control, kv-prep-fusion, rope, or profile-replay") { |value| comparison_mode = value }
+  parser.on("--baseline-self-chunk=N", "head-groups only: baseline query rows 128, 256, 512 or 1024; default 128") { |value| baseline_chunk_requested = value.to_i }
   parser.on("--candidate-self-chunk=N", "Candidate query rows: 128, 256, 512 or 1024; K/V, attention-graph, rope and profile-replay modes require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--candidate-heads-per-group=N", "head-groups only: positive divisor of 40; 40 is the all-head chunk control") { |value| candidate_heads_per_group = value.to_i }
   parser.on("--pairs=N", "Measured pairs after warmup; K/V control/fusion and head-groups accept balanced 4") { |value| pairs = value.to_i }
@@ -345,6 +347,10 @@ raise ArgumentError.new("--warmup-order must be AB or BA") unless {"AB", "BA"}.i
 raise ArgumentError.new("--candidate-self-chunk must be 128, 256, 512 or 1024") unless {128, 256, 512, 1024}.includes?(candidate_chunk)
 compare_self_chunks = comparison_mode == "self-chunks"
 compare_head_groups = comparison_mode == "head-groups"
+if requested_chunk = baseline_chunk_requested
+  raise ArgumentError.new("--baseline-self-chunk requires --comparison=head-groups") unless compare_head_groups
+  raise ArgumentError.new("--baseline-self-chunk must be 128, 256, 512 or 1024") unless {128, 256, 512, 1024}.includes?(requested_chunk)
+end
 raise ArgumentError.new("--candidate-heads-per-group must be a positive divisor of 40") unless candidate_heads_per_group > 0 && HEADS % candidate_heads_per_group == 0
 raise ArgumentError.new("Head grouping requires --comparison=head-groups") if !compare_head_groups && candidate_heads_per_group != HEADS
 compare_kv_layout = comparison_mode == "kv-layout"
@@ -377,6 +383,7 @@ end
 require_exact = !(compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph)
 candidate_groups = (compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
 baseline_chunk = (compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
+baseline_chunk = baseline_chunk_requested.not_nil! if compare_head_groups && baseline_chunk_requested
 candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : ((compare_self_chunks || compare_head_groups) ? candidate_chunk : BASELINE_CHUNK_Q)
 candidate_chunk_values = candidate_chunk * candidate_heads_per_group * HEAD_DIM
 weights_path = File.expand_path(weights_path)
