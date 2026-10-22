@@ -8,7 +8,16 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest bounded result: native F32 key-shard attention with compensated PV
+Current bounded continuation (2026-10-22): GPU-built positional QBit records
+pass exact layout, reconstruction and same-format projection checks for all
+18 arms. At the loosest tested policy, 1024-value records use 4.5202 logical
+bits/weight, but decode-to-F32 plus projection is still slower than the paired
+BF16 control. Next distinguish decode fused into the consumer from mean/scale
+factoring and code-domain arithmetic; unchanged numerical gates apply. This
+does not admit a packed full model or video quality. See the final contract,
+results and limitations below.
+
+Earlier bounded attention result: native F32 key-shard attention with compensated PV
 accumulation reduces matched full-block time by 17.79% and 18.02% in two fresh
 processes with opposite warmup orders. All eight pairs favor the candidate and
 all 187,432,960 output values pass the unchanged tolerance. This qualifies the
@@ -4762,3 +4771,170 @@ The fixture-aware result decays after relevant source, weight, activation,
 shape or backend changes. Repeat guarded numerical checks before transferring
 it; quality/generalization needs new trajectory inputs, and speed needs an
 actual packed consumer and matched complete-path timings.
+
+### Positional-correction contract (2026-10-22)
+
+Implemented opt-in experiment: consume the pinned real Wan FFN matrix
+and the existing four seeded input rows. For each 256/512/1024-value packing
+tile, consider Gaussian p4 and p5 plus every weight whose normalized absolute
+reconstruction error exceeds the declared policy, and an original-BF16 escape.
+Normalization remains per 256 values. Choose the smallest complete tile cost
+under each fixed error policy; ties prefer BF16, then p5, then p4, so a sidecar
+must be strictly cheaper than the next viable precision. A common prefix-offset
+table, tile header,
+position widths, values and alignment all count. Wider packing tiles are an
+experiment in metadata amortization, not a change to quantization statistics.
+
+The bounded raw-buffer representation is a UInt32 byte-offset table (tiles+1)
+and four-byte-aligned variable records. Shape, tile size and the reconstruction
+LUTs are external descriptors; this is not a standalone file container. Report
+blob-plus-offset bytes explicitly, excluding any future global container header
+or separately resident LUTs. A record starts with a four-byte header:
+precision byte (4/5/16), value-mode byte (0 BF16 absolute / 1 F16 delta), and
+UInt16 correction count. Quantized records retain all original mean/sigma and
+bit planes, followed by increasing local positions (UInt8 for 256, UInt16 for
+512/1024) and two-byte values. Raw BF16 records have no corrections. Padding
+is zero. Selected positions and base precision are identical between the two
+value modes. F16 rounding may miss the reconstruction policy; report this
+separately instead of changing the mask, size or parity gate.
+
+Build plans, scan offsets, pack records, reconstruct and project on GPU with
+caller-owned buffers and one existing terminal completion boundary per arm.
+The packing workspace may reserve worst-case capacity: distinguish its actual
+allocation from the logical packed length. Do not infer model memory admission
+from logical bytes alone. Initially decode to the existing reusable F32 stage;
+tile-fused GEMM and model loader integration remain outside this slice.
+
+CAUTION rollback removes only opt-in codec/probe additions. DoD: release build;
+exact layout/selection agreement with an independently prepared oracle;
+same-format decoded-weight and projection parity at the unchanged finite
+`2e-5 + 2e-5*abs(reference)` gate; complete byte accounting; malformed-header,
+offset, capacity, position, ordering and nonfinite controls; seeded comparator
+failure; zero tracked encode allocations/inter-operator host waits/activation
+readbacks; guarded native and oracle runs with the 15% cache-aware reserve,
+64 MiB swap-growth limit and explicit process/time budgets. Keep compression
+distortion versus original BF16 separate from kernel parity. Timings include
+decode plus projection and exclude offline packing, with matched BF16 control;
+packing cost is reported separately if measured. No full generation is allowed.
+
+The strongest failure is an apparently compact format whose sidecars, capacity
+or reconstruction rounding are omitted, or whose scalar policy is promoted to
+video quality. Correlated Mini-Quad review must attack these boundaries. Evidence
+decays with relevant source/weights/inputs/layout/backend changes. The return
+frontier remains short-fragment diffusion-step quality/speed testing after
+model memory admission and trajectory-quality checks.
+
+#### Positional results and scope
+
+The GPU packer, independent offline MPS oracle and native consumer agree
+bit-for-bit for plans, offsets, packed bytes, all 70,778,880 reconstructed
+weights and all 61,931,520 projection outputs in each of 18 arms. The native
+projection executes 4480 rows, using four distinct seeded upstream rows tiled
+1120 times on GPU. This exercises the real 13824 x 5120 weight matrix and
+full projection shape; it does not provide denoising-trajectory coverage.
+The offline oracle exports references outside the timed native path.
+
+The table reports BF16 replacements. Equal-size F16-delta arms choose exactly
+the same positions, tiers and bytes; their projection relative-L2 differences
+are below 0.000006 percentage points. No F16 post-rounding policy misses occur
+on this fixture. Relative L2 versus original BF16 is compression distortion,
+separate from the unchanged same-format implementation parity gate.
+
+| Packing values | Policy | Blob + offsets bytes | Bits/weight | Corrections | Projection relative L2 vs BF16 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 | 0.10 | 67,321,612 | 7.609232 | 6,082,928 | 2.276470% |
+| 256 | 0.20 | 53,942,720 | 6.097041 | 2,014,579 | 3.551548% |
+| 256 | 0.50 | 41,531,368 | 4.694210 | 459,420 | 6.954429% |
+| 512 | 0.10 | 71,883,764 | 8.124883 | 6,082,300 | 2.275129% |
+| 512 | 0.20 | 54,434,996 | 6.152682 | 1,742,908 | 3.285557% |
+| 512 | 0.50 | 40,544,924 | 4.582714 | 459,430 | 6.954487% |
+| 1024 | 0.10 | 71,330,804 | 8.062383 | 6,082,300 | 2.275129% |
+| 1024 | 0.20 | 53,895,064 | 6.091655 | 1,727,077 | 3.264850% |
+| 1024 | 0.50 | 39,991,964 | 4.520214 | 459,430 | 6.954487% |
+
+Wider records amortize headers/offsets but require two-byte positions rather
+than one. They therefore lose at policy 0.10, where many corrections are
+needed. At policy 0.50, 1024-value records save 3.71% against 256-value records.
+Normalization groups stay 256. A fixed scalar policy does not fix projection
+error, and this result does not beat the earlier Q4_K size/error point
+(4.5 bits/weight, 4.632% projection relative L2). No format is promoted for
+model/video quality. F16 deltas show no measured equal-byte quality advantage.
+
+Logical compression is also not deployed resident-memory compression. The
+probe reserves 142,663,680 bytes of blob capacity plus offsets, maintains the
+270 MiB F32 weight stage and retains source/oracle/workspace buffers. Its
+explicit arena is 2,211,073,156 bytes, excluding opaque MPS plan internals.
+An offline compact artifact, exact-size resident allocation and a packed
+consumer remain separate integration work.
+
+Eleven individual GPU controls pass: seeded +1/NaN comparator failures,
+threshold equality, strict raw-cost ties, zero sigma, alignment padding,
+stale valid bytes after a failed pack, insufficient capacity, and malformed
+precision/offset/position/order. Four host argument guards reject. Failed
+packing invalidates decoding even if a previous valid blob remains resident.
+Every native numerical arm uses one terminal wait, zero inter-operator waits,
+zero activation readbacks and zero tracked encode-time MetalBuffer allocations.
+
+#### Paired cost of the staged consumer
+
+Four selected policy-0.50 arms have four pack-only samples and four matched
+decode/projection versus BF16-expand/projection pairs each, after individual
+warmups. Both pair orders occur (ABBA then BAAB); validation is outside each
+timed command. Reported segment medians include the existing terminal wait;
+packing is separate from decode/projection. These are small, single-process
+paired observations, not whole-block or end-to-end model timings.
+
+| Packing / corrections | Pack wall ms | Decode + projection wall ms | Paired BF16 wall ms | Median paired slowdown |
+| --- | ---: | ---: | ---: | ---: |
+| 256 / BF16 | 9.875 | 63.840 | 58.114 | 9.017% |
+| 512 / BF16 | 7.932 | 61.910 | 56.850 | 7.806% |
+| 1024 / BF16 | 7.219 | 59.904 | 58.627 | 2.081% |
+| 512 / F16 delta | 8.308 | 61.255 | 57.836 | 5.474% |
+
+All sixteen wall-time pairs favor BF16. Two 1024-value GPU-elapsed pairs are
+slightly faster for the candidate, although its GPU median is slower; the
+smallest paired effect is noisy. Cross-arm ordering is fixed, so comparing these
+arm medians does not establish a tile-size speedup. Smaller packed-source
+reads alone do not remove the shared F32 stage write/read, output traffic or
+the 317 billion MACs at 4480 rows. At the 1024/0.50 point, the source payload
+shrinks from 141.56 MB BF16 to 39.99 MB, while both paths still write 283.12 MB
+of F32 weights and the consumer reads that stage. This motivates tiled
+decode-and-multiply without the global intermediate, not a bandwidth-speedup
+claim for the current path.
+
+Correlated Mini-Quad review is ROBUST for bounded layout/selection/parity and
+the reported paired observations; model quality, deployed memory reduction
+and a general speedup remain unestablished. Defaults/loaders remain unchanged.
+No full generation ran. Guarded native sampled peak is 2.095 GiB, minimum
+cache-aware headroom 31.422 GiB, pressure-free minimum 76%, swap growth zero,
+and no owned processes remain. All build/oracle/native commands exit zero,
+with unchanged prelaunch-pinned inputs and authenticated completion receipts.
+
+External evidence directory:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-positional-20261022/`.
+`summary-v3.json` SHA256
+`481f555253e5341f54cc4e10c105f7ea8ddb10b1ba6ae80d904a506b34eca896`
+indexes `build-v2`, `oracle-v1`, `native-v2`, immutable `fixture-v1`, per-control
+results and all sixty timing segments. Earlier native-v1 results are exploratory
+after the probe's source comment/default-fixture-path refresh; v2 binds the
+final source bytes. The fixture manifest SHA256 is
+`d77557f7d01798f91bbc3ad765f0147e33c0702e4cdb735f849b9641a0aaee3f`.
+
+CPU-only source/receipt/guard/result refresh (choose a fresh output filename):
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B \
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-positional-20261022/verify.py \
+  --build v2 --oracle v1 --native v2 --output summary-refresh-UNIQUE.json
+```
+
+The indexed release-build and native commands are in the summary and their
+intent receipts. Native invocation uses `--fixture=.../fixture-4480-v3`,
+`--positional-fixture=.../fixture-v1` and `--rounds=4`, under
+`wan_memory_guard.py --memory-accounting=file-cache
+--max-footprint-mib=4096 --max-swap-growth-mib=64 --timeout-sec=600`.
+The guard's fixed reserve is 15%; the explicit budget is a sampled stop limit,
+not a memory reservation.
+Refresh on relevant source, inputs, layout or backend changes; rerun matched
+timings on host/runtime/device changes. The return frontier is reduced-step
+short-video testing only after packed-model admission and trajectory checks.

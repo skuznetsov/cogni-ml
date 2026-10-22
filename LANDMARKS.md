@@ -32098,3 +32098,49 @@ Refresh after source/toolchain/device/model/workload changes.
   waits, unchanged parity gate, 15% reserve and 64 MiB swap-growth stop,
   SSD scratch, no full generation. Refresh after relevant source, weights,
   inputs, shape or backend changes; speed needs a real packed consumer.
+
+### 2026-10-22 — Build positional QBit corrections and bound their staged cost
+
+- Opt-in native GPU planning/scan/packing/validated decoding implements
+  p4/p5 plus all required positional corrections, with original BF16 fallback.
+  Selection counts complete record headers, positions, values, padding and
+  offsets; ties choose higher precision. BF16 replacements and equal-size
+  F16 deltas use identical masks/tiers. Packing tiles 256/512/1024 retain
+  canonical 256-value normalization and unchanged p4/p5 payloads.
+- All 18 arms agree bit-for-bit with the independent offline MPS oracle for
+  wire bytes, 70,778,880 decoded weights and 61,931,520 projection outputs.
+  Native executes 4480 rows, repeating four distinct seeded inputs 1120 times;
+  this is not captured video-trajectory coverage. Eleven GPU controls and four
+  host rejection guards pass, including stale blob after packing failure.
+  No encode-time MetalBuffer allocations, activation readbacks or inter-op
+  waits; one terminal completion per native numerical arm. Same-format parity
+  keeps the finite 2e-5 + 2e-5*abs(reference) gate; lossy BF16 distortion is
+  reported separately and does not pass that original-weight gate.
+- Policy .50 uses 4.6942/4.5827/4.5202 blob-plus-offset bits per weight for
+  256/512/1024 records, with about 6.9545% projection relative L2 versus BF16.
+  Policy .10 instead favors 256 records (7.6092 bpw, 2.2765% output relative
+  L2): one-byte correction positions matter when corrections are numerous.
+  F16 deltas show no material equal-byte quality benefit on these inputs.
+  Shape/LUT/global-container metadata is excluded from these raw-buffer sizes.
+- The current staged consumer is slower in every measured wall-time pair. Four pairs
+  per selected .50 arm give median paired wall slowdowns 9.017%/7.806%/2.081%
+  for BF16 corrections at 256/512/1024 and 5.474% for F16 deltas at 512.
+  No full-block, model-quality, memory-admission or speedup claim. The probe
+  reserves BF16-sized worst-case capacity and a 270 MiB F32 stage; logical
+  packed bytes are not measured deployed resident memory. Defaults unchanged.
+- Source-bound release build-v2/oracle-v1/native-v2 and CPU refresh pass.
+  Evidence: `docs/wan-performance-frontier.md`, external
+  `wan-qbit-positional-20261022/summary-v3.json`, SHA256
+  `481f555253e5341f54cc4e10c105f7ea8ddb10b1ba6ae80d904a506b34eca896`.
+  Native sampled peak 2.095 GiB, minimum cache-aware headroom 31.422 GiB,
+  minimum pressure-free 76%, zero swap growth, no owned processes remaining.
+  Correlated Mini-Quad: ROBUST for bounded representation/parity and paired
+  observations, VULNERABLE for model quality, deployed memory and general speed.
+- Continuation: distinguish on-chip decode fused into GEMM from algebraic
+  mean/scale factoring or direct LUT/bitplane arithmetic. The nonlinear
+  Gaussian codebook and F32 association need independent falsifiers; smaller
+  weights alone cannot prove bandwidth-limited execution. Preserve unchanged
+  gates, 15% reserve, 64 MiB swap-growth stop and SSD scratch; no full generation.
+  Reduced-step video comparison remains the return frontier after packed-model
+  admission and real trajectory checks. Refresh after relevant source, layout,
+  weights, inputs or backend changes; matched timing needs a quiet current host.
