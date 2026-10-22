@@ -31780,3 +31780,44 @@ Refresh after source/toolchain/device/model/workload changes.
   Next signal: resolve telemetry separately, then complete a fresh balanced
   replication before promotion. Rollback selects all-head C128. No full model,
   Studio, video generation or lower-precision/approximate math is exercised.
+
+### [LM-WAN-PS-GROUP-TELEMETRY-2026-10-21] Fail-closed telemetry repaired; opposite-warmup block runs complete
+
+- At parent `32fc1459`, replace whole-system `ps -axo` with one `ps -g PGID`
+  query, explicitly using modern `COMMAND_MODE=unix2003`. Preserve the one-second
+  cap, 0.5 s sampling, unreaped leader identity pin, signaling/cleanup and every
+  memory/swap limit. Forward the run deadline through group and ESRCH queries;
+  cleanup keeps its independent bounds. Empty, foreign, duplicate, malformed,
+  timed-out or failed queries cannot become successful telemetry/quiescence.
+- Red falsifiers fail against the old implementation; all 38 CPU guard tests
+  then pass. A known-tree CPU probe matches targeted/full membership in 30
+  interleaved pairs and both zombie cases under a legacy parent. Median query
+  latency is 3.491688 vs 42.293395 ms; this does not isolate a GPU speedup.
+- Reused unchanged GPU binaries complete two full block-0 runs, real BF16
+  weights/synthetic GPU inputs/F32 math, opposite warmups, four balanced pairs
+  each. G40/C128 vs G4/C1024 arm medians are 13.548086/11.619343 s and
+  11.244238/10.351370 s; median paired reductions are 11.5871% and 6.3081%.
+  Seven of eight pairs win, but one loses 1.1654% and chronology drifts. Stable
+  gain/default promotion stays unverified; production remains G40/C128.
+- Ten full comparisons are bit-exact on 187,432,960 values each. Two short
+  retained-upstream runs pass 20 examples/24 checkpoints each; full-K/Q8192,
+  changed-K/V replay and +1/NaN controls pass at unchanged finite tolerance.
+  No fresh upstream runtime, full-spatial oracle or quality claim follows.
+- All 20 arms retain one terminal wait and zero tracked encode MetalBuffer
+  allocations/inter-operator waits/readbacks. All 453 full-run ps queries succeed.
+  Peak sampled footprint is 10.681322 GiB; minimum cache-aware reserve 19.9987%,
+  pressure-free 54%, swap growth zero and final owned live processes zero.
+  No GPU source/synchronization, full model, Studio or generation changes/runs.
+- Raw receipts, source/build/fixture pins and CPU refresh commands are in
+  `docs/wan-performance-frontier.md` and external
+  `wan-self-attention/ps-telemetry-20261021/`. Root receipt SHA256 is
+  `1ed543735015f1e20cb1ef8e39695fba6662601067e53b89859f0b94f295d8c3`.
+  V2 binds 35 raw receipts and pair IDs to timestamp positions; v1 is superseded
+  after MiniQuad's pair-relabel/record-reorder counterexample. Raw data is unchanged.
+  All three seeded geometry/order attacks reject. Correlated review is ROBUST
+  for this bounded repair/receipt; a stable-speedup/default claim stays VULNERABLE.
+  Old incomplete timings and the CPU probe v1 cleanup-control failure are
+  retained/excluded. Next: isolate geometry and drift. Refresh on scoped
+  source/build/fixture, ps/OS/SDK/driver/device, dtype/shape/order, queue/resources,
+  guard/collector changes or evidence loss. Rollback is this telemetry-only
+  implementation plus its tests/docs; the existing GPU opt-in remains.

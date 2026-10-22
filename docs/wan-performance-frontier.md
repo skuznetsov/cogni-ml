@@ -3355,3 +3355,137 @@ retained numerical checks and one completed comparison; a repeatable speedup
 remains VULNERABLE. The review and verifier use the same runtime evidence and
 are not independent replications. Crystal formatting and `git diff --check`
 pass. No production default changes and no full generation is run.
+
+### Process telemetry repair and full-block replication (2026-10-21)
+
+Completed transition: replace the guard's whole-system `ps -axo` listing with a
+single process-group query and repeat the existing G40/C128 versus G4/C1024
+full-block comparison. The observed failure was the one-second `ps` timeout;
+its internal kernel or scheduling cause is not established. Targeting the
+query is a hypothesis to test, not a reason to accept missing telemetry.
+
+This is a CAUTION change to containment instrumentation. Preserve the one-second
+subprocess cap, 0.5-second sampling interval, waitable unreaped leader pin,
+fail-closed cleanup, 15% reserve, footprint cap and swap-growth limit. Reject
+foreign, duplicate, malformed or absent group rows. Propagate the existing
+runtime deadline to the group query, without applying an expired run deadline
+to cleanup. The macOS `ps(1)` and `compat(5)` manpages define modern `-g` group
+selection; explicitly select `COMMAND_MODE=unix2003` for that subprocess only.
+Rollback is the telemetry-only diff; no attention source or default changes.
+
+The strongest failure mode is omission of a live descendant or an exited
+leader, causing false quiescence or loss of safe cleanup. DoD: CPU guard specs
+must reject seeded selector/timeout/deadline/parse failures and preserve real
+zombie-leader, TERM-resistant-descendant and unrelated-session controls. An
+interleaved CPU membership probe must match targeted and full listings of a
+known tree. Then retained-upstream block specs and two fresh full-block runs
+with opposite warmup orders must finish under the unchanged guard. Compare
+all full outputs at the unchanged finite `2e-5+2e-5*abs(reference)` tolerance;
+record whole-block latency, one existing terminal wait, zero inter-operator
+waits/readbacks and zero tracked encode MetalBuffer allocations. A failed or
+incomplete run is excluded from timing; no stable-speedup or default-promotion
+claim is admitted merely because one run improves. Evidence is retained under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/ps-telemetry-20261021/`.
+
+The repair uses `/bin/ps -g <PGID> -o pid=,pgid=,stat=` and forwards the runtime
+deadline to the initial group query and the ESRCH membership refresh. Cleanup
+still has its own bounded queries and retains the unreaped leader identity pin.
+No signaling, memory-accounting, threshold, polling or GPU code changes. Errors,
+timeouts and empty/foreign/duplicate/truncated output still stop the guard;
+unverified quiescence cannot become a successful completion.
+
+The new CPU falsifiers first fail against the old implementation (four failures
+and four errors), then all 38 guard tests pass. Existing live-child, zombie-leader,
+TERM-resistant descendant, unrelated-session, telemetry-outage and cleanup
+controls remain green. In a CPU-only probe with a legacy-mode parent, modern
+targeted and full listings match the known PID/zombie-class set in all 30
+interleaved pairs while an unrelated session creates and reaps children. The
+zombie-only and exited-leader/live-descendant cases also agree. Targeted `ps`
+median is 3.491688 ms versus 42.293395 ms for the full listing. This descriptive
+CPU result does not establish a causal full-block speedup from telemetry alone.
+The initial membership probe v1 fails in its own zombie-only cleanup control;
+it is retained and excluded. Corrected v2 preserves the guard unchanged, skips
+the zombie-only signal using the pinned snapshot and verifies owned-process
+absence after cleanup.
+
+Two new native full-block processes complete with opposite warmup orders and
+the same balanced measured order AB/BA/BA/AB. A is G40/C128 and B is G4/C1024;
+both retain 320 cross-attention groups per segment, compact shared scratch,
+the same real block-0 BF16 weights, synthetic GPU-filled inputs and full-key F32
+math. K/V preparation remains inside each timed block. Phase-root and API
+profiling are disabled.
+
+| Warmup | A median wall seconds | B median wall seconds | Median paired reduction | B wins |
+| --- | ---: | ---: | ---: | ---: |
+| AB | 13.548086 | 11.619343 | 11.5871% | 4/4 |
+| BA | 11.244238 | 10.351370 | 6.3081% | 3/4 |
+
+The AB-run paired reductions are 0.2663%, 13.6182%, 15.1316% and 9.5560%; the
+BA-run reductions are 5.9355%, 6.6806%, 9.2210% and -1.1654%. Arm medians and
+the median of pair reductions are different statistics. Opposite warmups now
+complete and both run medians favor B, but chronology drifts and one pair loses.
+A stable gain and default promotion remain unverified; G40/C128 stays default.
+This comparison changes both head-group and query-chunk geometry and does not
+isolate a grouping/cache mechanism. Earlier guard-aborted timings stay excluded.
+
+All ten complete-output comparisons (two warmups plus eight measured pairs)
+are finite and bit-exact on 187,432,960 values each. Both short retained-upstream
+configurations pass 20 examples and 24 reused-scratch checkpoints. The separate
+full-K/Q8192 candidate check passes at maximum oracle absolute error 1.1473894e-6,
+including changed-K/V workspace replay and finite +1/NaN rejection controls.
+The full-block +1/NaN controls also reject. Tensor tolerance remains finite
+`2e-5+2e-5*abs(reference)`. This re-executes native checks against retained
+upstream fixtures; it is not a fresh upstream runtime, full-spatial upstream
+block comparison, real-activation comparison or video-quality assessment.
+
+All 20 timed arms retain one existing terminal wait, zero tracked encode
+MetalBuffer allocations, zero inter-operator waits and zero activation readbacks.
+No new GPU synchronization is introduced. In the two full runs all 453 targeted
+queries succeed: medians 2.7480/2.8918 ms and maxima 15.3790/11.1849 ms. The
+unchanged 12 GiB/600 s guards finish with zero owned live processes. Peak sampled
+footprint is 10.681322 GiB, minimum cache-aware headroom 19.9987%, minimum
+pressure-free 54%, and swap growth zero. File-backed pages include speculative
+pages once; sampled guards do not bound between-poll spikes or guarantee cache
+reclaimability. No full model, Studio or generation runs.
+
+Reproduction from the task worktree (CPU-only evidence refresh):
+
+```sh
+TMPDIR=/opt/mldata_ssd/cogni-ml/video-scene-20261019/tmp PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/opt/python@3.11/bin/python3.11 -B spec/wan_memory_guard_spec.py
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/ps-telemetry-20261021/verify-replication-v2.py /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/ps-telemetry-20261021/verified-replication-refresh.json
+```
+
+The verifier requires a new output path. `replication-pins-v1.json` binds 413
+scoped source files (only the guard differs from parent `32fc1459`), unchanged
+release binaries/build receipts and retained fixtures. Its SHA256 is
+`395d779058190045be6a9400f7c92b175aded8f71d692418f1153a03cccd870d`.
+The completed root receipt `verified-replication-root-v2.json` has SHA256
+`1ed543735015f1e20cb1ef8e39695fba6662601067e53b89859f0b94f295d8c3`;
+the verifier has SHA256
+`4fa6a6aacf23c76c25cfea38e556061ef53e382454f630688ce216d82cac81fc`.
+It binds 35 raw receipts by hash and checks actual monotonic arm chronology,
+pair IDs and measured-record order, geometry, numerical controls, resource
+thresholds, live-process quiescence and ps receipts. Both old incomplete
+full-block attempts are rejected. `default_promotion_admitted:false` is an
+explicit scope policy, not a derived proof of performance stability. The v1
+verifier/receipt is retained but superseded: MiniQuad found that swapping A-arm
+pair IDs between two BA pairs and reordering their JSON records could change
+the derived paired median to 5.9060% without rejection. The v2 analyzer and
+verifier bind pair IDs to timestamp positions as well as labels, and require
+measured record order to match time order. Original raw measurements are
+unchanged; no GPU rerun was needed for this evidence-verification repair.
+
+Final correlated MiniQuad review is ROBUST for the scoped telemetry repair,
+completed runs and corrected receipt validation. Three in-memory controls are
+rejected: wrong arm geometry, cross-pair relabeling/reordering and same-ID
+measured-record reordering. `replication-v2-adversary-controls.json` binds the
+verifier, analyzer and root report; its SHA256 is
+`12133ea127eee1b614fc8bf27ce2dc86db2bdf71859279cef308c08c9e3d7dc9`.
+Review reuses the same raw measurements and is not an independent hardware
+replication. A stable-speedup/default-promotion claim remains VULNERABLE.
+
+Next signal: quantify chronological drift and isolate head grouping from chunk
+geometry before selecting a production default. Refresh this evidence after
+scoped source/binary/fixture, ps/OS/SDK/driver, device/dtype/shape, order,
+queue/resource, collector/guard changes or artifact loss. Rollback reverts only
+this telemetry/test/documentation change; the existing attention opt-in remains.

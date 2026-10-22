@@ -150,7 +150,8 @@ def parse_swap_used(text: str) -> int:
 
 
 def _run_text(argv: list[str], *, timeout: float = 1.0,
-              deadline: float | None = None) -> str:
+              deadline: float | None = None,
+              env: dict[str, str] | None = None) -> str:
     if deadline is not None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -158,7 +159,7 @@ def _run_text(argv: list[str], *, timeout: float = 1.0,
         timeout = min(timeout, remaining)
     try:
         result = subprocess.run(argv, check=True, capture_output=True, text=True,
-                                timeout=timeout)
+                                timeout=timeout, env=env)
     except (OSError, subprocess.SubprocessError) as error:
         raise TelemetryError(f"telemetry command failed: {Path(argv[0]).name}") from error
     return result.stdout
@@ -239,12 +240,17 @@ def _proc_pid_rusage(pid: int) -> int:
     return int(usage.ri_phys_footprint)
 
 
-def process_group_members(pgid: int) -> list[GroupProcess]:
+def process_group_members(pgid: int, *, deadline: float | None = None) -> list[GroupProcess]:
     """Enumerate one process group; fail closed if ps cannot provide a full sample."""
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 1:
         raise TelemetryError("process-group identity is invalid")
-    output = _run_text(["/bin/ps", "-axo", "pid=,pgid=,stat="])
+    # ps(1): one -g selects this process group, including its unreaped leader.
+    # compat(5): legacy mode ignores -g, so pin modern semantics for ps only.
+    # Keep the existing one-second command cap and fail closed on every error.
+    output = _run_text(["/bin/ps", "-g", str(pgid), "-o", "pid=,pgid=,stat="],
+                       deadline=deadline, env={**os.environ, "COMMAND_MODE": "unix2003"})
     members: list[GroupProcess] = []
+    seen: set[int] = set()
     try:
         for line in output.splitlines():
             fields = line.split(None, 2)
@@ -254,15 +260,19 @@ def process_group_members(pgid: int) -> list[GroupProcess]:
             state = fields[2].strip()
             if pid <= 0 or row_pgid <= 0 or not state:
                 raise TelemetryError("ps process list has invalid process identity")
-            if row_pgid == pgid:
-                members.append(GroupProcess(pid, state))
+            if row_pgid != pgid or pid in seen:
+                raise TelemetryError("ps group query returned a foreign or duplicate process")
+            seen.add(pid)
+            members.append(GroupProcess(pid, state))
     except ValueError as error:
         raise TelemetryError("ps process list has a nonnumeric pid or pgid") from error
+    if not members:
+        raise TelemetryError("ps group query returned no process rows")
     return members
 
 
-def _group_usage(pgid: int) -> tuple[int, int]:
-    members = process_group_members(pgid)
+def _group_usage(pgid: int, *, deadline: float | None = None) -> tuple[int, int]:
+    members = process_group_members(pgid, deadline=deadline)
     if not members or not any(member.pid == pgid for member in members):
         raise TelemetryError("process-group leader missing from sample")
     total = 0
@@ -275,7 +285,7 @@ def _group_usage(pgid: int) -> tuple[int, int]:
             # membership check; skip only if that exact PID has left our group.
             if error.errno != errno.ESRCH:
                 raise TelemetryError("proc_pid_rusage failed") from error
-            if any(row.pid == member.pid for row in process_group_members(pgid)):
+            if any(row.pid == member.pid for row in process_group_members(pgid, deadline=deadline)):
                 raise TelemetryError("process footprint disappeared while still in group") from error
             continue
         if not member.state.startswith("Z"):
@@ -296,7 +306,7 @@ def collect_telemetry(pgid: int | None, deadline: float | None = None) -> Teleme
     if pgid is None:
         footprint, live = 0, 0
     else:
-        footprint, live = _group_usage(pgid)
+        footprint, live = _group_usage(pgid, deadline=deadline)
     return Telemetry(pressure, pages.free_spec_bytes, physical, swap, footprint, live,
                      pages.speculative_bytes, pages.file_backed_bytes)
 

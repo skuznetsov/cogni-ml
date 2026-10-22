@@ -112,6 +112,74 @@ class ParserSpec(unittest.TestCase):
             with self.assertRaisesRegex(guard.TelemetryError, "leader missing"):
                 guard._group_usage(101)
 
+    def test_process_group_query_is_targeted_and_preserves_its_deadline(self):
+        with patch.dict(os.environ, {"COMMAND_MODE": "legacy"}), \
+                patch.object(guard, "_run_text", return_value="101 101 Ss\n202 101 S\n") as run:
+            members = guard.process_group_members(101, deadline=123.0)
+        self.assertEqual(members, [guard.GroupProcess(101, "Ss"), guard.GroupProcess(202, "S")])
+        self.assertEqual(run.call_args.args[0],
+                         ["/bin/ps", "-g", "101", "-o", "pid=,pgid=,stat="])
+        self.assertEqual(run.call_args.kwargs["deadline"], 123.0)
+        self.assertEqual(run.call_args.kwargs["env"]["COMMAND_MODE"], "unix2003")
+
+    def test_targeted_group_query_rejects_inconsistent_or_partial_rows(self):
+        for output in ("101 101 Ss\n202 303 S\n", "101 101 Ss\n101 101 Ss\n",
+                       "", "101 101 Ss\n202 101\n", "101 101 Ss\nword 101 S\n"):
+            with self.subTest(output=output), \
+                    patch.object(guard, "_run_text", return_value=output), \
+                    self.assertRaises(guard.TelemetryError):
+                guard.process_group_members(101)
+
+    def test_ps_failure_and_deadline_never_become_successful_empty_samples(self):
+        for error in (subprocess.TimeoutExpired("ps", 1),
+                      subprocess.CalledProcessError(1, "ps", output="")):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(guard.subprocess, "run", side_effect=error) as run, \
+                    self.assertRaises(guard.TelemetryError):
+                guard.process_group_members(101)
+            self.assertEqual(run.call_args.kwargs["timeout"], 1.0)
+            self.assertTrue(run.call_args.kwargs["check"])
+        with patch.object(guard.time, "monotonic", return_value=10.0), \
+                patch.object(guard.subprocess, "run", return_value=SimpleNamespace(stdout="101 101 S\n")) as run:
+            guard.process_group_members(101, deadline=10.25)
+            self.assertEqual(run.call_args.kwargs["timeout"], 0.25)
+        with patch.object(guard.time, "monotonic", return_value=10.0), \
+                patch.object(guard.subprocess, "run") as run, \
+                self.assertRaises(guard.TelemetryError):
+            guard.process_group_members(101, deadline=10.0)
+        run.assert_not_called()
+
+    def test_runtime_collector_passes_deadline_to_group_footprint(self):
+        report = ("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+                  "Pages free: 100.\nPages speculative: 25.\n")
+        with patch.object(guard.sys, "platform", "darwin"), \
+                patch.object(guard, "_run_text", side_effect=[
+                    "System-wide memory free percentage: 80%\n", report,
+                    str(PHYSICAL) + "\n", "used = 10.00M"]), \
+                patch.object(guard, "_group_usage", return_value=(123, 1)) as usage:
+            guard.collect_telemetry(101, deadline=123.0)
+        usage.assert_called_once_with(101, deadline=123.0)
+
+    def test_disappearing_footprint_requires_a_fresh_group_query_with_same_deadline(self):
+        for still_present in (True, False):
+            with self.subTest(still_present=still_present):
+                leader = guard.GroupProcess(101, "S")
+                descendant = guard.GroupProcess(202, "S")
+                refreshed = [leader, descendant] if still_present else [leader]
+                with patch.object(guard, "process_group_members", side_effect=[
+                        [leader, descendant], refreshed]) as members, \
+                        patch.object(guard, "_proc_pid_rusage", side_effect=[
+                            123, ProcessLookupError(guard.errno.ESRCH, "exited")]):
+                    if still_present:
+                        with self.assertRaises(guard.TelemetryError):
+                            guard._group_usage(101, deadline=123.0)
+                    else:
+                        self.assertEqual(guard._group_usage(101, deadline=123.0), (123, 1))
+                self.assertEqual(members.call_count, 2)
+                for call in members.call_args_list:
+                    self.assertEqual(call.args, (101,))
+                    self.assertEqual(call.kwargs, {"deadline": 123.0})
+
     @unittest.skipUnless(sys.platform == "darwin", "macOS libproc ABI")
     def test_rusage_v2_ctypes_layout_matches_native_footprint_field(self):
         self.assertEqual(guard._RUsageInfoV2.ri_phys_footprint.offset, 72)
