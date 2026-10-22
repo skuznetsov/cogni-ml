@@ -8,13 +8,22 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Current bounded continuation (2026-10-22): the opt-in rounded-codebook tiled
+Current bounded continuation (2026-10-22): the deep Quad audit separates
+packed-model memory admission from custom-GEMM throughput. A source-bound,
+paired predecoded-weight control gives 0.905788 s dense versus 0.057411 s
+direct MPS (15.78x), with all 61,931,520 outputs bit-exact to the saved
+same-format upstream oracle. Neither compute kernel changed. Prioritize a
+packed-weight consumer using one shared F32 stage and existing MPS; custom
+GEMM scheduling is a separate research route. See the final audit and results.
+
+The opt-in rounded-codebook tiled
 GEMM preserves same-format upstream projection results, including all
 61,931,520 outputs of the selected 4480-row arm. It is rejected for speed:
 3.519166 s median GPU time versus 0.060227 s for decode -> MPS -> bias, a
-58.43x slowdown. The same small-tile dense GEMM takes 0.905182 s in one
-diagnostic sample. First pair the dense control against direct MPS, improve
-tiling/reuse if confirmed, then retest codebook and correction overhead.
+58.43x slowdown. The fresh predecoded control confirms a large gap in the
+custom dense schedule even without decode. Decoder-only micro-optimization
+cannot make that unchanged schedule competitive; this does not reject all
+fused layouts, which can change reuse and data movement together.
 Positional records still provide 4.5202 logical bits per
 weight at the loosest tested policy; same-format parity does not remove the
 previously measured quantization loss against BF16. No packed full-model or
@@ -5277,7 +5286,224 @@ sample ordering, status words and guard telemetry:
   --build v2 --parity v2 --timing v2 --output summary-refresh-UNIQUE.json
 ```
 
+This command belongs to the historical probe hash above. The later opt-in
+`dense-timing` addition changes that pinned probe, so the old live-source
+refresh now rejects it as stale. Preserve its receipts as historical evidence;
+use the final dense-control verifier for the current probe bytes.
+
 Correlated Mini-Quad verdict is ROBUST for same-format parity and this measured
 complete-path regression, VULNERABLE for other timing arms, real activations,
 cycle attribution, resident-model admission and video quality. Refresh after
 relevant source, layout, LUT, weight, input, shape or backend changes.
+
+### Quantized GEMM introspection and compute-isolation contract (2026-10-22)
+
+This audit revisits the execution boundary before another kernel rewrite. The
+three reviewers inspected separate geometry/reuse, representation/exactness,
+and benchmark/model-integration surfaces. Their reviews share a model lineage;
+source inspection, arithmetic and executed checks carry the evidence, not
+agreement. Mini-Quad remains required at each material transition: make a
+prediction, challenge it, run the smallest discriminator, then attack its scope.
+
+**The capacity problem does not require a fused GEMM first.**
+[`WanS2VMPSLinearStage`](../src/ml/video/metal_linear_mps.cr) already shares one
+F32 expansion stage across 15 fixed block/audio plans. Its largest matrix at
+the current dimensions occupies 283,115,520 bytes (270 MiB), independent of
+the number of layers. Packed weights could replace the resident BF16 weight
+pool while each projection decodes into this stage and uses MPS. This remains
+a proposed model integration: `WanT5.mps_projection` currently always expands
+a separate F32/BF16 source and rejects source/stage aliasing. It needs a
+validated preexpanded entry point, packed loading and per-binding identity;
+the current helper is not already a packed-model mode. Preserve serial stage
+ownership, ordered GPU decode/use, failure propagation and completion lifetime.
+Count all packed bindings, metadata, protected tensors, scratch, T5 and opaque
+MPS allocations before model admission. A 270 MiB stage is not a reason to
+retain the entire original BF16 pool as well, once the lossy packed model has
+its own quality admission. Keep the original-weight exact control as a
+separate run rather than silently treating same-format parity as that gate.
+
+**The small fused tile repeats work that a large GEMM should amortize.**
+At M=4480, N=13824, K=5120, the 16x8 output mapping launches
+`(4480/16)*(13824/8) = 483840` threadgroups. Each traverses 640 K8 fragments,
+with two F32 matrix-MACs per fragment. It reconstructs
+`280*70778880 = 19818086400` B values and logically requests 158.54 GB of
+F32 activation loads across output tiles. These are source-level operations,
+not DRAM measurements. Cache/compiler effects and the four repeated input
+rows matter. Current record validation, code extraction and sparse correction
+lookup repeat per row tile. The measured .50/mode0 arm has only p4 records,
+459,430 corrections among 70,778,880 weights (0.65% density). It invokes a
+correction search per decoded coefficient; empty lists require no binary-search
+loop comparisons. Rounded codebook expansion is amortized per canonical
+256-value group within each threadgroup, then repeated across the 280 row
+tiles; it is not a fresh multiply/add per weight. Counts do not establish
+which instructions dominate GPU time.
+
+The projection performs 634,178,764,800 counted FLOPs. The idealized F32
+operand/output footprint is 622,592,000 bytes, giving about 1018.61 FLOPs/byte
+if each operand were transferred once. This is a reuse opportunity, not
+achieved arithmetic intensity or proof of a compute bottleneck. The measured
+complete-path effective rates are about 0.18 TFLOP/s fused and 10.53 TFLOP/s
+decode/MPS; the one-shot dense diagnostic is about 0.70 TFLOP/s. A cache or
+barrier hypothesis still needs a discriminating measurement.
+
+**Archive layout and execution layout need not be identical.**
+The current positional packer copies canonical p4/p5 bitplanes unchanged.
+A GPU execution layout that is lossless relative to the selected QBit decoder
+outputs could block outputs in K-major order, reduce bit extraction and make
+eight-output fragments contiguous. Account for conversion,
+offsets, corrections, raw records, and any simultaneous archive copy. Larger
+row/output tiles and K32 staging can preserve ascending F32 K8 accumulations;
+they are candidates, not established speedups. Existing larger GGUF kernels
+provide scheduling examples but use half operands/rounding, so do not satisfy
+this numerical contract unchanged. A temporary shared correction index is a
+latency/occupancy trade; a persistent dense map also consumes model memory.
+Their merits cannot be decided from correction density alone.
+
+[`FLUTE`](https://arxiv.org/html/2407.10960v2) offers relevant mechanisms:
+offline weight reordering and vectorized/duplicated lookup tables. Its cited
+2-4x kernel gains target batches below 32, not M=4480; its FP16 global partial
+reduction is not admitted by our F32 contract. Borrow layout ideas and measure
+them on Metal rather than importing CUDA performance claims. Mean/scale
+factoring and direct bitplane arithmetic still have the previously recorded
+nonlinear-LUT and F32 reassociation falsifiers.
+
+**Validation can be amortized only with enforceable weight ownership.**
+A raw mutable `MetalBuffer` plus a status word does not certify future uses.
+A prepared handle would need to bind blob, offsets, LUTs, geometry, layout and
+generation, prevent mutation/alias reuse through completion, and order
+validation/use on the same command chain. Consumers must retain fail-closed
+certificate/status checks. Without that boundary, keep extent/header/padding,
+finite-value and sorted-unique-correction validation. This is a possible
+future design, not a license to remove the current checks.
+
+**Kernel parity, weight selection and video quality have different probes.**
+For weight error E and activation matrix X, linear output error is `X*E^T`
+and its squared Frobenius norm is `tr(E*(X^T*X)*E^T)`. Repeating four rows
+1120 times leaves X's rank at most four; it multiplies the same calibration
+Gram matrix rather than adding activation coverage. The current ~6.95%
+relative L2 error versus original BF16 therefore cannot qualify a denoising
+trajectory. Real early/middle/late-step and CFG-branch activations should guide
+precision/corrections after memory admission; keep strict same-format
+implementation parity separate. The earlier Q4_K result had lower projection
+error at a smaller size than QBit p5 on these inputs, so compare it at matched
+complete storage/runtime budgets rather than privileging the more elaborate
+codec. No quality ranking beyond these inputs follows.
+
+The return frontier remains 8/12/16 versus 40 diffusion steps after safe model
+admission. Step reduction changes the algorithm and does not reduce resident
+weight memory. Conversely, weight compression alone does not remove long-key
+self-attention or denoising calls. N=36608 whole-block measurements and this
+M=4480 single-projection experiment must not be combined into a video ETA.
+
+**Next discriminator, before changing either compute kernel:** run the new opt-in
+`dense-timing` mode in the existing probe. Decode the selected arm once outside
+timing; compare dense F32 and direct MPS with identical resident F32 weights,
+input, bias, status overhead and command boundaries. Warm both orders and use
+four ABBA/BAAB pairs. Qualify full outputs against the pinned upstream oracle
+before and after timing, including +1/NaN comparator controls. Each timed arm
+retains one terminal completion, zero inter-operator waits/readbacks and zero
+tracked encode-buffer allocations. Use a 4 GiB owned-group limit, 15%
+cache-aware reserve/floor, 64 MiB swap-growth stop and 300 s runtime deadline;
+scratch/build/evidence stay on the external SSD. No full model or generation.
+Rollback is omission of the new opt-in mode; production defaults are untouched.
+DoD is a source/binary/fixture-bound independent CPU verifier accepting all
+numerical, order, timing and guard records. Reject missing records and finite
+or NaN corruptions. If dense remains much slower, retain MPS as the practical
+consumer and investigate custom F32 scheduling separately; if competitive,
+isolate packed decode cost. Neither outcome alone authorizes a model-quality
+or whole-video acceleration claim.
+
+### Predecoded dense versus direct MPS: paired result (2026-10-22)
+
+The guarded release build-v2 and dense-timing-v2 pass the contract above.
+Both routes consume the same retained F32 stage, F32 input and bias. Decode,
+full-output comparisons and MPS-plan creation occur outside the timed arms.
+Direct MPS borrows the live Metal command buffer/encoder; the bridge does not
+submit or wait internally. Each route retains its existing one terminal wait.
+The dense route keeps the current 16x8 output tile, K8 accumulation and 70
+dispatch segments; this experiment changes neither compute kernel.
+
+| Median, four measured samples per route | Dense F32 | Direct MPS |
+| --- | ---: | ---: |
+| GPU interval | 905.788 ms | 57.411 ms |
+| CPU encoding | 0.043 ms | 0.065 ms |
+| Wall interval including terminal completion | 906.168 ms | 58.560 ms |
+| Counted projection FLOPs / GPU interval | 0.700 TFLOP/s | 11.046 TFLOP/s |
+
+The ratio of GPU medians is 15.7774x. All four adjacent counterbalanced pairs
+favor MPS: dense/MPS ratios 15.4588, 15.6339, 16.2140 and 15.9186.
+ABBA and BAAB strata give ratios of medians 15.5461x and 16.0663x;
+the direction survives both orders, without establishing host-independent
+latency. Eight warmup invocations precede these eight measured invocations.
+No profiler is active. Encoding is tens of microseconds here and does not
+explain the roughly 848 ms GPU-interval gap. The GPU interval covers the whole
+command; it does not attribute cycles to individual instructions.
+
+Before timing, all 70,778,880 decoded weights and all 61,931,520 outputs per
+route match their saved same-format upstream oracles bit-for-bit. After
+timing, dense/upstream, MPS/upstream and dense/MPS comparisons again have zero
+bit differences, nonfinite values or tolerance violations. The unchanged
+finite `2e-5 + 2e-5*abs(reference)` gate and GPU +1/NaN comparator controls
+pass. Synthetic raw/p4/p5, both correction modes, tails and malformed-record
+controls also pass. Tracked encode-time Metal-buffer allocations,
+inter-operator host waits and activation readbacks are zero. Status/metrics
+are read only after terminal completion, outside the measured encode path.
+
+The runtime guard records 28 samples, a 1.274 GiB process-group peak,
+19.977 GiB minimum cache-aware headroom, minimum pressure-free reading 76%,
+zero swap growth and zero owned processes remaining. The 4 GiB group cap,
+15% reserve/floor, 64 MiB swap-growth stop and 300 s deadline are retained;
+build uses a 240 s deadline. Sampled guards cannot exclude between-sample
+spikes. All scratch, binaries and receipts are external. No full model, block,
+Studio or generation was launched.
+
+Evidence is external under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-dense-control-20261022/`:
+
+- `summary-v2.json`, SHA256
+  `992ac74212e16c8da5f26043a0aad096e4f865264b3540d7fceb370092f11735`;
+- binary SHA256
+  `ea77ef8ab576fb1865d4fb9ab5086ddd91d74e785c85cf1f48886ff046a4fdff`;
+- native probe SHA256
+  `ef0ecc9d561db918453811853df89b3c10322e0f41e565f2a49031839bff3508`;
+- independent CPU verifier SHA256
+  `8677d35cc3bc5b9b5e369a62db3225041ed931831da9af34fe81b43e73fd5d10`.
+
+V1 numerical records passed, but its receipt verifier rejected a fixture file
+shared by several declared arms. The verifier also needed to recognize the
+external-SSD symlink for the executable path. Preserve the rejected V1
+receipt/verifier; V2 pins the corrected verifier before a fresh build/run.
+Only declared shared roles and the canonical executable alias are admitted;
+other command arguments, binary digests and fixture claims remain exact.
+Ten CPU negative controls reject nonfinite metrics, over-counts, missing
+records, failed parity, absent +1/NaN detection, altered arguments/digests and
+unclaimed shared roles. This repairs provenance checks without weakening
+numerical or resource gates. CPU-only refresh (choose a new output basename):
+
+```sh
+TMPDIR=/opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-qbit-dense-control-20261022 \
+  /opt/homebrew/opt/python@3.11/bin/python3.11 -B \
+  /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-qbit-dense-control-20261022/verify.py \
+  --version v2 --output summary-refresh-UNIQUE.json
+```
+
+Correlated Mini-Quad verdict: ROBUST for the scoped paired observation and
+same-format numerical parity. The tested dense schedule is slow even after
+decode is removed; it needs better reuse/scheduling before decoder-only work
+can make this route competitive. This does not assign cycles to barriers,
+loads or codebooks, nor prove a lower bound for a redesigned fused layout.
+The strongest falsifier is a provenance-clean matched rerun that materially
+collapses this gap. Four repeated seeded rows remain a throughput fixture,
+not trajectory-quality coverage.
+
+Next bounded move: introduce and test a validated preexpanded MPS entry point
+on one packed projection, including decode, serial stage reuse, binding
+identity and failure propagation. Keep the existing helper/control unchanged.
+Only after that passes should a separate memory plan count complete packed
+storage, protected tensors, T5, shared scratch and opaque MPS resources for
+model admission. Custom lossless execution repacking/larger F32 tiles remain
+separate candidates. Reduced-step 8/12/16 versus 40 video is still the return
+frontier after memory and trajectory-quality admission. Refresh numerical
+evidence after source, layout, LUT, weights, inputs, geometry or backend
+changes; refresh paired timing on the current host. No model-quality,
+deployed-memory or whole-video speed claim follows from this projection.

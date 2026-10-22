@@ -326,6 +326,10 @@ private def cg_timed(kind : String, zero : ML::Metal::ComputePipeline,
     cg_mps(e, plan, control, bias, rows)
   when "dense_tiled_gemm"
     cg_dense(e, x, stage, bias, fused, rows)
+  when "dense_f32_predecoded"
+    cg_dense(e, x, stage, bias, fused, rows)
+  when "direct_mps_predecoded"
+    cg_mps(e, plan, control, bias, rows)
   else
     raise "Unknown timing route #{kind}"
   end
@@ -433,12 +437,15 @@ selected_arm = "positional_tile1024_t050_mode0"
 OptionParser.parse do |parser|
   parser.on("--fixture=DIR", "Pinned source fixture") { |value| fixture_dir = value }
   parser.on("--positional-fixture=DIR", "Pinned positional reference") { |value| reference_dir = value }
-  parser.on("--mode=MODE", "parity or timing") { |value| mode = value }
+  parser.on("--mode=MODE", "parity, timing, or dense-timing") { |value| mode = value }
   parser.on("--arm=NAME", "One pinned tile1024 arm for full-shape timing") { |value| selected_arm = value }
 end
-raise "Unknown probe mode" unless {"parity", "timing"}.includes?(mode)
+raise "Unknown probe mode" unless {"parity", "timing", "dense-timing"}.includes?(mode)
 raise "Unknown timing arm" unless DOT_ARM_NAMES.includes?(selected_arm)
-rows = mode == "timing" ? 4480 : DOT_ROWS
+if mode == "dense-timing"
+  raise "Dense timing requires the pinned t050 mode0 arm" unless selected_arm == "positional_tile1024_t050_mode0"
+end
+rows = mode == "timing" || mode == "dense-timing" ? 4480 : DOT_ROWS
 
 fixture_manifest_path = File.join(fixture_dir, "manifest.json")
 reference_manifest_path = File.join(reference_dir, "manifest.json")
@@ -573,7 +580,7 @@ begin
         rows_per_dispatch: 64, f32_weight_stage_bytes_control_only: stage.size,
         full_model_loaded: false, generation: false}.to_json)
   STDOUT.flush
-  executing_arms = mode == "timing" ? arms.select { |arm| arm["name"].as_s == selected_arm } : arms
+  executing_arms = mode == "timing" || mode == "dense-timing" ? arms.select { |arm| arm["name"].as_s == selected_arm } : arms
   executing_arms.each do |arm|
     name = arm["name"].as_s
     dot_upload(File.join(reference_dir, arm["offsets"]["path"].as_s), offsets, offsets.size)
@@ -627,6 +634,77 @@ begin
           blob_and_offsets_bytes: arm["storage_accounting"]["blob_and_offsets_bytes"].as_i64}.to_json)
     STDOUT.flush
     raise "Numerical qualification rejected: #{name}" unless qualification_ok
+    if mode == "dense-timing"
+      # The full qualification above decodes once into `stage`; both timed
+      # routes consume that same resident F32 stage and identical input.
+      # Warm and measure ABBA/BAAB with one command and one terminal wait per route.
+      warm_order = ["dense_f32_predecoded", "direct_mps_predecoded",
+                    "direct_mps_predecoded", "dense_f32_predecoded",
+                    "direct_mps_predecoded", "dense_f32_predecoded",
+                    "dense_f32_predecoded", "direct_mps_predecoded"]
+      warm_order.each_with_index do |kind, position|
+        result = cg_timed(kind, zero, input, offsets, blob, lut4, lut5, bias, fused,
+          control, stage, status, plan.not_nil!, rows)
+        puts({schema: "wan_qbit_codebook_gemm_timing_v1", arm: name, rows: rows,
+              sample_kind: "warmup", segment: kind, position: position, measured: false,
+              predecoded_weights_retained: true, decode_inside_timed_segment: false,
+              timing: result}.to_json); STDOUT.flush
+      end
+      measured_order = ["dense_f32_predecoded", "direct_mps_predecoded",
+                        "direct_mps_predecoded", "dense_f32_predecoded",
+                        "direct_mps_predecoded", "dense_f32_predecoded",
+                        "dense_f32_predecoded", "direct_mps_predecoded"]
+      measured_order.each_with_index do |kind, position|
+        result = cg_timed(kind, zero, input, offsets, blob, lut4, lut5, bias, fused,
+          control, stage, status, plan.not_nil!, rows)
+        puts({schema: "wan_qbit_codebook_gemm_timing_v1", arm: name, rows: rows,
+              sample_kind: "paired", segment: kind, position: position, pair: position//2,
+              quartet: position//4, order: position < 4 ? "ABBA" : "BAAB", measured: true,
+              predecoded_weights_retained: true, decode_inside_timed_segment: false,
+              correctness_outside_timed_segment: true, timing: result}.to_json); STDOUT.flush
+      end
+
+      # Preserve both timed outputs, then validate each against the pinned
+      # same-format upstream result and against the other route. Re-run the
+      # comparator's +1/NaN rejection control after timing as well.
+      post = ML::Metal::CommandBuffer.new
+      e = ML::Metal::ComputeEncoder.new(post)
+      before = ML::MetalBuffer.video_spec_allocations
+      cg_zero(e, zero, status, 8); cg_zero(e, zero, metrics, 35)
+      cg_compare(e, compare, fused, oracle_output, metrics, 0, rows*DOT_DOUT, DOT_OUTPUTS)
+      cg_compare(e, compare, control, oracle_output, metrics, 1, rows*DOT_DOUT, DOT_OUTPUTS)
+      cg_compare(e, compare, fused, control, metrics, 2, rows*DOT_DOUT, rows*DOT_DOUT)
+      e.set_pipeline(seed).set_buffer(control_a, 0, ML::Metal::BufferAccess::Write)
+        .set_buffer(control_b, 1, ML::Metal::BufferAccess::Write).dispatch_1d(2)
+      cg_compare(e, compare, control_a, control_b, metrics, 3, 2, 2)
+      e.end_encoding; post.commit; post.wait
+      allocated = ML::MetalBuffer.video_spec_allocations - before
+      raise "Post-timing qualification encode allocated buffers" unless allocated == 0
+      dense_metric = cg_metric(metrics, 0)
+      mps_metric = cg_metric(metrics, 1)
+      pair_metric = cg_metric(metrics, 2)
+      positive = cg_metric(metrics, 3)
+      status_words = status.contents.as(UInt32*).to_slice(8).to_a
+      dense_ok = dense_metric[:tolerance_violations] == 0 && dense_metric[:nonfinite] == 0
+      mps_ok = mps_metric[:tolerance_violations] == 0 && mps_metric[:nonfinite] == 0
+      pair_ok = pair_metric[:tolerance_violations] == 0 && pair_metric[:nonfinite] == 0
+      comparator_ok = positive[:bit_differences] == 2 && positive[:tolerance_violations] == 2 && positive[:nonfinite] == 1
+      status_ok = status_words.all? { |word| word == 0 }
+      post_ok = dense_ok && mps_ok && pair_ok && comparator_ok && status_ok
+      puts({schema: "wan_qbit_codebook_gemm_qualification_v1", phase: "post_timing_dense_mps",
+            arm: name, rows: rows, compared_outputs: rows*DOT_DOUT,
+            dense_f32_predecoded_vs_upstream: dense_metric,
+            direct_mps_predecoded_vs_upstream: mps_metric,
+            dense_f32_vs_direct_mps: pair_metric, positive_control: positive,
+            dense_gate: dense_ok, direct_mps_gate: mps_ok, paired_gate: pair_ok,
+            comparator_control_passed: comparator_ok, status: status_words,
+            qualification_passed: post_ok, encode_metal_buffer_allocations: allocated,
+            terminal_waits: 1, inter_operator_host_waits: 0,
+            device_activation_readbacks: 0}.to_json)
+      STDOUT.flush
+      raise "Post-timing numerical qualification rejected: #{name}" unless post_ok
+      next
+    end
     next unless mode == "timing"
     # Warm both AB and BA orders; identical resident buffers and command boundary.
     warm_order = ["fused_codebook_gemm", "decode_mps_projection", "decode_mps_projection", "fused_codebook_gemm"]

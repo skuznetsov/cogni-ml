@@ -32216,10 +32216,55 @@ Refresh after source/toolchain/device/model/workload changes.
   ROBUST for these parity/regression observations, VULNERABLE for other arms,
   real activations, resident-model admission and quality. Refresh after relevant
   source, LUT, representation, weights, inputs, shape or backend changes.
-- Continuation: paired same-geometry dense-F32 tiled versus direct MPS on the
-  same predecoded weights first; improve row/output reuse if that split confirms
-  the baseline gap, then retest local decode/correction staging. The fixture
+- Historical continuation, completed and superseded by the following entry:
+  paired same-geometry dense-F32 tiled versus direct MPS on the same predecoded
+  weights. The result changes priority to the staged MPS consumer. The fixture
   repeats four seeded rows rather than real denoising activations. Reduced-step
   video remains the return frontier after packed-model admission and trajectory
   checks. GPU-only compute, no new in-chain waits, unchanged gates, SSD scratch;
   no full model, block, Studio or generation was launched or authorized here.
+
+## Wan quantized GEMM introspection and dense control (2026-10-22)
+
+- Deep Quad inspected geometry/reuse, representation/exactness and benchmark
+  boundaries before another rewrite. Main missed separation: packed-model
+  capacity can use the existing shared 270 MiB F32 MPS stage; it does not
+  require a competitive fused GEMM first. Packed loading and a validated
+  preexpanded entry point are still proposed, with serial stage ownership,
+  binding identity, fail-closed status and completion lifetime required.
+- New opt-in `dense-timing` predecodes once and pairs unchanged dense F32 and
+  direct MPS on the same stage/input/bias. Guarded build-v2/run-v2 plus the
+  independent CPU verifier pass. Four counterbalanced ABBA/BAAB pairs give
+  median GPU 0.905788 s dense versus 0.057411 s MPS (15.7774x); every pair
+  favors MPS, ratios 15.4588-16.2140. Encoding is 43/65 microseconds.
+  This rejects decoder-only work as sufficient for the unchanged dense
+  schedule, without attributing GPU cycles or rejecting redesigned fused layouts.
+- All 70,778,880 decoded weights and all 61,931,520 projection outputs pass
+  bit-exact same-format upstream checks; full post-timing comparisons also
+  match. Synthetic raw/p4/p5, correction modes, tails/malformed records and
+  +1/NaN comparator controls pass. Zero tracked encode-buffer allocations,
+  inter-operator waits or activation readbacks; one terminal completion per
+  route. Unchanged finite `2e-5 + 2e-5*abs(reference)` gate. Repeating four
+  seeded rows adds no calibration rank; real trajectory and lossy model
+  quality remain open, including ~6.95% projection relative L2 versus BF16.
+- Runtime sampled peak 1.274 GiB, minimum cache-aware headroom 19.977 GiB,
+  minimum pressure-free 76%, zero swap growth and no owned processes left.
+  Retain 4 GiB group cap, 15% reserve/floor, 64 MiB swap stop and bounded
+  deadlines. No full model, block, Studio or generation. GPU source/kernel
+  changes are absent; the opt-in probe is the only executable repository edit.
+- Evidence: `docs/wan-performance-frontier.md`, external
+  `wan-qbit-dense-control-20261022/summary-v2.json`, SHA256
+  `992ac74212e16c8da5f26043a0aad096e4f865264b3540d7fceb370092f11735`.
+  V1 receipt rejection exposed shared fixture-role and SSD-symlink assumptions;
+  corrected verifier was pinned before fresh V2 build/run and rejects ten
+  negative controls. Old codebook receipts remain historical; their live probe
+  pin is now stale. Correlated Mini-Quad is ROBUST within this projection,
+  VULNERABLE for deployed memory, real activations, cycle attribution and video.
+- Continuation: test one packed projection through a validated preexpanded MPS
+  consumer, including decode and stage reuse, before whole-model admission.
+  Count complete packed storage, protected tensors, T5, scratch and opaque MPS
+  allocations. Custom execution layout/larger F32 tiles are separate research.
+  Return to 8/12/16 versus 40 steps after memory and trajectory-quality gates.
+  Refresh after source, representation, LUT, weights, inputs, geometry or backend
+  changes; paired timing needs a current host. All scratch stays on the external
+  SSD; preserve Mini-Quad at material transitions and no full generation.
