@@ -91,7 +91,7 @@ private BENCH_METAL = <<-METAL
   }
 METAL
 
-private record ArmResult, groups : Int32, query_chunk : Int32, order : String, warmup : Bool,
+private record ArmResult, groups : Int32, query_chunk : Int32, heads_per_group : Int32, order : String, warmup : Bool,
   host_wall_seconds : Float64, encode_host_elapsed_seconds : Float64,
   command_chain_setup_elapsed_seconds : Float64, terminal_wait_elapsed_seconds : Float64,
   monotonic_begin_seconds : Float64, monotonic_end_seconds : Float64,
@@ -248,7 +248,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   raise "Full block encode allocated MetalBuffers" unless allocations == 0
   raise "Full block arm did not use exactly one terminal wait" unless chain.wait_count == 1
   raise "Full block arm did not segment its command chain" unless chain.segment_count > 0
-  result = ArmResult.new(groups, attention.chunk_rows, order, warmup, wall_seconds, encode_seconds,
+  result = ArmResult.new(groups, attention.chunk_rows, attention.heads_per_group, order, warmup, wall_seconds, encode_seconds,
     (encode_started - wall_started).total_seconds, wait_seconds,
     monotonic_begin, monotonic_end, chain.gpu_elapsed_seconds, chain.segment_count,
     chain.wait_count, allocations, phase_profile, api_profile_result, trace,
@@ -311,6 +311,7 @@ weights_path = ""
 pairs = 3
 comparison_mode = "cross-segments"
 baseline_chunk_requested : Int32? = nil
+baseline_heads_requested : Int32? = nil
 candidate_chunk = 256
 candidate_heads_per_group = HEADS
 warmup_order = "AB"
@@ -325,6 +326,7 @@ OptionParser.parse do |parser|
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
   parser.on("--comparison=MODE", "cross-segments (default), self-chunks, head-groups, kv-layout, attention-graph, kv-prep-control, kv-prep-fusion, rope, or profile-replay") { |value| comparison_mode = value }
   parser.on("--baseline-self-chunk=N", "head-groups only: baseline query rows 128, 256, 512 or 1024; default 128") { |value| baseline_chunk_requested = value.to_i }
+  parser.on("--baseline-heads-per-group=N", "head-groups only: baseline positive divisor of 40; default 40") { |value| baseline_heads_requested = value.to_i }
   parser.on("--candidate-self-chunk=N", "Candidate query rows: 128, 256, 512 or 1024; K/V, attention-graph, rope and profile-replay modes require 128") { |value| candidate_chunk = value.to_i }
   parser.on("--candidate-heads-per-group=N", "head-groups only: positive divisor of 40; 40 is the all-head chunk control") { |value| candidate_heads_per_group = value.to_i }
   parser.on("--pairs=N", "Measured pairs after warmup; K/V control/fusion and head-groups accept balanced 4") { |value| pairs = value.to_i }
@@ -350,6 +352,12 @@ compare_head_groups = comparison_mode == "head-groups"
 if requested_chunk = baseline_chunk_requested
   raise ArgumentError.new("--baseline-self-chunk requires --comparison=head-groups") unless compare_head_groups
   raise ArgumentError.new("--baseline-self-chunk must be 128, 256, 512 or 1024") unless {128, 256, 512, 1024}.includes?(requested_chunk)
+end
+baseline_heads_per_group = HEADS
+if requested_heads = baseline_heads_requested
+  raise ArgumentError.new("--baseline-heads-per-group requires --comparison=head-groups") unless compare_head_groups
+  raise ArgumentError.new("--baseline-heads-per-group must be a positive divisor of 40") unless requested_heads > 0 && HEADS % requested_heads == 0
+  baseline_heads_per_group = requested_heads
 end
 raise ArgumentError.new("--candidate-heads-per-group must be a positive divisor of 40") unless candidate_heads_per_group > 0 && HEADS % candidate_heads_per_group == 0
 raise ArgumentError.new("Head grouping requires --comparison=head-groups") if !compare_head_groups && candidate_heads_per_group != HEADS
@@ -384,6 +392,7 @@ require_exact = !(compare_self_chunks || compare_head_groups || compare_kv_layou
 candidate_groups = (compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
 baseline_chunk = (compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
 baseline_chunk = baseline_chunk_requested.not_nil! if compare_head_groups && baseline_chunk_requested
+baseline_chunk_values = baseline_chunk * baseline_heads_per_group * HEAD_DIM
 candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : ((compare_self_chunks || compare_head_groups) ? candidate_chunk : BASELINE_CHUNK_Q)
 candidate_chunk_values = candidate_chunk * candidate_heads_per_group * HEAD_DIM
 weights_path = File.expand_path(weights_path)
@@ -424,7 +433,7 @@ begin
   block_scratch_bytes_saved = default_block_scratch_bytes - block_scratch_bytes
   tiny_audio_scratch_bytes = ML::Video::WanS2VAudioInjector.scratch_bytes(audio_cfg)
   projection_stage_bytes = ML::Video::WanS2VMPSLinearStage.required_weight_count(DIM, FFN).to_i64 * sizeof(Float32)
-  attention_workspace_bytes = 3_i64 * baseline_chunk * DIM * sizeof(Float32)
+  attention_workspace_bytes = 3_i64 * baseline_chunk_values * sizeof(Float32)
   attention_workspace_bytes += 3_i64 * candidate_chunk_values * sizeof(Float32) if compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
   prepared_kv_bytes = prepared_kv_for_candidate ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
   attention_workspace_bytes += prepared_kv_bytes
@@ -474,7 +483,7 @@ begin
         rope_coefficients_built_per_candidate_encode: compare_rope,
         baseline_query_chunk: baseline_chunk,
         candidate_query_chunk: candidate_chunk,
-        baseline_heads_per_group: HEADS, candidate_heads_per_group: candidate_heads_per_group,
+        baseline_heads_per_group: baseline_heads_per_group, candidate_heads_per_group: candidate_heads_per_group,
         candidate_head_group_count: HEADS // candidate_heads_per_group,
         candidate_distinct_attention_executables: 1,
         baseline_kv_layout: prepared_kv_for_both_arms ? "B,H,K,D" : "B,K,H,D",
@@ -520,9 +529,9 @@ begin
   projection_workspace = ML::Video::WanS2VMPSLinearWorkspace.new(
     plan_cfg, audio_cfg, scratch.not_nil!, audio_scratch.not_nil!, context,
     local_audio, projection_stage.not_nil!)
-  chunk_q = scratch.not_nil!.alloc("chunk_q", baseline_chunk * DIM)
-  chunk_a = scratch.not_nil!.alloc("chunk_a", baseline_chunk * DIM)
-  chunk_b = scratch.not_nil!.alloc("chunk_b", baseline_chunk * DIM)
+  chunk_q = scratch.not_nil!.alloc("chunk_q", baseline_chunk_values)
+  chunk_a = scratch.not_nil!.alloc("chunk_a", baseline_chunk_values)
+  chunk_b = scratch.not_nil!.alloc("chunk_b", baseline_chunk_values)
   # Keep attention-owned destinations outside the block scratch resources
   # checked by fused preparation. Both arms retain and refresh this same pair.
   candidate_prepared_k = prepared_kv_for_candidate ? inputs.not_nil!.alloc("shared_prepared_k_bhkd", FULL_VALUES.to_i32) : nil
@@ -533,7 +542,8 @@ begin
     scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
     chunk_q, chunk_a, chunk_b,
     prepared_kv_for_both_arms ? candidate_prepared_k : nil,
-    prepared_kv_for_both_arms ? candidate_prepared_v : nil)
+    prepared_kv_for_both_arms ? candidate_prepared_v : nil,
+    heads_per_group: baseline_heads_per_group)
   if compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
     candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
       1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
@@ -647,8 +657,8 @@ begin
     arm_uses_explicit_qk_softmax_pv = compare_attention_graph && arm.order == "B"
     arm_uses_fused_kv_preparation = compare_kv_prep_fusion && arm.order == "B"
     puts({schema: "wan_s2v_full_block_arm_v1", groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
-          heads_per_group: arm.order == "A" ? HEADS : candidate_heads_per_group,
-          head_group_count: arm.order == "A" ? 1 : HEADS // candidate_heads_per_group,
+          heads_per_group: arm.heads_per_group,
+          head_group_count: HEADS // arm.heads_per_group,
           distinct_attention_executables: (arm.order == "A" ? attention_workspace.not_nil! : candidate_attention).distinct_executable_count,
           order: arm.order, warmup: arm.warmup, host_wall_seconds: arm.host_wall_seconds,
           encode_cpu_seconds: arm.encode_host_elapsed_seconds,
@@ -723,8 +733,8 @@ begin
       arm_uses_fused_kv_preparation = compare_kv_prep_fusion && !baseline
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
             groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
-            heads_per_group: baseline ? HEADS : candidate_heads_per_group,
-            head_group_count: baseline ? 1 : HEADS // candidate_heads_per_group,
+            heads_per_group: arm.heads_per_group,
+            head_group_count: HEADS // arm.heads_per_group,
             distinct_attention_executables: (baseline ? attention_workspace.not_nil! : candidate_attention).distinct_executable_count,
             order: arm.order, warmup: false,
             host_wall_seconds: arm.host_wall_seconds,

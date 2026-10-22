@@ -8,6 +8,11 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
+Latest bounded result: fixed-G4 C128/C1024 pairs with opposite warmups favor
+C128 in both process means, but substantial timing drift prevents a stable
+speedup claim. The next discriminator is an identical-arm drift control; see
+the fixed-G4 query-chunk comparison below. Full generation remains stopped.
+
 ## What the existing evidence permits
 
 [The attention comparison](wan-self-attention-benchmark.md) is committed at
@@ -3616,3 +3621,113 @@ order, queue/resource, collector/guard changes or artifact loss. A later
 documentation commit is admissible only while the pinned parent remains an
 ancestor and every scoped byte still matches. Sampling and retained-fixture
 limitations above remain part of the certificate.
+
+### Fixed-G4 query-chunk comparison (2026-10-22)
+
+Run contract: compare A=G4/C128 with B=G4/C1024 inside each complete-block
+process, first with AB warmup, then BA in a fresh sequential process. Each
+process retains four measured AB/BA/BA/AB pairs. The previous benchmark fixes
+baseline heads at 40; add a head-groups-only baseline override, size its Q/A/B
+tiles for the actual head group, and report actual geometry. Defaults stay
+G40/C128, and GPU kernels, F32 operator math and synchronization stay unchanged.
+Rollback removes only this benchmark selection change and its documentation.
+
+The candidate hypothesis is lower complete-block latency at C128 with G4 fixed;
+the prior cross-process absolute times are only motivation. A reversal with
+opposite warmup, no repeatable paired direction, or strict numerical failure
+rejects the corresponding performance claim. The measured value includes K/V
+preparation, projections, attention, FFN and residual on real block-0 BF16
+weights with synthetic GPU inputs, not video-generation quality or throughput.
+
+DoD: capture old-binary rejection; validate both warmup plans, independent
+baseline/candidate geometry, unchanged default, invalid head divisors and use
+outside head-groups mode before GPU setup. Recheck G4/C128 and G4/C1024 against
+retained upstream fixtures at short/full-K shapes, including changed-K/V replay
+and finite +1/NaN rejection. Both guarded full-block processes must finish with
+finite 2e-5+2e-5*abs(reference) over every output value, one existing terminal
+wait per arm, zero inter-operator waits/readbacks/tracked encode MetalBuffer
+allocations, and no diagnostics in timed arms. Bind pair IDs to monotonic
+chronology and challenge geometry/order/numerical-summary validation.
+
+Keep 12 GiB/600 s per full block process, 5 GiB/120 s per full-K probe, cache-aware
+15% reserve, one-second ps timeout and 64 MiB swap-growth limit. Speculative
+pages count once in free plus file-backed headroom. Below-budget startup or any
+runtime guard failure stops the stage; retain incomplete attempts and exclude
+their timings. No full model, Studio, generation, lower precision, new GPU
+synchronization or production-default promotion. Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-chunk-pairs-20261022/`.
+
+Results at parent `792ae4ea`, with the scoped benchmark source SHA256
+`80b9aab09d78d5f86bcacc408f9b21adf6ea3ace3994672cf16baf2c64eab918`:
+
+| Warmup | G4/C128 geometric full-block seconds | G4/C1024 geometric full-block seconds | Observed C128 latency reduction |
+| --- | ---: | ---: | ---: |
+| AB | 12.028588 | 12.535343 | 4.0426% |
+| BA | 22.458574 | 27.382974 | 17.9834% |
+
+For each pair, the contrast is `log(T_C1024/T_C128)`. Average within each
+process, then give the two process means equal weight: theta is
+`0.11975747119096586`, giving an observed 11.2864% latency reduction at C128.
+Five of eight pairs favor C128; individual reductions range from -2.1713% to
+29.3191%. Measured arm times drift from 10.7537 to 32.5024 s. Both process means
+favor C128, but this is not a stable speedup estimate, proof of a warmup-order
+effect, or eight independent host replications. Retain C128 as the next
+experimental baseline; defaults remain unchanged. An identical-arm control is
+the next discriminator for host/queue drift before promoting a stable chunk
+winner. C1024 includes a final 768-row query tail padded to 1024; its cost is
+part of the full-block treatment, not an isolated head-group or kernel effect.
+
+All ten complete-output comparisons pass the unchanged finite
+`2e-5+2e-5*abs(reference)` check over 187,432,960 values each. They are not
+bit-exact: maximum absolute error is 2.4795532e-5, normalized error 0.7017164.
+Both retained-upstream short native checks pass 20 examples and trace 24
+checkpoints. Both full-K probes compare Q8192/K36608/H40/D128 with retained
+upstream outputs; candidate maximum errors are 1.1399388e-6 at C128 and
+1.1473894e-6 at C1024. Changed-K/V replay, reuse of the original workspaces and
+finite +1/NaN rejection pass. No fresh upstream runtime or full-spatial
+upstream-block qualification follows from these fixtures.
+
+The 20 timed arms retain one existing terminal wait each and zero
+inter-operator waits, activation readbacks or tracked encode MetalBuffer
+allocations. K/V preparation stays inside every arm. The two query workspaces
+occupy 7,077,888 bytes together: 786,432 for C128 and 6,291,456 for C1024. Both
+stay resident, so this experiment does not compare process peak memory between
+chunks. All full-block guards finish normally: sampled peak footprint
+10.526399 GiB, minimum cache-aware reserve 24.9160%, zero swap growth. The
+12 GiB/600 s process budget and 15% reserve are unchanged; file-backed
+headroom remains an estimate, and sampling does not bound between-poll spikes.
+
+The first release build failed on nullable baseline-head inference; the typed
+assignment fixed it before any measured GPU stage. Its failed receipt is
+retained and excluded. Selection checks pass five valid plans and five invalid
+configurations; default plan output is byte-identical to the previous binary.
+`root-paired-analysis-v1.json` independently derives the contrasts directly
+from raw arm records. Stage argv, build/fixture/guard pins and all raw receipts
+remain under the evidence root above.
+
+Correlated MiniQuad is ROBUST for scoped source/receipt/chronology/numerical
+integrity, VULNERABLE for a stable or causal speedup claim. Positive AB/BA
+fixtures pass; all six CPU mutations reject: wrong grouping, wrong chunk,
+cross-pair relabel/reorder, same-ID raw-arm reorder, strict-pass normalized
+error above one and mismatched stage argv. The final canonical Python 3.11
+report is `verify-g4-chunk-pairs-v5.report.json`, SHA256
+`c74a086768f13cd06c7a8298e27d0a14546cb4a8c89fb0171211468fa9791aa2`.
+The controls-v5 report has SHA256
+`d467868efe03ae37ed8727f067769536d3e17dcab366b76e858bc0076d8ee853`.
+Earlier verifier schema/interpreter mismatches and their superseded reports
+remain retained and excluded from the final certificate.
+
+CPU-only refresh rechecks the scoped source ancestry/bytes, build/fixture/guard
+pins, selection, chronology, numerical receipts and adversarial controls;
+choose a fresh output path because reports are exclusive:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-chunk-pairs-20261022/verify-g4-chunk-pairs-v1.py /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/g4-chunk-pairs-20261022/verify-g4-chunk-pairs-refresh-UNIQUE.report.json
+```
+
+Refresh after scoped source/build/fixture, OS/SDK/driver/device, dtype/shape,
+order, queue/resource, collector/guard changes or artifact loss. A subsequent
+documentation commit is admissible while the pinned parent stays an ancestor
+and all scoped bytes match. This refresh authenticates existing results; a new
+performance environment needs fresh paired measurements. Sampling, synthetic
+inputs and retained upstream fixtures remain part of the evidence boundary.

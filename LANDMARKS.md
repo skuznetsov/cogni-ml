@@ -31860,3 +31860,44 @@ Refresh after source/toolchain/device/model/workload changes.
   stay unchanged. Refresh on scoped source/build/fixture, OS/SDK/driver/device,
   dtype/shape/order, queue/resources, collector/guard changes or artifact loss.
   Rollback removes only the benchmark option and its documentation.
+
+### [LM-WAN-G4-CHUNK-PAIRS-2026-10-22] Fixed-G4 chunks pass strict checks; timing effect remains variable
+
+- At parent `792ae4ea`, add opt-in `--baseline-heads-per-group` to the
+  head-groups benchmark, size baseline Q/A/B tiles for the selected group and
+  report actual workspace geometry. Defaults remain G40/C128. Five valid new
+  plans and five invalid configurations pass selection/rejection checks; the
+  default plan is byte-identical to the previous binary. GPU math and
+  synchronization are unchanged.
+- Two fresh sequential full block-0 processes compare A=G4/C128 and B=G4/C1024
+  inside each process, warmups AB then BA, four measured AB/BA/BA/AB pairs each.
+  Real BF16 weights, F32 math, synthetic GPU inputs, N36608/H40/D128 and timed
+  K/V preparation stay fixed. Geometric full-block times are 12.028588/12.535343
+  s (AB) and 22.458574/27.382974 s (BA): observed C128 reductions 4.0426% and
+  17.9834%. Equal-weight process log contrast gives 11.2864%, but only 5/8 pairs
+  favor C128, range -2.1713% to 29.3191%, with 10.7537-32.5024 s timing drift.
+  This does not establish a stable speedup or a causal warmup effect.
+- All ten complete-output comparisons pass unchanged finite
+  2e-5+2e-5*abs(reference) over 187,432,960 values each; max absolute error
+  2.4795532e-5, normalized 0.7017164. Two native short retained-upstream cases
+  pass 20 examples/24 checkpoints each; both full-K/Q8192 probes pass, including
+  changed-K/V reuse and finite +1/NaN controls. No fresh/full-spatial upstream
+  block or generation-quality qualification follows.
+- All 20 arms retain one existing terminal wait and zero inter-operator waits,
+  activation readbacks or tracked encode MetalBuffer allocations. Both guarded
+  processes finish normally with 12 GiB/600 s limits and a 15% cache-aware
+  floor: sampled peak 10.526399 GiB, minimum reserve 24.9160%, zero swap growth,
+  690 successful ps queries, no live owned process at exit. File cache is an
+  estimate and sampling does not bound between-poll spikes. No full model,
+  Studio or generation runs.
+- Evidence/refresh command: `docs/wan-performance-frontier.md`, external
+  `wan-self-attention/g4-chunk-pairs-20261022/`. Final v5 report SHA256
+  `c74a086768f13cd06c7a8298e27d0a14546cb4a8c89fb0171211468fa9791aa2`;
+  root independently reproduces the contrasts. Correlated MiniQuad is ROBUST
+  for scoped source/receipt/chronology/numerical integrity; all six CPU attacks
+  reject. A stable/causal performance claim remains VULNERABLE. Next signal:
+  identical-arm drift control before promoting a stable chunk winner; retain
+  C128 as experimental baseline, keep defaults unchanged. Refresh on scoped
+  source/build/fixture, OS/SDK/driver/device, dtype/shape/order, queue/resources,
+  collector/guard changes or artifact loss. Rollback removes only this
+  benchmark selection change and its documentation.
