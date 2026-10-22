@@ -3189,3 +3189,169 @@ sample cannot attribute individual calls in the unsampled run, and the
 recomputation within the same agent lineage agrees with the raw counts; it
 is not an independent runtime replication. Crystal formatting and
 `git diff --check` pass for the final implementation.
+
+## Independent-head locality experiment (2026-10-21)
+
+Status: HYPOTHESIS, opt-in only. Measurement parent is `b9002577`.
+The current full-key F32 MPS path handles all 40 heads per query chunk of
+128 rows. Its prepared K/V pair is 1,499,463,680 bytes; one head's pair is
+37,486,592 bytes. The previous continuation probe found queue admission
+backpressure during outstanding GPU work, but did not establish a faster
+attention implementation.
+
+The candidate partitions independent heads into groups, binds contiguous
+BHTD K/V views by buffer offset at setup, and traverses query chunks within
+each group. GPU kernels gather Q into contiguous group scratch, zero padded
+query rows, and scatter context into the original BQHD output. No keys are
+omitted; F32 storage, scale, full-key SDPA and downstream block math remain.
+Smaller K/V working sets might improve locality. This is an inferred
+opportunity, not a measured cache or bandwidth claim. Extra graph calls,
+gather/scatter traffic, reduced occupancy and hidden workspace are opposing
+costs. A different graph shape can also change F32 rounding.
+
+This is a CAUTION performance experiment. Defaults remain unchanged.
+The admissible corridor is B=1, positive group size dividing the head count,
+prepared head-major K/V, prebound aliasing offset views and setup-only plans.
+All groups share one compiled executable; only K/V views and feed bindings
+are distinct. Graph compilation is not repeated per group.
+Reject unsupported shapes, explicit QK-softmax-PV grouping, overlapping or
+undersized buffers, integer overflow and nonaliasing views. Existing chain
+lifetime rules apply; release must follow the existing terminal boundary.
+There are no added events, host waits, callbacks, encode-time Metal buffers
+or activation readbacks. Rollback selects the original all-head workspace.
+
+Falsifier/DoD: first run retained real-width upstream block checkpoints and
+selected-query full-K native comparisons with finite tolerance
+`2e-5 + 2e-5 * abs(reference)`, qualified by finite +1 and NaN controls.
+Exercise nonzero head offsets, padded query tails and workspace replay.
+Compare group endpoints at Qchunk=1024 and an all-head same-chunk control
+against the production Qchunk=128 baseline on Q=8192, including K/V
+preparation and gather/scatter. Reject failed numerical/alias/resource gates.
+Only a surviving candidate proceeds to the real-weight full block at
+Q=K=36608, with compact scratch and balanced AB/BA/BA/AB pairs. Reverse
+warmup in a fresh process if chronological drift makes a win ambiguous.
+The optimization must improve completed full-block latency, not only call
+count, encoding time or a kernel proxy. Nonrepeatable timing leaves it off.
+
+All runs use the unchanged file-cache-aware memory guard with a 15% physical
+reserve, swap growth <=64 MiB, bounded process footprint and timeout.
+Full-block cap is 12 GiB/600 seconds; selected-query cap is <=5 GiB/120
+seconds. No complete model or video generation is authorized by this probe.
+Commands, source/binary/fixture pins and raw receipts are retained under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/head-grouping-20261021/`.
+Results decay on source, SDK/driver, hardware, dtype, shape, execution order
+or guard changes; refresh the same retained oracle and balanced experiment.
+
+Outcome: the opt-in implementation and bounded numerical checks are VERIFIED;
+a repeatable speedup and default promotion are not established. Native setup
+compiles the first grouped plan once and creates K/V offset views for the
+remaining groups, retaining the backing buffers and executable. The reported
+`distinct_executable_count=1` is a source-backed structural property, not
+independent native runtime introspection. The all-head default retains its
+original path. Grouping changes no precision or key coverage. It is not an
+LTP/WBA transformation or an approximate/sparse attention method.
+
+Retained-upstream block tests pass 20 examples each at G1/C1, G4/C3 and the
+unchanged G40/C128 default, with 24 reused-scratch checkpoints per configuration.
+Replay/default/chained outputs are bit-exact, with one existing terminal wait
+per chain and zero tracked encode MetalBuffer allocations. Grouped admission
+rejects invalid divisors, missing prepared K/V, unsupported graph mode, aliases
+and undersized scratch before preparing pipelines. Full-K selected-query checks
+cover Q=128, a nonzero-offset padded tail of 257 rows, and Q=8192. The retained
+oracle's maximum observed absolute difference in the G4/Q8192 control is
+1.1473894e-6, with zero violations at the unchanged finite tensor tolerance.
+Finite +1 and NaN controls reject the seeded defects. Changed K/V salts change
+the output; fresh and already-used workspaces agree bit-exactly after refresh.
+These are comparisons with pinned retained upstream fixtures, not a fresh
+upstream execution or a full-spatial upstream block/quality comparison.
+
+The completed full-block run `full-block-g4-ba-v3` uses real BF16 block0 weights,
+F32 math, synthetic GPU inputs, B1/Q=K36608/H40/D128 and compact scratch on
+Apple M2 Max. A is G40/C128; B is G4/C1024. Both refresh the same full prepared
+K/V pair inside each timed block. Cross-attention grouping stays at 320 and
+K/V preparation fusion stays disabled in both arms. Warmup is BA and the four
+measured orders are AB, BA, BA, AB:
+
+| Pair | Order | A wall seconds | B wall seconds | Paired latency reduction |
+| --- | --- | ---: | ---: | ---: |
+| 0 | AB | 20.152372 | 17.916411 | 11.10% |
+| 1 | BA | 20.372410 | 18.078557 | 11.26% |
+| 2 | BA | 22.121236 | 18.968733 | 14.25% |
+| 3 | AB | 23.473078 | 23.254743 | 0.93% |
+
+Median paired latency reduction is 11.1774%; separate arm medians are
+21.246823 s and 18.523645 s (12.8169% ratio-of-medians reduction). The paired
+statistic and ratio of medians are different quantities. All five full-output
+comparisons, including warmup, match 187,432,960 values bit-exactly and pass
+finite checks. Every arm has one existing terminal wait, zero inter-operator
+host waits/readbacks and zero tracked encode MetalBuffer allocations. Segment
+count changes from 624 to 637. Group size and query chunk both change, so this
+does not isolate a grouping-only speedup or prove a cache/bandwidth mechanism.
+Root GPU intervals include command-buffer gaps; they are not kernel busy time.
+
+The successful full-block guard finishes with rc 0 and zero owned processes.
+Peak sampled footprint is 11,354,572,528 bytes (10.575 GiB), minimum cache-aware
+headroom is 15,768,748,032 bytes (22.9465%), pressure-free minimum is 63%, and
+swap growth is zero. The unchanged outer guard enforces a 12 GiB footprint cap,
+15% physical reserve and 600 s deadline. File-backed pages count once; their
+reclaimability and spikes between samples remain limitations of the guard.
+
+Timing remains VULNERABLE to chronological drift: both arms slow during the
+completed run and the final pair nearly loses the benefit. Standalone G4/Q8192
+first improves by about 5%, then regresses by about 7.9% in a later control;
+short Q=128/257 is slower due to padded work. The all-head C1024 control is
+slower than C128. Its separate control arm always runs after A/B, so it cannot
+establish a causal locality benefit. Do not enable grouping automatically or
+extrapolate this run to diffusion steps, end-to-end generation or all devices.
+
+Four incomplete stages are excluded from qualified timing: the first all-head
+primitive (`primitive-g40-q8192-ab-v2`), G5/Q8192 (`primitive-g5-q8192-ab-v3`),
+the initial full-block AB attempt (`full-block-g4-ab-v3`) and the fresh AB
+replication (`full-block-g4-ab-repeat-v3`). Each hits the existing one-second
+`ps` telemetry timeout. The first full-block and G5 cleanup also lose the
+leader identity; separate successful process listings confirm their owned
+PID/group absent, recorded in their `cleanup-absence.json` files. This is not
+guard-verified reaping. The fresh AB replication stops before timing arms
+and completes guard cleanup. No timeout, memory floor or tensor tolerance is
+weakened; incomplete arms do not become successful runs. G5 has no qualified
+completed result and remains unselected.
+
+Evidence under the experiment root includes `source-pins-v2.json` and
+`source-pins-v3.json` (413 source files each), native/release build receipts,
+per-stage invocation/log/guard/error files, `completed-full-block-ba-v1.json`
+and `verify-head-groups-v1.py`. V3 changes the primitive probe's replay
+diagnostic; production, benchmark and block-test sources are unchanged from
+the V2 numerical runs. The archived V2 probe is `probe-source-v2.cr`.
+The full-block release binary SHA-256 is
+`4e927b3ca9c0942df0d24d48a20b9f6512a8fbec788a768afa70a3563e8c9205`.
+The retained short fixture SHA-256 is
+`fb7943d637bc8a6853707cd2ed284595e6744c4368083c36993fd1dd26d78da9`;
+the full-K manifest SHA-256 is
+`7586da395e4acedcd667639c91350119135183a0ed692fa994faeb683c6b850a`.
+Build receipts bind the native objects, SDK/compiler, source and release
+binaries. Invocation receipts record the bounded commands without raw
+environment dumps. Refresh the curated evidence index with a new exclusive
+output path:
+
+```sh
+evidence_root=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/head-grouping-20261021
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B "$evidence_root/verify-head-groups-v1.py" "$evidence_root/verification-refresh.json"
+```
+
+Expected: `verified=true` for the stated bounded scope,
+`stable_speedup_verified=false` and `default_promotion_admitted=false`.
+The verifier rehashes sources, objects, binaries and fixtures, checks numerical
+controls and guard receipts, recomputes the balanced full-block pairs, and
+rejects both incomplete full-block runs as negative controls. It indexes local
+evidence; it does not attest authentic execution or prove a causal mechanism.
+The next discriminating signal is a completed fresh AB/BA replication with
+unchanged guard settings and acceptable timing stability. Resolve the telemetry
+failure separately before further heavy runs; no default change is admitted.
+
+Root refresh passes in `verified-head-groups-root-v1.json`; verifier SHA-256 is
+`a1481eed40b26669d966e106e403624dd0a7f8b1f37f5f6ad06ae34a14fef830`.
+Final correlated MiniQuad review is ROBUST for the scoped implementation,
+retained numerical checks and one completed comparison; a repeatable speedup
+remains VULNERABLE. The review and verifier use the same runtime evidence and
+are not independent replications. Crystal formatting and `git diff --check`
+pass. No production default changes and no full generation is run.

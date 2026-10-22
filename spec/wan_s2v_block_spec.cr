@@ -295,6 +295,12 @@ private def wan_prepare_mps_self_attention(
   unless 1 <= chunk_rows <= ML::Video::WanAttentionMPSChunkWorkspace::MAX_CHUNK_ROWS
     raise ArgumentError.new("MPS self-attention fixture chunk rows are out of range")
   end
+  heads_per_group = ENV["WAN_S2V_MPS_HEADS_PER_GROUP"]?.try(&.to_i32) || cfg.heads
+  unless heads_per_group > 0 && cfg.heads % heads_per_group == 0
+    raise ArgumentError.new("MPS self-attention fixture head group must divide heads")
+  end
+  # Keep full-head capacity for the existing invalid-workspace controls.
+  # Grouped encode may bind the smaller prefix of these reusable buffers.
   count = (chunk_rows.to_i64 * cfg.dim).to_i32
   prepared_count = (cfg.seq.to_i64 * cfg.dim).to_i32
   prepared_k = prepared_kv ? attention_scratch.alloc("prepared_k_bhkd", prepared_count) : nil
@@ -304,7 +310,7 @@ private def wan_prepare_mps_self_attention(
     scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
     scratch["wan_b_self_attn"], attention_scratch.alloc("chunk_q", count),
     attention_scratch.alloc("chunk_out_a", count), attention_scratch.alloc("chunk_out_b", count),
-    prepared_k, prepared_v)
+    prepared_k, prepared_v, heads_per_group: heads_per_group)
 end
 
 private WAN_KV_PACKED_CHECK_SOURCE = <<-METAL
@@ -624,7 +630,9 @@ private def wan_check_reused_block_scratch(
           self_attention_backend: attention ? "mpsgraph_sdpa_chunked" : "native",
           self_attention_kv_layout: attention.try { |workspace| workspace.head_major_kv? ? "B,H,K,D" : "B,K,H,D" },
           prepared_kv_refreshed_inside_each_block_encode: attention.try(&.head_major_kv?) || false,
-          attention_chunk_rows: attention.try(&.chunk_rows), attention_scratch_bytes: attention_scratch.resident_bytes,
+          attention_chunk_rows: attention.try(&.chunk_rows),
+          attention_heads_per_group: attention.try(&.heads_per_group),
+          attention_scratch_bytes: attention_scratch.resident_bytes,
           scope: "real-width short block fixture; not full spatial geometry or video"}.to_json)
   ensure
     if active = chain

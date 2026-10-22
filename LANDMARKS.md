@@ -31741,3 +31741,42 @@ Refresh after source/toolchain/device/model/workload changes.
   review is ROBUST for the bounded correlation and sampled wait path; a cause
   for every slow call remains unproven. The sampled replay is a separate run,
   and no direct semaphore-capacity counter is available.
+
+### [LM-WAN-HEAD-GROUPS-2026-10-21] Opt-in exact attention grouping with a provisional full-block gain
+
+- At parent `b9002577`, native B1 F32 full-key MPS SDPA can partition independent
+  heads into positive divisors of H. Setup compiles one graph executable and
+  binds retained head-major K/V offset views; GPU gather/scatter adapts Q/context.
+  The source-backed executable count is structural, not native introspection.
+  Unsupported modes, aliases and undersized buffers are rejected. No production
+  wait, event, callback, activation readback or encode MetalBuffer is added.
+- Retained-upstream G1/C1, G4/C3 and original G40/C128 each pass 20 examples and
+  24 reused-scratch checkpoints at unchanged finite 2e-5+2e-5*abs(reference).
+  Full-K selected-query/tail checks, finite +1/NaN controls and changed-K/V replay
+  through the exact already-used workspace pass. G4/Q8192 oracle max abs is
+  1.1473894e-6. This is retained-fixture evidence, not a fresh upstream run or
+  full-spatial upstream block/quality comparison.
+- One completed full-weight compact block0 run on M2 Max, N36608/H40/D128,
+  compares A G40/C128 with B G4/C1024, charging K/V preparation and all block
+  math. BA warmup and AB/BA/BA/AB measured pairs yield 11.1774% median paired
+  reduction; arm medians are 21.246823/18.523645 s. All five full comparisons
+  are bit-exact on 187,432,960 values. Arms retain one terminal wait and zero
+  tracked encode MetalBuffer allocations/inter-operator waits/readbacks.
+- The completed guard holds 12 GiB/600 s and the 15% cache-aware floor: peak
+  sampled footprint 10.575 GiB, minimum headroom 22.9465%, no swap growth,
+  zero owned processes at exit. Four telemetry-aborted stages are excluded;
+  two lose cleanup identity and have separately recorded owned-group absence.
+  Neither full AB attempt completes; the fresh repeat stops before timings.
+  The one-second ps timeout and all memory/tensor limits are unchanged.
+- Timing is provisional: chronological drift reduces the last pair's gain to
+  0.93%, later primitive G4 timing regresses, and short sequences are slower.
+  Both head and query chunk geometry change; no isolated grouping/cache mechanism
+  follows. Correlated MiniQuad accepts scoped correctness and the observed run;
+  a stable speedup/default-promotion claim remains VULNERABLE. Defaults stay off.
+- Source/build/input/guard lineage, raw runs, excluded controls and CPU-only
+  refresh are in `docs/wan-performance-frontier.md` and external evidence under
+  `wan-self-attention/head-grouping-20261021/`. Refresh on scoped source, binary,
+  fixture, SDK/driver, device, dtype, shape, order or guard change/evidence loss.
+  Next signal: resolve telemetry separately, then complete a fresh balanced
+  replication before promotion. Rollback selects all-head C128. No full model,
+  Studio, video generation or lower-precision/approximate math is exercised.

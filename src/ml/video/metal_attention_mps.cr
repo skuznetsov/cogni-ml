@@ -29,6 +29,66 @@ module ML::Video::MetalAttentionMPS
     }
     METAL
 
+  HEAD_GROUP_GATHER_SOURCE = <<-METAL
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wan_attention_mps_gather_head_group_q(
+        const device float *q [[buffer(0)]],
+        device float *group_q [[buffer(1)]],
+        constant uint &query_rows [[buffer(2)]],
+        constant uint &heads [[buffer(3)]],
+        constant uint &head_dim [[buffer(4)]],
+        constant uint &query_offset [[buffer(5)]],
+        constant uint &valid_rows [[buffer(6)]],
+        constant uint &chunk_rows [[buffer(7)]],
+        constant uint &head_start [[buffer(8)]],
+        constant uint &group_heads [[buffer(9)]],
+        constant uint &count [[buffer(10)]],
+        uint tid [[thread_position_in_grid]]) {
+      if (tid >= count) return;
+      const uint row = tid / (group_heads * head_dim);
+      const uint head = (tid / head_dim) % group_heads;
+      const uint d = tid % head_dim;
+      if (row >= chunk_rows) return;
+      if (row >= valid_rows) {
+        group_q[tid] = 0.0f;
+        return;
+      }
+      if (query_offset + row >= query_rows || head_start + head >= heads) return;
+      const uint source = ((query_offset + row) * heads + head_start + head) * head_dim + d;
+      group_q[tid] = q[source];
+    }
+    METAL
+
+  HEAD_GROUP_SCATTER_SOURCE = <<-METAL
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wan_attention_mps_scatter_head_group_output(
+        const device float *group_output [[buffer(0)]],
+        device float *output [[buffer(1)]],
+        constant uint &query_rows [[buffer(2)]],
+        constant uint &heads [[buffer(3)]],
+        constant uint &head_dim [[buffer(4)]],
+        constant uint &query_offset [[buffer(5)]],
+        constant uint &valid_rows [[buffer(6)]],
+        constant uint &chunk_rows [[buffer(7)]],
+        constant uint &head_start [[buffer(8)]],
+        constant uint &group_heads [[buffer(9)]],
+        constant uint &count [[buffer(10)]],
+        uint tid [[thread_position_in_grid]]) {
+      if (tid >= count) return;
+      const uint row = tid / (group_heads * head_dim);
+      if (row >= valid_rows || row >= chunk_rows || query_offset + row >= query_rows) return;
+      const uint head = (tid / head_dim) % group_heads;
+      const uint d = tid % head_dim;
+      if (head_start + head >= heads) return;
+      const uint destination = ((query_offset + row) * heads + head_start + head) * head_dim + d;
+      output[destination] = group_output[tid];
+    }
+    METAL
+
   # Read BTHD and write BHTD in one caller-chain dispatch. The output index is
   # linearized in BHTD order so writes remain contiguous; each thread copies
   # the matching F32 K and V element.
@@ -70,6 +130,11 @@ module ML::Video::MetalAttentionMPS
   # accounting begins.
   def self.prepare_head_major_kv! : Nil
     head_major_kv_transpose_pipeline
+  end
+
+  def self.prepare_head_group! : Nil
+    head_group_gather_pipeline
+    head_group_scatter_pipeline
   end
 
   def self.negate_q!(chain : ML::Metal::MPSCommandChain,
@@ -143,6 +208,82 @@ module ML::Video::MetalAttentionMPS
       .dispatch_1d(count.to_i32)
   end
 
+  # Gather one contiguous head group from BQHD into compact [chunk,G,D]
+  # scratch. The last short chunk is zero-padded in the same dispatch.
+  def self.gather_query_head_group!(chain : ML::Metal::MPSCommandChain,
+                                    q : ML::MetalBuffer, group_q : ML::MetalBuffer,
+                                    query_rows : Int32, heads : Int32,
+                                    head_dim : Int32, query_offset : Int32,
+                                    valid_rows : Int32, chunk_rows : Int32,
+                                    head_start : Int32, group_heads : Int32) : Nil
+    validate_head_group_extent!(query_rows, heads, head_dim, query_offset,
+      valid_rows, chunk_rows, head_start, group_heads)
+    q_count = checked_elements(1, query_rows, heads, head_dim)
+    group_count = checked_elements(1, chunk_rows, group_heads, head_dim)
+    MetalOps.check(q, q_count)
+    MetalOps.check(group_q, group_count)
+    {q, group_q}.each do |buffer|
+      unless buffer.storage_mode == ML::StorageMode::Shared
+        raise ArgumentError.new("MPS head grouping requires shared F32 buffers")
+      end
+    end
+    if MetalOps.overlap?(q, group_q)
+      raise ArgumentError.new("MPS head grouping Q scratch must not alias full Q")
+    end
+    chain.encoder
+      .set_pipeline(head_group_gather_pipeline)
+      .set_buffer(q, 0, ML::Metal::BufferAccess::Read)
+      .set_buffer(group_q, 1, ML::Metal::BufferAccess::Write)
+      .set_value(query_rows.to_u32, 2)
+      .set_value(heads.to_u32, 3)
+      .set_value(head_dim.to_u32, 4)
+      .set_value(query_offset.to_u32, 5)
+      .set_value(valid_rows.to_u32, 6)
+      .set_value(chunk_rows.to_u32, 7)
+      .set_value(head_start.to_u32, 8)
+      .set_value(group_heads.to_u32, 9)
+      .set_value(group_count.to_u32, 10)
+      .dispatch_1d(group_count.to_i32)
+  end
+
+  # Scatter one compact [chunk,G,D] result into its BQHD head slice.
+  def self.scatter_query_head_group!(chain : ML::Metal::MPSCommandChain,
+                                     group_output : ML::MetalBuffer,
+                                     output : ML::MetalBuffer,
+                                     query_rows : Int32, heads : Int32,
+                                     head_dim : Int32, query_offset : Int32,
+                                     valid_rows : Int32, chunk_rows : Int32,
+                                     head_start : Int32, group_heads : Int32) : Nil
+    validate_head_group_extent!(query_rows, heads, head_dim, query_offset,
+      valid_rows, chunk_rows, head_start, group_heads)
+    output_count = checked_elements(1, query_rows, heads, head_dim)
+    group_count = checked_elements(1, chunk_rows, group_heads, head_dim)
+    MetalOps.check(output, output_count)
+    MetalOps.check(group_output, group_count)
+    {output, group_output}.each do |buffer|
+      unless buffer.storage_mode == ML::StorageMode::Shared
+        raise ArgumentError.new("MPS head grouping requires shared F32 buffers")
+      end
+    end
+    if MetalOps.overlap?(output, group_output)
+      raise ArgumentError.new("MPS head grouping output scratch must not alias full output")
+    end
+    chain.encoder
+      .set_pipeline(head_group_scatter_pipeline)
+      .set_buffer(group_output, 0, ML::Metal::BufferAccess::Read)
+      .set_buffer(output, 1, ML::Metal::BufferAccess::Write)
+      .set_value(query_rows.to_u32, 2)
+      .set_value(heads.to_u32, 3)
+      .set_value(head_dim.to_u32, 4)
+      .set_value(query_offset.to_u32, 5)
+      .set_value(valid_rows.to_u32, 6)
+      .set_value(chunk_rows.to_u32, 7)
+      .set_value(head_start.to_u32, 8)
+      .set_value(group_heads.to_u32, 9)
+      .set_value(group_count.to_u32, 10)
+      .dispatch_1d(group_count.to_i32)
+  end
+
   private def self.q_negate_pipeline : ML::Metal::ComputePipeline
     ML::Metal::PipelineCache.get("wan_attention_mps_negate_q") do
       ML::Metal::ComputePipeline.new("wan_attention_mps_negate_q", Q_NEGATE_SOURCE)
@@ -159,6 +300,34 @@ module ML::Video::MetalAttentionMPS
     ML::Metal::PipelineCache.get("wan_attention_mps_transpose_head_major_kv") do
       ML::Metal::ComputePipeline.new("wan_attention_mps_transpose_head_major_kv",
         HEAD_MAJOR_KV_TRANSPOSE_SOURCE)
+    end
+  end
+
+  private def self.head_group_gather_pipeline : ML::Metal::ComputePipeline
+    ML::Metal::PipelineCache.get("wan_attention_mps_gather_head_group_q") do
+      ML::Metal::ComputePipeline.new("wan_attention_mps_gather_head_group_q",
+        HEAD_GROUP_GATHER_SOURCE)
+    end
+  end
+
+  private def self.head_group_scatter_pipeline : ML::Metal::ComputePipeline
+    ML::Metal::PipelineCache.get("wan_attention_mps_scatter_head_group_output") do
+      ML::Metal::ComputePipeline.new("wan_attention_mps_scatter_head_group_output",
+        HEAD_GROUP_SCATTER_SOURCE)
+    end
+  end
+
+  private def self.validate_head_group_extent!(query_rows : Int32, heads : Int32,
+                                               head_dim : Int32, query_offset : Int32,
+                                               valid_rows : Int32, chunk_rows : Int32,
+                                               head_start : Int32,
+                                               group_heads : Int32) : Nil
+    unless query_rows > 0 && heads > 0 && head_dim > 0 && query_offset >= 0 &&
+           valid_rows > 0 && chunk_rows >= valid_rows &&
+           query_offset.to_i64 + valid_rows <= query_rows &&
+           head_start >= 0 && group_heads > 0 &&
+           head_start.to_i64 + group_heads <= heads
+      raise ArgumentError.new("MPS head grouping extent must be positive and in range")
     end
   end
 
@@ -192,6 +361,15 @@ end
       heads : Int32, head_dim : Int32, q : Pointer(Void), k : Pointer(Void),
       v : Pointer(Void), output_a : Pointer(Void), output_b : Pointer(Void),
     ) : Pointer(Void)
+    fun plan_create_head_major_kv_group_view = gs_wan_attention_mps_plan_create_head_major_kv_group_view(
+      device : Pointer(Void), batches : Int32, query_rows : Int32, key_rows : Int32,
+      heads : Int32, head_dim : Int32, q : Pointer(Void), k : Pointer(Void),
+      v : Pointer(Void), output_a : Pointer(Void), output_b : Pointer(Void),
+      kv_offset_bytes : UInt64,
+    ) : Pointer(Void)
+    fun plan_clone_head_major_kv_group_view = gs_wan_attention_mps_plan_clone_head_major_kv_group_view(
+      template : Pointer(Void), kv_offset_bytes : UInt64,
+    ) : Pointer(Void)
     fun encode = gs_wan_attention_mps_encode(plan : Pointer(Void),
                                              command : Pointer(Void), output_slot : Int32) : Int32
     fun copy = gs_wan_attention_mps_copy(command : Pointer(Void),
@@ -221,6 +399,31 @@ module ML::Video
       @explicit_qk_softmax_pv
     end
 
+    def clone_head_major_kv_group_view(offset_bytes : Int64) : WanAttentionMPSPlan
+      unless @head_major_kv && !@explicit_qk_softmax_pv &&
+             !@prepared_kv_offset_bytes.nil?
+        raise ArgumentError.new("Only a prepared head-major SDPA plan can be cloned for a K/V group")
+      end
+      WanAttentionMPSPlan.new(@batches, @query_rows, @key_rows, @heads,
+        @head_dim, @q, @k, @v, @output_a, @output_b, true, false,
+        offset_bytes, self)
+    end
+
+    def native_group_clone_handle : Pointer(Void)
+      if @released || @handle.null? || !@head_major_kv ||
+         @prepared_kv_offset_bytes.nil? || @explicit_qk_softmax_pv
+        raise ArgumentError.new("Prepared K/V clone template is unavailable")
+      end
+      @handle
+    end
+
+    def same_group_bindings?(q : ML::MetalBuffer, k : ML::MetalBuffer,
+                             v : ML::MetalBuffer, output_a : ML::MetalBuffer,
+                             output_b : ML::MetalBuffer) : Bool
+      @q.same?(q) && @k.same?(k) && @v.same?(v) &&
+        @output_a.same?(output_a) && @output_b.same?(output_b)
+    end
+
     @q : ML::MetalBuffer
     @k : ML::MetalBuffer
     @v : ML::MetalBuffer
@@ -228,6 +431,7 @@ module ML::Video
     @output_b : ML::MetalBuffer
     @head_major_kv : Bool
     @explicit_qk_softmax_pv : Bool
+    @prepared_kv_offset_bytes : Int64?
     @handle : Pointer(Void)
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -237,17 +441,34 @@ module ML::Video
                    @k : ML::MetalBuffer, @v : ML::MetalBuffer,
                    @output_a : ML::MetalBuffer, @output_b : ML::MetalBuffer,
                    head_major_kv : Bool = false,
-                   explicit_qk_softmax_pv : Bool = false)
+                   explicit_qk_softmax_pv : Bool = false,
+                   prepared_kv_offset_bytes : Int64? = nil,
+                   head_major_kv_template : WanAttentionMPSPlan? = nil)
       @head_major_kv = head_major_kv
       @explicit_qk_softmax_pv = explicit_qk_softmax_pv
+      @prepared_kv_offset_bytes = prepared_kv_offset_bytes
       if @explicit_qk_softmax_pv && !@head_major_kv
         raise ArgumentError.new("explicit QK-softmax-PV requires head-major K/V")
+      end
+      if @prepared_kv_offset_bytes && (!@head_major_kv || @explicit_qk_softmax_pv)
+        raise ArgumentError.new("prepared K/V offset views require head-major SDPA")
+      end
+      if template = head_major_kv_template
+        unless !@prepared_kv_offset_bytes.nil? && @head_major_kv &&
+               !@explicit_qk_softmax_pv && template.batches == @batches &&
+               template.query_rows == @query_rows && template.key_rows == @key_rows &&
+               template.heads == @heads && template.head_dim == @head_dim &&
+               template.same_group_bindings?(@q, @k, @v, @output_a, @output_b)
+          raise ArgumentError.new("Prepared K/V clone shape or layout differs from its template")
+        end
+        template.native_group_clone_handle
       end
       @handle = Pointer(Void).null
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
       {@q, @output_a, @output_b}.each { |buffer| MetalOps.check(buffer, q_count) }
       {@k, @v}.each { |buffer| MetalOps.check(buffer, kv_count) }
+      validate_prepared_kv_offset!(kv_count)
       all = {@q, @k, @v, @output_a, @output_b}
       all.each do |buffer|
         unless buffer.storage_mode == ML::StorageMode::Shared
@@ -270,10 +491,22 @@ module ML::Video
                       @q.handle, @k.handle, @v.handle, @output_a.handle,
                       @output_b.handle)
                   elsif @head_major_kv
-                    WanAttentionMPSFFI.plan_create_head_major_kv(device,
-                      @batches, @query_rows, @key_rows, @heads, @head_dim,
-                      @q.handle, @k.handle, @v.handle, @output_a.handle,
-                      @output_b.handle)
+                    if offset = @prepared_kv_offset_bytes
+                      if template = head_major_kv_template
+                        WanAttentionMPSFFI.plan_clone_head_major_kv_group_view(
+                          template.native_group_clone_handle, offset.to_u64)
+                      else
+                        WanAttentionMPSFFI.plan_create_head_major_kv_group_view(device,
+                          @batches, @query_rows, @key_rows, @heads, @head_dim,
+                          @q.handle, @k.handle, @v.handle, @output_a.handle,
+                          @output_b.handle, offset.to_u64)
+                      end
+                    else
+                      WanAttentionMPSFFI.plan_create_head_major_kv(device,
+                        @batches, @query_rows, @key_rows, @heads, @head_dim,
+                        @q.handle, @k.handle, @v.handle, @output_a.handle,
+                        @output_b.handle)
+                    end
                   else
                     WanAttentionMPSFFI.plan_create(device, @batches, @query_rows,
                       @key_rows, @heads, @head_dim, @q.handle, @k.handle, @v.handle,
@@ -423,10 +656,24 @@ module ML::Video
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
       {@q, @output_a, @output_b}.each { |buffer| MetalOps.check(buffer, q_count) }
       {@k, @v}.each { |buffer| MetalOps.check(buffer, kv_count) }
+      validate_prepared_kv_offset!(kv_count)
       {@q, @k, @v, @output_a, @output_b}.each do |buffer|
         unless buffer.storage_mode == ML::StorageMode::Shared
           raise ArgumentError.new("MPS attention requires shared F32 buffers")
         end
+      end
+    end
+
+    private def validate_prepared_kv_offset!(kv_count : Int64) : Nil
+      if offset = @prepared_kv_offset_bytes
+        kv_bytes = kv_count * sizeof(Float32)
+        unless offset >= 0 && offset % sizeof(Float32) == 0 &&
+               offset <= @k.size && kv_bytes <= @k.size - offset &&
+               offset <= @v.size && kv_bytes <= @v.size - offset
+          raise ArgumentError.new("Prepared K/V group view must be aligned and in range")
+        end
+        MetalOps.check(@k, (offset + kv_bytes) // sizeof(Float32))
+        MetalOps.check(@v, (offset + kv_bytes) // sizeof(Float32))
       end
     end
   end
@@ -449,6 +696,7 @@ module ML::Video
     getter heads : Int32
     getter head_dim : Int32
     getter chunk_rows : Int32
+    getter heads_per_group : Int32
 
     @q : ML::MetalBuffer
     @k : ML::MetalBuffer
@@ -460,7 +708,8 @@ module ML::Video
     @head_major_k : ML::MetalBuffer?
     @head_major_v : ML::MetalBuffer?
     @explicit_qk_softmax_pv : Bool
-    @plan : WanAttentionMPSPlan
+    @plan : WanAttentionMPSPlan? = nil
+    @head_group_plans = [] of WanAttentionMPSPlan
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
@@ -468,11 +717,25 @@ module ML::Video
     # result backings. When enabled, the full-size head-major K/V buffers are
     # included too. Original full Q/K/V/output remain caller-accounted.
     def scratch_bytes : Int64
-      bytes = checked_elements(1, @chunk_rows, @heads, @head_dim) * sizeof(Float32) * 3
+      bytes = checked_elements(1, @chunk_rows, @heads_per_group, @head_dim) * sizeof(Float32) * 3
       if head_major_kv?
         bytes += checked_elements(@batches, @key_rows, @heads, @head_dim) * sizeof(Float32) * 2
       end
       bytes
+    end
+
+    def group_count : Int32
+      @heads // @heads_per_group
+    end
+
+    def plan_count : Int32
+      group_count
+    end
+
+    # Group plans share one compiled MPSGraph executable. The ordinary path
+    # owns one plan and therefore also has one distinct executable.
+    def distinct_executable_count : Int32
+      1
     end
 
     def head_major_kv? : Bool
@@ -491,13 +754,19 @@ module ML::Video
                    @chunk_output_b : ML::MetalBuffer,
                    head_major_k : ML::MetalBuffer? = nil,
                    head_major_v : ML::MetalBuffer? = nil,
-                   explicit_qk_softmax_pv : Bool = false)
+                   explicit_qk_softmax_pv : Bool = false,
+                   heads_per_group : Int32? = nil)
       @head_major_k = head_major_k
       @head_major_v = head_major_v
       @explicit_qk_softmax_pv = explicit_qk_softmax_pv
+      @heads_per_group = heads_per_group || @heads
       raise ArgumentError.new("MPS attention chunk workspace supports B=1 only") unless @batches == 1
       unless @chunk_rows > 0 && @chunk_rows <= MAX_CHUNK_ROWS
         raise ArgumentError.new("MPS attention chunk rows must be within 1..#{MAX_CHUNK_ROWS}")
+      end
+      unless @heads > 0 && @heads_per_group > 0 &&
+             @heads_per_group <= @heads && @heads % @heads_per_group == 0
+        raise ArgumentError.new("MPS attention heads per group must be a positive divisor of heads")
       end
       if @head_major_k.nil? != @head_major_v.nil?
         raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
@@ -505,10 +774,16 @@ module ML::Video
       if @explicit_qk_softmax_pv && @head_major_k.nil?
         raise ArgumentError.new("explicit QK-softmax-PV requires head-major K/V")
       end
+      if group_count > 1
+        raise ArgumentError.new("Grouped MPS attention requires prepared head-major K/V") if @head_major_k.nil?
+        if @explicit_qk_softmax_pv
+          raise ArgumentError.new("Grouped MPS attention currently requires the SDPA graph")
+        end
+      end
 
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
-      chunk_count = checked_elements(1, @chunk_rows, @heads, @head_dim)
+      chunk_count = checked_elements(1, @chunk_rows, @heads_per_group, @head_dim)
       {@q, @output}.each { |buffer| MetalOps.check(buffer, q_count) }
       {@k, @v}.each { |buffer| MetalOps.check(buffer, kv_count) }
       {@chunk_q, @chunk_output_a, @chunk_output_b}.each do |buffer|
@@ -554,9 +829,35 @@ module ML::Video
       if prepared_k = @head_major_k
         prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
         MetalAttentionMPS.prepare_head_major_kv!
-        @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
-          @head_dim, @chunk_q, prepared_k, prepared_v, @chunk_output_a,
-          @chunk_output_b, true, @explicit_qk_softmax_pv)
+        if group_count > 1
+          MetalAttentionMPS.prepare_head_group!
+          begin
+            group_index = 0
+            while group_index < group_count
+              head_start = group_index * @heads_per_group
+              offset_elements = head_start.to_i64 * @key_rows * @head_dim
+              offset_bytes = offset_elements * sizeof(Float32)
+              if group_index == 0
+                first_plan = WanAttentionMPSPlan.new(1, @chunk_rows,
+                  @key_rows, @heads_per_group, @head_dim, @chunk_q, prepared_k,
+                  prepared_v, @chunk_output_a, @chunk_output_b, true, false,
+                  offset_bytes)
+                @head_group_plans << first_plan
+                @plan = first_plan
+              else
+                @head_group_plans << @head_group_plans[0].clone_head_major_kv_group_view(offset_bytes)
+              end
+              group_index += 1
+            end
+          rescue ex
+            @head_group_plans.each(&.release)
+            raise ex
+          end
+        else
+          @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
+            @head_dim, @chunk_q, prepared_k, prepared_v, @chunk_output_a,
+            @chunk_output_b, true, @explicit_qk_softmax_pv)
+        end
       else
         @plan = WanAttentionMPSPlan.new(1, @chunk_rows, @key_rows, @heads,
           @head_dim, @chunk_q, @k, @v, @chunk_output_a, @chunk_output_b)
@@ -590,7 +891,11 @@ module ML::Video
           @batches, @key_rows, @heads, @head_dim)
       end
 
-      encode_chunks(chain)
+      if group_count > 1
+        encode_grouped_chunks(chain)
+      else
+        encode_chunks(chain)
+      end
     end
 
     # Run caller-owned K/V preparation in place of the default head-major
@@ -604,7 +909,11 @@ module ML::Video
       prepared_k = @head_major_k || raise ArgumentError.new("K/V preparation requires head-major MPS attention")
       prepared_v = @head_major_v || raise ArgumentError.new("Head-major MPS attention requires both prepared K and V buffers")
       yield chain.encoder, prepared_k, prepared_v
-      encode_chunks(chain)
+      if group_count > 1
+        encode_grouped_chunks(chain)
+      else
+        encode_chunks(chain)
+      end
     end
 
     # Return the prepared outputs for preflight validation. Actual use still
@@ -686,10 +995,33 @@ module ML::Video
           MetalAttentionMPS.zero_q_tail!(chain, @chunk_q,
             valid_elements.to_i32, (chunk_elements - valid_elements).to_i32)
         end
-        @plan.encode(chain, 0)
+        @plan.not_nil!.encode(chain, 0)
         WanAttentionMPSPlan.copy(chain, @chunk_output_a, @output, valid_bytes,
           0_i64, destination_offset_bytes)
         query_offset += valid_rows
+      end
+    end
+
+    # Group heads outside the query loop. Each plan binds a zero-copy view into
+    # the corresponding contiguous head range of prepared BHTD K/V. Q gather,
+    # graph execution, and output scatter all remain on the caller's chain.
+    private def encode_grouped_chunks(chain : ML::Metal::MPSCommandChain) : Nil
+      group_index = 0
+      while group_index < group_count
+        head_start = group_index * @heads_per_group
+        query_offset = 0
+        while query_offset < @query_rows
+          valid_rows = Math.min(@chunk_rows, @query_rows - query_offset)
+          MetalAttentionMPS.gather_query_head_group!(chain, @q, @chunk_q,
+            @query_rows, @heads, @head_dim, query_offset, valid_rows,
+            @chunk_rows, head_start, @heads_per_group)
+          @head_group_plans[group_index].encode(chain, 0)
+          MetalAttentionMPS.scatter_query_head_group!(chain, @chunk_output_a,
+            @output, @query_rows, @heads, @head_dim, query_offset,
+            valid_rows, @chunk_rows, head_start, @heads_per_group)
+          query_offset += valid_rows
+        end
+        group_index += 1
       end
     end
 
@@ -698,7 +1030,11 @@ module ML::Video
       if chain = @chain
         raise ArgumentError.new("Complete MPS attention command chain before releasing workspace") unless chain.completed?
       end
-      @plan.release
+      if group_count > 1
+        @head_group_plans.each(&.release)
+      elsif plan = @plan
+        plan.release
+      end
       @released = true
     end
 
@@ -711,7 +1047,7 @@ module ML::Video
     private def validate_bindings! : Nil
       q_count = checked_elements(@batches, @query_rows, @heads, @head_dim)
       kv_count = checked_elements(@batches, @key_rows, @heads, @head_dim)
-      chunk_count = checked_elements(1, @chunk_rows, @heads, @head_dim)
+      chunk_count = checked_elements(1, @chunk_rows, @heads_per_group, @head_dim)
       {@q, @output}.each { |buffer| MetalOps.check(buffer, q_count) }
       {@k, @v}.each { |buffer| MetalOps.check(buffer, kv_count) }
       {@chunk_q, @chunk_output_a, @chunk_output_b}.each do |buffer|
