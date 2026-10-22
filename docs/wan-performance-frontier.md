@@ -8,12 +8,13 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest bounded result: identical G4/C128 arms show a 12.35-13.51% increase
-from the first four to the last four measured blocks, with a similar increase
-in the GPU interval envelope. The mean label contrast is only -0.743% for B
-relative to A. This documents temporal drift without identifying its cause;
-the earlier C128/C1024 speedup remains provisional. See the identical-arm
-control below. Full generation remains stopped.
+Latest bounded result: native F32 key-shard attention with compensated PV
+accumulation reduces matched full-block time by 17.79% and 18.02% in two fresh
+processes with opposite warmup orders. All eight pairs favor the candidate and
+all 187,432,960 output values pass the unchanged tolerance. This qualifies the
+opt-in block probe on this host; substantial absolute host drift remains, and
+neither full-model quality nor stable end-to-end latency is established.
+See the final section for evidence and limits. Full generation remains stopped.
 
 ## What the existing evidence permits
 
@@ -4054,3 +4055,317 @@ shape/order, queue/resource policy or host-state changes require new matched
 measurements before transferring timing conclusions. A failed refresh reopens
 dependent claims and leaves defaults unchanged. Rollback removes only the
 opt-in benchmark adapter and its documentation.
+
+### Smaller independent head groups at fixed C128 (2026-10-22)
+
+Design-sealed experiment, parent `2d6eca5b`: compare G4/C128 with G1/C128
+and, if the first candidate fails to improve, G2/C128. Heads are independent;
+each retains all 36,608 keys, the same F32 SDPA scale and no mask/dropout.
+Only the existing opt-in workspace's head grouping changes. The selected-query
+probe gains an explicit baseline group argument, default 40, so a G4 baseline
+does not silently fall back to G40 or change the baseline scratch accounting.
+No engine, kernel, queue, dtype, barrier, host wait or allocation policy changes
+are admitted. Rollback removes the probe option and restores the experiment
+settings; production defaults remain unchanged during qualification.
+
+Prediction: a smaller K/V group may lower attention latency enough to outweigh
+more gather/SDPA/scatter calls. A cache mechanism is a hypothesis; these probes
+do not measure cache hits. Falsifiers are a failed finite unchanged upstream
+gate, stale K/V replay, a new encode allocation/wait/readback, guard violation,
+or a complete-block regression after balanced warmup/order controls. Do not
+infer a block win from selected queries or older profiled timings.
+
+DoD: release-build the probe; reject invalid baseline divisors before fixture
+or Metal access; check default and G4 CPU memory plans; compare Q8192/full K
+and a nonzero-offset padded Q257 tail with the pinned upstream oracle, including
+finite +1/NaN rejection and fresh/reused changed-K/V checks. Run retained
+upstream block checkpoints at the candidate group. Only a qualified candidate
+advances to two fresh complete-block processes with AB and BA warmups and four
+measured pairs in AB,BA,BA,AB order, using real BF16 block weights and F32 math.
+All 187,432,960 output values must pass the original finite tolerance. Speed
+acceptance requires at least 5% paired geometric latency reduction in each
+process, both pair-order strata favoring the candidate, and no individual pair
+regression beyond 2%. Diagnostic collectors stay off in timed blocks.
+
+Use unchanged cache-aware 15% reserve and pressure checks, 64 MiB swap-growth
+limit, 5 GiB/120 s primitive and 12 GiB/600 s full-block caps. One owned heavy
+process runs at a time. No full model, Studio or video generation. Retain frozen
+source/build/oracle/command pins and complete guard lifetimes in
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/smaller-head-groups-20261022/`.
+Evidence decays on scoped source, artifact, hardware/OS/SDK/driver, shape, dtype,
+queue policy or experiment-order changes; refresh matched native runs before
+transferring a speed claim. This is ordinary independent-head scheduling,
+without approximation or an LTP/WBA claim.
+
+### Native STEEL F32 attention discriminator (2026-10-22)
+
+The smaller-head probes reject further subdivision: at Q8192/full K36608,
+G1 and G2 lose to G4 in all three paired samples. Neither advances to the
+complete-block gate. This changes the next experiment from scheduling the same
+MPS executable to a different native tiled implementation.
+
+The candidate ports the MIT-licensed MLX STEEL attention specialization for
+F32, D128, BQ32/BK16, four SIMD groups. Freeze the upstream revision, license
+and transitive shader sources before adapting them. Use the existing native
+Metal compiler in safe math mode, with no MLX runtime or reduced precision in
+the measured path. Preserve full K/V, scale, unmasked noncausal attention and
+F32 intermediate/accumulation types. GPU barriers and ordered dispatches are
+permitted; no additional host wait, activation readback, or encode-time
+MetalBuffer allocation is permitted. No speed or occupancy claim follows from
+the source's tile size alone.
+
+The first discriminator is the same pinned full-key upstream fixture at Q128,
+Q8192 and the offset Q257 tail, with NaN-poisoned outputs, finite +1/NaN
+negative controls and fresh/reused changed-K/V tests. The candidate must pass
+the existing finite `2e-5+2e-5*abs(reference)` gate against both upstream and
+G4/C128, and beat G4 in all three Q8192 pairs before full-block integration.
+Do not hide layout/preparation work outside a timed arm. Strongest failure
+modes are a stride/parameter ABI mismatch, an unwritten tail, changed reduction
+error on real projected inputs, or a long dispatch missing the existing bounded
+submission policy. Validate capability and bound native dispatch work before
+large allocations.
+
+Only a surviving primitive advances to the real BF16-weight full block with
+F32 activations. Use the preceding two-process AB/BA warmup, balanced four-pair,
+5%-per-process speed gate and original finite numerical tolerance. Intermediate
+upstream checkpoints remain required. Keep the cache-aware 15% reserve,
+64 MiB swap-growth limit, one heavy process and bounded footprint/deadline.
+Production defaults remain unchanged until all gates pass. Rollback removes
+the opt-in candidate and leaves the existing MPS workspace intact. Full model
+and video generation remain stopped. Frozen external evidence lives under
+`wan-self-attention/steel-f32-20261022/`; scoped source/oracle/build/driver,
+geometry, dtype or queue-policy changes require refreshed matched evidence.
+
+The first native specialization passes Q128/Q8192 and the Q257 offset tail,
+including unchanged finite upstream comparisons, NaN/+1 rejection and changed
+K/V fresh/reused checks, but loses all three Q8192 timing pairs to G4/C128
+(2.292-2.304 s versus 1.763-1.786 s, including K/V preparation). It does not
+advance to the complete block. The next single discriminator is BQ32/BK32,
+WM4/WN2: eight SIMD groups keep Q in registers, reduce shared storage to
+18,436 bytes and halve the full-key loop count from 2,288 to 1,144. The score
+exchange adds barriers, so this is a hypothesis rather than a predicted win.
+BQ64/WM4 is rejected by upstream's `TQ == 1` static assertion. Keep the same
+80-group dispatch bound, strict numerical/negative/replay controls, Q8192
+three-pair primitive gate and complete-block gate. Do not sweep further tile
+shapes without new evidence about the limiting resource.
+
+The Q-register/BK32 variant also loses all three Q8192 pairs (2.200-2.273 s
+versus 1.760-1.800 s), while passing the unchanged upstream and replay gates.
+It does not advance. Source review identifies a separate scheduling mismatch:
+the native flattened grid traverses all forty heads within each query tile,
+whereas MPS G4 traverses all query chunks within each four-head group. Their
+nominal K/V working sets are respectively 1,499,463,680 and 149,946,368 bytes;
+these byte counts do not establish cache residency or traffic.
+
+The next discriminator changes only this native tile-index permutation to
+four-head groups. BQ32/BK32/WM4/WN2, per-row arithmetic/reduction, all key
+coverage, buffers, 80-group dispatch bound and chain policy remain unchanged.
+Exhaustive CPU index controls must prove a bijection for Q128, Q8192 and the
+Q257 padded tail, including dispatch boundaries. Repeat the same strict
+upstream/negative/changed-KV controls and three-pair primitive gate before any
+complete-block integration. A failure rejects this schedule; no cache or
+bandwidth mechanism is inferred from latency alone. Rollback selects the
+preceding frozen shader; production remains untouched. This is a loop-order
+experiment rather than another tile-geometry sweep.
+
+The four-head native permutation also fails the primitive speed gate:
+2.143-2.161 s versus 1.748-1.766 s in all three Q8192 pairs. Numerical,
+negative and fresh/reused changed-K/V gates pass. Cross-process differences
+between native permutations do not isolate a cache effect. No native STEEL
+candidate is admitted to the complete block.
+
+The next MPS discriminator keeps G4 and tests C256 against C128. Earlier
+balanced complete-block comparisons cover C128 versus C1024, but do not
+interpolate kernel performance at C256. This is a different balance of
+query-row parallelism and per-call work with the existing F32 SDPA executable;
+neither fewer calls nor an intermediate chunk size implies a win. Keep K/V
+preparation and all gather/scatter work inside each arm. The same Q128,
+Q8192 and offset Q257 upstream/negative/changed-KV controls, all-three primitive
+speed gate, 15% reserve and two-process complete-block gate apply. Reject a
+slower primitive before any full-block run. No engine implementation or
+production default changes are needed for this experiment.
+
+C256 also fails the primitive gate: Q8192 paired wall times are
+1.7053/1.7086/1.7080 s versus C128 1.7059/1.7171/1.7058 s. The third pair
+loses, and the aggregate difference is below 0.5%. Q128 and the offset Q257
+tail pass numerical/replay checks but are slower. No complete-block run is
+admitted for this candidate.
+
+The next distinct discriminator continues the native BQ32/BK32 online softmax
+across 2,048-key shards. For each four-head group, visit all query tiles before
+advancing to the next key shard. Keep unnormalized F32 output, row maxima and
+row sums in preallocated GPU buffers between ordered dispatches; normalize only
+after the final shard. Each row retains ascending key order and the preceding
+kernel's arithmetic. The nominal active G4 K/V slice falls from 149,946,368 to
+8,388,608 bytes; cache residency and a speed benefit remain hypotheses.
+
+The first falsifier is bit identity with the frozen unsharded native v4 shader,
+including changed K/V and reused workspaces, in addition to the unchanged
+finite upstream gate. A split must neither reload normalized output nor merge
+independently normalized contexts. Bound each dispatch by the preceding
+80-group full-key work budget, preserve query/key tails, and allocate the two
+row-state arrays at setup. The same terminal wait, zero encode allocations,
+15% reserve, primitive three-pair gate and complete-block gate still apply.
+Any bit discrepancy or primitive loss rejects this formulation. Rollback
+selects the frozen unsharded shader; no production implementation changes.
+
+The 2,048-key continuation passes bit identity with v4 for Q128, Q8192 and
+the offset Q257 tail, including fresh/reused changed K/V. Against current
+MPS G4/C128, Q8192 wins all three pairs: 1.4925/1.4988/1.4928 s versus
+1.7752/1.7901/1.7869 s. Q128 and Q257 are slower because the fixed 180 roots
+dominate short inputs. This admits only the long-query complete-block probe;
+it does not justify selecting the native path for short queries.
+
+Use a probe-only subclass of the block's existing workspace type. It retains
+the inherited unused MPS plans and their conservative memory reserve, but
+reports zero executed Graph executables for the native arm. The native path
+uses the same in-chain K/V transpose as its primitive probe; both arms include
+preparation. Allocate 11,714,560 additional row-state bytes at setup. Restrict
+the benchmark option to unprofiled G4/C128 comparisons and retain the preceding
+strict upstream checkpoint gate, compact scratch, balanced two-process speed
+gate and 12 GiB/600 s process cap. No production type or default changes.
+The callback adapter records the active chain before yielding to a fused K/V
+writer, so a partially encoded failing callback cannot bypass release guards;
+the timed comparison uses ordinary preparation on both arms.
+
+### Compensated native long-key attention (2026-10-22)
+
+The first continuation shader (v5) fails the real-weight complete-block warmup:
+14,162 of 187,432,960 final values exceed the unchanged tolerance. Its passing
+selected-query upstream fixture is insufficient. A diagnostic-only invocation
+compares attention before projection on the GPU, consuming A's saved attention
+before B overwrites the aliased final output. It finds 92,928 attention
+violations. The callback adds no host wait or allocation; diagnostic comparisons
+are excluded from normal timed arms. This localizes the failure before the
+output projection without reading activations back to the CPU.
+
+Two isolated discriminators are rejected. Translating V by its first row
+(v6), although an exact-arithmetic identity, fails the strict Q8192 upstream
+fixture. Compensating only the online-softmax denominator (v7) leaves 92,878
+attention violations and 14,101 final-output violations. Neither advances to
+normal complete-block timing. Retain these failures rather than widening the
+tolerance or attributing them to downstream amplification alone.
+
+The surviving shader (v8) compensates the **PV numerator**. Form each BK32
+contribution in an additional F32 output fragment, then Kahan-merge it into the
+running output with a second correction fragment. Scale output and correction
+by the same online-maximum factor and fold the correction before each shard
+spill or final normalization. QK, exponentials, denominator, input types and
+tile/shard/head scheduling stay unchanged. This adds 32 F32 scalar slots per
+thread, with no additional GPU buffers, dispatches, host waits or encode-time
+allocations. It is ordinary numerical stabilization, without an LTP/WBA claim.
+
+The full-size diagnostic now passes all 187,432,960 attention values, maximum
+absolute difference `9.775162e-6`, maximum tolerance-normalized error
+`0.26414144`. The final output also passes every value, maximum absolute
+difference `2.0980835e-5`, maximum normalized error `0.2650215`. This isolates
+PV accumulation as the main numerical cause on this input; it does not prove
+universal stability of uncompensated inner MMA products or all model layers.
+
+The Q8192/full-K36608 primitive passes the pinned upstream, finite/+1/NaN and
+changed-K/V fresh/reused controls. Its three paired times, including K/V
+preparation, are 1.5075/1.5069/1.5073 s versus MPS G4/C128
+1.7401/1.7526/1.7267 s. The nonzero-offset padded Q257 tail also passes.
+Retained real-width upstream block checkpoints pass with ordinary and fused
+K/V preparation: seven examples, zero failures/errors per invocation, with
+repeat/chained/replay and fused K/V checks. This retained upstream block has
+short spatial length; no full-spatial real-weight upstream oracle was run.
+The full-size comparisons below use the currently qualified MPS path.
+
+Two unprofiled fresh processes use opposite warmups, four measured pairs each
+in AB,BA,BA,AB order, BF16 weights, F32 activations/math, compact scratch and
+ordinary K/V preparation inside **both** timed arms. A is MPS G4/C128; B is the
+native 2,048-key-shard candidate. Inputs are fixed synthetic activations with
+real block-0 weights. Each warmup and measured pair compares every
+final value using finite `2e-5 + 2e-5*abs(reference)`; all pass. The injected
+finite error and NaN are rejected. No root/API collector is enabled.
+
+| Warmup | A paired seconds | B paired seconds | Geometric time reduction | AB / BA geometric B:A |
+| --- | --- | --- | --- | --- |
+| AB | 11.2439, 12.6471, 15.3274, 18.0915 | 10.2304, 10.3111, 10.8036, 15.8035 | 17.7911% | 0.89151 / 0.75807 |
+| BA | 29.3237, 26.2276, 22.5117, 22.1842 | 25.2888, 21.8626, 18.7452, 16.7369 | 18.0231% | 0.80662 / 0.83313 |
+
+All eight pairs favor B; both processes exceed the predeclared 5% geometric
+reduction, both order strata favor B, and no pair regresses. Absolute wall time
+drifts strongly within and between processes. Balanced ordering gives a scoped
+relative result, not a quiet-host or stable-latency certificate. Read-only host
+inspection observed unrelated compilation/indexing; `pmset` recorded no thermal
+warning, which does not exclude GPU throttling or establish the drift's cause.
+
+Every timed arm reports one terminal wait, zero encode-time MetalBuffer
+allocations, zero inter-operator host waits and zero activation readbacks.
+Numerical reductions/readback run outside timed arms. Peak sampled group
+footprint is 10.533 / 10.467 GiB, minimum cache-aware headroom
+22.189% / 22.176%, minimum pressure-free 66% / 64%, swap growth zero. Both
+12 GiB / 600 s guards finish with exit zero and no live group members; maximum
+sample gaps are 0.607 / 1.989 s. Sampled guards do not prevent between-poll spikes.
+No model, Studio or full video generation was started.
+
+The [checked-in shader](../examples/support/kernels/wan_steel_f32_d128.metal)
+is byte-identical to the measured external v8 input, SHA-256
+`b3e27825b3723d80789e6b73acecff0a2a4e66380691d18dce827a3cf3d8664f`.
+Its [provenance and MIT license](../examples/support/kernels/wan_steel_f32_d128.md)
+keep the MLX revision and local modifications explicit. Historical receipts
+name the external file; packaging it does not claim another measurement.
+Keep the native adapter opt-in: short queries lose to MPS, the probe retains
+unused inherited MPS plans, and a production pipeline cache/release policy,
+other blocks and full-model quality remain outside this certificate.
+
+DoD evidence is under
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/steel-f32-20261022/`:
+`build-intent-v7.json` / `build-receipt-v7.json`,
+`primitive-pv-compensation-mps-q8192-v1`,
+`primitive-pv-compensation-mps-q257-v1`,
+`upstream-pv-compensation-short-v1`,
+`upstream-pv-compensation-short-fused-v1`,
+`full-block-pv-compensation-diagnostic-v1`,
+`full-block-pv-compensation-ab-v1`, and `full-block-pv-compensation-ba-v1`.
+Each stage retains command, stdout, exit, telemetry and complete guard lifetime.
+The final report verifies frozen source/build/oracle/shader/command pins as
+well as numerical, ordering, synchronization, speed and resource predicates.
+Its name is `pv-compensation-results-v2.report.json`, SHA-256
+`7aae57fb0c7f71806d211bc0fe44b69b3471ba1d6808cf6be8c240f40caa61dd`.
+The CPU-only verifier, `verify-pv-compensation-results-v2.py`, has SHA-256
+`612a2e9ebfe5bd4e67cae3a82f7202037cca8341c7a4b384d772ccfd4689bcc2`.
+Refresh with:
+
+```sh
+python3 /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-self-attention/steel-f32-20261022/verify-pv-compensation-results-v2.py --check-only
+```
+
+Expected signal is `RESULT ROBUST qualification_gate_passed=True` and exit zero.
+V1's exact report refresh exposed Python 3.11/3.15 differences in the last bit
+of the derived geometric mean. V2 uses `math.fsum`, passes exact refresh on both
+interpreters, and preserves all raw measurements, full-precision gates and
+tensor tolerances. Neither report nor historical evidence was overwritten.
+The verifier reconstructs historical source bytes; separately check current
+scoped sources against the v7 intent before transferring this result to a new
+checkout. Hashes establish file identity, not runtime attestation or independent
+recomputation of the emitted GPU metrics.
+
+For a new matched timing series, first rerun the upstream/primitive gates, then
+run the built full-block benchmark under the existing cache-aware 15% guard
+with a unique log path, `--max-footprint-mib=12288`,
+`--max-swap-growth-mib=64`, `--timeout-sec=600`, and:
+
+```sh
+wan_s2v_full_block_benchmark \
+  --weights=/path/to/wan-official.weights.safetensors \
+  --comparison=head-groups --baseline-self-chunk=128 \
+  --baseline-heads-per-group=4 --candidate-self-chunk=128 \
+  --candidate-heads-per-group=4 --pairs=4 --reuse-block-scratch \
+  --candidate-steel-source=examples/support/kernels/wan_steel_f32_d128.metal \
+  --warmup-order=AB
+```
+
+Repeat in a fresh process with `--warmup-order=BA`. Pin/check the bytes of the
+file actually compiled, not just its path. Do not enable diagnostics in timing
+runs. Expected signal is exit zero, all finite strict comparisons, unchanged
+wait/allocation counts, complete clean guards and the same predeclared speed
+gate. The MiniQuad adversary verdict is ROBUST for the measured probe scope;
+the reviews are same-lineage and correlated, supported by source/hash checks
+and executed numerical/negative/paired controls. OS/SDK/driver/device, shader,
+geometry, dtype or resource/queue-policy changes require fresh numerical and
+matched timing evidence. Scoped artifact/source loss requires integrity refresh;
+a failure reopens dependent claims. Rollback removes this opt-in adapter and
+its packaged source; existing engine defaults remain unchanged.

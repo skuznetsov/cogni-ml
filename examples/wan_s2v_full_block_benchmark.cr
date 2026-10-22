@@ -8,6 +8,7 @@ require "../src/ml/video/metal_mps_command_chain"
 require "../src/ml/video/metal_attention_mps"
 require "../spec/support/video_allocation_counter"
 require "./support/wan_host_observation"
+require "./support/wan_s2v_steel_block_workspace"
 
 private FULL_SEQ                       = 36_608
 private FULL_VIDEO_TOKENS              = 34_944
@@ -195,7 +196,8 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
                        api_profile : Bool = false,
                        continuation_trace : Bool = false,
                        reuse_scratch : Bool = false,
-                       fuse_kv_preparation : Bool = false) : ArmResult
+                       fuse_kv_preparation : Bool = false,
+                       block_trace : Hash(String, ML::MetalBuffer)? = nil) : ArmResult
   if continuation_trace
     puts({schema: "wan_s2v_full_block_arm_begin_v1", order: order, warmup: warmup,
           continuation_trace_requested: true}.to_json)
@@ -214,7 +216,7 @@ private def encode_arm(groups : Int32, order : String, warmup : Bool,
   allocations_before = ML::MetalBuffer.video_spec_allocations
   encode_started = Time.instant
   ML::Video::WanS2VBlock.encode(chain.encoder, x, modulation, positions, context,
-    output, weights, scratch, cfg, weight_prefix: "block.", tiled_attention: true,
+    output, weights, scratch, cfg, trace: block_trace, weight_prefix: "block.", tiled_attention: true,
     execution_chain: chain, mps_workspace: linear, attention_workspace: attention,
     cross_attention_groups_per_segment: groups, precompute_rope: precompute_rope,
     reuse_scratch: reuse_scratch, fuse_kv_preparation: fuse_kv_preparation)
@@ -325,6 +327,8 @@ continuation_trace_requested = false
 profile_identical_arms_requested = false
 reuse_block_scratch = false
 plan_only = false
+candidate_steel_source = ""
+diagnose_self_attention = false
 OptionParser.parse do |parser|
   parser.banner = "Usage: build/wan_s2v_full_block_benchmark --weights=FILE [--comparison=kv-prep-control|kv-prep-fusion|head-groups --pairs=3|4] [--warmup-order=AB|BA] [--plan-only]"
   parser.on("--weights=FILE", "Official block-0 plus injector-0 BF16 safetensors sidecar") { |value| weights_path = value }
@@ -341,6 +345,8 @@ OptionParser.parse do |parser|
   parser.on("--continuation-trace", "Correlate profiled continuation calls and command-root GPU intervals; requires --api-profile") { continuation_trace_requested = true }
   parser.on("--profile-identical-arms", "Instrument both equal-geometry head-groups arms with existing phase/API/continuation diagnostics; requires --phase-roots") { profile_identical_arms_requested = true }
   parser.on("--reuse-block-scratch", "Use opt-in same-object block scratch lifetime aliases for both arms") { reuse_block_scratch = true }
+  parser.on("--candidate-steel-source=FILE", "Probe-only native F32 key-shard candidate; requires unprofiled head-groups G4/C128 on both arms") { |value| candidate_steel_source = value }
+  parser.on("--diagnose-self-attention", "GPU-compare attention before projection; warmup AB only, no measured pairs") { diagnose_self_attention = true }
   parser.on("--plan-only", "Print the full-shape memory plan and exit before GPU setup or dispatch") { plan_only = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -406,6 +412,17 @@ require_exact = profile_identical_arms_requested || !(compare_self_chunks || com
 candidate_groups = (compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? 320 : 1024
 baseline_chunk = (compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : BASELINE_CHUNK_Q
 baseline_chunk = baseline_chunk_requested.not_nil! if compare_head_groups && baseline_chunk_requested
+native_candidate = !candidate_steel_source.empty?
+if diagnose_self_attention && (!native_candidate || warmup_order != "AB")
+  raise ArgumentError.new("Self-attention diagnosis requires a native candidate and AB warmup")
+end
+if native_candidate
+  unless compare_head_groups && baseline_chunk == 128 && candidate_chunk == 128 &&
+         baseline_heads_per_group == 4 && candidate_heads_per_group == 4 && !profile_mode_allowed
+    raise ArgumentError.new("STEEL full-block probe requires unprofiled head-groups G4/C128 on both arms")
+  end
+  candidate_self_attention_backend = "native_steel_f32_key_shards_2048"
+end
 baseline_chunk_values = baseline_chunk * baseline_heads_per_group * HEAD_DIM
 candidate_chunk = (compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_rope || compare_profile_replay) ? KV_LAYOUT_CHUNK_Q : ((compare_self_chunks || compare_head_groups) ? candidate_chunk : BASELINE_CHUNK_Q)
 candidate_chunk_values = candidate_chunk * candidate_heads_per_group * HEAD_DIM
@@ -451,6 +468,8 @@ begin
   attention_workspace_bytes += 3_i64 * candidate_chunk_values * sizeof(Float32) if compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
   prepared_kv_bytes = prepared_kv_for_candidate ? 2_i64 * FULL_VALUES * sizeof(Float32) : 0_i64
   attention_workspace_bytes += prepared_kv_bytes
+  native_row_state_bytes = native_candidate ? 2_i64 * FULL_SEQ * HEADS * sizeof(Float32) : 0_i64
+  attention_workspace_bytes += native_row_state_bytes
   explicit_score_reserve_bytes = compare_attention_graph ? EXPLICIT_SCORE_RESERVE_BYTES : 0_i64
   explicit_nonweight_bytes = checked_sum([
     input_bytes, block_scratch_bytes, tiny_audio_scratch_bytes,
@@ -476,7 +495,14 @@ begin
         block_scratch_bytes_saved: block_scratch_bytes_saved,
         unused_audio_plan_scratch_bytes: tiny_audio_scratch_bytes, input_output_bytes: input_bytes,
         projection_stage_bytes: projection_stage_bytes,
-        self_attention_chunk_bytes: attention_workspace_bytes - prepared_kv_bytes,
+        self_attention_chunk_bytes: attention_workspace_bytes - prepared_kv_bytes - native_row_state_bytes,
+        native_row_state_bytes: native_row_state_bytes,
+        candidate_steel_source: native_candidate ? candidate_steel_source : nil,
+        diagnose_self_attention: diagnose_self_attention,
+        candidate_steel_key_shard_rows: native_candidate ? 2_048 : 0,
+        native_query_tile_rows: native_candidate ? 32 : nil,
+        native_key_tile_rows: native_candidate ? 32 : nil,
+        unused_candidate_mps_plans_retained: native_candidate,
         prepared_kv_buffer_bytes: prepared_kv_bytes,
         prepared_kv_pair_shared_between_arms: prepared_kv_for_both_arms,
         prepared_kv_buffer_bytes_refreshed_per_arm_encode: prepared_kv_bytes,
@@ -490,7 +516,7 @@ begin
         opaque_mps_reserve_bytes: OPAQUE_RESERVE, estimated_bytes: total_estimate,
         budget_bytes: explicit_budget_bytes,
         budget_limit_gib: explicit_budget_bytes / (1024_i64 * 1024 * 1024),
-        attention_backend: "mps_chunked",
+        attention_backend: native_candidate ? "mps_vs_native_key_shards" : "mps_chunked",
         comparison_mode: comparison_mode,
         profile_identical_arms_requested: profile_identical_arms_requested,
         baseline_precompute_rope: false,
@@ -500,7 +526,7 @@ begin
         candidate_query_chunk: candidate_chunk,
         baseline_heads_per_group: baseline_heads_per_group, candidate_heads_per_group: candidate_heads_per_group,
         candidate_head_group_count: HEADS // candidate_heads_per_group,
-        candidate_distinct_attention_executables: 1,
+        candidate_distinct_attention_executables: native_candidate ? 0 : 1,
         baseline_kv_layout: prepared_kv_for_both_arms ? "B,H,K,D" : "B,K,H,D",
         candidate_kv_layout: prepared_kv_for_candidate ? "B,H,K,D" : "B,K,H,D",
         query_chunk_rows_equal_between_arms: baseline_chunk == candidate_chunk,
@@ -560,27 +586,54 @@ begin
     prepared_kv_for_both_arms ? candidate_prepared_v : nil,
     heads_per_group: baseline_heads_per_group)
   if compare_self_chunks || compare_head_groups || compare_kv_layout || compare_attention_graph || compare_kv_prep_control || compare_kv_prep_fusion || compare_profile_replay
-    candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
-      1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
-      scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
-      scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
-      scratch.not_nil!.alloc("candidate_chunk_q", candidate_chunk_values),
-      scratch.not_nil!.alloc("candidate_chunk_a", candidate_chunk_values),
-      scratch.not_nil!.alloc("candidate_chunk_b", candidate_chunk_values),
-      candidate_prepared_k, candidate_prepared_v,
-      explicit_qk_softmax_pv: compare_attention_graph,
-      heads_per_group: candidate_heads_per_group)
+    if native_candidate
+      candidate_attention_workspace = WanS2VSteelBlockWorkspace.new(
+        FULL_SEQ, FULL_SEQ, HEADS,
+        scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
+        scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
+        scratch.not_nil!.alloc("candidate_chunk_q", candidate_chunk_values),
+        scratch.not_nil!.alloc("candidate_chunk_a", candidate_chunk_values),
+        scratch.not_nil!.alloc("candidate_chunk_b", candidate_chunk_values),
+        candidate_prepared_k.not_nil!, candidate_prepared_v.not_nil!,
+        inputs.not_nil!.alloc("native_row_state", (2_i64 * FULL_SEQ * HEADS).to_i32),
+        File.read(candidate_steel_source))
+    else
+      candidate_attention_workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(
+        1, FULL_SEQ, FULL_SEQ, HEADS, HEAD_DIM, candidate_chunk,
+        scratch.not_nil!["wan_b_self_q"], scratch.not_nil!["wan_b_self_k"],
+        scratch.not_nil!["wan_b_self_v"], scratch.not_nil!["wan_b_self_attn"],
+        scratch.not_nil!.alloc("candidate_chunk_q", candidate_chunk_values),
+        scratch.not_nil!.alloc("candidate_chunk_a", candidate_chunk_values),
+        scratch.not_nil!.alloc("candidate_chunk_b", candidate_chunk_values),
+        candidate_prepared_k, candidate_prepared_v,
+        explicit_qk_softmax_pv: compare_attention_graph,
+        heads_per_group: candidate_heads_per_group)
+    end
   end
   candidate_attention = candidate_attention_workspace || attention_workspace.not_nil!
   unless attention_workspace.not_nil!.distinct_executable_count == 1 &&
-         candidate_attention.distinct_executable_count == 1
-    raise "Each attention arm must share one compiled executable"
+         candidate_attention.distinct_executable_count == (native_candidate ? 0 : 1)
+    raise "Attention executable counts differ from the declared backend"
   end
 
   fill = ML::Metal::ComputePipeline.new("wan_full_block_fill_f32", BENCH_METAL)
   positions_fill = ML::Metal::ComputePipeline.new("wan_full_block_fill_positions", BENCH_METAL)
   zero = ML::Metal::ComputePipeline.new("wan_full_block_zero_metrics", BENCH_METAL)
   compare = ML::Metal::ComputePipeline.new("wan_full_block_compare", BENCH_METAL)
+  if diagnose_self_attention
+    candidate_attention.as(WanS2VSteelBlockWorkspace).diagnostic_after_attention = ->(chain : ML::Metal::MPSCommandChain) {
+      e = chain.encoder
+      # A's attention trace temporarily occupies B's final output. Consume it
+      # here before B's final projection overwrites that same allocation.
+      e.set_pipeline(zero).set_buffer(metrics, 0, ML::Metal::BufferAccess::Write)
+        .set_value(5_u32, 1).dispatch_1d(5)
+      e.set_pipeline(compare).set_buffer(output_candidate, 0)
+        .set_buffer(scratch.not_nil!["wan_b_self_attn"], 1)
+        .set_buffer(metrics, 2, ML::Metal::BufferAccess::ReadWrite)
+        .set_value(FULL_VALUES.to_u32, 3).dispatch_1d(FULL_VALUES.to_i32)
+      nil
+    }
+  end
   corrupt = ML::Metal::ComputePipeline.new("wan_full_block_corrupt_plus_one_and_nan", BENCH_METAL)
   setup = ML::Metal::CommandBuffer.new
   setup_encoder = ML::Metal::ComputeEncoder.new(setup)
@@ -620,7 +673,19 @@ begin
       api_profile: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && api_profile_requested,
       continuation_trace: (profile_identical_arms_requested || (compare_profile_replay && !baseline)) && continuation_trace_requested,
       reuse_scratch: reuse_block_scratch,
-      fuse_kv_preparation: compare_kv_prep_fusion && !baseline)
+      fuse_kv_preparation: compare_kv_prep_fusion && !baseline,
+      block_trace: diagnose_self_attention && baseline ? {"self_attention" => output_candidate} : nil)
+  end
+  if diagnose_self_attention
+    # The existing B terminal wait completed the in-chain GPU comparison.
+    values = metrics.contents.as(UInt32*)
+    puts({schema: "wan_s2v_full_block_attention_comparison_v1", compared_values: FULL_VALUES,
+          bit_differences: values[0], tolerance_violations: values[1], nonfinite: values[2],
+          max_abs: values[3].unsafe_as(Float32), max_normalized_error: values[4].unsafe_as(Float32),
+          strict_pass: values[1] == 0 && values[2] == 0,
+          tolerance: "2e-5+2e-5*abs(reference)", activation_readbacks: 0,
+          diagnostic_metal_buffer_allocations: 0, diagnostic_waits_added: 0,
+          comparison_inside_candidate_chain: true, speed_comparison: false}.to_json)
   end
   warm_baseline = warm_results["A"]
   warm_candidate = warm_results["B"]
@@ -664,6 +729,12 @@ begin
         profile_replay_is_not_a_speed_comparison: profile_mode_allowed,
         comparison_outside_timed_arms: true}.to_json)
   STDOUT.flush
+  if diagnose_self_attention
+    puts({schema: "wan_s2v_full_block_diagnostic_only_v1", measured_pairs: 0,
+          warmup_comparison_pass: warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0,
+          full_block_acceptance: false}.to_json)
+    exit
+  end
   unless (!require_exact || warm_compare[:bit_differences] == 0) && warm_compare[:tolerance_violations] == 0 && warm_compare[:nonfinite] == 0
     raise "Warmup block outputs failed the required comparison"
   end
@@ -673,6 +744,7 @@ begin
     arm_uses_fused_kv_preparation = compare_kv_prep_fusion && arm.order == "B"
     puts({schema: "wan_s2v_full_block_arm_v1", groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
           heads_per_group: arm.heads_per_group,
+          native_query_tile_rows: native_candidate && arm.order == "B" ? 32 : nil,
           head_group_count: HEADS // arm.heads_per_group,
           distinct_attention_executables: (arm.order == "A" ? attention_workspace.not_nil! : candidate_attention).distinct_executable_count,
           order: arm.order, warmup: arm.warmup, host_wall_seconds: arm.host_wall_seconds,
@@ -701,7 +773,7 @@ begin
           prepared_kv_pair_shared_between_arms: prepared_kv_for_both_arms,
           prepared_kv_buffer_bytes_refreshed_per_encode: arm_uses_prepared_kv ? prepared_kv_bytes : 0_i64,
           prepared_kv_requested: prepared_kv_requested,
-          self_attention_backend: arm_uses_explicit_qk_softmax_pv ? candidate_self_attention_backend : baseline_self_attention_backend,
+          self_attention_backend: arm.order == "B" ? candidate_self_attention_backend : baseline_self_attention_backend,
           cross_attention_backend: "native_tiled",
           explicit_qk_softmax_pv: arm_uses_explicit_qk_softmax_pv,
           fuse_kv_preparation: arm_uses_fused_kv_preparation,
@@ -750,6 +822,7 @@ begin
       puts({schema: "wan_s2v_full_block_arm_v1", pair: pair,
             groups_per_segment: arm.groups, query_chunk_rows: arm.query_chunk,
             heads_per_group: arm.heads_per_group,
+            native_query_tile_rows: native_candidate && !baseline ? 32 : nil,
             head_group_count: HEADS // arm.heads_per_group,
             distinct_attention_executables: (baseline ? attention_workspace.not_nil! : candidate_attention).distinct_executable_count,
             order: arm.order, warmup: false,
@@ -779,7 +852,7 @@ begin
             prepared_kv_pair_shared_between_arms: prepared_kv_for_both_arms,
             prepared_kv_buffer_bytes_refreshed_per_encode: arm_uses_prepared_kv ? prepared_kv_bytes : 0_i64,
             prepared_kv_requested: prepared_kv_requested,
-            self_attention_backend: arm_uses_explicit_qk_softmax_pv ? candidate_self_attention_backend : baseline_self_attention_backend,
+            self_attention_backend: baseline ? baseline_self_attention_backend : candidate_self_attention_backend,
             cross_attention_backend: "native_tiled",
             explicit_qk_softmax_pv: arm_uses_explicit_qk_softmax_pv,
             fuse_kv_preparation: arm_uses_fused_kv_preparation,

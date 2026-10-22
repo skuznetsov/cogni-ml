@@ -8,6 +8,7 @@ require "../src/ml/video/metal_attention"
 require "../src/ml/video/metal_mps_command_chain"
 require "../src/ml/video/metal_ops"
 require "../spec/support/video_allocation_counter"
+require "./support/wan_s2v_steel_attention_probe"
 
 private HG_Q_ROWS          = 36_608
 private HG_K_ROWS          = 36_608
@@ -130,7 +131,8 @@ private record HGFixture, manifest_path : String, expected_path : String,
   attention_source_sha256 : String, adapter_sha256 : String, generator_sha256 : String
 
 private record HGArm, name : String, heads_per_group : Int32, chunk_rows : Int32,
-  output : ML::MetalBuffer, workspace : ML::Video::WanAttentionMPSChunkWorkspace
+  output : ML::MetalBuffer,
+  workspace : ML::Video::WanAttentionMPSChunkWorkspace | WanS2VSteelAttentionProbe
 
 private def hg_sha256(path : String) : String
   digest = Digest::SHA256.new
@@ -237,15 +239,18 @@ private def hg_load_expected_slice(path : String, destination : ML::MetalBuffer,
 end
 
 private def hg_plan(query_rows : Int32, candidate_chunk : Int32,
-                    candidate_group : Int32, same_chunk_control : Bool)
+                    candidate_group : Int32, baseline_group : Int32,
+                    same_chunk_control : Bool, key_shard_rows : Int32 = 0)
   query_values = query_rows.to_i64 * HG_CHANNELS
   kv_values = HG_K_ROWS.to_i64 * HG_CHANNELS
   arms = same_chunk_control ? 3 : 2
-  base_scratch = 3_i64 * HG_BASELINE_CHUNK * HG_HEADS * HG_HEAD_DIM
+  base_scratch = 3_i64 * HG_BASELINE_CHUNK * baseline_group * HG_HEAD_DIM
   candidate_scratch = 3_i64 * candidate_chunk * candidate_group * HG_HEAD_DIM
   scratch_values = base_scratch + candidate_scratch + base_scratch + candidate_scratch
   scratch_values += 3_i64 * candidate_chunk * HG_HEADS * HG_HEAD_DIM if same_chunk_control
   explicit_values = query_values * (4 + arms) + 4_i64 * kv_values + scratch_values
+  # Fresh and reused candidate workspaces each own an F32 (max, sum) per row/head.
+  explicit_values += 4_i64 * query_rows * HG_HEADS if key_shard_rows > 0
   metric_sets = arms + 1 + (same_chunk_control ? 1 : 0) + 1 + 2 + 2
   explicit_values += 4 + metric_sets * 5
   {query_values: query_values, kv_values: kv_values, scratch_values: scratch_values,
@@ -309,6 +314,7 @@ private def hg_run_arm(arm : HGArm, query_rows : Int32,
       schema: "wan_s2v_attention_head_groups_arm_v1", arm: arm.name,
       heads_per_group: arm.heads_per_group, group_count: HG_HEADS // arm.heads_per_group,
       chunk_rows: arm.chunk_rows, completed_wall_seconds: completed_seconds,
+      backend: arm.workspace.is_a?(WanS2VSteelAttentionProbe) ? "native_steel_f32" : "mpsgraph_sdpa",
       encode_wall_seconds: encode_seconds,
       summed_command_root_gpu_interval_seconds: chain.gpu_elapsed_seconds,
       distinct_executable_count: arm.workspace.distinct_executable_count,
@@ -336,7 +342,7 @@ private def hg_validate_original(arms : Array(HGArm), expected : ML::MetalBuffer
                                  control_actual_plus : ML::MetalBuffer,
                                  control_reference_nan : ML::MetalBuffer,
                                  control_actual_nan : ML::MetalBuffer,
-                                 query_rows : Int32) : Nil
+                                 query_rows : Int32, require_bitexact : Bool = false) : Nil
   chain = ML::Metal::MPSCommandChain.new
   begin
     encoder = chain.encoder
@@ -373,6 +379,9 @@ private def hg_validate_original(arms : Array(HGArm), expected : ML::MetalBuffer
     unless pair[:tolerance_violations] == 0 && pair[:nonfinite] == 0
       raise "candidate differs from baseline beyond the strict tolerance"
     end
+    if require_bitexact && pair[:bit_differences] != 0
+      raise "sharded candidate is not bit-identical to the unsharded native control"
+    end
     if arms.size == 3
       control = results["candidate_same_chunk"]
       unless control[:tolerance_violations] == 0 && control[:nonfinite] == 0
@@ -387,6 +396,7 @@ private def hg_validate_original(arms : Array(HGArm), expected : ML::MetalBuffer
     puts({schema: "wan_s2v_attention_head_groups_validation_v1",
           phase: "original_fixture", query_rows: query_rows, compared_values: count,
           metrics: results, positive_control_rejected: true, nan_control_rejected: true,
+          native_bitexact_required: require_bitexact,
           terminal_waits: chain.wait_count, passed: true}.to_json)
     STDOUT.flush
     chain.release
@@ -406,7 +416,7 @@ private def hg_validate_mutated(original_baseline : ML::MetalBuffer,
                                 metrics : Hash(String, ML::MetalBuffer),
                                 zero : ML::Metal::ComputePipeline,
                                 compare : ML::Metal::ComputePipeline,
-                                query_rows : Int32) : Nil
+                                query_rows : Int32, require_bitexact : Bool = false) : Nil
   chain = ML::Metal::MPSCommandChain.new
   begin
     encoder = chain.encoder
@@ -428,6 +438,9 @@ private def hg_validate_mutated(original_baseline : ML::MetalBuffer,
     unless strict[:tolerance_violations] == 0 && strict[:nonfinite] == 0
       raise "changed-K/V candidate differs from fresh baseline beyond strict tolerance"
     end
+    if require_bitexact && strict[:bit_differences] != 0
+      raise "changed-K/V sharded candidate is not bit-identical to native control"
+    end
     {results[:mutation_changed_baseline], results[:mutation_changed_candidate]}.each do |changed|
       unless changed[:bit_differences] > 0 && changed[:nonfinite] == 0
         raise "changed-K/V replay did not change a finite output"
@@ -436,6 +449,7 @@ private def hg_validate_mutated(original_baseline : ML::MetalBuffer,
     puts({schema: "wan_s2v_attention_head_groups_validation_v1",
           phase: "changed_kv_replay", k_salt: 5, v_salt: 6, query_rows: query_rows,
           compared_values: count, metrics: results, terminal_waits: chain.wait_count,
+          native_bitexact_required: require_bitexact,
           changed_kv_attested: true, passed: true}.to_json)
     STDOUT.flush
     chain.release
@@ -454,7 +468,7 @@ private def hg_validate_reused_changed_kv(arms : Array(HGArm),
                                           metrics : Hash(String, ML::MetalBuffer),
                                           zero : ML::Metal::ComputePipeline,
                                           compare : ML::Metal::ComputePipeline,
-                                          query_rows : Int32) : Nil
+                                          query_rows : Int32, require_bitexact : Bool = false) : Nil
   chain = ML::Metal::MPSCommandChain.new
   begin
     encoder = chain.encoder
@@ -471,12 +485,16 @@ private def hg_validate_reused_changed_kv(arms : Array(HGArm),
       unless result[:tolerance_violations] == 0 && result[:nonfinite] == 0
         raise "reused workspace differs from its fresh changed-K/V counterpart"
       end
+      if require_bitexact && result[:bit_differences] != 0
+        raise "reused changed-K/V workspace lost bit identity"
+      end
     end
     puts({schema: "wan_s2v_attention_head_groups_validation_v1",
           phase: "reused_changed_kv_workspace", k_salt: 5, v_salt: 6,
           query_rows: query_rows, compared_values_per_arm: count,
           metrics: {baseline: baseline, candidate: candidate},
           terminal_waits: chain.wait_count, original_workspaces_reused: true,
+          native_bitexact_required: require_bitexact,
           matched_fresh_changed_kv_outputs: true, passed: true}.to_json)
     STDOUT.flush
     chain.release
@@ -547,14 +565,19 @@ query_rows = 128
 query_start = 0
 query_start_set = false
 tail = false
+baseline_group = HG_HEADS
 candidate_group = 1
 candidate_chunk = 1_024
 pairs = 1
 order = "AB"
 same_chunk_control = false
 plan_only = false
+steel_source_path = ""
+baseline_steel_source_path = ""
+key_shard_rows = 0
+require_native_bitexact = false
 OptionParser.parse do |parser|
-  parser.banner = "Usage: wan_s2v_attention_head_groups_probe --fixture=DIR [--query-rows=128|257|8192] [--candidate-heads-per-group=G] [--candidate-chunk=128|256|512|1024] [--pairs=1|3] [--order=AB|BA] [--same-chunk-control]"
+  parser.banner = "Usage: wan_s2v_attention_head_groups_probe --fixture=DIR [--query-rows=128|257|8192] [--baseline-heads-per-group=G] [--candidate-heads-per-group=G] [--candidate-chunk=128|256|512|1024] [--pairs=1|3] [--order=AB|BA] [--same-chunk-control]"
   parser.on("--fixture=DIR", "Pinned full-query upstream attention fixture") { |value| fixture_dir = value }
   parser.on("--query-rows=N", "Selected query rows (default 128)") { |value| query_rows = value.to_i }
   parser.on("--query-start=N", "First full-sequence query row (default 0)") do |value|
@@ -562,15 +585,23 @@ OptionParser.parse do |parser|
     query_start_set = true
   end
   parser.on("--tail", "Select the final query rows") { tail = true }
+  parser.on("--baseline-heads-per-group=N", "Baseline group size dividing 40 at chunk 128 (default 40)") { |value| baseline_group = value.to_i }
   parser.on("--candidate-heads-per-group=N", "Candidate group size dividing 40 (default 1)") { |value| candidate_group = value.to_i }
   parser.on("--candidate-chunk=N", "Candidate query chunk rows: 128, 256, 512, 1024 (default 1024)") { |value| candidate_chunk = value.to_i }
   parser.on("--pairs=N", "Measured A/B pairs: 1 or 3 (default 1)") { |value| pairs = value.to_i }
   parser.on("--order=AB|BA", "Pair order; 3 pairs alternate to balance chronology") { |value| order = value }
   parser.on("--same-chunk-control", "Opt in to all-head G=40 at candidate chunk size") { same_chunk_control = true }
   parser.on("--plan-only", "Print CPU-only plan without Metal or fixture access") { plan_only = true }
+  parser.on("--candidate-steel-source=FILE", "Opt in to the pinned standalone F32 STEEL probe shader; group/chunk metadata applies to the MPS control only") { |value| steel_source_path = File.expand_path(value) }
+  parser.on("--baseline-steel-source=FILE", "Use an unsharded native F32 STEEL control") { |value| baseline_steel_source_path = File.expand_path(value) }
+  parser.on("--candidate-steel-key-shard=N", "Continue exact online state across 2048-key GPU shards") { |value| key_shard_rows = value.to_i }
+  parser.on("--require-native-bitexact", "Require candidate/native control bit identity") { require_native_bitexact = true }
 end
 
 raise ArgumentError.new("--query-rows must be 128, 257, or 8192") unless HG_QUERY_ROWS.includes?(query_rows)
+unless baseline_group > 0 && baseline_group <= HG_HEADS && HG_HEADS % baseline_group == 0
+  raise ArgumentError.new("--baseline-heads-per-group must divide 40")
+end
 unless candidate_group > 0 && candidate_group <= HG_HEADS && HG_HEADS % candidate_group == 0
   raise ArgumentError.new("--candidate-heads-per-group must divide 40")
 end
@@ -579,21 +610,38 @@ raise ArgumentError.new("--pairs must be 1 or 3") unless {1, 3}.includes?(pairs)
 raise ArgumentError.new("--order must be AB or BA") unless {"AB", "BA"}.includes?(order)
 raise ArgumentError.new("--tail cannot combine with --query-start") if tail && query_start_set
 raise ArgumentError.new("All-head candidate is already the same-chunk control") if same_chunk_control && candidate_group == HG_HEADS
+raise ArgumentError.new("STEEL probe does not support the same-chunk control") if !steel_source_path.empty? && same_chunk_control
+unless {0, 2_048}.includes?(key_shard_rows)
+  raise ArgumentError.new("--candidate-steel-key-shard must be zero or 2048")
+end
+if key_shard_rows > 0 && steel_source_path.empty?
+  raise ArgumentError.new("Key shards require --candidate-steel-source")
+end
+if !baseline_steel_source_path.empty? && (steel_source_path.empty? || same_chunk_control)
+  raise ArgumentError.new("Native baseline requires a native candidate and no same-chunk control")
+end
+if require_native_bitexact && (baseline_steel_source_path.empty? || key_shard_rows == 0)
+  raise ArgumentError.new("Bit identity requires native baseline and sharded candidate")
+end
 query_start = HG_Q_ROWS - query_rows if tail
 unless query_start >= 0 && query_start.to_i64 + query_rows <= HG_Q_ROWS
   raise ArgumentError.new("--query-start and --query-rows exceed full query extent")
 end
 fixture_dir = File.expand_path(fixture_dir) unless fixture_dir.empty?
-buffer_plan = hg_plan(query_rows, candidate_chunk, candidate_group, same_chunk_control)
+buffer_plan = hg_plan(query_rows, candidate_chunk, candidate_group, baseline_group, same_chunk_control, key_shard_rows)
 raise ArgumentError.new("Explicit MetalBuffer plan exceeds 5 GiB") if buffer_plan[:explicit_bytes] > HG_EXPLICIT_CAP
 
 if plan_only
   puts({schema: "wan_s2v_attention_head_groups_plan_v1", query_start: query_start,
         query_rows: query_rows, key_rows: HG_K_ROWS, heads: HG_HEADS, head_dim: HG_HEAD_DIM,
-        baseline: {heads_per_group: HG_HEADS, group_count: 1, chunk_rows: HG_BASELINE_CHUNK},
+        baseline: {heads_per_group: baseline_group, group_count: HG_HEADS // baseline_group, chunk_rows: HG_BASELINE_CHUNK},
         candidate: {heads_per_group: candidate_group, group_count: HG_HEADS // candidate_group,
                     chunk_rows: candidate_chunk},
         same_chunk_control: same_chunk_control ? {heads_per_group: HG_HEADS, chunk_rows: candidate_chunk} : nil,
+        candidate_backend: steel_source_path.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+        baseline_backend: baseline_steel_source_path.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+        key_shard_rows: key_shard_rows, native_bitexact_required: require_native_bitexact,
+        steel_geometry: steel_source_path.empty? ? nil : {query_tile: WanS2VSteelAttentionProbe::QUERY_TILE, key_tile: WanS2VSteelAttentionProbe::KEY_TILE, simd_groups: WanS2VSteelAttentionProbe::SIMD_GROUPS, head_grouping_applies: false},
         changed_kv_replay: {k_salt: 5, v_salt: 6}, pairs: pairs, order: order,
         explicit_buffer_bytes: buffer_plan[:explicit_bytes], explicit_buffer_cap_bytes: HG_EXPLICIT_CAP,
         explicit_buffer_cap_passed: true, opaque_mps_private_workspace_included: false,
@@ -603,6 +651,8 @@ if plan_only
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 fixture = hg_validate_fixture!(fixture_dir)
+steel_source = steel_source_path.empty? ? "" : File.read(steel_source_path)
+baseline_steel_source = baseline_steel_source_path.empty? ? "" : File.read(baseline_steel_source_path)
 
 puts({schema: "wan_s2v_attention_head_groups_setup_v1",
       device_name: ML::Metal::Device.instance.name,
@@ -612,11 +662,17 @@ puts({schema: "wan_s2v_attention_head_groups_setup_v1",
       fixture_manifest_path: fixture.manifest_path,
       fixture_manifest_sha256: fixture.manifest_sha256,
       expected_full_file_sha256: fixture.expected_sha256,
+      candidate_backend: steel_source.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+      baseline_backend: baseline_steel_source.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+      baseline_shader_sha256: baseline_steel_source.empty? ? nil : Digest::SHA256.hexdigest(baseline_steel_source),
+      key_shard_rows: key_shard_rows, native_bitexact_required: require_native_bitexact,
+      candidate_shader_sha256: steel_source.empty? ? nil : Digest::SHA256.hexdigest(steel_source),
+      steel_geometry: steel_source.empty? ? nil : {query_tile: WanS2VSteelAttentionProbe::QUERY_TILE, key_tile: WanS2VSteelAttentionProbe::KEY_TILE, simd_groups: WanS2VSteelAttentionProbe::SIMD_GROUPS, head_grouping_applies: false},
       reference_torch_version: fixture.torch_version,
       wan_attention_source_sha256: fixture.attention_source_sha256,
       wan_s2v_reference_adapter_sha256: fixture.adapter_sha256,
       generator_sha256: fixture.generator_sha256,
-      baseline: {heads_per_group: HG_HEADS, group_count: 1, chunk_rows: HG_BASELINE_CHUNK},
+      baseline: {heads_per_group: baseline_group, group_count: HG_HEADS // baseline_group, chunk_rows: HG_BASELINE_CHUNK},
       candidate: {heads_per_group: candidate_group, group_count: HG_HEADS // candidate_group,
                   chunk_rows: candidate_chunk},
       same_chunk_control: same_chunk_control ? {heads_per_group: HG_HEADS,
@@ -625,7 +681,7 @@ puts({schema: "wan_s2v_attention_head_groups_setup_v1",
       opaque_mps_private_workspace_bytes: "not included in explicit MetalBuffer accounting",
       pairs: pairs, requested_order: order, model_weights_loaded: false,
       validation_tolerance: "2e-5+2e-5*abs(reference)",
-      timed_arm_scope: "NaN poison, full BTHD-to-head-major K/V refresh, grouped gather/SDPA/scatter, and one terminal wait",
+      timed_arm_scope: "NaN poison, full BTHD-to-head-major K/V refresh, selected backend attention, and one terminal wait",
       all_outputs_compared_to_pinned_upstream: true,
       scope: "selected-query attention only; no full block/model/video-throughput claim"}.to_json)
 STDOUT.flush
@@ -643,7 +699,8 @@ begin
   prepared_v = arena.alloc("hg_head_major_value", kv_values.to_i32)
   expected = arena.alloc("hg_upstream_expected_bhqd", query_values.to_i32)
 
-  arm_specs = [{"baseline_g40_c128", HG_HEADS, HG_BASELINE_CHUNK},
+  baseline_name = "baseline_g#{baseline_group}_c#{HG_BASELINE_CHUNK}"
+  arm_specs = [{baseline_name, baseline_group, HG_BASELINE_CHUNK},
                {"candidate", candidate_group, candidate_chunk}]
   arm_specs << {"same_chunk_g40", HG_HEADS, candidate_chunk} if same_chunk_control
   outputs = [] of ML::MetalBuffer
@@ -654,9 +711,18 @@ begin
     chunk_q = arena.alloc("hg_#{name}_chunk_q", scratch_values.to_i32)
     chunk_a = arena.alloc("hg_#{name}_chunk_output_a", scratch_values.to_i32)
     chunk_b = arena.alloc("hg_#{name}_chunk_output_b", scratch_values.to_i32)
-    workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
-      HG_K_ROWS, HG_HEADS, HG_HEAD_DIM, chunk, q, k, v, output,
-      chunk_q, chunk_a, chunk_b, prepared_k, prepared_v, heads_per_group: group)
+    workspace = if name == "candidate" && !steel_source.empty?
+                  row_state = key_shard_rows > 0 ? arena.alloc("hg_candidate_row_state", query_rows * HG_HEADS * 2) : nil
+                  WanS2VSteelAttentionProbe.new(query_rows, HG_K_ROWS, HG_HEADS,
+                    q, k, v, output, prepared_k, prepared_v, steel_source, key_shard_rows, row_state)
+                elsif name == baseline_name && !baseline_steel_source.empty?
+                  WanS2VSteelAttentionProbe.new(query_rows, HG_K_ROWS, HG_HEADS,
+                    q, k, v, output, prepared_k, prepared_v, baseline_steel_source)
+                else
+                  ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
+                    HG_K_ROWS, HG_HEADS, HG_HEAD_DIM, chunk, q, k, v, output,
+                    chunk_q, chunk_a, chunk_b, prepared_k, prepared_v, heads_per_group: group)
+                end
     arms << HGArm.new(name, group, chunk, output, workspace)
   end
 
@@ -664,15 +730,24 @@ begin
   mutated_candidate = arena.alloc("hg_mutated_candidate_output", query_values.to_i32)
   outputs << mutated_baseline << mutated_candidate
   {arms[0], arms[1]}.each do |original|
-    output = original.name == "baseline_g40_c128" ? mutated_baseline : mutated_candidate
+    output = original.name == baseline_name ? mutated_baseline : mutated_candidate
     scratch_values = original.chunk_rows.to_i64 * original.heads_per_group * HG_HEAD_DIM
     chunk_q = arena.alloc("hg_mutation_#{original.name}_chunk_q", scratch_values.to_i32)
     chunk_a = arena.alloc("hg_mutation_#{original.name}_chunk_output_a", scratch_values.to_i32)
     chunk_b = arena.alloc("hg_mutation_#{original.name}_chunk_output_b", scratch_values.to_i32)
-    workspace = ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
-      HG_K_ROWS, HG_HEADS, HG_HEAD_DIM, original.chunk_rows, q, k, v, output,
-      chunk_q, chunk_a, chunk_b, prepared_k, prepared_v,
-      heads_per_group: original.heads_per_group)
+    workspace = if original.name == "candidate" && !steel_source.empty?
+                  row_state = key_shard_rows > 0 ? arena.alloc("hg_mutation_candidate_row_state", query_rows * HG_HEADS * 2) : nil
+                  WanS2VSteelAttentionProbe.new(query_rows, HG_K_ROWS, HG_HEADS,
+                    q, k, v, output, prepared_k, prepared_v, steel_source, key_shard_rows, row_state)
+                elsif original.name == baseline_name && !baseline_steel_source.empty?
+                  WanS2VSteelAttentionProbe.new(query_rows, HG_K_ROWS, HG_HEADS,
+                    q, k, v, output, prepared_k, prepared_v, baseline_steel_source)
+                else
+                  ML::Video::WanAttentionMPSChunkWorkspace.new(1, query_rows,
+                    HG_K_ROWS, HG_HEADS, HG_HEAD_DIM, original.chunk_rows, q, k, v, output,
+                    chunk_q, chunk_a, chunk_b, prepared_k, prepared_v,
+                    heads_per_group: original.heads_per_group)
+                end
     mutation_arms << HGArm.new("mutated_#{original.name}", original.heads_per_group,
       original.chunk_rows, output, workspace)
   end
@@ -716,7 +791,7 @@ begin
   puts(hg_run_arm(arms[2], query_rows, nan_pipeline).to_json) if arms.size == 3
   hg_validate_original(arms, expected, metrics, zero_pipeline, compare_pipeline,
     control_reference_plus, control_actual_plus, control_reference_nan,
-    control_actual_nan, query_rows)
+    control_actual_nan, query_rows, require_native_bitexact)
 
   measured_wall = Hash(String, Array(Float64)).new { |hash, key| hash[key] = [] of Float64 }
   pairs.times do |pair_index|
@@ -741,7 +816,7 @@ begin
     end
     hg_validate_original(arms, expected, metrics, zero_pipeline, compare_pipeline,
       control_reference_plus, control_actual_plus, control_reference_nan,
-      control_actual_nan, query_rows)
+      control_actual_nan, query_rows, require_native_bitexact)
   end
 
   mutation_setup = hg_setup_kv(k, v, fill_pipeline, kv_values, 5_u32, 6_u32)
@@ -752,21 +827,25 @@ begin
     STDOUT.flush
   end
   hg_validate_mutated(arms[0].output, arms[1].output, mutated_baseline,
-    mutated_candidate, metrics, zero_pipeline, compare_pipeline, query_rows)
+    mutated_candidate, metrics, zero_pipeline, compare_pipeline, query_rows, require_native_bitexact)
   mutation_order.each do |index|
     result = hg_run_arm(arms[index], query_rows, nan_pipeline)
     puts result.merge({phase: "reused_changed_kv_workspace", k_salt: 5, v_salt: 6}).to_json
     STDOUT.flush
   end
   hg_validate_reused_changed_kv(arms, mutated_baseline, mutated_candidate,
-    metrics, zero_pipeline, compare_pipeline, query_rows)
+    metrics, zero_pipeline, compare_pipeline, query_rows, require_native_bitexact)
   puts({schema: "wan_s2v_attention_head_groups_summary_v1", query_start: query_start,
-        query_rows: query_rows, candidate_heads_per_group: candidate_group,
+        query_rows: query_rows, baseline_heads_per_group: baseline_group,
+        baseline_chunk_rows: HG_BASELINE_CHUNK, candidate_heads_per_group: candidate_group,
         candidate_chunk_rows: candidate_chunk, measured_pairs: pairs, requested_order: order,
+        candidate_backend: steel_source.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+        baseline_backend: baseline_steel_source.empty? ? "mpsgraph_sdpa" : "native_steel_f32",
+        key_shard_rows: key_shard_rows, native_bitexact_required: require_native_bitexact,
         measured_completed_wall_seconds: measured_wall, mutation_setup_host_seconds: mutation_setup,
         explicit_buffer_bytes: arena.resident_bytes, full_kv_rows: HG_K_ROWS,
         default_production_workspace_changed: false,
-        scope: "selected-query MPS attention only; timings include K/V preparation and group gather/scatter"}.to_json)
+        scope: "selected-query attention only; timings include K/V preparation and backend layout work"}.to_json)
   STDOUT.flush
 ensure
   (mutation_arms + arms).reverse_each do |arm|

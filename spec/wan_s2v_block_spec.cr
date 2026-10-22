@@ -6,6 +6,7 @@ require "json"
 require "digest/sha256"
 require "../src/ml/video/wan_s2v_block"
 require "./support/video_allocation_counter"
+require "../examples/support/wan_s2v_steel_block_workspace"
 
 # Test-only native-dispatch observation: every block starts with a native
 # normalization dispatch, so rejected fusion admission must leave this at zero.
@@ -286,6 +287,10 @@ private def wan_prepare_mps_self_attention(
   cfg : ML::Video::WanS2VConfig, scratch : ML::Video::Arena,
   attention_scratch : ML::Video::Arena,
 ) : ML::Video::WanAttentionMPSChunkWorkspace?
+  native_source = ENV["WAN_S2V_NATIVE_STEEL_SOURCE"]?
+  if native_source && ENV["WAN_S2V_MPS_SELF_ATTENTION"]? != "1"
+    raise ArgumentError.new("Native STEEL fixture requires WAN_S2V_MPS_SELF_ATTENTION=1")
+  end
   prepared_kv = ENV["WAN_S2V_MPS_PREPARED_KV"]? == "1"
   if prepared_kv && ENV["WAN_S2V_MPS_SELF_ATTENTION"]? != "1"
     raise ArgumentError.new("MPS prepared K/V fixture requires WAN_S2V_MPS_SELF_ATTENTION=1")
@@ -299,12 +304,25 @@ private def wan_prepare_mps_self_attention(
   unless heads_per_group > 0 && cfg.heads % heads_per_group == 0
     raise ArgumentError.new("MPS self-attention fixture head group must divide heads")
   end
+  if native_source && !(cfg.batches == 1 && cfg.head_dim == 128 &&
+     heads_per_group == 4 && chunk_rows == 128 && prepared_kv)
+    raise ArgumentError.new("Native STEEL fixture requires B1/D128/G4/C128 and prepared K/V")
+  end
   # Keep full-head capacity for the existing invalid-workspace controls.
   # Grouped encode may bind the smaller prefix of these reusable buffers.
   count = (chunk_rows.to_i64 * cfg.dim).to_i32
   prepared_count = (cfg.seq.to_i64 * cfg.dim).to_i32
   prepared_k = prepared_kv ? attention_scratch.alloc("prepared_k_bhkd", prepared_count) : nil
   prepared_v = prepared_kv ? attention_scratch.alloc("prepared_v_bhkd", prepared_count) : nil
+  if source = native_source
+    return WanS2VSteelBlockWorkspace.new(cfg.seq, cfg.seq, cfg.heads,
+      scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
+      scratch["wan_b_self_attn"], attention_scratch.alloc("chunk_q", count),
+      attention_scratch.alloc("chunk_out_a", count), attention_scratch.alloc("chunk_out_b", count),
+      prepared_k.not_nil!, prepared_v.not_nil!,
+      attention_scratch.alloc("native_row_state", (2_i64 * cfg.seq * cfg.heads).to_i32),
+      File.read(source))
+  end
   ML::Video::WanAttentionMPSChunkWorkspace.new(
     cfg.batches, cfg.seq, cfg.seq, cfg.heads, cfg.head_dim, chunk_rows,
     scratch["wan_b_self_q"], scratch["wan_b_self_k"], scratch["wan_b_self_v"],
@@ -627,7 +645,7 @@ private def wan_check_reused_block_scratch(
           default_scratch_bytes: ML::Video::WanS2VBlock.scratch_bytes(cfg, precompute_rope: precompute_rope),
           precompute_rope: precompute_rope, mps_projections: !workspace.nil?,
           fuse_kv_preparation: fuse_kv_preparation,
-          self_attention_backend: attention ? "mpsgraph_sdpa_chunked" : "native",
+          self_attention_backend: attention.is_a?(WanS2VSteelBlockWorkspace) ? "native_steel_f32_key_shards_2048" : (attention ? "mpsgraph_sdpa_chunked" : "native"),
           self_attention_kv_layout: attention.try { |workspace| workspace.head_major_kv? ? "B,H,K,D" : "B,K,H,D" },
           prepared_kv_refreshed_inside_each_block_encode: attention.try(&.head_major_kv?) || false,
           attention_chunk_rows: attention.try(&.chunk_rows),
