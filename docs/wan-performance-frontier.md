@@ -4601,3 +4601,164 @@ packed GEMM must beat this complete decode-plus-GEMM control and re-pass the
 same-format gate. The reduced-diffusion-step experiment remains the return
 frontier after memory admission and model-quality checks; full generation
 remains outside the current authorization.
+
+### Gaussian-prefix diagnosis contract (2026-10-22)
+
+The accepted continuation is to measure compression error on genuine denoising
+activations at multiple timesteps. The scoped inventory found only scheduler
+recurrence traces and the original noise/image/audio/text input pack, not saved
+DiT activations or trajectory latents. Reaching later timesteps requires the
+preceding full DiT evaluations; the current BF16 model is still outside the
+admitted memory budget. Do not relabel the four seeded block rows as trajectory
+data or start complete generation to obtain them.
+
+Before changing the weight loader, admit a smaller discriminating experiment
+on the existing real FFN matrix and four controlled input rows. Compare weight
+error, standardized tail occupancy/error, and projection error for the original
+formats. For QBit p4/p5, keep the payload fixed while replacing Gaussian prefix
+centroids with the arithmetic mean of full-code levels, restore only original
+weights with |z| >= 3 or 4, and independently reassign the original normalized
+weights to the nearest existing Gaussian centroid. The last three arms are
+diagnostic interventions, not production codecs or equal-storage quality claims.
+Integrate the standard-normal scalar error for the existing intervals as a
+separate mathematical control: conditional means optimize those fixed cells,
+not every possible low-bit partition or the activation-weighted matrix loss.
+
+CAUTION rollback removes the opt-in diagnostics and leaves the existing
+benchmark, codecs, loaders and defaults unchanged. DoD: a release native probe
+with independently prepared MPS reference outputs, existing finite
+`2e-5 + 2e-5*abs(reference)` parity for every tested projection, positive error
+controls, GPU-only reconstruction/reduction/projection within each arm, no
+inter-operator host waits or activation readbacks, and guarded execution with
+the existing 15% cache-aware reserve and 64 MiB swap-growth stop. Record source,
+fixture, binary and command identity. Never infer video quality, a new codec's
+storage cost or speed from ideal tail repair or these four input rows. The
+strongest attribution failure is mistaking a useful oracle intervention for an
+implementable equal-bit codec. Refresh for changed weights, inputs or kernels.
+
+### Gaussian-prefix diagnosis result and adaptive-packing correction (2026-10-22)
+
+The opt-in native diagnostic and separately prepared MPS oracle completed on
+the same real 13824 x 5120 FFN matrix. All four original decoded matrices and
+all twelve original/intervention projections are bit-exact to their same-format
+references at the unchanged finite gate. GPU reductions have a full-matrix
+known-answer control, one-ULP threshold-boundary controls, and seeded +1/NaN
+rejection. Each native arm reconstructs, reduces and projects on GPU without an
+inter-operator host wait, activation readback, or encode-time MetalBuffer
+allocation. This diagnostic makes no timing claim.
+
+Gaussian conditional means reduce weight squared error versus arithmetic means
+of the retained full-code levels by 33.49% at p4 and 13.82% at p5. The centroid
+formula is therefore not the observed failure. Even a standard-normal source
+has relative scalar RMS errors of 13.31% and 7.41% for these fixed p4/p5 prefix
+cells. Conditional means optimize reconstruction within those fixed cells;
+they do not make the cells an optimal low-bit partition or minimize the
+activation-weighted projection loss.
+
+Only 0.2331% of weights have standardized magnitude at least 3, yet they account
+for 33.38%/43.12% of p4/p5 weight squared error. Restoring those weights reduces
+projection squared error by 54.55%/63.37% on the four distinct test rows. The
+p5 restored-tail output relative L2 is 4.215%, versus uniform p5 6.965% and
+Q4_K 4.632%. Original BF16-derived weights are available free to this diagnostic
+intervention; these numbers do not establish a real codec's storage or speed.
+The raw fourth standardized moment is 2.787, so rare extreme sensitivity does
+not justify calling the overall weight distribution heavy-tailed.
+
+The user correctly identified a missing comparison: fixed p4/p5 for an entire
+matrix does not test error-dependent dynamic QBit precision selection. The
+uniform-format ranking above is not a verdict on adaptive QBit. Locate and
+verify the existing selector and physical layout before reusing them for Wan
+weights; keep KV/state adaptation, weight packing, and activation-sensitive
+quality selection separate. Scalar weight error can improve while projection
+error worsens, as the p5 Gaussian/arithmetic control also demonstrates.
+
+Evidence root: external `wan-gaussian-diagnostics-20261022/` under the same
+video evidence base. `summary-v1.json` SHA256
+`ad6eaadbb788c4d8c5b01b4999113b7aab62d8aebdacffa87ebd52ff6e8753ed`
+indexes `build-v4`, `oracle-v1`, `native-v4`, immutable `fixture-v1`, and the
+source/binary/fixture-bound intents and unchanged-input completion receipts.
+Native explicit buffers total 1,979,917,500 bytes; sampled process peak is
+1.858 GiB, minimum cache-aware headroom 32.67 GiB, minimum pressure-free
+reading 77%, and swap growth zero. All owned process groups finished normally.
+Correlated Mini-Quad review returned ROBUST for this fixture's same-format
+parity and statistics, VULNERABLE for model-quality generalization. There are
+four distinct seeded input rows, repeated 1120 times, not denoising trajectory
+activations. Loaders and defaults remain unchanged; no full generation ran.
+
+### Reuse the existing adaptive-weight falsifier (2026-10-22)
+
+Live source confirms the user's recollection: `bin/qwen35_q6_adaptive_weight_probe.cr`
+is an adaptive per-256-value weight-policy prototype. It selects p4 when
+`max(abs(decoded-original))/block_sigma <= 0.20`, otherwise p5 at `<= 0.10`,
+otherwise original Q6. It forecasts sizes and tests mixed operator outputs;
+it does not write or consume a production mixed-tier weight container.
+The original Qwen default selected only Q6, and the tested compressed policies
+failed their quality gates (`docs/qwen-qbit-cache-frontier.md`, adaptive weight
+probe section). This is a transfer hypothesis, not a validated Wan policy.
+
+The next bounded falsifier applies that exact selector to Wan's existing
+Gaussian p4/p5 candidates, falling back to the original BF16-derived weights.
+Two explicit diagnostic policies use thresholds 0.50/0.50 and 1.00/0.50.
+These are selector parameters, not changes to the unchanged same-format
+upstream parity gate. Selection, reconstruction, reductions and projection
+stay on GPU; tier bytes and projections are checked against an independent
+offline MPS reference, with inclusive-boundary, zero-sigma and nonfinite
+selector controls. No compact mixed payload is built or timed. Charge the old
+weight prototype's four metadata bytes per block in the size forecast, but do
+not claim it accounts for a complete future address/index layout.
+
+DoD: release build, exact tier agreement, finite projection parity at
+`2e-5 + 2e-5*abs(reference)`, selector controls, zero encode allocations and
+inter-operator host waits, and the same 15% reserve/64 MiB swap-growth guard.
+The strongest failure is interpreting an error-threshold policy or a storage
+forecast as an implemented, quality-approved packed model. Rollback removes
+only these opt-in diagnostics; production codecs/loaders/defaults stay fixed.
+
+The bounded GPU transfer passed: all 276480 selected tiers agree exactly with
+the MPS oracle in every policy, and all three projections are bit-exact to
+their same-format references. Twelve selector controls per policy cover
+adjacent Float32 threshold values, p4 precedence, zero sigma and nonfinite
+inputs. The twelve original/ablation arms and corruption/statistics controls
+also re-pass in the same release executable. There are no inter-operator host
+waits, activation readbacks, or tracked encode allocations in the native path.
+The offline oracle has host waits and exports tier vectors and four output
+rows to immutable reference files; it is outside that native-path claim.
+Correlated Mini-Quad review returned ROBUST for selector transfer and
+same-fixture parity, VULNERABLE for model-quality generalization, compact-format
+completeness and speed.
+
+| p4 / p5 thresholds | p4 blocks | p5 blocks | BF16 blocks | Forecast bits/weight | Output relative L2 vs BF16 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.20 / 0.10 | 0 | 0 | 276480 | 16.125 | 0.000% |
+| 0.50 / 0.50 | 60049 | 130495 | 85936 | 8.499 | 4.168% |
+| 1.00 / 0.50 | 186715 | 3829 | 85936 | 8.041 | 6.153% |
+
+The original selector preserves this matrix exactly by rejecting compression.
+The 0.50/0.50 policy reduces error compared with uniform p5 (6.965%), but
+its forecast costs 8.499 rather than 5.25 bits/weight. The whole-block BF16
+escape applies to 31.082% of blocks. This is evidence for a size/error tradeoff
+on four inputs, not an equal-byte win over p5 or Q4_K (4.5 bits/weight), an
+implemented mixed format, or model/video quality. Next discriminate smaller
+normalization groups, intermediate precision tiers, or sparse escapes at a
+matched complete storage budget, then validate on real denoising activations.
+
+External `adaptive-summary-v1.json` SHA256
+`73aa0d27ef76cc981dff524655d2ddfa7fd8f05dceb3e5b83d6a38888f7f9efd`
+indexes the source-bound `build-v6`, `adaptive-oracle-v1`, and
+`adaptive-native-v6` receipts plus immutable `adaptive-fixture-v1`.
+Native sampled peak footprint is 1.858 GiB, minimum cache-aware headroom
+29.944 GiB, minimum pressure-free reading 78%, swap growth zero, and no owned
+process remains. No full model or video generation ran. Native manifest
+admission also binds both oracle scripts to current source hashes; the command
+receipts establish their execution, rather than relying on manifest assertions.
+
+CPU integrity/guard/result refresh (does not run a model):
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-gaussian-diagnostics-20261022/summarize-adaptive-v1.py
+```
+
+The fixture-aware result decays after relevant source, weight, activation,
+shape or backend changes. Repeat guarded numerical checks before transferring
+it; quality/generalization needs new trajectory inputs, and speed needs an
+actual packed consumer and matched complete-path timings.

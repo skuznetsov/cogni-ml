@@ -32052,3 +32052,49 @@ Refresh after source/toolchain/device/model/workload changes.
   source, weights, inputs, shape, backend, OS/runtime/driver or host-state change.
   Correlated Mini-Quad verdict: ROBUST for this probe, without model/video
   quality or general performance promotion.
+
+
+### 2026-10-22 — Diagnose Gaussian QBit and restore the adaptive-weight comparison
+
+- The existing Qwen adaptive-weight prototype is real: `bin/qwen35_q6_adaptive_weight_probe.cr`
+  chooses p4/p5/original Q6 per 256 values by max absolute residual divided by
+  block sigma. It forecasts storage and mixed operator quality; it is not a
+  production mixed-tier packer. Fixed p4/p5 Wan measurements do not test it.
+- Opt-in native/MPS diagnostics on the same real Wan FFN matrix show Gaussian
+  conditional means reduce weight squared error versus arithmetic centroids
+  by 33.49%/13.82% at p4/p5. The main surviving concerns are fixed-cell tails,
+  scalar-error versus projection-error mismatch, and precision allocation.
+  A tail-restoration oracle is evidence for sensitivity, not a free codec.
+- GPU transfer of the existing selector, with original BF16 fallback, passes
+  exact tier comparison for all 276480 blocks and bit-exact same-format MPS
+  projection comparisons. Thresholds .20/.10 select all BF16 (16.125 forecast
+  bpw); .50/.50 select 60049 p4, 130495 p5, 85936 BF16 blocks (8.499 bpw,
+  4.168% output relative L2 versus BF16); 1.00/.50 yields 8.041 bpw and 6.153%.
+  Uniform p5 is 5.25 bpw/6.965%; Q4_K is 4.5 bpw/4.632%. No equal-byte win,
+  complete mixed-layout, quality or speed claim follows from these forecasts.
+- Release v6 re-passes all twelve original/ablation arms, all three adaptive
+  arms, corruption/statistics controls and twelve selector controls per policy
+  at unchanged finite 2e-5 + 2e-5*abs(reference). Reconstruction, selection,
+  reductions and projections remain GPU-resident with no inter-operator host
+  waits, activation readbacks or tracked encode allocations. Guarded native
+  sampled peak is 1.858 GiB, minimum cache-aware headroom 29.944 GiB, minimum
+  pressure-free reading 78%, swap growth zero, no owned processes remaining.
+- Correlated Mini-Quad verdict: ROBUST for selector transfer and same-fixture
+  parity; VULNERABLE for model-quality generalization, compact-format
+  completeness and speed. The offline MPS oracle waits and exports fixtures;
+  the zero inter-operator wait/activation-readback claim scopes to native arms.
+- Evidence/refresh: `docs/wan-performance-frontier.md`, external
+  `wan-gaussian-diagnostics-20261022/adaptive-summary-v1.json`, SHA256
+  `73aa0d27ef76cc981dff524655d2ddfa7fd8f05dceb3e5b83d6a38888f7f9efd`.
+  Source/fixture/binary/command hashes bind executions; the CPU refresh script
+  rechecks receipts, live inputs, numerical results and sampled guard limits.
+- Continuation: compare smaller groups, intermediate precision or sparse
+  escapes at matched complete storage budgets, then use genuinely captured
+  Wan denoising activations. Only four distinct seeded rows exist in this
+  fixture; repeating them does not establish trajectory/video quality. The
+  reduced 8/12/16 versus 40 diffusion-step quality experiment remains the
+  return frontier after packed-model memory admission. Keep production
+  codecs/loaders/defaults fixed. Standing scope: GPU paths, no new in-chain
+  waits, unchanged parity gate, 15% reserve and 64 MiB swap-growth stop,
+  SSD scratch, no full generation. Refresh after relevant source, weights,
+  inputs, shape or backend changes; speed needs a real packed consumer.
