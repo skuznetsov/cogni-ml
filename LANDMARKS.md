@@ -32019,3 +32019,36 @@ Refresh after source/toolchain/device/model/workload changes.
   host-state changes. Rollback removes only the opt-in benchmark adapter and
   its documentation; the pinned parent and scoped source bytes bind evidence
   across documentation-only or source-preserving commits.
+
+### 2026-10-22 — Bound Wan packed-weight projection cost and distortion
+
+- One opt-in real-checkpoint `blocks.0.ffn.0` projection (13824 x 5120),
+  with four seeded upstream input rows GPU-tiled to 4480, completed under the
+  15% cache-aware reserve and 64 MiB swap-growth guard. No full generation.
+- GPU decode -> the same persistent F32 MPS GEMM -> bias medians (eight
+  balanced measured samples each): BF16 56.536 ms, Q4_K 57.578 ms,
+  QBit p4 57.625 ms, p5 57.070 ms. Stored matrix sizes are 135.00 / 37.97 /
+  35.86 / 44.30 MiB, plus a shared 270 MiB F32 stage. This is a storage-memory
+  reduction in packed payload, not a net model-resident memory measurement,
+  demonstrated projection acceleration, or packed GEMM.
+- All decoded weights and same-format projections were bit-exact to the
+  independently prepared MPS references before/after timing at the unchanged
+  finite 2e-5 + 2e-5*abs(reference) gate. Six invalid encodes and seeded +1/NaN
+  controls reject. No inter-operator host waits, activation readbacks or
+  encode-time MetalBuffer allocations. QBit payload/LUT bytes independently
+  match the public Crystal codec on 3072 real blocks per precision.
+- Lossy-vs-BF16 projection relative L2 is Q4_K 4.632%, p4 11.642%, p5 6.965%.
+  Q4_K is the strongest measured size/error candidate here, not an approved
+  model/video-quality format; only four distinct activation rows were tested.
+  Keep defaults/loaders unchanged. Next falsifier is multiple real denoising
+  activation/timestep captures before packed-model admission. Reduced-step
+  diffusion quality/speed remains the return frontier after memory admission.
+- Evidence and guarded rerun: `docs/wan-performance-frontier.md`, external
+  `wan-quantized-projection-20261022/summary-v1.json` SHA256
+  `b9b6ad2466c02dd07ce5c2701cb77f6f03986146505649b4c38605d12a5d85a5`.
+  Source/binary/fixture hashes bind prelaunch intent and unchanged postlaunch
+  receipts. Native sampled peak 1.579 GiB, minimum headroom 25.973 GiB,
+  zero swap growth. Refresh numerical/performance evidence after any relevant
+  source, weights, inputs, shape, backend, OS/runtime/driver or host-state change.
+  Correlated Mini-Quad verdict: ROBUST for this probe, without model/video
+  quality or general performance promotion.

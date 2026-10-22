@@ -4463,3 +4463,141 @@ error and complete GPU time, including decode, before choosing a format.
 Kernel parity must retain its existing tolerances against the same decoded
 weights; lossy model quality is a separate experiment and must not be presented
 as exact BF16/upstream parity. Preserve the BF16 control and the 15% guard.
+
+### Packed projection probe contract (2026-10-22, design sealed)
+
+The next admitted experiment is one real checkpoint projection,
+`blocks.0.ffn.0.weight` (13824 x 5120), with its original bias and identical
+resident inputs across BF16, canonical Q4_K, QBit p4 and QBit p5. Use the
+short-clip token count (4480 rows) for performance; qualify whether inputs are
+captured activations or controlled synthetic values explicitly. No complete
+block/model/video inference or activation quantization is admitted here.
+
+CAUTION rollback is deletion of the opt-in benchmark and decode helper;
+existing weight types, loaders and engine defaults remain unchanged. Offline
+checkpoint conversion is preprocessing and excluded from the projection
+timing. Timed arms contain GPU weight expansion/decode followed immediately by
+the same existing F32 MPS projection and bias operation, using one persistent
+F32 weight stage. Do not add per-operator waits, activation readbacks, or
+encode-time MetalBuffer allocations. Each independent sample has its existing
+terminal completion boundary. Warm all four arms, rotate their order in both
+directions, and report completed GPU and host wall time, not encode time alone.
+
+DoD: independently prepared packed payloads and torch-MPS reference traces;
+GPU unpack and projection comparison at the unchanged finite
+`2e-5 + 2e-5*abs(reference)` gate; a seeded corruption that the comparator
+rejects; full-size timing including decode; explicit packed/stage/activation
+bytes; and clean sampled guard lifetimes with a 15% cache-aware physical
+reserve and 64 MiB swap-growth stop. Only one owned heavy process may run.
+Source/fixture/binary/command hashes and explicit memory budgets bind evidence.
+The strongest failure mode is a valid format decoder incorrectly promoted to
+quality parity: report quantized-vs-BF16 distortion separately, never widen
+the decoder/kernel gate. Another falsifier is decode overhead erasing the
+storage benefit in completed projection time. A memory-only result is valid
+but cannot be called acceleration. Any failed gate keeps the path opt-in and
+unqualified. Refresh for weight/input/geometry/kernel/backend/runtime changes.
+
+### Packed projection results (2026-10-22)
+
+The bounded comparison completed on Apple M2 Max (64 GiB). The real BF16
+checkpoint matrix is `blocks.0.ffn.0.weight`, `[13824, 5120]`, with its original
+bias. The four upstream-captured, seeded FFN input rows were periodically tiled
+on GPU to 4480 rows. This exercises the short-clip projection geometry with
+only four distinct inputs; it is not a capture from a generated video.
+
+All four labels below describe **weight storage**, not GEMM arithmetic.
+Every timed projection expands/decodes the entire matrix on GPU into the same
+persistent 270 MiB F32 stage, then invokes the same F32 MPS matmul and bias.
+Offline archive packing, disk IO, pipeline compilation, reference loading,
+and validation are outside the timed arms. Projection time includes decode.
+
+| Stored weights | Matrix MiB | Decode GPU ms | Decode + projection GPU ms | Completed wall ms | Output relative L2 vs BF16 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| BF16 | 135.00 | 1.111 | 56.536 | 56.792 | 0 |
+| Q4_K | 37.97 | 2.246 | 57.578 | 57.842 | 4.632% |
+| QBit p4 | 35.86 | 2.305 | 57.625 | 57.896 | 11.642% |
+| QBit p5 | 44.30 | 2.259 | 57.070 | 57.313 | 6.965% |
+
+Times are medians of eight measured samples per format and mode, after two
+warmup rounds. Both forward and reverse rotations give each format two
+appearances at each of the four order positions. Projection GPU ranges were
+56.202-56.564 / 56.892-57.898 / 56.977-57.896 / 56.698-57.514 ms in table order.
+Every paired quantized/BF16 projection was slower in this run. The packed
+payloads are smaller; this probe does not establish net model-resident memory
+savings or faster projection through the unpack-to-F32 path. Do not rank the
+small timing differences between quantized formats as durable.
+The common F32 stage is additional memory, not part of the packed matrix size.
+
+Before and after timing, each format's 70,778,880 decoded weights and
+61,931,520 projection outputs matched its independently prepared same-format
+torch-MPS reference **bit for bit**. The finite `2e-5 + 2e-5*abs(reference)`
+gate was unchanged. All six invalid encode requests were rejected, and the
+comparator detected both a seeded +1 error and a NaN. There were no
+inter-operator host waits, activation readbacks, or encode-time MetalBuffer
+allocations. The existing terminal completion boundary remains per sample.
+
+Those exactness checks do not erase lossy compression error. Relative L2 in
+the table compares each quantized projection to the native BF16 control;
+cosines are 0.99892745 / 0.99365403 / 0.99770158 for Q4_K / p4 / p5. Maximum
+absolute errors are 0.458864 / 5.601690 / 4.144031. Q4_K had lower output error
+than either QBit variant on these four inputs, while being smaller than p5.
+The QBit producer also matched the existing public Crystal codec byte for byte
+on 3072 real blocks at the beginning, middle, and end of the matrix per
+precision; all 256 LUT entries per precision matched exactly. Gaussian
+conditional reconstruction is implemented as specified, but this result does
+not establish that its distribution assumptions fit Wan weights or activations.
+
+The native guard exited cleanly: sampled peak group footprint 1.579 GiB,
+minimum cache-aware physical headroom 25.973 GiB, minimum pressure-free 80%,
+and zero swap growth. Explicit resident probe buffers were 1,679,990,844 bytes
+(including all four stored matrices, references and metrics); opaque MPS
+storage is excluded from that explicit count. The guard retained the 15%
+reserve, 4 GiB process-group budget, 64 MiB swap-growth stop, and 240 s timeout.
+The 0.5 s sampling interval does not certify an instantaneous memory peak.
+Oracle preparation and the offline codec check also finished under their
+separate guards. No model, Studio, full block, or video generation was run.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-quantized-projection-20261022`.
+`summary-v1.json` (SHA-256
+`b9b6ad2466c02dd07ce5c2701cb77f6f03986146505649b4c38605d12a5d85a5`)
+indexes the measurements, numerical checks and guard lifetimes. The successful
+fixture is `fixture-4480-v3/manifest.json` (SHA-256
+`0dba2df508f72764837c23d8c5743a6d687e2d1b6104406e38325031084c3703`).
+`build-intent-v2.json`, `oracle-intent-v3.json`, and `native-intent-v1.json`
+bind exact commands, source/object/binary hashes, inputs and budgets before
+execution. `native-completion-v1.json` confirms exit 0, unchanged input hashes,
+and the output/guard hashes. `qbit-producer-check-intent-v2.json` and its log
+bind the existing-codec comparison. Earlier failed fixture preparation attempts
+produced no timing evidence and were corrected before this run.
+
+Correlated Mini-Quad source and run-level review returned ROBUST for this
+bounded probe. The strongest surviving limitations are the four distinct
+activation rows, sampled public-codec comparison (1.111% of blocks per
+precision), and sampled memory telemetry. The result does not certify
+model/video quality, instantaneous peak memory, or a general timing ranking.
+
+Rerun the qualified native binary with the guard, from the worktree root:
+
+```sh
+/opt/homebrew/opt/python@3.11/bin/python3.11 -B examples/support/wan_memory_guard.py \
+  --memory-accounting=file-cache --max-footprint-mib=4096 \
+  --max-swap-growth-mib=64 --timeout-sec=240 \
+  --log=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-quantized-projection-20261022/native-guard-new.jsonl \
+  -- /opt/mldata_ssd/cogni-ml/video-scene-20261019/build/wan-quantized-projection-20261022/probe-v2 \
+  --fixture=/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-quantized-projection-20261022/fixture-4480-v3 \
+  --rounds=8
+```
+
+Decision: retain BF16 as the exact control and keep packed decoding opt-in;
+engine weight types, loaders and defaults are unchanged. Q4_K is the strongest
+memory/error candidate of this measured set, not an approved video-quality
+format. Before model integration, test several projections with genuinely
+captured denoising activations, including outliers and multiple timesteps;
+keep compression distortion separate from same-format kernel parity. For
+QBit, distinguish an empirical-distribution mismatch from activation-sensitive
+error before changing centroids or adding an outlier residual. Any fused
+packed GEMM must beat this complete decode-plus-GEMM control and re-pass the
+same-format gate. The reduced-diffusion-step experiment remains the return
+frontier after memory admission and model-quality checks; full generation
+remains outside the current authorization.
