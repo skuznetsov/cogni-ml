@@ -8,7 +8,52 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Current bounded result (2026-10-22): the opt-in positional decode -> shared
+Completed bounded experiment (2026-10-22 local; evidence dated 2026-10-23 UTC):
+[Q4_K versus affine INT4 with exceptions](wan-affine-budget-benchmark.md).
+All six equal-size arms pass bit-exact decoded-weight and same-format upstream
+projection checks, before and after timing, at M=4 and M=4480. Native GPU packing
+matches independently serialized payloads byte for byte. The 10 CPU reference
+tests and 3 native API/invalid-wire tests pass. The opt-in module and probe do
+not change model or codec defaults; rollback removes these additions without
+rewriting checkpoints.
+
+Every arm has a 39,813,120-byte packed payload ceiling (4.5 bits/weight),
+including its parameters, directories, exception positions/values, alignment
+and padding. An identical external 16-byte shape/format descriptor adds to
+every package, including Q4_K; the shared 55,296-byte F32 bias is reported
+separately. Affine groups contain 256 values, F32 scale/offset and 128 nibble
+bytes. Sparse 1024-value records allocate corrections globally by residual
+score, with deterministic index-order ties. Activation-weighted selection
+uses source rows 0/1, then the reverse fold 2/3; the other two rows are held
+out. All 4480 timing rows are repetitions of these four seeded upstream
+inputs, not independent examples or captured video activations.
+
+Q4_K has lower observed pooled output distortion against original BF16:
+4.63% relative L2 versus 6.89-7.33% for the five min/max-affine alternatives.
+This is a separate lossy metric, not a relaxation of the unchanged finite
+`2e-5 + 2e-5*abs(reference)` same-format gate. The first M4480 run gives
+59.98 ms Q4_K versus 58.60-61.78 ms alternatives for complete decode -> shared
+F32 stage -> MPS -> bias. Every paired ratio range crosses 1.0; the fresh
+process then shows strong nonstationarity (Q4_K median 221.68 ms). There is
+no speed winner or production promotion. The reusable 270 MiB F32 stage
+remains. Next test joint base-range fitting and exception selection during
+packing, rather than only repairing residuals after min/max fitting.
+
+The strongest falsifiers remain a selector that overfits two calibration rows,
+metadata or padding omitted from the storage budget, divergent float rounding
+or reduction order, malformed records consumed without NaN/status rejection,
+or a smaller representation that loses on complete execution time. Encode
+must allocate no tracked Metal buffers and introduce no host readback, wait
+or submission inside the command chain. Same-format parity establishes
+execution of reconstructed weights, not BF16-equivalent quality. Any claim
+expires on relevant source, payload, input, geometry or backend changes.
+All work stayed within the cache-aware 15% reserve, 4 GiB process-group cap,
+64 MiB swap-growth stop, 240-second build and 300-second run limits. The two
+M4480 runs peak at 2.04 GiB process-group footprint, with at least 19.96 GiB
+estimated headroom and no observed swap growth. No full block/model/generation
+was run. These are sampled guards and reclaimable-cache estimates.
+
+Earlier bounded result (2026-10-22): the opt-in positional decode -> shared
 F32 stage -> MPS seam passes serial reuse and same-format upstream parity.
 Complete-route medians are 60.629 ms packed versus 59.172 ms F32-expansion
 control; pair direction changes with order, so no speedup or latency-equivalence
