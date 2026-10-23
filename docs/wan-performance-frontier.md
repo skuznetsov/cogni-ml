@@ -8,7 +8,47 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest bounded result (2026-10-22 local; evidence dated 2026-10-23 UTC):
+Latest bounded result (2026-10-23):
+[same-wire Q4_K range-count ablation](wan-q4k-range-benchmark.md).
+Opt-in native GPU packers compare eight 32-value ranges with one tied
+256-value range under the same zero-inclusive min/max fitter. All arms retain
+the canonical 144-byte Q4_K block, actual serialized half/six-bit parameters,
+unchanged decoder and 39,813,136-byte complete package. Pinned ggml Q4_K is
+a third control with a different weighted iterative fitter.
+
+On four unique seeded inputs to `blocks.0.ffn.0.weight` (13824 by 5120),
+eight versus one reduces pooled BF16 output relative L2 from 7.39585% to
+5.08291% (31.27% relative), and weight relative L2 from 11.06873% to 7.71828%.
+Canonical ggml remains more accurate at 4.63165% output error. M=4480 repeats
+the four rows; no representative-activation or video-quality claim is made.
+The 13 CPU reference tests, 8 analyzer tests and 5 native examples pass.
+At M=4 and in two fresh M=4480 processes, both GPU packs match expected bytes
+exactly; all decoded weights and full outputs before/after timing match the
+independent same-format upstream bit for bit. The unchanged finite tolerance,
+BF16 control and injected finite/NaN corruption checks pass.
+
+Complete decode -> shared F32 stage -> MPS -> bias GPU medians for ggml /
+eight / one are 60.6435 / 61.8793 / 60.1917 ms in A and
+59.9058 / 60.8419 / 60.1302 ms in the opposite-order fresh process B.
+Every paired ratio range crosses 1; no latency winner or equivalence is
+established. Range granularity improves the matched quality measurement
+without changing runtime geometry; the 270 MiB decoded stage remains.
+All timed samples have zero inter-op waits/readbacks/tracked encode allocations.
+Native probe sampled footprint peaks at 1.60784 GiB, minimum estimated
+cache-aware headroom is 16.62109 GiB, pressure-free is at least 73%, and swap
+growth is zero. The 15% / 4 GiB / 64 MiB guards remain unchanged.
+
+The correlated Mini-Quad verdict is ROBUST for this bounded comparison and
+VULNERABLE for broader quality or small speed claims. The linked document
+contains exact successful DoD commands, receipt/source/object pins, native
+object ancestry limits and rollback. Production defaults/checkpoints are
+unchanged; no full model, block, Studio or generation ran. Refresh on source,
+payload, input/geometry, compiler/native-object, OS/SDK/device or numerical-policy
+changes. Next quality discriminator: captured disjoint activations and more
+projection types at fixed bytes. The execution frontier remains a competitive
+fused decode/GEMM; this experiment establishes no such kernel.
+
+Previous bounded result (2026-10-22 local; evidence dated 2026-10-23 UTC):
 [joint INT4 range and exception fitting](wan-joint-affine-benchmark.md).
 Six endpoint-rank pairs per 256-value group are fitted jointly with one/two
 local BF16 replacements; the global variant then allocates exactly 414,719
@@ -50,11 +90,11 @@ adversary is ROBUST for bounded execution/storage/guards and VULNERABLE for
 broader quality or small speed claims. Results expire on relevant source,
 payload, input, geometry or backend changes.
 
-Next falsifier: separate Q4_K's eight local 32-value ranges from its other
+This motivated separating Q4_K's eight local 32-value ranges from its other
 encoding choices with a same-wire, same-size tied-range ablation. Range
 granularity is a structural hypothesis for its remaining accuracy advantage;
 the finite search and decoupled global allocation are competing explanations.
-The ablation is proposed, not implemented.
+The matched ablation is completed above.
 
 Completed bounded experiment (2026-10-22 local; evidence dated 2026-10-23 UTC):
 [Q4_K versus affine INT4 with exceptions](wan-affine-budget-benchmark.md).

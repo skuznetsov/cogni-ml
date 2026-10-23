@@ -32447,3 +32447,46 @@ Refresh after source/toolchain/device/model/workload changes.
   low-rank residuals; no replacement format is implemented or admitted.
   Refresh after source, fixture/layout/LUT, geometry, compiler/native object,
   SDK/OS/device or numerical-policy changes before consuming this evidence.
+
+## Wan Q4_K local-range count at fixed package size (2026-10-23)
+
+- Opt-in GPU packer `src/ml/video/q4k_range_weights.cr` and
+  `examples/wan_q4k_range_benchmark.cr` compare eight 32-value ranges with one
+  tied 256-value range using the same zero-inclusive min/max fitting rule,
+  actual serialized half/six-bit parameters, canonical 144-byte Q4_K blocks
+  and existing decoder. All packages are 39,813,120 payload bytes plus the
+  same 16-byte descriptor. Production defaults/checkpoints are unchanged;
+  rollback removes the opt-in files without rewriting weights.
+- For `blocks.0.ffn.0.weight` (13824 by 5120), eight versus one reduces pooled
+  BF16 output relative L2 from 7.39585% to 5.08291% (31.27% relative), and weight
+  relative L2 from 11.06873% to 7.71828%. Pinned ggml Q4_K still gives lower
+  output error, 4.63165%, with a different weighted iterative fitter. Only the
+  matched min/max pair isolates range count under this rule. Four unique
+  seeded rows repeated at M4480 do not establish video quality.
+- The 13 CPU reference tests, 8 analyzer tests and 5 native Metal examples pass
+  with zero pending. M4 and two fresh opposite-order M4480 processes produce
+  exact GPU payload bytes and bit-exact same-format upstream decoded weights
+  and full outputs before/after timing. Preserve the finite
+  `2e-5 + 2e-5*abs(reference)` gate. BF16 control, finite/NaN corruption,
+  rounding, zero, invalid geometry/aliasing and sticky error controls pass.
+- Full M4480 decode -> shared F32 stage -> MPS -> bias GPU medians for
+  ggml/eight/one are 60.6435/61.8793/60.1917 ms in A and
+  59.9058/60.8419/60.1302 ms in B. Every paired ratio range crosses 1: no
+  latency winner or equivalence is established. The common 270 MiB stage
+  remains; all timed samples have zero inter-op waits/readbacks/tracked encode
+  Metal-buffer allocations. Native sampled footprint peaks at 1.60784 GiB,
+  min cache-aware estimated headroom 16.62109 GiB, pressure-free at least 73%,
+  swap growth zero. Preserve 15% reserve/floor, 4 GiB cap and 64 MiB swap stop;
+  samples cannot exclude between-poll spikes. No model/block/Studio/generation.
+- Source-bound receipt tags, exact DoD commands, fitting semantics and native
+  object ancestry limitations are in `docs/wan-q4k-range-benchmark.md`.
+  External evidence is `video-scene-20261019/evidence/wan-q4k-range-20261023/`;
+  final `summary-v1.json` SHA256
+  `e218bd65b9c8a558187c918b6a83eefef3b8a080f1dd116799a17c77d2b2f2d5`.
+  Correlated Mini-Quad verdict: ROBUST for bounded parity/storage/observed
+  guards; VULNERABLE for representative quality and small speed claims.
+  Next quality falsifier is fixed-byte evaluation on captured disjoint Wan
+  activations and more projection types. The execution question remains a
+  competitive fused decode/GEMM without the F32 stage, not established here.
+  Refresh on source, payload/input/geometry, compiler/native object,
+  SDK/OS/device or numerical-policy changes before consuming this result.
