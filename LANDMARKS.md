@@ -32362,3 +32362,44 @@ Refresh after source/toolchain/device/model/workload changes.
   64 MiB swap stop. Correlated Quad scalar verdict is ROBUST only in its tested
   scope; GPU route/speed claims remain PROPOSED. Refresh on LUT/header/decoder,
   source/geometry/backend and OS/SDK/device changes before consuming evidence.
+
+## Wan TensorOps dense and direct QBit qualification (2026-10-22)
+
+- Opt-in probes at `examples/wan_tensorops_probe.cr` and its four support
+  files qualify Metal 4 F32 cooperative-input tiles on M2 Max / macOS 26.6.2 /
+  SDK 27.0. Final `v7` source pins and receipts are under external evidence
+  `video-scene-20261019/evidence/wan-tensorops-20261022/`; see
+  `docs/wan-qbit-no-stage-research.md` for commands, hashes and receipt limits.
+  Existing consumers and transformer defaults are unchanged.
+- Four small F32 cases cover cancellation, odd K, tails and orientation against
+  a separate GPU scalar oracle and MPS. Dense and direct QBit full-projection
+  checks cover all 61,931,520 outputs before and after timing: bitexact against
+  pinned same-format upstream and MPS, unchanged finite
+  `2e-5 + 2e-5*abs(reference)` gate. Five tiny QBit controls pass valid raw BF16,
+  malformed offsets/mode, nonfinite data and incoming sticky failure. These
+  seeded inputs repeat four rows on GPU, not a representative video trajectory.
+- Best tested final dense 64/32/32 tile measures 195.330 ms versus same-run
+  preexpanded MPS 56.985 ms; direct QBit measures 757.682 ms versus 57.818 ms.
+  Four samples per route use both ABBA/BAAB orders and both warmup orders.
+  These schedules are noncompetitive. Separate v5/v7 runs do not isolate the
+  effect of replacing per-panel error barriers with a SIMD vote. Do not promote
+  a speedup, instruction-lowering, spill or DRAM-bandwidth claim.
+- Direct QBit binds 38.1413 MiB of packed weights, offsets and LUTs plus 32-byte
+  status, without a global decoded 270 MiB weight stage. Diagnostic controls
+  still retain the dense matrix and two outputs; this is not whole-model peak
+  memory evidence. Original-BF16 projection relative-L2 error near 6.95% remains
+  OPEN independently of same-format parity and weight capacity savings.
+- Final guarded bridge/build/small/dense/QBit/spec commands return zero with
+  unchanged source pins. Focused specs: 5 examples, 0 failures/errors, 1
+  intentional pending cost probe. Sampled headroom stays above 23.30 GiB,
+  owned group footprint below 885.01 MiB, pressure-free at least 78%, swap
+  growth zero. Preserve 15% reserve/floor, 4 GiB cap, 64 MiB swap stop and
+  deadlines; sampling cannot exclude between-poll spikes. No new in-chain host
+  waits, submissions, activation readbacks or tracked encode-buffer allocations;
+  opaque MPS allocations are outside that counter. No model/block/generation.
+- Correlated Mini-Quad verdict: ROBUST for bounded fixture parity, exercised
+  failures and measured noncompetitive latency; OPEN for representative
+  activations, original-weight quality, full-model capacity and video speed.
+  Next candidate is a conventional multi-SIMDgroup local-panel GEMM, starting
+  with dense F32 qualification; it remains PROPOSED. Refresh on source,
+  fixture/layout/LUT, geometry, compiler/native objects, SDK/OS/device changes.

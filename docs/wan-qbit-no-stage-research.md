@@ -1,17 +1,21 @@
 # Wan QBit GEMM without a global decoded weight stage
 
-Research snapshot: 2026-10-22, source baseline `7c178df1`, Apple M2 Max,
-macOS 26.6.2. No Metal compilation, GPU probe, model, block, Studio or generation
-was launched for this audit. The new execution routes below are proposals.
+Research baseline: `7c178df1`; bounded implementation at `31f4d6ce` plus the
+source-pinned probe below, 2026-10-22, Apple M2 Max, macOS 26.6.2, SDK 27.0.
+TensorOps F32 and direct QBit now compile and pass the declared numerical
+checks. They are slower than MPS on this projection. No full model, block,
+Studio or generation was launched. The threadgroup-panel alternative remains
+PROPOSED.
 
 ## Decision and falsifier
 
 Prioritize a bounded Metal Performance Primitives (MPP) TensorOps experiment:
 decode QBit values and positional corrections into a SIMD-group cooperative
 F32 input tensor, then consume it directly with `matmul2d`. Keep a conventional
-Steel-style threadgroup-panel loader as a second candidate. Both remove the
-global dense-weight stage while retaining local decoding. Neither has measured
-speed or numerical parity on this host.
+Steel-style threadgroup-panel loader as a second candidate. Both aim to remove
+the global dense-weight stage while retaining local decoding. The TensorOps
+experiment below establishes same-format parity and reduced candidate weight
+storage, but rejects a latency improvement for its measured schedules.
 
 The decisive risk is losing optimized matrix throughput, not the existence of
 a decoding buffer. First establish a fast dense F32 control for the candidate
@@ -56,9 +60,8 @@ integer-int4 input path. [Apple custom TensorOps operations](https://developer.a
 
 Apple places cooperative-tensor matmul inputs among its macOS 26 updates.
 The API is portable across M1-M5; older GPUs use optimized shader
-implementations. The local 26.6.2 host is a candidate target; the exact
-SDK/runtime/type combination still needs the bounded compile and execution
-check below. This does not give M2 the M5's Neural Accelerators.
+implementations. The local 26.6.2 host passes the bounded runtime compile and
+execution checks below. This does not give M2 the M5's Neural Accelerators.
 [Apple TensorOps availability](https://developer.apple.com/videos/play/tech-talks/111432/),
 [Metal feature tables](https://developer.apple.com/metal/capabilities/)
 
@@ -70,10 +73,11 @@ The installed MacOSX SDK's `MPPTensorOpsMatMul2d.h` advertises
 `float x float -> float`, cooperative right-input construction and compatibility
 checks. Its descriptor defaults to `relaxed_precision=false`; keep that mode.
 The implementation limits this cooperative-input path to `execution_simdgroup`
-and compile-time K. A loop over fixed K panels is a candidate, not a compiled
-implementation. A threadgroup may schedule independent SIMD-group tiles, but
+and compile-time K. A threadgroup may schedule independent SIMD-group tiles, but
 one cooperative input cannot simply be shared as an arbitrary multi-SIMDgroup
-matmul input. Check `is_compatible_as_right_input` and the generated layout.
+matmul input. Use the right-input factory and `run` type checks for a fresh
+cooperative input. `is_compatible_as_right_input` only tests a destination
+cooperative tensor for conversion and cannot test the fresh input itself.
 
 F32 types and non-relaxed API mode are not proof of bitwise agreement with MPS
 or of a particular instruction lowering. Register pressure, spills, a smaller
@@ -81,7 +85,7 @@ reuse domain and panel-accumulation order can erase the benefit. Source-level
 private storage also does not prove that the compiler never spills to memory.
 Compilation, strict output comparison and profiling remain necessary.
 
-Proposed dataflow:
+Tested TensorOps dataflow:
 
 ```text
 packed codes + exact local F32 LUT + positional corrections
@@ -170,12 +174,14 @@ overflow-edge binary32 inputs are outside this bounded rational probe.
 ## Next bounded experiment and admission contract
 
 1. Compile one static-K SIMD-group TensorOps tile with F32 inputs/accumulator,
-   `relaxed_precision=false` and an asserted compatible input layout. Check
+   `relaxed_precision=false` and the factory's compatible input layout. Check
    decoded values, corrections and full output against the selected decoder
    oracle, including cancellation, tails and invalid-input controls.
 2. Establish a fast dense F32 control using the same candidate geometry before
    attributing any packed-route performance to decoding. A dense control far
-   behind MPS invalidates the simple fast-loader hypothesis for that schedule.
+   behind MPS rejects competitiveness for the dense schedule. Compressed loads
+   still require their own bounded test because they change the byte traffic;
+   neither result alone proves a DRAM bandwidth bottleneck.
 3. Replace only B loading with the real packed records. Require the finite
    `2e-5 + 2e-5*abs(reference)` full-output gate, including +1/NaN comparator
    sensitivity, before paired full-projection timings. Keep both warmup orders.
@@ -225,4 +231,150 @@ This evidence decays on LUT, group header, scalar decoding semantics or script
 changes. Re-run the scalar probe then. Refresh API assumptions on SDK/OS/device
 changes; compile and measure on the target host before any execution claim.
 The three read-only Quad reviews are correlated analysis, not independent GPU
-measurements. The next permitted signal is the bounded tile experiment above.
+measurements. The bounded GPU follow-up is recorded below.
+
+## Active TensorOps implementation slice (2026-10-22)
+
+CAUTION, probe-only: compile an explicit non-relaxed F32 cooperative-right-input
+32x32x32 tile, then compare its complete dense projection with the existing MPS
+consumer. The experiment is admitted; deployment/default changes and full
+generation remain rejected. Removal of the new probe restores the prior state.
+DoD: a guarded Metal/Crystal release build, finite full-output comparisons with
+the unchanged tolerance against MPS and the pinned upstream fixture, comparator
++1/NaN sensitivity, tails/cancellation controls, and counterbalanced paired dense
+timings. Keep one existing terminal completion per route and zero tracked
+encode-time buffer allocations. The strongest failure is inadequate matrix
+throughput on M2. Require dense numerical qualification before the QBit loader;
+measure compressed loading separately even if the dense schedule is slow.
+Report an unsupported SDK/runtime combination or a measured-red route as such;
+neither licenses relaxed arithmetic or a wider tolerance. No candidate is
+promoted from a storage ratio or a successful compile alone.
+
+## Bounded TensorOps results and decision
+
+Implementation: `examples/wan_tensorops_probe.cr` and
+`examples/support/wan_tensorops_{kernel.cr,probe.mm,probe.metal,qbit.metal}`.
+These are opt-in diagnostics; model defaults and existing consumers are
+unchanged. The runtime bridge explicitly requests Metal 4.0 and safe math.
+The offline `metal` toolchain was unavailable, so the installed runtime compiler
+was used without installing dependencies. Unsupported runtimes fail closed.
+Cooperative right input and F32 accumulation use non-relaxed mode, one 32-lane
+SIMD group and ascending K32 panels; bias is added separately.
+
+The small F32 checks cover 32x64x32, 35x73x37 and 17x33x9 M/K/N shapes,
+near-cancellation, odd K, M/N tails and an asymmetric one-hot orientation case.
+All four comparisons with a separate GPU sequential-FMA oracle and direct MPS
+are bitexact. NaN-poisoned outputs and the +1/NaN comparator control prevent
+unwritten or insensitive comparisons from passing.
+
+Full projection: M4480/K5120/N13824. Each route has four measured samples in
+counterbalanced ABBA/BAAB orders after both warmup orders. Values below are
+descriptive GPU medians, not confidence intervals or video timings.
+
+| Candidate M/N/K tile | Candidate GPU ms | Same-run preexpanded MPS ms | Receipt |
+|---|---:|---:|---|
+| Dense F32 32/32/32 | 211.114 | 58.043 | dense-v3 |
+| Dense F32 64/32/32 | 191.765 | 55.260 | dense-v4-t64x32 |
+| Dense F32 32/64/32 | 267.633 | 55.747 | dense-v4-t32x64 |
+| Dense F32 64/64/32 | 286.650 | 57.860 | dense-v4-t64x64 |
+| Dense F32 64/32/32, final source | 195.330 | 56.985 | dense-v7-t64x32 |
+| Direct QBit 64/32/32, barrier baseline | 773.847 | 56.109 | qbit-v5-t64x32 |
+| Direct QBit 64/32/32, SIMD error vote | 757.682 | 57.818 | qbit-v7-t64x32 |
+
+Final dense/QBit encode medians are 0.029/0.016 ms; wall medians are
+196.533/757.911 ms. Preparation, uploads, validation comparisons, logging and
+the separate failure-control batch are outside these intervals. MPS timing
+consumes the already uploaded F32 control matrix directly, without another
+weight-stage copy. Every measured route keeps one terminal completion and no
+inter-operator host wait, activation readback or tracked MetalBuffer allocation.
+That allocation counter does not measure opaque MPS/driver allocations.
+
+Pre/post checks compare every one of the 61,931,520 outputs against the pinned
+upstream **same-format** projection and between routes: zero bit differences,
+zero nonfinite values and zero violations of `2e-5 + 2e-5*abs(reference)`.
+QBit status is eight zeros before and after timing and is checked after every
+timed completion. These inputs are four seeded upstream-captured rows repeated
+4480 times on GPU, not representative video activations. This does not close
+the approximately 6.95% relative-L2 error against the original BF16 projection.
+
+Five separate tiny GPU controls run in one untimed command: valid raw BF16,
+out-of-blob offset, unsupported mode, nonfinite raw coefficient and incoming
+capacity failure. The valid case is bitexact with the scalar oracle. All four
+failure cases turn 105 initially finite output elements into NaNs. The first
+three local decode/format failures set sticky word 7; the incoming failure
+preserves word 6 without inventing a local error. The pinned blob is untouched.
+
+Replacing only the per-K32 error reduction's two threadgroup barriers with
+`simd_any` preserves those controls and full parity. Exact one-SIMDgroup launch
+is essential; record-publication barriers remain. The roughly 2% raw timing
+difference is from separate process runs and does not establish an optimization
+benefit. These separate runs provide no evidence that the barriers explain the
+large gap; they do not isolate the barriers' contribution. No spill or
+DRAM-bandwidth claim follows.
+
+The direct QBit route binds **39,994,012 bytes** of packed weights, offsets and
+LUTs (38.1413 MiB), plus a 32-byte status buffer. It never binds or produces the
+270 MiB F32 weight stage. This is 3.54x smaller than the original 135 MiB BF16
+matrix. The full diagnostic deliberately retains a dense matrix for MPS and
+two output matrices; its explicit live buffers total 910,670,620 bytes. It does
+not demonstrate whole-model peak-memory savings or a complete quantized model.
+The archival plan is verified for lineage but is not uploaded by the candidate.
+
+Final dense/QBit guards observe at least 23.30 GiB cache-aware headroom, at most
+885.01 MiB owned process-group footprint, memory-pressure free percentage at
+least 78%, and zero swap growth. The 15% floor, 4 GiB cap, 64 MiB swap-growth
+stop and deadlines are unchanged. These are sampled limits, not a guarantee
+against between-sample spikes; file-backed reclaimability remains an estimate.
+
+Decision: ROBUST for the declared fixture parity, negative controls and
+noncompetitive latency within this host/geometry. Original-weight quality,
+representative activations, whole-model capacity and end-to-end speed remain
+OPEN. Keep staged MPS as the existing control. The next useful experiment is
+a conventional multi-SIMDgroup tiled GEMM with cooperatively decoded local B
+panels, first qualifying its dense F32 throughput. Per-weight bitplane lookup,
+correction searches and reuse across M remain hypotheses to discriminate;
+do not repeat the current schedule solely with wider tiles. This is a future
+bounded probe, not a default change or full-generation authorization.
+
+## TensorOps reproduction and receipt boundary
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/`.
+`run-experiment.py` freezes commands, source/object hashes, binary/bridge hashes,
+environment versions, guard limits, and stdout/stderr/guard digests. Final
+`source-v7/index.json` pins the five owned implementation files and launcher;
+older `source-v3`, `source-v4`, `source-v5` and failed `source-v6` snapshots
+preserve their historical bytes. This is a partial source archive: other
+tracked dependencies are hash-checked against the live worktree separately.
+Source snapshots and receipts are evidence indexes, not compiler attestations.
+
+Six existing native objects are pinned to prior build receipt SHA256
+`4cf673fd89d04112bc72de3e26e98d85111876f8f9b698042df2341aa2f6bca4`.
+The new Metal 4 bridge has a fresh source/object/link receipt. The prior receipt
+does not provide source-to-object ancestry for every reused native object;
+current native-source hashes alone cannot manufacture that ancestry. The
+same pinned objects serve both candidate and MPS controls. An initial harness
+compile failure (`build-v6`) is retained explicitly and superseded by successful
+v7 build/experiments; it is not an accepted GPU result.
+
+Commands below require the pinned local fixture and object paths. Choose a
+fresh version token for a rerun; the launcher rejects overwriting evidence.
+The final executed token is `v7`.
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py bridge v7
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py build v7
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py small v7 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py dense v7 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py qbit v7 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-tensorops-20261022/run-experiment.py spec v7
+```
+
+Expected: build/run return code zero and unchanged source hashes; four small
+F32 cases and five QBit controls pass; full pre/post comparisons have no
+violations; focused specs report 5 examples, 0 failures/errors, 1 intentional
+pending cost probe. Only small projections are executed by the specs.
+Refresh all execution evidence after source, packed layout/LUT, fixture,
+geometry, compiler flags, native objects, SDK, OS or device changes. Changes
+to activation coverage reopen quality claims even when same-format parity
+continues to pass. Preserve the numerical gate and memory guards on refresh.
