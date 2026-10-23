@@ -32403,3 +32403,47 @@ Refresh after source/toolchain/device/model/workload changes.
   Next candidate is a conventional multi-SIMDgroup local-panel GEMM, starting
   with dense F32 qualification; it remains PROPOSED. Refresh on source,
   fixture/layout/LUT, geometry, compiler/native objects, SDK/OS/device changes.
+
+## Wan multi-SIMDgroup shared-panel GEMM qualification (2026-10-23)
+
+- Opt-in `--backend shared-panel` in `examples/wan_tensorops_probe.cr` adds
+  four-SIMDgroup F32 GEMM with shared A/B panels at M/N/K tiles 32/32/32 and
+  64/32/32. Existing defaults and consumers remain unchanged. Implementation,
+  rollback, commands, evidence pins and ancestry limits are in
+  `docs/wan-qbit-no-stage-research.md`, shared-panel experiment section.
+- Final v3 passes six small GPU scalar/MPS cases per tile, heterogeneous raw
+  BF16 and corrected-p4 tests, five sticky-status controls, and all 61,931,520
+  full-projection outputs before/after timing and poisoned re-execution:
+  bitexact against pinned same-format upstream/MPS. Preserve the finite
+  `2e-5 + 2e-5*abs(reference)` gate. The selected complete arm has 69,120 p4
+  records and 459,430 replacements; p5 is not qualified. Four seeded input
+  rows repeated on GPU do not establish representative trajectory quality.
+- Dense 32/64 tile means are 272.113/238.040 ms versus respective same-run
+  MPS controls 65.390/58.058 ms. Direct-QBit means are 1598.175/905.045 ms
+  versus 58.446/58.841 ms. Each process has four measured samples per route
+  in ABBA/BAAB orders. Separate processes do not isolate tile-size effects.
+  All candidates are noncompetitive; command encoding averages 0.020-0.026 ms.
+- Direct QBit uses 39,994,012 packed bytes plus 32-byte status, avoiding a
+  270 MiB global F32 stage. The diagnostic retains dense control/output
+  buffers, so this is not whole-model memory evidence. Original-BF16 error
+  near 6.95% remains open independently of same-format parity. There are no
+  new in-chain waits/submissions, activation readbacks or tracked encode
+  allocations; local threadgroup barriers remain and are timed.
+- All nine final bridge/build/small/dense/QBit/spec commands return zero;
+  focused specs report 5 examples, 0 failures/errors, 1 intentional pending.
+  Sampled headroom minimum is 16.879 GiB, owned group maximum 928.580 MiB,
+  swap growth zero. Preserve 15% reserve/floor, 4 GiB cap, 64 MiB swap stop
+  and deadlines; samples cannot exclude between-poll spikes. No model,
+  full block, Studio or generation was loaded. External CPU validator
+  self-tests and both root receipt audits pass; see root summary hashes in
+  the research document. Spec launch-time bytes lack the individual pins
+  that cover the GPU harness/shader. Reused native-object ancestry is partial.
+- Correlated Mini-Quad: ROBUST for tested parity, exercised failures and
+  measured latency; no throughput promotion. Static B-loader review finds
+  20,480-byte adjacent-lane source strides at K=5120, but no bandwidth cause
+  is measured. Next discriminator is contiguous-K loading plus local transpose
+  on the same schedule. The user's new research frontier is a simpler adaptive
+  affine low-bit base with sparse corrections, compared with structured or
+  low-rank residuals; no replacement format is implemented or admitted.
+  Refresh after source, fixture/layout/LUT, geometry, compiler/native object,
+  SDK/OS/device or numerical-policy changes before consuming this evidence.

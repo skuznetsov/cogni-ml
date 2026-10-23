@@ -378,3 +378,183 @@ Refresh all execution evidence after source, packed layout/LUT, fixture,
 geometry, compiler flags, native objects, SDK, OS or device changes. Changes
 to activation coverage reopen quality claims even when same-format parity
 continues to pass. Preserve the numerical gate and memory guards on refresh.
+
+## Shared-panel GEMM experiment (2026-10-23)
+
+CAUTION, opt-in diagnostics only, based on `4792a15f`. Test a conventional
+four-SIMDgroup F32 GEMM with shared local A/B panels against the same uploaded
+MPS control, then replace only B loading with the pinned positional QBit arm.
+Admit 32/32/32 and 64/32/32 M/N/K tiles initially. Preserve ascending K fragments,
+F32 coefficients/accumulation, separate bias, and the unchanged finite
+`2e-5 + 2e-5*abs(reference)` gate. No execution defaults, full model, block or
+generation changes. Omitting `--backend shared-panel` keeps the prior probe
+backend; removing the new adapters/shader and reverting the harness additions
+restores the prior state. The staged MPS consumer remains control and rollback.
+
+DoD: guarded release build, small GPU scalar/MPS comparisons covering odd K,
+tails, cancellation, asymmetric one-hot inputs and cross-SIMDgroup panel reuse;
+five sticky-status QBit failure controls; full pre/post-output gates against
+pinned same-format upstream; counterbalanced dense then QBit timings including
+all local decode work. Keep one terminal completion per route, zero new
+inter-operator host waits/submissions, activation readbacks or tracked encode
+MetalBuffer allocations. GPU threadgroup barriers protect shared panel lifetime
+and are included in timing. Preserve cache-aware 15% reserve/floor, 4 GiB owned
+process-group cap, 64 MiB swap-growth stop, 240-second builds/300-second runs.
+The strongest failure is unsafe panel reuse or changed floating-point order;
+poisoned/tail and independently varying input-row controls must pass before
+timing. Reduced weight bytes alone cannot admit a throughput or quality claim.
+
+### Qualification and measured result
+
+The final v3 adapter launches exactly four 32-lane SIMD groups. All groups
+reuse one local A panel and one local B panel per ascending K32 iteration;
+F32 `simdgroup_load` / `simdgroup_multiply_accumulate` / `simdgroup_store`
+perform the matrix operations. Each group owns a disjoint output quadrant.
+The dead A panel becomes C scratch after the final panel-read barrier, then
+the threads copy only in-bounds results and add bias separately. The QBit
+variant changes B preparation to local positional decoding; it binds no dense
+weight matrix and creates no global decoded-weight stage. Both paths remain
+explicit probe backends, not production alternatives selected by default.
+
+Two rejected versions are retained. v1 compiled the host binary but failed
+runtime shader compilation because the grid/threadgroup Metal attributes had
+inconsistent dimensions; no GPU candidate result was produced. v2 compiled
+and dispatched but all 1,024 outputs of its first small F32 case violated the
+gate while MPS matched the scalar oracle. Replacing manual fragment/output
+mapping with documented matrix loads/stores resolved the observed failure in
+v3. This change does not isolate which removed manual mapping was wrong.
+Neither rejected version supplies an accepted performance result.
+
+Both final tiles pass six small F32 cases against a separate sequential-FMA
+GPU oracle and MPS: cancellation, odd K, asymmetric one-hot selection, M/N
+tails, and heterogeneous non-dyadic data varying independently across rows
+and K. Each QBit run additionally passes heterogeneous raw-BF16 records at
+65/2048/35 and a pinned corrected-p4 prefix at 65/5120/35, followed by the five
+existing sticky-status controls. The prefix has 175 corrected p4 records and
+1,135 BF16 replacements. A CPU header rescan of the complete selected arm
+finds 69,120 p4 records, 459,430 replacements, and no p5/raw records. The p5
+decoder branch therefore remains unqualified by this experiment.
+
+Full-projection dimensions are M=4480, K=5120, N=13824. Dense here means the
+F32 expansion of the selected `positional_tile1024_t050_mode0` arm, not the
+original BF16 weights. Both routes use the same coefficients, bias and four
+pinned upstream input rows repeated on GPU. All 61,931,520 outputs are bitexact
+against same-format upstream and MPS before timing, after timing, and in an
+additional poisoned re-execution inside the existing post-check command.
+Each small output is also poisoned before execution. The finite
+`2e-5 + 2e-5*abs(reference)` gate is unchanged, with a positive comparator
+control that must detect both a finite defect and a nonfinite value.
+Individual timed invocations are not poisoned or independently checked;
+the post-check reads the last timed outputs and then checks the poisoned
+re-execution. Original-weight error and trajectory quality remain open.
+
+Measured GPU time on M2 Max / macOS 26.6.2 / SDK 27.0:
+
+| Candidate | M/N/K tile | Candidate mean, ms | Same-run MPS mean, ms | Candidate / MPS |
+| --- | --- | ---: | ---: | ---: |
+| Dense F32 shared panel | 32/32/32 | 272.113 | 65.390 | 4.16x |
+| Dense F32 shared panel | 64/32/32 | 238.040 | 58.058 | 4.10x |
+| Direct positional QBit | 32/32/32 | 1598.175 | 58.446 | 27.34x |
+| Direct positional QBit | 64/32/32 | 905.045 | 58.841 | 15.38x |
+
+Each row is a separate process with eight warmups and eight measured records
+in ABBA/BAAB orders, four measured samples per route. Candidate GPU ranges
+are 270.771-273.974, 233.015-247.370, 1535.827-1660.972, and
+900.637-909.413 ms respectively. Compare each candidate to its own MPS
+control; these runs do not isolate the causal effect of changing tile size
+or of the earlier one-SIMDgroup TensorOps schedule. Full-projection timing
+excludes input fill, upload, fixture expansion and output comparison, but
+includes all candidate record validation and local decode work. Candidate
+host encode averages are 0.020-0.026 ms; this gap is in GPU execution, not
+explained by host command encoding. No specific barrier, bandwidth, spill,
+cache or instruction-lowering bottleneck has been isolated.
+
+The packed route uses 39,994,012 bytes (38.1413 MiB, 4.52045 bits/weight),
+including offsets and LUTs, plus a 32-byte status buffer. It avoids the
+270 MiB global F32 stage; the original BF16 matrix is 135 MiB. The diagnostic
+still retains the dense MPS control and both output matrices: explicit buffers
+are 870,676,636 bytes for dense and 910,670,680 bytes for QBit. These numbers
+do not establish whole-model peak memory or quality. The earlier approximately
+6.95% projection relative-L2 difference against original BF16 remains open.
+
+Final bridge/build, both small runs, both dense runs, both QBit runs and the
+focused spec command return zero with unchanged source pins. Specs report
+5 examples, 0 failures, 0 errors, 1 intentional pending cost probe. Sampled
+cache-aware headroom stays at least 16.879 GiB, owned group footprint at most
+928.580 MiB, pressure-free at least 77%, and swap growth zero. The 15% floor,
+4 GiB cap, 64 MiB swap-growth stop and deadlines are unchanged. Sampling
+cannot exclude between-poll spikes, and reclaimable file cache is an estimate.
+No model, complete block, Studio or generation is loaded. There are zero new
+inter-operator host waits/submissions, activation readbacks or tracked encode
+MetalBuffer allocations. One terminal completion per timed route and the
+required local threadgroup barriers remain; opaque MPS allocations are outside
+the tracked allocation counter.
+
+### Reproduction and continuation
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/`.
+The frozen launcher SHA256 is
+`ab6f5bc34dc8a76f0a58592d7db22be6f492102d45a004e0ffa32d09fe7f1914`.
+`source-v3/source-hashes.json` and per-command intent/completion receipts pin
+the executable, bridge, relevant source and dependencies. `source-v1` and
+`source-v2` retain the failed implementations. This is a partial source
+archive; other dependency files are hash-checked live. The six reused native
+objects have the same prior receipt and ancestry limitation documented above;
+the runtime Metal 4 bridge is rebuilt from source. Both candidates and MPS
+use the same pinned native objects.
+
+The focused spec command and stdout are receipt-backed, but the two individual
+spec files were omitted from the launcher's source-hash manifest. A later
+`git diff --quiet HEAD -- spec/qbit_positional_mps_linear_spec.cr spec/video_linear_mps_projection_spec.cr`
+returns zero; it does not retroactively pin their launch-time bytes. Keep that
+ancestry limit separate from the fully pinned GPU harness and shader evidence.
+The external CPU verifier `validate-shared-panel.py` rejects seeded mutations
+of numerical gates, route/status checks, failure-control order, resource
+boundaries and finite timing. Root reruns accept both final tile receipts:
+`summary-v3-root-t32.json` (SHA256
+`21a4b323ff80ef0851094a56bd630bcd5bb18c394b08c21728ed99b3389fe069`)
+and `summary-v3-root-t64.json` (SHA256
+`a5a91d6505841264ebad0e9ebb310420e63080da965b664bb688744ee04edb19`).
+The correlated Mini-Quad verdict is ROBUST for the bounded fixture parity,
+exercised failures and measured noncompetitive latency. That verdict does not
+admit whole-model speed, quality, p5 coverage or a particular GPU bottleneck.
+
+From the owned worktree, with the pinned fixtures/objects available, execute
+the following using a fresh version token on a rerun (the accepted token is
+`v3`; existing evidence cannot be overwritten):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py bridge v3
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py build v3
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py small v3 --tile 32x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py small v3 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py dense v3 --tile 32x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py dense v3 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py qbit v3 --tile 32x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py qbit v3 --tile 64x32
+python3 -B /opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-shared-panel-20261023/run-experiment.py spec v3
+```
+
+Expected: all commands exit zero, no source drift, all small/failure and full
+pre/post/poisoned gates pass, four finite measured samples per route in both
+orders, guard completion without termination, and the focused spec counts
+above. Format and whitespace checks are
+`crystal tool format --check examples/wan_tensorops_probe.cr examples/support/wan_shared_panel_kernel.cr`
+and `git diff --check`. Refresh execution evidence after source, fixture,
+layout/LUT, geometry, compiler/native object, SDK, OS or device changes.
+
+Decision: keep the shared-panel path opt-in; MPS remains the execution control.
+Four SIMD groups and reduced global weight bytes alone do not produce a
+competitive GEMM in this schedule. Qualification is limited to tested formats,
+inputs and geometry; there is no full-model speed or quality claim. Next
+separate B-panel preparation from matrix execution on the same schedule before
+attributing the deficit to decode, memory access, validation or barriers.
+
+A concrete static discriminator is the dense B loader: at TN=32 its adjacent
+lanes vary N at fixed K in the source `[N,K]` matrix. At K=5120 their addresses
+are 20,480 bytes apart. This establishes an address stride, not a measured
+DRAM bottleneck. Compare a contiguous-K load followed by a local transpose
+under the same numerical and timing gates; transpose/bank-conflict overhead
+could negate the gain. QBit reconstruction repeats for each M tile (140 at
+TM=32, 70 at TM=64); those are reconstruction counts, not DRAM traffic counts.

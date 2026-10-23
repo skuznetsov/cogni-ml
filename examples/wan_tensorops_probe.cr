@@ -1,6 +1,6 @@
-# Opt-in TensorOps diagnostic. Small mode has an independent sequential-FMA
+# Opt-in TensorOps/shared-panel diagnostic. Small mode has an independent sequential-FMA
 # oracle; dense/QBit modes compare against the pinned t050 upstream projection.
-# QBit reconstructs coefficients inside the cooperative B tile, with no global
+# QBit reconstructs coefficients inside the local B tile, with no global
 # dense weight stage. The diagnostic retains dense weights for its MPS control.
 require "json"
 require "digest/sha256"
@@ -8,6 +8,7 @@ require "option_parser"
 require "../src/ml/video/metal_ops"
 require "../src/ml/video/metal_linear_mps"
 require "./support/wan_tensorops_kernel"
+require "./support/wan_shared_panel_kernel"
 require "../spec/support/video_allocation_counter"
 
 private WTP_DIN             =  5120
@@ -29,8 +30,10 @@ private WTP_DENSE_CAP       = 2_i64 * 1024**3
 
 mode = nil.as(String?)
 tile = "32x32"
+backend = "tensorops"
 OptionParser.parse do |parser|
-  parser.banner = "Usage: wan_tensorops_probe (--small | --dense | --qbit) [--tile MxN]"
+  parser.banner = "Usage: wan_tensorops_probe (--small | --dense | --qbit) [--tile MxN] [--backend tensorops|shared-panel]"
+  parser.on("--backend BACKEND", "Opt-in GEMM backend: tensorops or shared-panel") { |value| backend = value }
   parser.on("--tile TILE", "Probe tile: 32x32, 64x32, 32x64 or 64x64") { |value| tile = value }
   parser.on("--small", "Run GPU-generated small-shape qualification") do
     raise ArgumentError.new("Choose exactly one mode") if mode
@@ -45,10 +48,14 @@ OptionParser.parse do |parser|
     mode = "qbit"
   end
 end
+raise ArgumentError.new("Unknown GEMM backend #{backend}") unless {"tensorops", "shared-panel"}.includes?(backend)
 raise ArgumentError.new("Unknown arguments: #{ARGV.join(' ')}") unless ARGV.empty?
 raise ArgumentError.new("Select exactly one of --small, --dense or --qbit") unless mode
 unless {"32x32", "64x32", "32x64", "64x64"}.includes?(tile)
   raise ArgumentError.new("Unadmitted TensorOps tile #{tile}")
+end
+if backend == "shared-panel" && !{"32x32", "64x32"}.includes?(tile)
+  raise ArgumentError.new("Unadmitted shared-panel tile #{tile}")
 end
 tile_m, tile_n = tile.split('x').map(&.to_i)
 
@@ -72,11 +79,17 @@ private WTP_METAL = <<-METAL
       constant uint4 &shape [[buffer(3)]], uint i [[thread_position_in_grid]]) {
     const uint M = shape.x, K = shape.y, N = shape.z;
     const bool one_hot = (shape.w & 0x80000000u) != 0u;
-    const uint salt = shape.w & 0x7fffffffu;
+    const bool heterogeneous = (shape.w & 0x40000000u) != 0u;
+    const bool preserve_weight_bias = (shape.w & 0x20000000u) != 0u;
+    const uint salt = shape.w & 0x1fffffffu;
     if (i < M * K) {
       const uint row = i / K, k = i % K;
       float value;
-      if (one_hot) {
+      if (heterogeneous) {
+        uint h = (row + 1u) * 0x9e3779b9u ^ (k + salt) * 0x85ebca6bu;
+        h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15;
+        value = float(int(h % 2001u) - 1000) * (1.0f / 4093.0f);
+      } else if (one_hot) {
         const uint selected_k = (row * 7u + 3u) % K;
         value = k == selected_k ? 1.0f : 0.0f;
       } else if (k == 0u) value = 512.0f + float(row) * 0.5f;
@@ -90,10 +103,14 @@ private WTP_METAL = <<-METAL
       }
       input[i] = value;
     }
-    if (i < N * K) {
+    if (!preserve_weight_bias && i < N * K) {
       const uint n = i / K, k = i % K, pair = k >> 1u;
       float value;
-      if (one_hot) {
+      if (heterogeneous) {
+        uint h = (n + 7u) * 0xc2b2ae35u ^ (k + salt) * 0x27d4eb2fu;
+        h ^= h >> 16; h *= 0x846ca68bu; h ^= h >> 15;
+        value = float(int(h % 2001u) - 1000) * (1.0f / 4093.0f);
+      } else if (one_hot) {
         const int code = int((n * 17u + k * 5u + salt) % 29u) - 14;
         value = float(code) * (1.0f / 64.0f);
       } else if (k < 2u) value = float(1u + (n % 3u)) * 0.125f;
@@ -105,7 +122,7 @@ private WTP_METAL = <<-METAL
       }
       weight[i] = value;
     }
-    if (i < N) {
+    if (!preserve_weight_bias && i < N) {
       const int code = one_hot ? int((i * 11u + salt) % 13u) - 6 : int(i % 9u) - 4;
       bias[i] = float(code) * (1.0f / 32.0f);
     }
@@ -169,6 +186,29 @@ private WTP_METAL = <<-METAL
       device uint *snapshots [[buffer(1)]], constant uint &test [[buffer(2)]],
       uint i [[thread_position_in_grid]]) {
     if (i < 8u) snapshots[test * 8u + i] = status[i];
+  }
+
+  // Stress-only raw records. Round each seeded coefficient down to its exact
+  // BF16 expansion and retain that same F32 coefficient for both GPU controls.
+  kernel void wtp_pack_raw_stress(device float *weight [[buffer(0)]],
+      device uchar *blob [[buffer(1)]], device uint *offsets [[buffer(2)]],
+      device uint *status [[buffer(3)]], constant uint4 &shape [[buffer(4)]],
+      uint i [[thread_position_in_grid]]) {
+    const uint K = shape.y, N = shape.z, record_bytes = 2052u;
+    const uint tiles = N * (K / 1024u);
+    if (i < N * K) {
+      uint bits = as_type<uint>(weight[i]) & 0xffff0000u;
+      weight[i] = as_type<float>(bits);
+      uint within = i % 1024u, base = (i / 1024u) * record_bytes;
+      blob[base + 4u + within * 2u] = uchar((bits >> 16) & 255u);
+      blob[base + 5u + within * 2u] = uchar(bits >> 24);
+      if (within == 0u) {
+        blob[base] = 16u; blob[base + 1u] = 0u;
+        blob[base + 2u] = 0u; blob[base + 3u] = 0u;
+      }
+    }
+    if (i <= tiles) offsets[i] = i * record_bytes;
+    if (i < 8u) status[i] = 0u;
   }
 
   kernel void wtp_compare(device const float *actual [[buffer(0)]],
@@ -298,6 +338,12 @@ end
 
 private def wtp_upload(path : String, buffer : ML::MetalBuffer, bytes : Int64) : Nil
   raise "Upload byte count mismatch for #{path}" unless File.size(path) == bytes && buffer.size >= bytes
+  File.open(path, "rb") { |file| file.read_fully(Slice.new(buffer.contents.as(UInt8*), bytes.to_i32)) }
+end
+
+# Caller has already verified the complete pinned fixture and its SHA-256.
+private def wtp_upload_prefix(path : String, buffer : ML::MetalBuffer, bytes : Int64) : Nil
+  raise "Invalid fixture prefix extent" unless bytes > 0 && File.size(path) >= bytes && buffer.size >= bytes
   File.open(path, "rb") { |file| file.read_fully(Slice.new(buffer.contents.as(UInt8*), bytes.to_i32)) }
 end
 
@@ -441,6 +487,24 @@ private def wtp_status!(kernel : WanTensorOpsKernel) : Array(UInt32)?
   end
 end
 
+private def wtp_dense_kernel(backend : String, tile_m : Int32, tile_n : Int32) : WanTensorOpsKernel
+  backend == "shared-panel" ? WanSharedPanelKernel.new(tile_m, tile_n) : WanTensorOpsKernel.new(tile_m, tile_n)
+end
+
+private def wtp_qbit_kernel(backend : String, tile_m : Int32, tile_n : Int32,
+                            blob : ML::MetalBuffer, offsets : ML::MetalBuffer,
+                            lut4 : ML::MetalBuffer, lut5 : ML::MetalBuffer,
+                            status : ML::MetalBuffer, blob_bytes : Int32,
+                            offset_count : Int32) : WanTensorOpsKernel
+  if backend == "shared-panel"
+    WanSharedPanelQBitKernel.new(tile_m, tile_n, blob, offsets, lut4, lut5,
+      status, blob_bytes, offset_count)
+  else
+    WanTensorOpsQBitKernel.new(tile_m, tile_n, blob, offsets, lut4, lut5,
+      status, blob_bytes, offset_count)
+  end
+end
+
 private def wtp_repeat_seed(e : ML::Metal::ComputeEncoder,
                             pipeline : ML::Metal::ComputePipeline,
                             source : ML::MetalBuffer, output : ML::MetalBuffer,
@@ -476,7 +540,8 @@ private def wtp_small_qualification(kernel : WanTensorOpsKernel,
                                     compare : ML::Metal::ComputePipeline,
                                     seed_control : ML::Metal::ComputePipeline,
                                     rows : Int32, din : Int32, dout : Int32,
-                                    salt : UInt32) : JSON::Any
+                                    salt : UInt32, raw_qbit_stress : Bool = false,
+                                    qbit_fixture = nil) : JSON::Any
   arena = ML::Video::Arena.new
   plan : ML::Video::WanT5MPSLinearPlan? = nil
   begin
@@ -489,6 +554,40 @@ private def wtp_small_qualification(kernel : WanTensorOpsKernel,
     metrics = arena.alloc("small_metrics", 20)
     control_actual = arena.alloc("small_control_actual", 2)
     control_expected = arena.alloc("small_control_expected", 2)
+    active_kernel = kernel
+    pack = nil.as(ML::Metal::ComputePipeline?)
+    raw_blob = nil.as(ML::MetalBuffer?)
+    raw_offsets = nil.as(ML::MetalBuffer?)
+    raw_status = nil.as(ML::MetalBuffer?)
+    if raw_qbit_stress
+      raise "Raw QBit stress requires shared panels and whole records" unless kernel.route == "shared_panel_f32" && din % 1024 == 0
+      records = dout * (din // 1024)
+      raw_blob = arena.alloc("stress_raw_qbit_blob", records * 2052 // 4)
+      raw_offsets = arena.alloc("stress_raw_qbit_offsets", records + 1)
+      lut4 = arena.alloc("stress_raw_qbit_lut4", 256)
+      lut5 = arena.alloc("stress_raw_qbit_lut5", 256)
+      raw_status = arena.alloc("stress_raw_qbit_status", 8)
+      active_kernel = wtp_qbit_kernel("shared-panel", kernel.tile_m, kernel.tile_n,
+        raw_blob, raw_offsets, lut4, lut5, raw_status, records * 2052, records + 1)
+      pack = wtp_pipeline("wtp_pack_raw_stress")
+    end
+    if fixture = qbit_fixture
+      raise "Pinned QBit stress must use the original K and a channel prefix" unless din == WTP_DIN && dout <= WTP_DOUT && (salt & 0x20000000_u32) != 0
+      blob = arena.alloc("stress_pinned_qbit_blob", (fixture[:blob_bytes] + 3) // 4)
+      count = dout * (din // 1024) + 1
+      offsets = arena.alloc("stress_pinned_qbit_offsets", count)
+      lut4 = arena.alloc("stress_pinned_lut4", 256)
+      lut5 = arena.alloc("stress_pinned_lut5", 256)
+      raw_status = arena.alloc("stress_pinned_status", 8)
+      wtp_upload(fixture[:blob_path], blob, fixture[:blob_bytes].to_i64)
+      wtp_upload_prefix(fixture[:offsets_path], offsets, count.to_i64 * 4)
+      wtp_upload(fixture[:lut4_path], lut4, 1024_i64)
+      wtp_upload(fixture[:lut5_path], lut5, 1024_i64)
+      wtp_upload_prefix(fixture[:weight_path], weight, din.to_i64 * dout * 4)
+      wtp_upload_prefix(fixture[:bias_path], bias, dout.to_i64 * 4)
+      active_kernel = wtp_qbit_kernel("shared-panel", kernel.tile_m, kernel.tile_n,
+        blob, offsets, lut4, lut5, raw_status, fixture[:blob_bytes], count)
+    end
     plan = wtp_new_plan(rows, din, dout, input, weight, mps_output)
 
     before = ML::MetalBuffer.video_spec_allocations
@@ -499,7 +598,17 @@ private def wtp_small_qualification(kernel : WanTensorOpsKernel,
     wtp_poison(e, poison, oracle_output, rows * dout)
     wtp_poison(e, poison, mps_output, rows * dout)
     wtp_seed_small(e, seed, input, weight, bias, rows, din, dout, salt)
-    kernel.encode(e, input, weight, bias, tensorops_output, rows, din, dout)
+    if pack
+      shape = StaticArray[rows.to_u32, din.to_u32, dout.to_u32, 1024_u32]
+      e.set_pipeline(pack).set_buffer(weight, 0, ML::Metal::BufferAccess::ReadWrite)
+        .set_buffer(raw_blob.not_nil!, 1, ML::Metal::BufferAccess::Write)
+        .set_buffer(raw_offsets.not_nil!, 2, ML::Metal::BufferAccess::Write)
+        .set_buffer(raw_status.not_nil!, 3, ML::Metal::BufferAccess::Write)
+        .set_bytes(shape.to_unsafe.as(Void*), 16, 4).dispatch_1d(din * dout)
+    elsif raw_status
+      wtp_zero(e, zero, raw_status, 8)
+    end
+    active_kernel.encode(e, input, weight, bias, tensorops_output, rows, din, dout)
     ML::Video::MetalLinearMPS.project_preexpanded(e, input, bias, mps_output,
       rows, din, dout, ML::Video::WeightDType::F32, plan.not_nil!, weight)
     wtp_sequential_fma(e, oracle, input, weight, bias, oracle_output, rows, din, dout)
@@ -511,6 +620,7 @@ private def wtp_small_qualification(kernel : WanTensorOpsKernel,
     e.end_encoding
     command.commit
     command.wait
+    gpu_status = wtp_status!(active_kernel)
     allocations = ML::MetalBuffer.video_spec_allocations - before
     raise "Small qualification encode allocated tracked MetalBuffers" unless allocations == 0
 
@@ -521,10 +631,16 @@ private def wtp_small_qualification(kernel : WanTensorOpsKernel,
     passed = wtp_tolerance_ok(tensorops_metric) && wtp_tolerance_ok(mps_metric) &&
              wtp_tolerance_ok(pair_metric) && wtp_positive_ok(positive_metric)
     one_hot = (salt & 0x80000000_u32) != 0
+    heterogeneous = (salt & 0x40000000_u32) != 0
     result = JSON.parse({schema: "wan_tensorops_small_qualification_v1",
+                         candidate_route: active_kernel.route, qbit_gpu_status: gpu_status,
+                         qbit_raw_record_stress: raw_qbit_stress,
+                         qbit_pinned_record_tail_stress: !qbit_fixture.nil?,
+                         qbit_pinned_arm: qbit_fixture.nil? ? nil : WTP_ARM,
                          rows: rows, input_dim: din, output_dim: dout, input_seed_salt: salt,
-                         input_pattern: one_hot ? "one_hot_k=(row*7+3)%K with asymmetric dyadic row-major weight and nonzero bias" : "near-cancelling first pair, exact cancelling pairs, dyadic unmatched odd-K tail",
-                         cancellation_pair: one_hot ? "not_applicable" : "x[0]*w[0] and x[1]*w[1] nearly cancel; remaining pairs cancel exactly",
+                         gpu_seed_source_sha256: Digest::SHA256.hexdigest(WTP_METAL),
+                         input_pattern: heterogeneous ? "independent uint-mixed row/K and N/K values, non-dyadic F32 scale 1/4093, nonzero bias" : (one_hot ? "one_hot_k=(row*7+3)%K with asymmetric dyadic row-major weight and nonzero bias" : "near-cancelling first pair, exact cancelling pairs, dyadic unmatched odd-K tail"),
+                         cancellation_pair: one_hot || heterogeneous ? "not_applicable" : "x[0]*w[0] and x[1]*w[1] nearly cancel; remaining pairs cancel exactly",
                          odd_input_tail: din.odd?, oracle: "sequential F32 fma in increasing K, then F32 bias add",
                          tensorops_vs_oracle: wtp_metric_json(metrics, 0, rows * dout),
                          preexpanded_mps_vs_oracle: wtp_metric_json(metrics, 1, rows * dout),
@@ -620,7 +736,7 @@ private def wtp_dense_timed(route : String, kernel : WanTensorOpsKernel,
   command = ML::Metal::CommandBuffer.new
   e = ML::Metal::ComputeEncoder.new(command)
   case route
-  when "tensorops_f32", "tensorops_qbit_positional"
+  when "tensorops_f32", "tensorops_qbit_positional", "shared_panel_f32", "shared_panel_qbit_positional"
     kernel.encode(e, input, weight, bias, tensorops_output,
       WTP_ROWS, WTP_DIN, WTP_DOUT)
   when "preexpanded_mps_f32"
@@ -650,6 +766,10 @@ private def wtp_run_small(kernel : WanTensorOpsKernel) : Nil
   compare = wtp_pipeline("wtp_compare")
   seed_control = wtp_pipeline("wtp_seed_control")
   shapes = [{32, 64, 32, 11_u32}, {35, 73, 37, 23_u32}, {17, 33, 9, 37_u32}]
+  if kernel.route == "shared_panel_f32"
+    shapes << {65, 1031, 49, 0x40000035_u32}
+    shapes << {97, 257, 65, 0x40000061_u32}
+  end
   results = shapes.map do |shape|
     wtp_small_qualification(kernel, zero, poison, seed, oracle, compare, seed_control,
       shape[0], shape[1], shape[2], shape[3])
@@ -666,7 +786,7 @@ end
 # One command/terminal completion for a finite raw-BF16 control and malformed
 # offset, mode, decoded nonfinite, and incoming-capacity failures. Output starts
 # finite in failure cases so unwritten NaNs cannot masquerade as poisoning.
-private def wtp_qbit_failure_controls(tile_m : Int32, tile_n : Int32) : Nil
+private def wtp_qbit_failure_controls(backend : String, tile_m : Int32, tile_n : Int32, fixture) : Nil
   rows, din, dout = 35, 1024, 3
   elements = rows * dout
   zero = wtp_pipeline("wtp_zero")
@@ -675,6 +795,14 @@ private def wtp_qbit_failure_controls(tile_m : Int32, tile_n : Int32) : Nil
   snapshot = wtp_pipeline("wtp_snapshot_status")
   oracle = wtp_pipeline("wtp_sequential_fma")
   compare = wtp_pipeline("wtp_compare")
+  if backend == "shared-panel"
+    wtp_small_qualification(wtp_dense_kernel(backend, tile_m, tile_n), zero,
+      wtp_pipeline("wtp_poison"), seed, oracle, compare, wtp_pipeline("wtp_seed_control"),
+      65, 2048, 35, 0x40000079_u32, true)
+    wtp_small_qualification(wtp_dense_kernel(backend, tile_m, tile_n), zero,
+      wtp_pipeline("wtp_poison"), seed, oracle, compare, wtp_pipeline("wtp_seed_control"),
+      65, WTP_DIN, 35, 0x60000083_u32, false, fixture)
+  end
   arena = ML::Video::Arena.new
   begin
     input = arena.alloc("control_input", rows * din)
@@ -690,7 +818,7 @@ private def wtp_qbit_failure_controls(tile_m : Int32, tile_n : Int32) : Nil
     status = arena.alloc("control_status", 8)
     snapshots = arena.alloc("control_status_snapshots", 5 * 8)
     metrics = arena.alloc("control_metrics", 5 * 5)
-    kernel = WanTensorOpsQBitKernel.new(tile_m, tile_n, blob, offsets, lut4, lut5,
+    kernel = wtp_qbit_kernel(backend, tile_m, tile_n, blob, offsets, lut4, lut5,
       status, blob_bytes, dout + 1)
     before = ML::MetalBuffer.video_spec_allocations
     command = ML::Metal::CommandBuffer.new
@@ -744,7 +872,7 @@ private def wtp_qbit_failure_controls(tile_m : Int32, tile_n : Int32) : Nil
   end
 end
 
-private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool = false) : Nil
+private def wtp_run_dense(backend : String, tile_m : Int32, tile_n : Int32, fixture, qbit : Bool = false) : Nil
   ML::Video::MetalLinearMPS.prepare!
   zero = wtp_pipeline("wtp_zero")
   poison = wtp_pipeline("wtp_poison")
@@ -762,7 +890,7 @@ private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool =
     expected = arena.alloc("pinned_upstream_four_row_projection", WTP_REFERENCE_ELEMS)
     tensorops_output = arena.alloc("tensorops_full_output", WTP_OUTPUT_ELEMENTS)
     mps_output = arena.alloc("mps_full_output", WTP_OUTPUT_ELEMENTS)
-    metrics = arena.alloc("comparison_metrics", 20)
+    metrics = arena.alloc("comparison_metrics", 35)
     control_actual = arena.alloc("comparator_control_actual", 2)
     control_expected = arena.alloc("comparator_control_expected", 2)
     wtp_upload(fixture[:input_path], source, WTP_SOURCE_ROWS.to_i64 * WTP_DIN * 4)
@@ -781,10 +909,10 @@ private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool =
                wtp_upload(fixture[:lut4_path], lut4, 1024_i64)
                wtp_upload(fixture[:lut5_path], lut5, 1024_i64)
                packed_bytes = fixture[:blob_bytes].to_i64 + fixture[:offset_count].to_i64 * 4 + 2048
-               WanTensorOpsQBitKernel.new(tile_m, tile_n, blob, offsets, lut4, lut5, status,
+               wtp_qbit_kernel(backend, tile_m, tile_n, blob, offsets, lut4, lut5, status,
                  fixture[:blob_bytes], fixture[:offset_count])
              else
-               WanTensorOpsKernel.new(tile_m, tile_n)
+               wtp_dense_kernel(backend, tile_m, tile_n)
              end
     wtp_describe_kernel(kernel)
     explicit_bytes = arena.resident_bytes
@@ -841,16 +969,25 @@ private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool =
       STDOUT.flush
     end
 
-    # Timed outputs are checked again after all measurements; the initial
-    # qualification never certifies later writes by itself.
+    # Check the final timed outputs, then re-execute both routes from poisoned
+    # outputs in this diagnostic command. The latter catches incomplete writes;
+    # it is outside every measured interval and adds no inter-operator wait.
     post = ML::Metal::CommandBuffer.new
     e = ML::Metal::ComputeEncoder.new(post)
     before = ML::MetalBuffer.video_spec_allocations
-    wtp_zero(e, zero, metrics, 20)
+    wtp_zero(e, zero, metrics, 35)
     wtp_compare_triplet(e, compare, tensorops_output, mps_output, expected,
       metrics, WTP_OUTPUT_ELEMENTS, WTP_REFERENCE_ELEMS)
     wtp_seed_control(e, seed_control, control_actual, control_expected)
     wtp_compare(e, compare, control_actual, control_expected, metrics, 3, 2, 2)
+    wtp_poison(e, poison, tensorops_output, WTP_OUTPUT_ELEMENTS)
+    wtp_poison(e, poison, mps_output, WTP_OUTPUT_ELEMENTS)
+    kernel.encode(e, input, weight, bias, tensorops_output, WTP_ROWS, WTP_DIN, WTP_DOUT)
+    ML::Video::MetalLinearMPS.project_preexpanded(e, input, bias, mps_output,
+      WTP_ROWS, WTP_DIN, WTP_DOUT, ML::Video::WeightDType::F32, plan.not_nil!, weight)
+    wtp_compare(e, compare, tensorops_output, expected, metrics, 4, WTP_OUTPUT_ELEMENTS, WTP_REFERENCE_ELEMS)
+    wtp_compare(e, compare, mps_output, expected, metrics, 5, WTP_OUTPUT_ELEMENTS, WTP_REFERENCE_ELEMS)
+    wtp_compare(e, compare, tensorops_output, mps_output, metrics, 6, WTP_OUTPUT_ELEMENTS, WTP_OUTPUT_ELEMENTS)
     e.end_encoding
     post.commit
     post.wait
@@ -862,12 +999,18 @@ private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool =
     pair_metric = wtp_metric(metrics, 2)
     positive_metric = wtp_metric(metrics, 3)
     post_passed = wtp_tolerance_ok(tensorops_metric) && wtp_tolerance_ok(mps_metric) &&
-                  wtp_tolerance_ok(pair_metric) && wtp_positive_ok(positive_metric)
+                  wtp_tolerance_ok(pair_metric) && wtp_positive_ok(positive_metric) &&
+                  (4..6).all? { |slot| wtp_tolerance_ok(wtp_metric(metrics, slot)) }
     puts({schema: "wan_tensorops_dense_post_timing_qualification_v1", arm: WTP_ARM,
           candidate_route: kernel.route, qbit_gpu_status: gpu_status,
           tensorops_vs_upstream: wtp_metric_json(metrics, 0, WTP_OUTPUT_ELEMENTS),
           preexpanded_mps_vs_upstream: wtp_metric_json(metrics, 1, WTP_OUTPUT_ELEMENTS),
           tensorops_vs_preexpanded_mps: wtp_metric_json(metrics, 2, WTP_OUTPUT_ELEMENTS),
+          poisoned_reexecution_tensorops_vs_upstream: wtp_metric_json(metrics, 4, WTP_OUTPUT_ELEMENTS),
+          poisoned_reexecution_mps_vs_upstream: wtp_metric_json(metrics, 5, WTP_OUTPUT_ELEMENTS),
+          poisoned_reexecution_tensorops_vs_mps: wtp_metric_json(metrics, 6, WTP_OUTPUT_ELEMENTS),
+          poisoned_reexecution_outside_timed_intervals: true,
+          individual_timed_invocations_poisoned: false,
           comparator_positive_control: wtp_metric_json(metrics, 3, 2),
           comparator_positive_control_passed: wtp_positive_ok(positive_metric),
           qualification_passed: post_passed,
@@ -892,9 +1035,14 @@ private def wtp_run_dense(tile_m : Int32, tile_n : Int32, fixture, qbit : Bool =
 end
 
 private def wtp_describe_kernel(kernel : WanTensorOpsKernel) : Nil
+  shared_panel = kernel.route.starts_with?("shared_panel_")
   puts({schema: "wan_tensorops_kernel_v1", tile_m: kernel.tile_m, tile_n: kernel.tile_n, tile_k: 32,
         candidate_route: kernel.route,
-        execution_scope: "simdgroup", threads_per_threadgroup: 32,
+        execution_scope: shared_panel ? "threadgroup" : "simdgroup",
+        threads_per_threadgroup: shared_panel ? 128 : 32,
+        simdgroups_per_threadgroup: shared_panel ? 4 : 1,
+        mma_backend: shared_panel ? "metal_simdgroup_matrix" : "mpp_tensor_ops",
+        coefficient_dtype: "F32", accumulator_dtype: "F32",
         thread_execution_width: kernel.pipeline.thread_execution_width,
         source_sha256: kernel.source_sha256, relaxed_precision: false,
         metal_language: "4.0", math_mode: "safe"}.to_json)
@@ -903,13 +1051,13 @@ end
 
 case mode
 when "small"
-  kernel = WanTensorOpsKernel.new(tile_m, tile_n)
+  kernel = wtp_dense_kernel(backend, tile_m, tile_n)
   wtp_describe_kernel(kernel)
   wtp_run_small(kernel)
 when "dense", "qbit"
   fixture = wtp_validate_dense_fixture
-  wtp_qbit_failure_controls(tile_m, tile_n) if mode == "qbit"
-  wtp_run_dense(tile_m, tile_n, fixture, mode == "qbit")
+  wtp_qbit_failure_controls(backend, tile_m, tile_n, fixture) if mode == "qbit"
+  wtp_run_dense(backend, tile_m, tile_n, fixture, mode == "qbit")
 else
   raise "Unreachable TensorOps probe mode"
 end
