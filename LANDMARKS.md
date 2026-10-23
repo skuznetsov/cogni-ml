@@ -32490,3 +32490,54 @@ Refresh after source/toolchain/device/model/workload changes.
   competitive fused decode/GEMM without the F32 stage, not established here.
   Refresh on source, payload/input/geometry, compiler/native object,
   SDK/OS/device or numerical-policy changes before consuming this result.
+
+
+## Wan canonical Q4_K with sparse F16 deltas (2026-10-23)
+
+- Opt-in GPU packer/decoder `src/ml/video/q4k_delta_weights.cr` and native
+  `examples/wan_q4k_delta_benchmark.cr` qualify 1/4/8 top-absolute-residual
+  corrections per canonical 256-value Q4_K block. Each record is U8 local
+  position plus F16 delta; ties prefer lower positions. The base payload is
+  unchanged. Complete package sizes including the 16-byte descriptor are
+  39,813,136 / 40,642,576 / 43,130,896 / 46,448,656 bytes for K0/K1/K4/K8.
+  Model defaults/checkpoints are unchanged; rollback removes opt-in additions.
+- On `blocks.0.ffn.0.weight` (13824 by 5120), weight relative L2 vs BF16 is
+  7.02861%/6.94894%/6.74457%/6.50725%, pooled projection relative L2 is
+  4.63165%/4.57702%/4.44768%/4.30013%. K8 reduces output norm error by 7.16%
+  for 16.67% more packed bytes; maximum output error is not monotonic.
+  Only four seeded non-video input rows are used. M4480 repeats them 1120
+  times, adding execution scale but no quality diversity. Fixed quotas are
+  not globally/activation optimal; no perceptual/video-quality claim.
+- The 9 CPU reference tests, 12 analyzer tests and 6 native Metal examples
+  pass. All GPU sidecars match independent expected bytes; full decoded
+  weights and full outputs before/after timing are bit-exact against frozen
+  same-format upstream at M4 and in both fresh M4480 processes. Preserve the
+  finite `2e-5 + 2e-5*abs(reference)` gate, separately from lossy BF16 error.
+  BF16 control, finite/NaN corruption, wire/rounding/tie/invalid-buffer/sticky
+  controls pass. Final source-bound native build/probes use v2; v1 predates
+  cosmetic formatting and is not evidence for current native bytes.
+- Full M4480 decode -> reused 270 MiB F32 stage -> MPS -> bias GPU medians
+  for K0/K1/K4/K8 are 57.66921/57.83448/58.91102/62.67004 ms in A and
+  57.74969/57.86144/58.89075/62.78829 ms in opposite-order B. K4/K8 are slower
+  in every pair; K1 paired ranges cross 1. No speed promotion. Decode-only
+  K8 is about 7.267 ms vs 2.38 ms base; the decoder redundantly validates
+  records/duplicates for every output, so this is not a format lower bound.
+- Zero inter-op host waits, activation readbacks, or tracked explicit
+  ML::MetalBuffer encode allocations in timed samples. The packer allocates
+  no separate explicit global workspace; private arrays/MPS resources are
+  outside that counter. Native sampled footprint peaks at 1.78048 GiB,
+  min estimated cache-aware headroom 21.70114 GiB, pressure-free at least 73%,
+  swap growth zero. Oracle min headroom is 12.78004 GiB. Preserve 15% reserve,
+  4 GiB process cap, 64 MiB swap stop and deadlines. Sampling cannot exclude
+  inter-poll spikes. No full model/block/Studio/generation was launched.
+- Reproduction, exact receipt/source/object pins and incomplete native-object
+  ancestry limits are in `docs/wan-q4k-delta-benchmark.md`. External evidence:
+  `video-scene-20261019/evidence/wan-q4k-delta-20261023/summary-v2.json`, SHA256
+  `506e43e85c24eaa9a3f09ab60c837e997840a1e291730a6fbbebbb181bb5b667`.
+  Correlated Mini-Quad is ROBUST for bounded execution/storage/observed guards
+  and VULNERABLE for broader quality/optimality/speed claims. Next execution
+  falsifier: block-shared validation with identical arithmetic/failure rules;
+  next quality falsifier: nonrepeated held-out Wan activations and global
+  allocation at matched serialized bytes. Refresh after source, payload,
+  input/geometry, compiler/native object, OS/SDK/device or numerical-policy
+  changes before consuming these results.

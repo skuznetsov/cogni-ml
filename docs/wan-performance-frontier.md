@@ -9,6 +9,40 @@ allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
 Latest bounded result (2026-10-23):
+[canonical Q4_K with sparse F16 deltas](wan-q4k-delta-benchmark.md).
+For the same `blocks.0.ffn.0.weight` and four unique seeded non-video inputs,
+0/1/4/8 corrections per 256-value block give pooled BF16 output relative L2
+of 4.63165%/4.57702%/4.44768%/4.30013%. Complete packages include all U8
+positions, F16 deltas and the common 16-byte descriptor: 37.96877/38.75978/
+41.13283/44.29689 MiB. K8 improves output relative L2 by 7.16% for 16.67%
+more packed bytes. Fixed block quotas are not globally/activation optimal.
+
+The 9 CPU reference tests, 12 analyzer tests and 6 native Metal examples pass.
+GPU sidecars and full decoded weights/outputs before and after timing match
+independent same-format upstream bit for bit at M4 and in two fresh M4480
+processes, retaining the finite gate. M4480 repeats the same four rows and
+adds no independent quality evidence. Original-BF16 and injected corruption
+controls pass. Complete decode -> shared F32 stage -> MPS -> bias GPU medians
+for K0/K1/K4/K8 are 57.66921/57.83448/58.91102/62.67004 ms in A and
+57.74969/57.86144/58.89075/62.78829 ms in opposite-order B. K4/K8 are slower
+in every measured pair; K1 ranges cross 1. No speed promotion is admitted.
+The current decoder repeats record/duplicate validation per weight, so these
+are implementation costs rather than a sparse-format lower bound.
+
+All timed samples have zero inter-op waits/readbacks/tracked explicit
+`ML::MetalBuffer` encode allocations; opaque MPS/compiler storage is outside
+that counter. No separate explicit global packing workspace is allocated;
+private packer arrays may use compiler-managed scratch. The 270 MiB F32 stage
+remains. Native sampled peak footprint is 1.78048 GiB, minimum cache-aware
+estimated headroom 21.70114 GiB, pressure-free at least 73%, swap growth zero.
+The 15% reserve / 4 GiB cap / 64 MiB swap stop remains unchanged. No full
+model/block/Studio/generation ran. The correlated Mini-Quad is ROBUST for this
+bounded result and VULNERABLE for broader quality/optimality/speed claims.
+The linked report contains exact commands, receipt hashes, ancestry limits,
+rollback and decay triggers. Next discriminators are block-shared validation
+and held-out nonrepeated activations with fixed-byte correction allocation.
+
+Previous bounded result (2026-10-23):
 [same-wire Q4_K range-count ablation](wan-q4k-range-benchmark.md).
 Opt-in native GPU packers compare eight 32-value ranges with one tied
 256-value range under the same zero-inclusive min/max fitter. All arms retain
