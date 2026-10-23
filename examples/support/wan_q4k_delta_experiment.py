@@ -47,11 +47,15 @@ def main():
     parser.add_argument('--rows', type=int, choices=[4, 4480], default=4)
     parser.add_argument('--reverse-first', action='store_true', help='Reverse the first warmup and paired order')
     parser.add_argument('--rounds', type=int, choices=[16, 32])
+    parser.add_argument('--compare-block-validation', action='store_true',
+                        help='Pair per-value and per-block correction validation in the native probe')
     args = parser.parse_args()
+    if args.compare_block_validation and args.mode != 'probe':
+        parser.error('block-validation comparison is only a probe mode')
     if args.rounds is None:
         args.rounds = 16
     if args.rounds not in [16, 32]:
-        parser.error('rounds must be two or four complete forward/reverse arm rotations')
+        parser.error('rounds must be 16 or 32 balanced measured rounds')
     for value in [args.tag, args.build_tag, args.fixture_tag]:
         if not value.isascii() or not value.replace('-', '').isalnum():
             parser.error('tags must be ASCII alphanumeric with optional hyphens')
@@ -154,12 +158,15 @@ def main():
             if source.is_file():
                 files[str(source)] = sha(source)
         command = [str(binary), '--fixture='+str(fixture), '--rounds='+str(args.rounds)]
+        if args.compare_block_validation:
+            command += ['--compare-block-validation']
         if args.reverse_first:
             command += ['--reverse-first']
     deadline = 240 if args.mode == 'build' else 300
     intent = {'schema': 'wan_q4k_delta_intent_v1', 'command': command,
               'mode': args.mode, 'tag': args.tag, 'files': files,
               'sparse_delta_ablation': True, 'reverse_first': args.reverse_first,
+              'block_validation_comparison': args.compare_block_validation,
               'head': capture(['git', 'rev-parse', 'HEAD']),
               'status': capture(['git', 'status', '--short']),
               'macos': platform.mac_ver()[0], 'created_unix': time.time(),

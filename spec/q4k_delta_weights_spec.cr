@@ -42,17 +42,39 @@ private def q4kd_output(buffer : ML::MetalBuffer, index : Int32) : Float32
   buffer.contents.as(Float32*)[index]
 end
 
+private def q4kd_valid_sidecar(blocks : Int32, patches : Int32) : Bytes
+  bytes = Bytes.new(blocks * patches * 3, 0_u8)
+  blocks.times do |block|
+    patches.times do |rank|
+      index = case patches
+              when 1
+                block == 0 ? 0 : 255
+              when 4
+                {0, 64, 192, 255}[rank]
+              else
+                {0, 32, 64, 96, 128, 160, 224, 255}[rank]
+              end
+      offset = (block * patches + rank) * 3
+      bytes[offset] = index.to_u8
+      q4kd_store_u16(bytes, offset + 1, 0x3c00_u16)
+    end
+  end
+  bytes
+end
+
 private def q4kd_encode_decode(command : ML::Metal::CommandBuffer,
                                source : ML::MetalBuffer,
                                payload : ML::MetalBuffer,
                                sidecar : ML::MetalBuffer,
                                status : ML::MetalBuffer,
                                destination : ML::MetalBuffer,
+                               block_destination : ML::MetalBuffer,
                                count : Int32,
                                patches : Int32) : Nil
   encoder = ML::Metal::ComputeEncoder.new(command)
   Q4KDelta.pack(encoder, source, payload, sidecar, status, count, patches)
   Q4KDelta.decode(encoder, payload, sidecar, destination, status, count, patches)
+  Q4KDelta.decode_block_validated(encoder, payload, sidecar, block_destination, status, count, patches)
   encoder.end_encoding
 end
 
@@ -183,6 +205,7 @@ describe "Q4_K sparse F16 delta native packing and decoding" do
     sidecar = ML::MetalBuffer.new(Q4KDelta.sidecar_bytes(256, 1))
     status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
     destination = ML::MetalBuffer.new(256_i64 * sizeof(Float32))
+    block_destination = ML::MetalBuffer.new(256_i64 * sizeof(Float32))
     command = nil.as(ML::Metal::CommandBuffer?)
     begin
       source.write_bytes(input_bytes.to_unsafe, input_bytes.size)
@@ -190,19 +213,181 @@ describe "Q4_K sparse F16 delta native packing and decoding" do
       status.contents.as(UInt32*).value = 0_u32
       active = ML::Metal::CommandBuffer.new
       command = active
-      q4kd_encode_decode(active, source, payload, sidecar, status, destination, 256, 1)
+      q4kd_encode_decode(active, source, payload, sidecar, status, destination, block_destination, 256, 1)
       active.commit_and_wait
       active.completed_successfully?.should be_true
       status.contents.as(UInt32*).value.should eq(0_u32)
       q4kd_sidecar_bytes(sidecar, 3).should eq(Bytes[0_u8, 0x9a_u8, 0x39_u8])
       # 0.2999267578125 + half(0x399a)=0.7001953125.
       q4kd_output(destination, 0).should eq(1.0001220703125_f32)
+      q4kd_output(block_destination, 0).should eq(1.0001220703125_f32)
       q4kd_output(destination, 1).should eq(0.0_f32)
+      q4kd_output(block_destination, 1).should eq(0.0_f32)
     ensure
       if active = command
         active.discard unless active.committed?
       end
-      {source, payload, sidecar, status, destination}.each(&.release)
+      {source, payload, sidecar, status, destination, block_destination}.each(&.release)
+    end
+  end
+
+  it "matches the per-value decoder for K=1/4/8 in one command without tracked encode allocations" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDelta.prepare!
+
+    payload_bytes = q4kd_zero_payload(2)
+    payload = ML::MetalBuffer.new(payload_bytes.size.to_i64)
+    sidecar_1 = ML::MetalBuffer.new(Q4KDelta.sidecar_bytes(512, 1))
+    sidecar_4 = ML::MetalBuffer.new(Q4KDelta.sidecar_bytes(512, 4))
+    sidecar_8 = ML::MetalBuffer.new(Q4KDelta.sidecar_bytes(512, 8))
+    status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    old_1 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    new_1 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    old_4 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    new_4 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    old_8 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    new_8 = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    command = nil.as(ML::Metal::CommandBuffer?)
+    begin
+      payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+      { {sidecar_1, 1}, {sidecar_4, 4}, {sidecar_8, 8} }.each do |sidecar, patches|
+        bytes = q4kd_valid_sidecar(2, patches)
+        sidecar.write_bytes(bytes.to_unsafe, bytes.size)
+      end
+      status.contents.as(UInt32*).value = 0_u32
+
+      active = ML::Metal::CommandBuffer.new
+      command = active
+      encoder = ML::Metal::ComputeEncoder.new(active)
+      allocations = ML::MetalBuffer.video_spec_allocations
+      Q4KDelta.decode(encoder, payload, sidecar_1, old_1, status, 512, 1)
+      Q4KDelta.decode_block_validated(encoder, payload, sidecar_1, new_1, status, 512, 1)
+      Q4KDelta.decode(encoder, payload, sidecar_4, old_4, status, 512, 4)
+      Q4KDelta.decode_block_validated(encoder, payload, sidecar_4, new_4, status, 512, 4)
+      Q4KDelta.decode(encoder, payload, sidecar_8, old_8, status, 512, 8)
+      Q4KDelta.decode_block_validated(encoder, payload, sidecar_8, new_8, status, 512, 8)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      encoder.end_encoding
+      active.commit_and_wait
+      active.completed_successfully?.should be_true
+      status.contents.as(UInt32*).value.should eq(0_u32)
+
+      { {old_1, new_1}, {old_4, new_4}, {old_8, new_8} }.each do |old_output, new_output|
+        512.times do |index|
+          q4kd_output(new_output, index).should eq(q4kd_output(old_output, index))
+        end
+      end
+      {0, 511}.each do |index|
+        q4kd_output(new_1, index).should eq(1.0_f32)
+      end
+      {0, 64, 192, 255, 256, 320, 448, 511}.each do |index|
+        q4kd_output(new_4, index).should eq(1.0_f32)
+      end
+      {0, 32, 64, 96, 128, 160, 224, 255, 256, 288, 320, 352, 384, 416, 480, 511}.each do |index|
+        q4kd_output(new_8, index).should eq(1.0_f32)
+      end
+    ensure
+      if active = command
+        active.discard unless active.committed?
+      end
+      {payload, sidecar_1, sidecar_4, sidecar_8, status, old_1, new_1,
+       old_4, new_4, old_8, new_8}.each(&.release)
+    end
+  end
+
+  it "isolates duplicate and nonfinite correction lists while preserving valid adjacent blocks and sticky status" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDelta.prepare!
+
+    payload_bytes = q4kd_zero_payload(4)
+    sidecar_bytes = q4kd_valid_sidecar(4, 4)
+    # Block zero has a duplicate position. Blocks one and two have NaN and Inf deltas.
+    sidecar_bytes[3] = sidecar_bytes[0]
+    q4kd_store_u16(sidecar_bytes, 12 + 1, 0x7e00_u16)
+    q4kd_store_u16(sidecar_bytes, 24 + 1, 0x7c00_u16)
+    payload = ML::MetalBuffer.new(payload_bytes.size.to_i64)
+    sidecar = ML::MetalBuffer.new(sidecar_bytes.size.to_i64)
+    old_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    old_output = ML::MetalBuffer.new(1024_i64 * sizeof(Float32))
+    new_output = ML::MetalBuffer.new(1024_i64 * sizeof(Float32))
+    command = nil.as(ML::Metal::CommandBuffer?)
+    begin
+      payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+      sidecar.write_bytes(sidecar_bytes.to_unsafe, sidecar_bytes.size)
+      old_status.contents.as(UInt32*).value = 0x80_u32
+      status.contents.as(UInt32*).value = 0x80_u32
+
+      active = ML::Metal::CommandBuffer.new
+      command = active
+      encoder = ML::Metal::ComputeEncoder.new(active)
+      Q4KDelta.decode(encoder, payload, sidecar, old_output, old_status, 1024, 4)
+      Q4KDelta.decode_block_validated(encoder, payload, sidecar, new_output, status, 1024, 4)
+      encoder.end_encoding
+      active.commit_and_wait
+      active.completed_successfully?.should be_true
+      old_status.contents.as(UInt32*).value.should eq(0x81_u32)
+      status.contents.as(UInt32*).value.should eq(0x81_u32)
+
+      1024.times do |index|
+        q4kd_output(new_output, index).should eq(q4kd_output(old_output, index))
+      end
+      768.times do |index|
+        q4kd_output(new_output, index).should eq(0.0_f32)
+      end
+      {768, 832, 960, 1023}.each do |index|
+        q4kd_output(new_output, index).should eq(1.0_f32)
+      end
+    ensure
+      if active = command
+        active.discard unless active.committed?
+      end
+      {payload, sidecar, old_status, status, old_output, new_output}.each(&.release)
+    end
+  end
+
+  it "zeros a nonfinite Q4_K base block without suppressing its valid neighboring block" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDelta.prepare!
+
+    payload_bytes = q4kd_zero_payload(2)
+    payload_bytes[0] = 0x00_u8
+    payload_bytes[1] = 0x7c_u8 # +Inf d makes every base value in block zero invalid.
+    sidecar_bytes = q4kd_valid_sidecar(2, 1)
+    payload = ML::MetalBuffer.new(payload_bytes.size.to_i64)
+    sidecar = ML::MetalBuffer.new(sidecar_bytes.size.to_i64)
+    old_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    old_output = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    new_output = ML::MetalBuffer.new(512_i64 * sizeof(Float32))
+    command = nil.as(ML::Metal::CommandBuffer?)
+    begin
+      payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+      sidecar.write_bytes(sidecar_bytes.to_unsafe, sidecar_bytes.size)
+      old_status.contents.as(UInt32*).value = 0_u32
+      status.contents.as(UInt32*).value = 0_u32
+
+      active = ML::Metal::CommandBuffer.new
+      command = active
+      encoder = ML::Metal::ComputeEncoder.new(active)
+      Q4KDelta.decode(encoder, payload, sidecar, old_output, old_status, 512, 1)
+      Q4KDelta.decode_block_validated(encoder, payload, sidecar, new_output, status, 512, 1)
+      encoder.end_encoding
+      active.commit_and_wait
+      active.completed_successfully?.should be_true
+      old_status.contents.as(UInt32*).value.should_not eq(0_u32)
+      status.contents.as(UInt32*).value.should_not eq(0_u32)
+
+      512.times do |index|
+        q4kd_output(new_output, index).should eq(q4kd_output(old_output, index))
+      end
+      256.times { |index| q4kd_output(new_output, index).should eq(0.0_f32) }
+      q4kd_output(new_output, 511).should eq(1.0_f32)
+    ensure
+      if active = command
+        active.discard unless active.committed?
+      end
+      {payload, sidecar, old_status, status, old_output, new_output}.each(&.release)
     end
   end
 end
@@ -233,10 +418,12 @@ describe "Q4_K sparse F16 delta guards" do
       {0, -256, 255, 257}.each do |count|
         expect_raises(ArgumentError) { Q4KDelta.pack(encoder, source, payload, sidecar, status, count, 4) }
         expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, sidecar, destination, status, count, 4) }
+        expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, sidecar, destination, status, count, 4) }
       end
       {0, 2, 3, 9}.each do |patches|
         expect_raises(ArgumentError) { Q4KDelta.pack(encoder, source, payload, sidecar, status, 256, patches) }
         expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, sidecar, destination, status, 256, patches) }
+        expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, sidecar, destination, status, 256, patches) }
       end
       expect_raises(ArgumentError) { Q4KDelta.pack(encoder, small_source, payload, sidecar, status, 256, 4) }
       expect_raises(ArgumentError) { Q4KDelta.pack(encoder, source, small_payload, sidecar, status, 256, 4) }
@@ -247,6 +434,10 @@ describe "Q4_K sparse F16 delta guards" do
       expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, small_sidecar, destination, status, 256, 4) }
       expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, sidecar, destination, small_status, 256, 4) }
       expect_raises(ArgumentError) { Q4KDelta.pack(encoder, released, payload, sidecar, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, small_payload, sidecar, destination, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, small_sidecar, destination, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, sidecar, small_destination, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, sidecar, destination, small_status, 256, 4) }
 
       # Each pairwise alias is rejected, including aliases through status.
       expect_raises(ArgumentError) { Q4KDelta.pack(encoder, shared, shared, sidecar, status, 256, 4) }
@@ -262,6 +453,12 @@ describe "Q4_K sparse F16 delta guards" do
       expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, shared, shared, status, 256, 4) }
       expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, shared, destination, shared, 256, 4) }
       expect_raises(ArgumentError) { Q4KDelta.decode(encoder, payload, sidecar, shared, shared, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, shared, shared, destination, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, shared, sidecar, shared, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, shared, sidecar, destination, shared, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, shared, shared, status, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, shared, destination, shared, 256, 4) }
+      expect_raises(ArgumentError) { Q4KDelta.decode_block_validated(encoder, payload, sidecar, shared, shared, 256, 4) }
       encoder.end_encoding
       ended = true
       command.discard

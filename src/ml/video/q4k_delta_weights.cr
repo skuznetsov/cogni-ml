@@ -11,8 +11,9 @@ module ML::Video::Q4KDeltaWeights
 
   @@pack_pipeline : ML::Metal::ComputePipeline?
   @@decode_pipeline : ML::Metal::ComputePipeline?
+  @@decode_block_validated_pipeline : ML::Metal::ComputePipeline?
 
-  # Compile the opt-in pack and fused decode kernels during setup. Encode calls
+  # Compile the opt-in pack and decode kernels during setup. Encode calls
   # only validate, bind caller-owned storage, and dispatch on the open encoder.
   def self.prepare! : Nil
     @@pack_pipeline ||= ML::Metal::PipelineCache.get("wan_q4k_delta_pack") do
@@ -20,6 +21,9 @@ module ML::Video::Q4KDeltaWeights
     end
     @@decode_pipeline ||= ML::Metal::PipelineCache.get("wan_q4k_delta_decode") do
       ML::Metal::ComputePipeline.new("wan_q4k_delta_decode", SOURCE)
+    end
+    @@decode_block_validated_pipeline ||= ML::Metal::PipelineCache.get("wan_q4k_delta_decode_block_validated") do
+      ML::Metal::ComputePipeline.new("wan_q4k_delta_decode_block_validated", SOURCE)
     end
   end
 
@@ -85,6 +89,43 @@ module ML::Video::Q4KDeltaWeights
       .set_buffer(status, 3, ML::Metal::BufferAccess::ReadWrite)
     e.set_value(count.to_u32, 4).set_value(patches.to_u32, 5)
     e.dispatch_1d(count)
+  end
+
+  # Decode canonical Q4_K values with one complete threadgroup per 256-value
+  # block. Each group validates its correction records once, then shares them
+  # across its lanes. The existing per-value decoder remains the control.
+  def self.decode_block_validated(e : ML::Metal::ComputeEncoder,
+                                  canonical_q4k_payload : ML::MetalBuffer,
+                                  sidecar : ML::MetalBuffer,
+                                  destination : ML::MetalBuffer,
+                                  status : ML::MetalBuffer,
+                                  count : Int32, patches : Int32) : Nil
+    validate_count!(count)
+    validate_patches!(patches)
+
+    payload_bytes = (count.to_i64 // BLOCK_ELEMENTS) * Q4_K_BLOCK_BYTES
+    deltas_bytes = sidecar_bytes(count, patches)
+    check_buffer!(canonical_q4k_payload, payload_bytes)
+    check_buffer!(sidecar, deltas_bytes)
+    ML::Video::MetalOps.check(destination, count.to_i64)
+    check_status!(status)
+    unless disjoint?(canonical_q4k_payload, sidecar, destination, status)
+      raise ArgumentError.new("Q4_K delta payload, sidecar, destination, and status buffers must be disjoint")
+    end
+
+    selected_pipeline = @@decode_block_validated_pipeline || raise ArgumentError.new("Call Q4KDeltaWeights.prepare! before decode")
+    unless selected_pipeline.max_total_threads_per_threadgroup >= BLOCK_ELEMENTS
+      raise ArgumentError.new("Q4K block-validated decode requires a 256-threadgroup pipeline")
+    end
+    e.set_pipeline(selected_pipeline)
+      .set_buffer(canonical_q4k_payload, 0)
+      .set_buffer(sidecar, 1)
+      .set_buffer(destination, 2, ML::Metal::BufferAccess::Write)
+      .set_buffer(status, 3, ML::Metal::BufferAccess::ReadWrite)
+    e.set_value(count.to_u32, 4).set_value(patches.to_u32, 5)
+    # This API consumes threadgroup_position_in_grid as the block index, so
+    # pass a count of groups and an exact full 256-lane group size.
+    e.dispatch_threadgroups({count // BLOCK_ELEMENTS, 1, 1}, {BLOCK_ELEMENTS, 1, 1})
   end
 
   private def self.validate_count!(count : Int32) : Nil

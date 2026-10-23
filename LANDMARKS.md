@@ -32541,3 +32541,52 @@ Refresh after source/toolchain/device/model/workload changes.
   allocation at matched serialized bytes. Refresh after source, payload,
   input/geometry, compiler/native object, OS/SDK/device or numerical-policy
   changes before consuming these results.
+
+## Wan Q4_K sparse-delta block-shared validation (2026-10-23)
+
+- Opt-in `Q4KDeltaWeights.decode_block_validated` uses one exact 256-lane
+  threadgroup per block. Lane zero validates/stages 1/4/8 records once;
+  an unconditional local barrier shares them with all lanes. Keep the old
+  per-value decoder as control. Malformed lists zero only their block;
+  invalid base/result values zero only their value; independent sticky
+  status and separate F32 arithmetic are retained. No format/default or
+  checkpoint change; rollback uses the old API without the comparison flag.
+- On the same `blocks.0.ffn.0.weight` (13824 by 5120), all eight old/new
+  execution arms' full decoded weights and outputs are bit-exact with
+  independent same-format upstream before/after timing at M4 and two fresh
+  M4480 orders. The 9 CPU reference tests, 15 analyzer tests and 9 native
+  examples pass. Preserve finite `2e-5 + 2e-5*abs(reference)` tolerance.
+  Adjacent malformed/valid blocks, duplicate/NaN/Inf records, independent
+  old/new sticky status, rounding, boundary indices, aliases and geometry
+  are checked. Fresh oracle manifests are byte-identical to the parent;
+  no lineage pins were weakened when the launcher changed.
+- Adjacent old/new pairs balance all eight positions, both orders per half,
+  with 16 measured rounds and two warmups per mode. M4480 K8 full
+  decode -> reused F32 stage -> MPS -> bias GPU medians are
+  62.97452 -> 59.71060 ms A and 71.39210 -> 67.63685 ms B. Paired latency
+  medians improve 4.59%/5.27%; every pair/slot/half improves beyond observed
+  A/A spread. K8 decode is 7.39960 -> 4.24546 and 7.43042 -> 4.24323 ms,
+  paired about 43% less. K4 decode improves about 29%; full-path paired
+  -1.50%/-2.54% is closer to A/A noise. K1 has no stable speed claim.
+  Absolute baseline A/B drift is about 11%: do not pool runs or infer a
+  model-wide gain. Four repeated seeded non-video rows add no new quality
+  evidence, and all lossy BF16-relative metrics/package bytes are unchanged.
+- All timed samples retain one terminal wait and zero inter-op host waits,
+  activation readbacks or tracked explicit Metal-buffer encode allocations.
+  The 270 MiB F32 stage remains. Native sampled peak footprint is
+  1.78563 GiB, minimum cache-aware headroom 18.94270 GiB, pressure-free at
+  least 73%, swap growth zero. Preserve 15% reserve/floor, 4 GiB cap and
+  64 MiB swap-growth stop, with opaque-resource and between-poll limitations.
+  No full model, block, Studio, video or generation was launched.
+- Exact commands, failure controls, lineage limits, receipt pins and refresh
+  boundary are in `docs/wan-q4k-block-validation-benchmark.md`. External
+  `evidence/wan-q4k-delta-20261023/summary-block-v1.json` SHA256 is
+  `c8669179f12ec37d567814356232390cce024945670bb5da314c463f9cab8b2c`.
+  Correlated Mini-Quad verdict: ROBUST for pinned parity/failure controls,
+  observed guards and bounded K8 projection gain; VULNERABLE for broader
+  quality/model-wide speed claims. Both eight-pair AB/BA orientations
+  improve in each full-size process.
+  Next execution falsifier: cheaper K8 lookup or competitive fused
+  decode/GEMM without the common stage. Refresh on source/dispatch,
+  payload/sidecar/input/geometry, compiler/native objects, OS/SDK/device,
+  numerical-policy or schedule changes before reusing this evidence.

@@ -223,3 +223,81 @@ kernel void wan_q4k_delta_decode(
     }
     destination[gid] = decoded;
 }
+
+// Opt-in comparison kernel. One exact 256-lane threadgroup owns each block;
+// lane zero validates and stages the correction records before every lane
+// reaches the unconditional barrier. The control kernel above is unchanged.
+kernel void wan_q4k_delta_decode_block_validated(
+    device const uchar *canonical_q4k_payload [[buffer(0)]],
+    device const uchar *sidecar [[buffer(1)]],
+    device float *destination [[buffer(2)]],
+    device atomic_uint *status [[buffer(3)]],
+    constant uint &count [[buffer(4)]],
+    constant uint &patches [[buffer(5)]],
+    uint block_index [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]]) {
+    threadgroup uint shared_indices[8];
+    threadgroup float shared_deltas[8];
+    threadgroup uint shared_malformed;
+
+    if (lane == 0u) {
+        shared_malformed = 0u;
+        if (patches != 1u && patches != 4u && patches != 8u) {
+            shared_malformed = 1u;
+            q4kd_set_error(status);
+        } else {
+            device const uchar *records = sidecar + block_index * patches * 3u;
+            for (uint rank = 0u; rank < patches; ++rank) {
+                const uint offset = rank * 3u;
+                const uint index = uint(records[offset]);
+                const float delta = q4kd_load_f16_le(records + offset + 1u);
+                shared_indices[rank] = index;
+                shared_deltas[rank] = delta;
+                if (!isfinite(delta))
+                    shared_malformed = 1u;
+                for (uint prior = 0u; prior < rank; ++prior) {
+                    if (shared_indices[prior] == index)
+                        shared_malformed = 1u;
+                }
+            }
+            if (shared_malformed != 0u)
+                q4kd_set_error(status);
+        }
+    }
+
+    // All lanes, including those in malformed blocks, must reach this barrier.
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const uint within = lane;
+    const uint gid = block_index * Q4KD_BLOCK_ELEMENTS + within;
+    if (gid >= count)
+        return;
+    if (shared_malformed != 0u) {
+        destination[gid] = 0.0f;
+        return;
+    }
+
+    device const uchar *q4k_block =
+        canonical_q4k_payload + block_index * Q4KD_BLOCK_BYTES;
+    const float base = q4kd_decode_base(q4k_block, within);
+    if (!isfinite(base)) {
+        q4kd_set_error(status);
+        destination[gid] = 0.0f;
+        return;
+    }
+
+    float delta = 0.0f;
+    for (uint rank = 0u; rank < patches; ++rank) {
+        if (shared_indices[rank] == within) {
+            delta = shared_deltas[rank];
+            break;
+        }
+    }
+    const float decoded = base + delta;
+    if (!isfinite(decoded)) {
+        q4kd_set_error(status);
+        destination[gid] = 0.0f;
+        return;
+    }
+    destination[gid] = decoded;
+}

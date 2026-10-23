@@ -21,6 +21,8 @@ results = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(results)
 
 ROWS, DIN, DOUT = 4, results.INPUT_DIM, results.OUTPUT_DIM
+BLOCK_ARMS = tuple(f"{arm}_block" for arm in results.ARMS)
+EXECUTION_ARMS = results.ARMS + BLOCK_ARMS
 MANIFEST_SCHEMA = "wan_q4k_delta_reference_v1"
 ZERO_METRIC = lambda count, **changes: {
     "compared_values": count,
@@ -37,12 +39,22 @@ ZERO_METRIC = lambda count, **changes: {
 
 
 def timing_records(rounds: int = 16, reverse_first: bool = False,
-                   manifest_sha256: str = "a" * 64) -> list[dict]:
+                   manifest_sha256: str = "a" * 64,
+                   block_validation_comparison: bool = False) -> list[dict]:
     records = []
+    arms = EXECUTION_ARMS if block_validation_comparison else results.ARMS
     for mode in results.MODES:
         for round_id in (-2, -1, *range(rounds)):
-            rotation = max(round_id, 0) % len(results.ARMS)
-            order = list(results.ARMS[rotation:]) + list(results.ARMS[:rotation])
+            if block_validation_comparison:
+                rotation = max(round_id, 0) % len(results.ARMS)
+                base_order = list(results.ARMS[rotation:]) + list(results.ARMS[:rotation])
+                order = [item for arm in base_order for item in (arm, f"{arm}_block")]
+                if round_id >= 0 and (round_id // 4) % 2 == 1:
+                    order = [item for index in range(0, len(order), 2)
+                             for item in (order[index + 1], order[index])]
+            else:
+                rotation = max(round_id, 0) % len(arms)
+                order = list(arms[rotation:]) + list(arms[:rotation])
             reverse = ((round_id == -1) if round_id < 0 else round_id >= rounds // 2)
             if reverse != reverse_first:
                 order.reverse()
@@ -297,7 +309,9 @@ def make_reference_fixture(base: Path, rows: int = ROWS) -> tuple[Path, dict[str
                      "__source_pins__": source_pins}
 
 
-def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[str, str]]:
+def complete_synthetic_probe(base: Path, rounds: int = 16, *,
+                              block_validation_comparison: bool = False,
+                              reverse_first: bool = False) -> tuple[str, dict[str, str]]:
     fixture, fixture_files = make_reference_fixture(base, ROWS)
     source_manifest = Path(fixture_files["__source_manifest__"])
     source_fixture = Path(fixture_files["__source_dir__"])
@@ -326,6 +340,13 @@ def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[st
         "mps_storage": "opaque and included in the process guard, excluded from explicit byte sum",
         "tolerance": "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
     }
+    if block_validation_comparison:
+        setup["block_validation_comparison"] = True
+        setup["execution_arms"] = list(EXECUTION_ARMS)
+        setup["format_by_arm"] = {
+            arm: arm.removesuffix("_block") for arm in EXECUTION_ARMS
+        }
+    setup["reverse_first"] = reverse_first
     records = [setup]
     for arm in results.ARMS[1:]:
         records.append({
@@ -345,8 +366,9 @@ def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[st
         "decoder": metric(DIN * DOUT),
         "projection": metric(ROWS * DOUT),
     })
+    execution_arms = EXECUTION_ARMS if block_validation_comparison else results.ARMS
     for phase in ("before_timing", "after_timing"):
-        for arm in results.ARMS:
+        for arm in execution_arms:
             records.append({
                 "schema": "wan_q4k_delta_parity_v1",
                 "phase": phase,
@@ -364,7 +386,9 @@ def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[st
                 "calibration_rows": [],
                 "unique_evaluation_rows": [0, 1, 2, 3],
             })
-    records.extend(timing_records(rounds, manifest_sha256=manifest_sha))
+    records.extend(timing_records(
+        rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha,
+        block_validation_comparison=block_validation_comparison))
     records.append({
         "schema": "wan_q4k_delta_controls_v1",
         "corruption_rejected": True,
@@ -433,8 +457,10 @@ def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[st
         "schema": "wan_q4k_delta_intent_v1",
         "mode": "probe",
         "tag": "r4",
-        "command": [str(binary), f"--fixture={fixture}", f"--rounds={rounds}"],
-        "reverse_first": False,
+        "command": [str(binary), f"--fixture={fixture}", f"--rounds={rounds}"] +
+                   (["--compare-block-validation"] if block_validation_comparison else []) +
+                   (["--reverse-first"] if reverse_first else []),
+        "reverse_first": reverse_first,
         "files": files,
         "memory_accounting": "file-cache",
         "reserve_pct": 15,
@@ -442,6 +468,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16) -> tuple[str, dict[st
         "max_swap_growth_mib": 64,
         "timeout_sec": 300,
     }
+    if block_validation_comparison:
+        probe_intent["block_validation_comparison"] = True
     write_json(probe_intent_path, probe_intent)
     probe_receipt = {
         "schema": "wan_q4k_delta_completion_v1",
@@ -474,6 +502,10 @@ class ResultAnalyzerSpec(unittest.TestCase):
         timing_count = len(timing_records())
         self.assertEqual(timing_count, (16 + 2) * len(results.ARMS) * len(results.MODES))
         self.assertEqual(results.expected_probe_record_count(timing_count), 158)
+        comparison_timing_count = len(timing_records(block_validation_comparison=True))
+        self.assertEqual(comparison_timing_count,
+                         (16 + 2) * len(EXECUTION_ARMS) * len(results.MODES))
+        self.assertEqual(results.expected_probe_record_count(comparison_timing_count), 310)
 
     def test_complete_positive_receipt_and_all_arm_records_are_accepted(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -488,6 +520,147 @@ class ResultAnalyzerSpec(unittest.TestCase):
             self.assertEqual(set(accepted["lossy_quality"]), set(results.ARMS))
             self.assertEqual(accepted["lineage"]["storage"]["q4_k_delta8"]["sidecar_bytes"],
                              results.BLOCK_COUNT * 8 * 3)
+
+    def test_complete_block_validation_comparison_receipt_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, block_validation_comparison=True, reverse_first=True)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            setup = accepted["setup"]
+            self.assertIs(setup["block_validation_comparison"], True)
+            self.assertEqual(setup["execution_arms"], list(EXECUTION_ARMS))
+            self.assertEqual(setup["format_by_arm"], {
+                arm: arm.removesuffix("_block") for arm in EXECUTION_ARMS
+            })
+            self.assertEqual(set(setup["variants"]), set(results.ARMS))
+            self.assertEqual(set(setup["per_arm_storage"]), set(results.ARMS))
+            self.assertEqual(set(accepted["lossy_quality"]), set(EXECUTION_ARMS))
+            for mode in results.MODES:
+                timing = accepted["timings_ms"][mode]
+                self.assertEqual(
+                    timing["arms"]["q4_k_block"]["gpu_seconds"]["count"], 16)
+                paired = timing["paired_block_validation"]
+                self.assertEqual(set(paired), set(results.ARMS))
+                self.assertIs(paired["q4_k"]["aa_drift_control"], True)
+                for format_arm in results.ARMS:
+                    comparison = paired[format_arm]
+                    self.assertEqual(
+                        set(comparison["paired_percent_change"]),
+                        {"gpu_seconds", "wall_seconds", "encode_seconds"})
+                    self.assertEqual(
+                        set(comparison["paired_percent_change"]["gpu_seconds"]["by_old_position"]),
+                        {str(position) for position in range(len(EXECUTION_ARMS))})
+                    self.assertEqual(
+                        set(comparison["paired_percent_change"]["gpu_seconds"]["by_rotation"]),
+                        {str(rotation) for rotation in range(len(results.ARMS))})
+                    self.assertEqual(
+                        set(comparison["paired_percent_change"]["gpu_seconds"]["by_half"]),
+                        {"first", "second"})
+                    self.assertIn("rotation_median_range",
+                                  comparison["old_over_block_gpu_ratio"])
+
+    def test_block_comparison_rejects_missing_arm_bad_order_and_non_bit_exact_parity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, block_validation_comparison=True)
+            stdout = evidence / f"probe-{tag}.stdout.log"
+            original_records = [json.loads(line) for line in stdout.read_text().splitlines()]
+
+            def check(mutator, expected_message):
+                records = json.loads(json.dumps(original_records))
+                mutator(records)
+                stdout.write_text("".join(json.dumps(record, allow_nan=False) + "\n"
+                                                 for record in records))
+                receipt_path = evidence / f"probe-{tag}.completion.json"
+                receipt = json.loads(receipt_path.read_text())
+                receipt["stdout_sha256"] = results.sha(stdout)
+                write_json(receipt_path, receipt)
+                with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                    with self.assertRaisesRegex(ValueError, expected_message):
+                        results.read_probe(evidence, tag)
+
+            check(lambda records: records.__setitem__(
+                slice(None), [record for record in records if not (
+                    record["schema"] == "wan_q4k_delta_parity_v1" and
+                    record["variant"] == "q4_k_block" and
+                    record["phase"] == "before_timing")]),
+                "parity records")
+
+            def break_order(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_timing_v1" and
+                              record["mode"] == "projection" and record["round"] == 0 and
+                              record["position"] == 0)
+                record["variant"] = "q4_k_delta1_block"
+
+            check(break_order, "arm order")
+
+            def break_bit_exact(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_parity_v1" and
+                              record["variant"] == "q4_k_block" and
+                              record["phase"] == "before_timing")
+                record["decoder"]["bit_differences"] = 1
+
+            check(break_bit_exact, "bit-exact")
+
+    def test_block_comparison_rejects_flag_mapping_and_guard_tampering(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, block_validation_comparison=True)
+            intent_path = evidence / f"probe-{tag}.intent.json"
+            receipt_path = evidence / f"probe-{tag}.completion.json"
+            stdout = evidence / f"probe-{tag}.stdout.log"
+            original_records = [json.loads(line) for line in stdout.read_text().splitlines()]
+
+            original_intent = json.loads(intent_path.read_text())
+            intent = json.loads(json.dumps(original_intent))
+            intent["command"].remove("--compare-block-validation")
+            write_json(intent_path, intent)
+            receipt = json.loads(receipt_path.read_text())
+            receipt["intent_sha256"] = results.sha(intent_path)
+            write_json(receipt_path, receipt)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "block-validation comparison"):
+                    results.read_probe(evidence, tag)
+
+            write_json(intent_path, original_intent)
+            receipt = json.loads(receipt_path.read_text())
+            receipt["intent_sha256"] = results.sha(intent_path)
+            write_json(receipt_path, receipt)
+            def break_mapping(records):
+                setup = next(record for record in records
+                             if record["schema"] == "wan_q4k_delta_setup_v1")
+                setup["format_by_arm"]["q4_k_delta4_block"] = "q4_k_delta8"
+            rewrite_stdout(evidence, break_mapping)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "format|mapping|execution"):
+                    results.read_probe(evidence, tag)
+
+            # Restore the original stdout, then make a linked low-pressure sample.
+            stdout.write_text("".join(json.dumps(record, allow_nan=False) + "\n"
+                                             for record in original_records))
+            receipt = json.loads(receipt_path.read_text())
+            receipt["stdout_sha256"] = results.sha(stdout)
+            write_json(receipt_path, receipt)
+            events = valid_guard_events()
+            events[3]["pressure_free_pct"] = 14
+            guard = evidence / f"probe-{tag}.guard.jsonl"
+            guard.write_text("".join(json.dumps(event, sort_keys=True) + "\n"
+                                              for event in events))
+            receipt = json.loads(receipt_path.read_text())
+            receipt["guard_sha256"] = results.sha(guard)
+            write_json(receipt_path, receipt)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "pressure"):
+                    results.read_probe(evidence, tag)
 
     def test_storage_accounting_rejects_wrong_sidecar_and_candidate_quota(self):
         expected = results.expected_storage("q4_k_delta4")

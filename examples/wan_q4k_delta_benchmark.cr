@@ -12,10 +12,12 @@ require "./support/wan_affine_budget_metrics"
 fixture_dir = ""
 rounds = 0
 reverse_first = false
+compare_block_validation = false
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
   p.on("--reverse-first", "Reverse the first warmup and paired order") { reverse_first = true }
-  p.on("--rounds=N", "Two or four complete forward/reverse arm rotations") { |v| rounds = v.to_i }
+  p.on("--rounds=N", "Balanced forward/reverse arm rotations") { |v| rounds = v.to_i }
+  p.on("--compare-block-validation", "Pair per-value and per-block correction validation") { compare_block_validation = true }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 rounds = 16 if rounds == 0
@@ -36,6 +38,10 @@ unless manifest["comparison"]["atol"].as_f == 2e-5 && manifest["comparison"]["rt
   raise "Unchanged finite upstream gate is required"
 end
 variants = ["q4_k", "q4_k_delta1", "q4_k_delta4", "q4_k_delta8"]
+execution_arms = variants.dup
+execution_arms.concat(variants.map { |name| "#{name}_block" }) if compare_block_validation
+format_by_arm = variants.to_h { |name| {name, name} }
+variants.each { |name| format_by_arm["#{name}_block"] = name } if compare_block_validation
 variant_manifest = manifest["variants"]
 raise "Unexpected fixture arm set" unless variant_manifest.as_h.keys.sort == variants.sort
 source_fixture = manifest["source_fixture"]
@@ -166,6 +172,8 @@ begin
         f32_stage_bytes: stage.size, explicit_buffer_bytes_during_pack: arena.resident_bytes,
         packing_workspace_bytes: 0,
         reverse_first: reverse_first, variants: variants,
+        block_validation_comparison: compare_block_validation, execution_arms: execution_arms,
+        format_by_arm: format_by_arm,
         mps_storage: "opaque and included in the process guard, excluded from explicit byte sum",
         tolerance: "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)"}.to_json)
   STDOUT.flush
@@ -206,10 +214,13 @@ begin
   end
 
   decode = ->(encoder : ML::Metal::ComputeEncoder, name : String) {
-    if name == "q4_k"
+    format = format_by_arm[name]
+    if format == "q4_k"
       ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
+    elsif name != format
+      ML::Video::Q4KDeltaWeights.decode_block_validated(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
     else
-      ML::Video::Q4KDeltaWeights.decode(encoder, payload, sidecars[name], stage, status, weight_count, patch_map[name])
+      ML::Video::Q4KDeltaWeights.decode(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
     end
     nil
   }
@@ -237,8 +248,8 @@ begin
   raise "Native BF16 control failed" unless bw[:tolerance_violations] == 0 && bw[:nonfinite] == 0 && bo[:tolerance_violations] == 0 && bo[:nonfinite] == 0
   puts({schema: "wan_q4k_delta_bf16_control_v1", decoder: bw, projection: bo}.to_json)
   validate = ->(phase : String) {
-    variants.each do |name|
-      v = variant_manifest[name]
+    execution_arms.each do |name|
+      v = variant_manifest[format_by_arm[name]]
       affine_budget_upload(File.join(fixture_dir, v["decoded_weight"]["path"].as_s), expected_weight, stage.size)
       affine_budget_upload(File.join(fixture_dir, v["expected_projection"]["path"].as_s), expected_output, output.size)
       cmd = ML::Metal::CommandBuffer.new
@@ -270,6 +281,9 @@ begin
       STDOUT.flush
       raise "Weight parity failed #{name}: #{wm}" unless wm[:tolerance_violations] == 0 && wm[:nonfinite] == 0
       raise "Projection parity failed #{name}: #{om}" unless om[:tolerance_violations] == 0 && om[:nonfinite] == 0
+      if compare_block_validation && (wm[:bit_differences] != 0 || om[:bit_differences] != 0)
+        raise "Validation placement changed exact fixture output: #{name}"
+      end
     end
     nil
   }
@@ -277,6 +291,13 @@ begin
   {"projection", "decode_only"}.each do |mode|
     (-2...rounds).each do |round|
       order = variants.rotate(Math.max(round, 0) % variants.size)
+      if compare_block_validation
+        swap_pair = round >= 0 && (round // variants.size).odd?
+        order = order.flat_map do |name|
+          pair = [name, "#{name}_block"]
+          swap_pair ? pair.reverse : pair
+        end
+      end
       order = order.reverse if (round == -1 || round >= rounds // 2) != reverse_first
       order.each_with_index do |name, position|
         cmd = ML::Metal::CommandBuffer.new

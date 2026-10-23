@@ -13,6 +13,8 @@ import struct
 
 
 ARMS = ("q4_k", "q4_k_delta1", "q4_k_delta4", "q4_k_delta8")
+BLOCK_ARMS = tuple(f"{arm}_block" for arm in ARMS)
+COMPARISON_ARMS = ARMS + BLOCK_ARMS
 PATCHES_PER_BLOCK = {"q4_k": 0, "q4_k_delta1": 1, "q4_k_delta4": 4, "q4_k_delta8": 8}
 MODES = ("projection", "decode_only")
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +65,13 @@ def _finite_number(value, label: str, *, positive: bool = False) -> float:
 def summary(values):
     if not values or any(not math.isfinite(x) or x <= 0 for x in values):
         raise ValueError("Missing, non-finite or non-positive timing")
+    return {"count": len(values), "min": min(values), "median": statistics.median(values),
+            "max": max(values)}
+
+
+def _finite_summary(values):
+    if not values or any(not math.isfinite(value) for value in values):
+        raise ValueError("Missing or non-finite paired timing summary")
     return {"count": len(values), "min": min(values), "median": statistics.median(values),
             "max": max(values)}
 
@@ -119,15 +128,23 @@ def validate_metric(metric, expected_count: int, label: str, *, strict: bool = T
                 f"Strict finite parity failed: {label}")
 
 
-def validate_parity(records, rows: int, din: int, dout: int) -> None:
-    expected = {(arm, phase) for arm in ARMS for phase in ("before_timing", "after_timing")}
+def validate_parity(records, rows: int, din: int, dout: int,
+                    execution_arms=ARMS, *, require_bit_exact: bool = False) -> None:
+    expected = {(arm, phase) for arm in execution_arms
+                for phase in ("before_timing", "after_timing")}
     actual = [(record.get("variant"), record.get("phase")) for record in records]
     require(len(actual) == len(expected) and set(actual) == expected,
             "Missing, duplicate or unexpected pre/post parity records")
     for record in records:
         arm = record["variant"]
-        validate_metric(record.get("decoder"), din * dout, f"{arm} decoder")
-        validate_metric(record.get("projection"), rows * dout, f"{arm} projection")
+        decoder = record.get("decoder")
+        projection = record.get("projection")
+        validate_metric(decoder, din * dout, f"{arm} decoder")
+        validate_metric(projection, rows * dout, f"{arm} projection")
+        if require_bit_exact:
+            require(decoder["bit_differences"] == 0 and
+                    projection["bit_differences"] == 0,
+                    f"Block-validation comparison requires bit-exact decoder and projection parity: {arm}")
         weight_loss = record.get("lossy_weight_vs_bf16")
         validate_metric(weight_loss, din * dout, f"{arm} full-weight BF16 comparison", strict=False)
         require(weight_loss["nonfinite"] == 0,
@@ -148,9 +165,37 @@ def _rotated_order(rotation: int, reverse: bool) -> tuple[str, ...]:
     return tuple(reversed(order)) if reverse else order
 
 
-def expected_probe_record_count(timing_count: int) -> int:
+def _comparison_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[str, ...]:
+    rotation = max(round_id, 0) % len(ARMS)
+    base_order = ARMS[rotation:] + ARMS[:rotation]
+    order = [item for arm in base_order for item in (arm, f"{arm}_block")]
+    if round_id >= 0 and (round_id // 4) % 2 == 1:
+        order = [item for index in range(0, len(order), 2)
+                 for item in (order[index + 1], order[index])]
+    reverse = ((round_id == -1) if round_id < 0 else round_id >= rounds // 2)
+    if reverse != reverse_first:
+        order.reverse()
+    return tuple(order)
+
+
+def expected_probe_record_count(timing_count: int,
+                                block_validation_comparison: bool | None = None) -> int:
     """Count setup, three pack records, BF16 control, parity, timing and control."""
-    return 1 + len(ARMS[1:]) + 1 + len(ARMS) * 2 + timing_count + 1
+    if block_validation_comparison is None:
+        counts = {
+            (rounds + 2) * arm_count * len(MODES): arm_count
+            for rounds in (16, 32) for arm_count in (len(ARMS), len(COMPARISON_ARMS))
+        }
+        matching_counts = [count for observed, count in counts.items()
+                           if observed == timing_count]
+        require(len(matching_counts) == 1,
+                "Cannot infer execution-arm count from timing record count")
+        arm_count = matching_counts[0]
+    else:
+        require(type(block_validation_comparison) is bool,
+                "Invalid block-validation comparison flag")
+        arm_count = len(COMPARISON_ARMS) if block_validation_comparison else len(ARMS)
+    return 1 + len(ARMS[1:]) + 1 + arm_count * 2 + timing_count + 1
 
 
 def validate_corruption_control(record: dict, expected_count: int) -> None:
@@ -184,9 +229,9 @@ def validate_pack_records(records) -> list[dict]:
     return records
 
 
-def validate_probe_command(command, reverse_first, setup) -> tuple[Path, Path, int, bool]:
-    require(isinstance(command, list) and
-            (len(command) == 3 or (len(command) == 4 and command[3] == "--reverse-first")),
+def validate_probe_command(command, reverse_first, setup,
+                           intent_block_validation_comparison=None) -> tuple[Path, Path, int, bool]:
+    require(isinstance(command, list) and 3 <= len(command) <= 5,
             "Unexpected probe command")
     binary = Path(command[0])
     require(binary.is_absolute() and binary.name.startswith("probe-"),
@@ -202,7 +247,29 @@ def validate_probe_command(command, reverse_first, setup) -> tuple[Path, Path, i
     rounds_text = rounds_arg.removeprefix("--rounds=")
     require(rounds_text in ("16", "32"), "Unexpected probe round count")
     rounds = int(rounds_text)
-    expected_reverse = len(command) == 4
+    setup_comparison = setup.get("block_validation_comparison", False)
+    require(type(setup_comparison) is bool,
+            "Invalid block-validation comparison setup flag")
+    if intent_block_validation_comparison is None:
+        intent_comparison = setup_comparison
+    else:
+        require(type(intent_block_validation_comparison) is bool,
+                "Invalid block-validation comparison intent flag")
+        intent_comparison = intent_block_validation_comparison
+    require(intent_comparison is setup_comparison,
+            "block-validation comparison flag differs between intent and setup")
+
+    if setup_comparison:
+        require(len(command) in (4, 5) and command[3] == "--compare-block-validation",
+                "Probe command block-validation comparison flag disagrees with setup/intent")
+        expected_reverse = len(command) == 5
+        if expected_reverse:
+            require(command[4] == "--reverse-first", "Unexpected probe command flag order")
+    else:
+        require(len(command) in (3, 4) and
+                (len(command) == 3 or command[3] == "--reverse-first"),
+                "Unexpected probe command")
+        expected_reverse = len(command) == 4
     require(type(reverse_first) is bool and reverse_first == expected_reverse,
             "Probe reverse-order intent differs from command")
     require(setup.get("reverse_first") is reverse_first,
@@ -214,7 +281,13 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
     require(rounds in (16, 32), "Unsupported measured-round count")
     require(type(reverse_first) is bool, "Invalid reverse-first flag")
     rows = setup["rows"]
-    expected_records_per_mode = (rounds + 2) * len(ARMS)
+    comparison = setup.get("block_validation_comparison", False)
+    require(type(comparison) is bool, "Invalid block-validation comparison setup flag")
+    execution_arms = COMPARISON_ARMS if comparison else ARMS
+    if "execution_arms" in setup:
+        require(setup["execution_arms"] == list(execution_arms),
+                "Unexpected execution arm declaration")
+    expected_records_per_mode = (rounds + 2) * len(execution_arms)
     require(len(records) == expected_records_per_mode * len(MODES),
             "Missing or extra timing records, including warmups")
     by_mode_round = {}
@@ -236,7 +309,7 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
         position = record.get("position")
         require(type(round_id) is int and -2 <= round_id < rounds,
                 "Invalid timing round")
-        require(type(position) is int and 0 <= position < len(ARMS),
+        require(type(position) is int and 0 <= position < len(execution_arms),
                 "Invalid timing position")
         require(type(record.get("warmup")) is bool and record["warmup"] == (round_id < 0),
                 "Warmup flag/round mismatch")
@@ -250,14 +323,18 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
     for mode in MODES:
         for round_id in (-2, -1, *range(rounds)):
             bucket = by_mode_round.get((mode, round_id))
-            require(bucket is not None and set(bucket) == set(range(len(ARMS))),
+            require(bucket is not None and set(bucket) == set(range(len(execution_arms))),
                     f"Incomplete timing round: {mode} {round_id}")
-            if round_id < 0:
-                reverse = (round_id == -1) != reverse_first
+            if comparison:
+                expected_order = _comparison_order(round_id, rounds, reverse_first)
             else:
-                reverse = (round_id >= rounds // 2) != reverse_first
-            expected_order = _rotated_order(max(round_id, 0) % len(ARMS), reverse)
-            actual_order = tuple(bucket[position]["variant"] for position in range(len(ARMS)))
+                if round_id < 0:
+                    reverse = (round_id == -1) != reverse_first
+                else:
+                    reverse = (round_id >= rounds // 2) != reverse_first
+                expected_order = _rotated_order(max(round_id, 0) % len(ARMS), reverse)
+            actual_order = tuple(bucket[position]["variant"]
+                                 for position in range(len(execution_arms)))
             require(actual_order == expected_order,
                     f"Unexpected arm order: {mode} {round_id}: {actual_order}")
 
@@ -267,7 +344,7 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
                     if candidate_mode == mode and round_id >= 0
                     for record in bucket.values()]
         by_round = {round_id: {bucket[position]["variant"]: bucket[position]
-                              for position in range(len(ARMS))}
+                              for position in range(len(execution_arms))}
                     for (candidate_mode, round_id), bucket in by_mode_round.items()
                     if candidate_mode == mode and round_id >= 0}
         paired = {}
@@ -292,10 +369,84 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
             "arms": {arm: {metric: summary([record[metric] * 1000 for record in measured
                                            if record["variant"] == arm])
                             for metric in ("gpu_seconds", "wall_seconds", "encode_seconds")}
-                     for arm in ARMS},
+                     for arm in execution_arms},
             "paired_q4_k_over_candidate_gpu": paired,
             "speed_winner_selected": False,
         }
+        if comparison:
+            block_paired = {}
+            for arm in ARMS:
+                paired_records = []
+                for round_id in range(rounds):
+                    old = by_round[round_id][arm]
+                    block = by_round[round_id][f"{arm}_block"]
+                    paired_records.append({
+                        "round": round_id,
+                        "rotation": round_id % len(ARMS),
+                        "half": "first" if round_id < rounds // 2 else "second",
+                        "old_position": old["position"],
+                        "old": old,
+                        "block": block,
+                        "gpu_ratio": old["gpu_seconds"] / block["gpu_seconds"],
+                    })
+                ratios = [item["gpu_ratio"] for item in paired_records]
+                by_rotation = {
+                    str(rotation): summary([item["gpu_ratio"] for item in paired_records
+                                            if item["rotation"] == rotation])
+                    for rotation in range(len(ARMS))
+                }
+                rotation_medians = [item["median"] for item in by_rotation.values()]
+                by_old_position = {
+                    str(position): summary([item["gpu_ratio"] for item in paired_records
+                                            if item["old_position"] == position])
+                    for position in sorted({item["old_position"] for item in paired_records})
+                }
+                by_half = {
+                    half: summary([item["gpu_ratio"] for item in paired_records
+                                   if item["half"] == half])
+                    for half in ("first", "second")
+                }
+                metric_changes = {}
+                for metric in ("gpu_seconds", "wall_seconds", "encode_seconds"):
+                    changes = [100.0 * (item["block"][metric] - item["old"][metric]) /
+                               item["old"][metric] for item in paired_records]
+                    metric_changes[metric] = {
+                        "definition": "100 * (block_validation - per_value) / per_value",
+                        "all_rounds": _finite_summary(changes),
+                        "by_old_position": {
+                            str(position): _finite_summary([
+                                changes[index] for index, item in enumerate(paired_records)
+                                if item["old_position"] == position])
+                            for position in sorted({item["old_position"]
+                                                    for item in paired_records})
+                        },
+                        "by_rotation": {
+                            str(rotation): _finite_summary([
+                                changes[index] for index, item in enumerate(paired_records)
+                                if item["rotation"] == rotation])
+                            for rotation in range(len(ARMS))
+                        },
+                        "by_half": {
+                            half: _finite_summary([
+                                changes[index] for index, item in enumerate(paired_records)
+                                if item["half"] == half])
+                            for half in ("first", "second")
+                        },
+                    }
+                block_paired[arm] = {
+                    "aa_drift_control": arm == "q4_k",
+                    "old_over_block_gpu_ratio": {
+                        "all_rounds": summary(ratios),
+                        "by_rotation": by_rotation,
+                        "by_old_position": by_old_position,
+                        "by_half": by_half,
+                        "rotation_median_range": {
+                            "min": min(rotation_medians), "max": max(rotation_medians),
+                        },
+                    },
+                    "paired_percent_change": metric_changes,
+                }
+            timings[mode]["paired_block_validation"] = block_paired
     return timings
 
 
@@ -660,7 +811,22 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     validate_source_binding(files, receipt.get("sources"))
     command = intent.get("command")
     binary, fixture, rounds, reverse_first = validate_probe_command(
-        command, intent.get("reverse_first"), setup)
+        command, intent.get("reverse_first"), setup,
+        intent.get("block_validation_comparison", False))
+    comparison = setup.get("block_validation_comparison", False)
+    execution_arms = COMPARISON_ARMS if comparison else ARMS
+    expected_formats = {arm: arm for arm in ARMS}
+    if comparison:
+        expected_formats.update({f"{arm}_block": arm for arm in ARMS})
+    if comparison:
+        require("execution_arms" in setup and "format_by_arm" in setup,
+                "Block-validation comparison setup is missing execution-arm mapping")
+    if "execution_arms" in setup:
+        require(setup.get("execution_arms") == list(execution_arms),
+                "Unexpected execution arm declaration")
+    if "format_by_arm" in setup:
+        require(setup.get("format_by_arm") == expected_formats,
+                "Execution arm format mapping differs from the frozen oracle formats")
     require(fixture.is_absolute() and fixture.resolve().parent == base.resolve() and
             fixture.name.startswith("fixture-"), "Unexpected probe fixture path")
     require(receipt.get("binary_sha256") == sha(binary), "Probe binary hash mismatch")
@@ -768,11 +934,14 @@ def read_probe(base: Path, tag: str):
     setup = setup_records[0]
     lineage = validate_lineage(base, tag, receipt, intent, setup)
     rows, din, dout = setup["rows"], setup["din"], setup["dout"]
+    comparison = setup.get("block_validation_comparison", False)
+    execution_arms = COMPARISON_ARMS if comparison else ARMS
     require(setup.get("tolerance") == "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
             "Unexpected numerical acceptance gate")
 
     parity = [record for record in records if record["schema"] == "wan_q4k_delta_parity_v1"]
-    validate_parity(parity, rows, din, dout)
+    validate_parity(parity, rows, din, dout, execution_arms,
+                    require_bit_exact=comparison)
     bf16 = [record for record in records if record["schema"] == "wan_q4k_delta_bf16_control_v1"]
     require(len(bf16) == 1, "Missing or duplicated BF16 control")
     validate_metric(bf16[0].get("decoder"), din * dout, "BF16 decoder control")
@@ -788,14 +957,16 @@ def read_probe(base: Path, tag: str):
     require(len(controls) == 1, "Missing or duplicated corruption control")
     validate_corruption_control(controls[0], rows * dout)
 
-    require(len(records) == expected_probe_record_count(len(timings)),
+    require(len(records) == expected_probe_record_count(len(timings), comparison),
             "Missing or extra setup, pack, parity, timing or control records")
     guards = [json.loads(line) for line in paths["guard.jsonl"].read_text().splitlines()]
     memory = validate_guard(guards, intent)
     loss = {}
     before = {record["variant"]: record for record in parity if record["phase"] == "before_timing"}
     after = {record["variant"]: record for record in parity if record["phase"] == "after_timing"}
-    for arm in ARMS:
+    formats = setup.get("format_by_arm", {arm: arm for arm in ARMS})
+    for arm in execution_arms:
+        format_arm = formats[arm]
         native_quality = {}
         for phase, record in (("before_timing", before[arm]), ("after_timing", after[arm])):
             row_metrics = record["lossy_vs_bf16_per_source_row"]
@@ -812,7 +983,7 @@ def read_probe(base: Path, tag: str):
             }
         loss[arm] = {
             "native_gpu": native_quality,
-            "reference_cpu": lineage["reference_quality"][arm],
+            "reference_cpu": lineage["reference_quality"][format_arm],
         }
     return {"tag": tag, "completion_sha256": sha(paths["completion.json"]),
             "lineage": lineage, "setup": setup, "timings_ms": timings_ms,

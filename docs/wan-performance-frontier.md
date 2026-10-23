@@ -9,6 +9,42 @@ allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
 Latest bounded result (2026-10-23):
+[Q4_K sparse-delta block-shared validation](wan-q4k-block-validation-benchmark.md).
+The opt-in `decode_block_validated` validates/stages 1/4/8 correction records
+once per 256-value block, with the old per-value kernel retained as control.
+It adds one unconditional threadgroup-local barrier, no dispatch/global
+scratch/inter-op host wait/readback, and preserves failure and F32 arithmetic
+semantics. Format bytes, fitting, checkpoints and production defaults are
+unchanged. The 9 CPU reference tests, 15 analyzer tests and 9 native Metal
+examples pass. All eight old/new arms' full weights/outputs match independent
+same-format upstream bit for bit before/after timing at M4 and in two fresh
+opposite-order M4480 processes; the finite tolerance is unchanged.
+
+Adjacent pairs rotate/swap through all eight slots with both pair orders in
+each half. K8 complete-projection GPU medians are 62.97452 -> 59.71060 ms in
+A and 71.39210 -> 67.63685 ms in B. Direct paired latency changes have
+medians -4.59%/-5.27%, improving in every pair/slot/half beyond observed A/A
+spread. K8 decode medians are 7.39960 -> 4.24546 and 7.43042 -> 4.24323 ms,
+paired -43.00%/-42.71%. K4 decode improves about 29%; its small complete-path
+change (-1.50%/-2.54% paired medians) is closer to A/A noise. K1 has no stable
+speed result. A/A projection paired medians are -0.29%/+0.51%, with ranges
+crossing zero. Absolute baseline A/B medians drift about 11%, so runs are
+not pooled and no model-wide latency claim is made. M4480 still repeats
+four seeded non-video rows; quality diversity and distortion are unchanged.
+
+All timed samples retain zero inter-op waits/readbacks/tracked explicit
+encode allocations. The common 270 MiB F32 stage and MPS resources remain.
+Native sampled peak footprint is 1.78563 GiB, minimum estimated cache-aware
+headroom 18.94270 GiB, pressure-free at least 73%, swap growth zero. Preserve
+15% reserve/floor, 4 GiB cap, 64 MiB swap stop and sampled-guard limitations.
+No full model/block/Studio/generation ran. The linked report contains exact
+DoD commands, receipt pins, failure controls, rollback and refresh triggers.
+The correlated Mini-Quad verdict is ROBUST for bounded parity, guards and
+the observed K8 projection gain, VULNERABLE for broader quality/speed claims.
+The next execution discriminator is cheaper K8 record lookup or competitive
+fused decode/GEMM; production promotion still needs its larger scope gate.
+
+Previous bounded result (2026-10-23):
 [canonical Q4_K with sparse F16 deltas](wan-q4k-delta-benchmark.md).
 For the same `blocks.0.ffn.0.weight` and four unique seeded non-video inputs,
 0/1/4/8 corrections per 256-value block give pooled BF16 output relative L2
