@@ -10,13 +10,16 @@ require "../spec/support/video_allocation_counter"
 require "./support/wan_affine_budget_metrics"
 
 fixture_dir = ""
-rounds = 12
+rounds = 0
+joint = false
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
-  p.on("--rounds=N", "Balanced forward/reverse rotations; 12 or 24") { |v| rounds = v.to_i }
+  p.on("--joint", "Include joint range/exception fitting arms") { joint = true }
+  p.on("--rounds=N", "Two or four complete forward/reverse arm rotations") { |v| rounds = v.to_i }
 end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
-raise ArgumentError.new("rounds must be 12 or 24") unless {12, 24}.includes?(rounds)
+rounds = joint ? 20 : 12 if rounds == 0
+raise ArgumentError.new("Invalid balanced round count") unless (joint ? {20, 40} : {12, 24}).includes?(rounds)
 manifest_path = File.join(fixture_dir, "manifest.json")
 manifest = JSON.parse(File.read(manifest_path))
 raise "Unsupported fixture" unless manifest["schema"].as_s == "wan_affine_budget_reference_v1"
@@ -33,7 +36,9 @@ unless manifest["comparison"]["atol"].as_f == 2e-5 && manifest["comparison"]["rt
   raise "Unchanged finite upstream gate is required"
 end
 variants = ["q4_k", "sparse_weight", "sparse_activation_f0", "sparse_activation_f1", "kchannel_weight", "nrow_weight"]
+variants += ["joint_quota_weight", "joint_global_weight", "joint_global_activation_f0", "joint_global_activation_f1"] if joint
 variant_manifest = manifest["variants"]
+raise "Unexpected fixture arm set" unless variant_manifest.as_h.keys.sort == variants.sort
 source_fixture = manifest["source_fixture"]
 {
   "manifest_sha256"          => "0dba2df508f72764837c23d8c5743a6d687e2d1b6104406e38325031084c3703",
@@ -49,7 +54,9 @@ end
 end
 raise "Substituted Q4_K payload" unless variant_manifest["q4_k"]["payload"]["sha256"] == source_fixture["q4_k_sha256"]
 mode_map = {"q4_k" => -1, "sparse_weight" => 0, "sparse_activation_f0" => 1,
-            "sparse_activation_f1" => 1, "kchannel_weight" => 2, "nrow_weight" => 3}
+            "sparse_activation_f1" => 1, "kchannel_weight" => 2, "nrow_weight" => 3,
+            "joint_quota_weight" => 4, "joint_global_weight" => 5,
+            "joint_global_activation_f0" => 6, "joint_global_activation_f1" => 6}
 weight_count = din * dout
 output_count = rows * dout
 codec_geometry = ML::Video::AffineExceptionWeights::Geometry.new(dout, din)
@@ -72,12 +79,12 @@ record_path.call(baseline["decoded_weight"])
 variants.each do |name|
   v = variant_manifest[name]
   raise "Unexpected codec mode" unless v["mode"].as_i == mode_map[name]
-  expected_fold = name == "sparse_activation_f1" ? 1 : 0
+  expected_fold = name.ends_with?("_f1") ? 1 : 0
   raise "Unexpected calibration fold" unless v["fold"].as_i == expected_fold
   raise "Unequal packed budget" unless v["payload"]["bytes"].as_i64 == budget
   descriptor_path = record_path.call(v["descriptor"])
   raise "Descriptor must occupy exactly 16 bytes" unless File.size(descriptor_path) == 16
-  format_id = name == "q4_k" ? 0 : (mode_map[name] <= 1 ? 1 : mode_map[name])
+  format_id = name == "q4_k" ? 0 : ({2, 3}.includes?(mode_map[name]) ? mode_map[name] : 1)
   File.open(descriptor_path, "rb") do |file|
     descriptor = Array.new(4) { file.read_bytes(UInt32, IO::ByteFormat::LittleEndian) }
     raise "Invalid common descriptor" unless descriptor == [0x31425157_u32, format_id.to_u32, dout.to_u32, din.to_u32]
@@ -149,6 +156,7 @@ begin
         package_bytes_per_arm: budget + 16, shared_bias_bytes: bias.size,
         f32_stage_bytes: stage.size, explicit_buffer_bytes_during_pack: arena.resident_bytes + workspace.not_nil!.resident_bytes,
         packing_workspace_bytes: workspace.not_nil!.resident_bytes,
+        joint_range_fit: joint, variants: variants,
         mps_storage: "opaque and included in the process guard, excluded from explicit byte sum",
         tolerance: "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)"}.to_json)
   STDOUT.flush
@@ -244,8 +252,8 @@ begin
       om = affine_budget_metrics(metrics, partials, output_count)
       check_status.call
       loss = Array.new(4) { |r| affine_budget_metrics(row_metrics[r], row_partials[r], dout) }
-      train_rows = if mode_map[name] == 1
-                     name == "sparse_activation_f1" ? [2, 3] : [0, 1]
+      train_rows = if {1, 6}.includes?(mode_map[name])
+                     name.ends_with?("_f1") ? [2, 3] : [0, 1]
                    else
                      [] of Int32
                    end

@@ -39,14 +39,24 @@ def capture(command):
 
 
 def main():
+    global OUT, BUILD
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=['build', 'oracle', 'cpu-spec', 'spec', 'probe'])
     parser.add_argument('tag')
     parser.add_argument('--build-tag', default='v1')
     parser.add_argument('--fixture-tag', default='r4-v2')
     parser.add_argument('--rows', type=int, choices=[4, 4480], default=4)
-    parser.add_argument('--rounds', type=int, choices=[12, 24], default=12)
+    parser.add_argument('--joint', action='store_true',
+                        help='Joint range/exception fit; separate immutable evidence namespace')
+    parser.add_argument('--rounds', type=int, choices=[12, 20, 24, 40])
     args = parser.parse_args()
+    if args.joint:
+        OUT = BASE / 'evidence/wan-joint-affine-20261023'
+        BUILD = BASE / 'build/wan-joint-affine-20261023'
+    if args.rounds is None:
+        args.rounds = 20 if args.joint else 12
+    if args.rounds not in ([20, 40] if args.joint else [12, 24]):
+        parser.error('rounds must be two or four complete forward/reverse arm rotations')
     for value in [args.tag, args.build_tag, args.fixture_tag]:
         if not value.isascii() or not value.replace('-', '').isalnum():
             parser.error('tags must be ASCII alphanumeric with optional hyphens')
@@ -110,6 +120,8 @@ def main():
         command = [str(ORACLE_PYTHON), '-B', 'examples/support/wan_affine_budget_reference.py',
                    '--fixture-dir', str(SOURCE_FIXTURE), '--output-dir', str(fixture),
                    '--rows', str(args.rows)]
+        if args.joint:
+            command += ['--joint']
     elif args.mode == 'cpu-spec':
         command = [str(ORACLE_PYTHON), '-B', 'spec/wan_affine_budget_reference_spec.py']
     elif args.mode == 'spec':
@@ -140,9 +152,12 @@ def main():
             if source.is_file():
                 files[str(source)] = sha(source)
         command = [str(binary), '--fixture='+str(fixture), '--rounds='+str(args.rounds)]
+        if args.joint:
+            command += ['--joint']
     deadline = 240 if args.mode == 'build' else 300
     intent = {'schema': 'wan_affine_budget_intent_v1', 'command': command,
               'mode': args.mode, 'tag': args.tag, 'files': files,
+              'joint_range_fit': args.joint,
               'head': capture(['git', 'rev-parse', 'HEAD']),
               'status': capture(['git', 'status', '--short']),
               'macos': platform.mac_ver()[0], 'created_unix': time.time(),

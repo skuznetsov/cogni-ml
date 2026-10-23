@@ -41,6 +41,8 @@ AFFINE_BASE_BYTES = AFFINE_GROUPS * AFFINE_RECORD_BYTES
 SPARSE_COUNTS_BYTES = SPARSE_RECORDS * 4
 SPARSE_OFFSETS_BYTES = (SPARSE_RECORDS + 1) * 4
 SPARSE_PATCH_BYTES = PATCH_COUNT * 4
+JOINT_UPGRADE_COUNT = PATCH_COUNT - AFFINE_GROUPS
+JOINT_RANGE_CANDIDATES = ((0, 0), (1, 0), (0, 1), (2, 0), (1, 1), (0, 2))
 
 FIXTURE_MANIFEST_SHA256 = "0dba2df508f72764837c23d8c5743a6d687e2d1b6104406e38325031084c3703"
 INPUT_SHA256 = "2d1462e25bfc05523da2ac8a7487c21b08986ef3eb9fe2f0a2f9527c9b65618c"
@@ -143,6 +145,38 @@ def _pack_affine_groups(values: np.ndarray) -> tuple[bytes, np.ndarray]:
     return packed.tobytes(), decoded
 
 
+def _pack_affine_groups_with_bounds(
+    values: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> tuple[bytes, np.ndarray]:
+    """Pack affine groups using independently selected F32 endpoints."""
+    values = np.asarray(values, dtype=np.float32)
+    lower = np.asarray(lower, dtype=np.float32).reshape(-1)
+    upper = np.asarray(upper, dtype=np.float32).reshape(-1)
+    if values.ndim != 2 or values.shape[1] != BLOCK_VALUES or values.shape[0] != lower.size or lower.size != upper.size:
+        raise ValueError("bounded affine batch must have matching [groups,256] values and endpoints")
+    if not np.isfinite(values).all() or not np.isfinite(lower).all() or not np.isfinite(upper).all():
+        raise ValueError("bounded affine source/endpoints contain a non-finite value")
+    if np.any(upper < lower):
+        raise ValueError("bounded affine upper endpoint is below lower endpoint")
+    span = np.subtract(upper, lower, dtype=np.float32)
+    scale = np.divide(span, np.float32(15.0), dtype=np.float32)
+    if not np.isfinite(scale).all():
+        raise ValueError("bounded affine scale is non-finite")
+    scale[span == 0] = np.float32(0.0)
+    delta = np.subtract(values, lower[:, None], dtype=np.float32)
+    normalized = np.zeros_like(delta)
+    np.divide(delta, scale[:, None], out=normalized, where=scale[:, None] != 0)
+    rounded = np.floor(np.add(normalized, np.float32(0.5), dtype=np.float32))
+    codes = np.clip(rounded, 0, 15).astype(np.uint8)
+    packed = np.empty((values.shape[0], AFFINE_RECORD_BYTES), dtype=np.uint8)
+    packed[:, :128] = codes[:, 0::2] | (codes[:, 1::2] << 4)
+    packed[:, 128:132] = scale.astype("<f4", copy=False).view(np.uint8).reshape(-1, 4)
+    packed[:, 132:136] = lower.astype("<f4", copy=False).view(np.uint8).reshape(-1, 4)
+    scaled = np.multiply(codes.astype(np.float32), scale[:, None], dtype=np.float32)
+    decoded = np.add(lower[:, None], scaled, dtype=np.float32)
+    return packed.tobytes(), decoded
+
+
 def _decode_affine_group(record: bytes | memoryview) -> np.ndarray:
     if len(record) != AFFINE_RECORD_BYTES:
         raise ValueError("affine record must be exactly 136 bytes")
@@ -181,6 +215,41 @@ def encode_affine_base(
     del decoded
     if base_path.stat().st_size != AFFINE_BASE_BYTES:
         raise RuntimeError(f"unexpected affine base bytes: {base_path.stat().st_size}")
+
+
+def encode_affine_base_with_ranges(
+    source_bf16: np.memmap,
+    base_path: Path,
+    decoded_path: Path,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> None:
+    """Write an affine base with one preselected range per flattened group."""
+    element_count = OUTPUT_DIM * INPUT_DIM
+    if source_bf16.size != element_count or element_count % BLOCK_VALUES:
+        raise ValueError("affine source must contain complete 256-value groups")
+    lower = np.asarray(lower, dtype=np.float32).reshape(-1)
+    upper = np.asarray(upper, dtype=np.float32).reshape(-1)
+    total_groups = element_count // BLOCK_VALUES
+    if lower.size != total_groups or upper.size != total_groups:
+        raise ValueError("selected affine ranges have the wrong group count")
+    decoded = np.memmap(decoded_path, dtype="<f4", mode="w+", shape=(element_count,))
+    with base_path.open("wb") as stream:
+        groups_per_chunk = 8192
+        for group_start in range(0, total_groups, groups_per_chunk):
+            group_end = min(total_groups, group_start + groups_per_chunk)
+            start = group_start * BLOCK_VALUES
+            end = group_end * BLOCK_VALUES
+            source = bf16_bits_to_f32(source_bf16[start:end]).reshape(-1, BLOCK_VALUES)
+            records, decoded_chunk = _pack_affine_groups_with_bounds(
+                source, lower[group_start:group_end], upper[group_start:group_end]
+            )
+            stream.write(records)
+            decoded[start:end] = decoded_chunk.reshape(-1)
+    decoded.flush()
+    del decoded
+    if base_path.stat().st_size != AFFINE_BASE_BYTES:
+        raise RuntimeError(f"unexpected fitted affine base bytes: {base_path.stat().st_size}")
 
 
 def decode_affine_region(
@@ -271,6 +340,271 @@ def calibration_weights(input_rows: np.ndarray, row_ids: tuple[int, int]) -> np.
     squares = np.multiply(values, values, dtype=np.float32)
     total = np.add(squares[0], squares[1], dtype=np.float32)
     return np.multiply(total, np.float32(0.5), dtype=np.float32)
+
+
+def _tree_sum_f32(values: np.ndarray) -> np.ndarray:
+    """Sum 256 lanes with the native reducer's fixed 128..1 tree order."""
+    reduced = np.array(values, dtype=np.float32, copy=True)
+    if reduced.ndim != 2 or reduced.shape[1] != BLOCK_VALUES:
+        raise ValueError("joint fit reduction expects [groups,256] values")
+    stride = BLOCK_VALUES // 2
+    while stride:
+        np.add(reduced[:, :stride], reduced[:, stride : stride * 2], out=reduced[:, :stride])
+        stride //= 2
+    return reduced[:, 0].copy()
+
+
+def _masked_tree_loss(scores: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    masked = np.array(scores, dtype=np.float32, copy=True)
+    rows = np.arange(masked.shape[0], dtype=np.int64)
+    if positions.ndim == 1:
+        masked[rows, positions.astype(np.int64)] = np.float32(0.0)
+    else:
+        for column in range(positions.shape[1]):
+            masked[rows, positions[:, column].astype(np.int64)] = np.float32(0.0)
+    return _tree_sum_f32(masked)
+
+
+def _joint_fit_groups_multi(
+    values: np.ndarray,
+    metric_weights: dict[str, np.ndarray | None],
+    group_start: int = 0,
+) -> dict[str, dict[str, Any]]:
+    values = np.asarray(values, dtype=np.float32)
+    if values.ndim != 2 or values.shape[1] != BLOCK_VALUES:
+        raise ValueError("joint fit values must have shape [groups,256]")
+    if not np.isfinite(values).all():
+        raise ValueError("joint fit source contains a non-finite value")
+    group_count = values.shape[0]
+    if group_start < 0:
+        raise ValueError("joint fit group offset cannot be negative")
+
+    metric_matrices: dict[str, np.ndarray | None] = {}
+    lane_offsets = np.arange(group_count * BLOCK_VALUES, dtype=np.int64)
+    for name, weights in metric_weights.items():
+        if weights is None:
+            metric_matrices[name] = None
+            continue
+        weights = np.asarray(weights, dtype=np.float32)
+        if weights.ndim == 1 and weights.size:
+            indices = (group_start * BLOCK_VALUES + lane_offsets) % weights.size
+            metric_matrices[name] = weights[indices].reshape(group_count, BLOCK_VALUES)
+        elif weights.shape == values.shape:
+            metric_matrices[name] = weights
+        else:
+            raise ValueError("joint fit metric weights must be a nonempty vector or [groups,256]")
+        if not np.isfinite(metric_matrices[name]).all():
+            raise ValueError("joint fit metric weights contain a non-finite value")
+
+    order_indices = np.argsort(values, axis=1, kind="stable")
+    order = np.take_along_axis(values, order_indices, axis=1)
+    lows = np.stack(
+        (order[:, 0], order[:, 1], order[:, 0], order[:, 2], order[:, 1], order[:, 0]), axis=1
+    ).astype(np.float32, copy=False)
+    highs = np.stack(
+        (order[:, 255], order[:, 255], order[:, 254], order[:, 255], order[:, 254], order[:, 253]), axis=1
+    ).astype(np.float32, copy=False)
+    outputs: dict[str, dict[str, Any]] = {}
+    for name in metric_weights:
+        outputs[name] = {
+            "q1": {
+                "candidate_losses": np.empty((group_count, len(JOINT_RANGE_CANDIDATES)), dtype=np.float32),
+                "candidate_positions": np.empty((group_count, len(JOINT_RANGE_CANDIDATES)), dtype=np.uint16),
+            },
+            "q2": {
+                "candidate_losses": np.empty((group_count, len(JOINT_RANGE_CANDIDATES)), dtype=np.float32),
+                "candidate_positions": np.empty((group_count, len(JOINT_RANGE_CANDIDATES), 2), dtype=np.uint16),
+            },
+        }
+
+    for candidate_id in range(len(JOINT_RANGE_CANDIDATES)):
+        lower = lows[:, candidate_id]
+        upper = highs[:, candidate_id]
+        span = np.subtract(upper, lower, dtype=np.float32)
+        scale = np.divide(span, np.float32(15.0), dtype=np.float32)
+        if not np.isfinite(scale).all():
+            raise ValueError("joint fit scale is non-finite")
+        scale[span == 0] = np.float32(0.0)
+        delta = np.subtract(values, lower[:, None], dtype=np.float32)
+        normalized = np.zeros_like(delta)
+        np.divide(delta, scale[:, None], out=normalized, where=scale[:, None] != 0)
+        rounded = np.floor(np.add(normalized, np.float32(0.5), dtype=np.float32))
+        codes = np.clip(rounded, 0, 15).astype(np.float32)
+        scaled = np.multiply(scale[:, None], codes, dtype=np.float32)
+        decoded = np.add(lower[:, None], scaled, dtype=np.float32)
+        residual = np.subtract(values, decoded, dtype=np.float32)
+        base_scores = np.multiply(residual, residual, dtype=np.float32)
+        if not np.isfinite(base_scores).all():
+            raise ValueError("joint fit produced a non-finite residual score")
+
+        for name, weights in metric_matrices.items():
+            scores = base_scores if weights is None else np.multiply(base_scores, weights, dtype=np.float32)
+            if not np.isfinite(scores).all():
+                raise ValueError("joint fit produced a non-finite weighted residual score")
+            top1 = np.argmax(scores, axis=1).astype(np.uint16)
+            second_scores = np.array(scores, dtype=np.float32, copy=True)
+            second_scores[np.arange(group_count), top1.astype(np.int64)] = np.float32(-np.inf)
+            top2 = np.argmax(second_scores, axis=1).astype(np.uint16)
+            outputs[name]["q1"]["candidate_losses"][:, candidate_id] = _masked_tree_loss(scores, top1)
+            outputs[name]["q1"]["candidate_positions"][:, candidate_id] = top1
+            outputs[name]["q2"]["candidate_losses"][:, candidate_id] = _masked_tree_loss(
+                scores, np.stack((top1, top2), axis=1)
+            )
+            outputs[name]["q2"]["candidate_positions"][:, candidate_id, 0] = top1
+            outputs[name]["q2"]["candidate_positions"][:, candidate_id, 1] = top2
+
+    row_ids = np.arange(group_count, dtype=np.int64)
+    for name in outputs:
+        for quantity in ("q1", "q2"):
+            fit = outputs[name][quantity]
+            losses = fit.pop("candidate_losses")
+            positions = fit.pop("candidate_positions")
+            best_id = np.argmin(losses, axis=1).astype(np.uint8)
+            fit["candidate_id"] = best_id
+            fit["candidate_losses"] = losses
+            fit["loss"] = losses[row_ids, best_id.astype(np.int64)]
+            if not np.isfinite(fit["loss"]).all():
+                raise ValueError("joint fit produced a non-finite reduced loss")
+            if quantity == "q1":
+                fit["patch_positions"] = positions[row_ids, best_id.astype(np.int64)][:, None]
+            else:
+                fit["patch_positions"] = positions[row_ids, best_id.astype(np.int64), :]
+            fit["lower"] = lows[row_ids, best_id.astype(np.int64)].copy()
+            fit["upper"] = highs[row_ids, best_id.astype(np.int64)].copy()
+    return outputs
+
+
+def joint_fit_groups(
+    values: np.ndarray, metric_weights: np.ndarray | None = None
+) -> dict[str, dict[str, Any]]:
+    """Fit one or more groups with all six range candidates and q1/q2 patches."""
+    return _joint_fit_groups_multi(values, {"metric": metric_weights})["metric"]
+
+
+def joint_fit_source_groups(
+    source_bf16: np.memmap,
+    metric_weights: dict[str, np.ndarray | None],
+    chunk_groups: int = 512,
+) -> dict[str, dict[str, dict[str, np.ndarray]]]:
+    """Chunk the pinned [N,K] BF16 source while retaining only compact fit records."""
+    if source_bf16.size != OUTPUT_DIM * INPUT_DIM or source_bf16.size % BLOCK_VALUES:
+        raise ValueError("joint fit source must match the pinned complete-group geometry")
+    if chunk_groups <= 0:
+        raise ValueError("joint fit chunk size must be positive")
+    group_count = source_bf16.size // BLOCK_VALUES
+    chunks: dict[str, dict[str, dict[str, list[np.ndarray]]]] = {
+        name: {quantity: {} for quantity in ("q1", "q2")} for name in metric_weights
+    }
+    for first_group in range(0, group_count, chunk_groups):
+        last_group = min(group_count, first_group + chunk_groups)
+        first_value = first_group * BLOCK_VALUES
+        last_value = last_group * BLOCK_VALUES
+        values = bf16_bits_to_f32(source_bf16[first_value:last_value]).reshape(-1, BLOCK_VALUES)
+        partial = _joint_fit_groups_multi(values, metric_weights, group_start=first_group)
+        for name in metric_weights:
+            for quantity in ("q1", "q2"):
+                for field, value in partial[name][quantity].items():
+                    chunks[name][quantity].setdefault(field, []).append(np.asarray(value))
+        del values, partial
+    return {
+        name: {
+            quantity: {field: np.concatenate(parts, axis=0) for field, parts in fields.items()}
+            for quantity, fields in quantities.items()
+        }
+        for name, quantities in chunks.items()
+    }
+
+
+def select_joint_quota_patches(
+    q1_positions: np.ndarray,
+    q2_positions: np.ndarray,
+    gains: np.ndarray,
+    patch_count: int = PATCH_COUNT,
+) -> dict[str, Any]:
+    """Give every group one patch, then spend remaining budget on best upgrades."""
+    q1_positions = np.asarray(q1_positions).reshape(-1)
+    q2_positions = np.asarray(q2_positions)
+    gains = np.asarray(gains, dtype=np.float32).reshape(-1)
+    group_count = q1_positions.size
+    if q2_positions.shape != (group_count, 2) or gains.size != group_count:
+        raise ValueError("joint quota arrays must contain matching q1, q2, and gain groups")
+    if not np.issubdtype(q1_positions.dtype, np.integer) or not np.issubdtype(
+        q2_positions.dtype, np.integer
+    ):
+        raise ValueError("joint quota positions must be integers")
+    if np.any(q1_positions < 0) or np.any(q1_positions >= BLOCK_VALUES) or np.any(
+        q2_positions < 0
+    ) or np.any(q2_positions >= BLOCK_VALUES):
+        raise ValueError("joint quota positions must be within each 256-value group")
+    if np.any(q2_positions[:, 0] == q2_positions[:, 1]):
+        raise ValueError("joint quota q2 positions must be distinct within each group")
+    if not np.isfinite(gains).all():
+        raise ValueError("joint quota gains contain a non-finite value")
+    if np.any(gains < 0):
+        raise ValueError("joint quota gains must be nonnegative")
+    q1_positions = q1_positions.astype(np.uint16, copy=False)
+    q2_positions = q2_positions.astype(np.uint16, copy=False)
+    gains[gains == 0] = np.float32(0.0)
+    upgrade_count = int(patch_count) - group_count
+    if group_count == 0 or upgrade_count < 0 or upgrade_count > group_count:
+        raise ValueError("joint quota must allocate one or two patches to every group")
+    upgrade_groups = top_indices(gains, upgrade_count)
+    upgraded = np.zeros(group_count, dtype=np.bool_)
+    upgraded[upgrade_groups] = True
+    regular_groups = np.flatnonzero(~upgraded)
+    selected = np.empty(group_count + upgrade_count, dtype=np.int64)
+    selected[: regular_groups.size] = (
+        regular_groups.astype(np.int64) * BLOCK_VALUES + q1_positions[regular_groups].astype(np.int64)
+    )
+    if upgrade_count:
+        selected[regular_groups.size :] = (
+            upgrade_groups[:, None].astype(np.int64) * BLOCK_VALUES
+            + q2_positions[upgrade_groups].astype(np.int64)
+        ).reshape(-1)
+    selected.sort()
+    if selected.size != patch_count or (selected.size > 1 and np.any(selected[1:] <= selected[:-1])):
+        raise RuntimeError("joint quota did not produce a unique exact patch count")
+    return {
+        "selected_flat_indices": selected,
+        "upgrade_groups": upgrade_groups,
+        "upgrade_count": upgrade_count,
+        "upgrade_gain_threshold": float(np.partition(gains, gains.size - upgrade_count)[gains.size - upgrade_count])
+        if upgrade_count
+        else None,
+    }
+
+
+def joint_candidate_histogram(candidate_ids: np.ndarray) -> dict[str, int]:
+    candidate_ids = np.asarray(candidate_ids, dtype=np.int64).reshape(-1)
+    if np.any(candidate_ids < 0) or np.any(candidate_ids >= len(JOINT_RANGE_CANDIDATES)):
+        raise ValueError("joint candidate ID is outside the fixed candidate set")
+    counts = np.bincount(candidate_ids, minlength=len(JOINT_RANGE_CANDIDATES))
+    return {str(index): int(count) for index, count in enumerate(counts)}
+
+
+def sparse_record_patch_histogram(
+    selected: np.ndarray, values_per_group: int = SPARSE_RECORD_VALUES
+) -> dict[str, int]:
+    selected = np.asarray(selected, dtype=np.int64).reshape(-1)
+    if values_per_group <= 0 or (OUTPUT_DIM * INPUT_DIM) % values_per_group:
+        raise ValueError("patch histogram group size must divide the pinned projection")
+    if selected.size and (np.any(selected < 0) or np.any(selected >= OUTPUT_DIM * INPUT_DIM)):
+        raise ValueError("sparse patch selection exceeds the pinned projection")
+    if np.unique(selected).size != selected.size:
+        raise ValueError("sparse patch selection contains duplicate indices")
+    group_count = OUTPUT_DIM * INPUT_DIM // values_per_group
+    _, populated_counts = np.unique(selected // values_per_group, return_counts=True)
+    populated_group_count = populated_counts.size
+    return {
+        "values_per_group": int(values_per_group),
+        "group_count": int(group_count),
+        "zero_patch_groups": int(group_count - populated_group_count),
+        "one_patch_groups": int(np.count_nonzero(populated_counts == 1)),
+        "two_patch_groups": int(np.count_nonzero(populated_counts == 2)),
+        "more_than_two_patch_groups": int(np.count_nonzero(populated_counts > 2)),
+        "minimum_patches_per_group": 0 if populated_group_count < group_count else int(populated_counts.min()),
+        "maximum_patches_per_group": int(populated_counts.max()) if populated_group_count else 0,
+    }
 
 
 def write_selection_file(
@@ -884,7 +1218,7 @@ def build_fixture(args: argparse.Namespace) -> Path:
             output_dir = stage / "variants" / name
             output_dir.mkdir(parents=True, exist_ok=True)
             expected_path = output_dir / "expected_projection.f32"
-            format_key = "sparse" if mode in (0, 1) else name.rsplit("/", 1)[-1]
+            format_key = "sparse" if mode in (0, 1, 4, 5, 6) else name.rsplit("/", 1)[-1]
             format_id = FORMAT_IDS[format_key]
             descriptor_path = output_dir / "descriptor.bin"
             write_descriptor(descriptor_path, format_id)
@@ -1015,6 +1349,245 @@ def build_fixture(args: argparse.Namespace) -> Path:
         )
         del n_scores
         n_scores_path.unlink()
+
+        joint_fit_metadata: dict[str, Any] | None = None
+        if getattr(args, "joint", False):
+            fold0_weights = calibration_weights(input_rows, (0, 1))
+            fold1_weights = calibration_weights(input_rows, (2, 3))
+            joint_fits = joint_fit_source_groups(
+                source_bf16,
+                {
+                    "weight": None,
+                    "activation_f0": fold0_weights,
+                    "activation_f1": fold1_weights,
+                },
+            )
+
+            def fit_loss_summary(
+                q1_fit: dict[str, np.ndarray],
+                q2_fit: dict[str, np.ndarray],
+                selected_candidate_ids: np.ndarray,
+                selected_policy_loss: np.ndarray,
+                selected_policy_baseline_loss: np.ndarray,
+                loss_scope: str,
+            ) -> dict[str, Any]:
+                selected_loss_sum = float(np.sum(selected_policy_loss, dtype=np.float64))
+                minmax_loss_sum = float(np.sum(selected_policy_baseline_loss, dtype=np.float64))
+                return {
+                    "chosen_q1_candidate_local_residual_sum_after_one_patch_per_group": float(
+                        np.sum(q1_fit["loss"], dtype=np.float64)
+                    ),
+                    "chosen_q2_candidate_local_residual_sum_after_two_patches_per_group": float(
+                        np.sum(q2_fit["loss"], dtype=np.float64)
+                    ),
+                    "candidate0_minmax_q1_local_residual_sum_after_one_patch_per_group": float(
+                        np.sum(q1_fit["candidate_losses"][:, 0], dtype=np.float64)
+                    ),
+                    "candidate0_minmax_q2_local_residual_sum_after_two_patches_per_group": float(
+                        np.sum(q2_fit["candidate_losses"][:, 0], dtype=np.float64)
+                    ),
+                    "selected_local_policy_residual_sum": selected_loss_sum,
+                    "selected_local_policy_candidate0_minmax_residual_sum": minmax_loss_sum,
+                    "selected_local_policy_loss_reduction_vs_candidate0_minmax": minmax_loss_sum - selected_loss_sum,
+                    "best_q1_range_candidate_histogram": joint_candidate_histogram(q1_fit["candidate_id"]),
+                    "best_q2_range_candidate_histogram": joint_candidate_histogram(q2_fit["candidate_id"]),
+                    "selected_range_candidate_histogram": joint_candidate_histogram(selected_candidate_ids),
+                    "scope": loss_scope,
+                }
+
+            def emit_joint_sparse_variant(
+                name: str,
+                mode: int,
+                fold: int,
+                lower: np.ndarray,
+                upper: np.ndarray,
+                selected: np.ndarray,
+                selection: dict[str, Any],
+                candidate_ids: np.ndarray,
+            ) -> None:
+                output_dir = stage / "variants" / name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                base_path = work / f"joint-base-{name}.bin"
+                base_decoded_path = work / f"joint-base-{name}.f32"
+                payload_path = output_dir / "payload.bin"
+                decoded_path = output_dir / "decoded_weight.f32"
+                encode_affine_base_with_ranges(
+                    source_bf16, base_path, base_decoded_path, lower, upper
+                )
+                candidate_ids = np.asarray(candidate_ids, dtype=np.uint8).reshape(-1)
+                if candidate_ids.size != AFFINE_GROUPS:
+                    raise ValueError("joint selected range IDs do not cover every affine group")
+                candidate_path = output_dir / "selected-range-candidate.u8"
+                candidate_record = write_selection_file(candidate_path, candidate_ids, "<u1", stage)
+                selected = np.asarray(selected, dtype=np.int64)
+                selected_path = output_dir / "selected-flat-indices.u32"
+                selected_record = write_selection_file(selected_path, selected, "<u4", stage)
+                components = build_sparse_payload(base_path, payload_path, selected, source_bf16)
+                components["affine_groups"] = AFFINE_GROUPS
+                components["affine_group_count"] = AFFINE_GROUPS
+                components["group_patch_quota_policy"] = selection.get("group_patch_quota_policy")
+                decode_sparse_payload(payload_path, decoded_path, source_bf16)
+                selection["selected_count"] = int(selected.size)
+                selection["selected_indices"] = selected_record
+                selection["selected_indices_sha256"] = _array_hash(selected.astype("<u4"))
+                selection["selected_range_candidate_ids"] = candidate_record
+                selection["selected_range_candidate_ids_sha256"] = _array_hash(candidate_ids)
+                selection["selected_range_candidate_histogram"] = joint_candidate_histogram(candidate_ids)
+                selection["patches_per_256_value_group_histogram"] = sparse_record_patch_histogram(
+                    selected, BLOCK_VALUES
+                )
+                selection["patches_per_1024_value_record_histogram"] = sparse_record_patch_histogram(selected)
+                selection["tie_rule"] = "equal F32 score selects lower group/flat index; range candidate ties select lower candidate ID"
+                finish_variant(
+                    f"variants/{name}",
+                    mode,
+                    fold,
+                    payload_path,
+                    decoded_path,
+                    selection,
+                    components,
+                )
+                base_decoded_path.unlink(missing_ok=True)
+                base_path.unlink(missing_ok=True)
+
+            weight_fit = joint_fits["weight"]
+            q1_weight = weight_fit["q1"]
+            q2_weight = weight_fit["q2"]
+            quota = select_joint_quota_patches(
+                q1_weight["patch_positions"][:, 0],
+                q2_weight["patch_positions"],
+                np.subtract(q1_weight["loss"], q2_weight["loss"], dtype=np.float32),
+            )
+            upgraded = np.zeros(AFFINE_GROUPS, dtype=np.bool_)
+            upgraded[quota["upgrade_groups"]] = True
+            quota_candidate_ids = np.where(
+                upgraded, q2_weight["candidate_id"], q1_weight["candidate_id"]
+            ).astype(np.uint8)
+            quota_lower = np.where(upgraded, q2_weight["lower"], q1_weight["lower"]).astype(np.float32)
+            quota_upper = np.where(upgraded, q2_weight["upper"], q1_weight["upper"]).astype(np.float32)
+            quota_policy_loss = np.where(upgraded, q2_weight["loss"], q1_weight["loss"])
+            quota_policy_baseline = np.where(
+                upgraded,
+                q2_weight["candidate_losses"][:, 0],
+                q1_weight["candidate_losses"][:, 0],
+            )
+            quota_summary = fit_loss_summary(
+                q1_weight,
+                q2_weight,
+                quota_candidate_ids,
+                quota_policy_loss,
+                quota_policy_baseline,
+                "Sum of per-256-group F32 tree losses for the emitted quota's one/two local exceptions; candidate-0 minmax uses the same per-group exception count.",
+            )
+            upgrade_path = stage / "variants" / "joint_quota_weight" / "upgrade-groups.u32"
+            upgrade_path.parent.mkdir(parents=True, exist_ok=True)
+            upgrade_record = write_selection_file(
+                upgrade_path, quota["upgrade_groups"], "<u4", stage
+            )
+            emit_joint_sparse_variant(
+                "joint_quota_weight",
+                4,
+                0,
+                quota_lower,
+                quota_upper,
+                quota["selected_flat_indices"],
+                {
+                    "selector": "best q1 range for each group, then best q2 range for exactly the highest F32 L1-L2 group gains",
+                    "range_fit": "all six fixed endpoint candidates for q1 and q2; group ties use lower candidate ID",
+                    "upgrade_count": quota["upgrade_count"],
+                    "upgrade_gain_threshold": quota["upgrade_gain_threshold"],
+                    "upgrade_groups": upgrade_record,
+                    "upgrade_groups_sha256": _array_hash(quota["upgrade_groups"].astype("<u4")),
+                    "group_patch_quota_policy": "one patch per 256-value group, with one additional patch for selected upgrade groups",
+                    "fit_loss": quota_summary,
+                },
+                quota_candidate_ids,
+            )
+
+            del upgraded, quota_lower, quota_upper, quota_candidate_ids
+            del quota_policy_loss, quota_policy_baseline, quota_summary
+            del q1_weight, q2_weight, weight_fit
+
+            for name, mode, fold, train_rows, metric_name in (
+                ("joint_global_weight", 5, 0, None, "weight"),
+                ("joint_global_activation_f0", 6, 0, (0, 1), "activation_f0"),
+                ("joint_global_activation_f1", 6, 1, (2, 3), "activation_f1"),
+            ):
+                fit = joint_fits[metric_name]
+                q1_fit = fit["q1"]
+                q2_fit = fit["q2"]
+                lower = q2_fit["lower"]
+                upper = q2_fit["upper"]
+                selected_candidate_ids = q2_fit["candidate_id"]
+                fit_summary = fit_loss_summary(
+                    q1_fit,
+                    q2_fit,
+                    selected_candidate_ids,
+                    q2_fit["loss"],
+                    q2_fit["candidate_losses"][:, 0],
+                    "Local q2 proxy: two exceptions per 256-value group before final global top-R competition; this is not the realized global payload loss and cannot represent groups receiving zero or more than two final patches.",
+                )
+                output_dir = stage / "variants" / name
+                output_dir.mkdir(parents=True, exist_ok=True)
+                base_path = work / f"joint-base-{name}.bin"
+                base_decoded_path = work / f"joint-base-{name}.f32"
+                encode_affine_base_with_ranges(
+                    source_bf16, base_path, base_decoded_path, lower, upper
+                )
+                decoded_base_joint = np.memmap(
+                    base_decoded_path, dtype="<f4", mode="r", shape=(source_bf16.size,)
+                )
+                weights = None if train_rows is None else calibration_weights(input_rows, train_rows)
+                score_path = work / f"score-{name}.f32"
+                scores = write_score_file(
+                    source_bf16, decoded_base_joint, score_path, source_bf16.size, weights
+                )
+                selected = top_indices(scores, PATCH_COUNT)
+                threshold = float(
+                    np.partition(np.asarray(scores), scores.size - PATCH_COUNT)[scores.size - PATCH_COUNT]
+                )
+                selection = {
+                    "selector": "best q2 range per group, then global top-R residual patches without a per-group floor/cap",
+                    "range_fit": "all six fixed endpoint candidates for q1 and q2; q2 candidate ties use lower candidate ID",
+                    "train_input_rows": list(train_rows) if train_rows else None,
+                    "heldout_input_rows": ([2, 3] if fold == 0 else [0, 1]) if train_rows else None,
+                    "selected_count": PATCH_COUNT,
+                    "score_threshold": threshold,
+                    "group_patch_quota_policy": None,
+                    "fit_loss": fit_summary,
+                }
+                emit_joint_sparse_variant(
+                    name,
+                    mode,
+                    fold,
+                    lower,
+                    upper,
+                    selected,
+                    selection,
+                    selected_candidate_ids,
+                )
+                del scores, decoded_base_joint, lower, upper, selected_candidate_ids
+                score_path.unlink(missing_ok=True)
+                base_decoded_path.unlink(missing_ok=True)
+                base_path.unlink(missing_ok=True)
+            del joint_fits, fold0_weights, fold1_weights
+            joint_fit_metadata = {
+                "enabled_by_opt_in_flag": "--joint",
+                "candidate_order": [list(pair) for pair in JOINT_RANGE_CANDIDATES],
+                "q1_and_q2_consider_all_six_candidates": True,
+                "endpoint_rule": "stable numeric sort of source BF16 promoted to F32; equal values preserve ascending local lane order",
+                "quantization_rule": "F32 scale=(upper-lower)/15; round floor((value-lower)/scale+0.5), clamp 0..15; decode scale*code then lower+scaled with contraction off",
+                "correction_rule": "one or two highest F32 squared residual scores; lower local index breaks ties; corrections are absolute BF16 replacements",
+                "loss_reduction": "mask selected exceptions then F32 tree reduction at strides 128,64,...,1",
+                "quota_upgrade_count": JOINT_UPGRADE_COUNT,
+                "quota_policy": "exactly one patch per 256-value group, then one upgrade patch for the highest F32 L1-L2 group gains",
+                "global_policy": "best q2 base per 256-value group followed by global top-R residual selection; groups may receive zero or more than two patches",
+                "activation_folds": {
+                    "f0": {"train_rows": [0, 1], "heldout_rows": [2, 3]},
+                    "f1": {"train_rows": [2, 3], "heldout_rows": [0, 1]},
+                },
+                "claim_scope": "bounded endpoint-candidate heuristic under the exact payload budget; not a global optimum or trajectory-quality claim",
+            }
         del decoded_base, source_bf16, input_rows
         shutil.rmtree(work)
 
@@ -1087,6 +1660,8 @@ def build_fixture(args: argparse.Namespace) -> Path:
                 "source_rows_are_periodically_tiled_when_rows_4480": True,
             },
         }
+        if joint_fit_metadata is not None:
+            manifest["joint_fit"] = joint_fit_metadata
         write_json(stage / "manifest.json", manifest)
         if os.path.lexists(output_path):
             raise FileExistsError(f"immutable output appeared while preparing: {output_path}")
@@ -1103,6 +1678,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fixture-dir", type=Path, required=True, help="pinned wan_quantized_projection_reference_v1 fixture")
     parser.add_argument("--output-dir", type=Path, required=True, help="new immutable output fixture directory")
     parser.add_argument("--rows", type=int, choices=(SOURCE_ROWS, BENCH_ROWS), required=True)
+    parser.add_argument(
+        "--joint",
+        action="store_true",
+        help="also build four joint affine-range and sparse-exception candidates",
+    )
     return parser
 
 

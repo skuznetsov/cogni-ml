@@ -8,6 +8,54 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
+Latest bounded result (2026-10-22 local; evidence dated 2026-10-23 UTC):
+[joint INT4 range and exception fitting](wan-joint-affine-benchmark.md).
+Six endpoint-rank pairs per 256-value group are fitted jointly with one/two
+local BF16 replacements; the global variant then allocates exactly 414,719
+patches without a per-group floor or cap. The complete package stays equal
+to Q4_K: 39,813,120-byte payload plus common 16-byte descriptor. These are
+finite search/allocation heuristics, not globally optimal fits.
+
+On the four unique seeded source rows, uncalibrated global fitting reduces
+pooled BF16 output relative L2 from 7.06763% (min/max sparse control) to
+6.04116%, a 14.52% relative reduction at the same bytes. Q4_K remains more
+accurate at 4.63165%. Both activation-calibrated variants improve training
+rows but regress on held-out rows relative to uncalibrated global fitting;
+they are not promoted. M=4480 repeats those same four rows and adds no
+independent quality evidence. No video-quality claim is admitted.
+
+The final 22 CPU tests and 5 native Metal examples pass. At M=4 and in two
+fresh M=4480 processes, all nine native GPU packs match independent CPU
+payloads byte for byte. All ten arms have bit-exact decoded-weight and
+same-format upstream projection results before and after timing, with the
+unchanged finite tolerance. Injected finite/NaN corruption, malformed-wire
+rejection and deterministic zero-score ties pass. The source-bound DoD
+commands and successful receipt tags are in the linked experiment document.
+
+Complete decode -> shared F32 stage -> MPS -> bias paired ratios for the
+uncalibrated global arm have medians 1.0147/1.0193, but both ranges cross 1.
+The Q4_K absolute median nearly doubles across fresh processes
+(71.3282 -> 140.7880 ms); no speed winner, stable small slowdown or latency
+equivalence is established. The 270 MiB reusable F32 stage remains. All
+timed samples have zero inter-op waits/readbacks/tracked encode-time Metal
+allocations. Full-size process-group footprint peaks at 2.198 GiB, minimum
+cache-aware estimated headroom is 15.419 GiB and observed swap growth is zero,
+within the 15% reserve / 4 GiB process-group / 64 MiB swap-growth guards.
+These are sampled bounds, not a reservation or protection from inter-poll spikes.
+
+This CAUTION change stays confined to opt-in pack modes/probes; rollback
+removes them without rewriting checkpoints or changing model defaults.
+No full model, block, Studio or generation was launched. The evidence
+adversary is ROBUST for bounded execution/storage/guards and VULNERABLE for
+broader quality or small speed claims. Results expire on relevant source,
+payload, input, geometry or backend changes.
+
+Next falsifier: separate Q4_K's eight local 32-value ranges from its other
+encoding choices with a same-wire, same-size tied-range ablation. Range
+granularity is a structural hypothesis for its remaining accuracy advantage;
+the finite search and decoupled global allocation are competing explanations.
+The ablation is proposed, not implemented.
+
 Completed bounded experiment (2026-10-22 local; evidence dated 2026-10-23 UTC):
 [Q4_K versus affine INT4 with exceptions](wan-affine-budget-benchmark.md).
 All six equal-size arms pass bit-exact decoded-weight and same-format upstream
@@ -19,7 +67,7 @@ rewriting checkpoints.
 
 Every arm has a 39,813,120-byte packed payload ceiling (4.5 bits/weight),
 including its parameters, directories, exception positions/values, alignment
-and padding. An identical external 16-byte shape/format descriptor adds to
+and padding. A common 16-byte external shape/format descriptor is counted for
 every package, including Q4_K; the shared 55,296-byte F32 bias is reported
 separately. Affine groups contain 256 values, F32 scale/offset and 128 nibble
 bytes. Sparse 1024-value records allocate corrections globally by residual
@@ -36,8 +84,8 @@ This is a separate lossy metric, not a relaxation of the unchanged finite
 F32 stage -> MPS -> bias. Every paired ratio range crosses 1.0; the fresh
 process then shows strong nonstationarity (Q4_K median 221.68 ms). There is
 no speed winner or production promotion. The reusable 270 MiB F32 stage
-remains. Next test joint base-range fitting and exception selection during
-packing, rather than only repairing residuals after min/max fitting.
+remains. This motivated the joint base-range/exception fitting experiment
+reported above, rather than only repairing residuals after min/max fitting.
 
 The strongest falsifiers remain a selector that overfits two calibration rows,
 metadata or padding omitted from the storage budget, divergent float rounding
