@@ -82,7 +82,8 @@ private def q4kl_release(buffers : Array(ML::MetalBuffer)) : Nil
   buffers.each(&.release)
 end
 
-private def q4kl_run_gemm_case(rows : Int32, in_dim : Int32, patches : Int32) : Nil
+private def q4kl_run_gemm_case(rows : Int32, in_dim : Int32, patches : Int32,
+                               variant : Q4KDeltaLinear::GemmVariant = Q4KDeltaLinear::GemmVariant::Legacy) : Nil
   out_dim = 35
   weight_count = in_dim * out_dim
   output_count = rows * out_dim
@@ -140,9 +141,9 @@ private def q4kl_run_gemm_case(rows : Int32, in_dim : Int32, patches : Int32) : 
     Q4KDeltaLinear.decode_probe(encoder, payload, sidecar, decoded, status,
       weight_count, patches)
     Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, fused, status,
-      rows, in_dim, out_dim, patches)
+      rows, in_dim, out_dim, patches, variant)
     Q4KDeltaLinear.dense_linear(encoder, input, decoded, bias, dense,
-      rows, in_dim, out_dim)
+      rows, in_dim, out_dim, variant)
     ML::Video::MetalOps.linear(encoder, input, decoded, bias, scalar,
       rows, in_dim, out_dim)
     ML::MetalBuffer.video_spec_allocations.should(eq(allocation_count),
@@ -169,6 +170,22 @@ end
 
 describe "Q4_K sparse-delta fused linear" do
   it "validates GEMM geometry and the cached four-simdgroup pipeline contract" do
+    Q4KDeltaLinear.variant_name.should eq("legacy")
+    Q4KDeltaLinear.variant_name(Q4KDeltaLinear::GemmVariant::B128N32S4K32).should eq("candidate-b128n32-sg4-tk32")
+    Q4KDeltaLinear.variant_name(Q4KDeltaLinear::GemmVariant::B64N32S4K32BT).should eq("candidate-b64n32-sg4-tk32-bt")
+    Q4KDeltaLinear.variant_name(Q4KDeltaLinear::GemmVariant::B64N32S4K64BT).should eq("candidate-b64n32-sg4-tk64-bt")
+    {
+      {Q4KDeltaLinear::GemmVariant::Legacy, 64, 32, 32},
+      {Q4KDeltaLinear::GemmVariant::B128N32S4K32, 128, 32, 32},
+      {Q4KDeltaLinear::GemmVariant::B64N32S4K32BT, 64, 32, 32},
+      {Q4KDeltaLinear::GemmVariant::B64N32S4K64BT, 64, 32, 64},
+    }.each do |variant, tile_m, tile_n, tile_k|
+      Q4KDeltaLinear.tile_m(variant).should eq(tile_m)
+      Q4KDeltaLinear.tile_n(variant).should eq(tile_n)
+      Q4KDeltaLinear.tile_k(variant).should eq(tile_k)
+      Q4KDeltaLinear.threadgroup_threads(variant).should eq(128)
+    end
+
     {1, 19, 65}.each do |rows|
       {256, 512}.each do |in_dim|
         Q4KDeltaLinear.checked_geometry(rows, in_dim, 35).should eq({rows, in_dim, 35})
@@ -199,9 +216,80 @@ describe "Q4_K sparse-delta fused linear" do
 
     pending! "Requires macOS Metal" unless ML::Metal::Device.init!
     Q4KDeltaLinear.prepare!
-    Q4KDeltaLinear.linear_pipeline.thread_execution_width.should eq(32)
-    Q4KDeltaLinear.linear_pipeline.max_total_threads_per_threadgroup.should be >= 128
-    Q4KDeltaLinear.static_threadgroup_memory_bytes.should be <= 32768
+    {
+      Q4KDeltaLinear::GemmVariant::Legacy,
+      Q4KDeltaLinear::GemmVariant::B128N32S4K32,
+      Q4KDeltaLinear::GemmVariant::B64N32S4K32BT,
+      Q4KDeltaLinear::GemmVariant::B64N32S4K64BT,
+    }.each do |variant|
+      Q4KDeltaLinear.linear_pipeline(variant).thread_execution_width.should eq(32)
+      Q4KDeltaLinear.linear_pipeline(variant).max_total_threads_per_threadgroup.should be >= 128
+      Q4KDeltaLinear.dense_pipeline(variant).thread_execution_width.should eq(32)
+      Q4KDeltaLinear.dense_pipeline(variant).max_total_threads_per_threadgroup.should be >= 128
+      Q4KDeltaLinear.static_threadgroup_memory_bytes(variant).should be <= 32768
+      Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(variant).should be <= 32768
+      if variant == Q4KDeltaLinear::GemmVariant::B64N32S4K64BT
+        Q4KDeltaLinear.static_threadgroup_memory_bytes(variant).should eq(26752_i64)
+        Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(variant).should eq(24576_i64)
+      end
+    end
+  end
+
+  it "runs the opt-in 128x32 schedule across row-tile boundaries and Q4_K patch quotas" do
+    pending! "Requires macOS Metal Performance Shaders" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+    ML::Video::MetalLinearMPS.prepare!
+
+    # N=35 exercises the column tail. Rows straddle the candidate M=128 tile,
+    # and K=256/512 covers one and two Q4_K blocks with every patch quota.
+    [
+      {127, 256, 0},
+      {128, 256, 1},
+      {129, 512, 4},
+      {257, 512, 8},
+    ].each do |rows, in_dim, patches|
+      q4kl_run_gemm_case(rows, in_dim, patches,
+        Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+    end
+  end
+
+  it "runs the transposed-B 64x32 schedule across row tails and Q4_K patch quotas" do
+    pending! "Requires macOS Metal Performance Shaders" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+    ML::Video::MetalLinearMPS.prepare!
+
+    # N=35 exercises the column tail. Rows cover both sides of the M=64 tile
+    # and a second tile; K and patch quotas match the shared Q4_K path.
+    [
+      {63, 256, 0},
+      {64, 256, 1},
+      {65, 512, 4},
+      {129, 512, 8},
+    ].each do |rows, in_dim, patches|
+      q4kl_run_gemm_case(rows, in_dim, patches,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+    end
+  end
+
+  it "runs the transposed-B TK64 schedule across row tails and Q4_K patch quotas" do
+    pending! "Requires macOS Metal Performance Shaders" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+    ML::Video::MetalLinearMPS.prepare!
+
+    # N=35 exercises the column tail. Rows straddle the M=64 tile and cross
+    # into a second tile; K and patches cover one/two blocks and every quota.
+    [
+      {63, 256, 0},
+      {64, 256, 1},
+      {65, 512, 4},
+      {129, 512, 8},
+    ].each do |rows, in_dim, patches|
+      q4kl_run_gemm_case(rows, in_dim, patches,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
+    end
   end
 
   it "matches the separately decoded scalar FMA oracle and MPS across M/N/K tails and patch quotas" do
@@ -276,6 +364,20 @@ describe "Q4_K sparse-delta fused linear" do
     corrected_decoded = ML::MetalBuffer.new(256_i64 * sizeof(Float32))
     base_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
     corrected_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    input = ML::MetalBuffer.new(256_i64 * sizeof(Float32))
+    bias = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    base_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    corrected_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    bt_base_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    bt_corrected_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    tk64_base_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    tk64_corrected_output = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+    base_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    corrected_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    bt_base_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    bt_corrected_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    tk64_base_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    tk64_corrected_gemm_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
     command = nil.as(ML::Metal::CommandBuffer?)
     begin
       payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
@@ -285,6 +387,15 @@ describe "Q4_K sparse-delta fused linear" do
       corrected_sidecar.contents.as(UInt8*)[2] = 0_u8
       base_status.contents.as(UInt32*).value = 0_u32
       corrected_status.contents.as(UInt32*).value = 0_u32
+      input.contents.as(Float32*)[0] = 1_f32
+      1.upto(255) { |index| input.contents.as(Float32*)[index] = 0_f32 }
+      bias.contents.as(Float32*).value = 0_f32
+      base_gemm_status.contents.as(UInt32*).value = 0_u32
+      corrected_gemm_status.contents.as(UInt32*).value = 0_u32
+      bt_base_gemm_status.contents.as(UInt32*).value = 0_u32
+      bt_corrected_gemm_status.contents.as(UInt32*).value = 0_u32
+      tk64_base_gemm_status.contents.as(UInt32*).value = 0_u32
+      tk64_corrected_gemm_status.contents.as(UInt32*).value = 0_u32
 
       active = ML::Metal::CommandBuffer.new
       command = active
@@ -293,19 +404,54 @@ describe "Q4_K sparse-delta fused linear" do
         base_status, 256, 0)
       Q4KDeltaLinear.decode_probe(encoder, payload, corrected_sidecar,
         corrected_decoded, corrected_status, 256, 1)
+      Q4KDeltaLinear.linear(encoder, input, payload, base_sidecar, bias,
+        base_output, base_gemm_status, 1, 256, 1, 0,
+        Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+      Q4KDeltaLinear.linear(encoder, input, payload, corrected_sidecar, bias,
+        corrected_output, corrected_gemm_status, 1, 256, 1, 1,
+        Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+      Q4KDeltaLinear.linear(encoder, input, payload, base_sidecar, bias,
+        bt_base_output, bt_base_gemm_status, 1, 256, 1, 0,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+      Q4KDeltaLinear.linear(encoder, input, payload, corrected_sidecar, bias,
+        bt_corrected_output, bt_corrected_gemm_status, 1, 256, 1, 1,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+      Q4KDeltaLinear.linear(encoder, input, payload, base_sidecar, bias,
+        tk64_base_output, tk64_base_gemm_status, 1, 256, 1, 0,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
+      Q4KDeltaLinear.linear(encoder, input, payload, corrected_sidecar, bias,
+        tk64_corrected_output, tk64_corrected_gemm_status, 1, 256, 1, 1,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
       encoder.end_encoding
       active.commit_and_wait
       active.completed_successfully?.should be_true
       base_status.contents.as(UInt32*).value.should eq(0_u32)
       corrected_status.contents.as(UInt32*).value.should eq(0_u32)
+      base_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
+      corrected_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
+      bt_base_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
+      bt_corrected_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
+      tk64_base_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
+      tk64_corrected_gemm_status.contents.as(UInt32*).value.should eq(0_u32)
       base_decoded.contents.as(UInt32*)[0].should eq(0x8000_0000_u32)
       corrected_decoded.contents.as(UInt32*)[0].should eq(0_u32)
+      q4kl_load_f32(base_output, 0).should eq(0_f32)
+      q4kl_load_f32(corrected_output, 0).should eq(0_f32)
+      q4kl_load_f32(bt_base_output, 0).should eq(0_f32)
+      q4kl_load_f32(bt_corrected_output, 0).should eq(0_f32)
+      q4kl_load_f32(tk64_base_output, 0).should eq(0_f32)
+      q4kl_load_f32(tk64_corrected_output, 0).should eq(0_f32)
     ensure
       if active = command
         active.discard unless active.committed?
       end
       {payload, base_sidecar, corrected_sidecar, base_decoded,
-       corrected_decoded, base_status, corrected_status}.each(&.release)
+       corrected_decoded, base_status, corrected_status, input, bias,
+       base_output, corrected_output, base_gemm_status,
+       corrected_gemm_status, bt_base_output, bt_corrected_output,
+       bt_base_gemm_status, bt_corrected_gemm_status, tk64_base_output,
+       tk64_corrected_output, tk64_base_gemm_status,
+       tk64_corrected_gemm_status}.each(&.release)
     end
   end
 
@@ -347,12 +493,27 @@ describe "Q4_K sparse-delta fused linear" do
         decoded = ML::MetalBuffer.new((out_dim * in_dim).to_i64 * sizeof(Float32)); buffers << decoded
         scalar = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << scalar
         fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << fused
+        candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << candidate_fused
+        bt_candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << bt_candidate_fused
+        tk64_candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << tk64_candidate_fused
         fused.contents.as(Float32*)[0] = 1234_f32
         fused.contents.as(Float32*)[1] = -1234_f32
+        candidate_fused.contents.as(Float32*)[0] = 1234_f32
+        candidate_fused.contents.as(Float32*)[1] = -1234_f32
+        bt_candidate_fused.contents.as(Float32*)[0] = 1234_f32
+        bt_candidate_fused.contents.as(Float32*)[1] = -1234_f32
+        tk64_candidate_fused.contents.as(Float32*)[0] = 1234_f32
+        tk64_candidate_fused.contents.as(Float32*)[1] = -1234_f32
         probe_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << probe_status
         fused_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << fused_status
+        candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << candidate_status
+        bt_candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << bt_candidate_status
+        tk64_candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << tk64_candidate_status
         probe_status.contents.as(UInt32*).value = 0_u32
         fused_status.contents.as(UInt32*).value = 0_u32
+        candidate_status.contents.as(UInt32*).value = 0_u32
+        bt_candidate_status.contents.as(UInt32*).value = 0_u32
+        tk64_candidate_status.contents.as(UInt32*).value = 0_u32
 
         active = ML::Metal::CommandBuffer.new
         command = active
@@ -363,11 +524,23 @@ describe "Q4_K sparse-delta fused linear" do
           rows, in_dim, out_dim)
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, fused,
           fused_status, rows, in_dim, out_dim, 4)
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+          candidate_fused, candidate_status, rows, in_dim, out_dim, 4,
+          Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+          bt_candidate_fused, bt_candidate_status, rows, in_dim, out_dim, 4,
+          Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+          tk64_candidate_fused, tk64_candidate_status, rows, in_dim, out_dim, 4,
+          Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
         encoder.end_encoding
         active.commit_and_wait
         active.completed_successfully?.should be_true
         probe_status.contents.as(UInt32*).value.should(eq(1_u32), "#{label} probe status")
         fused_status.contents.as(UInt32*).value.should(eq(1_u32), "#{label} fused status")
+        candidate_status.contents.as(UInt32*).value.should(eq(1_u32), "#{label} candidate status")
+        bt_candidate_status.contents.as(UInt32*).value.should(eq(1_u32), "#{label} transposed-B candidate status")
+        tk64_candidate_status.contents.as(UInt32*).value.should(eq(1_u32), "#{label} TK64 transposed-B candidate status")
 
         256.times do |index|
           q4kl_load_f32(decoded, index).should(eq(0_f32), "#{label} malformed channel 0 block")
@@ -378,6 +551,9 @@ describe "Q4_K sparse-delta fused linear" do
         q4kl_load_f32(decoded, 256).should_not eq(0_f32) # channel 0, K block 1
         q4kl_load_f32(decoded, 512).should_not eq(0_f32) # channel 1, K block 0
         q4kl_assert_close("#{label} malformed fused output", fused, scalar, out_dim)
+        q4kl_assert_close("#{label} malformed candidate output", candidate_fused, scalar, out_dim)
+        q4kl_assert_close("#{label} malformed transposed-B candidate output", bt_candidate_fused, scalar, out_dim)
+        q4kl_assert_close("#{label} malformed TK64 transposed-B candidate output", tk64_candidate_fused, scalar, out_dim)
       ensure
         if active = command
           active.discard unless active.committed?
@@ -401,12 +577,27 @@ describe "Q4_K sparse-delta fused linear" do
       decoded = ML::MetalBuffer.new((out_dim * in_dim).to_i64 * sizeof(Float32)); buffers << decoded
       scalar = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << scalar
       fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << fused
+      candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << candidate_fused
+      bt_candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << bt_candidate_fused
+      tk64_candidate_fused = ML::MetalBuffer.new(out_dim.to_i64 * sizeof(Float32)); buffers << tk64_candidate_fused
       fused.contents.as(Float32*)[0] = 1234_f32
       fused.contents.as(Float32*)[1] = -1234_f32
+      candidate_fused.contents.as(Float32*)[0] = 1234_f32
+      candidate_fused.contents.as(Float32*)[1] = -1234_f32
+      bt_candidate_fused.contents.as(Float32*)[0] = 1234_f32
+      bt_candidate_fused.contents.as(Float32*)[1] = -1234_f32
+      tk64_candidate_fused.contents.as(Float32*)[0] = 1234_f32
+      tk64_candidate_fused.contents.as(Float32*)[1] = -1234_f32
       decode_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << decode_status
       fused_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << fused_status
+      candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << candidate_status
+      bt_candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << bt_candidate_status
+      tk64_candidate_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << tk64_candidate_status
       decode_status.contents.as(UInt32*).value = 0_u32
       fused_status.contents.as(UInt32*).value = 0x40_u32
+      candidate_status.contents.as(UInt32*).value = 0x40_u32
+      bt_candidate_status.contents.as(UInt32*).value = 0x40_u32
+      tk64_candidate_status.contents.as(UInt32*).value = 0x40_u32
 
       active = ML::Metal::CommandBuffer.new
       command = active
@@ -417,12 +608,27 @@ describe "Q4_K sparse-delta fused linear" do
         rows, in_dim, out_dim)
       Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, fused,
         fused_status, rows, in_dim, out_dim, 4)
+      Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+        candidate_fused, candidate_status, rows, in_dim, out_dim, 4,
+        Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+      Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+        bt_candidate_fused, bt_candidate_status, rows, in_dim, out_dim, 4,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+      Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias,
+        tk64_candidate_fused, tk64_candidate_status, rows, in_dim, out_dim, 4,
+        Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
       encoder.end_encoding
       active.commit_and_wait
       active.completed_successfully?.should be_true
       decode_status.contents.as(UInt32*).value.should eq(0_u32)
       fused_status.contents.as(UInt32*).value.should eq(0x40_u32)
+      candidate_status.contents.as(UInt32*).value.should eq(0x40_u32)
+      bt_candidate_status.contents.as(UInt32*).value.should eq(0x40_u32)
+      tk64_candidate_status.contents.as(UInt32*).value.should eq(0x40_u32)
       q4kl_assert_close("pre-existing sticky status still computes", fused, scalar, out_dim)
+      q4kl_assert_close("pre-existing sticky status candidate still computes", candidate_fused, scalar, out_dim)
+      q4kl_assert_close("pre-existing sticky status transposed-B candidate still computes", bt_candidate_fused, scalar, out_dim)
+      q4kl_assert_close("pre-existing sticky status TK64 transposed-B candidate still computes", tk64_candidate_fused, scalar, out_dim)
     ensure
       if active = command
         active.discard unless active.committed?
@@ -453,8 +659,32 @@ describe "Q4_K sparse-delta fused linear" do
           status, 1, 256, 1, 0)
       end
       expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, tiny_input, payload, sidecar, bias, output,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, tiny_input, payload, sidecar, bias, output,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, tiny_input, payload, sidecar, bias, output,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
+      end
+      expect_raises(ArgumentError) do
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
           status, 1, 256, 1, 0)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B128N32S4K32)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K32BT)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
       end
       expect_raises(ArgumentError) do
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, output, output,

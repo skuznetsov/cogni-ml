@@ -49,19 +49,35 @@ def main():
     parser.add_argument('--rounds', type=int, choices=[16, 32])
     parser.add_argument('--compare-block-validation', action='store_true',
                         help='Pair per-value and per-block correction validation in the native probe')
+    parser.add_argument('--compare-gemm', action='store_true',
+                        help='Compare legacy and selected native dense GEMM against MPS only')
     parser.add_argument('--compare-fused', action='store_true',
                         help='Compare fused Q4_K delta projection against block-validated staged controls')
+    parser.add_argument('--gemm-variant', choices=[
+        'legacy', 'candidate-b128n32-sg4-tk32', 'candidate-b64n32-sg4-tk32-bt',
+        'candidate-b64n32-sg4-tk64-bt'],
+                        help='Native GEMM geometry for dense and fused candidate arms')
     args = parser.parse_args()
-    if args.compare_block_validation and args.compare_fused:
-        parser.error('--compare-block-validation and --compare-fused are mutually exclusive')
-    if (args.compare_block_validation or args.compare_fused) and args.mode != 'probe':
+    comparison_modes = sum((args.compare_block_validation, args.compare_gemm,
+                            args.compare_fused))
+    if comparison_modes > 1:
+        parser.error('comparison modes are mutually exclusive')
+    if (args.compare_block_validation or args.compare_gemm or args.compare_fused) and args.mode != 'probe':
         parser.error('comparison modes are only available in probe mode')
+    if args.gemm_variant is not None and not (args.compare_gemm or args.compare_fused):
+        parser.error('--gemm-variant requires --compare-gemm or --compare-fused')
+    if args.compare_gemm and args.gemm_variant == 'legacy':
+        parser.error('--compare-gemm requires a candidate variant distinct from the legacy control')
+    args.gemm_variant = args.gemm_variant or (
+        'candidate-b64n32-sg4-tk32-bt' if args.compare_gemm else 'legacy')
     if args.mode in ['spec', 'build', 'probe'] and not (ROOT/'spec/q4k_delta_linear_spec.cr').is_file():
         raise RuntimeError('Required native Q4_K delta linear spec is missing')
     if args.rounds is None:
         args.rounds = 16
     if args.rounds not in [16, 32]:
         parser.error('rounds must be 16 or 32 balanced measured rounds')
+    if args.compare_gemm and args.rounds != 16:
+        parser.error('--compare-gemm uses exactly 16 measured rounds')
     for value in [args.tag, args.build_tag, args.fixture_tag]:
         if not value.isascii() or not value.replace('-', '').isalnum():
             parser.error('tags must be ASCII alphanumeric with optional hyphens')
@@ -168,8 +184,10 @@ def main():
         command = [str(binary), '--fixture='+str(fixture), '--rounds='+str(args.rounds)]
         if args.compare_block_validation:
             command += ['--compare-block-validation']
+        if args.compare_gemm:
+            command += ['--compare-gemm', '--gemm-variant='+args.gemm_variant]
         if args.compare_fused:
-            command += ['--compare-fused']
+            command += ['--compare-fused', '--gemm-variant='+args.gemm_variant]
         if args.reverse_first:
             command += ['--reverse-first']
     deadline = 240 if args.mode == 'build' else 300
@@ -177,6 +195,8 @@ def main():
               'mode': args.mode, 'tag': args.tag, 'files': files,
               'sparse_delta_ablation': True, 'reverse_first': args.reverse_first,
               'block_validation_comparison': args.compare_block_validation,
+              'gemm_comparison': args.compare_gemm,
+              'gemm_variant': args.gemm_variant,
               'fused_comparison': args.compare_fused,
               'head': capture(['git', 'rev-parse', 'HEAD']),
               'status': capture(['git', 'status', '--short']),

@@ -127,6 +127,32 @@ def fused_timing_records(rounds: int = 16, reverse_first: bool = False,
     return records
 
 
+def gemm_timing_records(rounds: int = 16, reverse_first: bool = False,
+                        manifest_sha256: str = "a" * 64) -> list[dict]:
+    records = []
+    for round_id in (-2, -1, *range(rounds)):
+        order = results._gemm_order(round_id, rounds, reverse_first)
+        for position, arm in enumerate(order):
+            records.append({
+                "schema": "wan_q4k_delta_timing_v1",
+                "mode": "dense_gemm",
+                "manifest_sha256": manifest_sha256,
+                "rows": ROWS,
+                "terminal_waits": 1,
+                "inter_operator_host_waits": 0,
+                "activation_readbacks": 0,
+                "encode_metal_buffer_allocations": 0,
+                "round": round_id,
+                "position": position,
+                "warmup": round_id < 0,
+                "variant": arm,
+                "gpu_seconds": 0.001 + position * 0.00001,
+                "wall_seconds": 0.002 + position * 0.00001,
+                "encode_seconds": 0.0001 + position * 0.000001,
+            })
+    return records
+
+
 def valid_guard_events() -> list[dict]:
     physical = 64 * 1024**3
     sample = {
@@ -360,6 +386,8 @@ def make_reference_fixture(base: Path, rows: int = ROWS) -> tuple[Path, dict[str
 def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                               block_validation_comparison: bool = False,
                               fused_comparison: bool = False,
+                              gemm_comparison: bool = False,
+                              gemm_variant: str | None = None,
                               reverse_first: bool = False) -> tuple[str, dict[str, str]]:
     fixture, fixture_files = make_reference_fixture(base, ROWS)
     source_manifest = Path(fixture_files["__source_manifest__"])
@@ -371,8 +399,11 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     manifest_sha = results.sha(output_manifest)
 
     metric = ZERO_METRIC
-    if block_validation_comparison and fused_comparison:
+    if sum((block_validation_comparison, fused_comparison, gemm_comparison)) > 1:
         raise ValueError("Comparison modes are mutually exclusive")
+    if gemm_variant is None:
+        gemm_variant = (results.GEMM_CANDIDATE_VARIANT if gemm_comparison else "legacy")
+    variant_config = results.GEMM_VARIANTS[gemm_variant]
     setup = {
         "schema": "wan_q4k_delta_setup_v1",
         "manifest_sha256": manifest_sha,
@@ -388,6 +419,23 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "packing_workspace_bytes": 0,
         "explicit_buffer_bytes_during_pack": 1024**3,
         "reverse_first": False,
+        "gemm_comparison": gemm_comparison,
+        "gemm_variant": gemm_variant,
+        "gemm_variant_name": gemm_variant,
+        "gemm_tile_shape": variant_config["tile_shape"],
+        "gemm_threadgroup_threads": variant_config["threads"],
+        "dense_static_threadgroup_memory_bytes": None,
+        "gemm_legacy_dense_static_threadgroup_memory_bytes": None,
+        "gemm_candidate_dense_static_threadgroup_memory_bytes": None,
+        "gemm_legacy_dense_pipeline": None,
+        "gemm_candidate_dense_pipeline": None,
+        "candidate_pipeline": None,
+        "candidate_static_threadgroup_memory_bytes": None,
+        "dense_mode_execution_arms": None,
+        "dense_mode_weight_format": None,
+        "dense_mode_internal_tile_shape": None,
+        "gemm_schedule": None,
+        "gemm_schedule_directions": None,
         "mps_storage": "opaque and included in the process guard, excluded from explicit byte sum",
         "tolerance": "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
     }
@@ -403,44 +451,78 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
             "fused_comparison": True,
             "execution_arms": list(results.FUSED_ARMS),
             "format_by_arm": {
-                arm: arm.removesuffix("_fused") for arm in results.FUSED_ARMS
+                **{arm: arm for arm in results.ARMS},
+                **{arm: arm.removesuffix("_fused") for arm in results.FUSED_ARMS},
             },
             "fused_staged_control_decoder": "block_validated",
             "candidate_global_f32_weight_stage_bytes": 0,
             "control_f32_weight_stage_bytes": results.WEIGHT_COUNT * 4,
             "retained_harness_bytes_excluding_stage": 1024**3 - results.WEIGHT_COUNT * 4,
             "q4_k_fused_dummy_sidecar_bytes": 4,
-            "candidate_pipeline": "video_q4k_delta_linear_f32",
-            "candidate_static_threadgroup_memory_bytes": 0,
+            "candidate_pipeline": variant_config["linear_pipeline"],
+            "candidate_static_threadgroup_memory_bytes": variant_config.get(
+                "linear_static_threadgroup_memory_bytes", 0),
+            "dense_static_threadgroup_memory_bytes": variant_config[
+                "dense_static_threadgroup_memory_bytes"],
             "dense_mode_execution_arms": ["dense_native", "dense_mps"],
             "dense_mode_weight_format": "q4_k",
-            "dense_mode_internal_tile_shape": {"tm": 64, "tn": 32, "tk": 32},
+            "dense_mode_internal_tile_shape": variant_config["tile_shape"],
+        })
+    if gemm_comparison:
+        setup.update({
+            "execution_arms": list(results.GEMM_ARMS),
+            "format_by_arm": {
+                **{arm: arm for arm in results.ARMS},
+                **{arm: "q4_k" for arm in results.GEMM_ARMS},
+            },
+            "gemm_tile_shape": variant_config["tile_shape"],
+            "gemm_threadgroup_threads": variant_config["threads"],
+            "dense_static_threadgroup_memory_bytes": variant_config[
+                "dense_static_threadgroup_memory_bytes"],
+            "gemm_legacy_dense_static_threadgroup_memory_bytes":
+                results.GEMM_VARIANTS["legacy"]["dense_static_threadgroup_memory_bytes"],
+            "gemm_candidate_dense_static_threadgroup_memory_bytes": variant_config[
+                "dense_static_threadgroup_memory_bytes"],
+            "gemm_legacy_dense_pipeline": results.GEMM_VARIANTS["legacy"]["dense_pipeline"],
+            "gemm_candidate_dense_pipeline": variant_config["dense_pipeline"],
+            "dense_mode_execution_arms": list(results.GEMM_ARMS),
+            "dense_mode_weight_format": "q4_k",
+            "dense_mode_internal_tile_shape": variant_config["tile_shape"],
+            "gemm_schedule": "six_sample_palindrome_opposite_base_direction_by_half_v1",
+            "gemm_schedule_directions": {
+                "first_half": "reverse" if reverse_first else "forward",
+                "second_half": "forward" if reverse_first else "reverse",
+            },
         })
     setup["reverse_first"] = reverse_first
     records = [setup]
-    for arm in results.ARMS[1:]:
-        records.append({
-            "schema": "wan_q4k_delta_packing_v1",
-            "variant": arm,
-            "gpu_seconds": 0.01,
-            "wall_seconds": 0.02,
-            "encode_seconds": 0.001,
-            "sidecar_word_differences": 0,
-            "encode_metal_buffer_allocations": 0,
-            "activation_readbacks": 0,
-            "terminal_waits": 1,
-            "byte_validation_outside_packing_interval": True,
-        })
-    records.append({
-        "schema": "wan_q4k_delta_bf16_control_v1",
-        "decoder": metric(DIN * DOUT),
-        "projection": metric(ROWS * DOUT),
-    })
-    execution_arms = (results.FUSED_ARMS if fused_comparison else
-                      EXECUTION_ARMS if block_validation_comparison else results.ARMS)
-    for phase in ("before_timing", "after_timing"):
-        for arm in execution_arms:
+    if not gemm_comparison:
+        for arm in results.ARMS[1:]:
             records.append({
+                "schema": "wan_q4k_delta_packing_v1",
+                "variant": arm,
+                "gpu_seconds": 0.01,
+                "wall_seconds": 0.02,
+                "encode_seconds": 0.001,
+                "sidecar_word_differences": 0,
+                "encode_metal_buffer_allocations": 0,
+                "activation_readbacks": 0,
+                "terminal_waits": 1,
+                "byte_validation_outside_packing_interval": True,
+            })
+    if not gemm_comparison:
+        records.append({
+            "schema": "wan_q4k_delta_bf16_control_v1",
+            "decoder": metric(DIN * DOUT),
+            "projection": metric(ROWS * DOUT),
+        })
+    execution_arms = (results.GEMM_ARMS if gemm_comparison else
+                      results.FUSED_ARMS if fused_comparison else
+                      EXECUTION_ARMS if block_validation_comparison else results.ARMS)
+    if not gemm_comparison:
+        for phase in ("before_timing", "after_timing"):
+            for arm in execution_arms:
+                records.append({
                 "schema": "wan_q4k_delta_parity_v1",
                 "phase": phase,
                 "variant": arm,
@@ -457,7 +539,21 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                     for _ in range(4)
                 ],
                 "calibration_rows": [],
-                "unique_evaluation_rows": [0, 1, 2, 3],
+                    "unique_evaluation_rows": [0, 1, 2, 3],
+                })
+    else:
+        for phase in ("before_timing", "after_timing"):
+            records.append({
+                "schema": "wan_q4k_delta_gemm_parity_v1",
+                "phase": phase,
+                "format": "q4_k",
+                "reference_arm": "q4_k",
+                "decoder": metric(DIN * DOUT),
+                "dense_native_legacy": metric(ROWS * DOUT),
+                "dense_native_candidate": metric(ROWS * DOUT),
+                "dense_mps": metric(ROWS * DOUT),
+                "candidate_vs_legacy": metric(ROWS * DOUT),
+                "candidate_vs_mps": metric(ROWS * DOUT),
             })
     if fused_comparison:
         for phase in ("before_timing", "after_timing"):
@@ -474,6 +570,9 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                     "dense_native_vs_dense_mps": metric(ROWS * DOUT),
                 })
         records.extend(fused_timing_records(
+            rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha))
+    elif gemm_comparison:
+        records.extend(gemm_timing_records(
             rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha))
     else:
         records.extend(timing_records(
@@ -556,9 +655,16 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "tag": "r4",
         "command": [str(binary), f"--fixture={fixture}", f"--rounds={rounds}"] +
                    (["--compare-block-validation"] if block_validation_comparison else []) +
-                   (["--compare-fused"] if fused_comparison else []) +
+                   (["--compare-gemm", f"--gemm-variant={gemm_variant}"]
+                    if gemm_comparison else []) +
+                   (["--compare-fused", f"--gemm-variant={gemm_variant}"]
+                    if fused_comparison else []) +
                    (["--reverse-first"] if reverse_first else []),
         "reverse_first": reverse_first,
+        "block_validation_comparison": block_validation_comparison,
+        "gemm_comparison": gemm_comparison,
+        "gemm_variant": gemm_variant,
+        "fused_comparison": fused_comparison,
         "files": files,
         "memory_accounting": "file-cache",
         "reserve_pct": 15,
@@ -566,10 +672,6 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "max_swap_growth_mib": 64,
         "timeout_sec": 300,
     }
-    if block_validation_comparison:
-        probe_intent["block_validation_comparison"] = True
-    if fused_comparison:
-        probe_intent["fused_comparison"] = True
     write_json(probe_intent_path, probe_intent)
     probe_receipt = {
         "schema": "wan_q4k_delta_completion_v1",
@@ -610,6 +712,209 @@ class ResultAnalyzerSpec(unittest.TestCase):
         self.assertEqual(fused_timing_count, (16 + 2) * len(results.FUSED_ARMS) + 4 + 16 * 4)
         self.assertEqual(results.expected_probe_record_count(
             fused_timing_count, False, True), 238)
+
+    def test_dense_gemm_candidate_receipts_bind_order_parity_and_pipeline_metadata(self):
+        candidate = results.GEMM_CANDIDATE_VARIANT
+        for reverse_first in (False, True):
+            with self.subTest(reverse_first=reverse_first), tempfile.TemporaryDirectory() as temporary:
+                evidence = Path(temporary) / "evidence"
+                evidence.mkdir()
+                tag, source_pins = complete_synthetic_probe(
+                    evidence, gemm_comparison=True, gemm_variant=candidate,
+                    reverse_first=reverse_first)
+                with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                    accepted = results.read_probe(evidence, tag)
+                self.assertEqual(accepted["setup"]["gemm_variant"], candidate)
+                self.assertEqual(accepted["setup"]["gemm_tile_shape"],
+                                 results.GEMM_VARIANTS[candidate]["tile_shape"])
+                self.assertEqual(accepted["setup"]["gemm_legacy_dense_pipeline"],
+                                 results.GEMM_VARIANTS["legacy"]["dense_pipeline"])
+                self.assertEqual(accepted["setup"]["gemm_candidate_dense_pipeline"],
+                                 results.GEMM_VARIANTS[candidate]["dense_pipeline"])
+                self.assertEqual(
+                    results._gemm_order(-2, 16, reverse_first),
+                    tuple(record["variant"] for record in gemm_timing_records(
+                        reverse_first=reverse_first)[:6]))
+                timing = accepted["timings_ms"]["dense_gemm"]
+                self.assertEqual(
+                    timing["arms"]["dense_native_candidate"]["gpu_seconds"]["count"], 32)
+                paired = timing["paired_candidate_over_legacy_and_mps_gpu"]
+                for comparison in paired.values():
+                    ratios = comparison["candidate_over_control_gpu_ratio"]
+                    self.assertEqual(ratios["all_rounds"]["count"], 16)
+                    self.assertEqual(set(ratios["by_half"]), {"first", "second"})
+                    self.assertEqual(set(ratios["by_order"]), {
+                        ">".join(results._gemm_order(round_id, 16, reverse_first))
+                        for round_id in range(16)
+                    })
+
+    def test_dense_gemm_b128_v1_receipt_without_pipeline_names_remains_accepted(self):
+        legacy_candidate = "candidate-b128n32-sg4-tk32"
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=legacy_candidate)
+
+            def remove_v1_unavailable_pipeline_names(records):
+                setup = records[0]
+                setup.pop("gemm_legacy_dense_pipeline")
+                setup.pop("gemm_candidate_dense_pipeline")
+
+            rewrite_stdout(evidence, remove_v1_unavailable_pipeline_names)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            self.assertEqual(accepted["setup"]["gemm_variant"], legacy_candidate)
+
+    def test_dense_gemm_b64_candidates_require_pipeline_identity(self):
+        for candidate in results.GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS:
+            for mutation in ("missing", "wrong"):
+                with self.subTest(candidate=candidate, mutation=mutation), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    evidence = Path(temporary) / "evidence"
+                    evidence.mkdir()
+                    tag, source_pins = complete_synthetic_probe(
+                        evidence, gemm_comparison=True, gemm_variant=candidate)
+
+                    def corrupt_pipeline_name(records):
+                        if mutation == "missing":
+                            records[0].pop("gemm_legacy_dense_pipeline")
+                            records[0].pop("gemm_candidate_dense_pipeline")
+                        else:
+                            records[0]["gemm_candidate_dense_pipeline"] = "unbound_pipeline"
+
+                    rewrite_stdout(evidence, corrupt_pipeline_name)
+                    with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                        with self.assertRaisesRegex(
+                                ValueError,
+                                "Dense-GEMM legacy/candidate pipeline identity changed"):
+                            results.read_probe(evidence, tag)
+
+    def test_dense_gemm_tk64_binds_exact_geometry_tgm_and_pipeline_metadata(self):
+        candidate = results.GEMM_TK64_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=candidate)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            setup = accepted["setup"]
+            self.assertEqual(setup["gemm_tile_shape"], {"tm": 64, "tn": 32, "tk": 64})
+            self.assertEqual(setup["dense_static_threadgroup_memory_bytes"], 24_576)
+            self.assertEqual(setup["gemm_candidate_dense_static_threadgroup_memory_bytes"], 24_576)
+            self.assertEqual(setup["gemm_legacy_dense_static_threadgroup_memory_bytes"], 12_288)
+            self.assertEqual(setup["gemm_candidate_dense_pipeline"],
+                             results.GEMM_VARIANTS[candidate]["dense_pipeline"])
+            self.assertEqual(accepted["timings_ms"]["dense_gemm"]["arms"]
+                             ["dense_native_candidate"]["gpu_seconds"]["count"], 32)
+
+    def test_dense_gemm_tk64_rejects_wrong_actual_threadgroup_memory(self):
+        candidate = results.GEMM_TK64_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=candidate)
+
+            def corrupt_tgm(records):
+                setup = records[0]
+                setup["dense_static_threadgroup_memory_bytes"] = 24_572
+                setup["gemm_candidate_dense_static_threadgroup_memory_bytes"] = 24_572
+
+            rewrite_stdout(evidence, corrupt_tgm)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(
+                        ValueError, "Dense-GEMM actual threadgroup memory differs"):
+                    results.read_probe(evidence, tag)
+
+    def test_dense_gemm_tk64_rejects_wrong_tile_shape(self):
+        candidate = results.GEMM_TK64_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=candidate)
+
+            def corrupt_tile_shape(records):
+                records[0]["gemm_tile_shape"]["tk"] = 32
+                records[0]["dense_mode_internal_tile_shape"]["tk"] = 32
+
+            rewrite_stdout(evidence, corrupt_tile_shape)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(
+                        ValueError, "Selected GEMM variant geometry differs"):
+                    results.read_probe(evidence, tag)
+
+    def test_fused_tk64_binds_exact_fused_and_dense_pipeline_memory(self):
+        candidate = results.GEMM_TK64_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, fused_comparison=True, gemm_variant=candidate)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            setup = accepted["setup"]
+            self.assertEqual(setup["candidate_pipeline"],
+                             results.GEMM_VARIANTS[candidate]["linear_pipeline"])
+            self.assertEqual(setup["candidate_static_threadgroup_memory_bytes"], 26_752)
+            self.assertEqual(setup["dense_static_threadgroup_memory_bytes"], 24_576)
+
+    def test_fused_tk64_rejects_wrong_fused_pipeline_memory(self):
+        candidate = results.GEMM_TK64_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, fused_comparison=True, gemm_variant=candidate)
+
+            def corrupt_fused_tgm(records):
+                records[0]["candidate_static_threadgroup_memory_bytes"] = 26_748
+
+            rewrite_stdout(evidence, corrupt_fused_tgm)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(
+                        ValueError, "TK64 fused/dense actual threadgroup memory differs"):
+                    results.read_probe(evidence, tag)
+
+    def test_dense_gemm_rejects_schedule_and_strict_cross_parity_mutations(self):
+        candidate = results.GEMM_CANDIDATE_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=candidate)
+            original_stdout = (evidence / f"probe-{tag}.stdout.log").read_text()
+
+            def break_order(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_timing_v1" and
+                              record["round"] == 0 and record["position"] == 0)
+                record["variant"] = "dense_native_candidate"
+
+            rewrite_stdout(evidence, break_order)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "Unexpected dense-GEMM arm order"):
+                    results.read_probe(evidence, tag)
+
+            stdout = evidence / f"probe-{tag}.stdout.log"
+            stdout.write_text(original_stdout)
+            completion_path = evidence / f"probe-{tag}.completion.json"
+            completion = json.loads(completion_path.read_text())
+            completion["stdout_sha256"] = results.sha(stdout)
+            write_json(completion_path, completion)
+
+            def break_cross_parity(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_gemm_parity_v1" and
+                              record["phase"] == "after_timing")
+                record["candidate_vs_mps"]["tolerance_violations"] = 1
+
+            rewrite_stdout(evidence, break_cross_parity)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "Strict finite parity failed"):
+                    results.read_probe(evidence, tag)
 
     def test_complete_positive_receipt_and_all_arm_records_are_accepted(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -965,6 +1270,97 @@ class ResultAnalyzerSpec(unittest.TestCase):
             results.validate_source_binding({source: "b" * 64}, {})
         with self.assertRaises(ValueError):
             results.validate_source_binding({source: "b" * 64}, {source: "c" * 64})
+
+    def test_linked_receipt_uses_archived_repo_source_but_keeps_external_pins_live(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "evidence"
+            repo = Path(directory) / "checkout"
+            source = repo / "src/kernel.cr"
+            source_extra = repo / "src/other.cr"
+            source_archive = base / "sources-build-v1/src/kernel.cr"
+            source_extra_archive = base / "sources-build-v1/src/other.cr"
+            partial_archive = base / "sources-build-v0/src/kernel.cr"
+            native_object = Path(directory) / "build/bridge.o"
+            fixture_manifest = base / "fixture-old/manifest.json"
+            source.parent.mkdir(parents=True)
+            source_archive.parent.mkdir(parents=True)
+            source.write_text("current checkout source")
+            source_extra.write_text("current checkout secondary source")
+            source_archive.write_text("source bytes used by historical build")
+            source_extra_archive.write_text("secondary source bytes used by historical build")
+            partial_archive.parent.mkdir(parents=True)
+            partial_archive.write_text("source bytes used by historical build")
+            native_object.parent.mkdir(parents=True)
+            native_object.write_bytes(b"historical native object")
+            fixture_manifest.parent.mkdir(parents=True)
+            fixture_manifest.write_bytes(b"historical fixture manifest")
+
+            files = {
+                str(source): results.sha(source_archive),
+                str(source_extra): results.sha(source_extra_archive),
+                str(native_object): results.sha(native_object),
+                str(fixture_manifest): results.sha(fixture_manifest),
+            }
+            intent_path = base / "oracle-old.intent.json"
+            receipt_path = base / "oracle-old.completion.json"
+            write_json(intent_path, {
+                "schema": "wan_q4k_delta_intent_v1",
+                "mode": "oracle",
+                "tag": "oracle-old",
+                "files": files,
+            })
+            write_json(receipt_path, {
+                "schema": "wan_q4k_delta_completion_v1",
+                "returncode": 0,
+                "changed_files": [],
+                "intent_sha256": results.sha(intent_path),
+                "sources": {str(source): files[str(source)],
+                            str(source_extra): files[str(source_extra)]},
+            })
+
+            # A changed live source symlink must not redirect historical source
+            # validation, and a partial snapshot must not satisfy the full pin set.
+            live_source_target = Path(directory) / "changed-live-source.cr"
+            live_source_target.write_text("mutated live source target")
+            source.unlink()
+            source.symlink_to(live_source_target)
+            self.assertEqual(results._matching_source_archive(base, files, repo),
+                             source_archive.parents[1])
+
+            validated, _ = results._linked_receipt(
+                base, receipt_path, intent_path, "oracle", "oracle-old",
+                source_root=repo)
+            self.assertEqual(validated["sources"], {
+                str(source): files[str(source)],
+                str(source_extra): files[str(source_extra)],
+            })
+
+            source_archive.write_text("mutated archived source")
+            with self.assertRaisesRegex(ValueError, "No archived build source snapshot"):
+                results._linked_receipt(
+                    base, receipt_path, intent_path, "oracle", "oracle-old",
+                    source_root=repo)
+            source_archive.write_text("source bytes used by historical build")
+            source_archive.unlink()
+            source_extra_archive.unlink()
+            with self.assertRaisesRegex(ValueError, "No archived build source snapshot"):
+                results._linked_receipt(
+                    base, receipt_path, intent_path, "oracle", "oracle-old",
+                    source_root=repo)
+
+            source_archive.write_text("source bytes used by historical build")
+            source_extra_archive.write_text("secondary source bytes used by historical build")
+            fixture_manifest.write_bytes(b"mutated fixture manifest")
+            with self.assertRaisesRegex(ValueError, "Pinned file changed or missing"):
+                results._linked_receipt(
+                    base, receipt_path, intent_path, "oracle", "oracle-old",
+                    source_root=repo)
+            fixture_manifest.write_bytes(b"historical fixture manifest")
+            native_object.write_bytes(b"mutated native object")
+            with self.assertRaisesRegex(ValueError, "Pinned file changed or missing"):
+                results._linked_receipt(
+                    base, receipt_path, intent_path, "oracle", "oracle-old",
+                    source_root=repo)
 
     def test_full_weight_quality_metric_is_required_on_pre_and_post_parity(self):
         valid = {

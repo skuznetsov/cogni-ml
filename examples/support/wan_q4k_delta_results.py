@@ -17,6 +17,39 @@ BLOCK_ARMS = tuple(f"{arm}_block" for arm in ARMS)
 COMPARISON_ARMS = ARMS + BLOCK_ARMS
 FUSED_ARMS = tuple(item for arm in ARMS for item in (arm, f"{arm}_fused"))
 FUSED_CANDIDATE_ARMS = tuple(f"{arm}_fused" for arm in ARMS)
+GEMM_CANDIDATE_VARIANT = "candidate-b64n32-sg4-tk32-bt"
+GEMM_TK64_VARIANT = "candidate-b64n32-sg4-tk64-bt"
+GEMM_VARIANTS = {
+    "legacy": {
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "linear_pipeline": "video_q4k_delta_linear_f32",
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32",
+        "dense_static_threadgroup_memory_bytes": 12_288,
+    },
+    "candidate-b128n32-sg4-tk32": {
+        "tile_shape": {"tm": 128, "tn": 32, "tk": 32}, "threads": 128,
+        "linear_pipeline": "video_q4k_delta_linear_f32_candidate_b128n32_sg4_tk32",
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b128n32_sg4_tk32",
+        "dense_static_threadgroup_memory_bytes": 20_480,
+    },
+    GEMM_CANDIDATE_VARIANT: {
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "linear_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk32_bt",
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk32_bt",
+        "dense_static_threadgroup_memory_bytes": 12_288,
+    },
+    GEMM_TK64_VARIANT: {
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 64}, "threads": 128,
+        "linear_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk64_bt",
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk64_bt",
+        "dense_static_threadgroup_memory_bytes": 24_576,
+        "linear_static_threadgroup_memory_bytes": 26_752,
+    },
+}
+GEMM_CANDIDATE_VARIANTS = tuple(name for name in GEMM_VARIANTS if name != "legacy")
+GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS = (GEMM_CANDIDATE_VARIANT, GEMM_TK64_VARIANT)
+GEMM_ARMS = ("dense_native_legacy", "dense_native_candidate", "dense_mps")
+GEMM_MODES = ("dense_gemm",)
 PATCHES_PER_BLOCK = {"q4_k": 0, "q4_k_delta1": 1, "q4_k_delta4": 4, "q4_k_delta8": 8}
 MODES = ("projection", "decode_only")
 FUSED_MODES = ("dense_mode", "fused_projection")
@@ -243,6 +276,185 @@ def _dense_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[str, 
     return ("dense_mps", "dense_native", "dense_native", "dense_mps")
 
 
+def _gemm_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[str, ...]:
+    rotation = max(round_id, 0) % len(GEMM_ARMS)
+    rotated = GEMM_ARMS[rotation:] + GEMM_ARMS[:rotation]
+    reverse_phase = (round_id == -1) if round_id < 0 else round_id >= rounds // 2
+    reverse_direction = reverse_phase != reverse_first
+    if reverse_direction:
+        rotated = (rotated[0], rotated[2], rotated[1])
+    return rotated + tuple(reversed(rotated))
+
+
+def validate_gemm_parity(records, rows: int, din: int, dout: int) -> dict:
+    expected_phases = {"before_timing", "after_timing"}
+    require(len(records) == 2 and
+            {record.get("phase") for record in records} == expected_phases,
+            "Missing, duplicate or unexpected dense-GEMM parity records")
+    summaries = {}
+    for record in records:
+        phase = record.get("phase")
+        require(record.get("format") == "q4_k" and
+                record.get("reference_arm") == "q4_k",
+                "Dense GEMM parity must use the Q4_K-decoded reference")
+        decoder = record.get("decoder")
+        validate_metric(decoder, din * dout, f"dense_gemm {phase} Q4_K decoder")
+        metrics = {}
+        for field, label in (("dense_native_legacy", "legacy GEMM"),
+                             ("dense_native_candidate", "candidate GEMM"),
+                             ("dense_mps", "MPS GEMM")):
+            metrics[field] = record.get(field)
+            validate_metric(metrics[field], rows * dout,
+                            f"dense_gemm {phase} {label}")
+        pairs = {}
+        for field, label in (("candidate_vs_legacy", "candidate/legacy"),
+                             ("candidate_vs_mps", "candidate/MPS")):
+            pairs[field] = record.get(field)
+            validate_metric(pairs[field], rows * dout,
+                            f"dense_gemm {phase} {label}")
+        summaries[phase] = {"decoder": decoder, **metrics, **pairs}
+    return summaries
+
+
+def _validate_gemm_timing_records(records, setup: dict, rounds: int,
+                                  reverse_first: bool) -> dict:
+    require(rounds == 16, "Dense-GEMM comparison requires exactly 16 measured rounds")
+    require(type(reverse_first) is bool, "Invalid reverse-first flag")
+    require(setup.get("execution_arms") == list(GEMM_ARMS) and
+            setup.get("dense_mode_execution_arms") == list(GEMM_ARMS),
+            "Unexpected dense-GEMM execution arms")
+    expected_count = (rounds + 2) * len(GEMM_ARMS) * 2
+    require(len(records) == expected_count,
+            "Missing or extra dense-GEMM timing records, including warmups")
+    by_round = {}
+    for record in records:
+        require(record.get("mode") in GEMM_MODES,
+                f"Unexpected dense-GEMM timing mode: {record.get('mode')}")
+        require(record.get("manifest_sha256") == setup["manifest_sha256"],
+                "Dense-GEMM timing provenance changed")
+        require(record.get("rows") == setup["rows"],
+                "Dense-GEMM timing geometry changed")
+        require(type(record.get("terminal_waits")) is int and
+                record["terminal_waits"] == 1 and
+                type(record.get("inter_operator_host_waits")) is int and
+                record["inter_operator_host_waits"] == 0 and
+                type(record.get("activation_readbacks")) is int and
+                record["activation_readbacks"] == 0 and
+                type(record.get("encode_metal_buffer_allocations")) is int and
+                record["encode_metal_buffer_allocations"] == 0,
+                "Dense-GEMM command-chain constraints failed")
+        round_id = record.get("round")
+        position = record.get("position")
+        require(type(round_id) is int and -2 <= round_id < rounds,
+                "Invalid dense-GEMM timing round")
+        require(type(position) is int and 0 <= position < len(GEMM_ARMS) * 2,
+                "Invalid dense-GEMM timing position")
+        require(type(record.get("warmup")) is bool and
+                record["warmup"] == (round_id < 0),
+                "Dense-GEMM warmup flag/round mismatch")
+        for key in ("gpu_seconds", "wall_seconds", "encode_seconds"):
+            _finite_number(record.get(key), f"dense_gemm {key}", positive=round_id >= 0)
+        bucket = by_round.setdefault(round_id, {})
+        require(position not in bucket, "Duplicate dense-GEMM timing position")
+        bucket[position] = record
+
+    for round_id in (-2, -1, *range(rounds)):
+        bucket = by_round.get(round_id)
+        require(bucket is not None and set(bucket) == set(range(len(GEMM_ARMS) * 2)),
+                f"Incomplete dense-GEMM timing round: {round_id}")
+        actual_order = tuple(bucket[position]["variant"]
+                             for position in range(len(GEMM_ARMS) * 2))
+        require(actual_order == _gemm_order(round_id, rounds, reverse_first),
+                f"Unexpected dense-GEMM arm order: {round_id}: {actual_order}")
+        require(set(actual_order) == set(GEMM_ARMS) and
+                all(actual_order.count(arm) == 2 for arm in GEMM_ARMS),
+                f"Dense-GEMM round does not contain two samples per arm: {round_id}")
+
+    measured = [record for round_id, bucket in by_round.items() if round_id >= 0
+                for record in bucket.values()]
+    arm_summaries = {
+        arm: {metric: summary([record[metric] * 1000 for record in measured
+                               if record["variant"] == arm])
+              for metric in ("gpu_seconds", "wall_seconds", "encode_seconds")}
+        for arm in GEMM_ARMS
+    }
+    for arm in GEMM_ARMS:
+        require(arm_summaries[arm]["gpu_seconds"]["count"] == rounds * 2,
+                f"Dense-GEMM arm does not have two samples per round: {arm}")
+
+    paired = {}
+    for control_arm, label in (("dense_native_legacy", "candidate_over_legacy"),
+                               ("dense_mps", "candidate_over_mps")):
+        round_details = []
+        for round_id in range(rounds):
+            bucket = by_round[round_id]
+            samples_by_arm = {
+                arm: [bucket[position]["gpu_seconds"] for position in range(6)
+                      if bucket[position]["variant"] == arm]
+                for arm in GEMM_ARMS
+            }
+            require(all(len(samples) == 2 for samples in samples_by_arm.values()),
+                    f"Dense-GEMM paired round has incomplete arm samples: {round_id}")
+            candidate_mean = statistics.mean(samples_by_arm["dense_native_candidate"])
+            control_mean = statistics.mean(samples_by_arm[control_arm])
+            order = [bucket[position]["variant"] for position in range(6)]
+            direction = "reverse" if ((round_id >= rounds // 2) != reverse_first) else "forward"
+            round_details.append({
+                "round": round_id,
+                "half": "first" if round_id < rounds // 2 else "second",
+                "rotation": round_id % len(GEMM_ARMS),
+                "direction": direction,
+                "order": order,
+                "candidate_mean_gpu_seconds": candidate_mean,
+                "control_arm": control_arm,
+                "control_mean_gpu_seconds": control_mean,
+                "candidate_over_control_gpu_ratio": candidate_mean / control_mean,
+            })
+        ratios = [item["candidate_over_control_gpu_ratio"] for item in round_details]
+        by_half = {
+            half: summary([item["candidate_over_control_gpu_ratio"]
+                           for item in round_details if item["half"] == half])
+            for half in ("first", "second")
+        }
+        by_rotation = {
+            str(rotation): summary([item["candidate_over_control_gpu_ratio"]
+                                    for item in round_details
+                                    if item["rotation"] == rotation])
+            for rotation in range(len(GEMM_ARMS))
+        }
+        order_groups = {}
+        for item in round_details:
+            key = ">".join(item["order"])
+            order_groups.setdefault(key, []).append(item["candidate_over_control_gpu_ratio"])
+        require(len(order_groups) == 6,
+                "Dense-GEMM schedule did not exercise all six rotation/direction orders")
+        by_order = {order: summary(values) for order, values in sorted(order_groups.items())}
+        paired[label] = {
+            "candidate_over_control_gpu_ratio": {
+                "all_rounds": summary(ratios),
+                "by_half": by_half,
+                "by_rotation": by_rotation,
+                "by_order": by_order,
+                "rounds": round_details,
+            },
+        }
+
+    position_counts = {
+        arm: {str(position): sum(record["variant"] == arm and record["position"] == position
+                                 for record in measured)
+              for position in range(len(GEMM_ARMS) * 2)}
+        for arm in GEMM_ARMS
+    }
+    return {
+        "dense_gemm": {
+            "arms": arm_summaries,
+            "paired_candidate_over_legacy_and_mps_gpu": paired,
+            "measured_position_counts_by_arm": position_counts,
+            "speed_winner_selected": False,
+        },
+    }
+
+
 def _validate_fused_timing_records(records, setup: dict, rounds: int,
                                    reverse_first: bool) -> dict:
     require(rounds in (16, 32), "Unsupported measured-round count")
@@ -389,8 +601,12 @@ def _validate_fused_timing_records(records, setup: dict, rounds: int,
 
 def expected_probe_record_count(timing_count: int,
                                 block_validation_comparison: bool | None = None,
-                                fused_comparison: bool | None = None) -> int:
-    """Count setup, three pack records, BF16 control, parity, timing and control."""
+                                fused_comparison: bool | None = None,
+                                gemm_comparison: bool | None = None) -> int:
+    """Count setup, validation, timing and control records for the selected mode."""
+    if gemm_comparison is None:
+        gemm_comparison = timing_count == (16 + 2) * len(GEMM_ARMS) * 2
+    require(type(gemm_comparison) is bool, "Invalid dense-GEMM comparison flag")
     if fused_comparison is None:
         fused_counts = {
             (rounds + 2) * len(FUSED_ARMS) + 4 + rounds * 4: rounds
@@ -401,8 +617,13 @@ def expected_probe_record_count(timing_count: int,
         else:
             fused_comparison = False
     require(type(fused_comparison) is bool, "Invalid fused comparison flag")
-    require(not (fused_comparison and block_validation_comparison is True),
-            "Fused and block-validation comparisons are mutually exclusive")
+    require(not ((fused_comparison and block_validation_comparison is True) or
+                 (gemm_comparison and (fused_comparison or block_validation_comparison is True))),
+            "Dense-GEMM, fused and block-validation comparisons are mutually exclusive")
+    if gemm_comparison:
+        require(timing_count == (16 + 2) * len(GEMM_ARMS) * 2,
+                "Unexpected dense-GEMM timing record count")
+        return 1 + 2 + timing_count + 1
     if fused_comparison:
         require(timing_count in {
             (rounds + 2) * len(FUSED_ARMS) + 4 + rounds * 4
@@ -472,8 +693,10 @@ def validate_pack_records(records) -> list[dict]:
 
 def validate_probe_command(command, reverse_first, setup,
                            intent_block_validation_comparison=None,
-                           intent_fused_comparison=None) -> tuple[Path, Path, int, bool]:
-    require(isinstance(command, list) and 3 <= len(command) <= 5,
+                           intent_fused_comparison=None,
+                           intent_gemm_comparison=None,
+                           intent_gemm_variant=None) -> tuple[Path, Path, int, bool]:
+    require(isinstance(command, list) and 3 <= len(command) <= 6,
             "Unexpected probe command")
     binary = Path(command[0])
     require(binary.is_absolute() and binary.name.startswith("probe-"),
@@ -491,12 +714,15 @@ def validate_probe_command(command, reverse_first, setup,
     rounds = int(rounds_text)
     setup_comparison = setup.get("block_validation_comparison", False)
     setup_fused = setup.get("fused_comparison", False)
+    setup_gemm = setup.get("gemm_comparison", False)
     require(type(setup_comparison) is bool,
             "Invalid block-validation comparison setup flag")
     require(type(setup_fused) is bool,
             "Invalid fused comparison setup flag")
-    require(not (setup_comparison and setup_fused),
-            "Fused and block-validation comparisons are mutually exclusive")
+    require(type(setup_gemm) is bool,
+            "Invalid dense-GEMM comparison setup flag")
+    require(sum((setup_comparison, setup_fused, setup_gemm)) <= 1,
+            "Dense-GEMM, fused and block-validation comparisons are mutually exclusive")
     if intent_block_validation_comparison is None:
         intent_comparison = setup_comparison
     else:
@@ -514,12 +740,45 @@ def validate_probe_command(command, reverse_first, setup,
     require(intent_fused is setup_fused,
             "fused comparison flag differs between intent and setup")
 
-    if setup_fused:
-        require(len(command) in (4, 5) and command[3] == "--compare-fused",
-                "Probe command fused comparison flag disagrees with setup/intent")
-        expected_reverse = len(command) == 5
+    if intent_gemm_comparison is None:
+        intent_gemm = setup_gemm
+    else:
+        require(type(intent_gemm_comparison) is bool,
+                "Invalid dense-GEMM comparison intent flag")
+        intent_gemm = intent_gemm_comparison
+    require(intent_gemm is setup_gemm,
+            "dense-GEMM comparison flag differs between intent and setup")
+
+    setup_variant = setup.get("gemm_variant", "legacy")
+    intent_variant = setup_variant if intent_gemm_variant is None else intent_gemm_variant
+    require(isinstance(setup_variant, str) and setup_variant in GEMM_VARIANTS and
+            isinstance(intent_variant, str) and intent_variant == setup_variant,
+            "GEMM variant differs between intent and setup")
+    if setup_gemm:
+        require(setup_variant in GEMM_CANDIDATE_VARIANTS,
+                "Dense-GEMM comparison must select an admitted candidate variant")
+    if not (setup_fused or setup_gemm):
+        require(setup_variant == "legacy",
+                "A non-GEMM probe cannot select a non-legacy GEMM variant")
+
+    if setup_gemm:
+        expected_flags = ["--compare-gemm", f"--gemm-variant={setup_variant}"]
+        require(command[3:3 + len(expected_flags)] == expected_flags,
+                "Probe command dense-GEMM comparison/variant flags disagree with setup/intent")
+        expected_reverse = len(command) == 3 + len(expected_flags) + 1
         if expected_reverse:
-            require(command[4] == "--reverse-first", "Unexpected probe command flag order")
+            require(command[-1] == "--reverse-first", "Unexpected probe command flag order")
+        require(len(command) == 3 + len(expected_flags) + int(expected_reverse),
+                "Unexpected dense-GEMM probe command flags")
+    elif setup_fused:
+        expected_flags = ["--compare-fused", f"--gemm-variant={setup_variant}"]
+        require(command[3:3 + len(expected_flags)] == expected_flags,
+                "Probe command fused comparison/variant flags disagree with setup/intent")
+        expected_reverse = len(command) == 3 + len(expected_flags) + 1
+        if expected_reverse:
+            require(command[-1] == "--reverse-first", "Unexpected probe command flag order")
+        require(len(command) == 3 + len(expected_flags) + int(expected_reverse),
+                "Unexpected fused probe command flags")
     elif setup_comparison:
         require(len(command) in (4, 5) and command[3] == "--compare-block-validation",
                 "Probe command block-validation comparison flag disagrees with setup/intent")
@@ -542,11 +801,19 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
     require(rounds in (16, 32), "Unsupported measured-round count")
     require(type(reverse_first) is bool, "Invalid reverse-first flag")
     fused = setup.get("fused_comparison", False)
+    gemm = setup.get("gemm_comparison", False)
     require(type(fused) is bool, "Invalid fused comparison timing flag")
+    require(type(gemm) is bool, "Invalid dense-GEMM comparison timing flag")
+    require(not (fused and gemm),
+            "Dense-GEMM and fused comparisons are mutually exclusive")
     if fused:
         require(setup.get("block_validation_comparison", False) is False,
                 "Fused and block-validation comparisons are mutually exclusive")
         return _validate_fused_timing_records(records, setup, rounds, reverse_first)
+    if gemm:
+        require(setup.get("block_validation_comparison", False) is False,
+                "Dense-GEMM and block-validation comparisons are mutually exclusive")
+        return _validate_gemm_timing_records(records, setup, rounds, reverse_first)
     rows = setup["rows"]
     comparison = setup.get("block_validation_comparison", False)
     require(type(comparison) is bool, "Invalid block-validation comparison setup flag")
@@ -1021,7 +1288,64 @@ def _validate_reference_quality(variant: dict, arm: str, rows: int) -> dict:
             "projection_vs_bf16": projection}
 
 
-def _validate_file_map(files, *, check_bytes: bool = True) -> dict:
+def _repo_relative_path(name: str | Path, source_root: Path) -> Path | None:
+    """Map a pinned checkout path into its source snapshot namespace.
+
+    Resolve the checkout and containing directories so equivalent macOS paths
+    such as /var/... and /private/var/... compare consistently. Keep the final
+    filename lexical: a changed live source symlink must not redirect historical
+    validation away from the archived path named by the receipt.
+    """
+    path = Path(name)
+    if not path.is_absolute():
+        return None
+    try:
+        checkout = source_root.resolve()
+        containing_directory = path.parent.resolve()
+        return (containing_directory / path.name).relative_to(checkout)
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _archived_source_matches(files: dict, source_archive: Path,
+                             source_root: Path = ROOT) -> bool:
+    """Check whether an archived source tree contains every pinned repo file."""
+    archive_root = source_archive.resolve()
+    sources = [(relative, digest) for name, digest in files.items()
+               if (relative := _repo_relative_path(name, source_root)) is not None]
+    if not sources or not archive_root.is_dir():
+        return False
+    for relative, digest in sources:
+        archived = archive_root / relative
+        try:
+            resolved = archived.resolve()
+        except (OSError, RuntimeError):
+            return False
+        if (not resolved.is_relative_to(archive_root) or not resolved.is_file() or
+                sha(resolved) != digest):
+            return False
+    return True
+
+
+def _matching_source_archive(base: Path, files: dict,
+                             source_root: Path = ROOT) -> Path | None:
+    """Find a captured build source tree matching all repo pins in a receipt."""
+    has_repo_sources = any(_repo_relative_path(name, source_root) is not None
+                           for name in files)
+    if not has_repo_sources:
+        return None
+    base_root = base.resolve()
+    matches = [archive for archive in sorted(base.glob("sources-*"))
+               if archive.is_dir() and not archive.is_symlink() and
+               archive.resolve().is_relative_to(base_root) and
+               _archived_source_matches(files, archive, source_root)]
+    require(bool(matches), "No archived build source snapshot matches all repository pins")
+    return matches[0]
+
+
+def _validate_file_map(files, *, check_bytes: bool = True,
+                       source_archive: Path | None = None,
+                       source_root: Path = ROOT) -> dict:
     require(isinstance(files, dict) and files, "Missing receipt file map")
     normalized = {}
     for name, digest in files.items():
@@ -1031,7 +1355,21 @@ def _validate_file_map(files, *, check_bytes: bool = True) -> dict:
                 f"Invalid SHA-256 pin: {name}")
         path = Path(name)
         if check_bytes:
-            require(path.is_file() and sha(path) == digest, f"Pinned file changed or missing: {name}")
+            relative = _repo_relative_path(path, source_root)
+            if source_archive is not None and relative is not None:
+                require(not source_archive.is_symlink(), "Source snapshot directory must not be a symlink")
+                archive_root = source_archive.resolve()
+                archived = archive_root / relative
+                try:
+                    resolved = archived.resolve()
+                except (OSError, RuntimeError):
+                    resolved = Path()
+                require(resolved.is_relative_to(archive_root) and resolved.is_file() and
+                        sha(resolved) == digest,
+                        f"Archived source pin changed or missing: {name}")
+            else:
+                require(path.is_file() and sha(path) == digest,
+                        f"Pinned file changed or missing: {name}")
         normalized[name] = digest
     return normalized
 
@@ -1039,13 +1377,15 @@ def _validate_file_map(files, *, check_bytes: bool = True) -> dict:
 def validate_source_binding(files: dict, completion_sources: dict, root: Path = ROOT) -> None:
     """Require receipt source hashes to equal the repository subset of intent pins."""
     expected = {name: digest for name, digest in files.items()
-                if Path(name).is_relative_to(root)}
+                if _repo_relative_path(name, root) is not None}
     require(isinstance(completion_sources, dict) and completion_sources == expected,
             "Completion source map differs from the intent file pins")
 
 
 def _linked_receipt(base: Path, receipt_path: Path, intent_path: Path,
-                    mode: str, tag: str) -> tuple[dict, dict]:
+                    mode: str, tag: str, *,
+                    source_archive: Path | None = None,
+                    source_root: Path = ROOT) -> tuple[dict, dict]:
     require(receipt_path.is_file() and intent_path.is_file(),
             f"Missing linked {mode} receipt or intent")
     completion = json.loads(receipt_path.read_text())
@@ -1059,8 +1399,17 @@ def _linked_receipt(base: Path, receipt_path: Path, intent_path: Path,
             f"Unexpected linked {mode} intent")
     require(completion.get("intent_sha256") == sha(intent_path),
             f"Linked {mode} intent digest mismatch")
-    files = _validate_file_map(intent.get("files"))
-    validate_source_binding(files, completion.get("sources"))
+    intent_files = intent.get("files")
+    require(isinstance(intent_files, dict), f"Missing linked {mode} file map")
+    files = _validate_file_map(intent_files, check_bytes=False, source_root=source_root)
+    validate_source_binding(files, completion.get("sources"), source_root)
+    if source_archive is None:
+        if mode == "build":
+            source_archive = base / f"sources-{tag}"
+        elif mode == "oracle":
+            source_archive = _matching_source_archive(base, files, source_root)
+    files = _validate_file_map(files, source_archive=source_archive,
+                               source_root=source_root)
     return completion, intent
 
 
@@ -1074,23 +1423,35 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     require(intent.get("schema") == "wan_q4k_delta_intent_v1" and
             intent.get("mode") == "probe" and intent.get("tag") == tag,
             "Probe intent mode or tag mismatch")
-    files = _validate_file_map(intent.get("files"))
+    files = _validate_file_map(intent.get("files"), check_bytes=False)
     validate_source_binding(files, receipt.get("sources"))
     command = intent.get("command")
     binary, fixture, rounds, reverse_first = validate_probe_command(
         command, intent.get("reverse_first"), setup,
         intent.get("block_validation_comparison", False),
-        intent.get("fused_comparison", False))
+        intent.get("fused_comparison", False),
+        intent.get("gemm_comparison", False),
+        intent.get("gemm_variant", "legacy"))
+    build_tag = binary.name.removeprefix("probe-")
+    source_archive = base / f"sources-{build_tag}"
+    files = _validate_file_map(intent.get("files"), source_archive=source_archive)
     comparison = setup.get("block_validation_comparison", False)
     fused = setup.get("fused_comparison", False)
-    require(type(comparison) is bool and type(fused) is bool and not (comparison and fused),
+    gemm = setup.get("gemm_comparison", False)
+    require(type(comparison) is bool and type(fused) is bool and type(gemm) is bool and
+            sum((comparison, fused, gemm)) <= 1,
             "Invalid or conflicting comparison mode setup")
-    execution_arms = FUSED_ARMS if fused else COMPARISON_ARMS if comparison else ARMS
+    gemm_variant = setup.get("gemm_variant", "legacy")
+    require(isinstance(gemm_variant, str) and gemm_variant in GEMM_VARIANTS,
+            "Unknown native GEMM variant in setup")
+    variant_config = GEMM_VARIANTS[gemm_variant]
+    execution_arms = (GEMM_ARMS if gemm else FUSED_ARMS if fused else
+                      COMPARISON_ARMS if comparison else ARMS)
     expected_formats = {arm: arm for arm in ARMS}
     if comparison:
         expected_formats.update({f"{arm}_block": arm for arm in ARMS})
     if fused:
-        expected_formats = {arm: arm.removesuffix("_fused") for arm in FUSED_ARMS}
+        expected_formats.update({arm: arm.removesuffix("_fused") for arm in FUSED_ARMS})
         require("execution_arms" in setup and "format_by_arm" in setup,
                 "Fused comparison setup is missing execution-arm mapping")
         stage_bytes = WEIGHT_COUNT * 4
@@ -1103,15 +1464,75 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
                 setup["explicit_buffer_bytes_during_pack"] ==
                 setup["retained_harness_bytes_excluding_stage"] + stage_bytes and
                 setup.get("q4_k_fused_dummy_sidecar_bytes") == 4 and
-                setup.get("candidate_pipeline") == "video_q4k_delta_linear_f32" and
+                setup.get("candidate_pipeline") == variant_config["linear_pipeline"] and
                 type(setup.get("candidate_static_threadgroup_memory_bytes")) is int and
-                0 <= setup["candidate_static_threadgroup_memory_bytes"] <= 32 * 1024,
+                0 <= setup["candidate_static_threadgroup_memory_bytes"] <= 32 * 1024 and
+                type(setup.get("dense_static_threadgroup_memory_bytes")) is int and
+                0 <= setup["dense_static_threadgroup_memory_bytes"] <= 32 * 1024,
                 "Fused candidate stage, control stage, dummy sidecar or pipeline accounting changed")
+        if gemm_variant == GEMM_TK64_VARIANT:
+            require(setup.get("candidate_static_threadgroup_memory_bytes") ==
+                    variant_config["linear_static_threadgroup_memory_bytes"] and
+                    setup.get("dense_static_threadgroup_memory_bytes") ==
+                    variant_config["dense_static_threadgroup_memory_bytes"],
+                    "TK64 fused/dense actual threadgroup memory differs from selected pipeline configuration")
         require(setup.get("dense_mode_execution_arms") == ["dense_native", "dense_mps"] and
                 setup.get("dense_mode_weight_format") == "q4_k" and
-                setup.get("dense_mode_internal_tile_shape") == {"tm": 64, "tn": 32, "tk": 32},
-                "Dense same-format control mapping or TM64/TN32/TK32 tile shape changed")
-    if comparison or fused:
+                setup.get("dense_mode_internal_tile_shape") == variant_config["tile_shape"],
+                "Dense same-format control mapping or selected tile shape changed")
+    if gemm:
+        expected_formats.update({arm: "q4_k" for arm in GEMM_ARMS})
+    if fused or gemm:
+        require(setup.get("gemm_variant_name") == gemm_variant and
+                setup.get("gemm_tile_shape") == variant_config["tile_shape"] and
+                setup.get("gemm_threadgroup_threads") == variant_config["threads"],
+                "Selected GEMM variant geometry differs from setup metadata")
+    if gemm:
+        expected_shape = variant_config["tile_shape"]
+        require(gemm_variant in GEMM_CANDIDATE_VARIANTS and
+                setup.get("gemm_variant_name") == gemm_variant and
+                setup.get("gemm_tile_shape") == expected_shape and
+                setup.get("gemm_threadgroup_threads") == variant_config["threads"],
+                "Dense-GEMM selector/configuration differs from the admitted candidate")
+        require(setup.get("dense_mode_execution_arms") == list(GEMM_ARMS) and
+                setup.get("dense_mode_weight_format") == "q4_k" and
+                setup.get("dense_mode_internal_tile_shape") == expected_shape,
+                "Dense-GEMM format or geometry mapping changed")
+        candidate_tgm = setup.get("dense_static_threadgroup_memory_bytes")
+        legacy_tgm = setup.get("gemm_legacy_dense_static_threadgroup_memory_bytes")
+        named_candidate_tgm = setup.get("gemm_candidate_dense_static_threadgroup_memory_bytes")
+        require(all(type(value) is int and 0 <= value <= 32 * 1024
+                    for value in (candidate_tgm, legacy_tgm, named_candidate_tgm)) and
+                candidate_tgm == named_candidate_tgm,
+                "Dense-GEMM actual legacy/candidate threadgroup memory accounting changed")
+        require(candidate_tgm == variant_config["dense_static_threadgroup_memory_bytes"] and
+                legacy_tgm == GEMM_VARIANTS["legacy"]["dense_static_threadgroup_memory_bytes"],
+                "Dense-GEMM actual threadgroup memory differs from selected pipeline configuration")
+        legacy_pipeline = setup.get("gemm_legacy_dense_pipeline")
+        candidate_pipeline = setup.get("gemm_candidate_dense_pipeline")
+        if gemm_variant in GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS:
+            require(legacy_pipeline == GEMM_VARIANTS["legacy"]["dense_pipeline"] and
+                    candidate_pipeline == variant_config["dense_pipeline"],
+                    "Dense-GEMM legacy/candidate pipeline identity changed")
+        else:
+            # The v1 B128 screening receipts predate explicit pipeline-name fields.
+            # Their exact source archive still pins the old dispatch; accept those
+            # receipts without names, but validate both fields when present.
+            require((legacy_pipeline is None and candidate_pipeline is None) or
+                    (legacy_pipeline == GEMM_VARIANTS["legacy"]["dense_pipeline"] and
+                     candidate_pipeline == variant_config["dense_pipeline"]),
+                    "Dense-GEMM legacy/candidate pipeline identity changed")
+        require(setup.get("candidate_pipeline") is None and
+                setup.get("candidate_static_threadgroup_memory_bytes") is None,
+                "Dense-only GEMM receipt unexpectedly reports a fused pipeline")
+        require(setup.get("gemm_schedule") ==
+                "six_sample_palindrome_opposite_base_direction_by_half_v1" and
+                setup.get("gemm_schedule_directions") == {
+                    "first_half": "reverse" if reverse_first else "forward",
+                    "second_half": "forward" if reverse_first else "reverse",
+                },
+                "Dense-GEMM schedule or phase declaration changed")
+    if comparison or fused or gemm:
         require("execution_arms" in setup and "format_by_arm" in setup,
                 "Comparison setup is missing execution-arm mapping")
     if "execution_arms" in setup:
@@ -1137,7 +1558,8 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     build_intent_path = base / f"build-{build_tag}.intent.json"
     _pin_for(files, build_receipt_path)
     build_receipt, build_intent = _linked_receipt(
-        base, build_receipt_path, build_intent_path, "build", build_tag)
+        base, build_receipt_path, build_intent_path, "build", build_tag,
+        source_archive=source_archive)
     build_command = build_intent.get("command")
     require(isinstance(build_command, list) and "-o" in build_command,
             "Malformed build command")
@@ -1200,6 +1622,7 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     return {"build_tag": build_tag, "fixture_tag": fixture_tag, "rounds": rounds,
             "reverse_first": reverse_first, "manifest_sha256": manifest_sha,
             "block_validation_comparison": comparison, "fused_comparison": fused,
+            "gemm_comparison": gemm, "gemm_variant": gemm_variant,
             "storage": reference["storage"],
             "reference_quality": reference["quality"],
             "binary_sha256": receipt["binary_sha256"],
@@ -1220,7 +1643,8 @@ def read_probe(base: Path, tag: str):
     allowed_schemas = {
         "wan_q4k_delta_setup_v1", "wan_q4k_delta_packing_v1", "wan_q4k_delta_bf16_control_v1",
         "wan_q4k_delta_parity_v1", "wan_q4k_delta_dense_parity_v1",
-        "wan_q4k_delta_timing_v1", "wan_q4k_delta_controls_v1",
+        "wan_q4k_delta_gemm_parity_v1", "wan_q4k_delta_timing_v1",
+        "wan_q4k_delta_controls_v1",
     }
     require(all(isinstance(record, dict) and record.get("schema") in allowed_schemas for record in records),
             "Unknown or malformed probe output record")
@@ -1231,15 +1655,28 @@ def read_probe(base: Path, tag: str):
     rows, din, dout = setup["rows"], setup["din"], setup["dout"]
     comparison = setup.get("block_validation_comparison", False)
     fused = setup.get("fused_comparison", False)
-    require(type(comparison) is bool and type(fused) is bool and not (comparison and fused),
+    gemm = setup.get("gemm_comparison", False)
+    require(type(comparison) is bool and type(fused) is bool and type(gemm) is bool and
+            sum((comparison, fused, gemm)) <= 1,
             "Invalid or conflicting probe comparison modes")
-    execution_arms = FUSED_ARMS if fused else COMPARISON_ARMS if comparison else ARMS
+    execution_arms = (GEMM_ARMS if gemm else FUSED_ARMS if fused else
+                      COMPARISON_ARMS if comparison else ARMS)
     require(setup.get("tolerance") == "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
             "Unexpected numerical acceptance gate")
 
     parity = [record for record in records if record["schema"] == "wan_q4k_delta_parity_v1"]
-    validate_parity(parity, rows, din, dout, execution_arms,
-                    require_bit_exact=comparison, require_fused_staged=fused)
+    if gemm:
+        require(not parity, "Dense-GEMM mode must not run the fused full-arm parity set")
+        gemm_parity = validate_gemm_parity(
+            [record for record in records
+             if record["schema"] == "wan_q4k_delta_gemm_parity_v1"], rows, din, dout)
+    else:
+        require(not [record for record in records
+                     if record["schema"] == "wan_q4k_delta_gemm_parity_v1"],
+                "Unexpected dense-GEMM parity records outside GEMM comparison")
+        gemm_parity = None
+        validate_parity(parity, rows, din, dout, execution_arms,
+                        require_bit_exact=comparison, require_fused_staged=fused)
     dense_parity_records = [record for record in records
                             if record["schema"] == "wan_q4k_delta_dense_parity_v1"]
     if fused:
@@ -1249,12 +1686,20 @@ def read_probe(base: Path, tag: str):
                 "Unexpected dense-mode parity records outside fused comparison")
         dense_parity = None
     bf16 = [record for record in records if record["schema"] == "wan_q4k_delta_bf16_control_v1"]
-    require(len(bf16) == 1, "Missing or duplicated BF16 control")
-    validate_metric(bf16[0].get("decoder"), din * dout, "BF16 decoder control")
-    validate_metric(bf16[0].get("projection"), rows * dout, "BF16 projection control")
+    if gemm:
+        require(not bf16, "Dense-GEMM screening must not run the unrelated BF16 control")
+    else:
+        require(len(bf16) == 1, "Missing or duplicated BF16 control")
+        validate_metric(bf16[0].get("decoder"), din * dout, "BF16 decoder control")
+        validate_metric(bf16[0].get("projection"), rows * dout, "BF16 projection control")
 
-    packs = validate_pack_records(
-        [record for record in records if record["schema"] == "wan_q4k_delta_packing_v1"])
+    pack_records = [record for record in records
+                    if record["schema"] == "wan_q4k_delta_packing_v1"]
+    if gemm:
+        require(not pack_records, "Dense-GEMM screening must not pack the delta arms")
+        packs = []
+    else:
+        packs = validate_pack_records(pack_records)
 
     timings = [record for record in records if record["schema"] == "wan_q4k_delta_timing_v1"]
     timings_ms = validate_timing_records(timings, setup, lineage["rounds"], lineage["reverse_first"])
@@ -1263,41 +1708,44 @@ def read_probe(base: Path, tag: str):
     require(len(controls) == 1, "Missing or duplicated corruption control")
     validate_corruption_control(controls[0], rows * dout, fused_comparison=fused)
 
-    require(len(records) == expected_probe_record_count(len(timings), comparison, fused),
+    require(len(records) == expected_probe_record_count(
+        len(timings), comparison, fused, gemm),
             "Missing or extra setup, pack, parity, timing or control records")
     guards = [json.loads(line) for line in paths["guard.jsonl"].read_text().splitlines()]
     memory = validate_guard(guards, intent)
     loss = {}
-    before = {record["variant"]: record for record in parity if record["phase"] == "before_timing"}
-    after = {record["variant"]: record for record in parity if record["phase"] == "after_timing"}
-    formats = setup.get("format_by_arm", {arm: arm for arm in ARMS})
-    for arm in execution_arms:
-        format_arm = formats[arm]
-        native_quality = {}
-        for phase, record in (("before_timing", before[arm]), ("after_timing", after[arm])):
-            row_metrics = record["lossy_vs_bf16_per_source_row"]
-            full_weight = record["lossy_weight_vs_bf16"]
-            native_quality[phase] = {
-                "full_weight_vs_bf16": {
-                    key: full_weight[key] for key in (
-                        "compared_values", "bit_differences", "tolerance_violations", "nonfinite",
-                        "max_abs", "rmse", "relative_l2", "cosine",
-                    )
-                },
-                "per_source_row_relative_l2_vs_bf16": [metric["relative_l2"]
-                                                        for metric in row_metrics],
+    if not gemm:
+        before = {record["variant"]: record for record in parity if record["phase"] == "before_timing"}
+        after = {record["variant"]: record for record in parity if record["phase"] == "after_timing"}
+        formats = setup.get("format_by_arm", {arm: arm for arm in ARMS})
+        for arm in execution_arms:
+            format_arm = formats[arm]
+            native_quality = {}
+            for phase, record in (("before_timing", before[arm]), ("after_timing", after[arm])):
+                row_metrics = record["lossy_vs_bf16_per_source_row"]
+                full_weight = record["lossy_weight_vs_bf16"]
+                native_quality[phase] = {
+                    "full_weight_vs_bf16": {
+                        key: full_weight[key] for key in (
+                            "compared_values", "bit_differences", "tolerance_violations", "nonfinite",
+                            "max_abs", "rmse", "relative_l2", "cosine",
+                        )
+                    },
+                    "per_source_row_relative_l2_vs_bf16": [metric["relative_l2"]
+                                                            for metric in row_metrics],
+                }
+            loss[arm] = {
+                "native_gpu": native_quality,
+                "reference_cpu": lineage["reference_quality"][format_arm],
             }
-        loss[arm] = {
-            "native_gpu": native_quality,
-            "reference_cpu": lineage["reference_quality"][format_arm],
-        }
     return {"tag": tag, "completion_sha256": sha(paths["completion.json"]),
             "lineage": lineage, "setup": setup, "timings_ms": timings_ms,
             "dense_parity": dense_parity,
+            "gemm_parity": gemm_parity,
             "lossy_quality": loss, "packing": packs,
-            "all_decoder_projection_checks_bit_exact": all(
+            "all_decoder_projection_checks_bit_exact": (None if gemm else all(
                 record[metric]["bit_differences"] == 0
-                for record in parity for metric in ("decoder", "projection")),
+                for record in parity for metric in ("decoder", "projection"))),
             "memory": memory}
 
 

@@ -32633,3 +32633,50 @@ Refresh after source/toolchain/device/model/workload changes.
   loader change, then same-geometry packed tests. Refresh on source/dispatch,
   payload/sidecar/input/geometry, compiler/native object, OS/SDK/device,
   numerical-policy or schedule changes before consuming this evidence.
+
+## Wan native dense GEMM reuse and sparse-delta return (2026-10-23)
+
+- Three opt-in F32 GEMM schedules preserve four SIMD groups, ascending K8
+  accumulation, reconstruction/status semantics and legacy rollback.
+  B64/N32/K32 with fragment reuse and transposed shared B[N,K] reduces
+  paired M4480 native latency about 2% (281 -> 276 ms; ratios
+  0.98001x/0.97998x). MPS remains about 56 ms, 4.85540x/4.85572x faster.
+  M4 has no stable improvement. Wider M128 regresses about 33%, TK64 about
+  122%; reject those speed hypotheses within the measured scope.
+- Both B64 schedules return to complete Q4_K plus 0/1/4/8 F16-delta
+  execution. All packed paths lose to block-validated decode -> reused F32
+  stage -> MPS -> bias; TK64 K8 paired ratios are 18.57666x/19.00054x.
+  No global decoded-weight stage is bound by candidates, but the combined
+  harness retains the control's 270 MiB stage; no process-footprint saving
+  is established. Keep staged MPS and legacy defaults. Competitive exact
+  native F32 performance remains open.
+- DoD: guarded `spec dense-reuse-native-v3` passes 18 native examples;
+  `analysis-spec dense-reuse-analysis-v4` passes 28 tests. Fifteen guarded
+  `probe` runs cover dense M4/opposite M4480 orders across all selectors,
+  followed by packed M4/opposite M4480 orders for BT32/TK64. All 396 parity
+  metric groups have zero nonfinite values/violations at the unchanged
+  finite `2e-5 + 2e-5*abs(ref)` gate. M4480 outputs are bit-exact with
+  same-format upstream; M4 maximum tolerance ratio is 0.33294. All 2,244
+  timing samples retain one terminal wait and zero inter-op waits,
+  activation readbacks or tracked explicit encode-buffer allocations.
+- Sampled native peak footprint is 2.46875 GiB, minimum estimated
+  cache-aware headroom 15.34151 GiB, pressure-free at least 66%, swap growth
+  zero. Preserve 15% reserve/floor, 4 GiB cap, 64 MiB swap stop and deadlines;
+  opaque allocations and between-poll spikes remain guard limitations.
+  No full model/block/Studio/generation. M4480 repeats four non-video rows;
+  same-format parity does not establish BF16 quality or model-wide gains.
+- Commands, source/object ancestry limits and old-build archive checks are
+  in `docs/wan-native-gemm-reuse-benchmark.md`. Strict external summary
+  `evidence/wan-q4k-delta-20261023/summary-native-reuse-v2.json` SHA256:
+  `948b1fd8a76319b1603fd6268803b1f7c753c66676d7c14ebba72e238dec6ec0`.
+  Exact build-tag snapshots bind old timings; complete oracle subsets and
+  external fixture/object/binary bytes remain mandatory. The analyzer
+  rejects partial/mutated archives and retargeted live source symlinks.
+  Next falsifier: dense direct-device SIMD matrix loads with a separate
+  safe tail path before another packed return (not implemented/measured).
+  Refresh on source/dispatch, payload/sidecar/input/geometry, compiler/native
+  object, OS/SDK/device, numerical policy or schedule changes. Archived
+  timing evidence remains valid only for its captured bytes and scope.
+  Correlated Mini-Quad: ROBUST for bounded parity/failure controls, observed
+  guards and the two-process BT32 native gain; VULNERABLE for representative
+  quality, hardware-cause inference, model-wide benefits or MPS superiority.

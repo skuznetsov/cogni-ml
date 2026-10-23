@@ -8,7 +8,53 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest bounded result (2026-10-23):
+Latest completed bounded result (2026-10-23):
+[native F32 panel and fragment reuse, followed by Q4_K sparse-delta GEMM](wan-native-gemm-reuse-benchmark.md).
+The best opt-in candidate keeps M64/N32/K32 and four SIMD groups, reuses
+fragments, and stages B[N,K] for transposed SIMD loads. Full-size M4480
+GPU latency is about 281 -> 276 ms, with paired candidate/legacy ratios
+0.98001x/0.97998x in fresh opposite-order processes. MPS is about 56 ms,
+with paired native/MPS ratios 4.85540x/4.85572x. M4 has no stable gain.
+The larger M128 tile regresses about 33%; doubling K panel depth to 64
+regresses about 122%. These measurements reject wider-panel speed claims
+for the tested schedules, without identifying a hardware cause.
+
+Both B64 schedules return to complete Q4_K/0/1/4/8-delta execution with
+unchanged F32 reconstruction and ascending K8 arithmetic. Every packed
+variant is slower than block-validated decode -> reused F32 stage -> MPS
+-> bias. The TK64 K8 paired fused/control ratios are 18.57666x/19.00054x.
+The candidate binds zero global decoded-weight stage bytes, but the combined
+harness retains the control's 270 MiB stage: no process-RSS saving is measured.
+Keep legacy selection and staged MPS; no model or precision default changes.
+
+DoD passes: 18 final native Metal examples, 28 analyzer tests and 15
+source-bound GPU probes at M4 and M4480 through
+`examples/support/wan_q4k_delta_experiment.py`. All 396 parity metric groups
+have zero nonfinite values and tolerance violations; M4480 outputs are
+bit-exact with independent same-format upstream. M4 maximum tolerance ratio
+is 0.33294 under the unchanged finite gate. All 2,244 timing samples,
+including warmups, retain one terminal wait and zero inter-op waits,
+activation readbacks or tracked explicit encode-buffer allocations.
+Sampled native peak footprint is 2.46875 GiB, minimum estimated cache-aware
+headroom 15.34151 GiB, pressure-free at least 66%, swap growth zero. Preserve
+15% reserve/floor, 4 GiB cap, 64 MiB swap stop, deadlines and sampling limits.
+No full model/block/Studio/generation. Repeated four-row inputs establish
+bounded execution parity, not representative video quality or model-wide speed.
+
+The strict analyzer verifies old probe/build pins against each exact captured
+build archive, complete oracle source sets, and external fixture/object/binary
+bytes. Negative tests reject partial/mutated archives and live symlink
+redirection. Historical timings remain tied to archived v1/v2/v3 source;
+final tests do not relabel them as timings of final source. Commands, hashes,
+ancestry limits and refresh boundaries are in the report. Competitive exact
+native F32 GEMM remains open. Next falsifier: direct device SIMD matrix loads
+with a separate safe tail path, testing staging/barrier cost before another
+packed return. This next variant is not implemented or measured.
+Correlated Mini-Quad is ROBUST for bounded parity/failure controls, observed
+guards and the two-process native gain; VULNERABLE for representative
+quality, hardware-cause inference, model-wide benefits or MPS superiority.
+
+Previous bounded result (2026-10-23):
 [Q4_K sparse-delta GEMM without a global F32 stage](wan-q4k-fused-gemm-benchmark.md).
 Opt-in `Q4KDeltaLinear.linear` consumes packed weights directly with a
 64-by-32-by-32 shared-panel F32 GEMM and four SIMD groups. It retains separate

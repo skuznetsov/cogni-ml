@@ -2,42 +2,193 @@ require "../metal/dispatch"
 require "./metal_ops"
 
 module ML::Video::Q4KDeltaLinear
+  enum GemmVariant
+    Legacy
+    B128N32S4K32
+    B64N32S4K32BT
+    B64N32S4K64BT
+  end
+
   BLOCK_ELEMENTS               =   256
   Q4_K_BLOCK_BYTES             =   144
   STATUS_WORDS                 =     1
   STATUS_ERROR                 = 1_u32
   MAX_STATIC_THREADGROUP_BYTES = 32 * 1024
+  LEGACY_TILE_M                =  64
+  LEGACY_TILE_N                =  32
+  LEGACY_TILE_K                =  32
+  CANDIDATE_TILE_M             = 128
+  CANDIDATE_TILE_N             =  32
+  CANDIDATE_TILE_K             =  32
+  BT_CANDIDATE_TILE_M          =  64
+  BT_CANDIDATE_TILE_N          =  32
+  BT_CANDIDATE_TILE_K          =  32
+  BT_K64_CANDIDATE_TILE_M      =  64
+  BT_K64_CANDIDATE_TILE_N      =  32
+  BT_K64_CANDIDATE_TILE_K      =  64
+  GEMM_THREADS                 = 128
+
+  LEGACY_LINEAR_KERNEL           = "video_q4k_delta_linear_f32"
+  LEGACY_DENSE_KERNEL            = "video_q4k_delta_dense_linear_f32"
+  CANDIDATE_LINEAR_KERNEL        = "video_q4k_delta_linear_f32_candidate_b128n32_sg4_tk32"
+  CANDIDATE_DENSE_KERNEL         = "video_q4k_delta_dense_linear_f32_candidate_b128n32_sg4_tk32"
+  BT_CANDIDATE_LINEAR_KERNEL     = "video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk32_bt"
+  BT_CANDIDATE_DENSE_KERNEL      = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk32_bt"
+  BT_K64_CANDIDATE_LINEAR_KERNEL = "video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk64_bt"
+  BT_K64_CANDIDATE_DENSE_KERNEL  = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk64_bt"
 
   SOURCE = {{ read_file("#{__DIR__}/kernels/q4k_delta_linear.metal") }}
 
   @@linear_pipeline : ML::Metal::ComputePipeline?
   @@dense_pipeline : ML::Metal::ComputePipeline?
+  @@candidate_linear_pipeline : ML::Metal::ComputePipeline?
+  @@candidate_dense_pipeline : ML::Metal::ComputePipeline?
+  @@bt_candidate_linear_pipeline : ML::Metal::ComputePipeline?
+  @@bt_candidate_dense_pipeline : ML::Metal::ComputePipeline?
+  @@bt_k64_candidate_linear_pipeline : ML::Metal::ComputePipeline?
+  @@bt_k64_candidate_dense_pipeline : ML::Metal::ComputePipeline?
   @@decode_pipeline : ML::Metal::ComputePipeline?
 
   # Compile and validate reusable kernels during setup. Encode methods only
   # validate caller-owned storage, bind it, and append work to the open encoder.
   def self.prepare! : Nil
-    @@linear_pipeline ||= ML::Metal::PipelineCache.get("video_q4k_delta_linear_f32") do
-      ML::Metal::ComputePipeline.new("video_q4k_delta_linear_f32", SOURCE)
+    @@linear_pipeline ||= ML::Metal::PipelineCache.get(LEGACY_LINEAR_KERNEL) do
+      ML::Metal::ComputePipeline.new(LEGACY_LINEAR_KERNEL, SOURCE)
     end
-    @@dense_pipeline ||= ML::Metal::PipelineCache.get("video_q4k_delta_dense_linear_f32") do
-      ML::Metal::ComputePipeline.new("video_q4k_delta_dense_linear_f32", SOURCE)
+    @@dense_pipeline ||= ML::Metal::PipelineCache.get(LEGACY_DENSE_KERNEL) do
+      ML::Metal::ComputePipeline.new(LEGACY_DENSE_KERNEL, SOURCE)
+    end
+    @@candidate_linear_pipeline ||= ML::Metal::PipelineCache.get(CANDIDATE_LINEAR_KERNEL) do
+      ML::Metal::ComputePipeline.new(CANDIDATE_LINEAR_KERNEL, SOURCE)
+    end
+    @@candidate_dense_pipeline ||= ML::Metal::PipelineCache.get(CANDIDATE_DENSE_KERNEL) do
+      ML::Metal::ComputePipeline.new(CANDIDATE_DENSE_KERNEL, SOURCE)
+    end
+    @@bt_candidate_linear_pipeline ||= ML::Metal::PipelineCache.get(BT_CANDIDATE_LINEAR_KERNEL) do
+      ML::Metal::ComputePipeline.new(BT_CANDIDATE_LINEAR_KERNEL, SOURCE)
+    end
+    @@bt_candidate_dense_pipeline ||= ML::Metal::PipelineCache.get(BT_CANDIDATE_DENSE_KERNEL) do
+      ML::Metal::ComputePipeline.new(BT_CANDIDATE_DENSE_KERNEL, SOURCE)
+    end
+    @@bt_k64_candidate_linear_pipeline ||= ML::Metal::PipelineCache.get(BT_K64_CANDIDATE_LINEAR_KERNEL) do
+      ML::Metal::ComputePipeline.new(BT_K64_CANDIDATE_LINEAR_KERNEL, SOURCE)
+    end
+    @@bt_k64_candidate_dense_pipeline ||= ML::Metal::PipelineCache.get(BT_K64_CANDIDATE_DENSE_KERNEL) do
+      ML::Metal::ComputePipeline.new(BT_K64_CANDIDATE_DENSE_KERNEL, SOURCE)
     end
     @@decode_pipeline ||= ML::Metal::PipelineCache.get("video_q4k_delta_decode_probe") do
       ML::Metal::ComputePipeline.new("video_q4k_delta_decode_probe", SOURCE)
     end
     validate_gemm_pipeline!(@@linear_pipeline.not_nil!, "fused Q4_K")
     validate_gemm_pipeline!(@@dense_pipeline.not_nil!, "dense control")
+    validate_gemm_pipeline!(@@candidate_linear_pipeline.not_nil!, "candidate fused Q4_K")
+    validate_gemm_pipeline!(@@candidate_dense_pipeline.not_nil!, "candidate dense control")
+    validate_gemm_pipeline!(@@bt_candidate_linear_pipeline.not_nil!, "transposed-B candidate fused Q4_K")
+    validate_gemm_pipeline!(@@bt_candidate_dense_pipeline.not_nil!, "transposed-B candidate dense control")
+    validate_gemm_pipeline!(@@bt_k64_candidate_linear_pipeline.not_nil!, "TK64 transposed-B candidate fused Q4_K")
+    validate_gemm_pipeline!(@@bt_k64_candidate_dense_pipeline.not_nil!, "TK64 transposed-B candidate dense control")
   end
 
   # Expose setup-time pipeline metadata so harnesses can record the actual
   # compiled threadgroup footprint rather than a source-level estimate.
-  def self.linear_pipeline : ML::Metal::ComputePipeline
-    @@linear_pipeline || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
+  def self.linear_pipeline(variant : GemmVariant = GemmVariant::Legacy) : ML::Metal::ComputePipeline
+    selected = case variant
+               when GemmVariant::Legacy
+                 @@linear_pipeline
+               when GemmVariant::B128N32S4K32
+                 @@candidate_linear_pipeline
+               when GemmVariant::B64N32S4K32BT
+                 @@bt_candidate_linear_pipeline
+               when GemmVariant::B64N32S4K64BT
+                 @@bt_k64_candidate_linear_pipeline
+               end
+    selected || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
   end
 
-  def self.static_threadgroup_memory_bytes : Int64
-    linear_pipeline.static_threadgroup_memory_length
+  def self.dense_pipeline(variant : GemmVariant = GemmVariant::Legacy) : ML::Metal::ComputePipeline
+    selected = case variant
+               when GemmVariant::Legacy
+                 @@dense_pipeline
+               when GemmVariant::B128N32S4K32
+                 @@candidate_dense_pipeline
+               when GemmVariant::B64N32S4K32BT
+                 @@bt_candidate_dense_pipeline
+               when GemmVariant::B64N32S4K64BT
+                 @@bt_k64_candidate_dense_pipeline
+               end
+    selected || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
+  end
+
+  def self.variant_name(variant : GemmVariant = GemmVariant::Legacy) : String
+    case variant
+    when GemmVariant::Legacy
+      "legacy"
+    when GemmVariant::B128N32S4K32
+      "candidate-b128n32-sg4-tk32"
+    when GemmVariant::B64N32S4K32BT
+      "candidate-b64n32-sg4-tk32-bt"
+    when GemmVariant::B64N32S4K64BT
+      "candidate-b64n32-sg4-tk64-bt"
+    else
+      raise ArgumentError.new("Unsupported GEMM variant")
+    end
+  end
+
+  def self.tile_m(variant : GemmVariant = GemmVariant::Legacy) : Int32
+    case variant
+    when GemmVariant::Legacy
+      LEGACY_TILE_M
+    when GemmVariant::B128N32S4K32
+      CANDIDATE_TILE_M
+    when GemmVariant::B64N32S4K32BT
+      BT_CANDIDATE_TILE_M
+    when GemmVariant::B64N32S4K64BT
+      BT_K64_CANDIDATE_TILE_M
+    else
+      raise ArgumentError.new("Unsupported GEMM variant")
+    end
+  end
+
+  def self.tile_n(variant : GemmVariant = GemmVariant::Legacy) : Int32
+    case variant
+    when GemmVariant::Legacy
+      LEGACY_TILE_N
+    when GemmVariant::B128N32S4K32
+      CANDIDATE_TILE_N
+    when GemmVariant::B64N32S4K32BT
+      BT_CANDIDATE_TILE_N
+    when GemmVariant::B64N32S4K64BT
+      BT_K64_CANDIDATE_TILE_N
+    else
+      raise ArgumentError.new("Unsupported GEMM variant")
+    end
+  end
+
+  def self.tile_k(variant : GemmVariant = GemmVariant::Legacy) : Int32
+    case variant
+    when GemmVariant::Legacy
+      LEGACY_TILE_K
+    when GemmVariant::B128N32S4K32
+      CANDIDATE_TILE_K
+    when GemmVariant::B64N32S4K32BT
+      BT_CANDIDATE_TILE_K
+    when GemmVariant::B64N32S4K64BT
+      BT_K64_CANDIDATE_TILE_K
+    else
+      raise ArgumentError.new("Unsupported GEMM variant")
+    end
+  end
+
+  def self.threadgroup_threads(variant : GemmVariant = GemmVariant::Legacy) : Int32
+    GEMM_THREADS
+  end
+
+  def self.static_threadgroup_memory_bytes(variant : GemmVariant = GemmVariant::Legacy) : Int64
+    linear_pipeline(variant).static_threadgroup_memory_length
+  end
+
+  def self.dense_static_threadgroup_memory_bytes(variant : GemmVariant = GemmVariant::Legacy) : Int64
+    dense_pipeline(variant).static_threadgroup_memory_length
   end
 
   # Validate the positive-M/N, 256-multiple-K geometry and every element count
@@ -75,7 +226,8 @@ module ML::Video::Q4KDeltaLinear
                   sidecar : ML::MetalBuffer, bias : ML::MetalBuffer,
                   output : ML::MetalBuffer, status : ML::MetalBuffer,
                   rows : Int32, in_dim : Int32, out_dim : Int32,
-                  patches : Int32) : Nil
+                  patches : Int32,
+                  variant : GemmVariant = GemmVariant::Legacy) : Nil
     checked_geometry(rows, in_dim, out_dim)
     validate_patches!(patches)
     input_count = rows.to_i64 * in_dim
@@ -83,7 +235,7 @@ module ML::Video::Q4KDeltaLinear
     output_count = rows.to_i64 * out_dim
     payload_bytes = payload_bytes!(weight_count)
     deltas_bytes = sidecar_bytes(weight_count.to_i32, patches)
-    grid_x, grid_y = checked_dispatch_grid!(rows, out_dim)
+    grid_x, grid_y = checked_dispatch_grid!(rows, out_dim, variant)
 
     ML::Video::MetalOps.check(input, input_count)
     check_bytes!(payload, payload_bytes, "Q4_K payload")
@@ -93,7 +245,7 @@ module ML::Video::Q4KDeltaLinear
     check_status!(status)
     assert_all_disjoint!(input, payload, sidecar, bias, output, status)
 
-    selected = @@linear_pipeline || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before linear")
+    selected = linear_pipeline(variant)
     e.set_pipeline(selected)
     e.set_buffer(input, 0).set_buffer(payload, 1).set_buffer(sidecar, 2)
     e.set_buffer(bias, 3).set_buffer(output, 4, ML::Metal::BufferAccess::Write)
@@ -101,7 +253,7 @@ module ML::Video::Q4KDeltaLinear
     e.set_value(rows.to_u32, 6).set_value(in_dim.to_u32, 7)
     e.set_value(out_dim.to_u32, 8).set_value(patches.to_u32, 9)
     e.dispatch_threadgroups(
-      {grid_x, grid_y, 1}, {128, 1, 1})
+      {grid_x, grid_y, 1}, {threadgroup_threads(variant), 1, 1})
   end
 
   # Same shared-panel F32 GEMM and bias schedule as the fused path, reading a
@@ -109,26 +261,27 @@ module ML::Video::Q4KDeltaLinear
   def self.dense_linear(e : ML::Metal::ComputeEncoder,
                         input : ML::MetalBuffer, weight : ML::MetalBuffer,
                         bias : ML::MetalBuffer, output : ML::MetalBuffer,
-                        rows : Int32, in_dim : Int32, out_dim : Int32) : Nil
+                        rows : Int32, in_dim : Int32, out_dim : Int32,
+                        variant : GemmVariant = GemmVariant::Legacy) : Nil
     checked_geometry(rows, in_dim, out_dim)
     input_count = rows.to_i64 * in_dim
     weight_count = out_dim.to_i64 * in_dim
     output_count = rows.to_i64 * out_dim
-    grid_x, grid_y = checked_dispatch_grid!(rows, out_dim)
+    grid_x, grid_y = checked_dispatch_grid!(rows, out_dim, variant)
     ML::Video::MetalOps.check(input, input_count)
     ML::Video::MetalOps.check(weight, weight_count)
     ML::Video::MetalOps.check(bias, out_dim.to_i64)
     ML::Video::MetalOps.check(output, output_count)
     assert_all_disjoint!(input, weight, bias, output)
 
-    selected = @@dense_pipeline || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before dense_linear")
+    selected = dense_pipeline(variant)
     e.set_pipeline(selected)
     e.set_buffer(input, 0).set_buffer(weight, 1).set_buffer(bias, 2)
     e.set_buffer(output, 3, ML::Metal::BufferAccess::Write)
     e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5)
     e.set_value(out_dim.to_u32, 6)
     e.dispatch_threadgroups(
-      {grid_x, grid_y, 1}, {128, 1, 1})
+      {grid_x, grid_y, 1}, {threadgroup_threads(variant), 1, 1})
   end
 
   # Diagnostic decode only. This entry point and the fused GEMM call the same
@@ -246,9 +399,12 @@ module ML::Video::Q4KDeltaLinear
   end
 
   private def self.checked_dispatch_grid!(rows : Int32,
-                                          out_dim : Int32) : {Int32, Int32}
-    grid_x = (out_dim.to_i64 + 31_i64) // 32_i64
-    grid_y = (rows.to_i64 + 63_i64) // 64_i64
+                                          out_dim : Int32,
+                                          variant : GemmVariant) : {Int32, Int32}
+    columns = tile_n(variant).to_i64
+    row_tile = tile_m(variant).to_i64
+    grid_x = (out_dim.to_i64 + columns - 1_i64) // columns
+    grid_y = (rows.to_i64 + row_tile - 1_i64) // row_tile
     grid_count = checked_product!(grid_x, grid_y, "GEMM dispatch groups")
     unless grid_x > 0 && grid_y > 0 &&
            grid_x <= Int32::MAX && grid_y <= Int32::MAX &&

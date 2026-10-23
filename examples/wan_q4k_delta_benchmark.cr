@@ -14,18 +14,46 @@ fixture_dir = ""
 rounds = 0
 reverse_first = false
 compare_block_validation = false
+compare_gemm = false
 compare_fused = false
+gemm_variant_id = ""
+gemm_variant_selected = false
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
   p.on("--reverse-first", "Reverse the first warmup and paired order") { reverse_first = true }
   p.on("--rounds=N", "Balanced forward/reverse arm rotations") { |v| rounds = v.to_i }
   p.on("--compare-block-validation", "Pair per-value and per-block correction validation") { compare_block_validation = true }
+  p.on("--compare-gemm", "Compare legacy and candidate native dense GEMM against MPS only") { compare_gemm = true }
   p.on("--compare-fused", "Pair fused Q4_K delta projection against block-validated staged controls") { compare_fused = true }
+  p.on("--gemm-variant=ID", "Native GEMM geometry: legacy, candidate-b128n32-sg4-tk32, candidate-b64n32-sg4-tk32-bt, or candidate-b64n32-sg4-tk64-bt") do |v|
+    gemm_variant_id = v
+    gemm_variant_selected = true
+  end
 end
-raise ArgumentError.new("--compare-block-validation and --compare-fused are mutually exclusive") if compare_block_validation && compare_fused
+raise ArgumentError.new("Comparison modes are mutually exclusive") if
+  (compare_block_validation && compare_gemm) || (compare_block_validation && compare_fused) ||
+  (compare_gemm && compare_fused)
+raise ArgumentError.new("--gemm-variant requires --compare-gemm or --compare-fused") if
+  gemm_variant_selected && !compare_gemm && !compare_fused
+gemm_variant_id = compare_gemm ? "candidate-b64n32-sg4-tk32-bt" : "legacy" if gemm_variant_id.empty?
+raise ArgumentError.new("--compare-gemm requires a candidate variant") if
+  compare_gemm && gemm_variant_id == "legacy"
+gemm_variant = case gemm_variant_id
+               when "legacy"
+                 ML::Video::Q4KDeltaLinear::GemmVariant::Legacy
+               when "candidate-b128n32-sg4-tk32"
+                 ML::Video::Q4KDeltaLinear::GemmVariant::B128N32S4K32
+               when "candidate-b64n32-sg4-tk32-bt"
+                 ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4K32BT
+               when "candidate-b64n32-sg4-tk64-bt"
+                 ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4K64BT
+               else
+                 raise ArgumentError.new("Unknown GEMM variant: #{gemm_variant_id}")
+               end
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 rounds = 16 if rounds == 0
 raise ArgumentError.new("Invalid balanced round count") unless {16, 32}.includes?(rounds)
+raise ArgumentError.new("--compare-gemm uses exactly 16 measured rounds") if compare_gemm && rounds != 16
 manifest_path = File.join(fixture_dir, "manifest.json")
 manifest = JSON.parse(File.read(manifest_path))
 raise "Unsupported fixture" unless manifest["schema"].as_s == "wan_q4k_delta_reference_v1"
@@ -45,9 +73,11 @@ variants = ["q4_k", "q4_k_delta1", "q4_k_delta4", "q4_k_delta8"]
 execution_arms = variants.dup
 execution_arms.concat(variants.map { |name| "#{name}_block" }) if compare_block_validation
 execution_arms = variants.flat_map { |name| [name, "#{name}_fused"] } if compare_fused
+execution_arms = ["dense_native_legacy", "dense_native_candidate", "dense_mps"] if compare_gemm
 format_by_arm = variants.to_h { |name| {name, name} }
 variants.each { |name| format_by_arm["#{name}_block"] = name } if compare_block_validation
 variants.each { |name| format_by_arm["#{name}_fused"] = name } if compare_fused
+format_by_arm.merge!({"dense_native_legacy" => "q4_k", "dense_native_candidate" => "q4_k", "dense_mps" => "q4_k"}) if compare_gemm
 variant_manifest = manifest["variants"]
 raise "Unexpected fixture arm set" unless variant_manifest.as_h.keys.sort == variants.sort
 source_fixture = manifest["source_fixture"]
@@ -108,7 +138,7 @@ begin
   ML::Video::MetalLinearMPS.prepare!
   ML::Video::PackedWeightDecode.prepare!
   ML::Video::Q4KDeltaWeights.prepare!
-  ML::Video::Q4KDeltaLinear.prepare! if compare_fused
+  ML::Video::Q4KDeltaLinear.prepare! if compare_fused || compare_gemm
   tile = ML::Metal::ComputePipeline.new("affine_budget_tile", AFFINE_BUDGET_SOURCE)
   zero = ML::Metal::ComputePipeline.new("affine_budget_zero", AFFINE_BUDGET_SOURCE)
   compare = ML::Metal::ComputePipeline.new("affine_budget_compare", AFFINE_BUDGET_SOURCE)
@@ -155,10 +185,19 @@ begin
   staged_output = arena.alloc("staged_output", output_count) if compare_fused
   staged_metrics = arena.alloc("staged_metrics", 5) if compare_fused
   staged_partials = arena.alloc("staged_partials", ((output_count + 255) // 256) * 4) if compare_fused
-  dense_native_metrics = arena.alloc("dense_native_metrics", 5) if compare_fused
-  dense_native_partials = arena.alloc("dense_native_partials", ((output_count + 255) // 256) * 4) if compare_fused
-  dense_mps_metrics = arena.alloc("dense_mps_metrics", 5) if compare_fused
-  dense_mps_partials = arena.alloc("dense_mps_partials", ((output_count + 255) // 256) * 4) if compare_fused
+  dense_native_metrics = arena.alloc("dense_native_metrics", 5) if compare_fused || compare_gemm
+  dense_native_partials = arena.alloc("dense_native_partials", ((output_count + 255) // 256) * 4) if compare_fused || compare_gemm
+  dense_mps_metrics = arena.alloc("dense_mps_metrics", 5) if compare_fused || compare_gemm
+  dense_mps_partials = arena.alloc("dense_mps_partials", ((output_count + 255) // 256) * 4) if compare_fused || compare_gemm
+  gemm_candidate_output = arena.alloc("gemm_candidate_output", output_count) if compare_gemm
+  gemm_candidate_metrics = arena.alloc("gemm_candidate_metrics", 5) if compare_gemm
+  gemm_candidate_partials = arena.alloc("gemm_candidate_partials", ((output_count + 255) // 256) * 4) if compare_gemm
+  gemm_legacy_output = arena.alloc("gemm_legacy_output", output_count) if compare_gemm
+  gemm_mps_output = arena.alloc("gemm_mps_output", output_count) if compare_gemm
+  gemm_candidate_legacy_metrics = arena.alloc("gemm_candidate_legacy_metrics", 5) if compare_gemm
+  gemm_candidate_legacy_partials = arena.alloc("gemm_candidate_legacy_partials", ((output_count + 255) // 256) * 4) if compare_gemm
+  gemm_candidate_mps_metrics = arena.alloc("gemm_candidate_mps_metrics", 5) if compare_gemm
+  gemm_candidate_mps_partials = arena.alloc("gemm_candidate_mps_partials", ((output_count + 255) // 256) * 4) if compare_gemm
   affine_budget_upload(input_path, source, source.size)
   affine_budget_upload(bias_path, bias, bias.size)
   affine_budget_upload(original_path, original, original.size)
@@ -204,17 +243,45 @@ begin
         control_f32_weight_stage_bytes: compare_fused ? stage.size : nil,
         retained_harness_bytes_excluding_stage: compare_fused ? arena.resident_bytes - stage.size : nil,
         q4_k_fused_dummy_sidecar_bytes: compare_fused ? dummy_sidecar.not_nil!.size : nil,
-        candidate_pipeline: compare_fused ? ML::Video::Q4KDeltaLinear.linear_pipeline.name : nil,
-        candidate_static_threadgroup_memory_bytes: compare_fused ? ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes : nil,
-        dense_mode_execution_arms: compare_fused ? ["dense_native", "dense_mps"] : nil,
-        dense_mode_weight_format: compare_fused ? "q4_k" : nil,
-        dense_mode_internal_tile_shape: compare_fused ? {tm: 64, tn: 32, tk: 32} : nil,
+        gemm_comparison: compare_gemm,
+        gemm_variant: gemm_variant_id,
+        gemm_variant_name: ML::Video::Q4KDeltaLinear.variant_name(gemm_variant),
+        gemm_tile_shape: {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+                          tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
+                          tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)},
+        gemm_threadgroup_threads: ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant),
+        dense_static_threadgroup_memory_bytes: (compare_gemm || compare_fused) ?
+          ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_legacy_dense_static_threadgroup_memory_bytes: compare_gemm ?
+          ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(
+            ML::Video::Q4KDeltaLinear::GemmVariant::Legacy) : nil,
+        gemm_candidate_dense_static_threadgroup_memory_bytes: compare_gemm ?
+          ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_legacy_dense_pipeline: compare_gemm ?
+          ML::Video::Q4KDeltaLinear.dense_pipeline(
+            ML::Video::Q4KDeltaLinear::GemmVariant::Legacy).name : nil,
+        gemm_candidate_dense_pipeline: compare_gemm ?
+          ML::Video::Q4KDeltaLinear.dense_pipeline(gemm_variant).name : nil,
+        candidate_pipeline: compare_fused ? ML::Video::Q4KDeltaLinear.linear_pipeline(gemm_variant).name : nil,
+        candidate_static_threadgroup_memory_bytes: compare_fused ?
+          ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes(gemm_variant) : nil,
+        dense_mode_execution_arms: compare_gemm ? execution_arms : (compare_fused ? ["dense_native", "dense_mps"] : nil),
+        dense_mode_weight_format: (compare_gemm || compare_fused) ? "q4_k" : nil,
+        dense_mode_internal_tile_shape: (compare_gemm || compare_fused) ?
+          {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+           tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
+           tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)} : nil,
+        gemm_schedule: compare_gemm ? "six_sample_palindrome_opposite_base_direction_by_half_v1" : nil,
+        gemm_schedule_directions: compare_gemm ?
+          {first_half: reverse_first ? "reverse" : "forward",
+           second_half: reverse_first ? "forward" : "reverse"} : nil,
         mps_storage: "opaque and included in the process guard, excluded from explicit byte sum",
         tolerance: "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)"}.to_json)
   STDOUT.flush
 
   # One-time GPU packing has its own terminal measurement; it is excluded from
   # resident-packed inference. Full byte qualification is a separate diagnostic.
+  unless compare_gemm
   variants.reject { |v| v == "q4_k" }.each do |name|
     v = variant_manifest[name]
     cmd = ML::Metal::CommandBuffer.new
@@ -247,6 +314,7 @@ begin
     STDOUT.flush
     raise "GPU packing differs from independent serialized oracle: #{name}" unless differences == 0
   end
+  end
 
   sidecar_for = ->(format : String) {
     format == "q4_k" ? dummy_sidecar.not_nil! : sidecars[format]
@@ -273,7 +341,7 @@ begin
   fused_linear = ->(encoder : ML::Metal::ComputeEncoder, name : String) {
     format = format_by_arm[name]
     ML::Video::Q4KDeltaLinear.linear(encoder, input, payload, sidecar_for.call(format), bias,
-      output, status, rows, din, dout, patch_map[format])
+      output, status, rows, din, dout, patch_map[format], gemm_variant)
     nil
   }
   poison_buffer = ->(encoder : ML::Metal::ComputeEncoder, buffer : ML::MetalBuffer, count : Int32) {
@@ -286,6 +354,7 @@ begin
       .set_value(output_count.to_u32, 2).dispatch_1d(output_count)
     nil
   }
+  unless compare_gemm
   # Qualify the unchanged native BF16 control before treating its saved
   # upstream output as the distortion reference for every compressed arm.
   affine_budget_upload(File.join(fixture_dir, baseline["decoded_weight"]["path"].as_s), expected_weight, stage.size)
@@ -304,6 +373,7 @@ begin
   bo = affine_budget_metrics(metrics, partials, output_count)
   raise "Native BF16 control failed" unless bw[:tolerance_violations] == 0 && bw[:nonfinite] == 0 && bo[:tolerance_violations] == 0 && bo[:nonfinite] == 0
   puts({schema: "wan_q4k_delta_bf16_control_v1", decoder: bw, projection: bo}.to_json)
+  end
   validate_dense = ->(phase : String) {
     q4k = variant_manifest["q4_k"]
     affine_budget_upload(File.join(fixture_dir, q4k["decoded_weight"]["path"].as_s), expected_weight, stage.size)
@@ -315,7 +385,7 @@ begin
     ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
     affine_budget_compare(encoder, zero, compare, stage, expected_weight, weight_metrics, weight_partials, weight_count)
     poison_buffer.call(encoder, output, output_count)
-    ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout)
+    ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout, gemm_variant)
     affine_budget_compare(encoder, zero, compare, output, expected_output,
       dense_native_metrics.not_nil!, dense_native_partials.not_nil!, output_count)
     preserve_output.call(encoder, staged_output.not_nil!)
@@ -345,6 +415,66 @@ begin
             dense_native_vs_dense_mps: cross_metric}.to_json)
       STDOUT.flush
     end
+    nil
+  }
+  validate_gemm = ->(phase : String) {
+    q4k = variant_manifest["q4_k"]
+    affine_budget_upload(File.join(fixture_dir, q4k["decoded_weight"]["path"].as_s), expected_weight, stage.size)
+    affine_budget_upload(File.join(fixture_dir, q4k["expected_projection"]["path"].as_s), expected_output, output.size)
+    cmd = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(cmd)
+    before = ML::MetalBuffer.video_spec_allocations
+    poison_buffer.call(encoder, stage, weight_count)
+    ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
+    affine_budget_compare(encoder, zero, compare, stage, expected_weight, weight_metrics, weight_partials, weight_count)
+
+    poison_buffer.call(encoder, output, output_count)
+    ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout,
+      ML::Video::Q4KDeltaLinear::GemmVariant::Legacy)
+    affine_budget_compare(encoder, zero, compare, output, expected_output,
+      dense_native_metrics.not_nil!, dense_native_partials.not_nil!, output_count)
+    preserve_output.call(encoder, gemm_legacy_output.not_nil!)
+
+    poison_buffer.call(encoder, output, output_count)
+    ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout, gemm_variant)
+    affine_budget_compare(encoder, zero, compare, output, expected_output,
+      gemm_candidate_metrics.not_nil!, gemm_candidate_partials.not_nil!, output_count)
+    preserve_output.call(encoder, gemm_candidate_output.not_nil!)
+
+    poison_buffer.call(encoder, output, output_count)
+    project.call(encoder)
+    affine_budget_compare(encoder, zero, compare, output, expected_output,
+      dense_mps_metrics.not_nil!, dense_mps_partials.not_nil!, output_count)
+    preserve_output.call(encoder, gemm_mps_output.not_nil!)
+
+    affine_budget_compare(encoder, zero, compare, gemm_candidate_output.not_nil!, gemm_legacy_output.not_nil!,
+      gemm_candidate_legacy_metrics.not_nil!, gemm_candidate_legacy_partials.not_nil!, output_count)
+    affine_budget_compare(encoder, zero, compare, gemm_candidate_output.not_nil!, gemm_mps_output.not_nil!,
+      gemm_candidate_mps_metrics.not_nil!, gemm_candidate_mps_partials.not_nil!, output_count)
+    encoder.end_encoding
+    cmd.commit
+    cmd.wait
+    decoder_metric = affine_budget_metrics(weight_metrics, weight_partials, weight_count)
+    legacy_metric = affine_budget_metrics(dense_native_metrics.not_nil!, dense_native_partials.not_nil!, output_count)
+    candidate_metric = affine_budget_metrics(gemm_candidate_metrics.not_nil!, gemm_candidate_partials.not_nil!, output_count)
+    mps_metric = affine_budget_metrics(dense_mps_metrics.not_nil!, dense_mps_partials.not_nil!, output_count)
+    candidate_legacy_metric = affine_budget_metrics(gemm_candidate_legacy_metrics.not_nil!, gemm_candidate_legacy_partials.not_nil!, output_count)
+    candidate_mps_metric = affine_budget_metrics(gemm_candidate_mps_metrics.not_nil!, gemm_candidate_mps_partials.not_nil!, output_count)
+    check_status.call
+    {"Q4_K decoder" => decoder_metric, "legacy GEMM" => legacy_metric,
+     "candidate GEMM" => candidate_metric, "MPS GEMM" => mps_metric}.each do |name, metric|
+      raise "Dense GEMM parity failed #{name}" unless metric[:tolerance_violations] == 0 && metric[:nonfinite] == 0
+    end
+    {"candidate/legacy" => candidate_legacy_metric, "candidate/MPS" => candidate_mps_metric}.each do |name, metric|
+      raise "Dense GEMM pair comparison failed #{name}" unless metric[:tolerance_violations] == 0 && metric[:nonfinite] == 0
+    end
+    raise "Dense GEMM validation encoded an allocation" unless ML::MetalBuffer.video_spec_allocations == before
+    puts({schema: "wan_q4k_delta_gemm_parity_v1", phase: phase, format: "q4_k",
+          reference_arm: "q4_k", decoder: decoder_metric,
+          dense_native_legacy: legacy_metric, dense_native_candidate: candidate_metric,
+          dense_mps: mps_metric, candidate_vs_legacy: candidate_legacy_metric,
+          candidate_vs_mps: candidate_mps_metric}.to_json)
+    STDOUT.flush
     nil
   }
   validate = ->(phase : String) {
@@ -424,7 +554,47 @@ begin
     check_status.call
     nil
   }
-  if compare_fused
+  if compare_gemm
+    validate_gemm.call("before_timing")
+    prepare_dense_weight.call
+    gemm_methods = ["dense_native_legacy", "dense_native_candidate", "dense_mps"]
+    (-2...rounds).each do |round|
+      rotation = Math.max(round, 0) % gemm_methods.size
+      rotated = gemm_methods.rotate(rotation)
+      reverse_phase = round < 0 ? round == -1 : round >= rounds // 2
+      reverse_direction = reverse_phase != reverse_first
+      rotated = [rotated[0], rotated[2], rotated[1]] if reverse_direction
+      order = rotated + rotated.reverse
+      order.each_with_index do |name, position|
+        cmd = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(cmd)
+        before = ML::MetalBuffer.video_spec_allocations
+        started = Time.instant
+        case name
+        when "dense_native_legacy"
+          ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output,
+            rows, din, dout, ML::Video::Q4KDeltaLinear::GemmVariant::Legacy)
+        when "dense_native_candidate"
+          ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output,
+            rows, din, dout, gemm_variant)
+        else
+          project.call(encoder)
+        end
+        encoder.end_encoding
+        encode = (Time.instant - started).total_seconds
+        gpu = cmd.commit_and_wait_gpu_elapsed_seconds
+        wall = (Time.instant - started).total_seconds
+        raise "Timed dense GEMM encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
+        puts({schema: "wan_q4k_delta_timing_v1", mode: "dense_gemm", variant: name,
+              round: round, position: position, warmup: round < 0, rows: rows,
+              encode_seconds: encode, gpu_seconds: gpu, wall_seconds: wall,
+              terminal_waits: 1, inter_operator_host_waits: 0, activation_readbacks: 0,
+              encode_metal_buffer_allocations: 0, manifest_sha256: manifest_hash}.to_json)
+        STDOUT.flush
+      end
+    end
+    validate_gemm.call("after_timing")
+  elsif compare_fused
     validate_dense.call("before_timing")
     validate.call("before_timing")
     prepare_dense_weight.call
@@ -445,7 +615,7 @@ begin
         before = ML::MetalBuffer.video_spec_allocations
         started = Time.instant
         if name == "dense_native"
-          ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout)
+          ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout, gemm_variant)
         else
           project.call(encoder)
         end
@@ -479,7 +649,7 @@ begin
         if name.ends_with?("_fused")
           ML::Video::Q4KDeltaLinear.linear(encoder, input, payload,
             sidecar_for.call(format_by_arm[name]), bias, output, status, rows, din, dout,
-            patch_map[format_by_arm[name]])
+            patch_map[format_by_arm[name]], gemm_variant)
         else
           decode.call(encoder, name)
           project.call(encoder)

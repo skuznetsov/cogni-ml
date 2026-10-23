@@ -9,6 +9,10 @@ constant uint Q4KL_BLOCK_BYTES = 144u;
 constant uint Q4KL_TM = 64u;
 constant uint Q4KL_TN = 32u;
 constant uint Q4KL_TK = 32u;
+constant uint Q4KL_CANDIDATE_TM = 128u;
+constant uint Q4KL_CANDIDATE_TN = 32u;
+constant uint Q4KL_CANDIDATE_TK = 32u;
+constant uint Q4KL_BT_K64_CANDIDATE_TK = 64u;
 constant uint Q4KL_PATCH_SLOTS = 8u;
 constant uint Q4KL_ERROR = 1u;
 
@@ -244,6 +248,159 @@ static inline void q4kl_run_gemm(
   }
 }
 
+// Opt-in fragment-reuse schedule. It keeps the same 2x2 SIMD-group mapping
+// and F32 8x8 multiply-accumulate sequence as the legacy kernel. B fragments
+// are loaded once per ascending K fragment; one A fragment at a time is
+// reused across both column blocks to keep fragment register lifetimes short.
+// TRANSPOSED_B stores each staged [N,K] row contiguously and loads it as B[K,N].
+// Existing variants keep WIDE_K=false; TK64 changes only the panel grouping.
+template <bool Q4K, bool WIDE_M, bool WIDE_K, bool TRANSPOSED_B>
+static inline void q4kl_run_gemm_reuse(
+    device const float *input, device const float *dense_weight,
+    device const uchar *payload, device const uchar *sidecar,
+    device const float *bias, device float *output,
+    device atomic_uint *status, uint rows, uint in_dim, uint out_dim,
+    uint patches, uint2 group, uint tid, uint simdgroup,
+    uint threads, threadgroup float *a_panel,
+    threadgroup float *b_panel, threadgroup uint *patch_indices,
+    threadgroup float *patch_deltas, threadgroup uint *block_malformed) {
+  if (threads != 128u)
+    return;
+
+  constexpr uint TM = WIDE_M ? Q4KL_CANDIDATE_TM : Q4KL_TM;
+  constexpr uint TK = WIDE_K ? Q4KL_BT_K64_CANDIDATE_TK : Q4KL_CANDIDATE_TK;
+  static_assert(TM * TK >= TM * Q4KL_CANDIDATE_TN,
+      "A panel must hold the output tile used by the F32 epilogue");
+  const uint row_begin = group.y * TM;
+  const uint col_begin = group.x * Q4KL_CANDIDATE_TN;
+  constexpr uint ROW_BLOCKS = TM / 16u;
+  constexpr uint COL_BLOCKS = Q4KL_CANDIDATE_TN / 16u;
+  simdgroup_float8x8 accum[ROW_BLOCKS * COL_BLOCKS];
+  #pragma clang loop unroll(full)
+  for (uint i = 0u; i < ROW_BLOCKS * COL_BLOCKS; ++i) {
+    accum[i].thread_elements()[0] = 0.0f;
+    accum[i].thread_elements()[1] = 0.0f;
+  }
+
+  const uint sg_row = (simdgroup & 1u) * (TM / 2u);
+  const uint sg_col = (simdgroup >> 1u) * (Q4KL_CANDIDATE_TN / 2u);
+  const uint blocks_per_channel = in_dim / Q4KL_BLOCK_ELEMENTS;
+  simdgroup_float8x8 a_fragment;
+  simdgroup_float8x8 b_fragments[COL_BLOCKS];
+  for (uint k0 = 0u; k0 < in_dim; k0 += TK) {
+    if (Q4K && (k0 % Q4KL_BLOCK_ELEMENTS) == 0u) {
+      for (uint local_n = tid; local_n < Q4KL_CANDIDATE_TN; local_n += 128u) {
+        const uint channel = col_begin + local_n;
+        if (channel < out_dim) {
+          q4kl_stage_corrections(sidecar, status, channel, blocks_per_channel,
+              k0 / Q4KL_BLOCK_ELEMENTS, patches, local_n, patch_indices,
+              patch_deltas, block_malformed);
+        } else {
+          const uint slot_base = local_n * Q4KL_PATCH_SLOTS;
+          for (uint rank = 0u; rank < Q4KL_PATCH_SLOTS; ++rank) {
+            patch_indices[slot_base + rank] = 0xffffffffu;
+            patch_deltas[slot_base + rank] = 0.0f;
+          }
+          block_malformed[local_n] = 0u;
+        }
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Read each tile once. TRANSPOSED_B keeps [N,K] rows contiguous for its
+    // transposed SIMD-group load; other variants store [K,N].
+    for (uint i = tid; i < Q4KL_CANDIDATE_TN * TK; i += 128u) {
+      const uint local_n = i / TK;
+      const uint local_k = i % TK;
+      const uint channel = col_begin + local_n;
+      const uint k = k0 + local_k;
+      float value = 0.0f;
+      if (channel < out_dim) {
+        if (Q4K) {
+          const uint block_in_channel = k / Q4KL_BLOCK_ELEMENTS;
+          const uint flat_block = channel * blocks_per_channel + block_in_channel;
+          const uint slot_base = local_n * Q4KL_PATCH_SLOTS;
+          float delta = 0.0f;
+          for (uint rank = 0u; rank < patches; ++rank) {
+            if (patch_indices[slot_base + rank] == (k % Q4KL_BLOCK_ELEMENTS)) {
+              delta = patch_deltas[slot_base + rank];
+              break;
+            }
+          }
+          value = q4kl_decode_coefficient(payload + flat_block * Q4KL_BLOCK_BYTES,
+              k % Q4KL_BLOCK_ELEMENTS, delta, patches != 0u,
+              block_malformed[local_n] != 0u, status);
+        } else {
+          value = dense_weight[channel * in_dim + k];
+        }
+      }
+      const uint b_index = TRANSPOSED_B
+          ? local_n * TK + local_k
+          : local_k * Q4KL_CANDIDATE_TN + local_n;
+      b_panel[b_index] = value;
+    }
+
+    for (uint i = tid; i < TM * TK; i += 128u) {
+      const uint local_m = i / TK;
+      const uint local_k = i % TK;
+      const uint m = row_begin + local_m;
+      const uint k = k0 + local_k;
+      a_panel[i] = m < rows ? input[m * in_dim + k] : 0.0f;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    #pragma clang loop unroll(full)
+    for (uint kfrag = 0u; kfrag < TK; kfrag += 8u) {
+      #pragma clang loop unroll(full)
+      for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+        if (TRANSPOSED_B) {
+          simdgroup_load(b_fragments[cb],
+              b_panel + (sg_col + cb * 8u) * TK + kfrag,
+              TK, 0, true);
+        } else {
+          simdgroup_load(b_fragments[cb],
+              b_panel + kfrag * Q4KL_CANDIDATE_TN + sg_col + cb * 8u,
+              Q4KL_CANDIDATE_TN);
+        }
+      }
+      #pragma clang loop unroll(full)
+      for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+        simdgroup_load(a_fragment,
+            a_panel + (sg_row + rb * 8u) * TK + kfrag,
+            TK);
+        #pragma clang loop unroll(full)
+        for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+          const uint acc_index = rb * COL_BLOCKS + cb;
+          simdgroup_multiply_accumulate(accum[acc_index], a_fragment,
+              b_fragments[cb], accum[acc_index]);
+        }
+      }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  // The A panel has at least TM*TN elements, so its prefix can hold the output
+  // tile for the F32 bias epilogue without extra shared memory.
+  #pragma clang loop unroll(full)
+  for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+    #pragma clang loop unroll(full)
+    for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+      const uint acc_index = rb * COL_BLOCKS + cb;
+      simdgroup_store(accum[acc_index],
+          a_panel + (sg_row + rb * 8u) * Q4KL_CANDIDATE_TN + sg_col + cb * 8u,
+          Q4KL_CANDIDATE_TN);
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  for (uint i = tid; i < TM * Q4KL_CANDIDATE_TN; i += 128u) {
+    const uint m = row_begin + i / Q4KL_CANDIDATE_TN;
+    const uint n = col_begin + i % Q4KL_CANDIDATE_TN;
+    if (m < rows && n < out_dim)
+      output[m * out_dim + n] = a_panel[i] + bias[n];
+  }
+}
+
 kernel void video_q4k_delta_linear_f32(
     device const float *input [[buffer(0)]],
     device const uchar *payload [[buffer(1)]],
@@ -289,6 +446,155 @@ kernel void video_q4k_delta_dense_linear_f32(
   threadgroup uint block_malformed[Q4KL_TN];
   q4kl_run_gemm<false>(input, weight, nullptr, nullptr, bias, output, nullptr,
       rows, in_dim, out_dim, 0u, group, tid, simdgroup,
+      threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
+      block_malformed);
+}
+
+kernel void video_q4k_delta_linear_f32_candidate_b128n32_sg4_tk32(
+    device const float *input [[buffer(0)]],
+    device const uchar *payload [[buffer(1)]],
+    device const uchar *sidecar [[buffer(2)]],
+    device const float *bias [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    device atomic_uint *status [[buffer(5)]],
+    constant uint &rows [[buffer(6)]],
+    constant uint &in_dim [[buffer(7)]],
+    constant uint &out_dim [[buffer(8)]],
+    constant uint &patches [[buffer(9)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_CANDIDATE_TM * Q4KL_CANDIDATE_TK];
+  threadgroup float b_panel[Q4KL_CANDIDATE_TK * Q4KL_CANDIDATE_TN];
+  threadgroup uint patch_indices[Q4KL_CANDIDATE_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_CANDIDATE_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_CANDIDATE_TN];
+  q4kl_run_gemm_reuse<true, true, false, false>(input, nullptr,
+      payload, sidecar, bias, output,
+      status, rows, in_dim, out_dim, patches, group, tid, simdgroup,
+      threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
+      block_malformed);
+}
+
+kernel void video_q4k_delta_dense_linear_f32_candidate_b128n32_sg4_tk32(
+    device const float *input [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &in_dim [[buffer(5)]],
+    constant uint &out_dim [[buffer(6)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_CANDIDATE_TM * Q4KL_CANDIDATE_TK];
+  threadgroup float b_panel[Q4KL_CANDIDATE_TK * Q4KL_CANDIDATE_TN];
+  threadgroup uint patch_indices[Q4KL_CANDIDATE_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_CANDIDATE_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_CANDIDATE_TN];
+  q4kl_run_gemm_reuse<false, true, false, false>(input, weight, nullptr,
+      nullptr, bias, output,
+      nullptr, rows, in_dim, out_dim, 0u, group, tid, simdgroup,
+      threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
+      block_malformed);
+}
+
+kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk32_bt(
+    device const float *input [[buffer(0)]],
+    device const uchar *payload [[buffer(1)]],
+    device const uchar *sidecar [[buffer(2)]],
+    device const float *bias [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    device atomic_uint *status [[buffer(5)]],
+    constant uint &rows [[buffer(6)]],
+    constant uint &in_dim [[buffer(7)]],
+    constant uint &out_dim [[buffer(8)]],
+    constant uint &patches [[buffer(9)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_TM * Q4KL_TK];
+  threadgroup float b_panel[Q4KL_TK * Q4KL_TN];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  q4kl_run_gemm_reuse<true, false, false, true>(input, nullptr, payload, sidecar,
+      bias, output, status, rows, in_dim, out_dim, patches, group, tid,
+      simdgroup, threads.x * threads.y, a_panel, b_panel, patch_indices,
+      patch_deltas, block_malformed);
+}
+
+kernel void video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk32_bt(
+    device const float *input [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &in_dim [[buffer(5)]],
+    constant uint &out_dim [[buffer(6)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_TM * Q4KL_TK];
+  threadgroup float b_panel[Q4KL_TK * Q4KL_TN];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  q4kl_run_gemm_reuse<false, false, false, true>(input, weight, nullptr, nullptr,
+      bias, output, nullptr, rows, in_dim, out_dim, 0u, group, tid, simdgroup,
+      threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
+      block_malformed);
+}
+
+kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk64_bt(
+    device const float *input [[buffer(0)]],
+    device const uchar *payload [[buffer(1)]],
+    device const uchar *sidecar [[buffer(2)]],
+    device const float *bias [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    device atomic_uint *status [[buffer(5)]],
+    constant uint &rows [[buffer(6)]],
+    constant uint &in_dim [[buffer(7)]],
+    constant uint &out_dim [[buffer(8)]],
+    constant uint &patches [[buffer(9)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_TM * Q4KL_BT_K64_CANDIDATE_TK];
+  threadgroup float b_panel[Q4KL_CANDIDATE_TN * Q4KL_BT_K64_CANDIDATE_TK];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  q4kl_run_gemm_reuse<true, false, true, true>(input, nullptr, payload, sidecar,
+      bias, output, status, rows, in_dim, out_dim, patches, group, tid,
+      simdgroup, threads.x * threads.y, a_panel, b_panel, patch_indices,
+      patch_deltas, block_malformed);
+}
+
+kernel void video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk64_bt(
+    device const float *input [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &in_dim [[buffer(5)]],
+    constant uint &out_dim [[buffer(6)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_TM * Q4KL_BT_K64_CANDIDATE_TK];
+  threadgroup float b_panel[Q4KL_CANDIDATE_TN * Q4KL_BT_K64_CANDIDATE_TK];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  q4kl_run_gemm_reuse<false, false, true, true>(input, weight, nullptr, nullptr,
+      bias, output, nullptr, rows, in_dim, out_dim, 0u, group, tid, simdgroup,
       threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
       block_malformed);
 }
