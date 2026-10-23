@@ -15,8 +15,11 @@ import struct
 ARMS = ("q4_k", "q4_k_delta1", "q4_k_delta4", "q4_k_delta8")
 BLOCK_ARMS = tuple(f"{arm}_block" for arm in ARMS)
 COMPARISON_ARMS = ARMS + BLOCK_ARMS
+FUSED_ARMS = tuple(item for arm in ARMS for item in (arm, f"{arm}_fused"))
+FUSED_CANDIDATE_ARMS = tuple(f"{arm}_fused" for arm in ARMS)
 PATCHES_PER_BLOCK = {"q4_k": 0, "q4_k_delta1": 1, "q4_k_delta4": 4, "q4_k_delta8": 8}
 MODES = ("projection", "decode_only")
+FUSED_MODES = ("dense_mode", "fused_projection")
 ROOT = Path(__file__).resolve().parents[2]
 MIB = 1024 * 1024
 PHYSICAL_RESERVE_PCT = 15
@@ -129,7 +132,8 @@ def validate_metric(metric, expected_count: int, label: str, *, strict: bool = T
 
 
 def validate_parity(records, rows: int, din: int, dout: int,
-                    execution_arms=ARMS, *, require_bit_exact: bool = False) -> None:
+                    execution_arms=ARMS, *, require_bit_exact: bool = False,
+                    require_fused_staged: bool = False) -> None:
     expected = {(arm, phase) for arm in execution_arms
                 for phase in ("before_timing", "after_timing")}
     actual = [(record.get("variant"), record.get("phase")) for record in records]
@@ -141,6 +145,12 @@ def validate_parity(records, rows: int, din: int, dout: int,
         projection = record.get("projection")
         validate_metric(decoder, din * dout, f"{arm} decoder")
         validate_metric(projection, rows * dout, f"{arm} projection")
+        if require_fused_staged and arm.endswith("_fused"):
+            validate_metric(record.get("fused_vs_staged"), rows * dout,
+                            f"{arm} fused/staged projection")
+        elif require_fused_staged:
+            require("fused_vs_staged" not in record,
+                    f"Staged control unexpectedly reports fused/staged parity: {arm}")
         if require_bit_exact:
             require(decoder["bit_differences"] == 0 and
                     projection["bit_differences"] == 0,
@@ -158,6 +168,38 @@ def validate_parity(records, rows: int, din: int, dout: int,
         require(record.get("calibration_rows") == [] and
                 record.get("unique_evaluation_rows") == [0, 1, 2, 3],
                 f"Unexpected calibration/evaluation scope: {arm}")
+
+
+def validate_dense_parity(records, rows: int, din: int, dout: int) -> dict:
+    expected_phases = {"before_timing", "after_timing"}
+    require(len(records) == 4 and
+            {(record.get("phase"), record.get("variant")) for record in records} ==
+            {(phase, arm) for phase in expected_phases
+             for arm in ("dense_native", "dense_mps")},
+            "Missing, duplicate or unexpected dense-mode parity records")
+    summaries = {}
+    for record in records:
+        phase, arm = record["phase"], record["variant"]
+        decoder = record.get("decoder")
+        validate_metric(decoder, din * dout, f"dense_mode {phase} Q4_K decoder")
+        require(record.get("format") == "q4_k",
+                "Dense mode must use the Q4_K-decoded coefficient matrix")
+        native = record.get("dense_native")
+        mps = record.get("dense_mps")
+        cross = record.get("dense_native_vs_dense_mps")
+        validate_metric(native, rows * dout, f"dense_mode {phase} native projection")
+        validate_metric(mps, rows * dout, f"dense_mode {phase} MPS projection")
+        validate_metric(cross, rows * dout, f"dense_mode {phase} native/MPS parity")
+        require(record.get("reference_arm") == "q4_k" and
+                record.get("variant") in ("dense_native", "dense_mps"),
+                "Unexpected dense-mode reference mapping")
+        summaries[f"{phase}:{arm}"] = {
+            "decoder": decoder,
+            "dense_native": native,
+            "dense_mps": mps,
+            "dense_native_vs_dense_mps": cross,
+        }
+    return summaries
 
 
 def _rotated_order(rotation: int, reverse: bool) -> tuple[str, ...]:
@@ -178,10 +220,197 @@ def _comparison_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[
     return tuple(order)
 
 
+def _fused_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[str, ...]:
+    rotation = max(round_id, 0) % len(ARMS)
+    base_order = ARMS[rotation:] + ARMS[:rotation]
+    order = [item for arm in base_order for item in (arm, f"{arm}_fused")]
+    if round_id >= 0 and (round_id // len(ARMS)) % 2 == 1:
+        order = [item for index in range(0, len(order), 2)
+                 for item in (order[index + 1], order[index])]
+    reverse = ((round_id == -1) if round_id < 0 else round_id >= rounds // 2)
+    if reverse != reverse_first:
+        order.reverse()
+    return tuple(order)
+
+
+def _dense_order(round_id: int, rounds: int, reverse_first: bool) -> tuple[str, ...]:
+    if round_id < 0:
+        order = ("dense_native", "dense_mps") if round_id == -2 else ("dense_mps", "dense_native")
+        return tuple(reversed(order)) if reverse_first else order
+    abba = (round_id < rounds // 2) != reverse_first
+    if abba:
+        return ("dense_native", "dense_mps", "dense_mps", "dense_native")
+    return ("dense_mps", "dense_native", "dense_native", "dense_mps")
+
+
+def _validate_fused_timing_records(records, setup: dict, rounds: int,
+                                   reverse_first: bool) -> dict:
+    require(rounds in (16, 32), "Unsupported measured-round count")
+    require(type(reverse_first) is bool, "Invalid reverse-first flag")
+    require(setup.get("execution_arms") == list(FUSED_ARMS) and
+            setup.get("dense_mode_execution_arms") == ["dense_native", "dense_mps"],
+            "Unexpected fused or dense execution arms")
+    expected_count = (rounds + 2) * len(FUSED_ARMS) + 4 + rounds * 4
+    require(len(records) == expected_count,
+            "Missing or extra fused/dense timing records, including warmups")
+    by_mode_round = {}
+    for record in records:
+        mode = record.get("mode")
+        require(mode in FUSED_MODES, f"Unexpected fused timing mode: {mode}")
+        require(record.get("manifest_sha256") == setup["manifest_sha256"],
+                "Timing provenance changed")
+        require(record.get("rows") == setup["rows"], "Timing geometry changed")
+        require(type(record.get("terminal_waits")) is int and record["terminal_waits"] == 1 and
+                type(record.get("inter_operator_host_waits")) is int and
+                record["inter_operator_host_waits"] == 0 and
+                type(record.get("activation_readbacks")) is int and
+                record["activation_readbacks"] == 0 and
+                type(record.get("encode_metal_buffer_allocations")) is int and
+                record["encode_metal_buffer_allocations"] == 0,
+                "Command-chain constraints failed")
+        round_id = record.get("round")
+        position = record.get("position")
+        require(type(round_id) is int and -2 <= round_id < rounds,
+                "Invalid timing round")
+        expected_size = (2 if round_id < 0 else 4) if mode == "dense_mode" else len(FUSED_ARMS)
+        require(type(position) is int and 0 <= position < expected_size,
+                "Invalid timing position")
+        require(type(record.get("warmup")) is bool and record["warmup"] == (round_id < 0),
+                "Warmup flag/round mismatch")
+        for key in ("gpu_seconds", "wall_seconds", "encode_seconds"):
+            _finite_number(record.get(key), f"{mode} {key}", positive=round_id >= 0)
+        bucket = by_mode_round.setdefault((mode, round_id), {})
+        require(position not in bucket, "Duplicate timing position")
+        bucket[position] = record
+
+    for mode in FUSED_MODES:
+        for round_id in (-2, -1, *range(rounds)):
+            bucket = by_mode_round.get((mode, round_id))
+            expected_size = ((2 if round_id < 0 else 4) if mode == "dense_mode"
+                             else len(FUSED_ARMS))
+            require(bucket is not None and set(bucket) == set(range(expected_size)),
+                    f"Incomplete timing round: {mode} {round_id}")
+            expected_order = (_dense_order(round_id, rounds, reverse_first)
+                              if mode == "dense_mode" else
+                              _fused_order(round_id, rounds, reverse_first))
+            actual_order = tuple(bucket[position]["variant"] for position in range(expected_size))
+            require(actual_order == expected_order,
+                    f"Unexpected arm order: {mode} {round_id}: {actual_order}")
+
+    summaries = {}
+    dense_by_round = {round_id: by_mode_round[("dense_mode", round_id)]
+                      for round_id in range(rounds)}
+    dense_ratios = {}
+    dense_pairs = []
+    dense_samples = [record for (mode, round_id), bucket in by_mode_round.items()
+                     if mode == "dense_mode" and round_id >= 0
+                     for record in bucket.values()]
+    for round_id, bucket in dense_by_round.items():
+        native_values = [bucket[position]["gpu_seconds"] for position in bucket
+                         if bucket[position]["variant"] == "dense_native"]
+        mps_values = [bucket[position]["gpu_seconds"] for position in bucket
+                      if bucket[position]["variant"] == "dense_mps"]
+        require(len(native_values) == len(mps_values) == 2,
+                "Dense paired round must contain two native and two MPS samples")
+        native_mean = statistics.mean(native_values)
+        mps_mean = statistics.mean(mps_values)
+        ratio = native_mean / mps_mean
+        dense_ratios[round_id] = ratio
+        dense_pairs.append({"round": round_id,
+                            "order": [bucket[position]["variant"] for position in range(4)],
+                            "native_mean_gpu_seconds": native_mean,
+                            "mps_mean_gpu_seconds": mps_mean,
+                            "native_over_mps_gpu_ratio": ratio})
+    dense_summaries = {
+        "arms": {arm: {metric: summary([record[metric] * 1000 for record in dense_samples
+                                        if record["variant"] == arm])
+                        for metric in ("gpu_seconds", "wall_seconds", "encode_seconds")}
+                  for arm in ("dense_native", "dense_mps")},
+        "paired_dense_native_over_mps_gpu": {
+            "all_rounds": summary(list(dense_ratios.values())),
+            "by_half": {
+                half: summary([ratio for round_id, ratio in dense_ratios.items()
+                               if (round_id < rounds // 2) == (half == "first")])
+                for half in ("first", "second")
+            },
+            "by_order": {
+                order: summary([pair["native_over_mps_gpu_ratio"] for pair in dense_pairs
+                               if ("ABBA" if pair["order"] == ["dense_native", "dense_mps", "dense_mps", "dense_native"]
+                                   else "BAAB") == order])
+                for order in ("ABBA", "BAAB")
+            },
+            "rounds": dense_pairs,
+        },
+        "speed_winner_selected": False,
+    }
+
+    fused_by_round = {round_id: by_mode_round[("fused_projection", round_id)]
+                      for round_id in range(rounds)}
+    fused_samples = [record for (mode, round_id), bucket in by_mode_round.items()
+                     if mode == "fused_projection" and round_id >= 0
+                     for record in bucket.values()]
+    paired_fused = {}
+    for arm in ARMS:
+        candidate = f"{arm}_fused"
+        round_ratios = {}
+        pair_details = []
+        for round_id, bucket in fused_by_round.items():
+            control = next(record for record in bucket.values() if record["variant"] == arm)
+            fused = next(record for record in bucket.values() if record["variant"] == candidate)
+            require(abs(control["position"] - fused["position"]) == 1,
+                    f"Fused/staged pair is not adjacent: {arm} round {round_id}")
+            ratio = control["gpu_seconds"] / fused["gpu_seconds"]
+            round_ratios[round_id] = ratio
+            pair_details.append({"round": round_id, "control": control,
+                                 "fused": fused, "control_over_fused_gpu_ratio": ratio})
+        by_rotation = {
+            str(rotation): summary([ratio for round_id, ratio in round_ratios.items()
+                                    if round_id % len(ARMS) == rotation])
+            for rotation in range(len(ARMS))
+        }
+        paired_fused[arm] = {
+            "candidate_arm": candidate,
+            "staged_control_over_fused_gpu": {
+                "all_rounds": summary(list(round_ratios.values())),
+                "by_rotation": by_rotation,
+                "rounds": pair_details,
+            },
+        }
+    fused_summaries = {
+        "arms": {arm: {metric: summary([record[metric] * 1000 for record in fused_samples
+                                        if record["variant"] == arm])
+                        for metric in ("gpu_seconds", "wall_seconds", "encode_seconds")}
+                  for arm in FUSED_ARMS},
+        "paired_staged_control_over_fused_gpu": paired_fused,
+        "speed_winner_selected": False,
+    }
+    return {"dense_mode": dense_summaries, "fused_projection": fused_summaries}
+
+
 def expected_probe_record_count(timing_count: int,
-                                block_validation_comparison: bool | None = None) -> int:
+                                block_validation_comparison: bool | None = None,
+                                fused_comparison: bool | None = None) -> int:
     """Count setup, three pack records, BF16 control, parity, timing and control."""
-    if block_validation_comparison is None:
+    if fused_comparison is None:
+        fused_counts = {
+            (rounds + 2) * len(FUSED_ARMS) + 4 + rounds * 4: rounds
+            for rounds in (16, 32)
+        }
+        if timing_count in fused_counts:
+            fused_comparison = True
+        else:
+            fused_comparison = False
+    require(type(fused_comparison) is bool, "Invalid fused comparison flag")
+    require(not (fused_comparison and block_validation_comparison is True),
+            "Fused and block-validation comparisons are mutually exclusive")
+    if fused_comparison:
+        require(timing_count in {
+            (rounds + 2) * len(FUSED_ARMS) + 4 + rounds * 4
+            for rounds in (16, 32)
+        }, "Unexpected fused timing record count")
+        arm_count = len(FUSED_ARMS)
+        dense_parity_count = 4
+    elif block_validation_comparison is None:
         counts = {
             (rounds + 2) * arm_count * len(MODES): arm_count
             for rounds in (16, 32) for arm_count in (len(ARMS), len(COMPARISON_ARMS))
@@ -191,22 +420,34 @@ def expected_probe_record_count(timing_count: int,
         require(len(matching_counts) == 1,
                 "Cannot infer execution-arm count from timing record count")
         arm_count = matching_counts[0]
+        dense_parity_count = 0
     else:
         require(type(block_validation_comparison) is bool,
                 "Invalid block-validation comparison flag")
         arm_count = len(COMPARISON_ARMS) if block_validation_comparison else len(ARMS)
-    return 1 + len(ARMS[1:]) + 1 + arm_count * 2 + timing_count + 1
+        dense_parity_count = 0
+    return 1 + len(ARMS[1:]) + 1 + arm_count * 2 + dense_parity_count + timing_count + 1
 
 
-def validate_corruption_control(record: dict, expected_count: int) -> None:
+def validate_corruption_control(record: dict, expected_count: int, *, fused_comparison: bool = False) -> None:
     metric = record.get("corruption")
     validate_metric(metric, expected_count, "positive corruption control", strict=False)
+    valid_primary_bits = (metric["bit_differences"] >= 2 if fused_comparison else
+                          metric["bit_differences"] == 2)
     require(record.get("corruption_rejected") is True and
             record.get("final_status_zero") is True and
-            metric["bit_differences"] == 2 and
+            valid_primary_bits and
             metric["tolerance_violations"] == 2 and
             metric["nonfinite"] == 1,
             "Positive corruption/NaN control did not detect the expected failures")
+    if fused_comparison:
+        staged = record.get("fused_vs_staged_corruption")
+        validate_metric(staged, expected_count, "fused/staged corruption control", strict=False)
+        require(record.get("fused_vs_staged_corruption_rejected") is True and
+                staged["bit_differences"] >= 2 and
+                staged["tolerance_violations"] == 2 and
+                staged["nonfinite"] == 1,
+                "Positive fused/staged corruption control did not detect the expected failures")
 
 
 def validate_pack_records(records) -> list[dict]:
@@ -230,7 +471,8 @@ def validate_pack_records(records) -> list[dict]:
 
 
 def validate_probe_command(command, reverse_first, setup,
-                           intent_block_validation_comparison=None) -> tuple[Path, Path, int, bool]:
+                           intent_block_validation_comparison=None,
+                           intent_fused_comparison=None) -> tuple[Path, Path, int, bool]:
     require(isinstance(command, list) and 3 <= len(command) <= 5,
             "Unexpected probe command")
     binary = Path(command[0])
@@ -248,8 +490,13 @@ def validate_probe_command(command, reverse_first, setup,
     require(rounds_text in ("16", "32"), "Unexpected probe round count")
     rounds = int(rounds_text)
     setup_comparison = setup.get("block_validation_comparison", False)
+    setup_fused = setup.get("fused_comparison", False)
     require(type(setup_comparison) is bool,
             "Invalid block-validation comparison setup flag")
+    require(type(setup_fused) is bool,
+            "Invalid fused comparison setup flag")
+    require(not (setup_comparison and setup_fused),
+            "Fused and block-validation comparisons are mutually exclusive")
     if intent_block_validation_comparison is None:
         intent_comparison = setup_comparison
     else:
@@ -258,8 +505,22 @@ def validate_probe_command(command, reverse_first, setup,
         intent_comparison = intent_block_validation_comparison
     require(intent_comparison is setup_comparison,
             "block-validation comparison flag differs between intent and setup")
+    if intent_fused_comparison is None:
+        intent_fused = setup_fused
+    else:
+        require(type(intent_fused_comparison) is bool,
+                "Invalid fused comparison intent flag")
+        intent_fused = intent_fused_comparison
+    require(intent_fused is setup_fused,
+            "fused comparison flag differs between intent and setup")
 
-    if setup_comparison:
+    if setup_fused:
+        require(len(command) in (4, 5) and command[3] == "--compare-fused",
+                "Probe command fused comparison flag disagrees with setup/intent")
+        expected_reverse = len(command) == 5
+        if expected_reverse:
+            require(command[4] == "--reverse-first", "Unexpected probe command flag order")
+    elif setup_comparison:
         require(len(command) in (4, 5) and command[3] == "--compare-block-validation",
                 "Probe command block-validation comparison flag disagrees with setup/intent")
         expected_reverse = len(command) == 5
@@ -280,6 +541,12 @@ def validate_probe_command(command, reverse_first, setup,
 def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bool):
     require(rounds in (16, 32), "Unsupported measured-round count")
     require(type(reverse_first) is bool, "Invalid reverse-first flag")
+    fused = setup.get("fused_comparison", False)
+    require(type(fused) is bool, "Invalid fused comparison timing flag")
+    if fused:
+        require(setup.get("block_validation_comparison", False) is False,
+                "Fused and block-validation comparisons are mutually exclusive")
+        return _validate_fused_timing_records(records, setup, rounds, reverse_first)
     rows = setup["rows"]
     comparison = setup.get("block_validation_comparison", False)
     require(type(comparison) is bool, "Invalid block-validation comparison setup flag")
@@ -812,15 +1079,41 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     command = intent.get("command")
     binary, fixture, rounds, reverse_first = validate_probe_command(
         command, intent.get("reverse_first"), setup,
-        intent.get("block_validation_comparison", False))
+        intent.get("block_validation_comparison", False),
+        intent.get("fused_comparison", False))
     comparison = setup.get("block_validation_comparison", False)
-    execution_arms = COMPARISON_ARMS if comparison else ARMS
+    fused = setup.get("fused_comparison", False)
+    require(type(comparison) is bool and type(fused) is bool and not (comparison and fused),
+            "Invalid or conflicting comparison mode setup")
+    execution_arms = FUSED_ARMS if fused else COMPARISON_ARMS if comparison else ARMS
     expected_formats = {arm: arm for arm in ARMS}
     if comparison:
         expected_formats.update({f"{arm}_block": arm for arm in ARMS})
-    if comparison:
+    if fused:
+        expected_formats = {arm: arm.removesuffix("_fused") for arm in FUSED_ARMS}
         require("execution_arms" in setup and "format_by_arm" in setup,
-                "Block-validation comparison setup is missing execution-arm mapping")
+                "Fused comparison setup is missing execution-arm mapping")
+        stage_bytes = WEIGHT_COUNT * 4
+        require(setup.get("fused_staged_control_decoder") == "block_validated" and
+                setup.get("candidate_global_f32_weight_stage_bytes") == 0 and
+                setup.get("control_f32_weight_stage_bytes") == stage_bytes and
+                type(setup.get("retained_harness_bytes_excluding_stage")) is int and
+                setup["retained_harness_bytes_excluding_stage"] >= 0 and
+                type(setup.get("explicit_buffer_bytes_during_pack")) is int and
+                setup["explicit_buffer_bytes_during_pack"] ==
+                setup["retained_harness_bytes_excluding_stage"] + stage_bytes and
+                setup.get("q4_k_fused_dummy_sidecar_bytes") == 4 and
+                setup.get("candidate_pipeline") == "video_q4k_delta_linear_f32" and
+                type(setup.get("candidate_static_threadgroup_memory_bytes")) is int and
+                0 <= setup["candidate_static_threadgroup_memory_bytes"] <= 32 * 1024,
+                "Fused candidate stage, control stage, dummy sidecar or pipeline accounting changed")
+        require(setup.get("dense_mode_execution_arms") == ["dense_native", "dense_mps"] and
+                setup.get("dense_mode_weight_format") == "q4_k" and
+                setup.get("dense_mode_internal_tile_shape") == {"tm": 64, "tn": 32, "tk": 32},
+                "Dense same-format control mapping or TM64/TN32/TK32 tile shape changed")
+    if comparison or fused:
+        require("execution_arms" in setup and "format_by_arm" in setup,
+                "Comparison setup is missing execution-arm mapping")
     if "execution_arms" in setup:
         require(setup.get("execution_arms") == list(execution_arms),
                 "Unexpected execution arm declaration")
@@ -906,6 +1199,7 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
             "Unexpected F32 stage, packing workspace or explicit-buffer accounting")
     return {"build_tag": build_tag, "fixture_tag": fixture_tag, "rounds": rounds,
             "reverse_first": reverse_first, "manifest_sha256": manifest_sha,
+            "block_validation_comparison": comparison, "fused_comparison": fused,
             "storage": reference["storage"],
             "reference_quality": reference["quality"],
             "binary_sha256": receipt["binary_sha256"],
@@ -925,7 +1219,8 @@ def read_probe(base: Path, tag: str):
     records = [json.loads(line) for line in paths["stdout.log"].read_text().splitlines()]
     allowed_schemas = {
         "wan_q4k_delta_setup_v1", "wan_q4k_delta_packing_v1", "wan_q4k_delta_bf16_control_v1",
-        "wan_q4k_delta_parity_v1", "wan_q4k_delta_timing_v1", "wan_q4k_delta_controls_v1",
+        "wan_q4k_delta_parity_v1", "wan_q4k_delta_dense_parity_v1",
+        "wan_q4k_delta_timing_v1", "wan_q4k_delta_controls_v1",
     }
     require(all(isinstance(record, dict) and record.get("schema") in allowed_schemas for record in records),
             "Unknown or malformed probe output record")
@@ -935,13 +1230,24 @@ def read_probe(base: Path, tag: str):
     lineage = validate_lineage(base, tag, receipt, intent, setup)
     rows, din, dout = setup["rows"], setup["din"], setup["dout"]
     comparison = setup.get("block_validation_comparison", False)
-    execution_arms = COMPARISON_ARMS if comparison else ARMS
+    fused = setup.get("fused_comparison", False)
+    require(type(comparison) is bool and type(fused) is bool and not (comparison and fused),
+            "Invalid or conflicting probe comparison modes")
+    execution_arms = FUSED_ARMS if fused else COMPARISON_ARMS if comparison else ARMS
     require(setup.get("tolerance") == "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
             "Unexpected numerical acceptance gate")
 
     parity = [record for record in records if record["schema"] == "wan_q4k_delta_parity_v1"]
     validate_parity(parity, rows, din, dout, execution_arms,
-                    require_bit_exact=comparison)
+                    require_bit_exact=comparison, require_fused_staged=fused)
+    dense_parity_records = [record for record in records
+                            if record["schema"] == "wan_q4k_delta_dense_parity_v1"]
+    if fused:
+        dense_parity = validate_dense_parity(dense_parity_records, rows, din, dout)
+    else:
+        require(not dense_parity_records,
+                "Unexpected dense-mode parity records outside fused comparison")
+        dense_parity = None
     bf16 = [record for record in records if record["schema"] == "wan_q4k_delta_bf16_control_v1"]
     require(len(bf16) == 1, "Missing or duplicated BF16 control")
     validate_metric(bf16[0].get("decoder"), din * dout, "BF16 decoder control")
@@ -955,9 +1261,9 @@ def read_probe(base: Path, tag: str):
 
     controls = [record for record in records if record["schema"] == "wan_q4k_delta_controls_v1"]
     require(len(controls) == 1, "Missing or duplicated corruption control")
-    validate_corruption_control(controls[0], rows * dout)
+    validate_corruption_control(controls[0], rows * dout, fused_comparison=fused)
 
-    require(len(records) == expected_probe_record_count(len(timings), comparison),
+    require(len(records) == expected_probe_record_count(len(timings), comparison, fused),
             "Missing or extra setup, pack, parity, timing or control records")
     guards = [json.loads(line) for line in paths["guard.jsonl"].read_text().splitlines()]
     memory = validate_guard(guards, intent)
@@ -987,6 +1293,7 @@ def read_probe(base: Path, tag: str):
         }
     return {"tag": tag, "completion_sha256": sha(paths["completion.json"]),
             "lineage": lineage, "setup": setup, "timings_ms": timings_ms,
+            "dense_parity": dense_parity,
             "lossy_quality": loss, "packing": packs,
             "all_decoder_projection_checks_bit_exact": all(
                 record[metric]["bit_differences"] == 0

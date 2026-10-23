@@ -79,6 +79,54 @@ def timing_records(rounds: int = 16, reverse_first: bool = False,
     return records
 
 
+def fused_timing_records(rounds: int = 16, reverse_first: bool = False,
+                         manifest_sha256: str = "a" * 64) -> list[dict]:
+    """Create the separately scheduled dense and fused timing populations."""
+    records = []
+    for mode in results.FUSED_MODES:
+        for round_id in (-2, -1, *range(rounds)):
+            if mode == "dense_mode":
+                if round_id < 0:
+                    order = (("dense_native", "dense_mps") if round_id == -2 else
+                             ("dense_mps", "dense_native"))
+                    if reverse_first:
+                        order = tuple(reversed(order))
+                else:
+                    abba = (round_id < rounds // 2) != reverse_first
+                    order = (("dense_native", "dense_mps", "dense_mps", "dense_native")
+                             if abba else
+                             ("dense_mps", "dense_native", "dense_native", "dense_mps"))
+            else:
+                rotation = max(round_id, 0) % len(results.ARMS)
+                base_order = results.ARMS[rotation:] + results.ARMS[:rotation]
+                order = [item for arm in base_order for item in (arm, f"{arm}_fused")]
+                if round_id >= 0 and (round_id // len(results.ARMS)) % 2 == 1:
+                    order = [item for index in range(0, len(order), 2)
+                             for item in (order[index + 1], order[index])]
+                reverse = ((round_id == -1) if round_id < 0 else round_id >= rounds // 2)
+                if reverse != reverse_first:
+                    order.reverse()
+            for position, arm in enumerate(order):
+                records.append({
+                    "schema": "wan_q4k_delta_timing_v1",
+                    "mode": mode,
+                    "manifest_sha256": manifest_sha256,
+                    "rows": ROWS,
+                    "terminal_waits": 1,
+                    "inter_operator_host_waits": 0,
+                    "activation_readbacks": 0,
+                    "encode_metal_buffer_allocations": 0,
+                    "round": round_id,
+                    "position": position,
+                    "warmup": round_id < 0,
+                    "variant": arm,
+                    "gpu_seconds": 0.001 + position * 0.00001,
+                    "wall_seconds": 0.002 + position * 0.00001,
+                    "encode_seconds": 0.0001 + position * 0.000001,
+                })
+    return records
+
+
 def valid_guard_events() -> list[dict]:
     physical = 64 * 1024**3
     sample = {
@@ -311,6 +359,7 @@ def make_reference_fixture(base: Path, rows: int = ROWS) -> tuple[Path, dict[str
 
 def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                               block_validation_comparison: bool = False,
+                              fused_comparison: bool = False,
                               reverse_first: bool = False) -> tuple[str, dict[str, str]]:
     fixture, fixture_files = make_reference_fixture(base, ROWS)
     source_manifest = Path(fixture_files["__source_manifest__"])
@@ -322,6 +371,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     manifest_sha = results.sha(output_manifest)
 
     metric = ZERO_METRIC
+    if block_validation_comparison and fused_comparison:
+        raise ValueError("Comparison modes are mutually exclusive")
     setup = {
         "schema": "wan_q4k_delta_setup_v1",
         "manifest_sha256": manifest_sha,
@@ -333,7 +384,7 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "variants": list(results.ARMS),
         "per_arm_storage": {arm: results.expected_storage(arm) for arm in results.ARMS},
         "shared_bias_bytes": DOUT * 4,
-        "f32_stage_bytes": DIN * DOUT * 4,
+        "f32_stage_bytes": results.WEIGHT_COUNT * 4,
         "packing_workspace_bytes": 0,
         "explicit_buffer_bytes_during_pack": 1024**3,
         "reverse_first": False,
@@ -346,6 +397,25 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         setup["format_by_arm"] = {
             arm: arm.removesuffix("_block") for arm in EXECUTION_ARMS
         }
+    if fused_comparison:
+        setup.update({
+            "block_validation_comparison": False,
+            "fused_comparison": True,
+            "execution_arms": list(results.FUSED_ARMS),
+            "format_by_arm": {
+                arm: arm.removesuffix("_fused") for arm in results.FUSED_ARMS
+            },
+            "fused_staged_control_decoder": "block_validated",
+            "candidate_global_f32_weight_stage_bytes": 0,
+            "control_f32_weight_stage_bytes": results.WEIGHT_COUNT * 4,
+            "retained_harness_bytes_excluding_stage": 1024**3 - results.WEIGHT_COUNT * 4,
+            "q4_k_fused_dummy_sidecar_bytes": 4,
+            "candidate_pipeline": "video_q4k_delta_linear_f32",
+            "candidate_static_threadgroup_memory_bytes": 0,
+            "dense_mode_execution_arms": ["dense_native", "dense_mps"],
+            "dense_mode_weight_format": "q4_k",
+            "dense_mode_internal_tile_shape": {"tm": 64, "tn": 32, "tk": 32},
+        })
     setup["reverse_first"] = reverse_first
     records = [setup]
     for arm in results.ARMS[1:]:
@@ -366,7 +436,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "decoder": metric(DIN * DOUT),
         "projection": metric(ROWS * DOUT),
     })
-    execution_arms = EXECUTION_ARMS if block_validation_comparison else results.ARMS
+    execution_arms = (results.FUSED_ARMS if fused_comparison else
+                      EXECUTION_ARMS if block_validation_comparison else results.ARMS)
     for phase in ("before_timing", "after_timing"):
         for arm in execution_arms:
             records.append({
@@ -375,6 +446,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                 "variant": arm,
                 "decoder": metric(DIN * DOUT),
                 "projection": metric(ROWS * DOUT),
+                **({"fused_vs_staged": metric(ROWS * DOUT)}
+                   if fused_comparison and arm.endswith("_fused") else {}),
                 "lossy_weight_vs_bf16": metric(DIN * DOUT, bit_differences=DIN * DOUT,
                                                tolerance_violations=DIN * DOUT,
                                                rmse=0.1, relative_l2=0.1, cosine=0.99),
@@ -386,16 +459,40 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                 "calibration_rows": [],
                 "unique_evaluation_rows": [0, 1, 2, 3],
             })
-    records.extend(timing_records(
-        rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha,
-        block_validation_comparison=block_validation_comparison))
-    records.append({
+    if fused_comparison:
+        for phase in ("before_timing", "after_timing"):
+            for arm in ("dense_native", "dense_mps"):
+                records.append({
+                    "schema": "wan_q4k_delta_dense_parity_v1",
+                    "phase": phase,
+                    "variant": arm,
+                    "format": "q4_k",
+                    "reference_arm": "q4_k",
+                    "decoder": metric(DIN * DOUT),
+                    "dense_native": metric(ROWS * DOUT),
+                    "dense_mps": metric(ROWS * DOUT),
+                    "dense_native_vs_dense_mps": metric(ROWS * DOUT),
+                })
+        records.extend(fused_timing_records(
+            rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha))
+    else:
+        records.extend(timing_records(
+            rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha,
+            block_validation_comparison=block_validation_comparison))
+    control = {
         "schema": "wan_q4k_delta_controls_v1",
         "corruption_rejected": True,
-        "corruption": metric(ROWS * DOUT, bit_differences=2,
+        "corruption": metric(ROWS * DOUT, bit_differences=4 if fused_comparison else 2,
                               tolerance_violations=2, nonfinite=1),
         "final_status_zero": True,
-    })
+    }
+    if fused_comparison:
+        control.update({
+            "fused_vs_staged_corruption_rejected": True,
+            "fused_vs_staged_corruption": metric(
+                ROWS * DOUT, bit_differences=9, tolerance_violations=2, nonfinite=1),
+        })
+    records.append(control)
 
     stdout = base / "probe-r4.stdout.log"
     stdout.write_text("".join(json.dumps(record, allow_nan=False) + "\n" for record in records))
@@ -459,6 +556,7 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         "tag": "r4",
         "command": [str(binary), f"--fixture={fixture}", f"--rounds={rounds}"] +
                    (["--compare-block-validation"] if block_validation_comparison else []) +
+                   (["--compare-fused"] if fused_comparison else []) +
                    (["--reverse-first"] if reverse_first else []),
         "reverse_first": reverse_first,
         "files": files,
@@ -470,6 +568,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     }
     if block_validation_comparison:
         probe_intent["block_validation_comparison"] = True
+    if fused_comparison:
+        probe_intent["fused_comparison"] = True
     write_json(probe_intent_path, probe_intent)
     probe_receipt = {
         "schema": "wan_q4k_delta_completion_v1",
@@ -506,6 +606,10 @@ class ResultAnalyzerSpec(unittest.TestCase):
         self.assertEqual(comparison_timing_count,
                          (16 + 2) * len(EXECUTION_ARMS) * len(results.MODES))
         self.assertEqual(results.expected_probe_record_count(comparison_timing_count), 310)
+        fused_timing_count = len(fused_timing_records())
+        self.assertEqual(fused_timing_count, (16 + 2) * len(results.FUSED_ARMS) + 4 + 16 * 4)
+        self.assertEqual(results.expected_probe_record_count(
+            fused_timing_count, False, True), 238)
 
     def test_complete_positive_receipt_and_all_arm_records_are_accepted(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -561,6 +665,153 @@ class ResultAnalyzerSpec(unittest.TestCase):
                         {"first", "second"})
                     self.assertIn("rotation_median_range",
                                   comparison["old_over_block_gpu_ratio"])
+
+    def test_complete_fused_comparison_receipt_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, fused_comparison=True, reverse_first=True)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            self.assertIs(accepted["setup"]["fused_comparison"], True)
+            self.assertEqual(accepted["setup"]["execution_arms"], list(results.FUSED_ARMS))
+            self.assertEqual(accepted["lineage"]["fused_comparison"], True)
+            self.assertEqual(set(accepted["lossy_quality"]), set(results.FUSED_ARMS))
+            self.assertEqual(set(accepted["dense_parity"]), {
+                f"{phase}:{arm}"
+                for phase in ("before_timing", "after_timing")
+                for arm in ("dense_native", "dense_mps")
+            })
+            self.assertEqual(set(accepted["timings_ms"]), set(results.FUSED_MODES))
+            timing = accepted["timings_ms"]["fused_projection"]
+            self.assertEqual(set(timing["arms"]), set(results.FUSED_ARMS))
+            self.assertEqual(set(timing["paired_staged_control_over_fused_gpu"]), set(results.ARMS))
+            self.assertEqual(
+                timing["arms"]["q4_k_fused"]["gpu_seconds"]["count"], 16)
+            dense = accepted["timings_ms"]["dense_mode"]
+            self.assertEqual(set(dense["arms"]), {"dense_native", "dense_mps"})
+            self.assertEqual(
+                dense["paired_dense_native_over_mps_gpu"]["all_rounds"]["count"], 16)
+
+    def test_fused_comparison_rejects_schedule_coverage_and_comparator_mutations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(evidence, fused_comparison=True)
+            stdout = evidence / f"probe-{tag}.stdout.log"
+            original_records = [json.loads(line) for line in stdout.read_text().splitlines()]
+
+            def check(mutator, expected_message):
+                records = json.loads(json.dumps(original_records))
+                mutator(records)
+                stdout.write_text("".join(json.dumps(record, allow_nan=False) + "\n"
+                                                 for record in records))
+                receipt_path = evidence / f"probe-{tag}.completion.json"
+                receipt = json.loads(receipt_path.read_text())
+                receipt["stdout_sha256"] = results.sha(stdout)
+                write_json(receipt_path, receipt)
+                with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                    with self.assertRaisesRegex(ValueError, expected_message):
+                        results.read_probe(evidence, tag)
+
+            check(lambda records: records.pop(next(index for index, record in enumerate(records)
+                  if record["schema"] == "wan_q4k_delta_timing_v1" and
+                  record["mode"] == "fused_projection" and record["round"] == 0)),
+                  "fused/dense timing records")
+
+            def break_fused_order(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_timing_v1" and
+                              record["mode"] == "fused_projection" and
+                              record["round"] == 0 and record["position"] == 0)
+                record["variant"] = "q4_k_fused"
+
+            check(break_fused_order, "arm order")
+
+            def break_dense_order(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_timing_v1" and
+                              record["mode"] == "dense_mode" and
+                              record["round"] == 0 and record["position"] == 0)
+                record["variant"] = "dense_mps"
+
+            check(break_dense_order, "Unexpected arm order: dense_mode")
+
+            def make_timing_nonfinite(records):
+                record = next(record for record in records
+                              if record["schema"] == "wan_q4k_delta_timing_v1" and
+                              record["mode"] == "dense_mode" and record["round"] == 0)
+                record["gpu_seconds"] = "nan"
+
+            check(make_timing_nonfinite, "Invalid numeric field")
+
+            check(lambda records: records.pop(next(index for index, record in enumerate(records)
+                  if record["schema"] == "wan_q4k_delta_dense_parity_v1" and
+                  record["phase"] == "after_timing" and record["variant"] == "dense_mps")),
+                  "dense-mode parity records")
+
+            def corrupt_fused_comparator(records):
+                control = next(record for record in records
+                               if record["schema"] == "wan_q4k_delta_controls_v1")
+                control["fused_vs_staged_corruption"]["tolerance_violations"] = 0
+
+            check(corrupt_fused_comparator, "Positive fused/staged corruption")
+
+            def remove_fused_parity(records):
+                records[:] = [record for record in records if not (
+                    record["schema"] == "wan_q4k_delta_parity_v1" and
+                    record["variant"] == "q4_k_fused" and
+                    record["phase"] == "before_timing")]
+
+            check(remove_fused_parity, "parity records")
+
+    def test_fused_comparison_binds_intent_mapping_and_buffer_accounting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(evidence, fused_comparison=True)
+            intent_path = evidence / f"probe-{tag}.intent.json"
+            receipt_path = evidence / f"probe-{tag}.completion.json"
+            original_intent = json.loads(intent_path.read_text())
+
+            intent = json.loads(json.dumps(original_intent))
+            intent["fused_comparison"] = False
+            write_json(intent_path, intent)
+            receipt = json.loads(receipt_path.read_text())
+            receipt["intent_sha256"] = results.sha(intent_path)
+            write_json(receipt_path, receipt)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                with self.assertRaisesRegex(ValueError, "fused comparison flag"):
+                    results.read_probe(evidence, tag)
+
+            write_json(intent_path, original_intent)
+            receipt = json.loads(receipt_path.read_text())
+            receipt["intent_sha256"] = results.sha(intent_path)
+            write_json(receipt_path, receipt)
+
+            def check_setup(mutator, expected_message):
+                stdout = evidence / f"probe-{tag}.stdout.log"
+                original = [json.loads(line) for line in stdout.read_text().splitlines()]
+                records = json.loads(json.dumps(original))
+                setup = next(record for record in records
+                             if record["schema"] == "wan_q4k_delta_setup_v1")
+                mutator(setup)
+                stdout.write_text("".join(json.dumps(record, allow_nan=False) + "\n"
+                                                 for record in records))
+                receipt = json.loads(receipt_path.read_text())
+                receipt["stdout_sha256"] = results.sha(stdout)
+                write_json(receipt_path, receipt)
+                with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                    with self.assertRaisesRegex(ValueError, expected_message):
+                        results.read_probe(evidence, tag)
+
+            check_setup(lambda setup: setup["format_by_arm"].update({"q4_k_fused": "q4_k_delta1"}),
+                        "format mapping")
+            check_setup(lambda setup: setup.update(
+                retained_harness_bytes_excluding_stage=
+                    setup["retained_harness_bytes_excluding_stage"] - 4),
+                "stage, control stage, dummy sidecar or pipeline accounting")
 
     def test_block_comparison_rejects_missing_arm_bad_order_and_non_bit_exact_parity(self):
         with tempfile.TemporaryDirectory() as temporary:

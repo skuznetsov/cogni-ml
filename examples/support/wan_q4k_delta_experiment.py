@@ -49,9 +49,15 @@ def main():
     parser.add_argument('--rounds', type=int, choices=[16, 32])
     parser.add_argument('--compare-block-validation', action='store_true',
                         help='Pair per-value and per-block correction validation in the native probe')
+    parser.add_argument('--compare-fused', action='store_true',
+                        help='Compare fused Q4_K delta projection against block-validated staged controls')
     args = parser.parse_args()
-    if args.compare_block_validation and args.mode != 'probe':
-        parser.error('block-validation comparison is only a probe mode')
+    if args.compare_block_validation and args.compare_fused:
+        parser.error('--compare-block-validation and --compare-fused are mutually exclusive')
+    if (args.compare_block_validation or args.compare_fused) and args.mode != 'probe':
+        parser.error('comparison modes are only available in probe mode')
+    if args.mode in ['spec', 'build', 'probe'] and not (ROOT/'spec/q4k_delta_linear_spec.cr').is_file():
+        raise RuntimeError('Required native Q4_K delta linear spec is missing')
     if args.rounds is None:
         args.rounds = 16
     if args.rounds not in [16, 32]:
@@ -101,7 +107,8 @@ def main():
     if args.mode not in ['oracle', 'cpu-spec']:
         patterns += ['src/**/*.cr', 'src/**/*.metal', 'spec/support/*.cr',
                      'examples/wan_q4k_delta*.cr', 'examples/support/wan_affine_budget_metrics.cr',
-                     'spec/q4k_delta_weights_spec.cr']
+                     'spec/q4k_delta_weights_spec.cr',
+                     'spec/q4k_delta_linear_spec.cr']
     for pattern in patterns:
         for source in ROOT.glob(pattern):
             if source.is_file():
@@ -129,7 +136,8 @@ def main():
     elif args.mode == 'analysis-spec':
         command = [sys.executable, '-B', 'spec/wan_q4k_delta_results_spec.py']
     elif args.mode == 'spec':
-        command = [old_command[0], 'spec', 'spec/q4k_delta_weights_spec.cr', '--link-flags', flags]
+        command = [old_command[0], 'spec', 'spec/q4k_delta_weights_spec.cr',
+                   'spec/q4k_delta_linear_spec.cr', '--link-flags', flags]
     else:
         receipt_path = OUT/f'build-{args.build_tag}.completion.json'
         receipt = json.loads(receipt_path.read_text())
@@ -160,6 +168,8 @@ def main():
         command = [str(binary), '--fixture='+str(fixture), '--rounds='+str(args.rounds)]
         if args.compare_block_validation:
             command += ['--compare-block-validation']
+        if args.compare_fused:
+            command += ['--compare-fused']
         if args.reverse_first:
             command += ['--reverse-first']
     deadline = 240 if args.mode == 'build' else 300
@@ -167,6 +177,7 @@ def main():
               'mode': args.mode, 'tag': args.tag, 'files': files,
               'sparse_delta_ablation': True, 'reverse_first': args.reverse_first,
               'block_validation_comparison': args.compare_block_validation,
+              'fused_comparison': args.compare_fused,
               'head': capture(['git', 'rev-parse', 'HEAD']),
               'status': capture(['git', 'status', '--short']),
               'macos': platform.mac_ver()[0], 'created_unix': time.time(),

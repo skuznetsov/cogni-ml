@@ -9,6 +9,49 @@ allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
 Latest bounded result (2026-10-23):
+[Q4_K sparse-delta GEMM without a global F32 stage](wan-q4k-fused-gemm-benchmark.md).
+Opt-in `Q4KDeltaLinear.linear` consumes packed weights directly with a
+64-by-32-by-32 shared-panel F32 GEMM and four SIMD groups. It retains separate
+F32 reconstruction and addition of half-rounded 0/1/4/8 corrections. Records
+are validated once per output-channel/256-K block in each row tile and reused
+across eight K32 panels. The candidate binds no global decoded-weight stage;
+compiled static threadgroup memory is 14,464 bytes. No model/default change.
+
+The 9 CPU reference tests, 18 analyzer tests and 15 native examples pass,
+including non-dyadic heterogeneous rows, tails, malformed/neighboring valid
+records, sticky status, signed zero and alias/size/allocation guards. Every
+format's full coefficients match independent same-format upstream exactly
+before/after timing. At M4480 all full outputs are bit-exact in both fresh
+opposite-order processes. M4 output low-bit differences remain inside the
+unchanged finite gate (maximum tolerance ratio 0.33294). BF16 and injected
+finite/NaN controls pass; the final GPU status is observed from status words.
+
+Complete decode/GEMM/bias loses to block-validated decode -> reusable F32
+stage -> MPS -> bias in every measured pair. K8 GPU medians are
+59.72000 -> 594.81648 ms A and 63.75567 -> 598.73873 ms B; paired fused/control
+ratios are 9.95983x/9.51305x. K0/K1/K4 also regress. The same-tile dense
+control is already 5.05698x/4.57342x slower than MPS by paired medians, so
+the next discriminator is a competitive native dense GEMM before loader
+optimization. No hardware bottleneck is identified. Staged K0 A/B medians
+drift 5.9%, dense MPS 21.5%; do not pool processes or infer stable ratios.
+
+The candidate removes 270 MiB from its global binding inventory; the combined
+harness retains that control stage and other resources, so no process-RSS
+reduction is measured. All 636 timing samples retain one terminal wait and
+zero inter-op waits/readbacks/tracked explicit encode allocations. Native
+sampled footprint peaks at 2.02292 GiB, estimated cache-aware headroom stays
+at least 18.87155 GiB, pressure-free at least 74%, swap growth zero. Preserve
+15% reserve/floor, 4 GiB cap, 64 MiB swap stop and sampled-guard limitations.
+No full model/block/Studio/generation ran. M4480 repeats four unique seeded
+non-video rows and adds no independent quality evidence. Quantization package
+bytes and reconstructed coefficients are unchanged.
+The speed hypothesis is rejected for this tile/device/input scope. Keep
+staged MPS and the fused route opt-in. The linked report contains final
+source-bound v3 build/v2 probe receipts, exact DoD and refresh boundaries.
+The correlated Mini-Quad is ROBUST for bounded parity/guards/non-promotion,
+VULNERABLE for representative quality and model-wide memory/speed claims.
+
+Previous bounded result (2026-10-23):
 [Q4_K sparse-delta block-shared validation](wan-q4k-block-validation-benchmark.md).
 The opt-in `decode_block_validated` validates/stages 1/4/8 correction records
 once per 256-value block, with the old per-value kernel retained as control.

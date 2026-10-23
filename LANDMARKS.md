@@ -32590,3 +32590,46 @@ Refresh after source/toolchain/device/model/workload changes.
   decode/GEMM without the common stage. Refresh on source/dispatch,
   payload/sidecar/input/geometry, compiler/native objects, OS/SDK/device,
   numerical-policy or schedule changes before reusing this evidence.
+
+## Wan Q4_K sparse-delta GEMM without a global F32 stage (2026-10-23)
+
+- Opt-in `Q4KDeltaLinear.linear` and `kernels/q4k_delta_linear.metal` consume
+  the existing Q4_K/0/1/4/8-delta format with a 64x32x32 shared-panel F32 GEMM,
+  four SIMD groups and 14,464 compiled static threadgroup bytes. Correction
+  records are validated once per output-channel/256-K block in each row tile
+  and reused across eight panels. Separate reconstruction arithmetic,
+  half-rounded additions, signed zero, malformed-slice isolation and sticky
+  status remain intact. No model/default/checkpoint change; omit the probe's
+  `--compare-fused` flag to retain staged MPS.
+- The 15 native examples, 9 CPU reference tests and 18 analyzer tests pass.
+  Full coefficients are bit-exact with independent same-format upstream
+  before/after timing at M4 and both opposite-order M4480 processes. Full
+  M4480 outputs are also bit-exact; M4 low-bit differences have maximum
+  tolerance ratio 0.33294 under unchanged finite `2e-5 + 2e-5*abs(ref)`.
+  BF16/corruption controls and observed final status-word checks pass.
+- All fused pairs regress against block-validated decode -> F32 stage ->
+  MPS -> bias. M4480 K8 GPU medians are 59.72000 -> 594.81648 ms A and
+  63.75567 -> 598.73873 ms B; paired ratios 9.95983x/9.51305x. Same-tile
+  dense is already 5.05698x/4.57342x slower than MPS. Staged K0 medians drift
+  5.9%, dense MPS 21.5% between processes; do not pool or infer a hardware
+  cause. The speed hypothesis is rejected within this tile/device/input scope.
+- Candidate global stage bytes are zero versus 283,115,520 control bytes.
+  The combined harness retains the stage: no process-RSS saving is measured.
+  All 636 timing samples retain one terminal wait and zero inter-op waits,
+  activation readbacks or tracked explicit encode-buffer allocations.
+  Sampled native peak footprint 2.02292 GiB, minimum estimated cache-aware
+  headroom 18.87155 GiB, pressure-free at least 74%, swap growth zero.
+  Preserve 15% reserve/floor, 4 GiB cap, 64 MiB swap stop and sampling limits.
+  No full model/block/Studio/generation. M4480 repeats four non-video rows;
+  no representative quality or model-wide fit/throughput result.
+- Final source-bound build `fused-v3`, probes `fused-r4-v2`, `fused-a4480-v2`,
+  `fused-b4480-v2`; exact commands, receipt pins and object-ancestry limits:
+  `docs/wan-q4k-fused-gemm-benchmark.md`. External
+  `evidence/wan-q4k-delta-20261023/summary-fused-v2.json` SHA256
+  `9d44bba01a8f9467adefbdd998aed6b0cf99cd8b4476368ebba1086c4f87caa4`.
+  Correlated Mini-Quad: ROBUST for bounded parity/observed guards and speed
+  non-promotion; VULNERABLE for broader quality/memory/speed claims. Next
+  execution falsifier: competitive native dense GEMM before another fused
+  loader change, then same-geometry packed tests. Refresh on source/dispatch,
+  payload/sidecar/input/geometry, compiler/native object, OS/SDK/device,
+  numerical-policy or schedule changes before consuming this evidence.

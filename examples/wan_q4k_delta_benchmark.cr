@@ -6,6 +6,7 @@ require "path"
 require "../src/ml/video/metal_linear_mps"
 require "../src/ml/video/packed_weight_decode"
 require "../src/ml/video/q4k_delta_weights"
+require "../src/ml/video/q4k_delta_linear"
 require "../spec/support/video_allocation_counter"
 require "./support/wan_affine_budget_metrics"
 
@@ -13,12 +14,15 @@ fixture_dir = ""
 rounds = 0
 reverse_first = false
 compare_block_validation = false
+compare_fused = false
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
   p.on("--reverse-first", "Reverse the first warmup and paired order") { reverse_first = true }
   p.on("--rounds=N", "Balanced forward/reverse arm rotations") { |v| rounds = v.to_i }
   p.on("--compare-block-validation", "Pair per-value and per-block correction validation") { compare_block_validation = true }
+  p.on("--compare-fused", "Pair fused Q4_K delta projection against block-validated staged controls") { compare_fused = true }
 end
+raise ArgumentError.new("--compare-block-validation and --compare-fused are mutually exclusive") if compare_block_validation && compare_fused
 raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 rounds = 16 if rounds == 0
 raise ArgumentError.new("Invalid balanced round count") unless {16, 32}.includes?(rounds)
@@ -40,8 +44,10 @@ end
 variants = ["q4_k", "q4_k_delta1", "q4_k_delta4", "q4_k_delta8"]
 execution_arms = variants.dup
 execution_arms.concat(variants.map { |name| "#{name}_block" }) if compare_block_validation
+execution_arms = variants.flat_map { |name| [name, "#{name}_fused"] } if compare_fused
 format_by_arm = variants.to_h { |name| {name, name} }
 variants.each { |name| format_by_arm["#{name}_block"] = name } if compare_block_validation
+variants.each { |name| format_by_arm["#{name}_fused"] = name } if compare_fused
 variant_manifest = manifest["variants"]
 raise "Unexpected fixture arm set" unless variant_manifest.as_h.keys.sort == variants.sort
 source_fixture = manifest["source_fixture"]
@@ -102,11 +108,21 @@ begin
   ML::Video::MetalLinearMPS.prepare!
   ML::Video::PackedWeightDecode.prepare!
   ML::Video::Q4KDeltaWeights.prepare!
+  ML::Video::Q4KDeltaLinear.prepare! if compare_fused
   tile = ML::Metal::ComputePipeline.new("affine_budget_tile", AFFINE_BUDGET_SOURCE)
   zero = ML::Metal::ComputePipeline.new("affine_budget_zero", AFFINE_BUDGET_SOURCE)
   compare = ML::Metal::ComputePipeline.new("affine_budget_compare", AFFINE_BUDGET_SOURCE)
   bytes_compare = ML::Metal::ComputePipeline.new("affine_budget_bytes", AFFINE_BUDGET_SOURCE)
   corrupt = ML::Metal::ComputePipeline.new("affine_budget_corrupt", AFFINE_BUDGET_SOURCE)
+  copy = ML::Metal::ComputePipeline.new("affine_budget_copy", AFFINE_BUDGET_SOURCE)
+  poison = ML::Metal::ComputePipeline.new("affine_budget_poison", <<-METAL)
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void affine_budget_poison(device float *dst [[buffer(0)]],
+        constant uint &count [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+      if (i < count) dst[i] = as_type<float>(0x7fc00000u);
+    }
+    METAL
   source = arena.alloc("source", 4 * din)
   input = arena.alloc("input", rows * din)
   original = arena.alloc("original", (weight_count.to_i64 // 2).to_i32)
@@ -117,6 +133,7 @@ begin
   baseline_output = arena.alloc("baseline_output", output_count)
   bias = arena.alloc("bias", dout)
   status = arena.alloc("status", ML::Video::Q4KDeltaWeights::STATUS_WORDS)
+  dummy_sidecar = arena.alloc("q4k_fused_dummy_sidecar", 1) if compare_fused
   status.contents.as(UInt32*).clear(ML::Video::Q4KDeltaWeights::STATUS_WORDS)
   payload = arena.alloc("canonical_q4k", (budget // 4).to_i32)
   sidecars = {} of String => ML::MetalBuffer
@@ -135,6 +152,13 @@ begin
   weight_partials = arena.alloc("weight_partials", ((weight_count + 255) // 256) * 4)
   row_metrics = Array.new(4) { |r| arena.alloc("row_metrics_#{r}", 5) }
   row_partials = Array.new(4) { |r| arena.alloc("row_partials_#{r}", ((dout + 255) // 256) * 4) }
+  staged_output = arena.alloc("staged_output", output_count) if compare_fused
+  staged_metrics = arena.alloc("staged_metrics", 5) if compare_fused
+  staged_partials = arena.alloc("staged_partials", ((output_count + 255) // 256) * 4) if compare_fused
+  dense_native_metrics = arena.alloc("dense_native_metrics", 5) if compare_fused
+  dense_native_partials = arena.alloc("dense_native_partials", ((output_count + 255) // 256) * 4) if compare_fused
+  dense_mps_metrics = arena.alloc("dense_mps_metrics", 5) if compare_fused
+  dense_mps_partials = arena.alloc("dense_mps_partials", ((output_count + 255) // 256) * 4) if compare_fused
   affine_budget_upload(input_path, source, source.size)
   affine_budget_upload(bias_path, bias, bias.size)
   affine_budget_upload(original_path, original, original.size)
@@ -156,7 +180,7 @@ begin
   check_status = -> {
     words = Slice.new(status.contents.as(UInt32*), ML::Video::Q4KDeltaWeights::STATUS_WORDS).to_a
     raise "Sticky codec failure: #{words}" unless words.all?(&.zero?)
-    nil
+    true
   }
   puts({schema: "wan_q4k_delta_setup_v1", manifest_sha256: manifest_hash,
         rows: rows, din: din, dout: dout, unique_source_rows: 4, real_video_derived: false,
@@ -173,7 +197,18 @@ begin
         packing_workspace_bytes: 0,
         reverse_first: reverse_first, variants: variants,
         block_validation_comparison: compare_block_validation, execution_arms: execution_arms,
+        fused_comparison: compare_fused,
         format_by_arm: format_by_arm,
+        fused_staged_control_decoder: compare_fused ? "block_validated" : nil,
+        candidate_global_f32_weight_stage_bytes: compare_fused ? 0_i64 : nil,
+        control_f32_weight_stage_bytes: compare_fused ? stage.size : nil,
+        retained_harness_bytes_excluding_stage: compare_fused ? arena.resident_bytes - stage.size : nil,
+        q4_k_fused_dummy_sidecar_bytes: compare_fused ? dummy_sidecar.not_nil!.size : nil,
+        candidate_pipeline: compare_fused ? ML::Video::Q4KDeltaLinear.linear_pipeline.name : nil,
+        candidate_static_threadgroup_memory_bytes: compare_fused ? ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes : nil,
+        dense_mode_execution_arms: compare_fused ? ["dense_native", "dense_mps"] : nil,
+        dense_mode_weight_format: compare_fused ? "q4_k" : nil,
+        dense_mode_internal_tile_shape: compare_fused ? {tm: 64, tn: 32, tk: 32} : nil,
         mps_storage: "opaque and included in the process guard, excluded from explicit byte sum",
         tolerance: "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)"}.to_json)
   STDOUT.flush
@@ -213,11 +248,17 @@ begin
     raise "GPU packing differs from independent serialized oracle: #{name}" unless differences == 0
   end
 
+  sidecar_for = ->(format : String) {
+    format == "q4_k" ? dummy_sidecar.not_nil! : sidecars[format]
+  }
   decode = ->(encoder : ML::Metal::ComputeEncoder, name : String) {
     format = format_by_arm[name]
-    if format == "q4_k"
+    if compare_fused && name.ends_with?("_fused")
+      ML::Video::Q4KDeltaLinear.decode_probe(encoder, payload, sidecar_for.call(format), stage,
+        status, weight_count, patch_map[format])
+    elsif format == "q4_k"
       ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
-    elsif name != format
+    elsif compare_fused || name != format
       ML::Video::Q4KDeltaWeights.decode_block_validated(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
     else
       ML::Video::Q4KDeltaWeights.decode(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
@@ -227,6 +268,22 @@ begin
   project = ->(encoder : ML::Metal::ComputeEncoder) {
     ML::Video::MetalLinearMPS.project_preexpanded(encoder, input, bias, output, rows,
       din, dout, ML::Video::WeightDType::F32, plan.not_nil!, stage)
+    nil
+  }
+  fused_linear = ->(encoder : ML::Metal::ComputeEncoder, name : String) {
+    format = format_by_arm[name]
+    ML::Video::Q4KDeltaLinear.linear(encoder, input, payload, sidecar_for.call(format), bias,
+      output, status, rows, din, dout, patch_map[format])
+    nil
+  }
+  poison_buffer = ->(encoder : ML::Metal::ComputeEncoder, buffer : ML::MetalBuffer, count : Int32) {
+    encoder.set_pipeline(poison).set_buffer(buffer, 0, ML::Metal::BufferAccess::Write)
+      .set_value(count.to_u32, 1).dispatch_1d(count)
+    nil
+  }
+  preserve_output = ->(encoder : ML::Metal::ComputeEncoder, destination : ML::MetalBuffer) {
+    encoder.set_pipeline(copy).set_buffer(output, 0).set_buffer(destination, 1)
+      .set_value(output_count.to_u32, 2).dispatch_1d(output_count)
     nil
   }
   # Qualify the unchanged native BF16 control before treating its saved
@@ -247,19 +304,76 @@ begin
   bo = affine_budget_metrics(metrics, partials, output_count)
   raise "Native BF16 control failed" unless bw[:tolerance_violations] == 0 && bw[:nonfinite] == 0 && bo[:tolerance_violations] == 0 && bo[:nonfinite] == 0
   puts({schema: "wan_q4k_delta_bf16_control_v1", decoder: bw, projection: bo}.to_json)
+  validate_dense = ->(phase : String) {
+    q4k = variant_manifest["q4_k"]
+    affine_budget_upload(File.join(fixture_dir, q4k["decoded_weight"]["path"].as_s), expected_weight, stage.size)
+    affine_budget_upload(File.join(fixture_dir, q4k["expected_projection"]["path"].as_s), expected_output, output.size)
+    cmd = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(cmd)
+    before = ML::MetalBuffer.video_spec_allocations
+    poison_buffer.call(encoder, stage, weight_count)
+    ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
+    affine_budget_compare(encoder, zero, compare, stage, expected_weight, weight_metrics, weight_partials, weight_count)
+    poison_buffer.call(encoder, output, output_count)
+    ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout)
+    affine_budget_compare(encoder, zero, compare, output, expected_output,
+      dense_native_metrics.not_nil!, dense_native_partials.not_nil!, output_count)
+    preserve_output.call(encoder, staged_output.not_nil!)
+    poison_buffer.call(encoder, output, output_count)
+    project.call(encoder)
+    affine_budget_compare(encoder, zero, compare, output, expected_output,
+      dense_mps_metrics.not_nil!, dense_mps_partials.not_nil!, output_count)
+    affine_budget_compare(encoder, zero, compare, output, staged_output.not_nil!,
+      staged_metrics.not_nil!, staged_partials.not_nil!, output_count)
+    encoder.end_encoding
+    cmd.commit
+    cmd.wait
+    decoder_metric = affine_budget_metrics(weight_metrics, weight_partials, weight_count)
+    native_metric = affine_budget_metrics(dense_native_metrics.not_nil!, dense_native_partials.not_nil!, output_count)
+    mps_metric = affine_budget_metrics(dense_mps_metrics.not_nil!, dense_mps_partials.not_nil!, output_count)
+    cross_metric = affine_budget_metrics(staged_metrics.not_nil!, staged_partials.not_nil!, output_count)
+    check_status.call
+    raise "Dense Q4_K decoder parity failed" unless decoder_metric[:tolerance_violations] == 0 && decoder_metric[:nonfinite] == 0
+    {"dense_native" => native_metric, "dense_mps" => mps_metric, "dense_native_vs_dense_mps" => cross_metric}.each do |name, metric|
+      raise "Dense Q4_K parity failed #{name}" unless metric[:tolerance_violations] == 0 && metric[:nonfinite] == 0
+    end
+    raise "Dense validation encoded an allocation" unless ML::MetalBuffer.video_spec_allocations == before
+    {"dense_native", "dense_mps"}.each do |name|
+      puts({schema: "wan_q4k_delta_dense_parity_v1", phase: phase, variant: name,
+            format: "q4_k", reference_arm: "q4_k", decoder: decoder_metric,
+            dense_native: native_metric, dense_mps: mps_metric,
+            dense_native_vs_dense_mps: cross_metric}.to_json)
+      STDOUT.flush
+    end
+    nil
+  }
   validate = ->(phase : String) {
     execution_arms.each do |name|
       v = variant_manifest[format_by_arm[name]]
+      fused_arm = compare_fused && name.ends_with?("_fused")
       affine_budget_upload(File.join(fixture_dir, v["decoded_weight"]["path"].as_s), expected_weight, stage.size)
       affine_budget_upload(File.join(fixture_dir, v["expected_projection"]["path"].as_s), expected_output, output.size)
       cmd = ML::Metal::CommandBuffer.new
       encoder = ML::Metal::ComputeEncoder.new(cmd)
       before = ML::MetalBuffer.video_spec_allocations
+      poison_buffer.call(encoder, stage, weight_count) if compare_fused
       decode.call(encoder, name)
       affine_budget_compare(encoder, zero, compare, stage, expected_weight, weight_metrics, weight_partials, weight_count)
       affine_budget_compare(encoder, zero, compare, stage, bf16_weight, loss_metrics, loss_partials, weight_count)
-      project.call(encoder)
+      if fused_arm
+        poison_buffer.call(encoder, output, output_count)
+        fused_linear.call(encoder, name)
+      else
+        poison_buffer.call(encoder, output, output_count) if compare_fused
+        project.call(encoder)
+      end
       affine_budget_compare(encoder, zero, compare, output, expected_output, metrics, partials, output_count)
+      if fused_arm
+        affine_budget_compare(encoder, zero, compare, output, staged_output.not_nil!,
+          staged_metrics.not_nil!, staged_partials.not_nil!, output_count)
+      elsif compare_fused
+        preserve_output.call(encoder, staged_output.not_nil!)
+      end
       4.times do |r|
         affine_budget_compare(encoder, zero, compare, output, baseline_output,
           row_metrics[r], row_partials[r], dout, r * dout)
@@ -272,47 +386,76 @@ begin
       check_status.call
       weight_loss = affine_budget_metrics(loss_metrics, loss_partials, weight_count)
       raise "Nonfinite BF16 weight distortion" unless weight_loss[:nonfinite] == 0
+      fused_staged = affine_budget_metrics(staged_metrics.not_nil!, staged_partials.not_nil!, output_count) if fused_arm
       loss = Array.new(4) { |r| affine_budget_metrics(row_metrics[r], row_partials[r], dout) }
       raise "Validation encoded an allocation" unless ML::MetalBuffer.video_spec_allocations == before
-      puts({schema: "wan_q4k_delta_parity_v1", phase: phase, variant: name,
-            decoder: wm, projection: om, lossy_weight_vs_bf16: weight_loss, lossy_vs_bf16_per_source_row: loss,
-            calibration_rows: [] of Int32,
-            unique_evaluation_rows: [0, 1, 2, 3]}.to_json)
+      if fused_arm
+        puts({schema: "wan_q4k_delta_parity_v1", phase: phase, variant: name,
+              decoder: wm, projection: om, fused_vs_staged: fused_staged,
+              lossy_weight_vs_bf16: weight_loss, lossy_vs_bf16_per_source_row: loss,
+              calibration_rows: [] of Int32,
+              unique_evaluation_rows: [0, 1, 2, 3]}.to_json)
+      else
+        puts({schema: "wan_q4k_delta_parity_v1", phase: phase, variant: name,
+              decoder: wm, projection: om, lossy_weight_vs_bf16: weight_loss,
+              lossy_vs_bf16_per_source_row: loss, calibration_rows: [] of Int32,
+              unique_evaluation_rows: [0, 1, 2, 3]}.to_json)
+      end
       STDOUT.flush
       raise "Weight parity failed #{name}: #{wm}" unless wm[:tolerance_violations] == 0 && wm[:nonfinite] == 0
       raise "Projection parity failed #{name}: #{om}" unless om[:tolerance_violations] == 0 && om[:nonfinite] == 0
+      if fused_staged
+        raise "Fused/staged output parity failed #{name}: #{fused_staged}" unless fused_staged[:tolerance_violations] == 0 && fused_staged[:nonfinite] == 0
+      end
       if compare_block_validation && (wm[:bit_differences] != 0 || om[:bit_differences] != 0)
         raise "Validation placement changed exact fixture output: #{name}"
       end
     end
     nil
   }
-  validate.call("before_timing")
-  {"projection", "decode_only"}.each do |mode|
+  prepare_dense_weight = -> {
+    cmd = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(cmd)
+    poison_buffer.call(encoder, stage, weight_count)
+    ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
+    encoder.end_encoding
+    cmd.commit
+    cmd.wait
+    check_status.call
+    nil
+  }
+  if compare_fused
+    validate_dense.call("before_timing")
+    validate.call("before_timing")
+    prepare_dense_weight.call
+
+    # The dense control uses the same Q4_K-decoded coefficients and geometry as
+    # fused_projection. Decode and parity checks are outside each timed sample.
     (-2...rounds).each do |round|
-      order = variants.rotate(Math.max(round, 0) % variants.size)
-      if compare_block_validation
-        swap_pair = round >= 0 && (round // variants.size).odd?
-        order = order.flat_map do |name|
-          pair = [name, "#{name}_block"]
-          swap_pair ? pair.reverse : pair
-        end
+      if round < 0
+        dense_order = round == -2 ? ["dense_native", "dense_mps"] : ["dense_mps", "dense_native"]
+        dense_order = dense_order.reverse if reverse_first
+      else
+        abba = (round < rounds // 2) != reverse_first
+        dense_order = abba ? ["dense_native", "dense_mps", "dense_mps", "dense_native"] : ["dense_mps", "dense_native", "dense_native", "dense_mps"]
       end
-      order = order.reverse if (round == -1 || round >= rounds // 2) != reverse_first
-      order.each_with_index do |name, position|
+      dense_order.each_with_index do |name, position|
         cmd = ML::Metal::CommandBuffer.new
         encoder = ML::Metal::ComputeEncoder.new(cmd)
         before = ML::MetalBuffer.video_spec_allocations
         started = Time.instant
-        decode.call(encoder, name)
-        project.call(encoder) if mode == "projection"
+        if name == "dense_native"
+          ML::Video::Q4KDeltaLinear.dense_linear(encoder, input, stage, bias, output, rows, din, dout)
+        else
+          project.call(encoder)
+        end
         encoder.end_encoding
         encode = (Time.instant - started).total_seconds
         gpu = cmd.commit_and_wait_gpu_elapsed_seconds
         wall = (Time.instant - started).total_seconds
-        raise "Timed encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
+        raise "Timed dense encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
         check_status.call
-        puts({schema: "wan_q4k_delta_timing_v1", mode: mode, variant: name,
+        puts({schema: "wan_q4k_delta_timing_v1", mode: "dense_mode", variant: name,
               round: round, position: position, warmup: round < 0, rows: rows,
               encode_seconds: encode, gpu_seconds: gpu, wall_seconds: wall,
               terminal_waits: 1, inter_operator_host_waits: 0, activation_readbacks: 0,
@@ -320,19 +463,100 @@ begin
         STDOUT.flush
       end
     end
+
+    (-2...rounds).each do |round|
+      order = variants.rotate(Math.max(round, 0) % variants.size).flat_map do |name|
+        [name, "#{name}_fused"]
+      end
+      swap_pair = round >= 0 && (round // variants.size).odd?
+      order = order.each_slice(2).flat_map { |pair| swap_pair ? pair.reverse : pair }.to_a
+      order = order.reverse if (round == -1 || round >= rounds // 2) != reverse_first
+      order.each_with_index do |name, position|
+        cmd = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(cmd)
+        before = ML::MetalBuffer.video_spec_allocations
+        started = Time.instant
+        if name.ends_with?("_fused")
+          ML::Video::Q4KDeltaLinear.linear(encoder, input, payload,
+            sidecar_for.call(format_by_arm[name]), bias, output, status, rows, din, dout,
+            patch_map[format_by_arm[name]])
+        else
+          decode.call(encoder, name)
+          project.call(encoder)
+        end
+        encoder.end_encoding
+        encode = (Time.instant - started).total_seconds
+        gpu = cmd.commit_and_wait_gpu_elapsed_seconds
+        wall = (Time.instant - started).total_seconds
+        raise "Timed fused encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
+        check_status.call
+        puts({schema: "wan_q4k_delta_timing_v1", mode: "fused_projection", variant: name,
+              round: round, position: position, warmup: round < 0, rows: rows,
+              encode_seconds: encode, gpu_seconds: gpu, wall_seconds: wall,
+              terminal_waits: 1, inter_operator_host_waits: 0, activation_readbacks: 0,
+              encode_metal_buffer_allocations: 0, manifest_sha256: manifest_hash}.to_json)
+        STDOUT.flush
+      end
+    end
+    validate_dense.call("after_timing")
+    validate.call("after_timing")
+  else
+    validate.call("before_timing")
+    {"projection", "decode_only"}.each do |mode|
+      (-2...rounds).each do |round|
+        order = variants.rotate(Math.max(round, 0) % variants.size)
+        if compare_block_validation
+          swap_pair = round >= 0 && (round // variants.size).odd?
+          order = order.flat_map do |name|
+            pair = [name, "#{name}_block"]
+            swap_pair ? pair.reverse : pair
+          end
+        end
+        order = order.reverse if (round == -1 || round >= rounds // 2) != reverse_first
+        order.each_with_index do |name, position|
+          cmd = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(cmd)
+          before = ML::MetalBuffer.video_spec_allocations
+          started = Time.instant
+          decode.call(encoder, name)
+          project.call(encoder) if mode == "projection"
+          encoder.end_encoding
+          encode = (Time.instant - started).total_seconds
+          gpu = cmd.commit_and_wait_gpu_elapsed_seconds
+          wall = (Time.instant - started).total_seconds
+          raise "Timed encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
+          check_status.call
+          puts({schema: "wan_q4k_delta_timing_v1", mode: mode, variant: name,
+                round: round, position: position, warmup: round < 0, rows: rows,
+                encode_seconds: encode, gpu_seconds: gpu, wall_seconds: wall,
+                terminal_waits: 1, inter_operator_host_waits: 0, activation_readbacks: 0,
+                encode_metal_buffer_allocations: 0, manifest_sha256: manifest_hash}.to_json)
+          STDOUT.flush
+        end
+      end
+    end
+    validate.call("after_timing")
   end
-  validate.call("after_timing")
   cmd = ML::Metal::CommandBuffer.new
   e = ML::Metal::ComputeEncoder.new(cmd)
   e.set_pipeline(corrupt).set_buffer(output, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
   affine_budget_compare(e, zero, compare, output, expected_output, metrics, partials, output_count)
+  affine_budget_compare(e, zero, compare, output, staged_output.not_nil!,
+    staged_metrics.not_nil!, staged_partials.not_nil!, output_count) if compare_fused
   e.end_encoding
   cmd.commit
   cmd.wait
   corruption = affine_budget_metrics(metrics, partials, output_count)
   raise "Comparator accepted finite/NaN corruption" unless corruption[:tolerance_violations] == 2 && corruption[:nonfinite] == 1
-  puts({schema: "wan_q4k_delta_controls_v1", corruption_rejected: true,
-        corruption: corruption, final_status_zero: true}.to_json)
+  control = {schema: "wan_q4k_delta_controls_v1", corruption_rejected: true,
+             corruption: corruption, final_status_zero: check_status.call}
+  if compare_fused
+    staged_corruption = affine_budget_metrics(staged_metrics.not_nil!, staged_partials.not_nil!, output_count)
+    raise "Comparator accepted fused/staged finite/NaN corruption" unless staged_corruption[:tolerance_violations] == 2 && staged_corruption[:nonfinite] == 1
+    control = control.merge({fused_vs_staged_corruption_rejected: true,
+                             fused_vs_staged_corruption:          staged_corruption})
+  end
+  puts(control.to_json)
 ensure
   plan.try(&.release)
   arena.release
