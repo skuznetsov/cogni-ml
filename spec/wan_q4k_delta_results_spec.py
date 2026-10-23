@@ -494,6 +494,23 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                 "second_half": "forward" if reverse_first else "reverse",
             },
         })
+        if gemm_variant == results.GEMM_DEVICE_F32_VARIANT:
+            setup.update({
+                "gemm_candidate_dense_direct_pipeline": variant_config["dense_pipeline"],
+                "gemm_candidate_dense_direct_tile_shape": variant_config["tile_shape"],
+                "gemm_candidate_dense_direct_threadgroup_threads": variant_config["threads"],
+                "gemm_candidate_dense_direct_static_threadgroup_memory_bytes":
+                    variant_config["dense_static_threadgroup_memory_bytes"],
+                "gemm_candidate_dense_staged_tail_pipeline": variant_config[
+                    "staged_tail_pipeline"],
+                "gemm_candidate_dense_staged_tail_tile_shape": variant_config["tile_shape"],
+                "gemm_candidate_dense_staged_tail_threadgroup_threads":
+                    variant_config["threads"],
+                "gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes":
+                    variant_config["staged_tail_static_threadgroup_memory_bytes"],
+                "gemm_dense_dispatch_partition": results.expected_dense_dispatch_partition(
+                    ROWS, DIN, DOUT, variant_config["tile_shape"]),
+            })
     setup["reverse_first"] = reverse_first
     records = [setup]
     if not gemm_comparison:
@@ -845,6 +862,136 @@ class ResultAnalyzerSpec(unittest.TestCase):
                 with self.assertRaisesRegex(
                         ValueError, "Selected GEMM variant geometry differs"):
                     results.read_probe(evidence, tag)
+
+    def test_dense_device_f32_binds_direct_tail_pipelines_resources_and_m4_fallback(self):
+        candidate = results.GEMM_DEVICE_F32_VARIANT
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            evidence.mkdir()
+            tag, source_pins = complete_synthetic_probe(
+                evidence, gemm_comparison=True, gemm_variant=candidate)
+            with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                accepted = results.read_probe(evidence, tag)
+            setup = accepted["setup"]
+            config = results.GEMM_VARIANTS[candidate]
+            self.assertEqual(setup["gemm_candidate_dense_direct_pipeline"],
+                             config["dense_pipeline"])
+            self.assertEqual(setup["gemm_candidate_dense_direct_tile_shape"],
+                             {"tm": 64, "tn": 32, "tk": 32})
+            self.assertEqual(setup["gemm_candidate_dense_direct_static_threadgroup_memory_bytes"],
+                             8_192)
+            self.assertEqual(setup["gemm_candidate_dense_staged_tail_pipeline"],
+                             config["staged_tail_pipeline"])
+            self.assertEqual(setup[
+                "gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes"],
+                12_288)
+            self.assertEqual(setup["gemm_dense_dispatch_partition"], {
+                "direct_rows": 0, "direct_columns": 13824,
+                "direct_groups_x": 432, "direct_groups_y": 0,
+                "right_tail_groups": 0, "bottom_tail_groups": 432,
+                "direct_dispatches": 0, "staged_tail_dispatches": 1,
+            })
+
+    def test_dense_device_f32_full_and_mixed_dispatch_partitions_are_exact(self):
+        candidate = results.GEMM_DEVICE_F32_VARIANT
+        config = results.GEMM_VARIANTS[candidate]
+        expected = (
+            ((4480, DIN, DOUT), {
+                "direct_rows": 4480, "direct_columns": 13824,
+                "direct_groups_x": 432, "direct_groups_y": 70,
+                "right_tail_groups": 0, "bottom_tail_groups": 0,
+                "direct_dispatches": 1, "staged_tail_dispatches": 0,
+            }),
+            ((65, DIN, 35), {
+                "direct_rows": 64, "direct_columns": 32,
+                "direct_groups_x": 1, "direct_groups_y": 1,
+                "right_tail_groups": 1, "bottom_tail_groups": 2,
+                "direct_dispatches": 1, "staged_tail_dispatches": 2,
+            }),
+        )
+        for (rows, in_dim, out_dim), partition in expected:
+            with self.subTest(rows=rows, out_dim=out_dim):
+                actual = results.expected_dense_dispatch_partition(
+                    rows, in_dim, out_dim, config["tile_shape"])
+                self.assertEqual(actual, partition)
+                setup = {
+                    "gemm_candidate_dense_pipeline": config["dense_pipeline"],
+                    "gemm_candidate_dense_direct_pipeline": config["dense_pipeline"],
+                    "gemm_candidate_dense_direct_tile_shape": config["tile_shape"],
+                    "gemm_candidate_dense_direct_threadgroup_threads": config["threads"],
+                    "gemm_candidate_dense_static_threadgroup_memory_bytes":
+                        config["dense_static_threadgroup_memory_bytes"],
+                    "gemm_candidate_dense_direct_static_threadgroup_memory_bytes":
+                        config["dense_static_threadgroup_memory_bytes"],
+                    "gemm_candidate_dense_staged_tail_pipeline":
+                        config["staged_tail_pipeline"],
+                    "gemm_candidate_dense_staged_tail_tile_shape": config["tile_shape"],
+                    "gemm_candidate_dense_staged_tail_threadgroup_threads":
+                        config["threads"],
+                    "gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes":
+                        config["staged_tail_static_threadgroup_memory_bytes"],
+                    "gemm_dense_dispatch_partition": actual,
+                }
+                results.validate_device_f32_dense_metadata(
+                    setup, rows, in_dim, out_dim, config)
+
+    def test_dense_device_f32_rejects_tampered_full_and_tail_metadata(self):
+        candidate = results.GEMM_DEVICE_F32_VARIANT
+        config = results.GEMM_VARIANTS[candidate]
+        full_partition = results.expected_dense_dispatch_partition(
+            4480, DIN, DOUT, config["tile_shape"])
+        full_setup = {
+            "gemm_candidate_dense_pipeline": config["dense_pipeline"],
+            "gemm_candidate_dense_direct_pipeline": config["dense_pipeline"],
+            "gemm_candidate_dense_direct_tile_shape": config["tile_shape"],
+            "gemm_candidate_dense_direct_threadgroup_threads": config["threads"],
+            "gemm_candidate_dense_static_threadgroup_memory_bytes":
+                config["dense_static_threadgroup_memory_bytes"],
+            "gemm_candidate_dense_direct_static_threadgroup_memory_bytes":
+                config["dense_static_threadgroup_memory_bytes"],
+            "gemm_candidate_dense_staged_tail_pipeline": config["staged_tail_pipeline"],
+            "gemm_candidate_dense_staged_tail_tile_shape": config["tile_shape"],
+            "gemm_candidate_dense_staged_tail_threadgroup_threads": config["threads"],
+            "gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes":
+                config["staged_tail_static_threadgroup_memory_bytes"],
+            "gemm_dense_dispatch_partition": full_partition,
+        }
+        mutations = (
+            ("direct pipeline", "gemm_candidate_dense_direct_pipeline", "wrong_pipeline"),
+            ("tail pipeline", "gemm_candidate_dense_staged_tail_pipeline", "wrong_tail"),
+            ("direct geometry", "gemm_candidate_dense_direct_tile_shape",
+             {"tm": 128, "tn": 32, "tk": 32}),
+            ("tail geometry", "gemm_candidate_dense_staged_tail_tile_shape",
+             {"tm": 32, "tn": 32, "tk": 32}),
+            ("direct resources", "gemm_candidate_dense_direct_static_threadgroup_memory_bytes", 8196),
+            ("tail resources", "gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes", 12284),
+            ("full partition", "gemm_dense_dispatch_partition", {
+                **full_partition, "direct_rows": 4416}),
+        )
+        for name, field, value in mutations:
+            with self.subTest(mutation=name):
+                setup = json.loads(json.dumps(full_setup))
+                setup[field] = value
+                with self.assertRaises(ValueError):
+                    results.validate_device_f32_dense_metadata(
+                        setup, 4480, DIN, DOUT, config)
+
+        tail_setup = json.loads(json.dumps(full_setup))
+        tail_setup["gemm_dense_dispatch_partition"] = \
+            results.expected_dense_dispatch_partition(4, DIN, DOUT, config["tile_shape"])
+        tail_setup["gemm_dense_dispatch_partition"]["bottom_tail_groups"] -= 1
+        with self.assertRaisesRegex(ValueError, "dispatch partition"):
+            results.validate_device_f32_dense_metadata(
+                tail_setup, 4, DIN, DOUT, config)
+
+    def test_direct_device_f32_selector_is_rejected_for_fused_comparison(self):
+        candidate = results.GEMM_DEVICE_F32_VARIANT
+        command = ["/tmp/probe-v1", "--fixture=/tmp/fixture-r4", "--rounds=16",
+                   "--compare-fused", f"--gemm-variant={candidate}"]
+        setup = {"fused_comparison": True, "gemm_variant": candidate}
+        with self.assertRaisesRegex(ValueError, "dense-only|cannot be used for a fused"):
+            results.validate_probe_command(command, False, setup,
+                                           intent_gemm_variant=candidate)
 
     def test_fused_tk64_binds_exact_fused_and_dense_pipeline_memory(self):
         candidate = results.GEMM_TK64_VARIANT

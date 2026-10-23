@@ -9,6 +9,41 @@ allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
 Latest completed bounded result (2026-10-23):
+[native F32 direct device matrix loads](wan-native-device-gemm-benchmark.md).
+The opt-in dense-only M64/N32/K32, four-SIMD-group candidate preserves F32
+and ascending K8 accumulation, loading complete A/B tiles directly from
+device memory. An 8 KiB output panel remains; safe disjoint staged fringes
+use 12 KiB. M4480/N13824/K5120 is one direct dispatch with no fringe. M4
+is staged-tail-only and does not test the direct core. No model/default change.
+
+M4480 GPU medians are legacy 281.63781/281.51931 ms, candidate
+89.55925/89.69533 ms, MPS 54.91767/55.14894 ms in two fresh opposite-order
+processes. Paired candidate/legacy ratios 0.31650x/0.31715x establish about
+3.15x native acceleration; every measured round improves. MPS remains
+faster, with paired candidate/MPS ratios 1.61947x/1.61727x. These controls
+do not isolate staging cost from prior BT32 fragment/layout improvements.
+Keep staged MPS and legacy production selection; direct loading stays opt-in.
+
+DoD passes: 19 native examples, 32 analyzer tests and three source-bound
+GPU probes through `examples/support/wan_q4k_delta_experiment.py`. All 36
+parity metric groups have zero nonfinite values and tolerance violations;
+M4480 full outputs match independent same-format upstream bit for bit.
+M4 maximum tolerance ratio is 0.33169478 at the unchanged finite gate.
+All 324 timing samples retain one terminal wait and zero inter-op waits,
+activation readbacks or tracked explicit encode-buffer allocations.
+Sampled native peak footprint is 2.46706 GiB, minimum estimated cache-aware
+headroom 18.16843 GiB, pressure-free at least 71%, swap growth zero. Preserve
+15% reserve/floor, 4 GiB cap, 64 MiB swap stop, deadlines and sampling limits.
+No full model/block/Studio/generation. Four repeated non-video source rows
+establish bounded execution parity, not representative video/BF16 quality.
+The report records exact receipts, inherited object ancestry limits, red
+test corrections and refresh triggers. The next separate falsifier is packed
+Q4_K/delta execution with the faster cost frame; no packed gain is inferred.
+Correlated Mini-Quad: ROBUST for bounded execution/parity, observed guards
+and native speedup; VULNERABLE for portability, representative quality,
+causal hardware attribution, model-wide benefits or superiority to MPS.
+
+Previous bounded result (2026-10-23):
 [native F32 panel and fragment reuse, followed by Q4_K sparse-delta GEMM](wan-native-gemm-reuse-benchmark.md).
 The best opt-in candidate keeps M64/N32/K32 and four SIMD groups, reuses
 fragments, and stages B[N,K] for transposed SIMD loads. Full-size M4480
@@ -46,10 +81,9 @@ build archive, complete oracle source sets, and external fixture/object/binary
 bytes. Negative tests reject partial/mutated archives and live symlink
 redirection. Historical timings remain tied to archived v1/v2/v3 source;
 final tests do not relabel them as timings of final source. Commands, hashes,
-ancestry limits and refresh boundaries are in the report. Competitive exact
-native F32 GEMM remains open. Next falsifier: direct device SIMD matrix loads
-with a separate safe tail path, testing staging/barrier cost before another
-packed return. This next variant is not implemented or measured.
+ancestry limits and refresh boundaries are in the report. Its proposed
+direct-device follow-up is now measured in the latest result above;
+competitive exact native F32 performance against MPS still remains open.
 Correlated Mini-Quad is ROBUST for bounded parity/failure controls, observed
 guards and the two-process native gain; VULNERABLE for representative
 quality, hardware-cause inference, model-wide benefits or MPS superiority.

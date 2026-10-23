@@ -32680,3 +32680,49 @@ Refresh after source/toolchain/device/model/workload changes.
   Correlated Mini-Quad: ROBUST for bounded parity/failure controls, observed
   guards and the two-process BT32 native gain; VULNERABLE for representative
   quality, hardware-cause inference, model-wide benefits or MPS superiority.
+
+## Wan native F32 direct device matrix loads (2026-10-23)
+
+- Opt-in `Q4KDeltaLinear::GemmVariant::B64N32S4DeviceF32` loads complete
+  M64/N32/K32 tiles directly from F32 device A/B with four SIMD groups,
+  fragment reuse and unchanged ascending K8 accumulation. The output panel
+  uses 8 KiB compiled threadgroup storage; disjoint staged right/bottom
+  fringes use 12 KiB. Setup prepares pipelines, and at most three dispatches
+  share the caller's encoder. Packed use is rejected. Legacy and staged
+  MPS remain rollback; no model, precision or production default changes.
+- On M4480/N13824/K5120, GPU medians in opposite-order A/B processes are
+  legacy 281.63781/281.51931 ms, candidate 89.55925/89.69533 ms, MPS
+  54.91767/55.14894 ms. Paired candidate/legacy medians 0.31650x/0.31715x
+  show about 3.15x native acceleration, improving in every measured round.
+  Candidate/MPS remains 1.61947x/1.61727x. M4 is staged-tail-only, not a
+  device-core measurement. No matched BT32 control isolates staging cost.
+- Guarded DoD through `examples/support/wan_q4k_delta_experiment.py`:
+  `spec dense-device-native-v2` passes 19 native examples;
+  `analysis-spec dense-device-analysis-v2` passes 32 analyzer tests;
+  build `dense-device-v1` and probes `dense-device-r4-v1`,
+  `dense-device-a4480-v1`, `dense-device-b4480-v1` pass. All 36 parity
+  metric groups have zero nonfinite values/violations under unchanged finite
+  `2e-5 + 2e-5*abs(ref)`. Full M4480 coefficients/outputs are bit-exact with
+  same-format upstream; M4 maximum tolerance ratio 0.33169478. Corruption
+  controls reject injected finite/NaN errors and final GPU status is zero.
+- All 324 timing samples retain one terminal wait and zero inter-op host
+  waits, activation readbacks or tracked encode-buffer allocations. Sampled
+  native peak footprint is 2.46706 GiB, minimum estimated cache-aware
+  headroom 18.16843 GiB, pressure-free at least 71%, swap growth zero.
+  Preserve 15% reserve/floor, 4 GiB cap, 64 MiB system swap stop, deadlines
+  and sampling limits. No full model/block/Studio/generation. Four repeated
+  non-video source rows and Q4_K-decoded F32 coefficients do not establish
+  representative video quality, original-BF16 quality or model-wide speed.
+- Exact commands, red test corrections, receipt pins and inherited object
+  ancestry limits: `docs/wan-native-device-gemm-benchmark.md`. Strict external
+  `evidence/wan-q4k-delta-20261023/summary-native-device-v1.json` SHA256:
+  `55db527c28da55ebb8c07fedaa47eab4670595bc245ae80105bee70dca20784c`.
+  All successful receipts have `changed_files: []`; archived runtime bytes
+  and complete oracle/fixture/object pins bind the measurements. Next
+  separate falsifier: packed Q4_K/delta execution using this faster cost
+  frame; do not transfer the dense gain automatically. Refresh on source,
+  dispatch, input/geometry, payload/sidecar, compiler/native object, OS/SDK/
+  device, numerical-policy or schedule changes. Correlated Mini-Quad:
+  ROBUST for bounded execution/parity, observed guards and native speedup;
+  VULNERABLE for portability, representative quality, hardware-cause
+  inference, model-wide benefits or superiority to MPS.

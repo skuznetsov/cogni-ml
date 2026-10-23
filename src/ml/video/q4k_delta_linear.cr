@@ -7,6 +7,7 @@ module ML::Video::Q4KDeltaLinear
     B128N32S4K32
     B64N32S4K32BT
     B64N32S4K64BT
+    B64N32S4DeviceF32
   end
 
   BLOCK_ELEMENTS               =   256
@@ -26,6 +27,9 @@ module ML::Video::Q4KDeltaLinear
   BT_K64_CANDIDATE_TILE_M      =  64
   BT_K64_CANDIDATE_TILE_N      =  32
   BT_K64_CANDIDATE_TILE_K      =  64
+  DEVICE_F32_CANDIDATE_TILE_M  =  64
+  DEVICE_F32_CANDIDATE_TILE_N  =  32
+  DEVICE_F32_CANDIDATE_TILE_K  =  32
   GEMM_THREADS                 = 128
 
   LEGACY_LINEAR_KERNEL           = "video_q4k_delta_linear_f32"
@@ -36,6 +40,8 @@ module ML::Video::Q4KDeltaLinear
   BT_CANDIDATE_DENSE_KERNEL      = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk32_bt"
   BT_K64_CANDIDATE_LINEAR_KERNEL = "video_q4k_delta_linear_f32_candidate_b64n32_sg4_tk64_bt"
   BT_K64_CANDIDATE_DENSE_KERNEL  = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk64_bt"
+  DEVICE_F32_DENSE_KERNEL        = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32"
+  DEVICE_F32_TAIL_KERNEL         = "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail"
 
   SOURCE = {{ read_file("#{__DIR__}/kernels/q4k_delta_linear.metal") }}
 
@@ -47,6 +53,8 @@ module ML::Video::Q4KDeltaLinear
   @@bt_candidate_dense_pipeline : ML::Metal::ComputePipeline?
   @@bt_k64_candidate_linear_pipeline : ML::Metal::ComputePipeline?
   @@bt_k64_candidate_dense_pipeline : ML::Metal::ComputePipeline?
+  @@device_f32_candidate_dense_pipeline : ML::Metal::ComputePipeline?
+  @@device_f32_candidate_tail_pipeline : ML::Metal::ComputePipeline?
   @@decode_pipeline : ML::Metal::ComputePipeline?
 
   # Compile and validate reusable kernels during setup. Encode methods only
@@ -76,6 +84,12 @@ module ML::Video::Q4KDeltaLinear
     @@bt_k64_candidate_dense_pipeline ||= ML::Metal::PipelineCache.get(BT_K64_CANDIDATE_DENSE_KERNEL) do
       ML::Metal::ComputePipeline.new(BT_K64_CANDIDATE_DENSE_KERNEL, SOURCE)
     end
+    @@device_f32_candidate_dense_pipeline ||= ML::Metal::PipelineCache.get(DEVICE_F32_DENSE_KERNEL) do
+      ML::Metal::ComputePipeline.new(DEVICE_F32_DENSE_KERNEL, SOURCE)
+    end
+    @@device_f32_candidate_tail_pipeline ||= ML::Metal::PipelineCache.get(DEVICE_F32_TAIL_KERNEL) do
+      ML::Metal::ComputePipeline.new(DEVICE_F32_TAIL_KERNEL, SOURCE)
+    end
     @@decode_pipeline ||= ML::Metal::PipelineCache.get("video_q4k_delta_decode_probe") do
       ML::Metal::ComputePipeline.new("video_q4k_delta_decode_probe", SOURCE)
     end
@@ -87,6 +101,8 @@ module ML::Video::Q4KDeltaLinear
     validate_gemm_pipeline!(@@bt_candidate_dense_pipeline.not_nil!, "transposed-B candidate dense control")
     validate_gemm_pipeline!(@@bt_k64_candidate_linear_pipeline.not_nil!, "TK64 transposed-B candidate fused Q4_K")
     validate_gemm_pipeline!(@@bt_k64_candidate_dense_pipeline.not_nil!, "TK64 transposed-B candidate dense control")
+    validate_gemm_pipeline!(@@device_f32_candidate_dense_pipeline.not_nil!, "device-load candidate dense core")
+    validate_gemm_pipeline!(@@device_f32_candidate_tail_pipeline.not_nil!, "device-load candidate staged tail")
   end
 
   # Expose setup-time pipeline metadata so harnesses can record the actual
@@ -101,6 +117,8 @@ module ML::Video::Q4KDeltaLinear
                  @@bt_candidate_linear_pipeline
                when GemmVariant::B64N32S4K64BT
                  @@bt_k64_candidate_linear_pipeline
+               when GemmVariant::B64N32S4DeviceF32
+                 raise ArgumentError.new("The device-load GEMM variant is dense-only")
                end
     selected || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
   end
@@ -115,8 +133,20 @@ module ML::Video::Q4KDeltaLinear
                  @@bt_candidate_dense_pipeline
                when GemmVariant::B64N32S4K64BT
                  @@bt_k64_candidate_dense_pipeline
+               when GemmVariant::B64N32S4DeviceF32
+                 @@device_f32_candidate_dense_pipeline
                end
     selected || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
+  end
+
+  # The direct-load candidate is dense-only. Its safe fringe kernel stages the
+  # same 64x32x32 tile used by the transposed-B control, with caller-supplied
+  # group origins so right and bottom fringes remain disjoint.
+  def self.dense_staged_tail_pipeline(variant : GemmVariant) : ML::Metal::ComputePipeline
+    unless variant == GemmVariant::B64N32S4DeviceF32
+      raise ArgumentError.new("Only the device-load GEMM variant has a staged tail pipeline")
+    end
+    @@device_f32_candidate_tail_pipeline || raise ArgumentError.new("Call Q4KDeltaLinear.prepare! before querying the pipeline")
   end
 
   def self.variant_name(variant : GemmVariant = GemmVariant::Legacy) : String
@@ -129,6 +159,8 @@ module ML::Video::Q4KDeltaLinear
       "candidate-b64n32-sg4-tk32-bt"
     when GemmVariant::B64N32S4K64BT
       "candidate-b64n32-sg4-tk64-bt"
+    when GemmVariant::B64N32S4DeviceF32
+      "candidate-b64n32-sg4-device-f32"
     else
       raise ArgumentError.new("Unsupported GEMM variant")
     end
@@ -144,6 +176,8 @@ module ML::Video::Q4KDeltaLinear
       BT_CANDIDATE_TILE_M
     when GemmVariant::B64N32S4K64BT
       BT_K64_CANDIDATE_TILE_M
+    when GemmVariant::B64N32S4DeviceF32
+      DEVICE_F32_CANDIDATE_TILE_M
     else
       raise ArgumentError.new("Unsupported GEMM variant")
     end
@@ -159,6 +193,8 @@ module ML::Video::Q4KDeltaLinear
       BT_CANDIDATE_TILE_N
     when GemmVariant::B64N32S4K64BT
       BT_K64_CANDIDATE_TILE_N
+    when GemmVariant::B64N32S4DeviceF32
+      DEVICE_F32_CANDIDATE_TILE_N
     else
       raise ArgumentError.new("Unsupported GEMM variant")
     end
@@ -174,6 +210,8 @@ module ML::Video::Q4KDeltaLinear
       BT_CANDIDATE_TILE_K
     when GemmVariant::B64N32S4K64BT
       BT_K64_CANDIDATE_TILE_K
+    when GemmVariant::B64N32S4DeviceF32
+      DEVICE_F32_CANDIDATE_TILE_K
     else
       raise ArgumentError.new("Unsupported GEMM variant")
     end
@@ -189,6 +227,39 @@ module ML::Video::Q4KDeltaLinear
 
   def self.dense_static_threadgroup_memory_bytes(variant : GemmVariant = GemmVariant::Legacy) : Int64
     dense_pipeline(variant).static_threadgroup_memory_length
+  end
+
+  def self.dense_staged_tail_static_threadgroup_memory_bytes(variant : GemmVariant) : Int64
+    dense_staged_tail_pipeline(variant).static_threadgroup_memory_length
+  end
+
+  # Describe the direct full-tile core and the two disjoint staged fringes.
+  # The direct kernel only receives complete 64x32 tiles; the right fringe
+  # covers core rows, and the bottom fringe covers every column for tail rows.
+  def self.dense_dispatch_partition(rows : Int32, in_dim : Int32, out_dim : Int32,
+                                    variant : GemmVariant = GemmVariant::B64N32S4DeviceF32)
+    unless variant == GemmVariant::B64N32S4DeviceF32
+      raise ArgumentError.new("Dispatch partition is only defined for the device-load GEMM variant")
+    end
+    checked_geometry(rows, in_dim, out_dim)
+    grid_x, grid_y = checked_dispatch_grid!(rows, out_dim, variant)
+    core_x = out_dim // tile_n(variant)
+    core_y = rows // tile_m(variant)
+    right_tail_groups = (grid_x - core_x) * core_y
+    bottom_tail_groups = grid_x * (grid_y - core_y)
+    direct_dispatches = core_x > 0 && core_y > 0 ? 1 : 0
+    staged_tail_dispatches = (right_tail_groups > 0 ? 1 : 0) +
+                             (bottom_tail_groups > 0 ? 1 : 0)
+    {
+      direct_rows:            core_y * tile_m(variant),
+      direct_columns:         core_x * tile_n(variant),
+      direct_groups_x:        core_x,
+      direct_groups_y:        core_y,
+      right_tail_groups:      right_tail_groups,
+      bottom_tail_groups:     bottom_tail_groups,
+      direct_dispatches:      direct_dispatches,
+      staged_tail_dispatches: staged_tail_dispatches,
+    }
   end
 
   # Validate the positive-M/N, 256-multiple-K geometry and every element count
@@ -228,6 +299,9 @@ module ML::Video::Q4KDeltaLinear
                   rows : Int32, in_dim : Int32, out_dim : Int32,
                   patches : Int32,
                   variant : GemmVariant = GemmVariant::Legacy) : Nil
+    if variant == GemmVariant::B64N32S4DeviceF32
+      raise ArgumentError.new("The device-load GEMM variant is dense-only")
+    end
     checked_geometry(rows, in_dim, out_dim)
     validate_patches!(patches)
     input_count = rows.to_i64 * in_dim
@@ -275,6 +349,51 @@ module ML::Video::Q4KDeltaLinear
     assert_all_disjoint!(input, weight, bias, output)
 
     selected = dense_pipeline(variant)
+    if variant == GemmVariant::B64N32S4DeviceF32
+      partition = dense_dispatch_partition(rows, in_dim, out_dim, variant)
+      tail_pipeline = nil.as(ML::Metal::ComputePipeline?)
+      if partition[:staged_tail_dispatches] > 0
+        tail_pipeline = dense_staged_tail_pipeline(variant)
+      end
+
+      if partition[:direct_dispatches] > 0
+        e.set_pipeline(selected)
+        e.set_buffer(input, 0).set_buffer(weight, 1).set_buffer(bias, 2)
+        e.set_buffer(output, 3, ML::Metal::BufferAccess::Write)
+        e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5)
+        e.set_value(out_dim.to_u32, 6)
+        e.dispatch_threadgroups(
+          {partition[:direct_groups_x], partition[:direct_groups_y], 1},
+          {threadgroup_threads(variant), 1, 1})
+      end
+
+      if partition[:right_tail_groups] > 0
+        e.set_pipeline(tail_pipeline.not_nil!)
+        e.set_buffer(input, 0).set_buffer(weight, 1).set_buffer(bias, 2)
+        e.set_buffer(output, 3, ML::Metal::BufferAccess::Write)
+        e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5)
+        e.set_value(out_dim.to_u32, 6)
+        e.set_value(partition[:direct_groups_x].to_u32, 7).set_value(0_u32, 8)
+        e.dispatch_threadgroups(
+          {grid_x - partition[:direct_groups_x], partition[:direct_groups_y], 1},
+          {threadgroup_threads(variant), 1, 1})
+      end
+
+      bottom_tail_groups = grid_y - partition[:direct_groups_y]
+      if bottom_tail_groups > 0
+        e.set_pipeline(tail_pipeline.not_nil!)
+        e.set_buffer(input, 0).set_buffer(weight, 1).set_buffer(bias, 2)
+        e.set_buffer(output, 3, ML::Metal::BufferAccess::Write)
+        e.set_value(rows.to_u32, 4).set_value(in_dim.to_u32, 5)
+        e.set_value(out_dim.to_u32, 6)
+        e.set_value(0_u32, 7).set_value(partition[:direct_groups_y].to_u32, 8)
+        e.dispatch_threadgroups(
+          {grid_x, bottom_tail_groups, 1},
+          {threadgroup_threads(variant), 1, 1})
+      end
+      return
+    end
+
     e.set_pipeline(selected)
     e.set_buffer(input, 0).set_buffer(weight, 1).set_buffer(bias, 2)
     e.set_buffer(output, 3, ML::Metal::BufferAccess::Write)

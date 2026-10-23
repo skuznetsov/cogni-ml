@@ -19,6 +19,7 @@ FUSED_ARMS = tuple(item for arm in ARMS for item in (arm, f"{arm}_fused"))
 FUSED_CANDIDATE_ARMS = tuple(f"{arm}_fused" for arm in ARMS)
 GEMM_CANDIDATE_VARIANT = "candidate-b64n32-sg4-tk32-bt"
 GEMM_TK64_VARIANT = "candidate-b64n32-sg4-tk64-bt"
+GEMM_DEVICE_F32_VARIANT = "candidate-b64n32-sg4-device-f32"
 GEMM_VARIANTS = {
     "legacy": {
         "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
@@ -45,9 +46,22 @@ GEMM_VARIANTS = {
         "dense_static_threadgroup_memory_bytes": 24_576,
         "linear_static_threadgroup_memory_bytes": 26_752,
     },
+    GEMM_DEVICE_F32_VARIANT: {
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32",
+        "dense_static_threadgroup_memory_bytes": 8_192,
+        "staged_tail_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail",
+        "staged_tail_static_threadgroup_memory_bytes": 12_288,
+    },
 }
 GEMM_CANDIDATE_VARIANTS = tuple(name for name in GEMM_VARIANTS if name != "legacy")
-GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS = (GEMM_CANDIDATE_VARIANT, GEMM_TK64_VARIANT)
+GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS = (
+    GEMM_CANDIDATE_VARIANT, GEMM_TK64_VARIANT, GEMM_DEVICE_F32_VARIANT)
+GEMM_DENSE_ONLY_VARIANTS = (GEMM_DEVICE_F32_VARIANT,)
+GEMM_DISPATCH_PARTITION_FIELDS = (
+    "direct_rows", "direct_columns", "direct_groups_x", "direct_groups_y",
+    "right_tail_groups", "bottom_tail_groups", "direct_dispatches",
+    "staged_tail_dispatches")
 GEMM_ARMS = ("dense_native_legacy", "dense_native_candidate", "dense_mps")
 GEMM_MODES = ("dense_gemm",)
 PATCHES_PER_BLOCK = {"q4_k": 0, "q4_k_delta1": 1, "q4_k_delta4": 4, "q4_k_delta8": 8}
@@ -87,6 +101,77 @@ def sha(path: Path | str) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def expected_dense_dispatch_partition(rows: int, in_dim: int, out_dim: int,
+                                      tile_shape: dict) -> dict[str, int]:
+    """Return the disjoint direct-core and staged-fringe dispatch geometry."""
+    require(type(rows) is int and rows > 0 and
+            type(in_dim) is int and in_dim > 0 and
+            type(out_dim) is int and out_dim > 0,
+            "Invalid dense dispatch dimensions")
+    tile_m = tile_shape["tm"]
+    tile_n = tile_shape["tn"]
+    grid_x = (out_dim + tile_n - 1) // tile_n
+    grid_y = (rows + tile_m - 1) // tile_m
+    direct_groups_x = out_dim // tile_n
+    direct_groups_y = rows // tile_m
+    right_tail_groups = (grid_x - direct_groups_x) * direct_groups_y
+    bottom_tail_groups = grid_x * (grid_y - direct_groups_y)
+    return {
+        "direct_rows": direct_groups_y * tile_m,
+        "direct_columns": direct_groups_x * tile_n,
+        "direct_groups_x": direct_groups_x,
+        "direct_groups_y": direct_groups_y,
+        "right_tail_groups": right_tail_groups,
+        "bottom_tail_groups": bottom_tail_groups,
+        "direct_dispatches": int(direct_groups_x > 0 and direct_groups_y > 0),
+        "staged_tail_dispatches": int(right_tail_groups > 0) + int(bottom_tail_groups > 0),
+    }
+
+
+def validate_device_f32_dense_metadata(setup: dict, rows: int,
+                                       in_dim: int, out_dim: int,
+                                       variant_config: dict) -> None:
+    """Bind direct and staged-tail paths to their separate compiled pipelines."""
+    require(setup.get("gemm_candidate_dense_pipeline") == variant_config["dense_pipeline"] and
+            setup.get("gemm_candidate_dense_direct_pipeline") ==
+            variant_config["dense_pipeline"],
+            "Device-F32 direct dense pipeline identity changed")
+    require(setup.get("gemm_candidate_dense_direct_tile_shape") ==
+            variant_config["tile_shape"] and
+            setup.get("gemm_candidate_dense_direct_threadgroup_threads") ==
+            variant_config["threads"],
+            "Device-F32 direct geometry differs from the selected tile")
+    require(setup.get("gemm_candidate_dense_staged_tail_pipeline") ==
+            variant_config["staged_tail_pipeline"],
+            "Device-F32 staged-tail pipeline identity changed")
+    require(setup.get("gemm_candidate_dense_staged_tail_tile_shape") ==
+            variant_config["tile_shape"] and
+            setup.get("gemm_candidate_dense_staged_tail_threadgroup_threads") ==
+            variant_config["threads"],
+            "Device-F32 staged-tail geometry differs from the selected tile")
+    direct_tgm = setup.get("gemm_candidate_dense_static_threadgroup_memory_bytes")
+    named_direct_tgm = setup.get("gemm_candidate_dense_direct_static_threadgroup_memory_bytes")
+    tail_tgm = setup.get("gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes")
+    require(type(direct_tgm) is int and type(named_direct_tgm) is int and
+            direct_tgm == named_direct_tgm ==
+            variant_config["dense_static_threadgroup_memory_bytes"],
+            "Device-F32 direct dense threadgroup memory differs from its pipeline")
+    require(type(tail_tgm) is int and tail_tgm ==
+            variant_config["staged_tail_static_threadgroup_memory_bytes"],
+            "Device-F32 staged-tail threadgroup memory differs from its pipeline")
+    expected_partition = expected_dense_dispatch_partition(
+        rows, in_dim, out_dim, variant_config["tile_shape"])
+    actual_partition = setup.get("gemm_dense_dispatch_partition")
+    require(isinstance(actual_partition, dict) and
+            set(actual_partition) == set(GEMM_DISPATCH_PARTITION_FIELDS) and
+            all(type(actual_partition.get(name)) is int
+                for name in GEMM_DISPATCH_PARTITION_FIELDS) and
+            actual_partition == expected_partition and
+            actual_partition["direct_dispatches"] +
+            actual_partition["staged_tail_dispatches"] <= 3,
+            "Device-F32 direct/staged-tail dispatch partition changed")
 
 
 def _finite_number(value, label: str, *, positive: bool = False) -> float:
@@ -754,6 +839,9 @@ def validate_probe_command(command, reverse_first, setup,
     require(isinstance(setup_variant, str) and setup_variant in GEMM_VARIANTS and
             isinstance(intent_variant, str) and intent_variant == setup_variant,
             "GEMM variant differs between intent and setup")
+    if setup_fused:
+        require(setup_variant not in GEMM_DENSE_ONLY_VARIANTS,
+                "Direct-device F32 GEMM selector cannot be used for a fused comparison")
     if setup_gemm:
         require(setup_variant in GEMM_CANDIDATE_VARIANTS,
                 "Dense-GEMM comparison must select an admitted candidate variant")
@@ -1451,6 +1539,8 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
     if comparison:
         expected_formats.update({f"{arm}_block": arm for arm in ARMS})
     if fused:
+        require(gemm_variant not in GEMM_DENSE_ONLY_VARIANTS,
+                "Direct-device F32 GEMM selector cannot be used for a fused comparison")
         expected_formats.update({arm: arm.removesuffix("_fused") for arm in FUSED_ARMS})
         require("execution_arms" in setup and "format_by_arm" in setup,
                 "Fused comparison setup is missing execution-arm mapping")
@@ -1532,6 +1622,10 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
                     "second_half": "forward" if reverse_first else "reverse",
                 },
                 "Dense-GEMM schedule or phase declaration changed")
+        if gemm_variant == GEMM_DEVICE_F32_VARIANT:
+            validate_device_f32_dense_metadata(
+                setup, setup.get("rows"), setup.get("din"), setup.get("dout"),
+                variant_config)
     if comparison or fused or gemm:
         require("execution_arms" in setup and "format_by_arm" in setup,
                 "Comparison setup is missing execution-arm mapping")

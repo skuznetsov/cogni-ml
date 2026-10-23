@@ -55,8 +55,8 @@ def main():
                         help='Compare fused Q4_K delta projection against block-validated staged controls')
     parser.add_argument('--gemm-variant', choices=[
         'legacy', 'candidate-b128n32-sg4-tk32', 'candidate-b64n32-sg4-tk32-bt',
-        'candidate-b64n32-sg4-tk64-bt'],
-                        help='Native GEMM geometry for dense and fused candidate arms')
+        'candidate-b64n32-sg4-tk64-bt', 'candidate-b64n32-sg4-device-f32'],
+                        help='Native GEMM variant; the direct-device F32 selector is dense-only')
     args = parser.parse_args()
     comparison_modes = sum((args.compare_block_validation, args.compare_gemm,
                             args.compare_fused))
@@ -70,6 +70,8 @@ def main():
         parser.error('--compare-gemm requires a candidate variant distinct from the legacy control')
     args.gemm_variant = args.gemm_variant or (
         'candidate-b64n32-sg4-tk32-bt' if args.compare_gemm else 'legacy')
+    if args.compare_fused and args.gemm_variant == 'candidate-b64n32-sg4-device-f32':
+        parser.error('--gemm-variant=candidate-b64n32-sg4-device-f32 is dense-only')
     if args.mode in ['spec', 'build', 'probe'] and not (ROOT/'spec/q4k_delta_linear_spec.cr').is_file():
         raise RuntimeError('Required native Q4_K delta linear spec is missing')
     if args.rounds is None:

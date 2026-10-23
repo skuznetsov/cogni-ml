@@ -401,6 +401,80 @@ static inline void q4kl_run_gemm_reuse(
   }
 }
 
+// Dense-only full-tile discriminator. The direct grid contains complete
+// 64x32 output tiles, and K is validated as a multiple of 256 by the host, so
+// every 8x8 matrix load stays in bounds. Input and row-major [N,K] weights
+// are loaded directly from device memory; only the output tile uses
+// threadgroup storage for the bias epilogue. This removes operand panels and
+// their per-K threadgroup barriers while keeping the B64/32 F32 MAC order.
+static inline void q4kl_run_gemm_device_direct(
+    device const float *input, device const float *weight,
+    device const float *bias, device float *output,
+    uint rows, uint in_dim, uint out_dim, uint2 group, uint tid,
+    uint simdgroup, uint threads, threadgroup float *output_panel) {
+  if (threads != 128u)
+    return;
+
+  const uint row_begin = group.y * Q4KL_TM;
+  const uint col_begin = group.x * Q4KL_TN;
+  if (row_begin + Q4KL_TM > rows || col_begin + Q4KL_TN > out_dim)
+    return;
+  constexpr uint ROW_BLOCKS = Q4KL_TM / 16u;
+  constexpr uint COL_BLOCKS = Q4KL_TN / 16u;
+  simdgroup_float8x8 accum[ROW_BLOCKS * COL_BLOCKS];
+  #pragma clang loop unroll(full)
+  for (uint i = 0u; i < ROW_BLOCKS * COL_BLOCKS; ++i) {
+    accum[i].thread_elements()[0] = 0.0f;
+    accum[i].thread_elements()[1] = 0.0f;
+  }
+
+  const uint sg_row = (simdgroup & 1u) * (Q4KL_TM / 2u);
+  const uint sg_col = (simdgroup >> 1u) * (Q4KL_TN / 2u);
+  simdgroup_float8x8 a_fragment;
+  simdgroup_float8x8 b_fragments[COL_BLOCKS];
+  for (uint k0 = 0u; k0 < in_dim; k0 += Q4KL_TK) {
+    #pragma clang loop unroll(full)
+    for (uint kfrag = 0u; kfrag < Q4KL_TK; kfrag += 8u) {
+      #pragma clang loop unroll(full)
+      for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+        const uint n = col_begin + sg_col + cb * 8u;
+        simdgroup_load(b_fragments[cb],
+            weight + n * in_dim + k0 + kfrag, in_dim, 0, true);
+      }
+      #pragma clang loop unroll(full)
+      for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+        const uint m = row_begin + sg_row + rb * 8u;
+        simdgroup_load(a_fragment,
+            input + m * in_dim + k0 + kfrag, in_dim);
+        #pragma clang loop unroll(full)
+        for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+          const uint acc_index = rb * COL_BLOCKS + cb;
+          simdgroup_multiply_accumulate(accum[acc_index], a_fragment,
+              b_fragments[cb], accum[acc_index]);
+        }
+      }
+    }
+  }
+
+  #pragma clang loop unroll(full)
+  for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+    #pragma clang loop unroll(full)
+    for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+      const uint acc_index = rb * COL_BLOCKS + cb;
+      simdgroup_store(accum[acc_index],
+          output_panel + (sg_row + rb * 8u) * Q4KL_TN + sg_col + cb * 8u,
+          Q4KL_TN);
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  for (uint i = tid; i < Q4KL_TM * Q4KL_TN; i += 128u) {
+    const uint m = row_begin + i / Q4KL_TN;
+    const uint n = col_begin + i % Q4KL_TN;
+    output[m * out_dim + n] = output_panel[i] + bias[n];
+  }
+}
+
 kernel void video_q4k_delta_linear_f32(
     device const float *input [[buffer(0)]],
     device const uchar *payload [[buffer(1)]],
@@ -597,6 +671,51 @@ kernel void video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_tk64_bt(
       bias, output, nullptr, rows, in_dim, out_dim, 0u, group, tid, simdgroup,
       threads.x * threads.y, a_panel, b_panel, patch_indices, patch_deltas,
       block_malformed);
+}
+
+kernel void video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32(
+    device const float *input [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &in_dim [[buffer(5)]],
+    constant uint &out_dim [[buffer(6)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float output_panel[Q4KL_TM * Q4KL_TN];
+  q4kl_run_gemm_device_direct(input, weight, bias, output, rows, in_dim,
+      out_dim, group, tid, simdgroup, threads.x * threads.y, output_panel);
+}
+
+// The direct kernel only covers complete tiles. This staging pipeline handles
+// the disjoint right and bottom fringes by offsetting its local group origin.
+kernel void video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail(
+    device const float *input [[buffer(0)]],
+    device const float *weight [[buffer(1)]],
+    device const float *bias [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &rows [[buffer(4)]],
+    constant uint &in_dim [[buffer(5)]],
+    constant uint &out_dim [[buffer(6)]],
+    constant uint &group_base_x [[buffer(7)]],
+    constant uint &group_base_y [[buffer(8)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float a_panel[Q4KL_TM * Q4KL_TK];
+  threadgroup float b_panel[Q4KL_TK * Q4KL_TN];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  const uint2 tile_group = group + uint2(group_base_x, group_base_y);
+  q4kl_run_gemm_reuse<false, false, false, true>(input, weight, nullptr, nullptr,
+      bias, output, nullptr, rows, in_dim, out_dim, 0u, tile_group, tid,
+      simdgroup, threads.x * threads.y, a_panel, b_panel, patch_indices,
+      patch_deltas, block_malformed);
 }
 
 kernel void video_q4k_delta_decode_probe(
