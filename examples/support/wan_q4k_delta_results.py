@@ -77,6 +77,46 @@ GEMM_DISPATCH_PARTITION_FIELDS = (
     "staged_tail_dispatches")
 GEMM_ARMS = ("dense_native_legacy", "dense_native_candidate", "dense_mps")
 GEMM_MODES = ("dense_gemm",)
+Q4K_KERNEL_ARMS = (
+    "device_q4k_baseline", "device_q4k_map", "device_q4k_index", "staged_mps",
+)
+Q4K_KERNEL_VARIANTS = {
+    "device_q4k_baseline": {
+        "selector": GEMM_DEVICE_Q4K_VARIANT,
+        "variant_name": GEMM_DEVICE_Q4K_VARIANT,
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "direct_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k",
+        "direct_static_threadgroup_memory_bytes": 10_368,
+        "staged_tail_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail",
+        "staged_tail_static_threadgroup_memory_bytes": 14_464,
+    },
+    "device_q4k_map": {
+        "selector": "candidate-b64n32-sg4-device-q4k-map",
+        "variant_name": "candidate-b64n32-sg4-device-q4k-map",
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "direct_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_map",
+        "direct_static_threadgroup_memory_bytes": 10_368,
+        "staged_tail_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail",
+        "staged_tail_static_threadgroup_memory_bytes": 14_464,
+    },
+    "device_q4k_index": {
+        "selector": "candidate-b64n32-sg4-device-q4k-index",
+        "variant_name": "candidate-b64n32-sg4-device-q4k-index",
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "direct_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_index",
+        "direct_static_threadgroup_memory_bytes": 14_464,
+        "staged_tail_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail",
+        "staged_tail_static_threadgroup_memory_bytes": 14_464,
+    },
+}
+Q4K_KERNEL_PAIR_KEYS = tuple(
+    f"{left}__{right}"
+    for index, left in enumerate(Q4K_KERNEL_ARMS)
+    for right in Q4K_KERNEL_ARMS[index + 1:]
+)
+Q4K_KERNEL_FORMAT_BY_ARM = {arm: "all_q4_k_formats" for arm in Q4K_KERNEL_ARMS}
+Q4K_KERNEL_SCHEDULE = "format_rotation_and_arm_rotation_reverse_by_half_v1"
+Q4K_KERNEL_ROUNDS = 16
 PATCHES_PER_BLOCK = {"q4_k": 0, "q4_k_delta1": 1, "q4_k_delta4": 4, "q4_k_delta8": 8}
 MODES = ("projection", "decode_only")
 FUSED_MODES = ("dense_mode", "fused_projection")
@@ -141,6 +181,87 @@ def expected_dense_dispatch_partition(rows: int, in_dim: int, out_dim: int,
         "direct_dispatches": int(direct_groups_x > 0 and direct_groups_y > 0),
         "staged_tail_dispatches": int(right_tail_groups > 0) + int(bottom_tail_groups > 0),
     }
+
+
+def q4k_kernel_round_order(round_id: int, reverse_first: bool) -> list[tuple[str, int, str, int]]:
+    """Return (format, format position, arm, arm position) for one ablation round."""
+    require(type(round_id) is int and round_id in (-1, *range(Q4K_KERNEL_ROUNDS)),
+            "Invalid Q4_K kernel round")
+    require(type(reverse_first) is bool, "Invalid Q4_K kernel reverse-first flag")
+    rotation = max(round_id, 0) % len(ARMS)
+    reverse = reverse_first if round_id < 0 else (round_id >= Q4K_KERNEL_ROUNDS // 2) != reverse_first
+    formats = list(ARMS[rotation:]) + list(ARMS[:rotation])
+    if reverse:
+        formats.reverse()
+    order = []
+    for format_position, format_name in enumerate(formats):
+        format_index = ARMS.index(format_name)
+        arms = list(Q4K_KERNEL_ARMS[(rotation + format_index) % len(Q4K_KERNEL_ARMS):]) + \
+            list(Q4K_KERNEL_ARMS[:(rotation + format_index) % len(Q4K_KERNEL_ARMS)])
+        if reverse:
+            arms.reverse()
+        order.extend((format_name, format_position, arm, arm_position)
+                     for arm_position, arm in enumerate(arms))
+    return order
+
+
+def q4k_kernel_variant_metadata() -> list[dict]:
+    """Expected actual pipeline identities and compiled resources for the three direct arms."""
+    metadata = []
+    for arm in Q4K_KERNEL_ARMS[:3]:
+        variant = Q4K_KERNEL_VARIANTS[arm]
+        metadata.append({
+            "arm": arm,
+            "selector": variant["selector"],
+            "variant_name": variant["variant_name"],
+            "direct_pipeline": variant["direct_pipeline"],
+            "direct_tile_shape": variant["tile_shape"],
+            "direct_threadgroup_threads": variant["threads"],
+            "direct_static_threadgroup_memory_bytes":
+                variant["direct_static_threadgroup_memory_bytes"],
+            "staged_tail_pipeline": variant["staged_tail_pipeline"],
+            "staged_tail_tile_shape": variant["tile_shape"],
+            "staged_tail_threadgroup_threads": variant["threads"],
+            "staged_tail_static_threadgroup_memory_bytes":
+                variant["staged_tail_static_threadgroup_memory_bytes"],
+        })
+    return metadata
+
+
+def validate_q4k_kernel_setup(setup: dict, rows: int, in_dim: int, out_dim: int) -> None:
+    baseline = Q4K_KERNEL_VARIANTS[Q4K_KERNEL_ARMS[0]]
+    require(setup.get("gemm_comparison") is False and
+            setup.get("fused_comparison") is False and
+            setup.get("gemm_variant") == GEMM_DEVICE_Q4K_VARIANT and
+            setup.get("gemm_variant_name") == baseline["variant_name"] and
+            setup.get("gemm_tile_shape") == baseline["tile_shape"] and
+            setup.get("gemm_threadgroup_threads") == baseline["threads"],
+            "Q4_K kernel mode must bind the fixed direct-Q4_K selector and geometry")
+    require(setup.get("q4k_kernel_variants") == q4k_kernel_variant_metadata(),
+            "Q4_K kernel direct/tail selector, pipeline, geometry or resource metadata changed")
+    partition = expected_dense_dispatch_partition(
+        rows, in_dim, out_dim, Q4K_KERNEL_VARIANTS["device_q4k_baseline"]["tile_shape"])
+    require(setup.get("q4k_kernel_dispatch_partition") == partition,
+            "Q4_K kernel direct/tail dispatch partition changed")
+    require(setup.get("q4k_kernel_schedule") == Q4K_KERNEL_SCHEDULE and
+            setup.get("q4k_kernel_schedule_directions") == {
+                "first_half": "reverse" if setup.get("reverse_first") else "forward",
+                "second_half": "forward" if setup.get("reverse_first") else "reverse",
+            } and setup.get("q4k_kernel_warmup_cycles") == 1,
+            "Q4_K kernel schedule or warmup declaration changed")
+    require(setup.get("q4k_kernel_warmup_cycles") == 1 and
+            setup.get("q4k_kernel_comparison") is True and
+            setup.get("q4k_kernel_formats") == list(ARMS),
+            "Q4_K kernel round/warmup coverage changed")
+    require(setup.get("q4k_kernel_candidate_global_f32_weight_stage_bytes") == 0 and
+            setup.get("q4k_kernel_control_f32_weight_stage_bytes") == WEIGHT_COUNT * 4 and
+            setup.get("q4k_kernel_dummy_sidecar_bytes") == 4 and
+            type(setup.get("q4k_kernel_retained_harness_bytes_excluding_stage")) is int and
+            setup["q4k_kernel_retained_harness_bytes_excluding_stage"] >= 0 and
+            type(setup.get("explicit_buffer_bytes_during_pack")) is int and
+            setup["explicit_buffer_bytes_during_pack"] ==
+            setup["q4k_kernel_retained_harness_bytes_excluding_stage"] + WEIGHT_COUNT * 4,
+            "Q4_K direct candidate or staged MPS control weight-stage accounting changed")
 
 
 def validate_device_f32_dense_metadata(setup: dict, rows: int,
@@ -462,6 +583,41 @@ def validate_gemm_parity(records, rows: int, din: int, dout: int) -> dict:
     return summaries
 
 
+def validate_q4k_kernel_parity(records, rows: int, din: int, dout: int) -> dict:
+    """Require upstream and all-pairs strict parity for every format, before/after."""
+    expected = {(phase, format_name)
+                for phase in ("before_timing", "after_timing") for format_name in ARMS}
+    actual = [(record.get("phase"), record.get("format")) for record in records]
+    require(len(actual) == len(expected) and set(actual) == expected,
+            "Missing, duplicate or unexpected Q4_K kernel pre/post parity records")
+    summaries = {}
+    for record in records:
+        phase, format_name = record["phase"], record["format"]
+        require(record.get("schema") == "wan_q4k_delta_kernel_parity_v1" and
+                record.get("reference_arm") == format_name,
+                "Q4_K kernel parity must bind each format to its upstream projection")
+        decoder = record.get("decoder")
+        validate_metric(decoder, din * dout,
+                        f"Q4_K kernel {phase} {format_name} decoder")
+        projections = record.get("projections")
+        require(isinstance(projections, dict) and
+                set(projections) == set(Q4K_KERNEL_ARMS),
+                "Q4_K kernel parity projection arms changed")
+        for arm in Q4K_KERNEL_ARMS:
+            validate_metric(projections[arm], rows * dout,
+                            f"Q4_K kernel {phase} {format_name} {arm} upstream projection")
+        pairs = record.get("pairs")
+        require(isinstance(pairs, dict) and set(pairs) == set(Q4K_KERNEL_PAIR_KEYS),
+                "Q4_K kernel all-pairs parity set changed")
+        for pair in Q4K_KERNEL_PAIR_KEYS:
+            validate_metric(pairs[pair], rows * dout,
+                            f"Q4_K kernel {phase} {format_name} {pair} cross parity")
+        summaries[f"{phase}:{format_name}"] = {
+            "decoder": decoder, "projections": projections, "pairs": pairs,
+        }
+    return summaries
+
+
 def _validate_gemm_timing_records(records, setup: dict, rounds: int,
                                   reverse_first: bool) -> dict:
     require(rounds == 16, "Dense-GEMM comparison requires exactly 16 measured rounds")
@@ -596,6 +752,144 @@ def _validate_gemm_timing_records(records, setup: dict, rounds: int,
             "arms": arm_summaries,
             "paired_candidate_over_legacy_and_mps_gpu": paired,
             "measured_position_counts_by_arm": position_counts,
+            "speed_winner_selected": False,
+        },
+    }
+
+
+def _validate_q4k_kernel_timing_records(records, setup: dict, rounds: int,
+                                        reverse_first: bool) -> dict:
+    require(rounds == Q4K_KERNEL_ROUNDS,
+            "Q4_K kernel comparison uses exactly 16 measured rounds")
+    require(setup.get("q4k_kernel_comparison") is True and
+            setup.get("q4k_kernel_warmup_cycles") == 1,
+            "Unexpected Q4_K kernel timing mode or warmup count")
+    expected_count = (rounds + 1) * len(ARMS) * len(Q4K_KERNEL_ARMS)
+    require(len(records) == expected_count,
+            "Missing or extra Q4_K kernel timing records, including the full-shape warmup")
+    expected_sequence = [
+        (round_id, format_name, format_position, arm, arm_position)
+        for round_id in (-1, *range(rounds))
+        for format_name, format_position, arm, arm_position in
+        q4k_kernel_round_order(round_id, reverse_first)
+    ]
+    actual_sequence = []
+    by_format_round = {}
+    for record in records:
+        require(record.get("mode") == "q4k_kernel_ablation",
+                "Unexpected Q4_K kernel timing mode")
+        require(record.get("manifest_sha256") == setup["manifest_sha256"] and
+                record.get("rows") == setup["rows"],
+                "Q4_K kernel timing provenance or geometry changed")
+        require(type(record.get("terminal_waits")) is int and record["terminal_waits"] == 1 and
+                type(record.get("inter_operator_host_waits")) is int and
+                record["inter_operator_host_waits"] == 0 and
+                type(record.get("activation_readbacks")) is int and
+                record["activation_readbacks"] == 0 and
+                type(record.get("encode_metal_buffer_allocations")) is int and
+                record["encode_metal_buffer_allocations"] == 0,
+                "Q4_K kernel command-chain constraints failed")
+        round_id = record.get("round")
+        require(type(round_id) is int and round_id in (-1, *range(rounds)),
+                "Invalid Q4_K kernel timing round")
+        format_name = record.get("format")
+        arm = record.get("variant")
+        format_position = record.get("format_position")
+        position = record.get("position")
+        require(format_name in ARMS and arm in Q4K_KERNEL_ARMS and
+                type(format_position) is int and 0 <= format_position < len(ARMS) and
+                type(position) is int and 0 <= position < len(Q4K_KERNEL_ARMS),
+                "Invalid Q4_K kernel format or timing position")
+        require(type(record.get("warmup")) is bool and record["warmup"] == (round_id < 0),
+                "Q4_K kernel warmup flag/round mismatch")
+        for key in ("gpu_seconds", "wall_seconds", "encode_seconds"):
+            _finite_number(record.get(key), f"Q4_K kernel {key}", positive=round_id >= 0)
+        actual_sequence.append((round_id, format_name, format_position, arm, position))
+        bucket = by_format_round.setdefault((format_name, round_id), {})
+        require(arm not in bucket, "Duplicate Q4_K kernel arm in a format/round")
+        bucket[arm] = record
+    require(actual_sequence == expected_sequence,
+            "Unexpected Q4_K kernel arm/format order or rotation schedule")
+
+    measured_by_format_round = {}
+    for format_name in ARMS:
+        for round_id in range(rounds):
+            bucket = by_format_round.get((format_name, round_id))
+            require(bucket is not None and set(bucket) == set(Q4K_KERNEL_ARMS),
+                    f"Incomplete Q4_K kernel paired round: {format_name} {round_id}")
+            measured_by_format_round[(format_name, round_id)] = bucket
+
+    arm_summaries = {}
+    paired_by_format = {}
+    position_counts = {}
+    for format_name in ARMS:
+        format_records = [record for (candidate_format, round_id), bucket in by_format_round.items()
+                          if candidate_format == format_name and round_id >= 0
+                          for record in bucket.values()]
+        arm_summaries[format_name] = {
+            arm: {metric: summary([record[metric] * 1000 for record in format_records
+                                   if record["variant"] == arm])
+                  for metric in ("gpu_seconds", "wall_seconds", "encode_seconds")}
+            for arm in Q4K_KERNEL_ARMS
+        }
+        position_counts[format_name] = {
+            arm: {str(position): sum(record["variant"] == arm and record["position"] == position
+                                     for record in format_records)
+                  for position in range(len(Q4K_KERNEL_ARMS))}
+            for arm in Q4K_KERNEL_ARMS
+        }
+        for arm in Q4K_KERNEL_ARMS:
+            require(arm_summaries[format_name][arm]["gpu_seconds"]["count"] == rounds and
+                    set(position_counts[format_name][arm].values()) == {rounds // len(Q4K_KERNEL_ARMS)},
+                    f"Q4_K kernel samples are not balanced by arm/position: {format_name} {arm}")
+
+        pair_summaries = {}
+        for pair_key in Q4K_KERNEL_PAIR_KEYS:
+            left, right = pair_key.split("__", 1)
+            round_details = []
+            for round_id in range(rounds):
+                bucket = measured_by_format_round[(format_name, round_id)]
+                order = [record["variant"] for record in records
+                         if record["round"] == round_id and record["format"] == format_name]
+                left_record, right_record = bucket[left], bucket[right]
+                round_details.append({
+                    "round": round_id,
+                    "half": "first" if round_id < rounds // 2 else "second",
+                    "rotation": round_id % len(Q4K_KERNEL_ARMS),
+                    "direction": "reverse" if ((round_id >= rounds // 2) != reverse_first) else "forward",
+                    "order": order,
+                    "left": left_record,
+                    "right": right_record,
+                    "left_over_right_gpu_ratio": left_record["gpu_seconds"] / right_record["gpu_seconds"],
+                })
+            ratios = [item["left_over_right_gpu_ratio"] for item in round_details]
+            orders = {">".join(item["order"]) for item in round_details}
+            require(len(orders) == 8,
+                    f"Q4_K kernel schedule did not exercise eight orders: {format_name}")
+            pair_summaries[pair_key] = {
+                "left_arm": left,
+                "right_arm": right,
+                "left_over_right_gpu_ratio": {
+                    "all_rounds": summary(ratios),
+                    "by_half": {
+                        half: summary([item["left_over_right_gpu_ratio"] for item in round_details
+                                       if item["half"] == half])
+                        for half in ("first", "second")
+                    },
+                    "by_order": {
+                        order: summary([item["left_over_right_gpu_ratio"] for item in round_details
+                                        if ">".join(item["order"]) == order])
+                        for order in sorted(orders)
+                    },
+                    "rounds": round_details,
+                },
+            }
+        paired_by_format[format_name] = pair_summaries
+    return {
+        "q4k_kernel_ablation": {
+            "arms_by_format": arm_summaries,
+            "paired_gpu_ratios_by_format": paired_by_format,
+            "measured_position_counts_by_format_and_arm": position_counts,
             "speed_winner_selected": False,
         },
     }
@@ -748,7 +1042,8 @@ def _validate_fused_timing_records(records, setup: dict, rounds: int,
 def expected_probe_record_count(timing_count: int,
                                 block_validation_comparison: bool | None = None,
                                 fused_comparison: bool | None = None,
-                                gemm_comparison: bool | None = None) -> int:
+                                gemm_comparison: bool | None = None,
+                                q4k_kernel_comparison: bool | None = None) -> int:
     """Count setup, validation, timing and control records for the selected mode."""
     if gemm_comparison is None:
         gemm_comparison = timing_count == (16 + 2) * len(GEMM_ARMS) * 2
@@ -763,9 +1058,16 @@ def expected_probe_record_count(timing_count: int,
         else:
             fused_comparison = False
     require(type(fused_comparison) is bool, "Invalid fused comparison flag")
-    require(not ((fused_comparison and block_validation_comparison is True) or
-                 (gemm_comparison and (fused_comparison or block_validation_comparison is True))),
-            "Dense-GEMM, fused and block-validation comparisons are mutually exclusive")
+    if q4k_kernel_comparison is None:
+        q4k_kernel_comparison = timing_count == (Q4K_KERNEL_ROUNDS + 1) * len(ARMS) * len(Q4K_KERNEL_ARMS)
+    require(type(q4k_kernel_comparison) is bool, "Invalid Q4_K kernel comparison flag")
+    require(sum((fused_comparison, gemm_comparison,
+                 block_validation_comparison is True, q4k_kernel_comparison)) <= 1,
+            "Comparison modes are mutually exclusive")
+    if q4k_kernel_comparison:
+        require(timing_count == (Q4K_KERNEL_ROUNDS + 1) * len(ARMS) * len(Q4K_KERNEL_ARMS),
+                "Unexpected Q4_K kernel timing record count")
+        return 1 + len(ARMS[1:]) + 1 + len(ARMS) * 2 + timing_count + 1
     if gemm_comparison:
         require(timing_count == (16 + 2) * len(GEMM_ARMS) * 2,
                 "Unexpected dense-GEMM timing record count")
@@ -796,10 +1098,13 @@ def expected_probe_record_count(timing_count: int,
     return 1 + len(ARMS[1:]) + 1 + arm_count * 2 + dense_parity_count + timing_count + 1
 
 
-def validate_corruption_control(record: dict, expected_count: int, *, fused_comparison: bool = False) -> None:
+def validate_corruption_control(record: dict, expected_count: int, *,
+                                fused_comparison: bool = False,
+                                q4k_kernel_comparison: bool = False) -> None:
     metric = record.get("corruption")
     validate_metric(metric, expected_count, "positive corruption control", strict=False)
-    valid_primary_bits = (metric["bit_differences"] >= 2 if fused_comparison else
+    valid_primary_bits = (metric["bit_differences"] >= 2
+                          if fused_comparison or q4k_kernel_comparison else
                           metric["bit_differences"] == 2)
     require(record.get("corruption_rejected") is True and
             record.get("final_status_zero") is True and
@@ -815,6 +1120,13 @@ def validate_corruption_control(record: dict, expected_count: int, *, fused_comp
                 staged["tolerance_violations"] == 2 and
                 staged["nonfinite"] == 1,
                 "Positive fused/staged corruption control did not detect the expected failures")
+    if q4k_kernel_comparison:
+        staged = record.get("q4k_kernel_vs_staged_corruption")
+        validate_metric(staged, expected_count, "Q4_K kernel/staged MPS corruption control", strict=False)
+        require(record.get("q4k_kernel_vs_staged_corruption_rejected") is True and
+                staged["bit_differences"] >= 2 and
+                staged["tolerance_violations"] == 2 and staged["nonfinite"] == 1,
+                "Positive Q4_K kernel/staged MPS corruption control did not detect the expected failures")
 
 
 def validate_pack_records(records) -> list[dict]:
@@ -841,7 +1153,8 @@ def validate_probe_command(command, reverse_first, setup,
                            intent_block_validation_comparison=None,
                            intent_fused_comparison=None,
                            intent_gemm_comparison=None,
-                           intent_gemm_variant=None) -> tuple[Path, Path, int, bool]:
+                           intent_gemm_variant=None,
+                           intent_q4k_kernel_comparison=None) -> tuple[Path, Path, int, bool]:
     require(isinstance(command, list) and 3 <= len(command) <= 6,
             "Unexpected probe command")
     binary = Path(command[0])
@@ -861,14 +1174,17 @@ def validate_probe_command(command, reverse_first, setup,
     setup_comparison = setup.get("block_validation_comparison", False)
     setup_fused = setup.get("fused_comparison", False)
     setup_gemm = setup.get("gemm_comparison", False)
+    setup_q4k_kernels = setup.get("q4k_kernel_comparison", False)
     require(type(setup_comparison) is bool,
             "Invalid block-validation comparison setup flag")
     require(type(setup_fused) is bool,
             "Invalid fused comparison setup flag")
     require(type(setup_gemm) is bool,
             "Invalid dense-GEMM comparison setup flag")
-    require(sum((setup_comparison, setup_fused, setup_gemm)) <= 1,
-            "Dense-GEMM, fused and block-validation comparisons are mutually exclusive")
+    require(type(setup_q4k_kernels) is bool,
+            "Invalid Q4_K kernel comparison setup flag")
+    require(sum((setup_comparison, setup_fused, setup_gemm, setup_q4k_kernels)) <= 1,
+            "Comparison modes are mutually exclusive")
     if intent_block_validation_comparison is None:
         intent_comparison = setup_comparison
     else:
@@ -895,6 +1211,15 @@ def validate_probe_command(command, reverse_first, setup,
     require(intent_gemm is setup_gemm,
             "dense-GEMM comparison flag differs between intent and setup")
 
+    if intent_q4k_kernel_comparison is None:
+        intent_q4k_kernels = setup_q4k_kernels
+    else:
+        require(type(intent_q4k_kernel_comparison) is bool,
+                "Invalid Q4_K kernel comparison intent flag")
+        intent_q4k_kernels = intent_q4k_kernel_comparison
+    require(intent_q4k_kernels is setup_q4k_kernels,
+            "Q4_K kernel comparison flag differs between intent and setup")
+
     setup_variant = setup.get("gemm_variant", "legacy")
     intent_variant = setup_variant if intent_gemm_variant is None else intent_gemm_variant
     require(isinstance(setup_variant, str) and setup_variant in GEMM_VARIANTS and
@@ -906,11 +1231,25 @@ def validate_probe_command(command, reverse_first, setup,
     if setup_gemm:
         require(setup_variant in GEMM_CANDIDATE_VARIANTS,
                 "Dense-GEMM comparison must select an admitted candidate variant")
-    if not (setup_fused or setup_gemm):
+    if setup_q4k_kernels:
+        require(setup_variant == GEMM_DEVICE_Q4K_VARIANT,
+                "Q4_K kernel comparison must bind the baseline direct-Q4_K selector")
+    elif not (setup_fused or setup_gemm):
         require(setup_variant == "legacy",
                 "A non-GEMM probe cannot select a non-legacy GEMM variant")
 
-    if setup_gemm:
+    if setup_q4k_kernels:
+        require(rounds == Q4K_KERNEL_ROUNDS,
+                "Q4_K kernel comparison requires exactly 16 measured rounds")
+        expected_flags = ["--compare-q4k-kernels"]
+        require(command[3:4] == expected_flags,
+                "Probe command Q4_K kernel comparison flag disagrees with setup/intent")
+        expected_reverse = len(command) == 5
+        if expected_reverse:
+            require(command[-1] == "--reverse-first", "Unexpected probe command flag order")
+        require(len(command) == 4 + int(expected_reverse),
+                "Unexpected Q4_K kernel probe command flags")
+    elif setup_gemm:
         expected_flags = ["--compare-gemm", f"--gemm-variant={setup_variant}"]
         require(command[3:3 + len(expected_flags)] == expected_flags,
                 "Probe command dense-GEMM comparison/variant flags disagree with setup/intent")
@@ -951,10 +1290,16 @@ def validate_timing_records(records, setup: dict, rounds: int, reverse_first: bo
     require(type(reverse_first) is bool, "Invalid reverse-first flag")
     fused = setup.get("fused_comparison", False)
     gemm = setup.get("gemm_comparison", False)
+    q4k_kernels = setup.get("q4k_kernel_comparison", False)
     require(type(fused) is bool, "Invalid fused comparison timing flag")
     require(type(gemm) is bool, "Invalid dense-GEMM comparison timing flag")
-    require(not (fused and gemm),
-            "Dense-GEMM and fused comparisons are mutually exclusive")
+    require(type(q4k_kernels) is bool, "Invalid Q4_K kernel comparison timing flag")
+    require(sum((fused, gemm, q4k_kernels)) <= 1,
+            "Comparison timing modes are mutually exclusive")
+    if q4k_kernels:
+        require(setup.get("block_validation_comparison", False) is False,
+                "Q4_K kernel and block-validation comparisons are mutually exclusive")
+        return _validate_q4k_kernel_timing_records(records, setup, rounds, reverse_first)
     if fused:
         require(setup.get("block_validation_comparison", False) is False,
                 "Fused and block-validation comparisons are mutually exclusive")
@@ -1580,21 +1925,25 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
         intent.get("block_validation_comparison", False),
         intent.get("fused_comparison", False),
         intent.get("gemm_comparison", False),
-        intent.get("gemm_variant", "legacy"))
+        intent.get("gemm_variant", "legacy"),
+        intent.get("q4k_kernel_comparison", False))
     build_tag = binary.name.removeprefix("probe-")
     source_archive = base / f"sources-{build_tag}"
     files = _validate_file_map(intent.get("files"), source_archive=source_archive)
     comparison = setup.get("block_validation_comparison", False)
     fused = setup.get("fused_comparison", False)
     gemm = setup.get("gemm_comparison", False)
+    q4k_kernels = setup.get("q4k_kernel_comparison", False)
     require(type(comparison) is bool and type(fused) is bool and type(gemm) is bool and
-            sum((comparison, fused, gemm)) <= 1,
+            type(q4k_kernels) is bool and
+            sum((comparison, fused, gemm, q4k_kernels)) <= 1,
             "Invalid or conflicting comparison mode setup")
     gemm_variant = setup.get("gemm_variant", "legacy")
     require(isinstance(gemm_variant, str) and gemm_variant in GEMM_VARIANTS,
             "Unknown native GEMM variant in setup")
     variant_config = GEMM_VARIANTS[gemm_variant]
-    execution_arms = (GEMM_ARMS if gemm else FUSED_ARMS if fused else
+    execution_arms = (Q4K_KERNEL_ARMS if q4k_kernels else
+                      GEMM_ARMS if gemm else FUSED_ARMS if fused else
                       COMPARISON_ARMS if comparison else ARMS)
     expected_formats = {arm: arm for arm in ARMS}
     if comparison:
@@ -1638,6 +1987,12 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
                 setup.get("dense_mode_weight_format") == "q4_k" and
                 setup.get("dense_mode_internal_tile_shape") == variant_config["tile_shape"],
                 "Dense same-format control mapping or selected tile shape changed")
+    if q4k_kernels:
+        expected_formats.update(Q4K_KERNEL_FORMAT_BY_ARM)
+        require("execution_arms" in setup and "format_by_arm" in setup,
+                "Q4_K kernel comparison setup is missing execution-arm mapping")
+        validate_q4k_kernel_setup(setup, setup.get("rows"), setup.get("din"),
+                                  setup.get("dout"))
     if gemm:
         expected_formats.update({arm: "q4_k" for arm in GEMM_ARMS})
     if fused or gemm:
@@ -1694,7 +2049,7 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
             validate_device_f32_dense_metadata(
                 setup, setup.get("rows"), setup.get("din"), setup.get("dout"),
                 variant_config)
-    if comparison or fused or gemm:
+    if comparison or fused or gemm or q4k_kernels:
         require("execution_arms" in setup and "format_by_arm" in setup,
                 "Comparison setup is missing execution-arm mapping")
     if "execution_arms" in setup:
@@ -1785,6 +2140,7 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
             "reverse_first": reverse_first, "manifest_sha256": manifest_sha,
             "block_validation_comparison": comparison, "fused_comparison": fused,
             "gemm_comparison": gemm, "gemm_variant": gemm_variant,
+            "q4k_kernel_comparison": q4k_kernels,
             "storage": reference["storage"],
             "reference_quality": reference["quality"],
             "binary_sha256": receipt["binary_sha256"],
@@ -1805,7 +2161,8 @@ def read_probe(base: Path, tag: str):
     allowed_schemas = {
         "wan_q4k_delta_setup_v1", "wan_q4k_delta_packing_v1", "wan_q4k_delta_bf16_control_v1",
         "wan_q4k_delta_parity_v1", "wan_q4k_delta_dense_parity_v1",
-        "wan_q4k_delta_gemm_parity_v1", "wan_q4k_delta_timing_v1",
+        "wan_q4k_delta_gemm_parity_v1", "wan_q4k_delta_kernel_parity_v1",
+        "wan_q4k_delta_timing_v1",
         "wan_q4k_delta_controls_v1",
     }
     require(all(isinstance(record, dict) and record.get("schema") in allowed_schemas for record in records),
@@ -1818,16 +2175,31 @@ def read_probe(base: Path, tag: str):
     comparison = setup.get("block_validation_comparison", False)
     fused = setup.get("fused_comparison", False)
     gemm = setup.get("gemm_comparison", False)
+    q4k_kernels = setup.get("q4k_kernel_comparison", False)
     require(type(comparison) is bool and type(fused) is bool and type(gemm) is bool and
-            sum((comparison, fused, gemm)) <= 1,
+            type(q4k_kernels) is bool and
+            sum((comparison, fused, gemm, q4k_kernels)) <= 1,
             "Invalid or conflicting probe comparison modes")
     execution_arms = (GEMM_ARMS if gemm else FUSED_ARMS if fused else
+                      Q4K_KERNEL_ARMS if q4k_kernels else
                       COMPARISON_ARMS if comparison else ARMS)
     require(setup.get("tolerance") == "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)",
             "Unexpected numerical acceptance gate")
 
     parity = [record for record in records if record["schema"] == "wan_q4k_delta_parity_v1"]
-    if gemm:
+    q4k_kernel_parity = None
+    if q4k_kernels:
+        require(not parity and not [record for record in records
+                                    if record["schema"] == "wan_q4k_delta_gemm_parity_v1"],
+                "Q4_K kernel mode must use its dedicated all-pairs parity records")
+        gemm_parity = None
+        q4k_kernel_parity = validate_q4k_kernel_parity(
+            [record for record in records
+             if record["schema"] == "wan_q4k_delta_kernel_parity_v1"], rows, din, dout)
+        require(not [record for record in records
+                     if record["schema"] == "wan_q4k_delta_gemm_parity_v1"],
+                "Unexpected dense-GEMM parity records outside GEMM comparison")
+    elif gemm:
         require(not parity, "Dense-GEMM mode must not run the fused full-arm parity set")
         gemm_parity = validate_gemm_parity(
             [record for record in records
@@ -1868,15 +2240,16 @@ def read_probe(base: Path, tag: str):
 
     controls = [record for record in records if record["schema"] == "wan_q4k_delta_controls_v1"]
     require(len(controls) == 1, "Missing or duplicated corruption control")
-    validate_corruption_control(controls[0], rows * dout, fused_comparison=fused)
+    validate_corruption_control(controls[0], rows * dout, fused_comparison=fused,
+                                q4k_kernel_comparison=q4k_kernels)
 
     require(len(records) == expected_probe_record_count(
-        len(timings), comparison, fused, gemm),
+        len(timings), comparison, fused, gemm, q4k_kernels),
             "Missing or extra setup, pack, parity, timing or control records")
     guards = [json.loads(line) for line in paths["guard.jsonl"].read_text().splitlines()]
     memory = validate_guard(guards, intent)
     loss = {}
-    if not gemm:
+    if not gemm and not q4k_kernels:
         before = {record["variant"]: record for record in parity if record["phase"] == "before_timing"}
         after = {record["variant"]: record for record in parity if record["phase"] == "after_timing"}
         formats = setup.get("format_by_arm", {arm: arm for arm in ARMS})
@@ -1904,8 +2277,9 @@ def read_probe(base: Path, tag: str):
             "lineage": lineage, "setup": setup, "timings_ms": timings_ms,
             "dense_parity": dense_parity,
             "gemm_parity": gemm_parity,
+            "q4k_kernel_parity": q4k_kernel_parity,
             "lossy_quality": loss, "packing": packs,
-            "all_decoder_projection_checks_bit_exact": (None if gemm else all(
+            "all_decoder_projection_checks_bit_exact": (None if gemm or q4k_kernels else all(
                 record[metric]["bit_differences"] == 0
                 for record in parity for metric in ("decoder", "projection"))),
             "memory": memory}

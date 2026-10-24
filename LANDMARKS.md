@@ -32777,3 +32777,58 @@ Refresh after source/toolchain/device/model/workload changes.
   causes. Next separate falsifier could be compact rolling decoded panels
   feeding MPS. Refresh on kernel/dispatch, codec, input/geometry, fixture,
   compiler/native object, OS/SDK/device, numerical-policy or schedule changes.
+
+## 2026-10-24 — Q4_K coordinate reuse and quota-dependent delta indexing
+
+- Starting at `bad01824`, opt-in `candidate-b64n32-sg4-device-q4k-map`
+  captures API-derived matrix coordinates once per SIMD group; opt-in
+  `candidate-b64n32-sg4-device-q4k-index` also replaces sparse-delta scans
+  with a 4 KiB packed rank map prepared at existing 256-K boundaries. Keep
+  M64/N32/K32, four SIMD groups, canonical separate F32 base/delta arithmetic,
+  ascending K8 accumulation, malformed isolation and sticky status. Duplicate
+  rank codes are never indexed after malformed validation. No new GPU/host
+  barriers, activation readbacks or global decoded F32 candidate stage.
+  Baseline/Map use 10,368 compiled static threadgroup bytes, Index 14,464.
+  Original selectors and staged MPS remain rollback; no default/model change.
+- Matched M4480/N13824/K5120 A/B processes each use one direct dispatch;
+  M4 is staged-tail-only. Across 32 within-process same-format/round pairs,
+  Map/baseline GPU medians are 0.95884/0.90252/0.89698/0.91529 for 0/1/4/8
+  deltas. Index/baseline is 1.14233/1.00396/0.77266/0.63984: reject universal
+  indexing, retain bounded 22.73%/36.02% latency reductions at 4/8 deltas.
+  Absolute times drift strongly across A/B; do not infer a causal gain from
+  cross-process absolute differences. Best selected direct/MPS paired medians
+  remain 9.60593/9.85730/10.90198/10.97097. No MPS competitiveness claim.
+- Guarded DoD through `examples/support/wan_q4k_delta_experiment.py`:
+  `spec decode-reuse-native-v2` passes 25 examples;
+  `analysis-spec decode-reuse-analysis-v2` passes 38 tests;
+  build `decode-reuse-v1`, probes `decode-reuse-r4-v1`,
+  `decode-reuse-a4480-v1`, `decode-reuse-b4480-v1` and strict combined
+  analysis pass. All 264 same-format metric groups plus six BF16-control
+  groups have zero nonfinite values/violations under unchanged finite
+  `2e-5 + 2e-5*abs(ref)`. All 176 M4480 groups are bit-exact; M4 maximum
+  tolerance ratio is 0.33293873. Corruption injections are rejected and
+  terminal GPU status is zero. All 816 timing samples (768 measured, 48
+  warmups) retain one terminal wait and zero inter-op waits, activation
+  readbacks or tracked explicit encode-buffer allocations.
+- Sampled peak group footprint is 2.74253 GiB, minimum estimated cache-aware
+  headroom 10.32604 GiB, pressure-free at least 69%, swap growth zero.
+  Preserve 15% reserve/floor, 4 GiB cap, 64 MiB system swap stop, deadlines
+  and sampling limits. No full model/block/Studio/generation. Combined
+  harness retains the control's 270 MiB F32 stage; no deployed RSS saving
+  measured. Four non-video source rows tiled to M4480 establish bounded
+  execution parity, not representative video/original-BF16 quality.
+- `docs/wan-q4k-decode-reuse-benchmark.md` records exact commands, numerical
+  attacks, failed MSL/parser qualifications, receipt/binary/fixture pins and
+  inherited native-object ancestry limits. External strict summary under
+  `/opt/mldata_ssd/cogni-ml/video-scene-20261019/evidence/wan-q4k-delta-20261023/`
+  is `summary-decode-reuse-v1.json`, SHA256
+  `48f7e13cb901884783df2452d5e91eba3b5519b75d31bc096938b41dad09f48f`.
+  Successful receipts have `changed_files: []`; 248 runtime source pins
+  match the captured build. Correlated Mini-Quad is ROBUST for bounded
+  parity, failure controls, observed guards and paired direct-control gains;
+  MPS competitiveness/model-wide acceleration remains VULNERABLE. Coordinate
+  loads/scans are reduced, but 9.909 billion logical coefficient decodes
+  remain; sharing reconstruction across row-half groups/wider M is an
+  unmeasured next falsifier, not a hardware-cause conclusion. Refresh on
+  source/codec/fixture/geometry, compiler/native object, backend/OS/SDK/device,
+  numerical-policy or schedule changes.

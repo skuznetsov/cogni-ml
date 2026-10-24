@@ -8,7 +8,49 @@ No new model-path host waits, activation readbacks or encode-time Metal-buffer
 allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
-Latest completed bounded result (2026-10-23):
+Latest completed bounded result (2026-10-24):
+[repeated Q4_K reconstruction and sparse-delta lookup ablations](wan-q4k-decode-reuse-benchmark.md).
+Two opt-in M64/N32/K32, four-SIMD-group selectors capture API-derived
+coordinates once; the second also replaces sparse scans with a 4 KiB packed
+rank map. Canonical F32 reconstruction, separate half-rounded delta addition,
+ascending K8 accumulation, sticky status and malformed-block isolation remain.
+No global decoded F32 candidate stage, added threadgroup barriers or host
+synchronization. Direct static threadgroup memory is 10,368/14,464 bytes.
+
+Full M4480/N13824/K5120 opposite-order A/B probes show coordinate capture
+reducing paired GPU latency about 4–10% across four formats. For 4/8 deltas,
+the rank map reduces latency 22.73%/36.02% against the original register
+kernel (median of 32 within-process same-round ratios); it regresses plain
+Q4_K and is unstable for one delta. Absolute A/B times drift strongly, so
+do not infer gains from cross-process absolute differences. Selected direct
+arms still lose to complete decode -> reusable F32 stage -> MPS -> bias by
+paired medians 9.61/9.86/10.90/10.97 times. Defaults stay unchanged.
+
+Guarded DoD passes 25 native examples, 38 analyzer tests, three source-bound
+probes and strict receipt analysis. All 264 same-format metric groups plus
+six BF16-control groups have zero nonfinite values/violations under the
+unchanged gate. Both M4480 runs are bit-exact; M4 maximum tolerance ratio is
+0.33293873 and exercises only staged fringes. All 816 timing samples (768
+measured, 48 warmups) retain one terminal wait and zero inter-op waits,
+activation readbacks or tracked explicit encode-buffer allocations.
+Sampled peak group footprint is 2.74253 GiB, minimum cache-aware estimated
+headroom 10.32604 GiB, pressure-free at least 69%, swap growth zero. Preserve
+15% reserve/floor, 4 GiB cap, 64 MiB swap stop and sampling limits. No full
+model/block/Studio/generation. The harness retains the control's 270 MiB
+stage, so binding elimination does not measure deployed footprint savings.
+
+Correlated Mini-Quad is ROBUST for bounded parity, failure controls,
+observed guards and measured paired improvements over the direct control;
+the MPS competitiveness/model-wide acceleration objective remains VULNERABLE.
+Four repeated non-video rows establish no representative video/BF16 quality.
+The 9.909 billion logical coefficient reconstructions remain: reuse across
+row-half SIMD groups or a wider M tile is an unmeasured next hypothesis.
+Source counts do not establish hardware causes. Exact commands, receipts,
+red-test qualifications and inherited object-ancestry limits are in the
+report. Refresh on source/codec/fixture/geometry, compiler/native object,
+backend/OS/SDK/device, numerical-policy or schedule changes.
+
+Previous bounded result (2026-10-23):
 [Q4_K sparse deltas reconstructed inside direct GEMM fragments](wan-q4k-register-gemm-benchmark.md).
 The opt-in `candidate-b64n32-sg4-device-q4k` extends M64/N32/K32 with four
 SIMD groups to packed weights. It binds no global decoded F32 weight stage,

@@ -153,6 +153,35 @@ def gemm_timing_records(rounds: int = 16, reverse_first: bool = False,
     return records
 
 
+def q4k_kernel_timing_records(rounds: int = results.Q4K_KERNEL_ROUNDS,
+                              reverse_first: bool = False,
+                              manifest_sha256: str = "a" * 64) -> list[dict]:
+    records = []
+    for round_id in (-1, *range(rounds)):
+        for format_name, format_position, arm, position in \
+                results.q4k_kernel_round_order(round_id, reverse_first):
+            records.append({
+                "schema": "wan_q4k_delta_timing_v1",
+                "mode": "q4k_kernel_ablation",
+                "manifest_sha256": manifest_sha256,
+                "rows": ROWS,
+                "terminal_waits": 1,
+                "inter_operator_host_waits": 0,
+                "activation_readbacks": 0,
+                "encode_metal_buffer_allocations": 0,
+                "round": round_id,
+                "position": position,
+                "format_position": format_position,
+                "warmup": round_id < 0,
+                "format": format_name,
+                "variant": arm,
+                "gpu_seconds": 0.001 + format_position * 0.00001 + position * 0.000001,
+                "wall_seconds": 0.002 + format_position * 0.00001 + position * 0.000001,
+                "encode_seconds": 0.0001 + format_position * 0.000001 + position * 0.0000001,
+            })
+    return records
+
+
 def valid_guard_events() -> list[dict]:
     physical = 64 * 1024**3
     sample = {
@@ -430,11 +459,38 @@ def synthetic_device_q4k_fields(variant_config: dict, rows: int = ROWS,
     }
 
 
+def synthetic_q4k_kernel_fields(rows: int = ROWS, in_dim: int = DIN,
+                                out_dim: int = DOUT,
+                                reverse_first: bool = False) -> dict:
+    """Return exact metadata for the fixed baseline/map/index ablation."""
+    baseline = results.Q4K_KERNEL_VARIANTS["device_q4k_baseline"]
+    staged_bytes = results.WEIGHT_COUNT * 4
+    return {
+        "q4k_kernel_comparison": True,
+        "q4k_kernel_variants": results.q4k_kernel_variant_metadata(),
+        "q4k_kernel_dispatch_partition": results.expected_dense_dispatch_partition(
+            rows, in_dim, out_dim, baseline["tile_shape"]),
+        "q4k_kernel_schedule": results.Q4K_KERNEL_SCHEDULE,
+        "q4k_kernel_schedule_directions": {
+            "first_half": "reverse" if reverse_first else "forward",
+            "second_half": "forward" if reverse_first else "reverse",
+        },
+        "q4k_kernel_warmup_cycles": 1,
+        "q4k_kernel_formats": list(results.ARMS),
+        "q4k_kernel_candidate_global_f32_weight_stage_bytes": 0,
+        "q4k_kernel_control_f32_weight_stage_bytes": staged_bytes,
+        "q4k_kernel_retained_harness_bytes_excluding_stage": 1024**3 - staged_bytes,
+        "q4k_kernel_dummy_sidecar_bytes": 4,
+        "explicit_buffer_bytes_during_pack": 1024**3,
+    }
+
+
 def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                               block_validation_comparison: bool = False,
                               fused_comparison: bool = False,
                               gemm_comparison: bool = False,
                               gemm_variant: str | None = None,
+                              q4k_kernel_comparison: bool = False,
                               reverse_first: bool = False) -> tuple[str, dict[str, str]]:
     fixture, fixture_files = make_reference_fixture(base, ROWS)
     source_manifest = Path(fixture_files["__source_manifest__"])
@@ -446,10 +502,12 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     manifest_sha = results.sha(output_manifest)
 
     metric = ZERO_METRIC
-    if sum((block_validation_comparison, fused_comparison, gemm_comparison)) > 1:
+    if sum((block_validation_comparison, fused_comparison, gemm_comparison,
+            q4k_kernel_comparison)) > 1:
         raise ValueError("Comparison modes are mutually exclusive")
     if gemm_variant is None:
-        gemm_variant = (results.GEMM_CANDIDATE_VARIANT if gemm_comparison else "legacy")
+        gemm_variant = (results.GEMM_CANDIDATE_VARIANT if gemm_comparison else
+                        results.GEMM_DEVICE_Q4K_VARIANT if q4k_kernel_comparison else "legacy")
     variant_config = results.GEMM_VARIANTS[gemm_variant]
     setup = {
         "schema": "wan_q4k_delta_setup_v1",
@@ -562,6 +620,18 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                 "gemm_dense_dispatch_partition": results.expected_dense_dispatch_partition(
                     ROWS, DIN, DOUT, variant_config["tile_shape"]),
             })
+    if q4k_kernel_comparison:
+        setup.update({
+            "block_validation_comparison": False,
+            "fused_comparison": False,
+            "gemm_comparison": False,
+            "execution_arms": list(results.Q4K_KERNEL_ARMS),
+            "format_by_arm": {
+                **{arm: arm for arm in results.ARMS},
+                **results.Q4K_KERNEL_FORMAT_BY_ARM,
+            },
+            **synthetic_q4k_kernel_fields(reverse_first=reverse_first),
+        })
     setup["reverse_first"] = reverse_first
     records = [setup]
     if not gemm_comparison:
@@ -585,9 +655,27 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
             "projection": metric(ROWS * DOUT),
         })
     execution_arms = (results.GEMM_ARMS if gemm_comparison else
+                      results.Q4K_KERNEL_ARMS if q4k_kernel_comparison else
                       results.FUSED_ARMS if fused_comparison else
                       EXECUTION_ARMS if block_validation_comparison else results.ARMS)
-    if not gemm_comparison:
+    if q4k_kernel_comparison:
+        for phase in ("before_timing", "after_timing"):
+            for format_name in results.ARMS:
+                records.append({
+                    "schema": "wan_q4k_delta_kernel_parity_v1",
+                    "phase": phase,
+                    "format": format_name,
+                    "reference_arm": format_name,
+                    "decoder": metric(DIN * DOUT),
+                    "projections": {
+                        arm: metric(ROWS * DOUT) for arm in results.Q4K_KERNEL_ARMS
+                    },
+                    "pairs": {
+                        pair: metric(ROWS * DOUT)
+                        for pair in results.Q4K_KERNEL_PAIR_KEYS
+                    },
+                })
+    elif not gemm_comparison:
         for phase in ("before_timing", "after_timing"):
             for arm in execution_arms:
                 records.append({
@@ -642,6 +730,9 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     elif gemm_comparison:
         records.extend(gemm_timing_records(
             rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha))
+    elif q4k_kernel_comparison:
+        records.extend(q4k_kernel_timing_records(
+            rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha))
     else:
         records.extend(timing_records(
             rounds, reverse_first=reverse_first, manifest_sha256=manifest_sha,
@@ -649,7 +740,8 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
     control = {
         "schema": "wan_q4k_delta_controls_v1",
         "corruption_rejected": True,
-        "corruption": metric(ROWS * DOUT, bit_differences=4 if fused_comparison else 2,
+        "corruption": metric(ROWS * DOUT, bit_differences=(4 if fused_comparison else
+                                                             53_899 if q4k_kernel_comparison else 2),
                               tolerance_violations=2, nonfinite=1),
         "final_status_zero": True,
     }
@@ -657,6 +749,12 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
         control.update({
             "fused_vs_staged_corruption_rejected": True,
             "fused_vs_staged_corruption": metric(
+                ROWS * DOUT, bit_differences=9, tolerance_violations=2, nonfinite=1),
+        })
+    if q4k_kernel_comparison:
+        control.update({
+            "q4k_kernel_vs_staged_corruption_rejected": True,
+            "q4k_kernel_vs_staged_corruption": metric(
                 ROWS * DOUT, bit_differences=9, tolerance_violations=2, nonfinite=1),
         })
     records.append(control)
@@ -727,12 +825,14 @@ def complete_synthetic_probe(base: Path, rounds: int = 16, *,
                     if gemm_comparison else []) +
                    (["--compare-fused", f"--gemm-variant={gemm_variant}"]
                     if fused_comparison else []) +
+                   (["--compare-q4k-kernels"] if q4k_kernel_comparison else []) +
                    (["--reverse-first"] if reverse_first else []),
         "reverse_first": reverse_first,
         "block_validation_comparison": block_validation_comparison,
         "gemm_comparison": gemm_comparison,
         "gemm_variant": gemm_variant,
         "fused_comparison": fused_comparison,
+        "q4k_kernel_comparison": q4k_kernel_comparison,
         "files": files,
         "memory_accounting": "file-cache",
         "reserve_pct": 15,
@@ -780,6 +880,151 @@ class ResultAnalyzerSpec(unittest.TestCase):
         self.assertEqual(fused_timing_count, (16 + 2) * len(results.FUSED_ARMS) + 4 + 16 * 4)
         self.assertEqual(results.expected_probe_record_count(
             fused_timing_count, False, True), 238)
+
+        q4k_timing_count = len(q4k_kernel_timing_records())
+        self.assertEqual(q4k_timing_count,
+                         (results.Q4K_KERNEL_ROUNDS + 1) * len(results.ARMS) *
+                         len(results.Q4K_KERNEL_ARMS))
+        self.assertEqual(q4k_timing_count, 272)
+        self.assertEqual(results.expected_probe_record_count(
+            q4k_timing_count, False, False, False, True), 286)
+
+    def test_q4k_kernel_ablation_receipts_bind_parity_and_balanced_schedule(self):
+        for reverse_first in (False, True):
+            with self.subTest(reverse_first=reverse_first), tempfile.TemporaryDirectory() as temporary:
+                evidence = Path(temporary) / "evidence"
+                evidence.mkdir()
+                tag, source_pins = complete_synthetic_probe(
+                    evidence, q4k_kernel_comparison=True, reverse_first=reverse_first)
+                with patch.object(results, "SOURCE_FIXTURE_PINS", source_pins):
+                    accepted = results.read_probe(evidence, tag)
+
+                control = next(record for record in
+                               (json.loads(line) for line in
+                                (evidence / "probe-r4.stdout.log").read_text().splitlines())
+                               if record.get("schema") == "wan_q4k_delta_controls_v1")
+                self.assertEqual(control["corruption"]["bit_differences"], 53_899)
+
+                setup = accepted["setup"]
+                self.assertTrue(accepted["lineage"]["q4k_kernel_comparison"])
+                self.assertEqual(setup["gemm_variant"], results.GEMM_DEVICE_Q4K_VARIANT)
+                self.assertEqual(setup["q4k_kernel_variants"],
+                                 results.q4k_kernel_variant_metadata())
+                self.assertEqual(setup["q4k_kernel_dispatch_partition"],
+                                 results.expected_dense_dispatch_partition(
+                                     ROWS, DIN, DOUT,
+                                     results.Q4K_KERNEL_VARIANTS[
+                                         "device_q4k_baseline"]["tile_shape"]))
+                self.assertEqual(setup["q4k_kernel_candidate_global_f32_weight_stage_bytes"], 0)
+                self.assertEqual(setup["q4k_kernel_control_f32_weight_stage_bytes"],
+                                 results.WEIGHT_COUNT * 4)
+
+                parity = accepted["q4k_kernel_parity"]
+                self.assertEqual(len(parity), len(results.ARMS) * 2)
+                for summary in parity.values():
+                    for metric_record in (summary["decoder"], *summary["projections"].values(),
+                                          *summary["pairs"].values()):
+                        self.assertEqual(metric_record["tolerance_violations"], 0)
+                        self.assertEqual(metric_record["nonfinite"], 0)
+
+                timings = accepted["timings_ms"]["q4k_kernel_ablation"]
+                self.assertFalse(timings["speed_winner_selected"])
+                for format_name in results.ARMS:
+                    arms = timings["arms_by_format"][format_name]
+                    self.assertEqual(set(arms), set(results.Q4K_KERNEL_ARMS))
+                    for arm_summary in arms.values():
+                        self.assertEqual(arm_summary["gpu_seconds"]["count"], 16)
+                    positions = timings["measured_position_counts_by_format_and_arm"][format_name]
+                    for arm_positions in positions.values():
+                        self.assertEqual(set(arm_positions.values()), {4})
+                    pairs = timings["paired_gpu_ratios_by_format"][format_name]
+                    self.assertEqual(set(pairs), set(results.Q4K_KERNEL_PAIR_KEYS))
+                    for pair in pairs.values():
+                        ratios = pair["left_over_right_gpu_ratio"]
+                        self.assertEqual(ratios["all_rounds"]["count"], 16)
+                        self.assertEqual(ratios["by_half"]["first"]["count"], 8)
+                        self.assertEqual(ratios["by_half"]["second"]["count"], 8)
+                        self.assertEqual(len(ratios["by_order"]), 8)
+
+                rows = [json.loads(line) for line in
+                        (evidence / "probe-r4.stdout.log").read_text().splitlines()]
+                timed = [record for record in rows
+                         if record.get("mode") == "q4k_kernel_ablation"]
+                self.assertEqual(len(timed), 272)
+                actual_warmup = [
+                    (record["format"], record["format_position"],
+                     record["variant"], record["position"])
+                    for record in timed if record["round"] == -1
+                ]
+                self.assertEqual(actual_warmup,
+                                 results.q4k_kernel_round_order(-1, reverse_first))
+
+    def test_q4k_kernel_setup_and_parity_reject_tampered_metadata(self):
+        baseline = results.Q4K_KERNEL_VARIANTS["device_q4k_baseline"]
+        setup = {
+            "gemm_comparison": False,
+            "fused_comparison": False,
+            "gemm_variant": results.GEMM_DEVICE_Q4K_VARIANT,
+            "gemm_variant_name": baseline["variant_name"],
+            "gemm_tile_shape": baseline["tile_shape"],
+            "gemm_threadgroup_threads": baseline["threads"],
+            "reverse_first": False,
+            **synthetic_q4k_kernel_fields(),
+        }
+        results.validate_q4k_kernel_setup(setup, ROWS, DIN, DOUT)
+        partition = setup["q4k_kernel_dispatch_partition"]
+        mutations = (
+            ("selector", "q4k_kernel_variants", [
+                {**item, **({"selector": "unbound-selector"}
+                            if item["arm"] == "device_q4k_map" else {})}
+                for item in setup["q4k_kernel_variants"]
+            ]),
+            ("core pipeline", "q4k_kernel_variants", [
+                {**item, **({"direct_pipeline": "unbound-pipeline"}
+                            if item["arm"] == "device_q4k_index" else {})}
+                for item in setup["q4k_kernel_variants"]
+            ]),
+            ("tail resource", "q4k_kernel_variants", [
+                {**item, **({"staged_tail_static_threadgroup_memory_bytes": 14_460}
+                            if item["arm"] == "device_q4k_map" else {})}
+                for item in setup["q4k_kernel_variants"]
+            ]),
+            ("partition", "q4k_kernel_dispatch_partition",
+             {**partition, "bottom_tail_groups": partition["bottom_tail_groups"] - 1}),
+            ("global F32 stage", "q4k_kernel_candidate_global_f32_weight_stage_bytes", 4),
+            ("schedule", "q4k_kernel_schedule", "unbound_schedule"),
+            ("warmup count", "q4k_kernel_warmup_cycles", 2),
+        )
+        for name, field, value in mutations:
+            with self.subTest(mutation=name):
+                corrupt = json.loads(json.dumps(setup))
+                corrupt[field] = value
+                with self.assertRaises(ValueError):
+                    results.validate_q4k_kernel_setup(corrupt, ROWS, DIN, DOUT)
+
+        valid = []
+        for phase in ("before_timing", "after_timing"):
+            for format_name in results.ARMS:
+                valid.append({
+                    "schema": "wan_q4k_delta_kernel_parity_v1",
+                    "phase": phase,
+                    "format": format_name,
+                    "reference_arm": format_name,
+                    "decoder": ZERO_METRIC(DIN * DOUT),
+                    "projections": {
+                        arm: ZERO_METRIC(ROWS * DOUT) for arm in results.Q4K_KERNEL_ARMS
+                    },
+                    "pairs": {
+                        pair: ZERO_METRIC(ROWS * DOUT)
+                        for pair in results.Q4K_KERNEL_PAIR_KEYS
+                    },
+                })
+        results.validate_q4k_kernel_parity(valid, ROWS, DIN, DOUT)
+        corrupt_parity = json.loads(json.dumps(valid))
+        corrupt_parity[0]["pairs"][results.Q4K_KERNEL_PAIR_KEYS[0]][
+            "tolerance_violations"] = 1
+        with self.assertRaisesRegex(ValueError, "Strict finite parity failed"):
+            results.validate_q4k_kernel_parity(corrupt_parity, ROWS, DIN, DOUT)
 
     def test_dense_gemm_candidate_receipts_bind_order_parity_and_pipeline_metadata(self):
         candidate = results.GEMM_CANDIDATE_VARIANT
@@ -1749,9 +1994,46 @@ class ResultAnalyzerSpec(unittest.TestCase):
             "final_status_zero": True,
         }
         results.validate_corruption_control(record, ROWS * DOUT)
+        record["corruption"]["bit_differences"] = 3
+        with self.assertRaises(ValueError):
+            results.validate_corruption_control(record, ROWS * DOUT)
+        record["corruption"]["bit_differences"] = 2
         record["corruption"]["nonfinite"] = 0
         with self.assertRaises(ValueError):
             results.validate_corruption_control(record, ROWS * DOUT)
+
+    def test_q4k_kernel_corruption_control_allows_rounding_differences_but_requires_injection(self):
+        record = {
+            "corruption": ZERO_METRIC(ROWS * DOUT, bit_differences=53_899,
+                                      tolerance_violations=2, nonfinite=1),
+            "corruption_rejected": True,
+            "final_status_zero": True,
+            "q4k_kernel_vs_staged_corruption_rejected": True,
+            "q4k_kernel_vs_staged_corruption": ZERO_METRIC(
+                ROWS * DOUT, bit_differences=53_899,
+                tolerance_violations=2, nonfinite=1),
+        }
+        results.validate_corruption_control(
+            record, ROWS * DOUT, q4k_kernel_comparison=True)
+
+        for field, counter, value in (
+                ("corruption", "bit_differences", 1),
+                ("corruption", "tolerance_violations", 1),
+                ("corruption", "nonfinite", 0),
+                ("q4k_kernel_vs_staged_corruption", "bit_differences", 1),
+                ("q4k_kernel_vs_staged_corruption", "tolerance_violations", 1),
+                ("q4k_kernel_vs_staged_corruption", "nonfinite", 0)):
+            with self.subTest(missing_perturbation=(field, counter)):
+                corrupt = json.loads(json.dumps(record))
+                corrupt[field][counter] = value
+                with self.assertRaises(ValueError):
+                    results.validate_corruption_control(
+                        corrupt, ROWS * DOUT, q4k_kernel_comparison=True)
+
+        corrupt_flag = {**record, "q4k_kernel_vs_staged_corruption_rejected": False}
+        with self.assertRaises(ValueError):
+            results.validate_corruption_control(
+                corrupt_flag, ROWS * DOUT, q4k_kernel_comparison=True)
 
     def test_guard_accepts_policy_and_rejects_runtime_or_startup_breach(self):
         intent = {

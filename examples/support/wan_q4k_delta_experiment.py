@@ -53,6 +53,8 @@ def main():
                         help='Compare legacy and selected native dense GEMM against MPS only')
     parser.add_argument('--compare-fused', action='store_true',
                         help='Compare fused Q4_K delta projection against block-validated staged controls')
+    parser.add_argument('--compare-q4k-kernels', action='store_true',
+                        help='Compare baseline, coordinate-hoisted and rank-map direct Q4_K kernels against staged MPS')
     parser.add_argument('--gemm-variant', choices=[
         'legacy', 'candidate-b128n32-sg4-tk32', 'candidate-b64n32-sg4-tk32-bt',
         'candidate-b64n32-sg4-tk64-bt', 'candidate-b64n32-sg4-device-f32',
@@ -60,17 +62,22 @@ def main():
                         help='Native GEMM variant; the direct-device F32 selector is dense-only')
     args = parser.parse_args()
     comparison_modes = sum((args.compare_block_validation, args.compare_gemm,
-                            args.compare_fused))
+                            args.compare_fused, args.compare_q4k_kernels))
     if comparison_modes > 1:
         parser.error('comparison modes are mutually exclusive')
-    if (args.compare_block_validation or args.compare_gemm or args.compare_fused) and args.mode != 'probe':
+    if (args.compare_block_validation or args.compare_gemm or args.compare_fused or
+            args.compare_q4k_kernels) and args.mode != 'probe':
         parser.error('comparison modes are only available in probe mode')
-    if args.gemm_variant is not None and not (args.compare_gemm or args.compare_fused):
+    if args.gemm_variant is not None and not (args.compare_gemm or args.compare_fused or
+                                               args.compare_q4k_kernels):
         parser.error('--gemm-variant requires --compare-gemm or --compare-fused')
+    if args.compare_q4k_kernels and args.gemm_variant is not None:
+        parser.error('--compare-q4k-kernels uses its fixed baseline/map/index selectors')
     if args.compare_gemm and args.gemm_variant == 'legacy':
         parser.error('--compare-gemm requires a candidate variant distinct from the legacy control')
     args.gemm_variant = args.gemm_variant or (
-        'candidate-b64n32-sg4-tk32-bt' if args.compare_gemm else 'legacy')
+        'candidate-b64n32-sg4-tk32-bt' if args.compare_gemm else
+        ('candidate-b64n32-sg4-device-q4k' if args.compare_q4k_kernels else 'legacy'))
     if args.compare_fused and args.gemm_variant == 'candidate-b64n32-sg4-device-f32':
         parser.error('--gemm-variant=candidate-b64n32-sg4-device-f32 is dense-only')
     if args.mode in ['spec', 'build', 'probe'] and not (ROOT/'spec/q4k_delta_linear_spec.cr').is_file():
@@ -81,6 +88,8 @@ def main():
         parser.error('rounds must be 16 or 32 balanced measured rounds')
     if args.compare_gemm and args.rounds != 16:
         parser.error('--compare-gemm uses exactly 16 measured rounds')
+    if args.compare_q4k_kernels and args.rounds != 16:
+        parser.error('--compare-q4k-kernels uses exactly 16 measured rounds')
     for value in [args.tag, args.build_tag, args.fixture_tag]:
         if not value.isascii() or not value.replace('-', '').isalnum():
             parser.error('tags must be ASCII alphanumeric with optional hyphens')
@@ -191,6 +200,8 @@ def main():
             command += ['--compare-gemm', '--gemm-variant='+args.gemm_variant]
         if args.compare_fused:
             command += ['--compare-fused', '--gemm-variant='+args.gemm_variant]
+        if args.compare_q4k_kernels:
+            command += ['--compare-q4k-kernels']
         if args.reverse_first:
             command += ['--reverse-first']
     deadline = 240 if args.mode == 'build' else 300
@@ -201,6 +212,7 @@ def main():
               'gemm_comparison': args.compare_gemm,
               'gemm_variant': args.gemm_variant,
               'fused_comparison': args.compare_fused,
+              'q4k_kernel_comparison': args.compare_q4k_kernels,
               'head': capture(['git', 'rev-parse', 'HEAD']),
               'status': capture(['git', 'status', '--short']),
               'macos': platform.mac_ver()[0], 'created_unix': time.time(),

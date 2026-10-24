@@ -171,6 +171,73 @@ static inline void q4kl_load_q4_fragment(
   }
 }
 
+// Build one output channel's 256-entry correction lookup as 32 packed words
+// in a K-word-major [32][TN] layout. The channel owner is the only writer, so
+// rank insertion needs no atomics. The correction validator still owns
+// duplicate/nonfinite policy.
+static inline void q4kl_build_patch_rank_map_channel(
+    uint local_channel, uint patches, threadgroup uint *patch_indices,
+    threadgroup uint *patch_rank_map) {
+  const uint slot_base = local_channel * Q4KL_PATCH_SLOTS;
+  for (uint word = 0u; word < 32u; ++word)
+    patch_rank_map[word * Q4KL_TN + local_channel] = 0u;
+  for (uint rank = 0u; rank < patches; ++rank) {
+    const uint within = patch_indices[slot_base + rank];
+    const uint word = within >> 3u;
+    const uint shift = (within & 7u) * 4u;
+    patch_rank_map[word * Q4KL_TN + local_channel] |= (rank + 1u) << shift;
+  }
+}
+
+// Capture the two logical coordinates assigned to this lane once, then reuse
+// them for every Q4_K fragment. INDEX_MAP selects the per-channel nibble map;
+// the map lookup is skipped for malformed blocks before any rank is indexed.
+template <bool INDEX_MAP>
+static inline void q4kl_load_q4_fragment_captured(
+    thread simdgroup_float8x8 &matrix_fragment,
+    uint coordinate0, uint coordinate1,
+    device const uchar *payload, device atomic_uint *status,
+    uint in_dim, uint col_begin, uint sg_col, uint cb,
+    uint k0, uint kfrag, uint patches,
+    threadgroup uint *patch_indices, threadgroup float *patch_deltas,
+    threadgroup uint *block_malformed,
+    threadgroup uint *patch_rank_map) {
+  const uint blocks_per_channel = in_dim / Q4KL_BLOCK_ELEMENTS;
+  #pragma clang loop unroll(full)
+  for (uint element = 0u; element < 2u; ++element) {
+    const uint coordinate = element == 0u ? coordinate0 : coordinate1;
+    const uint local_k = coordinate >> 3u;
+    const uint local_n = coordinate & 7u;
+    const uint tile_n = sg_col + cb * 8u + local_n;
+    const uint channel = col_begin + tile_n;
+    const uint k = k0 + kfrag + local_k;
+    const uint block_in_channel = k / Q4KL_BLOCK_ELEMENTS;
+    const uint within = k % Q4KL_BLOCK_ELEMENTS;
+    const uint flat_block = channel * blocks_per_channel + block_in_channel;
+    const bool malformed = patches != 0u && block_malformed[tile_n] != 0u;
+    float delta = 0.0f;
+    if (patches != 0u && !malformed) {
+      if (INDEX_MAP) {
+        const uint map_word = patch_rank_map[(within >> 3u) * Q4KL_TN + tile_n];
+        const uint rank_plus_one = (map_word >> ((within & 7u) * 4u)) & 0x0fu;
+        if (rank_plus_one != 0u)
+          delta = patch_deltas[tile_n * Q4KL_PATCH_SLOTS + rank_plus_one - 1u];
+      } else {
+        for (uint rank = 0u; rank < patches; ++rank) {
+          const uint slot = tile_n * Q4KL_PATCH_SLOTS + rank;
+          if (patch_indices[slot] == within) {
+            delta = patch_deltas[slot];
+            break;
+          }
+        }
+      }
+    }
+    matrix_fragment.thread_elements()[element] = q4kl_decode_coefficient(
+        payload + flat_block * Q4KL_BLOCK_BYTES, within, delta,
+        patches != 0u, malformed, status);
+  }
+}
+
 template <bool Q4K>
 static inline void q4kl_run_gemm(
     device const float *input, device const float *dense_weight,
@@ -622,6 +689,175 @@ static inline void q4kl_run_gemm_device_q4k_direct(
   }
 }
 
+// Ablation core for coordinate capture and the optional packed-rank lookup.
+// The baseline DeviceQ4K implementation remains in its own helper so each
+// candidate changes only fragment-coordinate reuse and, for INDEX_MAP, delta
+// slot lookup. Per-output ascending-K8 matrix MAC order is unchanged.
+template <bool INDEX_MAP>
+static inline void q4kl_run_gemm_device_q4k_captured(
+    device const float *input, device const uchar *payload,
+    device const uchar *sidecar, device const float *bias,
+    device float *output, device atomic_uint *status,
+    uint rows, uint in_dim, uint out_dim, uint patches, uint2 group,
+    uint tid, uint simdgroup, uint threads, threadgroup float *output_panel,
+    threadgroup uint *patch_indices, threadgroup float *patch_deltas,
+    threadgroup uint *block_malformed, threadgroup uint *patch_rank_map) {
+  if (threads != 128u)
+    return;
+
+  const uint row_begin = group.y * Q4KL_TM;
+  const uint col_begin = group.x * Q4KL_TN;
+  if (row_begin + Q4KL_TM > rows || col_begin + Q4KL_TN > out_dim)
+    return;
+
+  // The output tile doubles as temporary coordinate storage. All SIMD groups
+  // capture their opaque lane mapping before any group can reuse this memory.
+  for (uint i = tid; i < 64u; i += 128u)
+    output_panel[i] = float(i);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  simdgroup_float8x8 coordinate_fragment;
+  q4kl_load_coordinate_fragment(coordinate_fragment, output_panel);
+  const uint coordinate0 = uint(coordinate_fragment.thread_elements()[0]);
+  const uint coordinate1 = uint(coordinate_fragment.thread_elements()[1]);
+
+  constexpr uint ROW_BLOCKS = Q4KL_TM / 16u;
+  constexpr uint COL_BLOCKS = Q4KL_TN / 16u;
+  simdgroup_float8x8 accum[ROW_BLOCKS * COL_BLOCKS];
+  #pragma clang loop unroll(full)
+  for (uint i = 0u; i < ROW_BLOCKS * COL_BLOCKS; ++i) {
+    accum[i].thread_elements()[0] = 0.0f;
+    accum[i].thread_elements()[1] = 0.0f;
+  }
+
+  const uint sg_row = (simdgroup & 1u) * (Q4KL_TM / 2u);
+  const uint sg_col = (simdgroup >> 1u) * (Q4KL_TN / 2u);
+  simdgroup_float8x8 a_fragment;
+  simdgroup_float8x8 b_fragments[COL_BLOCKS];
+  const uint blocks_per_channel = in_dim / Q4KL_BLOCK_ELEMENTS;
+  for (uint k0 = 0u; k0 < in_dim; k0 += Q4KL_TK) {
+    if (patches != 0u && (k0 % Q4KL_BLOCK_ELEMENTS) == 0u) {
+      if (k0 != 0u)
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+      for (uint local_n = tid; local_n < Q4KL_TN; local_n += 128u) {
+        q4kl_stage_corrections(sidecar, status, col_begin + local_n,
+            blocks_per_channel, k0 / Q4KL_BLOCK_ELEMENTS, patches, local_n,
+            patch_indices, patch_deltas, block_malformed);
+        if (INDEX_MAP)
+          q4kl_build_patch_rank_map_channel(local_n, patches, patch_indices,
+              patch_rank_map);
+      }
+      threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    #pragma clang loop unroll(full)
+    for (uint kfrag = 0u; kfrag < Q4KL_TK; kfrag += 8u) {
+      #pragma clang loop unroll(full)
+      for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+        q4kl_load_q4_fragment_captured<INDEX_MAP>(b_fragments[cb],
+            coordinate0, coordinate1, payload, status, in_dim, col_begin,
+            sg_col, cb, k0, kfrag, patches, patch_indices, patch_deltas,
+            block_malformed, patch_rank_map);
+      }
+      #pragma clang loop unroll(full)
+      for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+        const uint m = row_begin + sg_row + rb * 8u;
+        simdgroup_load(a_fragment,
+            input + m * in_dim + k0 + kfrag, in_dim);
+        #pragma clang loop unroll(full)
+        for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+          const uint acc_index = rb * COL_BLOCKS + cb;
+          simdgroup_multiply_accumulate(accum[acc_index], a_fragment,
+              b_fragments[cb], accum[acc_index]);
+        }
+      }
+    }
+  }
+
+  // Coordinate scratch cannot be overwritten until every SIMD group has
+  // finished its fragment stream.
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  #pragma clang loop unroll(full)
+  for (uint rb = 0u; rb < ROW_BLOCKS; ++rb) {
+    #pragma clang loop unroll(full)
+    for (uint cb = 0u; cb < COL_BLOCKS; ++cb) {
+      const uint acc_index = rb * COL_BLOCKS + cb;
+      simdgroup_store(accum[acc_index],
+          output_panel + (sg_row + rb * 8u) * Q4KL_TN + sg_col + cb * 8u,
+          Q4KL_TN);
+    }
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  for (uint i = tid; i < Q4KL_TM * Q4KL_TN; i += 128u) {
+    const uint m = row_begin + i / Q4KL_TN;
+    const uint n = col_begin + i % Q4KL_TN;
+    output[m * out_dim + n] = output_panel[i] + bias[n];
+  }
+}
+
+// Qualification probe for the captured-coordinate fragment path. It writes
+// every decoded coefficient for both 256-K blocks, with a separate device
+// slice for each SIMD group so all four group mappings are checked.
+template <bool INDEX_MAP>
+static inline void q4kl_run_q4_fragment_captured_probe(
+    device const uchar *payload, device const uchar *sidecar,
+    device float *destination, device atomic_uint *status, uint patches,
+    uint2 group, uint tid, uint simdgroup, uint threads,
+    threadgroup uint *patch_indices, threadgroup float *patch_deltas,
+    threadgroup uint *block_malformed, threadgroup uint *patch_rank_map,
+    threadgroup float *coordinates, threadgroup float *materialized) {
+  if (threads != 128u || group.y >= 2u)
+    return;
+
+  constexpr uint IN_DIM = 512u;
+  constexpr uint OUT_DIM = 32u;
+  constexpr uint OUTPUT_COUNT = IN_DIM * OUT_DIM;
+  for (uint i = tid; i < 64u; i += 128u)
+    coordinates[i] = float(i);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  if (patches != 0u) {
+    for (uint local_n = tid; local_n < OUT_DIM; local_n += 128u) {
+      q4kl_stage_corrections(sidecar, status, local_n,
+          IN_DIM / Q4KL_BLOCK_ELEMENTS, group.y, patches, local_n,
+          patch_indices, patch_deltas, block_malformed);
+      if (INDEX_MAP)
+        q4kl_build_patch_rank_map_channel(local_n, patches, patch_indices,
+            patch_rank_map);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+
+  simdgroup_float8x8 coordinate_fragment;
+  q4kl_load_coordinate_fragment(coordinate_fragment, coordinates);
+  const uint coordinate0 = uint(coordinate_fragment.thread_elements()[0]);
+  const uint coordinate1 = uint(coordinate_fragment.thread_elements()[1]);
+  const uint sg_col = (simdgroup >> 1u) * 16u;
+  const uint k0 = group.y * Q4KL_BLOCK_ELEMENTS;
+  for (uint kfrag = 0u; kfrag < Q4KL_BLOCK_ELEMENTS; kfrag += 8u) {
+    #pragma clang loop unroll(full)
+    for (uint cb = 0u; cb < 2u; ++cb) {
+      simdgroup_float8x8 matrix_fragment;
+      q4kl_load_q4_fragment_captured<INDEX_MAP>(matrix_fragment,
+          coordinate0, coordinate1, payload, status, IN_DIM, 0u, sg_col, cb,
+          k0, kfrag, patches, patch_indices, patch_deltas, block_malformed,
+          patch_rank_map);
+      simdgroup_store(matrix_fragment,
+          materialized + simdgroup * 128u + cb * 64u, 8u);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = tid; i < 4u * 2u * 64u; i += 128u) {
+      const uint local = i & 63u;
+      const uint cb = (i >> 6u) & 1u;
+      const uint sg = i >> 7u;
+      const uint channel = (sg >> 1u) * 16u + cb * 8u + (local & 7u);
+      const uint k = k0 + kfrag + (local >> 3u);
+      destination[sg * OUTPUT_COUNT + k * OUT_DIM + channel] = materialized[i];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+}
+
 kernel void video_q4k_delta_linear_f32(
     device const float *input [[buffer(0)]],
     device const uchar *payload [[buffer(1)]],
@@ -890,6 +1126,57 @@ kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k(
       block_malformed);
 }
 
+kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_map(
+    device const float *input [[buffer(0)]],
+    device const uchar *payload [[buffer(1)]],
+    device const uchar *sidecar [[buffer(2)]],
+    device const float *bias [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    device atomic_uint *status [[buffer(5)]],
+    constant uint &rows [[buffer(6)]],
+    constant uint &in_dim [[buffer(7)]],
+    constant uint &out_dim [[buffer(8)]],
+    constant uint &patches [[buffer(9)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float output_panel[Q4KL_TM * Q4KL_TN];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  q4kl_run_gemm_device_q4k_captured<false>(input, payload, sidecar, bias,
+      output, status, rows, in_dim, out_dim, patches, group, tid, simdgroup,
+      threads.x * threads.y, output_panel, patch_indices, patch_deltas,
+      block_malformed, patch_indices);
+}
+
+kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_index(
+    device const float *input [[buffer(0)]],
+    device const uchar *payload [[buffer(1)]],
+    device const uchar *sidecar [[buffer(2)]],
+    device const float *bias [[buffer(3)]],
+    device float *output [[buffer(4)]],
+    device atomic_uint *status [[buffer(5)]],
+    constant uint &rows [[buffer(6)]],
+    constant uint &in_dim [[buffer(7)]],
+    constant uint &out_dim [[buffer(8)]],
+    constant uint &patches [[buffer(9)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup float output_panel[Q4KL_TM * Q4KL_TN];
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  threadgroup uint patch_rank_map[Q4KL_TN * 32u];
+  q4kl_run_gemm_device_q4k_captured<true>(input, payload, sidecar, bias,
+      output, status, rows, in_dim, out_dim, patches, group, tid, simdgroup,
+      threads.x * threads.y, output_panel, patch_indices, patch_deltas,
+      block_malformed, patch_rank_map);
+}
+
 // The complete-tile path falls back to the established staged Q4_K loader for
 // right and bottom fringes. Group bases keep these rectangles disjoint.
 kernel void video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail(
@@ -945,6 +1232,49 @@ kernel void video_q4k_delta_coordinate_mapping_probe(
   threadgroup_barrier(mem_flags::mem_threadgroup);
   for (uint i = tid; i < 256u; i += 128u)
     destination[i] = mapped[i];
+}
+
+kernel void video_q4k_delta_q4_captured_fragment_map_probe(
+    device const uchar *payload [[buffer(0)]],
+    device const uchar *sidecar [[buffer(1)]],
+    device float *destination [[buffer(2)]],
+    device atomic_uint *status [[buffer(3)]],
+    constant uint &patches [[buffer(4)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  threadgroup float coordinates[64u];
+  threadgroup float materialized[4u * 2u * 64u];
+  q4kl_run_q4_fragment_captured_probe<false>(payload, sidecar, destination,
+      status, patches, group, tid, simdgroup, threads.x * threads.y,
+      patch_indices, patch_deltas, block_malformed, patch_indices,
+      coordinates, materialized);
+}
+
+kernel void video_q4k_delta_q4_captured_fragment_index_probe(
+    device const uchar *payload [[buffer(0)]],
+    device const uchar *sidecar [[buffer(1)]],
+    device float *destination [[buffer(2)]],
+    device atomic_uint *status [[buffer(3)]],
+    constant uint &patches [[buffer(4)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint2 threads [[threads_per_threadgroup]]) {
+  threadgroup uint patch_indices[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup float patch_deltas[Q4KL_TN * Q4KL_PATCH_SLOTS];
+  threadgroup uint block_malformed[Q4KL_TN];
+  threadgroup uint patch_rank_map[Q4KL_TN * 32u];
+  threadgroup float coordinates[64u];
+  threadgroup float materialized[4u * 2u * 64u];
+  q4kl_run_q4_fragment_captured_probe<true>(payload, sidecar, destination,
+      status, patches, group, tid, simdgroup, threads.x * threads.y,
+      patch_indices, patch_deltas, block_malformed, patch_rank_map,
+      coordinates, materialized);
 }
 
 // Materialize two decoded 8x8 Q4_K fragments: K=248..255 and K=256..263,

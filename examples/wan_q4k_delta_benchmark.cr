@@ -16,10 +16,26 @@ reverse_first = false
 compare_block_validation = false
 compare_gemm = false
 compare_fused = false
+compare_q4k_kernels = false
 gemm_variant_id = ""
 gemm_variant_selected = false
 DIRECT_DEVICE_F32_VARIANT_ID = "candidate-b64n32-sg4-device-f32"
 DIRECT_DEVICE_Q4K_VARIANT_ID = "candidate-b64n32-sg4-device-q4k"
+Q4K_KERNEL_ARMS = ["device_q4k_baseline", "device_q4k_map", "device_q4k_index", "staged_mps"]
+Q4K_KERNEL_PAIR_KEYS = ["device_q4k_baseline__device_q4k_map",
+                         "device_q4k_baseline__device_q4k_index",
+                         "device_q4k_baseline__staged_mps",
+                         "device_q4k_map__device_q4k_index",
+                         "device_q4k_map__staged_mps",
+                         "device_q4k_index__staged_mps"]
+Q4K_KERNEL_VARIANTS = [
+  {arm: "device_q4k_baseline", selector: DIRECT_DEVICE_Q4K_VARIANT_ID,
+   variant: ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K},
+  {arm: "device_q4k_map", selector: "candidate-b64n32-sg4-device-q4k-map",
+   variant: ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4KMap},
+  {arm: "device_q4k_index", selector: "candidate-b64n32-sg4-device-q4k-index",
+   variant: ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4KIndex},
+]
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
   p.on("--reverse-first", "Reverse the first warmup and paired order") { reverse_first = true }
@@ -27,15 +43,18 @@ OptionParser.parse do |p|
   p.on("--compare-block-validation", "Pair per-value and per-block correction validation") { compare_block_validation = true }
   p.on("--compare-gemm", "Compare legacy and candidate native dense GEMM against MPS only") { compare_gemm = true }
   p.on("--compare-fused", "Pair fused Q4_K delta projection against block-validated staged controls") { compare_fused = true }
+  p.on("--compare-q4k-kernels", "Compare baseline, coordinate-hoisted and rank-map direct Q4_K kernels against staged MPS") { compare_q4k_kernels = true }
   p.on("--gemm-variant=ID", "Native GEMM geometry: legacy, candidate-b128n32-sg4-tk32, candidate-b64n32-sg4-tk32-bt, candidate-b64n32-sg4-tk64-bt, candidate-b64n32-sg4-device-f32, or candidate-b64n32-sg4-device-q4k") do |v|
     gemm_variant_id = v
     gemm_variant_selected = true
   end
 end
-raise ArgumentError.new("Comparison modes are mutually exclusive") if (compare_block_validation && compare_gemm) || (compare_block_validation && compare_fused) ||
-                                                                      (compare_gemm && compare_fused)
+raise ArgumentError.new("Comparison modes are mutually exclusive") if [compare_block_validation, compare_gemm,
+  compare_fused, compare_q4k_kernels].count(true) > 1
 raise ArgumentError.new("--gemm-variant requires --compare-gemm or --compare-fused") if gemm_variant_selected && !compare_gemm && !compare_fused
-gemm_variant_id = compare_gemm ? "candidate-b64n32-sg4-tk32-bt" : "legacy" if gemm_variant_id.empty?
+raise ArgumentError.new("--compare-q4k-kernels uses its fixed baseline/map/index selectors") if compare_q4k_kernels && gemm_variant_selected
+gemm_variant_id = compare_gemm ? "candidate-b64n32-sg4-tk32-bt" :
+                  (compare_q4k_kernels ? DIRECT_DEVICE_Q4K_VARIANT_ID : "legacy") if gemm_variant_id.empty?
 raise ArgumentError.new("--compare-gemm requires a candidate variant") if compare_gemm && gemm_variant_id == "legacy"
 raise ArgumentError.new("The direct-device F32 GEMM candidate is dense-only") if compare_fused && gemm_variant_id == DIRECT_DEVICE_F32_VARIANT_ID
 gemm_variant = case gemm_variant_id
@@ -58,6 +77,7 @@ raise ArgumentError.new("--fixture is required") if fixture_dir.empty?
 rounds = 16 if rounds == 0
 raise ArgumentError.new("Invalid balanced round count") unless {16, 32}.includes?(rounds)
 raise ArgumentError.new("--compare-gemm uses exactly 16 measured rounds") if compare_gemm && rounds != 16
+raise ArgumentError.new("--compare-q4k-kernels uses exactly 16 measured rounds") if compare_q4k_kernels && rounds != 16
 manifest_path = File.join(fixture_dir, "manifest.json")
 manifest = JSON.parse(File.read(manifest_path))
 raise "Unsupported fixture" unless manifest["schema"].as_s == "wan_q4k_delta_reference_v1"
@@ -78,10 +98,12 @@ execution_arms = variants.dup
 execution_arms.concat(variants.map { |name| "#{name}_block" }) if compare_block_validation
 execution_arms = variants.flat_map { |name| [name, "#{name}_fused"] } if compare_fused
 execution_arms = ["dense_native_legacy", "dense_native_candidate", "dense_mps"] if compare_gemm
+execution_arms = Q4K_KERNEL_ARMS if compare_q4k_kernels
 format_by_arm = variants.to_h { |name| {name, name} }
 variants.each { |name| format_by_arm["#{name}_block"] = name } if compare_block_validation
 variants.each { |name| format_by_arm["#{name}_fused"] = name } if compare_fused
 format_by_arm.merge!({"dense_native_legacy" => "q4_k", "dense_native_candidate" => "q4_k", "dense_mps" => "q4_k"}) if compare_gemm
+Q4K_KERNEL_ARMS.each { |arm| format_by_arm[arm] = "all_q4_k_formats" } if compare_q4k_kernels
 variant_manifest = manifest["variants"]
 raise "Unexpected fixture arm set" unless variant_manifest.as_h.keys.sort == variants.sort
 source_fixture = manifest["source_fixture"]
@@ -142,7 +164,7 @@ begin
   ML::Video::MetalLinearMPS.prepare!
   ML::Video::PackedWeightDecode.prepare!
   ML::Video::Q4KDeltaWeights.prepare!
-  ML::Video::Q4KDeltaLinear.prepare! if compare_fused || compare_gemm
+  ML::Video::Q4KDeltaLinear.prepare! if compare_fused || compare_gemm || compare_q4k_kernels
   tile = ML::Metal::ComputePipeline.new("affine_budget_tile", AFFINE_BUDGET_SOURCE)
   zero = ML::Metal::ComputePipeline.new("affine_budget_zero", AFFINE_BUDGET_SOURCE)
   compare = ML::Metal::ComputePipeline.new("affine_budget_compare", AFFINE_BUDGET_SOURCE)
@@ -167,7 +189,7 @@ begin
   baseline_output = arena.alloc("baseline_output", output_count)
   bias = arena.alloc("bias", dout)
   status = arena.alloc("status", ML::Video::Q4KDeltaWeights::STATUS_WORDS)
-  dummy_sidecar = arena.alloc("q4k_fused_dummy_sidecar", 1) if compare_fused
+  dummy_sidecar = arena.alloc("q4k_fused_dummy_sidecar", 1) if compare_fused || compare_q4k_kernels
   status.contents.as(UInt32*).clear(ML::Video::Q4KDeltaWeights::STATUS_WORDS)
   payload = arena.alloc("canonical_q4k", (budget // 4).to_i32)
   sidecars = {} of String => ML::MetalBuffer
@@ -186,9 +208,9 @@ begin
   weight_partials = arena.alloc("weight_partials", ((weight_count + 255) // 256) * 4)
   row_metrics = Array.new(4) { |r| arena.alloc("row_metrics_#{r}", 5) }
   row_partials = Array.new(4) { |r| arena.alloc("row_partials_#{r}", ((dout + 255) // 256) * 4) }
-  staged_output = arena.alloc("staged_output", output_count) if compare_fused
-  staged_metrics = arena.alloc("staged_metrics", 5) if compare_fused
-  staged_partials = arena.alloc("staged_partials", ((output_count + 255) // 256) * 4) if compare_fused
+  staged_output = arena.alloc("staged_output", output_count) if compare_fused || compare_q4k_kernels
+  staged_metrics = arena.alloc("staged_metrics", 5) if compare_fused || compare_q4k_kernels
+  staged_partials = arena.alloc("staged_partials", ((output_count + 255) // 256) * 4) if compare_fused || compare_q4k_kernels
   dense_native_metrics = arena.alloc("dense_native_metrics", 5) if compare_fused || compare_gemm
   dense_native_partials = arena.alloc("dense_native_partials", ((output_count + 255) // 256) * 4) if compare_fused || compare_gemm
   dense_mps_metrics = arena.alloc("dense_mps_metrics", 5) if compare_fused || compare_gemm
@@ -202,6 +224,26 @@ begin
   gemm_candidate_legacy_partials = arena.alloc("gemm_candidate_legacy_partials", ((output_count + 255) // 256) * 4) if compare_gemm
   gemm_candidate_mps_metrics = arena.alloc("gemm_candidate_mps_metrics", 5) if compare_gemm
   gemm_candidate_mps_partials = arena.alloc("gemm_candidate_mps_partials", ((output_count + 255) // 256) * 4) if compare_gemm
+  q4_kernel_snapshots = {} of String => ML::MetalBuffer
+  q4_kernel_metrics = {} of String => ML::MetalBuffer
+  q4_kernel_partials = {} of String => ML::MetalBuffer
+  q4_kernel_pair_metrics = {} of String => ML::MetalBuffer
+  q4_kernel_pair_partials = {} of String => ML::MetalBuffer
+  q4_kernel_decoder_metrics = arena.alloc("q4_kernel_decoder_metrics", 5) if compare_q4k_kernels
+  q4_kernel_decoder_partials = arena.alloc("q4_kernel_decoder_partials", ((weight_count + 255) // 256) * 4) if compare_q4k_kernels
+  q4_kernel_staged_metrics = arena.alloc("q4_kernel_staged_metrics", 5) if compare_q4k_kernels
+  q4_kernel_staged_partials = arena.alloc("q4_kernel_staged_partials", ((output_count + 255) // 256) * 4) if compare_q4k_kernels
+  if compare_q4k_kernels
+    Q4K_KERNEL_ARMS[0...3].each do |arm|
+      q4_kernel_snapshots[arm] = arena.alloc("q4_kernel_#{arm}", output_count)
+      q4_kernel_metrics[arm] = arena.alloc("q4_kernel_#{arm}_metrics", 5)
+      q4_kernel_partials[arm] = arena.alloc("q4_kernel_#{arm}_partials", ((output_count + 255) // 256) * 4)
+    end
+    Q4K_KERNEL_PAIR_KEYS.each do |pair|
+      q4_kernel_pair_metrics[pair] = arena.alloc("q4_kernel_#{pair}_metrics", 5)
+      q4_kernel_pair_partials[pair] = arena.alloc("q4_kernel_#{pair}_partials", ((output_count + 255) // 256) * 4)
+    end
+  end
   affine_budget_upload(input_path, source, source.size)
   affine_budget_upload(bias_path, bias, bias.size)
   affine_budget_upload(original_path, original, original.size)
@@ -230,6 +272,25 @@ begin
                        {DIRECT_DEVICE_F32_VARIANT_ID, DIRECT_DEVICE_Q4K_VARIANT_ID}.includes?(gemm_variant_id)
   dense_partition = device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_dispatch_partition(rows, din, dout, gemm_variant) : nil
   linear_partition = compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.linear_dispatch_partition(rows, din, dout, gemm_variant) : nil
+  q4k_kernel_pipeline_metadata = compare_q4k_kernels ? Q4K_KERNEL_VARIANTS.map do |entry|
+    selected = entry[:variant]
+    {arm: entry[:arm], selector: entry[:selector],
+     variant_name: ML::Video::Q4KDeltaLinear.variant_name(selected),
+     direct_pipeline: ML::Video::Q4KDeltaLinear.linear_pipeline(selected).name,
+     direct_tile_shape: {tm: ML::Video::Q4KDeltaLinear.tile_m(selected),
+                         tn: ML::Video::Q4KDeltaLinear.tile_n(selected),
+                         tk: ML::Video::Q4KDeltaLinear.tile_k(selected)},
+     direct_threadgroup_threads: ML::Video::Q4KDeltaLinear.threadgroup_threads(selected),
+     direct_static_threadgroup_memory_bytes: ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes(selected),
+     staged_tail_pipeline: ML::Video::Q4KDeltaLinear.linear_staged_tail_pipeline(selected).name,
+     staged_tail_tile_shape: {tm: ML::Video::Q4KDeltaLinear.tile_m(selected),
+                              tn: ML::Video::Q4KDeltaLinear.tile_n(selected),
+                              tk: ML::Video::Q4KDeltaLinear.tile_k(selected)},
+     staged_tail_threadgroup_threads: ML::Video::Q4KDeltaLinear.threadgroup_threads(selected),
+     staged_tail_static_threadgroup_memory_bytes: ML::Video::Q4KDeltaLinear.linear_staged_tail_static_threadgroup_memory_bytes(selected)}
+  end : nil
+  q4k_kernel_partition = compare_q4k_kernels ? ML::Video::Q4KDeltaLinear.linear_dispatch_partition(
+    rows, din, dout, Q4K_KERNEL_VARIANTS[0][:variant]) : nil
   puts({schema: "wan_q4k_delta_setup_v1", manifest_sha256: manifest_hash,
         rows: rows, din: din, dout: dout, unique_source_rows: 4, real_video_derived: false,
         per_arm_storage: variants.to_h { |name|
@@ -249,6 +310,10 @@ begin
         format_by_arm: format_by_arm,
         fused_staged_control_decoder: compare_fused ? "block_validated" : nil,
         candidate_global_f32_weight_stage_bytes: compare_fused ? 0_i64 : nil,
+        q4k_kernel_candidate_global_f32_weight_stage_bytes: compare_q4k_kernels ? 0_i64 : nil,
+        q4k_kernel_control_f32_weight_stage_bytes: compare_q4k_kernels ? stage.size : nil,
+        q4k_kernel_retained_harness_bytes_excluding_stage: compare_q4k_kernels ? arena.resident_bytes - stage.size : nil,
+        q4k_kernel_dummy_sidecar_bytes: compare_q4k_kernels ? dummy_sidecar.not_nil!.size : nil,
         control_f32_weight_stage_bytes: compare_fused ? stage.size : nil,
         retained_harness_bytes_excluding_stage: compare_fused ? arena.resident_bytes - stage.size : nil,
         q4_k_fused_dummy_sidecar_bytes: compare_fused ? dummy_sidecar.not_nil!.size : nil,
@@ -316,6 +381,18 @@ begin
         gemm_schedule: compare_gemm ? "six_sample_palindrome_opposite_base_direction_by_half_v1" : nil,
         gemm_schedule_directions: compare_gemm ? {first_half: reverse_first ? "reverse" : "forward",
                                                   second_half: reverse_first ? "forward" : "reverse"} : nil,
+        q4k_kernel_comparison: compare_q4k_kernels,
+        q4k_kernel_variants: q4k_kernel_pipeline_metadata,
+        q4k_kernel_dispatch_partition: q4k_kernel_partition ? {direct_rows: q4k_kernel_partition[:direct_rows],
+          direct_columns: q4k_kernel_partition[:direct_columns], direct_groups_x: q4k_kernel_partition[:direct_groups_x],
+          direct_groups_y: q4k_kernel_partition[:direct_groups_y], right_tail_groups: q4k_kernel_partition[:right_tail_groups],
+          bottom_tail_groups: q4k_kernel_partition[:bottom_tail_groups], direct_dispatches: q4k_kernel_partition[:direct_dispatches],
+          staged_tail_dispatches: q4k_kernel_partition[:staged_tail_dispatches]} : nil,
+        q4k_kernel_schedule: compare_q4k_kernels ? "format_rotation_and_arm_rotation_reverse_by_half_v1" : nil,
+        q4k_kernel_schedule_directions: compare_q4k_kernels ? {first_half: reverse_first ? "reverse" : "forward",
+          second_half: reverse_first ? "forward" : "reverse"} : nil,
+        q4k_kernel_warmup_cycles: compare_q4k_kernels ? 1 : nil,
+        q4k_kernel_formats: compare_q4k_kernels ? variants : nil,
         mps_storage: "opaque and included in the process guard, excluded from explicit byte sum",
         tolerance: "finite && abs(actual-ref)<=2e-5+2e-5*abs(ref)"}.to_json)
   STDOUT.flush
@@ -367,7 +444,7 @@ begin
         status, weight_count, patch_map[format])
     elsif format == "q4_k"
       ML::Video::PackedWeightDecode.q4_k(encoder, payload, stage, weight_count)
-    elsif compare_fused || name != format
+    elsif compare_fused || compare_q4k_kernels || name != format
       ML::Video::Q4KDeltaWeights.decode_block_validated(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
     else
       ML::Video::Q4KDeltaWeights.decode(encoder, payload, sidecars[format], stage, status, weight_count, patch_map[format])
@@ -518,6 +595,88 @@ begin
     STDOUT.flush
     nil
   }
+  validate_q4k_kernels = ->(phase : String) {
+    variants.each do |format_name|
+      v = variant_manifest[format_name]
+      affine_budget_upload(File.join(fixture_dir, v["decoded_weight"]["path"].as_s), expected_weight, stage.size)
+      affine_budget_upload(File.join(fixture_dir, v["expected_projection"]["path"].as_s), expected_output, output.size)
+      cmd = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(cmd)
+      before = ML::MetalBuffer.video_spec_allocations
+      poison_buffer.call(encoder, stage, weight_count)
+      decode.call(encoder, format_name)
+      affine_budget_compare(encoder, zero, compare, stage, expected_weight,
+        q4_kernel_decoder_metrics.not_nil!, q4_kernel_decoder_partials.not_nil!, weight_count)
+
+      poison_buffer.call(encoder, output, output_count)
+      project.call(encoder)
+      affine_budget_compare(encoder, zero, compare, output, expected_output,
+        q4_kernel_staged_metrics.not_nil!, q4_kernel_staged_partials.not_nil!, output_count)
+      preserve_output.call(encoder, staged_output.not_nil!)
+      Q4K_KERNEL_VARIANTS.each do |entry|
+        arm = entry[:arm]
+        poison_buffer.call(encoder, output, output_count)
+        ML::Video::Q4KDeltaLinear.linear(encoder, input, payload, sidecar_for.call(format_name),
+          bias, output, status, rows, din, dout, patch_map[format_name], entry[:variant])
+        affine_budget_compare(encoder, zero, compare, output, expected_output,
+          q4_kernel_metrics[arm], q4_kernel_partials[arm], output_count)
+        preserve_output.call(encoder, q4_kernel_snapshots[arm])
+      end
+
+      Q4K_KERNEL_PAIR_KEYS.each do |pair|
+        pair_parts = pair.split("__")
+        left = pair_parts[0]
+        right = pair_parts[1]
+        left_buffer = left == "staged_mps" ? staged_output.not_nil! : q4_kernel_snapshots[left]
+        right_buffer = right == "staged_mps" ? staged_output.not_nil! : q4_kernel_snapshots[right]
+        affine_budget_compare(encoder, zero, compare, left_buffer, right_buffer,
+          q4_kernel_pair_metrics[pair], q4_kernel_pair_partials[pair], output_count)
+      end
+      encoder.end_encoding
+      cmd.commit
+      cmd.wait
+
+      decoder_metric = affine_budget_metrics(q4_kernel_decoder_metrics.not_nil!,
+        q4_kernel_decoder_partials.not_nil!, weight_count)
+      staged_metric = affine_budget_metrics(q4_kernel_staged_metrics.not_nil!,
+        q4_kernel_staged_partials.not_nil!, output_count)
+      baseline_metric = affine_budget_metrics(q4_kernel_metrics["device_q4k_baseline"],
+        q4_kernel_partials["device_q4k_baseline"], output_count)
+      map_metric = affine_budget_metrics(q4_kernel_metrics["device_q4k_map"],
+        q4_kernel_partials["device_q4k_map"], output_count)
+      index_metric = affine_budget_metrics(q4_kernel_metrics["device_q4k_index"],
+        q4_kernel_partials["device_q4k_index"], output_count)
+      pair_metrics = {
+        "device_q4k_baseline__device_q4k_map" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_baseline__device_q4k_map"], q4_kernel_pair_partials["device_q4k_baseline__device_q4k_map"], output_count),
+        "device_q4k_baseline__device_q4k_index" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_baseline__device_q4k_index"], q4_kernel_pair_partials["device_q4k_baseline__device_q4k_index"], output_count),
+        "device_q4k_baseline__staged_mps" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_baseline__staged_mps"], q4_kernel_pair_partials["device_q4k_baseline__staged_mps"], output_count),
+        "device_q4k_map__device_q4k_index" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_map__device_q4k_index"], q4_kernel_pair_partials["device_q4k_map__device_q4k_index"], output_count),
+        "device_q4k_map__staged_mps" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_map__staged_mps"], q4_kernel_pair_partials["device_q4k_map__staged_mps"], output_count),
+        "device_q4k_index__staged_mps" => affine_budget_metrics(q4_kernel_pair_metrics["device_q4k_index__staged_mps"], q4_kernel_pair_partials["device_q4k_index__staged_mps"], output_count),
+      }
+      check_status.call
+      {"Q4_K decoder" => decoder_metric, "staged MPS" => staged_metric,
+       "direct baseline" => baseline_metric, "coordinate map" => map_metric,
+       "rank index" => index_metric}.each do |label, metric|
+        raise "Q4_K kernel upstream parity failed #{label}: #{metric}" unless
+          metric[:tolerance_violations] == 0 && metric[:nonfinite] == 0
+      end
+      pair_metrics.each do |label, metric|
+        raise "Q4_K kernel cross parity failed #{label}: #{metric}" unless
+          metric[:tolerance_violations] == 0 && metric[:nonfinite] == 0
+      end
+      raise "Q4_K kernel validation encoded an allocation" unless ML::MetalBuffer.video_spec_allocations == before
+      puts({schema: "wan_q4k_delta_kernel_parity_v1", phase: phase,
+            format: format_name, reference_arm: format_name, decoder: decoder_metric,
+            projections: {"device_q4k_baseline" => baseline_metric,
+                          "device_q4k_map" => map_metric,
+                          "device_q4k_index" => index_metric,
+                          "staged_mps" => staged_metric},
+            pairs: pair_metrics}.to_json)
+      STDOUT.flush
+    end
+    nil
+  }
   validate = ->(phase : String) {
     execution_arms.each do |name|
       v = variant_manifest[format_by_arm[name]]
@@ -635,6 +794,48 @@ begin
       end
     end
     validate_gemm.call("after_timing")
+  elsif compare_q4k_kernels
+    validate_q4k_kernels.call("before_timing")
+    (-1...rounds).each do |round|
+      rotation = Math.max(round, 0) % Q4K_KERNEL_ARMS.size
+      reverse = round < 0 ? reverse_first : ((round >= rounds // 2) != reverse_first)
+      format_order = variants.rotate(rotation)
+      format_order = format_order.reverse if reverse
+      format_order.each_with_index do |format_name, format_position|
+        arm_rotation = (rotation + variants.index(format_name).not_nil!) % Q4K_KERNEL_ARMS.size
+        arm_order = Q4K_KERNEL_ARMS.rotate(arm_rotation)
+        arm_order = arm_order.reverse if reverse
+        arm_order.each_with_index do |name, position|
+          cmd = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(cmd)
+          before = ML::MetalBuffer.video_spec_allocations
+          started = Time.instant
+          if name == "staged_mps"
+            decode.call(encoder, format_name)
+            project.call(encoder)
+          else
+            entry = Q4K_KERNEL_VARIANTS.find! { |candidate| candidate[:arm] == name }
+            ML::Video::Q4KDeltaLinear.linear(encoder, input, payload,
+              sidecar_for.call(format_name), bias, output, status, rows, din, dout,
+              patch_map[format_name], entry[:variant])
+          end
+          encoder.end_encoding
+          encode = (Time.instant - started).total_seconds
+          gpu = cmd.commit_and_wait_gpu_elapsed_seconds
+          wall = (Time.instant - started).total_seconds
+          raise "Timed Q4_K kernel encode allocated a MetalBuffer" unless ML::MetalBuffer.video_spec_allocations == before
+          check_status.call
+          puts({schema: "wan_q4k_delta_timing_v1", mode: "q4k_kernel_ablation",
+                variant: name, format: format_name, format_position: format_position,
+                round: round, position: position, warmup: round < 0, rows: rows,
+                encode_seconds: encode, gpu_seconds: gpu, wall_seconds: wall,
+                terminal_waits: 1, inter_operator_host_waits: 0, activation_readbacks: 0,
+                encode_metal_buffer_allocations: 0, manifest_sha256: manifest_hash}.to_json)
+          STDOUT.flush
+        end
+      end
+    end
+    validate_q4k_kernels.call("after_timing")
   elsif compare_fused
     validate_dense.call("before_timing")
     validate.call("before_timing")
@@ -753,7 +954,7 @@ begin
   e.set_pipeline(corrupt).set_buffer(output, 0, ML::Metal::BufferAccess::ReadWrite).dispatch_1d(1)
   affine_budget_compare(e, zero, compare, output, expected_output, metrics, partials, output_count)
   affine_budget_compare(e, zero, compare, output, staged_output.not_nil!,
-    staged_metrics.not_nil!, staged_partials.not_nil!, output_count) if compare_fused
+    staged_metrics.not_nil!, staged_partials.not_nil!, output_count) if compare_fused || compare_q4k_kernels
   e.end_encoding
   cmd.commit
   cmd.wait
@@ -766,6 +967,13 @@ begin
     raise "Comparator accepted fused/staged finite/NaN corruption" unless staged_corruption[:tolerance_violations] == 2 && staged_corruption[:nonfinite] == 1
     control = control.merge({fused_vs_staged_corruption_rejected: true,
                              fused_vs_staged_corruption:          staged_corruption})
+  end
+  if compare_q4k_kernels
+    q4k_cross_corruption = affine_budget_metrics(staged_metrics.not_nil!, staged_partials.not_nil!, output_count)
+    raise "Comparator accepted Q4_K kernel/staged MPS corruption" unless
+      q4k_cross_corruption[:tolerance_violations] == 2 && q4k_cross_corruption[:nonfinite] == 1
+    control = control.merge({q4k_kernel_vs_staged_corruption_rejected: true,
+                             q4k_kernel_vs_staged_corruption: q4k_cross_corruption})
   end
   puts(control.to_json)
 ensure
