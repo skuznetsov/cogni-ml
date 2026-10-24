@@ -1405,6 +1405,15 @@ extern "C" int32_t gs_mps_chain_finish_wait(void *handle, double *gpuSeconds,
   }
 }
 
+// A nonblocking state query used to distinguish a pre-wait rejection from a
+// terminal completion error. The latter is still safe for resource release.
+extern "C" int32_t gs_mps_chain_drained(void *handle) {
+  if (!handle)
+    return -1;
+  CogniMPSCommandChain *chain = (__bridge CogniMPSCommandChain *)handle;
+  return chain.finished ? 1 : 0;
+}
+
 extern "C" int32_t gs_mps_chain_release(void *handle) {
   if (!handle)
     return 0;

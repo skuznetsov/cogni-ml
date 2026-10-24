@@ -10,6 +10,7 @@ require "./mps_continuation_trace"
     fun current_root = gs_mps_chain_current_root(chain : Void*) : Void*
     fun continue = gs_mps_chain_continue(chain : Void*) : Int32
     fun finish_wait = gs_mps_chain_finish_wait(chain : Void*, seconds : Float64*, segments : Int32*) : Int32
+    fun drained = gs_mps_chain_drained(chain : Void*) : Int32
     fun root_count = gs_mps_chain_root_count(chain : Void*, count : Int32*) : Int32
     fun root_timing = gs_mps_chain_root_timing(chain : Void*, sequence : Int32,
                                                completed : Int32*, has_error : Int32*, gpu_start : Float64*, gpu_end : Float64*) : Int32
@@ -92,7 +93,7 @@ module ML::Metal
   class MPSCommandChain
     @native : Pointer(Void) = Pointer(Void).null
     @encoder : ComputeEncoder? = nil
-    @completed = false
+    @drained = false
     @status = 0
     @phase_root_profile_enabled = false
     @phase_root_profile_finished = false
@@ -171,15 +172,20 @@ module ML::Metal
     end
 
     def commit_and_wait : Nil
-      unless @completed
+      unless @drained
         check_live!
         pause! if @encoder
         {% unless flag?(:cpu_only) %}
-          @wait_count += 1
           @status = MPSCommandChainFFI.finish_wait(@native, pointerof(@gpu_elapsed_seconds), pointerof(@segment_count))
+          native_drained = MPSCommandChainFFI.drained(@native)
+          raise "Failed to query MPS command chain drain state (#{native_drained})" if native_drained < 0
+          @drained = native_drained == 1
+          @wait_count += 1 if @drained
+        {% else %}
+          @drained = true
         {% end %}
-        @completed = true
       end
+      raise "MPS command chain completion failed before terminal drain (#{@status})" unless @drained
       raise "MPS command chain completion failed (#{@status})" unless @status == 0
     end
 
@@ -241,7 +247,7 @@ module ML::Metal
     end
 
     def continuation_trace : ML::Video::MPSContinuationTrace
-      unless @continuation_trace_enabled && @completed && @wait_count == 1 && @status == 0
+      unless @continuation_trace_enabled && @drained && @wait_count == 1 && @status == 0
         raise ArgumentError.new("MPS continuation trace requires enable and the successful existing terminal wait")
       end
       {% if flag?(:cpu_only) %}
@@ -372,7 +378,7 @@ module ML::Metal
     # terminal wait has completed and all root callbacks/fallbacks are recorded.
     def phase_root_profile : ML::Video::MPSCommandPhaseProfile
       require_phase_root_profile!
-      unless @completed && @wait_count == 1
+      unless @drained && @wait_count == 1
         raise ArgumentError.new("MPS phase-root profile is available only after the terminal wait")
       end
       raise ArgumentError.new("MPS command chain completion failed (#{@status})") unless @status == 0
@@ -403,7 +409,7 @@ module ML::Metal
     # hard diagnostic failure rather than silently reporting partial totals.
     def api_profile : ML::Video::MPSAPIProfile
       require_api_profile!
-      unless @completed && @wait_count == 1
+      unless @drained && @wait_count == 1
         raise ArgumentError.new("MPS API profile is available only after the terminal wait")
       end
       raise ArgumentError.new("MPS command chain completion failed (#{@status})") unless @status == 0
@@ -432,14 +438,21 @@ module ML::Metal
     end
 
     def completed? : Bool
-      @completed
+      drained?
+    end
+
+    # True only after the native command chain has returned from its terminal
+    # wait and finished root accounting. Pre-wait profile rejections remain
+    # retryable and do not authorize releasing resident GPU resources.
+    def drained? : Bool
+      @drained
     end
 
     # No implicit wait or finalizer: ownership must end explicitly after the
     # terminal wait, including on an exception after a graph encoded work.
     def release : Nil
       return if @native.null?
-      raise ArgumentError.new("Complete MPS command chain before release") unless @completed
+      raise ArgumentError.new("Complete MPS command chain before release") unless drained?
       {% unless flag?(:cpu_only) %}
         raise "MPS command chain release rejected" unless MPSCommandChainFFI.release(@native) == 0
       {% end %}
@@ -447,7 +460,7 @@ module ML::Metal
     end
 
     private def check_live! : Nil
-      raise ArgumentError.new("MPS command chain is completed or released") if @completed || @native.null?
+      raise ArgumentError.new("MPS command chain is completed or released") if @drained || @native.null?
     end
 
     private def root_count : Int32

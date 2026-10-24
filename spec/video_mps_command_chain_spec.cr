@@ -3,6 +3,25 @@ require "../src/ml/video/metal_ops"
 require "../src/ml/video/metal_mps_command_chain"
 require "./support/video_allocation_counter"
 
+lib MPSCommandChainScopeProbeFFI
+  struct Scope
+    owner_data : Void*
+    start_wall_ns : UInt64
+    start_thread_cpu_ns : UInt64
+    serial : UInt64
+    parent_graph_serial : UInt64
+    operation : UInt32
+    phase : UInt32
+    active : UInt32
+    clocks_valid : UInt32
+    nested_in_graph : UInt32
+    reserved : UInt32
+  end
+
+  fun begin = gs_mps_api_profile_scope_begin(operation : Int32, command_context : Void*, scope : Scope*) : Void
+  fun finish = gs_mps_api_profile_scope_end(scope : Scope*) : Void
+end
+
 describe ML::Metal::MPSCommandChain do
   it "orders native work across continued roots with one terminal wait" do
     arena = ML::Video::Arena.new
@@ -136,6 +155,46 @@ describe ML::Metal::MPSCommandChain do
         c.release
       end
       arena.release
+    end
+  end
+
+  it "keeps a pre-wait profile scope rejection retryable until the native chain drains" do
+    chain = nil.as(ML::Metal::MPSCommandChain?)
+    scope = MPSCommandChainScopeProbeFFI::Scope.new
+    scope_open = false
+    begin
+      c = ML::Metal::MPSCommandChain.new
+      chain = c
+      c.pause!
+      c.enable_api_profile!(phase_roots: false)
+
+      # Reproduce an unclosed graph API scope at the terminal-wait boundary.
+      MPSCommandChainScopeProbeFFI.begin(0, c.handle, pointerof(scope))
+      scope.active.should eq(1_u32)
+      scope_open = true
+
+      expect_raises(Exception, /-5/) { c.commit_and_wait }
+      c.drained?.should be_false
+      c.completed?.should be_false
+      c.wait_count.should eq(0)
+      expect_raises(ArgumentError) { c.release }
+
+      MPSCommandChainScopeProbeFFI.finish(pointerof(scope))
+      scope_open = false
+      scope.active.should eq(0_u32)
+
+      c.commit_and_wait
+      c.drained?.should be_true
+      c.completed?.should be_true
+      c.wait_count.should eq(1)
+      c.release
+      chain = nil
+    ensure
+      MPSCommandChainScopeProbeFFI.finish(pointerof(scope)) if scope_open
+      if c = chain
+        c.commit_and_wait unless c.drained?
+        c.release
+      end
     end
   end
 end
