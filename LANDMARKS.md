@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-F32-CORE-2026-10-24] Native block control; runtime precision remains open
+
+- User temporarily switched from Wan to Hy-Nomas. The opt-in dual-stream block
+  at pinned upstream `911cea6458a89c2663513ff7099561ec190dd491` has strict
+  safetensors F32/BF16 admission and reusable GPU scratch. Two-block output
+  chaining stays resident; encode allocates zero tracked MetalBuffers and adds
+  no completion wait/readback. Unsupported camera/history/masks reject early.
+- Tiny and C2048/H16/D128/F8192 synthetic probes each pass 6 examples and 444
+  intermediate comparisons at the unchanged finite `2e-5 + 2e-5*abs(ref)` gate;
+  maximum absolute error is 5.9604645e-6. These are F32-math controls with an
+  explicit MPS SDPA adapter, not Magi CUDA BF16 runtime or real-weight parity.
+- Final oracle/native sampled footprints stay below 4 GiB, cache-aware
+  headroom stays above 25%, swap growth is zero and no full model/video runs.
+  Correlated MiniQuad review is ROBUST only under the documented trusted
+  fixture-digest and immutable-checkpoint preconditions. There is no video
+  quality/speedup claim. Source, commands, receipts and decay triggers:
+  `docs/hy-nomas-native-frontier.md`.
+- Next: BF16 attention boundaries and actual checkpoint weights, then MPS
+  GEMM/attention at representative token counts. Wan return pointer:
+  `docs/wan-performance-frontier.md`, parent `e22fc2ba`; defaults are unchanged.
+
 ### [LM-WAN-SELF-API-SPLIT-2026-10-21] Attention dominates; continuation wall is mostly off CPU
 
 - At measurement parent `0a5fb0bb`, add default-off per-chain MPS API

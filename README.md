@@ -1485,6 +1485,15 @@ VAEs, and full video generation remain open. See the
 and reproducible gates, and [license notices](third_party/VIDEO_NOTICES.md) before
 using or redistributing the LTX-specific modules.
 
+An additional opt-in `ml/video/hy_nomas_block` implements Hy-Nomas dual video/text
+streams with reusable GPU scratch and safetensors admission for F32/BF16 weight
+storage. Its synthetic intermediate checks use the pinned upstream block with
+an explicitly F32 MPS attention adapter. This establishes an F32 math control;
+Magi's CUDA BF16 attention behavior, real checkpoint parity, camera/history,
+decoding and video generation remain open. See the
+[Hy-Nomas frontier and reproduction commands](docs/hy-nomas-native-frontier.md)
+and [source notices](third_party/VIDEO_NOTICES.md#hy-nomas).
+
 ## Metal Kernels
 
 | Kernel | Purpose |
@@ -1521,8 +1530,8 @@ NVIDIA/CUDA support is currently an experimental backend-probe track, not a full
 
 ## License
 
-The core library is MIT licensed. Optional Wan adaptations retain Apache-2.0
-notices. Optional LTX adaptations are covered by the LTX-2.x Community License,
+The core library is MIT licensed. Optional Wan and Hy-Nomas core adaptations
+retain Apache-2.0 notices. Optional LTX adaptations are covered by the LTX-2.x Community License,
 which includes commercial-use conditions; they are not covered by MIT.
 See [video source and license notices](third_party/VIDEO_NOTICES.md) for exact
 paths and included agreements, and the [native video frontier](docs/video-native-frontier.md)

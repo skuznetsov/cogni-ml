@@ -3,6 +3,27 @@
 The native video modules are opt-in. Their presence does not implement a
 complete generation pipeline or grant rights to external checkpoints.
 
+## Hy-Nomas
+
+The Hy-Nomas core block and oracle adapter are based on Tencent-Hunyuan/Hy-Nomas
+at `911cea6458a89c2663513ff7099561ec190dd491`.
+Upstream: <https://github.com/Tencent-Hunyuan/Hy-Nomas>.
+Copyright (C) 2026 Tencent. All rights reserved.
+
+Changes: native Crystal/Metal execution, explicit resident-buffer contracts,
+strict checkpoint bindings and a source-pinned diagnostic adapter. The included
+core Apache-2.0 terms are in
+[licenses/hy-nomas-Apache-2.0.txt](licenses/hy-nomas-Apache-2.0.txt).
+The [upstream license bundle](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/911cea6458a89c2663513ff7099561ec190dd491/LICENSE)
+also lists separately licensed dependencies; the core license is not a blanket
+license for that dependency bundle or for separately supplied encoders/decoders.
+No model weights or community ComfyUI implementation are included.
+
+- `src/ml/video/hy_nomas_block.cr`
+- `src/ml/video/kernels/hy_nomas_block.metal`
+- `spec/hy_nomas_block_spec.cr`
+- `spec/support/hy_nomas_reference.py`
+
 ## Wan 2.2 S2V
 
 The Wan-specific implementation and oracle adapter are based on the architecture
