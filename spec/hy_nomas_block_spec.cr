@@ -394,7 +394,20 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
         first.encode_mps(submission.not_nil!, first.image_output, inputs["txt"], inputs["vec"],
           inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
       end
-      first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
+      observed_markers = [] of String
+      observed_counts = [] of Int32
+      observer = ->(name : String) do
+        observed_markers << name
+        observed_counts << submission.not_nil!.observed_root_count
+        submission.not_nil!.wait_count.should eq(0)
+        nil
+      end
+      first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0],
+        phase_observer: observer)
+      observed_markers.should eq(["validate", "modulation", "qkv", "joint_pack", "attention",
+                                  "attention_projection_residual", "image_ffn", "text_ffn", "complete"])
+      observed_counts.all? { |count| count > 0 }.should be_true
+      observed_counts.should eq(observed_counts.sort)
       chain.encode_mps(submission.not_nil!, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[1])
       # Repeat the same prepared bindings; no state or scratch may accumulate.
       first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])

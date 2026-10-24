@@ -43,12 +43,20 @@ describe ML::Metal::MPSCommandChain do
       before = ML::MetalBuffer.video_spec_allocations
       c = ML::Metal::MPSCommandChain.new
       chain = c
+      c.observed_root_count.should eq(1)
+      expect_raises(ArgumentError) { c.completed_root_timings }
       expect_raises(ArgumentError) { c.handle }
       expect_raises(ArgumentError) { c.resume! }
       expect_raises(ArgumentError) { c.release }
       { {source, a}, {a, b}, {b, output} }.each_with_index do |buffers, i|
         e = c.encoder
         e.set_pipeline(pipeline).set_buffer(buffers[0], 0).set_buffer(buffers[1], 1).dispatch_1d(257)
+        # Observing roots must keep the existing encoder usable and create no
+        # extra root or wait, even while native work is being encoded.
+        borrowed_encoder = c.encoder
+        c.observed_root_count.should eq(i + 1)
+        c.encoder.should eq(borrowed_encoder)
+        c.wait_count.should eq(0)
         c.pause!
         expect_raises(ArgumentError) { c.encoder }
         expect_raises(ArgumentError) { c.pause! }
@@ -65,11 +73,19 @@ describe ML::Metal::MPSCommandChain do
       c.segment_count.should eq(3)
       c.gpu_elapsed_seconds.finite?.should be_true
       c.gpu_elapsed_seconds.should be > 0.0
+      roots = c.completed_root_timings
+      roots.map(&.sequence).should eq([0, 1, 2])
+      roots.all?(&.completed).should be_true
+      roots.any?(&.has_error).should be_false
+      roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }.should eq(c.gpu_elapsed_seconds)
+      c.completed_root_timings.should eq(roots)
+      expect_raises(ArgumentError) { c.observed_root_count }
       output.read(257).should eq(Array(Float32).new(257) { |i| i.to_f32 + 3.0_f32 })
       expect_raises(ArgumentError) { c.resume! }
       expect_raises(ArgumentError) { c.handle }
       expect_raises(ArgumentError) { c.continue_async! }
       c.release
+      expect_raises(ArgumentError) { c.completed_root_timings }
       c.release
     ensure
       if c = chain

@@ -1,10 +1,11 @@
 # Hy-Nomas native Metal frontier
 
 Document status: actual-checkpoint F32-math and BF16-boundary MPS block controls
-verified within the bounded scope below (2026-10-24). The opt-in prepared MPS
-backend matches the pinned MPS oracle, including chained output reuse. Historical
-failures of the original Metal path remain recorded. CUDA/Magi parity, target
-geometry performance and the video pipeline remain open.
+and a bounded J6560 one-block profile are verified within the scopes below
+(2026-10-24). The opt-in prepared MPS backend matches the pinned short-input
+MPS oracle, including chained output reuse. Historical failures of the original
+Metal path remain recorded. Full-J upstream output, CUDA/Magi parity, model-wide
+performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
 
@@ -1059,6 +1060,151 @@ chunk for the T1024 control.
 `make spec_hy_nomas` includes the standalone and pinned-fixture consumer specs;
 the upstream consumer is pending unless all trusted fixture pins are supplied.
 
+## Active slice: representative one-block profiling
+
+Status: verified for the bounded one-block probe, 2026-10-24; correlated
+MiniQuad verdict ROBUST within this scope. Parent `45cfa8f5` supplied the
+standalone compact attention control. The new benchmark uses B1, image/text rows
+5280/1280, C2048/H16/D128/FF8192, broadcast modulation, actual block-0 checkpoint
+weights converted from F32 to BF16 on GPU, and explicit compact C256/G16
+attention with `BF16BoundaryControl`. Inputs use deterministic GPU-generated
+values and synthetic unit-circle RoPE with theta 10000. This is not upstream's
+ND RoPE (theta 256, axes [16,56,56], grid [6,22,40]); it is a performance and
+repeatability probe, not a full-J upstream output or video-quality oracle.
+
+Risk: CAUTION (performance instrumentation across asynchronous command roots).
+The strongest failure is attributing a root shared by two phases entirely to
+one phase, or changing the submission schedule to obtain cleaner timings.
+Root-count observations and completed timestamp snapshots do not pause,
+continue, submit or wait for GPU work. Sampling
+the cursor can lock/register CPU tracker metadata, so observer-off arms alone
+provide clean block timings. An optional trusted CPU diagnostic observer
+marks validation, modulation, QKV, joint packing, attention, attention
+projection/residual, image FFN and text FFN. Markers denote phase starts;
+validation is CPU-only and complete is an endpoint. For GPU-producing phases,
+the inclusive root range from the start cursor to the end cursor supplies
+candidate attribution; roots crossing a marker retain all candidate phase
+names. GPU intervals of shared roots are not exact phase
+costs, and sums are not substituted for interval unions/envelopes.
+
+Implementation: optional markers in `hy_nomas_block.cr` / `hy_nomas_block_mps.cr`,
+read-only lifecycle-bound cursors/snapshots in `metal_mps_command_chain.cr`, and
+CPU-only candidate mapping in `hy_nomas_block_profile.cr`. Dispatch boundaries,
+fixed bindings, numerical policies and inference defaults are unchanged. A
+trusted observer must only inspect CPU metadata; if it throws after work was
+appended, callers must drain before releasing resources.
+
+The fresh release Makefile benchmark uses one prepared workspace, one warmup,
+and two ABBA groups (on/off/off/on), four paired comparisons. Each measured
+sample starts a fresh chain, encodes one block, then performs its sole terminal
+wait. Chain creation is reported separately. GPU output capture/comparison
+commands run symmetrically outside block timers, with their own terminal waits;
+only six UInt32 counters (24 bytes) are read to CPU. This adds no internal block
+wait, neural activation readback or forced profiling submission boundary.
+
+Observed medians on Apple M2 Max, macOS 26.6.2, SDK 27.0, Crystal 1.22.1:
+
+| Measurement | Observer off | Observer on |
+| --- | ---: | ---: |
+| Encode + terminal wait | 137.626 ms | 137.886 ms |
+| CPU command encoding | 1.853 ms | 1.787 ms |
+| Terminal wait wall time | 135.795 ms | 135.987 ms |
+| GPU root-interval union | 136.704 ms | 136.992 ms |
+| GPU root envelope | 136.720 ms | 137.008 ms |
+
+The first warmup block took 392.865 ms, including 225.348 ms of encoding; this
+excludes checkpoint loading, workspace construction and graph preparation.
+All eight measured outputs match the warmup at raw F32 bits over 13,434,880
+values per sample, with zero nonfinite, finite-gate or BF16-bin violations.
+Every sample has 28 roots, one block terminal wait and zero tracked encode-time
+MetalBuffer allocations. This does not establish zero opaque driver allocation.
+Observed paired on-minus-off wall deltas range from -56 to +349 microseconds;
+four pairs do not establish general negligible/zero observer overhead.
+
+Root attribution in all four observed samples:
+
+| Roots | Candidate phases | Median interval duration |
+| --- | --- | ---: |
+| 0 | modulation, QKV, joint packing, attention | 25.497 ms |
+| 1..25 | attention only | 57.623 ms summed per sample |
+| 26 | attention, projection/residual, image FFN | 27.189 ms |
+| 27 | image FFN, text FFN | 26.536 ms |
+
+The 57.623 ms is the median of each sample's sum over its 25 attention-only
+roots, roughly 42% of the observer-off GPU union. Boundary roots retain multiple
+labels, and intervals can include stalls. This is not an exact kernel-cost or
+QKV/FFN breakdown; all-candidate sums overlap and cannot be added. CPU encoding
+is small relative to GPU execution, so encoding micro-optimizations are not the
+main measured lever.
+
+Guarded DoD passed: `hy_nomas_block_profile_spec.cr` has three CPU examples;
+`video_mps_command_chain_spec.cr` has three lifecycle examples; freshly linked
+`hy_nomas_block_spec.cr` passes eight examples / 536 finite comparisons for each
+of the pinned real F32 and BF16 fixtures. Both block runs link the exact seven
+fresh bridge objects used by the benchmark. All 480 canonical saved checkpoint
+arrays per fixture are raw-F32 exact; the BF16 fixture also matches 72 selected
+boundary arrays. Alternative native modulation controls retain their small
+within-gate differences; do not call all 536 comparisons bitwise exact. The
+upstream full-block fixtures have six image and three text rows, not J6560.
+
+Preflight estimates 3,737,058,840 bytes, including loader staging, score reserves
+and a 256 MiB opaque-allocation heuristic. It is not a guaranteed peak bound.
+The benchmark's maximum sampled group footprint is 3,408,070,024 bytes
+(3.174 GiB); minimum cache-aware headroom is 41.718%; swap growth is zero.
+Across the two fresh fixture gates, the maximum sampled group footprint is
+3,576,301,992 bytes and minimum headroom 23.295%, with zero swap growth. All
+runs use the external 15% cache-aware floor, sampled 4 GiB cap (smaller for
+builds/tests), 64 MiB system swap-growth stop and 600 s deadline. Sampling can
+miss short peaks; file-backed cache is a reclaimability estimate. The executable
+does not enforce these runtime limits itself. Retained wrapper arrays grow with
+`--groups`; this evidence covers two groups under the guard, not arbitrary runs.
+
+An initial build was stopped for system swap growth of about 204 MiB while its
+own group used about 84 MiB. The guard was not weakened; a read-only stability
+check preceded retry. A Crystal digest API error, an external test-bundle require
+path error and a test-only borrowed-encoder comparison error were corrected;
+their failed receipts remain alongside the passing runs.
+
+Memory audit: diagnostic scratch has 55 distinct buffers totaling
+1,806,287,360 bytes (1.682 GiB). All 14 projections already share one 96 MiB
+F32 weight-expansion stage. Independent per-block scratch would consume about
+90.84 GiB for 54 blocks, before weights/workspaces. The next necessary step is
+sharing scratch/workspace across serial blocks under an explicit lifetime
+contract; current retained checkpoints and fixed graph bindings prohibit blind
+aliasing. Omitting expansion for F32-resident weights is a separate possible
+control, not a solution for the target BF16 residency.
+
+Conditional arithmetic: `432 * 137.626 ms = 59.4545 s` for isolated block-0-
+equivalent calls at these operands/geometry, each with a terminal wait. This
+passes the necessary 277.8 ms mean-block ceiling discussed above, but does not
+measure a 54-block stack, eight diffusion steps or seconds per video second.
+Other blocks, real inputs/ND RoPE, scheduler, text encoding, camera/history and
+PixelUMM remain outside this timing.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-full-block-profile-20261024/`.
+`logs/final-receipt-v1.json` indexes source/binary/object hashes, trusted fixture
+pins, exact guarded commands, outputs, guard samples and failures. The derived
+breakdown is `logs/benchmark-analysis-v1.json`. Rebuild under the existing guard
+with SSD-backed TMPDIR and CRYSTAL_CACHE_DIR:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-block-rebuild \
+  /opt/mldata_ssd/cogni-ml/hy-block-rebuild/hy_nomas_block_benchmark
+```
+
+Run through `examples/support/wan_memory_guard.py` with
+`--memory-accounting file-cache --max-footprint-mib 4096`,
+`--max-swap-growth-mib 64 --timeout-sec 600 --log FRESH`, then the benchmark
+`--groups=2`. `--preflight-only` validates source pins and geometry before Metal
+initialization. Exact fixture-gate environments are in the receipt's argv files;
+retain the trusted fixture/checkpoint digests rather than accepting new ones
+from mutable metadata. `make spec_hy_nomas` includes the new CPU profile spec.
+
+Rollback: omit the optional observer and remove the new benchmark; no inference
+default, numerical policy, buffer binding or scheduling change is admitted.
+Evidence decays on source, fixture, geometry, compiler/SDK/OS/device, numerical
+policy or host-scheduling changes. No full model or full generation is admitted.
+
 ## Continuation
 
 Active goal: native Hy-Nomas port, initially one proven DiT block. Return pointer:
@@ -1072,14 +1218,15 @@ inputs. Known grouping/short-chunk/multi-batch counterexamples remain rejected
 by workspace admission and retained as failed diagnostics. No general shape or
 activation qualification follows from the measured matrix.
 
-Next discriminator: representative native phase/whole-block timing at J=6,560
-with C256/G16, against the 277.8 ms necessary block ceiling for two minutes per
-video second at 8 steps/54 blocks. Share serial weight stages and liveness
-scratch before full-model residency. The roughly 62 ms reported GPU time for
-standalone attention alone does not
-establish video throughput: projections, conditioning, scheduler,
-text encoder, camera/history and PixelUMM remain outside it. Exact CUDA/Magi
-output dtype and BF16 activation semantics are also unresolved. Standing
-authority remains bounded GPU probes under the 15% floor and sampled 4 GiB cap;
-full generation is outside this slice. Refresh evidence after source, fixture,
-geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling changes.
+The J6560 block-0 probe now measures 137.626 ms warm median wall time with
+C256/G16 and synthetic inputs/RoPE, including its terminal wait. Next
+discriminator: a shared serial scratch/workspace contract with distinct input
+and output banks, unchanged two-block upstream/chained output parity, and
+negative overlap/early-release checks before full-model residency. Retain the
+diagnostic non-aliased path as control. Real ND RoPE and a full-J upstream output
+remain separate qualification gaps before pipeline quality claims. Exact
+CUDA/Magi output dtype and BF16 activation semantics are also unresolved.
+Standing authority remains bounded GPU probes under the 15% floor and sampled
+4 GiB cap; full generation is outside this slice. Refresh evidence after source,
+fixture, geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling
+changes, or artifact loss.

@@ -6,6 +6,51 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-BLOCK-PROFILE-2026-10-24] J6560 block profile passes; serial scratch is the next residency boundary
+
+- Fresh release benchmark at parent `45cfa8f5`, Apple M2 Max: one actual block-0
+  weight set, GPU F32-to-BF16 conversion, B1/image5280/text1280/C2048/H16/D128/
+  FF8192, explicit compact C256/G16 and BF16-boundary control. Deterministic
+  GPU-generated inputs and synthetic theta-10000 RoPE qualify performance and
+  repeatability only, not upstream ND RoPE, full-J output or generated quality.
+- One warmup and two on/off/off/on groups give four paired comparisons. Warm
+  observer-off medians: block encode + terminal wait 137.626 ms, CPU encoding
+  1.853 ms, GPU root union 136.704 ms. All eight outputs match the warmup at
+  raw F32 bits across 13,434,880 values each. Each block has 28 roots, one
+  terminal wait and zero tracked encode MetalBuffer allocations. Per-arm GPU
+  diagnostics have separate waits outside block timers; chain setup is separate.
+- The median per-sample sum over 25 attention-only interior roots is 57.623 ms
+  (about 42% of the off-arm GPU union). Boundary roots are shared by QKV,
+  packing, attention, residual and FFN phases; their intervals can include
+  stalls. No exact per-phase kernel costs follow. Four paired observer wall
+  deltas span -56..+349 microseconds, insufficient for a general overhead claim.
+- Three CPU profile and three command-chain lifecycle examples pass. Fresh
+  block specs link the benchmark's exact seven bridge objects: both real F32
+  and BF16 fixtures pass eight examples / 536 finite comparisons each, with
+  all 480 canonical checkpoint arrays raw-F32 exact and 72 BF16 fixture
+  boundary arrays exact. Short fixtures have six image / three text rows;
+  alternative native controls have small within-gate drift. Tolerances remain
+  `2e-5 + 2e-5*abs(reference)`; no inference default or scheduling changes.
+- Benchmark sampled footprint peaks at 3,408,070,024 bytes (3.174 GiB), minimum
+  cache-aware headroom 41.718%, swap growth zero. The two fresh fixture gates
+  peak at 3,576,301,992 bytes with minimum headroom 23.295%. External sampled
+  4 GiB cap, 15% floor, 64 MiB swap-growth stop and 600 s deadline stay intact.
+  Initial swap-guard/build/harness failures are retained, not counted as passes.
+- Scratch remains 55 non-aliased buffers / 1.682 GiB per block; all 14
+  projections already share one 96 MiB expansion stage. Next: explicit shared
+  serial scratch/workspace lifetime with distinct input/output banks and
+  unchanged two-block parity plus overlap/early-release falsifiers. Blind
+  aliasing violates retained checkpoints/fixed graph bindings. No full model
+  or generation was run. `432 * 137.626 ms = 59.4545 s` is conditional arithmetic
+  for block-0-equivalent calls, not measured DiT or video throughput.
+- Correlated MiniQuad verdict: ROBUST for the guarded one-block scope;
+  full-pipeline, quality and exact phase-cost claims remain unqualified.
+  Evidence/pins/commands/hashes/decay: `docs/hy-nomas-native-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-block-profile-20261024/logs/final-receipt-v1.json`.
+  Refresh on scoped source, operands/fixture/geometry, precision, compiler/
+  bridge/SDK/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-COMPACT-ATTENTION-2026-10-24] Bounded attention is opt-in; C256 is the tested long-input candidate
 
 - Prepared Metal/MPS attention packs K/V once per encode, reuses fixed smaller
@@ -47,8 +92,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence/pins/commands/source and binary hashes:
   `docs/hy-nomas-native-frontier.md`, compact attention section;
   `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-attention-20261024/logs/final-receipt-v1.json`.
-  Next: J6560 phase/whole-block timing with C256 and paired A/A, then shared
-  serial stages/liveness scratch before full-model residency. Refresh after
+  The J6560 whole-block follow-up is recorded in the profile landmark above;
+  shared serial stages/liveness scratch precede full-model residency. Refresh after
   scoped source, fixture/operands/geometry, precision, compiler/bridge,
   PyTorch/MPS/OS/device/schedule changes or artifact loss. Wan return pointer
   remains `docs/wan-performance-frontier.md`, `e22fc2ba`.

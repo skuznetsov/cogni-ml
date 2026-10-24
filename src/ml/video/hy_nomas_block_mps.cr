@@ -487,7 +487,11 @@ module ML::Video
     @chain : ML::Metal::MPSCommandChain
     @workspace : HyNomasMPSWorkspace
 
-    def initialize(@chain, @workspace)
+    def initialize(@chain, @workspace, @phase_observer : Proc(String, Nil)? = nil)
+    end
+
+    def phase_marker(name : String) : Nil
+      @phase_observer.try(&.call(name))
     end
 
     def validate!(block : HyNomasDualStreamBlock,
@@ -557,13 +561,18 @@ module ML::Video
 
   # Add the opt-in overload only when callers explicitly require this file.
   class HyNomasDualStreamBlock
+    # phase_observer is a trusted diagnostic callback, not a sandbox. It must
+    # only observe CPU metadata and must not mutate resources, encode, submit
+    # or wait. Its overhead belongs to instrumented timings. If it raises after
+    # work was appended, the caller must drain the chain before releasing it.
     def encode_mps(chain : ML::Metal::MPSCommandChain,
                    img : ML::MetalBuffer, txt : ML::MetalBuffer,
                    vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
                    video_rope_cos : ML::MetalBuffer,
                    video_rope_sin : ML::MetalBuffer,
-                   workspace : HyNomasMPSWorkspace) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
-      backend = HyNomasMPSBackend.new(chain, workspace)
+                   workspace : HyNomasMPSWorkspace,
+                   *, phase_observer : Proc(String, Nil)? = nil) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+      backend = HyNomasMPSBackend.new(chain, workspace, phase_observer)
       encode_with_backend(chain.encoder, img, txt, vec, vec_txt,
         video_rope_cos, video_rope_sin, backend)
     end

@@ -189,6 +189,42 @@ module ML::Metal
       raise "MPS command chain completion failed (#{@status})" unless @status == 0
     end
 
+    # CPU cursor observation, including the current open root. It never waits
+    # for GPU work, ends an encoder or manufactures a continuation. The native
+    # tracker may lock/register an unseen root and its completion metadata.
+    # Work on that root may cross any number of caller phase markers.
+    def observed_root_count : Int32
+      root_count
+    end
+
+    # Read the existing completion summaries after the caller's sole terminal
+    # wait, before release. This does not enable profiling or enqueue GPU work.
+    # Consumers must retain shared-root attribution and validate timestamps
+    # before treating these intervals as performance evidence.
+    def completed_root_timings : Array(ML::Video::MPSCommandRootTiming)
+      unless @drained && @wait_count == 1 && !@native.null?
+        raise ArgumentError.new("MPS root timing summaries require the terminal wait before release")
+      end
+      raise ArgumentError.new("MPS command chain completion failed (#{@status})") unless @status == 0
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        roots = Array(ML::Video::MPSCommandRootTiming).new(@segment_count)
+        @segment_count.times do |sequence|
+          completed = 0_i32
+          has_error = 0_i32
+          gpu_start = 0.0
+          gpu_end = 0.0
+          status = MPSCommandChainFFI.root_timing(@native, sequence.to_i32,
+            pointerof(completed), pointerof(has_error), pointerof(gpu_start), pointerof(gpu_end))
+          raise ArgumentError.new("Failed to read MPS root timing summary #{sequence} (#{status})") unless status == 0
+          roots << ML::Video::MPSCommandRootTiming.new(sequence.to_i32,
+            completed == 1, has_error != 0, gpu_start, gpu_end)
+        end
+        roots
+      {% end %}
+    end
+
     # Enable source-bound block phase profiling on a fresh chain. The caller
     # must create the chain immediately before WanS2VBlock.encode, with no
     # prelude in its first root, and must terminal-wait immediately after the
@@ -387,18 +423,7 @@ module ML::Metal
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
-        roots = Array(ML::Video::MPSCommandRootTiming).new(@segment_count)
-        @segment_count.times do |sequence|
-          completed = 0_i32
-          has_error = 0_i32
-          gpu_start = 0.0
-          gpu_end = 0.0
-          status = MPSCommandChainFFI.root_timing(@native, sequence.to_i32,
-            pointerof(completed), pointerof(has_error), pointerof(gpu_start), pointerof(gpu_end))
-          raise ArgumentError.new("Failed to read MPS root timing summary #{sequence} (#{status})") unless status == 0
-          roots << ML::Video::MPSCommandRootTiming.new(sequence.to_i32,
-            completed == 1, has_error != 0, gpu_start, gpu_end)
-        end
+        roots = completed_root_timings
         ranges = @phase_ranges || raise ArgumentError.new("MPS phase-root profile ranges are unavailable")
         ML::Video::MPSCommandPhaseProfile.build(roots, ranges, @gpu_elapsed_seconds)
       {% end %}

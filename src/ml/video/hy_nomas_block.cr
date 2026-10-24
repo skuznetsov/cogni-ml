@@ -145,6 +145,11 @@ module ML::Video
     # Optional execution seam. The base encoder remains independent of the
     # MPS bridge; the opt-in file supplies this backend when requested.
     abstract class EncodeBackend
+      # Optional CPU observation only. Implementations must not submit, pause,
+      # continue or wait for GPU work from a phase marker.
+      def phase_marker(name : String) : Nil
+      end
+
       abstract def validate!(block : HyNomasDualStreamBlock,
                              img : ML::MetalBuffer, txt : ML::MetalBuffer,
                              vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
@@ -499,6 +504,7 @@ module ML::Video
                                     video_rope_cos : ML::MetalBuffer,
                                     video_rope_sin : ML::MetalBuffer,
                                     backend : EncodeBackend?) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+      backend.try(&.phase_marker("validate"))
       validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
       backend.try do |execution|
         execution.validate!(self, img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
@@ -509,29 +515,37 @@ module ML::Video
       txt_rows = c.text_rows
       img_mod_rows = c.effective_img_modulation_rows
       txt_mod_rows = c.effective_txt_modulation_rows
+      backend.try(&.phase_marker("modulation"))
       e = encode_modulation(e, "img", @image_buffers, @image_weights, vec, img_mod_rows, img_rows, c.video_tokens, backend)
       e = encode_modulation(e, "txt", @text_buffers, @text_weights, vec_txt, txt_mod_rows, txt_rows, c.text_tokens, backend)
 
+      backend.try(&.phase_marker("qkv"))
       e = encode_stream_qkv(e, @image_buffers, @image_weights, img, img_rows, c.video_tokens,
         video_rope_cos, video_rope_sin, "img", backend)
       e = encode_stream_qkv(e, @text_buffers, @text_weights, txt, txt_rows, c.text_tokens,
         stream: "txt", backend: backend)
 
+      backend.try(&.phase_marker("joint_pack"))
       concat(e, @image_buffers.attn_q_rope.not_nil!, @text_buffers.attn_q_norm, @joint_query, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_k_rope.not_nil!, @text_buffers.attn_k_norm, @joint_key, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_v, @text_buffers.attn_v, @joint_value, c.video_tokens, c.text_tokens)
+      backend.try(&.phase_marker("attention"))
       if execution = backend
         e = execution.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention, c)
       else
         MetalOps.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention,
           c.joint_tokens, c.joint_tokens, c.heads, c.head_dim, c.batches)
       end
+      backend.try(&.phase_marker("attention_projection_residual"))
       split(e, @joint_attention, @image_buffers.attn_raw, @text_buffers.attn_raw, c.video_tokens, c.text_tokens)
 
       encode_attention_residual(e, "img", img, @image_buffers, @image_weights, img_rows, backend)
       encode_attention_residual(e, "txt", txt, @text_buffers, @text_weights, txt_rows, backend)
+      backend.try(&.phase_marker("image_ffn"))
       e = encode_feed_forward(e, "img", @image_buffers, @image_weights, img_rows, backend)
+      backend.try(&.phase_marker("text_ffn"))
       encode_feed_forward(e, "txt", @text_buffers, @text_weights, txt_rows, backend)
+      backend.try(&.phase_marker("complete"))
       {@image_output, @text_output}
     end
 
