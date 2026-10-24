@@ -20,6 +20,7 @@ FUSED_CANDIDATE_ARMS = tuple(f"{arm}_fused" for arm in ARMS)
 GEMM_CANDIDATE_VARIANT = "candidate-b64n32-sg4-tk32-bt"
 GEMM_TK64_VARIANT = "candidate-b64n32-sg4-tk64-bt"
 GEMM_DEVICE_F32_VARIANT = "candidate-b64n32-sg4-device-f32"
+GEMM_DEVICE_Q4K_VARIANT = "candidate-b64n32-sg4-device-q4k"
 GEMM_VARIANTS = {
     "legacy": {
         "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
@@ -53,10 +54,22 @@ GEMM_VARIANTS = {
         "staged_tail_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail",
         "staged_tail_static_threadgroup_memory_bytes": 12_288,
     },
+    GEMM_DEVICE_Q4K_VARIANT: {
+        "tile_shape": {"tm": 64, "tn": 32, "tk": 32}, "threads": 128,
+        "linear_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k",
+        "linear_static_threadgroup_memory_bytes": 10_368,
+        "linear_staged_tail_pipeline": "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail",
+        "linear_staged_tail_static_threadgroup_memory_bytes": 14_464,
+        "dense_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32",
+        "dense_static_threadgroup_memory_bytes": 8_192,
+        "staged_tail_pipeline": "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail",
+        "staged_tail_static_threadgroup_memory_bytes": 12_288,
+    },
 }
 GEMM_CANDIDATE_VARIANTS = tuple(name for name in GEMM_VARIANTS if name != "legacy")
 GEMM_PIPELINE_METADATA_REQUIRED_VARIANTS = (
-    GEMM_CANDIDATE_VARIANT, GEMM_TK64_VARIANT, GEMM_DEVICE_F32_VARIANT)
+    GEMM_CANDIDATE_VARIANT, GEMM_TK64_VARIANT, GEMM_DEVICE_F32_VARIANT,
+    GEMM_DEVICE_Q4K_VARIANT)
 GEMM_DENSE_ONLY_VARIANTS = (GEMM_DEVICE_F32_VARIANT,)
 GEMM_DISPATCH_PARTITION_FIELDS = (
     "direct_rows", "direct_columns", "direct_groups_x", "direct_groups_y",
@@ -156,6 +169,8 @@ def validate_device_f32_dense_metadata(setup: dict, rows: int,
     tail_tgm = setup.get("gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes")
     require(type(direct_tgm) is int and type(named_direct_tgm) is int and
             direct_tgm == named_direct_tgm ==
+            variant_config["dense_static_threadgroup_memory_bytes"] and
+            setup.get("dense_static_threadgroup_memory_bytes") ==
             variant_config["dense_static_threadgroup_memory_bytes"],
             "Device-F32 direct dense threadgroup memory differs from its pipeline")
     require(type(tail_tgm) is int and tail_tgm ==
@@ -172,6 +187,52 @@ def validate_device_f32_dense_metadata(setup: dict, rows: int,
             actual_partition["direct_dispatches"] +
             actual_partition["staged_tail_dispatches"] <= 3,
             "Device-F32 direct/staged-tail dispatch partition changed")
+
+
+def validate_device_q4k_fused_metadata(setup: dict, rows: int,
+                                       in_dim: int, out_dim: int,
+                                       variant_config: dict) -> None:
+    """Bind packed direct and staged-tail paths to their compiled pipelines."""
+    require(setup.get("candidate_pipeline") == variant_config["linear_pipeline"] and
+            setup.get("gemm_candidate_linear_direct_pipeline") ==
+            variant_config["linear_pipeline"],
+            "Device-Q4K direct pipeline identity changed")
+    require(setup.get("gemm_candidate_linear_direct_tile_shape") ==
+            variant_config["tile_shape"] and
+            setup.get("gemm_candidate_linear_direct_threadgroup_threads") ==
+            variant_config["threads"],
+            "Device-Q4K direct geometry differs from the selected tile")
+    direct_tgm = setup.get("candidate_static_threadgroup_memory_bytes")
+    named_direct_tgm = setup.get(
+        "gemm_candidate_linear_direct_static_threadgroup_memory_bytes")
+    require(type(direct_tgm) is int and type(named_direct_tgm) is int and
+            direct_tgm == named_direct_tgm ==
+            variant_config["linear_static_threadgroup_memory_bytes"],
+            "Device-Q4K direct threadgroup memory differs from its pipeline")
+    require(setup.get("gemm_candidate_linear_staged_tail_pipeline") ==
+            variant_config["linear_staged_tail_pipeline"],
+            "Device-Q4K staged-tail pipeline identity changed")
+    require(setup.get("gemm_candidate_linear_staged_tail_tile_shape") ==
+            variant_config["tile_shape"] and
+            setup.get("gemm_candidate_linear_staged_tail_threadgroup_threads") ==
+            variant_config["threads"],
+            "Device-Q4K staged-tail geometry differs from the selected tile")
+    tail_tgm = setup.get(
+        "gemm_candidate_linear_staged_tail_static_threadgroup_memory_bytes")
+    require(type(tail_tgm) is int and tail_tgm ==
+            variant_config["linear_staged_tail_static_threadgroup_memory_bytes"],
+            "Device-Q4K staged-tail threadgroup memory differs from its pipeline")
+    expected_partition = expected_dense_dispatch_partition(
+        rows, in_dim, out_dim, variant_config["tile_shape"])
+    actual_partition = setup.get("gemm_linear_dispatch_partition")
+    require(isinstance(actual_partition, dict) and
+            set(actual_partition) == set(GEMM_DISPATCH_PARTITION_FIELDS) and
+            all(type(actual_partition.get(name)) is int
+                for name in GEMM_DISPATCH_PARTITION_FIELDS) and
+            actual_partition == expected_partition and
+            actual_partition["direct_dispatches"] +
+            actual_partition["staged_tail_dispatches"] <= 3,
+            "Device-Q4K direct/staged-tail dispatch partition changed")
 
 
 def _finite_number(value, label: str, *, positive: bool = False) -> float:
@@ -1566,6 +1627,13 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
                     setup.get("dense_static_threadgroup_memory_bytes") ==
                     variant_config["dense_static_threadgroup_memory_bytes"],
                     "TK64 fused/dense actual threadgroup memory differs from selected pipeline configuration")
+        if gemm_variant == GEMM_DEVICE_Q4K_VARIANT:
+            validate_device_q4k_fused_metadata(
+                setup, setup.get("rows"), setup.get("din"), setup.get("dout"),
+                variant_config)
+            validate_device_f32_dense_metadata(
+                setup, setup.get("rows"), setup.get("din"), setup.get("dout"),
+                variant_config)
         require(setup.get("dense_mode_execution_arms") == ["dense_native", "dense_mps"] and
                 setup.get("dense_mode_weight_format") == "q4_k" and
                 setup.get("dense_mode_internal_tile_shape") == variant_config["tile_shape"],
@@ -1622,7 +1690,7 @@ def validate_lineage(base: Path, tag: str, receipt: dict, intent: dict,
                     "second_half": "forward" if reverse_first else "reverse",
                 },
                 "Dense-GEMM schedule or phase declaration changed")
-        if gemm_variant == GEMM_DEVICE_F32_VARIANT:
+        if gemm_variant in (GEMM_DEVICE_F32_VARIANT, GEMM_DEVICE_Q4K_VARIANT):
             validate_device_f32_dense_metadata(
                 setup, setup.get("rows"), setup.get("din"), setup.get("dout"),
                 variant_config)

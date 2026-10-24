@@ -119,9 +119,13 @@ private def q4kl_run_gemm_case(rows : Int32, in_dim : Int32, patches : Int32,
 
     decoded = ML::MetalBuffer.new(weight_count.to_i64 * sizeof(Float32))
     buffers << decoded
-    fused = ML::MetalBuffer.new(output_count.to_i64 * sizeof(Float32))
-    buffers << fused
     output_guard_count = 16
+    fused = ML::MetalBuffer.new((output_count + output_guard_count).to_i64 * sizeof(Float32))
+    buffers << fused
+    fused_values = fused.contents.as(Float32*)
+    (output_count + output_guard_count).times do |index|
+      fused_values[index] = 765_432.125_f32
+    end
     dense = ML::MetalBuffer.new((output_count + output_guard_count).to_i64 * sizeof(Float32))
     buffers << dense
     dense_values = dense.contents.as(Float32*)
@@ -175,6 +179,8 @@ private def q4kl_run_gemm_case(rows : Int32, in_dim : Int32, patches : Int32,
     output_guard_count.times do |index|
       dense_values[output_count + index].should(eq(-1_234_567.25_f32),
         "dense output guard changed at #{index} for rows=#{rows} N=#{out_dim}")
+      fused_values[output_count + index].should(eq(765_432.125_f32),
+        "fused output guard changed at #{index} for rows=#{rows} N=#{out_dim}")
     end
   ensure
     plan.try(&.release)
@@ -198,11 +204,18 @@ describe "Q4_K sparse-delta fused linear" do
     Q4KDeltaLinear.tile_k(device_variant).should eq(32)
     Q4KDeltaLinear.threadgroup_threads(device_variant).should eq(128)
     expect_raises(ArgumentError) { Q4KDeltaLinear.linear_pipeline(device_variant) }
+    device_q4k_variant = Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K
+    Q4KDeltaLinear.variant_name(device_q4k_variant).should eq("candidate-b64n32-sg4-device-q4k")
+    Q4KDeltaLinear.tile_m(device_q4k_variant).should eq(64)
+    Q4KDeltaLinear.tile_n(device_q4k_variant).should eq(32)
+    Q4KDeltaLinear.tile_k(device_q4k_variant).should eq(32)
+    Q4KDeltaLinear.threadgroup_threads(device_q4k_variant).should eq(128)
     {
       {Q4KDeltaLinear::GemmVariant::Legacy, 64, 32, 32},
       {Q4KDeltaLinear::GemmVariant::B128N32S4K32, 128, 32, 32},
       {Q4KDeltaLinear::GemmVariant::B64N32S4K32BT, 64, 32, 32},
       {Q4KDeltaLinear::GemmVariant::B64N32S4K64BT, 64, 32, 64},
+      {device_q4k_variant, 64, 32, 32},
     }.each do |variant, tile_m, tile_n, tile_k|
       Q4KDeltaLinear.tile_m(variant).should eq(tile_m)
       Q4KDeltaLinear.tile_n(variant).should eq(tile_n)
@@ -245,6 +258,30 @@ describe "Q4_K sparse-delta fused linear" do
       right_tail_groups: 1, bottom_tail_groups: 2,
       direct_dispatches: 1, staged_tail_dispatches: 2,
     })
+    Q4KDeltaLinear.dense_dispatch_partition(65, 5120, 35,
+      device_q4k_variant).should eq({
+      direct_rows: 64, direct_columns: 32, direct_groups_x: 1, direct_groups_y: 1,
+      right_tail_groups: 1, bottom_tail_groups: 2,
+      direct_dispatches: 1, staged_tail_dispatches: 2,
+    })
+    Q4KDeltaLinear.linear_dispatch_partition(4, 256, 13_824,
+      device_q4k_variant).should eq({
+      direct_rows: 0, direct_columns: 13_824, direct_groups_x: 432, direct_groups_y: 0,
+      right_tail_groups: 0, bottom_tail_groups: 432,
+      direct_dispatches: 0, staged_tail_dispatches: 1,
+    })
+    Q4KDeltaLinear.linear_dispatch_partition(4_480, 256, 13_824,
+      device_q4k_variant).should eq({
+      direct_rows: 4_480, direct_columns: 13_824, direct_groups_x: 432, direct_groups_y: 70,
+      right_tail_groups: 0, bottom_tail_groups: 0,
+      direct_dispatches: 1, staged_tail_dispatches: 0,
+    })
+    Q4KDeltaLinear.linear_dispatch_partition(65, 5120, 35,
+      device_q4k_variant).should eq({
+      direct_rows: 64, direct_columns: 32, direct_groups_x: 1, direct_groups_y: 1,
+      right_tail_groups: 1, bottom_tail_groups: 2,
+      direct_dispatches: 1, staged_tail_dispatches: 2,
+    })
     expect_raises(ArgumentError) do
       Q4KDeltaLinear.dense_dispatch_partition(1, 255, 35)
     end
@@ -267,6 +304,7 @@ describe "Q4_K sparse-delta fused linear" do
       Q4KDeltaLinear::GemmVariant::B128N32S4K32,
       Q4KDeltaLinear::GemmVariant::B64N32S4K32BT,
       Q4KDeltaLinear::GemmVariant::B64N32S4K64BT,
+      device_q4k_variant,
     }.each do |variant|
       Q4KDeltaLinear.linear_pipeline(variant).thread_execution_width.should eq(32)
       Q4KDeltaLinear.linear_pipeline(variant).max_total_threads_per_threadgroup.should be >= 128
@@ -277,6 +315,15 @@ describe "Q4_K sparse-delta fused linear" do
       if variant == Q4KDeltaLinear::GemmVariant::B64N32S4K64BT
         Q4KDeltaLinear.static_threadgroup_memory_bytes(variant).should eq(26752_i64)
         Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(variant).should eq(24576_i64)
+      end
+      if variant == device_q4k_variant
+        Q4KDeltaLinear.static_threadgroup_memory_bytes(variant).should eq(10_368_i64)
+        Q4KDeltaLinear.dense_pipeline(variant).name.should eq(
+          "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32")
+        Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(variant).should eq(8_192_i64)
+        Q4KDeltaLinear.dense_staged_tail_pipeline(variant).name.should eq(
+          "video_q4k_delta_dense_linear_f32_candidate_b64n32_sg4_device_f32_tail")
+        Q4KDeltaLinear.dense_staged_tail_static_threadgroup_memory_bytes(variant).should eq(12_288_i64)
       end
     end
     direct = Q4KDeltaLinear.dense_pipeline(device_variant)
@@ -289,6 +336,14 @@ describe "Q4_K sparse-delta fused linear" do
     tail.thread_execution_width.should eq(32)
     tail.max_total_threads_per_threadgroup.should be >= 128
     Q4KDeltaLinear.dense_staged_tail_static_threadgroup_memory_bytes(device_variant).should eq(12_288_i64)
+
+    packed = Q4KDeltaLinear.linear_pipeline(device_q4k_variant)
+    packed.name.should eq("video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k")
+    packed.thread_execution_width.should eq(32)
+    packed.max_total_threads_per_threadgroup.should be >= 128
+    Q4KDeltaLinear.linear_staged_tail_pipeline(device_q4k_variant).name.should eq(
+      "video_q4k_delta_linear_f32_candidate_b64n32_sg4_device_q4k_tail")
+    Q4KDeltaLinear.linear_staged_tail_static_threadgroup_memory_bytes(device_q4k_variant).should be <= 32_768_i64
   end
 
   it "runs the opt-in 128x32 schedule across row-tile boundaries and Q4_K patch quotas" do
@@ -367,6 +422,198 @@ describe "Q4_K sparse-delta fused linear" do
     ].each do |rows, in_dim, patches, out_dim|
       q4kl_run_gemm_case(rows, in_dim, patches,
         Q4KDeltaLinear::GemmVariant::Legacy, device_variant, out_dim)
+    end
+  end
+
+  it "runs direct Q4_K tiles and staged fringes for every sparse-delta quota" do
+    pending! "Requires macOS Metal Performance Shaders" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+    ML::Video::MetalLinearMPS.prepare!
+
+    variant = Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K
+    # Full core, tail-only, and mixed right/bottom fringes. Rows and columns
+    # include multiples of eight that do not align to the 64x32 direct tile.
+    [
+      {64, 256, 0, 32},
+      {4, 256, 1, 35},
+      {65, 512, 4, 35},
+      {72, 256, 8, 40},
+      {129, 512, 1, 72},
+    ].each do |rows, in_dim, patches, out_dim|
+      q4kl_run_gemm_case(rows, in_dim, patches, variant, nil, out_dim)
+    end
+  end
+
+  it "round-trips all 64 coordinates in each SIMD group and materializes both Q4_K N halves at K=248/256" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    coordinate_map = ML::MetalBuffer.new(256_i64 * sizeof(Float32))
+    coordinate_command = nil.as(ML::Metal::CommandBuffer?)
+    begin
+      active = ML::Metal::CommandBuffer.new
+      coordinate_command = active
+      encoder = ML::Metal::ComputeEncoder.new(active)
+      Q4KDeltaLinear.coordinate_mapping_probe(encoder, coordinate_map)
+      encoder.end_encoding
+      active.commit_and_wait
+      active.completed_successfully?.should be_true
+      mapped = coordinate_map.contents.as(Float32*)
+      4.times do |simdgroup|
+        64.times do |coordinate|
+          expected = (coordinate // 8 * 100 + coordinate % 8).to_f32
+          index = simdgroup * 64 + coordinate
+          mapped[index].should(eq(expected), "coordinate round trip SIMD group #{simdgroup} at #{coordinate}")
+        end
+      end
+    ensure
+      if active = coordinate_command
+        active.discard unless active.committed?
+      end
+      coordinate_map.release
+    end
+
+    {0, 1, 4, 8}.each do |patches|
+      in_dim = 512
+      out_dim = 32
+      weight_count = in_dim * out_dim
+      payload_bytes = q4kl_test_payload(in_dim, out_dim)
+      sidecar_bytes = q4kl_test_sidecar(in_dim, out_dim, patches)
+      buffers = [] of ML::MetalBuffer
+      command = nil.as(ML::Metal::CommandBuffer?)
+      begin
+        payload = ML::MetalBuffer.new(payload_bytes.size.to_i64); buffers << payload
+        payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+        sidecar = ML::MetalBuffer.new(sidecar_bytes.size.to_i64); buffers << sidecar
+        sidecar.write_bytes(sidecar_bytes.to_unsafe, sidecar_bytes.size)
+        expected = ML::MetalBuffer.new(weight_count.to_i64 * sizeof(Float32)); buffers << expected
+        actual = ML::MetalBuffer.new(1024_i64 * sizeof(Float32)); buffers << actual
+        status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << status
+        status.contents.as(UInt32*).value = 0_u32
+
+        active = ML::Metal::CommandBuffer.new
+        command = active
+        encoder = ML::Metal::ComputeEncoder.new(active)
+        Q4KDeltaLinear.decode_probe(encoder, payload, sidecar, expected,
+          status, weight_count, patches)
+        Q4KDeltaLinear.q4_fragment_probe(encoder, payload, sidecar, actual,
+          status, patches)
+        encoder.end_encoding
+        active.commit_and_wait
+        active.completed_successfully?.should be_true
+        status.contents.as(UInt32*).value.should eq(0_u32)
+        expected_bits = expected.contents.as(UInt32*)
+        actual_bits = actual.contents.as(UInt32*)
+        [248, 256].each_with_index do |k_origin, origin_index|
+          4.times do |simdgroup|
+            2.times do |cb|
+              8.times do |local_k|
+                8.times do |local_n|
+                  channel = (simdgroup // 2) * 16 + cb * 8 + local_n
+                  index = origin_index * 512 + simdgroup * 128 + cb * 64 + local_k * 8 + local_n
+                  expected_index = channel * in_dim + k_origin + local_k
+                  actual_bits[index].should(eq(expected_bits[expected_index]),
+                    "Q4_K fragment patches=#{patches} SIMD group=#{simdgroup} cb=#{cb} channel=#{channel} K=#{k_origin + local_k}")
+                end
+              end
+            end
+          end
+        end
+      ensure
+        if active = command
+          active.discard unless active.committed?
+        end
+        q4kl_release(buffers)
+      end
+    end
+  end
+
+  it "preserves signed-zero coefficient bits through the direct fragment loader" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+
+    in_dim = 512
+    out_dim = 32
+    weight_count = in_dim * out_dim
+    rows = 64
+    output_count = rows * out_dim
+    input_values = Array(Float32).new(rows * in_dim, 1_f32)
+    bias_values = Array(Float32).new(out_dim, 0_f32)
+    payload_bytes = Bytes.new(out_dim * (in_dim // 256) * 144, 0_u8)
+    (out_dim * (in_dim // 256)).times do |block|
+      offset = block * 144
+      q4kl_store_u16(payload_bytes, offset, 0x8000_u16)
+      q4kl_store_u16(payload_bytes, offset + 2, 0_u16)
+      12.times { |index| payload_bytes[offset + 4 + index] = 1_u8 }
+    end
+
+    {0, 1}.each do |patches|
+      sidecar_bytes = patches == 0 ? Bytes[0xa5_u8] : Bytes.new(out_dim * 2 * 3, 0_u8)
+      buffers = [] of ML::MetalBuffer
+      command = nil.as(ML::Metal::CommandBuffer?)
+      begin
+        payload = ML::MetalBuffer.new(payload_bytes.size.to_i64); buffers << payload
+        payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+        sidecar = ML::MetalBuffer.new(sidecar_bytes.size.to_i64); buffers << sidecar
+        sidecar.write_bytes(sidecar_bytes.to_unsafe, sidecar_bytes.size)
+        expected = ML::MetalBuffer.new(weight_count.to_i64 * sizeof(Float32)); buffers << expected
+        actual = ML::MetalBuffer.new(1024_i64 * sizeof(Float32)); buffers << actual
+        input = ML::MetalBuffer.new(input_values.size.to_i64 * sizeof(Float32)); buffers << input
+        input.write(input_values)
+        bias = ML::MetalBuffer.new(bias_values.size.to_i64 * sizeof(Float32)); buffers << bias
+        bias.write(bias_values)
+        scalar = ML::MetalBuffer.new(output_count.to_i64 * sizeof(Float32)); buffers << scalar
+        fused = ML::MetalBuffer.new(output_count.to_i64 * sizeof(Float32)); buffers << fused
+        status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << status
+        status.contents.as(UInt32*).value = 0_u32
+        fused_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << fused_status
+        fused_status.contents.as(UInt32*).value = 0_u32
+
+        active = ML::Metal::CommandBuffer.new
+        command = active
+        encoder = ML::Metal::ComputeEncoder.new(active)
+        Q4KDeltaLinear.decode_probe(encoder, payload, sidecar, expected,
+          status, weight_count, patches)
+        Q4KDeltaLinear.q4_fragment_probe(encoder, payload, sidecar, actual,
+          status, patches)
+        ML::Video::MetalOps.linear(encoder, input, expected, bias, scalar,
+          rows, in_dim, out_dim)
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, fused,
+          fused_status, rows, in_dim, out_dim, patches,
+          Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K)
+        encoder.end_encoding
+        active.commit_and_wait
+        active.completed_successfully?.should be_true
+        status.contents.as(UInt32*).value.should eq(0_u32)
+        fused_status.contents.as(UInt32*).value.should eq(0_u32)
+        q4kl_assert_close("signed-zero direct Q4_K core patches=#{patches}",
+          fused, scalar, output_count)
+
+        expected_bits = expected.contents.as(UInt32*)
+        actual_bits = actual.contents.as(UInt32*)
+        sign_bits = patches == 0 ? 0x8000_0000_u32 : 0_u32
+        [248, 256].each_with_index do |k_origin, origin_index|
+          4.times do |simdgroup|
+            2.times do |cb|
+              8.times do |local_k|
+                8.times do |local_n|
+                  channel = (simdgroup // 2) * 16 + cb * 8 + local_n
+                  index = origin_index * 512 + simdgroup * 128 + cb * 64 + local_k * 8 + local_n
+                  expected_index = channel * in_dim + k_origin + local_k
+                  expected_bits[expected_index].should eq(sign_bits)
+                  actual_bits[index].should eq(sign_bits)
+                end
+              end
+            end
+          end
+        end
+      ensure
+        if active = command
+          active.discard unless active.committed?
+        end
+        q4kl_release(buffers)
+      end
     end
   end
 
@@ -530,6 +777,80 @@ describe "Q4_K sparse-delta fused linear" do
        bt_base_gemm_status, bt_corrected_gemm_status, tk64_base_output,
        tk64_corrected_output, tk64_base_gemm_status,
        tk64_corrected_gemm_status}.each(&.release)
+    end
+  end
+
+  it "keeps malformed Q4_K blocks local in the direct-device core and preserves sticky status" do
+    pending! "Requires macOS Metal" unless ML::Metal::Device.init!
+    Q4KDeltaLinear.prepare!
+    ML::Video::MetalOps.prepare!
+
+    rows = 64
+    in_dim = 512
+    out_dim = 32
+    weight_count = in_dim * out_dim
+    output_count = rows * out_dim
+    input_values = Array(Float32).new(rows * in_dim, 1_f32)
+    bias_values = Array(Float32).new(out_dim, 0.125_f32)
+    payload_bytes = q4kl_test_payload(in_dim, out_dim)
+    malformed_bytes = q4kl_test_sidecar(in_dim, out_dim, 4)
+    # Duplicate one correction index in channel 0, block 0. Every other
+    # channel/block remains independently valid.
+    malformed_bytes[3] = malformed_bytes[0]
+
+    buffers = [] of ML::MetalBuffer
+    command = nil.as(ML::Metal::CommandBuffer?)
+    begin
+      input = ML::MetalBuffer.new(input_values.size.to_i64 * sizeof(Float32)); buffers << input
+      input.write(input_values)
+      payload = ML::MetalBuffer.new(payload_bytes.size.to_i64); buffers << payload
+      payload.write_bytes(payload_bytes.to_unsafe, payload_bytes.size)
+      sidecar = ML::MetalBuffer.new(malformed_bytes.size.to_i64); buffers << sidecar
+      sidecar.write_bytes(malformed_bytes.to_unsafe, malformed_bytes.size)
+      bias = ML::MetalBuffer.new(bias_values.size.to_i64 * sizeof(Float32)); buffers << bias
+      bias.write(bias_values)
+      decoded = ML::MetalBuffer.new(weight_count.to_i64 * sizeof(Float32)); buffers << decoded
+      scalar = ML::MetalBuffer.new(output_count.to_i64 * sizeof(Float32)); buffers << scalar
+      guard_count = 8
+      fused = ML::MetalBuffer.new((output_count + guard_count).to_i64 * sizeof(Float32)); buffers << fused
+      fused_values = fused.contents.as(Float32*)
+      (output_count + guard_count).times { |index| fused_values[index] = 765_432.125_f32 }
+      decode_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << decode_status
+      fused_status = ML::MetalBuffer.new(sizeof(UInt32).to_i64); buffers << fused_status
+      decode_status.contents.as(UInt32*).value = 0_u32
+      fused_status.contents.as(UInt32*).value = 0x40_u32
+
+      active = ML::Metal::CommandBuffer.new
+      command = active
+      encoder = ML::Metal::ComputeEncoder.new(active)
+      Q4KDeltaLinear.decode_probe(encoder, payload, sidecar, decoded,
+        decode_status, weight_count, 4)
+      ML::Video::MetalOps.linear(encoder, input, decoded, bias, scalar,
+        rows, in_dim, out_dim)
+      Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, fused,
+        fused_status, rows, in_dim, out_dim, 4,
+        Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K)
+      encoder.end_encoding
+      active.commit_and_wait
+      active.completed_successfully?.should be_true
+      decode_status.contents.as(UInt32*).value.should eq(1_u32)
+      fused_status.contents.as(UInt32*).value.should eq(0x41_u32)
+
+      decoded_values = decoded.contents.as(Float32*)
+      256.times do |k|
+        decoded_values[k].should eq(0_f32)
+      end
+      decoded_values[256].should_not eq(0_f32) # Channel 0, next Q4_K block.
+      decoded_values[512].should_not eq(0_f32) # Neighbor channel, first block.
+      q4kl_assert_close("malformed direct-device Q4_K core", fused, scalar, output_count)
+      guard_count.times do |index|
+        fused_values[output_count + index].should eq(765_432.125_f32)
+      end
+    ensure
+      if active = command
+        active.discard unless active.committed?
+      end
+      q4kl_release(buffers)
     end
   end
 
@@ -749,6 +1070,10 @@ describe "Q4_K sparse-delta fused linear" do
           status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
       end
       expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, tiny_input, payload, sidecar, bias, output,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K)
+      end
+      expect_raises(ArgumentError) do
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
           status, 1, 256, 1, 0)
       end
@@ -763,6 +1088,10 @@ describe "Q4_K sparse-delta fused linear" do
       expect_raises(ArgumentError) do
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
           status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4K64BT)
+      end
+      expect_raises(ArgumentError) do
+        Q4KDeltaLinear.linear(encoder, input, payload, sidecar, bias, input,
+          status, 1, 256, 1, 0, Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K)
       end
       expect_raises(ArgumentError) do
         Q4KDeltaLinear.linear(encoder, input, payload, sidecar, output, output,

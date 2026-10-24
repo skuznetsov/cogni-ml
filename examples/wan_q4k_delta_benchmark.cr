@@ -19,6 +19,7 @@ compare_fused = false
 gemm_variant_id = ""
 gemm_variant_selected = false
 DIRECT_DEVICE_F32_VARIANT_ID = "candidate-b64n32-sg4-device-f32"
+DIRECT_DEVICE_Q4K_VARIANT_ID = "candidate-b64n32-sg4-device-q4k"
 OptionParser.parse do |p|
   p.on("--fixture=DIR", "Immutable independent upstream fixture") { |v| fixture_dir = v }
   p.on("--reverse-first", "Reverse the first warmup and paired order") { reverse_first = true }
@@ -26,7 +27,7 @@ OptionParser.parse do |p|
   p.on("--compare-block-validation", "Pair per-value and per-block correction validation") { compare_block_validation = true }
   p.on("--compare-gemm", "Compare legacy and candidate native dense GEMM against MPS only") { compare_gemm = true }
   p.on("--compare-fused", "Pair fused Q4_K delta projection against block-validated staged controls") { compare_fused = true }
-  p.on("--gemm-variant=ID", "Native GEMM geometry: legacy, candidate-b128n32-sg4-tk32, candidate-b64n32-sg4-tk32-bt, candidate-b64n32-sg4-tk64-bt, or candidate-b64n32-sg4-device-f32") do |v|
+  p.on("--gemm-variant=ID", "Native GEMM geometry: legacy, candidate-b128n32-sg4-tk32, candidate-b64n32-sg4-tk32-bt, candidate-b64n32-sg4-tk64-bt, candidate-b64n32-sg4-device-f32, or candidate-b64n32-sg4-device-q4k") do |v|
     gemm_variant_id = v
     gemm_variant_selected = true
   end
@@ -48,6 +49,8 @@ gemm_variant = case gemm_variant_id
                  ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4K64BT
                when DIRECT_DEVICE_F32_VARIANT_ID
                  ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4DeviceF32
+               when DIRECT_DEVICE_Q4K_VARIANT_ID
+                 ML::Video::Q4KDeltaLinear::GemmVariant::B64N32S4DeviceQ4K
                else
                  raise ArgumentError.new("Unknown GEMM variant: #{gemm_variant_id}")
                end
@@ -222,8 +225,11 @@ begin
     raise "Sticky codec failure: #{words}" unless words.all?(&.zero?)
     true
   }
-  device_f32_dense = compare_gemm && gemm_variant_id == DIRECT_DEVICE_F32_VARIANT_ID
-  dense_partition = device_f32_dense ? ML::Video::Q4KDeltaLinear.dense_dispatch_partition(rows, din, dout, gemm_variant) : nil
+  device_q4k_variant = gemm_variant_id == DIRECT_DEVICE_Q4K_VARIANT_ID
+  device_dense_paths = (compare_gemm || compare_fused) &&
+                       {DIRECT_DEVICE_F32_VARIANT_ID, DIRECT_DEVICE_Q4K_VARIANT_ID}.includes?(gemm_variant_id)
+  dense_partition = device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_dispatch_partition(rows, din, dout, gemm_variant) : nil
+  linear_partition = compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.linear_dispatch_partition(rows, din, dout, gemm_variant) : nil
   puts({schema: "wan_q4k_delta_setup_v1", manifest_sha256: manifest_hash,
         rows: rows, din: din, dout: dout, unique_source_rows: 4, real_video_derived: false,
         per_arm_storage: variants.to_h { |name|
@@ -256,22 +262,22 @@ begin
         dense_static_threadgroup_memory_bytes: (compare_gemm || compare_fused) ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
         gemm_legacy_dense_static_threadgroup_memory_bytes: compare_gemm ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(
           ML::Video::Q4KDeltaLinear::GemmVariant::Legacy) : nil,
-        gemm_candidate_dense_static_threadgroup_memory_bytes: compare_gemm ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_candidate_dense_static_threadgroup_memory_bytes: (compare_gemm || device_dense_paths) ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
         gemm_legacy_dense_pipeline: compare_gemm ? ML::Video::Q4KDeltaLinear.dense_pipeline(
           ML::Video::Q4KDeltaLinear::GemmVariant::Legacy).name : nil,
-        gemm_candidate_dense_pipeline: compare_gemm ? ML::Video::Q4KDeltaLinear.dense_pipeline(gemm_variant).name : nil,
-        gemm_candidate_dense_direct_pipeline: device_f32_dense ? ML::Video::Q4KDeltaLinear.dense_pipeline(gemm_variant).name : nil,
-        gemm_candidate_dense_direct_tile_shape: device_f32_dense ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+        gemm_candidate_dense_pipeline: (compare_gemm || device_dense_paths) ? ML::Video::Q4KDeltaLinear.dense_pipeline(gemm_variant).name : nil,
+        gemm_candidate_dense_direct_pipeline: device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_pipeline(gemm_variant).name : nil,
+        gemm_candidate_dense_direct_tile_shape: device_dense_paths ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
                                                                     tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
                                                                     tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)} : nil,
-        gemm_candidate_dense_direct_threadgroup_threads: device_f32_dense ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
-        gemm_candidate_dense_direct_static_threadgroup_memory_bytes: device_f32_dense ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
-        gemm_candidate_dense_staged_tail_pipeline: device_f32_dense ? ML::Video::Q4KDeltaLinear.dense_staged_tail_pipeline(gemm_variant).name : nil,
-        gemm_candidate_dense_staged_tail_tile_shape: device_f32_dense ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+        gemm_candidate_dense_direct_threadgroup_threads: device_dense_paths ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
+        gemm_candidate_dense_direct_static_threadgroup_memory_bytes: device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_candidate_dense_staged_tail_pipeline: device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_staged_tail_pipeline(gemm_variant).name : nil,
+        gemm_candidate_dense_staged_tail_tile_shape: device_dense_paths ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
                                                                          tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
                                                                          tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)} : nil,
-        gemm_candidate_dense_staged_tail_threadgroup_threads: device_f32_dense ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
-        gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes: device_f32_dense ? ML::Video::Q4KDeltaLinear.dense_staged_tail_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_candidate_dense_staged_tail_threadgroup_threads: device_dense_paths ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
+        gemm_candidate_dense_staged_tail_static_threadgroup_memory_bytes: device_dense_paths ? ML::Video::Q4KDeltaLinear.dense_staged_tail_static_threadgroup_memory_bytes(gemm_variant) : nil,
         gemm_dense_dispatch_partition: dense_partition ? {direct_rows: dense_partition[:direct_rows],
                                                           direct_columns: dense_partition[:direct_columns],
                                                           direct_groups_x: dense_partition[:direct_groups_x],
@@ -280,6 +286,26 @@ begin
                                                           bottom_tail_groups: dense_partition[:bottom_tail_groups],
                                                           direct_dispatches: dense_partition[:direct_dispatches],
                                                           staged_tail_dispatches: dense_partition[:staged_tail_dispatches]} : nil,
+        gemm_candidate_linear_direct_pipeline: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.linear_pipeline(gemm_variant).name : nil,
+        gemm_candidate_linear_direct_tile_shape: compare_fused && device_q4k_variant ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+                                                                                       tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
+                                                                                       tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)} : nil,
+        gemm_candidate_linear_direct_threadgroup_threads: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
+        gemm_candidate_linear_direct_static_threadgroup_memory_bytes: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_candidate_linear_staged_tail_pipeline: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.linear_staged_tail_pipeline(gemm_variant).name : nil,
+        gemm_candidate_linear_staged_tail_tile_shape: compare_fused && device_q4k_variant ? {tm: ML::Video::Q4KDeltaLinear.tile_m(gemm_variant),
+                                                                                             tn: ML::Video::Q4KDeltaLinear.tile_n(gemm_variant),
+                                                                                             tk: ML::Video::Q4KDeltaLinear.tile_k(gemm_variant)} : nil,
+        gemm_candidate_linear_staged_tail_threadgroup_threads: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.threadgroup_threads(gemm_variant) : nil,
+        gemm_candidate_linear_staged_tail_static_threadgroup_memory_bytes: compare_fused && device_q4k_variant ? ML::Video::Q4KDeltaLinear.linear_staged_tail_static_threadgroup_memory_bytes(gemm_variant) : nil,
+        gemm_linear_dispatch_partition: linear_partition ? {direct_rows: linear_partition[:direct_rows],
+                                                             direct_columns: linear_partition[:direct_columns],
+                                                             direct_groups_x: linear_partition[:direct_groups_x],
+                                                             direct_groups_y: linear_partition[:direct_groups_y],
+                                                             right_tail_groups: linear_partition[:right_tail_groups],
+                                                             bottom_tail_groups: linear_partition[:bottom_tail_groups],
+                                                             direct_dispatches: linear_partition[:direct_dispatches],
+                                                             staged_tail_dispatches: linear_partition[:staged_tail_dispatches]} : nil,
         candidate_pipeline: compare_fused ? ML::Video::Q4KDeltaLinear.linear_pipeline(gemm_variant).name : nil,
         candidate_static_threadgroup_memory_bytes: compare_fused ? ML::Video::Q4KDeltaLinear.static_threadgroup_memory_bytes(gemm_variant) : nil,
         dense_mode_execution_arms: compare_gemm ? execution_arms : (compare_fused ? ["dense_native", "dense_mps"] : nil),

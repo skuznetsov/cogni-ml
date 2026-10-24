@@ -9,6 +9,55 @@ allocations are admitted. Experimental defaults remain off until their stated
 whole-block gate passes.
 
 Latest completed bounded result (2026-10-23):
+[Q4_K sparse deltas reconstructed inside direct GEMM fragments](wan-q4k-register-gemm-benchmark.md).
+The opt-in `candidate-b64n32-sg4-device-q4k` extends M64/N32/K32 with four
+SIMD groups to packed weights. It binds no global decoded F32 weight stage,
+preserves separate F32 base/delta rounding and ascending K8 accumulation, and
+uses an API-derived coordinate fragment rather than a fixed lane formula.
+The full-tile core uses 10,368 compiled static threadgroup bytes; disjoint
+masked fringes use 14,464. M4480/N13824/K5120 is one direct dispatch; M4
+uses only the staged tail. No model/default change.
+
+The packed speed hypothesis is rejected on this scope. Full operator GPU
+medians in opposite-order A/B processes are staged MPS -> fused:
+Q4_K 58.00217 -> 555.20260 / 61.28333 -> 556.34748 ms;
+eight deltas 59.70050 -> 932.68902 / 63.01529 -> 935.93948 ms.
+Paired fused/control medians are 9.57133x/9.09536x for Q4_K,
+10.21756x/9.69004x for one delta, 13.23598x/12.54577x for four and
+15.61705x/14.84813x for eight. Every measured round loses. The control
+includes block-validated decode -> reusable F32 stage -> MPS -> bias.
+There is no matched old packed-kernel arm, so no historical packed speedup
+or regression is inferred. Keep staged MPS and the new selector opt-in.
+
+Guarded DoD passes: 23 native examples, 35 analyzer tests, three
+source-bound probes and strict receipt analysis through
+`examples/support/wan_q4k_delta_experiment.py` and
+`examples/support/wan_q4k_delta_results.py`. All 168 same-format parity
+metric groups plus six BF16-control groups have zero nonfinite values or
+tolerance violations; full M4480 coefficients/outputs match upstream bit for
+bit. M4 maximum tolerance ratio is 0.33293873 under the unchanged gate.
+The 636 timing samples retain one terminal wait and zero inter-op waits,
+activation readbacks or tracked explicit encode-buffer allocations.
+Sampled footprint peaks at 2.02469 GiB, estimated cache-aware headroom stays
+at least 23.43906 GiB, pressure-free at least 70%, swap growth zero.
+Preserve 15% reserve/floor, 4 GiB cap, 64 MiB swap stop and sampling limits.
+No full model/block/Studio/generation. The candidate removes 270 MiB from
+its binding inventory; the combined harness retains that control stage,
+so no deployed process-footprint saving is measured. Packed format bytes
+and quantization loss are unchanged; four unique source rows tiled to
+M4480 do not establish real-video or original-BF16 quality.
+
+Correlated Mini-Quad: ROBUST for bounded parity, observed guards, receipt
+lineage and stage-binding elimination; overall VULNERABLE because the
+acceleration objective fails and model-wide benefits remain untested.
+Repeated coordinate loads/decodes are source-level hypotheses, not causal
+GPU measurements. A separate possible falsifier is a compact rolling decoded
+panel feeding MPS. No follow-up/default is admitted by these results alone.
+Refresh on source, codec, fixture, geometry, backend, schedule or hardware
+changes. Exact commands, receipts and inherited object-ancestry limits are
+in the report.
+
+Previous bounded result (2026-10-23):
 [native F32 direct device matrix loads](wan-native-device-gemm-benchmark.md).
 The opt-in dense-only M64/N32/K32, four-SIMD-group candidate preserves F32
 and ascending K8 accumulation, loading complete A/B tiles directly from
@@ -37,8 +86,8 @@ headroom 18.16843 GiB, pressure-free at least 71%, swap growth zero. Preserve
 No full model/block/Studio/generation. Four repeated non-video source rows
 establish bounded execution parity, not representative video/BF16 quality.
 The report records exact receipts, inherited object ancestry limits, red
-test corrections and refresh triggers. The next separate falsifier is packed
-Q4_K/delta execution with the faster cost frame; no packed gain is inferred.
+test corrections and refresh triggers. Its packed Q4_K/delta follow-up is
+now measured in the latest result above; no packed gain is inferred.
 Correlated Mini-Quad: ROBUST for bounded execution/parity, observed guards
 and native speedup; VULNERABLE for portability, representative quality,
 causal hardware attribution, model-wide benefits or superiority to MPS.

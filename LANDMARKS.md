@@ -32726,3 +32726,54 @@ Refresh after source/toolchain/device/model/workload changes.
   ROBUST for bounded execution/parity, observed guards and native speedup;
   VULNERABLE for portability, representative quality, hardware-cause
   inference, model-wide benefits or superiority to MPS.
+
+## 2026-10-23 — Q4_K register GEMM: correct bounded path, rejected speed claim
+
+- Starting at `a116784f`, opt-in `candidate-b64n32-sg4-device-q4k` embeds
+  canonical Q4_K plus 0/1/4/8 F16 deltas in direct M64/N32/K32 GEMM matrix
+  fragments. No global decoded F32 weight stage; separate base/delta rounding,
+  ascending K8 arithmetic, malformed-block isolation and sticky status remain.
+  Coordinate fragments derive element identities through the same matrix API;
+  all four SIMD groups and K248/256 boundaries are qualified on this backend.
+  Direct compiled threadgroup memory is 10,368 bytes, safe staged tail 14,464.
+  No production/model/default change. See
+  `docs/wan-q4k-register-gemm-benchmark.md` and `docs/wan-performance-frontier.md`.
+- Full M4480/N13824/K5120 direct projection loses to complete block-validated
+  decode -> reused F32 stage -> MPS -> bias in every measured pair. A/B GPU
+  medians are Q4_K 58.00217 -> 555.20260 / 61.28333 -> 556.34748 ms;
+  eight deltas 59.70050 -> 932.68902 / 63.01529 -> 935.93948 ms. Paired
+  fused/control medians for 0/1/4/8 corrections are A 9.57133/10.21756/
+  13.23598/15.61705x, B 9.09536/9.69004/12.54577/14.84813x. Keep staged
+  MPS and experimental selection. M4 is staged-tail-only. No matched old
+  packed arm permits a historical fused-kernel speed comparison.
+- Guarded DoD: `wan_q4k_delta_experiment.py spec packed-device-native-v2`
+  passes 23 examples; `analysis-spec packed-device-analysis-v2` passes 35 tests;
+  build `packed-device-v1` and probes `packed-device-r4-v1`,
+  `packed-device-a4480-v1`, `packed-device-b4480-v1` pass, as does strict
+  `wan_q4k_delta_results.py` analysis. All 168 same-format parity groups plus
+  six BF16-control groups have zero nonfinite values/violations at unchanged
+  finite `2e-5 + 2e-5*abs(ref)`. Both M4480 full outputs are bit-exact with
+  same-format upstream; M4 maximum tolerance ratio 0.33293873. Corruption
+  controls reject finite/NaN injections and terminal status is zero.
+- All 636 timing samples retain one terminal wait and zero inter-op waits,
+  activation readbacks or tracked explicit encode-buffer allocations; existing
+  post-completion status inspection remains. Sampled native group footprint
+  peaks at 2.02469 GiB, estimated cache-aware headroom at least 23.43906 GiB,
+  pressure-free at least 70%, system swap growth zero. Preserve 15% reserve/
+  floor, 4 GiB cap, 64 MiB swap stop, deadlines and sampling limits. No full
+  model/block/Studio/generation. Candidate bindings remove 270 MiB of decoded
+  weight stage, but the combined harness retains the control stage: no deployed
+  RSS saving is measured. Four seeded rows tiled to M4480 establish no new
+  original-BF16 or representative video-quality result.
+- External `evidence/wan-q4k-delta-20261023/summary-packed-device-v1.json`
+  under `/opt/mldata_ssd/cogni-ml/video-scene-20261019/` has SHA256
+  `cc016510afc022266f189bca7d372c4be29d2a1b03bdff1bd03439032f7ee3ed`.
+  Successful receipts have `changed_files: []`; all 248 source pins match
+  the captured build archive. Report records binary/oracle/receipt pins,
+  failed compilation/test-fixture corrections and inherited object-ancestry
+  limits. Mini-Quad is ROBUST for bounded parity/contracts/observed guards,
+  stage inventory and non-promotion; overall VULNERABLE because speed fails.
+  Repeated coordinate loads/decodes are hypotheses, not measured hardware
+  causes. Next separate falsifier could be compact rolling decoded panels
+  feeding MPS. Refresh on kernel/dispatch, codec, input/geometry, fixture,
+  compiler/native object, OS/SDK/device, numerical-policy or schedule changes.

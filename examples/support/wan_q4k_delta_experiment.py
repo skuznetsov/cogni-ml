@@ -55,7 +55,8 @@ def main():
                         help='Compare fused Q4_K delta projection against block-validated staged controls')
     parser.add_argument('--gemm-variant', choices=[
         'legacy', 'candidate-b128n32-sg4-tk32', 'candidate-b64n32-sg4-tk32-bt',
-        'candidate-b64n32-sg4-tk64-bt', 'candidate-b64n32-sg4-device-f32'],
+        'candidate-b64n32-sg4-tk64-bt', 'candidate-b64n32-sg4-device-f32',
+        'candidate-b64n32-sg4-device-q4k'],
                         help='Native GEMM variant; the direct-device F32 selector is dense-only')
     args = parser.parse_args()
     comparison_modes = sum((args.compare_block_validation, args.compare_gemm,
