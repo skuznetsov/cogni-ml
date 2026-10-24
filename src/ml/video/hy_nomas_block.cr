@@ -120,6 +120,74 @@ module ML::Video
       end
     end
 
+    record MPSLinearOperation,
+      name : String,
+      input : ML::MetalBuffer,
+      weights : LinearWeights,
+      output : ML::MetalBuffer,
+      rows : Int32,
+      input_dim : Int32,
+      output_dim : Int32
+
+    record MPSRMSOperation,
+      name : String,
+      input : ML::MetalBuffer,
+      weight : NormWeight,
+      output : ML::MetalBuffer,
+      tokens : Int32
+
+    record MPSActivationOperation,
+      name : String,
+      input : ML::MetalBuffer,
+      output : ML::MetalBuffer,
+      shape : Array(Int32)
+
+    # Optional execution seam. The base encoder remains independent of the
+    # MPS bridge; the opt-in file supplies this backend when requested.
+    abstract class EncodeBackend
+      abstract def validate!(block : HyNomasDualStreamBlock,
+                             img : ML::MetalBuffer, txt : ML::MetalBuffer,
+                             vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
+                             video_rope_cos : ML::MetalBuffer,
+                             video_rope_sin : ML::MetalBuffer) : Nil
+
+      abstract def linear(e : ML::Metal::ComputeEncoder, name : String,
+                          input : ML::MetalBuffer, weights : LinearWeights,
+                          output : ML::MetalBuffer, rows : Int32,
+                          input_dim : Int32, output_dim : Int32) : Nil
+
+      abstract def layer_norm(e : ML::Metal::ComputeEncoder,
+                              input : ML::MetalBuffer, output : ML::MetalBuffer,
+                              rows : Int32, dim : Int32, epsilon : Float32) : Nil
+
+      abstract def activation(e : ML::Metal::ComputeEncoder, name : String,
+                              input : ML::MetalBuffer,
+                              output : ML::MetalBuffer) : ML::Metal::ComputeEncoder
+
+      abstract def rms_norm(e : ML::Metal::ComputeEncoder, name : String,
+                            input : ML::MetalBuffer, weight : NormWeight,
+                            output : ML::MetalBuffer) : ML::Metal::ComputeEncoder
+
+      abstract def rope(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
+                        output : ML::MetalBuffer, cosine : ML::MetalBuffer,
+                        sine : ML::MetalBuffer, tokens : Int32) : Nil
+
+      abstract def modulate(e : ML::Metal::ComputeEncoder,
+                            input : ML::MetalBuffer, shift : ML::MetalBuffer,
+                            scale : ML::MetalBuffer, output : ML::MetalBuffer,
+                            rows : Int32, dim : Int32) : Nil
+
+      abstract def gated_residual(e : ML::Metal::ComputeEncoder,
+                                  input : ML::MetalBuffer, delta : ML::MetalBuffer,
+                                  gate : ML::MetalBuffer, output : ML::MetalBuffer,
+                                  rows : Int32, dim : Int32) : Nil
+
+      abstract def attention(e : ML::Metal::ComputeEncoder,
+                             query : ML::MetalBuffer, key : ML::MetalBuffer,
+                             value : ML::MetalBuffer, output : ML::MetalBuffer,
+                             config : HyNomasConfig) : ML::Metal::ComputeEncoder
+    end
+
     struct NormWeight
       getter weight : ML::MetalBuffer
       getter dtype : WeightDType
@@ -420,32 +488,144 @@ module ML::Video
                txt : ML::MetalBuffer, vec : ML::MetalBuffer,
                vec_txt : ML::MetalBuffer, video_rope_cos : ML::MetalBuffer,
                video_rope_sin : ML::MetalBuffer) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+      encode_with_backend(e, img, txt, vec, vec_txt, video_rope_cos, video_rope_sin, nil)
+    end
+
+    # Enqueue the same block body through an optional backend. Native `encode`
+    # passes nil and retains its original dispatch path.
+    private def encode_with_backend(e : ML::Metal::ComputeEncoder,
+                                    img : ML::MetalBuffer, txt : ML::MetalBuffer,
+                                    vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
+                                    video_rope_cos : ML::MetalBuffer,
+                                    video_rope_sin : ML::MetalBuffer,
+                                    backend : EncodeBackend?) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
       validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
+      backend.try do |execution|
+        execution.validate!(self, img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
+      end
 
       c = @config
       img_rows = c.image_rows
       txt_rows = c.text_rows
       img_mod_rows = c.effective_img_modulation_rows
       txt_mod_rows = c.effective_txt_modulation_rows
-      encode_modulation(e, @image_buffers, @image_weights, vec, img_mod_rows, img_rows, c.video_tokens)
-      encode_modulation(e, @text_buffers, @text_weights, vec_txt, txt_mod_rows, txt_rows, c.text_tokens)
+      e = encode_modulation(e, "img", @image_buffers, @image_weights, vec, img_mod_rows, img_rows, c.video_tokens, backend)
+      e = encode_modulation(e, "txt", @text_buffers, @text_weights, vec_txt, txt_mod_rows, txt_rows, c.text_tokens, backend)
 
-      encode_stream_qkv(e, @image_buffers, @image_weights, img, img_rows, c.video_tokens,
-        video_rope_cos, video_rope_sin)
-      encode_stream_qkv(e, @text_buffers, @text_weights, txt, txt_rows, c.text_tokens)
+      e = encode_stream_qkv(e, @image_buffers, @image_weights, img, img_rows, c.video_tokens,
+        video_rope_cos, video_rope_sin, "img", backend)
+      e = encode_stream_qkv(e, @text_buffers, @text_weights, txt, txt_rows, c.text_tokens,
+        stream: "txt", backend: backend)
 
       concat(e, @image_buffers.attn_q_rope.not_nil!, @text_buffers.attn_q_norm, @joint_query, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_k_rope.not_nil!, @text_buffers.attn_k_norm, @joint_key, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_v, @text_buffers.attn_v, @joint_value, c.video_tokens, c.text_tokens)
-      MetalOps.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention,
-        c.joint_tokens, c.joint_tokens, c.heads, c.head_dim, c.batches)
+      if execution = backend
+        e = execution.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention, c)
+      else
+        MetalOps.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention,
+          c.joint_tokens, c.joint_tokens, c.heads, c.head_dim, c.batches)
+      end
       split(e, @joint_attention, @image_buffers.attn_raw, @text_buffers.attn_raw, c.video_tokens, c.text_tokens)
 
-      encode_attention_residual(e, img, @image_buffers, @image_weights, img_rows)
-      encode_attention_residual(e, txt, @text_buffers, @text_weights, txt_rows)
-      encode_feed_forward(e, @image_buffers, @image_weights, img_rows)
-      encode_feed_forward(e, @text_buffers, @text_weights, txt_rows)
+      encode_attention_residual(e, "img", img, @image_buffers, @image_weights, img_rows, backend)
+      encode_attention_residual(e, "txt", txt, @text_buffers, @text_weights, txt_rows, backend)
+      e = encode_feed_forward(e, "img", @image_buffers, @image_weights, img_rows, backend)
+      encode_feed_forward(e, "txt", @text_buffers, @text_weights, txt_rows, backend)
       {@image_output, @text_output}
+    end
+
+    # Prepared MPS workspaces use these read-only views to bind fixed plans.
+    # They deliberately expose the already validated buffers, not Arena
+    # ownership or a second path for mutating the native block.
+    def mps_linear_operations : Array(MPSLinearOperation)
+      c = @config
+      [
+        MPSLinearOperation.new("img.modulation", @image_buffers.vec_silu, @image_weights.modulation,
+          @image_buffers.modulation, c.effective_img_modulation_rows, c.dim, 6 * c.dim),
+        MPSLinearOperation.new("txt.modulation", @text_buffers.vec_silu, @text_weights.modulation,
+          @text_buffers.modulation, c.effective_txt_modulation_rows, c.dim, 6 * c.dim),
+        MPSLinearOperation.new("img.attn.q", @image_buffers.attn_modulated, @image_weights.query,
+          @image_buffers.attn_q, c.image_rows, c.dim, c.dim),
+        MPSLinearOperation.new("img.attn.k", @image_buffers.attn_modulated, @image_weights.key,
+          @image_buffers.attn_k, c.image_rows, c.dim, c.dim),
+        MPSLinearOperation.new("img.attn.v", @image_buffers.attn_modulated, @image_weights.value,
+          @image_buffers.attn_v, c.image_rows, c.dim, c.dim),
+        MPSLinearOperation.new("txt.attn.q", @text_buffers.attn_modulated, @text_weights.query,
+          @text_buffers.attn_q, c.text_rows, c.dim, c.dim),
+        MPSLinearOperation.new("txt.attn.k", @text_buffers.attn_modulated, @text_weights.key,
+          @text_buffers.attn_k, c.text_rows, c.dim, c.dim),
+        MPSLinearOperation.new("txt.attn.v", @text_buffers.attn_modulated, @text_weights.value,
+          @text_buffers.attn_v, c.text_rows, c.dim, c.dim),
+        MPSLinearOperation.new("img.attn.proj", @image_buffers.attn_raw, @image_weights.projection,
+          @image_buffers.attn_projected, c.image_rows, c.dim, c.dim),
+        MPSLinearOperation.new("txt.attn.proj", @text_buffers.attn_raw, @text_weights.projection,
+          @text_buffers.attn_projected, c.text_rows, c.dim, c.dim),
+        MPSLinearOperation.new("img.ff.fc1", @image_buffers.ff_modulated, @image_weights.mlp_fc1,
+          @image_buffers.ff_hidden, c.image_rows, c.dim, c.ffn_dim),
+        MPSLinearOperation.new("img.ff.fc2", @image_buffers.ff_activated, @image_weights.mlp_fc2,
+          @image_buffers.ff_projected, c.image_rows, c.ffn_dim, c.dim),
+        MPSLinearOperation.new("txt.ff.fc1", @text_buffers.ff_modulated, @text_weights.mlp_fc1,
+          @text_buffers.ff_hidden, c.text_rows, c.dim, c.ffn_dim),
+        MPSLinearOperation.new("txt.ff.fc2", @text_buffers.ff_activated, @text_weights.mlp_fc2,
+          @text_buffers.ff_projected, c.text_rows, c.ffn_dim, c.dim),
+      ]
+    end
+
+    def mps_workspace_buffers : Tuple(Array(ML::MetalBuffer), Array(ML::MetalBuffer))
+      scratch = @scratch_buffers
+      weights = @bindings.map { |binding| @weights[binding.target] }
+      {scratch, weights}
+    end
+
+    def mps_rms_operations : Array(MPSRMSOperation)
+      c = @config
+      [
+        MPSRMSOperation.new("img.q", @image_buffers.attn_q, @image_weights.query_norm, @image_buffers.attn_q_norm, c.video_tokens),
+        MPSRMSOperation.new("img.k", @image_buffers.attn_k, @image_weights.key_norm, @image_buffers.attn_k_norm, c.video_tokens),
+        MPSRMSOperation.new("txt.q", @text_buffers.attn_q, @text_weights.query_norm, @text_buffers.attn_q_norm, c.text_tokens),
+        MPSRMSOperation.new("txt.k", @text_buffers.attn_k, @text_weights.key_norm, @text_buffers.attn_k_norm, c.text_tokens),
+      ]
+    end
+
+    def mps_activation_operations(vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer) : Array(MPSActivationOperation)
+      c = @config
+      img_shape = c.effective_img_modulation_rows == c.batches ? [c.batches, c.dim] : [c.batches, c.video_tokens, c.dim]
+      txt_shape = c.effective_txt_modulation_rows == c.batches ? [c.batches, c.dim] : [c.batches, c.text_tokens, c.dim]
+      [
+        MPSActivationOperation.new("img.silu", vec, @image_buffers.vec_silu, img_shape),
+        MPSActivationOperation.new("txt.silu", vec_txt, @text_buffers.vec_silu, txt_shape),
+        MPSActivationOperation.new("img.gelu", @image_buffers.ff_hidden, @image_buffers.ff_activated, [c.batches, c.video_tokens, c.ffn_dim]),
+        MPSActivationOperation.new("txt.gelu", @text_buffers.ff_hidden, @text_buffers.ff_activated, [c.batches, c.text_tokens, c.ffn_dim]),
+      ]
+    end
+
+    def mps_validate_inputs!(img : ML::MetalBuffer, txt : ML::MetalBuffer,
+                             vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
+                             video_rope_cos : ML::MetalBuffer,
+                             video_rope_sin : ML::MetalBuffer) : Nil
+      validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
+    end
+
+    def mps_validate_resources! : Nil
+      validate_weights!
+      validate_scratch!
+      validate_scratch_weight_aliases!
+    end
+
+    def mps_workspace_resources_match?(scratch : Array(ML::MetalBuffer),
+                                       weights : Array(ML::MetalBuffer)) : Bool
+      return false unless scratch.size == @scratch_plan.size && weights.size == @bindings.size
+      @scratch_plan.each_with_index do |(name, count), index|
+        buffer = @scratch.buffers[name]?
+        return false unless buffer && buffer.same?(scratch[index]) && buffer.valid? &&
+                            buffer.size == count.to_i64 * sizeof(Float32)
+      end
+      @bindings.each_with_index do |binding, index|
+        buffer = @weights.buffers[binding.target]?
+        return false unless buffer && buffer.same?(weights[index]) && buffer.valid?
+      end
+      true
     end
 
     private def self.append_binding(bindings : Array(WeightBinding), target : String,
@@ -586,45 +766,69 @@ module ML::Video
       result
     end
 
-    private def encode_modulation(e : ML::Metal::ComputeEncoder, buffers : StreamBuffers,
+    private def encode_modulation(e : ML::Metal::ComputeEncoder, stream : String,
+                                  buffers : StreamBuffers,
                                   weights : StreamWeights, vector : ML::MetalBuffer,
-                                  mod_rows : Int32, rows : Int32, tokens : Int32) : Nil
+                                  mod_rows : Int32, rows : Int32, tokens : Int32,
+                                  backend : EncodeBackend?) : ML::Metal::ComputeEncoder
       c = @config
-      e.set_pipeline(self.class.pipeline("hy_nomas_silu_f32"))
-      e.set_buffer(vector, 0).set_buffer(buffers.vec_silu, 1, ML::Metal::BufferAccess::Write)
-      e.set_value((mod_rows * c.dim).to_u32, 2)
-      e.dispatch_1d(mod_rows * c.dim)
-      linear(e, buffers.vec_silu, weights.modulation, buffers.modulation, mod_rows, c.dim, 6 * c.dim)
+      if execution = backend
+        e = execution.activation(e, "#{stream}.silu", vector, buffers.vec_silu)
+      else
+        e.set_pipeline(self.class.pipeline("hy_nomas_silu_f32"))
+        e.set_buffer(vector, 0).set_buffer(buffers.vec_silu, 1, ML::Metal::BufferAccess::Write)
+        e.set_value((mod_rows * c.dim).to_u32, 2)
+        e.dispatch_1d(mod_rows * c.dim)
+      end
+      linear(e, "#{stream}.modulation", buffers.vec_silu, weights.modulation, buffers.modulation,
+        mod_rows, c.dim, 6 * c.dim, backend)
       unpack_modulation(e, buffers.modulation, buffers, mod_rows, rows, tokens)
+      e
     end
 
     private def encode_stream_qkv(e : ML::Metal::ComputeEncoder, buffers : StreamBuffers,
                                   weights : StreamWeights, input : ML::MetalBuffer,
                                   rows : Int32, tokens : Int32,
                                   cos : ML::MetalBuffer? = nil,
-                                  sin : ML::MetalBuffer? = nil) : Nil
+                                  sin : ML::MetalBuffer? = nil,
+                                  stream : String = "img",
+                                  backend : EncodeBackend? = nil) : ML::Metal::ComputeEncoder
       c = @config
-      MetalOps.norm(e, input, @zero, @zero, buffers.attn_norm, rows, c.dim, c.norm_eps)
-      MetalOps.modulate(e, buffers.attn_norm, buffers.attn_shift, buffers.attn_scale, buffers.attn_modulated,
-        rows, c.dim, rows)
-      linear(e, buffers.attn_modulated, weights.query, buffers.attn_q, rows, c.dim, c.dim)
-      linear(e, buffers.attn_modulated, weights.key, buffers.attn_k, rows, c.dim, c.dim)
-      linear(e, buffers.attn_modulated, weights.value, buffers.attn_v, rows, c.dim, c.dim)
-      MetalOps.norm(e, buffers.attn_q, weights.query_norm.weight, @zero, buffers.attn_q_norm,
-        rows * c.heads, c.head_dim, c.norm_eps, rms: true, affine: true,
-        weight_dtype: weights.query_norm.dtype)
-      MetalOps.norm(e, buffers.attn_k, weights.key_norm.weight, @zero, buffers.attn_k_norm,
-        rows * c.heads, c.head_dim, c.norm_eps, rms: true, affine: true,
-        weight_dtype: weights.key_norm.dtype)
+      encode_non_affine_norm(e, input, buffers.attn_norm, rows, backend)
+      encode_pointwise_modulation(e, buffers.attn_norm, buffers.attn_shift,
+        buffers.attn_scale, buffers.attn_modulated, rows, c.dim, backend)
+      linear(e, "#{stream}.attn.q", buffers.attn_modulated, weights.query, buffers.attn_q,
+        rows, c.dim, c.dim, backend)
+      linear(e, "#{stream}.attn.k", buffers.attn_modulated, weights.key, buffers.attn_k,
+        rows, c.dim, c.dim, backend)
+      linear(e, "#{stream}.attn.v", buffers.attn_modulated, weights.value, buffers.attn_v,
+        rows, c.dim, c.dim, backend)
+      if execution = backend
+        e = execution.rms_norm(e, "#{stream}.q", buffers.attn_q, weights.query_norm, buffers.attn_q_norm)
+        e = execution.rms_norm(e, "#{stream}.k", buffers.attn_k, weights.key_norm, buffers.attn_k_norm)
+      else
+        MetalOps.norm(e, buffers.attn_q, weights.query_norm.weight, @zero, buffers.attn_q_norm,
+          rows * c.heads, c.head_dim, c.norm_eps, rms: true, affine: true,
+          weight_dtype: weights.query_norm.dtype)
+        MetalOps.norm(e, buffers.attn_k, weights.key_norm.weight, @zero, buffers.attn_k_norm,
+          rows * c.heads, c.head_dim, c.norm_eps, rms: true, affine: true,
+          weight_dtype: weights.key_norm.dtype)
+      end
       unless cos.nil? && sin.nil?
         cosine = cos || raise ArgumentError.new("Hy-Nomas video RoPE requires both cosine and sine tables")
         sine = sin || raise ArgumentError.new("Hy-Nomas video RoPE requires both cosine and sine tables")
         q_rope = buffers.attn_q_rope
         k_rope = buffers.attn_k_rope
         raise ArgumentError.new("Hy-Nomas RoPE scratch is unavailable for this stream") unless q_rope && k_rope
-        rope(e, buffers.attn_q_norm, q_rope.not_nil!, cosine, sine, tokens, rows)
-        rope(e, buffers.attn_k_norm, k_rope.not_nil!, cosine, sine, tokens, rows)
+        if execution = backend
+          execution.rope(e, buffers.attn_q_norm, q_rope.not_nil!, cosine, sine, tokens)
+          execution.rope(e, buffers.attn_k_norm, k_rope.not_nil!, cosine, sine, tokens)
+        else
+          rope(e, buffers.attn_q_norm, q_rope.not_nil!, cosine, sine, tokens, rows)
+          rope(e, buffers.attn_k_norm, k_rope.not_nil!, cosine, sine, tokens, rows)
+        end
       end
+      e
     end
 
     private def unpack_modulation(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
@@ -685,34 +889,92 @@ module ML::Video
       e.dispatch_1d(c.joint_rows * c.dim)
     end
 
-    private def encode_attention_residual(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
+    private def encode_attention_residual(e : ML::Metal::ComputeEncoder, stream : String,
+                                          input : ML::MetalBuffer,
                                           buffers : StreamBuffers, weights : StreamWeights,
-                                          rows : Int32) : Nil
+                                          rows : Int32,
+                                          backend : EncodeBackend?) : Nil
       c = @config
-      linear(e, buffers.attn_raw, weights.projection, buffers.attn_projected, rows, c.dim, c.dim)
-      MetalOps.add(e, input, buffers.attn_projected, buffers.after_attention,
-        rows * c.dim, buffers.attn_gate, c.dim, rows)
+      linear(e, "#{stream}.attn.proj", buffers.attn_raw, weights.projection,
+        buffers.attn_projected, rows, c.dim, c.dim, backend)
+      encode_pointwise_gated_residual(e, input, buffers.attn_projected,
+        buffers.attn_gate, buffers.after_attention, rows, c.dim, backend)
     end
 
-    private def encode_feed_forward(e : ML::Metal::ComputeEncoder, buffers : StreamBuffers,
-                                    weights : StreamWeights, rows : Int32) : Nil
+    private def encode_feed_forward(e : ML::Metal::ComputeEncoder, stream : String,
+                                    buffers : StreamBuffers, weights : StreamWeights,
+                                    rows : Int32,
+                                    backend : EncodeBackend?) : ML::Metal::ComputeEncoder
       c = @config
-      MetalOps.norm(e, buffers.after_attention, @zero, @zero, buffers.ff_norm,
-        rows, c.dim, c.norm_eps)
-      MetalOps.modulate(e, buffers.ff_norm, buffers.ff_shift, buffers.ff_scale,
-        buffers.ff_modulated, rows, c.dim, rows)
-      linear(e, buffers.ff_modulated, weights.mlp_fc1, buffers.ff_hidden, rows, c.dim, c.ffn_dim)
-      MetalOps.gelu(e, buffers.ff_hidden, buffers.ff_activated, rows * c.ffn_dim, approximate: true)
-      linear(e, buffers.ff_activated, weights.mlp_fc2, buffers.ff_projected, rows, c.ffn_dim, c.dim)
-      MetalOps.add(e, buffers.after_attention, buffers.ff_projected, buffers.output,
-        rows * c.dim, buffers.ff_gate, c.dim, rows)
+      encode_non_affine_norm(e, buffers.after_attention, buffers.ff_norm, rows, backend)
+      encode_pointwise_modulation(e, buffers.ff_norm, buffers.ff_shift,
+        buffers.ff_scale, buffers.ff_modulated, rows, c.dim, backend)
+      linear(e, "#{stream}.ff.fc1", buffers.ff_modulated, weights.mlp_fc1,
+        buffers.ff_hidden, rows, c.dim, c.ffn_dim, backend)
+      if execution = backend
+        e = execution.activation(e, "#{stream}.gelu", buffers.ff_hidden, buffers.ff_activated)
+      else
+        MetalOps.gelu(e, buffers.ff_hidden, buffers.ff_activated, rows * c.ffn_dim, approximate: true)
+      end
+      linear(e, "#{stream}.ff.fc2", buffers.ff_activated, weights.mlp_fc2,
+        buffers.ff_projected, rows, c.ffn_dim, c.dim, backend)
+      encode_pointwise_gated_residual(e, buffers.after_attention,
+        buffers.ff_projected, buffers.ff_gate, buffers.output, rows, c.dim, backend)
+      e
     end
 
-    private def linear(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
+    private def encode_pointwise_modulation(e : ML::Metal::ComputeEncoder,
+                                            input : ML::MetalBuffer,
+                                            shift : ML::MetalBuffer,
+                                            scale : ML::MetalBuffer,
+                                            output : ML::MetalBuffer,
+                                            rows : Int32, dim : Int32,
+                                            backend : EncodeBackend?) : Nil
+      if execution = backend
+        execution.modulate(e, input, shift, scale, output, rows, dim)
+      else
+        # Preserve the native path's existing broadcast and alias semantics.
+        MetalOps.modulate(e, input, shift, scale, output, rows, dim, rows)
+      end
+    end
+
+    private def encode_pointwise_gated_residual(e : ML::Metal::ComputeEncoder,
+                                                input : ML::MetalBuffer,
+                                                delta : ML::MetalBuffer,
+                                                gate : ML::MetalBuffer,
+                                                output : ML::MetalBuffer,
+                                                rows : Int32, dim : Int32,
+                                                backend : EncodeBackend?) : Nil
+      if execution = backend
+        execution.gated_residual(e, input, delta, gate, output, rows, dim)
+      else
+        # Preserve the native path's existing in-place residual behavior.
+        MetalOps.add(e, input, delta, output, rows * dim, gate, dim, rows)
+      end
+    end
+
+    private def encode_non_affine_norm(e : ML::Metal::ComputeEncoder,
+                                       input : ML::MetalBuffer, output : ML::MetalBuffer,
+                                       rows : Int32, backend : EncodeBackend?) : Nil
+      c = @config
+      if execution = backend
+        execution.layer_norm(e, input, output, rows, c.dim, c.norm_eps)
+      else
+        MetalOps.norm(e, input, @zero, @zero, output, rows, c.dim, c.norm_eps)
+      end
+    end
+
+    private def linear(e : ML::Metal::ComputeEncoder, name : String,
+                       input : ML::MetalBuffer,
                        weights : LinearWeights, output : ML::MetalBuffer,
-                       rows : Int32, in_dim : Int32, out_dim : Int32) : Nil
-      MetalOps.linear(e, input, weights.weight, weights.bias, output, rows, in_dim, out_dim,
-        weights.weight_dtype, weights.bias_dtype)
+                       rows : Int32, in_dim : Int32, out_dim : Int32,
+                       backend : EncodeBackend?) : Nil
+      if execution = backend
+        execution.linear(e, name, input, weights, output, rows, in_dim, out_dim)
+      else
+        MetalOps.linear(e, input, weights.weight, weights.bias, output, rows, in_dim, out_dim,
+          weights.weight_dtype, weights.bias_dtype)
+      end
     end
   end
 end

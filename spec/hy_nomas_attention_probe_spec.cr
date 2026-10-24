@@ -5,10 +5,14 @@ require "json"
 require "digest/sha256"
 require "./support/video_allocation_counter"
 require "../src/ml/video/hy_nomas_block"
+require "./support/hy_nomas_mps_projection_controls"
+require "./support/hy_nomas_mps_reductions"
+require "./support/hy_nomas_rms_controls"
 
 module HyAttentionProbe
   SOURCE = ML::Video::MetalOps::SOURCE + ML::Video::HyNomasDualStreamBlock::SOURCE +
-           {{ read_file("#{__DIR__}/support/hy_nomas_attention_probe.metal") }}
+           {{ read_file("#{__DIR__}/support/hy_nomas_attention_probe.metal") }} +
+           RMS_ROPE_CONTROL_SOURCE
   REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
 
   def self.fresh_report(path : String, & : IO ->) : Nil
@@ -456,7 +460,8 @@ module HyAttentionProbe
   end
 
   def self.run_case(data : JSON::Any, source : ML::Video::CheckpointFile,
-                    source_dtype : ML::GGUF::SafeTensorDType, report : IO) : Array(String)
+                    source_dtype : ML::GGUF::SafeTensorDType, report : IO,
+                    mps_controls : Bool = false) : Array(String)
     c = config(data)
     ops = data["operations"].as_a
     raise ArgumentError.new("Empty or duplicate probe operations") unless !ops.empty? && ops.map { |op| op["name"].as_s }.uniq.size == ops.size
@@ -465,7 +470,13 @@ module HyAttentionProbe
     resident = ML::Video::WeightDType.parse(data["resident_dtype"].as_s)
     arena = ML::Video::Arena.new
     weights = ML::Video::Arena.new
+    mps_arena = ML::Video::Arena.new
     prepared = nil.as(ML::Video::PreparedWeights?)
+    projections = nil.as(MPSProjectionControls?)
+    reductions = nil.as(MPSReductionControls?)
+    rms_controls = nil.as(MPSRMSControls?)
+    rope_controls = nil.as(MPSRopeControls?)
+    chain = nil.as(ML::Metal::MPSCommandChain?)
     failures = [] of String
     begin
       arena.upload("zero", Array(Float32).new(c.dim, 0.0_f32))
@@ -482,19 +493,63 @@ module HyAttentionProbe
         budget, resident_dtype: resident, require_all: true, reserve_bytes: arena.resident_bytes,
         allow_f32_to_bf16: source_dtype.f32? && resident.bf16?)
       prepared = ML::Video::PreparedWeights.new(plan, weights)
+      if mps_controls
+        mps_arena.upload("zero", Array(Float32).new(c.dim, 0.0_f32))
+        ops.each_with_index do |op, index|
+          next unless {"linear", "qk", "softmax", "pv", "attention", "rms", "rope"}.includes?(op["kind"].as_s)
+          op["inputs"].as_h.each { |name, record| mps_arena.upload("#{index}.input.#{name}", values(record)) }
+          count = values(op["expected"]).size
+          mps_arena.alloc("#{index}.output", count)
+          mps_arena.alloc("#{index}.rounded", count)
+        end
+        projections = MPSProjectionControls.new(c, ops, mps_arena, weights)
+        reductions = MPSReductionControls.new(c, ops, mps_arena)
+        rms_controls = MPSRMSControls.new(c, ops, mps_arena, weights)
+        rope_controls = MPSRopeControls.new(c, ops, mps_arena)
+      end
       allocations = ML::MetalBuffer.video_spec_allocations
-      command = ML::Metal::CommandBuffer.new
-      encoder = ML::Metal::ComputeEncoder.new(command)
+      command = nil.as(ML::Metal::CommandBuffer?)
+      encoder = if mps_controls
+                  chain = ML::Metal::MPSCommandChain.new
+                  chain.not_nil!.encoder
+                else
+                  command = ML::Metal::CommandBuffer.new
+                  ML::Metal::ComputeEncoder.new(command.not_nil!)
+                end
       prepared.not_nil!.encode(encoder)
       ops.each_with_index { |op, index| encode(encoder, op, index, c, arena, weights) }
       qk_index = ops.index! { |op| op["name"].as_s == "qk.postscale" }
       attention_index = ops.index! { |op| op["name"].as_s == "attention.canonical_sdpa" }
       online(encoder, arena["#{qk_index}.output"], arena["#{attention_index}.input.v"], arena["native_factored"], c)
       round(encoder, arena["native_factored"], arena["native_factored.rounded"], c.joint_rows * c.dim)
-      encoder.end_encoding
+      if mps_controls
+        ops.each_with_index do |op, index|
+          case op["kind"].as_s
+          when "linear"
+            projections.not_nil!.encode(chain.not_nil!.encoder, op, index)
+          when "qk", "softmax", "pv", "attention"
+            reductions.not_nil!.encode(chain.not_nil!, op, index)
+          when "rms"
+            rms_controls.not_nil!.encode(chain.not_nil!, op, index)
+          when "rope"
+            rope_controls.not_nil!.encode(chain.not_nil!.encoder, op, index)
+          else
+            next
+          end
+          round(chain.not_nil!.encoder, mps_arena["#{index}.output"], mps_arena["#{index}.rounded"], values(op["expected"]).size)
+        end
+      else
+        encoder.end_encoding
+      end
       ML::MetalBuffer.video_spec_allocations.should eq(allocations), "diagnostic encode must not allocate MetalBuffers"
       # Only terminal diagnostic completion/readback; no production waits added.
-      seconds = command.commit_and_wait_gpu_elapsed_seconds
+      seconds = if mps_controls
+                  chain.not_nil!.commit_and_wait
+                  chain.not_nil!.wait_count.should eq(1)
+                  chain.not_nil!.gpu_elapsed_seconds
+                else
+                  command.not_nil!.commit_and_wait_gpu_elapsed_seconds
+                end
       label = data["label"].as_s
       snapshots = {} of String => Array(Float32)
       rounded_snapshots = {} of String => Array(Float32)
@@ -566,16 +621,114 @@ module HyAttentionProbe
                      reference_qk_row: values(indexed["qk.postscale"]["expected"])[row * c.joint_tokens, c.joint_tokens],
                      qk_reference_mode: "explicit_mps_postscale"}.to_json)
       end
+      mps_failures = 0
+      mps_operations = 0
+      mps_rms_failures = 0
+      mps_rms_operations = 0
+      source_rope_failures = 0
+      source_rope_operations = 0
+      if mps_controls
+        ops.each_with_index do |op, index|
+          next unless {"linear", "qk", "softmax", "pv", "attention"}.includes?(op["kind"].as_s)
+          mps_operations += 1
+          op["inputs"].as_h.each do |name, record|
+            mps_arena["#{index}.input.#{name}"].read(values(record).size).map(&.unsafe_as(UInt32)).should eq(values(record).map(&.unsafe_as(UInt32))),
+              "MPS control must preserve frozen upstream operands"
+          end
+          actual = mps_arena["#{index}.output"].read(values(op["expected"]).size)
+          rounded = mps_arena["#{index}.rounded"].read(actual.size)
+          rounded.map(&.unsafe_as(UInt32)).should eq(actual.map { |value| bf16_bits(value) })
+          {"mps_raw"     => {actual, values(op["expected"])},
+           "mps_rounded" => {rounded, values(op["rounded_expected"])}}.each do |phase, pair|
+            stats = compare(pair[0], pair[1])
+            report.puts({label: label, operation: op["name"].as_s, kind: op["kind"].as_s,
+                         reference_mode: op["reference_mode"]?.try(&.as_s), phase: phase, stats: stats}.to_json)
+            if stats[:violations] > 0 || (phase == "mps_rounded" && stats[:bitwise_mismatches] > 0)
+              mps_failures += 1
+              failures << "#{label}/#{op["name"]}/#{phase}: strict=#{stats[:violations]} bits=#{stats[:bitwise_mismatches]}"
+            end
+          end
+        end
+
+        ops.each_with_index do |op, index|
+          next unless rms_controls.not_nil!.has_plan?(index.to_i32)
+          mps_rms_operations += 1
+          op["inputs"].as_h.each do |name, record|
+            mps_arena["#{index}.input.#{name}"].read(values(record).size).map(&.unsafe_as(UInt32)).should eq(values(record).map(&.unsafe_as(UInt32))),
+              "MPS RMS control must preserve frozen upstream operands"
+          end
+          actual = mps_arena["#{index}.output"].read(values(op["expected"]).size)
+          rounded = mps_arena["#{index}.rounded"].read(actual.size)
+          rounded.map(&.unsafe_as(UInt32)).should eq(actual.map { |value| bf16_bits(value) })
+          {"mps_rms_raw"     => {actual, values(op["expected"])},
+           "mps_rms_rounded" => {rounded, values(op["rounded_expected"])}}.each do |phase, pair|
+            stats = compare(pair[0], pair[1])
+            stream_tokens = op["name"].as_s.starts_with?("img.") ? c.video_tokens : c.text_tokens
+            report.puts({label: label, operation: op["name"].as_s, kind: op["kind"].as_s,
+                         phase: phase, stats: stats, input_shape: [c.batches, stream_tokens, c.heads, c.head_dim],
+                         mps_graph_shape: [c.batches, stream_tokens * c.heads, c.head_dim], flattened_rows: true}.to_json)
+            if stats[:violations] > 0 || (phase == "mps_rms_rounded" && stats[:bitwise_mismatches] > 0)
+              mps_rms_failures += 1
+              failures << "#{label}/#{op["name"]}/#{phase}: strict=#{stats[:violations]} bits=#{stats[:bitwise_mismatches]}"
+            end
+          end
+        end
+
+        ops.each_with_index do |op, index|
+          next unless rope_controls.not_nil!.has_plan?(index.to_i32)
+          source_rope_operations += 1
+          op["inputs"].as_h.each do |name, record|
+            mps_arena["#{index}.input.#{name}"].read(values(record).size).map(&.unsafe_as(UInt32)).should eq(values(record).map(&.unsafe_as(UInt32))),
+              "Source RoPE control must preserve frozen upstream operands"
+          end
+          actual = mps_arena["#{index}.output"].read(values(op["expected"]).size)
+          rounded = mps_arena["#{index}.rounded"].read(actual.size)
+          rounded.map(&.unsafe_as(UInt32)).should eq(actual.map { |value| bf16_bits(value) })
+          {"source_rope_raw"     => {actual, values(op["expected"])},
+           "source_rope_rounded" => {rounded, values(op["rounded_expected"])}}.each do |phase, pair|
+            stats = compare(pair[0], pair[1])
+            report.puts({label: label, operation: op["name"].as_s, kind: op["kind"].as_s,
+                         phase: phase, stats: stats,
+                         control_source: "separate_product_add_uncontracted"}.to_json)
+            if stats[:violations] > 0 || (phase == "source_rope_rounded" && stats[:bitwise_mismatches] > 0)
+              source_rope_failures += 1
+              failures << "#{label}/#{op["name"]}/#{phase}: strict=#{stats[:violations]} bits=#{stats[:bitwise_mismatches]}"
+            end
+          end
+        end
+      end
       report.puts({label: label, phase: "summary", operations: ops.size, numerical_failures: failures.size,
+                   mps_control_operations: mps_operations, mps_control_failures: mps_failures,
+                   mps_rms_control_operations: mps_rms_operations, mps_rms_control_failures: mps_rms_failures,
+                   source_rope_control_operations: source_rope_operations, source_rope_control_failures: source_rope_failures,
                    resident_weight_bytes: plan.destination_bytes, staging_weight_bytes: plan.staging_bytes,
-                   scratch_and_input_bytes: arena.resident_bytes, encode_metal_buffer_allocations: ML::MetalBuffer.video_spec_allocations - allocations,
+                   scratch_and_input_bytes: arena.resident_bytes + mps_arena.resident_bytes, encode_metal_buffer_allocations: ML::MetalBuffer.video_spec_allocations - allocations,
                    gpu_seconds_diagnostic_command: seconds, terminal_waits: 1}.to_json)
       report.flush
       failures
     ensure
-      prepared.try(&.release)
-      arena.release
-      weights.release
+      # MPSGraph may already have continued a root before an encode error.
+      # Drain that exceptional submission before releasing any plan/buffer.
+      begin
+        chain.try { |pending| pending.commit_and_wait unless pending.completed? }
+      ensure
+        # Preserve resources if completion is unknown. A terminal error with
+        # completed? true still permits cleanup without leaking the plans.
+        if chain.nil? || chain.not_nil!.completed?
+          begin
+            chain.try(&.release)
+          ensure
+            reductions.try(&.release)
+            projections.try(&.release)
+            rms_controls.try(&.release)
+            rope_controls.try(&.release)
+            prepared.try(&.release)
+            mps_arena.release
+            arena.release
+            weights.release
+          end
+        end
+      end
     end
   end
 end
@@ -679,6 +832,8 @@ describe HyAttentionProbe do
     source_dtype = ML::GGUF::SafeTensorDType.parse(fixture["source_dtype"].as_s)
     {ML::GGUF::SafeTensorDType::F32, ML::GGUF::SafeTensorDType::BF16}.includes?(source_dtype).should be_true
     checkpoint = ML::Video::CheckpointFile.new(weights_path)
+    mps_mode = ENV["HY_NOMAS_ATTENTION_MPS_CONTROLS"]? || "0"
+    {"0", "1"}.includes?(mps_mode).should be_true
     begin
       failures = [] of String
       HyAttentionProbe.fresh_report(ENV["HY_NOMAS_ATTENTION_REPORT"]) do |report|
@@ -686,8 +841,8 @@ describe HyAttentionProbe do
                      fixture_sha256: fixture_digest, checkpoint_sha256: weights_digest,
                      source_fixture_sha256: fixture["source_fixture_sha256"].as_s,
                      source_mode: source_mode, gate_atol: 2e-5, gate_rtol: 2e-5,
-                     rounded_gate: "bitwise", production_changes: false}.to_json)
-        fixture["cases"].as_a.each { |data| failures.concat(HyAttentionProbe.run_case(data, checkpoint, source_dtype, report)) }
+                     rounded_gate: "bitwise", production_changes: false, mps_controls: mps_mode == "1"}.to_json)
+        fixture["cases"].as_a.each { |data| failures.concat(HyAttentionProbe.run_case(data, checkpoint, source_dtype, report, mps_mode == "1")) }
         report.puts({phase: "complete", cases: fixture["cases"].as_a.size, failed_comparison_records: failures.size,
                      status: failures.empty? ? "parity_pass" : "numerical_gate_failed"}.to_json)
       end

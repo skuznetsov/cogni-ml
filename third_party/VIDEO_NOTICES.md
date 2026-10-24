@@ -24,6 +24,25 @@ No model weights or community ComfyUI implementation are included.
 - `spec/hy_nomas_block_spec.cr`
 - `spec/support/hy_nomas_reference.py`
 
+## PyTorch MPS LayerNorm compatibility path
+
+`src/ml/video/kernels/hy_nomas_mps_norm.metal` is an opt-in adaptation of the
+non-affine F32 `layer_norm_single_row` kernel from PyTorch
+`aten/src/ATen/native/mps/kernels/LayerNorm.metal` at tag `v2.8.0`.
+Upstream: <https://github.com/pytorch/pytorch/tree/v2.8.0>.
+The upstream copyright notices and BSD-3-Clause terms are retained in
+[licenses/pytorch-v2.8.0-BSD-3-Clause.txt](licenses/pytorch-v2.8.0-BSD-3-Clause.txt).
+This path is selected only by the explicit Hy-Nomas MPS block backend, for its
+two non-affine block LayerNorm operations. The native default encoder remains
+on its existing normalization path. `spec/support/hy_nomas_norm_controls.cr`
+aliases the same prepared kernel for same-input diagnostics.
+
+The SiLU and tanh-GELU graphs in
+`src/ml/video/hy_nomas_mps_reductions_bridge.mm` reproduce the operation order
+in PyTorch `aten/src/ATen/native/mps/operations/Activation.mm` at tag `v2.8.0`.
+The same PyTorch notices and BSD-3-Clause license above apply. The graphs are
+used by same-input controls and the explicit Hy-Nomas MPS block backend.
+
 ## Wan 2.2 S2V
 
 The Wan-specific implementation and oracle adapter are based on the architecture

@@ -1,9 +1,10 @@
 # Hy-Nomas native Metal frontier
 
-Document status: actual-checkpoint F32-math block control verified within the
-bounded scope below (2026-10-24). Same-input diagnostics localize projection and
-attention differences, but BF16 attention-boundary parity still fails. A video
-pipeline remains unimplemented.
+Document status: actual-checkpoint F32-math and BF16-boundary MPS block controls
+verified within the bounded scope below (2026-10-24). The opt-in prepared MPS
+backend matches the pinned MPS oracle, including chained output reuse. Historical
+failures of the original Metal path remain recorded. CUDA/Magi parity, target
+geometry performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
 
@@ -45,8 +46,9 @@ instead casts F32 Q/K/V to BF16 and converts the returned result to the original
 dtype when necessary. The wrapper alone does not establish the kernel's output
 dtype. This
 first slice does not claim numeric parity with that CUDA BF16 runtime, even when
-the source weights are stored as BF16. Native BF16 activation/attention parity is
-a separate open gate. Normalization epsilon is fixed to upstream's `1e-6`.
+the source weights are stored as BF16. The new `encode_mps` control certifies the
+declared MPS BF16 boundary policy, not full BF16 activation execution or CUDA
+FlashAttention reductions. Normalization epsilon is fixed to upstream's `1e-6`.
 
 ## Rejected and guard-only surface
 
@@ -60,8 +62,9 @@ No GPL community-port code is imported into this Apache-source implementation.
 
 ## Active slice: BF16 boundaries and checkpoint weights
 
-Status: actual-weight F32 control passes; BF16-boundary gate remains open,
-2026-10-24. Preserve the existing F32-control default.
+Status: actual-weight F32 and BF16-boundary controls pass through the opt-in MPS
+backend, 2026-10-24. The original native backend's BF16 failures remain open;
+preserve its existing F32-control default.
 An explicit opt-in BF16-boundary control rounds concatenated F32 Q/K/V to
 BF16 with round-to-nearest-even, compute attention in F32, then round its output
 to BF16 before the F32 projection. The output round-trip is an explicit control
@@ -172,8 +175,10 @@ guarded oracle-width env TMPDIR="$probe_root/tmp" PYTHONDONTWRITEBYTECODE=1 \
 shasum -a 256 "$probe_root/fixtures/tiny.json" "$probe_root/fixtures/width.json"
 
 guarded bridges make BUILD_DIR="$probe_root/build" \
-  "$probe_root/build/bridge.o" "$probe_root/build/metal_mps_command_chain.o" "$probe_root/build/metal_stage_io.o"
-probe_link="$probe_root/build/bridge.o $probe_root/build/metal_mps_command_chain.o $probe_root/build/metal_stage_io.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -lc++ -fuse-ld=/usr/bin/ld"
+  "$probe_root/build/bridge.o" "$probe_root/build/metal_mps_command_chain.o" "$probe_root/build/metal_stage_io.o" \
+  "$probe_root/build/wan_t5_mps_bridge.o" "$probe_root/build/wan_t5_rms_mps_bridge.o" \
+  "$probe_root/build/hy_nomas_mps_reductions.o"
+probe_link="$probe_root/build/bridge.o $probe_root/build/metal_mps_command_chain.o $probe_root/build/metal_stage_io.o $probe_root/build/wan_t5_mps_bridge.o $probe_root/build/wan_t5_rms_mps_bridge.o $probe_root/build/hy_nomas_mps_reductions.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -lc++ -fuse-ld=/usr/bin/ld"
 guarded build env TMPDIR="$probe_root/tmp" CRYSTAL_CACHE_DIR="$probe_root/crystal-cache" \
   crystal build spec/hy_nomas_block_spec.cr -o "$probe_root/build/hy_nomas_block_spec" \
   --error-trace --link-flags="$probe_link"
@@ -447,6 +452,100 @@ that fixture's independently captured digest to reproduce the failing gate.
 An exit 1 must remain a failure; do not ignore it in automation or treat the
 successful F32 control as certification of this precision mode.
 
+## Pilot-frame performance gate, 2026-10-24
+
+No end-to-end video speed has been measured. The native implementation is one
+dual-stream block, not the full sampler/text encoder/PixelUMM pipeline. Its
+nine-token correctness fixture must not be extrapolated to video throughput.
+
+At pinned upstream revision `911cea6458a89c2663513ff7099561ec190dd491`,
+`configs/experiment/inference.yaml` selects 8 Euler steps, 54 DiT blocks and
+guidance scales of 1.0. The default final segment has one DiT branch per step
+and no cache-write forward (`hymm/pipeline/causal_ar.py`, guidance selection,
+denoise loop and `should_cache_chunk`). A non-final segment or preserved cache
+adds one whole-stack cache-write pass. A 24-frame, 24-fps prefix uses 6 latent
+frames and, with the preset PixelUMM grid, 22 by 40 spatial tokens: 5,280 video
+plus 1,280 text tokens. This grid decodes to 704 by 1280; verify actual output
+dimensions rather than labeling the result 720p.
+
+For the user's ceiling of 120 wall seconds per video second:
+
+```text
+T_other + sum(block-call times) <= 120 seconds
+mean block-call time <= (120 - T_other) / (8 * 54)
+```
+
+The zero-overhead ceiling is 277.8 ms per block, or 246.9 ms with the ninth
+cache-write pass. `T_other` includes conditioning, scheduler, stack overhead,
+PixelUMM decoding and output handling. Exceeding this ceiling at representative
+geometry falsifies the target; passing one block is only a necessary condition.
+Cold request-to-first-pixel and warmed prefix time need separate measurements.
+
+With J=6,560, D=2,048 and FF=8,192, dense projection arithmetic is
+`2*J*(4*D^2 + 2*D*FF)`, plus two batch-row modulation projections
+`4*B*D*(6*D)` and QK/PV `4*J^2*D`: 1.012983 TFLOP per block. The 432 calls
+therefore need at least 3.647 TFLOP/s sustained if the whole 120-second budget
+were available to this arithmetic; conditioning and decoding make the actual
+requirement higher. This is a necessary throughput bound, not a speed result.
+
+The current named-checkpoint scratch formula requires 1.682 GiB at this
+geometry with the default broadcast modulation, or about 2.03 GiB in the
+separate per-token mode, before inputs, weights and opaque runtime workspace.
+Default conditioning already projects one row per stream and broadcasts it;
+there is no default per-token modulation GEMM redundancy to remove. The 54
+BF16 block weight sets alone require about 15.19 GiB, excluding embeddings and
+other models. Independent MPS workspaces additionally retain about 404.3 MiB of
+conversion/attention/RMS stages each, or about 21.32 GiB over 54 blocks. Independent
+named scratch sets would add 90.84 GiB. Both scratch lifetime reuse and shared
+serial stages are prerequisites for a whole-stack implementation; shared
+staging alone is insufficient. Reusing the expansion stage saves allocation
+space but still performs the conversion for each projection call.
+
+A target-shape probe needs a
+cache-aware residency preflight and compact attention/scratch before launch;
+the existing 4 GiB probe cap and 15% host reserve remain in force. A full pilot
+also requires the missing pipeline components. The current request excludes
+full generation; a future pilot must be a separately scoped run.
+
+The opt-in MPS backend now replaces scalar-output projection reductions and the
+serial per-key attention loop. Its nine-token diagnostic command is still not a
+video benchmark. Next candidates are compact grouped/chunked MPS attention,
+shared serial weight/RMS stages and liveness-based scratch reuse. At J=6,560,
+one F32 `[B,H,J,J]` score-sized tensor is 2.565 GiB; the graph's opaque peak can
+exceed this, so a complete dense attention graph plus full block scratch is not
+admitted under the 4 GiB probe cap. Reducing this workspace is needed before a
+representative full-block measurement. Any attention grouping/chunking must
+repeat the same-input and chained BF16 gates: a different graph shape may select
+different reductions even though heads are mathematically independent.
+Remove repeated conditioning work only where the upstream input invariant proves
+the rows are identical. A shared conversion stage saves capacity but still
+expands each weight matrix: fourteen linears write about 576 MiB of F32 staging
+per block call. This is another candidate after target-shape phase timings.
+Quantization or fewer diffusion steps are separate quality-changing experiments;
+they are not implied by the present unchanged-tolerance arithmetic work.
+
+## MPS reduction intervention frontier, 2026-10-24 (initial falsifier)
+
+The initial falsifier was a native MPS projection/QK/softmax/PV/SDPA control on the
+same trusted frozen operands. The existing failing report remains the anchor:
+raw arithmetic passes, but small reduction differences can straddle BF16
+midpoints. The intervention must retain the original native report and failed
+gates, use unchanged finite and bitwise rounded gates, preserve input identities,
+allocate plans and scratch before encoding, and use one terminal wait per case.
+The completed intervention is recorded below; no default, weight policy or
+full-generation scope changes.
+
+Risk is CAUTION: changing graph rank, layout or materialized targets may select
+different MPS arithmetic. Standalone QK and frozen-score softmax must therefore
+remain distinct from internal SDPA intermediates. The custom online recurrence
+and prescaled paths remain explicitly identified controls. Rollback is omission
+of the opt-in test controls. DoD is a fresh guarded tiny and actual-weight
+comparison report with per-operation outcomes, unchanged native controls,
+zero tracked encode buffer allocations, one terminal wait, and cache-aware
+memory remaining above 15%. A parity claim is limited to the operation/case
+inventory that actually passes; the diagnostic's original failing exit is
+retained until all its comparison records pass.
+
 ## Same-input attention diagnostics, 2026-10-24
 
 This test-only slice freezes operands from the preceding trusted upstream
@@ -671,21 +770,145 @@ MPS operator semantics, geometry/dtype, native arithmetic, producer/validator,
 compiler, bridge, runtime/device or command scheduling. Artifact loss requires
 regeneration rather than trusting the summary counts.
 
+## Prepared MPS block result, 2026-10-24
+
+The new `HyNomasDualStreamBlock#encode_mps` is an explicit opt-in backend. It
+keeps activations and BF16/F32 weights resident, reuses setup-time plans and
+scratch, and preserves the existing native encoder and its recorded failures.
+The measured path is Crystal/Metal/MPSGraph; PyTorch is only the pinned fixture
+oracle. Risk remains CAUTION because graph rank, layout, constants and operation
+order affect reduction arithmetic. Rollback is to omit `hy_nomas_block_mps.cr`
+and its explicit backend; no default or tolerance was changed.
+
+### Causal controls and implementation
+
+Same-input MPS projection and QK controls remove the native reduction drift:
+96 raw projection records and 12 raw QK records, plus their corresponding
+rounded records, are bitwise equal to the declared MPS references on actual
+weights. Sixteen raw softmax and sixteen raw PV controls also match bitwise,
+as do their rounded records. Canonical MPS
+attention matches its oracle. Alternative scaling placements are retained as
+separate experiments; they are not promoted merely because their raw F32 error
+fits the finite gate. The original diagnostic still exits 1 on known native and
+alternative-path BF16 failures. This expected diagnostic failure is not a failed
+test of the new opt-in full block.
+
+Matching projections/attention alone did not close chained BF16 parity. Tiny
+upstream/native F32 differences before a BF16 midpoint altered later bins. Each
+intervention first ran on identical frozen operands; only the matching variant
+was then inserted into the block:
+
+- Non-affine LayerNorm follows the pinned PyTorch 2.8 single-row reduction and
+  variance arithmetic; eight frozen raw comparisons are bitwise equal.
+- Modulation and gated residual preserve separate products/additions instead of
+  FMA contraction; sixteen frozen comparisons are bitwise equal.
+- SiLU and tanh-GELU use setup-prepared MPSGraph plans with the pinned PyTorch
+  operation order, constant rank and graph shape. SiLU has four same-input
+  bitwise controls, repeated on one chain; eight frozen GELU controls match.
+- Q/K RMS uses the existing native square / MPSGraph mean / native normalization
+  path with fixed scratch; sixteen raw/rounded controls match. Video RoPE keeps
+  adjacent-pair products/additions separate; eight raw/rounded controls match.
+
+Prepared F32 projection stages accept BF16 resident weights via GPU conversion.
+There are fourteen fixed linear bindings per block. The MPS workspace owns its
+weight, head-major attention and RMS scratch; it is strongly rooted until an
+explicit release after the registered chain drains. Projection hooks require
+block preflight and obtain the encoder from that exact chain. Rejected early
+release, direct projection before preflight and RoPE after release are negative
+checks. A separate command-chain fix prevents a rejected pre-wait call from
+being mistaken for completed GPU work (`345378c0`).
+
+MPSGraph encodes use nonblocking execution descriptors. Encoder values are
+refreshed after graph pauses/resumes. The runtime gate asserts zero tracked
+encode-time `MetalBuffer` allocations and exactly one terminal wait per variant;
+all diagnostic reads occur afterward. This does not claim zero opaque MPSGraph
+allocation or zero internal driver/queue backpressure.
+
+### Final verification and evidence
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-mps-reductions-20261024/`.
+The block binary is `build/hy_nomas_block_spec-v11`, compiled from the committed
+Crystal source with the fresh command-chain, Hy-Nomas reductions/activation and
+Wan T5 linear/RMS bridge objects. Core bridge/stage objects are from the earlier
+`hy-nomas-native-20261024/build/` root. The current source/bridge revisions, trusted
+checkpoint and fixture digests must be retained together.
+
+Both the actual C2048/H16/D128/FF8192 checkpoint and the tiny configuration pass
+the BF16-boundary fixture: eight examples each, four cases (broadcast/per-token
+modulation crossed with BF16/F32 weight residency), 536 finite comparisons per
+fixture, no violations. Each case encodes a first block, a second block consuming
+its resident output, a repeat of the first bindings and perturbed video input.
+For actual weights all 480 saved first/chained/perturbed checkpoint arrays are
+raw-F32 bitwise equal; all 72 selected BF16 boundary arrays have zero bit
+mismatches. This is evidence for these fixtures, not a universal bitwise promise.
+Receipts: `logs/block-{real,tiny}-v11-guard.jsonl` and corresponding
+`-comparisons.txt` reports. The unchanged finite gate is still
+`2e-5 + 2e-5*abs(reference)` and the BF16 boundary gate is still bitwise.
+
+Frozen RMS/RoPE evidence is in `logs/attention-real-v5-comparisons.jsonl`;
+same-input projection/QK evidence is in `logs/{tiny,real}-v1-comparisons.jsonl`.
+The SiLU reference producer validates source fixture identity and extracts only
+the four frozen modulation inputs; it does not load a checkpoint or instantiate
+a model. Its references are `pointwise-{tiny,real}-v1.json` (SHA-256 below).
+Native same-input SiLU controls and serial plan reuse are in
+`logs/pointwise-real-v6-comparisons.jsonl` and its guard receipt.
+
+```text
+pointwise-tiny-v1.json d8a9070b87ca4f99ca47ef7695514fc3d9ea6fe567c374b3e05211dab70be2a1
+pointwise-real-v1.json 8184c4c0e6e3293d0ed0b947f092c88d9c4fb08ef2834ffe87fe13ed774b90af
+```
+
+To replay the completed MPS block slice, use the guarded build/link commands
+above including `wan_t5_rms_mps_bridge.o`. Run each trusted F32 or BF16-boundary
+fixture serially with `HY_NOMAS_BLOCK_MPS=1`,
+`HY_NOMAS_NORM_CONTROLS=1`, `HY_NOMAS_MODULATION_CONTROLS=1`, and
+`HY_NOMAS_ACTIVATION_CONTROLS=1`, plus the independently pinned fixture/checkpoint
+digests and a fresh `HY_NOMAS_REPORT`. Native-default regression uses
+`HY_NOMAS_BLOCK_MPS=0 HY_NOMAS_ACTIVATION_CONTROLS=0` on an F32 fixture. Setting
+activation graph controls without the MPS chain is rejected. The same-input
+attention diagnostic retains its expected failing exit and original records.
+
+Verdict: correlated MiniQuad ROBUST for the supported `encode_mps` fixture
+contract, binding/lifetime guards and successful-path synchronization. This
+does not certify CUDA/Magi output dtype or FlashAttention reduction, all-BF16
+activations, camera/history/streaming, video quality, target-shape performance or
+the full pipeline. Refresh after scoped source, operand/checkpoint, graph rank or
+layout, precision policy, bridge/compiler, PyTorch/MPS/OS/device or scheduling
+changes. Missing evidence requires reproduction; a new failure reopens this gate.
+
+The final F32 fixtures also pass through `encode_mps`: eight examples and 536
+finite comparisons each for actual and tiny weights. All 480 saved checkpoint
+arrays per fixture are raw-F32 bitwise equal. The original native-default F32
+actual-weight regression still passes eight examples and 488 comparisons under
+the same finite gate. Reports/receipts are
+`logs/block-{real,tiny}-f32-v11-*` and `logs/block-native-f32-v11-*`.
+The producer's offline structure self-test, Crystal format checks and exact-diff
+whitespace check pass. The one final formatting-only change to
+`spec/support/hy_nomas_modulation_controls.cr` does not alter its operations.
+
+The final five block runs completed with zero swap growth, sampled process-group
+footprints below the 4 GiB cap (maximum 3541.144 MiB) and minimum cache-aware host
+headroom of 24.532%, above the unchanged 15% floor. Sampling cannot exclude
+between-poll peaks; file-backed cache is an estimate of reclaimable memory,
+not guaranteed immediately free pages. Build/probe receipts retain these guard
+limitations. macOS 26.6.2, Apple M2 Max, Crystal 1.22.1, PyTorch 2.8.0 oracle.
+No full checkpoint/model/pipeline was allocated. The nine-token command timings
+include repeated blocks and diagnostics with different native/MPS controls;
+they are not paired block throughput measurements or evidence for video speed.
+
 ## Continuation
 
 Active goal: native Hy-Nomas port, initially one proven DiT block. Return pointer:
 Wan performance work remains at `docs/wan-performance-frontier.md`, commit
 `e22fc2ba`; no Wan default has been changed. Confirmed frontier: one actual
-checkpoint block passes the F32-math control with both weight residencies.
-Frozen-input diagnostics retain BF16 projection/attention failures: QK score
-substitution resolves index 10120, while index 9949 requires a broader
-score-to-output arithmetic investigation. Next discriminator: compare native
-projection/QK reductions with MPS and isolate normalization/PV with frozen MPS
-probabilities. Preserve all failed boundary records and the original gate.
-Exact CUDA/Magi output dtype
-and BF16 activation semantics remain unresolved. Then measure MPS GEMM/attention
-at representative token counts before full-model residency, camera/history
-and PixelUMM. Standing authority remains bounded GPU probes under the 15% floor
+checkpoint block now passes the declared F32 and BF16-boundary MPS controls with
+both weight residencies and chained GPU outputs. Historical native failures and
+all gates remain retained. Exact CUDA/Magi output dtype and BF16 activation
+semantics remain unresolved. Next discriminator: compact grouped/chunked
+attention with same-input/chained parity, then native phase/total timings at
+J=6,560 against the 277.8 ms necessary block ceiling. Share serial stages and
+liveness scratch before full-model residency, camera/history and PixelUMM.
+Standing authority remains bounded GPU probes under the 15% floor
 and sampled 4 GiB cap; full generation is outside this slice.
 Refresh evidence after source, fixture, geometry, numerical policy, compiler,
 native bridge, SDK/OS/device or command-scheduling changes.

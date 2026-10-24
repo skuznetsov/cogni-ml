@@ -4,7 +4,10 @@ require "spec"
 require "json"
 require "digest/sha256"
 require "./support/video_allocation_counter"
-require "../src/ml/video/hy_nomas_block"
+require "./support/hy_nomas_norm_controls"
+require "./support/hy_nomas_modulation_controls"
+require "./support/hy_nomas_activation_controls"
+require "../src/ml/video/hy_nomas_block_mps"
 
 private def hy_config : ML::Video::HyNomasConfig
   ML::Video::HyNomasConfig.new(
@@ -112,10 +115,16 @@ private def hy_compare(actual : Array(Float32), expected : JSON::Any, label : St
   violations = 0
   max_abs = 0.0_f32
   max_ratio = 0.0_f32
+  bitwise_mismatches = 0
+  first_bit_difference = nil.as(Int32?)
   first_violation = nil.as(String?)
   Math.min(actual.size, reference.size).times do |index|
     value = actual[index]
     target = reference[index]
+    if value.unsafe_as(UInt32) != target.unsafe_as(UInt32)
+      bitwise_mismatches += 1
+      first_bit_difference ||= index
+    end
     unless value.finite? && target.finite?
       violations += 1
       first_violation ||= " first_index=#{index} actual=#{value} reference=#{target}"
@@ -131,7 +140,7 @@ private def hy_compare(actual : Array(Float32), expected : JSON::Any, label : St
     end
   end
   passed = actual.size == reference.size && violations == 0
-  detail = "#{label} n=#{actual.size}/#{reference.size} violations=#{violations} max_abs=#{max_abs} max_gate_ratio=#{max_ratio}#{first_violation}"
+  detail = "#{label} n=#{actual.size}/#{reference.size} violations=#{violations} max_abs=#{max_abs} max_gate_ratio=#{max_ratio} bitwise_mismatches=#{bitwise_mismatches} first_bit_index=#{first_bit_difference}#{first_violation}"
   reports << detail
   failures << detail unless passed
 end
@@ -181,6 +190,7 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
   sidecar = hy_sidecar(fixture_path, manifest)
   source_dtype = ML::GGUF::SafeTensorDType.parse(manifest["dtype"].as_s)
   resident_dtype = ML::Video::WeightDType.parse(variant["resident_dtype"].as_s)
+  case_label = "#{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}"
   allow_conversion = variant["allow_f32_to_bf16"].as_bool
   variant["attention_precision"].as_s.should eq(fixture["scope"]["attention_precision"].as_s)
   replay = variant["attention_replay"]
@@ -202,6 +212,22 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
   file = ML::Video::CheckpointFile.new(sidecar)
   arenas = [] of ML::Video::Arena
   prepared = nil.as(ML::Video::PreparedWeights?)
+  submission = nil.as(ML::Metal::MPSCommandChain?)
+  workspaces = [] of ML::Video::HyNomasMPSWorkspace
+  retained_workspaces_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
+  replay_plan = nil.as(ML::Video::HyNomasAttentionMPSPlan?)
+  mps_mode = ENV["HY_NOMAS_BLOCK_MPS"]? || "0"
+  {"0", "1"}.includes?(mps_mode).should be_true
+  norm_mode = ENV["HY_NOMAS_NORM_CONTROLS"]? || "0"
+  {"0", "1"}.includes?(norm_mode).should be_true
+  norm_control = norm_mode == "1" ? HyNomasNormProbe::Controls.new(config.dim, config.norm_eps) : nil
+  modulation_mode = ENV["HY_NOMAS_MODULATION_CONTROLS"]? || "0"
+  {"0", "1"}.includes?(modulation_mode).should be_true
+  modulation_control = nil.as(HyNomasModulationControls?)
+  activation_mode = ENV["HY_NOMAS_ACTIVATION_CONTROLS"]? || "0"
+  {"0", "1"}.includes?(activation_mode).should be_true
+  raise ArgumentError.new("Activation graph controls require the MPS command chain") if activation_mode == "1" && mps_mode != "1"
+  activation_control = nil.as(HyNomasActivationControls?)
   begin
     allocation_count = ML::MetalBuffer.video_spec_allocations
     expect_raises(ArgumentError, /memory budget/) do
@@ -236,6 +262,16 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     inputs.alloc("attention_replay.rounded", joint_count)
     inputs.alloc("attention_replay.img", config.image_rows * config.dim)
     inputs.alloc("attention_replay.txt", config.text_rows * config.dim)
+    if norm_control
+      inputs.alloc("norm_control.img", config.image_rows * config.dim)
+      inputs.alloc("norm_control.txt", config.text_rows * config.dim)
+    end
+    if modulation_mode == "1"
+      modulation_control = HyNomasModulationControls.new(config, inputs, variant, data)
+    end
+    if activation_mode == "1"
+      activation_control = HyNomasActivationControls.new(config, inputs, variant)
+    end
     {first_scratch, chain_scratch, perturbed_scratch}.each do |scratch|
       ML::Video::HyNomasDualStreamBlock.prepare_scratch!(scratch, config)
     end
@@ -255,16 +291,56 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
         "every named intermediate must have an upstream reference"
     end
 
+    if mps_mode == "1"
+      workspaces << ML::Video::HyNomasMPSWorkspace.new(first,
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      workspaces << ML::Video::HyNomasMPSWorkspace.new(chain,
+        first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      workspaces << ML::Video::HyNomasMPSWorkspace.new(perturbed,
+        inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 3)
+      replay_plan = ML::Video::HyNomasAttentionMPSPlan.new(config.batches, config.joint_tokens,
+        config.heads, config.head_dim, inputs["attention_replay.query"], inputs["attention_replay.key"],
+        inputs["attention_replay.value"], inputs["attention_replay.raw"])
+    end
     allocations_before_encode = ML::MetalBuffer.video_spec_allocations
-    command = ML::Metal::CommandBuffer.new
-    encoder = ML::Metal::ComputeEncoder.new(command)
+    command = nil.as(ML::Metal::CommandBuffer?)
+    encoder = if mps_mode == "1"
+                submission = ML::Metal::MPSCommandChain.new
+                submission.not_nil!.encoder
+              else
+                command = ML::Metal::CommandBuffer.new
+                ML::Metal::ComputeEncoder.new(command.not_nil!)
+              end
+    if mps_mode == "1"
+      operation = first.mps_linear_operations.first
+      expect_raises(ArgumentError, /preflight/) do
+        workspaces[0].project(submission.not_nil!, operation.name, operation.input,
+          operation.weights, operation.output, operation.rows, operation.input_dim,
+          operation.output_dim)
+      end
+    end
     prepared.not_nil!.encode(encoder)
+    if norm = norm_control
+      norm.encode(encoder, inputs["img"], inputs["norm_control.img"], config.image_rows)
+      norm.encode(encoder, inputs["txt"], inputs["norm_control.txt"], config.text_rows)
+    end
+    modulation_control.try(&.encode(encoder))
+    if control = activation_control
+      control.encode(submission.not_nil!)
+      encoder = submission.not_nil!.encoder
+    end
     # Isolate attention on the exact upstream Q/K/V. No F32 pre-attention drift
     # can cross a BF16 midpoint and contaminate this independent discriminator.
-    ML::Video::MetalOps.attention(encoder,
-      inputs["attention_replay.query"], inputs["attention_replay.key"], inputs["attention_replay.value"],
-      inputs["attention_replay.raw"], config.joint_tokens, config.joint_tokens,
-      config.heads, config.head_dim, config.batches)
+    if mps_mode == "1"
+      replay_plan.not_nil!.encode(submission.not_nil!)
+      encoder = submission.not_nil!.encoder
+    else
+      ML::Video::MetalOps.attention(encoder,
+        inputs["attention_replay.query"], inputs["attention_replay.key"], inputs["attention_replay.value"],
+        inputs["attention_replay.raw"], config.joint_tokens, config.joint_tokens,
+        config.heads, config.head_dim, config.batches)
+    end
     ML::Video::MetalOps.copy(encoder, inputs["attention_replay.raw"], inputs["attention_replay.rounded"], joint_count)
     encoder.set_pipeline(ML::Video::HyNomasDualStreamBlock.pipeline("hy_nomas_split_f32"))
     encoder.set_buffer(inputs["attention_replay.rounded"], 0, ML::Metal::BufferAccess::ReadWrite)
@@ -277,39 +353,102 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     expect_raises(ArgumentError, /alias/) do
       first.encode(encoder, first.image_output, inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
     end
-    first.encode(encoder, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
-    chain.encode(encoder, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
-    # The second first-block encode must overwrite all scratch deterministically.
-    first.encode(encoder, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
-    perturbed.encode(encoder, inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
-    encoder.end_encoding
+    if mps_mode == "1"
+      expect_raises(ArgumentError) do
+        first.encode_mps(submission.not_nil!, first.image_output, inputs["txt"], inputs["vec"],
+          inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
+      end
+      first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
+      chain.encode_mps(submission.not_nil!, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[1])
+      # Repeat the same prepared bindings; no state or scratch may accumulate.
+      first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
+      perturbed.encode_mps(submission.not_nil!, inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[2])
+      expect_raises(ArgumentError, /Complete/) { workspaces[0].release }
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 3)
+    else
+      first.encode(encoder, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      chain.encode(encoder, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      first.encode(encoder, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      perturbed.encode(encoder, inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+      encoder.end_encoding
+    end
     ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_encode),
       "encode must not allocate even a temporary MetalBuffer"
-    gpu_seconds = command.commit_and_wait_gpu_elapsed_seconds
+    gpu_seconds = if mps_mode == "1"
+                    submission.not_nil!.commit_and_wait
+                    submission.not_nil!.wait_count.should eq(1)
+                    submission.not_nil!.gpu_elapsed_seconds
+                  else
+                    command.not_nil!.commit_and_wait_gpu_elapsed_seconds
+                  end
     # All activation reads occur after this one existing terminal wait.
     snapshots = hy_snapshots(first)
     chain_snapshots = hy_snapshots(chain)
     perturbed_snapshots = hy_snapshots(perturbed)
     failures = [] of String
     reports = [] of String
+    if control = activation_control
+      control.snapshots.each do |stream, actual|
+        expected = variant["checkpoints"]["#{stream}.ff.activated"]
+        label = "#{case_label}/activation_control/#{stream}/gelu_tanh"
+        hy_compare(actual, expected, label, failures, reports)
+        reference = hy_floats(expected)
+        mismatches = actual.zip(reference).count { |left, right| left.unsafe_as(UInt32) != right.unsafe_as(UInt32) }
+        failures << "#{label} raw F32 bit mismatches=#{mismatches}" unless actual.size == reference.size && mismatches == 0
+      end
+    end
+    if control = modulation_control
+      control.snapshots.each do |name, actual|
+        stream, kind, mode = name.split('.')
+        checkpoint = kind == "modulate" ? "#{stream}.attn.modulated" : "#{stream}.after_attention"
+        hy_compare(actual, variant["checkpoints"][checkpoint],
+          "#{case_label}/modulation_control/#{name}", failures, reports)
+        if mode == "uncontracted"
+          reference = hy_floats(variant["checkpoints"][checkpoint])
+          unless actual.size == reference.size && actual.zip(reference).all? { |left, right| left.unsafe_as(UInt32) == right.unsafe_as(UInt32) }
+            failures << "#{case_label}/modulation_control/#{name} must match frozen upstream inputs bitwise"
+          end
+        end
+      end
+    end
+    if norm_control
+      {"img" => config.image_rows, "txt" => config.text_rows}.each do |stream, rows|
+        actual = inputs["norm_control.#{stream}"].read(rows * config.dim)
+        expected = variant["checkpoints"]["#{stream}.attn.norm"]
+        label = "#{case_label}/norm_control/#{stream}"
+        hy_compare(actual, expected, label, failures, reports)
+        mismatches = actual.zip(hy_floats(expected)).count { |left, right| left.unsafe_as(UInt32) != right.unsafe_as(UInt32) }
+        failures << "#{label} raw F32 bit mismatches=#{mismatches}" unless mismatches == 0
+      end
+    end
     hy_compare(inputs["attention_replay.raw"].read(joint_count), replay["attention_f32"],
-      "#{data["name"]}/#{manifest["dtype"]}/attention_replay/f32", failures, reports)
+      "#{case_label}/attention_replay/f32", failures, reports)
     hy_compare(inputs["attention_replay.rounded"].read(joint_count), replay["attention"],
-      "#{data["name"]}/#{manifest["dtype"]}/attention_replay/post_boundary", failures, reports)
+      "#{case_label}/attention_replay/post_boundary", failures, reports)
     {"first"     => {snapshots, variant["checkpoints"]},
      "chain"     => {chain_snapshots, variant["chain_expected"]["checkpoints"]},
      "perturbed" => {perturbed_snapshots, variant["video_perturbation"]["checkpoints"]}}.each do |group, pair|
       values, expected = pair
       expected.as_h.each do |name, reference|
-        hy_compare(values[name], reference, "#{data["name"]}/#{manifest["dtype"]}/#{group}/#{name}", failures, reports)
+        hy_compare(values[name], reference, "#{case_label}/#{group}/#{name}", failures, reports)
+        if config.attention_precision.bf16_boundary_control? &&
+           {"joint.query", "joint.key", "joint.value", "joint.attention", "img.attn.raw", "txt.attn.raw"}.includes?(name)
+          reference_bits = hy_floats(reference).map(&.unsafe_as(UInt32))
+          actual_bits = values[name].map(&.unsafe_as(UInt32))
+          mismatches = actual_bits.zip(reference_bits).count { |left, right| left != right }
+          detail = "boundary_bits #{case_label}/#{group}/#{name} mismatches=#{mismatches} n=#{actual_bits.size}/#{reference_bits.size}"
+          reports << detail
+          failures << detail unless actual_bits.size == reference_bits.size && mismatches == 0
+        end
       end
       if config.attention_precision.bf16_boundary_control?
-        hy_boundary_diagnostics(config, values, expected, "#{data["name"]}/#{manifest["dtype"]}/#{group}", reports)
+        hy_boundary_diagnostics(config, values, expected, "#{case_label}/#{group}", reports)
       end
     end
-    comparison_count = reports.count { |line| !line.starts_with?("boundary_input ") }
+    comparison_count = reports.count { |line| !line.starts_with?("boundary_input ") && !line.starts_with?("boundary_bits ") }
     origin = variant["weights_are_synthetic"].as_bool ? "synthetic" : "checkpoint"
-    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
+    workspace_bytes = workspaces.sum(&.resident_bytes)
+    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: backend=#{mps_mode == "1" ? "mps" : "native"} comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} mps_workspace_bytes=#{workspace_bytes} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} terminal_waits=1 gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
     STDERR.puts summary
     if report_path = ENV["HY_NOMAS_REPORT"]?
       File.open(report_path, "a") do |report|
@@ -326,9 +465,34 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
       "the chained block must consume the first block's resident output"
     failures
   ensure
-    prepared.try(&.release)
-    file.close
-    arenas.reverse_each(&.release)
+    begin
+      submission.try { |pending| pending.commit_and_wait unless pending.completed? }
+    ensure
+      # A failed drain may leave GPU work in flight. Retain its resources in
+      # that case; a completed chain, including a terminal GPU error, is safe
+      # to clean up. The external guard remains the final process boundary.
+      if submission.nil? || submission.not_nil!.completed?
+        begin
+          activation_control.try { |control| control.release(submission) }
+          submission.try(&.release)
+        ensure
+          replay_plan.try(&.release)
+          workspaces.reverse_each(&.release_after_terminal_wait!)
+          if !workspaces.empty? && (expired_encoder = encoder) && (bound_inputs = inputs)
+            # Invalid geometry prevents any dispatch if the released guard
+            # regresses; the expired encoder must never be touched here.
+            expect_raises(ArgumentError, /released/) do
+              workspaces[0].rope(expired_encoder, bound_inputs["img"], bound_inputs["txt"],
+                bound_inputs["video_cos"], bound_inputs["video_sin"], 0)
+            end
+          end
+          ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before)
+          prepared.try(&.release)
+          file.close
+          arenas.reverse_each(&.release)
+        end
+      end
+    end
   end
 end
 
@@ -572,6 +736,6 @@ describe ML::Video::HyNomasDualStreamBlock do
         failures.concat(hy_run_variant(fixture, data, variant, fixture_path.not_nil!))
       end
     end
-    failures.empty?.should be_true, failures.join("\n")
+    failures.empty?.should be_true, failures.first(16).join("\n")
   end
 end

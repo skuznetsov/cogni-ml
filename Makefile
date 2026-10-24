@@ -29,14 +29,15 @@ WAN_T5_MPS_OBJ := $(BUILD_DIR)/wan_t5_mps_bridge.o
 WAN_T5_RMS_MPS_OBJ := $(BUILD_DIR)/wan_t5_rms_mps_bridge.o
 WAN_T5_ATTENTION_MPS_OBJ := $(BUILD_DIR)/wan_t5_attention_mps_bridge.o
 WAN_ATTENTION_MPS_OBJ := $(BUILD_DIR)/wan_attention_mps_bridge.o
+HY_NOMAS_MPS_OBJ := $(BUILD_DIR)/hy_nomas_mps_reductions.o
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
-WAN_SPEC_OBJS := $(if $(IS_DARWIN),$(WAN_MPS_OBJS),)
+WAN_SPEC_OBJS := $(if $(IS_DARWIN),$(WAN_MPS_OBJS) $(HY_NOMAS_MPS_OBJ),)
 WAN_SPEC_LINK_FLAGS := $(if $(IS_DARWIN),-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -fuse-ld=/usr/bin/ld,)
 WAN_BENCHMARK_SOURCES := $(wildcard src/ml/video/*.cr src/ml/metal/*.cr src/ml/gguf/*.cr src/ml/*.cr) spec/support/video_allocation_counter.cr
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec_video_staging spec_wan spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec_video_staging spec_wan spec_hy_nomas spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -65,6 +66,10 @@ $(WAN_ATTENTION_MPS_OBJ): src/ml/video/wan_attention_mps_bridge.mm | $(BUILD_SEN
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
+$(HY_NOMAS_MPS_OBJ): src/ml/video/hy_nomas_mps_reductions_bridge.mm | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "Hy-Nomas MPS requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
 $(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS command chain requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
@@ -86,6 +91,11 @@ spec: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 spec_wan: $(BRIDGE_OBJ) $(WAN_MPS_OBJS)
 	$(CRYSTAL) spec $(wildcard spec/wan*_spec.cr) $(wildcard spec/video_*_spec.cr) \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
+
+spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ)
+	$(CRYSTAL) spec spec/hy_nomas_block_spec.cr spec/hy_nomas_attention_probe_spec.cr \
+		spec/hy_nomas_pointwise_probe_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 $(BUILD_DIR)/wan_s2v_projection_benchmark: examples/wan_s2v_projection_benchmark.cr $(WAN_BENCHMARK_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \

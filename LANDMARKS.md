@@ -6,6 +6,48 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-MPS-BLOCK-2026-10-24] Opt-in MPS closes the declared BF16 boundary gate
+
+- `HyNomasDualStreamBlock#encode_mps` uses prepared resident MPS projections and
+  canonical attention, matching LayerNorm/SiLU/GELU/RMS and uncontracted
+  modulation/residual/RoPE arithmetic. Same-input actual-weight projection,
+  QK, softmax and PV raw/rounded controls are bitwise equal. Projection/QK
+  replacement alone was insufficient; tiny pre-boundary drift propagated
+  through chained BF16 bins. Frozen controls isolated each subsequent change.
+- Final guarded `hy_nomas_block_spec-v11` runs pass the actual C2048/H16/D128/
+  FF8192 block and tiny configuration under both F32 and BF16-boundary policies,
+  four modulation/residency cases per fixture, eight examples and 536 finite
+  comparisons per run. All 480 saved checkpoint arrays per fixture are raw-F32
+  bitwise equal, including the second block consuming resident first outputs.
+  Both BF16 fixtures have zero mismatches over 72 selected boundary arrays.
+  The native-default actual F32 regression passes eight examples/488 comparisons.
+- Supported encode asserts zero tracked MetalBuffer allocations and one terminal
+  wait per case; all reads follow it. Strong workspace retention and bound-chain
+  projection hooks prevent premature scratch release; negative preflight,
+  early-release and post-release RoPE checks pass. The preceding chain fix
+  `345378c0` distinguishes rejected pre-wait calls from a drained GPU chain.
+  No zero-opaque-allocation or no-driver-stall claim is made.
+- Final five block runs: maximum sampled group footprint 3541.144 MiB, minimum
+  cache-aware headroom 24.532%, zero swap growth. The 4 GiB sampled cap, 15%
+  floor, 64 MiB swap stop and 600 s deadline remain. Correlated MiniQuad verdict:
+  ROBUST for this supported fixture/binding/lifetime contract. The original
+  failing native/alternative diagnostic remains retained; no tolerance or
+  native default changed. CUDA/Magi/all-BF16 parity is not established.
+- No full generation or representative throughput measured. One 24-frame prefix
+  needs J=6560 and 432 DiT calls at default 8 steps; the two-minute ceiling leaves
+  less than 277.8 ms per block before other work. Current named scratch is
+  1.682 GiB/block; MPS stages add 404.3 MiB/block and a dense score is 2.565 GiB.
+  Next: compact grouped/chunked attention with unchanged chained parity, shared
+  liveness scratch/stages, then representative phase/whole-block timing. Full
+  pipeline, camera/history and PixelUMM remain open; no speed promise follows
+  from nine-token correctness timings.
+- Evidence/pins/reproduction/decay:
+  `docs/hy-nomas-native-frontier.md`, prepared MPS block section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-mps-reductions-20261024/`.
+  Refresh on scoped source, checkpoint/fixture/operands, graph rank/layout,
+  precision, bridge/compiler/PyTorch/MPS/OS/device/schedule changes or artifact
+  loss. Wan return pointer: `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-BF16-LOCAL-2026-10-24] Same-input probes separate projection and attention drift
 
 - Test-only probes at parent `bd0bf23a` freeze trusted upstream block0 operands.
