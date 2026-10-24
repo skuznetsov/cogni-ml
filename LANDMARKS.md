@@ -6,6 +6,53 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-COMPACT-ATTENTION-2026-10-24] Bounded attention is opt-in; C256 is the tested long-input candidate
+
+- Prepared Metal/MPS attention packs K/V once per encode, reuses fixed smaller
+  Q/output stages and overlaps the final query window to preserve its graph
+  shape. No internal wait or tracked encode MetalBuffer allocation is added.
+  The canonical dense default is unchanged; omit the two workspace keywords
+  to roll back. Named stages at B1/J6560/H16/D128/C256 are 106.5 MiB versus
+  205 MiB dense; largest logical score is 102.5 MiB versus 2626.5625 MiB.
+  These are geometry bounds, not an opaque peak-memory bound.
+- Workspace admission rejects grouped heads, B>1 partial chunks and C<32
+  partial chunks before allocation. Their low-level diagnostics remain
+  available and failed receipts are retained: B2/T65/H16/D128/C32 has only
+  5.9604645e-8 max error but 17 BF16-bin mismatches. Guards reject known
+  counterexamples; they do not qualify every remaining shape/input.
+- F32 and BF16-rounded standalone controls each pass 19 examples/48 dense
+  comparisons under the unchanged finite and exact BF16-bin gates. Each has
+  45/48 raw-F32 exact comparisons; T65/C32 drift reaches 5.2154064e-8 without
+  a finite or BF16-bin violation. The pinned PyTorch 2.8 MPS oracle matches
+  C128/G16 over full T257 outputs and
+  three selected 128-row outputs at T6560 with full K/V. This is not a full
+  T6560 upstream output or CUDA/Magi parity claim. Four compact block fixture
+  runs (actual/tiny, F32/BF16 boundary controls) pass 8 examples/536 finite
+  comparisons/480 raw-exact checkpoint arrays each; BF16 fixtures also match
+  72 boundary arrays. C=T=9 integration establishes bindings/lifetime only.
+  Dense tiny-F32 regression and direct constructor rejection checks pass.
+- Guarded paired native timings at J6560: C128 -> C256 median wall
+  66.784 -> 61.589 ms initially, 68.467 -> 62.277 ms from a fresh Makefile
+  build. The gain has the same sign in all eight pairs. C512 is slower on
+  GPU despite cheaper encoding. A/A GPU ratios stay within 0.9955..1.0055
+  in the Makefile run, while wall ratios 0.8273..1.0445 expose outside-span
+  latency. Do not promote a universal speedup or infer video throughput.
+- Five final block runs: max sampled group footprint 3412.112 MiB, min
+  cache-aware headroom 19.379%, zero swap growth. Every reported run uses an
+  external guard; the benchmark itself only estimates geometry. The 4 GiB
+  sampled cap, 15% floor, 64 MiB swap-growth stop and 600 s deadline remain.
+  Correlated MiniQuad verdict: ROBUST within the exercised numerical,
+  constructor and ownership contracts; general admission and wall-speed
+  claims remain limited. No full model/generation was run.
+- Evidence/pins/commands/source and binary hashes:
+  `docs/hy-nomas-native-frontier.md`, compact attention section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-attention-20261024/logs/final-receipt-v1.json`.
+  Next: J6560 phase/whole-block timing with C256 and paired A/A, then shared
+  serial stages/liveness scratch before full-model residency. Refresh after
+  scoped source, fixture/operands/geometry, precision, compiler/bridge,
+  PyTorch/MPS/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-MPS-BLOCK-2026-10-24] Opt-in MPS closes the declared BF16 boundary gate
 
 - `HyNomasDualStreamBlock#encode_mps` uses prepared resident MPS projections and

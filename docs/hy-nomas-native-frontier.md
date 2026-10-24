@@ -896,19 +896,190 @@ No full checkpoint/model/pipeline was allocated. The nine-token command timings
 include repeated blocks and diagnostics with different native/MPS controls;
 they are not paired block throughput measurements or evidence for video speed.
 
+## Compact attention slice, 2026-10-24 (explicit opt-in)
+
+`HyNomasCompactAttentionMPSPlan` and its native bridge pack K/V once per encode
+into fixed BHTD buffers. Fixed smaller Q/output stages are reused serially. Each
+chunk runs the same rank-4 QK -> epsilon -> scale -> softmax -> PV graph. All
+bindings, offset views, graphs and execution descriptors are prepared before
+encoding. The canonical dense plan remains the default/control; rollback is to
+omit the new workspace keywords (`attention_query_chunk` and
+`attention_heads_per_group`, both zero by default).
+
+Every query graph has exactly C rows. The last window begins at `T-C` when a
+short tail would otherwise remain: independent attention rows are recomputed
+and overwritten on the GPU. This preserves the prepared graph shape, at the
+cost of at most C-1 redundant rows. No mask, causal, camera or history semantics
+are introduced. MPS command roots are refreshed after graph encoding before
+subsequent native gather/scatter work. Explicit release requires the latest
+chain to be drained; abandoned compact plans deliberately stay strongly
+retained until release/process exit.
+
+The workspace rejects known reduction counterexamples before device allocation:
+G must equal H; partial chunks require B=1 and C>=32. These are guards against
+observed failures, not a proof for every admitted dimension or activation.
+The general standalone constructor retains grouped/multi-batch/short-chunk
+variants for diagnostics only. No compact default is promoted.
+
+### Numerical falsifiers and measured scope
+
+Changing graph shape can change MPS reduction order. G4 at T129/T257 and C4 at
+T9 have BF16-RNE counterexamples under the unchanged gate. Adding a B2/T65/H16/
+D128/C32/G16 test found another: max F32 error `5.9604645e-8`, but 17 BF16 bins
+differ. That partial multi-batch case is now rejected by workspace admission.
+Its failed receipt is retained as `logs/compact-overlap-v6-f32-*`.
+`HY_NOMAS_COMPACT_GROUP_DIAGNOSTIC=1` explicitly reruns these counterexamples;
+this mode must fail the original gates, not become a passing qualification.
+
+Final standalone controls use full-index avalanche inputs rather than a short
+periodic pattern, changed GPU-resident Q/K/V, repeated encodes in one chain,
+a second completed-chain reuse, end canaries, binding/alias/size preflight and
+premature-release rejection. F32 and BF16-rounded inputs each pass 19 examples
+and 48 dense-versus-compact comparisons under the unchanged finite and exact
+BF16-bin gates (`logs/compact-overlap-v7-{f32,bf16}-*`). In each input policy,
+45/48 comparisons are also raw-F32 exact. The three T65/C32 first/changed/reuse
+records have raw-F32 drift up to `5.2154064e-8` with zero finite violations or
+BF16-bin differences. The B2/H3 partial-tail positive case exercises offsets
+without qualifying partial multi-batch use in the block workspace. The guard
+and retained plan-count checks also pass. Full block fixture runs also
+exercise the workspace constructor directly: grouped and partial short/multi-batch
+requests must reject before any tracked MetalBuffer or lifetime root is added.
+
+The independent synthetic oracle uses PyTorch 2.8.0 MPS, git
+`a1cb3cc05d46d198467bebbb6e8fba50a325d4e7`, with CPU fallback disabled. Producer
+`spec/support/hy_nomas_compact_attention_reference.py` SHA-256 is
+`d5f5a4d8ac0a75f719470e532d57ca0a45b6a5cabe03bc399cf6c787647a670f`.
+The verified [upstream Attention.mm](https://github.com/pytorch/pytorch/blob/v2.8.0/aten/src/ATen/native/mps/operations/Attention.mm)
+has SHA-256
+`167ee89bddb489c154b5d5ca72cf042745443f557d624fc48175f2d29f45a351`.
+The producer/consumer pin manifests, binary outputs, runtime/source provenance,
+input formula, shapes and per-record byte ranges before device allocation.
+
+For both F32 and BF16-rounded Q/K/V, C128/G16 matches the full upstream T257
+output (526,336 values) and three selected 128-row outputs with full K/V length
+6,560 (786,432 values, starts 0/3,200/6,432). These are raw-F32 bitwise equal.
+The latter is a selected-row reference, not a full-Q6560 upstream graph or an
+end-to-end model oracle. PyTorch is used only to create fixtures; the measured
+native path does not contain PyTorch.
+
+The block fixture matrix covers actual C2048/H16/D128/FF8192 checkpoint weights
+and the tiny configuration, both F32 and BF16-boundary policies, both weight
+residencies, broadcast/per-token modulation, chained outputs and perturbed
+inputs. Integration uses C=T=9 (G16 actual/G2 tiny); it proves the workspace
+binding/lifetime integration, not a representative long-query block speed.
+Every finite comparison retains `2e-5 + 2e-5*abs(reference)` and selected BF16
+boundaries require exact bits. Each of the four final compact block runs passes
+eight examples, all 536 finite comparisons and all 480 raw-F32 checkpoint arrays;
+the two BF16 fixtures also match all 72 selected boundary arrays exactly. A dense
+MPS tiny-F32 default-path regression passes the same eight examples/536 comparisons.
+Encode paths assert zero tracked MetalBuffer
+allocations and one terminal wait per independent case. This does not bound
+opaque MPSGraph/driver allocations or hidden API stalls.
+
+### Native attention timing and memory geometry
+
+Release-mode, GPU-filled BF16-rounded inputs, H16/D128, warm plans, four serial
+paired repetitions in AB/BA/AB/BA order. Timing includes `plan.encode` through
+one terminal wait, including K/V packing and query gather/output scatter;
+setup/compilation, input fill and a separate GPU diagnostic are outside it.
+Only the diagnostic's five counters are copied to the CPU after completion.
+No synchronization was added inside production attention encode.
+
+| Build/run | Tokens | Arm A | Arm B | Median wall A/B (ms) | Median GPU A/B (ms) |
+| --- | ---: | --- | --- | ---: | ---: |
+| Initial | 1,024 | C128 | canonical dense | 3.260 / 2.557 | 2.654 / 2.150 |
+| Initial | 6,560 | C128 | C256 | 66.784 / 61.589 | 66.403 / 61.227 |
+| Initial | 6,560 | C256 | C512 | 61.479 / 62.646 | 61.121 / 62.318 |
+| Initial | 6,560 | C256 A/A | C256 A/A | 61.475 / 61.586 | 61.018 / 61.133 |
+| Makefile | 1,024 | C128 | canonical dense | 2.808 / 2.271 | 2.489 / 1.930 |
+| Makefile | 6,560 | C128 | C256 | 68.467 / 62.277 | 68.013 / 61.846 |
+| Makefile | 6,560 | C256 | C512 | 62.920 / 63.581 | 62.286 / 62.961 |
+| Makefile | 6,560 | C256 A/A | C256 A/A | 65.778 / 65.371 | 62.332 / 62.355 |
+
+C256 reduces observed long-input median wall time by 7.8% versus C128 in the
+initial run and 9.0% after a fresh Makefile build, with the same sign in all
+eight pairs. The initial C256 A/A within-pair wall ratios range from 0.9922 to
+1.0058. The Makefile A/A has wall outliers (ratios 0.8273 to 1.0445), while GPU
+ratios remain 0.9955 to 1.0055. One arm takes 83.5 ms wall with 62.7 ms reported
+GPU time. This is evidence of latency outside the reported GPU span; it does
+not isolate host scheduling from queue/API delays. Both runs are retained.
+C512 encodes faster on the CPU but takes longer on the GPU; its small advantage
+or disadvantage in wall time is vulnerable to these outliers. No default is
+selected from that margin. These are local attention measurements, not
+full-block/video throughput.
+The short dense control is faster; compact attention buys a bounded score
+shape for long sequences, not a universal speedup over dense MPS.
+All arm comparisons have zero nonfinite values, finite violations and BF16
+bin mismatches, and maximum absolute error zero over every output value.
+The long-input full-output parity chain is transitive: C128 versus C256 in one
+run, then C256 versus C512 in a separate run on the same generated inputs.
+Independent upstream evidence for C128 is limited to the selected rows above.
+
+| J=6,560, B1/H16/D128 | Named stages (MiB) | Largest score (MiB) | Graph calls |
+| --- | ---: | ---: | ---: |
+| Dense | 205.0 | 2,626.5625 | 1 |
+| C128/G16 | 104.5 | 51.25 | 52 |
+| C256/G16 | 106.5 | 102.5 | 26 |
+| C512/G16 | 110.5 | 205.0 | 13 |
+
+Named stages are `2*B*H*(T+C)*D*4`; score shape is `G*C*T*4` bytes. They are not
+opaque peak-memory bounds. The benchmark preflight estimates named buffers,
+three score-sized reserves per arm and a 256 MiB opaque reserve; it rejects the
+J6560 dense comparison before Arena creation under the 4 GiB estimate. A fit
+is only a geometry estimate. The external guard is still mandatory for every
+run and is not enforced by the benchmark executable itself.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-attention-20261024/`.
+`logs/*-argv.json` stores exact final commands; fixture pins and source/object/
+binary hashes are indexed by `logs/final-receipt-v1.json`. Positive runs and
+expected-failing counterexamples have separate outputs and guard logs. Every
+reported run uses the unchanged sampled 4 GiB maximum (smaller caps for small
+probes/builds), cache-aware 15% host floor, 64 MiB system swap-growth stop and
+600 s deadline. The five final block runs (`logs/constructor-v4-*`) have a
+maximum sampled group footprint of 3412.112 MiB, minimum cache-aware headroom
+19.379% and zero swap growth. Sampling can miss short peaks; reclaimable
+file-backed cache is an estimate, not guaranteed immediately free pages.
+The fresh Makefile release target also builds successfully under the guard;
+its four benchmark runs use the exact final benchmark source and bridge.
+
+Rebuild the benchmark with the Makefile target below inside the same external
+guard, with TMPDIR and CRYSTAL_CACHE_DIR on the SSD:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-compact-rebuild \
+  /opt/mldata_ssd/cogni-ml/hy-compact-rebuild/hy_nomas_attention_benchmark
+```
+
+Run through `examples/support/wan_memory_guard.py` with
+`--memory-accounting file-cache --max-footprint-mib 4096`,
+`--max-swap-growth-mib 64 --timeout-sec 600 --log FRESH`. Pass the benchmark
+`--tokens=6560 --query-chunk=128 --compare-query-chunk=256`,
+`--input-bf16-boundary --repeats=4`. Use `--compare-dense` instead of the second
+chunk for the T1024 control.
+`make spec_hy_nomas` includes the standalone and pinned-fixture consumer specs;
+the upstream consumer is pending unless all trusted fixture pins are supplied.
+
 ## Continuation
 
 Active goal: native Hy-Nomas port, initially one proven DiT block. Return pointer:
 Wan performance work remains at `docs/wan-performance-frontier.md`, commit
-`e22fc2ba`; no Wan default has been changed. Confirmed frontier: one actual
-checkpoint block now passes the declared F32 and BF16-boundary MPS controls with
-both weight residencies and chained GPU outputs. Historical native failures and
-all gates remain retained. Exact CUDA/Magi output dtype and BF16 activation
-semantics remain unresolved. Next discriminator: compact grouped/chunked
-attention with same-input/chained parity, then native phase/total timings at
-J=6,560 against the 277.8 ms necessary block ceiling. Share serial stages and
-liveness scratch before full-model residency, camera/history and PixelUMM.
-Standing authority remains bounded GPU probes under the 15% floor
-and sampled 4 GiB cap; full generation is outside this slice.
-Refresh evidence after source, fixture, geometry, numerical policy, compiler,
-native bridge, SDK/OS/device or command-scheduling changes.
+`e22fc2ba`; no Wan default has been changed. Confirmed frontier: the actual
+checkpoint block passes the declared F32 and BF16-boundary MPS controls with
+both weight residencies and chained GPU outputs. Compact attention is explicit
+opt-in; C256/G16 is the fastest tested long-query candidate, with selected-row
+upstream parity and full-output native cross-chunk parity on the exercised
+inputs. Known grouping/short-chunk/multi-batch counterexamples remain rejected
+by workspace admission and retained as failed diagnostics. No general shape or
+activation qualification follows from the measured matrix.
+
+Next discriminator: representative native phase/whole-block timing at J=6,560
+with C256/G16, against the 277.8 ms necessary block ceiling for two minutes per
+video second at 8 steps/54 blocks. Share serial weight stages and liveness
+scratch before full-model residency. The roughly 62 ms reported GPU time for
+standalone attention alone does not
+establish video throughput: projections, conditioning, scheduler,
+text encoder, camera/history and PixelUMM remain outside it. Exact CUDA/Magi
+output dtype and BF16 activation semantics are also unresolved. Standing
+authority remains bounded GPU probes under the 15% floor and sampled 4 GiB cap;
+full generation is outside this slice. Refresh evidence after source, fixture,
+geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling changes.

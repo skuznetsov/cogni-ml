@@ -4,15 +4,16 @@
 require "./hy_nomas_block"
 require "./metal_linear_mps"
 require "./hy_nomas_attention_mps"
+require "./hy_nomas_attention_compact"
 require "./hy_nomas_mps_norm"
 require "./hy_nomas_mps_pointwise"
 require "./hy_nomas_mps_activation"
 require "./hy_nomas_mps_rms"
 
 module ML::Video
-  # Fixed-buffer MPS plans for every linear operation plus one full-sequence
-  # SDPA plan. The caller owns this workspace and its input, weight, and block
-  # scratch Arenas; the weight expansion stage and canonical SDPA staging are
+  # Fixed-buffer MPS plans for every linear operation plus one canonical or
+  # opt-in compact SDPA plan. The caller owns this workspace and its input,
+  # weight, and block scratch Arenas; the weight expansion and attention stages are
   # owned here. Reuse is serial: keep all bindings alive and immutable through
   # the command chain's terminal wait.
   class HyNomasMPSWorkspace
@@ -35,7 +36,7 @@ module ML::Video
     @plans = {} of String => WanT5MPSLinearPlan
     @scratch_buffers : Array(ML::MetalBuffer)
     @weight_buffers : Array(ML::MetalBuffer)
-    @attention_plan : HyNomasAttentionMPSPlan? = nil
+    @attention_plan : (HyNomasAttentionMPSPlan | HyNomasCompactAttentionMPSPlan)? = nil
     @norm_plan : HyNomasMPSLayerNorm::Plan
     @pointwise_plan : HyNomasMPSPointwise::Plan? = nil
     @activation_operations = {} of String => HyNomasDualStreamBlock::MPSActivationOperation
@@ -55,8 +56,15 @@ module ML::Video
                    img : ML::MetalBuffer, txt : ML::MetalBuffer,
                    vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
                    video_rope_cos : ML::MetalBuffer,
-                   video_rope_sin : ML::MetalBuffer)
+                   video_rope_sin : ML::MetalBuffer,
+                   *, attention_query_chunk : Int32 = 0,
+                   attention_heads_per_group : Int32 = 0)
       @config = @block.config
+      if attention_query_chunk != 0 || attention_heads_per_group != 0
+        HyNomasCompactAttentionMPSPlan.workspace_geometry(@config.batches,
+          @config.joint_tokens, @config.heads, @config.head_dim,
+          attention_query_chunk, attention_heads_per_group)
+      end
       @norm_plan = HyNomasMPSLayerNorm::Plan.new(@config.dim, @config.norm_eps)
       @block.mps_validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
       @block.mps_validate_resources!
@@ -97,10 +105,18 @@ module ML::Video
             operation.input, operation.weight.weight, operation.output,
             operation.weight.dtype, operation.tokens)
         end
-        @attention_plan = HyNomasAttentionMPSPlan.new(@config.batches,
-          @config.joint_tokens, @config.heads, @config.head_dim,
-          @block.checkpoints["joint.query"], @block.checkpoints["joint.key"],
-          @block.checkpoints["joint.value"], @block.checkpoints["joint.attention"])
+        @attention_plan = if attention_query_chunk > 0
+                            HyNomasCompactAttentionMPSPlan.new(@config.batches,
+                              @config.joint_tokens, @config.heads, @config.head_dim,
+                              @block.checkpoints["joint.query"], @block.checkpoints["joint.key"],
+                              @block.checkpoints["joint.value"], @block.checkpoints["joint.attention"],
+                              attention_query_chunk, attention_heads_per_group)
+                          else
+                            HyNomasAttentionMPSPlan.new(@config.batches,
+                              @config.joint_tokens, @config.heads, @config.head_dim,
+                              @block.checkpoints["joint.query"], @block.checkpoints["joint.key"],
+                              @block.checkpoints["joint.value"], @block.checkpoints["joint.attention"])
+                          end
         retain_lifetime_root!
       rescue ex
         release_lifetime_root!

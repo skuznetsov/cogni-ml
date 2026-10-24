@@ -215,9 +215,16 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
   submission = nil.as(ML::Metal::MPSCommandChain?)
   workspaces = [] of ML::Video::HyNomasMPSWorkspace
   retained_workspaces_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
-  replay_plan = nil.as(ML::Video::HyNomasAttentionMPSPlan?)
+  replay_plan = nil.as((ML::Video::HyNomasAttentionMPSPlan | ML::Video::HyNomasCompactAttentionMPSPlan)?)
   mps_mode = ENV["HY_NOMAS_BLOCK_MPS"]? || "0"
   {"0", "1"}.includes?(mps_mode).should be_true
+  attention_query_chunk = ENV.fetch("HY_NOMAS_ATTENTION_QUERY_CHUNK", "0").to_i32
+  attention_heads_per_group = ENV.fetch("HY_NOMAS_ATTENTION_HEADS_PER_GROUP", "0").to_i32
+  if attention_query_chunk != 0 || attention_heads_per_group != 0
+    raise ArgumentError.new("Compact attention requires the MPS block backend") unless mps_mode == "1"
+    ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(config.batches, config.joint_tokens,
+      config.heads, config.head_dim, attention_query_chunk, attention_heads_per_group)
+  end
   norm_mode = ENV["HY_NOMAS_NORM_CONTROLS"]? || "0"
   {"0", "1"}.includes?(norm_mode).should be_true
   norm_control = norm_mode == "1" ? HyNomasNormProbe::Controls.new(config.dim, config.norm_eps) : nil
@@ -275,6 +282,9 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     {first_scratch, chain_scratch, perturbed_scratch}.each do |scratch|
       ML::Video::HyNomasDualStreamBlock.prepare_scratch!(scratch, config)
     end
+    # Weight-plan validation covers these named buffers. Prepared MPS stages
+    # are added below and reported separately; the external guard caps the
+    # actual process, including opaque MPSGraph allocations.
     reserve = inputs.resident_bytes + first_scratch.resident_bytes + chain_scratch.resident_bytes + perturbed_scratch.resident_bytes
     plan = ML::Video::HyNomasDualStreamBlock.weight_plan(
       [file], config, 2_i64 * File.size(sidecar) + reserve + 1024_i64 * 1024,
@@ -292,16 +302,42 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     end
 
     if mps_mode == "1"
+      # Exercise constructor admission directly: a helper-only rejection test
+      # would not catch allocating workspace stages before checking geometry.
+      allocations_before_rejection = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /diagnostic only/) do
+        ML::Video::HyNomasMPSWorkspace.new(first,
+          inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"],
+          attention_query_chunk: config.joint_tokens, attention_heads_per_group: config.heads - 1)
+      end
+      partial_rejection = config.batches == 1 ? /Short compact/ : /Multi-batch compact/
+      expect_raises(ArgumentError, partial_rejection) do
+        ML::Video::HyNomasMPSWorkspace.new(first,
+          inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"],
+          attention_query_chunk: 4, attention_heads_per_group: config.heads)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_rejection)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before)
       workspaces << ML::Video::HyNomasMPSWorkspace.new(first,
-        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"],
+        attention_query_chunk: attention_query_chunk, attention_heads_per_group: attention_heads_per_group)
       workspaces << ML::Video::HyNomasMPSWorkspace.new(chain,
-        first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+        first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"],
+        attention_query_chunk: attention_query_chunk, attention_heads_per_group: attention_heads_per_group)
       workspaces << ML::Video::HyNomasMPSWorkspace.new(perturbed,
-        inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
+        inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"],
+        attention_query_chunk: attention_query_chunk, attention_heads_per_group: attention_heads_per_group)
       ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 3)
-      replay_plan = ML::Video::HyNomasAttentionMPSPlan.new(config.batches, config.joint_tokens,
-        config.heads, config.head_dim, inputs["attention_replay.query"], inputs["attention_replay.key"],
-        inputs["attention_replay.value"], inputs["attention_replay.raw"])
+      replay_plan = if attention_query_chunk > 0
+                      ML::Video::HyNomasCompactAttentionMPSPlan.new(config.batches, config.joint_tokens,
+                        config.heads, config.head_dim, inputs["attention_replay.query"], inputs["attention_replay.key"],
+                        inputs["attention_replay.value"], inputs["attention_replay.raw"],
+                        attention_query_chunk, attention_heads_per_group)
+                    else
+                      ML::Video::HyNomasAttentionMPSPlan.new(config.batches, config.joint_tokens,
+                        config.heads, config.head_dim, inputs["attention_replay.query"], inputs["attention_replay.key"],
+                        inputs["attention_replay.value"], inputs["attention_replay.raw"])
+                    end
     end
     allocations_before_encode = ML::MetalBuffer.video_spec_allocations
     command = nil.as(ML::Metal::CommandBuffer?)
@@ -448,7 +484,8 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     comparison_count = reports.count { |line| !line.starts_with?("boundary_input ") && !line.starts_with?("boundary_bits ") }
     origin = variant["weights_are_synthetic"].as_bool ? "synthetic" : "checkpoint"
     workspace_bytes = workspaces.sum(&.resident_bytes)
-    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: backend=#{mps_mode == "1" ? "mps" : "native"} comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} mps_workspace_bytes=#{workspace_bytes} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} terminal_waits=1 gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
+    replay_bytes = replay_plan.try(&.resident_bytes) || 0_i64
+    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: backend=#{mps_mode == "1" ? "mps" : "native"} comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} mps_workspace_bytes=#{workspace_bytes} mps_replay_attention_bytes=#{replay_bytes} mps_named_stage_total_bytes=#{workspace_bytes + replay_bytes} attention_query_chunk=#{attention_query_chunk} attention_heads_per_group=#{attention_heads_per_group} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} terminal_waits=1 gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
     STDERR.puts summary
     if report_path = ENV["HY_NOMAS_REPORT"]?
       File.open(report_path, "a") do |report|
