@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # Based on Tencent Hy-Nomas at 911cea6458a89c2663513ff7099561ec190dd491.
 # Copyright (C) 2026 Tencent. Apache-2.0. Modified for native Metal validation.
-"""Create bounded synthetic MPS oracle fixtures from the pinned Hy-Nomas block.
+"""Create bounded MPS oracle fixtures from the pinned Hy-Nomas block.
 
 By default, the fixture uses a tiny config. ``--real-width`` uses the Nomas-G
 hidden/FFN/head geometry with the same few tokens; it does not load real weights
-and cannot establish real-checkpoint parity. The fixture compiles the exact
-``MMDoubleStreamBlock`` class AST from the
+unless a trusted, exact single-block safetensors file is supplied. The fixture
+compiles the exact ``MMDoubleStreamBlock`` class AST from the
 pinned upstream source, with its actual pinned modulation, normalization, MLP,
 activation, and RoPE modules. Only attention dispatch is replaced with an
-explicit MPS-only PyTorch SDPA adapter for one unmasked segment. It does not
-load a full model, a real checkpoint, camera conditioning, history, or media.
-The adapter keeps F32 Q/K/V and attention output. Pinned Magi attention instead
-casts F32 Q/K/V to BF16 and casts its BF16 result back. This fixture is an F32
-math/order control, not numeric parity with that CUDA BF16 attention runtime.
+explicit MPS-only PyTorch SDPA adapter for one unmasked segment. The optional
+``bf16-boundaries`` precision rounds F32 concatenated Q/K/V through BF16 and
+rounds the F32 SDPA output through BF16 while keeping SDPA itself F32. This is
+a boundary control, not BF16 SDPA or Magi/CUDA numerical parity. Neither mode
+loads a full model, camera conditioning, history, or media.
 
-The ``bf16_weights_roundtrip_f32_compute`` control stores BF16-rounded weights
-and reloads them as F32 parameters. Activations and neural computation remain
-F32; this is not native BF16 activation coverage.
+The ``bf16_weights_roundtrip_f32_compute`` control uses BF16-rounded weight
+values with F32 parameters and computation. Synthetic fixtures store that
+control as a sidecar; trusted real weights retain their exact source sidecar
+and are rounded one MPS parameter at a time. This is not native BF16 activation
+coverage.
 """
 
 from __future__ import annotations
@@ -31,9 +33,11 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import time
 import types
 from typing import Any
 
@@ -44,6 +48,7 @@ DEFAULT_UPSTREAM = Path(
 )
 SEED_WEIGHTS = 20261024
 SEED_INPUTS = 20261025
+ATTENTION_PRECISIONS = ("f32", "bf16-boundaries")
 
 # Hashes cover the exact block AST, every executed upstream helper, and the
 # source that defines the one-segment attention contract. Any drift fails
@@ -104,6 +109,13 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _emit_stage_telemetry(enabled: bool, stage: str, **fields: Any) -> None:
+    if not enabled:
+        return
+    marker = {"stage": stage, "monotonic_ns": time.monotonic_ns(), **fields}
+    print(json.dumps(marker, sort_keys=True), file=sys.stderr, flush=True)
 
 
 def _verify_upstream(root: Path) -> dict[str, str]:
@@ -290,6 +302,92 @@ def _expected_block_keys(hidden: int, ffn: int, heads: int) -> dict[str, list[in
     return expected
 
 
+def _trusted_weights_path(
+    weights: Path | None,
+    expected_sha256: str | None,
+    *,
+    real_width: bool,
+) -> tuple[Path, str] | None:
+    if (weights is None) != (expected_sha256 is None):
+        raise ValueError("--weights and --weights-sha256 must be supplied together")
+    if weights is None:
+        return None
+    if not real_width:
+        raise ValueError("--weights is admitted only with --real-width")
+    assert expected_sha256 is not None
+    if re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256) is None:
+        raise ValueError("--weights-sha256 must be exactly 64 hexadecimal characters")
+
+    path = weights.resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("--weights must name a regular safetensors file")
+    if path.suffix.lower() != ".safetensors":
+        raise ValueError("--weights accepts safetensors files only")
+    actual_sha256 = _sha256(path)
+    if actual_sha256 != expected_sha256.lower():
+        raise ValueError(
+            f"Trusted checkpoint SHA256 mismatch: {actual_sha256} != {expected_sha256.lower()}"
+        )
+    return path, actual_sha256
+
+
+def _load_checkpoint_state(
+    torch: Any,
+    path: Path,
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Load only an exact, finite, single-block F32 or BF16 safetensors file."""
+    try:
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise RuntimeError("Real block weights require the safetensors package") from exc
+
+    expected = _expected_block_keys(
+        config["dim"], config["ffn_dim"], config["heads"]
+    )
+    prefixes = "double_blocks.0."
+    expected_source = {f"{prefixes}{name}": (name, shape) for name, shape in expected.items()}
+    with safe_open(str(path), framework="pt", device="cpu") as source:
+        actual_keys = set(source.keys())
+        if actual_keys != set(expected_source):
+            raise RuntimeError(
+                "Trusted safetensors must contain exactly the 32 double_blocks.0 "
+                f"block tensors: missing={sorted(set(expected_source) - actual_keys)}, "
+                f"unexpected={sorted(actual_keys - set(expected_source))}"
+            )
+
+        state: dict[str, Any] = {}
+        source_dtype: str | None = None
+        for source_name, (relative_name, expected_shape) in expected_source.items():
+            tensor = source.get_tensor(source_name)
+            if list(tensor.shape) != expected_shape:
+                raise RuntimeError(
+                    f"Trusted block shape mismatch for {source_name}: "
+                    f"{list(tensor.shape)} != {expected_shape}"
+                )
+            if tensor.dtype == torch.float32:
+                dtype_name = "F32"
+            elif tensor.dtype == torch.bfloat16:
+                dtype_name = "BF16"
+            else:
+                raise RuntimeError(
+                    f"Trusted block tensor {source_name} has unsupported dtype {tensor.dtype}"
+                )
+            if source_dtype is not None and dtype_name != source_dtype:
+                raise RuntimeError(
+                    "Trusted block tensors must use one dtype throughout; "
+                    f"found both {source_dtype} and {dtype_name}"
+                )
+            source_dtype = dtype_name
+            if not bool(torch.isfinite(tensor).all().item()):
+                raise RuntimeError(f"Trusted block tensor {source_name} contains non-finite values")
+            state[relative_name] = tensor
+
+    if source_dtype is None or len(state) != 32:
+        raise RuntimeError("Trusted checkpoint did not provide all 32 block tensors")
+    return state, source_dtype
+
+
 def _synthetic_state(torch: Any, model: Any, config: dict[str, Any]) -> dict[str, Any]:
     generator = torch.Generator(device="cpu").manual_seed(SEED_WEIGHTS)
     state: dict[str, Any] = {}
@@ -354,6 +452,105 @@ def _tensor_records(tensors: dict[str, Any], torch: Any) -> dict[str, dict[str, 
     return records
 
 
+def _device_matches_expected(expected: Any, actual: Any) -> bool:
+    """Compare a requested torch.device with a tensor's possibly indexed device."""
+    if expected.type != actual.type:
+        return False
+    return expected.index is None or expected.index == actual.index
+
+
+def _self_test_device_matching(torch: Any) -> None:
+    """Exercise device matching using torch.device values only; no device access."""
+    cases = (
+        (torch.device("mps"), torch.device("mps:0"), True),
+        (torch.device("mps"), torch.device("cpu"), False),
+        (torch.device("mps:1"), torch.device("mps:0"), False),
+    )
+    for expected, actual, admitted in cases:
+        observed = _device_matches_expected(expected, actual)
+        if observed is not admitted:
+            raise RuntimeError(
+                f"Device-match self-test failed: {expected} vs {actual}: "
+                f"expected {admitted}, got {observed}"
+            )
+
+
+def _round_parameters_bf16_in_place(torch: Any, model: Any, device: Any) -> None:
+    """Round F32 parameters through BF16 one tensor at a time on their device."""
+    parameters = list(model.named_parameters())
+    if not parameters:
+        raise RuntimeError("Cannot round an empty block parameter set")
+    with torch.no_grad():
+        for name, parameter in parameters:
+            if (
+                not _device_matches_expected(device, parameter.device)
+                or parameter.dtype != torch.float32
+            ):
+                raise RuntimeError(
+                    f"Expected F32 parameter {name} on {device}, got "
+                    f"{parameter.dtype} on {parameter.device}"
+                )
+            rounded = parameter.detach().to(dtype=torch.bfloat16).to(dtype=torch.float32)
+            parameter.copy_(rounded)
+            del rounded
+
+
+def _partition_tensor_records(
+    records: dict[str, dict[str, Any]],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
+    """Separate public block checkpoints from fixture-private tensor records."""
+    checkpoints: dict[str, dict[str, Any]] = {}
+    inputs: dict[str, dict[str, Any]] = {}
+    attention_replay: dict[str, dict[str, Any]] = {}
+    for name, record in records.items():
+        if name.startswith("$input."):
+            suffix = name.removeprefix("$input.")
+            destination = inputs
+        elif name.startswith("$attention_replay."):
+            suffix = name.removeprefix("$attention_replay.")
+            destination = attention_replay
+        elif name.startswith("$"):
+            raise RuntimeError(f"Unknown private tensor record prefix: {name}")
+        else:
+            checkpoints[name] = record
+            continue
+        if not suffix or suffix in destination:
+            raise RuntimeError(f"Invalid or duplicate private tensor record: {name}")
+        destination[suffix] = record
+    return checkpoints, inputs, attention_replay
+
+
+def _self_test_record_partition() -> None:
+    """Offline guard for public/private fixture record separation."""
+    public = {"shape": [1], "values": [1.0]}
+    image = {"shape": [1, 2], "values": [2.0, 3.0]}
+    query = {"shape": [1, 1, 1, 1], "values": [4.0]}
+    checkpoints, inputs, replay = _partition_tensor_records(
+        {
+            "joint.attention": public,
+            "$input.img": image,
+            "$attention_replay.query": query,
+        }
+    )
+    if checkpoints != {"joint.attention": public}:
+        raise RuntimeError("Private records leaked into public checkpoints")
+    if inputs != {"img": image}:
+        raise RuntimeError("Input records were not partitioned correctly")
+    if replay != {"query": query}:
+        raise RuntimeError("Attention replay records were not partitioned correctly")
+    try:
+        _partition_tensor_records({"$unknown.private": public})
+    except RuntimeError as exc:
+        if "Unknown private tensor record prefix" not in str(exc):
+            raise
+    else:
+        raise RuntimeError("Unknown private record prefix did not fail closed")
+
+
 def _capture_hooks(model: Any, capture_state: dict[str, Any], heads: int, head_dim: int) -> list[Any]:
     hooks: list[Any] = []
 
@@ -413,7 +610,14 @@ def _capture_hooks(model: Any, capture_state: dict[str, Any], heads: int, head_d
     return hooks
 
 
-def _build_sdpa_adapter(torch: Any, capture_state: dict[str, Any], receipt: dict[str, Any]) -> Any:
+def _build_sdpa_adapter(
+    torch: Any,
+    capture_state: dict[str, Any],
+    receipt: dict[str, Any],
+    attention_precision: str,
+) -> Any:
+    if attention_precision not in ATTENTION_PRECISIONS:
+        raise ValueError(f"Unsupported attention precision {attention_precision!r}")
     functional = torch.nn.functional
 
     def parallel_attention(
@@ -457,6 +661,19 @@ def _build_sdpa_adapter(torch: Any, capture_state: dict[str, Any], receipt: dict
         if any(tensor.dtype != torch.float32 for tensor in (query, key, value)):
             raise RuntimeError("Hy-Nomas oracle attention requires F32 Q/K/V tensors")
 
+        if attention_precision == "bf16-boundaries":
+            # Match the wrapper's visible cast boundaries while keeping this
+            # oracle's attention math itself in F32. This intentionally does
+            # not model Magi/FlashAttention's internal BF16 arithmetic.
+            query = query.to(dtype=torch.bfloat16).to(dtype=torch.float32)
+            key = key.to(dtype=torch.bfloat16).to(dtype=torch.float32)
+            value = value.to(dtype=torch.bfloat16).to(dtype=torch.float32)
+
+        capture = capture_state["current"]
+        capture["joint.query"] = query.detach().clone()
+        capture["joint.key"] = key.detach().clone()
+        capture["joint.value"] = value.detach().clone()
+
         query_h = query.permute(0, 2, 1, 3).contiguous()
         key_h = key.permute(0, 2, 1, 3).contiguous()
         value_h = value.permute(0, 2, 1, 3).contiguous()
@@ -468,15 +685,28 @@ def _build_sdpa_adapter(torch: Any, capture_state: dict[str, Any], receipt: dict
             dropout_p=0.0,
             is_causal=False,
         )
-        result = attended.permute(0, 2, 1, 3).contiguous().flatten(2)
-        if result.device.type != "mps":
+        attention_f32 = attended.permute(0, 2, 1, 3).contiguous().flatten(2)
+        if attention_f32.device.type != "mps":
             raise RuntimeError("PyTorch SDPA returned a non-MPS tensor")
-        capture_state["current"]["joint.attention"] = result.detach().clone()
-        capture_state["current"]["img.attn.raw"] = result[:, :img_q_len].detach().clone()
-        capture_state["current"]["txt.attn.raw"] = result[:, img_q_len:].detach().clone()
+        result = attention_f32
+        if attention_precision == "bf16-boundaries":
+            result = result.to(dtype=torch.bfloat16).to(dtype=torch.float32)
+
+        capture["joint.attention"] = result.detach().clone()
+        capture_state["attention_replay"] = {
+            "query": query.detach().clone(),
+            "key": key.detach().clone(),
+            "value": value.detach().clone(),
+            "attention_f32": attention_f32.detach().clone(),
+            "attention": result.detach().clone(),
+        }
+        capture["img.attn.raw"] = result[:, :img_q_len].detach().clone()
+        capture["txt.attn.raw"] = result[:, img_q_len:].detach().clone()
         receipt["calls"] += 1
         receipt["last_q_shape"] = list(query.shape)
         receipt["last_sdpa_shape"] = list(query_h.shape)
+        receipt["last_qkv_dtype"] = str(query.dtype).removeprefix("torch.")
+        receipt["last_output_dtype"] = str(result.dtype).removeprefix("torch.")
         return result
 
     return parallel_attention
@@ -539,6 +769,7 @@ def _run_case(
 ) -> tuple[dict[str, Any], tuple[Any, Any]]:
     capture: dict[str, Any] = {}
     capture_state["current"] = capture
+    capture_state["attention_replay"] = {}
     before_calls = receipt["calls"]
     video_tokens = config["video_tokens"]
     text_tokens = config["text_tokens"]
@@ -568,6 +799,9 @@ def _run_case(
     capture["txt.output"] = txt_out.detach().clone()
 
     required = {
+        "joint.query",
+        "joint.key",
+        "joint.value",
         "joint.attention",
         "img.modulation",
         "img.attn.norm",
@@ -612,18 +846,15 @@ def _run_case(
             f"extra={sorted(set(capture) - required)}"
         )
 
+    replay_tensors = capture_state["attention_replay"]
+    if set(replay_tensors) != {"query", "key", "value", "attention_f32", "attention"}:
+        raise RuntimeError("Pinned block did not provide a complete attention replay")
     all_tensors = dict(capture)
     all_tensors["$input.img"] = device_inputs["img"]
     all_tensors["$input.txt"] = device_inputs["txt"]
+    all_tensors.update({f"$attention_replay.{key}": value for key, value in replay_tensors.items()})
     records = _tensor_records(all_tensors, torch)
-    checkpoints = {
-        key: value for key, value in records.items() if not key.startswith("$input.")
-    }
-    input_records = {
-        key.removeprefix("$input."): value
-        for key, value in records.items()
-        if key.startswith("$input.")
-    }
+    checkpoints, input_records, attention_replay = _partition_tensor_records(records)
     _assert_nontrivial(input_records, checkpoints)
     result = {
         "precision_variant": variant,
@@ -632,6 +863,8 @@ def _run_case(
             "txt": checkpoints["txt.output"],
         },
         "checkpoints": checkpoints,
+        "attention_precision": receipt["attention_precision"],
+        "attention_replay": attention_replay,
         "attention_receipt": {
             "calls": 1,
             "joint_qkv_shape": receipt["last_q_shape"],
@@ -639,6 +872,9 @@ def _run_case(
             "mask": None,
             "causal": False,
             "dropout_p": 0.0,
+            "precision": receipt["attention_precision"],
+            "qkv_dtype": receipt["last_qkv_dtype"],
+            "output_dtype": receipt["last_output_dtype"],
         },
     }
     return result, (img_out.detach().clone(), txt_out.detach().clone())
@@ -725,6 +961,10 @@ def _save_fixture(
     cases: list[dict[str, Any]],
     receipt: dict[str, Any],
     config: dict[str, Any],
+    attention_precision: str,
+    source_state: dict[str, Any] | None = None,
+    source_dtype: str | None = None,
+    source_provenance: dict[str, Any] | None = None,
 ) -> None:
     from safetensors.torch import save_file
 
@@ -735,15 +975,21 @@ def _save_fixture(
     if not output.parent.is_dir():
         raise FileNotFoundError(f"Output parent must already exist: {output.parent}")
 
+    if attention_precision not in ATTENTION_PRECISIONS:
+        raise ValueError(f"Unsupported attention precision {attention_precision!r}")
+    if (source_state is None) != (source_dtype is None):
+        raise ValueError("Real source state and dtype must be supplied together")
+    if (source_state is None) != (source_provenance is None):
+        raise ValueError("Real source provenance must accompany source tensors")
+
+    synthetic = source_state is None
     weights_f32_name = f"{output.stem}.weights_f32.safetensors"
     weights_bf16_name = f"{output.stem}.weights_bf16.safetensors"
+    weights_source_name = f"{output.stem}.weights_source.safetensors"
     manifest_name = f"{output.stem}.manifest.json"
-    final_paths = [
-        output.parent / weights_f32_name,
-        output.parent / weights_bf16_name,
-        output.parent / manifest_name,
-        output,
-    ]
+    sidecar_names = [weights_f32_name, weights_bf16_name] if synthetic else [weights_source_name]
+    final_paths = [output.parent / name for name in sidecar_names]
+    final_paths.extend([output.parent / manifest_name, output])
     for final_path in final_paths:
         if final_path.exists() or final_path.is_symlink():
             raise FileExistsError(f"Fixture sidecar must be a new file: {final_path}")
@@ -754,86 +1000,152 @@ def _save_fixture(
     stage.mkdir()
     published: list[Path] = []
     try:
-        save_file(
-            {
-                f"double_blocks.0.{name}": value.contiguous()
-                for name, value in state_f32.items()
-            },
-            str(stage / weights_f32_name),
-            metadata={
-                "format": "hy-nomas-synthetic-double-stream-block",
-                "upstream_revision": revision,
-                "precision": "F32",
-                "weights_are_synthetic": "true",
-            },
-        )
-        save_file(
-            {
-                f"double_blocks.0.{name}": value.to(dtype=torch.bfloat16).contiguous()
-                for name, value in state_bf16.items()
-            },
-            str(stage / weights_bf16_name),
-            metadata={
-                "format": "hy-nomas-synthetic-double-stream-block",
-                "upstream_revision": revision,
-                "precision": "BF16 weights only; fixture computes in F32",
-                "weights_are_synthetic": "true",
-            },
-        )
+        if synthetic:
+            save_file(
+                {
+                    f"double_blocks.0.{name}": value.contiguous()
+                    for name, value in state_f32.items()
+                },
+                str(stage / weights_f32_name),
+                metadata={
+                    "format": "hy-nomas-synthetic-double-stream-block",
+                    "upstream_revision": revision,
+                    "precision": "F32",
+                    "weights_are_synthetic": "true",
+                },
+            )
+            save_file(
+                {
+                    f"double_blocks.0.{name}": value.to(dtype=torch.bfloat16).contiguous()
+                    for name, value in state_bf16.items()
+                },
+                str(stage / weights_bf16_name),
+                metadata={
+                    "format": "hy-nomas-synthetic-double-stream-block",
+                    "upstream_revision": revision,
+                    "precision": "BF16 weights only; fixture computes in F32",
+                    "weights_are_synthetic": "true",
+                },
+            )
+            sidecars = {
+                "f32": (weights_f32_name, state_f32, "F32", "F32", False),
+                "bf16_weights_roundtrip_f32_compute": (
+                    weights_bf16_name,
+                    state_bf16,
+                    "BF16",
+                    "BF16",
+                    False,
+                ),
+            }
+        else:
+            assert source_state is not None and source_dtype is not None
+            assert source_provenance is not None
+            save_file(
+                {
+                    f"double_blocks.0.{name}": value.contiguous()
+                    for name, value in source_state.items()
+                },
+                str(stage / weights_source_name),
+                metadata={
+                    "format": "hy-nomas-trusted-double-stream-block",
+                    "upstream_revision": revision,
+                    "precision": source_dtype,
+                    "weights_are_synthetic": "false",
+                    "source_checkpoint_sha256": source_provenance["file_sha256"],
+                },
+            )
+            # Both reference controls consume the exact source tensors. The
+            # BF16 resident variant rounds an F32 source at preparation time;
+            # if the source is already BF16, no conversion is admitted.
+            sidecars = {
+                "f32": (weights_source_name, source_state, source_dtype, "F32", False),
+                "bf16_weights_roundtrip_f32_compute": (
+                    weights_source_name,
+                    source_state,
+                    source_dtype,
+                    "BF16",
+                    source_dtype == "F32",
+                ),
+            }
         memory_policy = {
             "physical_memory_reserve_percent": 15,
             "runtime_budget_bytes": None,
             "budget_enforced_by": "external cache-aware runtime guard; producer does not sample host memory",
         }
-        bindings_f32 = _bindings(state_f32, "F32")
-        bindings_bf16 = _bindings(state_bf16, "BF16")
-        artifacts = {
-            "f32": {
+        artifacts: dict[str, dict[str, Any]] = {}
+        for variant_name, (filename, binding_state, source_weight_dtype, resident_dtype, allow_cast) in sidecars.items():
+            path = stage / filename
+            artifacts[variant_name] = {
                 "weights_file": {
-                    "path": weights_f32_name,
-                    "sha256": _sha256(stage / weights_f32_name),
-                    "bytes": (stage / weights_f32_name).stat().st_size,
-                    "dtype": "F32",
+                    "path": filename,
+                    "sha256": _sha256(path),
+                    "bytes": path.stat().st_size,
+                    "dtype": source_weight_dtype,
                 },
-                "checkpoint_bindings": bindings_f32,
+                "checkpoint_bindings": _bindings(binding_state, source_weight_dtype),
                 "compute_dtype": "F32",
+                "resident_dtype": resident_dtype,
+                "allow_f32_to_bf16": allow_cast,
+                "attention_precision": attention_precision,
+                "weights_are_synthetic": synthetic,
                 "memory_policy": memory_policy,
-            },
-            "bf16_weights_roundtrip_f32_compute": {
-                "weights_file": {
-                    "path": weights_bf16_name,
-                    "sha256": _sha256(stage / weights_bf16_name),
-                    "bytes": (stage / weights_bf16_name).stat().st_size,
-                    "dtype": "BF16",
-                },
-                "checkpoint_bindings": bindings_bf16,
-                "compute_dtype": "F32",
-                "memory_policy": memory_policy,
-                "compute_control": "BF16-rounded weights cast back to F32 parameters; F32 activations and compute",
-            },
-        }
+            }
+        artifacts["bf16_weights_roundtrip_f32_compute"]["compute_control"] = (
+            "BF16-rounded weights cast back to F32 parameters; F32 activations and compute"
+        )
+        if source_provenance is not None:
+            for artifact in artifacts.values():
+                artifact["source_checkpoint"] = source_provenance
         for case in cases:
             case["variants"]["f32"].update(artifacts["f32"])
             case["variants"]["bf16_weights_roundtrip_f32_compute"].update(
                 artifacts["bf16_weights_roundtrip_f32_compute"]
             )
+        reference_kind = (
+            "upstream_block_bf16_boundary_control_mps_sdpa"
+            if attention_precision == "bf16-boundaries"
+            else "upstream_block_f32_math_mps_sdpa"
+        )
+        attention_precision_note = (
+            "F32 concatenated Q/K/V round through BF16 before F32 SDPA; F32 SDPA output rounds through BF16 afterward. "
+            "This boundary control is not Magi/FlashAttention BF16 parity. Magi's output dtype was not executed here; "
+            "BF16 output followed by wrapper cast-back is only a hypothesis for the selected kernel."
+            if attention_precision == "bf16-boundaries"
+            else "F32 SDPA Q/K/V/output. The pinned Magi wrapper casts F32 Q/K/V through BF16; its output cast-back is conditional on kernel output dtype."
+        )
+        provenance = {
+            "revision": revision,
+            "upstream_revision": revision,
+            "file_sha256": source_hashes,
+            "source_sha256": source_hashes,
+            "block_source": "hymm/models/dit/nomas_cpt.py:887-1288",
+            "class_loading": "compile exact pinned MMDoubleStreamBlock AST statement; direct pinned helper modules",
+            "attention_adapter": "oracle-only MPS PyTorch SDPA replacement for parallel_attention",
+            "attention_precision": attention_precision,
+            "attention_precision_note": attention_precision_note,
+            "torch_version": torch.__version__,
+            "mps_device": "mps",
+        }
+        if source_provenance is not None:
+            provenance["source_checkpoint"] = source_provenance
+        weights_by_file: dict[str, dict[str, Any]] = {}
+        bindings_by_file: dict[str, list[dict[str, Any]]] = {}
+        for artifact in artifacts.values():
+            weights_file = artifact["weights_file"]
+            filename = weights_file["path"]
+            weights_by_file[filename] = {
+                "weights_file": weights_file,
+                "compute_dtype": "F32",
+                "weights_are_synthetic": synthetic,
+            }
+            bindings_by_file[filename] = artifact["checkpoint_bindings"]
         manifest = {
-            "schema_version": 1,
-            "artifact": "Hy-Nomas MMDoubleStreamBlock synthetic single-segment oracle",
-            "provenance": {
-                "revision": revision,
-                "upstream_revision": revision,
-                "file_sha256": source_hashes,
-                "source_sha256": source_hashes,
-                "block_source": "hymm/models/dit/nomas_cpt.py:887-1288",
-                "class_loading": "compile exact pinned MMDoubleStreamBlock AST statement; direct pinned helper modules",
-                "attention_adapter": "oracle-only MPS PyTorch SDPA replacement for parallel_attention",
-                "attention_precision_difference": "F32 SDPA Q/K/V/output; pinned Magi casts F32 Q/K/V to BF16 and its output back to F32",
-                "torch_version": torch.__version__,
-                "mps_device": "mps",
-            },
+            "schema_version": 2,
+            "artifact": "Hy-Nomas MMDoubleStreamBlock single-segment oracle",
+            "provenance": provenance,
             "scope": {
-                "reference_kind": "upstream_block_f32_math_mps_sdpa",
+                "reference_kind": reference_kind,
+                "attention_precision": attention_precision,
                 "pinned_magi_runtime_numeric_parity": False,
                 "block": "MMDoubleStreamBlock only; no model or pipeline instantiated",
                 "segment_mode": "single_full",
@@ -851,38 +1163,41 @@ def _save_fixture(
                 "history_or_cache": "none; no KV cache and no preceding segments",
                 "text_mask_semantics": "no mask; all text tokens are valid",
                 "camera_semantics": "separate post-block path; absent and not represented by a no-op",
+                "weights_are_synthetic": synthetic,
                 "other_excluded_paths": [
                     "multi-segment causal prefix",
                     "chunk-level causal attention",
                     "history/cache attention",
                     "action-window masking",
-                    "real checkpoint weights",
+                    *( [] if not synthetic else ["real checkpoint weights"] ),
                     "native BF16 activations",
                 ],
             },
             "config": config,
             "memory_policy": memory_policy,
-            "weights": {
-                weights_f32_name: artifacts["f32"],
-                weights_bf16_name: artifacts["bf16_weights_roundtrip_f32_compute"],
-            },
+            "weights_are_synthetic": synthetic,
+            "source": source_provenance,
+            "weights": weights_by_file,
             "cases": [case["name"] for case in cases],
             "attention_adapter_receipt": {
                 "sdpa_calls_total": receipt["calls"],
                 "requires_all_qkv_on_mps": True,
                 "explicit_attention_mask": None,
                 "is_causal": False,
+                "attention_precision": attention_precision,
+                "qkv_dtype": receipt.get("last_qkv_dtype"),
+                "output_dtype": receipt.get("last_output_dtype"),
+                "bf16_output_hypothesis": "Magi kernel output dtype was not executed or confirmed; wrapper casts result back only when its dtype is BF16",
             },
         }
         reference = {
-            "schema_version": 1,
-            "provenance": manifest["provenance"],
+            "schema_version": 2,
+            "provenance": provenance,
             "scope": manifest["scope"],
+            "weights_are_synthetic": synthetic,
+            "source": source_provenance,
             "config": config,
-            "checkpoint_bindings": {
-                weights_f32_name: bindings_f32,
-                weights_bf16_name: bindings_bf16,
-            },
+            "checkpoint_bindings": bindings_by_file,
             "manifest_file": manifest_name,
             "cases": cases,
         }
@@ -893,7 +1208,7 @@ def _save_fixture(
             json.dumps(reference, indent=2, sort_keys=True) + "\n"
         )
         for name, final_path in zip(
-            (weights_f32_name, weights_bf16_name, manifest_name, output.name),
+            (*sidecar_names, manifest_name, output.name),
             final_paths,
         ):
             (stage / name).rename(final_path)
@@ -918,20 +1233,73 @@ def main() -> int:
     parser.add_argument(
         "--output",
         type=Path,
-        required=True,
         help="new .json reference path; weights and manifest are sibling sidecars",
+    )
+    parser.add_argument(
+        "--structure-self-test",
+        action="store_true",
+        help="run the offline tensor-record partition guard without importing PyTorch/MPS",
+    )
+    parser.add_argument(
+        "--device-match-self-test",
+        action="store_true",
+        help="test torch.device type/index matching without querying or using a GPU",
+    )
+    parser.add_argument(
+        "--stage-telemetry",
+        action="store_true",
+        help="emit monotonic JSON stage markers to stderr; does not sample memory or synchronize MPS",
     )
     parser.add_argument(
         "--real-width",
         action="store_true",
         help=(
             "use Nomas-G C2048/H16/D128/F8192 geometry with only six video and "
-            "three text tokens; weights remain synthetic and this is not "
-            "real-checkpoint parity"
+            "three text tokens; optional --weights admits one trusted block only"
         ),
     )
+    parser.add_argument(
+        "--attention-precision",
+        choices=ATTENTION_PRECISIONS,
+        default="f32",
+        help=(
+            "attention boundary control: f32 or bf16-boundaries (BF16 QKV/output "
+            "rounding around F32 MPS SDPA; not Magi/CUDA parity)"
+        ),
+    )
+    parser.add_argument(
+        "--weights",
+        type=Path,
+        help="trusted safetensors containing exactly double_blocks.0 (requires --real-width)",
+    )
+    parser.add_argument(
+        "--weights-sha256",
+        help="trusted SHA-256 of the exact --weights file bytes (required with --weights)",
+    )
     args = parser.parse_args()
+    if args.structure_self_test:
+        _self_test_record_partition()
+        print(json.dumps({"tensor_record_partition": "pass"}, sort_keys=True))
+        return 0
+    if args.device_match_self_test:
+        import torch
+
+        _self_test_device_matching(torch)
+        print(json.dumps({"device_matching": "pass"}, sort_keys=True))
+        return 0
+    if args.output is None:
+        parser.error("--output is required unless --structure-self-test is selected")
     config = dict(REAL_WIDTH if args.real_width else TINY)
+    try:
+        trusted_weights = _trusted_weights_path(
+            args.weights,
+            args.weights_sha256,
+            real_width=args.real_width,
+        )
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        parser.error(str(exc))
+    if trusted_weights is not None:
+        config["geometry_label"] = "nomas_g_real_width_trusted_single_block_probe"
 
     fallback = os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK")
     if fallback not in (None, "0"):
@@ -946,6 +1314,30 @@ def main() -> int:
 
     import torch
 
+    source_state: dict[str, Any] | None = None
+    source_dtype: str | None = None
+    source_provenance: dict[str, Any] | None = None
+    if trusted_weights is not None:
+        weights_path, weights_sha256 = trusted_weights
+        try:
+            source_state, source_dtype = _load_checkpoint_state(torch, weights_path, config)
+        except (RuntimeError, OSError, ValueError) as exc:
+            raise SystemExit(str(exc)) from exc
+        source_provenance = {
+            "format": "safetensors",
+            "file_sha256": weights_sha256,
+            "weights_are_synthetic": False,
+            "source_dtype": source_dtype,
+            "tensor_prefix": "double_blocks.0.",
+            "tensor_count": 32,
+        }
+        _emit_stage_telemetry(
+            args.stage_telemetry,
+            "source_loaded",
+            source_dtype=source_dtype,
+            tensor_count=len(source_state),
+        )
+
     if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
         raise SystemExit("This oracle requires an available PyTorch MPS device; CPU fallback is forbidden")
     device = torch.device("mps")
@@ -955,7 +1347,10 @@ def main() -> int:
     helpers = _install_upstream_modules(upstream)
     posemb_layers = helpers[-1]
     capture_state: dict[str, Any] = {"current": {}}
-    receipt: dict[str, Any] = {"calls": 0}
+    receipt: dict[str, Any] = {
+        "calls": 0,
+        "attention_precision": args.attention_precision,
+    }
 
     def apply_rotary_capture(q: Any, k: Any, freqs_cis: Any, head_first: bool = False) -> tuple[Any, Any]:
         original = posemb_layers.apply_rotary_emb
@@ -967,7 +1362,9 @@ def main() -> int:
         capture["img.attn.k_rope"] = k_rot.detach().clone()
         return q_rot, k_rot
 
-    adapter = _build_sdpa_adapter(torch, capture_state, receipt)
+    adapter = _build_sdpa_adapter(
+        torch, capture_state, receipt, args.attention_precision
+    )
     block_type = _extract_pinned_block(
         upstream,
         torch,
@@ -985,16 +1382,40 @@ def main() -> int:
         qk_norm_type=config["qk_norm_type"],
         qkv_bias=config["qkv_bias"],
         dtype=torch.float32,
-        device=torch.device("cpu"),
+        # Trusted real weights already occupy CPU memory. Constructing a full
+        # random CPU block first needlessly adds another model-sized copy at
+        # the 4 GiB guard boundary; meta parameters are replaced by the exact
+        # safetensors tensors below, then moved to MPS for computation.
+        device=torch.device("meta" if source_state is not None else "cpu"),
     )
     block.eval()
-    state_f32 = _synthetic_state(torch, block, config)
-    block.load_state_dict(state_f32, strict=True)
-    state_bf16 = {
-        name: tensor.to(dtype=torch.bfloat16).to(dtype=torch.float32).contiguous()
-        for name, tensor in state_f32.items()
-    }
-    block.to(device=device, dtype=torch.float32)
+    if source_state is None:
+        state_f32 = _synthetic_state(torch, block, config)
+        state_bf16 = {
+            name: tensor.to(dtype=torch.bfloat16).to(dtype=torch.float32).contiguous()
+            for name, tensor in state_f32.items()
+        }
+        block.load_state_dict(state_f32, strict=True)
+        block.to(device=device, dtype=torch.float32)
+    else:
+        if source_dtype not in ("F32", "BF16"):
+            raise RuntimeError("Trusted source dtype was not established before block loading")
+        # Keep the source tensors as the F32-control input mapping. load_state_dict
+        # casts BF16 source values into the F32 MPS parameters when needed.
+        state_f32 = source_state
+        # An already-BF16 source is its own BF16-resident control. For F32
+        # source weights, the BF16-rounded/F32-compute control is prepared
+        # in place on MPS for each case to avoid a retained model-sized copy.
+        state_bf16 = source_state if source_dtype == "BF16" else {}
+        block.load_state_dict(source_state, strict=True, assign=True)
+        block.to(device=device, dtype=torch.float32)
+    _emit_stage_telemetry(
+        args.stage_telemetry,
+        "model_resident",
+        geometry=config["geometry_label"],
+        source_dtype=source_dtype or "synthetic",
+        device=device.type,
+    )
     hooks = _capture_hooks(
         block,
         capture_state,
@@ -1022,6 +1443,12 @@ def main() -> int:
                     "txt_modulation_rows": config["text_tokens"],
                 }
             variant_results: dict[str, Any] = {}
+            _emit_stage_telemetry(
+                args.stage_telemetry,
+                "variant_start",
+                case=case_name,
+                variant="f32",
+            )
             block.load_state_dict(state_f32, strict=True)
             base_f32, base_f32_outputs = _run_case(
                 torch,
@@ -1072,8 +1499,23 @@ def main() -> int:
                 "checkpoints": perturbed_f32["checkpoints"],
             }
             variant_results["f32"] = base_f32
+            _emit_stage_telemetry(
+                args.stage_telemetry,
+                "variant_complete",
+                case=case_name,
+                variant="f32",
+            )
 
-            block.load_state_dict(state_bf16, strict=True)
+            _emit_stage_telemetry(
+                args.stage_telemetry,
+                "variant_start",
+                case=case_name,
+                variant="bf16_weights_roundtrip_f32_compute",
+            )
+            if source_state is not None and source_dtype == "F32":
+                _round_parameters_bf16_in_place(torch, block, device)
+            else:
+                block.load_state_dict(state_bf16, strict=True)
             base_bf16, base_bf16_outputs = _run_case(
                 torch,
                 block,
@@ -1118,6 +1560,12 @@ def main() -> int:
                 "checkpoints": perturbed_bf16["checkpoints"],
             }
             variant_results["bf16_weights_roundtrip_f32_compute"] = base_bf16
+            _emit_stage_telemetry(
+                args.stage_telemetry,
+                "variant_complete",
+                case=case_name,
+                variant="bf16_weights_roundtrip_f32_compute",
+            )
             cases.append(
                 {
                     "name": case_name,
@@ -1139,6 +1587,7 @@ def main() -> int:
 
     if receipt["calls"] != len(cases) * 6:
         raise RuntimeError(f"Unexpected total SDPA calls: {receipt['calls']}")
+    _emit_stage_telemetry(args.stage_telemetry, "fixture_write_begin")
     _save_fixture(
         args.output.resolve(),
         torch,
@@ -1149,7 +1598,12 @@ def main() -> int:
         cases,
         receipt,
         config,
+        args.attention_precision,
+        source_state,
+        source_dtype,
+        source_provenance,
     )
+    _emit_stage_telemetry(args.stage_telemetry, "fixture_write_end")
     print(
         json.dumps(
             {

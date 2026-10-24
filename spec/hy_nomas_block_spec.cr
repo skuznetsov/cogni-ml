@@ -42,6 +42,33 @@ private def hy_load_fixture(path : String, expected_sha256 : String) : JSON::Any
   JSON.parse(contents)
 end
 
+# The generic oracle also supports synthetic weights. An actual-checkpoint
+# claim must independently select that mode and bind its exact source digest.
+private def hy_require_checkpoint_source!(fixture : JSON::Any, expected_sha256 : String) : Nil
+  unless expected_sha256.matches?(/\A[0-9a-f]{64}\z/)
+    raise ArgumentError.new("Actual checkpoint mode requires a trusted source SHA-256")
+  end
+  unless fixture["weights_are_synthetic"].as_bool == false && fixture["source"].as_h?
+    raise ArgumentError.new("Actual checkpoint mode rejects synthetic or missing source provenance")
+  end
+  source = fixture["source"]
+  unless source["weights_are_synthetic"].as_bool == false &&
+         source["file_sha256"].as_s == expected_sha256 &&
+         source["format"].as_s == "safetensors" &&
+         {"F32", "BF16"}.includes?(source["source_dtype"].as_s) &&
+         source["tensor_prefix"].as_s == "double_blocks.0." &&
+         source["tensor_count"].as_i == 32
+    raise ArgumentError.new("Actual checkpoint source provenance differs from the trusted block")
+  end
+  fixture["cases"].as_a.each do |data|
+    data["variants"].as_h.each_value do |variant|
+      unless variant["weights_are_synthetic"].as_bool == false && variant["source_checkpoint"] == source
+        raise ArgumentError.new("Variant is not bound to the trusted actual checkpoint source")
+      end
+    end
+  end
+end
+
 private def hy_case_config(fixture : JSON::Any, data : JSON::Any) : ML::Video::HyNomasConfig
   values = fixture["config"].as_h.dup
   data["config_overrides"]?.try(&.as_h.each { |key, value| values[key] = value })
@@ -55,7 +82,16 @@ private def hy_case_config(fixture : JSON::Any, data : JSON::Any) : ML::Video::H
     ffn_dim: values["ffn_dim"].as_i,
     img_modulation_rows: values["img_modulation_rows"]?.try(&.as_i) || 0,
     txt_modulation_rows: values["txt_modulation_rows"]?.try(&.as_i) || 0,
+    attention_precision: hy_attention_precision(fixture["scope"]["attention_precision"].as_s),
   )
+end
+
+private def hy_attention_precision(value : String) : ML::Video::HyNomasAttentionPrecision
+  case value
+  when "f32"             then ML::Video::HyNomasAttentionPrecision::F32Control
+  when "bf16-boundaries" then ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl
+  else                        raise ArgumentError.new("Unknown Hy-Nomas fixture attention precision")
+  end
 end
 
 # This gate rejects nonfinite values even when a NaN comparison might otherwise
@@ -76,32 +112,82 @@ private def hy_compare(actual : Array(Float32), expected : JSON::Any, label : St
   violations = 0
   max_abs = 0.0_f32
   max_ratio = 0.0_f32
+  first_violation = nil.as(String?)
   Math.min(actual.size, reference.size).times do |index|
     value = actual[index]
     target = reference[index]
     unless value.finite? && target.finite?
       violations += 1
+      first_violation ||= " first_index=#{index} actual=#{value} reference=#{target}"
       next
     end
     delta = (value - target).abs
     tolerance = 2e-5_f32 + 2e-5_f32 * target.abs
     max_abs = Math.max(max_abs, delta)
     max_ratio = Math.max(max_ratio, delta / tolerance)
-    violations += 1 if delta > tolerance
+    if delta > tolerance
+      violations += 1
+      first_violation ||= " first_index=#{index} actual=#{value} reference=#{target} actual_bits=#{value.unsafe_as(UInt32).to_s(16)} reference_bits=#{target.unsafe_as(UInt32).to_s(16)}"
+    end
   end
   passed = actual.size == reference.size && violations == 0
-  detail = "#{label} n=#{actual.size}/#{reference.size} violations=#{violations} max_abs=#{max_abs} max_gate_ratio=#{max_ratio}"
+  detail = "#{label} n=#{actual.size}/#{reference.size} violations=#{violations} max_abs=#{max_abs} max_gate_ratio=#{max_ratio}#{first_violation}"
   reports << detail
   failures << detail unless passed
 end
 
+# Terminal diagnostics only: relate a discrete BF16 mismatch to the F32
+# projection that preceded packing. No model computation is moved to the CPU.
+private def hy_boundary_diagnostics(config : ML::Video::HyNomasConfig,
+                                    actual : Hash(String, Array(Float32)),
+                                    expected : JSON::Any, label : String,
+                                    reports : Array(String)) : Nil
+  {"query" => {"img.attn.q_rope", "txt.attn.q_norm"},
+   "key"   => {"img.attn.k_rope", "txt.attn.k_norm"},
+   "value" => {"img.attn.v", "txt.attn.v"}}.each do |part, names|
+    name = "joint.#{part}"
+    reference = hy_floats(expected[name])
+    raw_references = {hy_floats(expected[names[0]]), hy_floats(expected[names[1]])}
+    # The ordinary comparison owns shape failures. Diagnostics must not mask
+    # that report by indexing a malformed fixture after comparison failed.
+    next unless actual[name].size == reference.size && reference.size == config.joint_rows * config.dim
+    next unless actual[names[0]].size == config.image_rows * config.dim &&
+                actual[names[1]].size == config.text_rows * config.dim &&
+                raw_references[0].size == actual[names[0]].size &&
+                raw_references[1].size == actual[names[1]].size
+    count = 0
+    actual[name].each_with_index do |packed, index|
+      target = reference[index]
+      next if packed == target
+      joint_row, channel = index.divmod(config.dim)
+      batch, token = joint_row.divmod(config.joint_tokens)
+      stream = token < config.video_tokens ? 0 : 1
+      stream_token = stream == 0 ? token : token - config.video_tokens
+      stream_tokens = stream == 0 ? config.video_tokens : config.text_tokens
+      raw_index = (batch * stream_tokens + stream_token) * config.dim + channel
+      raw = actual[names[stream]][raw_index]
+      raw_ref = raw_references[stream][raw_index]
+      reports << "boundary_input #{label}/#{name} index=#{index} native_pre=#{raw} reference_pre=#{raw_ref} native_pre_bits=#{raw.unsafe_as(UInt32).to_s(16)} reference_pre_bits=#{raw_ref.unsafe_as(UInt32).to_s(16)} native_post=#{packed} reference_post=#{target}"
+      count += 1
+      break if count == 4
+    end
+  end
+end
+
 private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
-                           variant : JSON::Any, fixture_path : String) : Nil
+                           variant : JSON::Any, fixture_path : String) : Array(String)
   config = hy_case_config(fixture, data)
   manifest = variant["weights_file"]
   sidecar = hy_sidecar(fixture_path, manifest)
   source_dtype = ML::GGUF::SafeTensorDType.parse(manifest["dtype"].as_s)
-  resident_dtype = source_dtype.bf16? ? ML::Video::WeightDType::BF16 : ML::Video::WeightDType::F32
+  resident_dtype = ML::Video::WeightDType.parse(variant["resident_dtype"].as_s)
+  allow_conversion = variant["allow_f32_to_bf16"].as_bool
+  variant["attention_precision"].as_s.should eq(fixture["scope"]["attention_precision"].as_s)
+  replay = variant["attention_replay"]
+  {"query", "key", "value", "attention"}.each do |name|
+    hy_floats(replay[name]).should eq(hy_floats(variant["checkpoints"]["joint.#{name}"])),
+      "attention replay must come from this variant's first block application"
+  end
   bindings = ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(config, source_dtype)
   variant["compute_dtype"].as_s.should eq("F32")
   fixture_bindings = variant["checkpoint_bindings"].as_a
@@ -119,7 +205,8 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
   begin
     allocation_count = ML::MetalBuffer.video_spec_allocations
     expect_raises(ArgumentError, /memory budget/) do
-      ML::Video::HyNomasDualStreamBlock.weight_plan([file], config, 1_i64, resident_dtype: resident_dtype, require_all: true)
+      ML::Video::HyNomasDualStreamBlock.weight_plan([file], config, 1_i64, resident_dtype: resident_dtype, require_all: true,
+        allow_f32_to_bf16: allow_conversion)
     end
     wrong_bindings = bindings.dup
     wrong_bindings[0] = bindings[0].copy_with(shape: [1_i64])
@@ -141,6 +228,14 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     arenas << perturbed_scratch
     data["inputs"].as_h.each { |name, values| inputs.upload(name, hy_floats(values)) }
     inputs.upload("img_perturbed", hy_floats(variant["video_perturbation"]["input_img"]))
+    {"query", "key", "value"}.each do |name|
+      inputs.upload("attention_replay.#{name}", hy_floats(replay[name]))
+    end
+    joint_count = config.joint_rows * config.dim
+    inputs.alloc("attention_replay.raw", joint_count)
+    inputs.alloc("attention_replay.rounded", joint_count)
+    inputs.alloc("attention_replay.img", config.image_rows * config.dim)
+    inputs.alloc("attention_replay.txt", config.text_rows * config.dim)
     {first_scratch, chain_scratch, perturbed_scratch}.each do |scratch|
       ML::Video::HyNomasDualStreamBlock.prepare_scratch!(scratch, config)
     end
@@ -148,6 +243,7 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     plan = ML::Video::HyNomasDualStreamBlock.weight_plan(
       [file], config, 2_i64 * File.size(sidecar) + reserve + 1024_i64 * 1024,
       reserve_bytes: reserve, resident_dtype: resident_dtype, require_all: true,
+      allow_f32_to_bf16: allow_conversion,
     )
     plan.destination_bytes.should eq(bindings.sum { |binding| binding.shape.product * resident_dtype.bytes_per_element })
     prepared = ML::Video::PreparedWeights.new(plan, weights)
@@ -163,6 +259,21 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     command = ML::Metal::CommandBuffer.new
     encoder = ML::Metal::ComputeEncoder.new(command)
     prepared.not_nil!.encode(encoder)
+    # Isolate attention on the exact upstream Q/K/V. No F32 pre-attention drift
+    # can cross a BF16 midpoint and contaminate this independent discriminator.
+    ML::Video::MetalOps.attention(encoder,
+      inputs["attention_replay.query"], inputs["attention_replay.key"], inputs["attention_replay.value"],
+      inputs["attention_replay.raw"], config.joint_tokens, config.joint_tokens,
+      config.heads, config.head_dim, config.batches)
+    ML::Video::MetalOps.copy(encoder, inputs["attention_replay.raw"], inputs["attention_replay.rounded"], joint_count)
+    encoder.set_pipeline(ML::Video::HyNomasDualStreamBlock.pipeline("hy_nomas_split_f32"))
+    encoder.set_buffer(inputs["attention_replay.rounded"], 0, ML::Metal::BufferAccess::ReadWrite)
+    encoder.set_buffer(inputs["attention_replay.img"], 1, ML::Metal::BufferAccess::Write)
+    encoder.set_buffer(inputs["attention_replay.txt"], 2, ML::Metal::BufferAccess::Write)
+    encoder.set_value(config.batches.to_u32, 3).set_value(config.video_tokens.to_u32, 4)
+    encoder.set_value(config.text_tokens.to_u32, 5).set_value(config.dim.to_u32, 6)
+    encoder.set_value(config.attention_precision.bf16_boundary_control? ? 1_u32 : 0_u32, 7)
+    encoder.dispatch_1d(joint_count)
     expect_raises(ArgumentError, /alias/) do
       first.encode(encoder, first.image_output, inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
     end
@@ -181,6 +292,10 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     perturbed_snapshots = hy_snapshots(perturbed)
     failures = [] of String
     reports = [] of String
+    hy_compare(inputs["attention_replay.raw"].read(joint_count), replay["attention_f32"],
+      "#{data["name"]}/#{manifest["dtype"]}/attention_replay/f32", failures, reports)
+    hy_compare(inputs["attention_replay.rounded"].read(joint_count), replay["attention"],
+      "#{data["name"]}/#{manifest["dtype"]}/attention_replay/post_boundary", failures, reports)
     {"first"     => {snapshots, variant["checkpoints"]},
      "chain"     => {chain_snapshots, variant["chain_expected"]["checkpoints"]},
      "perturbed" => {perturbed_snapshots, variant["video_perturbation"]["checkpoints"]}}.each do |group, pair|
@@ -188,8 +303,13 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
       expected.as_h.each do |name, reference|
         hy_compare(values[name], reference, "#{data["name"]}/#{manifest["dtype"]}/#{group}/#{name}", failures, reports)
       end
+      if config.attention_precision.bf16_boundary_control?
+        hy_boundary_diagnostics(config, values, expected, "#{data["name"]}/#{manifest["dtype"]}/#{group}", reports)
+      end
     end
-    summary = "Hy-Nomas #{data["name"]}/#{manifest["dtype"]}: checkpoints=#{reports.size} failures=#{failures.size} resident_weights_bytes=#{plan.destination_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} gpu_seconds_four_encodes_plus_weight_decode=#{gpu_seconds} reference_kind=upstream_block_f32_math_mps_sdpa"
+    comparison_count = reports.count { |line| !line.starts_with?("boundary_input ") }
+    origin = variant["weights_are_synthetic"].as_bool ? "synthetic" : "checkpoint"
+    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
     STDERR.puts summary
     if report_path = ENV["HY_NOMAS_REPORT"]?
       File.open(report_path, "a") do |report|
@@ -197,7 +317,6 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
         reports.each { |line| report.puts line }
       end
     end
-    failures.empty?.should be_true, failures.join("\n")
     # A video perturbation must propagate through joint attention into text.
     {"img.output", "txt.output"}.each do |name|
       snapshots[name].zip(perturbed_snapshots[name]).any? { |left, right| (left - right).abs > 1e-5_f32 }.should be_true,
@@ -205,6 +324,7 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     end
     hy_matches(snapshots["img.output"], chain_snapshots["img.output"]).should be_false,
       "the chained block must consume the first block's resident output"
+    failures
   ensure
     prepared.try(&.release)
     file.close
@@ -253,13 +373,84 @@ describe ML::Video::HyNomasDualStreamBlock do
       config.copy_with(norm_eps: Float32::NAN),
       config.copy_with(norm_eps: 1e-5_f32),
       config.copy_with(norm_eps: Float32::INFINITY),
+      config.copy_with(attention_precision: ML::Video::HyNomasAttentionPrecision.new(99)),
     ]
     allocations = ML::MetalBuffer.video_spec_allocations
     config.validate!
+    config.attention_precision.should eq(ML::Video::HyNomasAttentionPrecision::F32Control)
+    config.copy_with(attention_precision: ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl).validate!
     invalid.each do |item|
       expect_raises(ArgumentError) { item.validate! }
     end
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "rounds both attention boundaries on GPU with ties-even and preserves the F32 control" do
+    # Expected words are literal independent boundary cases, not values computed
+    # by copying the shader's integer rounding formula into the test.
+    source = [
+      0x00000000_u32, 0x80000000_u32,
+      0x3f807fff_u32, 0x3f808000_u32, 0x3f808001_u32, 0x3f818000_u32,
+      0xbf808000_u32, 0xbf818000_u32,
+      0x00008000_u32, 0x00018000_u32, 0x007f8000_u32,
+      0x7f7f7fff_u32, 0x7f7f8000_u32,
+      0x7f800000_u32, 0xff800000_u32,
+      0x7f800001_u32, 0xff800001_u32, 0x7fc10000_u32,
+    ]
+    rounded = [
+      0x00000000_u32, 0x80000000_u32,
+      0x3f800000_u32, 0x3f800000_u32, 0x3f810000_u32, 0x3f820000_u32,
+      0xbf800000_u32, 0xbf820000_u32,
+      0x00000000_u32, 0x00020000_u32, 0x00800000_u32,
+      0x7f7f0000_u32, 0x7f800000_u32,
+      0x7f800000_u32, 0xff800000_u32,
+      0x7fc00000_u32, 0xffc00000_u32, 0x7fc10000_u32,
+    ]
+    source.should_not eq(rounded), "an omitted BF16 boundary must be detectable"
+    arena = ML::Video::Arena.new
+    begin
+      arena.upload("left", source.map(&.unsafe_as(Float32)))
+      arena.upload("right", source.reverse.map(&.unsafe_as(Float32)))
+      arena.upload("raw_attention", (source + source.reverse).map(&.unsafe_as(Float32)))
+      {"f32", "bf16"}.each do |mode|
+        arena.alloc("#{mode}.packed", 2 * source.size)
+        arena.alloc("#{mode}.attention", 2 * source.size)
+        arena.alloc("#{mode}.img", source.size)
+        arena.alloc("#{mode}.txt", source.size)
+      end
+      ML::Video::HyNomasDualStreamBlock.prepare!
+      command = ML::Metal::CommandBuffer.new
+      encoder = ML::Metal::ComputeEncoder.new(command)
+      allocations = ML::MetalBuffer.video_spec_allocations
+      {"f32" => 0_u32, "bf16" => 1_u32}.each do |mode, flag|
+        encoder.set_pipeline(ML::Video::HyNomasDualStreamBlock.pipeline("hy_nomas_concat_f32"))
+        encoder.set_buffer(arena["left"], 0).set_buffer(arena["right"], 1)
+        encoder.set_buffer(arena["#{mode}.packed"], 2, ML::Metal::BufferAccess::Write)
+        encoder.set_value(1_u32, 3).set_value(1_u32, 4).set_value(1_u32, 5)
+        encoder.set_value(source.size.to_u32, 6).set_value(flag, 7)
+        encoder.dispatch_1d(2 * source.size)
+        ML::Video::MetalOps.copy(encoder, arena["raw_attention"], arena["#{mode}.attention"], 2 * source.size)
+        encoder.set_pipeline(ML::Video::HyNomasDualStreamBlock.pipeline("hy_nomas_split_f32"))
+        encoder.set_buffer(arena["#{mode}.attention"], 0, ML::Metal::BufferAccess::ReadWrite)
+        encoder.set_buffer(arena["#{mode}.img"], 1, ML::Metal::BufferAccess::Write)
+        encoder.set_buffer(arena["#{mode}.txt"], 2, ML::Metal::BufferAccess::Write)
+        encoder.set_value(1_u32, 3).set_value(1_u32, 4).set_value(1_u32, 5)
+        encoder.set_value(source.size.to_u32, 6).set_value(flag, 7)
+        encoder.dispatch_1d(2 * source.size)
+      end
+      encoder.end_encoding
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      command.commit_and_wait
+      {"f32" => source, "bf16" => rounded}.each do |mode, expected|
+        {"packed", "attention"}.each do |name|
+          arena["#{mode}.#{name}"].read(2 * source.size).map(&.unsafe_as(UInt32)).should eq(expected + expected.reverse)
+        end
+        arena["#{mode}.img"].read(source.size).map(&.unsafe_as(UInt32)).should eq(expected)
+        arena["#{mode}.txt"].read(source.size).map(&.unsafe_as(UInt32)).should eq(expected.reverse)
+      end
+    ensure
+      arena.release
+    end
   end
 
   it "binds exactly the pinned block weights and rejects unsupported checkpoint dtypes" do
@@ -332,14 +523,40 @@ describe ML::Video::HyNomasDualStreamBlock do
     end
   end
 
-  it "matches the declared upstream F32 math control, resident chaining and perturbation without encode allocations" do
+  it "rejects a synthetic fixture or a different source digest in actual checkpoint mode" do
+    digest = "a" * 64
+    source = %({"format":"safetensors","file_sha256":"#{digest}","weights_are_synthetic":false,"source_dtype":"F32","tensor_prefix":"double_blocks.0.","tensor_count":32})
+    variant = %({"weights_are_synthetic":false,"source_checkpoint":#{source}})
+    contents = %({"weights_are_synthetic":false,"source":#{source},"cases":[{"variants":{"f32":#{variant},"bf16_weights_roundtrip_f32_compute":#{variant}}}]})
+    fixture = JSON.parse(contents)
+    allocations = ML::MetalBuffer.video_spec_allocations
+    hy_require_checkpoint_source!(fixture, digest)
+    expect_raises(ArgumentError, /differs from the trusted block/) { hy_require_checkpoint_source!(fixture, "b" * 64) }
+    expect_raises(ArgumentError, /trusted source SHA-256/) { hy_require_checkpoint_source!(fixture, "") }
+    expect_raises(ArgumentError, /rejects synthetic/) do
+      hy_require_checkpoint_source!(JSON.parse(contents.sub("\"weights_are_synthetic\":false", "\"weights_are_synthetic\":true")), digest)
+    end
+    expect_raises(ArgumentError, /differs from the trusted block/) do
+      hy_require_checkpoint_source!(JSON.parse(contents.sub("\"tensor_count\":32", "\"tensor_count\":31")), digest)
+    end
+    fixture["cases"][0]["variants"]["f32"].as_h["source_checkpoint"] = JSON::Any.new(nil)
+    expect_raises(ArgumentError, /Variant is not bound/) { hy_require_checkpoint_source!(fixture, digest) }
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "matches the declared upstream precision control, resident chaining and perturbation without encode allocations" do
     fixture_path = ENV["HY_NOMAS_BLOCK_FIXTURE"]?
-    pending "Set HY_NOMAS_BLOCK_FIXTURE to the external pinned MPS oracle JSON" unless fixture_path
+    pending! "Set HY_NOMAS_BLOCK_FIXTURE to the external pinned MPS oracle JSON" unless fixture_path
     fixture = hy_load_fixture(fixture_path.not_nil!, ENV["HY_NOMAS_FIXTURE_SHA256"]? || "")
-    fixture["schema_version"].as_i.should eq(1)
+    if expected_source = ENV["HY_NOMAS_CHECKPOINT_SHA256"]?
+      hy_require_checkpoint_source!(fixture, expected_source)
+    end
+    fixture["schema_version"].as_i.should eq(2)
     fixture["provenance"]["revision"].as_s.should eq("911cea6458a89c2663513ff7099561ec190dd491")
     scope = fixture["scope"]
-    scope["reference_kind"].as_s.should eq("upstream_block_f32_math_mps_sdpa")
+    precision = scope["attention_precision"].as_s
+    hy_attention_precision(precision)
+    scope["reference_kind"].as_s.should eq(precision == "f32" ? "upstream_block_f32_math_mps_sdpa" : "upstream_block_bf16_boundary_control_mps_sdpa")
     scope["pinned_magi_runtime_numeric_parity"].as_bool.should be_false
     scope["segment_mode"].as_s.should eq("single_full")
     scope["text_mask"].as_s.should eq("none_all_valid")
@@ -348,11 +565,13 @@ describe ML::Video::HyNomasDualStreamBlock do
     scope["chunk_size_tokens"].as_i.should eq(0)
     cases = fixture["cases"].as_a
     cases.map { |data| data["name"].as_s }.sort.should eq(["broadcast", "per_token"])
+    failures = [] of String
     cases.each do |data|
       data["variants"].as_h.keys.sort.should eq(["bf16_weights_roundtrip_f32_compute", "f32"])
       data["variants"].as_h.each_value do |variant|
-        hy_run_variant(fixture, data, variant, fixture_path.not_nil!)
+        failures.concat(hy_run_variant(fixture, data, variant, fixture_path.not_nil!))
       end
     end
+    failures.empty?.should be_true, failures.join("\n")
   end
 end

@@ -8,6 +8,14 @@ require "./metal_ops"
 require "./checkpoint"
 
 module ML::Video
+  # F32Control preserves the initial native control path. BF16BoundaryControl
+  # rounds concatenated Q/K/V and the SDPA output through BF16 while keeping
+  # the intervening native attention arithmetic in F32.
+  enum HyNomasAttentionPrecision
+    F32Control
+    BF16BoundaryControl
+  end
+
   # One unmasked, bidirectional segment through a dual-stream MMDoubleStreamBlock.
   # A modulation row count of zero means one condition row per batch item
   # ([B,1,C]); set it to B*L for per-token conditions ([B,L,C]).
@@ -27,7 +35,8 @@ module ML::Video
     has_mask : Bool = false,
     has_camera : Bool = false,
     action_windows : Bool = false,
-    norm_eps : Float32 = 1e-6_f32 do
+    norm_eps : Float32 = 1e-6_f32,
+    attention_precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control do
     def effective_img_modulation_rows : Int32
       img_modulation_rows == 0 ? batches : img_modulation_rows
     end
@@ -55,6 +64,9 @@ module ML::Video
     end
 
     def validate! : Nil
+      unless attention_precision.f32_control? || attention_precision.bf16_boundary_control?
+        raise ArgumentError.new("Unsupported Hy-Nomas attention precision control")
+      end
       HyNomasDualStreamBlock.checked_count(batches, video_tokens, dim)
       HyNomasDualStreamBlock.checked_count(batches, text_tokens, dim)
       HyNomasDualStreamBlock.checked_count(batches, joint_tokens, dim)
@@ -291,10 +303,12 @@ module ML::Video
     def self.weight_plan(files : Array(CheckpointFile), config : HyNomasConfig,
                          budget_bytes : Int64, reserve_bytes : Int64 = 0_i64,
                          resident_dtype : WeightDType = WeightDType::F32,
-                         block_index : Int32 = 0, require_all : Bool = false) : WeightPlan
+                         block_index : Int32 = 0, require_all : Bool = false,
+                         allow_f32_to_bf16 : Bool = false) : WeightPlan
       validate_source_dtypes!(files, config, block_index)
       bindings = checkpoint_bindings(config, block_index: block_index)
-      WeightPlan.new(files, bindings, budget_bytes, reserve_bytes, resident_dtype, require_all)
+      WeightPlan.new(files, bindings, budget_bytes, reserve_bytes, resident_dtype,
+        require_all, allow_f32_to_bf16)
     end
 
     def self.prepare! : Nil
@@ -539,6 +553,9 @@ module ML::Video
       result["img.attn.k_norm"] = @image_buffers.attn_k_norm
       result["img.attn.q_rope"] = @image_buffers.attn_q_rope.not_nil!
       result["img.attn.k_rope"] = @image_buffers.attn_k_rope.not_nil!
+      result["joint.query"] = @joint_query
+      result["joint.key"] = @joint_key
+      result["joint.value"] = @joint_value
       result["joint.attention"] = @joint_attention
       result["img.attn.raw"] = @image_buffers.attn_raw
       result["img.attn.projected"] = @image_buffers.attn_projected
@@ -649,6 +666,7 @@ module ML::Video
       e.set_buffer(output, 2, ML::Metal::BufferAccess::Write)
       e.set_value(c.batches.to_u32, 3).set_value(left_tokens.to_u32, 4)
       e.set_value(right_tokens.to_u32, 5).set_value(c.dim.to_u32, 6)
+      e.set_value(c.attention_precision.bf16_boundary_control? ? 1_u32 : 0_u32, 7)
       e.dispatch_1d(c.joint_rows * c.dim)
     end
 
@@ -657,10 +675,13 @@ module ML::Video
                       img_tokens : Int32, txt_tokens : Int32) : Nil
       c = @config
       e.set_pipeline(self.class.pipeline("hy_nomas_split_f32"))
-      e.set_buffer(input, 0).set_buffer(img, 1, ML::Metal::BufferAccess::Write)
+      round_boundary = c.attention_precision.bf16_boundary_control?
+      input_access = round_boundary ? ML::Metal::BufferAccess::ReadWrite : ML::Metal::BufferAccess::Read
+      e.set_buffer(input, 0, input_access).set_buffer(img, 1, ML::Metal::BufferAccess::Write)
       e.set_buffer(txt, 2, ML::Metal::BufferAccess::Write)
       e.set_value(c.batches.to_u32, 3).set_value(img_tokens.to_u32, 4)
       e.set_value(txt_tokens.to_u32, 5).set_value(c.dim.to_u32, 6)
+      e.set_value(round_boundary ? 1_u32 : 0_u32, 7)
       e.dispatch_1d(c.joint_rows * c.dim)
     end
 

@@ -1487,10 +1487,13 @@ using or redistributing the LTX-specific modules.
 
 An additional opt-in `ml/video/hy_nomas_block` implements Hy-Nomas dual video/text
 streams with reusable GPU scratch and safetensors admission for F32/BF16 weight
-storage. Its synthetic intermediate checks use the pinned upstream block with
-an explicitly F32 MPS attention adapter. This establishes an F32 math control;
-Magi's CUDA BF16 attention behavior, real checkpoint parity, camera/history,
-decoding and video generation remain open. See the
+storage, including an explicit GPU setup conversion from F32 to BF16. The first
+block from the official distilled checkpoint passes 488 intermediate/replay
+comparisons against the pinned upstream F32-math MPS control, at real channel
+widths and short token counts. An experimental BF16 attention-boundary control
+fails the unchanged numerical gate and remains off by default. Magi's CUDA
+runtime, camera/history, decoding, video quality and generation speed remain
+open. See the
 [Hy-Nomas frontier and reproduction commands](docs/hy-nomas-native-frontier.md)
 and [source notices](third_party/VIDEO_NOTICES.md#hy-nomas).
 

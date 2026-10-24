@@ -6,6 +6,38 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-ACTUAL-BLOCK-2026-10-24] Actual weights pass F32 control; BF16 boundaries fail
+
+- Extract only 32 `double_blocks.0.` tensors from the official distilled
+  checkpoint at HF revision `bac719a80c8d02f91c485fca804bb8221e149b70`.
+  The local F32 subset SHA-256 is
+  `6810bf7cd7f9a8ac4d66240eee514637a7ccaa47dc9de02e8bc26ae4543530d1`.
+  HTTPS range provenance is retained; the complete 34.2 GB source file was
+  not downloaded or independently hashed. The extractor rejects unfamiliar
+  layouts and has 11 passing offline tests.
+- Native C2048/H16/D128/F8192 F32-math controls pass 8 examples and all 488
+  comparison records with actual weights, both F32/BF16 residency and both
+  modulation modes. A trusted fixture digest plus explicit expected source
+  digest binds actual-weight admission. GPU F32-to-BF16 setup conversion is
+  opt-in and fully budgeted; 20 checkpoint examples pass. Encode allocates
+  zero tracked MetalBuffers and adds no completion wait/activation readback.
+- BF16 attention-boundary control remains experimental and default-off:
+  289/488 actual-weight records fail the unchanged `2e-5 + 2e-5*abs(ref)` gate.
+  Pre-boundary F32 differences cross BF16 midpoints. Same-input raw F32
+  attention replays pass all four variants; one rounded replay element fails.
+  This is an open numerical gate, not established video quality degradation.
+- Final bounded runs retain the sampled 4 GiB cap, cache-aware 15% floor,
+  64 MiB swap-growth stop and 600 s deadline. Maximum final oracle/native
+  sampled peaks across the separate precision modes are 3508.597/2789.034 MiB
+  with zero swap growth; two earlier oracle cap stops
+  remain excluded failures. No model/video generation or speedup is claimed.
+  Correlated MiniQuad verdict is ROBUST only for actual-weight F32 control
+  under trusted producer/digest and immutable-file assumptions.
+- Next: isolate pre-rounding projection/reduction drift and the rounded
+  attention replay, then benchmark representative token counts. Commands,
+  receipts, pins and refresh triggers: `docs/hy-nomas-native-frontier.md`.
+  Wan return pointer remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-F32-CORE-2026-10-24] Native block control; runtime precision remains open
 
 - User temporarily switched from Wan to Hy-Nomas. The opt-in dual-stream block
@@ -23,8 +55,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   fixture-digest and immutable-checkpoint preconditions. There is no video
   quality/speedup claim. Source, commands, receipts and decay triggers:
   `docs/hy-nomas-native-frontier.md`.
-- Next: BF16 attention boundaries and actual checkpoint weights, then MPS
-  GEMM/attention at representative token counts. Wan return pointer:
+- Historical next gate was BF16 attention boundaries and actual weights;
+  see LM-HY-NOMAS-ACTUAL-BLOCK-2026-10-24 for that result. Wan return pointer:
   `docs/wan-performance-frontier.md`, parent `e22fc2ba`; defaults are unchanged.
 
 ### [LM-WAN-SELF-API-SPLIT-2026-10-21] Attention dominates; continuation wall is mostly off CPU

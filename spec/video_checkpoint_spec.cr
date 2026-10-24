@@ -223,6 +223,61 @@ describe ML::Video::CheckpointFile do
       end
     end
   end
+
+  it "admits F32-to-BF16 only by opt-in and budgets only converted source staging" do
+    header = %({"f32_a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]},"bf16":{"dtype":"BF16","shape":[2],"data_offsets":[8,12]},"f32_b":{"dtype":"F32","shape":[2],"data_offsets":[12,20]}})
+    with_video_checkpoint(header, Bytes.new(20)) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      begin
+        bindings = [
+          ML::Video::WeightBinding.new("a", "f32_a", [2_i64]),
+          ML::Video::WeightBinding.new("b", "bf16", [2_i64]),
+          ML::Video::WeightBinding.new("c", "f32_b", [2_i64]),
+        ]
+        allocations = ML::MetalBuffer.video_spec_allocations
+        expect_raises(ArgumentError, /original BF16/) do
+          ML::Video::WeightPlan.new([file], bindings, 128_i64,
+            resident_dtype: ML::Video::WeightDType::BF16)
+        end
+        expect_raises(ArgumentError, /budget/) do
+          ML::Video::WeightPlan.new([file], bindings, 31_i64, 4_i64,
+            resident_dtype: ML::Video::WeightDType::BF16,
+            allow_f32_to_bf16: true)
+        end
+        plan = ML::Video::WeightPlan.new([file], bindings, 32_i64, 4_i64,
+          resident_dtype: ML::Video::WeightDType::BF16,
+          allow_f32_to_bf16: true)
+        plan.allow_f32_to_bf16.should be_true
+        plan.destination_bytes.should eq(12)
+        plan.staging_bytes.should eq(16)
+        plan.peak_bytes.should eq(32)
+        plan.entries.map(&.raw_offset).should eq([0_i64, 0_i64, 8_i64])
+        expect_raises(ArgumentError, /BF16 residency/) do
+          ML::Video::WeightPlan.new([file], [bindings[0]], 128_i64,
+            allow_f32_to_bf16: true)
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      ensure
+        file.close
+      end
+    end
+
+    with_video_checkpoint(checkpoint_header(dtype: "F16", offsets: "[0,4]"), Bytes.new(4)) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      begin
+        binding = ML::Video::WeightBinding.new("weight", "w", [2_i64])
+        allocations = ML::MetalBuffer.video_spec_allocations
+        expect_raises(ArgumentError, /requires F32 source/) do
+          ML::Video::WeightPlan.new([file], [binding], 64_i64,
+            resident_dtype: ML::Video::WeightDType::BF16,
+            allow_f32_to_bf16: true)
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+      ensure
+        file.close
+      end
+    end
+  end
 end
 
 describe ML::Video::PreparedWeights do
@@ -496,6 +551,79 @@ describe ML::Video::PreparedWeights do
         weights.release
         expect_raises(ArgumentError, /released/) { weights.encode(encoder) }
       ensure
+        weights.try(&.release)
+        arena.release
+        file.close
+      end
+    end
+  end
+
+  it "rounds opt-in F32 sources to BF16 with ties-to-even and chains projections in one encoder" do
+    unless ML::Metal::Device.init!
+      pending "Metal required"
+      next
+    end
+    header = %({"w":{"dtype":"F32","shape":[2,2],"data_offsets":[0,16]},"b":{"dtype":"F32","shape":[2],"data_offsets":[16,24]},"rounds":{"dtype":"F32","shape":[8],"data_offsets":[24,56]},"direct":{"dtype":"BF16","shape":[2],"data_offsets":[56,60]}})
+    raw = IO::Memory.new
+    [0x3f800000_u32, 0x00000000_u32, 0x00000000_u32, 0x3f800000_u32,
+     0x00000000_u32, 0x00000000_u32,
+     0x3f808000_u32, 0x3f808001_u32, 0xbf808000_u32,
+     0x3f818000_u32, 0xbf818000_u32,
+     0x80000000_u32, 0x7f800000_u32, 0x7f812345_u32].each do |word|
+      raw.write_bytes(word, IO::ByteFormat::LittleEndian)
+    end
+    [0x3f80_u16, 0xc000_u16].each { |word| raw.write_bytes(word, IO::ByteFormat::LittleEndian) }
+    with_video_checkpoint(header, raw.to_slice) do |path|
+      file = ML::Video::CheckpointFile.new(path)
+      arena = ML::Video::Arena.new
+      weights = nil.as(ML::Video::PreparedWeights?)
+      command = nil.as(ML::Metal::CommandBuffer?)
+      encoder = nil.as(ML::Metal::ComputeEncoder?)
+      encoder_ended = false
+      begin
+        bindings = [
+          ML::Video::WeightBinding.new("w", "w", [2_i64, 2_i64]),
+          ML::Video::WeightBinding.new("b", "b", [2_i64]),
+          ML::Video::WeightBinding.new("rounds", "rounds", [8_i64]),
+          ML::Video::WeightBinding.new("direct", "direct", [2_i64]),
+        ]
+        plan = ML::Video::WeightPlan.new([file], bindings, 112_i64, 24_i64,
+          resident_dtype: ML::Video::WeightDType::BF16,
+          allow_f32_to_bf16: true, require_all: true)
+        plan.staging_bytes.should eq(56)
+        plan.peak_bytes.should eq(112)
+        weights = ML::Video::PreparedWeights.new(plan, arena)
+        Bytes.new(arena["direct"].contents.as(UInt8*), 4).should eq(raw.to_slice[56, 4])
+        x = arena.upload("x", [3_f32, -1_f32])
+        y = arena.alloc("y", 2)
+        z = arena.alloc("z", 2)
+        allocations = ML::MetalBuffer.video_spec_allocations
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command.not_nil!)
+        weights.encode(encoder.not_nil!)
+        ML::Video::MetalOps.linear(encoder.not_nil!, x, arena["w"], arena["b"], y, 1, 2, 2,
+          weight_dtype: ML::Video::WeightDType::BF16,
+          bias_dtype: ML::Video::WeightDType::BF16)
+        ML::Video::MetalOps.linear(encoder.not_nil!, y, arena["w"], arena["b"], z, 1, 2, 2,
+          weight_dtype: ML::Video::WeightDType::BF16,
+          bias_dtype: ML::Video::WeightDType::BF16)
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        encoder.not_nil!.end_encoding
+        encoder_ended = true
+        command.not_nil!.commit_and_wait
+        y.read(2).should eq([3_f32, -1_f32])
+        z.read(2).should eq([3_f32, -1_f32])
+        rounded_bytes = Bytes.new(16)
+        arena["rounds"].read_bytes(rounded_bytes.to_unsafe, rounded_bytes.size)
+        rounded = Array(UInt16).new(8) do |i|
+          IO::ByteFormat::LittleEndian.decode(UInt16, rounded_bytes[i * 2, 2])
+        end
+        rounded.should eq([0x3f80_u16, 0x3f81_u16, 0xbf80_u16,
+                           0x3f82_u16, 0xbf82_u16, 0x8000_u16,
+                           0x7f80_u16, 0x7fc1_u16])
+      ensure
+        encoder.try(&.end_encoding) unless encoder_ended
+        command.try { |active| active.discard unless active.committed? }
         weights.try(&.release)
         arena.release
         file.close

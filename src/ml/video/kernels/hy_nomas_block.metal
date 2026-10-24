@@ -5,6 +5,20 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// IEEE round-to-nearest-ties-to-even from F32 to BF16 followed by expansion
+// back to F32. NaNs retain sign and upper payload bits and are forced quiet;
+// infinities pass through the normal exact conversion path.
+inline float hy_nomas_bf16_roundtrip_f32(float value) {
+    const uint bits = as_type<uint>(value);
+    const uint magnitude = bits & 0x7fffffffu;
+    if (magnitude > 0x7f800000u) {
+        const uint nan_bf16 = (bits >> 16) | 0x40u;
+        return as_type<float>(nan_bf16 << 16);
+    }
+    const uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
+    return as_type<float>(rounded & 0xffff0000u);
+}
+
 kernel void hy_nomas_silu_f32(
     device const float *x [[buffer(0)]], device float *y [[buffer(1)]],
     constant uint &count [[buffer(2)]], uint id [[thread_position_in_grid]]) {
@@ -57,7 +71,8 @@ kernel void hy_nomas_concat_f32(
     device const float *left [[buffer(0)]], device const float *right [[buffer(1)]],
     device float *output [[buffer(2)]], constant uint &batches [[buffer(3)]],
     constant uint &left_tokens [[buffer(4)]], constant uint &right_tokens [[buffer(5)]],
-    constant uint &dim [[buffer(6)]], uint id [[thread_position_in_grid]]) {
+    constant uint &dim [[buffer(6)]], constant uint &bf16_boundary [[buffer(7)]],
+    uint id [[thread_position_in_grid]]) {
     const uint tokens = left_tokens + right_tokens;
     const uint count = batches * tokens * dim;
     if (id >= count) return;
@@ -65,19 +80,22 @@ kernel void hy_nomas_concat_f32(
     const uint token = row % tokens;
     const uint batch = row / tokens;
     const uint column = id % dim;
+    float value;
     if (token < left_tokens) {
-        output[id] = left[(batch * left_tokens + token) * dim + column];
+        value = left[(batch * left_tokens + token) * dim + column];
     } else {
         const uint right_token = token - left_tokens;
-        output[id] = right[(batch * right_tokens + right_token) * dim + column];
+        value = right[(batch * right_tokens + right_token) * dim + column];
     }
+    output[id] = bf16_boundary != 0u ? hy_nomas_bf16_roundtrip_f32(value) : value;
 }
 
 kernel void hy_nomas_split_f32(
-    device const float *input [[buffer(0)]], device float *left [[buffer(1)]],
+    device float *input [[buffer(0)]], device float *left [[buffer(1)]],
     device float *right [[buffer(2)]], constant uint &batches [[buffer(3)]],
     constant uint &left_tokens [[buffer(4)]], constant uint &right_tokens [[buffer(5)]],
-    constant uint &dim [[buffer(6)]], uint id [[thread_position_in_grid]]) {
+    constant uint &dim [[buffer(6)]], constant uint &bf16_boundary [[buffer(7)]],
+    uint id [[thread_position_in_grid]]) {
     const uint tokens = left_tokens + right_tokens;
     const uint count = batches * tokens * dim;
     if (id >= count) return;
@@ -85,10 +103,17 @@ kernel void hy_nomas_split_f32(
     const uint token = row % tokens;
     const uint batch = row / tokens;
     const uint column = id % dim;
+    float value = input[id];
+    if (bf16_boundary != 0u) {
+        value = hy_nomas_bf16_roundtrip_f32(value);
+        // Each invocation owns one unique source element; this in-place write
+        // preserves joint.attention as the post-boundary diagnostic checkpoint.
+        input[id] = value;
+    }
     if (token < left_tokens) {
-        left[(batch * left_tokens + token) * dim + column] = input[id];
+        left[(batch * left_tokens + token) * dim + column] = value;
     } else {
         const uint right_token = token - left_tokens;
-        right[(batch * right_tokens + right_token) * dim + column] = input[id];
+        right[(batch * right_tokens + right_token) * dim + column] = value;
     }
 }

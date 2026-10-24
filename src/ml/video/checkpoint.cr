@@ -177,6 +177,7 @@ module ML::Video
     getter peak_bytes : Int64
     getter reserve_bytes : Int64
     getter resident_dtype : WeightDType
+    getter allow_f32_to_bf16 : Bool
 
     def entries : Array(PlannedWeight)
       @entries.map(&.snapshot)
@@ -185,10 +186,15 @@ module ML::Video
     def initialize(files : Array(CheckpointFile), bindings : Array(WeightBinding),
                    budget_bytes : Int64, @reserve_bytes : Int64 = 0_i64,
                    @resident_dtype : WeightDType = WeightDType::F32,
-                   require_all : Bool = false)
+                   require_all : Bool = false,
+                   allow_f32_to_bf16 : Bool = false)
       unless budget_bytes > 0 && reserve_bytes >= 0 && reserve_bytes <= budget_bytes && !bindings.empty?
         raise ArgumentError.new("Invalid checkpoint memory budget or bindings")
       end
+      if allow_f32_to_bf16 && !resident_dtype.bf16?
+        raise ArgumentError.new("F32-to-BF16 conversion requires BF16 residency")
+      end
+      @allow_f32_to_bf16 = allow_f32_to_bf16
       tensors = {} of String => {CheckpointFile, CheckpointTensor}
       files.each do |file|
         file.unchanged!
@@ -213,13 +219,23 @@ module ML::Video
         if binding.dtype && binding.dtype != info.dtype
           raise ArgumentError.new("Checkpoint dtype mismatch #{binding.source}")
         end
-        if resident_dtype.bf16? && !info.dtype.bf16?
-          raise ArgumentError.new("Native BF16 residency requires original BF16 source #{binding.source}")
-        end
         # The reader admitted <= Int32::MAX bytes, so these additions cannot
         # overflow Int64 before the explicit bounded-budget rejection.
         if resident_dtype.bf16?
-          @entries << PlannedWeight.new(binding.snapshot, file, info.snapshot, 0_i64)
+          if info.dtype.bf16?
+            # Preserve the direct-copy path for original BF16 tensors.
+            @entries << PlannedWeight.new(binding.snapshot, file, info.snapshot, 0_i64)
+          elsif allow_f32_to_bf16 && info.dtype.f32?
+            # Only F32 sources need a conversion staging slice. Keep every
+            # offset four-byte aligned for the raw F32 reader kernel.
+            @staging_bytes = ((@staging_bytes + 3) // 4) * 4
+            @entries << PlannedWeight.new(binding.snapshot, file, info.snapshot, @staging_bytes)
+            @staging_bytes += info.data_bytes
+          elsif allow_f32_to_bf16
+            raise ArgumentError.new("F32-to-BF16 conversion requires F32 source #{binding.source}")
+          else
+            raise ArgumentError.new("Native BF16 residency requires original BF16 source #{binding.source}")
+          end
         else
           @staging_bytes = ((@staging_bytes + 3) // 4) * 4
           @entries << PlannedWeight.new(binding.snapshot, file, info.snapshot, @staging_bytes)
@@ -239,16 +255,18 @@ module ML::Video
     end
   end
 
-  # Arena owns destinations. F32 mode additionally owns raw staging until the
-  # caller's final command completes. Native BF16 copies file bytes directly
-  # into final buffers at setup; consumers expand operands on GPU when read.
+  # Arena owns destinations. F32 residency and opt-in F32-to-BF16 conversion
+  # additionally own raw staging until the caller's final command completes.
+  # Original BF16 tensors copy directly into final buffers at setup.
   class PreparedWeights
     SOURCE = {{ read_file("#{__DIR__}/kernels/weight_decode.metal") }}
     @raw : ML::MetalBuffer?
     @destinations = [] of ML::MetalBuffer
     @entries : Array(PlannedWeight)
     @pipeline : ML::Metal::ComputePipeline?
+    @bf16_pipeline : ML::Metal::ComputePipeline?
     @resident_dtype : WeightDType
+    @staging_bytes : Int64
     @arena : Arena
     @released = false
 
@@ -256,14 +274,17 @@ module ML::Video
       @arena = arena
       @raw = nil
       @pipeline = nil
+      @bf16_pipeline = nil
       @resident_dtype = plan.resident_dtype
+      @staging_bytes = plan.staging_bytes
       @entries = plan.entries
       @entries.each do |entry|
         if arena.allocated?(entry.binding.target)
           raise ArgumentError.new("Checkpoint destination already exists #{entry.binding.target}")
         end
         entry.file.validate_tensor!(entry.info)
-        unless @resident_dtype.bf16? ||
+        needs_staging = !@resident_dtype.bf16? || entry.info.dtype.f32?
+        unless !needs_staging ||
                (entry.raw_offset >= 0 && entry.raw_offset % 4 == 0 &&
                entry.raw_offset <= plan.staging_bytes && entry.info.data_bytes <= plan.staging_bytes - entry.raw_offset)
           raise ArgumentError.new("Invalid checkpoint staging range")
@@ -272,20 +293,24 @@ module ML::Video
       unless arena.resident_bytes <= plan.reserve_bytes
         raise ArgumentError.new("Existing arena buffers exceed checkpoint reserve")
       end
-      unless @resident_dtype.bf16?
+      if !@resident_dtype.bf16?
         @pipeline = ML::Metal::PipelineCache.get("video_weight_decode") do
           ML::Metal::ComputePipeline.new("video_weight_decode", SOURCE)
+        end
+      elsif plan.allow_f32_to_bf16 && @entries.any? { |entry| entry.info.dtype.f32? }
+        @bf16_pipeline = ML::Metal::PipelineCache.get("video_weight_encode_bf16") do
+          ML::Metal::ComputePipeline.new("video_weight_encode_bf16", SOURCE)
         end
       end
       names = [] of String
       begin
-        @raw = ML::MetalBuffer.new(plan.staging_bytes) unless @resident_dtype.bf16?
+        @raw = ML::MetalBuffer.new(plan.staging_bytes) if plan.staging_bytes > 0
         @entries.each do |entry|
           info = entry.info
           destination = arena.alloc_weight(entry.binding.target, info.n_elements.to_i32, @resident_dtype)
           names << entry.binding.target
           @destinations << destination
-          pointer = if @resident_dtype.bf16?
+          pointer = if @resident_dtype.bf16? && entry.info.dtype.bf16?
                       destination.contents.as(UInt8*)
                     else
                       @raw.not_nil!.contents.as(UInt8*) + entry.raw_offset
@@ -310,23 +335,39 @@ module ML::Video
         end
         MetalOps.check_storage(buffer, entry.info.n_elements, @resident_dtype)
       end
-      return if @resident_dtype.bf16?
-      raw = @raw || raise ArgumentError.new("Checkpoint staging has been released")
-      raise ArgumentError.new("Invalid checkpoint staging") unless raw.valid?
-      @destinations.each { |buffer| MetalOps.distinct(buffer, raw) }
-      @entries.each_with_index do |entry, i|
-        info = entry.info
-        count = (info.data_bytes // info.dtype.bytes_per_element).to_i32
-        tag = case info.dtype
-              in .f32?  then 0_u32
-              in .bf16? then 1_u32
-              in .f16?  then 2_u32
-              end
-        encoder.set_pipeline(@pipeline.not_nil!)
-        encoder.set_buffer(raw, 0, offset: entry.raw_offset)
-        encoder.set_buffer(@destinations[i], 1, ML::Metal::BufferAccess::Write)
-        encoder.set_value(count.to_u32, 2).set_value(tag, 3)
-        encoder.dispatch_1d(count)
+      if @staging_bytes > 0
+        raw = @raw || raise ArgumentError.new("Checkpoint staging has been released")
+        raise ArgumentError.new("Invalid checkpoint staging") unless raw.valid?
+        @destinations.each { |buffer| MetalOps.distinct(buffer, raw) }
+      end
+      if @resident_dtype.bf16?
+        return unless @staging_bytes > 0
+        raw = @raw.not_nil!
+        @entries.each_with_index do |entry, i|
+          next unless entry.info.dtype.f32?
+          count = entry.info.n_elements.to_i32
+          encoder.set_pipeline(@bf16_pipeline.not_nil!)
+          encoder.set_buffer(raw, 0, offset: entry.raw_offset)
+          encoder.set_buffer(@destinations[i], 1, ML::Metal::BufferAccess::Write)
+          encoder.set_value(count.to_u32, 2)
+          encoder.dispatch_1d(count)
+        end
+      else
+        raw = @raw || raise ArgumentError.new("Checkpoint staging has been released")
+        @entries.each_with_index do |entry, i|
+          info = entry.info
+          count = (info.data_bytes // info.dtype.bytes_per_element).to_i32
+          tag = case info.dtype
+                in .f32?  then 0_u32
+                in .bf16? then 1_u32
+                in .f16?  then 2_u32
+                end
+          encoder.set_pipeline(@pipeline.not_nil!)
+          encoder.set_buffer(raw, 0, offset: entry.raw_offset)
+          encoder.set_buffer(@destinations[i], 1, ML::Metal::BufferAccess::Write)
+          encoder.set_value(count.to_u32, 2).set_value(tag, 3)
+          encoder.dispatch_1d(count)
+        end
       end
     end
 
