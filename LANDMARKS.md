@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-BF16-LOCAL-2026-10-24] Same-input probes separate projection and attention drift
+
+- Test-only probes at parent `bd0bf23a` freeze trusted upstream block0 operands.
+  Actual C2048/H16/D128/F8192 weights, 6 video/3 text tokens, four modulation
+  and weight-residency variants: all 188 raw F32 records pass the unchanged
+  finite gate, max absolute error `2.861023e-6`. All 68 reference-reproduction
+  and four factored-native/production attention controls are bitwise equal.
+  Five unit controls pass. No production kernel/default/tolerance is changed.
+- The BF16 gate remains failed: 101/188 rounded diagnostic records differ
+  bitwise, including 83 finite-gate failures. Alternative paths and
+  counterfactual roundings overlap; this is not a count of unique live model
+  errors. Normal V projection has 28 actual-boundary bin differences, 14 finite
+  failures. Same-input final Q/K normalization/RoPE has none; inherited input
+  drift remains outside that isolated conclusion. Upstream bias placement is
+  bitwise equivalent here; native unbiased projection drift persists.
+- Canonical attention has two BF16 bin differences. Broadcast/F32 index 10120
+  is an exact native midpoint: frozen explicit-MPS QK restores the canonical
+  bin in the unchanged online reducer. Broadcast/BF16-weight index 9949 is a
+  counterexample to a QK-only fix: frozen QK does not restore it, while native
+  PV on actual MPS probabilities does. The probability control merges internal
+  QK and softmax; it does not isolate softmax alone. RNE is not changed.
+- Every variant uses one terminal wait, post-completion readbacks and zero
+  tracked encode MetalBuffer allocations. Serial guard receipts retain the
+  sampled 4 GiB cap, cache-aware 15% floor, 64 MiB swap-growth stop and 600 s
+  deadline. Final actual oracle/native sampled peaks are 1752.237/2738.659 MiB,
+  minimum headroom 30.992%/27.507%, zero swap growth. No full generation runs.
+- Correlated MiniQuad verdict: ROBUST for the bounded diagnostic with trusted
+  producer/digests and immutable weights; VULNERABLE as a general BF16 fix.
+- Evidence, trusted digests, reproduction and interpretation limits:
+  `docs/hy-nomas-native-frontier.md`, same-input diagnostics section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-attention-20261024/`. Next: compare native
+  projection/QK reductions with MPS and isolate normalization/PV with frozen
+  actual MPS probabilities. CUDA/Magi runtime parity, video quality and speed
+  remain open. Refresh on scoped source/fixture/checkpoint, geometry/dtype,
+  compiler/bridge/runtime/device, scheduling changes or artifact loss.
+  Wan return pointer remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-ACTUAL-BLOCK-2026-10-24] Actual weights pass F32 control; BF16 boundaries fail
 
 - Extract only 32 `double_blocks.0.` tensors from the official distilled
@@ -33,8 +70,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   remain excluded failures. No model/video generation or speedup is claimed.
   Correlated MiniQuad verdict is ROBUST only for actual-weight F32 control
   under trusted producer/digest and immutable-file assumptions.
-- Next: isolate pre-rounding projection/reduction drift and the rounded
-  attention replay, then benchmark representative token counts. Commands,
+- The following same-input investigation is retained in
+  LM-HY-NOMAS-BF16-LOCAL-2026-10-24 above. Representative-token benchmarks
+  remain pending. Commands,
   receipts, pins and refresh triggers: `docs/hy-nomas-native-frontier.md`.
   Wan return pointer remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
 

@@ -1,8 +1,9 @@
 # Hy-Nomas native Metal frontier
 
 Document status: actual-checkpoint F32-math block control verified within the
-bounded scope below (2026-10-24). Current frontier: BF16 attention-boundary
-numerical parity fails; a video pipeline remains unimplemented.
+bounded scope below (2026-10-24). Same-input diagnostics localize projection and
+attention differences, but BF16 attention-boundary parity still fails. A video
+pipeline remains unimplemented.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
 
@@ -350,9 +351,11 @@ Same-input raw F32 attention replay passes all four actual-weight variants
 (maximum absolute error 1.4305115e-6). After the output boundary, the
 broadcast/F32-resident replay has one violating element, index 10120:
 `-0.140625` versus `-0.13964844`, delta `0.0009765625`. The other three rounded
-replays pass. Thus upstream reduction drift exists inside attention as well as
-before Q/K/V packing. Chained block and final output gates also fail; these
-cannot be dismissed as harmless tiny intermediate differences. No generated
+replays pass. Thus implementation numerical differences exist inside attention
+as well as before Q/K/V packing; the replay alone does not identify their local
+cause. The isolated diagnostics below narrow that attribution. Chained block
+and final output gates also fail; these cannot be dismissed as harmless tiny
+intermediate differences. No generated
 video or quality impact has been tested. BF16-boundary mode stays experimental
 and default-off; no Magi/CUDA runtime parity has been established.
 
@@ -444,15 +447,242 @@ that fixture's independently captured digest to reproduce the failing gate.
 An exit 1 must remain a failure; do not ignore it in automation or treat the
 successful F32 control as certification of this precision mode.
 
+## Same-input attention diagnostics, 2026-10-24
+
+This test-only slice freezes operands from the preceding trusted upstream
+fixture. It separates local arithmetic differences from propagation through
+earlier operations. It changes no production kernel, rounding rule, tolerance,
+default or command schedule. Risk is CAUTION because an incorrect intervention
+could misattribute the failed BF16 gate. The guard is exact operand lineage,
+bitwise reference reproduction and a factored-native control. Rollback is
+omission of `spec/hy_nomas_attention_probe_spec.cr` and its two support files.
+
+The producer invokes pinned upstream RMSNorm/RoPE and PyTorch 2.8.0 MPS math;
+PyTorch is only the oracle. Both oracle and native neural operations run on GPU.
+The actual-weight geometry remains C2048/H16/D128/F8192 with **6 video and 3
+text tokens**, not a representative video length. Each fixture has the same
+four broadcast/per-token and F32/BF16-resident weight variants. BF16 residency
+means source F32 to BF16 to F32 compute, with conversions on GPU.
+
+Each variant contains 47 isolated operations: biased, unbiased and explicit-bias
+versions of eight projections; Q/K RMSNorm and video RoPE; QK, softmax and PV
+under three scaling placements; canonical/explicit MPS attention controls;
+and frozen-score/probability interventions. Frozen Q/K/V must be exactly the
+BF16-RNE round-trip of the original concatenated upstream operands. Layouts,
+scales, weight policy, source mode and independent fixture/checkpoint digests
+are checked before GPU work. Corruption controls reject malformed tensors,
+changed digests, incorrect layouts/scales, missing variants, source-mode
+substitution and broken boundary lineage.
+
+All operations and GPU rounding for a variant share one command with **one
+terminal wait**. Readbacks occur after that wait. Inputs remain bitwise unchanged
+and encode performs zero tracked MetalBuffer allocations. A factored native
+QK plus online reduction is bitwise identical to unchanged production attention
+in all four actual and all four tiny variants, validating this intervention
+within the tested geometry. These are diagnostic command times, not performance
+benchmarks.
+
+### Numerical result and causal limits
+
+The diagnostic DoD is a complete, trusted same-input report with unchanged
+finite gates, faithful native controls and retained failing BF16 records. It
+does **not** require or establish BF16 parity. Five unit controls pass; the
+fixture example completes and intentionally exits 1 for numerical failures.
+
+| Actual-weight check | Observed result |
+|---|---|
+| Raw F32 comparisons | 188/188 pass; max absolute error `2.861023e-6`, max gate ratio `0.0698829` |
+| Reproduction of preceding upstream captures | 68/68 records bitwise identical |
+| Factored native versus production attention | 4/4 records bitwise identical |
+| Rounded diagnostic records | 101/188 fail bitwise equality; 83 also fail the original finite gate |
+| Canonical attention output, after BF16 rounding | Two differing elements across four variants; one fails the finite gate |
+
+The bitwise BF16 diagnostic is stricter than the unchanged finite gate. The
+101 records include alternative arithmetic paths and counterfactual rounding
+sites; they are **not 101 unique live model-boundary failures**. Tiny controls
+have 13/188 failing rounded records. No failed gate is waived.
+The 188-record counts cover the 47 named operations per variant. Eight additional
+raw/rounded report rows compare the factored and frozen-QK interventions with
+canonical attention; those overlapping controls are not included in that count.
+
+On identical projection inputs, upstream `linear(x,w,b)` and
+`linear(x,w,None)+b` are bitwise equal across all 32 base projection slots
+(442,368 values). Native no-bias projections still differ in low F32 bits,
+consistent with the different native FMA-lane reduction and MPS GEMM arithmetic;
+bias placement does not explain the tested drift. Among normal projections,
+28 V values cross a BF16 bin at the actual Q/K/V boundary, 14 exceeding the
+finite post-rounding gate. Other projection rounding probes occur before
+Q/K RMSNorm/RoPE or after attention and are counterfactual boundaries.
+
+Same-input final Q/K RMSNorm/RoPE probes have zero BF16 bin differences across
+16 records. This does not clear chained Q/K: incoming projection differences
+are deliberately removed by these frozen-input tests and can propagate in a
+complete block.
+
+Two interventions distinguish the canonical attention failures:
+
+- **Broadcast/F32, index 10120:** native raw output is exactly
+  `-0.14013671875`, a BF16 midpoint, and rounds to `-0.140625`. Canonical MPS
+  gives approximately `-0.14013669`, rounding to `-0.13964844`. Replacing only
+  QK scores with frozen explicit-MPS postscale scores in the same native online
+  reducer restores the canonical BF16 value. The entire frozen-QK variant has
+  zero BF16 differences from canonical MPS here. QK arithmetic is causally
+  sufficient to explain this point under these inputs; RNE itself is correct.
+- **Broadcast/BF16 weights, index 9949:** freezing MPS QK does not restore the
+  canonical BF16 value. Native PV using probabilities returned by the actual
+  MPS math-SDPA operator does restore it. This implicates arithmetic between
+  scores and output in addition to QK. It does not isolate softmax alone:
+  the private MPS probability control includes its internal QK and softmax.
+  Frozen-QK online reduction also introduces other BF16 mismatches in this
+  variant, so it is not a general replacement or fix.
+
+Canonical SDPA, explicit postscale attention and private MPS math-SDPA expected
+outputs are bitwise equal for all four variants (110,592 values per path).
+The standalone frozen-score online reference is a custom recurrence control,
+not the canonical upstream attention algorithm. No CUDA/Magi execution,
+quality comparison, production fix or speedup is claimed.
+
+Correlated MiniQuad source/fixture/report review is ROBUST for this bounded
+diagnostic under the trusted-producer/digest and immutable-weight assumptions,
+and VULNERABLE as evidence for a general BF16 fix. Cross-path expected-output
+equality was independently checked from the pinned fixture during that review;
+the compact report verifier below checks report completion and control counts,
+not that additional fixture-array comparison.
+
+The next discriminator is to compare the native projection/QK reductions with
+the corresponding MPS GEMM/math path, then isolate normalization and PV with
+frozen actual MPS probabilities. Preserve the original F32 control and failed
+BF16 gates when evaluating a candidate change.
+
+### Safety and pinned evidence
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-attention-20261024/`.
+The same 15% physical reserve/floor, cache-aware file-cache accounting, sampled
+4 GiB process-group cap, 64 MiB swap-growth stop and 600 s deadline are retained.
+Jobs ran serially, with no full model, Studio or video generation.
+
+| Guard receipt under `logs/` | Sampled peak MiB | Minimum cache-aware headroom | Swap growth MiB | Exit |
+|---|---:|---:|---:|---:|
+| `oracle-tiny-v1.jsonl` | 229.033 | 36.184% | 0 | 0 |
+| `oracle-real-v1.jsonl` | 1752.237 | 30.992% | 0 | 0 |
+| `native-tiny-v4.jsonl` | 19.954 | 35.091% | 0 | 1, numerical gate |
+| `native-real-v2.jsonl` | 2738.659 | 27.507% | 0 | 1, numerical gate |
+
+Sampling can miss between-sample peaks. Source state is parent `bd0bf23a` plus
+the three test files in this slice. Toolchain/device and the three bridge
+objects remain unchanged from the historical controls above. The final actual
+report uses the final native binary; the tiny v4 report precedes only cosmetic
+report-field renaming. `logs/native-controls-v4.jsonl` records five passing unit
+controls and one pending GPU example with no external fixture.
+
+| Artifact relative to evidence root | SHA-256 |
+|---|---|
+| `fixtures/tiny-v1.json` | `736864935ca2abc91d69609a03a823a32b7beb55ff2c09c9a95ea7d34982f6ea` |
+| `fixtures/real-v1.json` | `481450208e45da4e648538c30855e5919538485e2eacf80e92773dddcc27d937` |
+| `build/hy_nomas_attention_probe_spec` | `69c5be3d8597fd61c3f577b1a83662f9f7490c20148098f9a8b6754e6046cec2` |
+| `logs/real-v2-comparisons.jsonl` | `46cee80de912bd891c3a645945bfe8f58cf7ff6017fce576b223a4209ece1086` |
+| `logs/verification-v1.json` | `0547b5b5eb9eb9db000ab4e5b4d8b5f809a54c3d4987e36dff30e2b98a86be92` |
+
+Actual source fixture/checkpoint pins are the preceding `real-bf16-v1.json`
+and actual F32 subset digests, respectively. The tiny source fixture digest is
+`3e1b9d014d02d71a1b38d4a9ea4eccd1a8f28f3824500d4f6f7ac691f67de0d6`;
+its F32 weight-sidecar digest is
+`c16f797818810ae066ed62733813a2adc36f1868b1edf6cc4f24f16f5ee37102`.
+
+### Reproduce the diagnostic slice
+
+Reuse the `guarded` function and pinned upstream/Python paths above, with a
+fresh `probe_root` under `/opt/mldata_ssd/cogni-ml/` and its usual subdirectories.
+Use freshly built bridges and `probe_link` from the build recipe above, or the
+unchanged, digest-checked historical objects. Never run GPU jobs concurrently.
+
+```sh
+guarded build-attention env TMPDIR="$probe_root/tmp" CRYSTAL_CACHE_DIR="$probe_root/crystal-cache" \
+  crystal build spec/hy_nomas_attention_probe_spec.cr \
+  -o "$probe_root/build/hy_nomas_attention_probe_spec" --error-trace --link-flags="$probe_link"
+PYTHONDONTWRITEBYTECODE=1 "$probe_python" spec/support/hy_nomas_attention_reference.py --structure-self-test
+guarded attention-unit-controls env TMPDIR="$probe_root/tmp" "$probe_root/build/hy_nomas_attention_probe_spec"
+
+probe_source_root=/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-20261024
+probe_source_digest=1fb14da66820ca061a87ec28024881de3165301d3993adb944cb45f275bc72e1
+probe_checkpoint_digest=6810bf7cd7f9a8ac4d66240eee514637a7ccaa47dc9de02e8bc26ae4543530d1
+guarded attention-oracle-actual env TMPDIR="$probe_root/tmp" PYTHONDONTWRITEBYTECODE=1 \
+  PYTORCH_ENABLE_MPS_FALLBACK=0 "$probe_python" spec/support/hy_nomas_attention_reference.py \
+  --fixture "$probe_source_root/fixtures/real-bf16-v1.json" --fixture-sha256 "$probe_source_digest" \
+  --weights "$probe_source_root/weights/distilled-block0-f32.safetensors" \
+  --weights-sha256 "$probe_checkpoint_digest" --upstream "$probe_upstream" \
+  --output "$probe_root/fixtures/attention-actual.json"
+shasum -a 256 "$probe_root/fixtures/attention-actual.json"
+probe_fixture_digest=REPLACE_WITH_TRUSTED_GENERATION_DIGEST
+guarded attention-native-actual env TMPDIR="$probe_root/tmp" \
+  HY_NOMAS_ATTENTION_SOURCE=actual \
+  HY_NOMAS_ATTENTION_FIXTURE="$probe_root/fixtures/attention-actual.json" \
+  HY_NOMAS_ATTENTION_FIXTURE_SHA256="$probe_fixture_digest" \
+  HY_NOMAS_ATTENTION_WEIGHTS="$probe_source_root/weights/distilled-block0-f32.safetensors" \
+  HY_NOMAS_ATTENTION_WEIGHTS_SHA256="$probe_checkpoint_digest" \
+  HY_NOMAS_ATTENTION_REPORT="$probe_root/logs/attention-actual-comparisons.jsonl" \
+  "$probe_root/build/hy_nomas_attention_probe_spec"
+```
+
+Expected native exit is **1**, with four summaries and a final
+`status=numerical_gate_failed` record. Missing completion, runtime/guard failure
+or changed provenance is not an acceptable diagnostic result. Do not mask the
+exit in parity automation. This separate diagnostic check verifies completion
+and the scoped result; it does not turn failed BF16 parity into a pass:
+
+```sh
+python3 - "$probe_root/logs/attention-actual-comparisons.jsonl" \
+  "$probe_fixture_digest" "$probe_checkpoint_digest" "$probe_source_digest" <<'PY'
+import json, sys
+from pathlib import Path
+rows = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+manifest, complete = rows[0], rows[-1]
+assert manifest['phase'] == 'manifest' and manifest['source_mode'] == 'actual'
+assert manifest['fixture_sha256'] == sys.argv[2]
+assert manifest['checkpoint_sha256'] == sys.argv[3]
+assert manifest['source_fixture_sha256'] == sys.argv[4]
+assert (manifest['gate_atol'], manifest['gate_rtol']) == (2e-5, 2e-5)
+assert manifest['rounded_gate'] == 'bitwise' and not manifest['production_changes']
+raw = [r for r in rows if r['phase'] == 'raw' and 'kind' in r]
+rounded = [r for r in rows if r['phase'] == 'rounded' and 'kind' in r]
+assert len(raw) == len(rounded) == 188
+assert all(r['stats']['violations'] == 0 for r in raw)
+assert sum(r['stats']['bitwise_mismatches'] > 0 for r in rounded) == 101
+assert sum(r['stats']['violations'] > 0 for r in rounded) == 83
+for phase, count in [('reference_reproduction', 68), ('bitwise_control', 4)]:
+    controls = [r for r in rows if r['phase'] == phase]
+    assert len(controls) == count
+    assert all(r['stats']['bitwise_mismatches'] == 0 for r in controls)
+summaries = [r for r in rows if r['phase'] == 'summary']
+assert len(summaries) == 4
+assert all(r['operations'] == 47 and r['terminal_waits'] == 1 and
+           r['encode_metal_buffer_allocations'] == 0 for r in summaries)
+assert complete == dict(phase='complete', cases=4,
+                        failed_comparison_records=101, status='numerical_gate_failed')
+print('Diagnostic complete; raw F32 controls pass; BF16 parity remains failed')
+PY
+```
+
+For the tiny replay, substitute its source fixture/sidecar and trusted digests
+above, use fresh output paths and set `HY_NOMAS_ATTENTION_SOURCE=synthetic`.
+
+Refresh this diagnosis after changes to operands/checkpoint, upstream or private
+MPS operator semantics, geometry/dtype, native arithmetic, producer/validator,
+compiler, bridge, runtime/device or command scheduling. Artifact loss requires
+regeneration rather than trusting the summary counts.
+
 ## Continuation
 
 Active goal: native Hy-Nomas port, initially one proven DiT block. Return pointer:
 Wan performance work remains at `docs/wan-performance-frontier.md`, commit
 `e22fc2ba`; no Wan default has been changed. Confirmed frontier: one actual
 checkpoint block passes the F32-math control with both weight residencies.
-Next discriminator: isolate identical-input projection/reduction order at a
-captured BF16 midpoint and the rounded same-Q/K/V attention replay. Preserve
-all failed boundary records and the original gate. Exact CUDA/Magi output dtype
+Frozen-input diagnostics retain BF16 projection/attention failures: QK score
+substitution resolves index 10120, while index 9949 requires a broader
+score-to-output arithmetic investigation. Next discriminator: compare native
+projection/QK reductions with MPS and isolate normalization/PV with frozen MPS
+probabilities. Preserve all failed boundary records and the original gate.
+Exact CUDA/Magi output dtype
 and BF16 activation semantics remain unresolved. Then measure MPS GEMM/attention
 at representative token counts before full-model residency, camera/history
 and PixelUMM. Standing authority remains bounded GPU probes under the 15% floor
