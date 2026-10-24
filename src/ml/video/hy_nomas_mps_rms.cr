@@ -4,9 +4,10 @@ require "./hy_nomas_block"
 require "./wan_t5"
 
 module ML::Video::HyNomasMPSRMS
-  # Fixed-input, fixed-weight plan. The caller owns and must retain this plan
-  # through the terminal wait; release is permitted only after that chain has
-  # drained. This wrapper owns only its square/mean scratch buffers.
+  # Fixed-input plan with a default fixed weight. The caller owns and must
+  # retain this plan through the terminal wait; release is permitted only after
+  # that chain has drained. This wrapper owns only its square/mean scratch
+  # buffers.
   class Plan
     getter tokens : Int32
     getter rows : Int32
@@ -49,7 +50,7 @@ module ML::Video::HyNomasMPSRMS
       validate_tensor!(@input, @count, "input")
       validate_tensor!(@output, @count, "output")
       validate_weight!
-      validate_distinct!([@input, @weight, @output])
+      validate_distinct!(@input, @weight, @output)
 
       @arena = Arena.new
       begin
@@ -84,9 +85,19 @@ module ML::Video::HyNomasMPSRMS
       @arena.resident_bytes
     end
 
-    # Append the proven T5 MPS mean operation for the fixed inputs. The native
-    # helper pauses/resumes around MPSGraph and refreshes the encoder itself.
+    # Append the proven T5 MPS mean operation for this plan's fixed tensors and
+    # default weight. The native helper pauses/resumes around MPSGraph and
+    # refreshes the encoder itself.
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
+      encode(chain, @weight, @weight_dtype)
+    end
+
+    # Append the same operation with a per-call norm weight. Only the weight is
+    # dynamic; the prepared MPSGraph remains bound to this plan's input/output
+    # and owned square/mean buffers.
+    def encode(chain : ML::Metal::MPSCommandChain,
+               weight : ML::MetalBuffer,
+               weight_dtype : WeightDType) : Nil
       raise ArgumentError.new("Hy-Nomas MPS RMS plan has been released") if @released
       chain.encoder
       if previous = @last_chain
@@ -94,11 +105,11 @@ module ML::Video::HyNomasMPSRMS
           raise ArgumentError.new("Hy-Nomas MPS RMS plan cannot span in-flight command chains")
         end
       end
-      validate_bindings!
+      validate_bindings!(weight, weight_dtype)
       @last_chain = chain
       WanT5.rms_norm_mps_mean(
-        chain, mean_plan, @mps_config.not_nil!, @input, @weight, @output,
-        square, mean, @weight_dtype,
+        chain, mean_plan, @mps_config.not_nil!, @input, weight, @output,
+        square, mean, weight_dtype,
       )
     end
 
@@ -128,11 +139,16 @@ module ML::Video::HyNomasMPSRMS
     end
 
     private def validate_bindings! : Nil
+      validate_bindings!(@weight, @weight_dtype)
+    end
+
+    private def validate_bindings!(weight : ML::MetalBuffer,
+                                   weight_dtype : WeightDType) : Nil
       validate_tensor!(@input, @count, "input")
       validate_tensor!(@output, @count, "output")
-      validate_weight!
+      validate_weight!(weight, weight_dtype)
       validate_scratch!(square, mean)
-      validate_distinct!([@input, @weight, @output, square, mean])
+      validate_distinct!(@input, weight, @output, square, mean)
     end
 
     private def validate_tensor!(buffer : ML::MetalBuffer, count : Int32,
@@ -146,12 +162,17 @@ module ML::Video::HyNomasMPSRMS
     end
 
     private def validate_weight! : Nil
-      expected_bytes = @head_dim.to_i64 * @weight_dtype.bytes_per_element
-      unless @weight.valid? && @weight.size == expected_bytes &&
-             @weight.storage_mode.shared?
-        raise ArgumentError.new("Hy-Nomas MPS RMS weight must be exact-size shared #{@weight_dtype}")
+      validate_weight!(@weight, @weight_dtype)
+    end
+
+    private def validate_weight!(weight : ML::MetalBuffer,
+                                 weight_dtype : WeightDType) : Nil
+      expected_bytes = @head_dim.to_i64 * weight_dtype.bytes_per_element
+      unless weight.valid? && weight.size == expected_bytes &&
+             weight.storage_mode.shared?
+        raise ArgumentError.new("Hy-Nomas MPS RMS weight must be exact-size shared #{weight_dtype}")
       end
-      MetalOps.check_storage(@weight, @head_dim.to_i64, @weight_dtype)
+      MetalOps.check_storage(weight, @head_dim.to_i64, weight_dtype)
     end
 
     private def validate_scratch!(square : ML::MetalBuffer,
@@ -160,14 +181,35 @@ module ML::Video::HyNomasMPSRMS
       validate_tensor!(mean, @rows, "mean scratch")
     end
 
-    private def validate_distinct!(buffers : Array(ML::MetalBuffer)) : Nil
-      buffers.each_with_index do |left, left_index|
-        buffers.each_with_index do |right, right_index|
-          next if right_index <= left_index
-          if MetalOps.overlap?(left, right)
-            raise ArgumentError.new("Hy-Nomas MPS RMS buffers must not overlap")
-          end
-        end
+    private def validate_distinct!(input : ML::MetalBuffer,
+                                   weight : ML::MetalBuffer,
+                                   output : ML::MetalBuffer) : Nil
+      validate_distinct_pair!(input, weight)
+      validate_distinct_pair!(input, output)
+      validate_distinct_pair!(weight, output)
+    end
+
+    private def validate_distinct!(input : ML::MetalBuffer,
+                                   weight : ML::MetalBuffer,
+                                   output : ML::MetalBuffer,
+                                   square : ML::MetalBuffer,
+                                   mean : ML::MetalBuffer) : Nil
+      validate_distinct_pair!(input, weight)
+      validate_distinct_pair!(input, output)
+      validate_distinct_pair!(input, square)
+      validate_distinct_pair!(input, mean)
+      validate_distinct_pair!(weight, output)
+      validate_distinct_pair!(weight, square)
+      validate_distinct_pair!(weight, mean)
+      validate_distinct_pair!(output, square)
+      validate_distinct_pair!(output, mean)
+      validate_distinct_pair!(square, mean)
+    end
+
+    private def validate_distinct_pair!(left : ML::MetalBuffer,
+                                        right : ML::MetalBuffer) : Nil
+      if MetalOps.overlap?(left, right)
+        raise ArgumentError.new("Hy-Nomas MPS RMS buffers must not overlap")
       end
     end
   end

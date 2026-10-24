@@ -1,11 +1,13 @@
 # Hy-Nomas native Metal frontier
 
-Document status: actual-checkpoint F32-math and BF16-boundary MPS block controls
-and a bounded J6560 one-block profile are verified within the scopes below
-(2026-10-24). The opt-in prepared MPS backend matches the pinned short-input
-MPS oracle, including chained output reuse. Historical failures of the original
-Metal path remain recorded. Full-J upstream output, CUDA/Magi parity, model-wide
-performance and the video pipeline remain open.
+Document status: actual-checkpoint F32-math and BF16-boundary MPS block controls,
+bounded J6560 profiles and a shared two-application scratch/workspace are verified
+within the scopes below (2026-10-24). Only block-0 weights are downloaded; the
+actual-weight chain applies that block twice. A separate synthetic control uses
+different successor weights. The shared path reduces named GPU memory but the
+J1024 paired probe shows no speedup. Historical failures remain recorded.
+Real pretrained block 0 to block 1, full-J upstream output, CUDA/Magi parity,
+model-wide performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
 
@@ -1060,7 +1062,162 @@ chunk for the T1024 control.
 `make spec_hy_nomas` includes the standalone and pinned-fixture consumer specs;
 the upstream consumer is pending unless all trusted fixture pins are supplied.
 
-## Active slice: representative one-block profiling
+## Active slice: shared serial scratch and MPS workspace
+
+Status: verified for the bounded serial workspace and fixture matrix below,
+2026-10-24. Correlated MiniQuad verdict: ROBUST within this scope.
+Risk: CAUTION (asynchronous shared storage and fixed MPSGraph bindings).
+Scope is exactly two serial block applications, not full generation. Only the
+32 block-0 tensors are downloaded; the pinned upstream chain oracle applies
+that same block twice, not pretrained blocks 0 and 1.
+
+One owner allocates the common intermediate scratch and one set of MPS
+linear, RMS and attention staging/plans. Two distinct image/text output banks
+keep the preceding block's outputs outside the next block's scratch view.
+Per-block weights and resource records are registered at setup; graph-bound
+linear/attention/activation buffers and geometry must remain identical.
+RMS reduction graphs retain fixed square/mean buffers, with validated norm
+weights selected per block. No within-block aliasing, arithmetic change,
+additional GPU wait, or forced submission boundary is admitted. The existing
+separate-scratch/workspace path remains the control.
+
+The strongest failure is a second live command chain overwriting common
+storage, or release of an owner while its graph work is in flight. A single
+workspace chain guard must reject that use before any dispatch or active
+resource switch. Early release, unregistered blocks, changed bindings, output
+alias and repeated/new completed-chain reuse are required negative controls.
+Caller-owned input/weight Arenas retain their existing lifetime contract.
+Shared owner cleanup drains only at the caller's existing terminal boundary,
+releases plans first, clears private borrowed maps without freeing their
+buffers, then releases the owning Arena. Rollback removes this opt-in path;
+no existing default or numerical tolerance changes.
+
+DoD: fresh bounded builds and the pinned F32/BF16 block fixture consumers must
+compare both applications' intermediate checkpoints using the unchanged
+`2e-5 + 2e-5*abs(reference)` gate and designated exact BF16 boundaries. Small
+fixture-only GPU snapshots preserve first-block checkpoints before reuse;
+these diagnostic copies add no waits and are excluded from timing probes.
+Native paired two-block probes compare separate and shared storage with one
+terminal wait and zero encode-time MetalBuffer allocations. The small
+different-weight control requires equal completed root counts. Representative
+benchmarks report automatic MPS root segmentation as an observation, rather
+than forcing extra submission boundaries to make it deterministic. The sampled process-group cap remains 4 GiB, cache-aware host
+headroom 15%, swap-growth stop 64 MiB and timeout 600 seconds. Large geometry
+is admitted only if its explicit plan fits; no full generation is authorized.
+
+Implementation history: falsify the missing serial API; add dynamic RMS weight
+validation, registered shared-plan bindings and the private scratch owner;
+exercise fixture parity and lifecycle negatives; then measure bounded paired
+probes and attack evidence/claims. Evidence expires on relevant source,
+fixture, geometry, toolchain, bridge, OS/device or scheduling changes.
+
+Probe-driven refinements: the combined four-variant BF16 fixture reported zero
+numerical failures but its sampled process footprint reached 4.216 GiB, so the
+external guard rejected the run. It is not an admitted passing run. Execute
+each case/resident-dtype variant in its own fresh guarded process; retain the
+same complete oracle matrix and all numerical gates. The v1 benchmark's third
+J1024 process also refuted deterministic root-count stability for an identical
+shared path: its first measured request had five roots, and the next request
+triggered the root-count assertion. Preserve that failed receipt, report all
+observed root counts, and continue to require exact output hashes, zero encode
+allocations and one terminal wait. This changes telemetry admission only;
+there is no inference or submission change.
+
+### Serial workspace results
+
+Freshly linked tests pass under the existing guards. Each F32-math and
+BF16-boundary pinned oracle is consumed in four isolated processes:
+`broadcast/BF16`, `broadcast/F32`, `per_token/BF16`, `per_token/F32`.
+`HY_NOMAS_FIXTURE_VARIANT` validates the exact schema/case/residency map before
+Metal initialization, reports selection as `1/4`, and retains the single
+digest-verified JSON parse. Unset selection keeps the original complete matrix.
+The eight runs each pass nine examples and 216 finite comparisons (1728 total).
+All 640 saved serial first/second checkpoint arrays are raw-F32 exact; the 120
+selected BF16 boundary arrays, including 48 serial arrays, also match exactly.
+Other native arithmetic controls retain small within-gate drift: this is not
+an all-1728-bitwise-exact claim. All tolerances and trusted source pins are
+unchanged. The oracle uses short inputs and actual upstream ND RoPE, not J6560.
+
+The focused different-weight successor test passes after GPU NaN poisoning of
+all unique nonconstant serial scratch/output buffers before each of two
+requests. All 40 second-block checkpoints match the separate-workspace control
+at raw F32 bits. Different projection and RMS weights catch stale per-block
+weight selection. Binding mutation, unregistered blocks, overlapping chains,
+output aliases, early release and setup cleanup have rejecting controls. Reuse
+covers fresh completed chains with the same fixed input buffer identities;
+there is no input rebinding or concurrent-use API. The complete Makefile suite
+passes 43 examples, zero failures/errors and four expected external-oracle
+pending cases; the block fixture pending case is discharged by the eight
+isolated runs above. This does not discharge the other external oracle scopes.
+
+J1024 performance uses B1/image768/text256/C2048/H16/D128/FF8192, C256/G16,
+BF16-resident actual block-0 weights, BF16-boundary attention, and synthetic
+GPU inputs/RoPE. Four fresh processes run separate/shared/shared/separate;
+each has one warmup and four measured two-block requests. All 16 measured
+output hash pairs are identical across both modes. Medians over eight samples
+per mode on Apple M2 Max, macOS 26.6.2, SDK 27.0, Crystal 1.22.1:
+
+| Two-block measurement | Separate | Shared |
+| --- | ---: | ---: |
+| Encode + terminal wait | 34.288 ms | 34.920 ms |
+| CPU encoding | 1.459 ms | 2.037 ms |
+| Native GPU chain elapsed | 33.066 ms | 33.149 ms |
+| Named resident buffers, bytes | 1,150,658,564 | 739,370,500 |
+| Scratch + workspace, bytes | 839,353,344 | 428,065,280 |
+
+This probe shows 411,288,064 fewer named resident bytes, not a speedup: shared
+wall time is 1.0184 times separate. Shared admission performs extra CPU binding
+checks; the sample does not isolate their exact cost. Separate roots are 5 in
+all eight samples; shared roots are 5 in seven and 6 in one. Automatic
+segmentation is observational. No forced commit or added wait is used to make
+it stable. Native GPU elapsed is a whole-chain measure, not an individual
+kernel cost. Timers exclude setup and post-terminal CPU output hashing.
+
+At J6560 (image5280/text1280, same channels and C256/G16), one shared workspace
+passes one warmup and four two-block requests. Median encode + terminal wait
+is 275.237 ms, CPU encoding 3.977 ms, native GPU elapsed 273.181 ms. Output
+hashes remain exact; each measured chain has 56 roots, one terminal wait and
+zero tracked encode-time MetalBuffer allocations. The scratch owner uses
+1,860,026,880 bytes, including two additional final-output buffers, and the
+single MPS workspace uses 320,655,360 bytes: 2,180,682,240 bytes (2.031 GiB)
+combined. Two independent scratch/workspace sets would require 4,253,885,440
+bytes (3.962 GiB), calculated from the same plans; that large separate arm is
+not executed under the 4 GiB cap. The performance probe applies block 0 twice
+and uses synthetic theta-10000 RoPE, not upstream ND theta-256 RoPE. It is not
+a full-J upstream, 54-block, diffusion or video-throughput qualification.
+
+Maximum sampled process-group footprint / minimum cache-aware headroom:
+
+| Admitted runs | Peak bytes | Minimum headroom | System swap growth |
+| --- | ---: | ---: | ---: |
+| Eight isolated fixture gates | 2,424,391,648 | 30.359% | 0 |
+| Four J1024 processes | 1,823,016,400 | 34.273% | 0 |
+| Shared J6560 | 3,419,833,856 | 31.857% | 0 |
+
+The sampled 4 GiB process cap, cache-aware 15% floor, 64 MiB system swap-growth
+stop and 600-second deadline remain intact. Existing system swap is nonzero;
+zero growth is not zero swap. Sampling can miss short peaks; file-backed cache
+is a reclaimability estimate. Named-buffer savings are plan/accounting facts;
+sampled footprint does not establish an equally large physical peak reduction.
+No full model or video generation ran.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-workspace-20261024/`.
+`logs/final-receipt-v1.json` binds current source/binary/object hashes, trusted
+fixture/checkpoint pins, exact guarded commands, outputs, guards and retained
+failures. `logs/serial-analysis-v1.json` checks complete selector coverage,
+cross-mode hashes, gates, memory accounting and benchmark medians.
+Rebuild with SSD-backed TMPDIR/CRYSTAL_CACHE_DIR through the same external
+guard and Makefile target `hy_nomas_serial_benchmark`. Default geometry is
+J1024; compare `--mode=separate` and `--mode=shared` in ABBA order. Add `--large`
+only to shared mode; `--preflight-only` checks pins/geometry before Metal
+initialization. `make spec_hy_nomas` includes the serial ownership test. Replay
+each fixture selector using its recorded argv and trusted digests; do not
+substitute new digests from mutable metadata. Refresh after scoped source,
+fixture, geometry, toolchain, bridge/SDK/OS/device or schedule changes, or
+artifact loss. Rollback omits the new serial wrapper/benchmark and uses
+separate workspaces; existing inference defaults remain unchanged.
+
+## Previous slice: representative one-block profiling
 
 Status: verified for the bounded one-block probe, 2026-10-24; correlated
 MiniQuad verdict ROBUST within this scope. Parent `45cfa8f5` supplied the
@@ -1218,14 +1375,19 @@ inputs. Known grouping/short-chunk/multi-batch counterexamples remain rejected
 by workspace admission and retained as failed diagnostics. No general shape or
 activation qualification follows from the measured matrix.
 
-The J6560 block-0 probe now measures 137.626 ms warm median wall time with
-C256/G16 and synthetic inputs/RoPE, including its terminal wait. Next
-discriminator: a shared serial scratch/workspace contract with distinct input
-and output banks, unchanged two-block upstream/chained output parity, and
-negative overlap/early-release checks before full-model residency. Retain the
-diagnostic non-aliased path as control. Real ND RoPE and a full-J upstream output
-remain separate qualification gaps before pipeline quality claims. Exact
-CUDA/Magi output dtype and BF16 activation semantics are also unresolved.
+The shared serial wrapper now reuses intermediate scratch and one MPS workspace
+with distinct final-output banks. Both actual block-0 applications match the
+short-input upstream oracle at all saved intermediates; the different-weight
+synthetic successor and overlap/early-release controls pass. At J6560 the
+two-block probe measures 275.237 ms warm median wall time and 2.031 GiB named
+scratch/workspace; independent sets would use 3.962 GiB by calculation. J1024
+ABBA shows no speedup. Next discriminator: actual pretrained block 0 to block 1
+with separately loaded weights and a pinned same-input upstream chain, followed
+by a bounded full-stack residency plan. Only the 32 block-0 tensors are local;
+full-model weights are not downloaded. Retain the separate path as control.
+Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps
+before pipeline quality claims. Exact CUDA/Magi output dtype and BF16 activation
+semantics are also unresolved.
 Standing authority remains bounded GPU probes under the 15% floor and sampled
 4 GiB cap; full generation is outside this slice. Refresh evidence after source,
 fixture, geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling

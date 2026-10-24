@@ -8,6 +8,7 @@ require "./support/hy_nomas_norm_controls"
 require "./support/hy_nomas_modulation_controls"
 require "./support/hy_nomas_activation_controls"
 require "../src/ml/video/hy_nomas_block_mps"
+require "../src/ml/video/hy_nomas_serial_mps"
 
 private def hy_config : ML::Video::HyNomasConfig
   ML::Video::HyNomasConfig.new(
@@ -43,6 +44,62 @@ private def hy_load_fixture(path : String, expected_sha256 : String) : JSON::Any
     raise ArgumentError.new("Hy-Nomas fixture SHA-256 mismatch")
   end
   JSON.parse(contents)
+end
+
+private def hy_fixture_variant_labels(fixture : JSON::Any) : Array(String)
+  unless fixture["schema_version"].as_i == 2
+    raise ArgumentError.new("Hy-Nomas fixture variant selection requires schema version 2")
+  end
+  cases = fixture["cases"].as_a
+  case_names = cases.map { |data| data["name"].as_s }.sort
+  unless case_names == ["broadcast", "per_token"]
+    raise ArgumentError.new("Hy-Nomas fixture cases must be broadcast and per_token")
+  end
+
+  labels = [] of String
+  cases.each do |data|
+    variants = data["variants"].as_h
+    unless variants.keys.sort == ["bf16_weights_roundtrip_f32_compute", "f32"]
+      raise ArgumentError.new("Hy-Nomas fixture variants must be f32 and bf16_weights_roundtrip_f32_compute")
+    end
+    variants.each do |variant_name, variant|
+      expected_dtype = variant_name == "f32" ? "F32" : "BF16"
+      resident_dtype = variant["resident_dtype"].as_s
+      unless resident_dtype == expected_dtype
+        raise ArgumentError.new("Hy-Nomas fixture variant #{variant_name} must use resident dtype #{expected_dtype}")
+      end
+      labels << "#{data["name"].as_s}/#{resident_dtype}"
+    end
+  end
+  labels
+end
+
+private def hy_validate_fixture_variant_selector!(fixture : JSON::Any, selector : String) : Nil
+  unless selector.matches?(/\A(?:broadcast|per_token)\/(?:F32|BF16)\z/)
+    raise ArgumentError.new("HY_NOMAS_FIXTURE_VARIANT must be case/resident_dtype, for example broadcast/BF16")
+  end
+  matches = hy_fixture_variant_labels(fixture).count(&.== selector)
+  unless matches == 1
+    raise ArgumentError.new("HY_NOMAS_FIXTURE_VARIANT #{selector} does not identify exactly one fixture variant")
+  end
+end
+
+private def hy_preflight_fixture_variant_selector! : JSON::Any?
+  selector = ENV["HY_NOMAS_FIXTURE_VARIANT"]?
+  return nil unless selector
+  if selector.empty?
+    raise ArgumentError.new("HY_NOMAS_FIXTURE_VARIANT must not be empty")
+  end
+  unless selector.matches?(/\A(?:broadcast|per_token)\/(?:F32|BF16)\z/)
+    raise ArgumentError.new("HY_NOMAS_FIXTURE_VARIANT must be case/resident_dtype, for example broadcast/BF16")
+  end
+  fixture_path = ENV["HY_NOMAS_BLOCK_FIXTURE"]?
+  unless fixture_path
+    raise ArgumentError.new("HY_NOMAS_BLOCK_FIXTURE is required when HY_NOMAS_FIXTURE_VARIANT is set")
+  end
+  fixture = hy_load_fixture(fixture_path, ENV["HY_NOMAS_FIXTURE_SHA256"]? || "")
+  hy_validate_fixture_variant_selector!(fixture, selector)
+  fixture
 end
 
 # The generic oracle also supports synthetic weights. An actual-checkpoint
@@ -145,6 +202,37 @@ private def hy_compare(actual : Array(Float32), expected : JSON::Any, label : St
   failures << detail unless passed
 end
 
+private def hy_compare_arrays(actual : Array(Float32), reference : Array(Float32), label : String,
+                              failures : Array(String), reports : Array(String)) : Nil
+  violations = 0
+  max_abs = 0.0_f32
+  max_ratio = 0.0_f32
+  bitwise_mismatches = 0
+  first_violation = nil.as(String?)
+  Math.min(actual.size, reference.size).times do |index|
+    value = actual[index]
+    target = reference[index]
+    bitwise_mismatches += 1 if value.unsafe_as(UInt32) != target.unsafe_as(UInt32)
+    unless value.finite? && target.finite?
+      violations += 1
+      first_violation ||= " first_index=#{index} actual=#{value} reference=#{target}"
+      next
+    end
+    delta = (value - target).abs
+    tolerance = 2e-5_f32 + 2e-5_f32 * target.abs
+    max_abs = Math.max(max_abs, delta)
+    max_ratio = Math.max(max_ratio, delta / tolerance)
+    if delta > tolerance
+      violations += 1
+      first_violation ||= " first_index=#{index} actual=#{value} reference=#{target}"
+    end
+  end
+  passed = actual.size == reference.size && violations == 0
+  detail = "#{label} n=#{actual.size}/#{reference.size} violations=#{violations} max_abs=#{max_abs} max_gate_ratio=#{max_ratio} bitwise_mismatches=#{bitwise_mismatches}#{first_violation}"
+  reports << detail
+  failures << detail unless passed
+end
+
 # Terminal diagnostics only: relate a discrete BF16 mismatch to the F32
 # projection that preceded packing. No model computation is moved to the CPU.
 private def hy_boundary_diagnostics(config : ML::Video::HyNomasConfig,
@@ -184,7 +272,9 @@ private def hy_boundary_diagnostics(config : ML::Video::HyNomasConfig,
 end
 
 private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
-                           variant : JSON::Any, fixture_path : String) : Array(String)
+                           variant : JSON::Any, fixture_path : String,
+                           selection_label : String, selected_variant_count : Int32,
+                           total_variant_count : Int32) : Array(String)
   config = hy_case_config(fixture, data)
   manifest = variant["weights_file"]
   sidecar = hy_sidecar(fixture_path, manifest)
@@ -213,11 +303,28 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
   arenas = [] of ML::Video::Arena
   prepared = nil.as(ML::Video::PreparedWeights?)
   submission = nil.as(ML::Metal::MPSCommandChain?)
+  serial_reuse_submission = nil.as(ML::Metal::MPSCommandChain?)
   workspaces = [] of ML::Video::HyNomasMPSWorkspace
+  serial_workspace = nil.as(ML::Video::HyNomasMPSSerialWorkspace?)
+  serial_snapshot_arena = nil.as(ML::Video::Arena?)
+  serial_snapshot_buffers = {} of String => ML::MetalBuffer
+  serial_after_block_indices = [] of Int32
+  clean_first_root_delta = nil.as(Int32?)
+  clean_second_root_delta = nil.as(Int32?)
+  clean_two_block_root_delta = nil.as(Int32?)
+  serial_two_block_root_delta = nil.as(Int32?)
+  serial_reuse_root_delta = nil.as(Int32?)
+  serial_reuse_allocation_delta = nil.as(Int64?)
+  serial_reuse_wait_count = nil.as(Int32?)
+  serial_owner_scratch_reserve_bytes = 0_i64
+  serial_snapshot_reserve_bytes = 0_i64
   retained_workspaces_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
   replay_plan = nil.as((ML::Video::HyNomasAttentionMPSPlan | ML::Video::HyNomasCompactAttentionMPSPlan)?)
   mps_mode = ENV["HY_NOMAS_BLOCK_MPS"]? || "0"
   {"0", "1"}.includes?(mps_mode).should be_true
+  serial_mode = ENV["HY_NOMAS_SERIAL_WORKSPACE"]? || "0"
+  {"0", "1"}.includes?(serial_mode).should be_true
+  raise ArgumentError.new("Serial shared scratch requires the MPS block backend") if serial_mode == "1" && mps_mode != "1"
   attention_query_chunk = ENV.fetch("HY_NOMAS_ATTENTION_QUERY_CHUNK", "0").to_i32
   attention_heads_per_group = ENV.fetch("HY_NOMAS_ATTENTION_HEADS_PER_GROUP", "0").to_i32
   if attention_query_chunk != 0 || attention_heads_per_group != 0
@@ -285,7 +392,17 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
     # Weight-plan validation covers these named buffers. Prepared MPS stages
     # are added below and reported separately; the external guard caps the
     # actual process, including opaque MPSGraph allocations.
-    reserve = inputs.resident_bytes + first_scratch.resident_bytes + chain_scratch.resident_bytes + perturbed_scratch.resident_bytes
+    if serial_mode == "1"
+      serial_plan = ML::Video::HyNomasDualStreamBlock.scratch_plan(config)
+      serial_owner_scratch_reserve_bytes = serial_plan.sum do |name, count|
+        count.to_i64 * sizeof(Float32) * (name == "hy_nomas.img.output" || name == "hy_nomas.txt.output" ? 2_i64 : 1_i64)
+      end
+      serial_snapshot_reserve_bytes = variant["checkpoints"].as_h.sum do |name, _|
+        first_scratch["hy_nomas.#{name}"].size
+      end
+    end
+    reserve = inputs.resident_bytes + first_scratch.resident_bytes + chain_scratch.resident_bytes +
+              perturbed_scratch.resident_bytes + serial_owner_scratch_reserve_bytes + serial_snapshot_reserve_bytes
     plan = ML::Video::HyNomasDualStreamBlock.weight_plan(
       [file], config, 2_i64 * File.size(sidecar) + reserve + 1024_i64 * 1024,
       reserve_bytes: reserve, resident_dtype: resident_dtype, require_all: true,
@@ -338,6 +455,38 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
                         config.heads, config.head_dim, inputs["attention_replay.query"], inputs["attention_replay.key"],
                         inputs["attention_replay.value"], inputs["attention_replay.raw"])
                     end
+    end
+    if serial_mode == "1"
+      # This paired control deliberately applies the same pinned block-0
+      # weights twice. The fixture's chain_expected oracle has that same scope.
+      serial_workspace = ML::Video::HyNomasMPSSerialWorkspace.new(config, [weights, weights],
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+        inputs["video_cos"], inputs["video_sin"],
+        attention_query_chunk: attention_query_chunk,
+        attention_heads_per_group: attention_heads_per_group)
+      serial_workspace.not_nil!.blocks.size.should eq(2)
+      serial_workspace.not_nil!.blocks.each do |block|
+        block.checkpoints.keys.sort.should eq(first.checkpoints.keys.sort)
+      end
+      serial_workspace.not_nil!.scratch_bytes.should be > 0
+      serial_workspace.not_nil!.scratch_bytes.should eq(serial_owner_scratch_reserve_bytes)
+      serial_workspace.not_nil!.mps_workspace_bytes.should be > 0
+      serial_workspace.not_nil!.resident_bytes.should eq(
+        serial_workspace.not_nil!.scratch_bytes + serial_workspace.not_nil!.mps_workspace_bytes)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 4),
+        "the three independent controls plus serial owner must retain exactly four MPS workspaces"
+
+      serial_snapshot_arena = ML::Video::Arena.new
+      arenas << serial_snapshot_arena.not_nil!
+      serial_first = serial_workspace.not_nil!.blocks[0]
+      serial_first.checkpoints.each do |name, source|
+        (source.size % sizeof(Float32)).should eq(0)
+        serial_snapshot_buffers[name] = serial_snapshot_arena.not_nil!.alloc(name,
+          (source.size // sizeof(Float32)).to_i32)
+      end
+      serial_first.checkpoints.size.should eq(40)
+      serial_snapshot_buffers.size.should eq(40)
+      serial_snapshot_arena.not_nil!.resident_bytes.should eq(serial_snapshot_reserve_bytes)
     end
     allocations_before_encode = ML::MetalBuffer.video_spec_allocations
     command = nil.as(ML::Metal::CommandBuffer?)
@@ -402,18 +551,62 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
         submission.not_nil!.wait_count.should eq(0)
         nil
       end
+      clean_two_block_root_start = submission.not_nil!.observed_root_count
       first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0],
         phase_observer: observer)
       observed_markers.should eq(["validate", "modulation", "qkv", "joint_pack", "attention",
                                   "attention_projection_residual", "image_ffn", "text_ffn", "complete"])
       observed_counts.all? { |count| count > 0 }.should be_true
       observed_counts.should eq(observed_counts.sort)
+      clean_after_first_block = submission.not_nil!.observed_root_count
       chain.encode_mps(submission.not_nil!, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[1])
+      clean_after_second_block = submission.not_nil!.observed_root_count
+      clean_first_root_delta = clean_after_first_block - clean_two_block_root_start
+      clean_second_root_delta = clean_after_second_block - clean_after_first_block
+      clean_two_block_root_delta = clean_after_second_block - clean_two_block_root_start
       # Repeat the same prepared bindings; no state or scratch may accumulate.
       first.encode_mps(submission.not_nil!, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[0])
       perturbed.encode_mps(submission.not_nil!, inputs["img_perturbed"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"], workspaces[2])
+      if shared = serial_workspace
+        serial_root_start = submission.not_nil!.observed_root_count
+        serial_blocks = shared.blocks
+        callback = ->(index : Int32, block : ML::Video::HyNomasDualStreamBlock) do
+          serial_after_block_indices << index
+          block.same?(serial_blocks[index]).should be_true
+          if index == 0
+            block.checkpoints.keys.sort.should eq(serial_snapshot_buffers.keys.sort)
+            block.checkpoints.each do |name, source|
+              count = (source.size // sizeof(Float32)).to_i32
+              ML::Video::MetalOps.copy(submission.not_nil!.encoder, source,
+                serial_snapshot_buffers[name], count)
+            end
+          end
+          nil
+        end
+        returned_img, returned_txt = shared.encode(submission.not_nil!, after_block: callback)
+        returned_img.same?(shared.blocks[1].image_output).should be_true
+        returned_txt.same?(shared.blocks[1].text_output).should be_true
+        serial_after_shared_encode = submission.not_nil!.observed_root_count
+        serial_two_block_root_delta = serial_after_shared_encode - serial_root_start
+        serial_after_block_indices.should eq([0, 1])
+
+        # Reject a distinct live chain before dispatching either block. Reuse
+        # this empty chain after the main chain drains for the lifecycle test.
+        serial_reuse_submission = ML::Metal::MPSCommandChain.new
+        main_roots_before_rejection = submission.not_nil!.observed_root_count
+        reuse_roots_before_rejection = serial_reuse_submission.not_nil!.observed_root_count
+        expect_raises(ArgumentError, /cannot span in-flight command chains/) do
+          shared.encode(serial_reuse_submission.not_nil!)
+        end
+        submission.not_nil!.observed_root_count.should eq(main_roots_before_rejection)
+        serial_reuse_submission.not_nil!.observed_root_count.should eq(reuse_roots_before_rejection)
+        serial_after_block_indices.should eq([0, 1]), "rejected chain must not reach a block callback"
+        submission.not_nil!.wait_count.should eq(0)
+        serial_reuse_submission.not_nil!.wait_count.should eq(0)
+        expect_raises(ArgumentError, /Complete Hy-Nomas serial command chain before release/) { shared.release }
+      end
       expect_raises(ArgumentError, /Complete/) { workspaces[0].release }
-      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 3)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before + 3 + (serial_workspace ? 1 : 0))
     else
       first.encode(encoder, inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
       chain.encode(encoder, first.image_output, first.text_output, inputs["vec"], inputs["vec_txt"], inputs["video_cos"], inputs["video_sin"])
@@ -494,11 +687,68 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
         hy_boundary_diagnostics(config, values, expected, "#{case_label}/#{group}", reports)
       end
     end
+    if shared = serial_workspace
+      clean_two_block_root_delta.not_nil!.should eq(serial_two_block_root_delta.not_nil!),
+        "shared two-block encoding must preserve the separate-control MPS root-count delta"
+      serial_first_snapshots = serial_snapshot_buffers.transform_values do |buffer|
+        buffer.read((buffer.size // sizeof(Float32)).to_i).map(&.to_f32)
+      end
+      serial_second_snapshots = hy_snapshots(shared.blocks[1])
+      {"serial_first"  => {serial_first_snapshots, variant["checkpoints"]},
+       "serial_second" => {serial_second_snapshots, variant["chain_expected"]["checkpoints"]}}.each do |group, pair|
+        values, expected = pair
+        expected.as_h.each do |name, reference|
+          hy_compare(values[name], reference, "#{case_label}/#{group}/#{name}", failures, reports)
+          if config.attention_precision.bf16_boundary_control? &&
+             {"joint.query", "joint.key", "joint.value", "joint.attention", "img.attn.raw", "txt.attn.raw"}.includes?(name)
+            reference_bits = hy_floats(reference).map(&.unsafe_as(UInt32))
+            actual_bits = values[name].map(&.unsafe_as(UInt32))
+            mismatches = actual_bits.zip(reference_bits).count { |left, right| left != right }
+            detail = "boundary_bits #{case_label}/#{group}/#{name} mismatches=#{mismatches} n=#{actual_bits.size}/#{reference_bits.size}"
+            reports << detail
+            failures << detail unless actual_bits.size == reference_bits.size && mismatches == 0
+          end
+        end
+        if config.attention_precision.bf16_boundary_control?
+          hy_boundary_diagnostics(config, values, expected, "#{case_label}/#{group}", reports)
+        end
+      end
+
+      # Once the first request is drained, the same workspace and same input
+      # buffers may be encoded on a fresh chain. Compare both final streams to
+      # their first-request values using the unchanged finite numerical gate.
+      serial_before_reuse = {
+        "img.output" => shared.blocks[1].image_output.read(config.image_rows * config.dim),
+        "txt.output" => shared.blocks[1].text_output.read(config.text_rows * config.dim),
+      }
+      reuse_chain = serial_reuse_submission.not_nil!
+      reuse_roots_start = reuse_chain.observed_root_count
+      reuse_allocations_start = ML::MetalBuffer.video_spec_allocations
+      reused_img, reused_txt = shared.encode(reuse_chain)
+      reused_img.same?(shared.blocks[1].image_output).should be_true
+      reused_txt.same?(shared.blocks[1].text_output).should be_true
+      serial_reuse_root_delta = reuse_chain.observed_root_count - reuse_roots_start
+      serial_reuse_allocation_delta = ML::MetalBuffer.video_spec_allocations - reuse_allocations_start
+      serial_reuse_allocation_delta.should eq(0), "serial re-encode must not allocate MetalBuffers"
+      reuse_chain.wait_count.should eq(0)
+      reuse_chain.commit_and_wait
+      reuse_chain.wait_count.should eq(1)
+      serial_reuse_wait_count = reuse_chain.wait_count
+      hy_compare_arrays(reused_img.read(config.image_rows * config.dim), serial_before_reuse["img.output"],
+        "#{case_label}/serial_reencode/img.output", failures, reports)
+      hy_compare_arrays(reused_txt.read(config.text_rows * config.dim), serial_before_reuse["txt.output"],
+        "#{case_label}/serial_reencode/txt.output", failures, reports)
+    end
     comparison_count = reports.count { |line| !line.starts_with?("boundary_input ") && !line.starts_with?("boundary_bits ") }
     origin = variant["weights_are_synthetic"].as_bool ? "synthetic" : "checkpoint"
     workspace_bytes = workspaces.sum(&.resident_bytes)
     replay_bytes = replay_plan.try(&.resident_bytes) || 0_i64
-    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: backend=#{mps_mode == "1" ? "mps" : "native"} comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} mps_workspace_bytes=#{workspace_bytes} mps_replay_attention_bytes=#{replay_bytes} mps_named_stage_total_bytes=#{workspace_bytes + replay_bytes} attention_query_chunk=#{attention_query_chunk} attention_heads_per_group=#{attention_heads_per_group} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} terminal_waits=1 gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
+    serial_metrics = if shared = serial_workspace
+                       " serial_workspace=1 serial_scratch_bytes=#{shared.scratch_bytes} serial_snapshot_bytes=#{serial_snapshot_arena.not_nil!.resident_bytes} serial_mps_workspace_bytes=#{shared.mps_workspace_bytes} serial_resident_bytes=#{shared.resident_bytes} clean_first_root_delta=#{clean_first_root_delta.not_nil!} clean_second_root_delta=#{clean_second_root_delta.not_nil!} clean_two_block_root_delta=#{clean_two_block_root_delta.not_nil!} serial_two_block_root_delta=#{serial_two_block_root_delta.not_nil!} serial_reencode_root_delta=#{serial_reuse_root_delta.not_nil!} serial_reencode_metal_buffer_allocations=#{serial_reuse_allocation_delta.not_nil!} serial_reencode_terminal_waits=#{serial_reuse_wait_count.not_nil!}"
+                     else
+                       " serial_workspace=0"
+                     end
+    summary = "Hy-Nomas #{data["name"]}/source_#{manifest["dtype"]}/resident_#{resident_dtype}/#{fixture["scope"]["attention_precision"].as_s}: fixture_selection=#{selection_label} fixture_variants=#{selected_variant_count}/#{total_variant_count} backend=#{mps_mode == "1" ? "mps" : "native"} comparisons=#{comparison_count} failures=#{failures.size} weights_origin=#{origin} resident_weights_bytes=#{plan.destination_bytes} weight_staging_bytes=#{plan.staging_bytes} scratch_bytes=#{reserve - inputs.resident_bytes} mps_workspace_bytes=#{workspace_bytes} mps_replay_attention_bytes=#{replay_bytes} mps_named_stage_total_bytes=#{workspace_bytes + replay_bytes}#{serial_metrics} attention_query_chunk=#{attention_query_chunk} attention_heads_per_group=#{attention_heads_per_group} encode_metal_buffer_allocations=#{ML::MetalBuffer.video_spec_allocations - allocations_before_encode} terminal_waits=1 gpu_seconds_diagnostic_command=#{gpu_seconds} reference_kind=#{fixture["scope"]["reference_kind"].as_s}"
     STDERR.puts summary
     if report_path = ENV["HY_NOMAS_REPORT"]?
       File.open(report_path, "a") do |report|
@@ -521,25 +771,32 @@ private def hy_run_variant(fixture : JSON::Any, data : JSON::Any,
       # A failed drain may leave GPU work in flight. Retain its resources in
       # that case; a completed chain, including a terminal GPU error, is safe
       # to clean up. The external guard remains the final process boundary.
-      if submission.nil? || submission.not_nil!.completed?
-        begin
-          activation_control.try { |control| control.release(submission) }
-          submission.try(&.release)
-        ensure
-          replay_plan.try(&.release)
-          workspaces.reverse_each(&.release_after_terminal_wait!)
-          if !workspaces.empty? && (expired_encoder = encoder) && (bound_inputs = inputs)
-            # Invalid geometry prevents any dispatch if the released guard
-            # regresses; the expired encoder must never be touched here.
-            expect_raises(ArgumentError, /released/) do
-              workspaces[0].rope(expired_encoder, bound_inputs["img"], bound_inputs["txt"],
-                bound_inputs["video_cos"], bound_inputs["video_sin"], 0)
+      begin
+        serial_reuse_submission.try { |pending| pending.commit_and_wait unless pending.completed? }
+      ensure
+        if (submission.nil? || submission.not_nil!.completed?) &&
+           (serial_reuse_submission.nil? || serial_reuse_submission.not_nil!.completed?)
+          begin
+            activation_control.try { |control| control.release(submission) }
+            submission.try(&.release)
+            serial_reuse_submission.try(&.release)
+            serial_workspace.try(&.release)
+          ensure
+            replay_plan.try(&.release)
+            workspaces.reverse_each(&.release_after_terminal_wait!)
+            if !workspaces.empty? && (expired_encoder = encoder) && (bound_inputs = inputs)
+              # Invalid geometry prevents any dispatch if the released guard
+              # regresses; the expired encoder must never be touched here.
+              expect_raises(ArgumentError, /released/) do
+                workspaces[0].rope(expired_encoder, bound_inputs["img"], bound_inputs["txt"],
+                  bound_inputs["video_cos"], bound_inputs["video_sin"], 0)
+              end
             end
+            ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before)
+            prepared.try(&.release)
+            file.close
+            arenas.reverse_each(&.release)
           end
-          ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(retained_workspaces_before)
-          prepared.try(&.release)
-          file.close
-          arenas.reverse_each(&.release)
         end
       end
     end
@@ -561,6 +818,10 @@ private def hy_sidecar(fixture_path : String, manifest : JSON::Any) : String
   hy_sha256(path).should eq(manifest["sha256"].as_s)
   path
 end
+
+# Retain the digest-verified parse for selected runs. The real oracle JSON is
+# hundreds of MiB, so the parity example must not parse a second copy.
+HY_NOMAS_FIXTURE_VARIANT_PREFLIGHT = hy_preflight_fixture_variant_selector!
 
 describe ML::Video::HyNomasDualStreamBlock do
   it "rejects unsupported model modes and invalid geometries before device allocation" do
@@ -758,10 +1019,34 @@ describe ML::Video::HyNomasDualStreamBlock do
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
   end
 
+  it "preflights an exact fixture variant selector without device allocation" do
+    contents = %({"schema_version":2,"cases":[{"name":"broadcast","variants":{"f32":{"resident_dtype":"F32"},"bf16_weights_roundtrip_f32_compute":{"resident_dtype":"BF16"}}},{"name":"per_token","variants":{"f32":{"resident_dtype":"F32"},"bf16_weights_roundtrip_f32_compute":{"resident_dtype":"BF16"}}}]})
+    fixture = JSON.parse(contents)
+    allocations = ML::MetalBuffer.video_spec_allocations
+    hy_fixture_variant_labels(fixture).sort.should eq(["broadcast/BF16", "broadcast/F32", "per_token/BF16", "per_token/F32"])
+    {"broadcast/BF16", "broadcast/F32", "per_token/BF16", "per_token/F32"}.each do |selector|
+      hy_validate_fixture_variant_selector!(fixture, selector)
+    end
+    expect_raises(ArgumentError, /case\/resident_dtype/) do
+      hy_validate_fixture_variant_selector!(fixture, "unknown/F32")
+    end
+    expect_raises(ArgumentError, /case\/resident_dtype/) do
+      hy_validate_fixture_variant_selector!(fixture, "")
+    end
+
+    invalid_variants = JSON.parse(contents)
+    invalid_variants["cases"][0]["variants"].as_h.delete("f32")
+    expect_raises(ArgumentError, /fixture variants must be/) do
+      hy_validate_fixture_variant_selector!(invalid_variants, "broadcast/F32")
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
   it "matches the declared upstream precision control, resident chaining and perturbation without encode allocations" do
     fixture_path = ENV["HY_NOMAS_BLOCK_FIXTURE"]?
     pending! "Set HY_NOMAS_BLOCK_FIXTURE to the external pinned MPS oracle JSON" unless fixture_path
-    fixture = hy_load_fixture(fixture_path.not_nil!, ENV["HY_NOMAS_FIXTURE_SHA256"]? || "")
+    fixture = HY_NOMAS_FIXTURE_VARIANT_PREFLIGHT ||
+              hy_load_fixture(fixture_path.not_nil!, ENV["HY_NOMAS_FIXTURE_SHA256"]? || "")
     if expected_source = ENV["HY_NOMAS_CHECKPOINT_SHA256"]?
       hy_require_checkpoint_source!(fixture, expected_source)
     end
@@ -779,11 +1064,26 @@ describe ML::Video::HyNomasDualStreamBlock do
     scope["chunk_size_tokens"].as_i.should eq(0)
     cases = fixture["cases"].as_a
     cases.map { |data| data["name"].as_s }.sort.should eq(["broadcast", "per_token"])
+    selector = ENV["HY_NOMAS_FIXTURE_VARIANT"]?
+    if selector
+      hy_validate_fixture_variant_selector!(fixture, selector)
+    end
+    total_variant_count = hy_fixture_variant_labels(fixture).size
+    selected_variant_count = selector ? 1 : total_variant_count
+    selection_label = selector || "all"
+    selection_report = "Hy-Nomas fixture selection=#{selection_label} selected_variants=#{selected_variant_count}/#{total_variant_count}"
+    STDERR.puts selection_report
+    if report_path = ENV["HY_NOMAS_REPORT"]?
+      File.open(report_path, "a") { |report| report.puts selection_report }
+    end
     failures = [] of String
     cases.each do |data|
       data["variants"].as_h.keys.sort.should eq(["bf16_weights_roundtrip_f32_compute", "f32"])
-      data["variants"].as_h.each_value do |variant|
-        failures.concat(hy_run_variant(fixture, data, variant, fixture_path.not_nil!))
+      data["variants"].as_h.each do |_variant_name, variant|
+        variant_label = "#{data["name"].as_s}/#{variant["resident_dtype"].as_s}"
+        next if selector && variant_label != selector
+        failures.concat(hy_run_variant(fixture, data, variant, fixture_path.not_nil!,
+          selection_label, selected_variant_count, total_variant_count))
       end
     end
     failures.empty?.should be_true, failures.first(16).join("\n")

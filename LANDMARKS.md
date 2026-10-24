@@ -6,6 +6,53 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
+
+- One owning scratch Arena, two distinct final image/text output banks, one
+  prepared MPS workspace. Fixed graph intermediates are shared; projection
+  and RMS weights select registered per-block bindings. In-flight chain and
+  early-release guards reject unsafe reuse. No arithmetic, inference default,
+  forced submission boundary or internal wait changes.
+- Only the 32 actual distilled block-0 tensors are downloaded (604,231,456-byte
+  F32 source); the pinned actual-weight oracle applies that same block twice.
+  A separate small control uses different synthetic successor/RMS weights and
+  poisons nonconstant scratch with NaNs before both repeated requests. Its
+  40 second-block checkpoints are raw-F32 exact against separate workspaces.
+  This is not a real pretrained block-0-to-block-1 qualification.
+- Eight isolated short-input fixture gates (F32/BF16-boundary math,
+  broadcast/per-token modulation, BF16/F32 weight residency) pass nine examples
+  and 216 finite comparisons each. All 640 serial intermediate arrays are
+  raw-F32 exact; 120 designated BF16 arrays, including 48 serial arrays, are
+  exact. Tolerance stays `2e-5 + 2e-5*abs(reference)`. The full Makefile suite
+  passes 43 examples, zero failures/errors, four external-oracle pending cases;
+  the eight isolated runs separately discharge its block-fixture pending case.
+- J1024 ABBA uses four fresh processes / eight measured samples per mode.
+  Separate/shared medians: wall 34.288/34.920 ms, GPU chain elapsed
+  33.066/33.149 ms, CPU encode 1.459/2.037 ms. All cross-mode output hashes
+  match. Named resident bytes fall from 1,150,658,564 to 739,370,500; there is
+  no measured speedup. Automatic root counts are 5x8 separate and 5x7/6x1
+  shared. Their variability is recorded, not forced away by extra commits.
+- J6560 shared two-block median is 275.237 ms including one terminal wait,
+  with zero tracked encode MetalBuffer allocations and stable output hashes.
+  Named scratch + workspace uses 2,180,682,240 bytes (2.031 GiB), versus
+  calculated 4,253,885,440 bytes (3.962 GiB) for two independent sets. The large
+  separate arm was not run. Benchmarks use synthetic inputs/theta-10000 RoPE;
+  no full-J upstream, full stack or video-throughput claim follows.
+- Admitted fixture gates peak at 2,424,391,648 sampled process-group bytes,
+  J6560 at 3,419,833,856; minimum cache-aware headroom across these is 30.359%,
+  swap growth zero. External 4 GiB cap, 15% floor, 64 MiB swap-growth stop and
+  600 s deadline remain. The combined four-variant fixture exceeded the cap;
+  its failed receipt is retained, replaced by the complete isolated matrix.
+- Correlated MiniQuad verdict: ROBUST for this fixed-input serial ownership
+  contract and measured matrix. Next: actual pretrained block 0 to block 1,
+  pinned upstream chain and bounded full-stack residency. Evidence, exact
+  commands, pins, source/binary/object hashes and retained failures:
+  `docs/hy-nomas-native-frontier.md`, serial section;
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-workspace-20261024/logs/final-receipt-v1.json`.
+  Refresh after scoped source, fixture/operands/geometry, precision, compiler/
+  bridge/SDK/OS/device/schedule changes or artifact loss. Wan return pointer
+  remains `docs/wan-performance-frontier.md`, `e22fc2ba`.
+
 ### [LM-HY-NOMAS-BLOCK-PROFILE-2026-10-24] J6560 block profile passes; serial scratch is the next residency boundary
 
 - Fresh release benchmark at parent `45cfa8f5`, Apple M2 Max: one actual block-0

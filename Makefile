@@ -38,7 +38,7 @@ WAN_BENCHMARK_SOURCES := $(wildcard src/ml/video/*.cr src/ml/metal/*.cr src/ml/g
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec_video_staging spec_wan spec_hy_nomas hy_nomas_block_benchmark spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec_video_staging spec_wan spec_hy_nomas hy_nomas_block_benchmark hy_nomas_serial_benchmark spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -99,6 +99,7 @@ spec_wan: $(BRIDGE_OBJ) $(WAN_MPS_OBJS)
 
 spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)
 	$(CRYSTAL) spec spec/hy_nomas_block_spec.cr spec/hy_nomas_block_profile_spec.cr \
+		spec/hy_nomas_serial_mps_spec.cr \
 		spec/hy_nomas_attention_probe_spec.cr \
 		spec/hy_nomas_pointwise_probe_spec.cr spec/hy_nomas_compact_attention_spec.cr \
 		spec/hy_nomas_compact_attention_oracle_spec.cr \
@@ -113,6 +114,12 @@ $(BUILD_DIR)/hy_nomas_block_benchmark: examples/hy_nomas_block_benchmark.cr $(WA
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 hy_nomas_block_benchmark: $(BUILD_DIR)/hy_nomas_block_benchmark
+
+$(BUILD_DIR)/hy_nomas_serial_benchmark: examples/hy_nomas_serial_benchmark.cr $(WAN_BENCHMARK_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+hy_nomas_serial_benchmark: $(BUILD_DIR)/hy_nomas_serial_benchmark
 
 $(BUILD_DIR)/wan_s2v_projection_benchmark: examples/wan_s2v_projection_benchmark.cr $(WAN_BENCHMARK_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \

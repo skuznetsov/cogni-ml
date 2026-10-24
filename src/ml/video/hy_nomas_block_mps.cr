@@ -19,6 +19,12 @@ module ML::Video
   class HyNomasMPSWorkspace
     WEIGHT_STAGE_KEY = "hy_nomas_mps.weight_stage"
 
+    private record SerialBinding, block : HyNomasDualStreamBlock,
+      img : ML::MetalBuffer, txt : ML::MetalBuffer,
+      scratch : Array(ML::MetalBuffer), weights : Array(ML::MetalBuffer),
+      linear : Hash(String, HyNomasDualStreamBlock::MPSLinearOperation),
+      rms : Hash(String, HyNomasDualStreamBlock::MPSRMSOperation)
+
     # MPSCommandChain has an explicit terminal wait but no deferred-resource
     # retention hook. Root each prepared workspace until its owner explicitly
     # releases it after that wait, so plan finalizers cannot invalidate graph
@@ -45,6 +51,8 @@ module ML::Video
     @rms_plans = {} of String => HyNomasMPSRMS::Plan
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
+    @serial_bindings = [] of SerialBinding
+    @serial_buffers = [] of ML::MetalBuffer
 
     getter config : HyNomasConfig
 
@@ -166,6 +174,75 @@ module ML::Video
       @arena.resident_bytes + (@attention_plan.try(&.resident_bytes) || 0_i64) + @rms_plans.values.sum(&.resident_bytes)
     end
 
+    # Setup-only admission for the two-block owner. All graph-bound tensors
+    # remain fixed; only weights and the final pointwise output banks differ.
+    # No plans or GPU storage are created when selecting a registered block.
+    def register_serial_blocks!(blocks : Array(HyNomasDualStreamBlock),
+                                inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer))) : Nil
+      raise ArgumentError.new("Hy-Nomas serial registration must precede encode") if @released || @last_chain || !@serial_bindings.empty?
+      unless blocks.size == 2 && inputs.size == 2 && blocks[0].same?(@block)
+        raise ArgumentError.new("Hy-Nomas serial registration requires the prepared block and one successor")
+      end
+      bindings = [] of SerialBinding
+      allowed = @fixed_inputs.dup
+      plan = HyNomasDualStreamBlock.scratch_plan(@config)
+      output_indices = plan.each_index.select { |index| {"hy_nomas.img.output", "hy_nomas.txt.output"}.includes?(plan[index][0]) }.to_a
+      raise ArgumentError.new("Hy-Nomas serial output schema changed") unless output_indices.size == 2
+      blocks.each_with_index do |block, index|
+        raise ArgumentError.new("Hy-Nomas serial block configuration changed") unless block.config == @config
+        img, txt = inputs[index]
+        block.mps_validate_inputs!(img, txt, @fixed_inputs[2], @fixed_inputs[3], @fixed_inputs[4], @fixed_inputs[5])
+        block.mps_validate_resources!
+        scratch, weights = block.mps_workspace_buffers
+        scratch.each_with_index do |buffer, slot|
+          if output_indices.includes?(slot)
+            if index > 0
+              @scratch_buffers.each { |other| MetalOps.distinct(buffer, other) }
+              @fixed_inputs.each { |other| MetalOps.distinct(buffer, other) }
+            end
+          elsif !buffer.same?(@scratch_buffers[slot])
+            raise ArgumentError.new("Hy-Nomas serial intermediate buffer identity changed: #{plan[slot][0]}")
+          end
+        end
+        linear = block.mps_linear_operations.to_h { |operation| {operation.name, operation} }
+        rms = block.mps_rms_operations.to_h { |operation| {operation.name, operation} }
+        raise ArgumentError.new("Hy-Nomas serial operation schema changed") unless linear.keys.sort == @operations.keys.sort && rms.keys.sort == @rms_operations.keys.sort
+        linear.each do |name, operation|
+          original = @operations[name]
+          unless operation.input.same?(original.input) && operation.output.same?(original.output) &&
+                 operation.rows == original.rows && operation.input_dim == original.input_dim && operation.output_dim == original.output_dim
+            raise ArgumentError.new("Hy-Nomas serial linear graph binding changed: #{name}")
+          end
+          validate_linear_operation!(operation)
+        end
+        rms.each do |name, operation|
+          original = @rms_operations[name]
+          unless operation.input.same?(original.input) && operation.output.same?(original.output) && operation.tokens == original.tokens
+            raise ArgumentError.new("Hy-Nomas serial RMS graph binding changed: #{name}")
+          end
+        end
+        activations = block.mps_activation_operations(@fixed_inputs[2], @fixed_inputs[3])
+        unless activations.size == @activation_operations.size && activations.all? { |operation| operation == @activation_operations[operation.name]? }
+          raise ArgumentError.new("Hy-Nomas serial activation graph binding changed")
+        end
+        allowed.concat(scratch).concat([img, txt])
+        bindings << SerialBinding.new(block, img, txt, scratch, weights, linear, rms)
+      end
+      unless inputs[0][0].same?(@fixed_inputs[0]) && inputs[0][1].same?(@fixed_inputs[1]) &&
+             inputs[1][0].same?(blocks[0].image_output) && inputs[1][1].same?(blocks[0].text_output)
+        raise ArgumentError.new("Hy-Nomas serial input banks must follow the registered predecessor")
+      end
+      # Cross-block aliases are not covered by each block's local validator.
+      bindings.each do |binding|
+        binding.weights.each do |weight|
+          allowed.each { |buffer| MetalOps.distinct(weight, buffer) }
+          MetalOps.distinct(weight, weight_stage)
+        end
+      end
+      @serial_bindings = bindings
+      @serial_buffers = allowed
+    end
+
     # Called before the first block dispatch. It verifies plan and buffer
     # identity, geometry, aliases, and chain lifecycle without allocating or
     # submitting work.
@@ -176,28 +253,44 @@ module ML::Video
                       video_rope_cos : ML::MetalBuffer,
                       video_rope_sin : ML::MetalBuffer) : Nil
       raise ArgumentError.new("Hy-Nomas MPS workspace has been released") if @released
-      unless @block.same?(block) && @config == block.config
-        raise ArgumentError.new("Hy-Nomas MPS workspace belongs to a different block")
-      end
-      block.mps_validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
-      block.mps_validate_resources!
-      unless fixed_input?(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
-        raise ArgumentError.new("Hy-Nomas MPS workspace input identity changed")
-      end
-      unless block.mps_workspace_resources_match?(@scratch_buffers, @weight_buffers)
-        raise ArgumentError.new("Hy-Nomas MPS workspace block buffer identity changed")
-      end
-      validate_workspace_allocations!
-      validate_linear_plans!
-      validate_attention_plan!(block)
-
-      # Validate the chain before any native linear work is appended. The
-      # attention plan cannot move between in-flight chains.
+      # Check the common lease before changing active block metadata. Sibling
+      # registered blocks must never overwrite shared stages on a live chain.
       chain.encoder
       if previous = @last_chain
         unless previous.same?(chain) || previous.completed?
           raise ArgumentError.new("Hy-Nomas MPS workspace cannot span in-flight command chains")
         end
+      end
+      serial = @serial_bindings.find { |binding| binding.block.same?(block) }
+      unless (@serial_bindings.empty? ? @block.same?(block) : !serial.nil?) && @config == block.config
+        raise ArgumentError.new("Hy-Nomas MPS workspace belongs to a different block")
+      end
+      block.mps_validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
+      block.mps_validate_resources!
+      input_matches = if binding = serial
+                        binding.img.same?(img) && binding.txt.same?(txt) &&
+                          @fixed_inputs[2].same?(vec) && @fixed_inputs[3].same?(vec_txt) &&
+                          @fixed_inputs[4].same?(video_rope_cos) && @fixed_inputs[5].same?(video_rope_sin)
+                      else
+                        fixed_input?(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
+                      end
+      unless input_matches
+        raise ArgumentError.new("Hy-Nomas MPS workspace input identity changed")
+      end
+      scratch = serial.try(&.scratch) || @scratch_buffers
+      weights = serial.try(&.weights) || @weight_buffers
+      unless block.mps_workspace_resources_match?(scratch, weights)
+        raise ArgumentError.new("Hy-Nomas MPS workspace block buffer identity changed")
+      end
+      validate_workspace_allocations!
+      validate_linear_plans!(serial.try(&.linear) || @operations)
+      validate_attention_plan!(block)
+
+      # Validate the chain before any native linear work is appended. The
+      # attention plan cannot move between in-flight chains.
+      if binding = serial
+        @operations = binding.linear
+        @rms_operations = binding.rms
       end
       @last_chain = chain
     end
@@ -282,7 +375,7 @@ module ML::Video
         raise ArgumentError.new("Hy-Nomas MPS RMS binding changed: #{name}")
       end
       plan = @rms_plans[name]? || raise ArgumentError.new("Missing Hy-Nomas MPS RMS plan: #{name}")
-      plan.encode(chain)
+      plan.encode(chain, weight.weight, weight.dtype)
     end
 
     def rope(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
@@ -363,7 +456,8 @@ module ML::Video
     private def validate_pointwise_bindings!(*buffers : ML::MetalBuffer) : Nil
       buffers.each do |buffer|
         unless @scratch_buffers.any? { |scratch| scratch.same?(buffer) } ||
-               @fixed_inputs.any? { |input| input.same?(buffer) }
+               @fixed_inputs.any? { |input| input.same?(buffer) } ||
+               @serial_buffers.any? { |allowed| allowed.same?(buffer) }
           raise ArgumentError.new("Hy-Nomas MPS pointwise binding is outside the prepared block workspace")
         end
       end
@@ -441,9 +535,9 @@ module ML::Video
       validate_setup_aliases!
     end
 
-    private def validate_linear_plans! : Nil
+    private def validate_linear_plans!(operations = @operations) : Nil
       raise ArgumentError.new("Hy-Nomas MPS linear plan set is incomplete") unless @plans.size == 14
-      @operations.each do |name, operation|
+      operations.each do |name, operation|
         plan = @plans[name]?
         raise ArgumentError.new("Missing Hy-Nomas MPS linear plan #{name}") unless plan
         unless operation.rows % @config.batches == 0 &&
