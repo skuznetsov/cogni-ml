@@ -6,6 +6,34 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] Native text decoder blocks match the bounded official MPS oracle
+
+- The opt-in Qwen2.5-VL adapter reuses CogniQwen Metal buffers and the serial
+  MPS command chain. It implements biased Q/K/V, split-half RoPE, GQA causal
+  attention, RMSNorm and SwiGLU. Qwen3.5 hybrid/GDN weights are not compatible.
+- Four official Transformers/MPS BF16 fixtures pass 102 stage comparisons
+  bit exactly: one tiny block, two distinct tiny blocks with unit and nonunit
+  RMS gains, and one 3584/18944/28Q/4KV/HD128 block. All have four tokens,
+  right padding `[1,1,1,0]`, offset seven and synthetic constructor weights.
+  The unchanged finite gate is `2e-5 + 2e-5*abs(reference)`.
+- Same-graph cast round trips failed as precision fences. Fifteen prepared
+  asynchronous executables materialize source BF16 boundaries through seven
+  caller-owned scratch buffers; matching general MPS SDPA graph dtypes closes
+  the remaining attention mismatch. Two blocks share the resident output/input
+  object, with one terminal wait per request and zero tracked named-buffer
+  allocations during encode. Serial overlap/budget/lifetime falsifiers pass.
+- Correlated MiniQuad verdict: ROBUST for this diagnostic serial slice. Fully
+  masked rows, concurrent callers, pretrained weights, long sequences, the full
+  26-block prefix, tokenization/prompt cropping and DiT integration are not
+  qualified. Prefix scratch reuse and aggregate admission remain prerequisites.
+  No generation or speedup is claimed; the 15% reserve remains unchanged.
+- Evidence, source/runtime pins, trusted fixture hashes, commands, memory and
+  residuals: `docs/qwen25-hy-nomas-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/qwen25-hy-nomas-20261024/logs/final-receipt-v1.json`.
+  Refresh after scoped source, precision, fixture/weights/geometry, compiler,
+  SDK/OS/device or lifecycle changes, or artifact loss. Next: a bounded
+  pretrained block chain; DiT return pointer is `docs/hy-nomas-native-frontier.md`.
+
 ### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
 
 - One owning scratch Arena, two distinct final image/text output banks, one

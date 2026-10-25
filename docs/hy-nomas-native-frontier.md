@@ -1364,8 +1364,11 @@ policy or host-scheduling changes. No full model or full generation is admitted.
 
 ## Continuation
 
-Active goal: native Hy-Nomas port, initially one proven DiT block. Return pointer:
-Wan performance work remains at `docs/wan-performance-frontier.md`, commit
+Active goal: native Hy-Nomas port. Current bounded branch: the CogniQwen
+Qwen2.5-VL text decoder, qualified on four-token synthetic BF16 fixtures,
+including real 7B block geometry; see `docs/qwen25-hy-nomas-frontier.md` for
+the exact scope and next pretrained-block discriminator. The DiT return point
+is recorded below. Wan performance work remains at `docs/wan-performance-frontier.md`, commit
 `e22fc2ba`; no Wan default has been changed. Confirmed frontier: the actual
 checkpoint block passes the declared F32 and BF16-boundary MPS controls with
 both weight residencies and chained GPU outputs. Compact attention is explicit
