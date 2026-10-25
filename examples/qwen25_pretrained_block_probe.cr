@@ -52,6 +52,48 @@ module ML::GGUF
       check_live!
       @scratch["rms_statistics"]
     end
+
+    # Reject malformed new-ABI feeds before any graph preparation or encoding.
+    # The 12 temporary bytes are released before allocating the trace outputs.
+    def diagnostic_exponent_guards! : Array(String)
+      check_live!
+      rejected = [] of String
+      {% unless flag?(:cpu_only) %}
+        bad_value = MetalBuffer.new(4_i64)
+        begin
+          bad_size = MetalBuffer.new(8_i64)
+          begin
+            bad_value.write([3.0_f32])
+            bad_size.write([2.0_f32, 2.0_f32])
+            weight_handles = @weights.map(&.handle)
+            stage_handles = STAGE_NAMES.map { |name| @stages[name].handle }.to_a
+            scratch_handles = SCRATCH_NAMES.map { |name| @scratch[name].handle }.to_a
+            { {"null", Pointer(Void).null, "required RMS exponent handle is null"},
+             {"wrong_size", bad_size.handle, "exact 4-byte shared buffer"},
+             {"wrong_value", bad_value.handle, "immutable F32 value 2.0"} }.each do |name, handle, expected_error|
+              error = Bytes.new(1024, 0_u8)
+              native = ::Qwen25MPSFFI.create_with_rms_exponent(Metal::Device.instance.device_handle,
+                1, @tokens, @config.dim, @config.ffn_dim, @config.heads, @config.kv_heads,
+                @config.head_dim, @config.rms_norm_eps, @input.handle, @mask.handle,
+                @positions.handle, @inv_freq.handle, weight_handles.to_unsafe,
+                stage_handles.to_unsafe, scratch_handles.to_unsafe, handle,
+                error.to_unsafe, error.size)
+              unless native.null?
+                Qwen25MPSFFI.destroy(native)
+                raise "invalid RMS exponent #{name} was accepted"
+              end
+              raise "unexpected RMS exponent rejection" unless String.new(error.to_unsafe).includes?(expected_error)
+              rejected << name
+            end
+          ensure
+            bad_size.release
+          end
+        ensure
+          bad_value.release
+        end
+      {% end %}
+      rejected
+    end
   end
 end
 
@@ -627,6 +669,7 @@ stage_reference_sha256 = ""
 report_path = ""
 layer_index = -1_i32
 rms_site_argument = "input"
+rms_power_fed = false
 max_named_bytes = 0_i64
 OptionParser.parse do |parser|
   parser.banner = "One-block pretrained Qwen2.5-VL stage discriminator; use the external memory guard."
@@ -637,6 +680,7 @@ OptionParser.parse do |parser|
   parser.on("--stage-reference-sha256 SHA256", "Trusted layer stage-manifest digest") { |value| stage_reference_sha256 = value }
   parser.on("--layer-index N", "Captured decoder layer index (0...26)") { |value| layer_index = value.to_i32 }
   parser.on("--rms-site SITE", "RMS site: input (default) or post-attention") { |value| rms_site_argument = value }
+  parser.on("--rms-power-fed", "Opt in to one immutable GPU exponent for both block RMS sites") { rms_power_fed = true }
   parser.on("--report PATH", "New native comparison report") { |value| report_path = value }
   parser.on("--max-named-bytes N", "Aggregate named-buffer admission cap") { |value| max_named_bytes = value.to_i64 }
 end
@@ -657,7 +701,8 @@ config = fixture.config
 tokens = fixture.tokens.size
 stage_bindings = Qwen25BlockProbe.stage_bindings(layer_index)
 rms_stage_names = stage_fixture.rms_stage_names
-block_named_bytes = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, tokens, 1)
+block_named_bytes = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, tokens, 1) +
+                    ML::GGUF::Qwen25VLBlockPlan.rms_exponent_bytes(rms_power_fed)
 rms_output_bytes = Qwen25BlockProbe.rms_trace_buffer_bytes(config, tokens)
 rms_trace_named_bytes = rms_output_bytes.sum
 rms_precise_trace_named_bytes = rms_output_bytes.sum
@@ -705,7 +750,8 @@ begin
   layer_weights = weights.upload_block_weights(layer_index, fixture.tensor_sha256s)
   layer_weights.each_value { |buffer| owned << buffer }
   block = ML::GGUF::Qwen25VLBlockPlan.new(config, token_count, input, mask,
-    positions, inv_freq, layer_weights, layer_index)
+    positions, inv_freq, layer_weights, layer_index, rms_power_fed: rms_power_fed)
+  exponent_guards_rejected = rms_power_fed ? block.not_nil!.diagnostic_exponent_guards! : [] of String
   rms_input = if canonical_rms_site == "input_layernorm"
                 input
               else
@@ -765,6 +811,14 @@ begin
   encode_allocations = ML::MetalBuffer.qwen25_block_probe_allocations - allocations_before
   raise "encoding allocated named Metal buffers" unless encode_allocations == 0
   raise "encoding introduced a device wait" unless chain.wait_count == 0
+  early_release_rejected = false
+  begin
+    block.not_nil!.release
+  rescue ex : ArgumentError
+    raise ex unless ex.message.try(&.includes?("terminal wait required"))
+    early_release_rejected = true
+  end
+  raise "in-flight block release was accepted" unless early_release_rejected
   wait_started = Time.instant
   chain.commit_and_wait
   wait_seconds = (Time.instant - wait_started).total_seconds
@@ -801,6 +855,9 @@ begin
   end
   scratch_name = Qwen25BlockProbe.rms_scratch_name(canonical_rms_site)
   scratch_actual = Qwen25BlockProbe.read_buffer(block.diagnostic_rms_normalized(scratch_name))
+  official_scratch_comparison = Qwen25BlockProbe.compare_rms_bf16(
+    "block_#{canonical_rms_site}_normalized_vs_official",
+    stage_fixture.expected_rms_stage(rms_stage_names.last), scratch_actual)
   legacy_scratch_comparison = Qwen25BlockProbe.compare_rms_bf16(
     "block_#{canonical_rms_site}_normalized_vs_legacy_graph_trace",
     rms_trace_actuals[rms_stage_names.last], scratch_actual)
@@ -828,15 +885,30 @@ begin
     "block_#{canonical_rms_site}_normalized_vs_precise_trace", precise_normalized_actual, scratch_actual)
   scratch_bitwise_equal = scratch_comparison[:different_elements] == 0
   production_root_comparison : Qwen25BlockProbe::RMSComparison? = nil
+  official_root_comparison : Qwen25BlockProbe::RMSComparison? = nil
   production_root_bitwise_equal = true
   if canonical_rms_site == "post_attention_layernorm"
     production_root_actual = Qwen25BlockProbe.read_buffer(block.diagnostic_rms_statistics)
     production_root_comparison = Qwen25BlockProbe.compare_rms_f32(
       "production_post_attention_inverse_root_vs_precise_trace_rsqrt_f32",
       rms_precise_trace_actuals[2], production_root_actual)
+    official_root_comparison = Qwen25BlockProbe.compare_rms_f32(
+      "production_post_attention_inverse_root_vs_official_rsqrt_f32",
+      stage_fixture.expected_rms_stage(rms_stage_names[2]), production_root_actual)
     production_root_bitwise_equal = production_root_comparison.not_nil![:different_elements] == 0
   end
-  rms_passed = rms_precise_passed && scratch_bitwise_equal && production_root_bitwise_equal
+  official_scratch_passed = official_scratch_comparison[:failures] == 0 &&
+                            official_scratch_comparison[:different_elements] == 0
+  official_root_passed = official_root_comparison.try do |comparison|
+    comparison[:failures] == 0 && comparison[:different_elements] == 0
+  end
+  # Both old trace graphs use square statistics. Their results remain visible
+  # controls, but the fed block must be gated directly against the oracle.
+  rms_passed = if rms_power_fed
+                 official_scratch_passed && (official_root_passed.nil? || official_root_passed)
+               else
+                 rms_precise_passed && scratch_bitwise_equal && production_root_bitwise_equal
+               end
 
   File.write(report_path, JSON.build(indent: "  ") do |json|
     json.object do
@@ -852,12 +924,17 @@ begin
       json.field "rms_site", canonical_rms_site
       json.field "rms_input_source", Qwen25BlockProbe.rms_input_source(canonical_rms_site)
       json.field "tokens", tokens
+      json.field "rms_power_fed", rms_power_fed
+      json.field "rms_exponent_named_bytes", ML::GGUF::Qwen25VLBlockPlan.rms_exponent_bytes(rms_power_fed)
+      json.field "rms_exponent_rejected_inputs", exponent_guards_rejected
+      json.field "rms_statistics_sites_using_fed_exponent", rms_power_fed ? ["input_layernorm", "post_attention_layernorm"] : [] of String
       json.field "named_bytes", named_bytes
       json.field "block_named_bytes", block_named_bytes
       json.field "rms_trace_named_bytes", rms_trace_named_bytes
       json.field "rms_precise_trace_named_bytes", rms_precise_trace_named_bytes
       json.field "named_allocations_during_encode", encode_allocations
       json.field "terminal_wait_count", chain.wait_count
+      json.field "early_release_rejected", early_release_rejected
       json.field "diagnostic_readbacks_after_terminal_wait",
         comparisons.size + rms_comparisons.size + rms_precise_comparisons.size + 1 + (production_root_comparison ? 1 : 0)
       json.field "activation_readbacks_before_terminal_wait", 0
@@ -881,6 +958,11 @@ begin
       json.field "production_root_vs_trace_comparison", production_root_comparison.not_nil! if production_root_comparison
       json.field "rms_trace_passed", rms_passed
       json.field "rms_precise_trace_comparisons", rms_precise_comparisons
+      json.field "rms_precise_trace_role", rms_power_fed ? "legacy_square_statistics_negative_control" : "production_gate"
+      json.field "rms_block_scratch_vs_official", official_scratch_comparison
+      json.field "rms_block_scratch_exact_official", official_scratch_passed
+      json.field "production_root_vs_official", official_root_comparison
+      json.field "production_root_exact_official", official_root_passed
       json.field "rms_precise_normalized_bf16_exact_official", precise_normalized_bf16_exact
       json.field "rms_precise_trace_passed", rms_precise_passed
       json.field "first_mismatch_stage", failures.first?.try(&.[:name])
@@ -903,8 +985,8 @@ begin
   end
   raise "standalone layer #{layer_index} output differs from authenticated prefix state #{layer_index + 1}" unless output_passed
   raise "layer #{layer_index} RMS trace or normalized scratch comparison failed" unless rms_passed
-  raise "precise layer #{layer_index} RMS trace differs from the authenticated official stages" unless rms_precise_passed
-  puts "PASS: all 17 layer-#{layer_index} stages, precise #{canonical_rms_site} trace, production RMS scratch, and standalone output match; legacy trace reported separately; one terminal wait; zero named allocations during encode"
+  raise "precise layer #{layer_index} RMS trace differs from the authenticated official stages" unless rms_power_fed || rms_precise_passed
+  puts "PASS: all 17 layer-#{layer_index} stages, production RMS gate, and standalone output match; trace roles recorded; one terminal wait; zero named allocations during encode"
 ensure
   Qwen25PrefixProbe.cleanup_after_drain(chain) do
     block.try(&.release)

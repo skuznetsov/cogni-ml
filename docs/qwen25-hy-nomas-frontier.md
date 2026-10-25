@@ -16,10 +16,95 @@ changing production RMS arithmetic or qualifying the full prefix.
 The connected follow-up also reproduces upstream epsilon, inverse-root,
 normalized F32/BF16 and BF16 gain bits exactly on that input, including the
 production-style in-place scalar scratch and non-trace normalize kernel.
-The default block still uses its earlier square path; block/prefix rechecks
-remain open.
+The opt-in block follow-up connects that exponent to both RMS sites and
+matches all 17 block-0 stages at S1280 raw-bit exactly. The default block and
+prefix still use the earlier square path; the 26-block S1280 recheck remains
+open.
 The full text encoder and video pipeline remain in progress. This adapter is opt-in; neither a
 1280-token prompt nor video generation is qualified here.
+
+## Block-0 GPU-fed RMS integration: qualified on the saved S1280 input
+
+CAUTION, 2026-10-25: qualify the saved S1280 block with one prepared immutable
+F32 exponent `2.0` shared by both RMS statistics steps. The prior connected
+RMS/gain probe is exact on the saved residual, but that does not establish
+equivalence after block graph compilation or serial scalar-scratch reuse.
+Keep the legacy constructor/default and use an explicit opt-in block path.
+Account its four named bytes before allocation, retain it until the terminal
+drain, and reject null, wrong-size/value/device, or overlapping native feeds.
+Rollback is disabling the opt-in path; prefix defaults remain unchanged.
+
+DoD: build the focused specs and `qwen25_pretrained_block_probe`, then run
+legacy and `--rms-power-fed` controls sequentially on the same authenticated
+block-0 input, checkpoint and 17-stage oracle. Require the candidate's full
+stage/output gate at unchanged `atol=rtol=2e-5`, report raw BF16 differences,
+and directly compare normalized scratch and the retained post-RMS inverse
+root with the official fixture. The older RMS traces remain negative controls
+when their statistics algorithm differs from the candidate. Require one
+terminal wait, zero pre-terminal reads and zero tracked encode allocations.
+Admit the explicit named footprint plus opaque runtime budget under the
+file-cache-aware 10% floor, 64 MiB swap-growth stop and bounded deadline.
+No prefix or full generation is admitted by this slice. A failure preserves
+the first differing stage and leaves the candidate opt-in.
+
+### Observed result
+
+The fresh same-binary pair uses checkpoint revision
+`eb6ba55b40ada64977147b52e50a4145ee89ac4f`, the retained authenticated S1280
+prefix and block-0 stage fixtures, and unchanged `atol=rtol=2e-5`. The candidate
+passes all 17 stages: 116,326,400 BF16 words, zero numerical failures and zero
+differing raw words. Its final 4,587,520-word hidden output also matches the
+independently retained prefix state 1 exactly. The input RMS output after gain
+is included in the 17-stage comparison. Post-attention normalized scratch
+(4,587,520 BF16 values) and inverse root (1,280 F32 values) match their official
+captures raw-bit exactly. Input inverse root is overwritten by shared scalar
+scratch reuse and is not separately retained or compared here.
+
+The legacy control exits one and reproduces the earlier first divergence:
+post-attention RMS after gain has 27 tolerance failures and 28 differing raw
+words; final hidden output has 596 failures/differing words. The candidate's
+two older standalone RMS traces retain square statistics and remain visible
+negative controls. They do not gate the fed candidate: its normalized scratch
+and inverse root are compared directly against the official fixture. This
+keeps trace-algorithm disagreement separate from production parity.
+
+Both runs use one terminal wait, zero pre-terminal activation reads and zero
+tracked encode-time MetalBuffer allocations, with 29 diagnostic reads after
+the wait. In-flight release is rejected. The new ABI rejects null, wrong-size
+and wrong-value exponent feeds in native probes; same-device/shared-storage
+and full-disjointness checks are present in source but not independently
+exercised by those three probes. One plan-private immutable four-byte buffer
+is retained for both RMS sites. Candidate named admission is 854,129,924 bytes,
+exactly four bytes above the legacy control; 19 prepared block steps and the
+encode implementation are unchanged. The old constructor ABI and PrefixPlan
+defaults remain unchanged.
+
+The file-cache-aware 10% reserve, 5 GiB sampled process cap, 64 MiB swap-growth
+stop and 180-second deadline remain intact. Candidate sampled peak is
+2,076,641,416 bytes, minimum cache-aware headroom 27,374,583,808 bytes and
+minimum pressure-free percentage 74; observed swap growth is zero with no
+guard abort. The legacy sampled peak is 1,927,071,688 bytes. These observations
+are not memory reservations or instantaneous peak bounds.
+
+Thirty-five focused Crystal examples, normal/cpu-only no-codegen, strict Clang,
+release linking, formatting and diff checks pass on the final source. Correlated
+MiniQuad review is ROBUST for this saved-input block/lifecycle scope. The oracle
+was retained and hash-authenticated, not recaptured in this slice. Companion
+objects have pinned bytes but opaque source ancestry, so this is not a hermetic
+rebuild. No speedup, all-input, full-prefix or generation claim follows.
+
+Evidence: `logs/native-block0-rms-{legacy,fed}-v1.*`,
+`logs/block0-rms-analysis-v1.json` and
+`logs/block0-fed-rms-receipt-v1.json` under
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
+`.landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json`.
+Next falsifier: separately admit the fed option in the 26-block prefix,
+including per-plan exponent accounting and shared-workspace lifecycle, then
+compare all retained hidden states at S1280 under the same finite gate and
+10% reserve. Keep the earlier full-prefix rejection until that check passes.
+Refresh this block certificate on scoped source, fixture/input, precision or
+geometry, toolchain/SDK/OS/device, execution/lifecycle changes, artifact loss
+or hash mismatch.
 
 ## Active pretrained prefix slice
 
@@ -451,11 +536,10 @@ and its lifecycle. The F32 feed supplies Torch's post-cast value, without
 reproducing its Int64 feed/cast topology. The caller-supplied RMS manifest
 digest is preserved in the pinned launch record.
 
-The remaining falsifier is to wire the retained exponent into both RMS sites
-of an opt-in block plan, account for its shared buffer, then separately admit
-block 0 before a 26-block prefix recheck. Keep S1280 prefix rejection in place
-until the larger check passes. Source/build/input/run pins and review bounds
-are indexed in
+The subsequent opt-in block integration above closes the both-RMS block-0
+falsifier on the saved input. The 26-block S1280 prefix remains rejected until
+its separately admitted recheck passes. This earlier connected diagnostic's
+source/build/input/run pins and review bounds are indexed in
 `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json`
 and `.landmark/evidence/2026-10-25-qwen25-connected-rms.json`.
 

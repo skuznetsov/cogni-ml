@@ -33443,3 +33443,42 @@ Refresh after source/toolchain/device/model/workload changes.
   full block or prefix run and no full generation. Refresh on scoped source,
   fixture/input, precision/geometry, toolchain/SDK/OS/device, execution or
   lifecycle changes, evidence loss or hash mismatch.
+
+## 2026-10-25 — Both GPU-fed RMS sites close saved S1280 block-0 parity
+
+- Active goal: qualify the prepared exponent in both RMS sites of block 0.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, block-0 GPU-fed RMS section.
+  An opt-in additive native ABI retains one private immutable shared F32[1]
+  exponent 2.0 for both statistics steps; the old constructor/default and
+  PrefixPlan are unchanged. The extra four named bytes are admitted before
+  allocation. The existing 19-step block encode implementation is unchanged.
+- A fresh same-binary legacy/fed pair on the authenticated saved S1280 fixture
+  confirms all 17 candidate stages raw-bit exact: 116,326,400 BF16 words.
+  Final hidden output also matches independently retained prefix state 1
+  (4,587,520 words). Post-attention normalized scratch and 1,280 F32 inverse
+  roots are exact. Input RMS after gain is covered by the stage gate; its
+  inverse root is overwritten by scalar scratch reuse and not retained here.
+  Legacy reproduces 27 tolerance failures/28 raw differences at post RMS
+  and 596 final-output failures/differences. `atol=rtol=2e-5` is unchanged.
+  Older standalone square-statistics traces remain reported negative controls;
+  direct official scratch/root comparisons gate the fed candidate.
+- Both runs have one terminal wait, 29 post-wait reads, no pre-wait activation
+  reads and zero tracked encode-time MetalBuffer allocations. In-flight release
+  and null/wrong-size/wrong-value exponent feeds are rejected. Candidate named
+  bytes: 854,129,924. Guard: file-cache-aware 10% reserve, 5 GiB sampled process
+  cap, 64 MiB swap-growth stop, 180 seconds. Candidate sampled peak 2,076,641,416
+  bytes, minimum headroom 27,374,583,808 bytes, pressure-free minimum 74%, zero
+  observed swap growth and no guard abort. Sampling is not a hard peak bound.
+- Thirty-five focused Crystal examples and normal/cpu-only no-codegen, strict
+  Clang, release link, format/diff checks pass. Correlated MiniQuad is ROBUST
+  for this saved-input block/lifecycle scope. Oracle captures were retained and
+  authenticated, not recaptured. Companion objects have pinned bytes but opaque
+  source ancestry. No all-input, speedup, full-prefix or generation claim.
+  Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/block0-fed-rms-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json`.
+- Next falsifier: separately admit the option in all 26 prefix blocks, including
+  exponent accounting and shared-workspace lifecycle, then compare all retained
+  S1280 hidden states. The earlier full-prefix rejection remains open; defaults
+  remain legacy. No full generation. Rollback: disable the block option. Refresh
+  on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.

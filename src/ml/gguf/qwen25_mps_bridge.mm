@@ -79,6 +79,11 @@ static NSArray<GsQwen25MPSGraphStep *> *gs_qwen25_precise_rms_steps(
     id<MTLBuffer> variancePlusEpsilon, id<MTLBuffer> inverseRoot,
     id<MTLBuffer> normalizedBf16, id<MTLBuffer> normalizedF32,
     uint32_t rows, uint32_t dim);
+static GsQwen25MPSGraphStep *gs_qwen25_rms_power_fed_statistics_step(
+    id<MTLDevice> device, id<MTLBuffer> inputBf16Buffer,
+    id<MTLBuffer> exponentF32Buffer, id<MTLBuffer> plusEpsilonBuffer,
+    uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
+    NSString *name, char *errorText, size_t errorCapacity);
 
 struct GsQwen25EmbeddingGatherParams {
   uint32_t tokens;
@@ -645,19 +650,25 @@ static GsQwen25MPSGraphStep *gs_qwen25_rms_statistics_step_optimization0(
       compilation, errorText, errorCapacity);
 }
 
-extern "C" void *gs_qwen25_mps_block_plan_create(
+static void *gs_qwen25_mps_block_plan_create_impl(
     void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
     int32_t ffnDim, int32_t heads, int32_t kvHeads, int32_t headDim,
     float rmsNormEpsilon, void *inputHandle, void *maskHandle,
     void *positionIdsHandle, void *invFreqHandle,
     void *const *weightHandles, void *const *stageHandles,
-    void *const *scratchHandles, char *errorText, size_t errorCapacity) {
+    void *const *scratchHandles, void *exponentHandle,
+    bool requireExponent, char *errorText, size_t errorCapacity) {
   if (errorText && errorCapacity > 0)
     errorText[0] = '\0';
   if (!deviceHandle || !inputHandle || !maskHandle || !positionIdsHandle ||
       !invFreqHandle || !weightHandles || !stageHandles || !scratchHandles) {
     gs_qwen25_set_error(errorText, errorCapacity,
                         "required device, input, mask, RoPE, weight, stage, or scratch handle is null");
+    return nullptr;
+  }
+  if (requireExponent && !exponentHandle) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "required RMS exponent handle is null");
     return nullptr;
   }
   if (@available(macOS 14.0, *)) {
@@ -751,6 +762,26 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
       id<MTLBuffer> mask = (__bridge id<MTLBuffer>)maskHandle;
       id<MTLBuffer> positions = (__bridge id<MTLBuffer>)positionIdsHandle;
       id<MTLBuffer> invFreq = (__bridge id<MTLBuffer>)invFreqHandle;
+      id<MTLBuffer> exponentBuffer = requireExponent
+          ? (__bridge id<MTLBuffer>)exponentHandle
+          : nil;
+      if (requireExponent) {
+        if (!exponentBuffer || exponentBuffer.device != device ||
+            exponentBuffer.storageMode != MTLStorageModeShared ||
+            !exponentBuffer.contents || exponentBuffer.length != sizeof(float)) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "RMS exponent must be an exact 4-byte shared buffer on the supplied device");
+          return nullptr;
+        }
+        uint32_t exponentBits = 0;
+        std::memcpy(&exponentBits, exponentBuffer.contents,
+                    sizeof(exponentBits));
+        if (exponentBits != 0x40000000u) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "RMS exponent must contain immutable F32 value 2.0");
+          return nullptr;
+        }
+      }
       NSMutableArray<id<MTLBuffer>> *weights =
           [NSMutableArray arrayWithCapacity:kGsQwen25WeightCount];
       NSMutableArray<id<MTLBuffer>> *stages =
@@ -838,6 +869,19 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           }
         }
       }
+      if (exponentBuffer) {
+        for (id<MTLBuffer> buffer in allBuffers) {
+          if (!gs_qwen25_disjoint(buffer, exponentBuffer)) {
+            gs_qwen25_set_error(errorText, errorCapacity,
+                                "RMS exponent MTLBuffer must be fully disjoint from feeds, weights, stages, and scratch");
+            return nullptr;
+          }
+        }
+        // The caller must keep these validated scalar bytes immutable until
+        // the prepared plan is destroyed; retaining it makes that lifetime
+        // explicit for all asynchronous encodes.
+        [allBuffers addObject:exponentBuffer];
+      }
 
       NSArray<NSNumber *> *hiddenShape =
           @[ @(batches), @(tokens), @(dim) ];
@@ -900,10 +944,16 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           gs_qwen25_precise_rms_pipelines(device, false, errorText, errorCapacity);
       if (!rmsPipelines)
         return nullptr;
-      GS_QWEN25_APPEND_STEP(gs_qwen25_rms_statistics_step(
-          device, input, scratchArray[7], (uint32_t)batches, (uint32_t)tokens,
-          (uint32_t)dim, rmsNormEpsilon, @"input_norm_statistics", errorText,
-          errorCapacity));
+      GS_QWEN25_APPEND_STEP(exponentBuffer
+          ? gs_qwen25_rms_power_fed_statistics_step(
+                device, input, exponentBuffer, scratchArray[7],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim,
+                rmsNormEpsilon, @"input_norm_statistics", errorText,
+                errorCapacity)
+          : gs_qwen25_rms_statistics_step(
+                device, input, scratchArray[7], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, rmsNormEpsilon,
+                @"input_norm_statistics", errorText, errorCapacity));
       [preparedSteps addObjectsFromArray:gs_qwen25_precise_rms_steps(
           rmsPipelines, input, scratchArray[7], scratchArray[7], scratchArray[0],
           nil, (uint32_t)batchTokens, (uint32_t)dim)];
@@ -1209,10 +1259,16 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           @[ hiddenShape ], @"attention_residual", errorText,
           errorCapacity));
 
-      GS_QWEN25_APPEND_STEP(gs_qwen25_rms_statistics_step(
-          device, stageArray[8], scratchArray[7], (uint32_t)batches,
-          (uint32_t)tokens, (uint32_t)dim, rmsNormEpsilon,
-          @"post_norm_statistics", errorText, errorCapacity));
+      GS_QWEN25_APPEND_STEP(exponentBuffer
+          ? gs_qwen25_rms_power_fed_statistics_step(
+                device, stageArray[8], exponentBuffer, scratchArray[7],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim,
+                rmsNormEpsilon, @"post_norm_statistics", errorText,
+                errorCapacity)
+          : gs_qwen25_rms_statistics_step(
+                device, stageArray[8], scratchArray[7], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, rmsNormEpsilon,
+                @"post_norm_statistics", errorText, errorCapacity));
       [preparedSteps addObjectsFromArray:gs_qwen25_precise_rms_steps(
           rmsPipelines, stageArray[8], scratchArray[7], scratchArray[7],
           scratchArray[5], nil, (uint32_t)batchTokens, (uint32_t)dim)];
@@ -1340,6 +1396,37 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
   gs_qwen25_set_error(errorText, errorCapacity,
                       "Qwen2.5-VL BF16 MPSGraph requires macOS 14 or newer");
   return nullptr;
+}
+
+extern "C" void *gs_qwen25_mps_block_plan_create(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    int32_t ffnDim, int32_t heads, int32_t kvHeads, int32_t headDim,
+    float rmsNormEpsilon, void *inputHandle, void *maskHandle,
+    void *positionIdsHandle, void *invFreqHandle,
+    void *const *weightHandles, void *const *stageHandles,
+    void *const *scratchHandles, char *errorText, size_t errorCapacity) {
+  return gs_qwen25_mps_block_plan_create_impl(
+      deviceHandle, batches, tokens, dim, ffnDim, heads, kvHeads, headDim,
+      rmsNormEpsilon, inputHandle, maskHandle, positionIdsHandle, invFreqHandle,
+      weightHandles, stageHandles, scratchHandles, nullptr, false, errorText,
+      errorCapacity);
+}
+
+// The caller owns the exponent's contents and must not mutate them until the
+// plan is destroyed. Creation validates the exact shared F32[1] value 2.0.
+extern "C" void *gs_qwen25_mps_block_plan_create_with_rms_exponent(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    int32_t ffnDim, int32_t heads, int32_t kvHeads, int32_t headDim,
+    float rmsNormEpsilon, void *inputHandle, void *maskHandle,
+    void *positionIdsHandle, void *invFreqHandle,
+    void *const *weightHandles, void *const *stageHandles,
+    void *const *scratchHandles, void *exponentHandle,
+    char *errorText, size_t errorCapacity) {
+  return gs_qwen25_mps_block_plan_create_impl(
+      deviceHandle, batches, tokens, dim, ffnDim, heads, kvHeads, headDim,
+      rmsNormEpsilon, inputHandle, maskHandle, positionIdsHandle, invFreqHandle,
+      weightHandles, stageHandles, scratchHandles, exponentHandle, true,
+      errorText, errorCapacity);
 }
 
 // Explicit unary and multiply boundaries match PyTorch's MPS RMSNorm: the

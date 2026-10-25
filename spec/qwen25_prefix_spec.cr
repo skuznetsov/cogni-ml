@@ -27,4 +27,18 @@ describe ML::GGUF::Qwen25VLPrefixPlan do
     ML::GGUF::Qwen25VLBlockPlan.scratch_buffer_bytes("rms_statistics", rms_statistics_shape).should eq(5_120_i64)
     ML::GGUF::Qwen25VLBlockPlan.scratch_buffer_bytes("input_normalized", input_normalized_shape).should eq(9_175_040_i64)
   end
+
+  it "admits one private exponent shared by both block RMS sites before allocation" do
+    config = ML::GGUF::Qwen25VLConfig.hy_nomas_7b
+    legacy = 320_476_160_i64
+    candidate = legacy + 4
+    ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, 1280).should eq(legacy)
+    ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, 1280, rms_power_fed: true).should eq(candidate)
+    ML::GGUF::Qwen25VLBlockPlan.admit_workspace_bytes!(config, 1280, candidate, rms_power_fed: true).should eq(candidate)
+    expect_raises(ArgumentError, /workspace exceeds/) do
+      ML::GGUF::Qwen25VLBlockPlan.admit_workspace_bytes!(config, 1280, candidate - 1, rms_power_fed: true)
+    end
+    expect_raises(ArgumentError) { ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, 0, rms_power_fed: true) }
+    expect_raises(ArgumentError) { ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, config.max_positions + 1) }
+  end
 end

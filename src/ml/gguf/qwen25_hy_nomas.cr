@@ -9,6 +9,13 @@ require "set"
                                                  head_dim : Int32, rms_norm_eps : Float32, input : Void*, mask : Void*,
                                                  positions : Void*, inv_freq : Void*, weights : Void**, stages : Void**, scratch : Void**,
                                                  error : UInt8*, error_capacity : LibC::SizeT) : Void*
+    fun create_with_rms_exponent = gs_qwen25_mps_block_plan_create_with_rms_exponent(
+      device : Void*, batches : Int32, tokens : Int32, dim : Int32, ffn : Int32,
+      heads : Int32, kv_heads : Int32, head_dim : Int32, rms_norm_eps : Float32,
+      input : Void*, mask : Void*, positions : Void*, inv_freq : Void*,
+      weights : Void**, stages : Void**, scratch : Void**, exponent : Void*,
+      error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Void*
     fun encode = gs_qwen25_mps_block_encode(plan : Void*, chain : Void*,
                                             error : UInt8*, error_capacity : LibC::SizeT) : Int32
     fun destroy = gs_qwen25_mps_block_plan_destroy(plan : Void*) : Void
@@ -170,6 +177,7 @@ module ML::GGUF
     getter input : MetalBuffer
     getter layer_index : Int32
     getter workspace_bytes : Int64 = 0_i64
+    getter rms_power_fed : Bool
     @mask : MetalBuffer
     @positions : MetalBuffer
     @inv_freq : MetalBuffer
@@ -178,6 +186,9 @@ module ML::GGUF
     @scratch = {} of String => MetalBuffer
     @owned_buffers = [] of MetalBuffer
     @workspace : Qwen25VLWorkspace? = nil
+    # Private immutable F32[1] feed, shared by the two statistics executables.
+    # Its host initialization occurs only during preparation.
+    @rms_power_exponent : MetalBuffer? = nil
     @native = Pointer(Void).null
     @chain : Metal::MPSCommandChain? = nil
     @released = false
@@ -238,11 +249,28 @@ module ML::GGUF
       end
     end
 
+    def self.rms_exponent_bytes(rms_power_fed : Bool) : Int64
+      rms_power_fed ? 4_i64 : 0_i64
+    end
+
+    def self.workspace_bytes(c : Qwen25VLConfig, tokens : Int32, rms_power_fed : Bool = false) : Int64
+      raise ArgumentError.new("tokens outside configured context") unless 0 < tokens <= c.max_positions
+      stage_shapes(c, tokens).values.sum { |shape| elements(shape) * 2 } +
+        scratch_bytes(c, tokens) + rms_exponent_bytes(rms_power_fed)
+    end
+
+    def self.admit_workspace_bytes!(c : Qwen25VLConfig, tokens : Int32,
+                                    max_bytes : Int64, rms_power_fed : Bool = false) : Int64
+      bytes = workspace_bytes(c, tokens, rms_power_fed)
+      raise ArgumentError.new("workspace exceeds admitted byte budget") unless 0 < bytes <= max_bytes
+      bytes
+    end
+
     def initialize(@config : Qwen25VLConfig, @tokens : Int32, @input : MetalBuffer,
                    @mask : MetalBuffer, @positions : MetalBuffer, @inv_freq : MetalBuffer,
                    weights : Hash(String, MetalBuffer), @layer_index = 0,
                    max_workspace_bytes : Int64 = 512_i64 * 1024 * 1024,
-                   @workspace : Qwen25VLWorkspace? = nil)
+                   @workspace : Qwen25VLWorkspace? = nil, @rms_power_fed : Bool = false)
       @weights = [] of MetalBuffer
       raise ArgumentError.new("tokens outside configured context") unless 0 < @tokens <= @config.max_positions
       raise ArgumentError.new("layer index outside decoder") unless 0 <= @layer_index < @config.layers
@@ -259,9 +287,7 @@ module ML::GGUF
       check_buffer!(@inv_freq, @config.head_dim.to_i64 // 2 * 4, "inverse frequencies")
       stage_shapes = self.class.stage_shapes(@config, @tokens)
       scratch_shapes = self.class.scratch_shapes(@config, @tokens)
-      stage_bytes = stage_shapes.values.sum { |shape| self.class.elements(shape) * 2 }
-      @workspace_bytes = stage_bytes + self.class.scratch_bytes(@config, @tokens)
-      raise ArgumentError.new("workspace exceeds admitted byte budget") unless 0 < @workspace_bytes <= max_workspace_bytes
+      @workspace_bytes = self.class.admit_workspace_bytes!(@config, @tokens, max_workspace_bytes, @rms_power_fed)
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
@@ -284,19 +310,35 @@ module ML::GGUF
               @owned_buffers << buffer
             end
           end
+          if @rms_power_fed
+            exponent = MetalBuffer.new(self.class.rms_exponent_bytes(true))
+            @owned_buffers << exponent
+            @rms_power_exponent = exponent
+            exponent.write([2.0_f32])
+          end
           weight_handles = @weights.map(&.handle)
           stage_handles = STAGE_NAMES.map { |name| @stages[name].handle }.to_a
           scratch_handles = SCRATCH_NAMES.map { |name| @scratch[name].handle }.to_a
-          @native = Qwen25MPSFFI.create(Metal::Device.instance.device_handle,
-            1, @tokens, @config.dim, @config.ffn_dim, @config.heads, @config.kv_heads,
-            @config.head_dim, @config.rms_norm_eps, @input.handle, @mask.handle,
-            @positions.handle, @inv_freq.handle, weight_handles.to_unsafe,
-            stage_handles.to_unsafe, scratch_handles.to_unsafe, @error_text.to_unsafe, @error_text.size)
+          @native = if exponent = @rms_power_exponent
+                      ::Qwen25MPSFFI.create_with_rms_exponent(Metal::Device.instance.device_handle,
+                        1, @tokens, @config.dim, @config.ffn_dim, @config.heads, @config.kv_heads,
+                        @config.head_dim, @config.rms_norm_eps, @input.handle, @mask.handle,
+                        @positions.handle, @inv_freq.handle, weight_handles.to_unsafe,
+                        stage_handles.to_unsafe, scratch_handles.to_unsafe, exponent.handle,
+                        @error_text.to_unsafe, @error_text.size)
+                    else
+                      Qwen25MPSFFI.create(Metal::Device.instance.device_handle,
+                        1, @tokens, @config.dim, @config.ffn_dim, @config.heads, @config.kv_heads,
+                        @config.head_dim, @config.rms_norm_eps, @input.handle, @mask.handle,
+                        @positions.handle, @inv_freq.handle, weight_handles.to_unsafe,
+                        stage_handles.to_unsafe, scratch_handles.to_unsafe, @error_text.to_unsafe, @error_text.size)
+                    end
           raise "Qwen2.5-VL graph preparation failed: #{error_message}" if @native.null?
           @@retained[object_id] = self
         rescue ex
           @owned_buffers.each(&.release)
           @owned_buffers.clear
+          @rms_power_exponent = nil
           @stages.clear
           @scratch.clear
           @workspace.try(&.detach(object_id))
@@ -354,6 +396,7 @@ module ML::GGUF
       @native = Pointer(Void).null
       @owned_buffers.each(&.release)
       @owned_buffers.clear
+      @rms_power_exponent = nil
       @stages.clear
       @scratch.clear
       @workspace.try(&.detach(object_id))
@@ -370,6 +413,9 @@ module ML::GGUF
     private def check_bound_buffers! : Nil
       raise ArgumentError.new("released Qwen2.5-VL input binding") unless @input.valid? && @mask.valid? && @positions.valid? && @inv_freq.valid?
       raise ArgumentError.new("released Qwen2.5-VL weight binding") unless @weights.all?(&.valid?)
+      if @rms_power_fed
+        raise ArgumentError.new("released Qwen2.5-VL RMS exponent binding") unless @rms_power_exponent.try(&.valid?)
+      end
       @stages.each_value do |buffer|
         raise ArgumentError.new("released Qwen2.5-VL stage binding") unless buffer.valid?
       end
