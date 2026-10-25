@@ -16,7 +16,7 @@
 
 static const NSUInteger kGsQwen25WeightCount = 12;
 static const NSUInteger kGsQwen25StageCount = 17;
-static const NSUInteger kGsQwen25ScratchCount = 7;
+static const NSUInteger kGsQwen25ScratchCount = 8;
 static const uint64_t kGsQwen25BFloat16Bytes = 2;
 
 @interface GsQwen25MPSGraphBuilder : NSObject
@@ -37,6 +37,11 @@ static const uint64_t kGsQwen25BFloat16Bytes = 2;
 @property(nonatomic, strong) NSArray<MPSGraphTensorData *> *outputs;
 @property(nonatomic, copy) NSString *name;
 @property(nonatomic) NSUInteger outputCount;
+@property(nonatomic, strong) id<MTLComputePipelineState> metalPipeline;
+@property(nonatomic, strong) NSArray<id<MTLBuffer>> *metalBuffers;
+@property(nonatomic) uint32_t metalThreads;
+@property(nonatomic) uint32_t rmsRows;
+@property(nonatomic) uint32_t rmsDim;
 @end
 
 @implementation GsQwen25MPSGraphStep
@@ -46,10 +51,40 @@ static const uint64_t kGsQwen25BFloat16Bytes = 2;
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) NSArray<GsQwen25MPSGraphStep *> *steps;
 @property(nonatomic, strong) NSArray<id<MTLBuffer>> *residentBuffers;
+@property(nonatomic) NSUInteger expectedStepCount;
 @end
 
 @implementation GsQwen25MPSBlockPlan
 @end
+
+@interface GsQwen25MPSEmbeddingGatherPlan : NSObject
+@property(nonatomic, strong) id<MTLDevice> device;
+@property(nonatomic, strong) id<MTLComputePipelineState> pipeline;
+@property(nonatomic, strong) id<MTLBuffer> compactRows;
+@property(nonatomic, strong) id<MTLBuffer> rowIndices;
+@property(nonatomic, strong) id<MTLBuffer> output;
+@property(nonatomic) uint32_t tokens;
+@property(nonatomic) uint32_t dim;
+@property(nonatomic) uint32_t uniqueRows;
+@property(nonatomic) uint32_t elementCount;
+@end
+
+@implementation GsQwen25MPSEmbeddingGatherPlan
+@end
+
+static NSArray<id<MTLComputePipelineState>> *gs_qwen25_precise_rms_pipelines(
+    id<MTLDevice> device, bool trace, char *errorText, size_t errorCapacity);
+static NSArray<GsQwen25MPSGraphStep *> *gs_qwen25_precise_rms_steps(
+    NSArray<id<MTLComputePipelineState>> *pipelines, id<MTLBuffer> input,
+    id<MTLBuffer> variancePlusEpsilon, id<MTLBuffer> inverseRoot,
+    id<MTLBuffer> normalizedBf16, id<MTLBuffer> normalizedF32,
+    uint32_t rows, uint32_t dim);
+
+struct GsQwen25EmbeddingGatherParams {
+  uint32_t tokens;
+  uint32_t dim;
+  uint32_t uniqueRows;
+};
 
 static void gs_qwen25_set_error(char *destination, size_t capacity,
                                 const char *message) {
@@ -179,9 +214,18 @@ static MPSGraphTensor *gs_qwen25_linear(
                          name:[name stringByAppendingString:@"_batches_tokens"]];
 }
 
+struct GsQwen25RMSTrace {
+  MPSGraphTensor *variance;
+  MPSGraphTensor *variancePlusEpsilon;
+  MPSGraphTensor *inverseRoot;
+  MPSGraphTensor *normalized;
+  MPSGraphTensor *normalizedBf16;
+};
+
 static MPSGraphTensor *gs_qwen25_rms_normalize(
     MPSGraph *graph, MPSGraphTensor *inputBf16, uint32_t batches,
-    uint32_t tokens, uint32_t dim, float epsilon, NSString *name) {
+    uint32_t tokens, uint32_t dim, float epsilon, NSString *name,
+    GsQwen25RMSTrace *trace = nullptr) {
   if (!graph || !inputBf16 || !name || dim == 0)
     return nil;
   MPSGraphTensor *inputF32 = [graph castTensor:inputBf16
@@ -201,7 +245,7 @@ static MPSGraphTensor *gs_qwen25_rms_normalize(
                                    name:[name stringByAppendingString:@"_epsilon_f32"]];
   MPSGraphTensor *inverseRootF32 =
       [graph reciprocalSquareRootWithTensor:meanPlusEpsilonF32
-                                       name:[name stringByAppendingString:@"_rsqrt_f32"]];
+                                   name:[name stringByAppendingString:@"_rsqrt_f32"]];
   MPSGraphTensor *inverseRootExpandedF32 =
       [graph reshapeTensor:inverseRootF32
                  withShape:@[ @(batches), @(tokens), @1 ]
@@ -217,6 +261,13 @@ static MPSGraphTensor *gs_qwen25_rms_normalize(
       !meanPlusEpsilonF32 || !inverseRootF32 || !inverseRootExpandedF32 ||
       !normalizedF32 || !normalizedBf16)
     return nil;
+  if (trace) {
+    trace->variance = meanF32;
+    trace->variancePlusEpsilon = meanPlusEpsilonF32;
+    trace->inverseRoot = inverseRootExpandedF32;
+    trace->normalized = normalizedF32;
+    trace->normalizedBf16 = normalizedBf16;
+  }
   return normalizedBf16;
 }
 
@@ -356,13 +407,14 @@ static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
     MPSGraphTensor *tensor = targetTensors[index];
     NSArray<NSNumber *> *shape = targetShapes[index];
     MPSGraphTensorData *data = nil;
-    if (tensor && tensor.dataType == MPSDataTypeBFloat16 &&
+    if (tensor && (tensor.dataType == MPSDataTypeBFloat16 ||
+                   tensor.dataType == MPSDataTypeFloat32) &&
         [tensor.shape isEqualToArray:shape])
       data = gs_qwen25_tensor_data(targetBuffers[index], shape,
-                                   MPSDataTypeBFloat16);
+                                   tensor.dataType);
     if (!data) {
       NSString *message = [NSString stringWithFormat:
-          @"%@ output %lu is not a bindable BF16 tensor of the declared shape",
+          @"%@ output %lu is not a bindable BF16/F32 tensor of the declared shape",
           name, (unsigned long)index];
       gs_qwen25_set_ns_error(errorText, errorCapacity, message);
       return nil;
@@ -508,6 +560,25 @@ static GsQwen25MPSGraphStep *gs_qwen25_builder_compile(
       errorText, errorCapacity);
 }
 
+static GsQwen25MPSGraphStep *gs_qwen25_rms_statistics_step(
+    id<MTLDevice> device, id<MTLBuffer> input, id<MTLBuffer> statistics,
+    uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder = gs_qwen25_new_builder(errorText, errorCapacity);
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *scalarShape = @[@(batches), @(tokens), @1];
+  MPSGraphTensor *feed = gs_qwen25_builder_add_bf16(
+      builder, input, hiddenShape, [name stringByAppendingString:@"_input"]);
+  GsQwen25RMSTrace trace = {};
+  if (!gs_qwen25_rms_normalize(builder.graph, feed, batches, tokens, dim,
+                               epsilon, name, &trace))
+    return nil;
+  MPSGraphTensor *plusEpsilon = [builder.graph
+      reshapeTensor:trace.variancePlusEpsilon withShape:scalarShape name:nil];
+  return gs_qwen25_builder_compile(builder, device, @[plusEpsilon], @[statistics],
+                                   @[scalarShape], name, errorText, errorCapacity);
+}
+
 extern "C" void *gs_qwen25_mps_block_plan_create(
     void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
     int32_t ffnDim, int32_t heads, int32_t kvHeads, int32_t headDim,
@@ -585,7 +656,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           hiddenElements, hiddenElements, rotaryElements, rotaryElements};
       const uint64_t scratchElements[kGsQwen25ScratchCount] = {
           hiddenElements, queryElements, queryElements, kvElements, kvElements,
-          hiddenElements, ffnElements};
+          hiddenElements, ffnElements, batchTokens};
 
       uint64_t inputBytes = 0, maskBytes = 0, positionsBytes = 0;
       uint64_t invFreqBytes = 0;
@@ -644,7 +715,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
       for (NSUInteger index = 0; index < kGsQwen25ScratchCount; ++index) {
         if (!scratchHandles[index]) {
           gs_qwen25_set_error(errorText, errorCapacity,
-                              "a required BF16 scratch handle is null");
+                              "a required scratch handle is null");
           return nullptr;
         }
         [scratches addObject:(__bridge id<MTLBuffer>)scratchHandles[index]];
@@ -678,10 +749,11 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
               stageElements[index - 4 - kGsQwen25WeightCount];
           requiredBytes = elements * kGsQwen25BFloat16Bytes;
         } else {
-          const uint64_t elements =
-              scratchElements[index - 4 - kGsQwen25WeightCount -
-                              kGsQwen25StageCount];
-          requiredBytes = elements * kGsQwen25BFloat16Bytes;
+          const NSUInteger scratchIndex = index - 4 - kGsQwen25WeightCount -
+                                          kGsQwen25StageCount;
+          const uint64_t elements = scratchElements[scratchIndex];
+          requiredBytes = elements * (scratchIndex == 7 ? sizeof(float)
+                                                        : kGsQwen25BFloat16Bytes);
         }
         if (!buffer || buffer.device != device ||
             buffer.storageMode != MTLStorageModeShared || !buffer.contents ||
@@ -732,7 +804,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
         rotaryShape, rotaryShape];
       NSArray<NSArray<NSNumber *> *> *scratchShapes = @[
         hiddenShape, qRopeShape, qRopeShape, kRopeShape, kRopeShape,
-        hiddenShape, ffnShape];
+        hiddenShape, ffnShape, @[@(batches), @(tokens), @1]];
       if (stageShapes.count != kGsQwen25StageCount ||
           scratchShapes.count != kGsQwen25ScratchCount) {
         gs_qwen25_set_error(errorText, errorCapacity,
@@ -741,7 +813,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
       }
 
       NSMutableArray<GsQwen25MPSGraphStep *> *preparedSteps =
-          [NSMutableArray arrayWithCapacity:15];
+          [NSMutableArray arrayWithCapacity:19];
       if (!preparedSteps) {
         gs_qwen25_set_error(errorText, errorCapacity,
                             "unable to allocate prepared graph step list");
@@ -755,20 +827,22 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
         [preparedSteps addObject:preparedStep];                                 \
       } while (0)
 
-      // Materialize the normalized activation before the BF16 gain multiply.
-      GsQwen25MPSGraphBuilder *builder =
-          gs_qwen25_new_builder(errorText, errorCapacity);
-      MPSGraphTensor *normInput = gs_qwen25_builder_add_bf16(
-          builder, input, hiddenShape, @"hidden_in_bf16");
-      MPSGraphTensor *normalized = gs_qwen25_rms_normalize(
-          builder.graph, normInput, (uint32_t)batches, (uint32_t)tokens,
-          (uint32_t)dim, rmsNormEpsilon, @"input_layernorm");
-      GS_QWEN25_APPEND_STEP(gs_qwen25_builder_compile(
-          builder, device, @[ normalized ], @[ scratchArray[0] ],
-          @[ hiddenShape ], @"input_norm_normalized", errorText,
+      // Keep F32 reduction, unary and multiplication boundaries explicit.
+      // The scalar scratch becomes inverseRoot in place, then is reused by
+      // the post-attention norm only after this norm's consumers are encoded.
+      NSArray<id<MTLComputePipelineState>> *rmsPipelines =
+          gs_qwen25_precise_rms_pipelines(device, false, errorText, errorCapacity);
+      if (!rmsPipelines)
+        return nullptr;
+      GS_QWEN25_APPEND_STEP(gs_qwen25_rms_statistics_step(
+          device, input, scratchArray[7], (uint32_t)batches, (uint32_t)tokens,
+          (uint32_t)dim, rmsNormEpsilon, @"input_norm_statistics", errorText,
           errorCapacity));
+      [preparedSteps addObjectsFromArray:gs_qwen25_precise_rms_steps(
+          rmsPipelines, input, scratchArray[7], scratchArray[7], scratchArray[0],
+          nil, (uint32_t)batchTokens, (uint32_t)dim)];
 
-      builder = gs_qwen25_new_builder(errorText, errorCapacity);
+      GsQwen25MPSGraphBuilder *builder = gs_qwen25_new_builder(errorText, errorCapacity);
       MPSGraphTensor *normalizedFeed = gs_qwen25_builder_add_bf16(
           builder, scratchArray[0], hiddenShape, @"input_normalized_bf16");
       MPSGraphTensor *inputNormWeight = gs_qwen25_builder_add_bf16(
@@ -1069,17 +1143,13 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           @[ hiddenShape ], @"attention_residual", errorText,
           errorCapacity));
 
-      builder = gs_qwen25_new_builder(errorText, errorCapacity);
-      MPSGraphTensor *residualFeed = gs_qwen25_builder_add_bf16(
-          builder, stageArray[8], hiddenShape, @"attention_residual_bf16");
-      MPSGraphTensor *postNormalized = gs_qwen25_rms_normalize(
-          builder.graph, residualFeed, (uint32_t)batches,
+      GS_QWEN25_APPEND_STEP(gs_qwen25_rms_statistics_step(
+          device, stageArray[8], scratchArray[7], (uint32_t)batches,
           (uint32_t)tokens, (uint32_t)dim, rmsNormEpsilon,
-          @"post_attention_layernorm");
-      GS_QWEN25_APPEND_STEP(gs_qwen25_builder_compile(
-          builder, device, @[ postNormalized ], @[ scratchArray[5] ],
-          @[ hiddenShape ], @"post_norm_normalized", errorText,
-          errorCapacity));
+          @"post_norm_statistics", errorText, errorCapacity));
+      [preparedSteps addObjectsFromArray:gs_qwen25_precise_rms_steps(
+          rmsPipelines, stageArray[8], scratchArray[7], scratchArray[7],
+          scratchArray[5], nil, (uint32_t)batchTokens, (uint32_t)dim)];
 
       builder = gs_qwen25_new_builder(errorText, errorCapacity);
       MPSGraphTensor *postNormalizedFeed = gs_qwen25_builder_add_bf16(
@@ -1176,7 +1246,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
           @[ hiddenShape ], @"hidden_out", errorText, errorCapacity));
 #undef GS_QWEN25_APPEND_STEP
 
-      if (preparedSteps.count != 15) {
+      if (preparedSteps.count != 19) {
         gs_qwen25_set_error(errorText, errorCapacity,
                             "internal prepared MPSGraph step count mismatch");
         return nullptr;
@@ -1185,6 +1255,7 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
       plan.device = device;
       plan.steps = [preparedSteps copy];
       plan.residentBuffers = [allBuffers copy];
+      plan.expectedStepCount = 19;
       if (!plan.device || !plan.steps || !plan.residentBuffers) {
         gs_qwen25_set_error(errorText, errorCapacity,
                             "unable to retain the prepared MPSGraph plan");
@@ -1205,6 +1276,243 @@ extern "C" void *gs_qwen25_mps_block_plan_create(
   return nullptr;
 }
 
+// Explicit unary and multiply boundaries match PyTorch's MPS RMSNorm: the
+// precise sqrt/reciprocal is materialized before scaling the BF16 input.
+static NSArray<id<MTLComputePipelineState>> *gs_qwen25_precise_rms_pipelines(
+    id<MTLDevice> device, bool trace, char *errorText, size_t errorCapacity) {
+  NSString *source = [NSString stringWithUTF8String:R"metal(
+    #include <metal_stdlib>
+    using namespace metal;
+    struct Qwen25RMSParams { uint rows; uint dim; };
+    inline ushort qwen25_bf16_rne(float value) {
+      uint bits = as_type<uint>(value);
+      if ((bits & 0x7fffffffu) > 0x7f800000u)
+        return ushort((bits >> 16) | 0x0040u);
+      return ushort((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+    }
+    kernel void qwen25_rms_precise_root(
+        device const float *variancePlusEpsilon [[buffer(0)]],
+        device float *inverseRoot [[buffer(1)]],
+        constant Qwen25RMSParams &p [[buffer(2)]],
+        uint row [[thread_position_in_grid]]) {
+      if (row < p.rows)
+        inverseRoot[row] = 1.0f / precise::sqrt(variancePlusEpsilon[row]);
+    }
+    kernel void qwen25_rms_precise_normalize_trace(
+        device const ushort *input [[buffer(0)]],
+        device const float *inverseRoot [[buffer(1)]],
+        device float *normalizedF32 [[buffer(2)]],
+        device ushort *normalizedBf16 [[buffer(3)]],
+        constant Qwen25RMSParams &p [[buffer(4)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index >= p.rows * p.dim)
+        return;
+      const float value = as_type<float>(uint(input[index]) << 16);
+      const float normalized = value * inverseRoot[index / p.dim];
+      normalizedF32[index] = normalized;
+      normalizedBf16[index] = qwen25_bf16_rne(normalized);
+    }
+    kernel void qwen25_rms_precise_normalize(
+        device const ushort *input [[buffer(0)]],
+        device const float *inverseRoot [[buffer(1)]],
+        device ushort *normalizedBf16 [[buffer(2)]],
+        constant Qwen25RMSParams &p [[buffer(3)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index >= p.rows * p.dim)
+        return;
+      const float value = as_type<float>(uint(input[index]) << 16);
+      const float normalized = value * inverseRoot[index / p.dim];
+      normalizedBf16[index] = qwen25_bf16_rne(normalized);
+    }
+  )metal"];
+  MTLCompileOptions *options = [MTLCompileOptions new];
+  if (@available(macOS 15.0, *)) {
+    options.mathMode = MTLMathModeSafe;
+  } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    options.fastMathEnabled = NO;
+#pragma clang diagnostic pop
+  }
+  NSError *error = nil;
+  id<MTLLibrary> library = [device newLibraryWithSource:source options:options
+                                                  error:&error];
+  NSMutableArray<id<MTLComputePipelineState>> *pipelines =
+      [NSMutableArray arrayWithCapacity:2];
+  NSArray<NSString *> *names = @[@"qwen25_rms_precise_root",
+      trace ? @"qwen25_rms_precise_normalize_trace" : @"qwen25_rms_precise_normalize"];
+  for (NSUInteger index = 0; index < names.count; ++index) {
+    id<MTLFunction> function = [library newFunctionWithName:names[index]];
+    id<MTLComputePipelineState> pipeline = function
+        ? [device newComputePipelineStateWithFunction:function error:&error] : nil;
+    if (!pipeline) {
+      gs_qwen25_set_ns_error(errorText, errorCapacity, [NSString stringWithFormat:
+          @"unable to prepare precise RMS pipeline: %@",
+          error.localizedDescription ?: @"Metal returned no pipeline"]);
+      return nil;
+    }
+    [pipelines addObject:pipeline];
+  }
+  return [pipelines copy];
+}
+
+static NSArray<GsQwen25MPSGraphStep *> *gs_qwen25_precise_rms_steps(
+    NSArray<id<MTLComputePipelineState>> *pipelines, id<MTLBuffer> input,
+    id<MTLBuffer> variancePlusEpsilon, id<MTLBuffer> inverseRoot,
+    id<MTLBuffer> normalizedBf16, id<MTLBuffer> normalizedF32,
+    uint32_t rows, uint32_t dim) {
+  NSMutableArray<GsQwen25MPSGraphStep *> *steps =
+      [NSMutableArray arrayWithCapacity:2];
+  NSArray<id<MTLBuffer>> *normalizeBuffers = normalizedF32
+      ? @[input, inverseRoot, normalizedF32, normalizedBf16]
+      : @[input, inverseRoot, normalizedBf16];
+  NSArray<NSArray<id<MTLBuffer>> *> *bindings =
+      @[@[variancePlusEpsilon, inverseRoot], normalizeBuffers];
+  for (NSUInteger index = 0; index < pipelines.count; ++index) {
+    GsQwen25MPSGraphStep *step = [GsQwen25MPSGraphStep new];
+    step.name = index == 0 ? @"rms_precise_root" : @"rms_precise_normalize";
+    step.metalPipeline = pipelines[index];
+    step.metalBuffers = bindings[index];
+    step.metalThreads = index == 0 ? rows : rows * dim;
+    step.rmsRows = rows;
+    step.rmsDim = dim;
+    [steps addObject:step];
+  }
+  return [steps copy];
+}
+
+// Diagnostic only. Extra outputs can alter graph fusion; the baseline probe
+// must also compare normalizedBf16 with the production block scratch.
+static void *gs_qwen25_mps_rms_trace_create_impl(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    float epsilon, void *inputHandle, void *const *outputHandles,
+    char *errorText, size_t errorCapacity, bool precise) {
+  if (errorText && errorCapacity > 0)
+    errorText[0] = '\0';
+  if (!deviceHandle || !inputHandle || !outputHandles || batches <= 0 ||
+      tokens <= 0 || dim <= 0 || !std::isfinite(epsilon) || epsilon <= 0) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "invalid RMS diagnostic dimensions or handles");
+    return nullptr;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      @try {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
+        id<MTLBuffer> input = (__bridge id<MTLBuffer>)inputHandle;
+        const uint64_t hiddenDims[] = {(uint64_t)batches, (uint64_t)tokens,
+                                        (uint64_t)dim};
+        uint64_t hiddenElements = 0;
+        if (!gs_qwen25_product(hiddenDims, 3, &hiddenElements) ||
+            input.device != device || !input.contents ||
+            input.length < hiddenElements * 2) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "invalid RMS diagnostic input binding");
+          return nullptr;
+        }
+        const uint64_t scalarElements = (uint64_t)batches * tokens;
+        const uint64_t outputBytes[] = {scalarElements * 4, scalarElements * 4,
+                                         scalarElements * 4, hiddenElements * 4,
+                                         hiddenElements * 2};
+        NSMutableArray<id<MTLBuffer>> *outputs = [NSMutableArray arrayWithCapacity:5];
+        NSMutableArray<id<MTLBuffer>> *allBuffers = [NSMutableArray arrayWithObject:input];
+        for (NSUInteger index = 0; index < 5; ++index) {
+          id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandles[index];
+          if (!output || output.device != device || !output.contents ||
+              output.length < outputBytes[index]) {
+            gs_qwen25_set_error(errorText, errorCapacity,
+                                "invalid RMS diagnostic output binding");
+            return nullptr;
+          }
+          for (id<MTLBuffer> other in allBuffers) {
+            if (!gs_qwen25_disjoint(output, other)) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "RMS diagnostic buffers must be disjoint");
+              return nullptr;
+            }
+          }
+          [outputs addObject:output];
+          [allBuffers addObject:output];
+        }
+        NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+        NSArray<NSNumber *> *scalarShape = @[@(batches), @(tokens), @1];
+        GsQwen25MPSGraphBuilder *builder = gs_qwen25_new_builder(errorText, errorCapacity);
+        if (!builder)
+          return nullptr;
+        MPSGraphTensor *feed = gs_qwen25_builder_add_bf16(
+            builder, input, hiddenShape, @"rms_trace_input");
+        GsQwen25RMSTrace trace = {};
+        if (!gs_qwen25_rms_normalize(builder.graph, feed, (uint32_t)batches,
+                                     (uint32_t)tokens, (uint32_t)dim, epsilon,
+                                     @"rms_trace", &trace))
+          return nullptr;
+        MPSGraphTensor *variance = [builder.graph reshapeTensor:trace.variance
+                                                     withShape:scalarShape name:nil];
+        MPSGraphTensor *plusEpsilon = [builder.graph reshapeTensor:trace.variancePlusEpsilon
+                                                        withShape:scalarShape name:nil];
+        NSArray<MPSGraphTensor *> *targets = precise
+            ? @[variance, plusEpsilon]
+            : @[variance, plusEpsilon, trace.inverseRoot,
+                trace.normalized, trace.normalizedBf16];
+        NSArray<id<MTLBuffer>> *targetBuffers = precise
+            ? @[outputs[0], outputs[1]] : outputs;
+        NSArray<NSArray<NSNumber *> *> *shapes = precise
+            ? @[scalarShape, scalarShape]
+            : @[scalarShape, scalarShape, scalarShape, hiddenShape, hiddenShape];
+        GsQwen25MPSGraphStep *step = gs_qwen25_builder_compile(
+            builder, device, targets, targetBuffers, shapes,
+            @"rms_trace", errorText, errorCapacity);
+        if (!step)
+          return nullptr;
+        NSMutableArray<GsQwen25MPSGraphStep *> *steps =
+            [NSMutableArray arrayWithObject:step];
+        if (precise) {
+          NSArray<id<MTLComputePipelineState>> *pipelines =
+              gs_qwen25_precise_rms_pipelines(device, true, errorText, errorCapacity);
+          if (!pipelines)
+            return nullptr;
+          NSArray<GsQwen25MPSGraphStep *> *metalSteps =
+              gs_qwen25_precise_rms_steps(pipelines, input, outputs[1], outputs[2],
+                                          outputs[4], outputs[3],
+                                          (uint32_t)scalarElements, (uint32_t)dim);
+          [steps addObjectsFromArray:metalSteps];
+        }
+        GsQwen25MPSBlockPlan *plan = [GsQwen25MPSBlockPlan new];
+        plan.device = device;
+        plan.steps = [steps copy];
+        plan.residentBuffers = [allBuffers copy];
+        plan.expectedStepCount = precise ? 3 : 1;
+        return (__bridge_retained void *)plan;
+      } @catch (NSException *exception) {
+        gs_qwen25_set_ns_error(errorText, errorCapacity, [NSString stringWithFormat:
+            @"RMS diagnostic exception %@: %@", exception.name, exception.reason]);
+        return nullptr;
+      }
+    }
+  }
+  gs_qwen25_set_error(errorText, errorCapacity,
+                      "RMS diagnostic requires macOS 14 or newer");
+  return nullptr;
+}
+
+extern "C" void *gs_qwen25_mps_rms_trace_create(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    float epsilon, void *inputHandle, void *const *outputHandles,
+    char *errorText, size_t errorCapacity) {
+  return gs_qwen25_mps_rms_trace_create_impl(
+      deviceHandle, batches, tokens, dim, epsilon, inputHandle, outputHandles,
+      errorText, errorCapacity, false);
+}
+
+extern "C" void *gs_qwen25_mps_rms_precise_trace_create(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    float epsilon, void *inputHandle, void *const *outputHandles,
+    char *errorText, size_t errorCapacity) {
+  return gs_qwen25_mps_rms_trace_create_impl(
+      deviceHandle, batches, tokens, dim, epsilon, inputHandle, outputHandles,
+      errorText, errorCapacity, true);
+}
+
 extern "C" int32_t gs_qwen25_mps_block_encode(
     void *planHandle, void *commandChainHandle, char *errorText,
     size_t errorCapacity) {
@@ -1222,7 +1530,8 @@ extern "C" int32_t gs_qwen25_mps_block_encode(
       MPSCommandBuffer *commandBuffer =
           (__bridge MPSCommandBuffer *)commandChainHandle;
       id<MTLCommandBuffer> root = commandBuffer.rootCommandBuffer;
-      if (!plan.device || !plan.steps || plan.steps.count != 15 ||
+      if (!plan.device || !plan.steps || plan.expectedStepCount == 0 ||
+          plan.steps.count != plan.expectedStepCount ||
           !plan.residentBuffers || !root ||
           root.commandQueue.device != plan.device ||
           root.status >= MTLCommandBufferStatusCommitted) {
@@ -1233,6 +1542,16 @@ extern "C" int32_t gs_qwen25_mps_block_encode(
       @try {
         for (NSUInteger index = 0; index < plan.steps.count; ++index) {
           GsQwen25MPSGraphStep *step = plan.steps[index];
+          if (step.metalPipeline) {
+            if (step.graph || step.metalPipeline.device != plan.device ||
+                step.metalBuffers.count == 0 || step.metalThreads == 0 ||
+                step.rmsRows == 0 || step.rmsDim == 0) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "prepared Metal RMS step is incomplete");
+              return -3;
+            }
+            continue;
+          }
           if (!step.graph || !step.executable || !step.execution ||
               !step.inputs || !step.outputs || step.outputCount == 0 ||
               step.outputs.count != step.outputCount) {
@@ -1245,6 +1564,34 @@ extern "C" int32_t gs_qwen25_mps_block_encode(
         }
         for (NSUInteger index = 0; index < plan.steps.count; ++index) {
           GsQwen25MPSGraphStep *step = plan.steps[index];
+          if (step.metalPipeline) {
+            // MPSGraph can replace the root with commitAndContinue. Borrow
+            // the current uncommitted root for each explicit Metal encoder.
+            id<MTLCommandBuffer> currentRoot = commandBuffer.rootCommandBuffer;
+            if (!currentRoot || currentRoot.commandQueue.device != plan.device ||
+                currentRoot.status >= MTLCommandBufferStatusCommitted) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "current Metal RMS root is unavailable");
+              return -4;
+            }
+            id<MTLComputeCommandEncoder> encoder = [currentRoot computeCommandEncoder];
+            if (!encoder) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "unable to open Metal RMS encoder");
+              return -4;
+            }
+            [encoder setComputePipelineState:step.metalPipeline];
+            for (NSUInteger binding = 0; binding < step.metalBuffers.count; ++binding)
+              [encoder setBuffer:step.metalBuffers[binding] offset:0 atIndex:binding];
+            const uint32_t params[] = {step.rmsRows, step.rmsDim};
+            [encoder setBytes:params length:sizeof(params) atIndex:step.metalBuffers.count];
+            const NSUInteger width = MIN((NSUInteger)256,
+                step.metalPipeline.maxTotalThreadsPerThreadgroup);
+            [encoder dispatchThreads:MTLSizeMake(step.metalThreads, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+            [encoder endEncoding];
+            continue;
+          }
           NSArray<MPSGraphTensorData *> *result =
               [step.executable encodeToCommandBuffer:commandBuffer
                                          inputsArray:step.inputs
@@ -1274,6 +1621,221 @@ extern "C" int32_t gs_qwen25_mps_block_encode(
 }
 
 extern "C" void gs_qwen25_mps_block_plan_destroy(void *planHandle) {
+  if (planHandle) {
+    __strong id retainedPlan = (__bridge_transfer id)planHandle;
+    (void)retainedPlan;
+  }
+}
+
+extern "C" void *gs_qwen25_mps_embedding_gather_create(
+    void *deviceHandle, int32_t tokens, int32_t dim, int32_t uniqueRows,
+    void *compactRowsHandle, void *rowIndicesHandle, void *outputHandle,
+    char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity > 0)
+    errorText[0] = '\0';
+  if (!deviceHandle || !compactRowsHandle || !rowIndicesHandle || !outputHandle ||
+      tokens <= 0 || dim <= 0 || uniqueRows <= 0) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "invalid Qwen2.5-VL embedding gather arguments");
+    return nullptr;
+  }
+
+  const uint64_t elements = (uint64_t)(uint32_t)tokens * (uint64_t)(uint32_t)dim;
+  const uint64_t compactElements =
+      (uint64_t)(uint32_t)uniqueRows * (uint64_t)(uint32_t)dim;
+  if (elements == 0 || elements > (uint64_t)INT32_MAX ||
+      compactElements == 0 || compactElements > (uint64_t)INT32_MAX ||
+      elements > UINT64_MAX / sizeof(uint16_t) ||
+      compactElements > UINT64_MAX / sizeof(uint16_t)) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "Qwen2.5-VL embedding gather dimensions exceed native bounds");
+    return nullptr;
+  }
+
+  id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
+  id<MTLBuffer> compactRows = (__bridge id<MTLBuffer>)compactRowsHandle;
+  id<MTLBuffer> rowIndices = (__bridge id<MTLBuffer>)rowIndicesHandle;
+  id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandle;
+  const uint64_t compactBytes = compactElements * sizeof(uint16_t);
+  const uint64_t indexBytes = (uint64_t)(uint32_t)tokens * sizeof(int32_t);
+  const uint64_t outputBytes = elements * sizeof(uint16_t);
+  if (!device || !compactRows || !rowIndices || !output ||
+      compactRows.device != device || rowIndices.device != device ||
+      output.device != device ||
+      compactRows.storageMode != MTLStorageModeShared ||
+      rowIndices.storageMode != MTLStorageModeShared ||
+      output.storageMode != MTLStorageModeShared ||
+      compactRows.length != compactBytes || rowIndices.length != indexBytes ||
+      output.length != outputBytes || !compactRows.contents ||
+      !rowIndices.contents || !output.contents ||
+      !gs_qwen25_disjoint(compactRows, rowIndices) ||
+      !gs_qwen25_disjoint(compactRows, output) ||
+      !gs_qwen25_disjoint(rowIndices, output)) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "embedding gather buffers must be exact, shared, disjoint, and on one Metal device");
+    return nullptr;
+  }
+
+  const int32_t *indices = (const int32_t *)rowIndices.contents;
+  for (int32_t token = 0; token < tokens; ++token) {
+    if (indices[token] < 0 || indices[token] >= uniqueRows) {
+      gs_qwen25_set_error(errorText, errorCapacity,
+                          "embedding remapped token index is outside the compact row table");
+      return nullptr;
+    }
+  }
+
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      @try {
+        NSString *source = [NSString stringWithUTF8String:R"metal(
+          #include <metal_stdlib>
+          using namespace metal;
+          struct Qwen25EmbeddingGatherParams {
+            uint tokens;
+            uint dim;
+            uint uniqueRows;
+          };
+          kernel void qwen25_embedding_gather(
+              device const ushort *compactRows [[buffer(0)]],
+              device const int *rowIndices [[buffer(1)]],
+              device ushort *output [[buffer(2)]],
+              constant Qwen25EmbeddingGatherParams &p [[buffer(3)]],
+              uint index [[thread_position_in_grid]]) {
+            const uint total = p.tokens * p.dim;
+            if (index >= total)
+              return;
+            const uint token = index / p.dim;
+            const int row = rowIndices[token];
+            if (row < 0 || uint(row) >= p.uniqueRows) {
+              output[index] = 0;
+              return;
+            }
+            const uint column = index % p.dim;
+            output[index] = compactRows[uint(row) * p.dim + column];
+          }
+        )metal"];
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:source
+                                                       options:nil
+                                                         error:&error];
+        id<MTLFunction> function =
+            [library newFunctionWithName:@"qwen25_embedding_gather"];
+        id<MTLComputePipelineState> pipeline = function
+            ? [device newComputePipelineStateWithFunction:function error:&error]
+            : nil;
+        if (!pipeline) {
+          NSString *message = [NSString stringWithFormat:
+              @"unable to prepare embedding gather pipeline: %@",
+              error.localizedDescription ?: @"Metal returned no pipeline"];
+          gs_qwen25_set_ns_error(errorText, errorCapacity, message);
+          return nullptr;
+        }
+
+        GsQwen25MPSEmbeddingGatherPlan *plan =
+            [GsQwen25MPSEmbeddingGatherPlan new];
+        plan.device = device;
+        plan.pipeline = pipeline;
+        plan.compactRows = compactRows;
+        plan.rowIndices = rowIndices;
+        plan.output = output;
+        plan.tokens = (uint32_t)tokens;
+        plan.dim = (uint32_t)dim;
+        plan.uniqueRows = (uint32_t)uniqueRows;
+        plan.elementCount = (uint32_t)elements;
+        if (!plan.device || !plan.pipeline || !plan.compactRows ||
+            !plan.rowIndices || !plan.output) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "unable to retain the prepared embedding gather plan");
+          return nullptr;
+        }
+        return (__bridge_retained void *)plan;
+      } @catch (NSException *exception) {
+        NSString *message = [NSString stringWithFormat:
+            @"Objective-C exception %@ preparing embedding gather: %@",
+            exception.name, exception.reason ?: @"(no reason)"];
+        gs_qwen25_set_ns_error(errorText, errorCapacity, message);
+        return nullptr;
+      }
+    }
+  }
+  gs_qwen25_set_error(errorText, errorCapacity,
+                      "Qwen2.5-VL embedding gather requires macOS 14 or newer");
+  return nullptr;
+}
+
+extern "C" int32_t gs_qwen25_mps_embedding_gather_encode(
+    void *planHandle, void *commandChainHandle, char *errorText,
+    size_t errorCapacity) {
+  if (errorText && errorCapacity > 0)
+    errorText[0] = '\0';
+  if (!planHandle || !commandChainHandle) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "required embedding plan or MPSCommandChain handle is null");
+    return -1;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      GsQwen25MPSEmbeddingGatherPlan *plan =
+          (__bridge GsQwen25MPSEmbeddingGatherPlan *)planHandle;
+      MPSCommandBuffer *commandBuffer =
+          (__bridge MPSCommandBuffer *)commandChainHandle;
+      id<MTLCommandBuffer> root = commandBuffer.rootCommandBuffer;
+      if (!plan.device || !plan.pipeline || !plan.compactRows ||
+          !plan.rowIndices || !plan.output || !root ||
+          root.commandQueue.device != plan.device ||
+          root.status >= MTLCommandBufferStatusCommitted ||
+          plan.elementCount == 0) {
+        gs_qwen25_set_error(errorText, errorCapacity,
+                            "MPSCommandChain root or prepared embedding gather plan is unavailable, committed, or on another device");
+        return -2;
+      }
+      GsQwen25EmbeddingGatherParams params = {
+          plan.tokens, plan.dim, plan.uniqueRows};
+      id<MTLComputeCommandEncoder> encoder = nil;
+      @try {
+        encoder = [root computeCommandEncoder];
+        if (!encoder) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "unable to create embedding gather compute encoder");
+          return -3;
+        }
+        [encoder setComputePipelineState:plan.pipeline];
+        [encoder setBuffer:plan.compactRows offset:0 atIndex:0];
+        [encoder setBuffer:plan.rowIndices offset:0 atIndex:1];
+        [encoder setBuffer:plan.output offset:0 atIndex:2];
+        [encoder setBytes:&params length:sizeof(params) atIndex:3];
+        const NSUInteger width = MIN((NSUInteger)256,
+            plan.pipeline.maxTotalThreadsPerThreadgroup);
+        if (width == 0) {
+          [encoder endEncoding];
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "embedding gather pipeline has no legal threadgroup width");
+          return -4;
+        }
+        const NSUInteger groups =
+            ((NSUInteger)plan.elementCount + width - 1) / width;
+        [encoder dispatchThreadgroups:MTLSizeMake(groups, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+        [encoder endEncoding];
+        return 0;
+      } @catch (NSException *exception) {
+        if (encoder)
+          [encoder endEncoding];
+        NSString *message = [NSString stringWithFormat:
+            @"Objective-C exception %@ encoding embedding gather: %@",
+            exception.name, exception.reason ?: @"(no reason)"];
+        gs_qwen25_set_ns_error(errorText, errorCapacity, message);
+        return -5;
+      }
+    }
+  }
+  gs_qwen25_set_error(errorText, errorCapacity,
+                      "Qwen2.5-VL embedding gather requires macOS 14 or newer");
+  return -5;
+}
+
+extern "C" void gs_qwen25_mps_embedding_gather_destroy(void *planHandle) {
   if (planHandle) {
     __strong id retainedPlan = (__bridge_transfer id)planHandle;
     (void)retainedPlan;

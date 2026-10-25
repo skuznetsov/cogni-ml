@@ -6,33 +6,39 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
-### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] Native text decoder blocks match the bounded official MPS oracle
+### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] The selected pretrained 26-block text prefix matches bounded official MPS captures
 
 - The opt-in Qwen2.5-VL adapter reuses CogniQwen Metal buffers and the serial
   MPS command chain. It implements biased Q/K/V, split-half RoPE, GQA causal
   attention, RMSNorm and SwiGLU. Qwen3.5 hybrid/GDN weights are not compatible.
 - Four official Transformers/MPS BF16 fixtures pass 102 stage comparisons
-  bit exactly: one tiny block, two distinct tiny blocks with unit and nonunit
+  with zero absolute error: one tiny block, two distinct tiny blocks with unit and nonunit
   RMS gains, and one 3584/18944/28Q/4KV/HD128 block. All have four tokens,
   right padding `[1,1,1,0]`, offset seven and synthetic constructor weights.
   The unchanged finite gate is `2e-5 + 2e-5*abs(reference)`.
-- Same-graph cast round trips failed as precision fences. Fifteen prepared
-  asynchronous executables materialize source BF16 boundaries through seven
-  caller-owned scratch buffers; matching general MPS SDPA graph dtypes closes
-  the remaining attention mismatch. Two blocks share the resident output/input
-  object, with one terminal wait per request and zero tracked named-buffer
-  allocations during encode. Serial overlap/budget/lifetime falsifiers pass.
-- Correlated MiniQuad verdict: ROBUST for this diagnostic serial slice. Fully
-  masked rows, concurrent callers, pretrained weights, long sequences, the full
-  26-block prefix, tokenization/prompt cropping and DiT integration are not
-  qualified. Prefix scratch reuse and aggregate admission remain prerequisites.
-  No generation or speedup is claimed; the 15% reserve remains unchanged.
+- Fresh pretrained S4/S32 runs compare embedding plus all 26 selected hidden
+  outputs against authenticated official captures. All 54 state comparisons
+  have zero differing BF16 words. The raw-word diagnostic is separate from
+  the unchanged finite gate and is challenged by a signed-zero control.
+- Same-graph casts failed as precision fences. The later pretrained layer-24
+  RMS failure is repaired by safe-math Metal sqrt/reciprocal, F32 scaling and
+  explicit BF16 rounding. Nineteen prepared graph/Metal steps per block use
+  seven BF16 scratch bindings and one F32 scalar per token. Ordered prefix
+  execution shares intermediates and retains separate hidden checkpoints.
+  One terminal wait, zero tracked encode allocations and no pre-terminal
+  activation reads are observed. Serial overlap/budget/lifetime falsifiers pass.
+- Correlated MiniQuad verdict: ROBUST for bounded serial S4/S32 numerical and
+  lifecycle evidence. Fully masked rows, concurrent callers, the 1280-token
+  prompt, tokenizer/cropping, full-model APIs and DiT integration remain
+  unqualified. No generation or speedup is claimed. Default memory floor is
+  15%; explicitly authorized runs select 10%, with process/swap/deadline guards.
 - Evidence, source/runtime pins, trusted fixture hashes, commands, memory and
   residuals: `docs/qwen25-hy-nomas-frontier.md` and
-  `/opt/mldata_ssd/cogni-ml/qwen25-hy-nomas-20261024/logs/final-receipt-v1.json`.
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-continuation-receipt-v3.json`.
+  The prior constructor-weight receipt remains historical evidence.
   Refresh after scoped source, precision, fixture/weights/geometry, compiler,
-  SDK/OS/device or lifecycle changes, or artifact loss. Next: a bounded
-  pretrained block chain; DiT return pointer is `docs/hy-nomas-native-frontier.md`.
+  SDK/OS/device or lifecycle changes, or artifact loss. Next: a separately
+  bounded long-prefix plan; DiT return pointer is `docs/hy-nomas-native-frontier.md`.
 
 ### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
 
@@ -33132,3 +33138,100 @@ Refresh after source/toolchain/device/model/workload changes.
   unmeasured next falsifier, not a hardware-cause conclusion. Refresh on
   source/codec/fixture/geometry, compiler/native object, backend/OS/SDK/device,
   numerical-policy or schedule changes.
+
+## 2026-10-24 — Qwen2.5-VL pretrained 26-block prefix continuation
+
+- Active goal: connect the pinned pretrained Qwen2.5-VL-7B-Instruct text
+  prefix for Hy-Nomas and compare embedding plus all 26 decoder outputs with
+  official Transformers MPS BF16. The bounded S4/S32 pretrained prefix passes:
+  embedding plus all 26 decoder outputs have zero differing BF16 words in
+  both fresh raw-word runs. The full text encoder remains IN_PROGRESS.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`,
+  active pretrained slice. Hy-Nomas prompt/cropping and DiT integration remain
+  subsequent frontiers; no full generation is authorized by this probe slice.
+- Four downloaded checkpoint shards at revision
+  `eb6ba55b40ada64977147b52e50a4145ee89ac4f` cover 313 selected tensors.
+  Blocks 0--25 contain 12,119,005,184 BF16 bytes. The embedding source table
+  stays on disk; verified unique rows feed an exact-bit GPU gather. A shared
+  ordered stage/scratch workspace retains all hidden outputs. At 1280 tokens
+  its static byte count is 549,852,160, not a measured full-prefix footprint.
+  Seven BF16 scratch bindings and one F32 RMS-statistics binding are shared;
+  the latter adds four bytes per token across the entire prefix.
+- `Qwen25VLWeights`, `Qwen25VLEmbeddingPlan`, `Qwen25VLPrefixPlan`,
+  `examples/support/qwen25_pretrained_reference.py` and
+  `examples/qwen25_pretrained_prefix.cr` implement the opt-in slice. The
+  native consumer binds a caller-trusted oracle manifest digest to the exact
+  parsed bytes, retains the authenticated reference sidecar snapshot and
+  hashes source chunks actually uploaded. The runner has one terminal wait,
+  zero tracked encode allocations and no pre-terminal activation readback;
+  27 post-terminal diagnostic readbacks are explicitly reported.
+- Guarded `make spec_qwen25` passes 42 examples without skips, with
+  all 102 standalone and 70 shared constructor-weight stage comparisons at
+  zero absolute error. First/last tensor digest failures restore live buffer counts/bytes.
+  The final pinned-interpreter CPU suite passes 92 tests (22 constructor
+  oracle, 13 pretrained-prefix, 13 block/RMS and 44 memory-guard tests).
+  Release probe build, formatting and strict native syntax checks pass.
+  External evidence root:
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
+  `logs/prefix-continuation-receipt-v3.json`. The v2 index is historical.
+  Current native tests and refreshed release probes are
+  `logs/native-rms-regression-v3.*`, production native build is
+  `logs/build-rms-production-v1.*`, and CPU tests are
+  `logs/cpu-qwen-rms-final-v2.out`.
+- User authorization changes the bounded run floor: `11191f3e` adds
+  `--runtime-floor-pct` with default 15% and minimum 7.5%; current pretrained
+  probes explicitly select 10%. Exact decimal arithmetic governs startup
+  and runtime checks. Cache accounting, process cap, 64 MiB swap-growth stop,
+  deadline and fail-closed telemetry remain. `logs/guard-floor-final-v1.*`
+  passes all 44 CPU guard tests. At 64 GiB, a 12.5 GiB process budget with
+  10% reserve requires 18.9 GiB startup headroom. Sampled guards neither
+  reserve memory nor bound instantaneous peaks.
+- `logs/oracle-s4-v9.*` and `logs/native-prefix-s4-raw-v1.*` pass: all 27 states
+  have zero differing BF16 words, one native terminal wait, zero tracked
+  encode allocations,
+  zero pre-terminal activation reads and 27 post-terminal diagnostic reads.
+  Trusted `fixtures/prefix-s4.json` SHA256 is
+  `c399cc50ef8a2435998fbd8c5dfc4121b4c414d538e33a023e4cd51225ca2398`.
+- `logs/oracle-s32-v1.*` produces the right-padded 32-token prefix at position
+  offset 7; trusted `fixtures/prefix-s32.json` SHA256 is
+  `40c665e0ce5903f43411d39a46379e8dda64ddbe41bd058f15552c877ccba96e`.
+  The historical `logs/native-prefix-s32-v1.*` rejects state 25 (892/114,688
+  failures,
+  max_abs 0.125) and state 26 (1,779 failures, max_abs 0.125); states 0--24
+  have zero absolute error. Wait/allocation/readback contracts still pass. Both successful
+  official runs stay below the sampled 12.5 GiB cap with zero observed swap
+  growth; S32 peaks at 13,320,652,576 sampled group bytes, only 101,120,224
+  below the cap. Do not widen the unchanged finite gate.
+- The official layer-24 standalone producer first reproduces captured S32
+  state 25 bit exactly, then captures actual RMS operations through a
+  pass-through TorchDispatch observer. Trusted block fixture SHA256 is
+  `4aaad9f784d86afbea6cd29868869af8889bd3b4b4bf907b0066d192d5b81960`.
+  Native MPSGraph inverse root differs by one F32 ULP in eight rows;
+  19 normalized BF16 words in row 30 cross a rounding boundary, leading to
+  the 892 hidden-output failures. Graph sqrt/division does not change that
+  result. A safe-math Metal `1.0f / precise::sqrt(x)` plus F32 scaling and
+  explicit BF16 rounding eliminates the downstream discrepancy. A remaining
+  one-ULP moments difference is recorded, not claimed exact.
+- `logs/native-block24-rms-production-v1.*` passes all 17 stage gates and
+  output with zero absolute error. Production normalized scratch equals the
+  independent precise trace bit exactly; the old graph trace remains a
+  separately reported negative control. Both production RMS norms use the
+  precise path: 19 prepared graph/Metal steps per block instead of 15, with
+  one shared F32 scalar per token and no extra host wait or encode allocation.
+- `logs/native-prefix-s4-raw-v1.*` and `logs/native-prefix-s32-raw-v1.*` both
+  exit zero: all 54 state comparisons across the two runs have zero differing
+  BF16 words, with the same one-wait/zero-allocation/no-preterminal-readback
+  contract. The signed-zero adversarial control prevents treating numerical
+  equality alone as bitwise identity; raw counts remain distinct from the
+  unchanged tolerance gate. Native peaks are 12,468,626,792 and 12,527,560,256
+  sampled group bytes, minimum cache-aware headroom 20,975,714,304 and
+  20,342,177,792 bytes, pressure-free >=63%, and no observed swap growth.
+- Next falsifier: declare a bounded longer-prefix memory plan before checking
+  the 1280-token Hy-Nomas prompt against official hidden states.
+  S1280, tokenizer/cropping, full-model APIs and video remain unqualified.
+  Historical startup failures v1--v5/v7 and harness failures v6/v8 are retained;
+  they establish no numerical parity. Model/Studio/video remain stopped.
+  The bounded S4/S32 pretrained-prefix DoD passes; correctness-probe timings
+  establish no model-wide speedup. Refresh on source,
+  runtime/compiler, checkpoint, geometry, attention/mask, numerical policy or
+  buffer-lifecycle changes.

@@ -196,7 +196,7 @@ module Qwen25FixtureSpec
     end
   end
 
-  def qualify(path : String) : Nil
+  def qualify(path : String, shared : Bool = false) : Nil
     fixture = JSON.parse(File.read(path))
     fixture["schema"].as_s.should eq("cogni_ml.qwen25_vl_text_decoder_hidden_state_reference")
     fixture["schema_version"].as_i.should eq(1)
@@ -218,6 +218,7 @@ module Qwen25FixtureSpec
     fixture_source = Source.new(fixture, path)
     owned = [] of ML::MetalBuffer
     plans = [] of Plan
+    prefix : ML::GGUF::Qwen25VLPrefixPlan? = nil
     chains = [] of ML::Metal::MPSCommandChain
     retained_before = Plan.retained_count
     begin
@@ -249,30 +250,65 @@ module Qwen25FixtureSpec
       end
       ML::MetalBuffer.stats[:live_bytes].should eq(live)
       Plan.retained_count.should eq(retained_before)
-      weight_sets.each_with_index do |weights, index|
-        source = index == 0 ? input : plans.last.output
-        plans << Plan.new(c, tokens, source, mask, pos, inv, weights, layer_index: index)
+      if shared
+        budget = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(c, tokens, weight_sets.size)
+        before_allocations = ML::MetalBuffer.video_spec_allocations
+        expect_raises(ArgumentError, /aggregate.*budget/) do
+          ML::GGUF::Qwen25VLPrefixPlan.new(c, tokens, input, mask, pos, inv, weight_sets, budget - 1)
+        end
+        ML::MetalBuffer.video_spec_allocations.should eq(before_allocations)
+        prefix = ML::GGUF::Qwen25VLPrefixPlan.new(c, tokens, input, mask, pos, inv, weight_sets, budget)
+        plans = prefix.blocks
+        (ML::MetalBuffer.stats[:live_bytes] - live).should eq(ML::GGUF::Qwen25VLPrefixPlan.workspace_bytes(c, tokens, weight_sets.size))
+        expect_raises(ArgumentError, /bound plans/) { prefix.workspace.release }
+      else
+        weight_sets.each_with_index do |weights, index|
+          source = index == 0 ? input : plans.last.output
+          plans << Plan.new(c, tokens, source, mask, pos, inv, weights, layer_index: index)
+        end
       end
       if plans.size == 2
         plans[1].input.same?(plans[0].output).should be_true
         weight_sets[1]["q_w"].same?(weight_sets[0]["q_w"]).should be_false
+        if shared
+          plans[1].stage("gate_proj").same?(plans[0].stage("gate_proj")).should be_true
+          plans[1].output.same?(plans[0].output).should be_false
+        end
       end
       chain = ML::Metal::MPSCommandChain.new
       chains << chain
       allocations = ML::MetalBuffer.video_spec_allocations
-      plans.each(&.encode(chain))
+      if p = prefix
+        if plans.size > 1
+          expect_raises(ArgumentError, /block order/) { plans[1].encode(chain) }
+          chain.wait_count.should eq(0)
+        end
+        # Callers cannot mutate the prefix's ordered plan list.
+        p.blocks.clear
+        p.blocks.size.should eq(plans.size)
+        p.encode(chain)
+        expect_raises(ArgumentError, /block order/) { plans[0].encode(chain) }
+      else
+        plans.each(&.encode(chain))
+      end
       ML::MetalBuffer.video_spec_allocations.should eq(allocations)
       chain.wait_count.should eq(0)
       expect_raises(ArgumentError, /terminal wait/) { plans[0].release }
       other = ML::Metal::MPSCommandChain.new
       chains << other
       expect_raises(ArgumentError, /in-flight chain/) { plans[0].encode(other) }
+      if p = prefix
+        expect_raises(ArgumentError, /in-flight chain/) { p.workspace.claim(other) }
+      end
       chain.commit_and_wait
       chain.wait_count.should eq(1)
       # All comparisons and diagnostic reads happen after the sole request wait.
       report = [] of NamedTuple(layer: Int32, stage: String, count: Int32, failures: Int32, max_abs: Float64)
       plans.each_with_index do |plan, index|
         Plan.stage_shapes(c, tokens).each do |name, shape|
+          # Shared intermediates retain the last block's values only. Every
+          # block's hidden checkpoint must survive its successor's writes.
+          next if shared && index < plans.size - 1 && name != "hidden_out"
           expected = if name == "rotary_cos" || name == "rotary_sin"
                        values(inputs[name], [3, 1, tokens, c.head_dim], "bfloat16", fixture_source)[0, tokens * c.head_dim]
                      else
@@ -285,7 +321,8 @@ module Qwen25FixtureSpec
         end
       end
       if root = ENV["COGNI_QWEN25_REPORT_DIR"]?
-        File.write(File.join(root, "#{File.basename(path)}.native.json"), report.to_json)
+        suffix = shared ? ".shared.native.json" : ".native.json"
+        File.write(File.join(root, "#{File.basename(path)}#{suffix}"), report.to_json)
       end
       failures = report.select { |r| r[:failures] > 0 }
       if failures.empty?
@@ -304,7 +341,11 @@ module Qwen25FixtureSpec
           # undrained chain correctly makes plan.release fail closed below.
         end
       end
-      plans.reverse_each(&.release)
+      if p = prefix
+        p.release
+      else
+        plans.reverse_each(&.release)
+      end
       chains.each(&.release)
       owned.reverse_each(&.release)
     end
@@ -348,6 +389,9 @@ describe "Qwen2.5-VL BF16 MPS qualification" do
       paths.split(':').each do |path|
         it "matches every upstream boundary in #{File.basename(path)}" do
           Qwen25FixtureSpec.qualify(path)
+        end
+        it "preserves hidden checkpoints with shared workspace in #{File.basename(path)}" do
+          Qwen25FixtureSpec.qualify(path, shared: true)
         end
       end
     else

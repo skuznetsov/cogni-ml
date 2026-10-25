@@ -1,5 +1,6 @@
 require "../core/buffer"
 require "../video/metal_mps_command_chain"
+require "set"
 
 {% unless flag?(:cpu_only) %}
   lib Qwen25MPSFFI
@@ -60,19 +61,109 @@ module ML::GGUF
     end
   end
 
-  # Prepared, explicitly released native graph. All bound tensors use BF16
-  # except positions and inverse frequencies (F32). Only serial host calls
-  # are supported. Borrowed bindings must not be overwritten or released in
-  # a way that races scheduled reads before the terminal wait. An ordered
-  # earlier GPU producer on the same chain may populate a block's input.
+  # Serial shared intermediates. Hidden outputs are deliberately not shared:
+  # each block retains its own checkpoint until the sole terminal drain.
+  class Qwen25VLWorkspace
+    getter config : Qwen25VLConfig
+    getter tokens : Int32
+    getter bytes : Int64
+    getter stages = {} of String => MetalBuffer
+    getter scratch = {} of String => MetalBuffer
+    @owners = Set(UInt64).new
+    @chain : Metal::MPSCommandChain? = nil
+    @next_layer = 0
+    @pending_block = false
+    @released = false
+
+    def initialize(@config, @tokens, max_bytes : Int64)
+      raise ArgumentError.new("tokens outside configured context") unless 0 < @tokens <= @config.max_positions
+      shapes = Qwen25VLBlockPlan.stage_shapes(@config, @tokens).reject { |name, _| name == "hidden_out" }
+      scratch_shapes = Qwen25VLBlockPlan.scratch_shapes(@config, @tokens)
+      stage_bytes = shapes.values.sum { |shape| Qwen25VLBlockPlan.elements(shape) * 2 }
+      @bytes = stage_bytes + Qwen25VLBlockPlan.scratch_bytes(@config, @tokens)
+      raise ArgumentError.new("shared workspace exceeds admitted byte budget") unless 0 < @bytes <= max_bytes
+      begin
+        shapes.each { |name, shape| @stages[name] = MetalBuffer.new(Qwen25VLBlockPlan.elements(shape) * 2) }
+        scratch_shapes.each do |name, shape|
+          @scratch[name] = MetalBuffer.new(Qwen25VLBlockPlan.scratch_buffer_bytes(name, shape))
+        end
+      rescue ex
+        @stages.each_value(&.release)
+        @scratch.each_value(&.release)
+        raise ex
+      end
+    end
+
+    def attach(owner : UInt64, config : Qwen25VLConfig, tokens : Int32) : Nil
+      raise ArgumentError.new("shared workspace released") if @released
+      raise ArgumentError.new("shared workspace geometry mismatch") unless @config == config && @tokens == tokens
+      raise ArgumentError.new("shared workspace owner already attached") unless @owners.add?(owner)
+    end
+
+    def detach(owner : UInt64) : Nil
+      @owners.delete(owner)
+    end
+
+    def claim(chain : Metal::MPSCommandChain) : Nil
+      raise ArgumentError.new("shared workspace released") if @released
+      raise ArgumentError.new("cannot claim a completed chain") if chain.completed?
+      if previous = @chain
+        unless previous.same?(chain) || previous.completed?
+          raise ArgumentError.new("shared workspace belongs to another in-flight chain")
+        end
+        unless previous.same?(chain)
+          @next_layer = 0
+          @pending_block = false
+        end
+      end
+      @chain = chain
+    end
+
+    # A bound block can be accessed for diagnostics, but cannot bypass the
+    # prefix's producer-before-consumer ordering. A partial failed encode
+    # poisons this chain until its normal terminal drain.
+    def begin_block(chain : Metal::MPSCommandChain, layer : Int32) : Nil
+      claim(chain)
+      raise ArgumentError.new("shared workspace block order mismatch") if @pending_block || layer != @next_layer
+      @pending_block = true
+    end
+
+    def complete_block(layer : Int32) : Nil
+      raise ArgumentError.new("shared workspace block completion mismatch") unless @pending_block && layer == @next_layer
+      @next_layer += 1
+      @pending_block = false
+    end
+
+    def release : Nil
+      return if @released
+      raise ArgumentError.new("shared workspace still has bound plans") unless @owners.empty?
+      if chain = @chain
+        raise ArgumentError.new("terminal wait required before workspace release") unless chain.completed?
+      end
+      @stages.each_value(&.release)
+      @scratch.each_value(&.release)
+      @stages.clear
+      @scratch.clear
+      @chain = nil
+      @released = true
+    end
+  end
+
+  # Prepared, explicitly released native graph. Bound tensors use BF16 except
+  # positions, inverse frequencies and the final RMS-statistics scratch (F32).
+  # Only serial host calls are supported. Borrowed bindings must not be
+  # overwritten or released in a way that races scheduled reads before the
+  # terminal wait. An ordered earlier GPU producer on the same chain may
+  # populate a block's input.
   class Qwen25VLBlockPlan
     WEIGHT_NAMES = {"input_norm", "q_w", "q_bias", "k_w", "k_bias", "v_w", "v_bias",
                     "o_w", "post_norm", "gate_w", "up_w", "down_w"}
     STAGE_NAMES = {"input_norm", "q_proj", "k_proj", "v_proj", "q_rope", "k_rope",
                    "attended", "o_proj", "residual", "post_norm", "gate_proj",
                    "up_proj", "silu_product", "down_proj", "hidden_out", "rotary_cos", "rotary_sin"}
+    # Keep this order in sync with the native ABI; the final RMS slot is F32.
     SCRATCH_NAMES = {"input_normalized", "q_cos_product", "q_sin_product", "k_cos_product",
-                     "k_sin_product", "post_normalized", "silu"}
+                     "k_sin_product", "post_normalized", "silu", "rms_statistics"}
 
     getter config : Qwen25VLConfig
     getter tokens : Int32
@@ -85,6 +176,8 @@ module ML::GGUF
     @weights : Array(MetalBuffer)
     @stages = {} of String => MetalBuffer
     @scratch = {} of String => MetalBuffer
+    @owned_buffers = [] of MetalBuffer
+    @workspace : Qwen25VLWorkspace? = nil
     @native = Pointer(Void).null
     @chain : Metal::MPSCommandChain? = nil
     @released = false
@@ -130,13 +223,26 @@ module ML::GGUF
       k = [1, c.kv_heads, tokens, c.head_dim]
       {"input_normalized" => d, "q_cos_product" => q, "q_sin_product" => q,
        "k_cos_product" => k, "k_sin_product" => k, "post_normalized" => d,
-       "silu" => [1, tokens, c.ffn_dim]}
+       "silu" => [1, tokens, c.ffn_dim], "rms_statistics" => [1, tokens, 1]}
+    end
+
+    def self.scratch_buffer_bytes(name : String, shape : Array(Int32)) : Int64
+      raise ArgumentError.new("unknown Qwen2.5-VL scratch binding: #{name}") unless SCRATCH_NAMES.includes?(name)
+      element_bytes = name == "rms_statistics" ? 4_i64 : 2_i64
+      elements(shape) * element_bytes
+    end
+
+    def self.scratch_bytes(c : Qwen25VLConfig, tokens : Int32) : Int64
+      scratch_shapes(c, tokens).sum do |name, shape|
+        scratch_buffer_bytes(name, shape)
+      end
     end
 
     def initialize(@config : Qwen25VLConfig, @tokens : Int32, @input : MetalBuffer,
                    @mask : MetalBuffer, @positions : MetalBuffer, @inv_freq : MetalBuffer,
                    weights : Hash(String, MetalBuffer), @layer_index = 0,
-                   max_workspace_bytes : Int64 = 512_i64 * 1024 * 1024)
+                   max_workspace_bytes : Int64 = 512_i64 * 1024 * 1024,
+                   @workspace : Qwen25VLWorkspace? = nil)
       @weights = [] of MetalBuffer
       raise ArgumentError.new("tokens outside configured context") unless 0 < @tokens <= @config.max_positions
       raise ArgumentError.new("layer index outside decoder") unless 0 <= @layer_index < @config.layers
@@ -153,17 +259,30 @@ module ML::GGUF
       check_buffer!(@inv_freq, @config.head_dim.to_i64 // 2 * 4, "inverse frequencies")
       stage_shapes = self.class.stage_shapes(@config, @tokens)
       scratch_shapes = self.class.scratch_shapes(@config, @tokens)
-      @workspace_bytes = (stage_shapes.values + scratch_shapes.values).sum { |shape| self.class.elements(shape) * 2 }
+      stage_bytes = stage_shapes.values.sum { |shape| self.class.elements(shape) * 2 }
+      @workspace_bytes = stage_bytes + self.class.scratch_bytes(@config, @tokens)
       raise ArgumentError.new("workspace exceeds admitted byte budget") unless 0 < @workspace_bytes <= max_workspace_bytes
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
         begin
-          stage_shapes.each do |name, shape|
-            @stages[name] = MetalBuffer.new(self.class.elements(shape) * 2)
-          end
-          scratch_shapes.each do |name, shape|
-            @scratch[name] = MetalBuffer.new(self.class.elements(shape) * 2)
+          if shared = @workspace
+            shared.attach(object_id, @config, @tokens)
+            @stages = shared.stages.dup
+            @scratch = shared.scratch.dup
+            @stages["hidden_out"] = MetalBuffer.new(@tokens.to_i64 * @config.dim * 2)
+            @owned_buffers << @stages["hidden_out"]
+          else
+            stage_shapes.each do |name, shape|
+              buffer = MetalBuffer.new(self.class.elements(shape) * 2)
+              @stages[name] = buffer
+              @owned_buffers << buffer
+            end
+            scratch_shapes.each do |name, shape|
+              buffer = MetalBuffer.new(self.class.scratch_buffer_bytes(name, shape))
+              @scratch[name] = buffer
+              @owned_buffers << buffer
+            end
           end
           weight_handles = @weights.map(&.handle)
           stage_handles = STAGE_NAMES.map { |name| @stages[name].handle }.to_a
@@ -176,10 +295,11 @@ module ML::GGUF
           raise "Qwen2.5-VL graph preparation failed: #{error_message}" if @native.null?
           @@retained[object_id] = self
         rescue ex
-          @stages.each_value(&.release)
+          @owned_buffers.each(&.release)
+          @owned_buffers.clear
           @stages.clear
-          @scratch.each_value(&.release)
           @scratch.clear
+          @workspace.try(&.detach(object_id))
           raise ex
         end
       {% end %}
@@ -194,6 +314,11 @@ module ML::GGUF
       stage("hidden_out")
     end
 
+    def validate_bindings! : Nil
+      check_live!
+      check_bound_buffers!
+    end
+
     # No neural host computation, GPU-buffer allocation, readback or wait.
     # Prepared executable bindings include every intermediate for qualification.
     def encode(chain : Metal::MPSCommandChain) : Nil
@@ -205,6 +330,7 @@ module ML::GGUF
         end
       end
       check_bound_buffers!
+      @workspace.try(&.begin_block(chain, @layer_index))
       # Retain the chain before entering MPS: a failed encode may have submitted
       # partial work and still requires the caller's normal terminal drain.
       @chain = chain
@@ -214,6 +340,7 @@ module ML::GGUF
         chain.resume!
         raise "Qwen2.5-VL encode failed (#{status}): #{error_message}" unless status == 0
       {% end %}
+      @workspace.try(&.complete_block(@layer_index))
     end
 
     def release : Nil
@@ -225,10 +352,11 @@ module ML::GGUF
         Qwen25MPSFFI.destroy(@native) unless @native.null?
       {% end %}
       @native = Pointer(Void).null
-      @stages.each_value(&.release)
+      @owned_buffers.each(&.release)
+      @owned_buffers.clear
       @stages.clear
-      @scratch.each_value(&.release)
       @scratch.clear
+      @workspace.try(&.detach(object_id))
       @released = true
       @chain = nil
       @@retained.delete(object_id)
@@ -256,6 +384,86 @@ module ML::GGUF
 
     private def error_message : String
       String.new(@error_text.to_unsafe)
+    end
+  end
+
+  # Opt-in bounded prefix. Source weights/input are borrowed and must remain
+  # live through release. Host calls are serial, just like MPSCommandChain.
+  class Qwen25VLPrefixPlan
+    @blocks = [] of Qwen25VLBlockPlan
+    getter workspace : Qwen25VLWorkspace
+    getter admitted_named_bytes : Int64
+    @released = false
+
+    def blocks : Array(Qwen25VLBlockPlan)
+      @blocks.dup
+    end
+
+    def self.workspace_bytes(config : Qwen25VLConfig, tokens : Int32, count : Int32) : Int64
+      validate_geometry!(config, tokens, count)
+      stage_bytes = Qwen25VLBlockPlan.stage_shapes(config, tokens).values.sum do |shape|
+        Qwen25VLBlockPlan.elements(shape) * 2
+      end
+      one = stage_bytes + Qwen25VLBlockPlan.scratch_bytes(config, tokens)
+      one + (count - 1).to_i64 * tokens * config.dim * 2
+    end
+
+    def self.weight_bytes(config : Qwen25VLConfig, count : Int32) : Int64
+      validate_geometry!(config, 1, count)
+      Qwen25VLBlockPlan.weight_shapes(config).values.sum { |s| Qwen25VLBlockPlan.elements(s) * 2 } * count
+    end
+
+    def self.named_bytes(config : Qwen25VLConfig, tokens : Int32, count : Int32) : Int64
+      # Include borrowed weights, input, mask, positions and inverse frequency.
+      weight_bytes(config, count) + workspace_bytes(config, tokens, count) +
+        tokens.to_i64 * config.dim * 2 + tokens.to_i64 * tokens * 2 +
+        tokens.to_i64 * 4 + config.head_dim.to_i64 // 2 * 4
+    end
+
+    private def self.validate_geometry!(config : Qwen25VLConfig, tokens : Int32, count : Int32) : Nil
+      raise ArgumentError.new("tokens outside configured context") unless 0 < tokens <= config.max_positions
+      raise ArgumentError.new("prefix block count outside decoder") unless 0 < count <= config.layers
+    end
+
+    def initialize(config : Qwen25VLConfig, tokens : Int32, input : MetalBuffer,
+                   mask : MetalBuffer, positions : MetalBuffer, inv_freq : MetalBuffer,
+                   layer_weights : Array(Hash(String, MetalBuffer)), max_named_bytes : Int64)
+      count = layer_weights.size
+      @admitted_named_bytes = self.class.named_bytes(config, tokens, count)
+      raise ArgumentError.new("prefix exceeds admitted aggregate named-buffer budget") unless @admitted_named_bytes <= max_named_bytes
+      @workspace = Qwen25VLWorkspace.new(config, tokens, self.class.workspace_bytes(config, tokens, count))
+      begin
+        next_input = input
+        layer_weights.each_with_index do |weights, index|
+          block = Qwen25VLBlockPlan.new(config, tokens, next_input, mask, positions,
+            inv_freq, weights, index, workspace: @workspace)
+          @blocks << block
+          next_input = block.output
+        end
+      rescue ex
+        @blocks.reverse_each(&.release)
+        @workspace.release
+        raise ex
+      end
+    end
+
+    def output : MetalBuffer
+      raise ArgumentError.new("prefix released") if @released
+      @blocks.last.output
+    end
+
+    def encode(chain : Metal::MPSCommandChain) : Nil
+      raise ArgumentError.new("prefix released") if @released
+      @blocks.each(&.validate_bindings!)
+      @workspace.claim(chain)
+      @blocks.each(&.encode(chain))
+    end
+
+    def release : Nil
+      return if @released
+      @blocks.reverse_each(&.release)
+      @workspace.release
+      @released = true
     end
   end
 end
