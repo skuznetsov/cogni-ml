@@ -2,9 +2,11 @@
 
 import importlib.util
 import ctypes
+import io
 import json
 import os
 from pathlib import Path
+from decimal import Decimal
 import signal
 import subprocess
 import sys
@@ -26,11 +28,11 @@ PHYSICAL = 64 * GIB
 
 
 def sample(*, pressure=80, available=40 * GIB, footprint=0, swap=10 * MIB,
-           live_processes=1, speculative=None, file_backed=None):
+           live_processes=1, speculative=None, file_backed=None, physical=PHYSICAL):
     return guard.Telemetry(
         pressure_free_pct=pressure,
         free_spec_bytes=available,
-        physical_bytes=PHYSICAL,
+        physical_bytes=physical,
         swap_used_bytes=swap,
         group_footprint_bytes=footprint,
         group_live_processes=live_processes,
@@ -40,6 +42,36 @@ def sample(*, pressure=80, available=40 * GIB, footprint=0, swap=10 * MIB,
 
 
 class ParserSpec(unittest.TestCase):
+    def test_runtime_floor_option_parses_exact_decimals_and_rejects_invalid_values(self):
+        self.assertEqual(guard._runtime_floor_pct_argument("7.5"), Decimal("7.5"))
+        self.assertEqual(guard._runtime_floor_pct_argument("7.500000000000000001"),
+                         Decimal("7.500000000000000001"))
+        self.assertEqual(guard._runtime_floor_pct_argument("10"), Decimal("10"))
+        self.assertEqual(guard._runtime_floor_pct_argument("100"), Decimal("100"))
+        for text in ("", "NaN", "sNaN", "Infinity", "-Infinity", "0", "-1",
+                     "7.49", "7.499999999999999999", "100.0001", "101",
+                     "not-a-number", "1e-19"):
+            with self.subTest(text=text), self.assertRaises(guard.argparse.ArgumentTypeError):
+                guard._runtime_floor_pct_argument(text)
+
+    def test_main_threads_runtime_floor_option_and_preserves_the_15_percent_default(self):
+        base = ["--max-footprint-mib", "1", "--max-swap-growth-mib", "0",
+                "--timeout-sec", "1", "--log", "/tmp/unused-wan-guard-log"]
+        with patch.object(guard, "run_guarded", return_value=0) as run:
+            self.assertEqual(guard.main(base + ["--", sys.executable, "-c", "pass"]), 0)
+            self.assertEqual(run.call_args.kwargs["runtime_floor_pct"], Decimal("15"))
+
+            self.assertEqual(guard.main(base + ["--runtime-floor-pct", "7.5",
+                                                "--", sys.executable, "-c", "pass"]), 0)
+            self.assertEqual(run.call_args.kwargs["runtime_floor_pct"], Decimal("7.5"))
+
+        with patch.object(guard, "run_guarded") as run, \
+                patch.object(guard.sys, "stderr", new=io.StringIO()):
+            with self.assertRaises(SystemExit):
+                guard.main(base + ["--runtime-floor-pct", "Infinity",
+                                   "--", sys.executable, "-c", "pass"])
+            run.assert_not_called()
+
     def test_memory_pressure_requires_one_valid_percentage(self):
         self.assertEqual(guard.parse_memory_pressure(
             "The system has 123 (1 pages with a page size of 4096).\n"
@@ -210,6 +242,64 @@ class ParserSpec(unittest.TestCase):
 
 
 class PolicySpec(unittest.TestCase):
+    def test_runtime_floor_exact_ceil_and_configured_pressure_headroom_boundaries(self):
+        for text, pressure, below_pressure, floor_bytes in (
+                ("10", 10, 9, 10), ("7.5", 8, 7, 8)):
+            with self.subTest(runtime_floor_pct=text):
+                pct = Decimal(text)
+                admitted = sample(pressure=pressure, available=floor_bytes, physical=100)
+                self.assertIsNone(guard.assess_startup(
+                    admitted, 0, runtime_floor_pct=pct))
+                self.assertIsNone(guard.assess_runtime(
+                    admitted, 0, 0, admitted.swap_used_bytes, runtime_floor_pct=pct))
+
+                low_pressure = sample(pressure=below_pressure, available=100, physical=100)
+                self.assertIn(f"below {text}%", guard.assess_startup(
+                    low_pressure, 0, runtime_floor_pct=pct))
+                self.assertIn(f"below {text}%", guard.assess_runtime(
+                    low_pressure, 0, 0, low_pressure.swap_used_bytes,
+                    runtime_floor_pct=pct))
+
+                low_headroom = sample(pressure=pressure, available=floor_bytes - 1, physical=100)
+                self.assertIn(f"{text}%", guard.assess_startup(
+                    low_headroom, 0, runtime_floor_pct=pct))
+                self.assertIn(f"{text}%", guard.assess_runtime(
+                    low_headroom, 0, 0, low_headroom.swap_used_bytes,
+                    runtime_floor_pct=pct))
+
+        # Physical-memory bytes need not divide evenly by a decimal percentage.
+        self.assertEqual(guard._runtime_floor_bytes(sample(physical=101), Decimal("10")), 11)
+        self.assertEqual(guard._runtime_floor_bytes(sample(physical=101), Decimal("7.5")), 8)
+
+    def test_default_runtime_floor_remains_15_percent(self):
+        self.assertEqual(guard.RUNTIME_FLOOR_PCT, 15)
+        admitted = sample(pressure=15, available=15, physical=100)
+        self.assertIsNone(guard.assess_startup(admitted, 0))
+        self.assertIsNone(guard.assess_runtime(admitted, 0, 0, admitted.swap_used_bytes))
+        low = sample(pressure=15, available=14, physical=100)
+        self.assertIn("15% physical-memory floor", guard.assess_runtime(
+            low, 0, 0, low.swap_used_bytes))
+
+    def test_assessment_and_guard_api_fail_closed_for_invalid_percentages(self):
+        for value in ("NaN", "Infinity", "0", "7.49", "7.499999999999999999",
+                      "100.1", 7.5, True):
+            with self.subTest(value=value):
+                self.assertIn("invalid runtime floor percentage", guard.assess_startup(
+                    sample(), 1, runtime_floor_pct=value))
+                self.assertIn("invalid runtime floor percentage", guard.assess_runtime(
+                    sample(), 1, 0, 0, runtime_floor_pct=value))
+
+        log_path = Path(tempfile.gettempdir()) / f"wan-invalid-runtime-floor-{os.getpid()}.jsonl"
+        try:
+            with self.assertRaises(ValueError):
+                guard.run_guarded([sys.executable, "-c", "pass"],
+                                  max_footprint_bytes=1, max_swap_growth_bytes=0,
+                                  timeout_sec=1, log_path=log_path,
+                                  runtime_floor_pct="NaN")
+            self.assertFalse(log_path.exists())
+        finally:
+            log_path.unlink(missing_ok=True)
+
     def test_file_cache_policy_admits_cache_heavy_host_but_default_stays_strict(self):
         cached = sample(available=10 * GIB, speculative=2 * GIB, file_backed=20 * GIB)
         self.assertIn("startup headroom", guard.assess_startup(cached, 10 * GIB))
@@ -298,7 +388,8 @@ class ContainmentSpec(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def run_with_provider(self, command, provider, *, timeout=5.0, name="guard.log",
-                          memory_accounting="free-speculative"):
+                          memory_accounting="free-speculative",
+                          runtime_floor_pct=guard.RUNTIME_FLOOR_PCT):
         return guard.run_guarded(
             command,
             max_footprint_bytes=10 * GIB,
@@ -309,7 +400,24 @@ class ContainmentSpec(unittest.TestCase):
             poll_interval_sec=0.02,
             terminate_grace_sec=0.15,
             memory_accounting=memory_accounting,
+            runtime_floor_pct=runtime_floor_pct,
         )
+
+    def test_run_guarded_applies_configured_floor_to_runtime_and_logs_it(self):
+        result = self.run_with_provider(
+            [sys.executable, "-c", "import time; time.sleep(0.08)"],
+            lambda group, _deadline: sample(
+                pressure=80, available=30 * GIB if group is None else 8 * GIB,
+                live_processes=0),
+            name="runtime-floor-10.log", runtime_floor_pct=Decimal("10"))
+        self.assertEqual(result, 0)
+        records = [json.loads(line) for line in
+                   (self.root / "runtime-floor-10.log").read_text().splitlines()]
+        limits = records[0]
+        self.assertEqual(limits["runtime_floor_pct"], 10)
+        self.assertEqual(limits["runtime_floor_pct_exact"], "10")
+        self.assertIn(">= 10%", limits["startup_rule"])
+        self.assertFalse(any(record.get("event") == "stopping" for record in records))
 
     def test_cache_aware_launch_logs_raw_counters_and_selected_estimate(self):
         marker = self.root / "cache-launch"

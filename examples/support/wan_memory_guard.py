@@ -29,6 +29,8 @@ from typing import Callable, Iterable
 MIB = 1024 * 1024
 RUSAGE_INFO_V2 = 2
 RUNTIME_FLOOR_PCT = 15
+MIN_RUNTIME_FLOOR_PCT = Decimal("7.5")
+MAX_RUNTIME_FLOOR_DECIMAL_PLACES = 18
 FREE_SPECULATIVE = "free-speculative"
 FILE_CACHE = "file-cache"
 MEMORY_ACCOUNTING_POLICIES = (FREE_SPECULATIVE, FILE_CACHE)
@@ -41,6 +43,50 @@ EXIT_TIMEOUT = 124
 
 class TelemetryError(RuntimeError):
     """Host or process telemetry is absent, malformed, or inconsistent."""
+
+
+def _coerce_runtime_floor_pct(value: Decimal | int | str) -> Decimal:
+    """Validate an exact decimal percentage without accepting binary floats."""
+    if isinstance(value, bool) or isinstance(value, float) or not isinstance(value, (Decimal, int, str)):
+        raise ValueError("runtime floor percentage must be an exact decimal value")
+    try:
+        pct = value if isinstance(value, Decimal) else Decimal(value)
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError("runtime floor percentage is invalid") from error
+    if not pct.is_finite() or pct < MIN_RUNTIME_FLOOR_PCT or pct > 100:
+        raise ValueError("runtime floor percentage must be finite and in [7.5, 100]")
+
+    # Bound denominator construction while allowing ordinary decimal settings
+    # such as 7.5 and 10, with exact rational rounding below.
+    digits = list(pct.as_tuple().digits)
+    exponent = pct.as_tuple().exponent
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    if max(0, -exponent) > MAX_RUNTIME_FLOOR_DECIMAL_PLACES:
+        raise ValueError(
+            f"runtime floor percentage supports at most {MAX_RUNTIME_FLOOR_DECIMAL_PLACES} decimal places")
+    return pct
+
+
+def _runtime_floor_pct_argument(text: str) -> Decimal:
+    try:
+        return _coerce_runtime_floor_pct(text)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _format_runtime_floor_pct(pct: Decimal) -> str:
+    rendered = format(pct, "f")
+    if "." in rendered:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered
+
+
+def _runtime_floor_pct_log_number(pct: Decimal) -> int | float:
+    if pct == pct.to_integral_value():
+        return int(pct)
+    return float(pct)
 
 
 @dataclass(frozen=True)
@@ -356,39 +402,55 @@ def _headroom_bytes(sample: Telemetry, memory_accounting: str) -> int:
     return sample.free_spec_bytes - sample.speculative_bytes + sample.file_backed_bytes
 
 
-def _runtime_floor_bytes(sample: Telemetry) -> int:
-    return (sample.physical_bytes * RUNTIME_FLOOR_PCT + 99) // 100
+def _runtime_floor_bytes(sample: Telemetry,
+                         runtime_floor_pct: Decimal | int | str = RUNTIME_FLOOR_PCT) -> int:
+    pct = _coerce_runtime_floor_pct(runtime_floor_pct)
+    numerator, denominator = pct.as_integer_ratio()
+    divisor = 100 * denominator
+    return (sample.physical_bytes * numerator + divisor - 1) // divisor
 
 
 def assess_startup(sample: Telemetry, max_footprint_bytes: int, *,
-                    memory_accounting: str = FREE_SPECULATIVE) -> str | None:
+                    memory_accounting: str = FREE_SPECULATIVE,
+                    runtime_floor_pct: Decimal | int | str = RUNTIME_FLOOR_PCT) -> str | None:
+    try:
+        runtime_floor_pct = _coerce_runtime_floor_pct(runtime_floor_pct)
+    except ValueError as error:
+        return f"invalid runtime floor percentage: {error}"
     invalid = _validate_sample(sample, memory_accounting)
     if invalid:
         return invalid
-    if sample.pressure_free_pct < RUNTIME_FLOOR_PCT:
-        return f"startup pressure {sample.pressure_free_pct}% is below {RUNTIME_FLOOR_PCT}%"
-    required = _runtime_floor_bytes(sample) + max_footprint_bytes
+    floor_label = _format_runtime_floor_pct(runtime_floor_pct)
+    if sample.pressure_free_pct < runtime_floor_pct:
+        return f"startup pressure {sample.pressure_free_pct}% is below {floor_label}%"
+    required = _runtime_floor_bytes(sample, runtime_floor_pct) + max_footprint_bytes
     if _headroom_bytes(sample, memory_accounting) < required:
         if memory_accounting == FILE_CACHE:
             return ("startup headroom estimate (free + file-backed) is below the "
-                    "15%-of-RAM policy floor plus the requested process-tree footprint budget")
-        return ("startup headroom is below 15% physical memory plus the requested "
+                    f"{floor_label}%-of-RAM policy floor plus the requested process-tree footprint budget")
+        return (f"startup headroom is below {floor_label}% physical memory plus the requested "
                 "process-tree footprint budget")
     return None
 
 
 def assess_runtime(sample: Telemetry, max_footprint_bytes: int,
                    max_swap_growth_bytes: int, initial_swap_bytes: int, *,
-                   memory_accounting: str = FREE_SPECULATIVE) -> str | None:
+                   memory_accounting: str = FREE_SPECULATIVE,
+                   runtime_floor_pct: Decimal | int | str = RUNTIME_FLOOR_PCT) -> str | None:
+    try:
+        runtime_floor_pct = _coerce_runtime_floor_pct(runtime_floor_pct)
+    except ValueError as error:
+        return f"invalid runtime floor percentage: {error}"
     invalid = _validate_sample(sample, memory_accounting)
     if invalid:
         return invalid
-    if sample.pressure_free_pct < RUNTIME_FLOOR_PCT:
-        return f"pressure fell below {RUNTIME_FLOOR_PCT}%"
-    if _headroom_bytes(sample, memory_accounting) < _runtime_floor_bytes(sample):
+    floor_label = _format_runtime_floor_pct(runtime_floor_pct)
+    if sample.pressure_free_pct < runtime_floor_pct:
+        return f"pressure fell below {floor_label}%"
+    if _headroom_bytes(sample, memory_accounting) < _runtime_floor_bytes(sample, runtime_floor_pct):
         if memory_accounting == FILE_CACHE:
-            return "file-cache headroom estimate fell below the 15%-of-RAM policy floor"
-        return "free/speculative bytes fell below the 15% physical-memory floor"
+            return f"file-cache headroom estimate fell below the {floor_label}%-of-RAM policy floor"
+        return f"free/speculative bytes fell below the {floor_label}% physical-memory floor"
     if sample.group_footprint_bytes > max_footprint_bytes:
         return "process-tree footprint exceeded its requested maximum"
     if sample.swap_used_bytes - initial_swap_bytes > max_swap_growth_bytes:
@@ -563,20 +625,24 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
                 telemetry_provider: Callable[[int | None, float | None], Telemetry] = collect_telemetry,
                 poll_interval_sec: float = 0.5,
                 terminate_grace_sec: float = 1.0,
-                memory_accounting: str = FREE_SPECULATIVE) -> int:
+                memory_accounting: str = FREE_SPECULATIVE,
+                runtime_floor_pct: Decimal | int | str = RUNTIME_FLOOR_PCT) -> int:
     """Run one command in a new session under startup and sampled runtime gates."""
     if (not command or max_footprint_bytes <= 0 or max_swap_growth_bytes < 0 or
             timeout_sec <= 0 or poll_interval_sec <= 0 or terminate_grace_sec < 0):
         raise ValueError("invalid command or nonpositive guard limits")
     if memory_accounting not in MEMORY_ACCOUNTING_POLICIES:
         raise ValueError("unknown memory-accounting policy")
+    runtime_floor_pct = _coerce_runtime_floor_pct(runtime_floor_pct)
+    floor_label = _format_runtime_floor_pct(runtime_floor_pct)
     with _open_log(Path(log_path)) as stream:
-        _log(stream, "limits", runtime_floor_pct=RUNTIME_FLOOR_PCT,
+        _log(stream, "limits", runtime_floor_pct=_runtime_floor_pct_log_number(runtime_floor_pct),
+             runtime_floor_pct_exact=floor_label,
              max_footprint_bytes=max_footprint_bytes,
              max_swap_growth_bytes=max_swap_growth_bytes, timeout_sec=timeout_sec,
              memory_accounting=memory_accounting,
              headroom_formula="printed free + speculative" if memory_accounting == FREE_SPECULATIVE else "printed free + file-backed (includes speculative)",
-             startup_rule="memory_pressure -Q >= 15% and selected headroom >= 15% physical + footprint budget",
+             startup_rule=f"memory_pressure -Q >= {floor_label}% and selected headroom >= {floor_label}% physical + footprint budget",
              file_cache_limitation="file-backed bytes are a reclaimability estimate, not guaranteed clean or immediately free memory",
              limitation="sampled limits cannot prevent between-poll spikes or cover deliberate setsid/setpgid escape")
         try:
@@ -591,7 +657,8 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
             return EXIT_TELEMETRY
         _log_sample(stream, initial, memory_accounting)
         startup_reason = assess_startup(initial, max_footprint_bytes,
-                                         memory_accounting=memory_accounting)
+                                         memory_accounting=memory_accounting,
+                                         runtime_floor_pct=runtime_floor_pct)
         if startup_reason:
             _log(stream, "blocked", reason=startup_reason)
             return EXIT_ADMISSION
@@ -650,7 +717,8 @@ def run_guarded(command: list[str], *, max_footprint_bytes: int,
                     break
                 violation = assess_runtime(sample, max_footprint_bytes,
                                           max_swap_growth_bytes, initial.swap_used_bytes,
-                                          memory_accounting=memory_accounting)
+                                          memory_accounting=memory_accounting,
+                                          runtime_floor_pct=runtime_floor_pct)
                 if violation:
                     _log(stream, "stopping", reason=violation)
                     _terminate_owned_group(child, terminate_grace_sec)
@@ -726,6 +794,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--memory-accounting", choices=MEMORY_ACCOUNTING_POLICIES,
                         default=FREE_SPECULATIVE,
                         help="headroom policy: strict free+speculative (default), or free+file-backed estimate")
+    parser.add_argument("--runtime-floor-pct", type=_runtime_floor_pct_argument,
+                        default=_coerce_runtime_floor_pct(RUNTIME_FLOOR_PCT), metavar="PERCENT",
+                        help="minimum memory pressure and physical headroom percentage (default: 15)")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -736,7 +807,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                            max_footprint_bytes=args.max_footprint_mib * MIB,
                            max_swap_growth_bytes=args.max_swap_growth_mib * MIB,
                            timeout_sec=args.timeout_sec, log_path=args.log,
-                           memory_accounting=args.memory_accounting)
+                           memory_accounting=args.memory_accounting,
+                           runtime_floor_pct=args.runtime_floor_pct)
     except (ValueError, OSError) as error:
         print(f"wan memory guard: {error}", file=sys.stderr)
         return EXIT_USAGE
