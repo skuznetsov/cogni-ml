@@ -27,6 +27,8 @@ SCHEMA_VERSION = 1
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 MODEL_REVISION = "eb6ba55b40ada64977147b52e50a4145ee89ac4f"
 TRUSTED_PREFIX_SHA256 = "40c665e0ce5903f43411d39a46379e8dda64ddbe41bd058f15552c877ccba96e"
+TRUSTED_PREFIX_S1280_SHA256 = "b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a"
+TRUSTED_PREFIX_SHA256S = frozenset((TRUSTED_PREFIX_SHA256, TRUSTED_PREFIX_S1280_SHA256))
 MAX_PREFIX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_DIAGNOSTIC_SIDECAR_BYTES = 512 * 1024 * 1024
 MAX_BLOCK_MPS_ESTIMATE_BYTES = 3 * 1024 * 1024 * 1024
@@ -43,6 +45,10 @@ RMS_TRACE_STAGE_SUFFIXES = (
     "normalized_f32",
     "normalized_bf16",
 )
+RMS_SITE_MODULES = {
+    "input": "input_layernorm",
+    "post-attention": "post_attention_layernorm",
+}
 RMS_SOURCE_FILE = "models/qwen2/modeling_qwen2.py"
 RMS_SOURCE_SHA256 = "08742a7c82a8713bc22f632f01c97b7eca3ef0e947180e7d6c9beec4897c4ff8"
 
@@ -90,8 +96,8 @@ def _read_prefix_snapshot(
     """Read and authenticate exact manifest and sidecar snapshots once."""
     if not _is_sha256(expected_sha256):
         raise ValueError("trusted prefix manifest SHA-256 is malformed")
-    if expected_sha256 != TRUSTED_PREFIX_SHA256:
-        raise ValueError("trusted prefix manifest digest does not match the pinned S32 fixture")
+    if expected_sha256 not in TRUSTED_PREFIX_SHA256S:
+        raise ValueError("trusted prefix manifest digest does not match a pinned prefix fixture")
     manifest_path = Path(manifest_path).expanduser()
     if manifest_path.is_symlink():
         raise ValueError("prefix manifest must be a regular non-symlink file")
@@ -369,8 +375,21 @@ def _stage_shapes(layer_index: int, sequence_length: int, geometry: dict[str, An
     return stage_shapes
 
 
-def _rms_trace_shapes(layer_index: int, sequence_length: int, hidden_size: int) -> dict[str, list[int]]:
-    prefix = f"layers.{layer_index}.input_layernorm."
+def _normalize_rms_site(rms_site: Any) -> str:
+    if not isinstance(rms_site, str) or rms_site not in RMS_SITE_MODULES:
+        raise ValueError("RMS trace site must be input or post-attention")
+    return RMS_SITE_MODULES[rms_site]
+
+
+def _rms_trace_shapes(
+    layer_index: int,
+    sequence_length: int,
+    hidden_size: int,
+    rms_site: str = "input_layernorm",
+) -> dict[str, list[int]]:
+    if rms_site not in {"input_layernorm", "post_attention_layernorm"}:
+        raise ValueError("RMS trace module site is unsupported")
+    prefix = f"layers.{layer_index}.{rms_site}."
     return {
         prefix + "variance_f32": [1, sequence_length, 1],
         prefix + "variance_plus_eps_f32": [1, sequence_length, 1],
@@ -378,6 +397,26 @@ def _rms_trace_shapes(layer_index: int, sequence_length: int, hidden_size: int) 
         prefix + "normalized_f32": [1, sequence_length, hidden_size],
         prefix + "normalized_bf16": [1, sequence_length, hidden_size],
     }
+
+
+def _qualified_rms_trace_entries(
+    layer_index: int,
+    rms_stages: dict[str, Any],
+    rms_site: str = "input_layernorm",
+) -> list[tuple[str, Any, str]]:
+    layer_index = _validate_layer_index(layer_index)
+    if rms_site not in {"input_layernorm", "post_attention_layernorm"}:
+        raise ValueError("RMS trace module site is unsupported")
+    if set(rms_stages) != set(RMS_TRACE_STAGE_SUFFIXES):
+        raise RuntimeError("RMS trace tensor inventory differs from its expected stage suffixes")
+    return [
+        (
+            f"layers.{layer_index}.{rms_site}.{name}",
+            rms_stages[name],
+            "bfloat16" if name.endswith("_bf16") else "float32",
+        )
+        for name in RMS_TRACE_STAGE_SUFFIXES
+    ]
 
 
 @contextmanager
@@ -464,6 +503,26 @@ def _validate_rms_trace(
             raise RuntimeError(f"official RMSNorm trace geometry changed: {qualified_name}")
         if require_mps and tensor.device.type != "mps":
             raise RuntimeError(f"official RMSNorm trace escaped MPS: {qualified_name}")
+
+
+def _validate_rms_input_binding(
+    rms_site: str,
+    observed_input_bytes: bytes,
+    prefix_input_bytes: bytes,
+    residual_after_attention_bytes: bytes,
+    layer_index: int,
+) -> str:
+    if rms_site == "input_layernorm":
+        expected_input = prefix_input_bytes
+        source_description = f"authenticated h{layer_index}"
+    elif rms_site == "post_attention_layernorm":
+        expected_input = residual_after_attention_bytes
+        source_description = "captured residual_after_attention stage"
+    else:
+        raise ValueError("RMS trace module site is unsupported")
+    if observed_input_bytes != expected_input:
+        raise RuntimeError(f"official {rms_site} input differs from {source_description}")
+    return _sha256_bytes(observed_input_bytes)
 
 
 def _verified_rms_source_sha256(transformers_sources: dict[str, Any]) -> str:
@@ -587,6 +646,7 @@ def _append_sidecar_record(
 
 
 def _pack_diagnostic_sidecars(
+    layer_index: int,
     hidden_states_in: Any,
     stages: dict[str, Any],
     extra_stages: dict[str, Any],
@@ -594,20 +654,17 @@ def _pack_diagnostic_sidecars(
     stage_order: list[str],
     expected_shapes: dict[str, list[int]],
     torch: Any,
+    rms_site: str = "input_layernorm",
 ) -> tuple[dict[str, bytes], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    if set(rms_stages) != {name.rsplit(".", 1)[-1] for name in expected_shapes if ".input_layernorm." in name}:
-        raise RuntimeError("RMS trace tensor inventory differs from its expected stage shape map")
+    layer_index = _validate_layer_index(layer_index)
+    rms_entries = _qualified_rms_trace_entries(layer_index, rms_stages, rms_site)
     sidecar_buffers: dict[str, bytearray] = {}
     records: dict[str, dict[str, Any]] = {}
     tensor_entries = (
         [("hidden_states_in", hidden_states_in, "bfloat16")]
         + [(name, stages[name], "bfloat16") for name in stage_order]
         + [(name, tensor, "bfloat16") for name, tensor in extra_stages.items()]
-        + [
-            (f"layers.24.input_layernorm.{name}", tensor,
-             "bfloat16" if name.endswith("_bf16") else "float32")
-            for name, tensor in rms_stages.items()
-        ]
+        + rms_entries
     )
     for name, tensor, dtype in tensor_entries:
         expected_shape = expected_shapes[name]
@@ -629,10 +686,7 @@ def _pack_diagnostic_sidecars(
         raise RuntimeError("diagnostic sidecar is missing hidden_states_in")
     stage_records = [records[name] for name in stage_order]
     extra_stage_records = [records[name] for name in extra_stages]
-    rms_stage_records = [
-        records[f"layers.24.input_layernorm.{name}"]
-        for name in rms_stages
-    ]
+    rms_stage_records = [records[name] for name, _, _ in rms_entries]
     hidden_record = {key: value for key, value in records["hidden_states_in"].items() if key != "name"}
     return (
         {name: bytes(payload) for name, payload in sidecar_buffers.items()},
@@ -707,6 +761,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
     producer = _load_pretrained_producer()
     layer_index = _validate_layer_index(args.layer_index, producer.PREFIX_LAYER_COUNT)
+    rms_site = _normalize_rms_site(args.rms_site)
     _fresh_output_paths(args.output)
     prefix_snapshot = _read_prefix_snapshot(
         args.prefix_reference,
@@ -747,12 +802,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     with torch.device("meta"):
         shape_probe = modeling.Qwen2_5_VLDecoderLayer(config, layer_idx=layer_index)
     _validate_official_rmsnorm_instance(
-        shape_probe.input_layernorm, modeling.Qwen2RMSNorm, transformers_sources
+        getattr(shape_probe, rms_site), modeling.Qwen2RMSNorm, transformers_sources
     )
     expected_weight_shapes = producer._expected_weight_names(shape_probe)
     stage_shapes = _stage_shapes(layer_index, request["sequence_length"], config_record, helper)
     rms_stage_shapes = _rms_trace_shapes(
-        layer_index, request["sequence_length"], config_record["hidden_size"]
+        layer_index, request["sequence_length"], config_record["hidden_size"], rms_site
     )
     extra_stage_name = f"layers.{layer_index}.mlp.act_fn"
     extra_stage_shapes = {
@@ -778,8 +833,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     device = torch.device("mps")
     with torch.device("meta"):
         layer = modeling.Qwen2_5_VLDecoderLayer(config, layer_idx=layer_index)
+    selected_rmsnorm = getattr(layer, rms_site)
     _validate_official_rmsnorm_instance(
-        layer.input_layernorm, modeling.Qwen2RMSNorm, transformers_sources
+        selected_rmsnorm, modeling.Qwen2RMSNorm, transformers_sources
     )
     if producer._expected_weight_names(layer) != expected_weight_shapes:
         raise RuntimeError("selected official decoder layer parameter geometry changed")
@@ -832,7 +888,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
         activation_hook = layer.mlp.act_fn.register_forward_hook(capture_mlp_activation)
         try:
-            with _observe_official_rmsnorm(layer.input_layernorm, torch) as captured_rms_short_names:
+            with _observe_official_rmsnorm(selected_rmsnorm, torch) as captured_rms_short_names:
                 output_hidden_states, captured = helper._capture_layer(
                     layer,
                     layer_index,
@@ -875,8 +931,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         torch.mps.synchronize()
 
     rms_input_bytes = _tensor_bf16_bytes(captured_rms_short_names["input_bf16"], torch)
-    if rms_input_bytes != input_state_bytes:
-        raise RuntimeError("official input_layernorm input differs from authenticated h24")
+    residual_after_attention_bytes = b""
+    if rms_site == "post_attention_layernorm":
+        residual_after_attention_bytes = _tensor_bf16_bytes(
+            captured["residual_after_attention"], torch
+        )
+    rms_input_sha256 = _validate_rms_input_binding(
+        rms_site,
+        rms_input_bytes,
+        input_state_bytes,
+        residual_after_attention_bytes,
+        layer_index,
+    )
     official_inv_freq = (
         rotary.inv_freq.detach()
         .to(device="cpu", dtype=torch.float32)
@@ -899,6 +965,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     sidecar_bytes, hidden_record, stage_records, extra_stage_records, rms_stage_records = _pack_diagnostic_sidecars(
+        layer_index,
         captured["hidden_states_in"],
         captured_stages,
         captured_extra_stages,
@@ -906,6 +973,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         stage_order,
         {"hidden_states_in": hidden_shape, **stage_shapes, **extra_stage_shapes, **rms_stage_shapes},
         torch,
+        rms_site=rms_site,
     )
     prefix_hidden_digest = _sha256_bytes(input_state_bytes)
     prefix_output_digest = _sha256_bytes(expected_output_bytes)
@@ -935,13 +1003,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "stages": stage_records,
         "extra_stages": extra_stage_records,
         "rms_trace": {
+            "site": rms_site,
             "source": {
                 "schema_version": 1,
                 "source_file": RMS_SOURCE_FILE,
                 "source_sha256": _verified_rms_source_sha256(transformers_sources),
                 "capture_method": "TorchDispatchMode pass-through around the official Qwen2RMSNorm.forward call",
             },
-            "input_state_sha256": _sha256_bytes(rms_input_bytes),
+            "input_state_sha256": rms_input_sha256,
             "stages": rms_stage_records,
         },
         "provenance": {
@@ -958,7 +1027,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "attention_implementation": "sdpa",
             "explicit_mps_synchronizations": 1,
             "config_generated_inv_freq_bitexact": True,
-            "input_layernorm_input_bitexact": True,
+            "rms_trace_site_input_bitexact": True,
+            "rms_trace_site": rms_site,
+            **({"input_layernorm_input_bitexact": True} if rms_site == "input_layernorm" else {}),
             "mps_memory_estimate_bytes": estimate,
             "mps_reserved_fraction": MPS_RESERVE_FRACTION,
             "prefix_output_bitexact": True,
@@ -975,6 +1046,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--prefix-reference", required=True, type=Path)
     parser.add_argument("--prefix-reference-sha256", required=True)
     parser.add_argument("--layer-index", type=int, default=24)
+    parser.add_argument(
+        "--rms-site",
+        choices=tuple(RMS_SITE_MODULES),
+        default="input",
+        help="official RMSNorm site to trace (default: input)",
+    )
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args(argv)
 

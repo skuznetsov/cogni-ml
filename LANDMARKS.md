@@ -20,6 +20,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   outputs against authenticated official captures. All 54 state comparisons
   have zero differing BF16 words. The raw-word diagnostic is separate from
   the unchanged finite gate and is challenged by a signed-zero control.
+- The S1280 check compares all 27 states but fails the unchanged gate, first
+  at block 0's post-attention RMSNorm. Its preceding stages are raw-BF16 exact;
+  28 norm words differ, producing 596 differing hidden words. This leaves
+  S4/S32 qualification intact and explicitly rejects S1280 qualification.
 - Same-graph casts failed as precision fences. The later pretrained layer-24
   RMS failure is repaired by safe-math Metal sqrt/reciprocal, F32 scaling and
   explicit BF16 rounding. Nineteen prepared graph/Metal steps per block use
@@ -36,9 +40,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   residuals: `docs/qwen25-hy-nomas-frontier.md` and
   `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-continuation-receipt-v3.json`.
   The prior constructor-weight receipt remains historical evidence.
+  The S1280 failure and two refuted SSD-only controls are indexed by
+  `logs/prefix-s1280-receipt-v1.json` under the same evidence root.
   Refresh after scoped source, precision, fixture/weights/geometry, compiler,
-  SDK/OS/device or lifecycle changes, or artifact loss. Next: a separately
-  bounded long-prefix plan; DiT return pointer is `docs/hy-nomas-native-frontier.md`.
+  SDK/OS/device or lifecycle changes, or artifact loss. Next: isolate the
+  same-input RMS square/mean reduction; DiT return pointer is
+  `docs/hy-nomas-native-frontier.md`.
 
 ### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
 
@@ -33235,3 +33242,63 @@ Refresh after source/toolchain/device/model/workload changes.
   establish no model-wide speedup. Refresh on source,
   runtime/compiler, checkpoint, geometry, attention/mask, numerical policy or
   buffer-lifecycle changes.
+
+## 2026-10-24 — S1280 pretrained prefix rejection and RMS continuation
+
+- Active goal: compare all selected pretrained Qwen2.5-VL blocks 0--25 at
+  S1280 against official Transformers MPS BF16 for Hy-Nomas. Both complete;
+  all 27 states are compared, but S1280 parity remains IN_PROGRESS. The
+  deterministic case repeats the S32 fixture's 20 visible IDs 63 times,
+  then adds 20 right-padding IDs: 1,280 query rows, 1,260 active keys, offset
+  seven and 18 unique embedding rows. This is not tokenizer or natural-prompt
+  qualification. Return pointer: `docs/qwen25-hy-nomas-frontier.md`, S1280
+  check; DiT remains `docs/hy-nomas-native-frontier.md`.
+- Sequential guarded oracle/native full-prefix runs use the authorized 10%
+  floor, file-cache accounting, 15 GiB sampled process cap, 64 MiB swap-growth
+  stop and 600-second deadline. Named native admission is 12,681,448,704
+  bytes. Observed oracle/native peaks are 14,736,099,344 / 13,606,266,912
+  bytes, minimum estimated cache-aware headroom 17,976,426,496 /
+  19,213,680,640 bytes, with no observed swap growth or guard violation.
+  Sampled limits are not instantaneous reservations. Native encoding has
+  one terminal wait, zero tracked allocations and no pre-terminal reads.
+- Official `oracle-s1280-v1` exits zero; trusted manifest SHA256 is
+  `b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a`.
+  Native `native-prefix-s1280-v1` exits one numerically: embedding is exact,
+  state 1 has 596/4,587,520 failures (max_abs 0.00390625), and accumulated
+  state 26 has 3,965,336 failures (max_abs 28). Do not widen the finite
+  `atol=rtol=2e-5` gate or treat the small initial discrepancy as parity.
+- The one-block diagnostic now accepts layers 0--25 and input/post-attention
+  RMS sites. It preserves authenticated fixture/weight links and bounds,
+  dynamic stage names, raw BF16 diagnostics and the one-wait contract.
+  Official block-0 fixtures reproduce full-prefix state 1 raw-bit exactly.
+  Native stages through attention residual are exact; post-attention norm
+  first differs in 28 raw words (27 finite failures), reproducing the final
+  596-word hidden discrepancy. The new default-input runner passes the
+  old layer-24 S32 fixture with all 17 stages raw-BF16 exact. Focused CPU
+  producer tests pass 29 cases; release build and Crystal formatting pass.
+- The actual official post-attention RMS capture has manifest SHA256
+  `d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9`.
+  On the authenticated identical residual, the native precise trace differs
+  in 670 variance rows (max_abs 2.2351741790771484e-8), 371 inverse-root rows
+  and 50 pre-gain BF16 words. Actual production inverse-root scratch and
+  normalized BF16 scratch are raw-bit exact to that trace after the sole
+  terminal wait. Pre-root production variance has not been exposed; an exact
+  reduction-order cause remains a hypothesis, not a verified conclusion.
+- SSD-only `power(x,2)` and separate materialized-F32-square controls both
+  produce identical variance/root/normalized hashes and all stage discrepancy
+  counts. Reject both as repairs for this case; production math is unchanged.
+  Records, runtime/source pins, reports, command/guard logs and limitations:
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-s1280-receipt-v1.json`.
+  Prior S4/S32 receipts remain historical evidence for their unchanged scope.
+- Correlated MiniQuad review is ROBUST for authenticated layer/site binding,
+  lifecycle reporting and bounded post-RMS localization. It does not establish
+  S1280 parity, an exact reduction-order cause or performance improvement.
+- Next falsifier: isolate same-input F32 square values and mean reduction
+  against the actual production statistics graph, then recheck block 0
+  before repeating all 26 blocks. Outstanding questions are which reduction
+  boundary changes the BF16 rounding and whether later blocks need another
+  localization after that repair. Standing authority covers bounded native
+  and official GPU correctness probes, sequential model residency, unchanged
+  tolerances, a 10% floor and no added host synchronization. No full generation
+  is admitted. Refresh on source, checkpoint/fixture, geometry, precision,
+  compiler/SDK/OS/device or lifecycle changes. No speedup is claimed.

@@ -5,8 +5,10 @@ gate at four and 32 tokens, 2026-10-24. Embedding plus all 26 hidden outputs
 have zero differing BF16 words against the authenticated official MPS BF16
 captures. The earlier state-25 divergence was localized to input RMSNorm and
 repaired with precise Metal square root/reciprocal and explicit BF16 rounding.
-The full text encoder and video pipeline remain in progress. This adapter is
-opt-in; neither a 1280-token prompt nor video generation is qualified here.
+The S1280 check compares all 26 blocks but rejects the unchanged numerical
+gate, first at block 0's post-attention RMSNorm. The full text encoder and
+video pipeline remain in progress. This adapter is opt-in; neither a
+1280-token prompt nor video generation is qualified here.
 
 ## Active pretrained prefix slice
 
@@ -41,6 +43,104 @@ and per-layer hidden comparisons at the unchanged finite gate. Source shard
 hashes, tensor inventory and fixture/runtime provenance must be retained.
 No full model, vision encoder, LM head, last-two-block or video run is admitted.
 Rollback is removal of the opt-in prefix adapter, loader and focused runner.
+
+### S1280 check: rejected at block-0 post-attention RMSNorm
+
+The bounded probe extends only the sequence geometry: 1,280 query rows,
+1,260 visible tokens (the authenticated S32 case's 20 visible IDs repeated
+63 times), 20 right-padding IDs and position offset 7. It has 18 unique
+embedding rows. This is a deterministic numerical stress case, not a natural
+language prompt or tokenizer-integration qualification. The exact aggregate
+native named admission is 12,681,448,704 bytes, including the shared
+549,852,160-byte stage/scratch workspace and all 26 resident BF16 blocks.
+
+Run the official producer and native prefix sequentially, each under the
+file-cache-aware guard with an explicit 10% floor, 15 GiB sampled process cap,
+64 MiB swap-growth stop and 600-second deadline. At 64 GiB physical memory,
+startup therefore requires 21.4 GiB cache-aware headroom. The producer's
+linear estimate and the native named count exclude some quadratic attention
+and runtime resources: one F32 [1,28,1280,1280] score tensor is 183,500,800
+bytes. Neither estimate is a peak-memory guarantee. Stop the owned probe on
+any guard violation; do not lower the floor or run both producers together.
+
+DoD: guarded official capture exits zero; its freshly observed manifest digest
+authenticates the native fixture; guarded `qwen25_pretrained_prefix` compares
+embedding plus all 26 hidden outputs at unchanged `atol=rtol=2e-5`, reports
+one terminal wait, zero tracked encode allocations and no pre-terminal
+activation readbacks. Report raw BF16 differing words separately. A failure
+preserves the report and first failing state for localization, leaving S4/S32
+qualification intact. No video, full generation or additional host wait is
+admitted. External inputs, command records, fixtures and reports live under
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024` with fresh S1280 names.
+
+Initial outcome: `oracle-s1280-v1` exits zero; authenticated manifest SHA256
+is `b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a`.
+`native-prefix-s1280-v1` compares all 27 states and rejects state 1: 596 of
+4,587,520 BF16 words differ, all outside the unchanged gate, with max_abs
+0.00390625. Embedding is raw-bit exact. Error then accumulates, reaching
+3,965,336 failures and max_abs 28 at state 26. The native encode still has
+one terminal wait, zero tracked allocations and no pre-terminal activation
+reads. This is a measured rejection, not an S1280 qualification.
+
+Both sampled guards complete without a limit violation or observed swap
+growth. Oracle/native sampled peaks are 14,736,099,344 / 13,606,266,912 bytes;
+minimum cache-aware headroom is 17,976,426,496 / 19,213,680,640 bytes.
+The indexed one-block diagnostic now supports layers 0--25 and optional input
+or post-attention RMS traces, preserving byte/digest limits and one terminal
+wait. `oracle-block0-s1280-v1` reproduces the full prefix's state 1 bit for bit.
+`native-block0-s1280-v1` is raw-BF16 exact through input norm, Q/K/V, RoPE,
+attention, output projection and attention residual. Its first failing stage
+is `layers.0.post_attention_layernorm`: 28 differing BF16 words, 27 finite
+failures, max_abs 0.001953125. Its final 596 differing words reproduce the
+full-prefix state-1 failure. An input-norm-only internal trace cannot explain
+the later post-attention norm; it is not evidence for that norm's arithmetic.
+The subsequent post-attention trace compares actual official variance,
+epsilon addition, inverse root, F32 scaling and BF16 rounding on that same
+authenticated residual.
+
+`oracle-block0-s1280-post-v1` again reproduces state 1 exactly and captures
+the actual post-attention norm, not a substituted formula. Its authenticated
+manifest SHA256 is
+`d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9`.
+`native-block0-s1280-post-v1` reports 670 differing F32 variance rows with
+max_abs 2.2351741790771484e-8; the same rows differ after epsilon addition.
+Precise inverse root differs in 371 rows, normalized BF16 in 50 words,
+the gained norm in 28 words, and the final hidden output in 596 words.
+The separately compiled precise trace and actual production scratch match
+bit for bit for both inverse root and normalized BF16. Thus the diagnostic
+reproduces the production mismatch; its extra outputs are not evidence of
+an entirely different normalized result. Direct pre-root production statistics
+have not been captured, so intermediate attribution retains that limitation.
+
+An SSD-only control replacing `squareWithTensor` with `power(x, F32(2))`
+produces the same variance, inverse-root and normalized hashes and the same
+596-word hidden discrepancy (`native-block0-s1280-post-power-v1`). Operator
+spelling alone is refuted for this case. An SSD-only materialized-square
+control (`native-block0-s1280-post-materialized-v1`) then separates the
+square graph from mean/epsilon addition, reusing existing SiLU scratch before
+its later write. It also produces the same variance, inverse-root, normalized
+hashes and all stage discrepancy counts. Both controls preserve named bytes,
+one terminal wait and zero tracked encode allocations or pre-terminal reads.
+Materialization at this boundary is therefore also refuted as a repair for
+this fixture; neither experimental bridge is adopted.
+The updated indexed runner also passes the old layer-24 S32/input-site fixture
+with all 17 stages raw-BF16 exact (`native-block24-s32-indexed-regression-v1`).
+The final focused CPU producer suite passes 29 tests, and Crystal formatting
+passes. Production math remains unchanged; the diagnostic extension and
+measured rejection are the completed slice, while S1280 parity remains open.
+
+Correlated MiniQuad review returns ROBUST for fixture binding, indexed/site
+selection, lifecycle constraints and localization; it does not qualify S1280
+parity or establish an exact reduction-order cause. The next falsifier is an
+isolated same-input F32 square/mean capture against the actual production
+statistics graph, distinguishing square values from the reduction itself
+before changing arithmetic. The existing production-root and normalized-BF16
+matches constrain that probe, but do not expose pre-root production variance.
+Refresh these claims on a source, fixture/checkpoint, geometry, precision,
+compiler/SDK/OS/device or buffer-lifecycle change. Curated commands, hashes,
+guard summaries and limitations are indexed in
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-s1280-receipt-v1.json`;
+the index is not itself proof. No generation or performance claim follows.
 
 ### Implemented boundary and observed checks
 

@@ -39,6 +39,19 @@ module ML::GGUF
       check_live!
       @scratch["input_normalized"]
     end
+
+    def diagnostic_rms_normalized(scratch_name : String) : MetalBuffer
+      check_live!
+      unless scratch_name == "input_normalized" || scratch_name == "post_normalized"
+        raise ArgumentError.new("unknown diagnostic RMS normalized scratch: #{scratch_name}")
+      end
+      @scratch[scratch_name]
+    end
+
+    def diagnostic_rms_statistics : MetalBuffer
+      check_live!
+      @scratch["rms_statistics"]
+    end
   end
 end
 
@@ -59,37 +72,11 @@ end
 module Qwen25BlockProbe
   extend self
 
-  LAYER_INDEX             = 24
   MAX_STAGE_SIDECAR_BYTES = 512_i64 * 1024 * 1024
   RMS_SOURCE_SHA256       = "08742a7c82a8713bc22f632f01c97b7eca3ef0e947180e7d6c9beec4897c4ff8"
   RMS_CAPTURE_METHOD      = "TorchDispatchMode pass-through around the official Qwen2RMSNorm.forward call"
-  RMS_STAGE_NAMES         = {
-    "layers.24.input_layernorm.variance_f32",
-    "layers.24.input_layernorm.variance_plus_eps_f32",
-    "layers.24.input_layernorm.rsqrt_f32",
-    "layers.24.input_layernorm.normalized_f32",
-    "layers.24.input_layernorm.normalized_bf16",
-  }
-  STAGE_BINDINGS = [
-    {"rotary_cos", "rotary_cos"},
-    {"rotary_sin", "rotary_sin"},
-    {"layers.24.input_layernorm", "input_norm"},
-    {"layers.24.self_attn.q_proj", "q_proj"},
-    {"layers.24.self_attn.k_proj", "k_proj"},
-    {"layers.24.self_attn.v_proj", "v_proj"},
-    {"post_rope_q", "q_rope"},
-    {"post_rope_k", "k_rope"},
-    {"attended", "attended"},
-    {"layers.24.self_attn.o_proj", "o_proj"},
-    {"residual_after_attention", "residual"},
-    {"layers.24.post_attention_layernorm", "post_norm"},
-    {"layers.24.mlp.gate_proj", "gate_proj"},
-    {"layers.24.mlp.up_proj", "up_proj"},
-    {"silu_product", "silu_product"},
-    {"layers.24.mlp.down_proj", "down_proj"},
-    {"hidden_states_out", "hidden_out"},
-  ]
-  WEIGHT_SUFFIXES = {
+  RMS_SITES               = {"input" => "input_layernorm", "post-attention" => "post_attention_layernorm"}
+  WEIGHT_SUFFIXES         = {
     "input_layernorm.weight", "self_attn.q_proj.weight", "self_attn.q_proj.bias",
     "self_attn.k_proj.weight", "self_attn.k_proj.bias", "self_attn.v_proj.weight",
     "self_attn.v_proj.bias", "self_attn.o_proj.weight", "post_attention_layernorm.weight",
@@ -99,7 +86,8 @@ module Qwen25BlockProbe
   alias Extent = NamedTuple(offset: Int64, nbytes: Int64)
   alias Sample = NamedTuple(index: Int64, actual: String, reference: String)
   alias Comparison = NamedTuple(name: String, elements: Int64, failures: Int64,
-    max_abs: Float64, first_failures: Array(Sample))
+    max_abs: Float64, first_failures: Array(Sample), different_bf16_words: Int64,
+    first_differences: Array(Sample))
   alias RMSComparison = NamedTuple(name: String, dtype: String, elements: Int64,
     failures: Int64, max_abs: Float64, first_failures: Array(Sample),
     different_elements: Int64, first_differences: Array(Sample),
@@ -112,6 +100,49 @@ module Qwen25BlockProbe
     [scalar_bytes, scalar_bytes, scalar_bytes, hidden_f32_bytes, hidden_bf16_bytes]
   end
 
+  def canonical_rms_site(site_argument : String) : String
+    RMS_SITES[site_argument]? || raise ArgumentError.new("RMS site must be input or post-attention")
+  end
+
+  def rms_stage_names(layer_index : Int32, canonical_site : String) : Array(String)
+    unless canonical_site == "input_layernorm" || canonical_site == "post_attention_layernorm"
+      raise ArgumentError.new("unknown canonical RMS site")
+    end
+    prefix = "layers.#{layer_index}.#{canonical_site}."
+    ["#{prefix}variance_f32", "#{prefix}variance_plus_eps_f32",
+     "#{prefix}rsqrt_f32", "#{prefix}normalized_f32", "#{prefix}normalized_bf16"]
+  end
+
+  def rms_input_source(canonical_site : String) : String
+    canonical_site == "input_layernorm" ? "prefix_input" : "residual_after_attention"
+  end
+
+  def rms_scratch_name(canonical_site : String) : String
+    canonical_site == "input_layernorm" ? "input_normalized" : "post_normalized"
+  end
+
+  def stage_bindings(layer_index : Int32) : Array(Tuple(String, String))
+    [
+      {"rotary_cos", "rotary_cos"},
+      {"rotary_sin", "rotary_sin"},
+      {"layers.#{layer_index}.input_layernorm", "input_norm"},
+      {"layers.#{layer_index}.self_attn.q_proj", "q_proj"},
+      {"layers.#{layer_index}.self_attn.k_proj", "k_proj"},
+      {"layers.#{layer_index}.self_attn.v_proj", "v_proj"},
+      {"post_rope_q", "q_rope"},
+      {"post_rope_k", "k_rope"},
+      {"attended", "attended"},
+      {"layers.#{layer_index}.self_attn.o_proj", "o_proj"},
+      {"residual_after_attention", "residual"},
+      {"layers.#{layer_index}.post_attention_layernorm", "post_norm"},
+      {"layers.#{layer_index}.mlp.gate_proj", "gate_proj"},
+      {"layers.#{layer_index}.mlp.up_proj", "up_proj"},
+      {"silu_product", "silu_product"},
+      {"layers.#{layer_index}.mlp.down_proj", "down_proj"},
+      {"hidden_states_out", "hidden_out"},
+    ] of Tuple(String, String)
+  end
+
   class StageFixture
     getter document : JSON::Any
     getter manifest_path : String
@@ -121,12 +152,21 @@ module Qwen25BlockProbe
     getter f32_sidecar_path : String
     getter f32_sidecar : Bytes
     getter layer_index : Int32
+    getter rms_site : String
+    getter rms_stage_names : Array(String)
 
     @extents = {} of String => Extent
     @rms_f32_extents = {} of String => Extent
 
     def initialize(path : String, trusted_sha256 : String,
-                   prefix : Qwen25PrefixProbe::Fixture)
+                   prefix : Qwen25PrefixProbe::Fixture, requested_layer_index : Int32,
+                   requested_rms_site : String = "input")
+      unless 0 <= requested_layer_index < prefix.config.layers &&
+             requested_layer_index + 1 <= Qwen25PrefixProbe::PREFIX_LAYERS
+        raise ArgumentError.new("diagnostic layer must be captured by the authenticated prefix")
+      end
+      @rms_site = Qwen25BlockProbe.canonical_rms_site(requested_rms_site)
+      @rms_stage_names = Qwen25BlockProbe.rms_stage_names(requested_layer_index, @rms_site)
       @manifest_path = File.realpath(path)
       manifest_bytes = File.read(@manifest_path)
       @manifest_sha256 = Digest::SHA256.hexdigest(manifest_bytes)
@@ -140,13 +180,13 @@ module Qwen25BlockProbe
       end
 
       @layer_index = @document["layer"]["index"].as_i
-      raise ArgumentError.new("stage reference is not for decoder layer 24") unless @layer_index == LAYER_INDEX
+      raise ArgumentError.new("stage reference layer differs from requested decoder layer") unless @layer_index == requested_layer_index
       validate_prefix_link!(prefix)
       validate_checkpoint_link!(prefix)
       validate_config_and_inputs!(prefix)
       validate_layer_weights!(prefix)
       validate_stage_records!(prefix.config, prefix.tokens.size)
-      validate_rms_trace!(prefix.config, prefix.tokens.size, prefix)
+      validate_rms_trace!(prefix.config, prefix.tokens.size)
 
       descriptors = @document["sidecars"]
       unless descriptors.as_h.keys.sort == ["bf16", "f32"]
@@ -181,6 +221,7 @@ module Qwen25BlockProbe
         raise ArgumentError.new("RMS trace F32 sidecar digest mismatch")
       end
       validate_input_state!(prefix)
+      validate_rms_input_state!(prefix)
     end
 
     def expected_stage(name : String) : Bytes
@@ -192,7 +233,7 @@ module Qwen25BlockProbe
     end
 
     def expected_rms_stage(name : String) : Bytes
-      if name == RMS_STAGE_NAMES.last
+      if name == @rms_stage_names.last
         return expected_stage("rms:#{name}")
       end
       extent = @rms_f32_extents[name]?
@@ -208,12 +249,12 @@ module Qwen25BlockProbe
       prefix_sidecar_sha = prefix.document["sidecars"]["bf16"]["sha256"].as_s
       raise ArgumentError.new("stage reference prefix-sidecar digest mismatch") unless record["sidecar_sha256"].as_s == prefix_sidecar_sha
       unless record["state_indexing"].as_s == "0=token_embedding; i+1=decoder_layer_i_output" &&
-             record["input_state_index"].as_i == LAYER_INDEX &&
-             record["expected_output_state_index"].as_i == LAYER_INDEX + 1
+             record["input_state_index"].as_i == @layer_index &&
+             record["expected_output_state_index"].as_i == @layer_index + 1
         raise ArgumentError.new("stage reference state indexing mismatch")
       end
-      input = prefix.expected_state(LAYER_INDEX)
-      output = prefix.expected_state(LAYER_INDEX + 1)
+      input = prefix.expected_state(@layer_index)
+      output = prefix.expected_state(@layer_index + 1)
       raise ArgumentError.new("stage reference input-state digest mismatch") unless record["input_state_sha256"].as_s == Digest::SHA256.hexdigest(input)
       raise ArgumentError.new("stage reference output-state digest mismatch") unless record["expected_output_state_sha256"].as_s == Digest::SHA256.hexdigest(output)
     end
@@ -244,7 +285,7 @@ module Qwen25BlockProbe
       shards = @document["layer"]["weights"].as_a.map { |weight| weight["shard"].as_s }.uniq
       expected_names = (["config.json", "model.safetensors.index.json"] + shards).uniq.sort
       unless verified.keys.sort == expected_names
-        raise ArgumentError.new("stage checkpoint files are not exact for layer 24")
+        raise ArgumentError.new("stage checkpoint files are not exact for layer #{@layer_index}")
       end
       prefix_shards = prefix_checkpoint["selected_shards"].as_a.map(&.as_s)
       raise ArgumentError.new("stage references an unselected checkpoint shard") unless shards.all? { |name| prefix_shards.includes?(name) }
@@ -291,8 +332,8 @@ module Qwen25BlockProbe
       seen = Set(String).new
       records.each do |record|
         key = record["key"].as_s
-        prefix_text = "model.layers.#{LAYER_INDEX}."
-        raise ArgumentError.new("stage weight outside layer 24: #{key}") unless key.starts_with?(prefix_text)
+        prefix_text = "model.layers.#{@layer_index}."
+        raise ArgumentError.new("stage weight outside layer #{@layer_index}: #{key}") unless key.starts_with?(prefix_text)
         suffix = key.sub(prefix_text, "")
         raise ArgumentError.new("stage weight name is not selected: #{key}") unless WEIGHT_SUFFIXES.includes?(suffix)
         raise ArgumentError.new("duplicate stage weight: #{key}") if seen.includes?(key)
@@ -311,17 +352,18 @@ module Qwen25BlockProbe
           raise ArgumentError.new("stage weight metadata mismatch: #{key}")
         end
       end
-      expected_names = WEIGHT_SUFFIXES.map { |suffix| "model.layers.#{LAYER_INDEX}.#{suffix}" }.to_set
+      expected_names = WEIGHT_SUFFIXES.map { |suffix| "model.layers.#{@layer_index}.#{suffix}" }.to_set
       raise ArgumentError.new("stage layer weight inventory is incomplete") unless seen == expected_names
     end
 
     private def validate_stage_records!(config : ML::GGUF::Qwen25VLConfig, tokens : Int32) : Nil
       shapes = ML::GGUF::Qwen25VLBlockPlan.stage_shapes(config, tokens)
       records = @document["stages"].as_a
-      raise ArgumentError.new("stage capture count mismatch") unless records.size == STAGE_BINDINGS.size
+      bindings = Qwen25BlockProbe.stage_bindings(@layer_index)
+      raise ArgumentError.new("stage capture count mismatch") unless records.size == bindings.size
       @extents = {} of String => Extent
       records.each_with_index do |record, index|
-        name, binding = STAGE_BINDINGS[index]
+        name, binding = bindings[index]
         raise ArgumentError.new("stage capture order/name mismatch at #{index}") unless record["name"].as_s == name
         raise ArgumentError.new("stage capture dtype mismatch: #{name}") unless record["dtype"].as_s == "bfloat16"
         expected_shape = name.starts_with?("rotary_") ? [tokens, config.head_dim] : shapes[binding]
@@ -345,17 +387,17 @@ module Qwen25BlockProbe
         records = extras.as_a
         raise ArgumentError.new("unexpected optional extra-stage count") unless records.size == 1
         record = records.first
-        unless record["name"].as_s == "layers.24.mlp.act_fn" &&
+        extra_name = "layers.#{@layer_index}.mlp.act_fn"
+        unless record["name"].as_s == extra_name &&
                record["dtype"].as_s == "bfloat16" &&
                record["shape"].as_a.map(&.as_i) == [1, tokens, config.ffn_dim]
           raise ArgumentError.new("unsupported optional extra stage")
         end
-        add_extent!(@extents, "extra:layers.24.mlp.act_fn", record["storage"], "bf16", tokens.to_i64 * config.ffn_dim * 2)
+        add_extent!(@extents, "extra:#{extra_name}", record["storage"], "bf16", tokens.to_i64 * config.ffn_dim * 2)
       end
     end
 
-    private def validate_rms_trace!(config : ML::GGUF::Qwen25VLConfig, tokens : Int32,
-                                    prefix : Qwen25PrefixProbe::Fixture) : Nil
+    private def validate_rms_trace!(config : ML::GGUF::Qwen25VLConfig, tokens : Int32) : Nil
       trace = @document["rms_trace"]
       source = trace["source"]
       unless source["schema_version"].as_i == 1 &&
@@ -364,15 +406,18 @@ module Qwen25BlockProbe
              source["capture_method"].as_s == RMS_CAPTURE_METHOD
         raise ArgumentError.new("RMS trace source identity mismatch")
       end
-      input_sha256 = Digest::SHA256.hexdigest(prefix.expected_state(LAYER_INDEX))
-      raise ArgumentError.new("RMS trace input-state digest mismatch") unless trace["input_state_sha256"].as_s == input_sha256
+      if site = trace["site"]?
+        raise ArgumentError.new("RMS trace site mismatch") unless site.as_s == @rms_site
+      elsif @rms_site != "input_layernorm"
+        raise ArgumentError.new("RMS trace site is required for post-attention diagnostics")
+      end
       records = trace["stages"].as_a
-      raise ArgumentError.new("RMS trace stage count mismatch") unless records.size == RMS_STAGE_NAMES.size
+      raise ArgumentError.new("RMS trace stage count mismatch") unless records.size == @rms_stage_names.size
       @rms_f32_extents = {} of String => Extent
       records.each_with_index do |record, index|
-        name = RMS_STAGE_NAMES[index]
+        name = @rms_stage_names[index]
         raise ArgumentError.new("RMS trace stage order/name mismatch at #{index}") unless record["name"].as_s == name
-        expected_bf16 = index == RMS_STAGE_NAMES.size - 1
+        expected_bf16 = index == @rms_stage_names.size - 1
         expected_dtype = expected_bf16 ? "bfloat16" : "float32"
         expected_sidecar = expected_bf16 ? "bf16" : "f32"
         expected_shape = if index < 3
@@ -389,6 +434,18 @@ module Qwen25BlockProbe
         extents = expected_bf16 ? @extents : @rms_f32_extents
         extent_name = expected_bf16 ? "rms:#{name}" : name
         add_extent!(extents, extent_name, record["storage"], expected_sidecar, expected_bytes)
+      end
+    end
+
+    private def validate_rms_input_state!(prefix : Qwen25PrefixProbe::Fixture) : Nil
+      expected = if @rms_site == "input_layernorm"
+                   prefix.expected_state(@layer_index)
+                 else
+                   expected_stage("residual_after_attention")
+                 end
+      actual_sha256 = Digest::SHA256.hexdigest(expected)
+      unless @document["rms_trace"]["input_state_sha256"].as_s == actual_sha256
+        raise ArgumentError.new("RMS trace selected-site input-state digest mismatch")
       end
     end
 
@@ -418,7 +475,7 @@ module Qwen25BlockProbe
 
     private def validate_input_state!(prefix : Qwen25PrefixProbe::Fixture) : Nil
       actual = expected_stage("hidden_states_in")
-      expected = prefix.expected_state(LAYER_INDEX)
+      expected = prefix.expected_state(@layer_index)
       raise ArgumentError.new("stage sidecar input state differs from authenticated prefix input") unless actual == expected
     end
 
@@ -441,13 +498,21 @@ module Qwen25BlockProbe
       raise ArgumentError.new("BF16 comparison size mismatch for #{name}")
     end
     failures = 0_i64
+    different_words = 0_i64
     maximum = 0.0
-    samples = [] of Sample
+    failure_samples = [] of Sample
+    difference_samples = [] of Sample
     (expected.size // 2).times do |index|
       reference_word = expected[2 * index].to_u32 | (expected[2 * index + 1].to_u32 << 8)
       actual_word = actual[2 * index].to_u32 | (actual[2 * index + 1].to_u32 << 8)
       reference = (reference_word << 16).unsafe_as(Float32).to_f64
       value = (actual_word << 16).unsafe_as(Float32).to_f64
+      if reference_word != actual_word
+        different_words += 1
+        if difference_samples.size < 8
+          difference_samples << {index: index.to_i64, actual: value.to_s, reference: reference.to_s}
+        end
+      end
       difference = (value - reference).abs
       failed = !reference.finite? || !value.finite? ||
                difference > Qwen25PrefixProbe::ATOL + Qwen25PrefixProbe::RTOL * reference.abs
@@ -458,15 +523,16 @@ module Qwen25BlockProbe
       end
       if failed
         failures += 1
-        if samples.size < 8
+        if failure_samples.size < 8
           actual_text = value.finite? ? value.to_s : (value.nan? ? "NaN" : (value > 0 ? "Infinity" : "-Infinity"))
           reference_text = reference.finite? ? reference.to_s : (reference.nan? ? "NaN" : (reference > 0 ? "Infinity" : "-Infinity"))
-          samples << {index: index.to_i64, actual: actual_text, reference: reference_text}
+          failure_samples << {index: index.to_i64, actual: actual_text, reference: reference_text}
         end
       end
     end
     {name: name, elements: (expected.size // 2).to_i64, failures: failures,
-     max_abs: maximum, first_failures: samples}
+     max_abs: maximum, first_failures: failure_samples,
+     different_bf16_words: different_words, first_differences: difference_samples}
   end
 
   def compare_rms_bf16(name : String, expected : Bytes, actual : Bytes) : RMSComparison
@@ -560,15 +626,17 @@ stage_reference = ""
 stage_reference_sha256 = ""
 report_path = ""
 layer_index = -1_i32
+rms_site_argument = "input"
 max_named_bytes = 0_i64
 OptionParser.parse do |parser|
-  parser.banner = "One-block pretrained Qwen2.5-VL layer-24 stage discriminator; use the external memory guard."
+  parser.banner = "One-block pretrained Qwen2.5-VL stage discriminator; use the external memory guard."
   parser.on("--checkpoint-root PATH", "Pinned local safetensors checkpoint") { |value| checkpoint_root = value }
   parser.on("--prefix-reference PATH", "Authenticated upstream prefix manifest") { |value| prefix_reference = value }
   parser.on("--prefix-reference-sha256 SHA256", "Trusted upstream prefix-manifest digest") { |value| prefix_reference_sha256 = value }
   parser.on("--stage-reference PATH", "Authenticated layer stage manifest") { |value| stage_reference = value }
   parser.on("--stage-reference-sha256 SHA256", "Trusted layer stage-manifest digest") { |value| stage_reference_sha256 = value }
-  parser.on("--layer-index N", "Required decoder layer index (24)") { |value| layer_index = value.to_i32 }
+  parser.on("--layer-index N", "Captured decoder layer index (0...26)") { |value| layer_index = value.to_i32 }
+  parser.on("--rms-site SITE", "RMS site: input (default) or post-attention") { |value| rms_site_argument = value }
   parser.on("--report PATH", "New native comparison report") { |value| report_path = value }
   parser.on("--max-named-bytes N", "Aggregate named-buffer admission cap") { |value| max_named_bytes = value.to_i64 }
 end
@@ -577,14 +645,18 @@ if checkpoint_root.empty? || prefix_reference.empty? || prefix_reference_sha256.
    report_path.empty? || max_named_bytes <= 0
   raise ArgumentError.new("checkpoint, both references, layer index, report and positive named-buffer budget required")
 end
-raise ArgumentError.new("only diagnostic decoder layer 24 is supported") unless layer_index == Qwen25BlockProbe::LAYER_INDEX
+raise ArgumentError.new("diagnostic layer must be captured by prefix states 0...26") unless 0 <= layer_index < Qwen25PrefixProbe::PREFIX_LAYERS
+canonical_rms_site = Qwen25BlockProbe.canonical_rms_site(rms_site_argument)
 raise ArgumentError.new("refusing to replace native report") if File.exists?(report_path) || File.symlink?(report_path)
 raise ArgumentError.new("unexpected positional arguments") unless ARGV.empty?
 
 fixture = Qwen25PrefixProbe::Fixture.new(prefix_reference, checkpoint_root, prefix_reference_sha256)
-stage_fixture = Qwen25BlockProbe::StageFixture.new(stage_reference, stage_reference_sha256, fixture)
+stage_fixture = Qwen25BlockProbe::StageFixture.new(
+  stage_reference, stage_reference_sha256, fixture, layer_index, rms_site_argument)
 config = fixture.config
 tokens = fixture.tokens.size
+stage_bindings = Qwen25BlockProbe.stage_bindings(layer_index)
+rms_stage_names = stage_fixture.rms_stage_names
 block_named_bytes = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, tokens, 1)
 rms_output_bytes = Qwen25BlockProbe.rms_trace_buffer_bytes(config, tokens)
 rms_trace_named_bytes = rms_output_bytes.sum
@@ -592,7 +664,7 @@ rms_precise_trace_named_bytes = rms_output_bytes.sum
 rms_named_bytes = rms_trace_named_bytes + rms_precise_trace_named_bytes
 named_bytes = block_named_bytes + rms_named_bytes
 raise ArgumentError.new("one-block diagnostic and both RMS traces exceed aggregate named-buffer budget") unless named_bytes <= max_named_bytes
-STDERR.puts "admitted #{named_bytes} named bytes for layer 24 and both RMS traces, #{tokens} tokens"
+STDERR.puts "admitted #{named_bytes} named bytes for layer #{layer_index}, #{canonical_rms_site}, and both RMS traces, #{tokens} tokens"
 
 weights : ML::GGUF::Qwen25VLWeights? = nil
 owned = [] of ML::MetalBuffer
@@ -634,6 +706,11 @@ begin
   layer_weights.each_value { |buffer| owned << buffer }
   block = ML::GGUF::Qwen25VLBlockPlan.new(config, token_count, input, mask,
     positions, inv_freq, layer_weights, layer_index)
+  rms_input = if canonical_rms_site == "input_layernorm"
+                input
+              else
+                block.not_nil!.stage("residual")
+              end
 
   rms_trace_outputs = [] of ML::MetalBuffer
   rms_output_bytes.each do |byte_size|
@@ -652,12 +729,12 @@ begin
   {% unless flag?(:cpu_only) %}
     rms_trace_native = ML::GGUF::Qwen25MPSFFI.rms_trace_create(
       ML::Metal::Device.instance.device_handle, 1, token_count, config.dim,
-      config.rms_norm_eps, input.handle, rms_trace_handles.to_unsafe,
+      config.rms_norm_eps, rms_input.handle, rms_trace_handles.to_unsafe,
       rms_trace_error.to_unsafe, rms_trace_error.size)
     raise "Qwen2.5-VL RMS trace preparation failed: #{String.new(rms_trace_error.to_unsafe)}" if rms_trace_native.null?
     rms_precise_trace_native = ML::GGUF::Qwen25MPSFFI.rms_precise_trace_create(
       ML::Metal::Device.instance.device_handle, 1, token_count, config.dim,
-      config.rms_norm_eps, input.handle, rms_precise_trace_handles.to_unsafe,
+      config.rms_norm_eps, rms_input.handle, rms_precise_trace_handles.to_unsafe,
       rms_precise_trace_error.to_unsafe, rms_precise_trace_error.size)
     raise "Qwen2.5-VL precise RMS trace preparation failed: #{String.new(rms_precise_trace_error.to_unsafe)}" if rms_precise_trace_native.null?
   {% else %}
@@ -667,6 +744,7 @@ begin
   chain = ML::Metal::MPSCommandChain.new
   allocations_before = ML::MetalBuffer.qwen25_block_probe_allocations
   encode_started = Time.instant
+  block.not_nil!.encode(chain) if canonical_rms_site == "post_attention_layernorm"
   {% unless flag?(:cpu_only) %}
     chain.pause!
     rms_trace_status = ML::GGUF::Qwen25MPSFFI.encode(
@@ -682,7 +760,7 @@ begin
   {% else %}
     raise "Metal disabled (cpu_only)"
   {% end %}
-  block.encode(chain)
+  block.not_nil!.encode(chain) if canonical_rms_site == "input_layernorm"
   encode_seconds = (Time.instant - encode_started).total_seconds
   encode_allocations = ML::MetalBuffer.qwen25_block_probe_allocations - allocations_before
   raise "encoding allocated named Metal buffers" unless encode_allocations == 0
@@ -695,7 +773,7 @@ begin
   # Every activation readback below occurs after the sole terminal wait.
   comparisons = [] of Qwen25BlockProbe::Comparison
   stage_outputs = {} of String => Bytes
-  Qwen25BlockProbe::STAGE_BINDINGS.each do |reference_name, binding|
+  stage_bindings.each do |reference_name, binding|
     expected = stage_fixture.expected_stage(reference_name)
     actual = Qwen25BlockProbe.read_buffer(block.stage(binding))
     stage_outputs[binding] = actual
@@ -704,36 +782,39 @@ begin
   output_expected = fixture.expected_state(layer_index + 1)
   # hidden_out is already the final stage binding, so reuse its one readback.
   output_actual = stage_outputs["hidden_out"]
-  output_comparison = Qwen25BlockProbe.compare("prefix_expected_state_25", output_expected, output_actual)
+  output_comparison = Qwen25BlockProbe.compare("prefix_expected_state_#{layer_index + 1}", output_expected, output_actual)
   failures = comparisons.select { |comparison| comparison[:failures] > 0 }
   output_passed = output_comparison[:failures] == 0
 
   rms_comparisons = [] of Qwen25BlockProbe::RMSComparison
   rms_trace_actuals = {} of String => Bytes
-  Qwen25BlockProbe::RMS_STAGE_NAMES.each_with_index do |name, index|
+  rms_stage_names.each_with_index do |name, index|
     expected = stage_fixture.expected_rms_stage(name)
     actual = Qwen25BlockProbe.read_buffer(rms_trace_outputs[index])
     rms_trace_actuals[name] = actual
-    comparison = if index == Qwen25BlockProbe::RMS_STAGE_NAMES.size - 1
+    comparison = if index == rms_stage_names.size - 1
                    Qwen25BlockProbe.compare_rms_bf16(name, expected, actual)
                  else
                    Qwen25BlockProbe.compare_rms_f32(name, expected, actual)
                  end
     rms_comparisons << comparison
   end
-  scratch_actual = Qwen25BlockProbe.read_buffer(block.diagnostic_input_normalized)
+  scratch_name = Qwen25BlockProbe.rms_scratch_name(canonical_rms_site)
+  scratch_actual = Qwen25BlockProbe.read_buffer(block.diagnostic_rms_normalized(scratch_name))
   legacy_scratch_comparison = Qwen25BlockProbe.compare_rms_bf16(
-    "block_input_normalized_vs_legacy_graph_trace",
-    rms_trace_actuals[Qwen25BlockProbe::RMS_STAGE_NAMES.last], scratch_actual)
+    "block_#{canonical_rms_site}_normalized_vs_legacy_graph_trace",
+    rms_trace_actuals[rms_stage_names.last], scratch_actual)
   legacy_rms_passed = rms_comparisons.all? { |comparison| comparison[:failures] == 0 }
 
   rms_precise_comparisons = [] of Qwen25BlockProbe::RMSComparison
+  rms_precise_trace_actuals = [] of Bytes
   precise_normalized_actual = Bytes.empty
-  Qwen25BlockProbe::RMS_STAGE_NAMES.each_with_index do |name, index|
+  rms_stage_names.each_with_index do |name, index|
     expected = stage_fixture.expected_rms_stage(name)
     actual = Qwen25BlockProbe.read_buffer(rms_precise_trace_outputs[index])
-    precise_normalized_actual = actual if index == Qwen25BlockProbe::RMS_STAGE_NAMES.size - 1
-    comparison = if index == Qwen25BlockProbe::RMS_STAGE_NAMES.size - 1
+    rms_precise_trace_actuals << actual
+    precise_normalized_actual = actual if index == rms_stage_names.size - 1
+    comparison = if index == rms_stage_names.size - 1
                    Qwen25BlockProbe.compare_rms_bf16(name, expected, actual)
                  else
                    Qwen25BlockProbe.compare_rms_f32(name, expected, actual)
@@ -744,9 +825,18 @@ begin
   rms_precise_passed = rms_precise_comparisons.all? { |comparison| comparison[:failures] == 0 } &&
                        precise_normalized_bf16_exact
   scratch_comparison = Qwen25BlockProbe.compare_rms_bf16(
-    "block_input_normalized_vs_precise_trace", precise_normalized_actual, scratch_actual)
+    "block_#{canonical_rms_site}_normalized_vs_precise_trace", precise_normalized_actual, scratch_actual)
   scratch_bitwise_equal = scratch_comparison[:different_elements] == 0
-  rms_passed = rms_precise_passed && scratch_bitwise_equal
+  production_root_comparison : Qwen25BlockProbe::RMSComparison? = nil
+  production_root_bitwise_equal = true
+  if canonical_rms_site == "post_attention_layernorm"
+    production_root_actual = Qwen25BlockProbe.read_buffer(block.diagnostic_rms_statistics)
+    production_root_comparison = Qwen25BlockProbe.compare_rms_f32(
+      "production_post_attention_inverse_root_vs_precise_trace_rsqrt_f32",
+      rms_precise_trace_actuals[2], production_root_actual)
+    production_root_bitwise_equal = production_root_comparison.not_nil![:different_elements] == 0
+  end
+  rms_passed = rms_precise_passed && scratch_bitwise_equal && production_root_bitwise_equal
 
   File.write(report_path, JSON.build(indent: "  ") do |json|
     json.object do
@@ -758,6 +848,9 @@ begin
       json.field "stage_reference", stage_fixture.manifest_path
       json.field "stage_reference_sha256", stage_fixture.manifest_sha256
       json.field "layer_index", layer_index
+      json.field "expected_output_state_index", layer_index + 1
+      json.field "rms_site", canonical_rms_site
+      json.field "rms_input_source", Qwen25BlockProbe.rms_input_source(canonical_rms_site)
       json.field "tokens", tokens
       json.field "named_bytes", named_bytes
       json.field "block_named_bytes", block_named_bytes
@@ -765,7 +858,8 @@ begin
       json.field "rms_precise_trace_named_bytes", rms_precise_trace_named_bytes
       json.field "named_allocations_during_encode", encode_allocations
       json.field "terminal_wait_count", chain.wait_count
-      json.field "diagnostic_readbacks_after_terminal_wait", comparisons.size + rms_comparisons.size + rms_precise_comparisons.size + 1
+      json.field "diagnostic_readbacks_after_terminal_wait",
+        comparisons.size + rms_comparisons.size + rms_precise_comparisons.size + 1 + (production_root_comparison ? 1 : 0)
       json.field "activation_readbacks_before_terminal_wait", 0
       json.field "encode_seconds", encode_seconds
       json.field "terminal_wait_seconds", wait_seconds
@@ -782,13 +876,16 @@ begin
       json.field "legacy_rms_block_scratch_comparison", legacy_scratch_comparison
       json.field "rms_block_scratch_comparison", scratch_comparison
       json.field "rms_block_scratch_bitwise_equal", scratch_bitwise_equal
+      json.field "production_root_vs_trace_checked", !production_root_comparison.nil?
+      json.field "production_root_vs_trace_bitwise_equal", production_root_bitwise_equal if production_root_comparison
+      json.field "production_root_vs_trace_comparison", production_root_comparison.not_nil! if production_root_comparison
       json.field "rms_trace_passed", rms_passed
       json.field "rms_precise_trace_comparisons", rms_precise_comparisons
       json.field "rms_precise_normalized_bf16_exact_official", precise_normalized_bf16_exact
       json.field "rms_precise_trace_passed", rms_precise_passed
       json.field "first_mismatch_stage", failures.first?.try(&.[:name])
       json.field "all_stages_passed", failures.empty?
-      json.field "standalone_output_matches_prefix_state_25", output_passed
+      json.field "standalone_output_matches_prefix_state", output_passed
       json.field "authenticated_extra_stages_not_native_bindings",
         stage_fixture.document["extra_stages"]?.try(&.as_a.map { |record| record["name"].as_s }) || [] of String
       json.field "passed", failures.empty? && output_passed && rms_passed
@@ -798,15 +895,16 @@ begin
   puts output_comparison.to_json
   rms_comparisons.each { |comparison| puts comparison.to_json }
   puts scratch_comparison.to_json
+  puts production_root_comparison.not_nil!.to_json if production_root_comparison
   puts legacy_scratch_comparison.to_json
   rms_precise_comparisons.each { |comparison| puts comparison.to_json }
   unless failures.empty?
-    raise "layer 24 first mismatch at captured stage #{failures.first[:name]} (#{failures.first[:failures]} elements)"
+    raise "layer #{layer_index} first mismatch at captured stage #{failures.first[:name]} (#{failures.first[:failures]} elements)"
   end
-  raise "standalone layer 24 output differs from authenticated prefix state 25" unless output_passed
-  raise "layer-24 RMS trace or normalized scratch comparison failed" unless rms_passed
-  raise "precise layer-24 RMS trace differs from the authenticated official stages" unless rms_precise_passed
-  puts "PASS: all 17 layer-24 stages, precise RMS trace, production normalized scratch, and standalone output match; legacy trace reported separately; one terminal wait; zero named allocations during encode"
+  raise "standalone layer #{layer_index} output differs from authenticated prefix state #{layer_index + 1}" unless output_passed
+  raise "layer #{layer_index} RMS trace or normalized scratch comparison failed" unless rms_passed
+  raise "precise layer #{layer_index} RMS trace differs from the authenticated official stages" unless rms_precise_passed
+  puts "PASS: all 17 layer-#{layer_index} stages, precise #{canonical_rms_site} trace, production RMS scratch, and standalone output match; legacy trace reported separately; one terminal wait; zero named allocations during encode"
 ensure
   Qwen25PrefixProbe.cleanup_after_drain(chain) do
     block.try(&.release)

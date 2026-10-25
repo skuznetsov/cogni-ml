@@ -46,7 +46,7 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
             manifest_path.write_bytes(manifest_bytes)
             trusted_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
 
-            with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256", trusted_sha256):
+            with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256S", frozenset({trusted_sha256})):
                 snapshot = reference._read_prefix_snapshot(
                     manifest_path,
                     trusted_sha256,
@@ -75,7 +75,7 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
                 nonlocal validator_called
                 validator_called = True
 
-            with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256", "a" * 64):
+            with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256S", frozenset({"a" * 64})):
                 with self.assertRaisesRegex(ValueError, "trusted prefix manifest digest"):
                     reference._read_prefix_snapshot(manifest_path, "b" * 64, validator)
             self.assertFalse(validator_called)
@@ -107,9 +107,17 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
                 manifest_path = root / "prefix.json"
                 manifest_path.write_bytes(encoded)
                 digest = hashlib.sha256(encoded).hexdigest()
-                with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256", digest):
+                with mock.patch.object(reference, "TRUSTED_PREFIX_SHA256S", frozenset({digest})):
                     with self.assertRaises(ValueError):
                         reference._read_prefix_snapshot(manifest_path, digest, lambda _value: None)
+
+    def test_trusted_prefix_digests_include_the_authenticated_s1280_fixture(self):
+        self.assertIn(reference.TRUSTED_PREFIX_SHA256, reference.TRUSTED_PREFIX_SHA256S)
+        self.assertEqual(
+            reference.TRUSTED_PREFIX_S1280_SHA256,
+            "b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a",
+        )
+        self.assertIn(reference.TRUSTED_PREFIX_S1280_SHA256, reference.TRUSTED_PREFIX_SHA256S)
 
     def test_layer_index_is_bounded_to_the_authenticated_prefix(self):
         self.assertEqual(reference._validate_layer_index(0), 0)
@@ -176,6 +184,70 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "source record is missing or changed"):
             reference._verified_rms_source_sha256({source: {"sha256": "0" * 64}})
+
+    def test_rms_trace_names_and_dtypes_follow_non24_layer_index(self):
+        stages = {name: object() for name in reference.RMS_TRACE_STAGE_SUFFIXES}
+        entries = reference._qualified_rms_trace_entries(0, stages)
+
+        self.assertEqual(
+            [name for name, _, _ in entries],
+            [f"layers.0.input_layernorm.{name}" for name in reference.RMS_TRACE_STAGE_SUFFIXES],
+        )
+        self.assertEqual(
+            [dtype for _, _, dtype in entries],
+            ["float32", "float32", "float32", "float32", "bfloat16"],
+        )
+        self.assertEqual(
+            set(reference._rms_trace_shapes(0, 2, 4)),
+            {name for name, _, _ in entries},
+        )
+        with self.assertRaisesRegex(RuntimeError, "inventory differs"):
+            reference._qualified_rms_trace_entries(0, {"variance_f32": object()})
+
+    def test_post_attention_rms_site_is_selectable_and_authenticates_residual_input(self):
+        common = ["--checkpoint-root", "/checkpoint", "--checkpoint-receipt", "/receipt",
+                  "--prefix-reference", "/prefix.json", "--prefix-reference-sha256", "a" * 64,
+                  "--output", "/output.json"]
+        default_args = reference._parse_args(common)
+        post_args = reference._parse_args(common + ["--rms-site", "post-attention"])
+
+        self.assertEqual(default_args.rms_site, "input")
+        self.assertEqual(reference._normalize_rms_site(default_args.rms_site), "input_layernorm")
+        self.assertEqual(
+            reference._normalize_rms_site(post_args.rms_site), "post_attention_layernorm"
+        )
+
+        stages = {name: object() for name in reference.RMS_TRACE_STAGE_SUFFIXES}
+        entries = reference._qualified_rms_trace_entries(
+            0, stages, "post_attention_layernorm"
+        )
+        self.assertEqual(
+            [name for name, _, _ in entries],
+            [f"layers.0.post_attention_layernorm.{name}" for name in reference.RMS_TRACE_STAGE_SUFFIXES],
+        )
+        self.assertEqual(
+            set(reference._rms_trace_shapes(0, 2, 4, "post_attention_layernorm")),
+            {name for name, _, _ in entries},
+        )
+
+        prefix_input = bytes.fromhex("01020304")
+        residual_input = bytes.fromhex("05060708")
+        self.assertEqual(
+            reference._validate_rms_input_binding(
+                "post_attention_layernorm", residual_input, prefix_input, residual_input, 0
+            ),
+            hashlib.sha256(residual_input).hexdigest(),
+        )
+        with self.assertRaisesRegex(RuntimeError, "differs from captured residual_after_attention"):
+            reference._validate_rms_input_binding(
+                "post_attention_layernorm", prefix_input, prefix_input, residual_input, 0
+            )
+        self.assertEqual(
+            reference._validate_rms_input_binding(
+                "input_layernorm", prefix_input, prefix_input, residual_input, 0
+            ),
+            hashlib.sha256(prefix_input).hexdigest(),
+        )
 
     def test_rms_dispatch_observer_records_actual_cpu_ops_without_replacing_them(self):
         import torch
@@ -247,7 +319,7 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
             self.assertEqual(saved["sidecars"]["f32"]["nbytes"], len(f32_payload))
             self.assertEqual(saved["sidecars"]["f32"]["sha256"], hashlib.sha256(f32_payload).hexdigest())
 
-    def test_selected_weight_digests_must_match_the_prefix_certificate(self):
+    def test_selected_weight_digests_must_match_the_prefix_certificate_for_layer0(self):
         producer = reference._load_pretrained_producer()
         names = (
             "input_layernorm.weight",
@@ -267,7 +339,7 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
         for name in names:
             shape = producer._expected_weight_shape(name)
             sources.append({
-                "key": f"model.layers.24.{name}",
+                "key": f"model.layers.0.{name}",
                 "shard": "model-00004-of-00005.safetensors",
                 "dtype": "BF16",
                 "shape": shape,
@@ -275,11 +347,11 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
                 "tensor_sha256": "a" * 64,
             })
         document = {"weight_sources": [dict(source) for source in sources]}
-        reference._validate_layer_weight_digests(sources, document, 24)
+        reference._validate_layer_weight_digests(sources, document, 0)
 
         sources[3]["tensor_sha256"] = "b" * 64
         with self.assertRaisesRegex(ValueError, "trusted prefix"):
-            reference._validate_layer_weight_digests(sources, document, 24)
+            reference._validate_layer_weight_digests(sources, document, 0)
 
     def test_forward_path_has_one_terminal_mps_synchronization(self):
         tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
@@ -307,7 +379,7 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
         self.assertLess(capture.lineno, sync.lineno)
         self.assertGreater(post_wait_readback.lineno, sync.lineno)
 
-    def test_extracts_input_h24_and_expected_output_h25_without_repacking(self):
+    def test_extracts_indexed_input_and_expected_output_without_repacking(self):
         producer = reference._load_pretrained_producer()
         hidden_size = producer.REAL_TEXT_GEOMETRY["hidden_size"]
         states = [index.to_bytes(2, "little") * hidden_size for index in range(27)]
@@ -325,14 +397,16 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
         }
         snapshot = {"document": document, "sidecar_bytes": b"".join(states)}
 
-        input_state, expected_output, full_shape, request = reference._prefix_state_bytes(
-            snapshot, 24, producer
-        )
+        for layer_index in (0, 24):
+            with self.subTest(layer_index=layer_index):
+                input_state, expected_output, full_shape, request = reference._prefix_state_bytes(
+                    snapshot, layer_index, producer
+                )
 
-        self.assertEqual(input_state, states[24])
-        self.assertEqual(expected_output, states[25])
-        self.assertEqual(full_shape, [27, 1, 1, hidden_size])
-        self.assertEqual(request["sequence_length"], 1)
+                self.assertEqual(input_state, states[layer_index])
+                self.assertEqual(expected_output, states[layer_index + 1])
+                self.assertEqual(full_shape, [27, 1, 1, hidden_size])
+                self.assertEqual(request["sequence_length"], 1)
         with self.assertRaisesRegex(ValueError, "layer index"):
             reference._prefix_state_bytes(snapshot, 26, producer)
 
