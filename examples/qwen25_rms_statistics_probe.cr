@@ -9,7 +9,8 @@ require "../src/ml/gguf/qwen25_hy_nomas"
   lib Qwen25RMSStatisticsProbeFFI
     fun create = gs_qwen25_mps_rms_statistics_probe_create(
       device : Void*, batches : Int32, tokens : Int32, dim : Int32,
-      epsilon : Float32, input : Void*, upstream_square : Void*, outputs : Void**,
+      epsilon : Float32, input : Void*, upstream_square : Void*,
+      power_exponent : Void*, power_exponent_int64 : Void*, outputs : Void**,
       error : UInt8*, error_capacity : LibC::SizeT,
     ) : Void*
   end
@@ -82,6 +83,8 @@ STDERR.puts "admitted #{named_bytes} named bytes for isolated layer-0 post-atten
 upstream_square_raw = reference.expected("square_f32")
 expected_square_bytes = source.tokens.to_i64 * source.dim * 4
 raise ArgumentError.new("authenticated upstream square has unexpected byte length") unless upstream_square_raw.size == expected_square_bytes
+power_exponent_raw = Qwen25RMSStatisticsProbe.exponent_two_f32le
+power_exponent_int64_raw = Qwen25RMSStatisticsProbe.exponent_two_i64le
 
 owned = [] of ML::MetalBuffer
 plan = Pointer(Void).null
@@ -96,6 +99,12 @@ begin
   upstream_square = ML::MetalBuffer.new(upstream_square_raw.size.to_i64)
   owned << upstream_square
   upstream_square.write_bytes(upstream_square_raw.to_unsafe, upstream_square_raw.size)
+  power_exponent = ML::MetalBuffer.new(power_exponent_raw.size.to_i64)
+  owned << power_exponent
+  power_exponent.write_bytes(power_exponent_raw.to_unsafe, power_exponent_raw.size)
+  power_exponent_int64 = ML::MetalBuffer.new(power_exponent_int64_raw.size.to_i64)
+  owned << power_exponent_int64
+  power_exponent_int64.write_bytes(power_exponent_int64_raw.to_unsafe, power_exponent_int64_raw.size)
 
   tokens = source.tokens
   dim = source.dim
@@ -108,6 +117,15 @@ begin
     tokens.to_i64 * 4,       # compile optimization level 0 plus epsilon
     tokens.to_i64 * 4,       # upstream-square materialized variance
     tokens.to_i64 * 4,       # upstream-square materialized variance + epsilon
+    tokens.to_i64 * dim * 4, # F32-[1]-buffer exponent power panel
+    tokens.to_i64 * 4,       # F32-buffer exponent variance
+    tokens.to_i64 * 4,       # F32-buffer exponent variance + epsilon
+    tokens.to_i64 * dim * 4, # matched constant exponent power panel
+    tokens.to_i64 * 4,       # constant exponent variance
+    tokens.to_i64 * 4,       # constant exponent variance + epsilon
+    tokens.to_i64 * dim * 4, # Int64-[1]-buffer exponent cast to F32 power panel
+    tokens.to_i64 * 4,       # Int64-buffer exponent variance
+    tokens.to_i64 * 4,       # Int64-buffer exponent variance + epsilon
   ]
   output_sizes.each do |bytes|
     buffer = ML::MetalBuffer.new(bytes)
@@ -119,7 +137,8 @@ begin
   {% unless flag?(:cpu_only) %}
     plan = Qwen25RMSStatisticsProbeFFI.create(
       ML::Metal::Device.instance.device_handle, 1, tokens, dim,
-      source.epsilon, input.handle, upstream_square.handle, output_handles.to_unsafe,
+      source.epsilon, input.handle, upstream_square.handle,
+      power_exponent.handle, power_exponent_int64.handle, output_handles.to_unsafe,
       native_error.to_unsafe, native_error.size)
     raise "Qwen2.5-VL RMS statistics probe preparation failed: #{String.new(native_error.to_unsafe)}" if plan.null?
   {% else %}
@@ -157,6 +176,15 @@ begin
   optimization0_plus_epsilon_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[5])
   upstream_square_variance_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[6])
   upstream_square_plus_epsilon_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[7])
+  fed_exponent_square_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[8])
+  fed_exponent_variance_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[9])
+  fed_exponent_plus_epsilon_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[10])
+  constant_exponent_square_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[11])
+  constant_exponent_variance_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[12])
+  constant_exponent_plus_epsilon_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[13])
+  int64_exponent_square_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[14])
+  int64_exponent_variance_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[15])
+  int64_exponent_plus_epsilon_f32 = Qwen25RMSStatisticsProbeRunner.read_buffer(output_buffers[16])
 
   row_width = dim.to_i64
   comparisons = [
@@ -168,6 +196,18 @@ begin
     Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_plus_eps_f32", optimization0_plus_epsilon_f32, 1_i64),
     Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_f32", upstream_square_variance_f32, 1_i64),
     Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_plus_eps_f32", upstream_square_plus_epsilon_f32, 1_i64),
+    Qwen25RMSStatisticsProbe.compare_f32(
+      "f32_fed_exponent_power_panel", reference.expected("square_f32"), fed_exponent_square_f32, row_width),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_f32", fed_exponent_variance_f32, 1_i64),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_plus_eps_f32", fed_exponent_plus_epsilon_f32, 1_i64),
+    Qwen25RMSStatisticsProbe.compare_f32(
+      "f32_constant_exponent_power_panel", reference.expected("square_f32"), constant_exponent_square_f32, row_width),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_f32", constant_exponent_variance_f32, 1_i64),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_plus_eps_f32", constant_exponent_plus_epsilon_f32, 1_i64),
+    Qwen25RMSStatisticsProbe.compare_f32(
+      "int64_fed_exponent_power_panel", reference.expected("square_f32"), int64_exponent_square_f32, row_width),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_f32", int64_exponent_variance_f32, 1_i64),
+    Qwen25RMSStatisticsProbeRunner.compare(reference, "variance_plus_eps_f32", int64_exponent_plus_epsilon_f32, 1_i64),
   ]
   production_vs_materialized = Qwen25RMSStatisticsProbe.compare_f32(
     "materialized_plus_eps_vs_direct_production_plus_eps",
@@ -184,23 +224,53 @@ begin
   same_reduction_square_plus_epsilon = Qwen25RMSStatisticsProbe.compare_f32(
     "native_square_materialized_plus_eps_vs_upstream_square_materialized_plus_eps",
     materialized_plus_epsilon_f32, upstream_square_plus_epsilon_f32, 1_i64)
+  fed_vs_constant_power_panel = Qwen25RMSStatisticsProbe.compare_f32(
+    "f32_fed_vs_constant_exponent_power_panel",
+    constant_exponent_square_f32, fed_exponent_square_f32, row_width)
+  fed_vs_constant_variance = Qwen25RMSStatisticsProbe.compare_f32(
+    "f32_fed_vs_constant_exponent_variance",
+    constant_exponent_variance_f32, fed_exponent_variance_f32, 1_i64)
+  fed_vs_constant_plus_epsilon = Qwen25RMSStatisticsProbe.compare_f32(
+    "f32_fed_vs_constant_exponent_plus_epsilon",
+    constant_exponent_plus_epsilon_f32, fed_exponent_plus_epsilon_f32, 1_i64)
+  torch_scalar_route_vs_f32_fed_power_panel = Qwen25RMSStatisticsProbe.compare_f32(
+    "torch_int64_scalar_route_vs_f32_fed_power_panel",
+    int64_exponent_square_f32, fed_exponent_square_f32, row_width)
+  torch_scalar_route_vs_f32_fed_variance = Qwen25RMSStatisticsProbe.compare_f32(
+    "torch_int64_scalar_route_vs_f32_fed_variance",
+    int64_exponent_variance_f32, fed_exponent_variance_f32, 1_i64)
+  torch_scalar_route_vs_f32_fed_plus_epsilon = Qwen25RMSStatisticsProbe.compare_f32(
+    "torch_int64_scalar_route_vs_f32_fed_plus_epsilon",
+    int64_exponent_plus_epsilon_f32, fed_exponent_plus_epsilon_f32, 1_i64)
   finite_gate_passed = comparisons.all? { |comparison| comparison[:finite_failures] == 0 } &&
                        production_vs_materialized[:finite_failures] == 0 &&
                        optimization0_vs_production[:finite_failures] == 0 &&
                        upstream_square_vs_production[:finite_failures] == 0 &&
                        same_reduction_square_variance[:finite_failures] == 0 &&
-                       same_reduction_square_plus_epsilon[:finite_failures] == 0
+                       same_reduction_square_plus_epsilon[:finite_failures] == 0 &&
+                       fed_vs_constant_power_panel[:finite_failures] == 0 &&
+                       fed_vs_constant_variance[:finite_failures] == 0 &&
+                       fed_vs_constant_plus_epsilon[:finite_failures] == 0 &&
+                       torch_scalar_route_vs_f32_fed_power_panel[:finite_failures] == 0 &&
+                       torch_scalar_route_vs_f32_fed_variance[:finite_failures] == 0 &&
+                       torch_scalar_route_vs_f32_fed_plus_epsilon[:finite_failures] == 0
   raw_gate_passed = comparisons.all? { |comparison| comparison[:raw_unequal] == 0 } &&
                     production_vs_materialized[:raw_unequal] == 0 &&
                     optimization0_vs_production[:raw_unequal] == 0 &&
                     upstream_square_vs_production[:raw_unequal] == 0 &&
                     same_reduction_square_variance[:raw_unequal] == 0 &&
-                    same_reduction_square_plus_epsilon[:raw_unequal] == 0
+                    same_reduction_square_plus_epsilon[:raw_unequal] == 0 &&
+                    fed_vs_constant_power_panel[:raw_unequal] == 0 &&
+                    fed_vs_constant_variance[:raw_unequal] == 0 &&
+                    fed_vs_constant_plus_epsilon[:raw_unequal] == 0 &&
+                    torch_scalar_route_vs_f32_fed_power_panel[:raw_unequal] == 0 &&
+                    torch_scalar_route_vs_f32_fed_variance[:raw_unequal] == 0 &&
+                    torch_scalar_route_vs_f32_fed_plus_epsilon[:raw_unequal] == 0
 
   report = JSON.build(indent: "  ") do |json|
     json.object do
       json.field "schema", "cogni_ml.qwen25_vl_pretrained_rms_statistics_native_probe"
-      json.field "schema_version", 1
+      json.field "schema_version", 3
       json.field "probe_complete", true
       json.field "source_stage_manifest", source.path
       json.field "source_stage_manifest_sha256", source.manifest_sha256
@@ -210,6 +280,19 @@ begin
       json.field "rms_reference_input_sha256", reference.input_sha256
       json.field "authenticated_upstream_square_sha256", Digest::SHA256.hexdigest(upstream_square_raw)
       json.field "authenticated_upstream_square_uploaded_bytes", upstream_square_raw.size
+      exponent_control = Qwen25RMSStatisticsProbe::EXPONENT_POWER_CONTROL
+      json.field "f32_power_exponent", exponent_control[:value]
+      json.field "f32_power_exponent_dtype", exponent_control[:dtype]
+      json.field "f32_power_exponent_shape", exponent_control[:shape]
+      json.field "f32_power_exponent_bits", exponent_control[:bits]
+      json.field "f32_power_exponent_buffer_sha256", Digest::SHA256.hexdigest(power_exponent_raw)
+      json.field "f32_power_exponent_buffer_uploaded_bytes", power_exponent_raw.size
+      json.field "torch_scalar_power_exponent_dtype", exponent_control[:torch_source_scalar_dtype]
+      json.field "torch_scalar_power_exponent_shape", exponent_control[:torch_source_scalar_shape]
+      json.field "torch_scalar_power_exponent_raw_sha256", Digest::SHA256.hexdigest(power_exponent_int64_raw)
+      json.field "torch_scalar_power_exponent_uploaded_bytes", power_exponent_int64_raw.size
+      json.field "torch_scalar_lowering_source_commit", Qwen25RMSStatisticsProbe::TORCH_SOURCE_COMMIT
+      json.field "torch_scalar_lowering_source_note_sha256", Qwen25RMSStatisticsProbe::TORCH_SCALAR_LOWERING_SOURCE_SHA256
       json.field "source_bf16_sidecar_sha256", source.bf16_sidecar_sha256
       json.field "source_f32_sidecar_sha256", source.f32_sidecar_sha256
       json.field "rms_f32_sidecar_sha256", reference.f32_sidecar_sha256
@@ -226,7 +309,7 @@ begin
       json.field "named_allocations_during_encode", encode_allocations
       json.field "terminal_wait_count", chain.wait_count
       json.field "diagnostic_readbacks_before_terminal_wait", 0
-      json.field "diagnostic_readbacks_after_terminal_wait", 8
+      json.field "diagnostic_readbacks_after_terminal_wait", 17
       json.field "encode_seconds", encode_seconds
       json.field "terminal_wait_seconds", wait_seconds
       json.field "gpu_elapsed_seconds", chain.gpu_elapsed_seconds
@@ -238,6 +321,9 @@ begin
         "same mean-over-axis +2 graph applied to native square and authenticated upstream square; bind variance and variance+epsilon for both",
         "direct gs_qwen25_rms_statistics_step production helper, nil compilation descriptor",
         "same production helper graph with MPSGraphCompilationDescriptor optimizationLevel=0",
+        "same F32 primary input and power graph with prepared F32 [1] exponent buffer, then materialized mean/epsilon",
+        "matched F32 [1] exponent constant 2.0 through the same power and materialized mean/epsilon graphs",
+        "prepared Int64 [1] exponent buffer followed by graph cast to F32, power, and the same materialized mean/epsilon graph",
       ]
       json.field "materialized_reduction", {
         input_shape: [1, tokens, dim], reduction_axis: [2],
@@ -270,6 +356,51 @@ begin
       json.field "same_reduction_native_square_vs_upstream_square_plus_epsilon", same_reduction_square_plus_epsilon
       json.field "upstream_square_control_scope",
         "The authenticated upstream square uses the same native axis +2 materialized mean and epsilon graph as the native square; their direct comparison isolates the square-panel values within this precompiled executable route."
+      json.field "exponent_power_controls" do
+        json.object do
+          json.field "matched_f32_constant_vs_buffer" do
+            json.object do
+              json.field "dtype", exponent_control[:dtype]
+              json.field "shape", exponent_control[:shape]
+              json.field "value", exponent_control[:value]
+              json.field "f32_bits", exponent_control[:bits]
+              json.field "operation", exponent_control[:operation]
+              json.field "arms_differ_only_by_secondary_operand_source", true
+              json.field "fed_buffer_sha256", Digest::SHA256.hexdigest(power_exponent_raw)
+              json.field "matches_torch_post_cast_operand", true
+              json.field "scope_note", "This matched arm isolates a buffer-fed F32 [1] operand from a same-value F32 graph constant."
+            end
+          end
+          json.field "torch_scalar_int64_feed_then_f32_cast" do
+            json.object do
+              torch_control = Qwen25RMSStatisticsProbe::TORCH_INT64_EXPONENT_CONTROL
+              json.field "source_scalar_dtype", torch_control[:dtype]
+              json.field "source_scalar_shape", torch_control[:shape]
+              json.field "raw_int64_value", 2
+              json.field "cast_before_power", torch_control[:cast_before_power]
+              json.field "uploaded_buffer_sha256", Digest::SHA256.hexdigest(power_exponent_int64_raw)
+              json.field "uploaded_bytes", power_exponent_int64_raw.size
+              json.field "source_commit", Qwen25RMSStatisticsProbe::TORCH_SOURCE_COMMIT
+              json.field "source_note_sha256", Qwen25RMSStatisticsProbe::TORCH_SCALAR_LOWERING_SOURCE_SHA256
+              json.field "scope_note", "This arm matches Torch's scalar feed dtype/shape and explicit common-dtype cast before power, within the native precompiled executable route; it does not reproduce Torch's graph-encode route."
+            end
+          end
+        end
+      end
+      json.field "f32_fed_vs_constant_exponent_power_panel", fed_vs_constant_power_panel
+      json.field "f32_fed_vs_constant_exponent_variance", fed_vs_constant_variance
+      json.field "f32_fed_vs_constant_exponent_plus_epsilon", fed_vs_constant_plus_epsilon
+      json.field "torch_int64_route_vs_f32_fed_power_panel", torch_scalar_route_vs_f32_fed_power_panel
+      json.field "torch_int64_route_vs_f32_fed_variance", torch_scalar_route_vs_f32_fed_variance
+      json.field "torch_int64_route_vs_f32_fed_plus_epsilon", torch_scalar_route_vs_f32_fed_plus_epsilon
+      json.field "f32_fed_vs_constant_exponent_raw_bitwise_parity_passed",
+        fed_vs_constant_power_panel[:raw_unequal] == 0 && fed_vs_constant_variance[:raw_unequal] == 0 && fed_vs_constant_plus_epsilon[:raw_unequal] == 0
+      json.field "f32_fed_vs_constant_exponent_finite_tolerance_passed",
+        fed_vs_constant_power_panel[:finite_failures] == 0 && fed_vs_constant_variance[:finite_failures] == 0 && fed_vs_constant_plus_epsilon[:finite_failures] == 0
+      json.field "torch_int64_cast_route_raw_bitwise_parity_passed",
+        comparisons[14][:raw_unequal] == 0 && comparisons[15][:raw_unequal] == 0 && comparisons[16][:raw_unequal] == 0
+      json.field "torch_int64_cast_route_finite_tolerance_passed",
+        comparisons[14][:finite_failures] == 0 && comparisons[15][:finite_failures] == 0 && comparisons[16][:finite_failures] == 0
       json.field "upstream_square_control_raw_bitwise_parity_passed",
         comparisons[6][:raw_unequal] == 0 && comparisons[7][:raw_unequal] == 0
       json.field "upstream_square_control_finite_tolerance_passed",
@@ -294,6 +425,12 @@ begin
   puts upstream_square_vs_production.to_json
   puts same_reduction_square_variance.to_json
   puts same_reduction_square_plus_epsilon.to_json
+  puts fed_vs_constant_power_panel.to_json
+  puts fed_vs_constant_variance.to_json
+  puts fed_vs_constant_plus_epsilon.to_json
+  puts torch_scalar_route_vs_f32_fed_power_panel.to_json
+  puts torch_scalar_route_vs_f32_fed_variance.to_json
+  puts torch_scalar_route_vs_f32_fed_plus_epsilon.to_json
 ensure
   Qwen25PrefixProbe.cleanup_after_drain(chain) do
     {% unless flag?(:cpu_only) %}

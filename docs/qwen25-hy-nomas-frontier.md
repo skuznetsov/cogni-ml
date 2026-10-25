@@ -9,6 +9,10 @@ The S1280 check compares all 26 blocks but rejects the unchanged numerical
 gate, first at block 0's post-attention RMSNorm. The isolated continuation
 localizes its statistics delta to differing F32 square values: the native mean
 and epsilon addition are raw-bit exact on authenticated upstream squares.
+The 2026-10-25 native control reproduces upstream square/mean/epsilon bits with
+a GPU-fed exponent; a matched constant exponent reproduces the discrepancy.
+This identifies an operand-source-sensitive route on the saved input, without
+changing production RMS arithmetic or qualifying the full prefix.
 The full text encoder and video pipeline remain in progress. This adapter is opt-in; neither a
 1280-token prompt nor video generation is qualified here.
 
@@ -284,6 +288,91 @@ scope are indexed in
 `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-reduction-receipt-v1.json`.
 Refresh on changed scoped source, checkpoint/fixture/input, precision/geometry,
 compiler/SDK/OS/device, execution route or buffer lifecycle, or evidence loss.
+
+### GPU-fed exponent falsifier: exact materialized control
+
+The isolated control keeps the authenticated S1280 residual and existing
+square/reduction outputs. Compare two native F32 power panels with the same
+primary-input rank, power operator, target layout, compilation and encode
+route. The secondary operand is either constant 2.0 or a prepared F32 GPU
+buffer containing 2.0, both shape `[1]` with F32 bits `0x40000000`. Apply the
+same materialized mean/epsilon graph to each panel. This varies only the
+effective-F32 operand source. Pinned Torch lowering wraps integer 2, feeds
+an Int64 `[1]` scalar and casts it to the common F32 dtype before power.
+A third diagnostic arm reproduces that operand/cast topology with a prepared
+eight-byte Int64 buffer. It retains the native precompiled-executable route;
+it does not reproduce Torch's graph-level encode API. An
+`aten::pow.Tensor_Scalar` trace alone does not establish the MPS lowering.
+
+Prediction: if a dynamic exponent is sufficient in this native route, its
+square/mean/epsilon hashes will match the authenticated official RMS capture.
+The matched constant arm distinguishes an operand-source effect from the
+historical negative in a different fused graph. If both arms still match the
+native square, the Int64-fed/cast arm distinguishes the remaining operand
+topology from an execution-route difference. If all miss, pivot rather than
+changing tolerances or asserting a closed-backend cause. An exact panel alone
+does not qualify a fused production replacement or the full prefix.
+
+The two panels and four scalar-row outputs add 36,720,640 bytes, plus a
+four-byte exponent buffer. The Int64-fed panel, two scalar-row outputs and
+eight-byte exponent add another 18,360,328 bytes: 119,336,972 native named
+bytes in total at S1280/D3584 (316 bytes at the tiny S2/D4 CPU geometry).
+The one-byte-short budget is an explicit rejection case.
+
+Admit only this opt-in diagnostic extension: at most 256 MiB named buffers,
+a 2 GiB sampled process cap, file-cache-aware 10% floor, 64 MiB swap-growth
+stop and 180-second deadline. Preserve one terminal wait, no pre-terminal
+activation reads and zero tracked encode allocations. DoD is a fresh guarded
+report with all three operand routes, authenticated comparisons, unchanged
+baseline hashes, and CPU budget/fixture/comparator checks. Rollback removes
+the diagnostic extension; production RMS arithmetic remains unchanged. No
+full block, 26-block prefix or generation is admitted by this small budget.
+
+Observed `native-rms-gpu-exponent-block0-post-v1` exits zero under that guard:
+
+| Prepared native power operand | Square raw differences | Mean raw differences | Mean + epsilon raw differences |
+| --- | ---: | ---: | ---: |
+| F32 constant `[1]`, value 2 | 4,465,460 / 4,587,520 | 670 / 1,280 | 670 / 1,280 |
+| F32 GPU buffer `[1]`, value 2 | 0 / 4,587,520 | 0 / 1,280 | 0 / 1,280 |
+| Int64 GPU buffer `[1]`, value 2, cast to F32 | 0 / 4,587,520 | 0 / 1,280 | 0 / 1,280 |
+
+Both fed arms reproduce the authenticated official square, variance and
+variance-plus-epsilon SHA256 values exactly. The constant arm reproduces the
+old native square/mean/epsilon hashes. All eight baseline output hashes are
+unchanged, including the direct production target. The F32 matched pair is
+enough to distinguish the operand source on this input; the Int64 cast is not
+required for this observed parity. The native precompiled-executable route is
+therefore capable of matching these materialized upstream stages. This is
+not a proof of MPSGraph's internal constant folding or power implementation,
+nor of equivalence across other inputs or fused target graphs.
+
+The report preserves unchanged `atol=rtol=2e-5`; every finite comparison
+passes. Aggregate raw parity remains false because the negative constant and
+production-square controls intentionally remain in the report. The plan has
+12 prepared executable steps, 119,336,972 named bytes, one terminal wait,
+17 post-wait output reads, zero tracked encode allocations and no
+pre-terminal activation reads. The sampled process peak is 369,050,704 bytes;
+minimum file-cache-aware headroom is 19,853,262,848 bytes, with no guard
+violation or observed swap growth. Sampling does not establish an
+instantaneous peak or reserve memory.
+
+Eight focused Crystal fixture/comparator/budget examples pass, along with
+normal/cpu-only no-codegen checks, strict Clang compilation, release linking,
+formatting and diff checks. This slice changes only the opt-in diagnostic;
+full RMS normalization/gain and block 0 are not executed. The next falsifier
+is a bounded GPU-fed-exponent replacement in the fused production-statistics
+target on the same residual, then normalization/gain parity, before any
+separately admitted block/prefix run. The dynamic exponent must be prepared,
+retained and immutable across encoding, with no per-step allocation or host
+wait. The exact operand/cast topology is source-pinned; the actual Torch
+scalar allocator branch and closed compiler internals remain unobserved.
+Correlated MiniQuad review is ROBUST for this fixed-input discriminator and
+bounded lifecycle only. Source/build/fixture/run pins, observed guard and
+review limits are indexed in
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-gpu-exponent-receipt-v1.json`
+and `.landmark/evidence/2026-10-25-qwen25-rms-gpu-exponent.json`. Refresh on
+scoped source, input/fixture, geometry/precision, toolchain/SDK/OS/device,
+execution/lifecycle changes, or evidence loss/hash mismatch.
 
 ### Implemented boundary and observed checks
 

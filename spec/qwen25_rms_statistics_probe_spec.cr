@@ -320,20 +320,40 @@ end
 
 describe Qwen25RMSStatisticsProbe do
   it "admits exact named-buffer accounting and rejects a one-byte-short cap" do
-    Qwen25RMSStatisticsProbe.required_named_bytes(2, 4).should eq(160_i64)
-    Qwen25RMSStatisticsProbe.admit_named_bytes!(2, 4, 160).should eq(160_i64)
+    Qwen25RMSStatisticsProbe.required_named_bytes(2, 4).should eq(316_i64)
+    Qwen25RMSStatisticsProbe.admit_named_bytes!(2, 4, 316).should eq(316_i64)
     expect_raises(ArgumentError, /budget rejected/) do
-      Qwen25RMSStatisticsProbe.admit_named_bytes!(2, 4, 159)
+      Qwen25RMSStatisticsProbe.admit_named_bytes!(2, 4, 315)
     end
 
-    # S=1280, D=3584: BF16 input; F32 input and native-square outputs;
-    # authenticated upstream-square input; and six scalar-output buffers.
+    # S=1280, D=3584: BF16 input; six F32 panels (input, native square,
+    # authenticated upstream square, and the three exponent-power outputs);
+    # twelve scalar-output buffers and the two exponent feeds.
     required = Qwen25RMSStatisticsProbe.required_named_bytes(1280, 3584)
-    required.should eq(64_256_000_i64)
+    required.should eq(119_336_972_i64)
     Qwen25RMSStatisticsProbe.admit_named_bytes!(1280, 3584, required).should eq(required)
     expect_raises(ArgumentError, /budget rejected/) do
       Qwen25RMSStatisticsProbe.admit_named_bytes!(1280, 3584, required - 1)
     end
+  end
+
+  it "pins matching F32 power operands and the separate Torch Int64 feed route" do
+    f32 = Qwen25RMSStatisticsProbe::EXPONENT_POWER_CONTROL
+    f32[:dtype].should eq("float32")
+    f32[:shape].should eq([1])
+    f32[:value].should eq(2.0)
+    f32[:bits].should eq("40000000")
+    Qwen25RMSStatisticsProbe.exponent_two_f32le.should eq(Bytes[0, 0, 0, 0x40])
+    f32[:matches_torch_post_cast_operand].should be_true
+    f32[:reproduces_torch_scalar_feed_and_cast_topology].should be_false
+
+    torch = Qwen25RMSStatisticsProbe::TORCH_INT64_EXPONENT_CONTROL
+    torch[:dtype].should eq("int64")
+    torch[:shape].should eq([1])
+    torch[:value].should eq(2_i64)
+    torch[:bytes].should eq(8)
+    Qwen25RMSStatisticsProbe.exponent_two_i64le.should eq(Bytes[2, 0, 0, 0, 0, 0, 0, 0])
+    torch[:reproduces_torch_scalar_feed_and_cast_topology].should be_true
   end
 
   it "retains only selected source ranges from the exact authenticated stream" do

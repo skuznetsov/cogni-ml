@@ -33362,3 +33362,44 @@ Refresh after source/toolchain/device/model/workload changes.
   full generation do not follow from this small probe's budget. Refresh on
   scoped source, checkpoint/fixture/input, geometry/precision, compiler/SDK/
   OS/device, execution route or buffer-lifecycle changes, or artifact loss.
+
+## 2026-10-25 — GPU-fed RMS power matches the saved upstream input
+
+- Active goal: reproduce upstream block-0 post-attention RMS square values
+  on the authenticated S1280 residual, without a model load or full generation.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, GPU-fed exponent section.
+  S4/S32 qualification is retained; production math is unchanged and S1280
+  full-prefix qualification remains rejected.
+- The matched native F32 `[1]` constant/buffer pair uses the same primary
+  input, power operator, materialized mean/epsilon targets and precompiled
+  executable route. Constant 2 reproduces 4,465,460 differing square words
+  and 670 differing mean/epsilon rows. Prepared GPU-buffer 2 reproduces
+  all 4,587,520 official squares and all 1,280 means/epsilon values raw-bit
+  exactly. A third Int64 `[1]` feed, explicitly cast to F32 like the pinned
+  Torch source, is also exact. The Int64 cast is not needed for this fixture's
+  observed parity. All eight earlier baseline output hashes are unchanged.
+- This falsifies the need for a different graph-encode API to reproduce these
+  materialized stages on this saved input. It does not establish closed
+  MPSGraph constant-folding internals, all-input parity, a fused production
+  RMS replacement, full-prefix repair or a speedup. The scalar allocator
+  branch used by the earlier Torch run was not observed. Aggregate raw
+  parity remains false because baseline/constant negative controls remain.
+- `native-rms-gpu-exponent-block0-post-v1` exits zero with 119,336,972 named
+  bytes, 12 prepared executable steps, one terminal wait, 17 post-wait reads,
+  zero tracked encode allocations and no pre-terminal activation reads.
+  Unchanged `atol=rtol=2e-5` passes throughout. The file-cache-aware 10% floor,
+  2 GiB sampled process cap, 64 MiB swap-growth stop and 180-second deadline
+  hold: sampled peak 369,050,704 bytes, minimum headroom 19,853,262,848 bytes,
+  no observed swap growth or limit violation. Sampling is not a reservation.
+- Eight focused Crystal tests, normal/cpu-only no-codegen, strict Clang,
+  release link, format and diff checks pass. MiniQuad review is ROBUST only
+  for the authenticated fixed-input discriminator and lifecycle. Reviewers
+  share lineage; reused companion object bytes are pinned, with opaque
+  source ancestry. Fresh source/build/input/run pins and claim limits are
+  indexed in `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-gpu-exponent-receipt-v1.json`.
+- Next falsifier: use a prepared immutable GPU exponent in the fused
+  production-statistics target, then check full RMS/gain on the same saved
+  residual. Block 0 and all 26 blocks require separate memory admission;
+  neither is authorized by this isolated probe's budget. Refresh on scoped
+  source, fixture/input, geometry/precision, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.

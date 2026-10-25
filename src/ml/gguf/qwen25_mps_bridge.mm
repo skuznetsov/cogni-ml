@@ -1613,21 +1613,70 @@ static GsQwen25MPSGraphStep *gs_qwen25_rms_materialized_statistics_step(
       errorText, errorCapacity);
 }
 
+static GsQwen25MPSGraphStep *gs_qwen25_rms_power_panel_step(
+    id<MTLDevice> device, id<MTLBuffer> inputF32Buffer,
+    id<MTLBuffer> exponentBuffer, id<MTLBuffer> powerBuffer,
+    uint32_t batches, uint32_t tokens, uint32_t dim, BOOL exponentIsBuffer,
+    BOOL exponentIsInt64,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder =
+      gs_qwen25_new_builder(errorText, errorCapacity);
+  if (!builder || !builder.graph)
+    return nil;
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *exponentShape = @[@1];
+  MPSGraphTensor *primary = gs_qwen25_builder_add_f32(
+      builder, inputF32Buffer, hiddenShape,
+      [name stringByAppendingString:@"_primary"]);
+  MPSGraphTensor *exponent = nil;
+  if (exponentIsBuffer) {
+    exponent = gs_qwen25_builder_add_f32(
+        builder, exponentBuffer, exponentShape,
+        [name stringByAppendingString:@"_exponent_buffer"]);
+  } else if (exponentIsInt64) {
+    MPSGraphTensor *int64Exponent = gs_qwen25_add_feed(
+        builder.graph, builder.feeds, builder.placeholders, builder.inputData,
+        exponentBuffer, exponentShape, MPSDataTypeInt64,
+        [name stringByAppendingString:@"_int64_exponent_buffer"]);
+    if (!int64Exponent)
+      return nil;
+    exponent = [builder.graph
+        castTensor:int64Exponent toType:MPSDataTypeFloat32
+             name:[name stringByAppendingString:@"_exponent_to_f32"]];
+  } else {
+    exponent = [builder.graph
+        constantWithScalar:2.0 shape:exponentShape
+                  dataType:MPSDataTypeFloat32];
+  }
+  if (!builder || !primary || !exponent)
+    return nil;
+  MPSGraphTensor *power = [builder.graph
+      powerWithPrimaryTensor:primary secondaryTensor:exponent
+                        name:[name stringByAppendingString:@"_power"]];
+  return gs_qwen25_builder_compile(
+      builder, device, @[power], @[powerBuffer], @[hiddenShape], name,
+      errorText, errorCapacity);
+}
+
 // Standalone diagnostic for locating RMS reduction discrepancies. The output
 // handles are, in order: BF16->F32 input, materialized F32 square, materialized
 // variance, materialized variance+epsilon, direct production variance+epsilon,
 // compile-optimization-level-0 production variance+epsilon, then variance and
-// variance+epsilon reduced from the authenticated upstream square panel.
+// variance+epsilon reduced from the authenticated upstream square panel,
+// followed by F32-fed, F32-constant, and Int64-fed-then-cast exponent power
+// panels and their materialized statistics.
 // All buffers and executables are prepared here; encode uses the shared plan
 // encoder and performs no host read or named Metal-buffer allocation.
 extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
     void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
     float epsilon, void *inputHandle, void *upstreamSquareHandle,
+    void *powerExponentHandle, void *powerExponentInt64Handle,
     void *const *outputHandles,
     char *errorText, size_t errorCapacity) {
   if (errorText && errorCapacity > 0)
     errorText[0] = '\0';
   if (!deviceHandle || !inputHandle || !upstreamSquareHandle ||
+      !powerExponentHandle || !powerExponentInt64Handle ||
       !outputHandles || batches <= 0 ||
       tokens <= 0 || dim <= 0 || !std::isfinite(epsilon) || epsilon <= 0.0f) {
     gs_qwen25_set_error(errorText, errorCapacity,
@@ -1641,6 +1690,10 @@ extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
         id<MTLBuffer> input = (__bridge id<MTLBuffer>)inputHandle;
         id<MTLBuffer> upstreamSquare =
             (__bridge id<MTLBuffer>)upstreamSquareHandle;
+        id<MTLBuffer> powerExponent =
+            (__bridge id<MTLBuffer>)powerExponentHandle;
+        id<MTLBuffer> powerExponentInt64 =
+            (__bridge id<MTLBuffer>)powerExponentInt64Handle;
         const uint64_t hiddenDims[] = {(uint64_t)batches, (uint64_t)tokens,
                                        (uint64_t)dim};
         const uint64_t scalarDims[] = {(uint64_t)batches, (uint64_t)tokens};
@@ -1656,9 +1709,33 @@ extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
             upstreamSquare.device != device || !upstreamSquare.contents ||
             upstreamSquare.storageMode != MTLStorageModeShared ||
             upstreamSquare.length < hiddenElements * 4 ||
-            !gs_qwen25_disjoint(input, upstreamSquare)) {
+            powerExponent.device != device || !powerExponent.contents ||
+            powerExponent.storageMode != MTLStorageModeShared ||
+            powerExponent.length != sizeof(float) ||
+            powerExponentInt64.device != device ||
+            !powerExponentInt64.contents ||
+            powerExponentInt64.storageMode != MTLStorageModeShared ||
+            powerExponentInt64.length != sizeof(int64_t) ||
+            !gs_qwen25_disjoint(input, upstreamSquare) ||
+            !gs_qwen25_disjoint(input, powerExponent) ||
+            !gs_qwen25_disjoint(input, powerExponentInt64) ||
+            !gs_qwen25_disjoint(upstreamSquare, powerExponent) ||
+            !gs_qwen25_disjoint(upstreamSquare, powerExponentInt64) ||
+            !gs_qwen25_disjoint(powerExponent, powerExponentInt64)) {
           gs_qwen25_set_error(errorText, errorCapacity,
                               "invalid RMS statistics probe input binding");
+          return nullptr;
+        }
+        uint32_t powerExponentBits = 0;
+        int64_t powerExponentInt64Value = 0;
+        memcpy(&powerExponentBits, powerExponent.contents,
+               sizeof(powerExponentBits));
+        memcpy(&powerExponentInt64Value, powerExponentInt64.contents,
+               sizeof(powerExponentInt64Value));
+        if (powerExponentBits != 0x40000000U ||
+            powerExponentInt64Value != 2) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "RMS power exponent controls must both encode 2");
           return nullptr;
         }
         const uint64_t hiddenF32Bytes = hiddenElements * 4;
@@ -1666,12 +1743,19 @@ extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
         const uint64_t outputBytes[] = {hiddenF32Bytes, hiddenF32Bytes,
                                         scalarF32Bytes, scalarF32Bytes,
                                         scalarF32Bytes, scalarF32Bytes,
-                                        scalarF32Bytes, scalarF32Bytes};
+                                        scalarF32Bytes, scalarF32Bytes,
+                                        hiddenF32Bytes, scalarF32Bytes,
+                                        scalarF32Bytes, hiddenF32Bytes,
+                                        scalarF32Bytes, scalarF32Bytes,
+                                        hiddenF32Bytes, scalarF32Bytes,
+                                        scalarF32Bytes};
         NSMutableArray<id<MTLBuffer>> *outputs =
-            [NSMutableArray arrayWithCapacity:8];
+            [NSMutableArray arrayWithCapacity:17];
         NSMutableArray<id<MTLBuffer>> *allBuffers =
-            [NSMutableArray arrayWithObjects:input, upstreamSquare, nil];
-        for (NSUInteger index = 0; index < 8; ++index) {
+            [NSMutableArray arrayWithObjects:input, upstreamSquare,
+                                             powerExponent, powerExponentInt64,
+                                             nil];
+        for (NSUInteger index = 0; index < 17; ++index) {
           id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandles[index];
           if (!output || output.device != device || !output.contents ||
               output.storageMode != MTLStorageModeShared ||
@@ -1693,7 +1777,7 @@ extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
 
         NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
         NSMutableArray<GsQwen25MPSGraphStep *> *steps =
-            [NSMutableArray arrayWithCapacity:6];
+            [NSMutableArray arrayWithCapacity:12];
 
         GsQwen25MPSGraphBuilder *castBuilder =
             gs_qwen25_new_builder(errorText, errorCapacity);
@@ -1761,11 +1845,72 @@ extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
           return nullptr;
         [steps addObject:optimization0Step];
 
+        GsQwen25MPSGraphStep *fedExponentPowerStep =
+            gs_qwen25_rms_power_panel_step(
+                device, outputs[0], powerExponent, outputs[8],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, YES,
+                NO,
+                @"rms_probe_fed_exponent_power", errorText, errorCapacity);
+        if (!fedExponentPowerStep)
+          return nullptr;
+        [steps addObject:fedExponentPowerStep];
+
+        GsQwen25MPSGraphStep *fedExponentStatisticsStep =
+            gs_qwen25_rms_materialized_statistics_step(
+                device, outputs[8], outputs[9], outputs[10],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_fed_exponent_statistics", errorText,
+                errorCapacity);
+        if (!fedExponentStatisticsStep)
+          return nullptr;
+        [steps addObject:fedExponentStatisticsStep];
+
+        GsQwen25MPSGraphStep *constantExponentPowerStep =
+            gs_qwen25_rms_power_panel_step(
+                device, outputs[0], nil, outputs[11],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, NO,
+                NO,
+                @"rms_probe_constant_exponent_power", errorText,
+                errorCapacity);
+        if (!constantExponentPowerStep)
+          return nullptr;
+        [steps addObject:constantExponentPowerStep];
+
+        GsQwen25MPSGraphStep *constantExponentStatisticsStep =
+            gs_qwen25_rms_materialized_statistics_step(
+                device, outputs[11], outputs[12], outputs[13],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_constant_exponent_statistics", errorText,
+                errorCapacity);
+        if (!constantExponentStatisticsStep)
+          return nullptr;
+        [steps addObject:constantExponentStatisticsStep];
+
+        GsQwen25MPSGraphStep *int64ExponentPowerStep =
+            gs_qwen25_rms_power_panel_step(
+                device, outputs[0], powerExponentInt64, outputs[14],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, NO,
+                YES, @"rms_probe_int64_exponent_cast_power", errorText,
+                errorCapacity);
+        if (!int64ExponentPowerStep)
+          return nullptr;
+        [steps addObject:int64ExponentPowerStep];
+
+        GsQwen25MPSGraphStep *int64ExponentStatisticsStep =
+            gs_qwen25_rms_materialized_statistics_step(
+                device, outputs[14], outputs[15], outputs[16],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_int64_exponent_statistics", errorText,
+                errorCapacity);
+        if (!int64ExponentStatisticsStep)
+          return nullptr;
+        [steps addObject:int64ExponentStatisticsStep];
+
         GsQwen25MPSBlockPlan *plan = [GsQwen25MPSBlockPlan new];
         plan.device = device;
         plan.steps = [steps copy];
         plan.residentBuffers = [allBuffers copy];
-        plan.expectedStepCount = 6;
+        plan.expectedStepCount = 12;
         if (!plan.device || plan.steps.count != plan.expectedStepCount ||
             !plan.residentBuffers) {
           gs_qwen25_set_error(errorText, errorCapacity,

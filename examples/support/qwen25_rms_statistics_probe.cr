@@ -7,24 +7,26 @@ require "digest/sha256"
 module Qwen25RMSStatisticsProbe
   extend self
 
-  STAGE_SCHEMA                = "cogni_ml.qwen25_vl_pretrained_decoder_block_stage_reference"
-  RMS_SCHEMA                  = "cogni_ml.qwen25_vl_pretrained_rms_reduction_reference"
-  MODEL_ID                    = "Qwen/Qwen2.5-VL-7B-Instruct"
-  REVISION                    = "eb6ba55b40ada64977147b52e50a4145ee89ac4f"
-  RMS_SOURCE_SHA256           = "08742a7c82a8713bc22f632f01c97b7eca3ef0e947180e7d6c9beec4897c4ff8"
-  TRUSTED_STAGE_SHA256        = "d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9"
-  RESIDUAL_STAGE_NAME         = "residual_after_attention"
-  NORM_WEIGHT_KEY             = "model.layers.0.post_attention_layernorm.weight"
-  RMS_PREFIX                  = "layers.0.post_attention_layernorm."
-  RMS_SUFFIXES                = %w(input_f32 square_f32 variance_f32 variance_plus_eps_f32 rsqrt_f32 normalized_f32 normalized_bf16 gained_output_bf16)
-  F32_SUFFIXES                = %w(input_f32 square_f32 variance_f32 variance_plus_eps_f32 rsqrt_f32 normalized_f32)
-  BF16_SUFFIXES               = %w(normalized_bf16 gained_output_bf16)
-  MAX_SOURCE_SIDECAR_BYTES    = 512_i64 * 1024 * 1024
-  MAX_REFERENCE_SIDECAR_BYTES = 256_i64 * 1024 * 1024
-  MAX_NAMED_BYTES             = 256_i64 * 1024 * 1024
-  ATOL                        = 2e-5
-  RTOL                        = 2e-5
-  OPTIMIZATION0_CONTROL       = {
+  STAGE_SCHEMA                        = "cogni_ml.qwen25_vl_pretrained_decoder_block_stage_reference"
+  RMS_SCHEMA                          = "cogni_ml.qwen25_vl_pretrained_rms_reduction_reference"
+  MODEL_ID                            = "Qwen/Qwen2.5-VL-7B-Instruct"
+  REVISION                            = "eb6ba55b40ada64977147b52e50a4145ee89ac4f"
+  RMS_SOURCE_SHA256                   = "08742a7c82a8713bc22f632f01c97b7eca3ef0e947180e7d6c9beec4897c4ff8"
+  TORCH_SCALAR_LOWERING_SOURCE_SHA256 = "1a423fb13f2c91c84d4a721c649ca958066047fc48092af6316bc325d0279119"
+  TORCH_SOURCE_COMMIT                 = "a1cb3cc05d46d198467bebbb6e8fba50a325d4e7"
+  TRUSTED_STAGE_SHA256                = "d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9"
+  RESIDUAL_STAGE_NAME                 = "residual_after_attention"
+  NORM_WEIGHT_KEY                     = "model.layers.0.post_attention_layernorm.weight"
+  RMS_PREFIX                          = "layers.0.post_attention_layernorm."
+  RMS_SUFFIXES                        = %w(input_f32 square_f32 variance_f32 variance_plus_eps_f32 rsqrt_f32 normalized_f32 normalized_bf16 gained_output_bf16)
+  F32_SUFFIXES                        = %w(input_f32 square_f32 variance_f32 variance_plus_eps_f32 rsqrt_f32 normalized_f32)
+  BF16_SUFFIXES                       = %w(normalized_bf16 gained_output_bf16)
+  MAX_SOURCE_SIDECAR_BYTES            = 512_i64 * 1024 * 1024
+  MAX_REFERENCE_SIDECAR_BYTES         = 256_i64 * 1024 * 1024
+  MAX_NAMED_BYTES                     = 256_i64 * 1024 * 1024
+  ATOL                                = 2e-5
+  RTOL                                = 2e-5
+  OPTIMIZATION0_CONTROL               = {
     compilation_descriptor_type:                         "MPSGraphCompilationDescriptor",
     compilation_api:                                     "MPSGraph.compileWithDevice(..., compilationDescriptor:)",
     optimization_level:                                  0,
@@ -35,6 +37,27 @@ module Qwen25RMSStatisticsProbe
     executable_descriptor_type:                          "MPSGraphExecutableExecutionDescriptor",
     executable_wait_until_completed:                     false,
     differs_from_torch_graph_execution_descriptor_route: true,
+  }
+  EXPONENT_POWER_CONTROL = {
+    dtype:                                          "float32",
+    shape:                                          [1],
+    value:                                          2.0,
+    bits:                                           "40000000",
+    operation:                                      "MPSGraph.powerWithPrimaryTensor:secondaryTensor:",
+    torch_source_scalar_dtype:                      "int64",
+    torch_source_scalar_shape:                      [1],
+    torch_cast_before_power:                        "int64 to common float32",
+    matches_torch_post_cast_operand:                true,
+    reproduces_torch_scalar_feed_and_cast_topology: false,
+  }
+  TORCH_INT64_EXPONENT_CONTROL = {
+    dtype:                                          "int64",
+    shape:                                          [1],
+    value:                                          2_i64,
+    bytes:                                          8,
+    cast_before_power:                              "int64 to common float32",
+    operation:                                      "MPSGraph.powerWithPrimaryTensor:secondaryTensor:",
+    reproduces_torch_scalar_feed_and_cast_topology: true,
   }
 
   alias RawSample = NamedTuple(index: Int64, row: Int64,
@@ -142,8 +165,19 @@ module Qwen25RMSStatisticsProbe
     raise ArgumentError.new("RMS probe geometry exceeds native element bounds") if hidden > Int32::MAX
     input_bf16 = hidden * 2
     input_f32 = hidden * 4
-    scalar_outputs = tokens.to_i64 * 4 * 6 # two materialized reductions plus production and L0
-    input_bf16 + input_f32 * 3 + scalar_outputs
+    # F32 input, native square, authenticated upstream square, and three
+    # exponent-power panels; six original plus six power-arm scalar outputs.
+    scalar_outputs = tokens.to_i64 * 4 * 12
+    exponent_buffers = 12_i64 # F32 [1] and Int64 [1] values, both equal 2
+    input_bf16 + input_f32 * 6 + scalar_outputs + exponent_buffers
+  end
+
+  def exponent_two_f32le : Bytes
+    Bytes[0x00_u8, 0x00_u8, 0x00_u8, 0x40_u8]
+  end
+
+  def exponent_two_i64le : Bytes
+    Bytes[0x02_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8, 0_u8]
   end
 
   def admit_named_bytes!(tokens : Int32, dim : Int32, budget : Int64) : Int64
