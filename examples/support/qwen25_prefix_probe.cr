@@ -9,11 +9,35 @@ module Qwen25PrefixProbe
   MODEL_ID                 = "Qwen/Qwen2.5-VL-7B-Instruct"
   PREFIX_LAYERS            =   26
   MAX_PREFIX_TOKENS        = 1280
-  MAX_PREFIX_SIDECAR_BYTES = (PREFIX_LAYERS + 1).to_i64 * MAX_PREFIX_TOKENS * 3584 * 2
+  MAX_PROMPT_RAW_TOKENS    = 1536
+  MAX_PREFIX_SIDECAR_BYTES = (PREFIX_LAYERS + 1).to_i64 * MAX_PROMPT_RAW_TOKENS * 3584 * 2
   ATOL                     = 2e-5
   RTOL                     = 2e-5
   alias Comparison = NamedTuple(state: Int32, elements: Int32, failures: Int32,
     max_abs: Float64, different_bf16_words: Int32)
+
+  # This binds an authenticated prompt record to the raw model request. It
+  # does not certify tokenizer semantics: the runner independently prepares
+  # the prompt natively and compares rendering, IDs, mask and crop before GPU.
+  def validate_prompt_contract!(metadata : JSON::Any, tokens : Array(Int32),
+                                mask : Array(Int32), offset : Int32) : Int32
+    raise ArgumentError.new("prompt template/source identity mismatch") unless metadata["template_name"].as_s == "li-dit-encode-video-json" && metadata["upstream_revision"].as_s == "911cea6458a89c2663513ff7099561ec190dd491"
+    {"prompt" => "prompt_sha256", "rendered_prompt" => "rendered_prompt_sha256"}.each do |field, digest|
+      raise ArgumentError.new("prompt text digest mismatch") unless Digest::SHA256.hexdigest(metadata[field].as_s) == metadata[digest].as_s
+    end
+    crop = metadata["crop_start"].as_i
+    raise ArgumentError.new("prompt raw/cropped sequence bound mismatch") unless offset == 0 && 0 < crop <= 256 && metadata["text_length"].as_i == 1280 && metadata["raw_length"].as_i == tokens.size && tokens.size == 1280 + crop && tokens.size <= MAX_PROMPT_RAW_TOKENS
+    raise ArgumentError.new("prompt raw inputs differ from model request") unless metadata["token_ids"].as_a.map(&.as_i) == tokens && metadata["attention_mask"].as_a.map(&.as_i) == mask
+    raise ArgumentError.new("prompt mask must be visible then right padded") unless mask.size == tokens.size && mask.first == 1 && mask.all? { |value| value == 0 || value == 1 } && mask == mask.sort.reverse
+    raise ArgumentError.new("prompt padding token mismatch") unless tokens.each_with_index.all? { |id, index| mask[index] == 1 || id == 151643 }
+    raise ArgumentError.new("prompt cannot contain vision input markers") if tokens.any? { |id| 151652 <= id <= 151656 }
+    marker = metadata["marker_token_ids"].as_a.map(&.as_i)
+    raise ArgumentError.new("prompt user marker mismatch") unless metadata["marker"].as_s == "<|im_start|>user\n" && marker == [151644, 872, 198]
+    first = (0..(tokens.size - marker.size)).find { |index| tokens[index, marker.size] == marker }
+    raise ArgumentError.new("prompt crop must follow the first user marker") unless first && first + marker.size == crop
+    raise ArgumentError.new("prompt cropped suffix mismatch") unless metadata["cropped_token_ids"].as_a.map(&.as_i) == tokens[crop..] && metadata["cropped_attention_mask"].as_a.map(&.as_i) == mask[crop..]
+    crop
+  end
 
   # Run cleanup only after the terminal drain proves that borrowed GPU state is
   # no longer in use. A completed command can still report a GPU error; keep
@@ -98,6 +122,8 @@ module Qwen25PrefixProbe
     getter checkpoint_root : String
     getter manifest_path : String
     getter manifest_sha256 : String
+    getter prompt_metadata : JSON::Any? = nil
+    getter crop_start : Int32 = 0
     getter config = ML::GGUF::Qwen25VLConfig.hy_nomas_7b
 
     @hidden_state_snapshot : Bytes
@@ -128,10 +154,15 @@ module Qwen25PrefixProbe
       @tokens = input["token_ids"].as_a.map(&.as_i)
       @attention_mask = input["attention_mask"].as_a.map(&.as_i)
       count = @tokens.size
-      raise ArgumentError.new("fixture tokens outside bounded prefix context") unless 1 < count <= 1280 && conf["sequence_length"].as_i == count
+      @prompt_metadata = @document["hy_nomas_prompt"]?
+      max_tokens = @prompt_metadata ? MAX_PROMPT_RAW_TOKENS : MAX_PREFIX_TOKENS
+      raise ArgumentError.new("fixture tokens outside bounded prefix context") unless 1 < count <= max_tokens && conf["sequence_length"].as_i == count
       raise ArgumentError.new("fixture token outside vocabulary") unless @tokens.all? { |id| 0 <= id < ML::GGUF::Qwen25VLWeights::VOCAB_SIZE }
-      raise ArgumentError.new("fixture mask must be visible then right padded") unless @attention_mask.size == count && @attention_mask.first == 1 && @attention_mask.last == 0 && @attention_mask.all? { |v| v == 0 || v == 1 } && @attention_mask == @attention_mask.sort.reverse
+      raise ArgumentError.new("fixture mask must be visible then right padded") unless @attention_mask.size == count && @attention_mask.first == 1 && (@prompt_metadata || @attention_mask.last == 0) && @attention_mask.all? { |v| v == 0 || v == 1 } && @attention_mask == @attention_mask.sort.reverse
       offset = input["position_offset"].as_i
+      if metadata = @prompt_metadata
+        @crop_start = Qwen25PrefixProbe.validate_prompt_contract!(metadata, @tokens, @attention_mask, offset)
+      end
       raise ArgumentError.new("fixture positions outside context") unless offset >= 0 && offset.to_i64 + count <= @config.max_positions
       @positions = Array(Float32).new(count) { |i| (offset + i).to_f32 }
       axes = input["position_ids_f32"].as_a
@@ -224,6 +255,28 @@ module Qwen25PrefixProbe
       comparison = Qwen25PrefixProbe.compare_bf16_bytes(expected, actual)
       {state: state, elements: size, failures: comparison[:failures], max_abs: comparison[:max_abs],
        different_bf16_words: comparison[:different_bf16_words]}
+    end
+
+    # The two readbacks occur only after the runner's sole terminal drain.
+    # The expected hidden suffix is sliced from the authenticated raw capture,
+    # while the actual suffix has been copied on the GPU by the crop plan.
+    def compare_conditioning(hidden : ML::MetalBuffer, mask : ML::MetalBuffer)
+      raise ArgumentError.new("conditioning requires a prompt fixture") unless @prompt_metadata && @crop_start > 0
+      count = @tokens.size - @crop_start
+      size = count * @config.dim * 2
+      raise ArgumentError.new("conditioning hidden extent mismatch") unless hidden.size == size
+      raise ArgumentError.new("conditioning mask extent mismatch") unless mask.size == count.to_i64 * sizeof(Int32)
+      expected = expected_state(PREFIX_LAYERS)[@crop_start * @config.dim * 2, size]
+      actual = Bytes.new(size)
+      hidden.read_bytes(actual.to_unsafe, actual.size)
+      compared = Qwen25PrefixProbe.compare_bf16_bytes(expected, actual)
+      actual_mask = Array(Int32).new(count, 0)
+      mask.read_bytes(actual_mask.to_unsafe.as(UInt8*), count * sizeof(Int32))
+      expected_mask = @attention_mask[@crop_start..]
+      mask_failures = actual_mask.zip(expected_mask).count { |value, reference| value != reference }
+      {tokens: count, crop_start: @crop_start, elements: size // 2,
+       failures: compared[:failures], max_abs: compared[:max_abs],
+       different_bf16_words: compared[:different_bf16_words], mask_failures: mask_failures}
     end
 
     private def read_sidecar_snapshot(expected_size : Int64) : Bytes

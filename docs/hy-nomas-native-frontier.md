@@ -57,9 +57,12 @@ FlashAttention reductions. Normalization epsilon is fixed to upstream's `1e-6`.
 
 Full model/Studio/video generation remains disabled for this slice. Audio-driven
 video, lip-sync, trained reference-image conditioning, diffusion scheduling,
-PixelUMM decoding, text tokenization/encoding, camera/action modules,
+PixelUMM decoding, integrated text conditioning, camera/action modules,
 cross-segment KV-cache behavior,
 INT8/FP8 inference and model-wide performance are unimplemented boundaries.
+Text tokenization and the selected 26-block encoder prefix now have a separate
+opt-in, one-natural-prompt qualification in `qwen25-hy-nomas-frontier.md`.
+Their integrated text projection/DiT handoff remains unimplemented here.
 Public RTX 4090 timings are author-reported CUDA results, not Metal predictions.
 No GPL community-port code is imported into this Apache-source implementation.
 

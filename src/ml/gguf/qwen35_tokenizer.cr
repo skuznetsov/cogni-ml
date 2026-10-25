@@ -35,7 +35,8 @@ module ML::GGUF
                    @chat_template : String? = nil,
                    @token_to_id : Hash(String, Int32) = {} of String => Int32,
                    @bpe_ranks : Hash(Tuple(String, String), Int32) = {} of Tuple(String, String) => Int32,
-                   @token_types : Array(Int32) = [] of Int32)
+                   @token_types : Array(Int32) = [] of Int32,
+                   @pretokenizer : Regex = QWEN35_PRETOKENIZER)
       @special_tokens = [] of Tuple(String, Int32)
       @vocab.each_with_index do |piece, id|
         token_type = @token_types[id]? || 0
@@ -155,7 +156,7 @@ module ML::GGUF
     end
 
     private def encode_native_text(text : String, ids : Array(Int32)) : Nil
-      text.scan(QWEN35_PRETOKENIZER) do |match|
+      text.scan(@pretokenizer) do |match|
         encoded_piece = encode_piece_bytes(match[0])
         bpe(encoded_piece).each do |piece|
           id = @token_to_id[piece]?

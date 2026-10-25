@@ -173,6 +173,37 @@ class Qwen25PretrainedReferenceSpec(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 reference._validate_inputs(*request)
 
+    def test_explicit_ids_keep_1280_limit_while_natural_path_has_bounded_extension(self):
+        ids = [1] * (reference.MAX_SEQUENCE_LENGTH + 1)
+        mask = [1] * len(ids)
+        with self.assertRaisesRegex(ValueError, "1280-token limit"):
+            reference._validate_inputs(ids, mask, 100, 0, 32)
+        request = reference._validate_inputs(
+            ids,
+            mask,
+            100,
+            0,
+            32,
+            reference.MAX_NATURAL_SEQUENCE_LENGTH,
+        )
+        self.assertEqual(request["sequence_length"], reference.MAX_SEQUENCE_LENGTH + 1)
+        self.assertEqual(request["multimodal_position_shape"], [3, 1, len(ids)])
+
+    def test_prompt_cli_rejects_mixed_or_incomplete_input_modes_before_runtime(self):
+        common = [
+            "--checkpoint-root", "/missing/checkpoint",
+            "--checkpoint-receipt", "/missing/receipt.json",
+            "--output", "/tmp/qwen25-never-created.json",
+        ]
+        with self.assertRaisesRegex(SystemExit, "must be supplied together"):
+            reference.main(common + ["--hy-nomas-prompt-file", "/tmp/prompt.txt"])
+        with self.assertRaisesRegex(SystemExit, "does not accept --token-ids"):
+            reference.main(common + [
+                "--hy-nomas-prompt-file", "/tmp/prompt.txt",
+                "--hy-nomas-root", "/tmp/hy-nomas",
+                "--token-ids", "1,2",
+            ])
+
     def test_rejects_receipt_with_wrong_revision_or_path_traversal(self):
         receipt = {
             "repo_id": reference.MODEL_ID,
@@ -421,8 +452,8 @@ class Qwen25PretrainedReferenceSpec(unittest.TestCase):
 
             materialize_config_record = reference._materialize_config_record
 
-            def record_config(config_value, sequence_length):
-                record = materialize_config_record(config_value, sequence_length)
+            def record_config(config_value, sequence_length, **kwargs):
+                record = materialize_config_record(config_value, sequence_length, **kwargs)
                 materialized_records.append(record)
                 return record
 

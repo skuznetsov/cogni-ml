@@ -34,6 +34,7 @@ EMBEDDING_KEY = "model.embed_tokens.weight"
 DEFAULT_TOKEN_IDS = (151644, 872, 151645, 0)
 DEFAULT_ATTENTION_MASK = (1, 1, 1, 0)
 MAX_SEQUENCE_LENGTH = 1280
+MAX_NATURAL_SEQUENCE_LENGTH = 1536
 MAX_SIDECAR_BYTES = 512 * 1024 * 1024
 SIDECAR_ENCODING = "bfloat16-le"
 RTOL = 2.0e-5
@@ -56,6 +57,9 @@ REAL_TEXT_GEOMETRY = {
 
 UPSTREAM_HELPER_PATH = Path(__file__).resolve().with_name(
     "qwen25_hy_nomas_reference.py"
+)
+UPSTREAM_PROMPT_HELPER_PATH = Path(__file__).resolve().with_name(
+    "qwen25_hy_nomas_prompt_reference.py"
 )
 
 
@@ -101,11 +105,18 @@ def _validate_inputs(
     vocab_size: int,
     position_offset: int,
     hidden_size: int,
+    max_sequence_length: int = MAX_SEQUENCE_LENGTH,
 ) -> dict[str, Any]:
     if not isinstance(token_ids, (list, tuple)) or not token_ids:
         raise ValueError("token IDs must be a nonempty integer sequence")
-    if len(token_ids) > MAX_SEQUENCE_LENGTH:
-        raise ValueError(f"sequence length exceeds the {MAX_SEQUENCE_LENGTH}-token limit")
+    if (
+        isinstance(max_sequence_length, bool)
+        or not isinstance(max_sequence_length, int)
+        or max_sequence_length < 1
+    ):
+        raise ValueError("sequence length limit must be a positive integer")
+    if len(token_ids) > max_sequence_length:
+        raise ValueError(f"sequence length exceeds the {max_sequence_length}-token limit")
     if any(isinstance(token, bool) or not isinstance(token, int) for token in token_ids):
         raise ValueError("token IDs must be integers")
     if any(token < 0 or token >= vocab_size for token in token_ids):
@@ -299,13 +310,28 @@ def _validate_manifest(document: Any, manifest_path: Path | None = None) -> None
         raise ValueError("fixture must use the official SDPA attention implementation")
     token_ids = inputs.get("token_ids")
     mask = inputs.get("attention_mask")
+    prompt_contract = document.get("hy_nomas_prompt")
+    sequence_limit = (
+        MAX_NATURAL_SEQUENCE_LENGTH if prompt_contract is not None else MAX_SEQUENCE_LENGTH
+    )
     request = _validate_inputs(
         token_ids,
         mask,
         REAL_TEXT_GEOMETRY["vocab_size"],
         inputs.get("position_offset"),
         REAL_TEXT_GEOMETRY["hidden_size"],
+        sequence_limit,
     )
+    if prompt_contract is not None:
+        _load_upstream_prompt_helper().validate_prompt_metadata(
+            prompt_contract,
+            token_ids,
+            mask,
+            inputs.get("position_ids_f32"),
+            inputs.get("position_ids_for_official_model"),
+            inputs.get("multimodal_position_shape"),
+            inputs.get("position_offset"),
+        )
     if request["sequence_length"] != config.get("sequence_length"):
         raise ValueError("fixture sequence length does not match its inputs")
     if inputs.get("position_ids_f32") != request["position_ids_f32"]:
@@ -458,6 +484,17 @@ def _load_upstream_helper() -> Any:
     return module
 
 
+def _load_upstream_prompt_helper() -> Any:
+    spec = importlib.util.spec_from_file_location(
+        "qwen25_hy_nomas_prompt_reference", UPSTREAM_PROMPT_HELPER_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load the pinned HyNomas prompt helper")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _parse_text_config(configuration: Any, values: dict[str, Any]) -> Any:
     config = configuration.Qwen2_5_VLTextConfig(
         vocab_size=values["vocab_size"],
@@ -479,7 +516,11 @@ def _parse_text_config(configuration: Any, values: dict[str, Any]) -> Any:
     return config
 
 
-def _materialize_config_record(config: Any, sequence_length: int) -> dict[str, Any]:
+def _materialize_config_record(
+    config: Any,
+    sequence_length: int,
+    max_sequence_length: int = MAX_SEQUENCE_LENGTH,
+) -> dict[str, Any]:
     """Validate and freeze the official text geometry before loading weights."""
     integer_fields = (
         "vocab_size",
@@ -541,7 +582,11 @@ def _materialize_config_record(config: Any, sequence_length: int) -> dict[str, A
         raise RuntimeError("official text config does not contain the pinned multimodal RoPE sections")
     record["rope_scaling"] = dict(rope_scaling)
 
-    if isinstance(sequence_length, bool) or not isinstance(sequence_length, int) or not 0 < sequence_length <= MAX_SEQUENCE_LENGTH:
+    if (
+        isinstance(sequence_length, bool)
+        or not isinstance(sequence_length, int)
+        or not 0 < sequence_length <= max_sequence_length
+    ):
         raise RuntimeError("official text config sequence length is outside the supported range")
     if getattr(config, "_attn_implementation", None) != "sdpa":
         raise RuntimeError("official text config must use SDPA attention")
@@ -782,13 +827,47 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
     # readers need a Path for safe shard resolution.
     checkpoint_root = Path(checkpoint["root"])
     text_values = _text_config(model_config_json)
+    prompt_contract = None
+    prompt_file = getattr(args, "hy_nomas_prompt_file", None)
+    upstream_root = getattr(args, "hy_nomas_root", None)
+    if (prompt_file is None) != (upstream_root is None):
+        raise ValueError("--hy-nomas-prompt-file and --hy-nomas-root must be supplied together")
+    if prompt_file is not None:
+        if getattr(args, "position_offset", 0) != 0:
+            raise ValueError("HyNomas video prompts use the original zero position offset")
+        prompt_request, prompt_contract = _load_upstream_prompt_helper().build_prompt(
+            args.checkpoint_root,
+            args.checkpoint_receipt,
+            upstream_root,
+            prompt_file,
+        )
+        token_ids = prompt_request["token_ids"]
+        attention_mask = prompt_request["attention_mask"]
+        position_offset = 0
+        sequence_limit = MAX_NATURAL_SEQUENCE_LENGTH
+    else:
+        prompt_request = None
+        token_ids = args.token_ids
+        attention_mask = args.attention_mask
+        position_offset = args.position_offset
+        sequence_limit = MAX_SEQUENCE_LENGTH
     request = _validate_inputs(
-        args.token_ids,
-        args.attention_mask,
+        token_ids,
+        attention_mask,
         int(text_values["vocab_size"]),
-        args.position_offset,
+        position_offset,
         int(text_values["hidden_size"]),
+        sequence_limit,
     )
+    if prompt_request is not None:
+        for key in (
+            "position_ids_f32",
+            "position_ids_for_official_model",
+            "multimodal_position_shape",
+            "sequence_length",
+        ):
+            if request[key] != prompt_request[key]:
+                raise ValueError(f"HyNomas prompt request has inconsistent {key}")
     weight_map = checkpoint["index_weight_map"]
     embedding_shard = weight_map[EMBEDDING_KEY]
 
@@ -807,7 +886,11 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
     # Materialize every fixture metadata field before constructing/uploading
     # the resident decoder prefix. In particular, pinned Transformers config
     # versions omit head_dim, so record the validated derived value here.
-    config_record = _materialize_config_record(config, request["sequence_length"])
+    config_record = _materialize_config_record(
+        config,
+        request["sequence_length"],
+        max_sequence_length=sequence_limit,
+    )
 
     with torch.device("meta"):
         shape_probe = modeling.Qwen2_5_VLDecoderLayer(config, layer_idx=0)
@@ -817,7 +900,7 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
         config.hidden_size,
         config.intermediate_size,
         request["sequence_length"],
-        len(set(args.token_ids)),
+        len(set(token_ids)),
     )
     _require_memory_budget(
         mps_estimate["estimated_peak_mps_bytes"],
@@ -830,7 +913,7 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
     embedding_rows, remapped_ids, embedding_row_sources = _load_selected_embedding_rows(
         checkpoint_root,
         embedding_shard,
-        args.token_ids,
+        token_ids,
         config.hidden_size,
         torch,
         safe_open,
@@ -873,11 +956,11 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
         rotary = modeling.Qwen2_5_VLRotaryEmbedding(config=config, device=device)
     rotary.eval()
     token_count = request["sequence_length"]
-    position_values = [args.position_offset + index for index in range(token_count)]
+    position_values = [position_offset + index for index in range(token_count)]
     multimodal_positions = torch.tensor(
         [position_values, position_values, position_values], device=device, dtype=torch.int64
     ).reshape(3, 1, token_count)
-    binary_mask = torch.tensor(args.attention_mask, device=device, dtype=torch.int64).reshape(1, -1)
+    binary_mask = torch.tensor(attention_mask, device=device, dtype=torch.int64).reshape(1, -1)
     cache_position = torch.arange(token_count, device=device, dtype=torch.int64)
 
     with torch.inference_mode():
@@ -891,7 +974,7 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
             position_ids=None,
         )
         if causal_mask is None:
-            if any(value == 0 for value in args.attention_mask):
+            if any(value == 0 for value in attention_mask):
                 raise RuntimeError("official causal-mask helper omitted a required padded-key mask")
             causal_mask_mode = "official implicit causal mask for all-visible input"
         else:
@@ -970,6 +1053,7 @@ def _run_prefix(args: argparse.Namespace, sidecar_writer: Any) -> dict[str, Any]
                 "position_offset",
             )
         } | {"inv_freq_f32": [float(value) for value in inv_freq]},
+        **({"hy_nomas_prompt": prompt_contract} if prompt_contract is not None else {}),
         "capture": {
             "source_layer_count": SOURCE_LAYER_COUNT,
             "prefix_layer_count": PREFIX_LAYER_COUNT,
@@ -1044,19 +1128,40 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint-root", type=Path, required=True)
     parser.add_argument("--checkpoint-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True, help="new JSON manifest path")
-    parser.add_argument("--token-ids", type=_parse_int_list, default=list(DEFAULT_TOKEN_IDS))
+    parser.add_argument("--token-ids", type=_parse_int_list)
     parser.add_argument(
         "--attention-mask",
         type=_parse_int_list,
-        default=list(DEFAULT_ATTENTION_MASK),
         help="integer 0/1 mask matching --token-ids; visible tokens must precede right padding",
     )
     parser.add_argument("--position-offset", type=int, default=0)
+    parser.add_argument(
+        "--hy-nomas-prompt-file",
+        type=Path,
+        help="UTF-8 prompt text; runs the pinned HyNomas video JSON template and tokenizer",
+    )
+    parser.add_argument(
+        "--hy-nomas-root",
+        type=Path,
+        help="pinned HyNomas source checkout required with --hy-nomas-prompt-file",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if (args.hy_nomas_prompt_file is None) != (args.hy_nomas_root is None):
+        raise SystemExit("--hy-nomas-prompt-file and --hy-nomas-root must be supplied together")
+    if args.hy_nomas_prompt_file is not None and args.position_offset != 0:
+        raise SystemExit("HyNomas video prompts use the original zero position offset")
+    if args.hy_nomas_prompt_file is not None:
+        if args.token_ids is not None or args.attention_mask is not None:
+            raise SystemExit("HyNomas prompt mode does not accept --token-ids or --attention-mask")
+    else:
+        if args.token_ids is None:
+            args.token_ids = list(DEFAULT_TOKEN_IDS)
+        if args.attention_mask is None:
+            args.attention_mask = list(DEFAULT_ATTENTION_MASK)
     output = args.output.expanduser()
     if output.is_symlink():
         raise SystemExit(f"refusing symlink fixture output: {output}")

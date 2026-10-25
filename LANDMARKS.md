@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QWEN25-NATURAL-PROMPT-2026-10-25] One native natural prompt and GPU conditioning crop match a fresh 26-block oracle
+
+- Native pinned Qwen2.5 byte-BPE/template preparation matches the original
+  Hy-Nomas prompt methods for the tram prompt. Constructor crop discovery is
+  108; raw input is 1388 tokens, with 131 visible tokens. The selected suffix
+  is 1280 positions, with 23 visible tokens. Forward preserves all raw context
+  and positions; only the final selected hidden state and mask are cropped.
+- Fresh official Transformers 4.57.3 MPS BF16 capture and native fed-RMS run
+  match all 27 boundaries: 134,313,984 exact BF16 words at unchanged
+  `atol=rtol=2e-5`. The GPU suffix adds 4,587,520 exact words and 1280 exact
+  Int32 mask entries. This extends, rather than replaces, the earlier repeated
+  S1280 qualification of 123,863,040 words below.
+- The actual native-prepared IDs/mask/positions feed the GPU. Preallocated
+  suffix copies follow the prefix on the same chain. One terminal wait, zero
+  pre-terminal reads through instrumented MetalBuffer APIs, zero tracked
+  encode allocations and 29 post-terminal reads are observed. In-flight plan
+  release is rejected. Source/destination immutability and same-chain producer
+  ordering remain explicit caller preconditions, not general handle leases.
+- Named admission is 12,738,809,672 bytes; crop allocations add 9,185,712 bytes.
+  Native GPU elapsed is 2.796 s and guarded whole-command time is 25.907 s.
+  This correctness run establishes neither a speedup nor video throughput.
+  Both sequential runs preserve a file-cache-aware 10% floor, 15 GiB sampled
+  process cap, 64 MiB swap-growth stop and 600 s deadline. Oracle/native peaks
+  are 14,714,783,832/13,744,023,416 bytes, observed swap growth zero.
+- Correlated MiniQuad verdict: ROBUST for the one-prompt serial scope.
+  Defaults stay unchanged and the path stays opt-in. No multimodal/batched or
+  all-input parity, integrated DiT conditioning, full generation, exact CUDA
+  reduction or hermetic companion-object rebuild claim follows.
+- Evidence: `docs/qwen25-hy-nomas-frontier.md`,
+  `.landmark/evidence/2026-10-25-qwen25-natural-prompt.json` and
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/natural-prompt-receipt-v1.json`.
+  Refresh on scoped source, prompt/tokenizer/template, checkpoint, precision,
+  geometry, toolchain/SDK/OS/device or execution/lifetime changes, or artifact
+  loss/hash mismatch. Next: actual Hy-Nomas text projection weights and a
+  resident conditioning-to-DiT intermediate gate. Return pointer:
+  `docs/hy-nomas-native-frontier.md`; no full generation is admitted.
+
 ### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] The selected pretrained 26-block text prefix matches bounded official MPS captures
 
 - The opt-in Qwen2.5-VL adapter reuses CogniQwen Metal buffers and the serial

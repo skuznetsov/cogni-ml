@@ -2,6 +2,53 @@ require "spec"
 require "digest/sha256"
 require "../examples/support/qwen25_prefix_probe"
 
+private def qwen25_prompt_contract
+  crop = 120
+  tokens = Array(Int32).new(1280 + crop, 151643)
+  tokens[0] = 151644
+  tokens[crop - 3] = 151644
+  tokens[crop - 2] = 872
+  tokens[crop - 1] = 198
+  tokens[crop] = 32
+  mask = Array(Int32).new(tokens.size) { |index| index <= crop ? 1 : 0 }
+  prompt = "A natural scene."
+  rendered = "source fixture; native rendering checked separately"
+  metadata = JSON.parse({
+    "prompt" => prompt, "prompt_sha256" => Digest::SHA256.hexdigest(prompt),
+    "rendered_prompt" => rendered, "rendered_prompt_sha256" => Digest::SHA256.hexdigest(rendered),
+    "template_name" => "li-dit-encode-video-json", "upstream_revision" => "911cea6458a89c2663513ff7099561ec190dd491",
+    "marker" => "<|im_start|>user\n", "marker_token_ids" => [151644, 872, 198],
+    "crop_start" => crop, "raw_length" => tokens.size, "text_length" => 1280,
+    "token_ids" => tokens, "attention_mask" => mask,
+    "cropped_token_ids" => tokens[crop..], "cropped_attention_mask" => mask[crop..],
+  }.to_json)
+  {metadata, tokens, mask}
+end
+
+describe "Hy-Nomas prompt input binding" do
+  it "admits a full raw request and its 1280-token output suffix" do
+    metadata, tokens, mask = qwen25_prompt_contract
+    Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens, mask, 0).should eq(120)
+  end
+
+  it "rejects cropping inputs before forward, wrong masks, and shifted crop" do
+    metadata, tokens, mask = qwen25_prompt_contract
+    expect_raises(ArgumentError) { Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens[120..], mask[120..], 0) }
+    bad_mask = mask.dup
+    bad_mask[1] = 0
+    expect_raises(ArgumentError) { Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens, bad_mask, 0) }
+    metadata.as_h["crop_start"] = JSON::Any.new(119_i64)
+    expect_raises(ArgumentError) { Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens, mask, 0) }
+  end
+
+  it "rejects a changed prompt digest and nonzero model positions" do
+    metadata, tokens, mask = qwen25_prompt_contract
+    expect_raises(ArgumentError) { Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens, mask, 1) }
+    metadata.as_h["prompt"] = JSON::Any.new("changed prompt")
+    expect_raises(ArgumentError) { Qwen25PrefixProbe.validate_prompt_contract!(metadata, tokens, mask, 0) }
+  end
+end
+
 private def with_qwen25_prefix_fixture(&block : String, String ->)
   root = ""
   checkpoint = ""

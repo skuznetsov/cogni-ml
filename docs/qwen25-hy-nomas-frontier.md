@@ -1,11 +1,12 @@
 # Qwen2.5-VL text decoder for Hy-Nomas
 
-Status: the opt-in GPU-fed RMS path passes the bounded pretrained 26-block
-S1280 prefix gate, 2026-10-25. Embedding plus every retained hidden output
-match the authenticated official MPS BF16 capture raw-bit exactly:
-123,863,040 values, unchanged `atol=rtol=2e-5`. Both RMS sites in every block
-use a prepared exponent buffer. Execution retains one terminal wait, zero
-pre-terminal activation reads and zero tracked encode allocations.
+Status: one natural text-only video prompt passes native preparation,
+embedding, the opt-in fed-RMS 26-block prefix and GPU conditioning crop against
+a fresh official MPS BF16 capture, 2026-10-25. The full 1388-token input has
+134,313,984 raw-bit-exact values across 27 hidden boundaries. Its selected
+1280-token suffix has 4,587,520 exact BF16 values and an exact Int32 mask.
+The unchanged finite gate is `atol=rtol=2e-5`. Execution retains one terminal
+wait, zero pre-terminal activation reads and zero tracked encode allocations.
 
 The legacy default is unchanged. Its earlier S4/S32 prefix qualifications and
 S1280 rejection remain historical controls. The S1280 investigation localized
@@ -14,10 +15,128 @@ constant/fed controls identified an operand-source-sensitive route on that
 saved input. A subsequent same-binary block-0 pair qualified all 17 stages;
 the fresh prefix run now qualifies all 27 retained hidden boundaries. The
 52 individual RMS intermediates are not retained by the shared workspace.
+The earlier repeated-token S1280 fed capture remains a separate qualification:
+123,863,040 exact values across the same 27 boundaries.
 
-The full text encoder and video pipeline remain in progress. This adapter
-and its fed option remain opt-in. Natural-prompt/tokenizer/cropping integration,
-multimodal positions, all-input parity and video generation are not qualified.
+The adapter, fed option and new prompt/crop path remain opt-in. Qualification
+is limited to the inputs and boundaries below. The integrated Hy-Nomas text
+projection/DiT handoff, multimodal positions, all-input parity and video
+generation remain unqualified.
+
+## Natural video prompt and GPU conditioning crop: qualified on one prompt
+
+CAUTION, 2026-10-25: qualify one distinct natural prompt through the pinned
+Hy-Nomas `li-dit-encode-video-json` template and Qwen2.5-VL tokenizer. The
+previous probe accepted prepared IDs; its repeated S1280 fixture could not establish
+prompt preparation or output cropping. Reuse native byte-BPE with the exact
+Qwen2.5 pretokenizer and fail closed on unsupported tokenizer assets. Preserve
+the default Qwen3.5 pretokenizer. CPU tokenization and source-file I/O precede
+GPU encoding; no neural operation or activation crosses to CPU before drain.
+
+The original constructor discovers the user-header crop using a 256-token
+prepass on `a photo of a cat`. Video tokenization then right-truncates/pads to
+`1280 + crop_start`, not 1280. Forward the complete system/user context with
+three identical position axes `0..Sraw-1`, including pad positions, through
+embedding and all 26 blocks. Hy-Nomas calls the inner text model, bypassing
+the outer multimodal position builder. Crop only the final selected hidden
+output and mask. Prepare contiguous GPU destination buffers before encoding;
+append exact-byte copies to the existing command root. Rollback is omitting
+the new prompt/crop option; saved explicit-ID probes and RMS defaults remain.
+
+DoD: CPU differentials must match rendered UTF-8, IDs, right padding,
+truncation, the discovered crop and positions against mechanically extracted
+upstream template/tokenization methods and the pinned tokenizer. Reject
+changed asset hashes and a wrong crop/input binding. Test one-byte-short crop
+admission before allocation. Capture a fresh official MPS BF16 oracle for the
+natural prompt, then run the native tokenizer, embedding, fed 26-block prefix
+and conditioning crop sequentially against it. Compare all 27 raw hidden
+boundaries and the cropped final hidden/mask at unchanged `atol=rtol=2e-5`,
+reporting raw-word differences separately. Require one terminal wait, zero
+pre-wait activation reads, zero tracked encode allocations, and in-flight
+release rejection. Use file-cache-aware 10% admission, 15 GiB sampled process
+cap, 64 MiB swap-growth stop and a 600-second deadline. No full generation.
+
+The strongest failure is apparently correct prompt IDs with a wrong upstream
+boundary: cropped inputs would discard system context, reset positions, and
+change every later hidden state. Authenticate the complete raw request and
+crop metadata, and compare the GPU crop with the authenticated raw suffix.
+Bind claims to the actual Transformers version and source hashes; local
+4.57.3 is not the upstream dependency pin 4.57.1. A failure retains its first
+boundary and leaves this route opt-in without widening numerical tolerances.
+
+### Observed result
+
+The prompt is `A yellow tram turns through a wet downtown intersection at dusk
+as pedestrians wait under umbrellas.` with no trailing newline. Native CPU
+preparation matches the independently produced rendering, token IDs, mask,
+positions and crop. The raw width is 1388: 108 system/header tokens plus 1280
+conditioning positions. There are 131 visible raw tokens and 23 visible suffix
+tokens. All raw positions, including padding, retain their original indices.
+The selected checkpoint and tokenizer revision is
+`eb6ba55b40ada64977147b52e50a4145ee89ac4f`.
+
+The fresh oracle runs official Transformers 4.57.3 decoder layers 0 through 25
+on MPS in BF16. Pinned Hy-Nomas template/tokenization methods are mechanically
+extracted from source revision `911cea6458a89c2663513ff7099561ec190dd491`;
+the complete Hy-Nomas model is not instantiated. The source-derived selected
+state is `hidden_states[-3]` of its 28-layer text model, without final norm.
+This is not a claim about the upstream dependency pin 4.57.1 or CUDA reductions.
+
+All 27 native raw boundaries pass: 134,313,984 BF16 words, zero tolerance
+failures and zero differing raw words. The final GPU crop passes 4,587,520
+BF16 words and 1280 mask entries, also exactly. Native preparation supplies the
+actual uploaded arrays; the reference IDs are an equality check, not the input
+source. Two preallocated byte copies follow the prefix on the same command
+root. There is one terminal wait, zero tracked MetalBuffer allocations during
+encoding, zero reads through the three instrumented MetalBuffer read APIs
+before drain, and 29 diagnostic reads after it. Both prefix and crop plan
+release attempts before completion are rejected.
+
+Aggregate named admission is 12,738,809,672 bytes under a 13 GiB cap. The crop
+adds 9,185,712 bytes: 5552 raw-mask bytes, 9,175,040 hidden-suffix bytes and
+5120 cropped-mask bytes. The native GPU elapsed interval is 2.796 seconds;
+encoding is 2.039 seconds and terminal waiting 0.965 seconds. These intervals
+overlap and must not be summed as GPU time. The entire guarded native command
+takes 25.907 seconds, including setup and comparison; this is a correctness
+run, not a speedup or video-throughput benchmark.
+
+The independent external guards preserve the file-cache-aware 10% floor,
+15 GiB sampled process cap, 64 MiB swap-growth stop and 600-second deadline.
+The oracle/native sampled peaks are 14,714,783,832/13,744,023,416 bytes;
+minimum cache-aware headroom is 12,254,314,496/18,184,142,848 bytes. Both finish
+with exit zero and zero observed swap growth. These sampled observations do
+not reserve memory or bound between-sample spikes.
+
+The focused Crystal suite reports 56 examples, zero failures and three existing
+pending cases requiring the external `llama-tokenize` utility; 20 Python tests
+pass, including
+the pinned prompt integration. Seven CPU native/upstream differentials match
+all 18 fields: five nonblank inputs cover Russian/English, decomposed Unicode,
+newlines, a special token and right truncation from 1914 to 1388 tokens. Two
+separate tests exercise the original empty/whitespace semantics by bypassing
+only the fixture helper's file-reader guard; the ordinary helper correctly
+rejects those inputs. Normal/cpu-only type checks, strict Clang compilation,
+release linking, formatting and diff checks pass.
+
+Correlated MiniQuad review is ROBUST for this prompt and the documented serial
+caller contract. Borrowed source and destination handles must remain valid and
+unmodified until drain; the API does not mechanically prevent direct buffer
+mutation or certify a source buffer's producer-chain identity. The runner obeys
+those preconditions. The generic blit bridge and two pinned reused companion
+objects have no new checked ABI or hermetic rebuild claim. All-input parity,
+multimodal/batched inputs, the DiT handoff, generation and default promotion
+remain outside this certificate.
+
+Evidence: `fixtures/prefix-natural-tram-v1.{json,bf16le}`,
+`logs/{oracle,native}-prefix-natural-tram-v1.*` and
+`logs/natural-prompt-receipt-v1.json` under
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
+`.landmark/evidence/2026-10-25-qwen25-natural-prompt.json`.
+Refresh after scoped source, prompt/tokenizer/template, checkpoint, geometry,
+precision, compiler/SDK/OS/device, scheduling/lifetime changes, or artifact
+loss/hash mismatch. Next falsifier: admit the actual Hy-Nomas text projection
+and its weights, then consume this resident conditioning in a bounded DiT
+block and compare intermediate outputs with upstream. No full generation.
 
 ## Block-0 GPU-fed RMS integration: qualified on the saved S1280 input
 
