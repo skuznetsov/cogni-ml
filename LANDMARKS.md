@@ -6,6 +6,57 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-CONDITIONED-EIGHT-2026-10-25] Eight BF16-cache blocks preserve exact live-conditioning replay at full J
+
+- Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight
+  full-row refiner/time embedding -> pretrained DiT blocks 0--7.
+  B1/V5280/T1280/J6560, 23 valid text rows / J5303 attention prefix,
+  zero-filled omitted query results and full-row projections/residuals.
+  Native BF16 parameters/F32 math match pinned upstream BF16-rounded F32
+  parameters through the bounded MPS adapter; CUDA/Magi and BF16 activation
+  semantics remain outside this qualification.
+- Both native requests match all 27 Qwen states, crop/mask and 18 consumer
+  captures raw exact: 110,102,528 F32 values/request, zero tolerance failures
+  or bit differences, unchanged finite `atol=rtol=2e-5`. The second request
+  remains exact after NaN poisoning 116 shared scratch/output buffers.
+  All 13 old four-block fixture spans remain byte-identical. Shared scratch
+  and one MPS workspace retain sixteen distinct final output banks and
+  direct GPU successor inputs; expected conditioning is never neural input.
+- Zero tracked encode allocations/preterminal activation reads, one terminal
+  wait and 47 postterminal reads/request. Early producer/crop/consumer release
+  is rejected. Finite wrong-block controls at positions 4 and 7 preserve all
+  predecessors and fail both target outputs; wrong padding keeps conditioning
+  exact and fails block 0. Eleven focused and fourteen four-block regression
+  Crystal examples, sixteen Python CPU tests and six live pre-Metal CLI
+  rejections pass. All 128 new BF16 tensors match fresh upstream conversion
+  during creation and reload. The independent stdlib byte/count audit covers
+  all eight cache files, F32 subsets/manifests, 12 upstream source files and
+  both requests' reported native hashes against reference spans. It is not a
+  second neural oracle or independently retained native payload. Correlated
+  MiniQuad verdict: ROBUST within this scope.
+- Named buffers: 19,099,905,356 bytes (consumer 6,361,095,684), including setup
+  F32 refiner staging; eight BF16 block payloads total 2,416,910,336 bytes.
+  Positive sampled process peak: 20,339,880,776 bytes (18.94 GiB). Minimum
+  headroom across native neural runs: 21,386,215,424 bytes. All admitted neural
+  runs preserve cache-aware 10% reserve, 22 GiB native / 9 GiB upstream caps,
+  64 MiB swap-growth stop and 600 s deadline, with zero observed swap growth
+  or abort. Samples do not bound instantaneous peaks. An undersized pre-Metal
+  256 MiB CLI attempt and two test-only failures are excluded; repaired specs
+  and 1 GiB CLI controls pass. The full checkpoint is not downloaded and its
+  declared whole-file LFS digest remains unverified.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-conditioned-eight.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-eight-20261025/logs/conditioned-eight-receipt-v1.json`.
+  Setup/terminal diagnostics use CPU; initial video input is synthetic and
+  upstream RoPE tables are uploaded. Immutable operator-pinned local files
+  and opaque companion object ancestry remain assumptions. No full generation,
+  video quality, full-stack fit or performance claim. Rollback: omit the opt-in
+  eight-block probe or revert this atomic change; retain the four-block control.
+  Next falsifier: separately budget a longer real-conditioning chain before
+  full-stack/video execution. Refresh on scoped code/source/cache/fixture,
+  precision/geometry, lifetime, toolchain/SDK/OS/device or artifact changes;
+  reread live memory before later GPU work.
+
 ### [LM-HY-NOMAS-CONDITIONED-FOUR-2026-10-25] Live Qwen conditioning feeds four full-J blocks with exact MPS replay
 
 - Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight

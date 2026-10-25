@@ -1,4 +1,4 @@
-# Two to four sequential blocks with common intermediate scratch and one
+# Two to eight sequential blocks with common intermediate scratch and one
 # prepared MPS workspace. Final output banks are distinct; within-block
 # input/scratch aliases are rejected. Each predecessor's output banks are the
 # next block's inputs.
@@ -28,8 +28,8 @@ module ML::Video
                    allow_shared_modulation : Bool = false)
       config.validate!
       attention_tokens = HyNomasMPSWorkspace.attention_tokens_for(config, valid_text_tokens)
-      unless (2..4).includes?(weights.size)
-        raise ArgumentError.new("Hy-Nomas serial workspace requires between two and four weight Arenas")
+      unless (2..8).includes?(weights.size)
+        raise ArgumentError.new("Hy-Nomas serial workspace requires between two and eight weight Arenas")
       end
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(config.batches,

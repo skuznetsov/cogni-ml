@@ -1,18 +1,109 @@
 # Hy-Nomas native Metal frontier
 
 Document status (2026-10-25): the opt-in natural-prompt Qwen26 prefix, GPU crop,
-actual-weight text refiner/time embedding and pretrained DiT blocks 0 to 3 now
+actual-weight text refiner/time embedding and pretrained DiT blocks 0 to 7 now
 pass a connected upstream gate at full B1/V5280/T1280/J6560. The bounded MPS
 adapter excludes padded attention rows and explicitly zeros their results;
 CUDA/Magi padding semantics remain unqualified. Local DiT weights cover these
-four blocks (128 tensors) plus 42 refiner/time tensors; the full checkpoint is
+eight blocks (256 tensors) plus 42 refiner/time tensors; the full checkpoint is
 not downloaded. Earlier synthetic-input, short-input and workspace controls
 retain their recorded scopes. A header-only planner accounts for complete DiT
-parameters and serial residency, but execution beyond four blocks, full-stack
+parameters and serial residency, but execution beyond eight blocks, full-stack
 peaks, video quality and model-wide performance remain open. This composition
 probe establishes correctness, not a speedup.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: eight BF16-cache blocks with real conditioning
+
+Status: VERIFIED within this MPS-adapter composition scope. The live
+Qwen26/crop/refiner chain feeds pretrained blocks 0 through 7 at
+B1/V5280/T1280/J6560. Keep the existing
+23-valid-text-row MPS attention adapter, full-row projections/residuals,
+BF16-resident parameters, F32 arithmetic and finite `atol=rtol=2e-5`.
+
+Risk: CAUTION (new checkpoint identities, shared scratch and output lifetime).
+Rollback: omit the opt-in eight-block probe; the four-block qualification
+remains the control. Authenticate the four additional named checkpoint subsets
+and qualify all native BF16 cache words against upstream GPU conversion before
+neural execution. Admit aggregate named bytes before Metal allocation. The
+strongest failure is a wrong successor or overwritten earlier output bank.
+
+DoD: focused count/admission/lifetime/oracle tests, then a fresh pinned-source
+MPS eight-block oracle and guarded native live chain. Compare conditioning and
+all sixteen block outputs on full J; require exact repeat after scratch poison,
+a finite wrong-last-block control, zero tracked encode allocations/preterminal
+activation reads and one terminal wait per request. Keep the cache-aware 10%
+reserve, bounded process caps, 64 MiB swap-growth stop and 600 s deadlines.
+No full generation, quality or speed claim. Refresh on source/cache/reference,
+geometry, precision, ownership, toolchain, OS or device changes.
+
+Observed: the fresh pinned upstream modules execute all eight actual blocks,
+168 attention query chunks (21 per block, C256/G16), the full 1280-row refiner
+and scalar timestep 500. The oracle consumes authenticated saved Qwen state
+26; native execution regenerates all 27 BF16 prefix boundaries from the same
+natural prompt, then passes the GPU crop directly to the refiner. The projected
+text, time vector and all sixteen block outputs match upstream raw exact in
+both native requests: 18 captures / 110,102,528 F32 values per request, zero
+bit differences, tolerance failures or maximum absolute error. The repeat
+remains exact after NaN poisoning 116 unique nonconstant scratch/output buffers.
+All thirteen tensor spans from the prior four-block fixture remain byte-exact.
+
+The eight blocks share intermediate scratch and one prepared MPS workspace;
+their sixteen output banks remain distinct. Every request has zero tracked
+encode-time MetalBuffer allocations and preterminal activation reads, one
+terminal wait and 47 postterminal diagnostic reads (27 Qwen states, crop/mask,
+18 consumer outputs). In-flight producer, crop and consumer releases are
+rejected. A finite block-3-for-block-4 control preserves blocks 0--3 and fails
+both block-4 outputs; a block-6-for-block-7 control preserves blocks 0--6 and
+fails both block-7 outputs. A wrong-padding control preserves the producer and
+refiner but fails both block-0 outputs. Later fault propagation stays finite.
+
+New source subsets 4--7 contain their exact 32 named F32 tensors under the
+pinned HF revision/header; the full checkpoint LFS digest remains declared,
+not verified. All 128 new BF16 tensor payloads match upstream conversion word
+for word during native GPU conversion and direct BF16 reload. Each resident
+block cache contains 302,113,792 BF16 payload bytes; all eight total
+2,416,910,336 bytes. Inference block caches need no F32 weight staging or
+conversion dispatches. Retained setup F32 refiner staging remains counted.
+
+The new focused target passes 11 Crystal examples; the previous four-block
+target passes 14 examples on the widened serial implementation. Sixteen new
+CPU Python tests and six live pre-Metal CLI rejections pass. A separately
+written streamed audit authenticates all eight F32 subsets/manifests, all
+eight BF16 cache files, 12 upstream source files, producer code and selected
+reference spans. Both requests' native-reported capture hashes match those
+spans. This is correlated source/artifact review, not a second neural oracle
+or a separately recorded native payload. MiniQuad verdict: ROBUST in scope.
+
+Aggregate native named bytes: 19,099,905,356; consumer: 6,361,095,684. The
+positive sampled process peak is 20,339,880,776 bytes (18.94 GiB); its minimum
+cache-aware headroom is 22,184,656,896 bytes. Across the native neural runs,
+the minimum headroom is 21,386,215,424 bytes (19.92 GiB). Upstream sampled
+peak is 9,593,507,128 bytes. Admitted neural runs preserve 10% reserve,
+22 GiB native / 9 GiB upstream process caps, 64 MiB swap-growth stops and
+600 s deadlines, without observed swap growth or guard abort. Sampling does
+not bound instantaneous peaks. A first pre-Metal CLI admission attempt hit
+its undersized 256 MiB cap while reading the existing Qwen diagnostic
+snapshot; it is excluded and the six CLI controls pass with 1 GiB caps.
+Two new test-only build failures were repaired before the passing spec run.
+
+Reproduce with `make spec_hy_nomas_conditioned_eight`,
+`make spec_hy_nomas_conditioned_four`,
+`python3 -B -m unittest discover -s spec -p 'hy_nomas_block47*test.py'`,
+`python3 -B spec/hy_nomas_conditioned_eight_reference_test.py` and
+`make hy_nomas_conditioned_eight_probe`. Use the external guard, SSD
+`BUILD_DIR` and exact arguments indexed by
+`/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-eight-20261025/logs/conditioned-eight-receipt-v1.json`.
+Repository evidence: `.landmark/evidence/2026-10-25-hy-nomas-conditioned-eight.json`.
+Operator-pinned immutable local artifacts remain a trust assumption; copied
+companion object ancestry is opaque. Setup I/O/uploads and terminal diagnostic
+reads use CPU. Initial video input is synthetic and upstream ND RoPE tables
+are uploaded. This does not qualify CUDA/Magi padding semantics, BF16
+activations, the full diffusion stack, video quality or generation speed.
+Next falsifier: separately budget a longer real-conditioning block chain
+before attempting full-stack/video execution; preserve the same geometry,
+precision and finite tolerance gates.
 
 ## Qualified slice: real masked conditioning through four full-J blocks
 
@@ -95,9 +186,9 @@ companion object ancestry is opaque. Setup file I/O/uploads and terminal
 diagnostics use CPU. Initial video input is synthetic, and upstream ND RoPE
 tables are uploaded rather than newly generated natively. No full diffusion,
 model-wide residency, CUDA/Magi or BF16-activation parity, quality or speed
-claim. Next falsifier: a separately budgeted extension beyond four resident
-blocks on the same real conditioning and full padded geometry, before any
-full-stack or video trial.
+claim. The subsequent eight-block extension is qualified above; execution
+beyond that boundary still needs separate admission before a full-stack or
+video trial.
 
 ## Qualified slice: four consecutive BF16-cache blocks at full J
 

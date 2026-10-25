@@ -217,8 +217,8 @@ module ML::Video
     def register_serial_blocks!(blocks : Array(HyNomasDualStreamBlock),
                                 inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer))) : Nil
       raise ArgumentError.new("Hy-Nomas serial registration must precede encode") if @released || @last_chain || !@serial_bindings.empty?
-      unless (2..4).includes?(blocks.size) && inputs.size == blocks.size && blocks[0].same?(@block)
-        raise ArgumentError.new("Hy-Nomas serial registration requires two to four ordered blocks beginning with the prepared block")
+      unless (2..8).includes?(blocks.size) && inputs.size == blocks.size && blocks[0].same?(@block)
+        raise ArgumentError.new("Hy-Nomas serial registration requires two to eight ordered blocks beginning with the prepared block")
       end
       bindings = [] of SerialBinding
       allowed = @fixed_inputs.dup

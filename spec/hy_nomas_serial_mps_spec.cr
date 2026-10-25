@@ -85,7 +85,7 @@ describe ML::Video::HyNomasMPSSerialWorkspace do
         inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
         inputs["cos"], inputs["sin"], attention_query_chunk: 9, attention_heads_per_group: c.heads)
       allocations = ML::MetalBuffer.video_spec_allocations
-      expect_raises(ArgumentError, /between two and four/) do
+      expect_raises(ArgumentError, /between two and eight/) do
         ML::Video::HyNomasMPSSerialWorkspace.new(c, [weights[0]],
           inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"])
       end
@@ -238,13 +238,13 @@ describe ML::Video::HyNomasMPSSerialWorkspace do
       # An invalid block count is rejected before the serial owner allocates
       # scratch or its MPS workspace.
       allocations_before_count_rejections = ML::MetalBuffer.video_spec_allocations
-      expect_raises(ArgumentError, /between two and four/) do
+      expect_raises(ArgumentError, /between two and eight/) do
         ML::Video::HyNomasMPSSerialWorkspace.new(c, [weights[0]], inputs["img"], inputs["txt"],
           inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"])
       end
-      five_weights = Array(ML::Video::Arena).new(5) { weights[0] }
-      expect_raises(ArgumentError, /between two and four/) do
-        ML::Video::HyNomasMPSSerialWorkspace.new(c, five_weights, inputs["img"], inputs["txt"],
+      nine_weights = Array(ML::Video::Arena).new(9) { weights[0] }
+      expect_raises(ArgumentError, /between two and eight/) do
+        ML::Video::HyNomasMPSSerialWorkspace.new(c, nine_weights, inputs["img"], inputs["txt"],
           inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"])
       end
       ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_count_rejections)
@@ -378,6 +378,191 @@ describe ML::Video::HyNomasMPSSerialWorkspace do
             actual.zip(control_expected[index][name]).all? do |value, reference|
               value.finite? && reference.finite? && value.unsafe_as(UInt32) == reference.unsafe_as(UInt32)
             end.should be_true, "four-block #{name}, block #{index}, iteration #{iteration} must match separate plans"
+          end
+        end
+      end
+    ensure
+      chains.each { |chain| chain.commit_and_wait unless chain.completed? }
+      serial.try(&.release)
+      workspaces.reverse_each(&.release)
+      arenas.reverse_each(&.release)
+      chains.each(&.release)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(roots_before)
+    end
+  end
+
+  it "runs eight distinct consecutive blocks with retained output banks and repeatable shared scratch" do
+    c = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 6, text_tokens: 3,
+      dim: 64, heads: 2, head_dim: 32, ffn_dim: 256,
+      attention_precision: ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl)
+    arenas = [] of ML::Video::Arena
+    workspaces = [] of ML::Video::HyNomasMPSWorkspace
+    chains = [] of ML::Metal::MPSCommandChain
+    serial = nil.as(ML::Video::HyNomasMPSSerialWorkspace?)
+    roots_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
+    begin
+      weights = Array(ML::Video::Arena).new(8) do |block_index|
+        arena = ML::Video::Arena.new
+        arenas << arena
+        ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(c).each_with_index do |binding, tensor|
+          count = binding.shape.reduce(1_i64) { |n, d| n * d }.to_i32
+          values = Array(Float32).new(count) do |i|
+            if binding.target.includes?("norm_weight")
+              1.0_f32 + block_index * 0.125_f32 + (i % 7) * 0.003_f32
+            else
+              Math.sin(i * 0.17 + tensor + block_index * 0.31).to_f32 * 0.04_f32
+            end
+          end
+          arena.upload(binding.target, values)
+        end
+        arena
+      end
+      inputs = ML::Video::Arena.new
+      arenas << inputs
+      {"img" => c.image_rows * c.dim, "txt" => c.text_rows * c.dim,
+       "vec" => c.dim, "vec_txt" => c.dim}.each_with_index do |(name, count), salt|
+        inputs.upload(name, Array(Float32).new(count) { |i| Math.sin(i * 0.13 + salt).to_f32 * 0.25_f32 })
+      end
+      inputs.upload("cos", Array(Float32).new(c.video_tokens * c.head_dim, 1.0_f32))
+      inputs.upload("sin", Array(Float32).new(c.video_tokens * c.head_dim, 0.0_f32))
+
+      before_invalid = ML::MetalBuffer.video_spec_allocations
+      nine_weights = Array(ML::Video::Arena).new(9) { weights[0] }
+      expect_raises(ArgumentError, /between two and eight/) do
+        ML::Video::HyNomasMPSSerialWorkspace.new(c, nine_weights, inputs["img"], inputs["txt"],
+          inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"])
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(before_invalid)
+
+      controls = weights.map do |weight|
+        scratch = ML::Video::Arena.new
+        arenas << scratch
+        ML::Video::HyNomasDualStreamBlock.prepare_scratch!(scratch, c)
+        ML::Video::HyNomasDualStreamBlock.new(c, weight, scratch)
+      end
+      controls.each_with_index do |block, index|
+        img = index == 0 ? inputs["img"] : controls[index - 1].image_output
+        txt = index == 0 ? inputs["txt"] : controls[index - 1].text_output
+        workspaces << ML::Video::HyNomasMPSWorkspace.new(block, img, txt,
+          inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"],
+          attention_query_chunk: 9, attention_heads_per_group: c.heads)
+      end
+      serial = ML::Video::HyNomasMPSSerialWorkspace.new(c, weights,
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+        inputs["cos"], inputs["sin"], attention_query_chunk: 9,
+        attention_heads_per_group: c.heads)
+      blocks = serial.blocks
+      blocks.size.should eq(8)
+      blocks.each_with_index do |block, index|
+        block.checkpoints.keys.sort.should eq(controls[index].checkpoints.keys.sort)
+        block.image_output.same?(block.text_output).should be_false
+        blocks.each_with_index do |other, other_index|
+          next if other_index <= index
+          block.image_output.same?(other.image_output).should be_false
+          block.image_output.same?(other.text_output).should be_false
+          block.text_output.same?(other.image_output).should be_false
+          block.text_output.same?(other.text_output).should be_false
+        end
+        controls.each do |control|
+          block.image_output.same?(control.image_output).should be_false
+          block.image_output.same?(control.text_output).should be_false
+          block.text_output.same?(control.image_output).should be_false
+          block.text_output.same?(control.text_output).should be_false
+        end
+        next if index == 0
+        block.checkpoints.each do |name, buffer|
+          next if {"img.output", "txt.output"}.includes?(name)
+          buffer.same?(blocks[0].checkpoints[name]).should be_true
+        end
+      end
+      serial.mps_workspace_bytes.should eq(workspaces[0].resident_bytes)
+
+      # A malformed final successor is rejected before the first dispatch and
+      # does not bind the owner to the drained-or-empty failed chain.
+      target = "txt_attn_k_norm_weight"
+      original = weights[7][target]
+      replacement = weights[6][target]
+      original.same?(replacement).should be_false
+      weights[7].buffers[target] = replacement
+      rejected = ML::Metal::MPSCommandChain.new
+      chains << rejected
+      roots_before_rejection = rejected.observed_root_count
+      allocations_before_rejection = ML::MetalBuffer.video_spec_allocations
+      begin
+        expect_raises(ArgumentError, /cached weight binding changed/) { serial.encode(rejected) }
+      ensure
+        weights[7].buffers[target] = original
+      end
+      rejected.observed_root_count.should eq(roots_before_rejection)
+      rejected.wait_count.should eq(0)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_rejection)
+
+      reference_chain = ML::Metal::MPSCommandChain.new
+      chains << reference_chain
+      allocations_before_reference = ML::MetalBuffer.video_spec_allocations
+      controls.each_with_index do |block, index|
+        img = index == 0 ? inputs["img"] : controls[index - 1].image_output
+        txt = index == 0 ? inputs["txt"] : controls[index - 1].text_output
+        block.encode_mps(reference_chain, img, txt, inputs["vec"],
+          inputs["vec_txt"], inputs["cos"], inputs["sin"], workspaces[index])
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_reference)
+      reference_chain.wait_count.should eq(0)
+      reference_chain.commit_and_wait
+      reference_chain.wait_count.should eq(1)
+      control_roots = reference_chain.completed_root_timings.size
+      expected = controls.map do |block|
+        block.checkpoints.transform_values { |buffer| buffer.read(buffer.element_count) }
+      end
+
+      poison = ML::Metal::ComputePipeline.new("hy_serial_eight_poison", <<-METAL)
+        #include <metal_stdlib>
+        using namespace metal;
+        kernel void hy_serial_eight_poison(device float *output [[buffer(0)]],
+          constant uint &count [[buffer(1)]], uint i [[thread_position_in_grid]]) {
+          if (i < count) output[i] = as_type<float>(0x7fc00000u);
+        }
+        METAL
+      poison_buffers = [] of ML::MetalBuffer
+      blocks.each do |block|
+        scratch, _ = block.mps_workspace_buffers
+        ML::Video::HyNomasDualStreamBlock.scratch_plan(c).each_with_index do |(name, _), index|
+          next if name == "hy_nomas.zero_head_bias"
+          buffer = scratch[index]
+          poison_buffers << buffer unless poison_buffers.any? { |other| other.same?(buffer) }
+        end
+      end
+      # The bound is exact: two outputs for each of eight blocks plus the
+      # non-output slots in the single shared scratch set.
+      scratch_plan = ML::Video::HyNomasDualStreamBlock.scratch_plan(c)
+      poison_buffers.size.should eq(16 + scratch_plan.size - 3)
+
+      2.times do |iteration|
+        chain = ML::Metal::MPSCommandChain.new
+        chains << chain
+        allocations = ML::MetalBuffer.video_spec_allocations
+        poison_buffers.each do |buffer|
+          chain.encoder.set_pipeline(poison)
+            .set_buffer(buffer, 0, ML::Metal::BufferAccess::Write)
+            .set_value(buffer.element_count.to_u32, 1)
+            .dispatch_1d(buffer.element_count)
+        end
+        result_img, result_txt = serial.encode(chain)
+        result_img.same?(blocks[7].image_output).should be_true
+        result_txt.same?(blocks[7].text_output).should be_true
+        chain.wait_count.should eq(0)
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        expect_raises(ArgumentError, /Complete/) { serial.release }
+        chain.commit_and_wait
+        chain.wait_count.should eq(1)
+        chain.completed_root_timings.size.should eq(control_roots)
+        blocks.each_with_index do |block, index|
+          block.checkpoints.each do |name, buffer|
+            next unless index == 7 || {"img.output", "txt.output"}.includes?(name)
+            actual = buffer.read(buffer.element_count)
+            actual.zip(expected[index][name]).all? do |value, reference|
+              value.finite? && reference.finite? && value.unsafe_as(UInt32) == reference.unsafe_as(UInt32)
+            end.should be_true, "eight-block #{name}, block #{index}, iteration #{iteration} must match separate plans"
           end
         end
       end
