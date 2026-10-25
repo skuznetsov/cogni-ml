@@ -439,6 +439,7 @@ module ML::GGUF
     @blocks = [] of Qwen25VLBlockPlan
     getter workspace : Qwen25VLWorkspace
     getter admitted_named_bytes : Int64
+    getter rms_power_fed : Bool
     @released = false
 
     def blocks : Array(Qwen25VLBlockPlan)
@@ -459,11 +460,21 @@ module ML::GGUF
       Qwen25VLBlockPlan.weight_shapes(config).values.sum { |s| Qwen25VLBlockPlan.elements(s) * 2 } * count
     end
 
-    def self.named_bytes(config : Qwen25VLConfig, tokens : Int32, count : Int32) : Int64
+    def self.named_bytes(config : Qwen25VLConfig, tokens : Int32, count : Int32,
+                         rms_power_fed : Bool = false) : Int64
       # Include borrowed weights, input, mask, positions and inverse frequency.
       weight_bytes(config, count) + workspace_bytes(config, tokens, count) +
         tokens.to_i64 * config.dim * 2 + tokens.to_i64 * tokens * 2 +
-        tokens.to_i64 * 4 + config.head_dim.to_i64 // 2 * 4
+        tokens.to_i64 * 4 + config.head_dim.to_i64 // 2 * 4 +
+        Qwen25VLBlockPlan.rms_exponent_bytes(rms_power_fed) * count
+    end
+
+    def self.admit_named_bytes!(config : Qwen25VLConfig, tokens : Int32,
+                                count : Int32, max_bytes : Int64,
+                                rms_power_fed : Bool = false) : Int64
+      bytes = named_bytes(config, tokens, count, rms_power_fed)
+      raise ArgumentError.new("prefix exceeds admitted aggregate named-buffer budget") unless 0 < bytes <= max_bytes
+      bytes
     end
 
     private def self.validate_geometry!(config : Qwen25VLConfig, tokens : Int32, count : Int32) : Nil
@@ -473,16 +484,18 @@ module ML::GGUF
 
     def initialize(config : Qwen25VLConfig, tokens : Int32, input : MetalBuffer,
                    mask : MetalBuffer, positions : MetalBuffer, inv_freq : MetalBuffer,
-                   layer_weights : Array(Hash(String, MetalBuffer)), max_named_bytes : Int64)
+                   layer_weights : Array(Hash(String, MetalBuffer)), max_named_bytes : Int64,
+                   @rms_power_fed : Bool = false)
       count = layer_weights.size
-      @admitted_named_bytes = self.class.named_bytes(config, tokens, count)
-      raise ArgumentError.new("prefix exceeds admitted aggregate named-buffer budget") unless @admitted_named_bytes <= max_named_bytes
+      @admitted_named_bytes = self.class.admit_named_bytes!(config, tokens, count,
+        max_named_bytes, @rms_power_fed)
       @workspace = Qwen25VLWorkspace.new(config, tokens, self.class.workspace_bytes(config, tokens, count))
       begin
         next_input = input
         layer_weights.each_with_index do |weights, index|
           block = Qwen25VLBlockPlan.new(config, tokens, next_input, mask, positions,
-            inv_freq, weights, index, workspace: @workspace)
+            inv_freq, weights, index, workspace: @workspace,
+            rms_power_fed: @rms_power_fed)
           @blocks << block
           next_input = block.output
         end

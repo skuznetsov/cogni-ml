@@ -41,4 +41,30 @@ describe ML::GGUF::Qwen25VLPrefixPlan do
     expect_raises(ArgumentError) { ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, 0, rms_power_fed: true) }
     expect_raises(ArgumentError) { ML::GGUF::Qwen25VLBlockPlan.workspace_bytes(config, config.max_positions + 1) }
   end
+
+  it "admits per-block RMS exponent bytes without charging the shared workspace" do
+    config = ML::GGUF::Qwen25VLConfig.hy_nomas_7b
+    {1, 26}.each do |count|
+      legacy = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, 1280, count)
+      fed = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, 1280, count,
+        rms_power_fed: true)
+      expected_legacy = count == 1 ? 799_048_960_i64 : 12_681_314_560_i64
+      expected_workspace = count == 1 ? 320_476_160_i64 : 549_852_160_i64
+
+      legacy.should eq(expected_legacy)
+      fed.should eq(legacy + count.to_i64 * 4)
+      ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, 1280, count,
+        rms_power_fed: false).should eq(legacy)
+      ML::GGUF::Qwen25VLPrefixPlan.admit_named_bytes!(config, 1280, count, fed,
+        rms_power_fed: true).should eq(fed)
+      expect_raises(ArgumentError, /prefix exceeds/) do
+        ML::GGUF::Qwen25VLPrefixPlan.admit_named_bytes!(config, 1280, count,
+          fed - 1, rms_power_fed: true)
+      end
+
+      shared = ML::GGUF::Qwen25VLPrefixPlan.workspace_bytes(config, 1280, count)
+      shared.should eq(expected_workspace)
+      (fed - legacy).should eq(count.to_i64 * 4)
+    end
+  end
 end

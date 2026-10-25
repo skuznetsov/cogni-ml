@@ -22,6 +22,7 @@ reference = ""
 reference_sha256 = ""
 report_path = ""
 max_named_bytes = 0_i64
+rms_power_fed = false
 OptionParser.parse do |parser|
   parser.banner = "Bounded pretrained Qwen2.5-VL prefix qualification; use the external memory guard."
   parser.on("--checkpoint-root PATH", "Pinned local safetensors checkpoint") { |v| checkpoint_root = v }
@@ -29,6 +30,7 @@ OptionParser.parse do |parser|
   parser.on("--reference-sha256 SHA256", "Trusted digest from a successful upstream oracle run") { |v| reference_sha256 = v }
   parser.on("--report PATH", "New native comparison report") { |v| report_path = v }
   parser.on("--max-named-bytes N", "Aggregate named-buffer admission cap") { |v| max_named_bytes = v.to_i64 }
+  parser.on("--rms-power-fed", "Use a prepared GPU exponent for both RMS sites in every prefix block") { rms_power_fed = true }
 end
 raise ArgumentError.new("checkpoint, reference, trusted digest, report and positive named-buffer budget required") if checkpoint_root.empty? || reference.empty? || reference_sha256.empty? || report_path.empty? || max_named_bytes <= 0
 raise ArgumentError.new("refusing to replace native report") if File.exists?(report_path) || File.symlink?(report_path)
@@ -39,7 +41,8 @@ config = fixture.config
 tokens = fixture.tokens.size
 unique_ids = fixture.tokens.uniq.sort
 gather_sizes = ML::GGUF::Qwen25VLEmbeddingPlan.resident_bytes(config, tokens, unique_ids.size)
-prefix_bytes = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, tokens, Qwen25PrefixProbe::PREFIX_LAYERS)
+prefix_bytes = ML::GGUF::Qwen25VLPrefixPlan.named_bytes(config, tokens,
+  Qwen25PrefixProbe::PREFIX_LAYERS, rms_power_fed: rms_power_fed)
 named_bytes = prefix_bytes + gather_sizes.compact_rows + gather_sizes.remapped_ids
 raise ArgumentError.new("pretrained prefix exceeds aggregate named-buffer budget") unless named_bytes <= max_named_bytes
 STDERR.puts "admitted #{named_bytes} named bytes, #{tokens} tokens, 26 BF16 decoder blocks"
@@ -77,7 +80,9 @@ begin
     STDERR.puts "loaded native decoder weights #{index + 1}/26" if (index + 1) % 4 == 0 || index == 25
   end
   prefix = ML::GGUF::Qwen25VLPrefixPlan.new(config, tokens, embedding.output, mask,
-    positions, inv_freq, layer_weights, prefix_bytes)
+    positions, inv_freq, layer_weights, prefix_bytes, rms_power_fed: rms_power_fed)
+  raise "prefix RMS mode was not applied to every block" unless prefix.blocks.all? { |block| block.rms_power_fed == rms_power_fed }
+  rms_fed_blocks = prefix.blocks.count(&.rms_power_fed)
   chain = ML::Metal::MPSCommandChain.new
   allocations_before = ML::MetalBuffer.qwen25_probe_allocations
   encode_started = Time.instant
@@ -87,6 +92,14 @@ begin
   encode_allocations = ML::MetalBuffer.qwen25_probe_allocations - allocations_before
   raise "encoding allocated named Metal buffers" unless encode_allocations == 0
   raise "encoding introduced a device wait" unless chain.wait_count == 0
+  early_release_rejected = false
+  begin
+    prefix.release
+  rescue ex : ArgumentError
+    raise ex unless ex.message.try(&.includes?("terminal wait required"))
+    early_release_rejected = true
+  end
+  raise "in-flight prefix release was accepted" unless early_release_rejected
   wait_started = Time.instant
   chain.commit_and_wait
   wait_seconds = (Time.instant - wait_started).total_seconds
@@ -103,13 +116,20 @@ begin
       json.field "checkpoint_revision", ML::GGUF::Qwen25VLWeights::EXPECTED_MODEL_REVISION
       json.field "tokens", tokens
       json.field "prefix_layers", 26
+      json.field "rms_power_fed", rms_power_fed
+      json.field "rms_fed_block_count", rms_fed_blocks
+      json.field "rms_statistics_sites_using_fed_exponent", 2 * rms_fed_blocks
+      json.field "rms_exponent_named_bytes", Qwen25PrefixProbe::PREFIX_LAYERS.to_i64 * ML::GGUF::Qwen25VLBlockPlan.rms_exponent_bytes(rms_power_fed)
       json.field "named_bytes", named_bytes
       json.field "shared_workspace_bytes", ML::GGUF::Qwen25VLPrefixPlan.workspace_bytes(config, tokens, 26)
+      json.field "shared_stage_scratch_bytes", prefix.workspace.bytes
+      json.field "retained_hidden_output_bytes", Qwen25PrefixProbe::PREFIX_LAYERS.to_i64 * tokens * config.dim * 2
       json.field "gather_bytes", {compact_rows: gather_sizes.compact_rows,
                                   remapped_ids: gather_sizes.remapped_ids,
                                   output: gather_sizes.output, total: gather_sizes.total}
       json.field "named_allocations_during_encode", encode_allocations
       json.field "terminal_wait_count", chain.wait_count
+      json.field "early_release_rejected", early_release_rejected
       json.field "diagnostic_readbacks_after_terminal_wait", comparisons.size
       json.field "activation_readbacks_before_terminal_wait", 0
       json.field "encode_seconds", encode_seconds

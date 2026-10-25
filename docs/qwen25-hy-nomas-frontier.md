@@ -1,27 +1,23 @@
 # Qwen2.5-VL text decoder for Hy-Nomas
 
-Status: the bounded pretrained 26-block prefix passes its unchanged numerical
-gate at four and 32 tokens, 2026-10-24. Embedding plus all 26 hidden outputs
-have zero differing BF16 words against the authenticated official MPS BF16
-captures. The earlier state-25 divergence was localized to input RMSNorm and
-repaired with precise Metal square root/reciprocal and explicit BF16 rounding.
-The S1280 check compares all 26 blocks but rejects the unchanged numerical
-gate, first at block 0's post-attention RMSNorm. The isolated continuation
-localizes its statistics delta to differing F32 square values: the native mean
-and epsilon addition are raw-bit exact on authenticated upstream squares.
-The 2026-10-25 native control reproduces upstream square/mean/epsilon bits with
-a GPU-fed exponent; a matched constant exponent reproduces the discrepancy.
-This identifies an operand-source-sensitive route on the saved input, without
-changing production RMS arithmetic or qualifying the full prefix.
-The connected follow-up also reproduces upstream epsilon, inverse-root,
-normalized F32/BF16 and BF16 gain bits exactly on that input, including the
-production-style in-place scalar scratch and non-trace normalize kernel.
-The opt-in block follow-up connects that exponent to both RMS sites and
-matches all 17 block-0 stages at S1280 raw-bit exactly. The default block and
-prefix still use the earlier square path; the 26-block S1280 recheck remains
-open.
-The full text encoder and video pipeline remain in progress. This adapter is opt-in; neither a
-1280-token prompt nor video generation is qualified here.
+Status: the opt-in GPU-fed RMS path passes the bounded pretrained 26-block
+S1280 prefix gate, 2026-10-25. Embedding plus every retained hidden output
+match the authenticated official MPS BF16 capture raw-bit exactly:
+123,863,040 values, unchanged `atol=rtol=2e-5`. Both RMS sites in every block
+use a prepared exponent buffer. Execution retains one terminal wait, zero
+pre-terminal activation reads and zero tracked encode allocations.
+
+The legacy default is unchanged. Its earlier S4/S32 prefix qualifications and
+S1280 rejection remain historical controls. The S1280 investigation localized
+the first divergence to block-0 post-attention RMS square statistics; matched
+constant/fed controls identified an operand-source-sensitive route on that
+saved input. A subsequent same-binary block-0 pair qualified all 17 stages;
+the fresh prefix run now qualifies all 27 retained hidden boundaries. The
+52 individual RMS intermediates are not retained by the shared workspace.
+
+The full text encoder and video pipeline remain in progress. This adapter
+and its fed option remain opt-in. Natural-prompt/tokenizer/cropping integration,
+multimodal positions, all-input parity and video generation are not qualified.
 
 ## Block-0 GPU-fed RMS integration: qualified on the saved S1280 input
 
@@ -98,15 +94,100 @@ Evidence: `logs/native-block0-rms-{legacy,fed}-v1.*`,
 `logs/block0-fed-rms-receipt-v1.json` under
 `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
 `.landmark/evidence/2026-10-25-qwen25-block0-fed-rms.json`.
-Next falsifier: separately admit the fed option in the 26-block prefix,
+The next falsifier was to separately admit the fed option in the 26-block prefix,
 including per-plan exponent accounting and shared-workspace lifecycle, then
 compare all retained hidden states at S1280 under the same finite gate and
-10% reserve. Keep the earlier full-prefix rejection until that check passes.
+10% reserve. The qualified prefix result below discharges that saved-input
+falsifier; the legacy rejection remains a negative control.
 Refresh this block certificate on scoped source, fixture/input, precision or
 geometry, toolchain/SDK/OS/device, execution/lifecycle changes, artifact loss
 or hash mismatch.
 
-## Active pretrained prefix slice
+## S1280 prefix GPU-fed RMS integration: qualified on the saved input
+
+CAUTION, 2026-10-25: extend the qualified opt-in block path to every block in
+the 26-block prefix. Keep the shared stage/scratch workspace and each retained
+hidden output unchanged. Each block owns its prepared immutable four-byte
+exponent, shared by that block's two RMS sites; admit all 104 additional named
+bytes before allocating any prefix resources. Preserve the legacy default and
+its authenticated numerical rejection as a negative control. Rollback is
+disabling the prefix option.
+
+DoD: first reject a one-byte-short fed prefix budget in a CPU falsifier, then
+build the native prefix probe and compare embedding plus every retained hidden
+state against the authenticated saved S1280 upstream fixture. Keep
+`atol=rtol=2e-5`, report raw BF16 differences separately, and require all 26
+blocks to bind the fed path. Encode embedding and the entire prefix in one
+chain: one terminal wait, no pre-terminal activation reads or tracked encode
+allocations. Exercise premature release rejection before the same terminal
+wait. Source-inspect shared scratch lifetime and serial ordering through a
+correlated MiniQuad review. Run only after file-cache-aware admission with a
+10% reserve, the prior 15 GiB sampled process cap, 64 MiB swap-growth stop and
+600-second deadline. An admission or numerical failure retains its exact
+boundary; do not widen tolerances or run full generation.
+
+### Observed result
+
+The freshly built native candidate exits zero under the guard and compares
+all 27 saved boundaries: embedding and outputs of blocks 0--25. Each boundary
+has 4,587,520 BF16 words; all 123,863,040 words match exactly, with zero
+tolerance failures, zero raw differences and max_abs zero. The retained oracle
+is authenticated by manifest SHA256
+`b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a`
+and sidecar SHA256
+`59404b4664b1f5d5313c8719565324da2dd77d03c24b14d5278c8d66be5f3bd2`;
+it was not recaptured in this slice. The earlier legacy prefix rejection uses
+the same fixture but an older binary, so it is a historical negative rather
+than a fresh same-binary prefix pair or an isolated causal experiment.
+
+The runner checks all 26 block options and reports 52 configured RMS sites.
+Numerical coverage is the 27 retained hidden boundaries, not 52 independently
+captured RMS intermediates. Each plan owns a four-byte immutable exponent for
+its two RMS sites. Total named admission is 12,681,448,808 bytes, including
+104 exponent bytes. Shared stage/scratch is 311,301,120 bytes; retained hidden
+outputs are a separate 238,551,040 bytes. Their 549,852,160-byte sum remains
+the existing `workspace_bytes` budget and `shared_workspace_bytes` report
+field; the new split fields distinguish shared storage from retained outputs.
+Exact-fit and one-byte-short CPU admission checks pass for one and 26 blocks.
+
+The prefix has one terminal wait, zero pre-terminal activation reads, zero
+tracked encode-time MetalBuffer allocations and 27 post-wait diagnostic reads.
+Premature prefix release is rejected before that same wait. Block arithmetic,
+native encode steps and serial shared-workspace ordering are unchanged.
+The observed GPU interval is 2.650 seconds; this single correctness run is not
+a speedup benchmark. The complete guarded process, including authentication,
+weight loading and diagnostics, takes 30.203 seconds.
+
+The sampled process-group peak is 13,596,551,152 bytes under the 15 GiB cap;
+minimum cache-aware headroom is 17,448,779,776 bytes and minimum pressure-free
+percentage is 58. Observed swap growth is zero and there is no guard abort.
+The 10% reserve, 64 MiB swap-growth stop and 600-second deadline are intact.
+Sampling and file-backed reclaimability do not establish a reservation or
+hard instantaneous peak bound.
+
+Thirty-six focused Crystal examples, normal/cpu-only no-codegen, strict Clang,
+release linking and format/diff checks pass. Correlated MiniQuad source and
+artifact review returns ROBUST within the declared saved-input scope. Reused companion
+objects have pinned bytes but opaque source ancestry; this is not a hermetic
+build. The repeated-token, right-padded S1280 fixture does not qualify natural
+prompts, tokenizer/cropping, multimodal positions, batching or full generation.
+
+Evidence: `logs/native-prefix-s1280-rms-fed-v1.*` and
+`logs/prefix-fed-rms-receipt-v1.json` under
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024`, indexed by
+`.landmark/evidence/2026-10-25-qwen25-prefix-fed-rms.json`.
+Next falsifier: compare fed hidden states on a distinct natural text-only
+prompt with authenticated upstream tokenization, position/mask and cropping
+semantics before connecting the Hy-Nomas text-conditioning pipeline. Keep the
+fed route opt-in; no full generation. Refresh on scoped source, fixture/input,
+precision/geometry, toolchain/SDK/OS/device, execution/lifecycle changes,
+artifact loss or hash mismatch.
+
+## Pretrained prefix slice
+
+The remainder records earlier slices and their then-open falsifiers. The
+qualified opt-in saved-S1280 boundary is stated above; legacy rejections
+below remain useful historical controls.
 
 This slice connects the pinned pretrained BF16 checkpoint and compares all
 26 selected decoder outputs with the official Transformers MPS decoder.
@@ -140,15 +221,16 @@ hashes, tensor inventory and fixture/runtime provenance must be retained.
 No full model, vision encoder, LM head, last-two-block or video run is admitted.
 Rollback is removal of the opt-in prefix adapter, loader and focused runner.
 
-### S1280 check: rejected at block-0 post-attention RMSNorm
+### Historical legacy S1280 check: rejected at block-0 post-attention RMSNorm
 
 The bounded probe extends only the sequence geometry: 1,280 query rows,
 1,260 visible tokens (the authenticated S32 case's 20 visible IDs repeated
 63 times), 20 right-padding IDs and position offset 7. It has 18 unique
 embedding rows. This is a deterministic numerical stress case, not a natural
 language prompt or tokenizer-integration qualification. The exact aggregate
-native named admission is 12,681,448,704 bytes, including the shared
-549,852,160-byte stage/scratch workspace and all 26 resident BF16 blocks.
+native named admission is 12,681,448,704 bytes, including the
+549,852,160-byte combined shared stage/scratch and retained-output budget
+and all 26 resident BF16 blocks.
 
 Run the official producer and native prefix sequentially, each under the
 file-cache-aware guard with an explicit 10% floor, 15 GiB sampled process cap,
@@ -225,7 +307,7 @@ The updated indexed runner also passes the old layer-24 S32/input-site fixture
 with all 17 stages raw-BF16 exact (`native-block24-s32-indexed-regression-v1`).
 The final focused CPU producer suite passes 29 tests, and Crystal formatting
 passes. Production math remains unchanged; the diagnostic extension and
-measured rejection are the completed slice, while S1280 parity remains open.
+measured rejection completed that slice, while S1280 parity was still open.
 
 Correlated MiniQuad review returns ROBUST for fixture binding, indexed/site
 selection, lifecycle constraints and localization; it does not qualify S1280
@@ -360,8 +442,8 @@ match on identical upstream squares. The production helper's target matches
 the native-square arm, but the upstream-square input is fed to a separately
 compiled materialized reduction graph. No test bypasses the square inside the
 fused production graph. Neither that counterfactual nor the closed MPSGraph
-power algorithm is established. The full S1280 prefix remains rejected and
-production arithmetic is unchanged.
+power algorithm is established. At that slice the full S1280 prefix remained
+rejected and production arithmetic was unchanged.
 
 Focused validation passes 32 Python producer tests and seven Crystal fixture,
 comparator, tamper/snapshot and budget examples, plus normal/cpu-only Crystal
@@ -537,8 +619,8 @@ reproducing its Int64 feed/cast topology. The caller-supplied RMS manifest
 digest is preserved in the pinned launch record.
 
 The subsequent opt-in block integration above closes the both-RMS block-0
-falsifier on the saved input. The 26-block S1280 prefix remains rejected until
-its separately admitted recheck passes. This earlier connected diagnostic's
+falsifier on the saved input. The subsequently qualified prefix recheck above
+closes that saved-S1280 continuation. This earlier connected diagnostic's
 source/build/input/run pins and review bounds are indexed in
 `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json`
 and `.landmark/evidence/2026-10-25-qwen25-connected-rms.json`.

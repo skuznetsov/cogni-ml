@@ -33482,3 +33482,42 @@ Refresh after source/toolchain/device/model/workload changes.
   remain legacy. No full generation. Rollback: disable the block option. Refresh
   on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
   execution/lifecycle changes, artifact loss or hash mismatch.
+
+## 2026-10-25 — GPU-fed RMS closes saved S1280 26-block prefix parity
+
+- Active goal: connect the qualified prepared exponent to both RMS sites in
+  every prefix block and compare S1280 hidden states. Return pointer:
+  `docs/qwen25-hy-nomas-frontier.md`, S1280 prefix GPU-fed RMS section.
+  PrefixPlan exposes an opt-in `rms_power_fed` flag, forwards it to all plans,
+  and admits 26 private four-byte feeds before workspace allocation. Legacy
+  defaults and native block arithmetic/encode are unchanged. Rollback: disable
+  the option. Shared scratch remains serial; hidden outputs remain retained.
+- Fresh guarded candidate exits zero against the authenticated retained official
+  MPS BF16 oracle: embedding plus outputs of blocks 0--25, all 123,863,040 BF16
+  words raw exact, zero tolerance failures, unchanged `atol=rtol=2e-5`.
+  All 26 plans bind the fed path (52 configured RMS sites); only 27 hidden
+  boundaries are retained and compared, not 52 RMS intermediates. The earlier
+  prefix negative uses an older binary and is historical, not a new same-binary
+  pair. No new upstream capture or all-input/causal/speedup claim follows.
+- Named bytes are 12,681,448,808, including 104 exponent bytes. Shared stage/
+  scratch is 311,301,120 bytes and 26 retained outputs total 238,551,040 bytes;
+  their existing aggregate workspace budget is 549,852,160 bytes. Exact-fit and
+  one-byte-short admission checks pass for one/26 blocks. One terminal wait,
+  zero pre-terminal activation reads, zero tracked encode-time allocations,
+  27 post-wait reads, and premature release rejection are observed. Single-run
+  GPU interval: 2.650 seconds; guarded whole-process time: 30.203 seconds.
+- File-cache-aware guard preserves 10% reserve, 15 GiB sampled process cap,
+  64 MiB swap-growth stop and 600-second deadline. Sampled peak is
+  13,596,551,152 bytes, minimum headroom 17,448,779,776 bytes, minimum pressure-
+  free percentage 58, no observed swap growth and no violation. Sampling is
+  not a reservation or instantaneous peak bound. Thirty-six focused Crystal
+  examples and normal/cpu-only no-codegen, strict Clang, release link and
+  format/diff checks pass. Correlated MiniQuad is ROBUST for this saved-input
+  scope. Reused companion objects have pinned bytes but opaque source ancestry.
+- Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-fed-rms-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-prefix-fed-rms.json`.
+  Next falsifier: a distinct natural text-only prompt with authenticated upstream
+  tokenization, mask/positions and cropping semantics before connecting the
+  Hy-Nomas text-conditioning pipeline. Keep opt-in; no full generation. Refresh
+  on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
+  execution/lifecycle changes, artifact loss or hash mismatch.
