@@ -6,6 +6,52 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PRETRAINED-SERIAL-2026-10-25] Actual DiT blocks 0 to 1 reuse scratch/workspace with exact bounded replay
+
+- Distinct pretrained block-0/block-1 subsets, resident in BF16 with F32 MPS
+  math/attention, pass all 80 upstream intermediate comparisons at unchanged
+  finite `atol=rtol=2e-5`. All 3,186,688 F32 values are also raw-bit exact for
+  independent plans and two shared-workspace requests. Inputs are authenticated
+  saved refiner output (23 text tokens), six seeded hidden video tokens, one
+  timestep vector and saved RoPE. Qwen/refiner are not rerun in this slice.
+- Each shared request poisons all 56 unique nonconstant scratch buffers with
+  NaNs before encoding and preserves 80 GPU snapshots before reuse. Shared,
+  independent and repeated outputs remain raw-F32 exact. One terminal wait per
+  request, zero tracked encode allocations/pre-terminal activation reads and
+  80 post-terminal diagnostic reads are observed. Rooted leases retain weight
+  staging/plans/resources through terminal completion or an incomplete drain.
+- Scratch plus workspace decreases from 219,816,192 to 110,145,664 named bytes:
+  109,670,528 bytes (104.59 MiB, 49.9%) saved for this geometry. Both phases are
+  admitted before GPU allocation. The independent peak estimate includes raw
+  conversion staging; opaque MPS/runtime allocations remain outside named
+  counters. This correctness probe does not establish a throughput speedup.
+- Substituting block 0 for successor block 1 preserves the first block and
+  rejects 38 successor checkpoints, including both final outputs. A cached
+  Linear/RMS binding guard rejects equal-shape/equal-dtype Arena rebinding before
+  allocation/dispatch; disabling that guard makes its rejection test fail.
+  One-byte aggregate admission rejects without tracked GPU allocations/reads.
+- Verification: 14 CPU tests pass; native suite has 60 examples, 56 passed,
+  zero failures/errors, four pre-existing external-oracle pending cases.
+  Fresh bridge build, upstream capture, positive/negative probes, byte audit
+  and formatting pass. Correlated MiniQuad verdict: ROBUST for this bounded
+  serial scope. Oracle/native probes retain a 4 GiB sampled process cap,
+  cache-aware 10% host reserve, 64 MiB swap-growth stop and 600 s deadline;
+  builds/small tests use 3 GiB. Highest sampled oracle/probe footprint is
+  2,454,849,288 bytes, minimum headroom 34,913,026,048 bytes, swap growth zero.
+  Sampling cannot exclude short spikes or guarantee cache reclaimability.
+- Local subsets now cover 64 DiT plus 42 refiner/time tensors. The complete
+  checkpoint remains absent; its declared LFS digest is unverified. Evidence
+  is pinned source/header and observed byte-range/subset hashes with immutable
+  local files. No CUDA/Magi, full-stack/full-J, quality, default or RTF claim.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-pretrained-serial.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-receipt-v1.json`.
+  Refresh on scoped source/weights/input/precision, compiler/SDK/OS/device,
+  ownership/scheduling changes or artifact loss/hash mismatch. Next: a bounded
+  full-stack weight/residency plan and full-geometry positional/output gates
+  before additional downloads or pipeline qualification. No full generation
+  is admitted; Wan return pointer is `docs/wan-performance-frontier.md`.
+
 ### [LM-HY-NOMAS-CONNECTED-TEXT-2026-10-25] One native prompt reaches an actual-weight short DiT block on one GPU chain
 
 - Native prompt preparation, all 26 selected Qwen2.5 blocks, the BF16 GPU
@@ -46,8 +92,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   `/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/logs/conditioning-receipt-v1.json`.
   Refresh on scoped source/input/mask/timestep/checkpoint, precision, toolchain,
   SDK/OS/device, scheduling/lifetime changes or artifact loss/hash mismatch.
-  Next: authenticate actual pretrained block-1 weights, compare block 0 to 1
-  against upstream with the shared workspace, then reassess full-stack memory.
+  The pretrained-serial landmark above discharges the subsequent saved-input
+  block-0-to-block-1 comparison. Full-stack memory/composition remains open.
   Wan return pointer remains `docs/wan-performance-frontier.md`; no full
   generation is admitted by this continuation.
 

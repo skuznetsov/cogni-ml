@@ -1,0 +1,193 @@
+{
+  "adversary_verdict": "ROBUST",
+  "base_commit": "3df64ebf14b424e1079d5890c0b3e2a1d95b4cdb",
+  "claim_level": "VERIFIED",
+  "failure_policy": "Reject or narrow the claim; preserve unchanged finite gate and memory/lifetime guards.",
+  "next_frontier": "Bounded full-stack residency/download plan and full-geometry positional/output gates before pipeline qualification; no full generation.",
+  "observed": {
+    "highest_sampled_oracle_probe_footprint_bytes": 2454849288,
+    "minimum_oracle_probe_cache_aware_headroom_bytes": 34913026048,
+    "negative": {
+      "comparisons": 80,
+      "elements": 3186688,
+      "failed_comparisons": 38,
+      "failed_elements": 1533556,
+      "max_abs": 139.36746215820312,
+      "raw_differences": 1533898
+    },
+    "negative_final_outputs": [
+      {
+        "elements": 12288,
+        "exact_first_repeat_match": null,
+        "exact_separate_match": false,
+        "failures": 12281,
+        "max_abs": 1.3316797018051147,
+        "name": "block1.img.output",
+        "raw_bit_differences": 12288
+      },
+      {
+        "elements": 47104,
+        "exact_first_repeat_match": null,
+        "exact_separate_match": false,
+        "failures": 47102,
+        "max_abs": 55.640167236328125,
+        "name": "block1.txt.output",
+        "raw_bit_differences": 47104
+      }
+    ],
+    "positive_groups": [
+      {
+        "comparisons": 80,
+        "elements": 3186688,
+        "failed_comparisons": 0,
+        "failed_elements": 0,
+        "max_abs": 0.0,
+        "raw_differences": 0
+      },
+      {
+        "comparisons": 80,
+        "elements": 3186688,
+        "failed_comparisons": 0,
+        "failed_elements": 0,
+        "max_abs": 0.0,
+        "raw_differences": 0
+      },
+      {
+        "comparisons": 80,
+        "elements": 3186688,
+        "failed_comparisons": 0,
+        "failed_elements": 0,
+        "max_abs": 0.0,
+        "raw_differences": 0
+      }
+    ],
+    "scope": "Report/counter/guard consistency; not independent numerical reproduction.",
+    "scratch_workspace_reuse_bytes": 109670528,
+    "status": "pass"
+  },
+  "receipt": {
+    "nbytes": 56744,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-receipt-v1.json",
+    "sha256": "f9bf97c70a6784e75ac344071652e18804453bc6ee6716b49978411b04321f0d"
+  },
+  "refresh_when": [
+    "scoped source/weights/input/precision changes",
+    "compiler/SDK/OS/device changes",
+    "ownership/scheduling changes",
+    "artifact loss/hash mismatch"
+  ],
+  "review": {
+    "nbytes": 2618,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-review-v1.json",
+    "sha256": "a3e3a6789bf8d7a415eb27025653da7dc5f4f7a98ce7d1e6f1c6fb5cf090379b"
+  },
+  "rollback": "Omit the optional probe; retain single-block and independent-plan controls.",
+  "schema": "landmark.evidence_packet.local.v1",
+  "scope": {
+    "admitted": "Actual pretrained blocks0->1, saved conditioning, B1/V6/T23/C2048/H16/D128/FF8192, single segment.",
+    "excluded": [
+      "input.img is the seeded hidden video state saved by the text-conditioning fixture; this is not full video latent conditioning or img_in patch embedding",
+      "PyTorch MPS F32 SDPA substitutes for Magi/Flash attention and does not establish their numerical parity",
+      "weights use F32 parameter storage containing BF16-rounded values; this does not test physical BF16-resident parameter storage or native BF16 compute",
+      "the declared whole-checkpoint HF LFS digest is not verified; source evidence is the pinned revision/header and the authenticated per-block byte-range payload hashes",
+      "the admitted chain covers only actual block 0 followed by actual block 1, not full-model execution or media generation",
+      "No live Qwen/refiner rerun in this slice.",
+      "No full-stack/full-J/quality/RTF/speedup/default-promotion claim.",
+      "Tracked allocation counters exclude opaque MPS/driver resources.",
+      "Sampled limits can miss between-poll spikes; file cache is a reclaimability estimate."
+    ],
+    "native_weight_storage": "BF16; F32 conversion/matmul/attention remain on GPU.",
+    "precision": {
+      "attention": "PyTorch MPS SDPA F32",
+      "compute": "F32",
+      "cuda_bf16_parity": false,
+      "native_bf16_compute": false,
+      "native_bf16_parameter_storage": false,
+      "parameter_storage": "F32",
+      "parameter_values": "BF16-rounded values",
+      "source_weight_dtype": "F32",
+      "weight_rounding": "source F32 values converted F32->BF16->F32 on MPS"
+    },
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "source_pins": [
+    {
+      "nbytes": 17350,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "3fb3e9de3fd5880ef3bfc95ef4c764ceb52b715e63d71f86f124c3764c7e2ca5"
+    },
+    {
+      "nbytes": 4549733,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+      "sha256": "11149b22dc9c5fef350bce68d20610dc4233649878d000db5d971b05b84554f2"
+    },
+    {
+      "nbytes": 99876,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-native-frontier.md",
+      "sha256": "7d01ca019b63e52247dcf7b04b42667bd9777c19982341d1c083ce0bcfa7bfda"
+    },
+    {
+      "nbytes": 50888,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block.cr",
+      "sha256": "ec86ac586d9ed087cb4b6307165167ab8a24b40883187659c167f6e849e7e257"
+    },
+    {
+      "nbytes": 10798,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_serial_mps_spec.cr",
+      "sha256": "7799d25e78ca747e5836b24dfcb450484d6870c133bb367e395c7cebb6eff4fa"
+    },
+    {
+      "nbytes": 2287,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_pretrained_serial_probe.cr",
+      "sha256": "d9ec2a69570300b938888059a62a1f37ce144c219837752b2ffc0d8147b77429"
+    },
+    {
+      "nbytes": 57121,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_pretrained_serial_probe.cr",
+      "sha256": "b165278a6604e3aea24fd6871a4da2dfb7efcfb2b430036d00384a982cf01224"
+    },
+    {
+      "nbytes": 507,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_pretrained_serial_admission_spec.cr",
+      "sha256": "614c9717b8bcbad13d31e0042f0b57de96b9aef5883d9b36ccb93d8ab7b1fbe7"
+    },
+    {
+      "nbytes": 1681,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_pretrained_serial_probe_spec.cr",
+      "sha256": "ed0e4728ffb0961cad416fcc24e2f2c0befc3c992755c1711b338540e3256b88"
+    },
+    {
+      "nbytes": 4759,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_block1_checkpoint_subset_test.py",
+      "sha256": "93064c46b973a2a72383617a8375193be409daaaf89b45d615a02cb503703de8"
+    },
+    {
+      "nbytes": 10333,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_pretrained_serial_reference_test.py",
+      "sha256": "0874299c6d643342822ff735b8708659cb38a0fa719b1036faee9b6271b5cf84"
+    },
+    {
+      "nbytes": 11024,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_block1_checkpoint_subset.py",
+      "sha256": "cf9eb7eceaf757bfe0c7e4d01a382afb217ea294c791ce6247176ef55b319f1f"
+    },
+    {
+      "nbytes": 45036,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pretrained_serial_reference.py",
+      "sha256": "4e47fe30497a4670ce2b3eea0b21f08db55c095e8611f3570094393a0f8311b9"
+    }
+  ],
+  "title": "Actual pretrained Hy-Nomas blocks 0 to 1 with shared scratch/workspace",
+  "verification": {
+    "budget": "One-byte aggregate budget rejects before tracked GPU allocation/readback.",
+    "checks_scope": "Curated artifact/source/report/guard index; its structure is not numerical proof.",
+    "cpu_tests": "14 passed.",
+    "guard_sensitivity": "External test-only guard disable yields the expected rejection-test failure.",
+    "native_suite": "60 examples:56 passed,0 failures/errors,4 optional external-oracle pending.",
+    "negative": "Wrong successor preserves block0 and fails38 block1 checkpoints including both outputs.",
+    "positive": "80 upstream checkpoints and two shared repeats pass finite gate; all raw-F32 exact."
+  }
+}

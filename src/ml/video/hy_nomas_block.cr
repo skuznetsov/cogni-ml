@@ -120,6 +120,11 @@ module ML::Video
       end
     end
 
+    record CachedWeightBinding,
+      target : String,
+      buffer : ML::MetalBuffer,
+      dtype : WeightDType
+
     record MPSLinearOperation,
       name : String,
       input : ML::MetalBuffer,
@@ -299,6 +304,7 @@ module ML::Video
     @scratch_buffers : Array(ML::MetalBuffer)
     @image_weights : StreamWeights
     @text_weights : StreamWeights
+    @cached_weight_bindings : Array(CachedWeightBinding)
     @image_buffers : StreamBuffers
     @text_buffers : StreamBuffers
     @joint_query : ML::MetalBuffer
@@ -475,6 +481,7 @@ module ML::Video
       validate_scratch_weight_aliases!
       @image_weights = StreamWeights.new(@weights, "img")
       @text_weights = StreamWeights.new(@weights, "txt")
+      @cached_weight_bindings = build_cached_weight_bindings
       @image_buffers = StreamBuffers.new(@scratch, "img", true)
       @text_buffers = StreamBuffers.new(@scratch, "txt", false)
       @joint_query = @scratch["hy_nomas.joint.query"]
@@ -623,6 +630,7 @@ module ML::Video
 
     def mps_validate_resources! : Nil
       validate_weights!
+      validate_cached_weight_bindings!
       validate_scratch!
       validate_scratch_weight_aliases!
     end
@@ -665,6 +673,52 @@ module ML::Video
         unless buffer.size == expected_bytes
           raise ArgumentError.new("Hy-Nomas weight buffer has an unexpected extent: #{binding.target}")
         end
+      end
+    end
+
+    private def validate_cached_weight_bindings! : Nil
+      @cached_weight_bindings.each do |binding|
+        current = @weights.buffers[binding.target]?
+        unless current && current.same?(binding.buffer)
+          raise ArgumentError.new("Hy-Nomas cached weight binding changed: #{binding.target}")
+        end
+        unless @weights.dtype(binding.target) == binding.dtype
+          raise ArgumentError.new("Hy-Nomas cached weight dtype changed: #{binding.target}")
+        end
+      end
+    end
+
+    private def build_cached_weight_bindings : Array(CachedWeightBinding)
+      bindings = [] of CachedWeightBinding
+      append_cached_stream_weight_bindings!(bindings, "img", @image_weights)
+      append_cached_stream_weight_bindings!(bindings, "txt", @text_weights)
+      bindings
+    end
+
+    private def append_cached_stream_weight_bindings!(bindings : Array(CachedWeightBinding),
+                                                      stream : String,
+                                                      weights : StreamWeights) : Nil
+      linear = [
+        {"mod", weights.modulation},
+        {"attn_q", weights.query},
+        {"attn_k", weights.key},
+        {"attn_v", weights.value},
+        {"attn_proj", weights.projection},
+        {"mlp_fc1", weights.mlp_fc1},
+        {"mlp_fc2", weights.mlp_fc2},
+      ]
+      linear.each do |(name, operation)|
+        bindings << CachedWeightBinding.new("#{stream}_#{name}_weight",
+          operation.weight, operation.weight_dtype)
+        bindings << CachedWeightBinding.new("#{stream}_#{name}_bias",
+          operation.bias, operation.bias_dtype)
+      end
+      {
+        {"attn_q_norm_weight", weights.query_norm},
+        {"attn_k_norm_weight", weights.key_norm},
+      }.each do |(name, operation)|
+        bindings << CachedWeightBinding.new("#{stream}_#{name}",
+          operation.weight, operation.dtype)
       end
     end
 

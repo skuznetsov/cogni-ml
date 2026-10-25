@@ -2,18 +2,103 @@
 
 Document status: the opt-in natural-prompt Qwen prefix, GPU conditioning crop,
 actual-weight text refiner/time embedding and one short-input DiT block pass a
-connected upstream intermediate gate (2026-10-25). Local DiT weights cover block
-0 plus the 42 refiner/time tensors; the full checkpoint is not downloaded.
-Earlier bounded J6560 profiles and shared two-application scratch/workspace
-controls remain qualified only within their recorded scopes. That actual-weight
-serial chain applies block 0 twice; its different-weight successor is synthetic.
-The shared path reduces named GPU memory but the J1024 paired probe shows no
-speedup. Real pretrained block 0 to block 1, full-J upstream output, CUDA/Magi
-parity, model-wide performance and the video pipeline remain open.
+connected upstream intermediate gate (2026-10-25). A separate same-input replay
+now qualifies actual pretrained DiT blocks 0 to 1 with shared scratch/workspace
+on the saved refiner output. Local DiT weights cover these 64 tensors plus the
+42 refiner/time tensors; the full checkpoint is not downloaded. Earlier bounded
+J6560 profiles and block-0-twice controls retain only their recorded scopes.
+Shared memory is reduced; no speedup follows from the new correctness probe.
+Full-stack composition, full-J upstream output, CUDA/Magi parity, model-wide
+performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
 
-## Active slice: resident Qwen conditioning through the actual text refiner
+## Qualified slice: distinct pretrained blocks 0 to 1 with shared scratch
+
+Status: VERIFIED within the saved-conditioning F32-math control below,
+2026-10-25. Two distinct pretrained modules match all 80 upstream intermediates
+(3,186,688 F32 values). Both independent plans and two repeated shared-workspace
+requests have zero raw-F32 differences against this capture. Every comparison
+also passes the unchanged finite `atol=rtol=2e-5` gate. The input is the preceding
+authenticated refiner output: 23 text tokens, one timestep vector and six seeded
+hidden video tokens with saved RoPE. This replay does not rerun Qwen/refiner or
+exercise the video input projection. Setup uploads these saved operands; the
+two sequential blocks, weight conversion, attention and snapshot copies execute
+on GPU.
+
+The new bounded extractor authenticates the complete pinned header and fetches
+only the 604,227,584-byte `double_blocks.1.` F32 payload. Its subset file is
+604,231,488 bytes, SHA-256
+`026568ecff75c5c4a4d771d313469a9245eb115c34f9117af7ac21290369651c`.
+Both actual subset files and manifests are hashed before native preparation.
+The source is tencent/Hy-Nomas revision
+`bac719a80c8d02f91c485fca804bb8221e149b70`; the declared LFS digest of the
+34,213,991,280-byte whole checkpoint is not verified. Trusted local files must
+remain immutable from authentication through use. Native weight storage is
+BF16 with F32 math/attention; the pinned upstream MPS adapter holds BF16-rounded
+weight values in F32 parameter storage. This qualifies that declared control,
+not CUDA/Magi or full BF16 activation execution.
+
+The shared owner uses one intermediate scratch set, one MPS workspace and
+distinct final-output banks. GPU snapshots preserve all 40 checkpoints per block
+before reuse. Each shared request first poisons all 56 unique nonconstant scratch
+buffers with NaNs and then emits 80 snapshot copies; both repeats remain exact
+against the independent plans and each other. Each request has one terminal wait,
+zero tracked encode-time MetalBuffer allocations and zero pre-terminal activation
+readbacks, followed by 80 diagnostic reads. Diagnostic poisoning/copies are
+extra probe work and establish no throughput benefit.
+
+The strongest identity falsifier replaces successor weights with block 0 while
+retaining the true block-1 oracle. Block 0 remains exact; 38 block-1 checkpoints
+fail the unchanged numerical gate, including both final outputs. A separate
+production preflight guard now rejects equal-shape/equal-dtype weight-map
+rebinding that would disagree with the block's cached Linear/RMS resources,
+before workspace allocation or dispatch. Disabling only this guard in an
+external test runner makes its rejection test fail as expected.
+
+Scratch plus workspace falls from 219,816,192 to 110,145,664 named bytes: a saving
+of 109,670,528 bytes (104.59 MiB, 49.9%) for these operands. Both phases are
+admitted before the first GPU allocation. The independent-control estimate is
+2,032,759,040 named bytes including both raw conversion stages and destinations;
+bounded host reference/capture arrays bring the estimate to 2,112,358,660 bytes.
+Conversion staging is released after the control terminal, so the lower shared
+phase total is not an isolated measure of reuse. Opaque MPS/runtime allocations
+are excluded from these estimates and named counters. A rooted owner and chain
+lease retain staging, plans and borrowed resources until terminal completion;
+incomplete drains retain them rather than freeing in-flight resources.
+
+DoD passed: 14 CPU subset/oracle tests; `make spec_hy_nomas` with the authenticated
+admission and timestep fixtures (60 examples: 56 passed, zero failures/errors,
+four pre-existing optional external-oracle cases pending); a fresh upstream
+two-module capture; positive `hy_nomas_pretrained_serial_probe`; and
+`--successor-block0-control`, whose success means the intentional mismatch was
+detected. An independent byte audit checks all 3,251,712 fixture values are finite,
+all 40 block-0 checkpoints equal the prior capture and all 40 successor checkpoints
+differ from block 0. The one-byte budget test rejects before any tracked GPU
+allocation/readback. Fresh bridge objects and the native executable were built
+under the guard. Correlated MiniQuad review is bounded by these root-run checks.
+
+All runs use a file-cache-aware 10% host reserve, 64 MiB swap-growth stop and
+at most a 600 s deadline. Builds/small tests have a 3 GiB sampled process cap; the upstream
+and two-block probes have 4 GiB. Across the three oracle/positive/negative runs,
+the highest sampled footprint is 2,454,849,288 bytes, minimum cache-aware headroom
+34,913,026,048 bytes and observed swap growth zero. Sampling can miss short peaks;
+file-backed cache is a reclaimability estimate. The native admission also leaves
+10% of its 4 GiB process estimate unused; this is separate from the physical host
+reserve and is not a bound on opaque allocations.
+
+Evidence and exact argument vectors are indexed in
+`.landmark/evidence/2026-10-25-hy-nomas-pretrained-serial.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-receipt-v1.json`.
+Build target: `make BUILD_DIR=FRESH_SSD_DIR hy_nomas_pretrained_serial_probe`.
+The executable requires the external memory guard; use new report/log paths
+when reproducing the receipt commands. Rollback: omit this opt-in probe and retain
+the single-block/independent controls. Full generation, full-stack residency,
+long-query performance and quality claims remain outside this slice. Refresh
+after scoped source, weights/input, precision, toolchain/SDK/OS/device, lifetime
+changes or evidence loss/hash mismatch.
+
+## Qualified slice: resident Qwen conditioning through the actual text refiner
 
 Status: VERIFIED within the one-prompt F32-math control below, 2026-10-25.
 The qualified natural tram prompt supplies
@@ -1482,9 +1567,11 @@ policy or host-scheduling changes. No full model or full generation is admitted.
 Active goal: native Hy-Nomas port. The current bounded composition qualifies
 the natural-prompt 26-block CogniQwen prefix, GPU crop, actual two-block text
 refiner/time embedding and one short-input DiT block on the same chain.
-The active result at the top of this document and
+The separate saved-input replay now qualifies distinct actual DiT blocks 0 to 1
+with shared scratch/workspace; it does not extend the live Qwen chain itself.
+The qualified results at the top of this document and
 `docs/qwen25-hy-nomas-frontier.md` define its input and precision limits.
-The next DiT discriminator is recorded below. Wan performance work remains
+The next DiT frontier is recorded below. Wan performance work remains
 at `docs/wan-performance-frontier.md`, commit
 `e22fc2ba`; no Wan default has been changed. Confirmed frontier: the actual
 checkpoint block passes the declared F32 and BF16-boundary MPS controls with
@@ -1495,23 +1582,25 @@ inputs. Known grouping/short-chunk/multi-batch counterexamples remain rejected
 by workspace admission and retained as failed diagnostics. No general shape or
 activation qualification follows from the measured matrix.
 
-The shared serial wrapper now reuses intermediate scratch and one MPS workspace
-with distinct final-output banks. Both actual block-0 applications match the
-short-input upstream oracle at all saved intermediates; the different-weight
-synthetic successor and overlap/early-release controls pass. At J6560 the
-two-block probe measures 275.237 ms warm median wall time and 2.031 GiB named
+The shared serial wrapper reuses intermediate scratch and one MPS workspace
+with distinct final-output banks. The real block-0-to-block-1 saved-input probe
+passes all 80 upstream intermediates and raw-F32 independent/poison/repeat gates.
+Its 109,670,528-byte scratch/workspace saving is a short-geometry result. Earlier
+J6560 block-0-twice timing remains 275.237 ms warm median wall and 2.031 GiB named
 scratch/workspace; independent sets would use 3.962 GiB by calculation. J1024
-ABBA shows no speedup. Next discriminator: actual pretrained block 0 to block 1
-with separately loaded weights and a pinned same-input upstream chain, followed
-by a bounded full-stack residency plan. The 32 block-0 tensors plus 42
-refiner/time tensors are local; full-model weights are not downloaded.
-Retain the separate path as control.
+ABBA shows no speedup. Neither timing qualifies a real 54-block stack.
+Next: build a bounded full-stack residency/download plan against available
+memory, then qualify full-geometry positional/output behavior. The 64 tensors
+from blocks 0/1 plus 42 refiner/time tensors are local; full-model weights are
+not downloaded. Retain the independent plans and single-block path as controls.
 Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps
 before pipeline quality claims. Exact CUDA/Magi output dtype and BF16 activation
 semantics are also unresolved.
 Standing authority remains bounded GPU probes. The new connected conditioning
 slice explicitly uses a cache-aware 10% floor and sampled 15 GiB process cap;
-small controls use 3 GiB. Earlier block-profile limits remain historical.
+the saved-input two-block oracle/probe uses 4 GiB; small controls use 3 GiB.
+All retain the 64 MiB swap-growth stop and 600 s deadline.
+Earlier block-profile limits remain historical.
 Full generation is outside this slice. Refresh evidence after source,
 fixture, geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling
 changes, or artifact loss.

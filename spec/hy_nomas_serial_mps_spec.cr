@@ -46,6 +46,30 @@ describe ML::Video::HyNomasMPSSerialWorkspace do
         ML::Video::HyNomasDualStreamBlock.prepare_scratch!(scratch, c)
         ML::Video::HyNomasDualStreamBlock.new(c, weight, scratch)
       end
+      # A block caches LinearWeights and NormWeights at construction. Replacing
+      # an equal-shaped/equal-dtype Arena entry afterward must not make the map
+      # appear to describe the buffers the block will actually dispatch.
+      {"img_attn_q_weight", "img_attn_q_bias", "img_attn_q_norm_weight"}.each do |target|
+        original = weights[0][target]
+        replacement = weights[1][target]
+        original.same?(replacement).should be_false
+        weights[0].dtype(target).should eq(weights[1].dtype(target))
+        weights[0].buffers[target] = replacement
+        allocations_before_rebind_check = ML::MetalBuffer.video_spec_allocations
+        begin
+          expect_raises(ArgumentError, /cached weight binding changed/) do
+            candidate = ML::Video::HyNomasMPSWorkspace.new(controls[0],
+              inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["cos"], inputs["sin"])
+            candidate.release
+          end
+        ensure
+          # Restore the owner map before either Arena cleanup runs; replacement
+          # remains owned by weights[1] throughout this falsifier.
+          weights[0].buffers[target] = original
+        end
+        weights[0][target].same?(original).should be_true
+        ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_rebind_check)
+      end
       controls.each_with_index do |block, index|
         img = index == 0 ? inputs["img"] : controls[0].image_output
         txt = index == 0 ? inputs["txt"] : controls[0].text_output
@@ -86,6 +110,28 @@ describe ML::Video::HyNomasMPSSerialWorkspace do
       # request. Diagnostic readback happens only after their terminal drain.
       chain = ML::Metal::MPSCommandChain.new
       chains << chain
+      # The registered workspace must re-check cached RMS weight identity
+      # before appending either block. Rebind after registration to isolate the
+      # preflight guard from constructor-time checks.
+      registered_target = "txt_attn_k_norm_weight"
+      registered_original = weights[1][registered_target]
+      registered_replacement = weights[0][registered_target]
+      registered_original.same?(registered_replacement).should be_false
+      weights[1].dtype(registered_target).should eq(weights[0].dtype(registered_target))
+      roots_before_rebind = chain.observed_root_count
+      allocations_before_registered_rebind = ML::MetalBuffer.video_spec_allocations
+      weights[1].buffers[registered_target] = registered_replacement
+      begin
+        expect_raises(ArgumentError, /cached weight binding changed/) do
+          serial.encode(chain)
+        end
+      ensure
+        weights[1].buffers[registered_target] = registered_original
+      end
+      chain.observed_root_count.should eq(roots_before_rebind)
+      chain.wait_count.should eq(0)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before_registered_rebind)
+      weights[1][registered_target].same?(registered_original).should be_true
       allocations = ML::MetalBuffer.video_spec_allocations
       controls[0].encode_mps(chain, inputs["img"], inputs["txt"], inputs["vec"],
         inputs["vec_txt"], inputs["cos"], inputs["sin"], workspaces[0])
