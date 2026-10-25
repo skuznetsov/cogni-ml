@@ -6,6 +6,50 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-FOUR-BLOCK-2026-10-25] Four consecutive BF16-cache blocks match fresh upstream at J6560
+
+- Scope: actual pretrained blocks 0 to 3, B1/V5280/T1280/C2048/H16/D128/FF8192,
+  synthetic MPS hidden inputs, upstream ND RoPE theta256/axes[16,56,56]/
+  grid[6,22,40]. Physical native BF16 parameters/F32 MPS arithmetic and SDPA
+  C256/G16; upstream uses BF16-rounded F32 parameters. All eight image/text
+  outputs, 53,739,520 F32 values/request, match raw exact twice at unchanged
+  finite `atol=rtol=2e-5`, including NaN poisoning 60 reusable scratch buffers.
+- Common intermediate scratch/MPS workspace and distinct persistent output
+  banks feed each successor directly on GPU. Zero tracked encode allocations/
+  preterminal activation reads, zero snapshots/interblock waits, one terminal
+  wait and eight postterminal diagnostics per request. Named buffers total
+  3,555,779,072 bytes, including 1,208,455,168 BF16 parameter bytes. Owners are
+  rooted before allocation and retained through completion or unknown drain.
+  All-block preflight rejects a changed late view before appending work and
+  permits fresh-chain retry. Registry inspection is a detached Array, not the
+  former fixed two-item Tuple; external Tuple-specific callers must adjust.
+- Fresh block-2/3 named-range F32 subsets and native GPU BF16 cast/reload each
+  match independent fresh MPS conversion exactly. Streamed audit authenticates
+  all 128 BF16 tensors/604,227,584 words, selected fixture spans, nine upstream
+  source files and producer/input recipe. Ten common input/block-0/1 output
+  spans match the prior two-block fixture. Full checkpoint LFS SHA remains
+  declared, not verified; authenticated subset hashes/ranges are the evidence.
+- Two finite wrong-successor controls preserve all predecessors and fail both
+  outputs at the injected block. Twenty-four Crystal examples, 30 CPU Python
+  tests and eight live pre-Metal CLI rejections pass. Correlated MiniQuad
+  source/runtime review plus numerical/admission falsifiers: ROBUST in scope.
+- Positive native sampled peak 3,958,524,040 bytes, minimum cache-aware headroom
+  34,235,318,272 bytes; upstream peak 6,153,505,696 bytes. All admitted bounded
+  runs preserve 10% reserve, 64 MiB swap-growth stop and 600 s deadline; native/
+  upstream neural caps are 6/10 GiB. No observed swap growth or guard abort.
+  Named counts/sampling do not prove instantaneous peaks or performance gains.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-four-block.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-four-block-20261025/logs/four-block-receipt-v1.json`.
+  Operator-pinned immutable local fixtures remain a trust assumption; copied
+  object ancestry is opaque. Setup I/O/terminal diagnostics use CPU. No full
+  conditioning/model, CUDA/Magi/BF16 activation, generation, quality or speed
+  claim. Next falsifier: bounded actual conditioning-to-four-block replay.
+  Rollback: omit the opt-in probe or revert this atomic serial extension;
+  preserve two-block control. Refresh on scoped code/checkpoint/cache/fixture,
+  precision/geometry, lifetime, compiler/SDK/OS/device or artifact changes;
+  reread live memory before later GPU work.
+
 ### [LM-HY-NOMAS-FULL-J-2026-10-25] Actual two-block RoPE and selected outputs match fresh upstream at J6560
 
 - Scope: actual pretrained blocks 0 to 1, B1/V5280/T1280/C2048/H16/D128/FF8192,

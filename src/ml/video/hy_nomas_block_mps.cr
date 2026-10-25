@@ -177,31 +177,53 @@ module ML::Video
       @arena.resident_bytes + (@attention_plan.try(&.resident_bytes) || 0_i64) + @rms_plans.values.sum(&.resident_bytes)
     end
 
-    # Setup-only admission for the two-block owner. All graph-bound tensors
-    # remain fixed; only weights and the final pointwise output banks differ.
+    # Setup-only admission for a bounded serial owner. All graph-bound
+    # intermediates remain fixed; each block has distinct final output banks.
     # No plans or GPU storage are created when selecting a registered block.
     def register_serial_blocks!(blocks : Array(HyNomasDualStreamBlock),
                                 inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer))) : Nil
       raise ArgumentError.new("Hy-Nomas serial registration must precede encode") if @released || @last_chain || !@serial_bindings.empty?
-      unless blocks.size == 2 && inputs.size == 2 && blocks[0].same?(@block)
-        raise ArgumentError.new("Hy-Nomas serial registration requires the prepared block and one successor")
+      unless (2..4).includes?(blocks.size) && inputs.size == blocks.size && blocks[0].same?(@block)
+        raise ArgumentError.new("Hy-Nomas serial registration requires two to four ordered blocks beginning with the prepared block")
       end
       bindings = [] of SerialBinding
       allowed = @fixed_inputs.dup
       plan = HyNomasDualStreamBlock.scratch_plan(@config)
       output_indices = plan.each_index.select { |index| {"hy_nomas.img.output", "hy_nomas.txt.output"}.includes?(plan[index][0]) }.to_a
       raise ArgumentError.new("Hy-Nomas serial output schema changed") unless output_indices.size == 2
+      output_banks = output_indices.map { |index| @scratch_buffers[index] }
+      output_banks.each_with_index do |buffer, index|
+        output_banks[0...index].each { |other| MetalOps.distinct(buffer, other) }
+        @fixed_inputs.each { |other| MetalOps.distinct(buffer, other) }
+      end
       blocks.each_with_index do |block, index|
+        if blocks.each_with_index.any? { |candidate, candidate_index| candidate_index < index && candidate.same?(block) }
+          raise ArgumentError.new("Hy-Nomas serial registration rejects duplicate block instances")
+        end
         raise ArgumentError.new("Hy-Nomas serial block configuration changed") unless block.config == @config
         img, txt = inputs[index]
+        expected_img = index == 0 ? @fixed_inputs[0] : blocks[index - 1].image_output
+        expected_txt = index == 0 ? @fixed_inputs[1] : blocks[index - 1].text_output
+        unless img.same?(expected_img) && txt.same?(expected_txt)
+          raise ArgumentError.new("Hy-Nomas serial input banks must follow the registered predecessor")
+        end
         block.mps_validate_inputs!(img, txt, @fixed_inputs[2], @fixed_inputs[3], @fixed_inputs[4], @fixed_inputs[5])
         block.mps_validate_resources!
         scratch, weights = block.mps_workspace_buffers
         scratch.each_with_index do |buffer, slot|
           if output_indices.includes?(slot)
-            if index > 0
-              @scratch_buffers.each { |other| MetalOps.distinct(buffer, other) }
+            if index == 0
+              unless buffer.same?(@scratch_buffers[slot])
+                raise ArgumentError.new("Hy-Nomas serial first-block output bank changed")
+              end
+            else
+              output_banks.each { |other| MetalOps.distinct(buffer, other) }
+              @scratch_buffers.each_with_index do |other, other_slot|
+                next if output_indices.includes?(other_slot)
+                MetalOps.distinct(buffer, other)
+              end
               @fixed_inputs.each { |other| MetalOps.distinct(buffer, other) }
+              output_banks << buffer
             end
           elsif !buffer.same?(@scratch_buffers[slot])
             raise ArgumentError.new("Hy-Nomas serial intermediate buffer identity changed: #{plan[slot][0]}")
@@ -231,9 +253,8 @@ module ML::Video
         allowed.concat(scratch).concat([img, txt])
         bindings << SerialBinding.new(block, img, txt, scratch, weights, linear, rms)
       end
-      unless inputs[0][0].same?(@fixed_inputs[0]) && inputs[0][1].same?(@fixed_inputs[1]) &&
-             inputs[1][0].same?(blocks[0].image_output) && inputs[1][1].same?(blocks[0].text_output)
-        raise ArgumentError.new("Hy-Nomas serial input banks must follow the registered predecessor")
+      unless output_banks.size == blocks.size * output_indices.size
+        raise ArgumentError.new("Hy-Nomas serial output bank inventory changed")
       end
       # Cross-block aliases are not covered by each block's local validator.
       bindings.each do |binding|
@@ -246,15 +267,17 @@ module ML::Video
       @serial_buffers = allowed
     end
 
-    # Called before the first block dispatch. It verifies plan and buffer
-    # identity, geometry, aliases, and chain lifecycle without allocating or
-    # submitting work.
+    # Verify plan and buffer identity, geometry, aliases, and chain lifecycle
+    # without allocating or submitting work. The serial owner's all-block
+    # preflight uses bind_chain: false so a rejected successor does not bind an
+    # otherwise unused command chain; block dispatch uses the default binding.
     def validate_for!(block : HyNomasDualStreamBlock,
                       chain : ML::Metal::MPSCommandChain,
                       img : ML::MetalBuffer, txt : ML::MetalBuffer,
                       vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
                       video_rope_cos : ML::MetalBuffer,
-                      video_rope_sin : ML::MetalBuffer) : Nil
+                      video_rope_sin : ML::MetalBuffer,
+                      *, bind_chain : Bool = true) : Nil
       raise ArgumentError.new("Hy-Nomas MPS workspace has been released") if @released
       # Check the common lease before changing active block metadata. Sibling
       # registered blocks must never overwrite shared stages on a live chain.
@@ -291,6 +314,7 @@ module ML::Video
 
       # Validate the chain before any native linear work is appended. The
       # attention plan cannot move between in-flight chains.
+      return unless bind_chain
       if binding = serial
         @operations = binding.linear
         @rms_operations = binding.rms

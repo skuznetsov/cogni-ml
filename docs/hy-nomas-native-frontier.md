@@ -4,20 +4,110 @@ Document status: the opt-in natural-prompt Qwen prefix, GPU conditioning crop,
 actual-weight text refiner/time embedding and one short-input DiT block pass a
 connected upstream intermediate gate (2026-10-25). A separate same-input replay
 now qualifies actual pretrained DiT blocks 0 to 1 with shared scratch/workspace
-on the saved refiner output. Local DiT weights cover these 64 tensors plus the
+on the saved refiner output. Local DiT weights now cover blocks 0 to 3 (128 tensors) plus the
 42 refiner/time tensors; the full checkpoint is not downloaded. Earlier bounded
 J6560 profiles and block-0-twice controls retain only their recorded scopes.
 Shared memory is reduced; no speedup follows from the new correctness probe.
 A header-only native planner now accounts for the complete DiT parameters and
-models serial block residency; full-stack peaks and N-block execution remain
+models serial block residency; full-stack peaks and execution beyond four blocks remain
 unqualified. GPU-produced BF16 source caches for blocks 0 and 1 now pass exact
 weight and short-input serial upstream gates without F32 raw staging. They
 preserve the independent-workspace control, shared scratch and repeated replay.
 A fresh same-input full-J replay now qualifies upstream ND RoPE application
-and eight selected outputs of actual blocks 0 to 1. Full-stack composition,
+and eight selected outputs of actual blocks 0 to 1. A further four-block replay
+now qualifies all eight image/text outputs at the same full J with common
+scratch/workspace and direct GPU handoff. Full-stack composition,
 CUDA/Magi parity, model-wide performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: four consecutive BF16-cache blocks at full J
+
+Status: VERIFIED within this four-block replay scope, 2026-10-25. Actual
+pretrained blocks 0 to 3 pass B1/V5280/T1280/C2048/H16/D128/FF8192 (J6560),
+upstream ND RoPE theta 256, axes [16,56,56], grid [6,22,40], and F32 neural
+arithmetic/MPS SDPA C256/G16. Native parameters are physically BF16; upstream
+uses BF16-rounded F32 parameters. Starting hidden inputs are deterministic
+synthetic MPS tensors, not the full conditioning pipeline. Retain only each
+block's image/text outputs; the prior two-block RoPE gate remains separate.
+All four blocks share intermediate scratch and one MPS workspace, with distinct
+output banks and direct GPU-only successor inputs.
+
+Risk: CAUTION (new checkpoint identities and extended resource lifetime).
+Rollback: omit the opt-in four-block probe and retain the two-block path; the
+serial extension is one reversible commit. No kernel arithmetic/default changes.
+Before execution, authenticate source/cache identities and aggregate named
+bytes, root owners before allocation, and reject malformed/short budgets.
+The strongest failure is a wrong successor or overwritten output bank; seeded
+wrong-block controls and a scratch-poisoned exact repeat must expose it.
+
+DoD: focused workspace/admission/oracle tests, then fresh guarded upstream and
+native four-block probes. All eight outputs must be finite and pass unchanged
+`atol=rtol=2e-5`; native repeated output bits must match after scratch poisoning.
+Require zero tracked encode allocations/preterminal activation reads, one
+terminal wait per request, no interblock waits, and exact new BF16 cache words.
+Use the cache-aware 10% floor, 64 MiB swap-growth stop, 600 s deadline and bounded
+per-process caps calculated before runs. No full generation or speed claim.
+Refresh on source/cache/fixture, geometry/precision, lifetime, toolchain, OS or
+device changes; reject or narrow the qualification if an authenticated artifact
+changes or disappears. Reread live memory before any later GPU run.
+
+Observed: a fresh pinned-source upstream run executes four actual blocks and
+104 attention query chunks. All eight native outputs, 53,739,520 F32 values per
+request, match upstream raw exact: zero bit differences, tolerance failures or
+maximum absolute error. The second request remains exact after NaN poisoning
+all 60 unique nonconstant reusable scratch buffers. A separately written
+streamed audit authenticates the reference spans, all four cache files and
+128 exact BF16 tensors (604,227,584 words), nine upstream source files and the
+producer/input recipe. The six inputs and four block-0/1 output spans also
+match the prior qualified two-block fixture exactly. This audit is not a second
+neural implementation.
+
+Blocks 2/3 were extracted as exact 32-tensor F32 checkpoint subsets from their
+named, nonadjacent ranges under the pinned HF revision/header. Native GPU
+conversion and direct BF16 reload each match their independent fresh MPS BF16
+oracles word for word. Each block has 302,113,792 BF16 payload bytes. The full
+checkpoint's declared LFS digest remains unverified because only subsets were
+downloaded. All four inference caches use zero source F32 staging/conversion
+dispatches; setup conversion has its own terminal waits outside inference.
+
+Each native request has zero tracked encode-time MetalBuffer allocations and
+preterminal activation readbacks, no snapshot copies or interblock waits, one
+terminal wait, and eight postterminal diagnostic readbacks. Named buffers total
+3,555,779,072 bytes: BF16 weights 1,208,455,168, inputs 59,162,624, scratch
+1,967,505,920 and MPS workspace 320,655,360. Owners are rooted before Metal
+allocation and retained until completion; failed/incomplete drains retain
+resources. Serial preflight validates every successor before appending work;
+a late rejected view does not bind an unused chain and can retry on a fresh
+chain. The registry getter returns a detached Array for the bounded two-to-four
+cardinality; external Tuple-specific callers would need adjustment.
+
+Substituting block 0 at position 2 preserves blocks 0/1 exactly, then produces
+10,809,018 image and 2,621,397 text tolerance failures at position 2. Substituting
+block 2 at position 3 preserves blocks 0/1/2 exactly, then produces 10,810,014
+image and 2,621,388 text failures at position 3. Both controls stay finite and
+make no repeat claim. The classification predicate rejects missing/duplicate
+captures, nonfinite values, earlier failure or an intact fault output.
+
+Twenty-four focused Crystal examples and 30 CPU Python tests pass. Eight live
+CLI controls reject a short budget, incorrect reference digest, swapped new
+caches, simultaneous control flags, existing report, widened tolerance, bad
+sidecar digest or wrong source order before Metal initialization. The native
+sampled process peak is 3,958,524,040 bytes with minimum cache-aware headroom
+34,235,318,272 bytes; upstream peaks at 6,153,505,696 with headroom at least
+30,634,344,448 bytes. All admitted runs preserve the 10% reserve, 6 GiB native/
+10 GiB upstream neural caps, 64 MiB swap-growth stop and 600 s deadline, with
+zero observed swap growth or guard abort. Sampled guards do not bound
+instantaneous peaks or establish a speedup or causal memory improvement.
+
+Evidence: `.landmark/evidence/2026-10-25-hy-nomas-four-block.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-four-block-20261025/logs/four-block-receipt-v1.json`.
+Correlated MiniQuad source/runtime review plus numerical controls: ROBUST within
+the stated scope. Operator-pinned fixtures and immutable local files remain
+trust assumptions; copied companion object ancestry is opaque. Setup I/O and
+postterminal diagnostics use CPU. No full generation, quality, full-stack fit,
+CUDA/Magi, BF16 activation or performance claim. Next falsifier: a bounded
+actual conditioning-to-four-block replay before extending residency further.
 
 ## Qualified slice: full-J RoPE and two-block output gate
 

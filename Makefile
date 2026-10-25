@@ -145,6 +145,22 @@ spec_hy_nomas_full_j: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) spec spec/hy_nomas_full_j_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
+$(BUILD_DIR)/hy_nomas_four_block_probe: examples/hy_nomas_four_block_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/hy_nomas_block23_cache_probe: examples/hy_nomas_block23_cache_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: hy_nomas_four_block_probe hy_nomas_block23_cache_probe spec_hy_nomas_four_block
+hy_nomas_four_block_probe: $(BUILD_DIR)/hy_nomas_four_block_probe
+hy_nomas_block23_cache_probe: $(BUILD_DIR)/hy_nomas_block23_cache_probe
+
+spec_hy_nomas_four_block: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) spec spec/hy_nomas_four_block_admission_spec.cr spec/hy_nomas_block23_cache_admission_spec.cr spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_full_j_admission_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
+
 spec_hy_nomas_bf16_cache: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) spec spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr spec/hy_nomas_bf16_serial_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)

@@ -1,0 +1,216 @@
+{
+  "adversary_verdict": "ROBUST",
+  "base_commit": "c6c1d58980134253176c511448edf0e4cbdd009b",
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_serial_mps.cr",
+      "examples/hy_nomas_block23_cache_probe.cr",
+      "examples/hy_nomas_four_block_probe.cr",
+      "examples/support/hy_nomas_block23_bf16_reference.py",
+      "examples/support/hy_nomas_block23_cache_probe.cr",
+      "examples/support/hy_nomas_four_block_probe.cr",
+      "spec/hy_nomas_block23_bf16_reference_test.py",
+      "spec/hy_nomas_block23_cache_admission_spec.cr",
+      "spec/hy_nomas_block23_checkpoint_subset_test.py",
+      "spec/hy_nomas_four_block_admission_spec.cr",
+      "spec/hy_nomas_four_block_reference_test.py",
+      "spec/hy_nomas_serial_mps_spec.cr",
+      "spec/support/hy_nomas_block23_checkpoint_subset.py",
+      "spec/support/hy_nomas_four_block_reference.py",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      ".landmark/evidence/2026-10-25-hy-nomas-four-block.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_serial_mps.cr",
+      "examples/hy_nomas_block23_cache_probe.cr",
+      "examples/hy_nomas_four_block_probe.cr",
+      "examples/support/hy_nomas_block23_bf16_reference.py",
+      "examples/support/hy_nomas_block23_cache_probe.cr",
+      "examples/support/hy_nomas_four_block_probe.cr",
+      "spec/hy_nomas_block23_bf16_reference_test.py",
+      "spec/hy_nomas_block23_cache_admission_spec.cr",
+      "spec/hy_nomas_block23_checkpoint_subset_test.py",
+      "spec/hy_nomas_four_block_admission_spec.cr",
+      "spec/hy_nomas_four_block_reference_test.py",
+      "spec/hy_nomas_serial_mps_spec.cr",
+      "spec/support/hy_nomas_block23_checkpoint_subset.py",
+      "spec/support/hy_nomas_four_block_reference.py",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      ".landmark/evidence/2026-10-25-hy-nomas-four-block.json"
+    ],
+    "rollback": "Omit the opt-in four-block probe; preserve the tested two-block path. The bounded serial extension is one reversible commit; kernel arithmetic/defaults are unchanged."
+  },
+  "claim_level": "VERIFIED",
+  "code_sources": [
+    {
+      "nbytes": 21269,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "72c526b3ee4aa47bafc6e784902fc55a6ca34ff9ac5a7c4245be7af08656bfd5"
+    },
+    {
+      "nbytes": 35642,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block_mps.cr",
+      "sha256": "cfb9d3b3ef75a7131eeb3e3a773a3ba9b855044c9c2f98f78f8c51dbe396036d"
+    },
+    {
+      "nbytes": 5979,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_serial_mps.cr",
+      "sha256": "ae0eec07467674dae71793f0ce6408b20cd141d296a4d35f3c8000694d334f2a"
+    },
+    {
+      "nbytes": 1390,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_block23_cache_probe.cr",
+      "sha256": "6a3bc993ed25e746fd820907f7453a9dabed56045416f756597e37b15d81ba1f"
+    },
+    {
+      "nbytes": 2035,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_four_block_probe.cr",
+      "sha256": "f11e0afdd160d43cadc9dded0e242ffb935744bfa81ad810bc3dc53218cf0cfe"
+    },
+    {
+      "nbytes": 35369,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_block23_bf16_reference.py",
+      "sha256": "b310e72292c290b1330495dc539de362f22b5c29ce7f9af7b8cce77f719abde1"
+    },
+    {
+      "nbytes": 9275,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_block23_cache_probe.cr",
+      "sha256": "20bf3f2d7aac78382e66a45b6d639c2f06316a9493d8d29c8078ee354bc4a21c"
+    },
+    {
+      "nbytes": 23765,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_four_block_probe.cr",
+      "sha256": "cf3b90cbd25c59cbe451d2f38e84da5bbcbe0e876478792937a63a7afa534b6c"
+    },
+    {
+      "nbytes": 17300,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_block23_bf16_reference_test.py",
+      "sha256": "1cf3fbb38e3e538a083bde69620fa64de8c4ace8a1b44e9c6faeafc9462c3d7f"
+    },
+    {
+      "nbytes": 2781,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_block23_cache_admission_spec.cr",
+      "sha256": "86968e285cacaee78190b98388d3e1f2139de0f33bfccd0bd5f4fcfe7f4e289b"
+    },
+    {
+      "nbytes": 8093,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_block23_checkpoint_subset_test.py",
+      "sha256": "c56833bbb3d7d9ce07e41d9697e698d208fe7f6b7d41edb4f6bc14377b945239"
+    },
+    {
+      "nbytes": 12415,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_four_block_admission_spec.cr",
+      "sha256": "99c1f1f136a4d7a035cb118d78ebf878103807deb7f5454f5ee1233c1351b995"
+    },
+    {
+      "nbytes": 12557,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_four_block_reference_test.py",
+      "sha256": "ed2e32520598e4243d70a8c74a18eb5a4243e6456102e9a66df6b2f8167ff572"
+    },
+    {
+      "nbytes": 20633,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_serial_mps_spec.cr",
+      "sha256": "949f750aa5dc1dfec39aa50ded650e49690cf854c514c323db3e1b79562efcf0"
+    },
+    {
+      "nbytes": 14836,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_block23_checkpoint_subset.py",
+      "sha256": "56912841a71d05ebdb714b16ae20322d2fabba31b804cee462974e0f58fa252b"
+    },
+    {
+      "nbytes": 35616,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_four_block_reference.py",
+      "sha256": "27e813d1a7e8c48c6c3a07913755612c33dca94fdb10e24a27735159e8ff503b"
+    }
+  ],
+  "dod": {
+    "command_index": "receipt.guards[*].argv",
+    "signal": "Fresh pinned upstream and two native requests agree raw exact for all 8 outputs/53,739,520 F32 values, scratch-poison repeat exact; exact new BF16 cast/reload; finite wrong-successor detection, unchanged tolerance and 10% reserve."
+  },
+  "excluded_attempts": [
+    {
+      "name": "build-cache-v1",
+      "reason": "Compile rejected a NamedTuple field inferred as Nil; explicit PhaseResult type fixed before build-cache-v2 and GPU conversion."
+    },
+    {
+      "name": "native-admission-v1",
+      "reason": "New serial test had incorrect nested tuple destructuring; corrected before the 24-example pass."
+    },
+    {
+      "name": "streamed-audit-v1",
+      "reason": "Audit script read a nonexistent CLI-row key passed instead of rejected_before_metal; no audit report published. Corrected audit reran all checks in v2."
+    }
+  ],
+  "failure_policy": "Reject or narrow the claim; retain finite 2e-5 gate, cache-aware 10% reserve and swap/process/deadline stops.",
+  "limitations": [
+    "Synthetic same-input four-block replay; no full conditioning/diffusion, model-wide residency, generation, quality or speed qualification.",
+    "Native parameters are physically BF16, but neural math/activations and MPS SDPA are F32; CUDA/Magi and BF16 activation semantics are not qualified.",
+    "Upstream generates ND RoPE tables on MPS; native application of uploaded tables, not a new native ND table generator, is qualified.",
+    "Pinned HF revision/header and observed range-subset hashes authenticate local subsets. The full checkpoint declared LFS digest remains unverified.",
+    "Operator-supplied reference SHA and immutable local files are trust assumptions, not hostile-producer authentication.",
+    "Setup file I/O/uploads and postterminal streamed diagnostics use CPU; inference and hidden-state handoff stay on GPU.",
+    "MetalBuffer allocation/readback counters cover their instrumented paths; sampled memory guards cannot bound between-poll peaks or prove causal performance/memory improvement.",
+    "Copied companion object bytes have opaque source ancestry and the build is not hermetic. Current scoped source pins do not claim all transitive source bytes were snapshotted at build time.",
+    "Cache conversion ran on the saved preformat tool source/binary, before later serial-preflight edits; the setup conversion path does not execute serial blocks. Final cache-tool edits change whitespace only.",
+    "The opt-in serial registry getter now returns a detached Array rather than a fixed Tuple2; external Tuple-specific callers would need adjustment."
+  ],
+  "named_bytes": {
+    "inputs": 59162624,
+    "scratch": 1967505920,
+    "total": 3555779072,
+    "weights": 1208455168,
+    "workspace": 320655360
+  },
+  "next_frontier": "Bounded actual conditioning-to-four-block replay before extending residency beyond four blocks.",
+  "observed": {
+    "admitted_guard_runs": 17,
+    "bf16_tensors": 128,
+    "bf16_words": 604227584,
+    "captures_per_request": 8,
+    "crystal_examples_passed": 24,
+    "encode_allocations_per_request": 0,
+    "exact_repeat": true,
+    "f32_values_per_request": 53739520,
+    "finite_wrong_successor_controls": 2,
+    "interblock_waits": 0,
+    "live_cli_rejections": 8,
+    "max_abs": 0.0,
+    "native_min_headroom_bytes": 34235318272,
+    "native_sampled_peak_bytes": 3958524040,
+    "new_cache_conversion_and_reload_exact": true,
+    "observed_swap_growth_bytes": 0,
+    "poisoned_buffers_per_request": 60,
+    "postterminal_reads_per_request": 8,
+    "preterminal_activation_reads_per_request": 0,
+    "python_tests_passed": 30,
+    "raw_differences": 0,
+    "requests": 2,
+    "snapshot_dispatches_per_request": 0,
+    "source_conversion_dispatches": 0,
+    "source_staging_bytes": 0,
+    "terminal_waits_per_request": 1,
+    "tolerance_failures": 0,
+    "unchanged_prior_fixture_spans": 10,
+    "upstream_min_headroom_bytes": 30634344448,
+    "upstream_sampled_peak_bytes": 6153505696
+  },
+  "receipt": {
+    "nbytes": 109475,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-four-block-20261025/logs/four-block-receipt-v1.json",
+    "sha256": "a5547ae8a87be770036b8b31969a33f720e767b52230d2a54bf276ceee4f76b1"
+  },
+  "refresh_when": [
+    "Scoped code/checkpoint/cache/fixture or evidence bytes change or disappear.",
+    "Precision/geometry, loader/lifetime, compiler/SDK/OS/device changes.",
+    "Reread live cache-aware memory before any later bounded GPU run."
+  ],
+  "schema": "cogni_ml.hy_nomas_four_block_evidence",
+  "schema_version": 1,
+  "scope": "Actual blocks 0->1->2->3 at B1/V5280/T1280/C2048/H16/D128/FF8192 (J6560), deterministic synthetic MPS inputs, upstream ND RoPE, native BF16 parameter storage/F32 math and MPS SDPA C256/G16."
+}
