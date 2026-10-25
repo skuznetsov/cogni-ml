@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-RESIDENCY-2026-10-25] Full DiT parameter accounting exposes cold conversion staging
+
+- Authenticated pinned header: 2,268 F32 tensors, 54 blocks and nine categories,
+  including camera/action. Payload is 34,213,738,368 bytes; projected BF16
+  parameters occupy 17,106,869,184 bytes (15.932 GiB). All native block bindings
+  match. Whole-checkpoint payload/LFS verification remains open.
+- At B1/V5280/T1280/C2048/H16/D128/FF8192, compact C256/G16 attention,
+  the modeled N=54 distinct-output extension uses 4,975,137,280 scratch/workspace
+  bytes. All-parameter cold/warm named totals are 56,354,907,456/22,141,169,088
+  bytes. The separate MPS heuristic adds 590,872,576 bytes; it bounds no opaque
+  allocation. N-block execution and two-bank outputs remain unimplemented.
+- Current F32-to-BF16 loading retains both source and destination until the
+  terminal. Removing its modeled 31.864 GiB source staging requires a new
+  qualified cache/loading path. Two-bank outputs could save a further
+  2,794,455,040 bytes, but need a binding/alias/lifetime proof.
+- Diagnostic snapshots are excluded: 54 full-J sets of the actual 40 captures
+  would add 80,127,000,576 bytes. Camera execution/history/KV, refiner/input/final
+  workspaces, scheduler, Qwen and PixelUMM execution remain outside accounting.
+  No pipeline fit, physical peak, speedup or numerical/default claim follows.
+- Verification: eight native CPU metadata specs, native report with zero
+  tracked GPU allocations, separately constructed closed-form/header audit,
+  short receipt reconciliation, one-byte budget rejection and same-length
+  header-tamper rejection. Correlated MiniQuad verdict: ROBUST within this
+  scope. No model, GPU work or full generation was run; existing finite
+  tolerance and cache-aware 10%/64 MiB swap/600 s guards remain unchanged.
+- Local qualified subsets cover 106 tensors, 1,791,766,528 F32 payload bytes;
+  paths/sizes are refreshed, payload hashes retain the previous scope. Another
+  32,421,971,840 payload bytes remain; nothing was downloaded in this slice.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-residency.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-receipt-v1.json`.
+  Next falsifier: GPU-produced BF16 cache for one local actual block, exact
+  BF16 bytes plus unchanged upstream intermediate gate before wider use.
+  Refresh on source/header, geometry/capture, loader lifetime/accounting
+  changes; live telemetry must be reread before later probes. Rollback: omit
+  the diagnostic. Full generation is outside admission; Wan return pointer
+  remains `docs/wan-performance-frontier.md`.
+
 ### [LM-HY-NOMAS-PRETRAINED-SERIAL-2026-10-25] Actual DiT blocks 0 to 1 reuse scratch/workspace with exact bounded replay
 
 - Distinct pretrained block-0/block-1 subsets, resident in BF16 with F32 MPS
@@ -47,8 +85,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   `.landmark/evidence/2026-10-25-hy-nomas-pretrained-serial.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-pretrained-chain-20261025/logs/serial-receipt-v1.json`.
   Refresh on scoped source/weights/input/precision, compiler/SDK/OS/device,
-  ownership/scheduling changes or artifact loss/hash mismatch. Next: a bounded
-  full-stack weight/residency plan and full-geometry positional/output gates
+  ownership/scheduling changes or artifact loss/hash mismatch. The metadata
+  landmark above now accounts for DiT parameters and block workspaces; complete
+  pipeline residency and full-geometry positional/output gates remain open
   before additional downloads or pipeline qualification. No full generation
   is admitted; Wan return pointer is `docs/wan-performance-frontier.md`.
 

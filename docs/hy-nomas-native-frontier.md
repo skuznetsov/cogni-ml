@@ -8,10 +8,92 @@ on the saved refiner output. Local DiT weights cover these 64 tensors plus the
 42 refiner/time tensors; the full checkpoint is not downloaded. Earlier bounded
 J6560 profiles and block-0-twice controls retain only their recorded scopes.
 Shared memory is reduced; no speedup follows from the new correctness probe.
+A header-only native planner now accounts for the complete DiT parameters and
+models serial block residency; full-stack peaks and N-block execution remain
+unqualified. Its next bounded probe is a single-block BF16 source cache.
 Full-stack composition, full-J upstream output, CUDA/Magi parity, model-wide
 performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: full-DiT metadata residency accounting
+
+Status: VERIFIED for authenticated header inventory and named-byte arithmetic,
+2026-10-25. No model or Metal device is initialized by this diagnostic. The
+252,904-byte pinned header covers 2,268 F32 tensors and 34,213,738,368 payload
+bytes. All 54 native block binding sets match the header. Projected BF16 storage
+is 17,106,869,184 bytes (15.932 GiB), including all camera/action, refiner,
+input, timestep and final-layer parameters. The whole checkpoint payload and
+its declared LFS digest remain unverified; only the header is authenticated here.
+
+The current loader retains F32 conversion sources through terminal completion
+alongside BF16 destinations. The following estimates retain distinct outputs
+for every block, one common scratch set and one MPS workspace. N=54 is an
+unimplemented extension of the two-block owner, not an executable allocation
+plan. Long geometry is B1/V5280/T1280/C2048/H16/D128/FF8192, with compact
+attention query chunk 256 and 16 heads per group.
+
+| Scenario | Cold named bytes | Warm named bytes | Scratch/workspace bytes |
+| --- | ---: | ---: | ---: |
+| V6/T23, two actual blocks | 1,923,088,512 | 714,633,344 | 110,145,664 |
+| J6560, two blocks | 4,052,527,616 | 2,844,072,448 | 2,180,682,240 |
+| J6560, all DiT parameters and 54 distinct output pairs | 56,354,907,456 | 22,141,169,088 | 4,975,137,280 |
+
+Cold minus warm is exactly the retained F32 source payload. A separately
+reported heuristic adds three maximum score tiles plus 256 MiB: 590,872,576
+bytes at J6560. The all-parameter estimates then become 53.035 GiB cold and
+21.171 GiB warm. Neither value bounds opaque/queued MPS allocations. Execution
+workspace for camera/history/KV, refiner/input/final layers, scheduler/latents,
+Qwen and PixelUMM remains excluded; all checkpoint parameters are counted.
+The cold estimate does not fit the observed 31.137 GiB cache-aware headroom
+after the 10% physical reserve. This snapshot is not reserved capacity or
+runtime admission, and a DiT-only warm comparison does not admit the pipeline.
+
+Diagnostic snapshots are separate from these totals: the 40 captures per block
+use 12,746,752 bytes for two short blocks, 2,967,666,688 bytes for two J6560
+blocks, and 80,127,000,576 bytes for 54 J6560 blocks. They must not be confused
+with all 55 native scratch buffers. A future two-bank output policy could save
+52 output pairs, 2,794,455,040 bytes (2.603 GiB), at N=54; current fixed bindings,
+alias checks and exactly-two-block APIs do not implement it.
+
+Download plan: the previously qualified block-0/block-1 and text/time subsets
+cover 106 tensors and 1,791,766,528 source payload bytes. Their paths and sizes
+are observed again; their payload hashes are not rerun in this metadata slice.
+The remaining 2,162 tensors require 32,421,971,840 F32 payload bytes (30.195 GiB),
+before transfer/container overhead. The two remaining source-file ranges are
+`[252912,968270320)` and `[2176725488,33630679920)`. No download was performed.
+A complete derived BF16 cache would contain 15.932 GiB of parameter payload;
+that cache does not yet exist. Qwen weights are already local separately;
+PixelUMM residency and the full pipeline download plan remain open.
+
+DoD passed: `make spec_hy_nomas_residency` with the authenticated external
+header (eight examples, zero failures/errors/pending); a freshly built native
+planner report with zero tracked GPU allocations; and a separately constructed
+Python closed-form/header audit, including the prior short-run receipt. CLI
+controls reject a same-length tampered header and a comparison budget one byte
+below the selected estimate. Correlated MiniQuad review is ROBUST for this
+metadata scope; no new neural numerical comparison, speedup or physical peak
+was measured. Builds/checks retain a 3 GiB sampled cap, cache-aware 10% reserve,
+64 MiB swap-growth stop and 600 s deadline. The existing numerical tolerance
+and inference execution path are unchanged.
+
+Build with `make BUILD_DIR=FRESH_SSD_DIR hy_nomas_residency_plan`, then run the
+binary with `--header PINNED_HEADER_JSON`. `--estimate-budget-bytes N` is only
+a comparison; it does not replace any runtime memory guard. Evidence and exact
+guarded arguments are indexed in
+`.landmark/evidence/2026-10-25-hy-nomas-residency.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-receipt-v1.json`.
+Rollback: omit this diagnostic; no inference/default change is admitted.
+Refresh on checkpoint/header, scratch/capture/attention geometry, loader
+lifetime or accounting changes; reread live telemetry before any later probe.
+
+Next falsifier: derive a BF16 cache for one already-local actual block using
+the existing GPU weight conversion, then require exact BF16 words and the
+unchanged upstream block intermediate gate. Keep setup/cache I/O outside the
+inference path, with no new inference waits or activation readbacks. Only
+after that gate should the two-block probe consume BF16 sources and expand
+positional/output coverage. This targets the 31.864 GiB modeled cold staging
+cost before further full-model downloads; it is not yet an implemented saving.
 
 ## Qualified slice: distinct pretrained blocks 0 to 1 with shared scratch
 
@@ -1589,9 +1671,11 @@ Its 109,670,528-byte scratch/workspace saving is a short-geometry result. Earlie
 J6560 block-0-twice timing remains 275.237 ms warm median wall and 2.031 GiB named
 scratch/workspace; independent sets would use 3.962 GiB by calculation. J1024
 ABBA shows no speedup. Neither timing qualifies a real 54-block stack.
-Next: build a bounded full-stack residency/download plan against available
-memory, then qualify full-geometry positional/output behavior. The 64 tensors
-from blocks 0/1 plus 42 refiner/time tensors are local; full-model weights are
+The authenticated DiT parameter/block-workspace plan is now recorded at the
+top; complete pipeline residency remains open. Next: qualify a single-block
+GPU-produced BF16 source cache to avoid cold F32 staging, then extend the
+two-block positional/output gate without retaining every full-J snapshot.
+The 64 tensors from blocks 0/1 plus 42 refiner/time tensors are local; full-model weights are
 not downloaded. Retain the independent plans and single-block path as controls.
 Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps
 before pipeline quality claims. Exact CUDA/Magi output dtype and BF16 activation
