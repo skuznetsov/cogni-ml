@@ -43,8 +43,12 @@ Rich landmarks include full State/Relations/Evidence structure.
   The S1280 failure and two refuted SSD-only controls are indexed by
   `logs/prefix-s1280-receipt-v1.json` under the same evidence root.
   Refresh after scoped source, precision, fixture/weights/geometry, compiler,
-  SDK/OS/device or lifecycle changes, or artifact loss. Next: isolate the
-  same-input RMS square/mean reduction; DiT return pointer is
+  SDK/OS/device or lifecycle changes, or artifact loss. The isolated RMS
+  continuation below localizes the statistics delta to square-versus-power
+  values: native mean/+epsilon is raw-bit exact on upstream squares. Its
+  receipt is `logs/rms-reduction-receipt-v1.json` under the same evidence root.
+  Next: GPU-fed exponent power control before a bounded repair and block-0
+  regression; DiT return pointer is
   `docs/hy-nomas-native-frontier.md`.
 
 ### [LM-HY-NOMAS-SERIAL-WORKSPACE-2026-10-24] Two applications share scratch and MPS plans; memory drops without a demonstrated speedup
@@ -33302,3 +33306,59 @@ Refresh after source/toolchain/device/model/workload changes.
   tolerances, a 10% floor and no added host synchronization. No full generation
   is admitted. Refresh on source, checkpoint/fixture, geometry, precision,
   compiler/SDK/OS/device or lifecycle changes. No speedup is claimed.
+
+## 2026-10-24 — Post-attention RMS square/mean localization
+
+- Active goal: isolate block-0 post-attention RMS statistics on the exact
+  authenticated S1280 attention residual, without full generation. Return
+  pointer: `docs/qwen25-hy-nomas-frontier.md`, isolated RMS section. S4/S32
+  remain qualified; the full S1280 prefix remains rejected. Production math
+  is unchanged by this diagnostic slice.
+- The standalone official RMS capture consumes only that residual and the
+  pinned 7,168-byte gain. All five old RMS intermediates and gained output
+  reproduce the old block trace raw-bit exactly. Its fresh manifest SHA256
+  is `c068b70a4a2c0020eb2b42cb639cc82e33c457758c43a237b474eaf18b0b3ca7`.
+  Source stage manifest remains d29c8a6b...31b9. A first harness launch rejects
+  optional-epsilon metadata before GPU setup; it is not numerical evidence.
+- Native F32 cast is raw-bit exact. Native square differs in 4,465,460 of
+  4,587,520 words, max_abs 3.814697265625e-6. Mean and +epsilon differ in
+  670 of 1,280 rows, max_abs 2.2351741790771484e-8. All F32 values pass the
+  unchanged `atol=rtol=2e-5` gate; raw equality is separately false.
+- Feed the authenticated upstream F32 squares through the same native
+  materialized mean/+epsilon graph: both outputs match all 1,280 upstream
+  rows raw-bit exactly. Direct production +epsilon equals the native-square
+  materialized result, and an explicit compile-optimization-level-0 control
+  equals direct production. Thus no standalone mean discrepancy is observed
+  on identical squares for this input. The upstream-square control is a
+  separately compiled materialized graph, not an injection into the fused
+  production helper. Do not promote it into that untested counterfactual.
+- The separate official MPS expression control reproduces the two arms:
+  `x.pow(2)` squares/mean match the official RMS, while `x*x` squares/mean
+  match native hashes. Unequal squares are 1--2 ULP above power; unequal
+  means are at most four ULP above. Pinned Torch runtime BinaryOps routes
+  scalar power through generic MPSGraph power. Its closed internal math is
+  unknown. The old native constant-exponent power negative remains valid
+  for that formulation; it did not reproduce Torch's scalar-feed graph.
+- Sequential isolated guards preserve the file-cache-aware 10% floor,
+  2 GiB sampled process cap, 64 MiB swap-growth stop and 180-second deadline.
+  Oracle/native-v1/native-v2/expression-control peaks are 1,520,306,120 /
+  121,537,352 / 252,838,872 / 1,456,620,936 bytes, with no observed swap growth
+  or guard violations. Native v2 uses 64,256,000 named bytes, one terminal
+  wait, eight post-wait readbacks, zero tracked encode allocations and no
+  pre-terminal activation reads. Sampling is not a peak reservation.
+- Thirty-two Python tests and seven focused Crystal examples pass. Native
+  normal/cpu-only no-codegen, strict Clang warnings, release link and format
+  checks pass. Correlated MiniQuad is ROBUST for authenticated fixed-input
+  localization and lifecycle, not a production fix, full-prefix parity or
+  speedup. Source/fixture/runtime/compiler/SDK/binary/object pins, exact
+  commands, guards and limitations are indexed at
+  `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-reduction-receipt-v1.json`.
+  Reused companion object source ancestry remains opaque and is disclosed.
+- Next falsifier: match Torch's GPU-fed exponent power path, then test a
+  bounded native repair against the saved RMS and block 0 before rerunning
+  all 26 blocks. Existing standing authority permits isolated native and
+  upstream GPU correctness probes with the unchanged tolerances, no extra
+  host synchronization and 10% reserve. Full-prefix/block admissions and
+  full generation do not follow from this small probe's budget. Refresh on
+  scoped source, checkpoint/fixture/input, geometry/precision, compiler/SDK/
+  OS/device, execution route or buffer-lifecycle changes, or artifact loss.

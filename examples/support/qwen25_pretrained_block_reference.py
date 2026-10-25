@@ -18,21 +18,30 @@ import math
 import os
 from pathlib import Path
 import platform
+import stat
 import sys
 from typing import Any, Callable
 
 
 SCHEMA = "cogni_ml.qwen25_vl_pretrained_decoder_block_stage_reference"
 SCHEMA_VERSION = 1
+RMS_REDUCTION_SCHEMA = "cogni_ml.qwen25_vl_pretrained_rms_reduction_reference"
+RMS_REDUCTION_SCHEMA_VERSION = 1
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 MODEL_REVISION = "eb6ba55b40ada64977147b52e50a4145ee89ac4f"
 TRUSTED_PREFIX_SHA256 = "40c665e0ce5903f43411d39a46379e8dda64ddbe41bd058f15552c877ccba96e"
 TRUSTED_PREFIX_S1280_SHA256 = "b78616cc1dc3b1deb1215b06ecc49fbf60e3b38477f24aec2a0ccd60da745d3a"
 TRUSTED_PREFIX_SHA256S = frozenset((TRUSTED_PREFIX_SHA256, TRUSTED_PREFIX_S1280_SHA256))
+TRUSTED_RMS_ONLY_STAGE_SHA256 = "d29c8a6bf457f0d848fa29c4dc734c806c54aee063db7c641032460811c331b9"
+TRUSTED_RMS_ONLY_STAGE_SHA256S = frozenset((TRUSTED_RMS_ONLY_STAGE_SHA256,))
 MAX_PREFIX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_DIAGNOSTIC_SIDECAR_BYTES = 512 * 1024 * 1024
 MAX_BLOCK_MPS_ESTIMATE_BYTES = 3 * 1024 * 1024 * 1024
+MAX_RMS_ONLY_MPS_ESTIMATE_BYTES = 256 * 1024 * 1024
 MPS_RESERVE_FRACTION = 0.15
+RMS_ONLY_MPS_RESERVE_FRACTION = 0.10
+RMS_ONLY_SEQUENCE_LENGTH = 1280
+RMS_ONLY_HIDDEN_SIZE = 3584
 
 STAGE_PREFIX_NAMES = (
     "rotary_cos",
@@ -44,6 +53,14 @@ RMS_TRACE_STAGE_SUFFIXES = (
     "rsqrt_f32",
     "normalized_f32",
     "normalized_bf16",
+)
+RMS_REDUCTION_TRACE_STAGE_SUFFIXES = (
+    "input_f32",
+    "square_f32",
+    *RMS_TRACE_STAGE_SUFFIXES[:3],
+    "normalized_f32",
+    "normalized_bf16",
+    "gained_output_bf16",
 )
 RMS_SITE_MODULES = {
     "input": "input_layernorm",
@@ -399,6 +416,27 @@ def _rms_trace_shapes(
     }
 
 
+def _rms_reduction_trace_shapes(
+    layer_index: int,
+    sequence_length: int,
+    hidden_size: int,
+) -> dict[str, list[int]]:
+    layer_index = _validate_layer_index(layer_index)
+    prefix = f"layers.{layer_index}.post_attention_layernorm."
+    hidden = [1, sequence_length, hidden_size]
+    reduced = [1, sequence_length, 1]
+    return {
+        prefix + "input_f32": hidden,
+        prefix + "square_f32": hidden,
+        prefix + "variance_f32": reduced,
+        prefix + "variance_plus_eps_f32": reduced,
+        prefix + "rsqrt_f32": reduced,
+        prefix + "normalized_f32": hidden,
+        prefix + "normalized_bf16": hidden,
+        prefix + "gained_output_bf16": hidden,
+    }
+
+
 def _qualified_rms_trace_entries(
     layer_index: int,
     rms_stages: dict[str, Any],
@@ -419,28 +457,161 @@ def _qualified_rms_trace_entries(
     ]
 
 
+def _qualified_rms_reduction_entries(
+    layer_index: int,
+    rms_stages: dict[str, Any],
+) -> list[tuple[str, Any, str]]:
+    layer_index = _validate_layer_index(layer_index)
+    if set(rms_stages) != set(RMS_REDUCTION_TRACE_STAGE_SUFFIXES):
+        raise RuntimeError("RMS reduction tensor inventory differs from its expected stage suffixes")
+    return [
+        (
+            f"layers.{layer_index}.post_attention_layernorm.{name}",
+            rms_stages[name],
+            "bfloat16" if name.endswith("_bf16") else "float32",
+        )
+        for name in RMS_REDUCTION_TRACE_STAGE_SUFFIXES
+    ]
+
+
+def _rms_tensor_runtime_record(tensor: Any) -> dict[str, Any]:
+    return {
+        "shape": list(tensor.shape),
+        "stride": list(tensor.stride()),
+        "dtype": str(tensor.dtype).removeprefix("torch."),
+        "device": tensor.device.type,
+        "layout": str(tensor.layout).removeprefix("torch."),
+    }
+
+
+def _rms_dispatch_record(
+    stage: str,
+    function: Any,
+    args: tuple[Any, ...],
+    result: Any,
+    captured: dict[str, Any],
+    norm_weight: Any,
+) -> dict[str, Any]:
+    schema = getattr(function, "_schema", None)
+    tensor_inputs = [value for value in args if hasattr(value, "shape") and hasattr(value, "dtype")]
+    tensor_input_sources = []
+    for value in tensor_inputs:
+        if value is norm_weight:
+            tensor_input_sources.append("norm.weight")
+            continue
+        matches = [
+            name for name, captured_value in captured.items()
+            if isinstance(captured_value, type(value)) and captured_value is value
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(f"official RMSNorm {stage} consumed an unbound or ambiguous tensor input")
+        tensor_input_sources.append(matches[0])
+    scalar_inputs = [
+        value for value in args
+        if isinstance(value, (bool, int, float, str))
+        or isinstance(value, (list, tuple)) and all(isinstance(item, (bool, int, float, str)) for item in value)
+    ]
+    return {
+        "stage": stage,
+        "operator": getattr(schema, "name", ""),
+        "overload": getattr(schema, "overload_name", ""),
+        "tensor_input_sources": tensor_input_sources,
+        "tensor_inputs": [_rms_tensor_runtime_record(value) for value in tensor_inputs],
+        "scalar_inputs": scalar_inputs,
+        "output": _rms_tensor_runtime_record(result),
+    }
+
+
 @contextmanager
-def _observe_official_rmsnorm(module: Any, torch: Any):
+def _observe_official_rmsnorm(module: Any, torch: Any, capture_reduction_trace: bool = False):
     """Observe actual ops inside one official RMSNorm call without substituting math."""
     from torch.utils._python_dispatch import TorchDispatchMode
 
     captured: dict[str, Any] = {}
+    if capture_reduction_trace:
+        captured["_operation_metadata"] = []
     original_forward = module.forward
+
+    def record(stage: str, function: Any, args: tuple[Any, ...], result: Any) -> None:
+        if capture_reduction_trace:
+            captured["_operation_metadata"].append(
+                _rms_dispatch_record(stage, function, args, result, captured, module.weight)
+            )
+
+    def capture_tensor(name: str, value: Any) -> None:
+        if name in captured:
+            raise RuntimeError(f"official RMSNorm emitted a duplicate diagnostic op: {name}")
+        captured[name] = value
 
     class RMSDispatchObserver(TorchDispatchMode):
         def __torch_dispatch__(self, function: Any, types: Any, args: Any = (), kwargs: Any = None) -> Any:
             result = function(*args, **(kwargs or {}))
             schema = getattr(function, "_schema", None)
             operator = getattr(schema, "name", "")
+            overload = getattr(schema, "overload_name", "")
             if not isinstance(result, torch.Tensor):
                 return result
+            if capture_reduction_trace and operator == "aten::to" and overload == "dtype":
+                source = args[0] if args else None
+                if (
+                    isinstance(source, torch.Tensor)
+                    and source.dtype == torch.bfloat16
+                    and result.dtype == torch.float32
+                    and tuple(source.shape) == tuple(result.shape)
+                ):
+                    if source is not captured.get("input_bf16"):
+                        raise RuntimeError("official RMSNorm F32 cast does not consume the observed BF16 input")
+                    capture_tensor("input_f32", result)
+                    record("input_f32", function, args, result)
+                elif (
+                    isinstance(source, torch.Tensor)
+                    and source.dtype == torch.float32
+                    and result.dtype == torch.bfloat16
+                    and tuple(source.shape) == tuple(result.shape)
+                ):
+                    if source is not captured.get("normalized_f32"):
+                        raise RuntimeError("official RMSNorm BF16 cast does not consume the observed normalized F32 value")
+                    capture_tensor("normalized_bf16", result)
+                    record("normalized_bf16", function, args, result)
+            if capture_reduction_trace and operator == "aten::pow":
+                if len(args) < 2 or args[1] != 2:
+                    raise RuntimeError("official RMSNorm square op changed its exponent")
+                if "input_f32" not in captured or args[0] is not captured["input_f32"]:
+                    raise RuntimeError("official RMSNorm square does not consume the observed F32 cast result")
+                capture_tensor("square_f32", result)
+                record("square_f32", function, args, result)
             if operator == "aten::mean":
+                if capture_reduction_trace and (
+                    not args
+                    or args[0] is not captured.get("square_f32")
+                    or len(args) < 3
+                    or args[1] != [-1]
+                    or args[2] is not True
+                ):
+                    raise RuntimeError("official RMSNorm mean no longer reduces the observed square over the final axis")
                 name = "variance_f32"
             elif operator == "aten::add" and result.dtype == torch.float32:
+                if capture_reduction_trace:
+                    epsilon_values = [value for value in args[1:] if isinstance(value, (int, float)) and not isinstance(value, bool)]
+                    if (
+                        not args
+                        or args[0] is not captured.get("variance_f32")
+                        or len(epsilon_values) != 1
+                        or float(epsilon_values[0]) != float(module.variance_epsilon)
+                    ):
+                        raise RuntimeError("official RMSNorm epsilon add does not consume variance and its configured epsilon")
                 name = "variance_plus_eps_f32"
             elif operator == "aten::rsqrt":
+                if capture_reduction_trace and (not args or args[0] is not captured.get("variance_plus_eps_f32")):
+                    raise RuntimeError("official RMSNorm reciprocal root does not consume variance plus epsilon")
                 name = "rsqrt_f32"
             elif operator == "aten::mul" and result.dtype == torch.float32:
+                if capture_reduction_trace and (
+                    len(args) != 2
+                    or args[0] is not captured.get("input_f32")
+                    or args[1] is not captured.get("rsqrt_f32")
+                ):
+                    raise RuntimeError("official RMSNorm normalization multiply changed its input or reciprocal root")
                 name = "normalized_f32"
             elif operator == "aten::mul" and result.dtype == torch.bfloat16:
                 candidates = [
@@ -451,16 +622,21 @@ def _observe_official_rmsnorm(module: Any, torch: Any):
                 ]
                 if len(candidates) != 1:
                     raise RuntimeError("official RMSNorm gain multiply did not expose one normalized BF16 operand")
-                name = "normalized_bf16"
-                if name in captured:
-                    raise RuntimeError(f"official RMSNorm emitted a duplicate diagnostic op: {name}")
-                captured[name] = candidates[0]
+                if "normalized_bf16" in captured:
+                    if candidates[0] is not captured["normalized_bf16"]:
+                        raise RuntimeError("official RMSNorm gain multiply changed the observed BF16 cast operand")
+                else:
+                    capture_tensor("normalized_bf16", candidates[0])
+                if capture_reduction_trace:
+                    if not any(value is module.weight for value in args):
+                        raise RuntimeError("official RMSNorm final multiply did not use the authenticated gain parameter")
+                    capture_tensor("gained_output_bf16", result)
+                    record("gained_output_bf16", function, args, result)
                 return result
             else:
                 return result
-            if name in captured:
-                raise RuntimeError(f"official RMSNorm emitted a duplicate diagnostic op: {name}")
-            captured[name] = result
+            capture_tensor(name, result)
+            record(name, function, args, result)
             return result
 
     def observed_forward(hidden_states: Any) -> Any:
@@ -481,11 +657,18 @@ def _validate_rms_trace(
     captured: dict[str, Any], expected_shapes: dict[str, list[int]], torch: Any, require_mps: bool
 ) -> None:
     expected_names = {name.rsplit(".", 1)[-1] for name in expected_shapes}
-    if set(captured) != expected_names | {"input_bf16"}:
+    tensor_captures = {name for name, value in captured.items() if isinstance(value, torch.Tensor)}
+    non_tensor_captures = set(captured) - tensor_captures
+    allowed_non_tensors = {"_operation_metadata"} if "input_f32" in expected_names else set()
+    if non_tensor_captures != allowed_non_tensors:
+        raise RuntimeError(f"official RMSNorm observer has unexpected non-tensor captures: {sorted(non_tensor_captures)}")
+    if "_operation_metadata" in allowed_non_tensors and not isinstance(captured.get("_operation_metadata"), list):
+        raise RuntimeError("official RMSNorm operation metadata capture is malformed")
+    if tensor_captures != expected_names | {"input_bf16"}:
         raise RuntimeError(
             "official RMSNorm did not produce the complete dispatch trace: "
-            f"missing={sorted((expected_names | {'input_bf16'}) - set(captured))}, "
-            f"unexpected={sorted(set(captured) - (expected_names | {'input_bf16'}))}"
+            f"missing={sorted((expected_names | {'input_bf16'}) - tensor_captures)}, "
+            f"unexpected={sorted(tensor_captures - (expected_names | {'input_bf16'}))}"
         )
     input_tensor = captured["input_bf16"]
     expected_input_shape = next(
@@ -498,7 +681,7 @@ def _validate_rms_trace(
     for qualified_name, shape in expected_shapes.items():
         name = qualified_name.rsplit(".", 1)[-1]
         tensor = captured[name]
-        expected_dtype = torch.bfloat16 if name == "normalized_bf16" else torch.float32
+        expected_dtype = torch.bfloat16 if name.endswith("_bf16") else torch.float32
         if tensor.dtype != expected_dtype or list(tensor.shape) != shape:
             raise RuntimeError(f"official RMSNorm trace geometry changed: {qualified_name}")
         if require_mps and tensor.device.type != "mps":
@@ -523,6 +706,304 @@ def _validate_rms_input_binding(
     if observed_input_bytes != expected_input:
         raise RuntimeError(f"official {rms_site} input differs from {source_description}")
     return _sha256_bytes(observed_input_bytes)
+
+
+def _rms_reference_record(
+    record: Any,
+    expected_name: str,
+    expected_shape: list[int],
+    expected_dtype: str,
+    sidecar_sizes: dict[str, int],
+) -> tuple[int, int, str]:
+    if not isinstance(record, dict) or record.get("name") != expected_name:
+        raise ValueError(f"authenticated RMS source is missing stage record {expected_name}")
+    if record.get("shape") != expected_shape or record.get("dtype") != expected_dtype:
+        raise ValueError(f"authenticated RMS source stage geometry changed: {expected_name}")
+    storage = record.get("storage")
+    sidecar_name = "bf16" if expected_dtype == "bfloat16" else "f32"
+    byte_width = 2 if expected_dtype == "bfloat16" else 4
+    expected_nbytes = math.prod(expected_shape) * byte_width
+    if (
+        not isinstance(storage, dict)
+        or storage.get("sidecar") != sidecar_name
+        or isinstance(storage.get("offset_bytes"), bool)
+        or not isinstance(storage.get("offset_bytes"), int)
+        or storage["offset_bytes"] < 0
+        or isinstance(storage.get("nbytes"), bool)
+        or not isinstance(storage.get("nbytes"), int)
+        or storage["nbytes"] != expected_nbytes
+        or storage["offset_bytes"] + expected_nbytes > sidecar_sizes.get(sidecar_name, -1)
+    ):
+        raise ValueError(f"authenticated RMS source storage range is invalid: {expected_name}")
+    return storage["offset_bytes"], expected_nbytes, sidecar_name
+
+
+def _validate_rms_only_source_document(
+    document: Any,
+    sequence_length: int = RMS_ONLY_SEQUENCE_LENGTH,
+    hidden_size: int = RMS_ONLY_HIDDEN_SIZE,
+) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != SCHEMA
+        or document.get("schema_version") != SCHEMA_VERSION
+    ):
+        raise ValueError("RMS-only source is not a trusted pretrained block stage manifest")
+    if (
+        not isinstance(document.get("layer"), dict)
+        or isinstance(document["layer"].get("index"), bool)
+        or not isinstance(document["layer"].get("index"), int)
+        or document["layer"].get("index") != 0
+        or not isinstance(document.get("prefix_reference"), dict)
+        or document["prefix_reference"].get("manifest_sha256") != TRUSTED_PREFIX_S1280_SHA256
+        or not _is_sha256(document["prefix_reference"].get("sidecar_sha256"))
+    ):
+        raise ValueError("RMS-only source is not linked to the authenticated S1280 layer-0 prefix")
+    config = document.get("config")
+    if (
+        not isinstance(config, dict)
+        or config.get("hidden_size") != hidden_size
+        or config.get("sequence_length") != sequence_length
+        or config.get("rms_norm_eps") != 1e-6
+    ):
+        raise ValueError("RMS-only source config does not match the pinned S1280 RMS geometry")
+    rms_trace = document.get("rms_trace")
+    source = rms_trace.get("source") if isinstance(rms_trace, dict) else None
+    if (
+        not isinstance(rms_trace, dict)
+        or rms_trace.get("site") != "post_attention_layernorm"
+        or not isinstance(rms_trace.get("input_state_sha256"), str)
+        or not _is_sha256(rms_trace.get("input_state_sha256"))
+        or not isinstance(source, dict)
+        or source.get("schema_version") != 1
+        or source.get("source_file") != RMS_SOURCE_FILE
+        or source.get("source_sha256") != RMS_SOURCE_SHA256
+        or source.get("capture_method") != "TorchDispatchMode pass-through around the official Qwen2RMSNorm.forward call"
+        or (
+            "variance_epsilon" in rms_trace
+            and rms_trace["variance_epsilon"] != config.get("rms_norm_eps")
+        )
+    ):
+        raise ValueError("RMS-only source does not contain the pinned post-attention RMS trace")
+    sidecars = document.get("sidecars")
+    if not isinstance(sidecars, dict) or set(sidecars) != {"bf16", "f32"}:
+        raise ValueError("RMS-only source must contain authenticated BF16 and F32 sidecars")
+    sidecar_sizes: dict[str, int] = {}
+    for name, descriptor in sidecars.items():
+        if not isinstance(descriptor, dict):
+            raise ValueError(f"RMS-only source sidecar descriptor is malformed: {name}")
+        expected_encoding = "bfloat16-le" if name == "bf16" else "float32-le"
+        size = descriptor.get("nbytes")
+        if (
+            descriptor.get("encoding") != expected_encoding
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+            or size > MAX_DIAGNOSTIC_SIDECAR_BYTES
+            or size % (2 if name == "bf16" else 4)
+            or not _is_sha256(descriptor.get("sha256"))
+        ):
+            raise ValueError(f"RMS-only source sidecar descriptor is invalid: {name}")
+        if name == "f32" and (descriptor.get("byte_order") != "little" or descriptor.get("storage_dtype") != "float32"):
+            raise ValueError("RMS-only source F32 sidecar metadata is invalid")
+        sidecar_sizes[name] = size
+
+    stage_records = document.get("stages")
+    rms_records = rms_trace.get("stages")
+    if not isinstance(stage_records, list) or not isinstance(rms_records, list):
+        raise ValueError("RMS-only source stage inventories are malformed")
+    records: dict[str, dict[str, Any]] = {}
+    all_records: list[tuple[str, dict[str, Any]]] = []
+    hidden_input = document.get("hidden_states_in")
+    if not isinstance(hidden_input, dict):
+        raise ValueError("RMS-only source is missing hidden_states_in storage metadata")
+    all_records.append(("hidden_states_in", hidden_input))
+    for group_name, group in (("stages", stage_records), ("extra_stages", document.get("extra_stages", [])), ("rms_trace.stages", rms_records)):
+        if not isinstance(group, list):
+            raise ValueError(f"RMS-only source {group_name} inventory is malformed")
+        for entry in group:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or entry["name"] in records:
+                raise ValueError(f"RMS-only source has a duplicate or malformed {group_name} record")
+            records[entry["name"]] = entry
+            all_records.append((entry["name"], entry))
+
+    expected_hidden = [1, sequence_length, hidden_size]
+    required_shapes = {
+        "residual_after_attention": (expected_hidden, "bfloat16"),
+        "layers.0.post_attention_layernorm": (expected_hidden, "bfloat16"),
+    }
+    for suffix in RMS_TRACE_STAGE_SUFFIXES:
+        dtype = "bfloat16" if suffix.endswith("_bf16") else "float32"
+        shape = [1, sequence_length, 1] if suffix in {
+            "variance_f32", "variance_plus_eps_f32", "rsqrt_f32"
+        } else expected_hidden
+        required_shapes[f"layers.0.post_attention_layernorm.{suffix}"] = (shape, dtype)
+
+    extents: dict[str, list[tuple[int, int, str]]] = {"bf16": [], "f32": []}
+    for name, record in all_records:
+        if name == "hidden_states_in":
+            if record.get("shape") != expected_hidden or record.get("dtype") != "bfloat16":
+                raise ValueError("RMS-only source hidden_states_in geometry is invalid")
+            # The source fixture's hidden input is stored at extent zero.
+            record_for_range = dict(record, name=name)
+        else:
+            record_for_range = record
+        shape = record_for_range.get("shape")
+        dtype = record_for_range.get("dtype")
+        if not isinstance(shape, list) or not shape or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in shape
+        ) or dtype not in {"bfloat16", "float32"}:
+            raise ValueError(f"RMS-only source tensor metadata is invalid: {name}")
+        storage = record_for_range.get("storage")
+        sidecar_name = "bf16" if dtype == "bfloat16" else "f32"
+        byte_width = 2 if dtype == "bfloat16" else 4
+        expected_nbytes = math.prod(shape) * byte_width
+        if (
+            not isinstance(storage, dict)
+            or storage.get("sidecar") != sidecar_name
+            or isinstance(storage.get("offset_bytes"), bool)
+            or not isinstance(storage.get("offset_bytes"), int)
+            or storage["offset_bytes"] < 0
+            or isinstance(storage.get("nbytes"), bool)
+            or not isinstance(storage.get("nbytes"), int)
+            or storage["nbytes"] != expected_nbytes
+            or storage["offset_bytes"] + expected_nbytes > sidecar_sizes[sidecar_name]
+        ):
+            raise ValueError(f"RMS-only source tensor range is invalid: {name}")
+        if name in required_shapes:
+            expected_shape, expected_dtype = required_shapes[name]
+            if shape != expected_shape or dtype != expected_dtype:
+                raise ValueError(f"RMS-only source stage geometry changed: {name}")
+        extents[sidecar_name].append((storage["offset_bytes"], storage["offset_bytes"] + expected_nbytes, name))
+    for sidecar_name, ranges in extents.items():
+        ordered = sorted(ranges)
+        if any(left[1] > right[0] for left, right in zip(ordered, ordered[1:])):
+            raise ValueError(f"RMS-only source {sidecar_name} tensor extents overlap")
+
+    required_names = {
+        "residual_after_attention",
+        "layers.0.post_attention_layernorm",
+        *(f"layers.0.post_attention_layernorm.{name}" for name in RMS_TRACE_STAGE_SUFFIXES),
+    }
+    if not required_names.issubset(records):
+        raise ValueError("RMS-only source is missing a required residual or RMS output stage")
+    return records, sidecar_sizes
+
+
+def _read_rms_only_sidecar_ranges(
+    root: Path,
+    descriptor: dict[str, Any],
+    records: dict[str, dict[str, Any]],
+    names: set[str],
+    sidecar_name: str,
+) -> dict[str, bytes]:
+    filename = descriptor.get("path")
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+    ):
+        raise ValueError("RMS-only source sidecar path must be a sibling basename")
+    path = root / filename
+    if path.is_symlink() or not path.is_file() or path.resolve(strict=True).parent != root:
+        raise ValueError("RMS-only source sidecar must be a regular sibling file")
+    selected: dict[str, tuple[int, int]] = {}
+    for name in names:
+        record = records.get(name)
+        if record is None:
+            raise ValueError(f"RMS-only source is missing tensor range {name}")
+        storage = record["storage"]
+        if storage["sidecar"] != sidecar_name:
+            raise ValueError(f"RMS-only source tensor uses the wrong sidecar: {name}")
+        selected[name] = (storage["offset_bytes"], storage["offset_bytes"] + storage["nbytes"])
+    output = {name: bytearray() for name in selected}
+    digest = hashlib.sha256()
+    expected_size = descriptor["nbytes"]
+    offset = 0
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor_fd = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor_fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != expected_size:
+            raise ValueError("RMS-only source sidecar size changed before authentication")
+        with os.fdopen(descriptor_fd, "rb", closefd=False) as source:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                end = offset + len(chunk)
+                for name, (start, stop) in selected.items():
+                    overlap_start = max(start, offset)
+                    overlap_end = min(stop, end)
+                    if overlap_start < overlap_end:
+                        output[name].extend(chunk[overlap_start - offset : overlap_end - offset])
+                offset = end
+    finally:
+        os.close(descriptor_fd)
+    if offset != expected_size or digest.hexdigest() != descriptor.get("sha256"):
+        raise ValueError(f"RMS-only source {sidecar_name} sidecar digest or size is invalid")
+    return {name: bytes(value) for name, value in output.items()}
+
+
+def _read_rms_only_source_snapshot(
+    manifest_path: Path,
+    expected_sha256: str,
+    sequence_length: int = RMS_ONLY_SEQUENCE_LENGTH,
+    hidden_size: int = RMS_ONLY_HIDDEN_SIZE,
+) -> dict[str, Any]:
+    if not _is_sha256(expected_sha256) or expected_sha256 not in TRUSTED_RMS_ONLY_STAGE_SHA256S:
+        raise ValueError("RMS-only source manifest digest is not trusted")
+    manifest_path = Path(manifest_path).expanduser()
+    if manifest_path.is_symlink():
+        raise ValueError("RMS-only source manifest must be a regular non-symlink file")
+    manifest_path = manifest_path.resolve(strict=True)
+    if not manifest_path.is_file():
+        raise ValueError("RMS-only source manifest must be a regular non-symlink file")
+    manifest_bytes = manifest_path.read_bytes()
+    if not 0 < len(manifest_bytes) <= MAX_PREFIX_MANIFEST_BYTES:
+        raise ValueError("RMS-only source manifest size is outside the supported range")
+    manifest_sha256 = _sha256_bytes(manifest_bytes)
+    if manifest_sha256 != expected_sha256:
+        raise ValueError("RMS-only source manifest SHA-256 does not match its trusted digest")
+    try:
+        document = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("trusted RMS-only source manifest is not valid JSON") from error
+    records, _ = _validate_rms_only_source_document(document, sequence_length, hidden_size)
+    root = manifest_path.parent.resolve(strict=True)
+    sidecars = document["sidecars"]
+    selected = {
+        "bf16": {
+            "residual_after_attention",
+            "layers.0.post_attention_layernorm",
+            "layers.0.post_attention_layernorm.normalized_bf16",
+        },
+        "f32": {
+            f"layers.0.post_attention_layernorm.{suffix}"
+            for suffix in RMS_TRACE_STAGE_SUFFIXES
+            if not suffix.endswith("_bf16")
+        },
+    }
+    range_bytes: dict[str, bytes] = {}
+    for name in ("bf16", "f32"):
+        range_bytes.update(
+            _read_rms_only_sidecar_ranges(root, sidecars[name], records, selected[name], name)
+        )
+    residual_bytes = range_bytes["residual_after_attention"]
+    if _sha256_bytes(residual_bytes) != document["rms_trace"]["input_state_sha256"]:
+        raise ValueError("RMS-only source residual does not match its authenticated RMS input digest")
+    return {
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "manifest_bytes": manifest_bytes,
+        "document": document,
+        "range_bytes": range_bytes,
+        "sidecar_sha256s": {name: sides["sha256"] for name, sides in sidecars.items()},
+    }
 
 
 def _verified_rms_source_sha256(transformers_sources: dict[str, Any]) -> str:
@@ -573,6 +1054,128 @@ def _require_block_memory_budget(estimated_bytes: int, current_bytes: int, recom
     allowed = int(recommended_bytes * (1.0 - MPS_RESERVE_FRACTION))
     if current_bytes + estimated_bytes > allowed:
         raise MemoryError("one-block diagnostic exceeds the MPS limit with a 15% reserve")
+
+
+def _estimate_rms_only_mps_bytes(
+    stage_shapes: dict[str, list[int]], sequence_length: int, hidden_size: int
+) -> int:
+    captures = sum(
+        math.prod(shape) * (2 if name.endswith("_bf16") else 4)
+        for name, shape in stage_shapes.items()
+    )
+    input_and_gain = sequence_length * hidden_size * 2 + hidden_size * 2
+    reduction_workspace = sequence_length * hidden_size * 4
+    fixed_slack = 64 * 1024 * 1024
+    return captures + input_and_gain + reduction_workspace + fixed_slack
+
+
+def _require_rms_only_memory_budget(
+    estimated_bytes: int, current_bytes: int, recommended_bytes: int
+) -> None:
+    if estimated_bytes > MAX_RMS_ONLY_MPS_ESTIMATE_BYTES:
+        raise MemoryError("RMS-only diagnostic estimate exceeds the 256 MiB limit")
+    if (
+        any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (estimated_bytes, current_bytes, recommended_bytes))
+        or recommended_bytes <= 0
+    ):
+        raise ValueError("RMS-only MPS memory measurements are invalid")
+    allowed = int(recommended_bytes * (1.0 - RMS_ONLY_MPS_RESERVE_FRACTION))
+    if current_bytes + estimated_bytes > allowed:
+        raise MemoryError("RMS-only diagnostic exceeds the MPS limit with a 10% reserve")
+
+
+def _validate_rms_only_checkpoint_binding(
+    document: dict[str, Any], checkpoint: dict[str, Any], producer: Any
+) -> dict[str, Any]:
+    reference_checkpoint = document.get("checkpoint")
+    if not isinstance(reference_checkpoint, dict):
+        raise ValueError("RMS-only source checkpoint record is missing")
+    for field in ("repo_id", "revision", "receipt_sha256", "config_sha256", "index_sha256", "verified_files"):
+        if reference_checkpoint.get(field) != checkpoint.get(field):
+            raise ValueError(f"RMS-only source checkpoint binding changed: {field}")
+    layer = document.get("layer")
+    weights = layer.get("weights") if isinstance(layer, dict) else None
+    if not isinstance(weights, list) or len(weights) != 12:
+        raise ValueError("RMS-only source layer weight inventory is incomplete")
+    expected_suffixes = (
+        "input_layernorm.weight",
+        "self_attn.q_proj.weight",
+        "self_attn.q_proj.bias",
+        "self_attn.k_proj.weight",
+        "self_attn.k_proj.bias",
+        "self_attn.v_proj.weight",
+        "self_attn.v_proj.bias",
+        "self_attn.o_proj.weight",
+        "post_attention_layernorm.weight",
+        "mlp.gate_proj.weight",
+        "mlp.up_proj.weight",
+        "mlp.down_proj.weight",
+    )
+    records: dict[str, dict[str, Any]] = {}
+    for record in weights:
+        if not isinstance(record, dict):
+            raise ValueError("RMS-only source layer weight record is malformed")
+        key = record.get("key")
+        if not isinstance(key, str) or key in records:
+            raise ValueError("RMS-only source layer weight key is malformed or duplicated")
+        records[key] = record
+    expected_keys = {f"model.layers.0.{suffix}" for suffix in expected_suffixes}
+    if set(records) != expected_keys:
+        raise ValueError("RMS-only source layer weight inventory differs from layer 0")
+    weight_map = checkpoint.get("index_weight_map")
+    verified_files = checkpoint.get("verified_files")
+    if not isinstance(weight_map, dict) or not isinstance(verified_files, dict):
+        raise ValueError("RMS-only selected checkpoint index or receipt map is malformed")
+    for suffix in expected_suffixes:
+        key = f"model.layers.0.{suffix}"
+        record = records[key]
+        expected_shape = producer._expected_weight_shape(suffix)
+        if (
+            record.get("dtype") != "BF16"
+            or record.get("shape") != expected_shape
+            or record.get("nbytes") != math.prod(expected_shape) * 2
+            or not _is_sha256(record.get("tensor_sha256"))
+            or record.get("shard") != weight_map.get(key)
+            or record.get("shard") not in verified_files
+        ):
+            raise ValueError(f"RMS-only source weight provenance changed: {key}")
+    return records["model.layers.0.post_attention_layernorm.weight"]
+
+
+def _load_rms_only_gain(
+    reference: dict[str, Any],
+    checkpoint: dict[str, Any],
+    torch: Any,
+    safe_open: Any,
+    producer: Any,
+) -> tuple[Any, dict[str, Any]]:
+    key = "model.layers.0.post_attention_layernorm.weight"
+    shard = checkpoint["index_weight_map"].get(key)
+    if not isinstance(shard, str) or shard != reference.get("shard"):
+        raise ValueError("checkpoint index does not bind the trusted post-attention RMS gain")
+    with safe_open(str(Path(checkpoint["root"]) / shard), framework="pt", device="cpu") as source:
+        try:
+            cpu_weight = source.get_tensor(key)
+        except Exception as error:
+            raise RuntimeError("could not load the selected post-attention RMS gain") from error
+    if cpu_weight.dtype != torch.bfloat16 or tuple(cpu_weight.shape) != (RMS_ONLY_HIDDEN_SIZE,):
+        raise RuntimeError("selected post-attention RMS gain is not the pinned BF16 vector")
+    digest = producer._hash_bf16_tensor(cpu_weight, torch)
+    if digest != reference.get("tensor_sha256"):
+        raise RuntimeError("selected post-attention RMS gain digest differs from the authenticated source")
+    gain = cpu_weight.to(device="mps")
+    if gain.device.type != "mps" or gain.dtype != torch.bfloat16 or tuple(gain.shape) != (RMS_ONLY_HIDDEN_SIZE,):
+        raise RuntimeError("selected post-attention RMS gain did not remain BF16 on MPS")
+    record = {
+        "key": key,
+        "shard": shard,
+        "dtype": "BF16",
+        "shape": [RMS_ONLY_HIDDEN_SIZE],
+        "nbytes": RMS_ONLY_HIDDEN_SIZE * 2,
+        "tensor_sha256": digest,
+    }
+    del cpu_weight
+    return gain, record
 
 
 def _state_tensor_from_bytes(state_bytes: bytes, shape: list[int], torch: Any, device: Any) -> Any:
@@ -697,6 +1300,128 @@ def _pack_diagnostic_sidecars(
     )
 
 
+def _validate_rms_reduction_observation(
+    captured: dict[str, Any],
+    expected_shapes: dict[str, list[int]],
+    operations: list[dict[str, Any]],
+    variance_epsilon: Any,
+    torch: Any,
+    require_mps: bool,
+) -> list[dict[str, str]]:
+    _validate_rms_trace(captured, expected_shapes, torch, require_mps)
+    expected = [
+        ("input_f32", "aten::to", "dtype"),
+        ("square_f32", "aten::pow", "Tensor_Scalar"),
+        ("variance_f32", "aten::mean", "dim"),
+        ("variance_plus_eps_f32", "aten::add", "Tensor"),
+        ("rsqrt_f32", "aten::rsqrt", ""),
+        ("normalized_f32", "aten::mul", "Tensor"),
+        ("normalized_bf16", "aten::to", "dtype"),
+        ("gained_output_bf16", "aten::mul", "Tensor"),
+    ]
+    actual = [
+        (record.get("stage"), record.get("operator"), record.get("overload"))
+        for record in operations
+        if isinstance(record, dict)
+    ]
+    if actual != expected or len(operations) != len(expected):
+        raise RuntimeError("official RMSNorm operation sequence differs from the pinned cast/reduction contract")
+    tensor_inputs = [record.get("tensor_inputs") for record in operations]
+    if any(not isinstance(inputs, list) for inputs in tensor_inputs):
+        raise RuntimeError("official RMSNorm operation tensor-input metadata is malformed")
+    expected_input_counts = [1, 1, 1, 1, 1, 2, 1, 2]
+    if [len(inputs) for inputs in tensor_inputs] != expected_input_counts:
+        raise RuntimeError("official RMSNorm operation tensor-input arity changed")
+    expected_input_sources = [
+        ["input_bf16"],
+        ["input_f32"],
+        ["square_f32"],
+        ["variance_f32"],
+        ["variance_plus_eps_f32"],
+        ["input_f32", "rsqrt_f32"],
+        ["normalized_f32"],
+        ["norm.weight", "normalized_bf16"],
+    ]
+    if [record.get("tensor_input_sources") for record in operations] != expected_input_sources:
+        raise RuntimeError("official RMSNorm operation metadata changed its tensor input stage binding")
+    outputs = [record.get("output") for record in operations]
+    if any(not isinstance(output, dict) for output in outputs):
+        raise RuntimeError("official RMSNorm operation output metadata is malformed")
+    if (
+        tensor_inputs[0][0] != _rms_tensor_runtime_record(captured["input_bf16"])
+        or any(
+            outputs[index] != _rms_tensor_runtime_record(captured[stage])
+            for index, stage in enumerate(RMS_REDUCTION_TRACE_STAGE_SUFFIXES)
+        )
+        or
+        tensor_inputs[1][0] != outputs[0]
+        or tensor_inputs[2][0] != outputs[1]
+        or tensor_inputs[3][0] != outputs[2]
+        or tensor_inputs[4][0] != outputs[3]
+        or tensor_inputs[5] != [outputs[0], outputs[4]]
+        or tensor_inputs[6][0] != outputs[5]
+        or tensor_inputs[7][1] != outputs[6]
+    ):
+        raise RuntimeError("official RMSNorm operator metadata does not preserve the cast/reduction dependency chain")
+    if (
+        operations[1].get("scalar_inputs") != [2]
+        or operations[2].get("scalar_inputs") != [[-1], True]
+        or operations[3].get("scalar_inputs") != [variance_epsilon]
+    ):
+        raise RuntimeError("official RMSNorm pow, mean, or epsilon arguments changed")
+    input_shape = expected_shapes["layers.0.post_attention_layernorm.input_f32"]
+    gain_input = tensor_inputs[7][0]
+    if (
+        not isinstance(gain_input, dict)
+        or gain_input.get("shape") != [input_shape[-1]]
+        or gain_input.get("dtype") != "bfloat16"
+        or gain_input.get("device") != outputs[7].get("device")
+    ):
+        raise RuntimeError("official RMSNorm final multiply did not expose its BF16 gain vector")
+    if (
+        isinstance(variance_epsilon, bool)
+        or not isinstance(variance_epsilon, (int, float))
+        or not math.isfinite(variance_epsilon)
+        or variance_epsilon < 0
+    ):
+        raise RuntimeError("official RMSNorm variance epsilon is malformed")
+    scalar_args = operations[3].get("scalar_inputs")
+    if not isinstance(scalar_args, list) or variance_epsilon not in scalar_args:
+        raise RuntimeError("official RMSNorm add op does not expose its configured epsilon")
+    sequence = [
+        {"stage": stage, "operator": operator, "overload": overload}
+        for stage, operator, overload in expected
+    ]
+    return sequence
+
+
+def _pack_rms_reduction_sidecars(
+    layer_index: int,
+    captured_stages: dict[str, Any],
+    expected_shapes: dict[str, list[int]],
+    torch: Any,
+) -> tuple[dict[str, bytes], list[dict[str, Any]]]:
+    sidecar_buffers: dict[str, bytearray] = {}
+    records = []
+    entries = _qualified_rms_reduction_entries(layer_index, captured_stages)
+    for name, tensor, dtype in entries:
+        expected_shape = expected_shapes.get(name)
+        if expected_shape is None or list(tensor.shape) != expected_shape:
+            raise RuntimeError(f"captured RMS reduction stage shape differs from contract: {name}")
+        if tensor.device.type != "mps":
+            raise RuntimeError(f"captured RMS reduction stage escaped MPS: {name}")
+        if dtype == "bfloat16":
+            if tensor.dtype != torch.bfloat16:
+                raise RuntimeError(f"captured RMS reduction stage dtype differs from BF16 contract: {name}")
+            raw = _tensor_bf16_bytes(tensor, torch)
+        else:
+            if tensor.dtype != torch.float32:
+                raise RuntimeError(f"captured RMS reduction stage dtype differs from F32 contract: {name}")
+            raw = _tensor_f32_bytes(tensor, torch)
+        records.append(_append_sidecar_record(sidecar_buffers, name, dtype, expected_shape, raw))
+    return {name: bytes(payload) for name, payload in sidecar_buffers.items()}, records
+
+
 def _fresh_output_paths(output_path: Path) -> tuple[Path, dict[str, Path]]:
     output_path = output_path.expanduser().absolute()
     parent = output_path.parent.resolve(strict=True)
@@ -750,7 +1475,267 @@ def _write_diagnostic(
     return manifest_path, sidecar_paths["bf16"]
 
 
+def _run_rms_only(args: argparse.Namespace) -> dict[str, Any]:
+    if args.layer_index != 0 or args.rms_site != "post-attention":
+        raise ValueError("RMS-only mode is fixed to --layer-index 0 --rms-site post-attention")
+    if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") not in (None, "0"):
+        raise RuntimeError("PYTORCH_ENABLE_MPS_FALLBACK must be unset or 0")
+    os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    if sys.byteorder != "little":
+        raise RuntimeError("checkpoint BF16 source preparation requires a little-endian host")
+
+    producer = _load_pretrained_producer()
+    _fresh_output_paths(args.output)
+    source_snapshot = _read_rms_only_source_snapshot(
+        args.rms_only_reference,
+        args.rms_only_reference_sha256,
+    )
+    source_document = source_snapshot["document"]
+    model_config_json, _, checkpoint = _load_selected_checkpoint(
+        args.checkpoint_root,
+        args.checkpoint_receipt,
+        0,
+        producer,
+    )
+    trusted_norm_weight = _validate_rms_only_checkpoint_binding(
+        source_document,
+        checkpoint,
+        producer,
+    )
+    text_values = producer._text_config(model_config_json)
+    if text_values != checkpoint["text_config"]:
+        raise RuntimeError("checkpoint text configuration changed during verification")
+
+    import torch
+    from safetensors import safe_open
+
+    if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
+        raise RuntimeError("pretrained RMS-only oracle requires MPS; CPU fallback is forbidden")
+    helper = producer._load_upstream_helper()
+    modeling, configuration, transformers_sources, transformers_version = helper._import_official(torch)
+    torch_sources = helper._verify_torch_sources(torch)
+    config = producer._parse_text_config(configuration, text_values)
+    config.num_hidden_layers = producer.SOURCE_LAYER_COUNT
+    config.use_cache = False
+    config._attn_implementation = "sdpa"
+    config_record = producer._materialize_config_record(config, RMS_ONLY_SEQUENCE_LENGTH)
+    if config_record != source_document["config"]:
+        raise ValueError("authenticated RMS-only source config differs from the pinned checkpoint config")
+
+    source_inputs = source_document.get("inputs")
+    if not isinstance(source_inputs, dict):
+        raise ValueError("authenticated RMS-only source input metadata is missing")
+    request = producer._validate_inputs(
+        source_inputs.get("token_ids"),
+        source_inputs.get("attention_mask"),
+        producer.REAL_TEXT_GEOMETRY["vocab_size"],
+        source_inputs.get("position_offset"),
+        RMS_ONLY_HIDDEN_SIZE,
+    )
+    diagnostic_inputs = _diagnostic_inputs(request, source_inputs)
+    if diagnostic_inputs != source_inputs:
+        raise ValueError("authenticated RMS-only source inputs changed during validation")
+
+    norm_weight_reference = trusted_norm_weight
+    epsilon = float(config_record["rms_norm_eps"])
+    with torch.device("meta"):
+        norm = modeling.Qwen2RMSNorm(RMS_ONLY_HIDDEN_SIZE, eps=epsilon)
+    _validate_official_rmsnorm_instance(norm, modeling.Qwen2RMSNorm, transformers_sources)
+    if (
+        not hasattr(norm, "variance_epsilon")
+        or isinstance(norm.variance_epsilon, bool)
+        or float(norm.variance_epsilon) != epsilon
+    ):
+        raise RuntimeError("official post-attention RMSNorm epsilon differs from the authenticated config")
+    if set(norm.state_dict()) != {"weight"} or norm.weight.device.type != "meta":
+        raise RuntimeError("official RMSNorm constructor did not create the expected meta gain parameter")
+
+    expected_shapes = _rms_reduction_trace_shapes(0, RMS_ONLY_SEQUENCE_LENGTH, RMS_ONLY_HIDDEN_SIZE)
+    estimate = _estimate_rms_only_mps_bytes(
+        expected_shapes,
+        RMS_ONLY_SEQUENCE_LENGTH,
+        RMS_ONLY_HIDDEN_SIZE,
+    )
+    _require_rms_only_memory_budget(
+        estimate,
+        int(torch.mps.current_allocated_memory()),
+        int(torch.mps.recommended_max_memory()),
+    )
+    device = torch.device("mps")
+    input_bytes = source_snapshot["range_bytes"]["residual_after_attention"]
+    input_hidden_states = _state_tensor_from_bytes(
+        input_bytes,
+        [1, RMS_ONLY_SEQUENCE_LENGTH, RMS_ONLY_HIDDEN_SIZE],
+        torch,
+        device,
+    )
+    gain, gain_record = _load_rms_only_gain(
+        norm_weight_reference,
+        checkpoint,
+        torch,
+        safe_open,
+        producer,
+    )
+    load_result = norm.load_state_dict({"weight": gain}, strict=True, assign=True)
+    if load_result.missing_keys or load_result.unexpected_keys:
+        raise RuntimeError("official RMSNorm gain did not load strictly")
+    norm.eval()
+    if (
+        norm.weight.device.type != "mps"
+        or norm.weight.dtype != torch.bfloat16
+        or tuple(norm.weight.shape) != (RMS_ONLY_HIDDEN_SIZE,)
+    ):
+        raise RuntimeError("official RMSNorm gain is not the authenticated BF16 MPS vector")
+    _validate_official_rmsnorm_instance(norm, modeling.Qwen2RMSNorm, transformers_sources)
+
+    operations: list[dict[str, Any]] = []
+    with torch.inference_mode():
+        with _observe_official_rmsnorm(norm, torch, capture_reduction_trace=True) as captured:
+            output = norm(input_hidden_states)
+        operations = captured["_operation_metadata"]
+        if captured.get("gained_output_bf16") is not output:
+            raise RuntimeError("official RMSNorm output differs from the pass-through gain multiply result")
+        operation_sequence = _validate_rms_reduction_observation(
+            captured,
+            expected_shapes,
+            operations,
+            norm.variance_epsilon,
+            torch,
+            require_mps=True,
+        )
+        # Exactly one explicit device wait, after the standalone official norm call.
+        torch.mps.synchronize()
+
+    observed_input_bytes = _tensor_bf16_bytes(captured["input_bf16"], torch)
+    if observed_input_bytes != input_bytes:
+        raise RuntimeError("standalone official RMSNorm did not consume the authenticated residual bytes")
+    input_state_sha256 = _validate_rms_input_binding(
+        "post_attention_layernorm",
+        observed_input_bytes,
+        b"",
+        input_bytes,
+        0,
+    )
+    observed_gain_bytes = _tensor_bf16_bytes(norm.weight, torch)
+    if _sha256_bytes(observed_gain_bytes) != gain_record["tensor_sha256"]:
+        raise RuntimeError("official RMSNorm gain parameter changed after loading the checkpoint tensor")
+
+    expected_reference = source_snapshot["range_bytes"]
+    preserved_rms_outputs: dict[str, dict[str, Any]] = {}
+    for suffix in RMS_TRACE_STAGE_SUFFIXES:
+        stage_name = f"layers.0.post_attention_layernorm.{suffix}"
+        actual_tensor = captured[suffix]
+        actual_bytes = (
+            _tensor_bf16_bytes(actual_tensor, torch)
+            if suffix.endswith("_bf16")
+            else _tensor_f32_bytes(actual_tensor, torch)
+        )
+        reference_bytes = expected_reference[stage_name]
+        if actual_bytes != reference_bytes:
+            raise RuntimeError(f"standalone RMS-only {suffix} differs from the authenticated old trace output")
+        preserved_rms_outputs[suffix] = {
+            "bitexact": True,
+            "sha256": _sha256_bytes(actual_bytes),
+        }
+
+    gained_output_bytes = _tensor_bf16_bytes(captured["gained_output_bf16"], torch)
+    expected_output_bytes = expected_reference["layers.0.post_attention_layernorm"]
+    if gained_output_bytes != expected_output_bytes:
+        raise RuntimeError("standalone gained RMS output differs from the authenticated old block output stage")
+    expected_stage_records = {
+        **{suffix: captured[suffix] for suffix in RMS_REDUCTION_TRACE_STAGE_SUFFIXES},
+    }
+    sidecar_bytes, rms_stage_records = _pack_rms_reduction_sidecars(
+        0,
+        expected_stage_records,
+        expected_shapes,
+        torch,
+    )
+    source_rms_trace = source_document["rms_trace"]
+    source_manifest_link = {
+        "path": Path(source_snapshot["manifest_path"]).name,
+        "manifest_sha256": source_snapshot["manifest_sha256"],
+        "sidecar_sha256s": source_snapshot["sidecar_sha256s"],
+        "layer_index": 0,
+        "prefix_reference_manifest_sha256": source_document["prefix_reference"]["manifest_sha256"],
+        "input_stage_name": "residual_after_attention",
+        "input_state_sha256": input_state_sha256,
+        "expected_output_stage_name": "layers.0.post_attention_layernorm",
+        "expected_output_state_sha256": _sha256_bytes(expected_output_bytes),
+    }
+    diagnostic = {
+        "schema": RMS_REDUCTION_SCHEMA,
+        "schema_version": RMS_REDUCTION_SCHEMA_VERSION,
+        "source_stage_manifest": source_manifest_link,
+        "checkpoint": {
+            key: checkpoint[key]
+            for key in ("repo_id", "revision", "receipt_sha256", "config_sha256", "index_sha256", "verified_files")
+        },
+        "config": config_record,
+        "inputs": diagnostic_inputs,
+        "layer": {
+            "index": 0,
+            "norm_weight": gain_record,
+        },
+        "rms_trace": {
+            "site": "post_attention_layernorm",
+            "source": {
+                "schema_version": 1,
+                "source_file": RMS_SOURCE_FILE,
+                "source_sha256": _verified_rms_source_sha256(transformers_sources),
+                "capture_method": "TorchDispatchMode pass-through around the official Qwen2RMSNorm.forward call",
+            },
+            "input_state_sha256": input_state_sha256,
+            "variance_epsilon": epsilon,
+            "operation_sequence": operation_sequence,
+            "operations": operations,
+            "stages": rms_stage_records,
+        },
+        "reference_checks": {
+            "old_rms_stages_bitexact": True,
+            "old_rms_stage_hashes": preserved_rms_outputs,
+            "gained_output_bitexact": True,
+            "gained_output_sha256": _sha256_bytes(gained_output_bytes),
+        },
+        "provenance": {
+            "producer_source_sha256": producer._sha256_file(Path(__file__).resolve()),
+            "upstream_helper_source_sha256": producer._sha256_file(producer.UPSTREAM_HELPER_PATH),
+            "transformers_sources": transformers_sources,
+            "torch_sources": torch_sources,
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "torch_version": str(torch.__version__),
+            "transformers_version": transformers_version,
+            "device": "mps",
+            "activation_dtype": "bfloat16",
+            "pytorch_enable_mps_fallback": "0",
+            "explicit_mps_synchronizations": 1,
+            "mps_memory_estimate_bytes": estimate,
+            "mps_reserved_fraction": RMS_ONLY_MPS_RESERVE_FRACTION,
+            "input_state_bitexact": True,
+            "gain_binding_bitexact": True,
+            "old_rms_stages_bitexact": True,
+            "gained_output_bitexact": True,
+            "standalone_rms_only": True,
+        },
+    }
+    _write_diagnostic(args.output, diagnostic, sidecar_bytes)
+    return diagnostic
+
+
 def _run(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, "rms_only_reference", None) is not None:
+        if args.prefix_reference is not None or args.prefix_reference_sha256 is not None:
+            raise ValueError("RMS-only mode accepts a block source manifest, not a prefix reference")
+        if args.rms_only_reference_sha256 is None:
+            raise ValueError("RMS-only mode requires the trusted block source manifest SHA-256")
+        return _run_rms_only(args)
+    if args.prefix_reference is None or args.prefix_reference_sha256 is None:
+        raise ValueError("block mode requires a trusted prefix reference and manifest SHA-256")
+    if args.rms_only_reference_sha256 is not None:
+        raise ValueError("RMS-only source digest was provided without a block source manifest")
     if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") not in (None, "0"):
         raise RuntimeError("PYTORCH_ENABLE_MPS_FALLBACK must be unset or 0")
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
@@ -1043,8 +2028,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint-root", required=True, type=Path)
     parser.add_argument("--checkpoint-receipt", required=True, type=Path)
-    parser.add_argument("--prefix-reference", required=True, type=Path)
-    parser.add_argument("--prefix-reference-sha256", required=True)
+    parser.add_argument("--prefix-reference", type=Path)
+    parser.add_argument("--prefix-reference-sha256")
+    parser.add_argument(
+        "--rms-only-reference",
+        type=Path,
+        help="trusted one-block manifest supplying the exact RMS-only input and comparison stages",
+    )
+    parser.add_argument(
+        "--rms-only-reference-sha256",
+        help="trusted SHA-256 of the RMS-only source stage manifest",
+    )
     parser.add_argument("--layer-index", type=int, default=24)
     parser.add_argument(
         "--rms-site",
@@ -1063,9 +2057,18 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "schema": diagnostic["schema"],
+                "mode": "rms_only" if diagnostic["schema"] == RMS_REDUCTION_SCHEMA else "block",
                 "layer_index": diagnostic["layer"]["index"],
-                "prefix_output_bitexact": diagnostic["provenance"]["prefix_output_bitexact"],
-                "stage_count": len(diagnostic["stages"]),
+                "output_bitexact": (
+                    diagnostic["provenance"].get("gained_output_bitexact")
+                    if diagnostic["schema"] == RMS_REDUCTION_SCHEMA
+                    else diagnostic["provenance"]["prefix_output_bitexact"]
+                ),
+                "stage_count": (
+                    len(diagnostic["rms_trace"]["stages"])
+                    if diagnostic["schema"] == RMS_REDUCTION_SCHEMA
+                    else len(diagnostic["stages"])
+                ),
                 "output": str(args.output),
             },
             sort_keys=True,

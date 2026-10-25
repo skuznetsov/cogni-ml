@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import ast
+from argparse import Namespace
 import importlib.util
 import json
 import math
@@ -280,6 +281,248 @@ class Qwen25PretrainedBlockReferenceSpec(unittest.TestCase):
         reference._validate_rms_trace(captured, expected_shapes, torch, require_mps=False)
         self.assertEqual(set(captured), set(reference.RMS_TRACE_STAGE_SUFFIXES) | {"input_bf16"})
         self.assertTrue(torch.equal(captured["normalized_bf16"], actual))
+
+    def test_reduction_observer_captures_actual_official_cast_pow_and_gain_ops(self):
+        import torch
+
+        producer = reference._load_pretrained_producer()
+        helper = producer._load_upstream_helper()
+        modeling, _, sources, _ = helper._import_official(torch)
+        norm = modeling.Qwen2RMSNorm(4, eps=1e-6).to(dtype=torch.bfloat16)
+        reference._validate_official_rmsnorm_instance(norm, modeling.Qwen2RMSNorm, sources)
+        hidden_states = torch.tensor(
+            [[[1, -2, 3, 4], [4, 3, -2, 1]]],
+            dtype=torch.bfloat16,
+        )
+        expected_shapes = reference._rms_reduction_trace_shapes(0, 2, 4)
+
+        with torch.inference_mode():
+            with reference._observe_official_rmsnorm(norm, torch, capture_reduction_trace=True) as captured:
+                actual = norm(hidden_states)
+
+        sequence = reference._validate_rms_reduction_observation(
+            captured,
+            expected_shapes,
+            captured["_operation_metadata"],
+            norm.variance_epsilon,
+            torch,
+            require_mps=False,
+        )
+        self.assertEqual(
+            [(item["stage"], item["operator"], item["overload"]) for item in sequence],
+            [
+                ("input_f32", "aten::to", "dtype"),
+                ("square_f32", "aten::pow", "Tensor_Scalar"),
+                ("variance_f32", "aten::mean", "dim"),
+                ("variance_plus_eps_f32", "aten::add", "Tensor"),
+                ("rsqrt_f32", "aten::rsqrt", ""),
+                ("normalized_f32", "aten::mul", "Tensor"),
+                ("normalized_bf16", "aten::to", "dtype"),
+                ("gained_output_bf16", "aten::mul", "Tensor"),
+            ],
+        )
+        self.assertIs(captured["gained_output_bf16"], actual)
+        self.assertEqual(
+            captured["_operation_metadata"][0]["output"]["stride"],
+            list(captured["input_f32"].stride()),
+        )
+        changed = [dict(item) for item in captured["_operation_metadata"]]
+        changed[3]["scalar_inputs"] = [2e-6]
+        with self.assertRaisesRegex(RuntimeError, "epsilon arguments changed"):
+            reference._validate_rms_reduction_observation(
+                captured,
+                expected_shapes,
+                changed,
+                norm.variance_epsilon,
+                torch,
+                require_mps=False,
+            )
+        changed = [dict(item) for item in captured["_operation_metadata"]]
+        changed[2] = dict(changed[2], tensor_input_sources=["input_f32"])
+        with self.assertRaisesRegex(RuntimeError, "tensor input stage binding"):
+            reference._validate_rms_reduction_observation(
+                captured,
+                expected_shapes,
+                changed,
+                norm.variance_epsilon,
+                torch,
+                require_mps=False,
+            )
+        captured["unexpected_metadata"] = object()
+        with self.assertRaisesRegex(RuntimeError, "unexpected non-tensor captures"):
+            reference._validate_rms_trace(captured, expected_shapes, torch, require_mps=False)
+
+    def test_rms_only_source_snapshot_authenticates_and_consumes_selected_ranges(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hidden_size = 4
+            sequence_length = 2
+            bf16_sidecar = bytearray()
+            f32_sidecar = bytearray()
+
+            def add_record(name, dtype, shape, raw):
+                payload = bf16_sidecar if dtype == "bfloat16" else f32_sidecar
+                sidecar_name = "bf16" if dtype == "bfloat16" else "f32"
+                record = {
+                    "name": name,
+                    "dtype": dtype,
+                    "shape": shape,
+                    "storage": {
+                        "sidecar": sidecar_name,
+                        "offset_bytes": len(payload),
+                        "nbytes": len(raw),
+                    },
+                }
+                payload.extend(raw)
+                return record
+
+            hidden = [1, sequence_length, hidden_size]
+            hidden_input = add_record("hidden_states_in", "bfloat16", hidden, bytes(range(16)))
+            residual = bytes(range(16, 32))
+            residual_record = add_record("residual_after_attention", "bfloat16", hidden, residual)
+            output = bytes(range(32, 48))
+            output_record = add_record("layers.0.post_attention_layernorm", "bfloat16", hidden, output)
+            f32_records = []
+            for suffix in ("variance_f32", "variance_plus_eps_f32", "rsqrt_f32"):
+                raw = struct.pack("<2f", 1.0, 2.0)
+                f32_records.append(add_record(
+                    f"layers.0.post_attention_layernorm.{suffix}",
+                    "float32",
+                    [1, sequence_length, 1],
+                    raw,
+                ))
+            raw_normalized = struct.pack("<8f", *range(8))
+            f32_records.append(add_record(
+                "layers.0.post_attention_layernorm.normalized_f32",
+                "float32",
+                hidden,
+                raw_normalized,
+            ))
+            normalized_bf16 = bytes(range(48, 64))
+            normalized_record = add_record(
+                "layers.0.post_attention_layernorm.normalized_bf16",
+                "bfloat16",
+                hidden,
+                normalized_bf16,
+            )
+            bf16_path = root / "source.bf16le"
+            f32_path = root / "source.f32le"
+            bf16_path.write_bytes(bf16_sidecar)
+            f32_path.write_bytes(f32_sidecar)
+            document = {
+                "schema": reference.SCHEMA,
+                "schema_version": reference.SCHEMA_VERSION,
+                "checkpoint": {},
+                "prefix_reference": {
+                    "manifest_sha256": reference.TRUSTED_PREFIX_S1280_SHA256,
+                    "sidecar_sha256": "a" * 64,
+                    "expected_output_state_sha256": hashlib.sha256(output).hexdigest(),
+                },
+                "config": {
+                    "hidden_size": hidden_size,
+                    "sequence_length": sequence_length,
+                    "rms_norm_eps": 1e-6,
+                },
+                "layer": {"index": 0, "weights": []},
+                "hidden_states_in": {key: value for key, value in hidden_input.items() if key != "name"},
+                "stages": [residual_record, output_record],
+                "extra_stages": [],
+                "rms_trace": {
+                    "site": "post_attention_layernorm",
+                    "input_state_sha256": hashlib.sha256(residual).hexdigest(),
+                    "variance_epsilon": 1e-6,
+                    "source": {
+                        "schema_version": 1,
+                        "source_file": reference.RMS_SOURCE_FILE,
+                        "source_sha256": reference.RMS_SOURCE_SHA256,
+                        "capture_method": "TorchDispatchMode pass-through around the official Qwen2RMSNorm.forward call",
+                    },
+                    "stages": [*f32_records, normalized_record],
+                },
+                "sidecars": {
+                    "bf16": {
+                        "path": bf16_path.name,
+                        "encoding": "bfloat16-le",
+                        "nbytes": len(bf16_sidecar),
+                        "sha256": hashlib.sha256(bf16_sidecar).hexdigest(),
+                    },
+                    "f32": {
+                        "path": f32_path.name,
+                        "encoding": "float32-le",
+                        "byte_order": "little",
+                        "storage_dtype": "float32",
+                        "nbytes": len(f32_sidecar),
+                        "sha256": hashlib.sha256(f32_sidecar).hexdigest(),
+                    },
+                },
+            }
+            legacy_document = json.loads(json.dumps(document))
+            del legacy_document["rms_trace"]["variance_epsilon"]
+            reference._validate_rms_only_source_document(
+                legacy_document,
+                sequence_length=sequence_length,
+                hidden_size=hidden_size,
+            )
+            mismatched_epsilon_document = json.loads(json.dumps(document))
+            mismatched_epsilon_document["rms_trace"]["variance_epsilon"] = 2e-6
+            with self.assertRaisesRegex(ValueError, "pinned post-attention RMS trace"):
+                reference._validate_rms_only_source_document(
+                    mismatched_epsilon_document,
+                    sequence_length=sequence_length,
+                    hidden_size=hidden_size,
+                )
+            manifest_bytes = json.dumps(document, sort_keys=True).encode("utf-8")
+            manifest_path = root / "source.json"
+            manifest_path.write_bytes(manifest_bytes)
+            manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+
+            with mock.patch.object(reference, "TRUSTED_RMS_ONLY_STAGE_SHA256S", frozenset({manifest_sha})):
+                snapshot = reference._read_rms_only_source_snapshot(
+                    manifest_path,
+                    manifest_sha,
+                    sequence_length=sequence_length,
+                    hidden_size=hidden_size,
+                )
+
+            self.assertEqual(snapshot["range_bytes"]["residual_after_attention"], residual)
+            self.assertEqual(snapshot["range_bytes"]["layers.0.post_attention_layernorm"], output)
+            self.assertEqual(
+                snapshot["range_bytes"]["layers.0.post_attention_layernorm.normalized_bf16"],
+                normalized_bf16,
+            )
+            self.assertEqual(snapshot["range_bytes"]["layers.0.post_attention_layernorm.normalized_f32"], raw_normalized)
+            bf16_path.write_bytes(b"replacement")
+            self.assertEqual(snapshot["range_bytes"]["residual_after_attention"], residual)
+            bf16_path.write_bytes(bytes(bf16_sidecar))
+
+            with mock.patch.object(reference, "TRUSTED_RMS_ONLY_STAGE_SHA256S", frozenset({"0" * 64})):
+                with self.assertRaisesRegex(ValueError, "digest is not trusted"):
+                    reference._read_rms_only_source_snapshot(
+                        manifest_path,
+                        manifest_sha,
+                        sequence_length=sequence_length,
+                        hidden_size=hidden_size,
+                    )
+
+            changed_document = json.loads(manifest_bytes)
+            changed_document["rms_trace"]["input_state_sha256"] = "0" * 64
+            changed_bytes = json.dumps(changed_document, sort_keys=True).encode("utf-8")
+            manifest_path.write_bytes(changed_bytes)
+            changed_sha = hashlib.sha256(changed_bytes).hexdigest()
+            with mock.patch.object(reference, "TRUSTED_RMS_ONLY_STAGE_SHA256S", frozenset({changed_sha})):
+                with self.assertRaisesRegex(ValueError, "does not match its authenticated RMS input digest"):
+                    reference._read_rms_only_source_snapshot(
+                        manifest_path,
+                        changed_sha,
+                        sequence_length=sequence_length,
+                        hidden_size=hidden_size,
+                    )
+
+    def test_rms_only_mode_rejects_unpinned_layer_or_norm_site_before_setup(self):
+        for layer_index, rms_site in ((24, "post-attention"), (0, "input")):
+            with self.subTest(layer_index=layer_index, rms_site=rms_site):
+                with self.assertRaisesRegex(ValueError, "fixed to --layer-index 0 --rms-site post-attention"):
+                    reference._run_rms_only(Namespace(layer_index=layer_index, rms_site=rms_site))
 
     def test_rms_trace_source_is_the_selected_official_norm_class(self):
         pinned_class = type(

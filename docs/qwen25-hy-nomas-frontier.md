@@ -6,8 +6,10 @@ have zero differing BF16 words against the authenticated official MPS BF16
 captures. The earlier state-25 divergence was localized to input RMSNorm and
 repaired with precise Metal square root/reciprocal and explicit BF16 rounding.
 The S1280 check compares all 26 blocks but rejects the unchanged numerical
-gate, first at block 0's post-attention RMSNorm. The full text encoder and
-video pipeline remain in progress. This adapter is opt-in; neither a
+gate, first at block 0's post-attention RMSNorm. The isolated continuation
+localizes its statistics delta to differing F32 square values: the native mean
+and epsilon addition are raw-bit exact on authenticated upstream squares.
+The full text encoder and video pipeline remain in progress. This adapter is opt-in; neither a
 1280-token prompt nor video generation is qualified here.
 
 ## Active pretrained prefix slice
@@ -110,7 +112,9 @@ The separately compiled precise trace and actual production scratch match
 bit for bit for both inverse root and normalized BF16. Thus the diagnostic
 reproduces the production mismatch; its extra outputs are not evidence of
 an entirely different normalized result. Direct pre-root production statistics
-have not been captured, so intermediate attribution retains that limitation.
+had not yet been captured in that run, so its intermediate attribution retained
+that limitation; the isolated reduction probe below now exposes the direct
+production helper's variance-plus-epsilon target.
 
 An SSD-only control replacing `squareWithTensor` with `power(x, F32(2))`
 produces the same variance, inverse-root and normalized hashes and the same
@@ -131,16 +135,155 @@ measured rejection are the completed slice, while S1280 parity remains open.
 
 Correlated MiniQuad review returns ROBUST for fixture binding, indexed/site
 selection, lifecycle constraints and localization; it does not qualify S1280
-parity or establish an exact reduction-order cause. The next falsifier is an
+parity or establish an exact reduction-order cause. At that boundary the next falsifier was an
 isolated same-input F32 square/mean capture against the actual production
 statistics graph, distinguishing square values from the reduction itself
-before changing arithmetic. The existing production-root and normalized-BF16
+before changing arithmetic. Its measured continuation is below. The existing production-root and normalized-BF16
 matches constrain that probe, but do not expose pre-root production variance.
 Refresh these claims on a source, fixture/checkpoint, geometry, precision,
 compiler/SDK/OS/device or buffer-lifecycle change. Curated commands, hashes,
 guard summaries and limitations are indexed in
 `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/prefix-s1280-receipt-v1.json`;
 the index is not itself proof. No generation or performance claim follows.
+
+### Active RMS square/reduction localization
+
+Admit only the authenticated block-0 S1280 post-attention residual and pinned
+RMS gain. Distinguish BF16-to-F32 cast/squares from the last-axis reduction,
+and observe the exact production statistics helper's output before inverse
+root overwrites it. An extra-output diagnostic graph alone cannot establish
+that helper's arithmetic. Operator-spelling and materialization controls above
+remain refuted for their tested formulation.
+
+The first source-grounded control holds the rank, positive last-axis index,
+inputs and output target fixed and compares the current nil compilation
+descriptor with explicit `MPSGraphOptimizationLevel0`. PyTorch sets level 0
+on its graph execution descriptor; the native precompiled executable accepts
+the descriptor at compilation instead. This only tests the optimization-level
+factor, not equality of the graph and executable execution routes. SDK headers
+describe level 1 as the property's default, but do not specify nil descriptor
+semantics. Graph options and compilation optimization levels are distinct.
+
+DoD: an actual official RMSNorm pass-through capture authenticates identical
+input/gain bytes, F32 cast/squares and existing RMS stages; a native cogni-ml
+probe compares these tensors and records the direct production statistics
+output. A distinguishable first operation or explicitly bounded unknown must
+remain after testing reduction geometry/order hypotheses. Keep the finite
+`atol=rtol=2e-5` gate and raw-word diagnostics separate. Both runs use the
+file-cache-aware 10% floor, 64 MiB swap-growth stop and 180-second deadline;
+admit no more than 256 MiB native named buffers and a 2 GiB sampled process
+cap for the isolated RMS probe. Recheck the budget before any broader probe.
+Use one terminal wait per run with no pre-terminal activation reads or tracked
+encode allocations. No full block prefix, full generation or production
+arithmetic change is admitted by this diagnostic slice. Rollback is removal
+of the opt-in diagnostic surface; preserve the existing prefix implementation.
+
+The isolated official run `oracle-rms-only-block0-post-v2` consumes the saved
+residual and only the 7,168-byte pretrained RMS gain, instantiating the official
+norm rather than a decoder layer. Its eight actual pass-through stage captures
+include the F32 cast and square. All five previously captured RMS intermediates
+and the gained output reproduce the old block trace bit for bit. The fresh
+manifest SHA256 is
+`c068b70a4a2c0020eb2b42cb639cc82e33c457758c43a237b474eaf18b0b3ca7`.
+A first launch rejected missing optional epsilon metadata before GPU setup;
+configuration-bound epsilon validation corrected that harness incompatibility.
+It is not numerical evidence.
+
+`native-rms-reduction-block0-post-v1` localizes an earlier raw discrepancy:
+
+| Stage | Differing F32 words | Maximum absolute difference |
+| --- | ---: | ---: |
+| BF16-to-F32 input | 0 / 4,587,520 | 0 |
+| Separately bound square | 4,465,460 / 4,587,520 | 3.814697265625e-6 |
+| Materialized-square mean | 670 / 1,280 | 2.2351741790771484e-8 |
+| Variance plus epsilon | 670 / 1,280 | 2.2351741790771484e-8 |
+
+All four F32 comparisons pass the unchanged finite gate. Raw discrepancy
+already begins at the square operation; it cannot yet be attributed to mean
+alone. The direct production helper's variance-plus-epsilon output is raw-bit
+identical to the materialized-square diagnostic and to the explicit level-0
+control. Its target is the actual production graph with no extra outputs;
+direct production variance before epsilon is not separately exported.
+Neither this finite pass nor the level-0 negative qualifies the full S1280
+prefix. The level-0 test does not reproduce Torch's graph-encode route.
+
+Pinned PyTorch source at runtime commit
+`a1cb3cc05d46d198467bebbb6e8fba50a325d4e7` routes
+`pow.Tensor_Scalar` through `binaryOpScalar` and `binaryOpTensor` to MPSGraph
+`powerWithPrimaryTensor:secondaryTensor:`; native RMS uses `squareWithTensor`.
+This is a source-grounded candidate for the square-value difference, not a
+proof of MPSGraph's closed internal approximation mechanism. The existing
+constant-exponent native power control remains a negative for its tested
+formulation. A same-input control must also account for the scalar feed and
+execution route before equating the two power graphs.
+
+Admit a second isolated native control using the authenticated upstream square
+panel as a prepared GPU input. Keep the materialized reduction graph's shape,
+axis, two targets and execution route fixed. If mean and epsilon now match,
+the square values account for their prior difference in this fixture; otherwise
+reduction/epsilon remains a separate source. Eight retained outputs and one
+additional input require 64,256,000 native named bytes, still within the same
+256 MiB admission and 2 GiB sampled process cap. A separate upstream arithmetic
+control compares `x.pow(2)` with `x*x` on that exact residual, preserving a sole
+terminal wait; it is diagnostic alternate arithmetic, not a replacement for
+the official RMSNorm capture or a production change.
+
+`native-rms-reduction-block0-post-v2` tests that discriminator. With the same
+native reduction graph fed the authenticated upstream squares, both variance
+and variance-plus-epsilon have zero differing words across all 1,280 rows.
+Their hashes are respectively
+`0bef526fa01e4fb2883c62207777f698518d55cceb741d4b670d857f672811c3`
+and `a0574cfd1144285003d5a939957d4efcc261bc5330c654e59c8ed1a036316d61`.
+The native-square arm still reproduces the prior 670-row difference, and the
+direct production target still equals that arm. Within this fixed-input test,
+square values account for the observed statistics delta; no separate mean or
+epsilon discrepancy is observed on identical square inputs. This establishes
+an operation boundary, not a particular internal power implementation or a
+mathematical proof about all possible reduction inputs.
+
+The official RMS-only run and native v1/v2 guards all finish without a limit
+violation or observed swap growth. Sampled process peaks are respectively
+1,520,306,120 / 121,537,352 / 252,838,872 bytes; minimum cache-aware headroom
+is 19,248,758,784 / 28,304,490,496 / 27,735,572,480 bytes. Each native run
+reports one terminal wait, zero tracked encode allocations and no pre-terminal
+activation reads. V2 has eight diagnostic readbacks after the wait and uses
+64,256,000 named bytes. The guard is sampled and does not reserve memory or
+certify an instantaneous peak. Timings here qualify no performance claim.
+
+The separate upstream expression control `oracle-rms-pow-mul-block0-post-v1`
+then reproduces both sides on the same uploaded BF16 residual. F32 `x.pow(2)`
+and its last-axis mean are raw-bit exact to the official RMS capture; F32
+`x*x` and its mean are raw-bit exact to the native square and mean hashes.
+All 4,465,460 unequal squares are 1--2 ULP above the power result; the 670
+unequal means are above it by at most four ULP. The control is alternate
+arithmetic, not a substituted oracle. It has one explicit terminal wait,
+131,344,384 estimated MPS bytes, a 1,456,620,936-byte sampled process peak,
+26,218,217,472-byte minimum cache-aware headroom and zero observed swap growth.
+
+This closes the fixed-input localization slice: cast is exact; square versus
+power paths produce different F32 square values; materialized mean and epsilon
+match on identical upstream squares. The production helper's target matches
+the native-square arm, but the upstream-square input is fed to a separately
+compiled materialized reduction graph. No test bypasses the square inside the
+fused production graph. Neither that counterfactual nor the closed MPSGraph
+power algorithm is established. The full S1280 prefix remains rejected and
+production arithmetic is unchanged.
+
+Focused validation passes 32 Python producer tests and seven Crystal fixture,
+comparator, tamper/snapshot and budget examples, plus normal/cpu-only Crystal
+no-codegen, strict C++ warnings, release link, formatting and diff whitespace
+checks. Correlated MiniQuad review is ROBUST for the authenticated fixed-input
+localization and lifecycle claims, with the fused-graph boundary above. It
+establishes no performance or broad-input parity claim. The next falsifier is
+a GPU-fed exponent power control matching Torch's scalar feed, distinguishing
+it from the previously refuted constant-exponent formulation. Only after a
+bounded native repair should block 0 and then the 26-block prefix be rechecked;
+the larger checks need their own memory admission. Commands, source/runtime,
+fixtures, binary/object pins, observed guards, retained failures and review
+scope are indexed in
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-reduction-receipt-v1.json`.
+Refresh on changed scoped source, checkpoint/fixture/input, precision/geometry,
+compiler/SDK/OS/device, execution route or buffer lifecycle, or evidence loss.
 
 ### Implemented boundary and observed checks
 

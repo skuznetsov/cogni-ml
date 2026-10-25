@@ -384,7 +384,7 @@ static MPSGraphTensor *gs_qwen25_rope_sum(
   return gs_qwen25_add_bf16(graph, cosProduct, sinProduct, name);
 }
 
-static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
+static GsQwen25MPSGraphStep *gs_qwen25_compile_step_with_descriptor(
     id<MTLDevice> device, MPSGraph *graph,
     NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds,
     NSMutableArray<MPSGraphTensor *> *placeholders,
@@ -392,6 +392,7 @@ static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
     NSArray<MPSGraphTensor *> *targetTensors,
     NSArray<id<MTLBuffer>> *targetBuffers,
     NSArray<NSArray<NSNumber *> *> *targetShapes, NSString *name,
+    MPSGraphCompilationDescriptor *compilationDescriptor,
     char *errorText, size_t errorCapacity) {
   if (!device || !graph || !feeds || !placeholders || !inputData ||
       !targetTensors || !targetBuffers || !targetShapes || !name ||
@@ -427,7 +428,7 @@ static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
                           feeds:(MPSGraphTensorShapedTypeDictionary *)feeds
                   targetTensors:targetTensors
                targetOperations:nil
-          compilationDescriptor:nil];
+          compilationDescriptor:compilationDescriptor];
   if (!executable) {
     NSString *message = [NSString stringWithFormat:
         @"MPSGraph could not compile prepared step %@", name];
@@ -473,6 +474,21 @@ static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
     return nil;
   }
   return step;
+}
+
+static GsQwen25MPSGraphStep *gs_qwen25_compile_step(
+    id<MTLDevice> device, MPSGraph *graph,
+    NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds,
+    NSMutableArray<MPSGraphTensor *> *placeholders,
+    NSMutableArray<MPSGraphTensorData *> *inputData,
+    NSArray<MPSGraphTensor *> *targetTensors,
+    NSArray<id<MTLBuffer>> *targetBuffers,
+    NSArray<NSArray<NSNumber *> *> *targetShapes, NSString *name,
+    char *errorText, size_t errorCapacity) {
+  // Keep every pre-existing production caller on the same nil descriptor.
+  return gs_qwen25_compile_step_with_descriptor(
+      device, graph, feeds, placeholders, inputData, targetTensors,
+      targetBuffers, targetShapes, name, nil, errorText, errorCapacity);
 }
 
 static MPSGraph *gs_qwen25_new_graph(char *errorText,
@@ -560,6 +576,24 @@ static GsQwen25MPSGraphStep *gs_qwen25_builder_compile(
       errorText, errorCapacity);
 }
 
+static GsQwen25MPSGraphStep *gs_qwen25_builder_compile_with_descriptor(
+    GsQwen25MPSGraphBuilder *builder, id<MTLDevice> device,
+    NSArray<MPSGraphTensor *> *targetTensors,
+    NSArray<id<MTLBuffer>> *targetBuffers,
+    NSArray<NSArray<NSNumber *> *> *targetShapes, NSString *name,
+    MPSGraphCompilationDescriptor *compilationDescriptor,
+    char *errorText, size_t errorCapacity) {
+  if (!builder) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "MPSGraph feed builder is unavailable");
+    return nil;
+  }
+  return gs_qwen25_compile_step_with_descriptor(
+      device, builder.graph, builder.feeds, builder.placeholders,
+      builder.inputData, targetTensors, targetBuffers, targetShapes, name,
+      compilationDescriptor, errorText, errorCapacity);
+}
+
 static GsQwen25MPSGraphStep *gs_qwen25_rms_statistics_step(
     id<MTLDevice> device, id<MTLBuffer> input, id<MTLBuffer> statistics,
     uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
@@ -577,6 +611,38 @@ static GsQwen25MPSGraphStep *gs_qwen25_rms_statistics_step(
       reshapeTensor:trace.variancePlusEpsilon withShape:scalarShape name:nil];
   return gs_qwen25_builder_compile(builder, device, @[plusEpsilon], @[statistics],
                                    @[scalarShape], name, errorText, errorCapacity);
+}
+
+// Diagnostic-only compilation control. It uses the same reduction graph,
+// rank, axis, target, and precompiled-executable encoding path as the baseline;
+// only the compile descriptor's optimization level differs.
+static GsQwen25MPSGraphStep *gs_qwen25_rms_statistics_step_optimization0(
+    id<MTLDevice> device, id<MTLBuffer> input, id<MTLBuffer> statistics,
+    uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder =
+      gs_qwen25_new_builder(errorText, errorCapacity);
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *scalarShape = @[@(batches), @(tokens), @1];
+  MPSGraphTensor *feed = gs_qwen25_builder_add_bf16(
+      builder, input, hiddenShape, [name stringByAppendingString:@"_input"]);
+  GsQwen25RMSTrace trace = {};
+  if (!gs_qwen25_rms_normalize(builder.graph, feed, batches, tokens, dim,
+                               epsilon, name, &trace))
+    return nil;
+  MPSGraphTensor *plusEpsilon = [builder.graph
+      reshapeTensor:trace.variancePlusEpsilon withShape:scalarShape name:nil];
+  MPSGraphCompilationDescriptor *compilation =
+      [MPSGraphCompilationDescriptor new];
+  if (!compilation) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "unable to allocate RMS level-0 compilation descriptor");
+    return nil;
+  }
+  compilation.optimizationLevel = MPSGraphOptimizationLevel0;
+  return gs_qwen25_builder_compile_with_descriptor(
+      builder, device, @[plusEpsilon], @[statistics], @[scalarShape], name,
+      compilation, errorText, errorCapacity);
 }
 
 extern "C" void *gs_qwen25_mps_block_plan_create(
@@ -1511,6 +1577,213 @@ extern "C" void *gs_qwen25_mps_rms_precise_trace_create(
   return gs_qwen25_mps_rms_trace_create_impl(
       deviceHandle, batches, tokens, dim, epsilon, inputHandle, outputHandles,
       errorText, errorCapacity, true);
+}
+
+static GsQwen25MPSGraphStep *gs_qwen25_rms_materialized_statistics_step(
+    id<MTLDevice> device, id<MTLBuffer> squareBuffer,
+    id<MTLBuffer> varianceBuffer, id<MTLBuffer> plusEpsilonBuffer,
+    uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder =
+      gs_qwen25_new_builder(errorText, errorCapacity);
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *scalarShape = @[@(batches), @(tokens), @1];
+  MPSGraphTensor *squareFeed = gs_qwen25_builder_add_f32(
+      builder, squareBuffer, hiddenShape,
+      [name stringByAppendingString:@"_square"]);
+  MPSGraphTensor *varianceRows = [builder.graph
+      meanOfTensor:squareFeed axes:@[@2]
+              name:[name stringByAppendingString:@"_variance_rows"]];
+  MPSGraphTensor *variance = [builder.graph
+      reshapeTensor:varianceRows withShape:scalarShape
+               name:[name stringByAppendingString:@"_variance"]];
+  MPSGraphTensor *epsilonF32 = [builder.graph
+      constantWithScalar:epsilon shape:@[@1]
+               dataType:MPSDataTypeFloat32];
+  MPSGraphTensor *plusRows = [builder.graph
+      additionWithPrimaryTensor:varianceRows
+            secondaryTensor:epsilonF32
+                         name:[name stringByAppendingString:@"_plus_rows"]];
+  MPSGraphTensor *plusEpsilon = [builder.graph
+      reshapeTensor:plusRows withShape:scalarShape
+               name:[name stringByAppendingString:@"_plus_epsilon"]];
+  return gs_qwen25_builder_compile(
+      builder, device, @[variance, plusEpsilon],
+      @[varianceBuffer, plusEpsilonBuffer], @[scalarShape, scalarShape], name,
+      errorText, errorCapacity);
+}
+
+// Standalone diagnostic for locating RMS reduction discrepancies. The output
+// handles are, in order: BF16->F32 input, materialized F32 square, materialized
+// variance, materialized variance+epsilon, direct production variance+epsilon,
+// compile-optimization-level-0 production variance+epsilon, then variance and
+// variance+epsilon reduced from the authenticated upstream square panel.
+// All buffers and executables are prepared here; encode uses the shared plan
+// encoder and performs no host read or named Metal-buffer allocation.
+extern "C" void *gs_qwen25_mps_rms_statistics_probe_create(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    float epsilon, void *inputHandle, void *upstreamSquareHandle,
+    void *const *outputHandles,
+    char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity > 0)
+    errorText[0] = '\0';
+  if (!deviceHandle || !inputHandle || !upstreamSquareHandle ||
+      !outputHandles || batches <= 0 ||
+      tokens <= 0 || dim <= 0 || !std::isfinite(epsilon) || epsilon <= 0.0f) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "invalid RMS statistics probe dimensions or handles");
+    return nullptr;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      @try {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
+        id<MTLBuffer> input = (__bridge id<MTLBuffer>)inputHandle;
+        id<MTLBuffer> upstreamSquare =
+            (__bridge id<MTLBuffer>)upstreamSquareHandle;
+        const uint64_t hiddenDims[] = {(uint64_t)batches, (uint64_t)tokens,
+                                       (uint64_t)dim};
+        const uint64_t scalarDims[] = {(uint64_t)batches, (uint64_t)tokens};
+        uint64_t hiddenElements = 0;
+        uint64_t scalarElements = 0;
+        if (!gs_qwen25_product(hiddenDims, 3, &hiddenElements) ||
+            !gs_qwen25_product(scalarDims, 2, &scalarElements) ||
+            hiddenElements > UINT64_MAX / 4 ||
+            scalarElements > UINT64_MAX / 4 ||
+            input.device != device || !input.contents ||
+            input.storageMode != MTLStorageModeShared ||
+            input.length < hiddenElements * 2 ||
+            upstreamSquare.device != device || !upstreamSquare.contents ||
+            upstreamSquare.storageMode != MTLStorageModeShared ||
+            upstreamSquare.length < hiddenElements * 4 ||
+            !gs_qwen25_disjoint(input, upstreamSquare)) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "invalid RMS statistics probe input binding");
+          return nullptr;
+        }
+        const uint64_t hiddenF32Bytes = hiddenElements * 4;
+        const uint64_t scalarF32Bytes = scalarElements * 4;
+        const uint64_t outputBytes[] = {hiddenF32Bytes, hiddenF32Bytes,
+                                        scalarF32Bytes, scalarF32Bytes,
+                                        scalarF32Bytes, scalarF32Bytes,
+                                        scalarF32Bytes, scalarF32Bytes};
+        NSMutableArray<id<MTLBuffer>> *outputs =
+            [NSMutableArray arrayWithCapacity:8];
+        NSMutableArray<id<MTLBuffer>> *allBuffers =
+            [NSMutableArray arrayWithObjects:input, upstreamSquare, nil];
+        for (NSUInteger index = 0; index < 8; ++index) {
+          id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandles[index];
+          if (!output || output.device != device || !output.contents ||
+              output.storageMode != MTLStorageModeShared ||
+              output.length < outputBytes[index]) {
+            gs_qwen25_set_error(errorText, errorCapacity,
+                                "invalid RMS statistics probe output binding");
+            return nullptr;
+          }
+          for (id<MTLBuffer> other in allBuffers) {
+            if (!gs_qwen25_disjoint(output, other)) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "RMS statistics probe buffers must be disjoint");
+              return nullptr;
+            }
+          }
+          [outputs addObject:output];
+          [allBuffers addObject:output];
+        }
+
+        NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+        NSMutableArray<GsQwen25MPSGraphStep *> *steps =
+            [NSMutableArray arrayWithCapacity:6];
+
+        GsQwen25MPSGraphBuilder *castBuilder =
+            gs_qwen25_new_builder(errorText, errorCapacity);
+        MPSGraphTensor *bf16Input = gs_qwen25_builder_add_bf16(
+            castBuilder, input, hiddenShape, @"rms_probe_input_bf16");
+        MPSGraphTensor *inputF32 = [castBuilder.graph
+            castTensor:bf16Input toType:MPSDataTypeFloat32
+            name:@"rms_probe_input_f32"];
+        GsQwen25MPSGraphStep *castStep = gs_qwen25_builder_compile(
+            castBuilder, device, @[inputF32], @[outputs[0]], @[hiddenShape],
+            @"rms_probe_bf16_to_f32", errorText, errorCapacity);
+        if (!castStep)
+          return nullptr;
+        [steps addObject:castStep];
+
+        GsQwen25MPSGraphBuilder *squareBuilder =
+            gs_qwen25_new_builder(errorText, errorCapacity);
+        MPSGraphTensor *squareInput = gs_qwen25_builder_add_f32(
+            squareBuilder, outputs[0], hiddenShape, @"rms_probe_square_input");
+        MPSGraphTensor *square = [squareBuilder.graph
+            squareWithTensor:squareInput name:@"rms_probe_square_f32"];
+        GsQwen25MPSGraphStep *squareStep = gs_qwen25_builder_compile(
+            squareBuilder, device, @[square], @[outputs[1]], @[hiddenShape],
+            @"rms_probe_square", errorText, errorCapacity);
+        if (!squareStep)
+          return nullptr;
+        [steps addObject:squareStep];
+
+        GsQwen25MPSGraphStep *statisticsStep =
+            gs_qwen25_rms_materialized_statistics_step(
+                device, outputs[1], outputs[2], outputs[3],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_materialized_statistics", errorText,
+                errorCapacity);
+        if (!statisticsStep)
+          return nullptr;
+        [steps addObject:statisticsStep];
+
+        GsQwen25MPSGraphStep *upstreamSquareStatisticsStep =
+            gs_qwen25_rms_materialized_statistics_step(
+                device, upstreamSquare, outputs[6], outputs[7],
+                (uint32_t)batches, (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_upstream_square_statistics", errorText,
+                errorCapacity);
+        if (!upstreamSquareStatisticsStep)
+          return nullptr;
+        [steps addObject:upstreamSquareStatisticsStep];
+
+        GsQwen25MPSGraphStep *productionStep =
+            gs_qwen25_rms_statistics_step(
+                device, input, outputs[4], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_production_statistics", errorText, errorCapacity);
+        if (!productionStep)
+          return nullptr;
+        [steps addObject:productionStep];
+
+        GsQwen25MPSGraphStep *optimization0Step =
+            gs_qwen25_rms_statistics_step_optimization0(
+                device, input, outputs[5], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"rms_probe_optimization_level_0_statistics",
+                errorText, errorCapacity);
+        if (!optimization0Step)
+          return nullptr;
+        [steps addObject:optimization0Step];
+
+        GsQwen25MPSBlockPlan *plan = [GsQwen25MPSBlockPlan new];
+        plan.device = device;
+        plan.steps = [steps copy];
+        plan.residentBuffers = [allBuffers copy];
+        plan.expectedStepCount = 6;
+        if (!plan.device || plan.steps.count != plan.expectedStepCount ||
+            !plan.residentBuffers) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "unable to retain RMS statistics probe plan");
+          return nullptr;
+        }
+        return (__bridge_retained void *)plan;
+      } @catch (NSException *exception) {
+        gs_qwen25_set_ns_error(errorText, errorCapacity,
+            [NSString stringWithFormat:@"RMS statistics probe exception %@: %@",
+             exception.name, exception.reason]);
+        return nullptr;
+      }
+    }
+  }
+  gs_qwen25_set_error(errorText, errorCapacity,
+                      "RMS statistics probe requires macOS 14 or newer");
+  return nullptr;
 }
 
 extern "C" int32_t gs_qwen25_mps_block_encode(
