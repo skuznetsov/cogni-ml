@@ -1,0 +1,248 @@
+{
+  "adversary_verdict": "ROBUST",
+  "base_commit": "f31c8d818efae294de68f93d7ffca8963bb90493",
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      "src/ml/video/bf16_weight_cache.cr",
+      "examples/hy_nomas_bf16_cache_probe.cr",
+      "examples/support/hy_nomas_bf16_cache_probe.cr",
+      "examples/support/hy_nomas_bf16_cache_reference.py",
+      "spec/video_bf16_weight_cache_spec.cr",
+      "spec/hy_nomas_bf16_cache_admission_spec.cr",
+      "spec/hy_nomas_bf16_cache_reference_test.py",
+      ".landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      "src/ml/video/bf16_weight_cache.cr",
+      "examples/hy_nomas_bf16_cache_probe.cr",
+      "examples/support/hy_nomas_bf16_cache_probe.cr",
+      "examples/support/hy_nomas_bf16_cache_reference.py",
+      "spec/video_bf16_weight_cache_spec.cr",
+      "spec/hy_nomas_bf16_cache_admission_spec.cr",
+      "spec/hy_nomas_bf16_cache_reference_test.py",
+      ".landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json"
+    ],
+    "rollback": "Omit opt-in cache diagnostic and retain original F32 source loader. No inference default changes."
+  },
+  "claim_level": "VERIFIED",
+  "failure_policy": "Reject or narrow claim, retain original source loader; never widen finite tolerance or memory guards.",
+  "limitations": [
+    "Saved upstream neural captures are authenticated but not freshly recaptured.",
+    "Native oracle input is caller-pinned; this receipt additionally binds producer report, script, source checkpoint/manifest and reference.",
+    "Raw weight bytes and activation diagnostics are read after terminal; offline oracle serializes 32 weight tensors after conversion.",
+    "Local files are immutable while trusted consumers run; authentication is not a hostile concurrent-file mutation boundary.",
+    "Companion object bytes are pinned; source ancestry is opaque and build is not hermetic.",
+    "A qualified cache may remain if separate report publication fails; report is an index, not a qualification gate.",
+    "No full checkpoint download, full model fit, full-J positional/output parity, CUDA/Magi/BF16 activation equivalence, speed or video quality/generation claim.",
+    "Named reduction is exact buffer arithmetic; sampled peaks do not prove instantaneous bounds or a physical-peak reduction."
+  ],
+  "next_frontier": "Qualified BF16 sources in actual two-block replay, then bounded positional/output coverage without retaining all full-J snapshots.",
+  "observed": {
+    "cache_file_bytes": 302117424,
+    "cache_payload_bytes": 302113792,
+    "captures_per_phase": 40,
+    "crystal_examples_passed": 13,
+    "f32_values_per_phase": 1593344,
+    "native_min_headroom_bytes": 38003752960,
+    "native_sampled_peak_bytes": 1110476384,
+    "observed_swap_growth_bytes": 0,
+    "oracle_sampled_peak_bytes": 2589197920,
+    "phases": [
+      {
+        "capture_values": 1593344,
+        "captures": 40,
+        "control_raw_differences": 0,
+        "conversion_dispatches": 32,
+        "destination_bytes": 302113792,
+        "different_weight_words": 0,
+        "encode_allocations": 0,
+        "max_abs": 0.0,
+        "name": "f32_source",
+        "named_bytes": 1016509568,
+        "postterminal_activation_reads": 40,
+        "preterminal_activation_reads": 0,
+        "staging_bytes": 604227584,
+        "tensor_count": 32,
+        "terminal_waits": 1,
+        "tolerance_failures": 0,
+        "upstream_raw_differences": 0,
+        "weight_words": 151056896
+      },
+      {
+        "capture_values": 1593344,
+        "captures": 40,
+        "control_raw_differences": 0,
+        "conversion_dispatches": 0,
+        "destination_bytes": 302113792,
+        "different_weight_words": 0,
+        "encode_allocations": 0,
+        "max_abs": 0.0,
+        "name": "bf16_cache",
+        "named_bytes": 412281984,
+        "postterminal_activation_reads": 40,
+        "preterminal_activation_reads": 0,
+        "staging_bytes": 0,
+        "tensor_count": 32,
+        "terminal_waits": 1,
+        "tolerance_failures": 0,
+        "upstream_raw_differences": 0,
+        "weight_words": 151056896
+      },
+      {
+        "capture_values": 1593344,
+        "captures": 40,
+        "control_raw_differences": 0,
+        "conversion_dispatches": 0,
+        "destination_bytes": 302113792,
+        "different_weight_words": 0,
+        "encode_allocations": 0,
+        "max_abs": 0.0,
+        "name": "bf16_cache_repeat",
+        "named_bytes": 412281984,
+        "postterminal_activation_reads": 40,
+        "preterminal_activation_reads": 0,
+        "staging_bytes": 0,
+        "tensor_count": 32,
+        "terminal_waits": 1,
+        "tolerance_failures": 0,
+        "upstream_raw_differences": 0,
+        "weight_words": 151056896
+      }
+    ],
+    "python_checks_passed": 7,
+    "removed_f32_staging_bytes": 604227584,
+    "tensor_count": 32,
+    "unique_bf16_words": 151056896
+  },
+  "receipt": {
+    "nbytes": 34197,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json",
+    "sha256": "e874b8d604f08a92a402329c45f9eaabe52be3e93ca09e1b758600d7db4dd0fe"
+  },
+  "refresh_when": [
+    "Scoped source/checkpoint or fixture bytes change",
+    "Precision/geometry, loader/lifetime or toolchain/device changes",
+    "Artifacts disappear or hashes differ",
+    "Live memory must be refreshed before any later probe"
+  ],
+  "review": {
+    "nbytes": 1422,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-review-final-v1.json",
+    "sha256": "17d9cb0ae3f774b8af0cbd710d8a45fff2eb529cf15d0f9e55e663b7cd448c03"
+  },
+  "schema": "landmark.evidence_packet.local.v1",
+  "scope": "one pretrained block at B1/V6/T23; native BF16 parameter storage, F32 math/MPS attention; setup byte I/O and post-terminal diagnostics only on CPU; no full generation or speed claim",
+  "source_pins": [
+    {
+      "nbytes": 18764,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "3fa28e85f8d8d979e999fd9f458b95a28418602928d745cdf3f00da5de64a8a3"
+    },
+    {
+      "nbytes": 4555228,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+      "sha256": "271a3fad2dc33dfa7bdb1e13945703a7e5302889e3c0ffb7cdca5282ffcdc343"
+    },
+    {
+      "nbytes": 110906,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-native-frontier.md",
+      "sha256": "8d9a9b5a8ab8f3d8a2129d4b85f8b01808189f23902d207dc2da072756b1c8f1"
+    },
+    {
+      "nbytes": 10370,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/bf16_weight_cache.cr",
+      "sha256": "cea112a1f694b0492db04012e950f7e80de808c15499dc440cf0c77207f38d59"
+    },
+    {
+      "nbytes": 1528,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_bf16_cache_probe.cr",
+      "sha256": "781dc9aa7883b4cd7ad68f313517571e967bf6115f7376b6d0fdd8abfd5b8aae"
+    },
+    {
+      "nbytes": 18703,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_bf16_cache_probe.cr",
+      "sha256": "b16d3d8243ca38bbb32bf6c8c3eff21ffac03b5bddf4fcc81c109382742c82e2"
+    },
+    {
+      "nbytes": 26696,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_bf16_cache_reference.py",
+      "sha256": "210afa27894b23eeba2460f9a51b6a30e2d196b6935765b2b780077f5996ca2d"
+    },
+    {
+      "nbytes": 12200,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/video_bf16_weight_cache_spec.cr",
+      "sha256": "6db0fc2e5bc8f638fbf0970780b1b25fba604d373931da7766b9b423293964b0"
+    },
+    {
+      "nbytes": 4576,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_bf16_cache_admission_spec.cr",
+      "sha256": "7d68cc60dd2421c326af0506f1c0b48df9c0bf3dc0b0888f6ed48198dc5d2fa8"
+    },
+    {
+      "nbytes": 6732,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_bf16_cache_reference_test.py",
+      "sha256": "e7296761f5a77ddf7b08f0809bb3ee4daffe0a9abe7cc44dada97f30edb8de00"
+    },
+    {
+      "nbytes": 57121,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_pretrained_serial_probe.cr",
+      "sha256": "b165278a6604e3aea24fd6871a4da2dfb7efcfb2b430036d00384a982cf01224"
+    },
+    {
+      "nbytes": 12594,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_text_probe.cr",
+      "sha256": "3514ed3525070e718a54b325ef2db86b7067b3d6c00cf37a36c80c58c7ad9445"
+    },
+    {
+      "nbytes": 931,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_probe_instrumentation.cr",
+      "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48"
+    },
+    {
+      "nbytes": 37589,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    },
+    {
+      "nbytes": 45036,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pretrained_serial_reference.py",
+      "sha256": "4e47fe30497a4670ce2b3eea0b21f08db55c095e8611f3570094393a0f8311b9"
+    },
+    {
+      "nbytes": 15713,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/checkpoint.cr",
+      "sha256": "72550c94330edd41caa57f18f63d90bb6d048307501803d2e1a168ef6d2a5217"
+    },
+    {
+      "nbytes": 19872,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_ops.cr",
+      "sha256": "b31c1bfa9eb9028389e69b546377f26cf7980e726a488ce5fc061e0bbc79098a"
+    },
+    {
+      "nbytes": 50888,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block.cr",
+      "sha256": "ec86ac586d9ed087cb4b6307165167ab8a24b40883187659c167f6e849e7e257"
+    },
+    {
+      "nbytes": 34231,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block_mps.cr",
+      "sha256": "64339a047ccc58fff2fd0dcf7ad97274b5bc243d6a97992cd06ea138d8b9f858"
+    },
+    {
+      "nbytes": 22968,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/metal_mps_command_chain.cr",
+      "sha256": "b606cc0645a54e95c008be3c615adadd29fe97d6804347147737ab25d473b645"
+    }
+  ],
+  "title": "Hy-Nomas one-block GPU BF16 source cache and exact upstream replay",
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05
+  }
+}

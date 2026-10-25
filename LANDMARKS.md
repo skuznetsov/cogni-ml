@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-BF16-CACHE-2026-10-25] One GPU-produced block cache removes F32 staging with exact bounded replay
+
+- Scope: actual pretrained block 0, B1/V6/T23/C2048/H16/D128/FF8192, native
+  BF16 parameter storage and F32 MPS math/attention. Fresh independent upstream
+  MPS conversion agrees on all 32 original names/shapes and 151,056,896 BF16
+  words. Source, BF16 reload and repeat each match all 40 saved upstream
+  intermediates (1,593,344 F32 values) raw exact; zero tolerance/control
+  differences at unchanged finite `atol=rtol=2e-5`. Intermediates are retained
+  authenticated upstream captures, not a fresh upstream block invocation.
+- Native derivative payload: 302,113,792 bytes; file: 302,117,424 bytes. Direct
+  BF16 reload removes 604,227,584 bytes (576.236 MiB) of F32 raw staging and 32
+  conversion dispatches. Named bytes decrease from 1,016,509,568 to 412,281,984.
+  No whole-pipeline fit, physical-peak reduction or speedup is measured.
+- Each request has zero tracked encode-time allocations/preterminal activation
+  reads, one terminal wait and 40 postterminal activation diagnostics. Raw
+  weight-byte comparison/serialization is setup work after completion. A rooted
+  owner retains resources through drain. A private same-parent directory holds
+  the cache until source/reload/repeat gates and owner cleanup pass; final
+  publication uses a no-clobber hard link. Failed qualification removes staging.
+- Guarded final native sampled peak: 1,110,476,384 bytes; minimum cache-aware
+  headroom: 38,003,752,960 bytes; zero observed swap growth. Oracle sampled
+  peak: 2,589,197,920 bytes. Preserve 4 GiB probe/oracle caps, 3 GiB small-check
+  cap, 10% reserve, 64 MiB swap-growth stop and 600 s deadline. Sampling cannot
+  prove instantaneous peaks. Thirteen Crystal and seven Python checks pass;
+  CLI one-byte-short budget/wrong digest reject before Metal initialization,
+  and an existing cache is preserved. Correlated MiniQuad: ROBUST for this
+  saved-input scope. Companion object bytes are pinned, source ancestry opaque.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json`.
+  Next falsifier: BF16 sources in the actual two-block replay, then positional/
+  output coverage without all full-J snapshots. Keep immutable authenticated
+  local files and opt-in loading; no full checkpoint or generation is admitted.
+  Rollback: omit this diagnostic and retain the F32-source loader. Refresh on
+  scoped source, checkpoint/fixture, geometry/precision, toolchain/device,
+  loader/lifetime or artifact changes; reread live memory before later probes.
+
 ### [LM-HY-NOMAS-RESIDENCY-2026-10-25] Full DiT parameter accounting exposes cold conversion staging
 
 - Authenticated pinned header: 2,268 F32 tensors, 54 blocks and nine categories,
@@ -18,8 +55,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   bytes. The separate MPS heuristic adds 590,872,576 bytes; it bounds no opaque
   allocation. N-block execution and two-bank outputs remain unimplemented.
 - Current F32-to-BF16 loading retains both source and destination until the
-  terminal. Removing its modeled 31.864 GiB source staging requires a new
-  qualified cache/loading path. Two-bank outputs could save a further
+  terminal. Removing its modeled 31.864 GiB source staging requires a qualified
+  model-wide cache/loading path. Two-bank outputs could save a further
   2,794,455,040 bytes, but need a binding/alias/lifetime proof.
 - Diagnostic snapshots are excluded: 54 full-J sets of the actual 40 captures
   would add 80,127,000,576 bytes. Camera execution/history/KV, refiner/input/final
@@ -37,8 +74,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence: `docs/hy-nomas-native-frontier.md`,
   `.landmark/evidence/2026-10-25-hy-nomas-residency.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-residency-20261025/logs/residency-receipt-v1.json`.
-  Next falsifier: GPU-produced BF16 cache for one local actual block, exact
-  BF16 bytes plus unchanged upstream intermediate gate before wider use.
+  The one-block BF16 cache is now qualified by the landmark above. Next
+  falsifier: BF16 sources in the actual two-block replay before wider use.
   Refresh on source/header, geometry/capture, loader lifetime/accounting
   changes; live telemetry must be reread before later probes. Rollback: omit
   the diagnostic. Full generation is outside admission; Wan return pointer
