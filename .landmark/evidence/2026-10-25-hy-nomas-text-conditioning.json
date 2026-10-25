@@ -1,0 +1,403 @@
+{
+  "format": "Local compact evidence index; no official packet-validator claim",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "VERIFIED only for one natural-prompt Qwen producer/crop, actual text/time refiner and one short DiT block on a serial GPU chain.",
+    "scope": {
+      "raw_tokens": 1388,
+      "crop_start": 108,
+      "conditioning_tokens": 1280,
+      "valid_prefix_rows": 23,
+      "video_tokens": 6,
+      "segments": 1,
+      "timestep": 500,
+      "precision": {
+        "attention": "f32",
+        "compute": "F32",
+        "cuda_bf16_parity": false,
+        "resident_weights": "BF16",
+        "weight_control": "source F32 parameters rounded through BF16 then represented in F32 for MPS compute"
+      },
+      "tolerance": {
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    },
+    "outcomes": {
+      "qwen_boundaries": 27,
+      "qwen_exact_bf16_words": 134313984,
+      "crop_exact_bf16_words": 4587520,
+      "exact_mask_entries": 1280,
+      "refiner_gate_checkpoints": 53,
+      "dit_gate_checkpoints": 40,
+      "full_vs_compact_gate_checkpoints": 45,
+      "named_bytes": 14707308492,
+      "encode_seconds": 2.460107334,
+      "terminal_wait_seconds": 1.4604219999999999,
+      "gpu_elapsed_seconds": 3.834105124999269,
+      "terminal_waits": 1,
+      "encode_named_allocations": 0,
+      "preterminal_activation_readbacks": 0,
+      "postterminal_reads": 122,
+      "native_examples_total": 57,
+      "native_examples_passed": 53,
+      "native_pending_external_probes": 4,
+      "cpu_tests_passed": 12,
+      "timing_scope": "One correctness run including setup conversion; no measured speedup, full stack latency or video throughput."
+    },
+    "excluded": [
+      "full generation or Studio",
+      "model-wide speedup or video RTF",
+      "general/multimodal/batched prompts",
+      "full BF16 activation or CUDA/Magi parity",
+      "concurrent callers or same-process recovery after incomplete drain",
+      "default promotion",
+      "adversarial mutable checkpoint filesystem",
+      "official packet-validator or hermetic-build claim"
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "examples/qwen25_pretrained_prefix.cr",
+      "examples/hy_nomas_text_conditioning_probe.cr",
+      "examples/hy_nomas_text_projection_replay.cr",
+      "examples/support/hy_nomas_probe_instrumentation.cr",
+      "examples/support/hy_nomas_text_probe.cr",
+      "examples/support/hy_nomas_text_session.cr",
+      "spec/hy_nomas_mps_shared_modulation_spec.cr",
+      "spec/hy_nomas_text_checkpoint_subset_test.py",
+      "spec/hy_nomas_text_conditioning_reference_test.py",
+      "spec/hy_nomas_text_probe_spec.cr",
+      "spec/hy_nomas_text_refiner_spec.cr",
+      "spec/hy_nomas_text_residual_spec.cr",
+      "spec/hy_nomas_text_session_lifecycle_spec.cr",
+      "spec/hy_nomas_text_timestep_spec.cr",
+      "spec/hy_nomas_timestep_reference_test.py",
+      "spec/support/hy_nomas_text_checkpoint_subset.py",
+      "spec/support/hy_nomas_text_conditioning_reference.py",
+      "spec/support/hy_nomas_timestep_reference.py",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_text_refiner.cr",
+      "src/ml/video/kernels/hy_nomas_text_refiner.metal",
+      ".landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      "docs/qwen25-hy-nomas-frontier.md",
+      "examples/qwen25_pretrained_prefix.cr",
+      "examples/hy_nomas_text_conditioning_probe.cr",
+      "examples/hy_nomas_text_projection_replay.cr",
+      "examples/support/hy_nomas_probe_instrumentation.cr",
+      "examples/support/hy_nomas_text_probe.cr",
+      "examples/support/hy_nomas_text_session.cr",
+      "spec/hy_nomas_mps_shared_modulation_spec.cr",
+      "spec/hy_nomas_text_checkpoint_subset_test.py",
+      "spec/hy_nomas_text_conditioning_reference_test.py",
+      "spec/hy_nomas_text_probe_spec.cr",
+      "spec/hy_nomas_text_refiner_spec.cr",
+      "spec/hy_nomas_text_residual_spec.cr",
+      "spec/hy_nomas_text_session_lifecycle_spec.cr",
+      "spec/hy_nomas_text_timestep_spec.cr",
+      "spec/hy_nomas_timestep_reference_test.py",
+      "spec/support/hy_nomas_text_checkpoint_subset.py",
+      "spec/support/hy_nomas_text_conditioning_reference.py",
+      "spec/support/hy_nomas_timestep_reference.py",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_text_refiner.cr",
+      "src/ml/video/kernels/hy_nomas_text_refiner.metal",
+      ".landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json"
+    ],
+    "default_deny": true
+  },
+  "evidence": {
+    "base_commit": "8d5a68966dcbf5056fdb865b479d825ffb89baff",
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/logs/conditioning-receipt-v1.json",
+      "nbytes": 56236,
+      "sha256": "633c0c56d9caf537d631f59041b5c89e444ccd0b82342186a3b7eccf5077eda0"
+    },
+    "review": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/logs/conditioning-review-v1.json",
+      "nbytes": 1676,
+      "sha256": "5c2e69956605406941749496afeefe8f91213bcba3f1410e580f3d1e8ad863d0"
+    },
+    "source_pins": [
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+        "nbytes": 16611,
+        "sha256": "80f6f4e3c9a48e31fdfe9d1a647560bb748eabe794540f271d596221348eb6ef"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+        "nbytes": 4546325,
+        "sha256": "b65d2ca09057fd056e3c2bb170b3f117d62743a2c60fe3e65180a2e0bff2d7bb"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-native-frontier.md",
+        "nbytes": 93890,
+        "sha256": "9eef83b2a7ce5d3e8149c360b6837f9d2a8f2409692606a4ef294747e9d9bde4"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/qwen25-hy-nomas-frontier.md",
+        "nbytes": 70106,
+        "sha256": "c554861f08204c0abf894e5147dc20f413c72597f74cb510b8ce8664580a599e"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/qwen25_pretrained_prefix.cr",
+        "nbytes": 16870,
+        "sha256": "2a5910adcbe23d751003105f32faf755871cf48a4632b1478fa02701507fb878"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_text_conditioning_probe.cr",
+        "nbytes": 5170,
+        "sha256": "339095e230552ae710a18cef4155c49c387082a0f174db7ad6bb75010f861c6b"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_text_projection_replay.cr",
+        "nbytes": 12960,
+        "sha256": "638079a223651d487198e32be7a77d7c57022848c22dfd962992d9c7323eade3"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_probe_instrumentation.cr",
+        "nbytes": 931,
+        "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_text_probe.cr",
+        "nbytes": 12594,
+        "sha256": "3514ed3525070e718a54b325ef2db86b7067b3d6c00cf37a36c80c58c7ad9445"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_text_session.cr",
+        "nbytes": 9546,
+        "sha256": "da0daa101939e7c12cc3ac588a2674d2b65b84b56b23b3f3308eaea68954300b"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_mps_shared_modulation_spec.cr",
+        "nbytes": 2809,
+        "sha256": "e07a25adc2b7063ae56a23b706b85efca1bd082babc5499db69da84379151ba7"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_checkpoint_subset_test.py",
+        "nbytes": 8111,
+        "sha256": "6557311488a4af75c4fec0f88a633924a40edf26ec6e7edfd316175216b9f1ef"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_conditioning_reference_test.py",
+        "nbytes": 6918,
+        "sha256": "87d5d8657982195055d275ece16f80eeda07844b0c099cfd29ab3f2f825e72a9"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_probe_spec.cr",
+        "nbytes": 5470,
+        "sha256": "5804c2b515196a144e9e3d5313a83a33bcb90bcf0b9a12ba7e7ab3a2072727e9"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_refiner_spec.cr",
+        "nbytes": 3008,
+        "sha256": "7e77e28bf8049d0edec72339059ed0376f7d6354bcc57e7f98da2c48e1cd3c27"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_residual_spec.cr",
+        "nbytes": 2033,
+        "sha256": "9e9865c082f4824d17663e03b9e44bf057ae626b29af7125fa1079a333a68dc5"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_session_lifecycle_spec.cr",
+        "nbytes": 1530,
+        "sha256": "5c496a7f5b30418a8f3ca74030f5baab4fee16a394dc7f8f1d0519b1a8475fdb"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_text_timestep_spec.cr",
+        "nbytes": 3944,
+        "sha256": "c4d4e1b235b23fce6a0b570738c8a285fbcc274ab2afec729ad92c2b59d0a103"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_timestep_reference_test.py",
+        "nbytes": 3989,
+        "sha256": "49645be310e1a73aef335fcfe9b042110673044c1451061bca31d7b9243e6a80"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_text_checkpoint_subset.py",
+        "nbytes": 19516,
+        "sha256": "bb66bc1680d7beb3b85fd836e737652e3cf18a5e7b12ebeca72174350d8c582c"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_text_conditioning_reference.py",
+        "nbytes": 57613,
+        "sha256": "7c93d169f554fae01c711ec53e9ce026a85ecd78453c73a838d130f49a47407c"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_timestep_reference.py",
+        "nbytes": 14466,
+        "sha256": "ebf43629c6cc2d31bc653b9bbc9de4b03b27b9dd143365d0752566efa73d9029"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block_mps.cr",
+        "nbytes": 34231,
+        "sha256": "64339a047ccc58fff2fd0dcf7ad97274b5bc243d6a97992cd06ea138d8b9f858"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_text_refiner.cr",
+        "nbytes": 31757,
+        "sha256": "fd3876e51f5a090ea50f086c5268f3f3034b93cf27bc5d2298e192c7ac6da807"
+      },
+      {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/kernels/hy_nomas_text_refiner.metal",
+        "nbytes": 6922,
+        "sha256": "d11c271a70394568d40f1462b7a661af7eb628f27595fa8b67b780762bd5b01b"
+      }
+    ]
+  },
+  "verification": {
+    "commands": {
+      "scope": "Reproduction argument vectors for the recorded source; supply new report and guard paths before reuse. These are not an original shell-argv audit.",
+      "working_directory": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "environment": {
+        "TMPDIR": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/tmp",
+        "CRYSTAL_CACHE_DIR": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/crystal-cache"
+      },
+      "guard_prefix_small": [
+        "python3",
+        "-B",
+        "examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "3072",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "600",
+        "--log",
+        "<fresh-small.guard.jsonl>",
+        "--"
+      ],
+      "guard_prefix_connected": [
+        "python3",
+        "-B",
+        "examples/support/wan_memory_guard.py",
+        "--memory-accounting",
+        "file-cache",
+        "--runtime-floor-pct",
+        "10",
+        "--max-footprint-mib",
+        "15360",
+        "--max-swap-growth-mib",
+        "64",
+        "--timeout-sec",
+        "600",
+        "--log",
+        "<fresh-connected.guard.jsonl>",
+        "--"
+      ],
+      "build": [
+        "make",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/hy_nomas_text_conditioning_probe",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/qwen25_pretrained_prefix",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/hy_nomas_text_projection_replay"
+      ],
+      "connected": [
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/qwen25_pretrained_prefix",
+        "--checkpoint-root",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/model",
+        "--reference",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/prefix-natural-tram-v1.json",
+        "--reference-sha256",
+        "eb64e5c31bc2178436b2b7dd411af45dea7fa43a8e3ff37a146bc411fac03ba1",
+        "--report",
+        "<fresh-connected.json>",
+        "--max-named-bytes",
+        "15800000000",
+        "--rms-power-fed",
+        "--hy-nomas-prompt-file",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/natural-tram-v1.txt",
+        "--hy-nomas-reference",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+        "--hy-nomas-reference-sha256",
+        "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e"
+      ],
+      "saved_conditioning": [
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/hy_nomas_text_conditioning_probe",
+        "--reference",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+        "--reference-sha256",
+        "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+        "--qwen-reference",
+        "/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/fixtures/prefix-natural-tram-v1.json",
+        "--qwen-reference-sha256",
+        "eb64e5c31bc2178436b2b7dd411af45dea7fa43a8e3ff37a146bc411fac03ba1",
+        "--report",
+        "<fresh-saved.json>",
+        "--max-named-bytes",
+        "2100000000"
+      ],
+      "isolated_fc2": [
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1/hy_nomas_text_projection_replay",
+        "--reference",
+        "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+        "--reference-sha256",
+        "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+        "--report",
+        "<fresh-projection.json>",
+        "--max-named-bytes",
+        "200000000"
+      ],
+      "native_specs": [
+        "env",
+        "HY_NOMAS_TIMESTEP_FIXTURE=/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/timestep-embedding-v1.json",
+        "HY_NOMAS_TIMESTEP_FIXTURE_SHA256=ac4edd4d21aa38af58a9d856cdfb463b4902ff1dc64ab03bc56d33c6338de14e",
+        "make",
+        "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/build/native-v1",
+        "spec_hy_nomas"
+      ],
+      "python_tests": [
+        "python3",
+        "-B",
+        "-m",
+        "unittest",
+        "spec/hy_nomas_text_checkpoint_subset_test.py",
+        "spec/hy_nomas_text_conditioning_reference_test.py",
+        "spec/hy_nomas_timestep_reference_test.py"
+      ],
+      "oracle": {
+        "python": "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python",
+        "argv_from_fixture": [
+          "spec/support/hy_nomas_text_conditioning_reference.py",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+          "--text-weights-sha256",
+          "58313f6141adafc12629b46c73f1bc270aa64c3e0972a8995875ba76d9068d8f",
+          "--text-manifest-sha256",
+          "0863d49ba53d54db5ad7ff5313099c3e93003cf304e729f4a377098f230f462f",
+          "--block-weights-sha256",
+          "6810bf7cd7f9a8ac4d66240eee514637a7ccaa47dc9de02e8bc26ae4543530d1",
+          "--block-manifest-sha256",
+          "c7afec8da5ac22a37d8e38b42c9f5ecdabab7929b5c40da9260e7c30c9c73016"
+        ],
+        "device": "mps",
+        "cpu_fallback": false
+      }
+    },
+    "adversary_verdict": "ROBUST",
+    "review_provenance": "Correlated same-lineage MiniQuad source review by conditioning_adversary plus root-executed numeric/guard/falsifier checks; not independent numerical reproduction.",
+    "receipt_checks": "JSON shape, declared outcomes, source/artifact hashes and recorded guard endings only; no substitution for executed numeric evidence."
+  },
+  "refresh_when": [
+    "scoped source or evidence artifact changes/loss/hash mismatch",
+    "input/mask/timestep/geometry/checkpoint or precision changes",
+    "compiler/SDK/OS/device changes",
+    "scheduling, ownership, alias or lifetime changes"
+  ],
+  "failure_policy": "Reject or narrow the scope, retain first mismatch; never widen tolerance or weaken memory/swap/terminal-lifetime guards.",
+  "next_frontier": "Authenticate actual block-1 weights and compare shared-workspace pretrained block 0 to block 1 against pinned upstream before full-stack admission."
+}

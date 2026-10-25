@@ -32,7 +32,7 @@ WAN_ATTENTION_MPS_OBJ := $(BUILD_DIR)/wan_attention_mps_bridge.o
 HY_NOMAS_MPS_OBJ := $(BUILD_DIR)/hy_nomas_mps_reductions.o
 HY_NOMAS_COMPACT_ATTENTION_OBJ := $(BUILD_DIR)/hy_nomas_attention_compact.o
 QWEN25_MPS_OBJ := $(BUILD_DIR)/qwen25_mps_bridge.o
-QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
+QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
 WAN_SPEC_OBJS := $(if $(IS_DARWIN),$(WAN_MPS_OBJS) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ) $(QWEN25_MPS_OBJ),)
 WAN_SPEC_LINK_FLAGS := $(if $(IS_DARWIN),-framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -fuse-ld=/usr/bin/ld,)
@@ -100,13 +100,21 @@ spec_qwen25: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(QWEN25_MPS_OBJ)
 		spec/qwen25_vl_weights_spec.cr spec/qwen25_vl_embedding_spec.cr spec/qwen25_prefix_probe_spec.cr spec/qwen25_vl_embedding_mps_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(QWEN25_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
-$(BUILD_DIR)/qwen25_pretrained_prefix: examples/qwen25_pretrained_prefix.cr examples/support/qwen25_prefix_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(QWEN25_MPS_OBJ)
+$(BUILD_DIR)/qwen25_pretrained_prefix: examples/qwen25_pretrained_prefix.cr examples/support/qwen25_prefix_probe.cr examples/support/hy_nomas_text_probe.cr examples/support/hy_nomas_text_session.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
-		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(QWEN25_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 $(BUILD_DIR)/qwen25_pretrained_block_probe: examples/qwen25_pretrained_block_probe.cr examples/support/qwen25_prefix_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(QWEN25_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(QWEN25_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/hy_nomas_text_conditioning_probe: examples/hy_nomas_text_conditioning_probe.cr examples/support/hy_nomas_text_probe.cr examples/support/hy_nomas_text_session.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/qwen25_prefix_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/hy_nomas_text_projection_replay: examples/hy_nomas_text_projection_replay.cr examples/support/hy_nomas_text_probe.cr examples/support/hy_nomas_text_session.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/qwen25_prefix_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) spec \
@@ -122,6 +130,11 @@ spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_M
 		spec/hy_nomas_attention_probe_spec.cr \
 		spec/hy_nomas_pointwise_probe_spec.cr spec/hy_nomas_compact_attention_spec.cr \
 		spec/hy_nomas_compact_attention_oracle_spec.cr \
+		spec/hy_nomas_mps_shared_modulation_spec.cr spec/hy_nomas_text_probe_spec.cr \
+		spec/hy_nomas_text_refiner_spec.cr \
+		spec/hy_nomas_text_residual_spec.cr \
+		spec/hy_nomas_text_session_lifecycle_spec.cr \
+		spec/hy_nomas_text_timestep_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 $(BUILD_DIR)/hy_nomas_attention_benchmark: examples/hy_nomas_attention_benchmark.cr $(WAN_BENCHMARK_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)

@@ -19,8 +19,12 @@ The earlier repeated-token S1280 fed capture remains a separate qualification:
 123,863,040 exact values across the same 27 boundaries.
 
 The adapter, fed option and new prompt/crop path remain opt-in. Qualification
-is limited to the inputs and boundaries below. The integrated Hy-Nomas text
-projection/DiT handoff, multimodal positions, all-input parity and video
+is limited to the inputs and boundaries below. A subsequent opt-in composition
+now passes the actual Hy-Nomas text refiner/time embedding and one six-video-token
+DiT block on the same GPU chain for this prompt; see
+`hy-nomas-native-frontier.md` and
+`.landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json` for its separate
+finite-gate scope. Multimodal positions, all-input parity, full DiT and video
 generation remain unqualified.
 
 ## Natural video prompt and GPU conditioning crop: qualified on one prompt

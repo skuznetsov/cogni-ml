@@ -6,6 +6,51 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-CONNECTED-TEXT-2026-10-25] One native prompt reaches an actual-weight short DiT block on one GPU chain
+
+- Native prompt preparation, all 26 selected Qwen2.5 blocks, the BF16 GPU
+  conditioning crop, actual single_refiner/time embedding and a six-video-token
+  DiT block execute on the same command chain. All 27 Qwen boundaries and the
+  crop are raw-BF16 exact: 134,313,984 plus 4,587,520 words, and 1280 mask entries.
+  All 53 refiner and 40 DiT intermediate comparisons pass the unchanged finite
+  `2e-5 + 2e-5*abs(reference)` gate. Refiner/DiT are not bit-exact claims.
+- Full masked 1280-row and compact 23-row upstream refiner controls pass all
+  45 valid-row comparisons. Downloaded distilled weights cover 42 refiner/time
+  tensors plus 32 block-0 tensors; the complete checkpoint remains absent.
+  BF16 weight residency with F32 math/attention does not qualify CUDA/Magi or
+  full BF16 activation execution. Admission rejects unsupported masks/modes.
+- Exact-input discriminators found ordinary Metal sin/cos errors despite safe
+  math, and contracted gated residual arithmetic. A fixed upstream F32 basis,
+  precise GPU trigonometry and a refiner-local uncontracted residual repair
+  these differences without extra dispatches, buffers or waits. Eight tested
+  timestep embeddings and isolated text FC2 replay are bit-exact. Generic
+  arithmetic/default paths remain unchanged.
+- Connected admission is 14,707,308,492 named bytes. The guarded run samples
+  15,748,213,632 process bytes (14.667 GiB), minimum cache-aware headroom
+  27,880,472,576 bytes, zero swap growth, one terminal wait, zero tracked encode
+  allocations/readbacks and 122 post-terminal diagnostic reads. The 3.834 s
+  GPU interval is a correctness observation, not video throughput. Guards keep
+  the authorized 10% reserve, 15 GiB process cap and 64 MiB swap-growth stop.
+- Session and isolated replay owners root raw conversion staging before first
+  dispatch; early release rejects and incomplete drains retain resources.
+  Same-chain serial ordering and immutable borrowed/checkpoint bytes remain
+  caller preconditions. Named counters exclude opaque MPS resources and
+  sampled limits cannot exclude between-poll spikes.
+- Verification: 57 native examples (53 passed), zero failures/errors, four pre-existing
+  optional external-fixture cases pending; 12 CPU admission/oracle tests pass.
+  Final saved-conditioning, connected and isolated-projection gates all pass.
+  Correlated MiniQuad verdict: ROBUST for the declared one-prompt serial scope.
+  No full generation, all-input parity, default promotion or speedup follows.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/logs/conditioning-receipt-v1.json`.
+  Refresh on scoped source/input/mask/timestep/checkpoint, precision, toolchain,
+  SDK/OS/device, scheduling/lifetime changes or artifact loss/hash mismatch.
+  Next: authenticate actual pretrained block-1 weights, compare block 0 to 1
+  against upstream with the shared workspace, then reassess full-stack memory.
+  Wan return pointer remains `docs/wan-performance-frontier.md`; no full
+  generation is admitted by this continuation.
+
 ### [LM-HY-NOMAS-QWEN25-NATURAL-PROMPT-2026-10-25] One native natural prompt and GPU conditioning crop match a fresh 26-block oracle
 
 - Native pinned Qwen2.5 byte-BPE/template preparation matches the original
@@ -39,8 +84,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/natural-prompt-receipt-v1.json`.
   Refresh on scoped source, prompt/tokenizer/template, checkpoint, precision,
   geometry, toolchain/SDK/OS/device or execution/lifetime changes, or artifact
-  loss/hash mismatch. Next: actual Hy-Nomas text projection weights and a
-  resident conditioning-to-DiT intermediate gate. Return pointer:
+  loss/hash mismatch. The connected landmark above now discharges the next
+  actual-weight text-refiner/short-DiT handoff for this prompt. Return pointer:
   `docs/hy-nomas-native-frontier.md`; no full generation is admitted.
 
 ### [LM-HY-NOMAS-QWEN25-BF16-2026-10-24] The selected pretrained 26-block text prefix matches bounded official MPS captures

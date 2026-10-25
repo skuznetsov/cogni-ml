@@ -1,15 +1,126 @@
 # Hy-Nomas native Metal frontier
 
-Document status: actual-checkpoint F32-math and BF16-boundary MPS block controls,
-bounded J6560 profiles and a shared two-application scratch/workspace are verified
-within the scopes below (2026-10-24). Only block-0 weights are downloaded; the
-actual-weight chain applies that block twice. A separate synthetic control uses
-different successor weights. The shared path reduces named GPU memory but the
-J1024 paired probe shows no speedup. Historical failures remain recorded.
-Real pretrained block 0 to block 1, full-J upstream output, CUDA/Magi parity,
-model-wide performance and the video pipeline remain open.
+Document status: the opt-in natural-prompt Qwen prefix, GPU conditioning crop,
+actual-weight text refiner/time embedding and one short-input DiT block pass a
+connected upstream intermediate gate (2026-10-25). Local DiT weights cover block
+0 plus the 42 refiner/time tensors; the full checkpoint is not downloaded.
+Earlier bounded J6560 profiles and shared two-application scratch/workspace
+controls remain qualified only within their recorded scopes. That actual-weight
+serial chain applies block 0 twice; its different-weight successor is synthetic.
+The shared path reduces named GPU memory but the J1024 paired probe shows no
+speedup. Real pretrained block 0 to block 1, full-J upstream output, CUDA/Magi
+parity, model-wide performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Active slice: resident Qwen conditioning through the actual text refiner
+
+Status: VERIFIED within the one-prompt F32-math control below, 2026-10-25.
+The qualified natural tram prompt supplies
+BF16 `[1,1280,3584]` conditioning and an authenticated mask with 23 valid
+prefix rows. The selected upstream preset uses `single_refiner`: masked
+context pooling, separate learned timestep/context embeddings, an input
+projection and two gated attention/MLP refiner blocks. A single linear
+projection is not an admitted substitute. Actual `time_in` weights provide
+the DiT vector independently of the refiner timestep embedder.
+
+CAUTION: extend only the opt-in diagnostic path. The implemented
+composition compacts valid prefix rows and casts BF16 to F32 on GPU, runs the
+complete refiner with BF16-resident checkpoint weights and declared F32 math,
+then feeds a six-video-token, single-segment native block. All 42 refiner/time
+tensors come from a bounded subset of the pinned distilled checkpoint. The
+full masked upstream refiner and compact control must first agree on valid
+rows at the unchanged finite gate. Compaction is rejected for nonbinary,
+empty or non-prefix masks; multi-segment, camera, guidance and full generation
+remain outside admission. Full BF16 activation or CUDA FlashAttention parity
+is not implied by this MPS F32 control.
+
+Strongest failure: padding compaction changes pooling/reduction order, or a
+BF16 attention boundary promotes a small F32 difference into a failed gate.
+DoD: CPU subset/fixture/admission rejection tests, a fresh pinned upstream
+full-versus-compact capture, and a guarded native comparison of every saved
+refiner/block intermediate on the same conditioning. The connected Qwen
+producer, crop, refiner and block must allocate zero named GPU buffers and
+read zero activations while encoding, with one terminal wait. All resources
+must survive until that wait; early release and budget underflow must reject.
+Keep `atol=rtol=2e-5`, cache-aware 10% reserve, sampled process cap, 64 MiB
+swap-growth stop and bounded deadline. Commands and observed scope will be
+recorded with the resulting evidence. If any gate fails, preserve the first
+mismatch and narrow the qualification rather than relaxing tolerances.
+Rollback: omit the new opt-in conditioning/block arguments; existing Qwen
+and block defaults remain the controls. Scratch and downloads stay under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025`.
+
+### Connected result and numerical discriminators
+
+The fresh pinned upstream capture compares the full masked 1280-row refiner
+with its 23-row compact control at 45 checkpoints; every comparison passes
+`abs(error) <= 2e-5 + 2e-5*abs(reference)`. The native saved-conditioning control
+and connected Qwen producer each pass all 53 refiner and 40 DiT intermediate
+comparisons. Both use actual checkpoint weights, resident in BF16 with F32
+math and attention. The source is tencent/Hy-Nomas revision
+`bac719a80c8d02f91c485fca804bb8221e149b70`, not synthetic refiner weights.
+
+Two same-input probes isolated and repaired execution-order differences:
+
+- Upstream creates a timestep-independent 128-element frequency basis in CPU
+  F32 before copying it to GPU. A fixed 512-byte basis reproduces those source
+  constants; runtime phase/trigonometry stay on GPU. Identical F32 phases still
+  differed with ordinary Metal `sin/cos` by up to `6.247125566e-5`. Explicit
+  `precise::sin/cos` match all 2048 output words at eight tested timesteps,
+  including fractional and unseen values. Safe math mode alone did not select
+  accurate transcendental functions.
+- On exact upstream refiner residual operands, the common gated add differed
+  in 487 words (maximum `3.814697265625e-6`). A refiner-local kernel with FP
+  contraction disabled matches all 47,104 words. It preserves upstream's
+  separate F32 gate multiply and residual add without another dispatch,
+  buffer or wait. The previously failing downstream text FC2 intermediate now
+  passes the unchanged gate. Replaying that FC2 alone on its exact upstream
+  activation already matched all 47,104 words, excluding a local FC2 defect
+  for that input.
+
+The final connected run keeps all 27 Qwen hidden boundaries and the crop
+raw-BF16 exact (134,313,984 plus 4,587,520 words), and the 1280-entry mask exact.
+The refiner/DiT are **finite-gate**, not bit-exact, qualifications: the refiner
+MLP FC2 still has a maximum absolute difference of `0.000186920166015625`,
+within the existing relative allowance. Every saved intermediate passes;
+small differences are not hidden by checking only the final output.
+
+Named admission is 14,707,308,492 bytes. The connected guarded command sampled
+a 15,748,213,632-byte peak (14.667 GiB), at least 27,880,472,576 bytes of
+cache-aware headroom and zero swap growth. The unchanged guard enforces a 10%
+physical reserve, 15 GiB sampled process cap, 64 MiB swap-growth stop and 600 s
+deadline. It cannot exclude between-sample spikes. There is one terminal wait,
+zero tracked encode-time MetalBuffer allocations, zero pre-terminal activation
+readbacks and 122 post-terminal diagnostic reads. Opaque MPS allocations are
+outside the named counters. The 3.834 s GPU interval is a single correctness
+run including Qwen and setup conversions, not a throughput benchmark or video
+latency estimate.
+
+A session-level chain lease is registered before the first prepared-weight
+conversion. A strong session root keeps raw conversion staging and prepared
+plans alive through partial encode failures or an incomplete drain. Release
+rejects until terminal completion; it performs no extra wait. Without this
+owner, downstream plan roots would not protect PreparedWeights' raw staging.
+The standalone projection replay has the same strong ownership boundary. An
+incomplete drain retains its resources until process exit; reusable recovery
+inside a long-lived caller is not qualified by this top-level probe.
+Trusted local checkpoint files must remain immutable between authentication,
+opening and use; the existing path checks are not an adversarial concurrent
+replacement guarantee.
+
+Verification: `make spec_hy_nomas` reported 57 examples: 53 passed, zero failures
+or errors, and four pending external-fixture probes; the new timestep fixture
+was enabled.
+Twelve CPU subset/oracle admission tests passed. The saved-conditioning and
+connected probes both passed at unchanged tolerances. Correlated MiniQuad
+review and root-run falsifiers support ROBUST for this serial one-prompt
+scope; they do not establish independent CUDA parity or all-input behavior.
+Evidence and exact reproduction arguments are indexed in
+`.landmark/evidence/2026-10-25-hy-nomas-text-conditioning.json` and the external
+receipt under `logs/conditioning-receipt-v1.json` in the scratch root above.
+Refresh on source, input/mask/timestep, checkpoint, precision, toolchain/SDK,
+OS/device, scheduling/lifetime changes or loss/hash mismatch of the evidence.
 
 ## Scope and design laws
 
@@ -57,12 +168,13 @@ FlashAttention reductions. Normalization epsilon is fixed to upstream's `1e-6`.
 
 Full model/Studio/video generation remains disabled for this slice. Audio-driven
 video, lip-sync, trained reference-image conditioning, diffusion scheduling,
-PixelUMM decoding, integrated text conditioning, camera/action modules,
+PixelUMM decoding, general integrated text conditioning, camera/action modules,
 cross-segment KV-cache behavior,
 INT8/FP8 inference and model-wide performance are unimplemented boundaries.
 Text tokenization and the selected 26-block encoder prefix now have a separate
 opt-in, one-natural-prompt qualification in `qwen25-hy-nomas-frontier.md`.
-Their integrated text projection/DiT handoff remains unimplemented here.
+The one-prompt, short-input refiner/DiT handoff is qualified above; general
+pipeline integration remains unimplemented.
 Public RTX 4090 timings are author-reported CUDA results, not Metal predictions.
 No GPL community-port code is imported into this Apache-source implementation.
 
@@ -1367,11 +1479,13 @@ policy or host-scheduling changes. No full model or full generation is admitted.
 
 ## Continuation
 
-Active goal: native Hy-Nomas port. Current bounded branch: the CogniQwen
-Qwen2.5-VL text decoder, qualified on four-token synthetic BF16 fixtures,
-including real 7B block geometry; see `docs/qwen25-hy-nomas-frontier.md` for
-the exact scope and next pretrained-block discriminator. The DiT return point
-is recorded below. Wan performance work remains at `docs/wan-performance-frontier.md`, commit
+Active goal: native Hy-Nomas port. The current bounded composition qualifies
+the natural-prompt 26-block CogniQwen prefix, GPU crop, actual two-block text
+refiner/time embedding and one short-input DiT block on the same chain.
+The active result at the top of this document and
+`docs/qwen25-hy-nomas-frontier.md` define its input and precision limits.
+The next DiT discriminator is recorded below. Wan performance work remains
+at `docs/wan-performance-frontier.md`, commit
 `e22fc2ba`; no Wan default has been changed. Confirmed frontier: the actual
 checkpoint block passes the declared F32 and BF16-boundary MPS controls with
 both weight residencies and chained GPU outputs. Compact attention is explicit
@@ -1389,12 +1503,15 @@ two-block probe measures 275.237 ms warm median wall time and 2.031 GiB named
 scratch/workspace; independent sets would use 3.962 GiB by calculation. J1024
 ABBA shows no speedup. Next discriminator: actual pretrained block 0 to block 1
 with separately loaded weights and a pinned same-input upstream chain, followed
-by a bounded full-stack residency plan. Only the 32 block-0 tensors are local;
-full-model weights are not downloaded. Retain the separate path as control.
+by a bounded full-stack residency plan. The 32 block-0 tensors plus 42
+refiner/time tensors are local; full-model weights are not downloaded.
+Retain the separate path as control.
 Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps
 before pipeline quality claims. Exact CUDA/Magi output dtype and BF16 activation
 semantics are also unresolved.
-Standing authority remains bounded GPU probes under the 15% floor and sampled
-4 GiB cap; full generation is outside this slice. Refresh evidence after source,
+Standing authority remains bounded GPU probes. The new connected conditioning
+slice explicitly uses a cache-aware 10% floor and sampled 15 GiB process cap;
+small controls use 3 GiB. Earlier block-profile limits remain historical.
+Full generation is outside this slice. Refresh evidence after source,
 fixture, geometry, numerical policy, compiler, bridge, SDK/OS/device or scheduling
 changes, or artifact loss.

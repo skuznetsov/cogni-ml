@@ -44,6 +44,7 @@ module ML::Video
     @weight_buffers : Array(ML::MetalBuffer)
     @attention_plan : (HyNomasAttentionMPSPlan | HyNomasCompactAttentionMPSPlan)? = nil
     @norm_plan : HyNomasMPSLayerNorm::Plan
+    @allow_shared_modulation : Bool
     @pointwise_plan : HyNomasMPSPointwise::Plan? = nil
     @activation_operations = {} of String => HyNomasDualStreamBlock::MPSActivationOperation
     @activation_plans = {} of String => HyNomasMPSActivation::UnaryPlan
@@ -66,8 +67,10 @@ module ML::Video
                    video_rope_cos : ML::MetalBuffer,
                    video_rope_sin : ML::MetalBuffer,
                    *, attention_query_chunk : Int32 = 0,
-                   attention_heads_per_group : Int32 = 0)
+                   attention_heads_per_group : Int32 = 0,
+                   allow_shared_modulation : Bool = false)
       @config = @block.config
+      @allow_shared_modulation = allow_shared_modulation
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(@config.batches,
           @config.joint_tokens, @config.heads, @config.head_dim,
@@ -511,6 +514,10 @@ module ML::Video
       end
       @fixed_inputs.each_with_index do |left, index|
         ((index + 1)...@fixed_inputs.size).each do |other_index|
+          if @allow_shared_modulation && index == 2 && other_index == 3 &&
+             left.same?(@fixed_inputs[other_index])
+            next
+          end
           if MetalOps.overlap?(left, @fixed_inputs[other_index])
             raise ArgumentError.new("Hy-Nomas fixed input buffers must not alias")
           end
