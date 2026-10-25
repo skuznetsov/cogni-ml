@@ -10,12 +10,102 @@ J6560 profiles and block-0-twice controls retain only their recorded scopes.
 Shared memory is reduced; no speedup follows from the new correctness probe.
 A header-only native planner now accounts for the complete DiT parameters and
 models serial block residency; full-stack peaks and N-block execution remain
-unqualified. A single-block GPU-produced BF16 source cache now passes exact
-weight and short-input upstream intermediate gates without F32 raw staging.
+unqualified. GPU-produced BF16 source caches for blocks 0 and 1 now pass exact
+weight and short-input serial upstream gates without F32 raw staging. They
+preserve the independent-workspace control, shared scratch and repeated replay.
 Full-stack composition, full-J upstream output, CUDA/Magi parity, model-wide
 performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: two-block BF16 source-cache replay
+
+Status: VERIFIED within the B1/V6/T23/C2048/H16/D128/FF8192 saved-input scope,
+2026-10-25. The existing two-block owner optionally consumes authenticated BF16
+derivatives for actual blocks 0 and 1. It preserves the separate-workspace
+control, shared-workspace replay and repeat, with direct GPU hidden-state
+handoff and GPU diagnostic copies before scratch reuse. Block 1's new native
+derivative passes its source/reload/repeat gates against a fresh independent
+MPS BF16 weight conversion. Block 0 reuses its previously qualified derivative
+and retained conversion oracle; the receipt binds that producer to its original
+source version. No neural upstream block was freshly rerun in this slice.
+
+DoD: all 64 resident weight tensors match independent MPS BF16 oracles word for
+word; all 80 intermediate captures per request pass finite `atol=rtol=2e-5`
+against the authenticated saved two-block upstream run. Shared/repeat outputs
+must match the separate-workspace control exactly. BF16 plans must have zero
+F32 raw staging and conversion dispatches, zero tracked encode allocations and
+preterminal activation reads, and one terminal wait per request. Reject wrong
+block identities/digests/dtypes and insufficient aggregate budgets before
+Metal; a wrong-successor control must expose block-1 output differences while
+block 0 still passes. No activation CPU round trip during neural execution.
+
+Risk: CAUTION (source identity and shared GPU lifetime). Root owners before
+allocations; release only after the existing terminal drain; retain resources
+if completion is unknown. Use the cache-aware 10% reserve, 4 GiB sampled probe
+cap, 64 MiB swap-growth stop and 600 s deadline (3 GiB for small checks/builds).
+Rollback: omit the optional BF16-source replay and retain the F32-source path.
+No full model, full-J, speedup, physical peak reduction or generation claim.
+
+Observed: all 64 resident weight tensors (302,113,792 BF16 words) match their
+independent MPS conversions exactly. All three requests reproduce all 80 saved
+upstream captures (3,186,688 F32 values per request) with zero raw-bit
+differences, tolerance failures and maximum absolute error. Shared results and
+repeat also match the separate-workspace control exactly after poisoning all
+56 unique reusable nonconstant scratch buffers. Native parameters are physically
+BF16; neural math and attention remain F32. The saved upstream control uses
+BF16-rounded parameter values in F32 storage with F32 MPS math/SDPA.
+
+| Two-block loader | BF16 destinations | F32 raw staging | Control named peak | Source GPU casts |
+| --- | ---: | ---: | ---: | ---: |
+| Original F32 source | 604,227,584 | 1,208,455,168 | 2,032,759,040 | 64 |
+| BF16 source caches | 604,227,584 | 0 | 824,303,872 | 0 |
+
+The shared phase uses 727,380,096 named bytes, including 12,746,752 diagnostic
+snapshot bytes. This is exact buffer arithmetic: 1,208,455,168 bytes (1.125 GiB)
+of cold F32 staging and 64 setup conversion dispatches are removed. The existing
+109,670,528-byte short-input scratch/workspace reuse is preserved. No timing
+speedup or physical-peak reduction follows from these figures.
+
+Each request has zero tracked encode-time MetalBuffer allocations and
+preterminal activation reads, one terminal wait and 80 postterminal activation
+diagnostics. All 64 raw weight-byte comparisons run after the completed control,
+before its plans are released. Owners are rooted before their first allocation
+and retained through terminal completion. Checkpoint byte I/O, cache creation
+and postterminal diagnostics run on CPU; neural execution and block handoff
+stay on GPU. There is no new inference synchronization.
+
+Eighteen focused Crystal examples and eleven Python checks pass. Six live CLI
+controls reject swapped cache/oracle inventories, a bad digest, a self-oracle,
+a one-byte-short budget and an existing report before Metal initialization.
+Cross-role hardlinks and identical file digests are rejected too. The wrong
+successor control keeps block 0 exact but exposes 12,281 image and 47,102 text
+output tolerance failures in block 1. The original F32-source serial replay
+also passes all three requests. A separately written streamed-byte audit binds
+the two cache files to all 64 oracle tensor hashes, original F32 files/manifests,
+producer scripts/reports and retained upstream reference.
+
+The two-block native run samples a 931,726,704-byte process peak, minimum
+cache-aware headroom of 37,414,289,408 bytes and zero swap growth. The fresh
+block-1 conversion oracle samples 2,586,789,352 bytes. All bounded runs preserve
+the 10% reserve and their process/swap/deadline limits. Samples do not prove
+instantaneous bounds; no physical-peak comparison is claimed.
+
+Build with `make BUILD_DIR=FRESH_SSD_DIR hy_nomas_bf16_serial_probe`; run the
+focused suite with `make BUILD_DIR=FRESH_SSD_DIR spec_hy_nomas_bf16_cache`.
+The opt-in CLI requires the reference/conditioning, ordered cache0/cache1 and
+oracle0/oracle1 files with trusted SHA-256 pins, a fresh report and aggregate
+named-byte budget. Exact guarded arguments and build/source pins are in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-serial-20261025/logs/serial-receipt-v1.json`;
+the curated index is `.landmark/evidence/2026-10-25-hy-nomas-bf16-serial.json`.
+Correlated MiniQuad verdict: ROBUST for this scope. CLI oracle pins remain
+caller-trusted; the external receipt supplies provenance, not hostile-producer
+authentication. Local files must remain immutable during use. Companion object
+bytes are pinned but their source ancestry remains opaque; the build is not
+hermetic. Refresh on scoped source, checkpoint/fixture, precision/geometry,
+loader/lifetime, compiler/SDK/OS/device or artifact changes. Next: bounded
+full-J positional/output coverage without retaining every intermediate snapshot,
+then cache coverage beyond these two blocks. Full-stack composition remains open.
 
 ## Qualified slice: single-block GPU-produced BF16 source cache
 
@@ -95,9 +185,9 @@ MiniQuad verdict is ROBUST within this scope. Evidence:
 `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json`.
 Refresh on source/checkpoint, fixture, precision, geometry, toolchain/device,
 loader/lifetime or artifact changes. Treat local source/cache files as immutable
-while authenticated consumers run. Next: consume qualified BF16 sources in the
-two-block replay and extend positional/output coverage without retaining every
-full-J snapshot. No full-stack cache, fit, performance or generation claim.
+while authenticated consumers run. The two-block BF16-source gate is now
+qualified above; positional/output coverage without retaining every full-J
+snapshot remains open. No full-stack cache, fit, performance or generation claim.
 
 ## Qualified slice: full-DiT metadata residency accounting
 
@@ -170,10 +260,10 @@ Rollback: omit this diagnostic; no inference/default change is admitted.
 Refresh on checkpoint/header, scratch/capture/attention geometry, loader
 lifetime or accounting changes; reread live telemetry before any later probe.
 
-The one-block cache gate above now qualifies removal of its 604,227,584-byte
-F32 staging payload. Next falsifier: consume BF16 sources in the two-block
-probe with the unchanged upstream intermediate gate, then expand positional/
-output coverage. Keep setup/cache I/O outside inference, with no new waits or
+The two-block cache gate above now qualifies removal of 1,208,455,168 bytes
+of F32 staging with the unchanged upstream intermediate gate. Next falsifier:
+expand positional/output coverage and cache coverage beyond those blocks.
+Keep setup/cache I/O outside inference, with no new waits or
 activation readbacks. The 31.864 GiB full-DiT cold staging removal remains a
 modeled extension; no whole-stack cache or runtime fit is implemented here.
 
@@ -1754,10 +1844,11 @@ J6560 block-0-twice timing remains 275.237 ms warm median wall and 2.031 GiB nam
 scratch/workspace; independent sets would use 3.962 GiB by calculation. J1024
 ABBA shows no speedup. Neither timing qualifies a real 54-block stack.
 The authenticated DiT parameter/block-workspace plan is now recorded at the
-top; complete pipeline residency remains open. The single-block BF16 cache
-now avoids cold F32 staging within its saved-input gate. Next: consume BF16
-sources in the two-block replay and extend its positional/output gate without
-retaining every full-J snapshot.
+top; complete pipeline residency remains open. BF16 source caches now remove
+cold F32 staging in the actual two-block saved-input replay: all 64 weight
+tensors and 80 captures per request are raw exact with one terminal wait.
+Next: extend its positional/output gate without retaining every full-J snapshot,
+then qualify cache coverage beyond the two local blocks.
 The 64 tensors from blocks 0/1 plus 42 refiner/time tensors are local; full-model weights are
 not downloaded. Retain the independent plans and single-block path as controls.
 Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps

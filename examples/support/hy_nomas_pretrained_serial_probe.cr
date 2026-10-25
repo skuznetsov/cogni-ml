@@ -2,6 +2,7 @@ require "digest/sha256"
 require "json"
 require "set"
 require "../../src/ml/video/hy_nomas_serial_mps"
+require "../../src/ml/video/bf16_weight_cache"
 require "./hy_nomas_text_probe"
 require "./hy_nomas_text_session"
 require "./hy_nomas_probe_instrumentation"
@@ -82,6 +83,29 @@ module HyNomasPretrainedSerialProbe
     snapshot_count: Int32, snapshot_bytes: Int64,
     owner_rooted_before_dispatch: Bool, chain_lease_started_before_dispatch: Bool,
     owner_retained_through_terminal: Bool)
+
+  alias BF16Source = NamedTuple(path: String, sha256: String)
+
+  def validate_bf16_sources!(sources : Array(BF16Source)) : Nil
+    raise ArgumentError.new("BF16 replay requires exactly two ordered sources") unless sources.size == 2
+    sources.each do |source|
+      unless source[:sha256].matches?(/\A[0-9a-f]{64}\z/) &&
+             File.file?(source[:path]) && !File.symlink?(source[:path])
+        raise ArgumentError.new("BF16 replay source must be a regular file with a SHA256 pin")
+      end
+    end
+    if File.info(sources[0][:path]).same_file?(File.info(sources[1][:path]))
+      raise ArgumentError.new("BF16 replay source files alias")
+    end
+  end
+
+  def validate_bf16_plan!(plan : ML::Video::WeightPlan, block_index : Int32) : Nil
+    unless 0 <= block_index <= 1 && plan.entries.size == 32 &&
+           plan.entries.all? { |entry| entry.binding.source.starts_with?("double_blocks.#{block_index}.") && entry.info.dtype.bf16? } &&
+           plan.resident_dtype.bf16? && !plan.allow_f32_to_bf16 && plan.staging_bytes == 0
+      raise ArgumentError.new("BF16 replay block #{block_index} requires 32 exact-index BF16 sources and no conversion staging")
+    end
+  end
 
   def sha256_file(path : String) : String
     HyNomasTextProbe.sha256(path)
@@ -515,20 +539,23 @@ module HyNomasPretrainedSerialProbe
     @snapshot_bytes = 0_i64
     @weight_destination_bytes = 0_i64
     @weight_raw_staging_bytes = 0_i64
+    getter weight_conversion_dispatches = 0_i32
     @request_metrics = [] of RequestCounters
     @shared_results = [] of Array(SharedTensorResult)
 
     def initialize(@reference : ReferenceFixture,
                    @conditioning : HyNomasTextProbe::Fixture,
-                   max_named_bytes : Int64)
+                   max_named_bytes : Int64,
+                   bf16_sources : Array(BF16Source)? = nil)
       unless max_named_bytes > 0 && max_named_bytes <= NAMED_BUDGET_LIMIT_BYTES
         raise ArgumentError.new("max named byte limit must be positive and no larger than the admitted 90% budget")
       end
       @named_byte_budget = max_named_bytes
       begin
-        plan_weights!
+        plan_weights!(bf16_sources)
         admit_control_peak!
         admit_shared_peak!
+        retain_lifetime_root!
         prepare_weight_destinations!
         prepare_inputs!
         @poison_pipeline = ML::Metal::ComputePipeline.new("hy_nomas_serial_poison_f32", <<-METAL)
@@ -540,7 +567,6 @@ module HyNomasPretrainedSerialProbe
           if (i < count) dst[i] = as_type<float>(0x7fc00000u);
         }
         METAL
-        retain_lifetime_root!
       rescue ex
         release_setup_before_submission!
         raise ex
@@ -596,6 +622,17 @@ module HyNomasPretrainedSerialProbe
 
     def shared_results : Array(Array(SharedTensorResult))
       @shared_results
+    end
+
+    # Diagnostic byte inspection only after a successful completed control.
+    # Plans and resident weights remain owned until release_control_phase!.
+    def each_completed_weight_plan(& : Int32, ML::Video::WeightPlan, ML::Video::Arena ->) : Nil
+      unless @active_chain.nil? && @rooted && !@released && !@control_phase_released &&
+             @request_metrics.size == 1 && @request_metrics[0][:terminal_wait_count] == 1 &&
+             control_passed? && @weight_plans.size == 2
+        raise ArgumentError.new("weight diagnostics require a successful completed two-block control")
+      end
+      @weight_plans.each_with_index { |plan, index| yield index.to_i32, plan, @weight_arenas[index] }
     end
 
     def run_control! : Array(TensorResult)
@@ -849,17 +886,25 @@ module HyNomasPretrainedSerialProbe
 
     # Header admission and the complete named-byte estimate run before any
     # MetalBuffer is created. WeightPlan and CheckpointFile are CPU-only.
-    private def plan_weights! : Nil
+    private def plan_weights!(bf16_sources : Array(BF16Source)? = nil) : Nil
+      HyNomasPretrainedSerialProbe.validate_bf16_sources!(bf16_sources) if bf16_sources
       ["block0", "block1"].each do |name|
-        file = ML::Video::CheckpointFile.new(@reference.block_path(name))
-        @checkpoint_files << file
         index = name == "block0" ? 0 : 1
+        file = if sources = bf16_sources
+                 source = sources[index]
+                 ML::Video::BF16WeightCache.authenticate(source[:path], source[:sha256])
+               else
+                 ML::Video::CheckpointFile.new(@reference.block_path(name))
+               end
+        @checkpoint_files << file
         plan = ML::Video::HyNomasDualStreamBlock.weight_plan([file], CONFIG,
           NAMED_BUDGET_LIMIT_BYTES, resident_dtype: ML::Video::WeightDType::BF16,
-          block_index: index, require_all: true, allow_f32_to_bf16: true)
+          block_index: index, require_all: true, allow_f32_to_bf16: bf16_sources.nil?)
         raise ArgumentError.new("pretrained #{name} must contain exactly 32 checkpoint tensors") unless plan.entries.size == 32
+        HyNomasPretrainedSerialProbe.validate_bf16_plan!(plan, index) if bf16_sources
         @weight_destination_bytes += plan.destination_bytes
         @weight_raw_staging_bytes += plan.staging_bytes
+        @weight_conversion_dispatches += plan.entries.count { |entry| entry.info.dtype.f32? }
         @weight_plans << plan
       end
     end

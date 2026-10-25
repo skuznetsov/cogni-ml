@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Stream the exact pinned Hy-Nomas block-0 weights into a BF16 cache.
+"""Stream one exact pinned Hy-Nomas DiT block into a BF16 cache.
 
-The source is the authenticated F32 block-0 safetensors subset. Each tensor is
-copied to MPS and converted there to BF16; the output keeps the original
-``double_blocks.0.*`` names and shapes. This helper does not instantiate or
-run a model. Its saved intermediate comparison scope is the authenticated
-block-0 capture from the prior two-block upstream oracle, whose parameters
-were BF16-rounded but stored and computed in F32.
+The source is an authenticated F32 block-0 or block-1 safetensors subset. Each
+tensor is copied to MPS and converted there to BF16; the output keeps the
+original checkpoint names and shapes. This helper does not instantiate or run
+a model. Its saved intermediate comparison scope is the selected block's
+authenticated capture from the prior two-block upstream oracle, whose
+parameters were BF16-rounded but stored and computed in F32.
 """
 
 from __future__ import annotations
@@ -39,6 +39,10 @@ DEFAULT_SERIAL_REFERENCE = Path(
 )
 DEFAULT_BLOCK0_WEIGHTS = serial_reference.DEFAULT_BLOCK0_WEIGHTS
 DEFAULT_BLOCK0_MANIFEST = serial_reference.DEFAULT_BLOCK0_MANIFEST
+DEFAULT_BLOCK1_WEIGHTS = serial_reference.DEFAULT_BLOCK1_WEIGHTS
+DEFAULT_BLOCK1_MANIFEST = serial_reference.DEFAULT_BLOCK1_MANIFEST
+DEFAULT_BLOCK_WEIGHTS = {0: DEFAULT_BLOCK0_WEIGHTS, 1: DEFAULT_BLOCK1_WEIGHTS}
+DEFAULT_BLOCK_MANIFESTS = {0: DEFAULT_BLOCK0_MANIFEST, 1: DEFAULT_BLOCK1_MANIFEST}
 ATOL = serial_reference.ATOL
 RTOL = serial_reference.RTOL
 MAX_REFERENCE_BYTES = 8 * 1024 * 1024
@@ -49,6 +53,22 @@ ReferenceError = serial_reference.ReferenceError
 
 def _valid_sha256(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _checked_block_index(value: Any) -> int:
+    if type(value) is not int or value not in (0, 1):
+        raise ReferenceError("block index must identify actual block 0 or 1")
+    return value
+
+
+def _block_index_argument(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("block index must be 0 or 1") from exc
+    if value not in (0, 1):
+        raise argparse.ArgumentTypeError("block index must be 0 or 1")
+    return value
 
 
 def _sha256_file(path: Path) -> str:
@@ -78,8 +98,10 @@ def validate_serial_reference_envelope(
     reference_sha256: str,
     sidecar_sha256: str,
     sidecar_nbytes: int,
+    block_index: int = 0,
 ) -> None:
-    """Admit only the exact saved first-block capture used by native replay."""
+    """Admit the exact saved two-block fixture and selected block capture."""
+    block_index = _checked_block_index(block_index)
     if reference_sha256 != SERIAL_REFERENCE_SHA256:
         raise ReferenceError("serial reference SHA is not the pinned capture")
     if (sidecar_sha256 != SERIAL_SIDECAR_SHA256
@@ -99,21 +121,28 @@ def validate_serial_reference_envelope(
             or not isinstance(handoff, dict)
             or handoff.get("same_mps_tensor_objects") is not True):
         raise ReferenceError("serial reference does not prove the saved two-block MPS run")
-    block0 = document["source"]["blocks"]["block0"]
-    pin = serial_reference.BLOCK_PINS["block0"]
-    if (block0.get("block_index") != 0
-            or block0.get("file_sha256") != pin["file_sha256"]
-            or block0.get("manifest_sha256") != pin["manifest_sha256"]
-            or block0.get("source_payload_sha256") != pin["source_payload_sha256"]
-            or block0.get("tensor_prefix") != "double_blocks.0."
-            or block0.get("tensor_count") != 32):
-        raise ReferenceError("serial reference block0 source pin mismatch")
+    block_name = f"block{block_index}"
+    block = document["source"]["blocks"][block_name]
+    pin = serial_reference.BLOCK_PINS[block_name]
+    if (block.get("block_index") != block_index
+            or block.get("file_sha256") != pin["file_sha256"]
+            or block.get("manifest_sha256") != pin["manifest_sha256"]
+            or block.get("source_payload_sha256") != pin["source_payload_sha256"]
+            or block.get("source_header_sha256") != pin["source_header_sha256"]
+            or block.get("tensor_prefix") != f"double_blocks.{block_index}."
+            or block.get("tensor_count") != 32):
+        raise ReferenceError(f"serial reference {block_name} source pin mismatch")
     if (document.get("tolerance") != {"atol": ATOL, "rtol": RTOL}
             or document.get("precision") != serial_reference.PRECISION):
         raise ReferenceError("serial reference precision or tolerance mismatch")
 
 
-def _trusted_serial_reference(path_arg: Path, supplied_sha256: str) -> tuple[Path, dict[str, Any], Path]:
+def _trusted_serial_reference(
+    path_arg: Path,
+    supplied_sha256: str,
+    block_index: int = 0,
+) -> tuple[Path, dict[str, Any], Path]:
+    block_index = _checked_block_index(block_index)
     if supplied_sha256 != SERIAL_REFERENCE_SHA256:
         raise ReferenceError("serial reference SHA is not the pinned capture")
     if path_arg.is_symlink():
@@ -145,13 +174,23 @@ def _trusted_serial_reference(path_arg: Path, supplied_sha256: str) -> tuple[Pat
         reference_sha256=actual_sha256,
         sidecar_sha256=sidecar_sha256,
         sidecar_nbytes=sidecar_path.stat().st_size,
+        block_index=block_index,
     )
     return path, document, sidecar_path
 
 
-def _block0_tensor_shapes() -> dict[str, list[int]]:
+def _block_tensor_shapes(block_index: int = 0) -> dict[str, list[int]]:
+    block_index = _checked_block_index(block_index)
     relative = serial_reference.block_reference._expected_block_keys(2048, 8192, 16)
-    return {f"double_blocks.0.{name}": shape for name, shape in sorted(relative.items())}
+    return {
+        f"double_blocks.{block_index}.{name}": shape
+        for name, shape in sorted(relative.items())
+    }
+
+
+def _block0_tensor_shapes() -> dict[str, list[int]]:
+    """Compatibility helper for callers that previously selected block 0."""
+    return _block_tensor_shapes(0)
 
 
 def build_safetensors_header(
@@ -195,24 +234,30 @@ def build_safetensors_header(
     return struct.pack("<Q", len(encoded)) + encoded, offsets
 
 
-def _validate_source_inventory(source: Any, expected: dict[str, list[int]]) -> None:
+def _validate_source_inventory(
+    source: Any,
+    expected: dict[str, list[int]],
+    block_index: int = 0,
+) -> None:
+    block_index = _checked_block_index(block_index)
+    block_name = f"block{block_index}"
     actual = set(source.keys())
     if actual != set(expected):
         raise ReferenceError(
-            "block0 source tensor inventory mismatch: "
+            f"{block_name} source tensor inventory mismatch: "
             f"missing={sorted(set(expected) - actual)}, unexpected={sorted(actual - set(expected))}"
         )
     for name, shape in expected.items():
         tensor_slice = source.get_slice(name)
         if tensor_slice.get_dtype() != "F32" or tensor_slice.get_shape() != shape:
-            raise ReferenceError(f"block0 source dtype/shape mismatch: {name}")
+            raise ReferenceError(f"{block_name} source dtype/shape mismatch: {name}")
 
 
 def _safetensors_module() -> Any:
     try:
         from safetensors import safe_open
     except ImportError as exc:
-        raise ReferenceError("block0 cache creation requires safetensors") from exc
+        raise ReferenceError("BF16 cache creation requires safetensors") from exc
     return safe_open
 
 
@@ -277,7 +322,12 @@ def publish_noreplace(path: Path, data: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def _capture_hashes(document: dict[str, Any], sidecar_path: Path) -> dict[str, dict[str, Any]]:
+def _capture_hashes(
+    document: dict[str, Any],
+    sidecar_path: Path,
+    block_index: int = 0,
+) -> dict[str, dict[str, Any]]:
+    block_index = _checked_block_index(block_index)
     try:
         import numpy as np
     except ImportError as exc:
@@ -286,16 +336,16 @@ def _capture_hashes(document: dict[str, Any], sidecar_path: Path) -> dict[str, d
     capture_hashes: dict[str, dict[str, Any]] = {}
     with sidecar_path.open("rb") as stream:
         for relative_name in serial_reference.BLOCK_CAPTURE_NAMES:
-            name = f"block0.{relative_name}"
+            name = f"block{block_index}.{relative_name}"
             metadata = tensors[name]
             offset = metadata["offset_bytes"]
             nbytes = metadata["nbytes"]
             stream.seek(offset)
             raw = stream.read(nbytes)
             if len(raw) != nbytes:
-                raise ReferenceError(f"short read in saved block0 capture: {name}")
+                raise ReferenceError(f"short read in saved {name} capture")
             if not bool(np.isfinite(np.frombuffer(raw, dtype="<f4")).all()):
-                raise ReferenceError(f"non-finite value in saved block0 capture: {name}")
+                raise ReferenceError(f"non-finite value in saved {name} capture")
             capture_hashes[name] = {
                 "dtype": "F32",
                 "shape": list(metadata["shape"]),
@@ -306,17 +356,18 @@ def _capture_hashes(document: dict[str, Any], sidecar_path: Path) -> dict[str, d
     return capture_hashes
 
 
-def _source_metadata(path: Path, digest: str, manifest_path: Path,
+def _source_metadata(block_index: int, path: Path, digest: str, manifest_path: Path,
                       manifest_sha256: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    block_index = _checked_block_index(block_index)
     return {
-        "block_index": 0,
+        "block_index": block_index,
         "path": str(path),
         "file_bytes": path.stat().st_size,
         "file_sha256": digest,
         "manifest_path": str(manifest_path),
         "manifest_sha256": manifest_sha256,
         "source": manifest["source"],
-        "tensor_prefix": "double_blocks.0.",
+        "tensor_prefix": f"double_blocks.{block_index}.",
         "tensor_count": 32,
     }
 
@@ -329,10 +380,22 @@ def _fixture_parser() -> argparse.ArgumentParser:
                         help="new JSON report path in an existing scratch directory")
     parser.add_argument("--reference", type=Path, default=DEFAULT_SERIAL_REFERENCE)
     parser.add_argument("--reference-sha256", required=True)
-    parser.add_argument("--block0-weights", type=Path, default=DEFAULT_BLOCK0_WEIGHTS)
-    parser.add_argument("--block0-weights-sha256", required=True)
-    parser.add_argument("--block0-manifest", type=Path, default=DEFAULT_BLOCK0_MANIFEST)
-    parser.add_argument("--block0-manifest-sha256", required=True)
+    parser.add_argument("--block-index", type=_block_index_argument, default=0,
+                        help="actual DiT block index to cache (0 or 1; default: 0)")
+    parser.add_argument("--block-weights", "--block0-weights", "--block1-weights",
+                        dest="block_weights",
+                        type=Path, default=None,
+                        help="authenticated F32 subset; defaults to selected block path")
+    parser.add_argument("--block-weights-sha256", "--block0-weights-sha256",
+                        "--block1-weights-sha256",
+                        dest="block_weights_sha256", required=True)
+    parser.add_argument("--block-manifest", "--block0-manifest", "--block1-manifest",
+                        dest="block_manifest",
+                        type=Path, default=None,
+                        help="authenticated manifest; defaults to selected block sidecar")
+    parser.add_argument("--block-manifest-sha256", "--block0-manifest-sha256",
+                        "--block1-manifest-sha256",
+                        dest="block_manifest_sha256", required=True)
     return parser
 
 
@@ -345,28 +408,43 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
     report_path = args.report.absolute()
     output_tmp, report_tmp = _prepare_outputs(output, report_path)
 
+    block_index = _checked_block_index(getattr(args, "block_index", 0))
+    block_name = f"block{block_index}"
+    block_weights = (getattr(args, "block_weights", None)
+                     or getattr(args, f"{block_name}_weights", None)
+                     or DEFAULT_BLOCK_WEIGHTS[block_index])
+    block_weights_sha256 = (getattr(args, "block_weights_sha256", None)
+                            or getattr(args, f"{block_name}_weights_sha256", None))
+    block_manifest = (getattr(args, "block_manifest", None)
+                      or getattr(args, f"{block_name}_manifest", None)
+                      or DEFAULT_BLOCK_MANIFESTS[block_index])
+    block_manifest_sha256 = (getattr(args, "block_manifest_sha256", None)
+                             or getattr(args, f"{block_name}_manifest_sha256", None))
+    if not isinstance(block_weights_sha256, str) or not isinstance(block_manifest_sha256, str):
+        raise ReferenceError("selected block file and manifest SHA-256 pins are required")
+
     reference_path, reference_doc, reference_sidecar = _trusted_serial_reference(
-        args.reference, args.reference_sha256
+        args.reference, args.reference_sha256, block_index
     )
     weights_path, weights_sha256, manifest_path, manifest = serial_reference._trusted_weight_pair(
-        name="block0",
-        weights=args.block0_weights,
-        weights_sha256=args.block0_weights_sha256,
-        manifest_path=args.block0_manifest,
-        manifest_sha256=args.block0_manifest_sha256,
+        name=block_name,
+        weights=Path(block_weights),
+        weights_sha256=block_weights_sha256,
+        manifest_path=Path(block_manifest),
+        manifest_sha256=block_manifest_sha256,
     )
 
     try:
         import torch
     except ImportError as exc:
-        raise ReferenceError("block0 BF16 cache conversion requires PyTorch") from exc
+        raise ReferenceError("BF16 cache conversion requires PyTorch") from exc
     safe_open = _safetensors_module()
     if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
         raise ReferenceError("MPS is required; CPU fallback is forbidden")
     if torch.get_default_dtype() != torch.float32:
         torch.set_default_dtype(torch.float32)
     device = torch.device("mps")
-    expected_shapes = _block0_tensor_shapes()
+    expected_shapes = _block_tensor_shapes(block_index)
     source_values: dict[str, Any] = {}
     converted: dict[str, Any] = {}
     finite_flags: list[Any] = []
@@ -376,12 +454,12 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
 
     try:
         with safe_open(str(weights_path), framework="pt", device="cpu") as source:
-            _validate_source_inventory(source, expected_shapes)
+            _validate_source_inventory(source, expected_shapes, block_index)
             for name in sorted(expected_shapes):
                 source_tensor = source.get_tensor(name)
                 if (source_tensor.dtype != torch.float32
                         or list(source_tensor.shape) != expected_shapes[name]):
-                    raise ReferenceError(f"block0 source tensor is invalid: {name}")
+                    raise ReferenceError(f"{block_name} source tensor is invalid: {name}")
                 source_value = source_tensor.to(device=device, dtype=torch.float32).contiguous()
                 if (source_value.device.type != "mps" or source_value.dtype != torch.float32
                         or list(source_value.shape) != expected_shapes[name]):
@@ -415,7 +493,7 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
                 torch.mps.synchronize()
             except Exception as drain_exc:
                 raise ReferenceError(
-                    "block0 BF16 conversion failed and MPS completion could not be confirmed: "
+                    f"{block_name} BF16 conversion failed and MPS completion could not be confirmed: "
                     f"{type(drain_exc).__name__}: {drain_exc}"
                 ) from None
         source_values.clear()
@@ -425,7 +503,7 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(exc, ReferenceError):
             raise
         raise ReferenceError(
-            f"block0 MPS BF16 conversion failed: {type(exc).__name__}: {exc}"
+            f"{block_name} MPS BF16 conversion failed: {type(exc).__name__}: {exc}"
         ) from None
 
     tensor_specs = {
@@ -486,14 +564,14 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
 
     reference_tensor_file = reference_doc["tensor_file"]
     try:
-        capture_tensors = _capture_hashes(reference_doc, reference_sidecar)
+        capture_tensors = _capture_hashes(reference_doc, reference_sidecar, block_index)
     except Exception:
         if output_tmp_owned:
             output_tmp.unlink(missing_ok=True)
             output_tmp_owned = False
         raise
     intermediate_reference = {
-        "kind": "authenticated saved block0 upstream capture; block not rerun",
+        "kind": f"authenticated saved {block_name} upstream capture; block not rerun",
         "reference_path": str(reference_path),
         "reference_sha256": SERIAL_REFERENCE_SHA256,
         "tensor_file_name": reference_tensor_file["name"],
@@ -502,7 +580,14 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
         "source_schema": serial_reference.SCHEMA,
         "source_upstream_revision": serial_reference.PINNED_REVISION,
         "source_producer_sha256": reference_doc["producer"]["source_sha256"],
-        "block_index": 0,
+        "block_index": block_index,
+        "block_name": block_name,
+        "input_context": (
+            "saved refined latent/text/vec/RoPE input from the conditioning fixture"
+            if block_index == 0 else
+            "saved block0 outputs reused as block1 inputs in the same upstream serial pass"
+        ),
+        "source_block": reference_doc["source"]["blocks"][block_name],
         "capture_tensor_count": len(serial_reference.BLOCK_CAPTURE_NAMES),
         "capture_tensors": capture_tensors,
         "tolerance": {"atol": ATOL, "rtol": RTOL},
@@ -521,17 +606,20 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
             "torch": torch.__version__,
             "device": "mps",
             "conversion": "source F32 tensor copied to MPS and cast to BF16",
+            "block_index": block_index,
+            "block_name": block_name,
             "converted_tensor_count": len(tensor_records),
             "explicit_terminal_waits": 1,
             "model_invocations": 0,
             "weight_cache_host_readbacks": len(tensor_records),
         },
         "source": {
-            "block0": _source_metadata(
+            block_name: _source_metadata(
+                block_index,
                 weights_path,
                 weights_sha256,
                 manifest_path,
-                serial_reference.BLOCK_PINS["block0"]["manifest_sha256"],
+                serial_reference.BLOCK_PINS[block_name]["manifest_sha256"],
                 manifest,
             ),
             "serial_reference": {
@@ -548,6 +636,8 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
             "sha256": file_sha256,
             "format": "safetensors",
             "dtype": "BF16",
+            "block_index": block_index,
+            "block_name": block_name,
             "tensor_count": len(tensor_records),
             "payload_nbytes": expected_payload_bytes,
             "tensors": tensor_records,
@@ -556,7 +646,7 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
         "tolerance": {"atol": ATOL, "rtol": RTOL},
         "limitations": [
             "The helper converts checkpoint weights and does not instantiate or run a neural block.",
-            "The saved block0 comparison is the prior authenticated MPS reference with BF16-rounded values held in F32 parameters and F32 compute.",
+            f"The saved {block_name} comparison is the prior authenticated MPS reference with BF16-rounded values held in F32 parameters and F32 compute.",
             "This helper authenticates and indexes the intermediate reference but performs no numerical comparison; the native probe owns that gate.",
             "This artifact does not establish full-model residency, BF16 activation parity, or generation behavior.",
         ],
@@ -589,6 +679,8 @@ def produce_cache(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(output),
         "output_sha256": file_sha256,
         "report": str(report_path),
+        "block_index": block_index,
+        "block_name": block_name,
         "tensor_count": len(tensor_records),
         "payload_nbytes": expected_payload_bytes,
         "capture_count": len(intermediate_reference["capture_tensors"]),

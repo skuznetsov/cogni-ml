@@ -39,17 +39,28 @@ module HyNomasBF16CacheProbe
 
   # Shape equality alone is insufficient: the exact original source names,
   # complete inventory and physical BF16 storage must all agree before Metal.
-  def validate_oracle!(plan : ML::Video::WeightPlan, oracle : ML::Video::CheckpointFile) : Nil
+  def validate_oracle!(plan : ML::Video::WeightPlan, oracle : ML::Video::CheckpointFile,
+                       block_index : Int32 = 0) : Nil
     entries = plan.entries
     tensors = oracle.tensors
-    unless entries.size == 32 && tensors.keys.to_set == entries.map(&.binding.source).to_set
-      raise ArgumentError.new("BF16 oracle must contain exactly the 32 block-0 tensors")
+    unless 0 <= block_index <= 1 && entries.size == 32 &&
+           entries.all?(&.binding.source.starts_with?("double_blocks.#{block_index}.")) &&
+           tensors.keys.to_set == entries.map(&.binding.source).to_set
+      raise ArgumentError.new("BF16 oracle must contain exactly the 32 block-#{block_index} tensors")
     end
     entries.each do |entry|
       info = tensors[entry.binding.source]
       unless info.dtype.bf16? && info.shape == entry.binding.shape && info.n_elements == entry.info.n_elements
         raise ArgumentError.new("BF16 oracle source/shape/dtype mismatch: #{info.name}")
       end
+    end
+  end
+
+  def block_pin(index : Int32) : Serial::BlockPin
+    case index
+    when 0 then Serial::BLOCK0_PIN
+    when 1 then Serial::BLOCK1_PIN
+    else        raise ArgumentError.new("cache block index must be 0 or 1")
     end
   end
 
@@ -76,6 +87,45 @@ module HyNomasBF16CacheProbe
     end
   end
 
+  # Only for callers that already established successful terminal completion.
+  # Read shared resident bytes in bounded chunks; never dequantize on CPU.
+  def compare_weight_buffers!(plan : ML::Video::WeightPlan, weights : ML::Video::Arena,
+                              oracle : ML::Video::CheckpointFile) : Array(WeightComparison)
+    oracle.unchanged!
+    chunk = Bytes.new(64 * 1024)
+    results = [] of WeightComparison
+    File.open(oracle.path, "rb") do |io|
+      plan.entries.each do |entry|
+        info = oracle.tensors[entry.binding.source]
+        buffer = weights[entry.binding.target]
+        pointer = buffer.contents.as(UInt8*)
+        expected_hash = Digest::SHA256.new
+        actual_hash = Digest::SHA256.new
+        different = 0_i64
+        offset = 0_i64
+        io.seek(oracle.data_offset + info.data_start)
+        while offset < info.data_bytes
+          count = Math.min(chunk.size.to_i64, info.data_bytes - offset).to_i32
+          expected = chunk[0, count]
+          io.read_fully(expected)
+          actual = Bytes.new(pointer + offset, count)
+          expected_hash.update(expected)
+          actual_hash.update(actual)
+          (count // 2).times do |index|
+            byte = index * 2
+            different += 1 if expected[byte] != actual[byte] || expected[byte + 1] != actual[byte + 1]
+          end
+          offset += count
+        end
+        results << {name: entry.binding.source, words: info.n_elements,
+                    different_words: different, native_sha256: actual_hash.hexfinal,
+                    upstream_sha256: expected_hash.hexfinal}
+      end
+    end
+    oracle.unchanged!
+    results.sort_by(&.[:name])
+  end
+
   class RunOwner
     @@roots = [] of RunOwner
     @@root_mutex = Mutex.new
@@ -97,23 +147,31 @@ module HyNomasBF16CacheProbe
     getter cache_sha256 = ""
     getter released = false
     @rooted = false
+    @block_index : Int32
 
     def initialize(@reference : Serial::ReferenceFixture,
-                   @oracle : ML::Video::CheckpointFile, @budget : Int64)
+                   @oracle : ML::Video::CheckpointFile, @budget : Int64,
+                   @block_index : Int32 = 0)
       begin
         # No Metal allocation precedes the complete original/oracle admission.
-        @file = ML::Video::CheckpointFile.new(reference.block_path("block0"))
+        HyNomasBF16CacheProbe.block_pin(@block_index)
+        @file = ML::Video::CheckpointFile.new(reference.block_path("block#{@block_index}"))
         plan = plan_for(@file.not_nil!, conversion: true)
         validate_original!(plan)
         HyNomasBF16CacheProbe.admit!(plan, @budget)
-        HyNomasBF16CacheProbe.validate_oracle!(plan, @oracle)
+        HyNomasBF16CacheProbe.validate_oracle!(plan, @oracle, @block_index)
         oracle_plan = plan_for(@oracle, conversion: false)
         HyNomasBF16CacheProbe.admit!(oracle_plan, @budget)
         root!
         input = ML::Video::Arena.new
         @input = input
         Serial::INPUT_SHAPES.each_key do |name|
-          values = @reference.values(name)
+          source = if @block_index == 1 && {"input.img", "input.txt"}.includes?(name)
+                     "block0.#{name.lchop("input.")}.output"
+                   else
+                     name
+                   end
+          values = @reference.values(source)
           raise ArgumentError.new("non-finite saved input: #{name}") unless values.all?(&.finite?)
           input.upload(name, values)
         end
@@ -129,7 +187,7 @@ module HyNomasBF16CacheProbe
       release_phase!
       @file = ML::Video::BF16WeightCache.authenticate(cache_path, @cache_sha256)
       cache_plan = plan_for(@file.not_nil!, conversion: false)
-      HyNomasBF16CacheProbe.validate_oracle!(cache_plan, @oracle)
+      HyNomasBF16CacheProbe.validate_oracle!(cache_plan, @oracle, @block_index)
       raise "BF16 cache reload allocated conversion staging" unless cache_plan.staging_bytes == 0
       prepare_phase!(cache_plan)
       run_phase!("bf16_cache")
@@ -158,13 +216,13 @@ module HyNomasBF16CacheProbe
     private def plan_for(file : ML::Video::CheckpointFile, conversion : Bool) : ML::Video::WeightPlan
       ML::Video::HyNomasDualStreamBlock.weight_plan([file], Serial::CONFIG,
         Serial::NAMED_BUDGET_LIMIT_BYTES, resident_dtype: ML::Video::WeightDType::BF16,
-        block_index: 0, require_all: true, allow_f32_to_bf16: conversion)
+        block_index: @block_index, require_all: true, allow_f32_to_bf16: conversion)
     end
 
     private def validate_original!(plan : ML::Video::WeightPlan) : Nil
       unless plan.entries.size == 32 && plan.entries.all?(&.info.dtype.f32?) &&
              plan.destination_bytes == 302_113_792_i64 && plan.staging_bytes == 604_227_584_i64
-        raise ArgumentError.new("original block-0 source plan differs from the pinned F32 inventory")
+        raise ArgumentError.new("original block-#{@block_index} source plan differs from the pinned F32 inventory")
       end
     end
 
@@ -186,8 +244,8 @@ module HyNomasBF16CacheProbe
         raise "block checkpoint map differs from authenticated 40-capture inventory"
       end
       block.checkpoints.each do |name, buffer|
-        unless buffer.size == @reference.tensor_bytes("block0.#{name}") &&
-               @reference.tensor_shape("block0.#{name}") == Serial.expected_capture_shape(name)
+        unless buffer.size == @reference.tensor_bytes("block#{@block_index}.#{name}") &&
+               @reference.tensor_shape("block#{@block_index}.#{name}") == Serial.expected_capture_shape(name)
           raise "block checkpoint shape/extent differs from upstream: #{name}"
         end
       end
@@ -221,7 +279,7 @@ module HyNomasBF16CacheProbe
       results = [] of Comparison
       @block.not_nil!.checkpoints.each do |capture, buffer|
         values = buffer.read((buffer.size // 4).to_i32)
-        expected = @reference.values("block0.#{capture}")
+        expected = @reference.values("block#{@block_index}.#{capture}")
         comparison = HyNomasTextProbe.compare_values(values, expected)
         control = @control[capture]?
         control_differences = if control
@@ -249,7 +307,7 @@ module HyNomasBF16CacheProbe
       end
       if path = publish
         @cache_sha256 = ML::Video::BF16WeightCache.write_after_terminal!(path, plan,
-          @weights.not_nil!, chain, Serial::BLOCK0_PIN.file_sha256)
+          @weights.not_nil!, chain, HyNomasBF16CacheProbe.block_pin(@block_index).file_sha256)
       end
       raise "post-terminal cache serialization added a native wait" unless chain.wait_count == 1
       chain.release
@@ -262,39 +320,7 @@ module HyNomasBF16CacheProbe
     private def compare_weights!(chain : ML::Metal::MPSCommandChain,
                                  plan : ML::Video::WeightPlan) : Array(WeightComparison)
       raise "weight diagnostics require the completed request" unless chain.completed? && chain.wait_count == 1
-      @oracle.unchanged!
-      chunk = Bytes.new(64 * 1024)
-      results = [] of WeightComparison
-      File.open(@oracle.path, "rb") do |io|
-        plan.entries.each do |entry|
-          info = @oracle.tensors[entry.binding.source]
-          buffer = @weights.not_nil![entry.binding.target]
-          pointer = buffer.contents.as(UInt8*)
-          expected_hash = Digest::SHA256.new
-          actual_hash = Digest::SHA256.new
-          different = 0_i64
-          offset = 0_i64
-          io.seek(@oracle.data_offset + info.data_start)
-          while offset < info.data_bytes
-            count = Math.min(chunk.size.to_i64, info.data_bytes - offset).to_i32
-            expected = chunk[0, count]
-            io.read_fully(expected)
-            actual = Bytes.new(pointer + offset, count)
-            expected_hash.update(expected)
-            actual_hash.update(actual)
-            (count // 2).times do |index|
-              byte = index * 2
-              different += 1 if expected[byte] != actual[byte] || expected[byte + 1] != actual[byte + 1]
-            end
-            offset += count
-          end
-          results << {name: entry.binding.source, words: info.n_elements,
-                      different_words: different, native_sha256: actual_hash.hexfinal,
-                      upstream_sha256: expected_hash.hexfinal}
-        end
-      end
-      @oracle.unchanged!
-      results.sort_by(&.[:name])
+      HyNomasBF16CacheProbe.compare_weight_buffers!(plan, @weights.not_nil!, @oracle)
     end
 
     private def input(name : String) : ML::MetalBuffer
@@ -336,7 +362,8 @@ module HyNomasBF16CacheProbe
 
   def run(reference_path : String, reference_sha : String, conditioning_path : String,
           oracle_path : String, oracle_sha : String, cache_path : String,
-          report_path : String, budget : Int64) : Bool
+          report_path : String, budget : Int64, block_index : Int32 = 0) : Bool
+    pin = block_pin(block_index)
     {cache_path, report_path}.each do |path|
       raise ArgumentError.new("refusing to replace cache/report") if File.exists?(path) || File.symlink?(path)
       raise ArgumentError.new("cache/report parent does not exist") unless Dir.exists?(File.dirname(File.expand_path(path)))
@@ -351,7 +378,7 @@ module HyNomasBF16CacheProbe
     oracle = ML::Video::BF16WeightCache.authenticate(oracle_path, oracle_sha)
     owner = nil.as(RunOwner?)
     begin
-      owner = RunOwner.new(reference, oracle, budget)
+      owner = RunOwner.new(reference, oracle, budget, block_index)
       active = owner
       qualify_cache!(cache_path) do |staged|
         active.run!(staged)
@@ -361,13 +388,13 @@ module HyNomasBF16CacheProbe
       report = {
         schema: "cogni_ml.hy_nomas_bf16_cache_probe.v1", status: "pass",
         reference: {path: reference.path, sha256: reference.sha256,
-                    scope: "saved first-block upstream MPS captures; no fresh upstream block rerun"},
+                    scope: "saved block-#{block_index} upstream MPS captures; no fresh upstream block rerun"},
         oracle: {path: File.realpath(oracle_path), sha256: oracle_sha},
         cache: {path: File.realpath(cache_path), sha256: owner.cache_sha256,
                 file_bytes: File.size(cache_path), payload_bytes: 302_113_792_i64,
                 publication: "after source, reload and repeat gates and terminal owner cleanup"},
-        source: {path: reference.block_path("block0"), sha256: Serial::BLOCK0_PIN.file_sha256,
-                 manifest_sha256: Serial::BLOCK0_PIN.manifest_sha256,
+        source: {path: reference.block_path("block#{block_index}"), sha256: pin.file_sha256,
+                 block_index: block_index, manifest_sha256: pin.manifest_sha256,
                  upstream_revision: Serial::PINNED_UPSTREAM_REVISION},
         tolerance: {atol: Serial::ATOL, rtol: Serial::RTOL},
         geometry: {batches: 1, video_tokens: 6, text_tokens: 23, dim: 2048,
@@ -388,7 +415,7 @@ module HyNomasBF16CacheProbe
         temporary.close unless temporary.closed?
         File.delete(temporary.path) if File.exists?(temporary.path)
       end
-      puts "PASS: one-block BF16 cache exact weights and upstream intermediate gate"
+      puts "PASS: block #{block_index} BF16 cache exact weights and upstream intermediate gate"
       true
     ensure
       if active = owner

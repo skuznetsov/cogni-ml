@@ -41,6 +41,45 @@ class HyNomasBf16CacheReferenceTests(unittest.TestCase):
             sidecar_nbytes=cache_reference.SERIAL_SIDECAR_BYTES,
         )
 
+    def test_accepts_selected_block1_and_rejects_index_name_or_pin_confusion(self):
+        document = valid_serial_document()
+        cache_reference.validate_serial_reference_envelope(
+            document,
+            reference_sha256=cache_reference.SERIAL_REFERENCE_SHA256,
+            sidecar_sha256=cache_reference.SERIAL_SIDECAR_SHA256,
+            sidecar_nbytes=cache_reference.SERIAL_SIDECAR_BYTES,
+            block_index=1,
+        )
+
+        for field, wrong_value in (
+            ("block_index", 0),
+            ("tensor_prefix", "double_blocks.0."),
+            ("file_sha256", cache_reference.serial_reference.BLOCK_PINS["block0"]["file_sha256"]),
+            ("manifest_sha256", cache_reference.serial_reference.BLOCK_PINS["block0"]["manifest_sha256"]),
+        ):
+            with self.subTest(field=field):
+                confused = valid_serial_document()
+                confused["source"]["blocks"]["block1"][field] = wrong_value
+                with self.assertRaises(cache_reference.ReferenceError):
+                    cache_reference.validate_serial_reference_envelope(
+                        confused,
+                        reference_sha256=cache_reference.SERIAL_REFERENCE_SHA256,
+                        sidecar_sha256=cache_reference.SERIAL_SIDECAR_SHA256,
+                        sidecar_nbytes=cache_reference.SERIAL_SIDECAR_BYTES,
+                        block_index=1,
+                    )
+
+        for invalid_index in (True, -1, 2, "1"):
+            with self.subTest(block_index=invalid_index), self.assertRaises(
+                    cache_reference.ReferenceError):
+                cache_reference.validate_serial_reference_envelope(
+                    valid_serial_document(),
+                    reference_sha256=cache_reference.SERIAL_REFERENCE_SHA256,
+                    sidecar_sha256=cache_reference.SERIAL_SIDECAR_SHA256,
+                    sidecar_nbytes=cache_reference.SERIAL_SIDECAR_BYTES,
+                    block_index=invalid_index,
+                )
+
     def test_rejects_changed_reference_hash_and_inherited_precision(self):
         document = valid_serial_document()
         with self.assertRaisesRegex(cache_reference.ReferenceError, "reference SHA"):
@@ -129,6 +168,66 @@ class HyNomasBf16CacheReferenceTests(unittest.TestCase):
         )))
         self.assertEqual(shapes["double_blocks.0.img_mod.linear.weight"], [12288, 2048])
         self.assertEqual(shapes["double_blocks.0.img_mlp.fc2.weight"], [2048, 8192])
+
+    def test_block1_inventory_uses_distinct_authenticated_source_names(self):
+        shapes = cache_reference._block_tensor_shapes(1)
+        self.assertEqual(len(shapes), 32)
+        self.assertTrue(all(name.startswith("double_blocks.1.") for name in shapes))
+        self.assertEqual(shapes["double_blocks.1.img_mod.linear.weight"], [12288, 2048])
+        self.assertEqual(shapes["double_blocks.1.img_mlp.fc2.weight"], [2048, 8192])
+        self.assertEqual(set(cache_reference._block0_tensor_shapes()), {
+            name.replace("double_blocks.1.", "double_blocks.0.") for name in shapes
+        })
+
+        class WrongBlockSource:
+            def keys(self):
+                return cache_reference._block0_tensor_shapes()
+
+        with self.assertRaisesRegex(cache_reference.ReferenceError, "block1 source tensor inventory"):
+            cache_reference._validate_source_inventory(
+                WrongBlockSource(), shapes, block_index=1
+            )
+
+    def test_selected_capture_hashes_bind_to_requested_block(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("NumPy is unavailable")
+        document = valid_serial_document()
+        with tempfile.TemporaryDirectory() as temporary:
+            sidecar = Path(temporary) / "serial.tensors.f32le"
+            with sidecar.open("wb") as stream:
+                stream.truncate(cache_reference.SERIAL_SIDECAR_BYTES)
+            for index in (0, 1):
+                captures = cache_reference._capture_hashes(document, sidecar, index)
+                self.assertEqual(len(captures), 40)
+                self.assertTrue(all(name.startswith(f"block{index}.") for name in captures))
+                self.assertFalse(any(name.startswith(f"block{1-index}.") for name in captures))
+
+    def test_cli_keeps_block0_default_and_accepts_generic_block1_selection(self):
+        base = [
+            "--output", "cache.safetensors",
+            "--report", "cache.json",
+            "--reference-sha256", cache_reference.SERIAL_REFERENCE_SHA256,
+        ]
+        legacy = cache_reference._fixture_parser().parse_args(base + [
+            "--block0-weights-sha256", cache_reference.serial_reference.BLOCK_PINS["block0"]["file_sha256"],
+            "--block0-manifest-sha256", cache_reference.serial_reference.BLOCK_PINS["block0"]["manifest_sha256"],
+        ])
+        self.assertEqual(legacy.block_index, 0)
+        self.assertIsNone(legacy.block_weights)
+        selected = cache_reference._fixture_parser().parse_args(base + [
+            "--block-index", "1",
+            "--block-weights-sha256", cache_reference.serial_reference.BLOCK_PINS["block1"]["file_sha256"],
+            "--block-manifest-sha256", cache_reference.serial_reference.BLOCK_PINS["block1"]["manifest_sha256"],
+        ])
+        self.assertEqual(selected.block_index, 1)
+        with self.assertRaises(SystemExit):
+            cache_reference._fixture_parser().parse_args(base + [
+                "--block-index", "2",
+                "--block-weights-sha256", "0" * 64,
+                "--block-manifest-sha256", "0" * 64,
+            ])
 
     def test_publication_refuses_existing_or_symlink_destinations(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -9,6 +9,7 @@ oracle_sha = ""
 cache = ""
 report = ""
 budget = 0_i64
+block_index = 0
 OptionParser.parse do |parser|
   parser.banner = "One pretrained Hy-Nomas block: GPU BF16 cache setup/reload and upstream parity; no generation."
   parser.on("--reference PATH", "Authenticated saved upstream intermediate reference") { |v| reference = v }
@@ -19,8 +20,9 @@ OptionParser.parse do |parser|
   parser.on("--cache PATH", "Fresh native GPU-produced BF16 safetensors derivative") { |v| cache = v }
   parser.on("--report PATH", "Fresh qualification report") { |v| report = v }
   parser.on("--max-named-bytes N", "Aggregate named-buffer allowance, external guard required") { |v| budget = v.to_i64 }
+  parser.on("--block-index N", "Exact pretrained block index: 0 (default) or 1") { |v| block_index = v.to_i }
 end
 unless ARGV.empty? && {reference, reference_sha, conditioning, oracle, oracle_sha, cache, report}.all? { |v| !v.empty? } && budget > 0
   raise ArgumentError.new("reference/digest, conditioning, oracle/digest, fresh cache/report and positive budget required")
 end
-exit(HyNomasBF16CacheProbe.run(reference, reference_sha, conditioning, oracle, oracle_sha, cache, report, budget) ? 0 : 1)
+exit(HyNomasBF16CacheProbe.run(reference, reference_sha, conditioning, oracle, oracle_sha, cache, report, budget, block_index) ? 0 : 1)

@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-BF16-SERIAL-2026-10-25] Two actual blocks consume BF16 caches with exact shared-workspace replay
+
+- Scope: saved B1/V6/T23/C2048/H16/D128/FF8192 inputs, actual blocks 0 to 1,
+  physical BF16 parameters and F32 MPS math/attention. All 64 tensors and
+  302,113,792 BF16 words match independent MPS conversions. Control, shared
+  replay and repeat each match all 80 authenticated saved upstream captures
+  (3,186,688 F32 values) raw exact at unchanged finite `atol=rtol=2e-5`.
+  Block 1 has a fresh GPU conversion oracle; block 0 retains its authenticated
+  prior conversion. No neural upstream block was freshly rerun.
+- The optional BF16-source path removes 1,208,455,168 bytes of cold F32 staging
+  and 64 source conversion dispatches. Control named bytes are 824,303,872
+  versus 2,032,759,040 for original F32 sources; shared named bytes remain
+  727,380,096 including snapshots. No speed or physical-peak reduction claim.
+- GPU outputs feed the successor directly; scratch/workspace is reused, with
+  GPU snapshots before overwrite and NaN poisoning before each shared request.
+  Zero tracked encode allocations/preterminal activation reads, one wait and
+  80 postterminal diagnostic reads per request. Rooted owners retain plans and
+  resources through completion; all weight bytes are compared before release.
+- Eighteen Crystal examples and eleven Python checks pass. Six CLI controls
+  reject bad identity/digest, self-oracle, insufficient budget or clobber before
+  Metal. Wrong-successor control keeps block 0 exact and fails both block-1
+  outputs. Original F32-source replay passes. Independent streamed-byte audit
+  binds cache/oracle tensors and producer/source/manifest/reference versions.
+  Correlated MiniQuad verdict: ROBUST within this scope.
+- Native sampled peak 931,726,704 bytes; minimum cache-aware headroom
+  37,414,289,408 bytes; observed swap growth zero. Preserve 10% reserve,
+  4 GiB probe/oracle caps, 3 GiB small-check cap, 64 MiB swap-growth stop and
+  600 s deadline. Samples do not bound instantaneous peaks. Oracle pins are
+  caller-trusted; receipt provenance assumes immutable local files. Companion
+  object bytes are pinned with opaque source ancestry; build is not hermetic.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-bf16-serial.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-serial-20261025/logs/serial-receipt-v1.json`.
+  Next falsifier: bounded full-J positional/output parity without all snapshots,
+  then cache coverage beyond two blocks. Full-stack fit/generation remain open.
+  Rollback: omit BF16 sources and retain the original F32 loader. Refresh on
+  scoped source/checkpoint/fixture, precision/geometry, loader/lifetime,
+  toolchain/OS/device or artifact changes; reread memory before later probes.
+
 ### [LM-HY-NOMAS-BF16-CACHE-2026-10-25] One GPU-produced block cache removes F32 staging with exact bounded replay
 
 - Scope: actual pretrained block 0, B1/V6/T23/C2048/H16/D128/FF8192, native
@@ -36,8 +75,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence: `docs/hy-nomas-native-frontier.md`,
   `.landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json`.
-  Next falsifier: BF16 sources in the actual two-block replay, then positional/
-  output coverage without all full-J snapshots. Keep immutable authenticated
+  Its two-block successor is qualified above; positional/output coverage
+  without all full-J snapshots remains open. Keep immutable authenticated
   local files and opt-in loading; no full checkpoint or generation is admitted.
   Rollback: omit this diagnostic and retain the F32-source loader. Refresh on
   scoped source, checkpoint/fixture, geometry/precision, toolchain/device,

@@ -40,7 +40,7 @@ WAN_BENCHMARK_SOURCES := $(wildcard src/ml/video/*.cr src/ml/metal/*.cr src/ml/g
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec_video_staging spec_wan spec_hy_nomas spec_hy_nomas_residency spec_hy_nomas_bf16_cache spec_qwen25 hy_nomas_block_benchmark hy_nomas_serial_benchmark hy_nomas_pretrained_serial_probe hy_nomas_bf16_cache_probe hy_nomas_residency_plan spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec_video_staging spec_wan spec_hy_nomas spec_hy_nomas_residency spec_hy_nomas_bf16_cache spec_qwen25 hy_nomas_block_benchmark hy_nomas_serial_benchmark hy_nomas_pretrained_serial_probe hy_nomas_bf16_cache_probe hy_nomas_bf16_serial_probe hy_nomas_residency_plan spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -128,8 +128,14 @@ $(BUILD_DIR)/hy_nomas_bf16_cache_probe: examples/hy_nomas_bf16_cache_probe.cr $(
 
 hy_nomas_bf16_cache_probe: $(BUILD_DIR)/hy_nomas_bf16_cache_probe
 
+$(BUILD_DIR)/hy_nomas_bf16_serial_probe: examples/hy_nomas_bf16_serial_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+hy_nomas_bf16_serial_probe: $(BUILD_DIR)/hy_nomas_bf16_serial_probe
+
 spec_hy_nomas_bf16_cache: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr \
+	$(CRYSTAL) spec spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr spec/hy_nomas_bf16_serial_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 # These targets inspect metadata only; no bridge link or Metal device is needed.
@@ -156,7 +162,7 @@ spec_hy_nomas: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_M
 		spec/hy_nomas_pretrained_serial_admission_spec.cr \
 		spec/hy_nomas_pretrained_serial_probe_spec.cr \
 		spec/hy_nomas_residency_plan_spec.cr \
-		spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr \
+		spec/video_bf16_weight_cache_spec.cr spec/hy_nomas_bf16_cache_admission_spec.cr spec/hy_nomas_bf16_serial_admission_spec.cr \
 		spec/hy_nomas_pointwise_probe_spec.cr spec/hy_nomas_compact_attention_spec.cr \
 		spec/hy_nomas_compact_attention_oracle_spec.cr \
 		spec/hy_nomas_mps_shared_modulation_spec.cr spec/hy_nomas_text_probe_spec.cr \
