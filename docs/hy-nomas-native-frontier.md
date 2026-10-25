@@ -13,10 +13,107 @@ models serial block residency; full-stack peaks and N-block execution remain
 unqualified. GPU-produced BF16 source caches for blocks 0 and 1 now pass exact
 weight and short-input serial upstream gates without F32 raw staging. They
 preserve the independent-workspace control, shared scratch and repeated replay.
-Full-stack composition, full-J upstream output, CUDA/Magi parity, model-wide
-performance and the video pipeline remain open.
+A fresh same-input full-J replay now qualifies upstream ND RoPE application
+and eight selected outputs of actual blocks 0 to 1. Full-stack composition,
+CUDA/Magi parity, model-wide performance and the video pipeline remain open.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: full-J RoPE and two-block output gate
+
+Status: VERIFIED within the same-input two-block scope, 2026-10-25. Actual
+pretrained blocks 0 to 1 pass B1/V5280/T1280/C2048/H16/D128/FF8192 (J6560), using
+upstream ND RoPE with theta 256, axes [16,56,56] and grid [6,22,40]. This is a
+block probe with deterministic synthetic GPU hidden inputs. Parameters remain
+physically BF16 in the native owner and BF16-rounded F32 in upstream; neural
+math and attention remain F32. No production arithmetic or default changes.
+
+DoD: a fresh pinned-source upstream MPS run and the native connected graph must
+agree at finite `atol=rtol=2e-5` for Q/K after video RoPE and image/text outputs
+of both blocks. Retain only these eight checkpoints, not all eighty. Block-0
+outputs feed block 1 on GPU, scratch/workspace are shared, and all diagnostic
+copies precede overwrite in the same command chain. A poisoned repeated native
+request must reproduce the first request exactly, with zero tracked encode
+allocations/preterminal activation reads and one terminal wait per request.
+Wrong RoPE and wrong-successor controls must be detected. Authenticate exact
+cache identities, reference inventory/digests and aggregate named-byte budget
+before Metal; reject an insufficient budget and malformed fixtures.
+
+Risk: CAUTION (larger geometry, positional ordering and shared GPU lifetime).
+Rollback: omit the new opt-in probe; retain the qualified short replay. Root
+owners before allocation and retain them if terminal completion is unknown.
+Use the cache-aware 10% reserve, 64 MiB swap-growth stop and 600 s deadline.
+Set bounded process caps from named buffers, retained selected tensors and MPS
+headroom before a run; the external guard covers opaque allocations by sampling.
+No full generation, full checkpoint download, speed or physical-peak claim.
+
+DoD commands: build/run the new `hy_nomas_full_j_probe` under the memory guard;
+run its focused native admission tests and Python oracle inventory tests.
+Expected signal: eight upstream comparisons and eight exact repeat checks pass;
+negative controls reject the tested faults without widening either tolerance.
+Refresh on scoped source/cache/fixture, geometry/precision, lifetime, toolchain,
+OS or device changes.
+
+Observed: a fresh pinned-source upstream run and both native requests agree
+on all eight selected captures, 70,123,520 F32 values per request, with zero
+raw-bit differences, tolerance failures and maximum absolute error. Repeating
+after NaN poisoning all 56 unique nonconstant reusable scratch buffers remains
+exact. The fixture holds six inputs and eight captures (339,656,704 bytes),
+instead of retaining all eighty intermediate tensors. Only four Q/K buffers
+need extra GPU snapshots (173,015,040 bytes); the four output banks are already
+distinct and are read only after completion. Block-0 outputs feed
+block 1 directly on GPU through the existing shared scratch/MPS workspace.
+
+Each request has zero tracked encode-time MetalBuffer allocations and
+preterminal activation reads, four diagnostic GPU copy dispatches, one terminal
+wait and eight postterminal reads. The owner is rooted before its first Metal
+allocation and retained through completion; failed or incomplete drains retain
+resources. Native BF16 caches have zero F32 source staging/conversion dispatches.
+Named buffers total 3,017,087,488 bytes, including BF16 weights 604,227,584,
+scratch 1,860,026,880, MPS workspace 320,655,360, inputs 59,162,624 and the four
+RoPE snapshots. These are named-byte counts, not physical memory measurements.
+
+The identity-RoPE negative produces finite Q/K and output failures. Substituting
+block 0 for the successor preserves all block-0 captures exactly but causes
+10,808,815 image and 2,621,402 text output tolerance failures in block 1. Negative
+modes report no repeat claim. Nine focused Crystal examples and eight Python
+checks pass. Seven CLI controls reject a short budget, swapped cache identities,
+widened tolerance, bad sidecar digest, truncated sidecar, bad reference digest
+or existing report before Metal initialization. A separate streamed hash/count
+audit binds each selected native SHA to its exact fixture span on both requests,
+all nine pinned upstream source files, the producer and both qualified caches.
+This audit is not another neural implementation.
+
+The positive native run samples a 3,400,582,968-byte process peak, minimum
+cache-aware headroom 34,521,726,976 bytes and pressure-free minimum 90%. The fresh
+upstream run samples 5,158,063,152 bytes, minimum headroom 30,819,106,816 bytes
+and pressure-free minimum 88%. All bounded runs retain the 10% reserve,
+6 GiB native/8 GiB upstream caps (3 GiB small checks), 64 MiB swap-growth stop
+and 600 s deadline, with zero observed swap growth and no guard abort. Sampling
+does not bound instantaneous peaks or establish a causal memory improvement.
+
+An initial native run completed comparisons but could not publish its report:
+Crystal rejects mode `wx`. That run is excluded. Report publication now closes
+a sibling private tempfile before an atomic no-replace hard link; the focused
+test covers complete contents, refusal to overwrite and temporary-name cleanup.
+
+Correlated MiniQuad verdict: ROBUST for this scope. The upstream block class is
+pinned and unchanged, with chunked PyTorch MPS F32 SDPA as the labeled attention
+surrogate. The oracle generates ND RoPE on MPS; native consumes the saved table
+and qualifies its application, not a new native ND table generator. Setup file
+I/O/uploads and postterminal streamed diagnostics use CPU. Neural execution and
+block handoff stay on GPU, with no added inference synchronization. Caller-pinned
+fixture SHA remains a trust boundary; receipt provenance is not hostile-producer
+authentication, and local files must remain immutable during use. Companion
+objects retain pinned bytes with opaque source ancestry; the build is not
+hermetic. No full conditioning, full model, CUDA/Magi/BF16-activation, speed,
+video generation or quality claim follows.
+
+Exact guarded arguments, source/artifact pins and excluded attempts are in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-full-j-20261025/logs/full-j-receipt-v1.json`;
+the curated index is `.landmark/evidence/2026-10-25-hy-nomas-full-j.json`.
+Next: extend authenticated BF16 cache coverage beyond the two local blocks and
+qualify bounded N-block execution before full conditioning or generation.
 
 ## Qualified slice: two-block BF16 source-cache replay
 
@@ -103,9 +200,9 @@ caller-trusted; the external receipt supplies provenance, not hostile-producer
 authentication. Local files must remain immutable during use. Companion object
 bytes are pinned but their source ancestry remains opaque; the build is not
 hermetic. Refresh on scoped source, checkpoint/fixture, precision/geometry,
-loader/lifetime, compiler/SDK/OS/device or artifact changes. Next: bounded
-full-J positional/output coverage without retaining every intermediate snapshot,
-then cache coverage beyond these two blocks. Full-stack composition remains open.
+loader/lifetime, compiler/SDK/OS/device or artifact changes. The full-J positional/
+output extension is qualified above; next is cache coverage beyond these two
+blocks. Full-stack composition remains open.
 
 ## Qualified slice: single-block GPU-produced BF16 source cache
 
@@ -186,8 +283,8 @@ MiniQuad verdict is ROBUST within this scope. Evidence:
 Refresh on source/checkpoint, fixture, precision, geometry, toolchain/device,
 loader/lifetime or artifact changes. Treat local source/cache files as immutable
 while authenticated consumers run. The two-block BF16-source gate is now
-qualified above; positional/output coverage without retaining every full-J
-snapshot remains open. No full-stack cache, fit, performance or generation claim.
+qualified above, including the later selected-capture full-J positional/output
+gate. No full-stack cache, fit, performance or generation claim.
 
 ## Qualified slice: full-DiT metadata residency accounting
 
@@ -1847,16 +1944,18 @@ The authenticated DiT parameter/block-workspace plan is now recorded at the
 top; complete pipeline residency remains open. BF16 source caches now remove
 cold F32 staging in the actual two-block saved-input replay: all 64 weight
 tensors and 80 captures per request are raw exact with one terminal wait.
-Next: extend its positional/output gate without retaining every full-J snapshot,
-then qualify cache coverage beyond the two local blocks.
+The selected-capture J6560 positional/output extension is now qualified at the
+top of this document. Next: qualify cache coverage beyond the two local blocks.
 The 64 tensors from blocks 0/1 plus 42 refiner/time tensors are local; full-model weights are
 not downloaded. Retain the independent plans and single-block path as controls.
-Real ND RoPE at J6560 and full-J upstream outputs remain qualification gaps
-before pipeline quality claims. Exact CUDA/Magi output dtype and BF16 activation
-semantics are also unresolved.
+Real upstream ND RoPE application and the selected full-J outputs now pass the
+bounded synthetic-input gate. Full conditioning, stack composition, exact
+CUDA/Magi output dtype and BF16 activation semantics remain unresolved before
+pipeline quality claims.
 Standing authority remains bounded GPU probes. The new connected conditioning
 slice explicitly uses a cache-aware 10% floor and sampled 15 GiB process cap;
-the saved-input two-block oracle/probe uses 4 GiB; small controls use 3 GiB.
+the short saved-input two-block oracle/probe uses 4 GiB, and full-J upstream/
+native probes use 8/6 GiB; small controls use 3 GiB.
 All retain the 64 MiB swap-growth stop and 600 s deadline.
 Earlier block-profile limits remain historical.
 Full generation is outside this slice. Refresh evidence after source,

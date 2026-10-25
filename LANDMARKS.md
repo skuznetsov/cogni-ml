@@ -6,6 +6,47 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-FULL-J-2026-10-25] Actual two-block RoPE and selected outputs match fresh upstream at J6560
+
+- Scope: actual pretrained blocks 0 to 1, B1/V5280/T1280/C2048/H16/D128/FF8192,
+  synthetic GPU hidden inputs, physical native BF16 parameters/F32 MPS math.
+  Fresh pinned upstream uses BF16-rounded F32 parameters and chunked F32 MPS
+  SDPA. Upstream ND RoPE has grid [6,22,40], axes [16,56,56], theta 256; native
+  application of those uploaded tables passes. All eight selected captures
+  (Q/K after RoPE and image/text outputs per block), 70,123,520 F32 values per
+  request, match upstream raw exact on two requests at unchanged finite
+  `atol=rtol=2e-5`. NaN poisoning 56 reused scratch buffers preserves repeat.
+- Direct GPU block handoff shares scratch/MPS workspace. Four Q/K snapshots
+  precede overwrite in the same chain (173,015,040 additional bytes); output
+  banks are already distinct. No all-eighty capture inventory: the fixture is
+  six inputs plus eight captures. Named buffers total 3,017,087,488 bytes.
+  Each request has zero tracked encode allocations/preterminal activation
+  reads, one terminal wait and eight postterminal reads. Owners are rooted
+  before allocation and retained until completion; incomplete drains retain
+  resources. BF16 caches have zero source F32 staging/conversion dispatches.
+- Identity RoPE and wrong-successor controls expose finite failures; the latter
+  keeps block 0 exact. Nine Crystal examples, eight Python checks, seven live
+  pre-Metal CLI rejections and a separately written streamed hash/count audit
+  pass. Initial `wx` report publication is rejected and excluded; the corrected
+  sibling-tempfile/no-replace hard-link publication is tested. Correlated
+  MiniQuad verdict: ROBUST for this scope.
+- Positive native sampled peak: 3,400,582,968 bytes; minimum cache-aware headroom
+  34,521,726,976 bytes. Fresh upstream peak: 5,158,063,152 bytes. Preserve 10%
+  reserve, 6/8 GiB native/upstream caps (3 GiB small checks), 64 MiB swap-growth
+  stop and 600 s deadline. No observed swap growth or guard abort. Sampling
+  does not bound instantaneous peaks or establish a physical memory saving.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-full-j.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-j-20261025/logs/full-j-receipt-v1.json`.
+  Operator-pinned fixture/local immutable files remain trust assumptions;
+  companion object ancestry is opaque. Setup I/O and postterminal diagnostics
+  use CPU. No full conditioning/model, CUDA/Magi/BF16 activation, performance,
+  generation or quality claim. Next falsifier: authenticated BF16 cache
+  coverage beyond two blocks and bounded N-block execution. Rollback: omit
+  the opt-in full-J probe. Refresh on scoped source/cache/fixture, precision/
+  geometry, loader/lifetime, toolchain/OS/device or artifact changes; reread
+  live memory before any later GPU run.
+
 ### [LM-HY-NOMAS-BF16-SERIAL-2026-10-25] Two actual blocks consume BF16 caches with exact shared-workspace replay
 
 - Scope: saved B1/V6/T23/C2048/H16/D128/FF8192 inputs, actual blocks 0 to 1,
@@ -39,8 +80,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence: `docs/hy-nomas-native-frontier.md`,
   `.landmark/evidence/2026-10-25-hy-nomas-bf16-serial.json`, and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-serial-20261025/logs/serial-receipt-v1.json`.
-  Next falsifier: bounded full-J positional/output parity without all snapshots,
-  then cache coverage beyond two blocks. Full-stack fit/generation remain open.
+  Its selected-capture full-J extension is qualified above. Next falsifier:
+  cache coverage beyond two blocks. Full-stack fit/generation remain open.
   Rollback: omit BF16 sources and retain the original F32 loader. Refresh on
   scoped source/checkpoint/fixture, precision/geometry, loader/lifetime,
   toolchain/OS/device or artifact changes; reread memory before later probes.
@@ -75,8 +116,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence: `docs/hy-nomas-native-frontier.md`,
   `.landmark/evidence/2026-10-25-hy-nomas-bf16-cache.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-cache-20261025/logs/cache-receipt-v2.json`.
-  Its two-block successor is qualified above; positional/output coverage
-  without all full-J snapshots remains open. Keep immutable authenticated
+  Its two-block and selected-capture full-J successors are qualified above.
+  Keep immutable authenticated
   local files and opt-in loading; no full checkpoint or generation is admitted.
   Rollback: omit this diagnostic and retain the F32-source loader. Refresh on
   scoped source, checkpoint/fixture, geometry/precision, toolchain/device,
