@@ -1447,6 +1447,326 @@ static NSArray<GsQwen25MPSGraphStep *> *gs_qwen25_precise_rms_steps(
   return [steps copy];
 }
 
+static GsQwen25MPSGraphStep *gs_qwen25_rms_power_fed_statistics_step(
+    id<MTLDevice> device, id<MTLBuffer> inputBf16Buffer,
+    id<MTLBuffer> exponentF32Buffer, id<MTLBuffer> plusEpsilonBuffer,
+    uint32_t batches, uint32_t tokens, uint32_t dim, float epsilon,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder =
+      gs_qwen25_new_builder(errorText, errorCapacity);
+  if (!builder || !builder.graph)
+    return nil;
+
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *exponentShape = @[@1];
+  NSArray<NSNumber *> *scalarShape = @[@(batches), @(tokens), @1];
+  MPSGraphTensor *inputBf16 = gs_qwen25_builder_add_bf16(
+      builder, inputBf16Buffer, hiddenShape,
+      [name stringByAppendingString:@"_input_bf16"]);
+  MPSGraphTensor *inputF32 = inputBf16
+      ? [builder.graph castTensor:inputBf16
+                          toType:MPSDataTypeFloat32
+                            name:[name stringByAppendingString:@"_input_f32"]]
+      : nil;
+  MPSGraphTensor *exponentF32 = gs_qwen25_builder_add_f32(
+      builder, exponentF32Buffer, exponentShape,
+      [name stringByAppendingString:@"_exponent_f32"]);
+  if (!inputBf16 || !inputF32 || !exponentF32) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "unable to bind connected RMS power feeds");
+    return nil;
+  }
+
+  MPSGraphTensor *powerF32 = [builder.graph
+      powerWithPrimaryTensor:inputF32 secondaryTensor:exponentF32
+                        name:[name stringByAppendingString:@"_power_f32"]];
+  MPSGraphTensor *meanF32 = powerF32
+      ? [builder.graph meanOfTensor:powerF32 axes:@[@2]
+                               name:[name stringByAppendingString:@"_mean_f32"]]
+      : nil;
+  MPSGraphTensor *epsilonF32 = [builder.graph
+      constantWithScalar:epsilon shape:exponentShape
+                dataType:MPSDataTypeFloat32];
+  MPSGraphTensor *plusEpsilonRowsF32 = meanF32
+      ? [builder.graph additionWithPrimaryTensor:meanF32
+                                secondaryTensor:epsilonF32
+                                             name:[name stringByAppendingString:@"_plus_epsilon_rows_f32"]]
+      : nil;
+  MPSGraphTensor *plusEpsilonF32 = plusEpsilonRowsF32
+      ? [builder.graph reshapeTensor:plusEpsilonRowsF32
+                           withShape:scalarShape
+                                name:[name stringByAppendingString:@"_plus_epsilon_f32"]]
+      : nil;
+  if (!powerF32 || !meanF32 || !epsilonF32 || !plusEpsilonRowsF32 ||
+      !plusEpsilonF32) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "unable to build connected RMS power statistics graph");
+    return nil;
+  }
+  return gs_qwen25_builder_compile(
+      builder, device, @[plusEpsilonF32], @[plusEpsilonBuffer], @[scalarShape],
+      name, errorText, errorCapacity);
+}
+
+static GsQwen25MPSGraphStep *gs_qwen25_rms_gain_step(
+    id<MTLDevice> device, id<MTLBuffer> normalizedBf16Buffer,
+    id<MTLBuffer> gainBf16Buffer, id<MTLBuffer> gainedBf16Buffer,
+    uint32_t batches, uint32_t tokens, uint32_t dim, NSString *name,
+    char *errorText, size_t errorCapacity) {
+  GsQwen25MPSGraphBuilder *builder =
+      gs_qwen25_new_builder(errorText, errorCapacity);
+  if (!builder || !builder.graph)
+    return nil;
+  NSArray<NSNumber *> *hiddenShape = @[@(batches), @(tokens), @(dim)];
+  NSArray<NSNumber *> *gainShape = @[@(dim)];
+  MPSGraphTensor *normalizedBf16 = gs_qwen25_builder_add_bf16(
+      builder, normalizedBf16Buffer, hiddenShape,
+      [name stringByAppendingString:@"_normalized_bf16"]);
+  MPSGraphTensor *gainBf16 = gs_qwen25_builder_add_bf16(
+      builder, gainBf16Buffer, gainShape,
+      [name stringByAppendingString:@"_gain_bf16"]);
+  MPSGraphTensor *gainedBf16 = gs_qwen25_apply_rms_weight(
+      builder.graph, normalizedBf16, gainBf16,
+      [name stringByAppendingString:@"_apply_gain"]);
+  if (!normalizedBf16 || !gainBf16 || !gainedBf16) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "unable to build connected RMS gain graph");
+    return nil;
+  }
+  return gs_qwen25_builder_compile(
+      builder, device, @[gainedBf16], @[gainedBf16Buffer], @[hiddenShape], name,
+      errorText, errorCapacity);
+}
+
+// Connected diagnostic. Outputs are ordered as:
+// A: production-statistics plus-epsilon, inverse-root, normalized F32,
+//    normalized BF16, gained BF16;
+// B: F32-buffer-fed power-statistics plus-epsilon, inverse-root, normalized
+//    F32, normalized BF16, gained BF16;
+// C: F32-buffer-fed power-statistics scratch reused in place for inverse-root,
+//    normalized BF16, gained BF16.
+// All three arms consume the same saved BF16 residual and gain buffer. The
+// runner owns the single terminal wait and post-wait comparisons.
+extern "C" void *gs_qwen25_mps_connected_rms_probe_create(
+    void *deviceHandle, int32_t batches, int32_t tokens, int32_t dim,
+    float epsilon, void *inputHandle, void *gainHandle,
+    void *exponentF32Handle, void *const *outputHandles, char *errorText,
+    size_t errorCapacity) {
+  if (errorText && errorCapacity > 0)
+    errorText[0] = '\0';
+  if (!deviceHandle || !inputHandle || !gainHandle || !exponentF32Handle ||
+      !outputHandles || batches <= 0 || tokens <= 0 || dim <= 0 ||
+      !std::isfinite(epsilon) || epsilon <= 0.0f) {
+    gs_qwen25_set_error(errorText, errorCapacity,
+                        "invalid connected RMS probe dimensions or handles");
+    return nullptr;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      @try {
+        id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
+        id<MTLBuffer> input = (__bridge id<MTLBuffer>)inputHandle;
+        id<MTLBuffer> gain = (__bridge id<MTLBuffer>)gainHandle;
+        id<MTLBuffer> exponentF32 = (__bridge id<MTLBuffer>)exponentF32Handle;
+        const uint64_t hiddenDims[] = {(uint64_t)batches, (uint64_t)tokens,
+                                       (uint64_t)dim};
+        const uint64_t rowDims[] = {(uint64_t)batches, (uint64_t)tokens};
+        uint64_t hiddenElements = 0;
+        uint64_t rowElements = 0;
+        if (!gs_qwen25_product(hiddenDims, 3, &hiddenElements) ||
+            !gs_qwen25_product(rowDims, 2, &rowElements) ||
+            hiddenElements > UINT32_MAX || rowElements > UINT32_MAX ||
+            hiddenElements > UINT64_MAX / 4 || rowElements > UINT64_MAX / 4 ||
+            (uint64_t)dim > UINT64_MAX / 2) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "connected RMS probe geometry exceeds native bounds");
+          return nullptr;
+        }
+
+        const uint64_t inputBytes = hiddenElements * 2;
+        const uint64_t gainBytes = (uint64_t)dim * 2;
+        const uint64_t exponentBytes = sizeof(float);
+        const uint64_t hiddenF32Bytes = hiddenElements * 4;
+        const uint64_t hiddenBf16Bytes = hiddenElements * 2;
+        const uint64_t rowF32Bytes = rowElements * 4;
+        const uint64_t outputBytes[] = {
+            rowF32Bytes, rowF32Bytes, hiddenF32Bytes, hiddenBf16Bytes,
+            hiddenBf16Bytes, rowF32Bytes, rowF32Bytes, hiddenF32Bytes,
+            hiddenBf16Bytes, hiddenBf16Bytes, rowF32Bytes, hiddenBf16Bytes,
+            hiddenBf16Bytes};
+        uint64_t namedBytes = inputBytes + gainBytes + exponentBytes;
+        for (NSUInteger index = 0; index < 13; ++index) {
+          if (outputBytes[index] > UINT64_MAX - namedBytes) {
+            gs_qwen25_set_error(errorText, errorCapacity,
+                                "connected RMS probe named-buffer size overflow");
+            return nullptr;
+          }
+          namedBytes += outputBytes[index];
+        }
+        if (namedBytes > 256ULL * 1024ULL * 1024ULL) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "connected RMS probe exceeds 256 MiB named-buffer cap");
+          return nullptr;
+        }
+
+        if (input.device != device || !input.contents ||
+            input.storageMode != MTLStorageModeShared ||
+            input.length != inputBytes || gain.device != device ||
+            !gain.contents || gain.storageMode != MTLStorageModeShared ||
+            gain.length != gainBytes || exponentF32.device != device ||
+            !exponentF32.contents ||
+            exponentF32.storageMode != MTLStorageModeShared ||
+            exponentF32.length != exponentBytes ||
+            !gs_qwen25_disjoint(input, gain) ||
+            !gs_qwen25_disjoint(input, exponentF32) ||
+            !gs_qwen25_disjoint(gain, exponentF32)) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "invalid connected RMS probe input binding");
+          return nullptr;
+        }
+        uint32_t exponentBits = 0;
+        memcpy(&exponentBits, exponentF32.contents, sizeof(exponentBits));
+        if (exponentBits != 0x40000000U) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "connected RMS power exponent must be F32 2.0");
+          return nullptr;
+        }
+
+        NSMutableArray<id<MTLBuffer>> *outputs =
+            [NSMutableArray arrayWithCapacity:13];
+        NSMutableArray<id<MTLBuffer>> *allBuffers =
+            [NSMutableArray arrayWithObjects:input, gain, exponentF32, nil];
+        for (NSUInteger index = 0; index < 13; ++index) {
+          id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandles[index];
+          if (!output || output.device != device || !output.contents ||
+              output.storageMode != MTLStorageModeShared ||
+              output.length != outputBytes[index]) {
+            gs_qwen25_set_error(errorText, errorCapacity,
+                                "invalid connected RMS probe output binding");
+            return nullptr;
+          }
+          for (id<MTLBuffer> other in allBuffers) {
+            if (!gs_qwen25_disjoint(output, other)) {
+              gs_qwen25_set_error(errorText, errorCapacity,
+                                  "connected RMS probe buffers must be disjoint");
+              return nullptr;
+            }
+          }
+          [outputs addObject:output];
+          [allBuffers addObject:output];
+        }
+
+        const uint32_t rows = (uint32_t)rowElements;
+        NSMutableArray<GsQwen25MPSGraphStep *> *steps =
+            [NSMutableArray arrayWithCapacity:12];
+        NSArray<id<MTLComputePipelineState>> *tracePipelines =
+            gs_qwen25_precise_rms_pipelines(device, true, errorText,
+                                            errorCapacity);
+        NSArray<id<MTLComputePipelineState>> *productionPipelines =
+            gs_qwen25_precise_rms_pipelines(device, false, errorText,
+                                            errorCapacity);
+        if (!tracePipelines || !productionPipelines)
+          return nullptr;
+
+        GsQwen25MPSGraphStep *legacyStatisticsStep =
+            gs_qwen25_rms_statistics_step(
+                device, input, outputs[0], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"connected_rms_legacy_statistics", errorText, errorCapacity);
+        if (!legacyStatisticsStep)
+          return nullptr;
+        [steps addObject:legacyStatisticsStep];
+        NSArray<GsQwen25MPSGraphStep *> *legacyTraceSteps =
+            gs_qwen25_precise_rms_steps(
+                tracePipelines, input, outputs[0], outputs[1], outputs[3],
+                outputs[2], rows, (uint32_t)dim);
+        if (legacyTraceSteps.count != 2)
+          return nullptr;
+        [steps addObjectsFromArray:legacyTraceSteps];
+        GsQwen25MPSGraphStep *legacyGainStep = gs_qwen25_rms_gain_step(
+            device, outputs[3], gain, outputs[4], (uint32_t)batches,
+            (uint32_t)tokens, (uint32_t)dim, @"connected_rms_legacy_gain",
+            errorText, errorCapacity);
+        if (!legacyGainStep)
+          return nullptr;
+        [steps addObject:legacyGainStep];
+
+        GsQwen25MPSGraphStep *fedTraceStatisticsStep =
+            gs_qwen25_rms_power_fed_statistics_step(
+                device, input, exponentF32, outputs[5], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"connected_rms_fed_trace_statistics", errorText,
+                errorCapacity);
+        if (!fedTraceStatisticsStep)
+          return nullptr;
+        [steps addObject:fedTraceStatisticsStep];
+        NSArray<GsQwen25MPSGraphStep *> *fedTraceSteps =
+            gs_qwen25_precise_rms_steps(
+                tracePipelines, input, outputs[5], outputs[6], outputs[8],
+                outputs[7], rows, (uint32_t)dim);
+        if (fedTraceSteps.count != 2)
+          return nullptr;
+        [steps addObjectsFromArray:fedTraceSteps];
+        GsQwen25MPSGraphStep *fedTraceGainStep = gs_qwen25_rms_gain_step(
+            device, outputs[8], gain, outputs[9], (uint32_t)batches,
+            (uint32_t)tokens, (uint32_t)dim, @"connected_rms_fed_trace_gain",
+            errorText, errorCapacity);
+        if (!fedTraceGainStep)
+          return nullptr;
+        [steps addObject:fedTraceGainStep];
+
+        GsQwen25MPSGraphStep *fedProductionStatisticsStep =
+            gs_qwen25_rms_power_fed_statistics_step(
+                device, input, exponentF32, outputs[10], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim, epsilon,
+                @"connected_rms_fed_production_statistics", errorText,
+                errorCapacity);
+        if (!fedProductionStatisticsStep)
+          return nullptr;
+        [steps addObject:fedProductionStatisticsStep];
+        NSArray<GsQwen25MPSGraphStep *> *fedProductionSteps =
+            gs_qwen25_precise_rms_steps(
+                productionPipelines, input, outputs[10], outputs[10],
+                outputs[11], nil, rows, (uint32_t)dim);
+        if (fedProductionSteps.count != 2)
+          return nullptr;
+        [steps addObjectsFromArray:fedProductionSteps];
+        GsQwen25MPSGraphStep *fedProductionGainStep =
+            gs_qwen25_rms_gain_step(
+                device, outputs[11], gain, outputs[12], (uint32_t)batches,
+                (uint32_t)tokens, (uint32_t)dim,
+                @"connected_rms_fed_production_gain", errorText,
+                errorCapacity);
+        if (!fedProductionGainStep)
+          return nullptr;
+        [steps addObject:fedProductionGainStep];
+
+        GsQwen25MPSBlockPlan *plan = [GsQwen25MPSBlockPlan new];
+        plan.device = device;
+        plan.steps = [steps copy];
+        plan.residentBuffers = [allBuffers copy];
+        plan.expectedStepCount = 12;
+        if (!plan.device || !plan.steps || !plan.residentBuffers ||
+            plan.steps.count != plan.expectedStepCount) {
+          gs_qwen25_set_error(errorText, errorCapacity,
+                              "unable to retain connected RMS probe plan");
+          return nullptr;
+        }
+        return (__bridge_retained void *)plan;
+      } @catch (NSException *exception) {
+        gs_qwen25_set_ns_error(errorText, errorCapacity,
+            [NSString stringWithFormat:
+                @"connected RMS probe exception %@: %@", exception.name,
+                exception.reason ?: @"(no reason)"]);
+        return nullptr;
+      }
+    }
+  }
+  gs_qwen25_set_error(errorText, errorCapacity,
+                      "connected RMS probe requires macOS 14 or newer");
+  return nullptr;
+}
+
 // Diagnostic only. Extra outputs can alter graph fusion; the baseline probe
 // must also compare normalizedBf16 with the production block scratch.
 static void *gs_qwen25_mps_rms_trace_create_impl(

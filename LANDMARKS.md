@@ -33403,3 +33403,43 @@ Refresh after source/toolchain/device/model/workload changes.
   neither is authorized by this isolated probe's budget. Refresh on scoped
   source, fixture/input, geometry/precision, toolchain/SDK/OS/device,
   execution/lifecycle changes, artifact loss or hash mismatch.
+
+## 2026-10-25 — Connected GPU-fed RMS/gain matches the saved S1280 input
+
+- Active goal: continue the authenticated block-0 post-attention RMS repair.
+  Return pointer: `docs/qwen25-hy-nomas-frontier.md`, connected RMS section.
+  The new opt-in diagnostic keeps the statistics graph's sole epsilon target,
+  feeds a retained immutable F32 `[1]` exponent 2.0, then runs existing precise
+  Metal root/normalize and BF16 gain. Production defaults remain unchanged;
+  the earlier S1280 full-prefix rejection remains open.
+- `native-connected-rms-block0-post-v1` reproduces upstream epsilon/root F32,
+  normalized F32/BF16 and BF16 gained output raw-bit exactly. Its second fed
+  arm also matches root/normalized BF16/gain using production-style in-place
+  scalar scratch and the non-trace normalize kernel. Their three common
+  outputs match exactly. Legacy control retains 670 epsilon and 371 root
+  differences, 1,276,635 normalized F32 differences, 50 normalized BF16 words
+  and 28 gained BF16 words (27 gain tolerance failures). The fed arms pass
+  unchanged `atol=rtol=2e-5`; tolerances are not used as raw parity.
+- The bounded selective reader authenticates and uploads only the selected
+  7,168-byte BF16 gain vector, never maps or uploads the shard. The 12-step
+  native plan uses 100,958,212 named bytes, one terminal wait, 13 post-wait
+  reads, zero tracked encode allocations and no pre-terminal activation reads.
+  File-cache-aware guard: 10% floor, 2 GiB sampled process cap, 64 MiB swap
+  stop, 180 seconds; observed peak 393,217,104 bytes, minimum headroom
+  19,062,308,864 bytes, zero observed swap growth and no violation. Sampling
+  is not a reservation or instantaneous peak proof.
+- Fourteen focused Crystal tests, normal/cpu-only no-codegen, strict Clang,
+  release link, format/diff checks pass. Correlated MiniQuad is ROBUST within
+  this fixed-input diagnostic/lifecycle scope. The F32 feed reproduces the
+  effective post-cast power operand, not Torch's Int64 feed/cast topology.
+  Preserve the exact caller-supplied RMS manifest digest in the launch pins.
+  No all-input, full-block/prefix or speedup claim follows. Companion objects
+  retain pinned bytes but opaque source ancestry; the build is not hermetic.
+  Evidence: `/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json`
+  and `.landmark/evidence/2026-10-25-qwen25-connected-rms.json`.
+- Next falsifier: wire the prepared shared exponent into both RMS sites in an
+  opt-in block plan and account for its lifetime/footprint, then separately
+  admit block 0 before all 26 blocks. The small diagnostic budget admits no
+  full block or prefix run and no full generation. Refresh on scoped source,
+  fixture/input, precision/geometry, toolchain/SDK/OS/device, execution or
+  lifecycle changes, evidence loss or hash mismatch.

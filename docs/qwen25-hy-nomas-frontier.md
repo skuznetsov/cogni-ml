@@ -13,6 +13,11 @@ The 2026-10-25 native control reproduces upstream square/mean/epsilon bits with
 a GPU-fed exponent; a matched constant exponent reproduces the discrepancy.
 This identifies an operand-source-sensitive route on the saved input, without
 changing production RMS arithmetic or qualifying the full prefix.
+The connected follow-up also reproduces upstream epsilon, inverse-root,
+normalized F32/BF16 and BF16 gain bits exactly on that input, including the
+production-style in-place scalar scratch and non-trace normalize kernel.
+The default block still uses its earlier square path; block/prefix rechecks
+remain open.
 The full text encoder and video pipeline remain in progress. This adapter is opt-in; neither a
 1280-token prompt nor video generation is qualified here.
 
@@ -373,6 +378,86 @@ review limits are indexed in
 and `.landmark/evidence/2026-10-25-qwen25-rms-gpu-exponent.json`. Refresh on
 scoped source, input/fixture, geometry/precision, toolchain/SDK/OS/device,
 execution/lifecycle changes, or evidence loss/hash mismatch.
+
+### Connected RMS and gain falsifier: exact saved-input candidate
+
+Admit a bounded three-arm native diagnostic on the same authenticated S1280
+post-attention residual and BF16 gain vector. Arm A keeps the production
+single-target square/mean/epsilon graph. Arm B changes only its power operand
+to a prepared immutable F32 GPU buffer `[1]`, value 2. Both continue through
+the same precise Metal root/normalization kernels and BF16 gain graph, with
+distinct retained outputs for epsilon, root, normalized F32/BF16 and gain.
+Arm C uses B's single-target statistics helper with the production in-place
+scalar scratch and non-trace BF16 normalization kernel before the same gain.
+It checks whether observation stores or scalar aliasing affect the result.
+
+The falsifier is per-stage upstream comparison at unchanged `atol=rtol=2e-5`,
+with raw-word differences reported separately. Arm A is a retained negative
+control; B and C must be assessed individually, including their common
+BF16 outputs. Load only the norm vector, authenticating the bytes against
+the fixture's tensor digest before uploading them. Do not upload block weights.
+No intermediate square panel or statistics trace target is added.
+
+This CAUTION change is opt-in; production block arithmetic stays unchanged.
+Its rollback removes the new diagnostic entry point and runner. The 13 outputs
+and three inputs require 100,958,212 named bytes at S1280/D3584 (228 bytes at
+S2/D4). Reject a one-byte-short budget before allocating Metal buffers. Keep
+the 256 MiB named cap, 2 GiB sampled process cap, file-cache-aware 10% floor,
+64 MiB swap-growth stop and 180-second deadline. DoD: focused CPU validation,
+strict native compilation, and a fresh guarded connected report preserving
+12 ordered steps, one terminal wait, no pre-terminal activation reads and
+zero tracked encode allocations. A failure must retain its report. This
+slice admits no block/prefix execution or full generation; exact local parity
+does not establish broad-input equivalence. Refresh on scoped source, fixture,
+precision/geometry, toolchain/device, execution/lifecycle or evidence changes.
+
+Observed `native-connected-rms-block0-post-v1` exits zero. The candidate's
+single-output statistics graph feeds the same precise root and normalization
+kernels and BF16 gain helper without an intermediate activation readback.
+
+| Retained output | Legacy trace raw differences | GPU-fed trace raw differences | GPU-fed production-style raw differences |
+| --- | ---: | ---: | ---: |
+| Mean + epsilon F32 (1,280 rows) | 670 | 0 | Overwritten by root |
+| Inverse-root F32 (1,280 rows) | 371 | 0 | 0 |
+| Normalized F32 (4,587,520 values) | 1,276,635 | 0 | Not retained |
+| Normalized BF16 (4,587,520 values) | 50 | 0 | 0 |
+| Gained BF16 (4,587,520 values) | 28 | 0 | 0 |
+
+Both candidate arms pass the unchanged finite `2e-5` gate and raw-bit gates
+individually. Their three common outputs are also raw-bit identical. Legacy
+BF16 normalization fails the finite gate at 50 values; gain fails at 27
+values while 28 words differ. A tolerance pass is therefore still distinct
+from raw parity. Its epsilon hash reproduces the retained production control.
+The selected gain's exact 7,168 copied bytes match the fixture's tensor digest;
+the bounded reader does not map, read or upload the full shard.
+
+The plan executes 12 ordered steps using 100,958,212 named bytes, one terminal
+wait, 13 post-wait output reads, zero tracked encode allocations and no
+pre-terminal activation reads. The guard observes a 393,217,104-byte process
+peak, minimum file-cache-aware headroom of 19,062,308,864 bytes, no swap growth
+and no limit violation. The floor stays 10%, with the same 2 GiB process cap,
+64 MiB swap stop and 180-second deadline. These are sampled observations,
+not instantaneous peak or memory-reservation guarantees.
+
+Fourteen focused Crystal tests pass, covering exact/one-byte-short budgets,
+authenticated fixture loading, selective gain mutation/extent rejection and
+finite/raw comparator separation. Normal/cpu-only no-codegen, strict Clang,
+release linking, formatting and diff checks pass. The retained source and
+binary pins identify the observed run; pre-existing companion objects have
+opaque source ancestry and this is not a hermetic rebuild. No speedup claim
+is made from the correctness run.
+Correlated MiniQuad review is ROBUST for this fixed-input connected diagnostic
+and its lifecycle. The F32 feed supplies Torch's post-cast value, without
+reproducing its Int64 feed/cast topology. The caller-supplied RMS manifest
+digest is preserved in the pinned launch record.
+
+The remaining falsifier is to wire the retained exponent into both RMS sites
+of an opt-in block plan, account for its shared buffer, then separately admit
+block 0 before a 26-block prefix recheck. Keep S1280 prefix rejection in place
+until the larger check passes. Source/build/input/run pins and review bounds
+are indexed in
+`/opt/mldata_ssd/cogni-ml/qwen25-pretrained-20261024/logs/rms-connected-receipt-v1.json`
+and `.landmark/evidence/2026-10-25-qwen25-connected-rms.json`.
 
 ### Implemented boundary and observed checks
 
