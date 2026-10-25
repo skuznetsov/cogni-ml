@@ -1,7 +1,7 @@
 # Native Metal/MPS execution for the pinned single-token Hy-Nomas text refiner.
-# The implementation keeps the Qwen input in BF16, compacts the immutable CPU
-# prefix mask on the GPU, and runs the refiner in F32 unless attention boundary
-# rounding is explicitly selected.
+# The implementation keeps the Qwen input in BF16, copies the immutable valid
+# prefix or requested padded extent on the GPU, and runs the refiner in F32
+# unless attention boundary rounding is explicitly selected.
 require "../gguf/safetensors"
 require "../metal/dispatch"
 require "./checkpoint"
@@ -31,8 +31,17 @@ module ML::Video
     RESIDUAL_KERNEL = "hy_nomas_text_gated_residual_f32"
     AFFINE_KERNEL   = "hy_nomas_text_layer_norm_affine_f32"
     ROUND_KERNEL    = "hy_nomas_text_roundtrip_bf16_f32"
+    CLEAR_KERNEL    = "hy_nomas_text_clear_padded_attention_f32"
 
-    SOURCE = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
+    SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
+    CLEAR_SOURCE = SOURCE + <<-METAL
+      kernel void hy_nomas_text_clear_padded_attention_f32(
+          device float *output [[buffer(0)]],
+          constant uint &count [[buffer(1)]],
+          uint index [[thread_position_in_grid]]) {
+        if (index < count) output[index] = 0.0f;
+      }
+      METAL
 
     record NamedBytes, activations : Int64, linear_stage : Int64,
       attention_stage : Int64, total : Int64
@@ -52,6 +61,7 @@ module ML::Video
     @source : ML::MetalBuffer
     @mask : Array(Int32)
     @valid_tokens : Int32
+    @processed_tokens : Int32
     @timestep : Float32
     @weights : Arena
     @attention_precision : HyNomasAttentionPrecision
@@ -73,6 +83,7 @@ module ML::Video
     @released = false
 
     getter valid_tokens : Int32
+    getter processed_tokens : Int32
     getter admitted_named_bytes : NamedBytes
     getter attention_precision : HyNomasAttentionPrecision
 
@@ -124,27 +135,34 @@ module ML::Video
       valid
     end
 
-    def self.named_bytes(mask : Array(Int32)) : NamedBytes
+    def self.processed_tokens(mask : Array(Int32), *, retain_padding : Bool = false) : Int32
+      retain_padding ? TOKEN_COUNT : valid_tokens(mask)
+    end
+
+    def self.named_bytes(mask : Array(Int32), *, retain_padding : Bool = false) : NamedBytes
       valid = valid_tokens(mask).to_i64
+      processed = processed_tokens(mask, retain_padding: retain_padding).to_i64
       # Every unique F32 activation is listed once. residual2/output and
       # projected_text are checkpoint aliases, not extra storage.
       fixed_elements = 24_321_i64 + 20_480_i64
       token_elements = 5_632_i64 + 2_i64 * 43_008_i64
-      activation = (fixed_elements + token_elements * valid) * sizeof(Float32)
+      activation = (fixed_elements + token_elements * processed) * sizeof(Float32)
       linear_stage = HIDDEN_DIM.to_i64 * FFN_DIM * sizeof(Float32)
-      # Each block owns an attention plan with four fixed head-major F32
-      # staging buffers (Q, K, V, output).
+      # Attention consumes only valid prefix rows even when the refiner keeps
+      # the full padded activation extent. Each block owns four fixed
+      # head-major F32 staging buffers (Q, K, V, output) for those rows.
       attention_stage = BLOCKS.to_i64 * 4_i64 * valid * HIDDEN_DIM * sizeof(Float32)
       NamedBytes.new(activation, linear_stage, attention_stage,
         activation + linear_stage + attention_stage)
     end
 
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
-                                seg_pos_emb_num : Int32 = 0) : NamedBytes
+                                seg_pos_emb_num : Int32 = 0,
+                                *, retain_padding : Bool = false) : NamedBytes
       unless seg_pos_emb_num == 0
         raise ArgumentError.new("Hy-Nomas text refiner requires seg_pos_emb_num=0")
       end
-      bytes = named_bytes(mask)
+      bytes = named_bytes(mask, retain_padding: retain_padding)
       unless max_named_bytes > 0 && bytes.total <= max_named_bytes
         raise ArgumentError.new("Hy-Nomas text refiner exceeds admitted named-buffer budget")
       end
@@ -154,14 +172,17 @@ module ML::Video
     def initialize(source : ML::MetalBuffer, mask : Array(Int32), timestep : Float32,
                    weights : Arena, max_named_bytes : Int64,
                    attention_precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control,
-                   *, seg_pos_emb_num : Int32 = 0)
+                   *, seg_pos_emb_num : Int32 = 0,
+                   retain_padding : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
+      @processed_tokens = self.class.processed_tokens(@mask, retain_padding: retain_padding)
       @timestep = timestep
       @weights = weights
       @attention_precision = attention_precision
-      @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num)
+      @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
+        retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
       unless @timestep.finite?
         raise ArgumentError.new("Hy-Nomas text timestep must be finite")
@@ -323,7 +344,7 @@ module ML::Video
       @weight_stage = arena.alloc("hy_nomas_text_refiner.weight_stage",
         (HIDDEN_DIM.to_i64 * FFN_DIM).to_i32)
 
-      allocate_checkpoint("input_compact", @valid_tokens * INPUT_DIM)
+      allocate_checkpoint("input_compact", @processed_tokens * INPUT_DIM)
       allocate_checkpoint("masked_mean", INPUT_DIM)
       timestep = arena.upload("hy_nomas_text_refiner.timestep", [@timestep])
       # The original scalar is retained as a setup-time GPU input, not read
@@ -342,7 +363,7 @@ module ML::Video
       allocate_checkpoint("time_in_mlp1", HIDDEN_DIM, "time_in.mlp1")
       allocate_checkpoint("time_in_silu", HIDDEN_DIM, "time_in.silu")
       allocate_checkpoint("vec", HIDDEN_DIM)
-      allocate_checkpoint("input_embed", @valid_tokens * HIDDEN_DIM)
+      allocate_checkpoint("input_embed", @processed_tokens * HIDDEN_DIM)
 
       BLOCKS.times do |block|
         prefix = "block#{block}"
@@ -350,19 +371,19 @@ module ML::Video
         allocate_checkpoint("#{prefix}.adaLN", 2 * HIDDEN_DIM)
         allocate_checkpoint("#{prefix}.gate_msa", HIDDEN_DIM)
         allocate_checkpoint("#{prefix}.gate_mlp", HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.norm1", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.qkv", @valid_tokens * 3 * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.q", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.k", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.v", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.attention", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.proj", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.residual1", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.norm2", @valid_tokens * HIDDEN_DIM)
-        allocate_checkpoint("#{prefix}.mlp_fc1", @valid_tokens * FFN_DIM)
-        allocate_checkpoint("#{prefix}.mlp_silu", @valid_tokens * FFN_DIM)
-        allocate_checkpoint("#{prefix}.mlp_fc2", @valid_tokens * HIDDEN_DIM)
-        output = allocate_checkpoint("#{prefix}.output", @valid_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.norm1", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.qkv", @processed_tokens * 3 * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.q", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.k", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.v", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.attention", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.proj", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.residual1", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.norm2", @processed_tokens * HIDDEN_DIM)
+        allocate_checkpoint("#{prefix}.mlp_fc1", @processed_tokens * FFN_DIM)
+        allocate_checkpoint("#{prefix}.mlp_silu", @processed_tokens * FFN_DIM)
+        allocate_checkpoint("#{prefix}.mlp_fc2", @processed_tokens * HIDDEN_DIM)
+        output = allocate_checkpoint("#{prefix}.output", @processed_tokens * HIDDEN_DIM)
         @checkpoints["#{prefix}.residual2"] = output
       end
       @checkpoints["projected_text"] = checkpoint("block1.output")
@@ -419,6 +440,11 @@ module ML::Video
           ML::Metal::ComputePipeline.new(name, SOURCE)
         end
       end
+      if @processed_tokens > @valid_tokens
+        @pipelines[CLEAR_KERNEL] = ML::Metal::PipelineCache.get(CLEAR_KERNEL) do
+          ML::Metal::ComputePipeline.new(CLEAR_KERNEL, CLEAR_SOURCE)
+        end
+      end
     end
 
     private def prepare_plans! : Nil
@@ -430,7 +456,7 @@ module ML::Video
       BLOCKS.times do |block|
         prefix = "block#{block}"
         prepare_activation("#{prefix}.condition_silu", "c", [HIDDEN_DIM])
-        prepare_activation("#{prefix}.mlp_silu", "#{prefix}.mlp_fc1", [@valid_tokens, FFN_DIM])
+        prepare_activation("#{prefix}.mlp_silu", "#{prefix}.mlp_fc1", [@processed_tokens, FFN_DIM])
         @attention_plans << HyNomasAttentionMPSPlan.new(1, @valid_tokens, HEADS,
           HEAD_DIM, checkpoint("#{prefix}.q"), checkpoint("#{prefix}.k"),
           checkpoint("#{prefix}.v"), checkpoint("#{prefix}.attention"))
@@ -445,7 +471,7 @@ module ML::Video
       prepare_linear("context_embed", "context_silu", "context_embed",
         "txt_in.c_embedder.linear_2", 1, HIDDEN_DIM, HIDDEN_DIM)
       prepare_linear("input_embed", "input_compact", "input_embed",
-        "txt_in.input_embedder", @valid_tokens, INPUT_DIM, HIDDEN_DIM)
+        "txt_in.input_embedder", @processed_tokens, INPUT_DIM, HIDDEN_DIM)
       prepare_linear("time_in.mlp1", "time_in.sinusoidal", "time_in.mlp1",
         "time_in.mlp.0", 1, TIMESTEP_DIM, HIDDEN_DIM)
       prepare_linear("time_in.mlp2", "time_in.silu", "vec",
@@ -459,13 +485,13 @@ module ML::Video
       prepare_linear("#{prefix}.adaLN", "#{prefix}.condition_silu", "#{prefix}.adaLN",
         "#{source_prefix}.adaLN_modulation.1", 1, HIDDEN_DIM, 2 * HIDDEN_DIM)
       prepare_linear("#{prefix}.qkv", "#{prefix}.norm1", "#{prefix}.qkv",
-        "#{source_prefix}.self_attn_qkv", @valid_tokens, HIDDEN_DIM, 3 * HIDDEN_DIM)
+        "#{source_prefix}.self_attn_qkv", @processed_tokens, HIDDEN_DIM, 3 * HIDDEN_DIM)
       prepare_linear("#{prefix}.proj", "#{prefix}.attention", "#{prefix}.proj",
-        "#{source_prefix}.self_attn_proj", @valid_tokens, HIDDEN_DIM, HIDDEN_DIM)
+        "#{source_prefix}.self_attn_proj", @processed_tokens, HIDDEN_DIM, HIDDEN_DIM)
       prepare_linear("#{prefix}.mlp_fc1", "#{prefix}.norm2", "#{prefix}.mlp_fc1",
-        "#{source_prefix}.mlp.fc1", @valid_tokens, HIDDEN_DIM, FFN_DIM)
+        "#{source_prefix}.mlp.fc1", @processed_tokens, HIDDEN_DIM, FFN_DIM)
       prepare_linear("#{prefix}.mlp_fc2", "#{prefix}.mlp_silu", "#{prefix}.mlp_fc2",
-        "#{source_prefix}.mlp.fc2", @valid_tokens, FFN_DIM, HIDDEN_DIM)
+        "#{source_prefix}.mlp.fc2", @processed_tokens, FFN_DIM, HIDDEN_DIM)
     end
 
     private def prepare_activation(name : String, input_name : String,
@@ -501,11 +527,11 @@ module ML::Video
     end
 
     private def encode_compaction(e : ML::Metal::ComputeEncoder) : Nil
-      count = @valid_tokens * INPUT_DIM
+      count = @processed_tokens * INPUT_DIM
       e.set_pipeline(@pipelines[COMPACT_KERNEL])
         .set_buffer(@source, 0)
         .set_buffer(checkpoint("input_compact"), 1, ML::Metal::BufferAccess::Write)
-        .set_value(@valid_tokens.to_u32, 2)
+        .set_value(@processed_tokens.to_u32, 2)
         .set_value(INPUT_DIM.to_u32, 3)
         .dispatch_1d(count)
     end
@@ -553,13 +579,21 @@ module ML::Video
         checkpoint("#{prefix}.q"), checkpoint("#{prefix}.k"),
         checkpoint("#{prefix}.v"))
       if @attention_precision.bf16_boundary_control?
-        round_bf16(chain.encoder, checkpoint("#{prefix}.q"), @valid_tokens * HIDDEN_DIM)
-        round_bf16(chain.encoder, checkpoint("#{prefix}.k"), @valid_tokens * HIDDEN_DIM)
-        round_bf16(chain.encoder, checkpoint("#{prefix}.v"), @valid_tokens * HIDDEN_DIM)
+        round_bf16(chain.encoder, checkpoint("#{prefix}.q"), @processed_tokens * HIDDEN_DIM)
+        round_bf16(chain.encoder, checkpoint("#{prefix}.k"), @processed_tokens * HIDDEN_DIM)
+        round_bf16(chain.encoder, checkpoint("#{prefix}.v"), @processed_tokens * HIDDEN_DIM)
+      end
+      if @processed_tokens > @valid_tokens
+        attention = checkpoint("#{prefix}.attention")
+        count = @processed_tokens * HIDDEN_DIM
+        chain.encoder.set_pipeline(@pipelines[CLEAR_KERNEL])
+          .set_buffer(attention, 0, ML::Metal::BufferAccess::Write)
+          .set_value(count.to_u32, 1)
+          .dispatch_1d(count)
       end
       @attention_plans[block].encode(chain)
       if @attention_precision.bf16_boundary_control?
-        round_bf16(chain.encoder, checkpoint("#{prefix}.attention"), @valid_tokens * HIDDEN_DIM)
+        round_bf16(chain.encoder, checkpoint("#{prefix}.attention"), @processed_tokens * HIDDEN_DIM)
       end
       encode_linear(chain, "#{prefix}.proj")
       gated_residual(chain.encoder, source, checkpoint("#{prefix}.proj"),
@@ -582,8 +616,8 @@ module ML::Video
       e.set_pipeline(@pipelines[RESIDUAL_KERNEL])
         .set_buffer(input, 0).set_buffer(delta, 1).set_buffer(gate, 2)
         .set_buffer(output, 3, ML::Metal::BufferAccess::Write)
-        .set_value((@valid_tokens * HIDDEN_DIM).to_u32, 4)
-        .set_value(HIDDEN_DIM.to_u32, 5).dispatch_1d(@valid_tokens * HIDDEN_DIM)
+        .set_value((@processed_tokens * HIDDEN_DIM).to_u32, 4)
+        .set_value(HIDDEN_DIM.to_u32, 5).dispatch_1d(@processed_tokens * HIDDEN_DIM)
     end
 
     private def split_qkv(e : ML::Metal::ComputeEncoder, qkv : ML::MetalBuffer,
@@ -593,8 +627,8 @@ module ML::Video
         .set_buffer(qkv, 0).set_buffer(q, 1, ML::Metal::BufferAccess::Write)
         .set_buffer(k, 2, ML::Metal::BufferAccess::Write)
         .set_buffer(v, 3, ML::Metal::BufferAccess::Write)
-        .set_value(@valid_tokens.to_u32, 4).set_value(HIDDEN_DIM.to_u32, 5)
-        .dispatch_1d(@valid_tokens * HIDDEN_DIM)
+        .set_value(@processed_tokens.to_u32, 4).set_value(HIDDEN_DIM.to_u32, 5)
+        .dispatch_1d(@processed_tokens * HIDDEN_DIM)
     end
 
     private def split_adaln(e : ML::Metal::ComputeEncoder, adaln : ML::MetalBuffer,
@@ -607,14 +641,14 @@ module ML::Video
 
     private def norm_affine(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
                             output : ML::MetalBuffer, prefix : String) : Nil
-      @norm_plan.not_nil!.encode(e, input, output, @valid_tokens)
+      @norm_plan.not_nil!.encode(e, input, output, @processed_tokens)
       weight_name = "#{prefix}.weight"
       bias_name = "#{prefix}.bias"
       weight = @weights[weight_name]
       bias = @weights[bias_name]
       weight_dtype = @weights.dtype(weight_name)
       bias_dtype = @weights.dtype(bias_name)
-      count = @valid_tokens * HIDDEN_DIM
+      count = @processed_tokens * HIDDEN_DIM
       MetalOps.distinct(output, weight, bias)
       e.set_pipeline(@pipelines[AFFINE_KERNEL])
         .set_buffer(output, 0, ML::Metal::BufferAccess::ReadWrite)

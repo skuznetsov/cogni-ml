@@ -1,0 +1,310 @@
+{
+  "adversary_verdict": "ROBUST",
+  "base_commit": "edbb37998e016886326835c3dd4d8a910ca6ff4a",
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_serial_mps.cr",
+      "src/ml/video/hy_nomas_text_refiner.cr",
+      "examples/hy_nomas_conditioned_four_probe.cr",
+      "examples/support/hy_nomas_conditioned_four_probe.cr",
+      "spec/hy_nomas_conditioned_four_admission_spec.cr",
+      "spec/hy_nomas_conditioned_four_reference_test.py",
+      "spec/hy_nomas_mps_padded_prefix_spec.cr",
+      "spec/hy_nomas_padded_conditioning_admission_spec.cr",
+      "spec/hy_nomas_mps_shared_modulation_spec.cr",
+      "spec/support/hy_nomas_conditioned_four_reference.py",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      ".landmark/evidence/2026-10-25-hy-nomas-conditioned-four.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "src/ml/video/hy_nomas_block_mps.cr",
+      "src/ml/video/hy_nomas_serial_mps.cr",
+      "src/ml/video/hy_nomas_text_refiner.cr",
+      "examples/hy_nomas_conditioned_four_probe.cr",
+      "examples/support/hy_nomas_conditioned_four_probe.cr",
+      "spec/hy_nomas_conditioned_four_admission_spec.cr",
+      "spec/hy_nomas_conditioned_four_reference_test.py",
+      "spec/hy_nomas_mps_padded_prefix_spec.cr",
+      "spec/hy_nomas_padded_conditioning_admission_spec.cr",
+      "spec/hy_nomas_mps_shared_modulation_spec.cr",
+      "spec/support/hy_nomas_conditioned_four_reference.py",
+      "LANDMARKS.md",
+      "docs/hy-nomas-native-frontier.md",
+      ".landmark/evidence/2026-10-25-hy-nomas-conditioned-four.json"
+    ],
+    "risk": "CAUTION: mask semantics, aliasing, cross-owner resource lifetime and new composition",
+    "rollback": "Omit the new opt-in probe or revert the atomic change; retain the separately qualified synthetic four-block control."
+  },
+  "claim_level": "VERIFIED",
+  "code_sources": [
+    {
+      "nbytes": 22249,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "75a0b2d38d6bbdbbcab0fc6e4c5431449154d437620cf2c60f0e18f1733baaf1"
+    },
+    {
+      "nbytes": 37766,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_block_mps.cr",
+      "sha256": "3edc2cd682a70b008da5c9212b26d18967add89400041416b64954f570e48481"
+    },
+    {
+      "nbytes": 6289,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_serial_mps.cr",
+      "sha256": "29006ec8775b35410fe35ff322f760937235235b55420941c7ee8a1cc4f37cc4"
+    },
+    {
+      "nbytes": 33586,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_text_refiner.cr",
+      "sha256": "176fcdaf7b36e2cd7c42b2566c9186bba526a10ad3a56cbcc9e39658d91e4b54"
+    },
+    {
+      "nbytes": 12143,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_conditioned_four_probe.cr",
+      "sha256": "598a98ed054877227c701631eaf854cd79bcff4ff3bac6f3d03be5fcea735829"
+    },
+    {
+      "nbytes": 21385,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_conditioned_four_probe.cr",
+      "sha256": "6c242785c48ae4d6d45dd8b833f229bab7ad2917f8b7c0b22b8a8b91ebd906bd"
+    },
+    {
+      "nbytes": 6061,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_conditioned_four_admission_spec.cr",
+      "sha256": "6e00ec64c40cc6d829d0cdfe672ded4e23b9ddda909bdb8bf58ce3c8ae99f697"
+    },
+    {
+      "nbytes": 12861,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_conditioned_four_reference_test.py",
+      "sha256": "0f33c7f6563943e3f1728a4b3f126599e0ff0e234dc51ad2fe23442854d0e885"
+    },
+    {
+      "nbytes": 6613,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_mps_padded_prefix_spec.cr",
+      "sha256": "f6f399172613e8ff0a980845caa707add14663f40711aa49547f625b979f1227"
+    },
+    {
+      "nbytes": 2676,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_padded_conditioning_admission_spec.cr",
+      "sha256": "e00b582d67d46783431b8bf76a066c2e4b44b6ac64fe6391330e80195f207513"
+    },
+    {
+      "nbytes": 5059,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_mps_shared_modulation_spec.cr",
+      "sha256": "54d9532a418dbe44c9f53286c5f974493dc47cf84be67049bcfcde371db94c59"
+    },
+    {
+      "nbytes": 41880,
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_conditioned_four_reference.py",
+      "sha256": "56c4586b938a3eedc8c55b1783bd347e50d2cd92d60edc7c07988edc93150a86"
+    }
+  ],
+  "decay_triggers": [
+    "scoped code/source/cache/fixture bytes",
+    "geometry or precision",
+    "ownership/lifetime",
+    "compiler/SDK/OS/device",
+    "evidence missing or altered"
+  ],
+  "documentation_sources": [
+    {
+      "nbytes": 4567354,
+      "path": "LANDMARKS.md",
+      "sha256": "5e46d0f596485ecb876d0bf35d46484e1628bbf3d218222127bd946b5a34c601"
+    },
+    {
+      "nbytes": 134898,
+      "path": "docs/hy-nomas-native-frontier.md",
+      "sha256": "f9cc30341335c30b069e0df9f983992567b513a1cecb701fd16e134e0abc3eef"
+    }
+  ],
+  "dod": {
+    "command_index": "receipt.guards[*].argv; receipt.small_check_observations",
+    "focused_commands": [
+      "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/build/native-v1 spec_hy_nomas_conditioned_four",
+      "python3 -B spec/hy_nomas_conditioned_four_reference_test.py",
+      "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/build/native-v1 hy_nomas_conditioned_four_probe"
+    ],
+    "signal": "Fresh pinned upstream consumer and live native Qwen26/crop/refiner/DiT4 match 10 selected outputs raw exact twice, including 108-buffer NaN poison repeat; finite mask and wrong-successor faults detected at intended boundaries, unchanged finite 2e-5 tolerance, zero tracked encode allocations/readbacks and one terminal wait/request under 10% cache-aware floor."
+  },
+  "excluded_attempts": [
+    {
+      "name": "native-build-v1",
+      "reason": "Superseded by v2 after MiniQuad corrected refiner valid-prefix attention before native qualification."
+    }
+  ],
+  "failure_policy": "Reject admission or narrow the claim; retain finite 2e-5 gates, cache-aware 10% floor and swap/process/deadline stops.",
+  "geometry": {
+    "attention_segments": 1,
+    "batches": 1,
+    "chunk_size_tokens": 0,
+    "dim": 2048,
+    "ffn_dim": 8192,
+    "head_dim": 128,
+    "heads": 16,
+    "padded_text_tokens": 1257,
+    "query_chunk": 256,
+    "refiner_depth": 2,
+    "refiner_input_dim": 3584,
+    "rope_axis_dims": [
+      16,
+      56,
+      56
+    ],
+    "rope_grid": [
+      6,
+      22,
+      40
+    ],
+    "rope_theta": 256.0,
+    "text_tokens": 1280,
+    "valid_joint_tokens": 5303,
+    "valid_text_tokens": 23,
+    "video_tokens": 5280
+  },
+  "guard_results": [
+    {
+      "min_headroom_bytes": 28744318976,
+      "name": "upstream-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 6165564440,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 36702486528,
+      "name": "native-build-v2",
+      "returncode": 0,
+      "sampled_peak_bytes": 802833896,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 35847176192,
+      "name": "focused-spec-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 907609648,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 22427516928,
+      "name": "native-positive-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 18857406248,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 24664244224,
+      "name": "native-padding-control-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 18915929656,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 24972394496,
+      "name": "native-successor-control-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 18899709496,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 43306614784,
+      "name": "admission-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 356402208,
+      "swap_growth_bytes": 0
+    },
+    {
+      "min_headroom_bytes": 43619336192,
+      "name": "stream-audit-v1",
+      "returncode": 0,
+      "sampled_peak_bytes": 10797488,
+      "swap_growth_bytes": 0
+    }
+  ],
+  "limitations": [
+    "MPS zero-padded-query adapter is explicit; CUDA/Magi padded-query semantics and BF16 activation parity remain unqualified.",
+    "Native reruns Qwen26; the fresh upstream consumer oracle reads authenticated saved Qwen state 26 instead of rerunning that prefix.",
+    "Initial video input is synthetic; ND RoPE tables come from upstream and are uploaded to native buffers.",
+    "Setup file I/O/uploads and postterminal streamed diagnostics use CPU; inference handoffs and intermediate arithmetic remain GPU.",
+    "BF16 block caches have no F32 source staging; refiner setup retains 583311360 bytes of F32 source staging until session release.",
+    "Operator-pinned immutable local artifacts are trust assumptions; whole-checkpoint declared LFS digest remains unverified.",
+    "Tracked allocation/readback counters cover their instrumented paths; memory samples do not bound between-poll peaks.",
+    "Companion objects were copied byte-for-byte from the prior qualified build; their source ancestry is opaque and the build is not hermetic.",
+    "No full diffusion, model-wide residency, generation, video quality or performance qualification."
+  ],
+  "mini_quad": {
+    "falsifier": "Full padded tensor geometry must survive real mask semantics, scratch poisoning, wrong-padding and wrong-successor controls.",
+    "next_signal": "Separately budgeted same-conditioning full-J extension beyond four resident blocks; no full generation authorized in this slice.",
+    "pivot": "Keep all projection/residual rows, restrict attention to the admitted valid prefix and clear omitted query outputs on GPU.",
+    "refuted_route": "Treating the full-row refiner attention as all 1280 valid keys; code inspection caught this before final build/native execution.",
+    "review_provenance": "same-lineage correlated delegation; no independent-model claim",
+    "verdict": "ROBUST within explicit MPS-adapter scope"
+  },
+  "native_precision": "BF16 resident parameters; F32 neural math and MPS attention; explicit zero padded query results",
+  "next_frontier": "Separately budgeted same-conditioning full-J extension beyond four resident blocks; no full generation authorized in this slice.",
+  "observed": {
+    "captures_per_positive_request": 10,
+    "consumer_named_bytes": 4937682436,
+    "crop_and_mask_exact": true,
+    "crystal_examples_passed": 13,
+    "early_release_rejections_per_process": 3,
+    "exact_poison_repeat": true,
+    "f32_values_per_positive_request": 56363008,
+    "live_pre_metal_rejections": 6,
+    "named_bytes": 17676492108,
+    "negative_controls": 2,
+    "positive_max_abs": 0,
+    "positive_raw_bit_differences": 0,
+    "positive_requests": 2,
+    "positive_tolerance_failures": 0,
+    "postterminal_diagnostic_reads_per_request": 39,
+    "preterminal_activation_readbacks_per_request": 0,
+    "python_cpu_tests_passed": 8,
+    "qwen_bf16_states_compared_per_request": 27,
+    "scratch_poison_buffer_count": 108,
+    "streamed_audit_authenticated_files": 39,
+    "terminal_waits_per_request": 1,
+    "tracked_encode_allocations_per_request": 0,
+    "upstream_attention_query_chunks": 84,
+    "upstream_padded_suffix_poison_passed": true
+  },
+  "padding_policy": {
+    "kind": "unpad_zero_tokens",
+    "padded_query_outputs": "attention result explicitly zero-filled",
+    "padded_text_rows": 1257,
+    "refiner_rows": 1280,
+    "valid_joint_prefix": 5303,
+    "valid_text_rows": 23
+  },
+  "problem": "The four full-J DiT blocks previously consumed synthetic hidden inputs; the real masked conditioning handoff and its padded-row semantics were unqualified.",
+  "provenance": {
+    "checkpoint_revision": "bac719a80c8d02f91c485fca804bb8221e149b70",
+    "native_qwen_source": "live natural-prompt Qwen26 with all 27 BF16 prefix states and crop/mask compared",
+    "oracle_qwen_source": "authenticated saved upstream Qwen state 26 and crop 108:1388",
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "weights": "four authenticated qualified BF16 block caches; 42 authenticated refiner/time tensors converted to BF16 on native GPU",
+    "whole_checkpoint_lfs_digest": "declared, unverified; only authenticated range subsets downloaded"
+  },
+  "receipt": {
+    "nbytes": 50966,
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/logs/conditioned-four-receipt-v1.json",
+    "sha256": "fb4f4771c361162178dec8d2203e33faa6422c64e4a20dcb6a7381030827508b"
+  },
+  "refresh": "Reauthenticate artifacts, run focused tests and fresh guarded upstream/native positive and finite negative controls at the intended source state; reread live memory first.",
+  "schema": "landmark-evidence-packet-v1",
+  "schema_version": 1,
+  "scope": "live native natural-prompt Qwen26/crop/full-row refiner/time embedding/four pretrained DiT blocks at full padded J6560; pinned upstream modules with explicit MPS prefix-unpadding and zero-padded-query adapter",
+  "strongest_counterexample": "A native/oracle pair could agree on an incorrect padded-query convention. This is prevented from becoming a CUDA/Magi claim by explicitly qualifying only the shared MPS prefix-unpadding/zero-output adapter; mask/successor negative controls and independent streamed span hashes discriminate the narrower composition claim.",
+  "task_id": "2026-10-25-hy-nomas-conditioned-four",
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "validation": {
+    "fallback": "Parse JSON, authenticate all referenced local artifact/code bytes, assert observed DoD signals, exact allowed/changed paths and clean diff; structural/hash validity does not prove neural correctness.",
+    "repository_graph_validator": "not present",
+    "repository_packet_template": "not present"
+  }
+}

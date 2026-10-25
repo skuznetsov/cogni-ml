@@ -23,14 +23,17 @@ module ML::Video
                    vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
                    cos : ML::MetalBuffer, sin : ML::MetalBuffer,
                    *, attention_query_chunk : Int32 = 0,
-                   attention_heads_per_group : Int32 = 0)
+                   attention_heads_per_group : Int32 = 0,
+                   valid_text_tokens : Int32? = nil,
+                   allow_shared_modulation : Bool = false)
       config.validate!
+      attention_tokens = HyNomasMPSWorkspace.attention_tokens_for(config, valid_text_tokens)
       unless (2..4).includes?(weights.size)
         raise ArgumentError.new("Hy-Nomas serial workspace requires between two and four weight Arenas")
       end
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(config.batches,
-          config.joint_tokens, config.heads, config.head_dim,
+          attention_tokens, config.heads, config.head_dim,
           attention_query_chunk, attention_heads_per_group)
       end
       @inputs = [img, txt, vec, vec_txt, cos, sin]
@@ -60,7 +63,9 @@ module ML::Video
         end
         @workspace = HyNomasMPSWorkspace.new(@blocks[0], img, txt, vec,
           vec_txt, cos, sin, attention_query_chunk: attention_query_chunk,
-          attention_heads_per_group: attention_heads_per_group)
+          attention_heads_per_group: attention_heads_per_group,
+          allow_shared_modulation: allow_shared_modulation,
+          valid_text_tokens: valid_text_tokens)
         workspace.register_serial_blocks!(@blocks, @block_inputs)
         @scratch_bytes = @arena.resident_bytes
         @mps_workspace_bytes = workspace.resident_bytes

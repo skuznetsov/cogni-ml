@@ -6,6 +6,50 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-CONDITIONED-FOUR-2026-10-25] Live Qwen conditioning feeds four full-J blocks with exact MPS replay
+
+- Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight
+  full-row text refiner/time embedding -> pretrained DiT blocks 0 to 3.
+  B1/V5280/T1280/J6560, 23 valid text rows and valid joint attention prefix
+  5303; all projections/residuals retain padded rows. MPS attention explicitly
+  zeros omitted query results. Pinned upstream modules use the same MPS
+  adapter, saved authenticated Qwen state 26 and BF16-rounded F32 parameters;
+  native parameters are BF16 resident with F32 neural math. This does not
+  establish CUDA/Magi padding or BF16 activation semantics.
+- Two native positive requests match all 27 Qwen BF16 states, crop/mask,
+  projected text, scalar vec and eight DiT image/text outputs. The latter 10
+  captures contain 56,363,008 F32 values/request, raw-bit exact at unchanged
+  finite `atol=rtol=2e-5`, including a repeat after NaN poisoning 108 reusable
+  nonconstant buffers. Common scratch/workspace and distinct output banks feed
+  successors directly on GPU; expected conditioning is never inference input.
+- Zero tracked encode MetalBuffer allocations/preterminal activation reads,
+  one terminal wait and 39 postterminal diagnostic reads/request. In-flight
+  producer/crop/consumer release is rejected. Wrong-padding control preserves
+  producer/refiner but fails both block-0 outputs; wrong-block-3 control keeps
+  all predecessors exact and fails both block-3 outputs. All failures finite.
+  Thirteen Crystal examples, eight Python CPU tests, six live pre-Metal CLI
+  rejections and a separately written byte/count audit pass. The audit binds
+  all output spans, caches/subsets/manifests and 12 upstream source files; it
+  is not a second neural implementation. Correlated MiniQuad verdict: ROBUST.
+- Aggregate named buffers 17,676,492,108 bytes; consumer 4,937,682,436 bytes,
+  including retained setup F32 refiner staging. Positive native sampled peak
+  18,857,406,248 bytes; minimum cache-aware headroom 22,427,516,928 bytes.
+  Upstream sampled peak 6,165,564,440 bytes. All admitted bounded runs retain
+  10% reserve, process caps, 64 MiB swap-growth stop and 600 s deadline; no
+  observed swap growth/abort. Sampling does not bound instantaneous peaks.
+- Evidence: `docs/hy-nomas-native-frontier.md`,
+  `.landmark/evidence/2026-10-25-hy-nomas-conditioned-four.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/logs/conditioned-four-receipt-v1.json`.
+  Operator-pinned immutable local files are trust assumptions; companion
+  object ancestry is opaque. Setup/terminal diagnostics use CPU; video input
+  is synthetic and native RoPE application uses uploaded upstream tables.
+  No full generation, model-wide residency/performance or quality claim.
+  Next falsifier: separately budgeted real-conditioning extension beyond four
+  blocks at full padded geometry. Rollback: omit the opt-in probe or revert
+  this atomic change; retain the synthetic four-block control. Refresh on
+  scoped code/source/cache/fixture, geometry/precision, lifetime, compiler/SDK/
+  OS/device or artifact changes; reread live memory before later GPU work.
+
 ### [LM-HY-NOMAS-FOUR-BLOCK-2026-10-25] Four consecutive BF16-cache blocks match fresh upstream at J6560
 
 - Scope: actual pretrained blocks 0 to 3, B1/V5280/T1280/C2048/H16/D128/FF8192,

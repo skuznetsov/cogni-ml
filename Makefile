@@ -149,6 +149,20 @@ $(BUILD_DIR)/hy_nomas_four_block_probe: examples/hy_nomas_four_block_probe.cr $(
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
+$(BUILD_DIR)/hy_nomas_conditioned_four_probe: examples/hy_nomas_conditioned_four_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: hy_nomas_conditioned_four_probe
+hy_nomas_conditioned_four_probe: $(BUILD_DIR)/hy_nomas_conditioned_four_probe
+
+.PHONY: spec_hy_nomas_conditioned_four
+spec_hy_nomas_conditioned_four: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) spec spec/hy_nomas_conditioned_four_admission_spec.cr spec/hy_nomas_padded_conditioning_admission_spec.cr \
+		spec/hy_nomas_mps_padded_prefix_spec.cr spec/hy_nomas_mps_shared_modulation_spec.cr \
+		spec/hy_nomas_serial_mps_spec.cr spec/hy_nomas_text_refiner_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
+
 $(BUILD_DIR)/hy_nomas_block23_cache_probe: examples/hy_nomas_block23_cache_probe.cr $(wildcard examples/support/hy_nomas*.cr examples/support/qwen25*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"

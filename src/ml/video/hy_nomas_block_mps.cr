@@ -17,7 +17,16 @@ module ML::Video
   # owned here. Reuse is serial: keep all bindings alive and immutable through
   # the command chain's terminal wait.
   class HyNomasMPSWorkspace
-    WEIGHT_STAGE_KEY = "hy_nomas_mps.weight_stage"
+    WEIGHT_STAGE_KEY       = "hy_nomas_mps.weight_stage"
+    ATTENTION_CLEAR_KERNEL = "hy_nomas_clear_joint_attention_f32"
+    ATTENTION_CLEAR_SOURCE = MetalOps::SOURCE + <<-METAL
+      kernel void hy_nomas_clear_joint_attention_f32(
+          device float *output [[buffer(0)]],
+          constant uint &count [[buffer(1)]],
+          uint index [[thread_position_in_grid]]) {
+        if (index < count) output[index] = 0.0f;
+      }
+      METAL
 
     private record SerialBinding, block : HyNomasDualStreamBlock,
       img : ML::MetalBuffer, txt : ML::MetalBuffer,
@@ -36,6 +45,7 @@ module ML::Video
 
     @block : HyNomasDualStreamBlock
     @config : HyNomasConfig
+    @attention_tokens : Int32
     @arena : Arena
     @weight_stage : ML::MetalBuffer? = nil
     @operations = {} of String => HyNomasDualStreamBlock::MPSLinearOperation
@@ -45,6 +55,7 @@ module ML::Video
     @attention_plan : (HyNomasAttentionMPSPlan | HyNomasCompactAttentionMPSPlan)? = nil
     @norm_plan : HyNomasMPSLayerNorm::Plan
     @allow_shared_modulation : Bool
+    @attention_clear_pipeline : ML::Metal::ComputePipeline? = nil
     @pointwise_plan : HyNomasMPSPointwise::Plan? = nil
     @activation_operations = {} of String => HyNomasDualStreamBlock::MPSActivationOperation
     @activation_plans = {} of String => HyNomasMPSActivation::UnaryPlan
@@ -56,6 +67,22 @@ module ML::Video
     @serial_buffers = [] of ML::MetalBuffer
 
     getter config : HyNomasConfig
+    getter attention_tokens : Int32
+
+    # Resolve the supported contiguous text-prefix attention geometry without
+    # allocating native resources. Full-sequence behavior remains the default.
+    def self.attention_tokens_for(config : HyNomasConfig,
+                                  valid_text_tokens : Int32?) : Int32
+      config.validate!
+      return config.joint_tokens unless valid = valid_text_tokens
+      unless config.batches == 1
+        raise ArgumentError.new("Hy-Nomas text-prefix attention requires batch-one geometry")
+      end
+      unless valid > 0 && valid <= config.text_tokens
+        raise ArgumentError.new("Hy-Nomas valid text prefix must be positive and no greater than text_tokens")
+      end
+      config.video_tokens + valid
+    end
 
     private def weight_stage : ML::MetalBuffer
       @weight_stage || raise ArgumentError.new("Hy-Nomas MPS weight stage is unavailable")
@@ -68,12 +95,14 @@ module ML::Video
                    video_rope_sin : ML::MetalBuffer,
                    *, attention_query_chunk : Int32 = 0,
                    attention_heads_per_group : Int32 = 0,
-                   allow_shared_modulation : Bool = false)
+                   allow_shared_modulation : Bool = false,
+                   valid_text_tokens : Int32? = nil)
       @config = @block.config
       @allow_shared_modulation = allow_shared_modulation
+      @attention_tokens = self.class.attention_tokens_for(@config, valid_text_tokens)
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(@config.batches,
-          @config.joint_tokens, @config.heads, @config.head_dim,
+          @attention_tokens, @config.heads, @config.head_dim,
           attention_query_chunk, attention_heads_per_group)
       end
       @norm_plan = HyNomasMPSLayerNorm::Plan.new(@config.dim, @config.norm_eps)
@@ -116,15 +145,20 @@ module ML::Video
             operation.input, operation.weight.weight, operation.output,
             operation.weight.dtype, operation.tokens)
         end
+        if @attention_tokens < @config.joint_tokens
+          @attention_clear_pipeline = ML::Metal::PipelineCache.get(ATTENTION_CLEAR_KERNEL) do
+            ML::Metal::ComputePipeline.new(ATTENTION_CLEAR_KERNEL, ATTENTION_CLEAR_SOURCE)
+          end
+        end
         @attention_plan = if attention_query_chunk > 0
                             HyNomasCompactAttentionMPSPlan.new(@config.batches,
-                              @config.joint_tokens, @config.heads, @config.head_dim,
+                              @attention_tokens, @config.heads, @config.head_dim,
                               @block.checkpoints["joint.query"], @block.checkpoints["joint.key"],
                               @block.checkpoints["joint.value"], @block.checkpoints["joint.attention"],
                               attention_query_chunk, attention_heads_per_group)
                           else
                             HyNomasAttentionMPSPlan.new(@config.batches,
-                              @config.joint_tokens, @config.heads, @config.head_dim,
+                              @attention_tokens, @config.heads, @config.head_dim,
                               @block.checkpoints["joint.query"], @block.checkpoints["joint.key"],
                               @block.checkpoints["joint.value"], @block.checkpoints["joint.attention"])
                           end
@@ -338,6 +372,15 @@ module ML::Video
         raise ArgumentError.new("Hy-Nomas MPS attention binding changed")
       end
       plan = @attention_plan || raise ArgumentError.new("Hy-Nomas MPS attention plan is unavailable")
+      if @attention_tokens < @config.joint_tokens
+        count = HyNomasDualStreamBlock.checked_count(@config.batches,
+          @config.joint_tokens, @config.dim)
+        pipeline = @attention_clear_pipeline || raise ArgumentError.new("Hy-Nomas attention clear pipeline is unavailable")
+        chain.encoder.set_pipeline(pipeline)
+          .set_buffer(output, 0, ML::Metal::BufferAccess::Write)
+          .set_value(count.to_u32, 1)
+          .dispatch_1d(count)
+      end
       plan.encode(chain)
     end
 
@@ -589,7 +632,7 @@ module ML::Video
       k = checkpoints["joint.key"]
       v = checkpoints["joint.value"]
       output = checkpoints["joint.attention"]
-      unless plan.batches == @config.batches && plan.tokens == @config.joint_tokens &&
+      unless plan.batches == @config.batches && plan.tokens == @attention_tokens &&
              plan.heads == @config.heads && plan.head_dim == @config.head_dim
         raise ArgumentError.new("Hy-Nomas MPS attention plan bindings changed")
       end

@@ -1,25 +1,103 @@
 # Hy-Nomas native Metal frontier
 
-Document status: the opt-in natural-prompt Qwen prefix, GPU conditioning crop,
-actual-weight text refiner/time embedding and one short-input DiT block pass a
-connected upstream intermediate gate (2026-10-25). A separate same-input replay
-now qualifies actual pretrained DiT blocks 0 to 1 with shared scratch/workspace
-on the saved refiner output. Local DiT weights now cover blocks 0 to 3 (128 tensors) plus the
-42 refiner/time tensors; the full checkpoint is not downloaded. Earlier bounded
-J6560 profiles and block-0-twice controls retain only their recorded scopes.
-Shared memory is reduced; no speedup follows from the new correctness probe.
-A header-only native planner now accounts for the complete DiT parameters and
-models serial block residency; full-stack peaks and execution beyond four blocks remain
-unqualified. GPU-produced BF16 source caches for blocks 0 and 1 now pass exact
-weight and short-input serial upstream gates without F32 raw staging. They
-preserve the independent-workspace control, shared scratch and repeated replay.
-A fresh same-input full-J replay now qualifies upstream ND RoPE application
-and eight selected outputs of actual blocks 0 to 1. A further four-block replay
-now qualifies all eight image/text outputs at the same full J with common
-scratch/workspace and direct GPU handoff. Full-stack composition,
-CUDA/Magi parity, model-wide performance and the video pipeline remain open.
+Document status (2026-10-25): the opt-in natural-prompt Qwen26 prefix, GPU crop,
+actual-weight text refiner/time embedding and pretrained DiT blocks 0 to 3 now
+pass a connected upstream gate at full B1/V5280/T1280/J6560. The bounded MPS
+adapter excludes padded attention rows and explicitly zeros their results;
+CUDA/Magi padding semantics remain unqualified. Local DiT weights cover these
+four blocks (128 tensors) plus 42 refiner/time tensors; the full checkpoint is
+not downloaded. Earlier synthetic-input, short-input and workspace controls
+retain their recorded scopes. A header-only planner accounts for complete DiT
+parameters and serial residency, but execution beyond four blocks, full-stack
+peaks, video quality and model-wide performance remain open. This composition
+probe establishes correctness, not a speedup.
 Upstream: Tencent-Hunyuan/Hy-Nomas at
 `911cea6458a89c2663513ff7099561ec190dd491` (Apache-2.0 source).
+
+## Qualified slice: real masked conditioning through four full-J blocks
+
+Status: VERIFIED within this MPS-adapter composition scope. The live native
+natural-prompt Qwen26 GPU crop feeds the actual-weight refiner/time embedding
+and pretrained blocks 0 to 3 in one command chain. Keep
+B1/V5280/T1280/J6560 tensor geometry, including 1257 padded text positions.
+Only the first 23 text positions are valid. Upstream range construction excludes
+padded queries and keys. The bounded MPS adapter explicitly zero-fills omitted
+query results; this does not prove the CUDA/Magi operator's padding behavior.
+Projections and residuals still operate on all 1280 rows. A compact J5303 replay
+cannot establish this full padded-tensor boundary.
+
+Risk: CAUTION (mask semantics, buffer lifetime and composition). Rollback:
+omit the new opt-in conditioning probe and retain the qualified synthetic
+four-block replay. Defaults, tolerances and arithmetic remain unchanged.
+Use prefix-only attention on the existing full buffers for B1, zero padded
+attention on GPU every request, and share the scalar-time modulation buffer
+only through the existing explicit alias permission. Reject arbitrary masks,
+multiple batches and unsupported segmentation before encoding this new path.
+
+DoD: focused admission/mask/lifetime tests, a fresh pinned-source MPS refiner
+and four-block oracle, and a guarded native live Qwen26/crop/refiner/four-block
+chain. Compare projected text, time vector and eight image/text block outputs
+at unchanged finite `atol=rtol=2e-5`. A repeat after scratch poisoning must match
+exactly; wrong-padding and wrong-successor controls must be detected. Require
+zero tracked encode MetalBuffer allocations/preterminal activation reads and
+one terminal wait per request. Source/cache/reference identities and aggregate
+named bytes must pass before Metal. Use cache-aware 10% reserve, bounded process
+caps, 64 MiB swap-growth stop and 600 s deadline. No full generation, video quality
+or performance claim. Refresh on source/fixture/geometry/precision, ownership,
+toolchain, OS or device changes; missing or altered evidence rejects admission.
+
+Observed: a fresh pinned-source upstream run evaluates the full 1280-row
+refiner, scalar timestep 500 and four actual blocks. Its MPS adapter executes
+84 attention query chunks (21 per block, C256/G16). A poisoned padded Q/K/V
+suffix leaves the valid-prefix result unchanged. The oracle consumes saved
+authenticated Qwen state 26, while native execution reruns all 26 Qwen blocks
+from the same natural prompt. All 27 BF16 prefix states, the GPU crop and mask
+pass on both positive requests and both negative-control requests.
+
+The projected text, time vector and eight block outputs (56,363,008 F32 values
+per positive request) match upstream raw exact: zero tolerance failures, bit
+differences or maximum absolute error. The second request remains exact after
+NaN poisoning 108 unique nonconstant refiner/DiT scratch buffers. GPU handoff
+uses the real projected text and scalar vec; expected conditioning is never
+uploaded as an inference input. All blocks share scratch/MPS workspace, keep
+distinct output banks and use the explicit shared-modulation alias permission.
+
+Each request has zero tracked MetalBuffer allocations during encode, zero
+preterminal activation readbacks and one terminal wait. The 39 postterminal
+diagnostic reads cover 27 Qwen states, crop plus mask and 10 consumer outputs.
+In-flight release of producer, crop and consumer is rejected. A finite wrong-
+padding control keeps the producer/refiner exact but fails both block-0
+outputs; substituting block-2 weights for block 3 preserves all predecessors
+and fails both block-3 outputs. Thirteen focused Crystal examples, eight CPU
+Python tests and six live pre-Metal CLI admission rejections pass. A separately
+written streamed byte/count audit authenticates all selected reference spans,
+their native digests, the four BF16 caches, source subsets/manifests and 12
+upstream source files. It is not a second neural implementation. Correlated
+MiniQuad source/runtime review returns ROBUST within this scope.
+
+Aggregate native named buffers: 17,676,492,108 bytes. Consumer named buffers:
+4,937,682,436 bytes, including full-row refiner scratch, four BF16 block caches,
+BF16 refiner parameters and retained setup F32 refiner staging. Native positive
+sampled peak: 18,857,406,248 bytes (17.56 GiB); minimum cache-aware headroom:
+22,427,516,928 bytes. Upstream sampled peak: 6,165,564,440 bytes. All admitted
+runs preserve the 10% reserve, process caps, 64 MiB swap-growth stop and 600 s
+deadline with no observed swap growth or abort. Sampling does not bound
+between-poll peaks; this diagnostic replay does not establish generation speed.
+
+Reproduce the focused checks with `make spec_hy_nomas_conditioned_four` and
+`python3 -B spec/hy_nomas_conditioned_four_reference_test.py`; build with
+`make hy_nomas_conditioned_four_probe`. Use an SSD `BUILD_DIR`, the external
+memory guard and exact pinned oracle/native arguments indexed by
+`/opt/mldata_ssd/cogni-ml/hy-nomas-conditioned-four-20261025/logs/conditioned-four-receipt-v1.json`.
+Repository evidence: `.landmark/evidence/2026-10-25-hy-nomas-conditioned-four.json`.
+Operator-pinned immutable local artifacts remain a trust assumption; copied
+companion object ancestry is opaque. Setup file I/O/uploads and terminal
+diagnostics use CPU. Initial video input is synthetic, and upstream ND RoPE
+tables are uploaded rather than newly generated natively. No full diffusion,
+model-wide residency, CUDA/Magi or BF16-activation parity, quality or speed
+claim. Next falsifier: a separately budgeted extension beyond four resident
+blocks on the same real conditioning and full padded geometry, before any
+full-stack or video trial.
 
 ## Qualified slice: four consecutive BF16-cache blocks at full J
 
