@@ -1,14 +1,13 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: removing only B64's three execution-only SIMD
-barriers reduces complete-projection time by 2.57-2.60% for dense F16 and
-0.72-1.14% for direct Q4 in two opposite-initial-order runs, with bitwise equal
-outputs. Moving the next-panel fill earlier is slower and is rejected. The
-uniform Q4 candidate still takes 15.57-16.28% longer than resident F32 MPS;
-this bounded schedule improvement does not close the native GEMM gap.
-See "B64 next-panel scheduling experiment" for scope, evidence and the next
-falsifier. Production dispatch is unchanged; the original-BF16 quality gate
-still fails. No generation was run.
+Current frontier, 2026-10-26: widening uniform B64 panels from K32 to K64
+preserves the full K8 MMA order and every output bit, but increases complete
+projection time by 7.40-8.71% for dense F16 and 3.33-5.03% for direct Q4 in
+two opposite-initial-order runs. K64 loses all 12 same-round pairs for each
+representation. Keep K32 for this geometry; fewer panel handoffs alone do not
+produce a speedup. See "K32 versus K64 panel experiment" for the measured
+countercase and next falsifier. Production dispatch is unchanged; the separate
+Q4 versus original-BF16 quality gate still fails. No generation was run.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
@@ -834,3 +833,121 @@ and opposite-initial-order complete-projection timings before carrying the
 change to Q4. No new precision, input distribution, full-block/model or video
 claim is admitted. Refresh on changed source/cache/fixture, geometry/schedule,
 precision, ownership, compiler/SDK/OS/device/MPS or missing external evidence.
+
+## K32 versus K64 panel experiment, 2026-10-26
+
+Status: VERIFIED within this opt-in diagnostic; the K64 speed hypothesis is
+rejected for the measured geometry. Compare the uniform B64 K32
+panel against K64 at M1280/K8192/N2048, first dense F16 and then direct Q4.
+Keep the 256-thread, eight-SIMD-group, M64/N64 geometry, fill-after-MMA
+schedule, full-K ordered K8 MMA sequence, F16 operands, F32 accumulators,
+merge and bias. Production dispatch is outside this change.
+
+Hypothesis: halving panel handoffs may reduce staging overhead. Countercase:
+32 KiB instead of 16 KiB of double-buffered threadgroup memory may reduce
+occupancy and erase the benefit. CAUTION: the strongest correctness failure
+is incomplete or overlapping K64 panel publication. Retain all threadgroup
+barriers, prove each K64 panel slot has one writer, check the compiled static
+allocation and device limit, and compare every output bit before and after
+bias with K32 and identical-operand MPS. The dense stage must qualify before
+a Q4 K64 candidate runs. Rollback removes the opt-in companion target.
+
+DoD: guarded release build, dense qualification, then profiler-off paired
+complete-projection runs with both initial orders, two warmup and six measured
+rounds, authenticated prior controls and unchanged finite F32 atol=rtol=2e-5.
+Replay the packed output bytes, raw GPU comparator words, root isolation,
+schedule, source/geometry bindings and guard telemetry, with seeded checker
+failures. Preserve one terminal wait/readback, zero preterminal reads/waits
+and zero tracked encode-time MetalBuffer allocations. Use the existing
+23-row real input repeated cyclically on GPU, without claiming a new prefix
+distribution. Budgets remain 2 GiB/120 s, a cache-aware 10% memory floor and
+64 MiB swap-growth stop; builds use 4 GiB/600 s. No full block, model, capture
+or generation. Identical-operand success does not waive the existing Q4
+versus original-BF16 quality failure. Refresh on changed source, fixtures,
+weights, geometry, precision, lifetimes, toolchain, device/OS/MPS or missing
+external evidence.
+
+Dense F16 qualified first with binary/source v1, including a full postterminal
+byte replay and 25 CPU checker tests, before any Q4 K64 candidate ran. Binary/
+source v2 then added Q4 to the same diagnostic. K64 has 128 panel iterations
+instead of 256 and 32,768 instead of 16,384 dynamic threadgroup bytes. Each
+output still executes the same 1,024 K8 MMAs in ascending K order. The K64
+weight panel uses all 256 threads with four decoder lanes per row; the input
+panel retains the original mapping and adds its second 32-wide band. All
+threadgroup barriers remain. Checked source transformations and panel-writer
+coverage address incomplete or overlapping publication. The compiled pipeline
+static-plus-dynamic limit and the queried M2 Max 32,768-byte device limit pass.
+
+Final GPU medians in ms per complete projection (two warmup/six measured
+rounds, 16 complete projections per isolated timed root, profiler off):
+
+| Path | Forward initial order | Reverse initial order | K64 duration increase |
+| --- | ---: | ---: | ---: |
+| Dense F16 K32 | 4.7536 | 4.5389 | reference |
+| Dense F16 K64 | 5.1678 | 4.8747 | 8.71% / 7.40% |
+| Direct Q4 K32 | 5.3547 | 4.9433 | reference |
+| Direct Q4 K64 | 5.5329 | 5.1921 | 3.33% / 5.03% |
+| Resident identical-operand F32 MPS | 4.5288 | 4.2464 | control |
+| Decode then F32 MPS | 4.7089 | 4.4467 | control |
+
+K64 loses all 12 paired rounds in both dense and Q4, including six K64-first
+and six K32-first pairs in each representation. Median paired K64/K32 ratios
+are 1.08657 dense and 1.05118 Q4. Absolute medians drift downward between run
+contexts, including MPS; the balanced within-round comparison, not an older
+absolute benchmark, supports rejection. The two run medians are not confidence
+intervals. Larger shared storage is a plausible occupancy explanation, not a
+measured cause; this experiment does not isolate decoder stalls or occupancy.
+
+All four K-panel candidates equal corresponding old B64 and identical-operand
+MPS outputs bitwise, raw and after bias. Both final runs repeat all 28 bank
+hashes; all 24 dense-stage and 20 pinned prior-control banks remain fixed. The
+finite F32 tolerance stays atol=rtol=2e-5. The separate G2 comparison still
+fails 949 entries and the original-BF16 G1 quality gate still fails (RMSE
+0.6173250074, relative L2 0.047034245, max abs 3.2914271355, 2,621,164 failures).
+Identical-operand exactness does not qualify the lossy representation.
+
+Each final run has 48 samples, 97 roots, 96 asynchronous continuations, zero
+timed-root overlap, one terminal wait/readback, zero preterminal reads/waits
+and zero tracked encode-time MetalBuffer allocations. Named storage is
+868,056,672 bytes including diagnostic controls and packing. Maximum sampled
+native process-group footprint is 1,715.13 MiB, minimum cache-aware headroom
+24.5558 GiB, swap growth zero. The 10% floor, 2 GiB cap, 64 MiB swap stop and
+120 s deadline pass unchanged. Samples do not bound true peaks, reclaimable
+file cache is an estimate, and counters exclude private MPS allocations.
+
+All three real byte replays pass (dense v1 and final forward/reverse v2). Final
+replays recompute 42 same-operand and three saved-BF16 comparisons, 204 raw
+comparator words including injected failures, authentic/cyclic row bands,
+schedule, launch/source bindings, root isolation and guard telemetry. The final
+checker passes 28 seeded CPU tests, including missing candidate comparisons,
+row-64 corruption despite rewritten hashes, altered geometry/source/root,
+fabricated timing summaries, widened tolerances and forged pass flags. Eleven
+pre-Metal admission negatives pass and preserve existing artifacts. Correlated
+Mini-Quad review is ROBUST for this bounded countercase; it is not independent
+replication or a general GEMM performance claim.
+
+Evidence: `.landmark/evidence/2026-10-26-hy-nomas-q4-kpanel.json`. Raw reports,
+sidecars, pinned checkers, selected source snapshots, binaries/linked-object
+receipts, exact commands and the recomputed aggregate live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026`. Each lineage pins 29
+selected sources and ten linked objects. These identities are not a hermetic
+build or driver attestation. No production kernel or default changed.
+
+Executed final DoD entry points (the runner applies the unchanged guard):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp/run_guarded.py build-kpanel-v2 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_kpanel_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp/run_guarded.py kpanel-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/build/hy_nomas_q4_kpanel_benchmark-v2 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-forward-v1.json --rows 1280 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp/run_guarded.py kpanel-reverse-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/build/hy_nomas_q4_kpanel_benchmark-v2 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-reverse-v1.json --rows 1280 --repeats 16 --reverse-first
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp/run_guarded.py verify-forward-v2 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v2.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-forward-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/tmp/run_guarded.py verify-reverse-v2 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/source/verify_kpanel_v2.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-kpanel-20261026/reports/kpanel-reverse-v1.json
+crystal tool format --check examples/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr
+git diff --check
+```
+
+Next falsifier: reserve 32 KiB for an otherwise unchanged K32 kernel, without
+changing panel width or K8 order. If that regresses against its 16 KiB control,
+it separates shared-reservation cost from the K64 loading change. No occupancy
+causality is admitted yet. Refresh the result on source/cache/fixture,
+geometry/schedule, precision/ownership, compiler/SDK/OS/device/MPS changes or
+missing external artifacts. Full-block and generation throughput remain open.

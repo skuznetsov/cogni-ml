@@ -34230,3 +34230,33 @@ Refresh after source/toolchain/device/model/workload changes.
   source/cache/fixture, geometry/schedule, precision/ownership, compiler/SDK/OS/
   device/MPS changes or missing external evidence; selected snapshots/receipts
   are not a hermetic build or driver attestation.
+
+
+### 2026-10-26: K64 panels preserve bits but lose to K32 in dense F16 and Q4
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K32 versus K64 panel
+  experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-kpanel.json.
+- Dense qualification precedes Q4. Opt-in K32/K64 clones keep M1280/K8192/N2048,
+  64x64 tiles, 256 threads and the same 1,024 ascending K8 MMAs per output.
+  K64 halves panel iterations but doubles shared bytes from 16,384 to 32,768;
+  all threadgroup barriers remain. The 23 saved real rows repeat on GPU.
+- Both opposite-initial-order schedules reject K64: dense duration +7.40-8.71%,
+  Q4 +3.33-5.03%; K64 loses all 12 same-round pairs per representation, six
+  candidate-first/six control-first. Median paired ratios 1.08657/1.05118.
+  Run-median ranges are not confidence intervals; shared-memory/occupancy
+  causality remains a hypothesis. Keep K32 for this geometry.
+- All four candidates equal B64 and identical-operand MPS raw/biased outputs
+  bitwise; all 28 final banks repeat both orders, all 24 dense-stage banks and
+  20 prior controls remain fixed. Unchanged atol=rtol=2e-5. G2's 949 failures
+  and original-BF16 Q4 relative L2 0.0470342 remain unwaived.
+- Each final schedule: 48 samples/97 roots/96 async continuations, one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled peak 1,715.13 MiB, headroom >=24.5558 GiB,
+  swap flat. The 10% cache-aware reserve, 2 GiB/120 s cap and 64 MiB swap stop
+  pass. Samples are not peak bounds; counters exclude private MPS allocations.
+- Three real byte replays, 25/28 lineage-specific checker tests and eleven
+  pre-Metal admission negatives pass. Correlated Mini-Quad ROBUST within this
+  diagnostic; no production change, full block, model, capture or generation.
+- Next falsifier: K32 with unused shared reservation padded to 32 KiB versus
+  16 KiB, retaining geometry/order. Refresh on source/cache/fixture, geometry,
+  precision/ownership, toolchain/device/OS/MPS changes or lost external evidence.
