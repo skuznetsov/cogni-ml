@@ -1,0 +1,392 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-tile-reuse",
+  "status": "VERIFIED within the bounded M1280 projection diagnostic; no production promotion",
+  "base_commit": "655217d52484c68f3064159dceac6fdb76fa6a1e",
+  "risk": "CAUTION: opt-in GPU performance diagnostic; production kernels and defaults unchanged",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Existing B64 and exact-tile B128/SG8 Qwen kernels preserve bitwise full-K G1/MPS outputs on the authenticated Q4 operands and improve over M32 G1 in every measured paired round. Median G1/candidate ratios are 1.070912/1.073027. Both remain slower than resident F32 MPS and Q4 expansion plus MPS."
+  },
+  "provenance": "Native terminal GPU bytes and isolated command-root intervals; postterminal byte/comparator/timing/guard replay; correlated Mini-Quad source and evidence review.",
+  "problem": "M1280 repeats weight-tile decoding for each M32 tile. Test whether sharing each decoded tile across 64 or 128 rows improves complete projection time while retaining the full-K accumulation order.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "packed_launches": [
+      {
+        "arm": "packed.g1",
+        "kernel": "hy_q4_bench_packed_h16",
+        "m_tile": 32,
+        "n_tile": 64,
+        "threads": 128,
+        "shared_bytes": 12288,
+        "threadgroups": [
+          40,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "packed.b64",
+        "kernel": "simd_mm_q4k_h16_b64",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "packed.b128",
+        "kernel": "simd_mm_q4k_h16_b128_sg8",
+        "m_tile": 128,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 24576,
+        "threadgroups": [
+          10,
+          32,
+          1
+        ],
+        "k_groups": 1
+      }
+    ],
+    "arms": [
+      "packed.g1",
+      "packed.b64",
+      "mps.resident",
+      "packed.b128",
+      "mps.expand"
+    ],
+    "repeats_per_timed_root": 16,
+    "warmup_rounds": 2,
+    "measured_rounds": 6,
+    "runs": 2,
+    "order": "Alternating forward/reverse rounds in each run; opposite first warmup order between runs.",
+    "timed_packed": "Tile decode + full-K SIMD GEMM + unchanged one-group F32 merge + one bias.",
+    "timed_mps": "Resident F32 matrix projection + bias; expansion control additionally decodes Q4 to F16 and widens to F32 each call.",
+    "excluded_from_timed_roots": "Input/setup, qualification, coverage atomics, poisoning, comparators, output packing; no profiler.",
+    "ownership": "All preallocated resources retained through the sole final wait. Packed candidates never expand a full weight matrix."
+  },
+  "dod": {
+    "build": "Guarded release build build-v1 exit0; selected source snapshot and frozen binary predate native runs.",
+    "native": "Two guarded M1280 runs exit0 with opposite initial orders; all 16 bank hashes repeat and all 12 prior control hashes match.",
+    "replay": "verify-forward-v1 and verify-reverse-v1 PASS: 18 same-operand and three saved-BF16 comparisons, 172 comparator words with injected controls, row bands, all-root timing isolation and guard logs.",
+    "negative_controls": "13 CPU checker tests pass; nine captured-report/timing falsifiers reject; six admission negatives reject before Metal initialization and preserve existing artifacts.",
+    "hygiene": "Scoped Crystal format check and git diff --check pass; selected 23 sources, frozen binary, ten linked objects and five postterminal scripts rechecked unchanged.",
+    "command_records": "Exact commands, caps, deadlines and successful exits are indexed in the external argv.json and guard.jsonl artifacts.",
+    "rollback": "Revert this opt-in benchmark commit."
+  },
+  "observations": {
+    "timings": [
+      {
+        "run": "reuse-m1280-forward-v1",
+        "gpu_median_ms_per_complete_call": {
+          "packed.g1": 5.0416809899616055,
+          "packed.b64": 4.708535156623839,
+          "mps.resident": 4.001095052444725,
+          "packed.b128": 4.704174478774803,
+          "mps.expand": 4.206421874641819
+        },
+        "guard_samples": {
+          "peak_sampled_process_mib": 955.1731567382812,
+          "min_pressure_free_pct": 90,
+          "min_cache_aware_headroom_gib": 28.576553344726562,
+          "swap_growth_mib": 0.0
+        }
+      },
+      {
+        "run": "reuse-m1280-reverse-v1",
+        "gpu_median_ms_per_complete_call": {
+          "packed.g1": 5.038787760440755,
+          "packed.b64": 4.705721354184789,
+          "mps.resident": 4.002739583029324,
+          "packed.b128": 4.696753906500817,
+          "mps.expand": 4.18315885372067
+        },
+        "guard_samples": {
+          "peak_sampled_process_mib": 644.9227905273438,
+          "min_pressure_free_pct": 90,
+          "min_cache_aware_headroom_gib": 28.892410278320312,
+          "swap_growth_mib": 0.0
+        }
+      }
+    ],
+    "paired_ratio_definition": "Control GPU seconds / candidate GPU seconds, paired by measured round. Values >1 favor the candidate.",
+    "paired_gpu_ratios": {
+      "packed.b64": {
+        "packed.g1": {
+          "count": 12,
+          "median": 1.0709119786470631,
+          "min": 1.0598965152613093,
+          "max": 1.0770154751329502,
+          "candidate_faster_count": 12
+        },
+        "mps.resident": {
+          "count": 12,
+          "median": 0.8500716352263877,
+          "min": 0.841916431489884,
+          "max": 0.8558868208410505,
+          "candidate_faster_count": 0
+        },
+        "mps.expand": {
+          "count": 12,
+          "median": 0.8907862612224957,
+          "min": 0.8811299628157602,
+          "max": 0.8982172689651922,
+          "candidate_faster_count": 0
+        }
+      },
+      "packed.b128": {
+        "packed.g1": {
+          "count": 12,
+          "median": 1.0730265688332132,
+          "min": 1.0703737210804296,
+          "max": 1.075411968463026,
+          "candidate_faster_count": 12
+        },
+        "mps.resident": {
+          "count": 12,
+          "median": 0.851469912761134,
+          "min": 0.8463675229834889,
+          "max": 0.8531074539160216,
+          "candidate_faster_count": 0
+        },
+        "mps.expand": {
+          "count": 12,
+          "median": 0.8914587775439397,
+          "min": 0.8877021830455681,
+          "max": 0.8967723732745363,
+          "candidate_faster_count": 0
+        }
+      }
+    },
+    "same_operand_parity": {
+      "b64_and_b128": "Bitwise equal to G1 and resident MPS for all 2621440 raw outputs and again after bias.",
+      "row_bands": "All 23 authentic rows and every cyclic row checked against G1; includes B128 second-band boundary.",
+      "all_16_bank_hashes_repeat_between_orders": true,
+      "prior_m1280_control_hashes_checked": 12,
+      "summary_semantics": "Candidate summary flags require bitwise identity as well as the per-comparison tolerance gate.",
+      "g2_mps_tolerance_failures_per_bank": 949
+    },
+    "original_bf16_saved_output": {
+      "name": "packed.g1.bias.vs.original_bf16_saved_upstream_rows",
+      "elements": 2621440,
+      "failures": 2621164,
+      "raw_bit_differences": 2621440,
+      "max_abs": 3.2914271354675293,
+      "rmse": 0.6173250074231923,
+      "relative_l2": 0.04703424499104567,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "finite_required": true,
+      "unchanged": true
+    },
+    "execution_per_run": {
+      "command_roots": 81,
+      "asynchronous_continuations": 80,
+      "timed_root_overlap_seconds": 0,
+      "terminal_waits": 1,
+      "terminal_packed_reads": 1,
+      "preterminal_reads": 0,
+      "tracked_encode_time_metalbuffer_allocations": 0,
+      "private_mps_allocations_tracked": false,
+      "named_bytes": 616398176
+    },
+    "weight_storage_bytes": {
+      "packed_q4_projection": 9437184,
+      "resident_f32_mps_projection": 67108864,
+      "additional_f16_correctness_control": 33554432
+    },
+    "memory_scope": "The diagnostic retains all controls/output banks and both weight representations; this is not minimal production storage. Guard samples do not bound true peaks or guarantee file-cache reclamation.",
+    "guard": {
+      "accounting": "file-cache",
+      "floor_percent": 10,
+      "native_process_cap_bytes": 2147483648,
+      "max_swap_growth_bytes": 67108864,
+      "native_deadline_seconds": 120,
+      "build_cap_mib": 4096,
+      "build_deadline_seconds": 600,
+      "checker_cap_mib": 1024,
+      "checker_deadline_seconds": 120,
+      "observed_native_swap_growth_bytes": 0
+    }
+  },
+  "adversary": {
+    "verdict": "ROBUST within the bounded projection diagnostic",
+    "review_lineage": "Correlated same-lineage source/lifetime review, supported by native bytes and executable postterminal falsifiers; no independent-model claim.",
+    "strongest_numerical_attack": "B128 two-band misrouting: poison outputs, preserve G1 baseline hashes, compare all output bits and authentic/cyclic rows. A synthetic 1280x2 row-64 checker-test mutation with recomputed hashes cannot forge candidate success.",
+    "strongest_timing_attack": "A named timed root can overlap other queued work: verify its interval against every other root. Captured overlap mutation is rejected.",
+    "pressure_cases": [
+      {
+        "case": "widened-tolerance",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "forged-g2-pass",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "wrong-segments",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "wrong-geometry",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "candidate-bank-hash",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "reported-metric-word",
+        "scope": "full-report",
+        "rejected": true
+      },
+      {
+        "case": "wrong-root",
+        "scope": "captured-timing",
+        "rejected": true
+      },
+      {
+        "case": "wrong-packed-launch",
+        "scope": "captured-timing",
+        "rejected": true
+      },
+      {
+        "case": "root-overlap",
+        "scope": "captured-timing",
+        "rejected": true
+      }
+    ],
+    "admission_cases": [
+      "cap",
+      "rows-edge",
+      "rows-zero",
+      "repeats",
+      "collision",
+      "sidecar-collision"
+    ]
+  },
+  "not_claimed": [
+    "Original-BF16 quality qualification: the separate quantization gate still fails and is not waived.",
+    "New real full-prefix activation distribution: M1280 is GPU cyclic repetition of 23 real rows.",
+    "Production dispatch promotion, other projections, full-block, cold-load, mixed-weight-cache or generation throughput.",
+    "Decoder-only, occupancy or DRAM bottleneck attribution: M tiling also changes register/shared-memory pressure.",
+    "Private MPS allocation counts, true memory peak or hermetic build/driver provenance."
+  ],
+  "next_falsifier": "Same-geometry dense F16 controls against B64/B128, preserving per-output K order, plus a GPU profile of MMA/staging/register pressure. Account for changed weight traffic before assigning differences to decoding.",
+  "decay_trigger": "Changed source/cache/fixture, geometry, repetition/order schedule, precision, ownership, compiler/SDK/OS/device/MPS or unavailable external artifacts. Rebuild and rerun affected gates before reusing the claim.",
+  "input_pins": {
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "weight_offset": 61441024,
+      "weight_bytes": 9437184,
+      "bias_offset": 61436928
+    },
+    "baseline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/reports/paired-m1280-forward-v1.json",
+      "sha256": "6cbe310fb1fdd619e715f440c09daac99e308eb5ca9f61eade459a9e0abd15c6",
+      "m1280_hashes_checked": 12
+    },
+    "kernel_sources": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "benchmark_sha256": "c904ac8240981695bde8c7904bc47f0182bba3a36e4a596ea32f6e28ff925adf",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158"
+    }
+  },
+  "source_receipt": {
+    "hardware": "Apple M2 Max",
+    "os": "26.6.2 (25G83)",
+    "sdk": "27.0",
+    "crystal": "Crystal 1.22.1 (2026-10-22)\n\nLLVM: 23.1.4\nDefault target: aarch64-apple-darwin25.6.0",
+    "selected_sources": 23,
+    "linked_objects": 10,
+    "scope": "Selected sources and objects were rechecked; not a hermetic attestation."
+  },
+  "external_artifacts": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026",
+    "availability": "Local external SSD; not committed",
+    "scope": "Curated index to actual evidence, not proof from hashes or structure alone.",
+    "columns": [
+      "relative_path",
+      "sha256",
+      "nbytes"
+    ],
+    "files": [
+      ["source/native-v1.json","efdb2538fb35fc2fb25f2c86bc119b0078a993c5a06615de7398ad1d72cca2ae",4227],
+      ["source/native-v1-receipt.json","8acd0e6b8319a2979e0fea27cd83c2093e99418451c84bf7f9067a8815c31ffe",3037],
+      ["build/hy_nomas_q4_tile_reuse_benchmark-v1","b7fb2937e614896488bd4e48da20d8b6a3d6b730f63c0096843e70fe91577f4f",1796928],
+      ["tmp/run_guarded.py","60227e5db3efb19fce852975754a190a7200d8dc94fe3022146e6002a7281119",1163],
+      ["source/verify_tile_reuse_v1.py","95d08a53bceacb21ef13f0d2ac2854229ab5639deefe611eeba9e440bc537fd9",52896],
+      ["source/test_verify_tile_reuse_v1.py","93c2c18ad632d22c40dde60e6ee9ea0c2dd15c9ba19d407bf78bf6dc19be0860",14069],
+      ["source/analyze_tile_reuse_v1.py","7a67f35981b70c331a98fce744896ed9fc9d44507bfec41e91afddc88ce6332e",3009],
+      ["source/checker_pressure_v1.py","6bd46243c7c5f5642293f0c8182817208645940a9304ad6593a10aaeac71d9a7",2128],
+      ["source/admission_checks_v1.py","9e81c3c38c1de975952f149f89230a665ff4cbbdb376cf62b5b216d2fd8d98cc",2068],
+      ["reports/reuse-m1280-forward-v1.json","14d902a8a7572d1aabd319c97df4dd8fb747f2e05e7b7f9d7a6dbfb2ed41e187",50529],
+      ["reports/reuse-m1280-reverse-v1.json","d93ab82139469ecdb1dedff4229503bec7c476366da0c782dd09f33c90420669",50487],
+      ["reports/verify-forward-v1.json","a31ddbee98bb8ea0d384e31b46188a827a20cba3e64dc6a724a4740b70bdc4b8",11572],
+      ["reports/verify-reverse-v1.json","376296f6668e4c8ae75c39dc1cb18fd840e514e96c7729b0ee1927690e8704db",11567],
+      ["reports/paired-analysis-v1.json","8c3e38251f905eec3c318ee054838f87fe72e72b8ba43a4602ed0bdd87658b6a",5656],
+      ["reports/checker-pressure-v1.json","c48bf127c59a39cf0e18e253466bb519723ae0153b6bca72a11b5c66d5524122",1751],
+      ["reports/admission-v1.json","03cfedce839d158061168dc7adb0edf94746342b4ed1a856bc59573b41ec728f",639],
+      ["reports/terminal-identities-v1.json","500f69da6f527fcb2979f828a44ff21791a5a7b558a43b6fa32f533b1c896349",1483],
+      ["reports/reuse-m1280-forward-v1.json.f32le","eed493fdb02ec80cd0ea3c01b258974b702710afc11e5704c6c1d91e5a78d540",167772848],
+      ["reports/reuse-m1280-reverse-v1.json.f32le","eed493fdb02ec80cd0ea3c01b258974b702710afc11e5704c6c1d91e5a78d540",167772848],
+      ["logs/build-v1.argv.json","9dd31a957c067f3d5890ba4d447633f4c77b11668dbcaff76c1ee8ea2b73a82b",649],
+      ["logs/build-v1.guard.jsonl","ccfb75900e1690eec9b0c7e50d46779036e8f78bc89748e61b1271454ae78f4a",6280],
+      ["logs/build-v1.out","ab58f637b2bb2458aef10b91d94015f91f06ef18d2e03f75316a32849cc473d0",1219],
+      ["logs/reuse-m1280-forward-v1.argv.json","975a78534ff921a115458e1e9fc1d1b61640595805d07054209e460ed53a325c",795],
+      ["logs/reuse-m1280-forward-v1.guard.jsonl","a9f63b49c1a607f2114c85f6fcbad9886d3f54b5d38d645ba724aa1c28cbc16b",3817],
+      ["logs/reuse-m1280-forward-v1.out","766759732c3bf56180e1c691ba7f9bc198ea10f354ae4173abbf971f2a6f6b4d",1652],
+      ["logs/reuse-m1280-reverse-v1.argv.json","b8e5d8d37173b361b12b4d5ad22195bece00912029c58a389db5896e9d982adb",816],
+      ["logs/reuse-m1280-reverse-v1.guard.jsonl","47965ba1053904cb11c57b14aff11f5e2f8204209e04b5c1d7572f2f54c874c1",3509],
+      ["logs/reuse-m1280-reverse-v1.out","498720ad0d64d30b1f5fb2006727436846ca4747dc866af0b35277ba7cc659e5",1650],
+      ["logs/verify-forward-v1.argv.json","83a354cc0ec389952c7385121d2ec0ed6fb527e86699039f3d0d05c20ef4e5f4",741],
+      ["logs/verify-forward-v1.guard.jsonl","45cefc739236bd6b41e21294dba04f9ba259993b49e02665fb072e1ffd7cc985",10589],
+      ["logs/verify-forward-v1.out","6e32941fe434b3adf19199c17e23a442385fd8a073fb677ef24c8dd28be60e73",9366],
+      ["logs/verify-reverse-v1.argv.json","8170ec05ccccac125aa29cf2b35534ec89b6fd49d6cba4126395711f4d644481",741],
+      ["logs/verify-reverse-v1.guard.jsonl","9592c8740e1e3fb05610a67a3a695fa4562526b6d5619432a6571f7de4162077",10270],
+      ["logs/verify-reverse-v1.out","a1a6785137e2c1866d69b140f5528121ec6a7ba76371c678871c4ca8afb5d72f",9361],
+      ["logs/checker-tests-v1.argv.json","1ded57eaeb5ab857b185b544e2c448654d28298d652b59abd42367c3d727e202",655],
+      ["logs/checker-tests-v1.guard.jsonl","ab557b92a5728d3ae84f06d0ab0d662d0353fd5b4e01b2b0e48cf012ac11524b",1662],
+      ["logs/checker-tests-v1.out","c41b26673a6c64182e2f256acc2fb2b182de3b1ab82bf79c8f093dd278ad5a75",1753],
+      ["logs/checker-pressure-v1.argv.json","073cf7b80ec3d05b0bb0fc3ea9b6c9803ecd1d1806d72bb3f858712e53a86f15",644],
+      ["logs/checker-pressure-v1.guard.jsonl","c3604025ced21545be51eba378ca08333b218d799a340caff6345875b80ed2e4",11812],
+      ["logs/checker-pressure-v1.out","fa82b75176e46744b0a612df5b1058b21b88bc549d63890aca5724a301e625c3",1433],
+      ["logs/admission-v1.argv.json","a001175ac435ea180def7ea760342d3da3cf6bd913dffe2349ebd35ebb3b504b",637],
+      ["logs/admission-v1.guard.jsonl","9dbfedd30e3e1ed1e78bcd6d3bbf59152ce3ce814817f5e0ebff8b0310840066",1659],
+      ["logs/admission-v1.out","58dd8b669fea8337bdeaa19b61b529a0e9a718c7444211f6ebac70653d72db26",459]
+    ]
+  }
+}

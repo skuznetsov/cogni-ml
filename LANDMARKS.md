@@ -34115,3 +34115,39 @@ Refresh after source/toolchain/device/model/workload changes.
   accumulation at M1280. No M32-to-M1280 dispatch threshold is qualified.
   Refresh on changed source/cache/fixture, geometry, repetition/order schedule,
   precision, ownership, compiler/SDK/OS/device/MPS or missing external artifacts.
+
+
+### 2026-10-26: full-K Q4 tile reuse preserves bits but does not close the MPS gap
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "Full-K weight-tile
+  reuse frontier", and .landmark/evidence/2026-10-26-hy-nomas-q4-tile-reuse.json.
+- An opt-in M1280/K8192/N2048 probe reuses existing Qwen B64/B128 kernels with
+  unchanged full-K G1 order, one-group F32 merge and bias. No production kernel
+  or dispatch change. Larger M still repeats the same 23 real rows on GPU.
+- Two opposite-initial-order runs give M32 G1 5.039-5.042 ms, B64 4.706-4.709 ms,
+  B128 4.697-4.704 ms, resident F32 MPS 4.001-4.003 ms, expansion+MPS 4.183-4.206 ms.
+  All 12 paired rounds favor both candidates over G1, and both MPS controls over
+  either candidate. Median G1/candidate ratios: 1.070912 B64, 1.073027 B128.
+- Both candidates equal G1/MPS bitwise for every raw/biased output; row-band
+  checks verify the 23 authentic rows and all cyclic rows separately. All 16
+  bank hashes repeat between orders and the 12 prior control hashes are fixed.
+  Finite F32 atol=rtol=2e-5 is unchanged. G2's 949 failures and the separate
+  original-BF16 quantization-quality failure remain; neither is waived.
+- Each run: 81 command roots/80 async continuations, no timed-root overlap, one final
+  wait/readback, zero tracked encode buffer allocations/preterminal reads.
+  Named bytes 616,398,176 include MPS/dense controls and terminal output banks;
+  packed weights remain 9 MiB versus MPS's 64 MiB matrix. Sampled native process
+  footprint at most 955.18 MiB, cache-aware headroom at least 28.5765 GiB, swap
+  flat. The guard retains a 10% floor, 2 GiB cap, 64 MiB swap stop and 120 s limit;
+  sampling does not bound true peaks, and counters exclude MPS private storage.
+- Both postterminal byte/row-band/timing/guard replays, 13 checker tests, nine
+  captured-data falsifiers and six pre-Metal admission negatives pass.
+  Correlated Mini-Quad ROBUST within this diagnostic. No original-BF16 quality,
+  real full-prefix, full-block or generation speed claim and no promotion.
+- Rejected inference: 4x fewer nominal tile decodes implies a comparable wall
+  speedup. B128 barely changes B64 timing; launch occupancy/register pressure
+  and staging remain unresolved. Next: same-geometry dense F16 controls plus
+  GPU profile, accounting for changed weight traffic before decoder attribution.
+  Refresh on changed source/cache/fixture, geometry/schedule, precision/ownership,
+  compiler/SDK/OS/device/MPS or missing external artifacts. Selected 23 source
+  files, binary and ten linked objects rechecked; not a hermetic attestation.

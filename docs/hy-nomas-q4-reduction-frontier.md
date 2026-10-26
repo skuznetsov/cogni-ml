@@ -1,8 +1,9 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: the opt-in paired benchmark verifies a small-M G2
-speedup and rejects all-M G2 promotion at M1280. See "Paired projection benchmark
-frontier" below for timing, shape-dependent numerical gates and the next probe.
+Current frontier, 2026-10-26: M64/M128 weight-tile reuse at M1280 preserves G1
+bits and gives a measured 1.071/1.073x speedup over M32, but remains slower than
+both MPS controls. The preceding benchmark rejects all-M G2 promotion. See the
+respective frontiers below for timing, numerical gates and the next falsifier.
 Production dispatch remains unchanged; no generation was launched.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
@@ -443,3 +444,116 @@ Q4 decoding across M tiles, first against the same MPS controls. Keep G2's
 small-M result separate; no dispatch threshold is qualified between M32 and
 M1280. Original-BF16 quality, real full-prefix inputs, full-block performance
 and generation remain open. No full generation was launched.
+
+## Full-K weight-tile reuse frontier, 2026-10-26
+
+Status: VERIFIED within the bounded M1280 projection diagnostic. The existing
+Qwen B64 and exact-tile B128/SG8 kernels share each decoded 64x32 weight tile
+across more input rows. Both are tested on the same M1280/K8192/N2048 operands
+against M32 G1, resident F32 MPS, and Q4 expansion plus MPS. The existing
+one-group F32 merge and bias remain in all packed timed arms so this probe
+changes M reuse rather than fusing work.
+Production kernels and dispatch policy remain unchanged.
+
+Risk: CAUTION (GPU scratch ownership and changed launch geometry). Rollback:
+revert the opt-in benchmark change. The strongest numerical failure mode is
+misrouting B128's two input bands; require all raw and biased outputs to match
+G1 bitwise, check the original 23 rows separately from cyclic repeats, and
+retain the unchanged finite `atol=rtol=2e-5` MPS gate. The performance falsifier
+is that register/shared-memory pressure erases the nominal 2x/4x reduction in
+weight-tile decodes. This is not a hardware-bandwidth claim.
+
+DoD: guarded release build of `hy_nomas_q4_tile_reuse_benchmark`; native M1280
+runs with both initial warmup orders, two warmup and six measured rounds per
+arm; postterminal replay of all output bytes, injected comparator controls,
+timing/root isolation and guard logs. Require one final wait/readback, zero
+tracked encode-time MetalBuffer allocations/early reads, the file-cache-aware
+10% floor, 2 GiB process cap, 64 MiB swap-growth stop and 120 s deadline.
+Admission negatives must reject before Metal initialization. No full model,
+block or generation is admitted. Original-BF16 quantization quality remains a
+separate gate; M1280 still repeats the same 23 real rows on GPU.
+
+Two guarded native runs on Apple M2 Max use opposite initial warmup orders;
+each alternates forward/reverse rounds, with 16 complete calls per timed root.
+Ranges below are the two run medians, not confidence intervals. Qualification,
+poisoning, comparators and packing remain outside the isolated timed roots.
+
+| Complete projection | Median GPU ms/call | M tile | Threads | Shared bytes |
+|---|---:|---:|---:|---:|
+| Packed G1 control | 5.039-5.042 | 32 | 128 | 12,288 |
+| Packed B64 G1 | 4.706-4.709 | 64 | 256 | 16,384 |
+| Packed B128/SG8 G1 | 4.697-4.704 | 128 | 256 | 24,576 |
+| Resident F32 MPS | 4.001-4.003 | internal | internal | internal |
+| Q4 expansion + MPS | 4.183-4.206 | internal | internal | internal |
+
+All 12 measured paired rounds favor B64/B128 over M32 G1. The median paired
+speed ratios are 1.070912 and 1.073027 respectively, corresponding to roughly
+6.6%/6.8% less time. All 12 rounds still favor both MPS controls. Resident/B128
+ratios are 0.846368-0.853107, median 0.851470. B128 has no demonstrated material
+advantage over B64 despite nominally fourfold rather than twofold fewer
+weight-tile decodes. These are repeated warm projection timings, not a
+full-block, mixed-weight-cache, cold-load or video throughput result. Do not
+infer an occupancy, bandwidth or decoder-only bottleneck from this comparison:
+the launch geometry changes register and shared-memory pressure as well.
+
+Both candidates equal M32 G1 and resident MPS bitwise for all 2,621,440 raw
+outputs and again after bias, under unchanged finite F32 atol=rtol=2e-5.
+Postterminal row-band checks separately verify the 23 authentic rows and every
+cyclic row, including B128's two-band boundary. All 16 bank hashes repeat
+between orders; the 12 prior M1280 control hashes remain unchanged. The
+candidate summary booleans require bitwise identity in addition to the
+per-comparison tolerance gate; a false strict summary need not imply a
+tolerance failure. G2 still fails 949 elements against MPS. The separate
+original-BF16 saved-output gate still fails (G1 RMSE 0.617325, relative L2
+0.0470342); matching identical Q4 operands does not qualify quantization
+quality or a new real full-prefix distribution.
+
+Each run has 81 command roots/80 asynchronous continuations, zero timed-root overlap,
+one final wait/readback, zero preterminal reads and zero tracked encode-time
+MetalBuffer allocations. Named storage is 616,398,176 bytes including every
+control/output bank. The packed projection consumes its 9 MiB weights directly;
+the diagnostic also retains a 64 MiB resident F32 MPS matrix and a 32 MiB F16
+control. It does not measure minimal production storage. The largest sampled
+process footprint is 955.18 MiB, minimum sampled cache-aware headroom is
+28.5765 GiB, and observed swap growth is zero. The 10% reserve, 2 GiB native
+cap, 64 MiB swap stop and 120-second deadline remain enforced. Sampling is
+not a peak-memory proof; MetalBuffer counts exclude private MPS allocations.
+
+Both postterminal replays recompute 18 same-operand and three saved-BF16
+comparisons from captured bytes, validate 172 raw comparator words including
+injected-bit controls, and check row bands, baseline hashes, 81 root timestamps,
+paired schedules and native guard logs. Thirteen CPU checker tests pass,
+including a row-64 mutation with recomputed sidecar/bank hashes that still
+cannot forge candidate success. Nine captured-report/timing falsifiers reject
+widened tolerance, forged G2 success, wrong geometry/segments/root/launch,
+overlap, candidate hash and metric words. Six admission negatives reject before
+Metal initialization and preserve existing artifacts. Correlated Mini-Quad
+source and evidence review is ROBUST only within this bounded diagnostic.
+
+Evidence: .landmark/evidence/2026-10-26-hy-nomas-q4-tile-reuse.json. External
+artifacts live under /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026:
+reuse-m1280-forward-v1/reuse-m1280-reverse-v1 reports and sidecars,
+verify-forward-v1/verify-reverse-v1, paired-analysis-v1, checker-pressure-v1,
+admission-v1 and terminal-identities-v1. The selected 23-file source snapshot,
+frozen binary and ten linked objects were rechecked after execution. The final
+checker predates both replays. This is not a hermetic build/driver attestation.
+
+Executed DoD entry points (the runner supplies the unchanged guards):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/tmp/run_guarded.py build-v1 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_tile_reuse_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/tmp/run_guarded.py reuse-m1280-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/build/hy_nomas_q4_tile_reuse_benchmark-v1 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/reports/reuse-m1280-forward-v1.json --rows 1280 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/tmp/run_guarded.py verify-forward-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/source/verify_tile_reuse_v1.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/reports/reuse-m1280-forward-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/source/test_verify_tile_reuse_v1.py -v
+crystal tool format --check examples/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr
+git diff --check
+```
+
+Next falsifier: compare Q4 loading with a dense F16 control at the same B64/B128
+geometry, preserving the per-output K order, and profile MMA/staging/register
+pressure. Account for changed weight traffic before attributing a time
+difference to decoding. Increasing M reuse alone does not close the MPS gap.
+Real full-prefix inputs, original-BF16 quality, other projections and full-block
+performance remain open before production promotion. Refresh on changed
+source/cache/fixture, geometry, repetition/order schedule, precision, ownership,
+compiler/SDK/OS/device/MPS or missing external artifacts. No full generation.
