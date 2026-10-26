@@ -1,14 +1,14 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: same-geometry dense F16 loading takes
-4.277-4.279 ms at B64 versus packed Q4's 4.683-4.693 ms, with bitwise equal
-outputs in both initial orders. This is about 8.7% less complete-projection
-time, not a pure decoder-cost measurement. Dense B128 remains slower than
-dense B64; even dense B64 remains slower than resident F32 MPS. These tested tile and
-loading variants do not close the native GEMM gap.
-See "Same-geometry Q4/F16 tile frontier" for exact scope, separate profile
-coverage, numerical gates and the next falsifier. Production dispatch is
-unchanged; the original-BF16 quality gate still fails. No generation was run.
+Current frontier, 2026-10-26: removing only B64's three execution-only SIMD
+barriers reduces complete-projection time by 2.57-2.60% for dense F16 and
+0.72-1.14% for direct Q4 in two opposite-initial-order runs, with bitwise equal
+outputs. Moving the next-panel fill earlier is slower and is rejected. The
+uniform Q4 candidate still takes 15.57-16.28% longer than resident F32 MPS;
+this bounded schedule improvement does not close the native GEMM gap.
+See "B64 next-panel scheduling experiment" for scope, evidence and the next
+falsifier. Production dispatch is unchanged; the original-BF16 quality gate
+still fails. No generation was run.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
@@ -701,3 +701,136 @@ larger B128 tile the default from nominal reuse counts. Original-BF16 quality,
 new real full-prefix inputs, other projections and full-block performance remain
 open. Refresh on changed source/cache/fixture, geometry/schedule, precision,
 resource ownership, compiler/SDK/OS/device/MPS, or unavailable external evidence.
+
+## B64 next-panel scheduling experiment, 2026-10-26
+
+Status: VERIFIED within this bounded projection diagnostic; uniform candidate
+admitted only as an opt-in experiment, eager candidate rejected for speed.
+The original B64 loop fills its next ping-pong panel after the current MMA
+sequence. The first variant moves only that unchanged fill/cursor block before
+the current MMA sequence, first against dense F16 and then with the same
+transformation on packed Q4. It retains all SIMD and threadgroup barriers,
+launch geometry, shared storage, full-K per-output MMA order, stores, merge
+and bias. No production source is changed.
+
+Risk: CAUTION. The strongest failure is a panel overwrite before another SIMD
+group finishes reading it. At iteration zero the next panel is unused; at each
+later iteration the preceding loop-end threadgroup barrier has completed every
+read of the panel about to be reused. Current reads use the other panel. The
+unchanged loop-end barrier publishes the new panel before the next iteration.
+Moving a fill across that barrier, removing a threadgroup barrier or aliasing
+panels is outside the admitted experiment. Rollback is removal of the opt-in
+target. The separate uniform variant below changes only SIMD barriers.
+
+DoD: guarded release build; M1280/K8192/N2048 opposite-initial-order profiler-off
+runs with two warmup and six measured rounds; exact prior bank identities and
+zero candidate bit differences before/after bias; unchanged finite 2e-5 gates;
+postterminal byte/comparator/root/schedule/guard replay and seeded failures.
+Use the existing authenticated 23-row GPU cyclic input, not a new full-prefix
+distribution. Accept a speedup only if both initial orders and paired rounds
+support it; dense traffic changes and full-generation throughput remain separate.
+Preserve one final wait/readback, zero preterminal reads/waits and zero tracked
+encode-time buffer allocations. Native budgets remain 2 GiB/120 s, 10% available
+memory including reclaimable file cache and 64 MiB swap growth. No full block,
+model, capture or generation is authorized by this probe.
+
+First candidate: measured-red for speed, with bit identity preserved. Opposite
+initial orders give dense eager-fill medians 4.6684/4.6689 ms versus baseline
+4.4432/4.4887 ms (4.01-5.07% more time); packed eager-fill 4.9539/5.0160 ms
+versus 4.9129/4.9657 ms (0.84-1.01% more). Dense wins zero of twelve paired
+rounds and packed two of twelve. Keep these reports as a refutation of this
+particular source move, not of overlap in general; no production promotion.
+
+Second candidate: remove only the three `simdgroup_barrier(mem_none)` statements
+inside the uniform K8 load/load/MMA body of the original B64 loop. Keep every
+threadgroup barrier, original fill-after-MMA order and ordered MMA calls.
+Apple's [MSL specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(2026-06-04, section 6.10.1, pp. 215-216) defines `mem_none` as execution-only;
+its matrix example and [Tech Talk 10858](https://developer.apple.com/videos/play/tech-talks/10858/)
+(24:56 code) use uniform loads followed by MMA without those SIMD barriers.
+This supports the bounded transformation, not general barrier removal. The
+strongest failure is lost convergence or shared-memory publication; require
+uniform participation, unchanged threadgroup barriers and all-output bit gates.
+The opt-in comparison retains both candidates and all controls.
+
+The final eight-arm benchmark passes its numerical gates and reports a small
+balanced speedup. It retains M1280/K8192/N2048, 256 threads, 16,384 shared bytes,
+20x32 threadgroups, two warmup and six measured rounds per arm, and 16 complete
+projections per isolated command root. Ranges are the two run medians, not
+confidence intervals. Only the final schedule's internal comparisons establish
+the uniform speedup; earlier six-arm absolute times have a different run context.
+
+| Complete projection | Forward median ms | Reverse median ms |
+|---|---:|---:|
+| Dense F16 B64 | 4.2822 | 4.2821 |
+| Dense eager fill | 4.4954 | 4.4983 |
+| Dense uniform | 4.1707 | 4.1719 |
+| Direct Q4 B64 | 4.6820 | 4.6902 |
+| Direct Q4 eager fill | 4.8624 | 4.8369 |
+| Direct Q4 uniform | 4.6288 | 4.6565 |
+| Resident F32 MPS | 4.0052 | 4.0047 |
+| Expansion + MPS | 4.1927 | 4.1974 |
+
+Dense uniform wins 12/12 paired measured rounds, Q4 uniform 11/12; the one Q4
+loss is 0.0057%. Median paired candidate/control time ratios are 0.974480 and
+0.987451 respectively. Both remain slower than MPS in every paired round.
+Eager fill is slower again in the final schedule (dense 4.98-5.05%, Q4
+3.13-3.85%); neither schedule supports promoting eager fill. No instruction-stall,
+occupancy, isolated decoder-cost or end-to-end video speed claim is made.
+
+All four new candidates equal same-geometry B64 and identical-operand MPS
+bitwise before and after bias for all 2,621,440 outputs per bank, under unchanged
+finite F32 atol=rtol=2e-5. Each flag requires exactly four comparisons. All 28
+output-bank hashes repeat between both final orders and smoke; all 24 earlier
+schedule banks and 20 prior dense-control banks remain fixed. G2 still fails
+949 identical-operand MPS entries. The separate original-BF16 G1 quality gate
+remains false (RMSE 0.6173250074, relative L2 0.047034245, max abs 3.2914271355,
+2,621,164 failures). The new bit identity does not waive quantization error.
+
+Final schedules have 64 samples, 129 roots and 128 asynchronous continuations,
+zero timed-root overlap, one terminal wait/readback, zero preterminal reads or
+waits and zero tracked encode-time MetalBuffer allocations. Named storage is
+868,057,184 bytes including all controls, banks and terminal packing. Maximum
+sampled native process-group footprint is 1,442.08 MiB, minimum cache-aware
+headroom 23.7423 GiB, swap growth zero. The 10% floor, 2 GiB cap, 64 MiB swap
+stop and 120 s deadline remain unchanged. Samples do not bound true peaks,
+file-backed pages are an estimate of reclaimability, and MetalBuffer counters
+exclude private MPS allocations. This is not minimal production storage.
+
+Both final postterminal replays pass: 42 same-operand and three saved-BF16
+comparisons recomputed from bytes, 268 raw comparator words including injected
+controls, authentic/cyclic row bands, launch geometry, root isolation, schedules
+and guard logs. The pinned final checker passes 29 CPU tests, including uniform
+row-64 corruption despite recomputed sidecar/bank hashes, vacuous candidate
+comparisons, widened tolerances, false pass flags, altered geometry/source/root,
+overlap and fabricated timing summaries. Eleven admission negatives pass before
+Metal initialization and preserve existing report/gate artifacts. Earlier eager
+reports also pass their pinned byte replay and 25 checker tests. One partial
+checker attempt failed on an undefined variable and is excluded from evidence.
+Correlated Mini-Quad review is ROBUST for this diagnostic, not an independent
+model assessment or general proof of barrier removal safety.
+
+Evidence: `.landmark/evidence/2026-10-26-hy-nomas-q4-b64-schedule.json`; raw
+reports, sidecars, pinned checkers, selected source snapshots, binaries/linked
+object receipts and exact commands live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026`. Binary v1/source v1
+bind the earlier eager schedule; v2/source v2 bind the final eight-arm schedule.
+Selected source identities are not a hermetic build or driver attestation.
+
+Executed final DoD entry points (the runner applies the unchanged guard):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/tmp/run_guarded.py build-v2 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_b64_schedule_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/tmp/run_guarded.py uniform-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/build/hy_nomas_q4_b64_schedule_benchmark-v2 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-forward-v1.json --rows 1280 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/tmp/run_guarded.py verify-uniform-forward-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/verify_b64_schedule_v2.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-forward-v1.json
+crystal tool format --check examples/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr
+git diff --check
+```
+
+Next falsifier: wider K panels (K32 versus K64), first in dense F16, retaining
+the exact K8 per-output MMA order. Halving panel handoffs may help, but double
+shared storage can reduce occupancy and erase the gain. Require bit identity
+and opposite-initial-order complete-projection timings before carrying the
+change to Q4. No new precision, input distribution, full-block/model or video
+claim is admitted. Refresh on changed source/cache/fixture, geometry/schedule,
+precision, ownership, compiler/SDK/OS/device/MPS or missing external evidence.

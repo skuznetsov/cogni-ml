@@ -34193,3 +34193,40 @@ Refresh after source/toolchain/device/model/workload changes.
   projection gain against MPS. These measured tile/load variants do not close
   the native gap. Refresh on source/cache/fixture, geometry/schedule, precision,
   ownership, compiler/SDK/OS/device/MPS changes or lost external evidence.
+
+
+### 2026-10-26: B64 uniform SIMD schedule gains modestly; eager panel fill rejected
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "B64 next-panel
+  scheduling experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-b64-schedule.json.
+- Opt-in clones preserve M1280/K8192/N2048, full-K K8 MMA order, 64x64 tiles,
+  256 threads, 16,384 shared bytes and all threadgroup barriers. Uniform removes
+  only three SIMD mem_none barriers; Apple's uniform matrix examples support
+  this sequence, not general barrier removal. Production kernels stay unchanged.
+- Two opposite-initial-order eight-arm schedules give dense uniform
+  4.1707/4.1719 ms versus B64 4.2822/4.2821 ms (2.57-2.60% less time), direct
+  Q4 uniform 4.6288/4.6565 versus 4.6820/4.6902 ms (0.72-1.14% less). Paired wins:
+  12/12 dense, 11/12 Q4. Resident MPS remains 4.0047-4.0052 ms and wins every
+  pair. No full-block, original-BF16 quality or video throughput claim.
+- Moving next-panel fill before MMA is slower in both earlier six-arm and
+  final eight-arm schedules; keep the explicit refutation. Do not equate
+  absolute times across those different run contexts or infer decoder-only cost.
+- All four new candidates are bitwise equal to B64/MPS raw and biased outputs
+  at unchanged finite atol=rtol=2e-5. All 28 final banks match both orders/smoke;
+  all earlier 24 schedule banks and 20 dense-control banks remain fixed. G2's
+  949 failures and original-BF16 G1 relative L2 0.0470342 remain unwaived.
+- Final runs: 64 samples, 129 roots, 128 async continuations, zero overlap,
+  one final wait/readback, zero preterminal reads or tracked encode allocations.
+  Named bytes 868,057,184 include controls. Guards pass unchanged (10% cache-aware
+  reserve, 2 GiB cap, 64 MiB swap stop, 120 s); sampled peak 1,442.08 MiB,
+  headroom at least 23.7423 GiB, swap flat. Sampling is not a peak bound and
+  counters exclude private MPS allocations.
+- Both final byte/comparator/row-band/root/guard replays, 29 final CPU checker
+  tests and eleven pre-Metal admission negatives pass. Earlier eager byte
+  replays and 25 tests pass; a partial checker error is excluded. Correlated
+  Mini-Quad ROBUST within the diagnostic. No generation or capture launched.
+- Next falsifier: K32/K64 panel width with exact K8 MMA order, dense first then
+  Q4. Fewer handoffs may be offset by shared-storage/occupancy cost. Refresh on
+  source/cache/fixture, geometry/schedule, precision/ownership, compiler/SDK/OS/
+  device/MPS changes or missing external evidence; selected snapshots/receipts
+  are not a hermetic build or driver attestation.

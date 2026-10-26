@@ -1,0 +1,722 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-b64-schedule",
+  "base_commit": "29e2614a89c8d61ddc125dc19f78a83f8c110279",
+  "status": "VERIFIED within bounded projection diagnostics; no production promotion",
+  "risk": "CAUTION: derived kernel scheduling, barriers and GPU resource lifetime",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Uniform B64 SIMD-matrix flow without three execution-only SIMD barriers preserves all output bits and reduces complete-projection time by 2.57-2.60% for dense F16 and 0.72-1.14% for direct Q4. Eager next-panel fill is slower. Both uniform paths still trail MPS."
+  },
+  "problem": "Test staging and MMA scheduling with dense control first, retaining full-K K8 per-output order.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "schedule": "Two opposite-initial-order profiler-off runs per lineage; 2 warmup/6 measured alternating rounds, 16 complete projections/root.",
+    "eager_change": "Move the unchanged next-panel fill/cursor block before current MMA; retain all barriers.",
+    "uniform_change": "Remove exactly three simdgroup_barrier(mem_none) statements from original B64 K8 load/load/MMA body; retain all threadgroup barriers and original fill/MMA order.",
+    "launch": [
+      {
+        "arm": "dense.uniform",
+        "kernel": "hy_q4_bench_dense_uniform",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "packed.uniform",
+        "kernel": "hy_q4_bench_packed_uniform",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1
+      }
+    ],
+    "timed": "GPU command-root complete projection: loads or tile decode + GEMM + one-group F32 merge + BF16 bias.",
+    "excluded": "Setup, input replication, qualification, poison, comparator and packing work; no profiler capture.",
+    "official_sources": [
+      "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf",
+      "https://developer.apple.com/videos/play/tech-talks/10858/"
+    ],
+    "barrier_scope": "Apple uniform SIMD-matrix examples support this converged load/load/MMA sequence, not general barrier removal."
+  },
+  "dod": {
+    "build": "Guarded release build-v1/build-v2 exit0, frozen source/binary/object receipts rechecked.",
+    "native": "Two full opposite-order runs per lineage exit0; final 28 bank hashes match both orders/smoke and 24 earlier schedule banks.",
+    "replay": "Four primary byte/comparator/row-band/root/schedule/guard replays PASS. Final checker recomputes 42 same-operand plus 3 original-BF16 comparisons, 268 comparator words with injected controls.",
+    "falsifiers": "Final 29 CPU tests PASS; earlier 25 tests PASS; 11 pre-Metal admission negatives PASS, existing artifacts unchanged.",
+    "hygiene": "Scoped Crystal format check and git diff --check pass. Selected 27 source files per lineage, binaries and 10 linked objects authenticated; no hermetic claim.",
+    "commands": "Exact executed command argv, limits, exits and logs pinned below; one-shot fresh outputs.",
+    "rollback": "Remove the opt-in target, its two examples and directly related documentation; production unchanged."
+  },
+  "results": {
+    "status": "PASS",
+    "scope": "bounded repeated-row projection; no generation",
+    "eager_v1": {
+      "gpu_median_ms_by_run": {
+        "schedule-forward-v1": {
+          "dense.b64": 4.443154948148731,
+          "dense.eager": 4.668352864428016,
+          "packed.b64": 4.912874999718042,
+          "packed.eager": 4.953921875312517,
+          "mps.resident": 4.111518229365174,
+          "mps.expand": 4.304531249545107
+        },
+        "schedule-reverse-v1": {
+          "dense.b64": 4.488725260216597,
+          "dense.eager": 4.668882812438824,
+          "packed.b64": 4.9657031249807915,
+          "packed.eager": 5.015970052681951,
+          "mps.resident": 4.149397135279287,
+          "mps.expand": 4.337489583122078
+        }
+      },
+      "pairs": {
+        "dense.eager.over.dense.b64": {
+          "paired_rounds": 12,
+          "wins": 0,
+          "median_ratio": 1.0523153860042456,
+          "min_ratio": 1.0145621100509803,
+          "max_ratio": 1.0765905184167668,
+          "time_reduction_pct_by_run": {
+            "schedule-forward-v1": -5.068423651826848,
+            "schedule-reverse-v1": -4.013557118742739
+          }
+        },
+        "packed.eager.over.packed.b64": {
+          "paired_rounds": 12,
+          "wins": 2,
+          "median_ratio": 1.0232844542099415,
+          "min_ratio": 0.9621981230937474,
+          "max_ratio": 1.0688117099098093,
+          "time_reduction_pct_by_run": {
+            "schedule-forward-v1": -0.8354960302639602,
+            "schedule-reverse-v1": -1.0122821770855106
+          }
+        }
+      },
+      "sampled_guard_results": {
+        "schedule-forward-v1": {
+          "sampled_peak_group_mib": 1269.9701919555664,
+          "sampled_min_headroom_gib": 35.6937255859375,
+          "sampled_max_swap_growth_bytes": 0
+        },
+        "schedule-reverse-v1": {
+          "sampled_peak_group_mib": 1279.626350402832,
+          "sampled_min_headroom_gib": 35.79719543457031,
+          "sampled_max_swap_growth_bytes": 0
+        }
+      }
+    },
+    "uniform_v2": {
+      "gpu_median_ms_by_run": {
+        "uniform-forward-v1": {
+          "dense.b64": 4.282234375295957,
+          "dense.eager": 4.495363281421305,
+          "dense.uniform": 4.170743488884909,
+          "packed.b64": 4.681976562096679,
+          "packed.eager": 4.862441406203288,
+          "packed.uniform": 4.628781250175962,
+          "mps.resident": 4.005234374744759,
+          "mps.expand": 4.192731771127001
+        },
+        "uniform-reverse-v1": {
+          "dense.b64": 4.282126302314282,
+          "dense.eager": 4.498261718708818,
+          "dense.uniform": 4.171920572844101,
+          "packed.b64": 4.690175781433936,
+          "packed.eager": 4.836859374790947,
+          "packed.uniform": 4.656464844174479,
+          "mps.resident": 4.004671875463828,
+          "mps.expand": 4.197355468022579
+        }
+      },
+      "pairs": {
+        "dense.eager.over.dense.b64": {
+          "paired_rounds": 12,
+          "wins": 0,
+          "median_ratio": 1.0503654786438177,
+          "min_ratio": 1.049015155178758,
+          "max_ratio": 1.0550732866508497,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": -4.977049069403594,
+            "uniform-reverse-v1": -5.047385367351853
+          }
+        },
+        "packed.eager.over.packed.b64": {
+          "paired_rounds": 12,
+          "wins": 0,
+          "median_ratio": 1.0347658875544896,
+          "min_ratio": 1.0214781193887437,
+          "max_ratio": 1.0529487173794483,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": -3.8544585115520835,
+            "uniform-reverse-v1": -3.1274647303765946
+          }
+        },
+        "dense.uniform.over.dense.b64": {
+          "paired_rounds": 12,
+          "wins": 12,
+          "median_ratio": 0.9744798506167618,
+          "min_ratio": 0.9703629405352548,
+          "max_ratio": 0.9762097679711368,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": 2.603568059100969,
+            "uniform-reverse-v1": 2.573621647045299
+          }
+        },
+        "packed.uniform.over.packed.b64": {
+          "paired_rounds": 12,
+          "wins": 11,
+          "median_ratio": 0.9874513227884909,
+          "min_ratio": 0.9751532053177562,
+          "max_ratio": 1.000057355461073,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": 1.136172110543321,
+            "uniform-reverse-v1": 0.718756371411533
+          }
+        },
+        "dense.uniform.over.mps.resident": {
+          "paired_rounds": 12,
+          "wins": 0,
+          "median_ratio": 1.0416556901952965,
+          "min_ratio": 1.0339646605072659,
+          "max_ratio": 1.0442988962423891,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": -4.132320325216865,
+            "uniform-reverse-v1": -4.1763395998805075
+          }
+        },
+        "packed.uniform.over.mps.resident": {
+          "paired_rounds": 12,
+          "wins": 0,
+          "median_ratio": 1.1579984280407258,
+          "min_ratio": 1.1458516385253732,
+          "max_ratio": 1.1691310060488114,
+          "time_reduction_pct_by_run": {
+            "uniform-forward-v1": -15.568299307601418,
+            "uniform-reverse-v1": -16.27581457307685
+          }
+        }
+      },
+      "sampled_guard_results": {
+        "uniform-forward-v1": {
+          "sampled_peak_group_mib": 1438.9390335083008,
+          "sampled_min_headroom_gib": 28.745468139648438,
+          "sampled_max_swap_growth_bytes": 0
+        },
+        "uniform-reverse-v1": {
+          "sampled_peak_group_mib": 1442.0796585083008,
+          "sampled_min_headroom_gib": 23.7423095703125,
+          "sampled_max_swap_growth_bytes": 0
+        }
+      }
+    },
+    "identities": {
+      "all_28_v2_banks_equal_between_orders_and_smoke": true,
+      "all_24_v1_banks_equal_to_v2": true,
+      "original_bf16_quality_gate_passed": false,
+      "g2_same_operand_gate_passed": false
+    },
+    "evidence": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-forward-v1.json",
+        "sha256": "0e445c1063ed8da080cac712cfada4c835d7b86d5476954b8f18d9b62f2562f2",
+        "nbytes": 65614
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-reverse-v1.json",
+        "sha256": "f899cafb4215188165246376dc707cabeb0744585118127d4691b76c57d5feb5",
+        "nbytes": 65652
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-forward-v1.json",
+        "sha256": "161fac440f370a9c317ebb9be2979d66fd06e7c7ac59ef844779cb47d70f40f8",
+        "nbytes": 83892
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-reverse-v1.json",
+        "sha256": "b45eba55be323f06e8cec293d206c5d514ecf95f439a9b81f8e2906e9c78fd35",
+        "nbytes": 83929
+      }
+    ]
+  },
+  "execution": {
+    "final_samples": 64,
+    "final_roots": 129,
+    "final_async_continuations": 128,
+    "terminal_waits": 1,
+    "terminal_packed_reads": 1,
+    "preterminal_reads": 0,
+    "tracked_encode_metalbuffer_allocations": 0,
+    "timed_root_overlap_seconds": 0,
+    "named_bytes": 868057184,
+    "counter_scope": "MetalBuffer counters exclude private MPS allocations; named storage includes controls and output banks, not minimal production footprint."
+  },
+  "guard": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "native_process_group_mib": 2048,
+    "swap_growth_mib": 64,
+    "native_deadline_seconds": 120,
+    "cpu_checker_mib": 1024,
+    "cpu_checker_deadline_seconds": 120,
+    "build_mib": 4096,
+    "build_deadline_seconds": 600,
+    "limitation": "Sampled telemetry does not bound true peaks, file-backed pages estimate reclaimability, and deliberate process-group escapes are not covered."
+  },
+  "adversary": {
+    "verdict": "ROBUST within declared projection/source/lifecycle scope",
+    "lineage": "Correlated same-lineage Mini-Quad source review; acceptance rests on executed byte/timing/guard evidence and seeded failures, not model agreement.",
+    "attacks": "Panel-reuse hazard, invalid barrier generalization, vacuous candidate gates, row-64 corruption with recomputed hashes, forged pass/timing/tolerance, order and benchmark-to-video extrapolation."
+  },
+  "trust": {
+    "F": "Executable source anchors, exact comparisons and replay; no formal synchronization proof.",
+    "G": "One projection, M1280 cyclic repetition of 23 real saved rows, one Apple M2 Max toolchain.",
+    "R": "Both initial orders, terminal byte replay, injected controls and seeded negative tests; sampled guards."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "examples/hy_nomas_q4_b64_schedule_benchmark.cr",
+      "examples/support/hy_nomas_q4_b64_schedule_benchmark.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-b64-schedule.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/hy_nomas_q4_b64_schedule_benchmark.cr",
+      "examples/support/hy_nomas_q4_b64_schedule_benchmark.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-b64-schedule.json"
+    ],
+    "production_promoted": false,
+    "full_model_or_generation": false,
+    "tolerances_widened": false,
+    "new_gpu_synchronizations": false
+  },
+  "unresolved": [
+    "Original-BF16 quantization quality remains failed (G1 relative L2 0.047034245).",
+    "G2 retains 949 identical-operand MPS tolerance failures.",
+    "No new real full-prefix distribution, other projection, full-block or video throughput qualification.",
+    "No instruction-stall, occupancy or isolated decoder-cost attribution."
+  ],
+  "discarded_attempts": [
+    "verify-forward-v1 used an incomplete checker and failed on an undefined profile_gate variable; replaced by frozen-checker verify-forward-v2."
+  ],
+  "next_falsifier": "Compare K32/K64 panels with identical K8 per-output MMA order, dense first then Q4. Fewer handoffs may be offset by shared-memory/occupancy cost.",
+  "decay_trigger": "Changed source/cache/fixture, geometry/schedule, precision, ownership, compiler/SDK/OS/device/MPS, or unavailable external evidence.",
+  "refresh": "Rebuild and repeat the bounded opposite-order GPU byte/timing/guard DoD; do not carry forward a pass from hashes alone.",
+  "evidence": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026",
+    "receipts": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/native-v1-receipt.json",
+        "sha256": "23e7f00e6d2b193543fccec6ae2d5ab93065086a9dbc801325ca0d3ac4f524ae",
+        "nbytes": 3035
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/native-v2-receipt.json",
+        "sha256": "24a623aa95674356378b831b2a54e42587325dc961d6fdfa4b17e8c57d24ed19",
+        "nbytes": 3035
+      }
+    ],
+    "scripts": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/verify_b64_schedule_v1.py",
+        "sha256": "c57edfa5bf921e258386c57038a9fb4fcbb66f42ad16405dc3620bce2ba9938a",
+        "nbytes": 61937
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/test_verify_b64_schedule_v1.py",
+        "sha256": "161f5f2505b64fda440251a9c9665802e4e6c86d069c8b1c59af43a58afcd857",
+        "nbytes": 23923
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/verify_b64_schedule_v2.py",
+        "sha256": "422035f927cdd761bf59e2c008bfd2894baf544da5eef6fadfa0cc2ffeab6168",
+        "nbytes": 63427
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/test_verify_b64_schedule_v2.py",
+        "sha256": "4ac250cef682baf72298709727ec699b41493595cbbfab72f3b3ef86bfffd1e1",
+        "nbytes": 30043
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/admission_v1.py",
+        "sha256": "9bcf580b2dc1e6688e3383fd55fc22a1b994a80fe5926f15f32da03d4694d390",
+        "nbytes": 2525
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/aggregate_v1.py",
+        "sha256": "6207f0bd997779b9f43d47262fdf8b73744564640e4e3a2945984965f2ec7f44",
+        "nbytes": 5223
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/source/close_evidence_v1.py",
+        "sha256": "ef96d82705472b10b2bdca58a3a6638eb331267370c406416db87a5702761cba",
+        "nbytes": 11353
+      }
+    ],
+    "reports": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-smoke-v1.json",
+        "sha256": "0713988888e598b76b4cb5bd8da6168d2d49add170096952aac18465803f1bac",
+        "nbytes": 65634
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-smoke-v1.json.f32le",
+        "sha256": "1c32c1f3d8d4079bd66b96d356551af52368d1a8ffd80ca545858184fa5ea889",
+        "nbytes": 251659056
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-forward-v1.json",
+        "sha256": "0e445c1063ed8da080cac712cfada4c835d7b86d5476954b8f18d9b62f2562f2",
+        "nbytes": 65614
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-forward-v1.json.f32le",
+        "sha256": "1c32c1f3d8d4079bd66b96d356551af52368d1a8ffd80ca545858184fa5ea889",
+        "nbytes": 251659056
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-reverse-v1.json",
+        "sha256": "f899cafb4215188165246376dc707cabeb0744585118127d4691b76c57d5feb5",
+        "nbytes": 65652
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/schedule-reverse-v1.json.f32le",
+        "sha256": "1c32c1f3d8d4079bd66b96d356551af52368d1a8ffd80ca545858184fa5ea889",
+        "nbytes": 251659056
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-smoke-v1.json",
+        "sha256": "57cacc9366013e6574a5de46b4d8ac9da13ef658fa96f546f14b704e41cf5438",
+        "nbytes": 83939
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-smoke-v1.json.f32le",
+        "sha256": "ceddd25ac894f4fe0e3ba10a422a3b5f8aff99c0dc56706305d64afe8e54eeb2",
+        "nbytes": 293602352
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-forward-v1.json",
+        "sha256": "161fac440f370a9c317ebb9be2979d66fd06e7c7ac59ef844779cb47d70f40f8",
+        "nbytes": 83892
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-forward-v1.json.f32le",
+        "sha256": "ceddd25ac894f4fe0e3ba10a422a3b5f8aff99c0dc56706305d64afe8e54eeb2",
+        "nbytes": 293602352
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-reverse-v1.json",
+        "sha256": "b45eba55be323f06e8cec293d206c5d514ecf95f439a9b81f8e2906e9c78fd35",
+        "nbytes": 83929
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/uniform-reverse-v1.json.f32le",
+        "sha256": "ceddd25ac894f4fe0e3ba10a422a3b5f8aff99c0dc56706305d64afe8e54eeb2",
+        "nbytes": 293602352
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/verify-forward-v2.json",
+        "sha256": "d307a0f8b382227c28cc6c7cbaee085fac8777418324e2b7c1058679a5c5bc84",
+        "nbytes": 47832
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/verify-reverse-v1.json",
+        "sha256": "044b5988fc2b0abf900ec148f4f936738ec2f9c8b6c9cd2a7f260f726b46a690",
+        "nbytes": 47838
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/verify-uniform-forward-v1.json",
+        "sha256": "026f0e1ba229d3eadd37de8f0bc9b1b48fc376ed49e411a2a2a9d8e77716d8b9",
+        "nbytes": 61194
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/verify-uniform-reverse-v1.json",
+        "sha256": "5a42bb4029829d3e570c4022a95bc7527544e0688ee525fd1d7873772dfeafe8",
+        "nbytes": 61196
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/admission-v1.json",
+        "sha256": "509bdac467d15a87ef603c2e86aff265360a76d86539a6635d11f75aba3a199f",
+        "nbytes": 1252
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/reports/aggregate-v1.json",
+        "sha256": "6cc43ab1ecefecaf12541a8cb61b520b8f5d3fca1184aabef65b5392a00c773c",
+        "nbytes": 6565
+      }
+    ],
+    "executed_commands": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v1.argv.json",
+        "sha256": "97dff17199857fcd1001efb93d5e1df2ffaf3c310fd95f33ee5bf3aae1d9e351",
+        "nbytes": 655
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v1.guard.jsonl",
+        "sha256": "2f21a886ba2e10d947397f9849516672db8a9f9ac67a2b284dad662e2c9c36ac",
+        "nbytes": 6564
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v1.out",
+        "sha256": "8a6f2a2fe075b20cf931efdf686217e8ae3809abe9ede2fb1edfc9d122c2f723",
+        "nbytes": 1223
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v2.argv.json",
+        "sha256": "0ea43d257daa124831a938de8027b764956d652af1c46cd0d26ae174e6947c8f",
+        "nbytes": 655
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v2.guard.jsonl",
+        "sha256": "8301ae37eabb049f226f2d46447338401279185e65a20fc9209e1255fb295f91",
+        "nbytes": 6276
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/build-v2.out",
+        "sha256": "8a6f2a2fe075b20cf931efdf686217e8ae3809abe9ede2fb1edfc9d122c2f723",
+        "nbytes": 1223
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2.argv.json",
+        "sha256": "e84407fc9b65f931cc88a70a6c16f6470d3ad6d6bdeb33ae2c17591ac6006f81",
+        "nbytes": 718
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2.guard.jsonl",
+        "sha256": "5acffc77205b702288aa286290a437943f28382d24a0ecf96ecd397ac3a9da4e",
+        "nbytes": 1659
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2.out",
+        "sha256": "c15f7376ba06564e357114d0147129ca881c012143e2b2d88739d9aedddef7ce",
+        "nbytes": 3970
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2-pinned-final.argv.json",
+        "sha256": "35fa4ae299a5fe17a12beacfc3813553d8a0af973d79c678883021420fff6d65",
+        "nbytes": 731
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2-pinned-final.guard.jsonl",
+        "sha256": "d96d83d8d7b6712b12e4b52ee236dde656e5d86c2a55b7159251798375bf41bc",
+        "nbytes": 1659
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/checker-cpu-v2-pinned-final.out",
+        "sha256": "9a8ccc073cfd60f54648a1b3508a96a8130151499f89ff1007103766c6b12ce3",
+        "nbytes": 4666
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-smoke-v1.argv.json",
+        "sha256": "ee3f74ca30d8dd89c6e4443ccd60d9c74ae11d3f2edb29baab494212c64da3cd",
+        "nbytes": 794
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-smoke-v1.guard.jsonl",
+        "sha256": "70c529bc27064d724b6e4bf9c5849ca8e9d3fca7d397e08ca70c06a23d573cad",
+        "nbytes": 3188
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-smoke-v1.out",
+        "sha256": "5edefe00263f8ce90d2bb7403b3b27a870efb0a0ad80a84e0c2cab804cf52368",
+        "nbytes": 1981
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-forward-v1.argv.json",
+        "sha256": "701beffd1efd9a4525f8397cba3258190c3ee039d40e5bc5b9be312786b8b05a",
+        "nbytes": 799
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-forward-v1.guard.jsonl",
+        "sha256": "34100ada7c1fe424ff38674e12ace72fa4804b10d82ce0ef4150fda9d26ef53d",
+        "nbytes": 4123
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-forward-v1.out",
+        "sha256": "806b33736a37b4ff17cf14fcb1439409de734a37536d5322853aaad6f1c0743d",
+        "nbytes": 1983
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-reverse-v1.argv.json",
+        "sha256": "74d403894e34dbdae649668bf0e7d5f404a41c0c687b0444848d988551c73951",
+        "nbytes": 820
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-reverse-v1.guard.jsonl",
+        "sha256": "8c411daaa4dcb7b6de04c56c4300953d632d8c03a7a05fe3c4670ad11309344c",
+        "nbytes": 4126
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/schedule-reverse-v1.out",
+        "sha256": "c8406b81df15f7661eb215d55a156b2f0610557dba8dd04a3b9a7c1a2eabba6e",
+        "nbytes": 1989
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-smoke-v1.argv.json",
+        "sha256": "b4dac911fdc50ef7a97827b538646c5a4042387958aa8ffdd856ff670eea3b1d",
+        "nbytes": 792
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-smoke-v1.guard.jsonl",
+        "sha256": "1e471013cdf420990a17286ec038d2d4fac13be1485a91e8d841b2e911f49adc",
+        "nbytes": 2884
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-smoke-v1.out",
+        "sha256": "f39687d9409a0e0b360887a20dfe61915623c5c2062687a9449c62f85edc32f6",
+        "nbytes": 2507
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-forward-v1.argv.json",
+        "sha256": "3e2d26d7c239c17cded84d11de1b333e1d26f7f9ddc8b4f221725f6218704c6c",
+        "nbytes": 797
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-forward-v1.guard.jsonl",
+        "sha256": "98ad21db9e81e1aa7a272b78f2e15b37516943514027d519cc677860a8ba4cba",
+        "nbytes": 4740
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-forward-v1.out",
+        "sha256": "193eaf0b3a561639ddc5c1f7cb34353bc2745efd7b28667123bffc759dd0eeb6",
+        "nbytes": 2508
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-reverse-v1.argv.json",
+        "sha256": "69f7fde9e2374d216b5baed84a3b9a448f3883250d7416a0d4a23a53116432b6",
+        "nbytes": 818
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-reverse-v1.guard.jsonl",
+        "sha256": "21057593812359a71ab5c3a0ff6e1a90e7620852cc76375a907adac4ba7645b5",
+        "nbytes": 4731
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/uniform-reverse-v1.out",
+        "sha256": "0723b6d31204a1a2fdb9ce8de68572f12e0f557402afba6cf46e877b1b89a016",
+        "nbytes": 2510
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-forward-v2.argv.json",
+        "sha256": "a9f88703e7264f14f35cac4cc64362b41db3b93694e347968b0c8e41d0010dcd",
+        "nbytes": 748
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-forward-v2.guard.jsonl",
+        "sha256": "8bed8e6ecbea98afbf091ef1b0ffa735a607a9ef23a1bd5620b3e408ae50cda0",
+        "nbytes": 16744
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-forward-v2.out",
+        "sha256": "1d9fb61e1894dc8b142c01b0f59de33802d87a30915b783bfe61664a902080a3",
+        "nbytes": 37222
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-reverse-v1.argv.json",
+        "sha256": "86a2ae0c06a6508e27a9c38c205fca9391dab58793182c41685ed9d32fdf9bf4",
+        "nbytes": 748
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-reverse-v1.guard.jsonl",
+        "sha256": "aaaeea23b2889279e230b320abbcd46d706f49e8444fe620aa7a265f3256408c",
+        "nbytes": 16741
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-reverse-v1.out",
+        "sha256": "c7c439cd55fee5fa985d81757ab409d7ca2f8fbc1b745b3cd77a2c7132a81177",
+        "nbytes": 37228
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-forward-v1.argv.json",
+        "sha256": "0cf0039bd5c657e3cf8dfa645c31bba1dbaad20ee5f0b2b191c876ad97aba69f",
+        "nbytes": 755
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-forward-v1.guard.jsonl",
+        "sha256": "15cf1283fb8fb189792fcb4d0a743452f0111d7ac87db310a86768d7bbc45ba1",
+        "nbytes": 19824
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-forward-v1.out",
+        "sha256": "dc9c0010702607f63d73d3eb5c1557da58241a99006b7946a01a37e737497d71",
+        "nbytes": 47716
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-reverse-v1.argv.json",
+        "sha256": "6a53ec292fe60cd2cbbda2067b82151fba7d3323b21bf180036adb2fc2d3a486",
+        "nbytes": 755
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-reverse-v1.guard.jsonl",
+        "sha256": "eb3305effd58d88107fd6c88b8ec0241e878592134bcf7646d7673db0df53000",
+        "nbytes": 19819
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/verify-uniform-reverse-v1.out",
+        "sha256": "4ebb55e74bf4aaef0ee4427ea6ee919addaaf342d4154b5f093278995c099177",
+        "nbytes": 47718
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/admission-v1.argv.json",
+        "sha256": "3b403c731533eb1cbb90854a61866198430347c7df27a84efd3d4dc217a80090",
+        "nbytes": 636
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/admission-v1.guard.jsonl",
+        "sha256": "c42affc1d4c6ff05a7c4e6a23c593ade57b236f8dfe268572c01ab9f9e7d2d9d",
+        "nbytes": 1662
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/admission-v1.out",
+        "sha256": "307bc40728a237d30cfca4a4fce5567bd589e3f7fdb6b3e51577f622b9c459fd",
+        "nbytes": 930
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/aggregate-v1.argv.json",
+        "sha256": "b5740dfc13ab8769552f4628df41e6c7e2bb70f772b28517d35d6e048128be56",
+        "nbytes": 636
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/aggregate-v1.guard.jsonl",
+        "sha256": "cd11ecd78926541d659318a60c8d6bc8c80acb9acc0c2f8f37c172ed20a7400d",
+        "nbytes": 1659
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/logs/aggregate-v1.out",
+        "sha256": "6cc43ab1ecefecaf12541a8cb61b520b8f5d3fca1184aabef65b5392a00c773c",
+        "nbytes": 6565
+      }
+    ],
+    "runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-b64-schedule-20261026/tmp/run_guarded.py",
+      "sha256": "d842ba5c69f7a198daf7624e039a55c9f8148ba66a534cac21d7be9f0ed2248e",
+      "nbytes": 1165
+    }
+  },
+  "ledger": "docs/hy-nomas-q4-reduction-frontier.md and LANDMARKS.md"
+}
