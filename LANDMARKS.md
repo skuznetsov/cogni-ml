@@ -34353,3 +34353,35 @@ Refresh after source/toolchain/device/model/workload changes.
   full-block/generation throughput claim. Refresh on source/cache/fixture,
   geometry/schedule, precision/lifetime, toolchain/device/OS/capture changes or
   missing external evidence. Correlated Mini-Quad is not independent replication.
+
+### 2026-10-26: deep Hy-Nomas audit pivots from panel tuning to pipeline value
+
+- Return pointer: docs/hy-nomas-performance-introspection.md. Source/evidence
+  inspection and arithmetic only; no model/build/GPU/full-generation run.
+- Park K16 loader tuning as the primary speed branch. M1280 repeats 23 text
+  rows, K16 loses all pairs, and B128 weight reuse was already tested. Preserve
+  compact residency: full54 named bytes drop 22.617 -> 10.896 GB; no speed or
+  quality promotion follows. Q4/BF16 final latent relL2 1.184/cosine 0.639.
+- Newly inspected upstream 37372925fd4bbb7977a89ce3248584926fc9e953 PixelUMM
+  defaults use 36 D4096/F12288 layers and 21,120 tokens for the saved short
+  latent. Its repeated linears count 293.389 TFLOP versus 285.272 TFLOP for
+  eight DiT passes' token-wise linears, excluding QK/PV attention in both.
+  This is a structural workload warning, not a decoder timing. The port pin
+  stays 911cea6458a89c2663513ff7099561ec190dd491; checkpoint match remains open.
+  The estimate is for six latents/one window, not a five-second cost share.
+  On the default non-CUDA/non-compiled path, upstream flex attention uses an
+  eager implementation documented to materialize dense scores; one
+  hypothetical F32 score is 53.174 GiB here.
+  This was not allocated. Inventory checkpoint/geometry/residency before a
+  decoder probe; implement physical locality, not just a dense attention mask.
+- Next exact falsifier: remove 1,257 unused text rows after the unchanged
+  refiner; compare image/valid-text outputs and final latent at unchanged
+  finite 2e-5. Potential 14.206% of a simple block FLOP model, not latency.
+  Padded output hashes are outside the proposed consumer contract. Start with
+  this cheap implementation probe; selected-boundary checks do not prove all
+  intermediate outputs. Bound a decoder block only after its inventory passes.
+- Current upstream advertises distilled 4/6/8 steps; default remains eight.
+  6.42s*8=51.36s is DiT-only conditional arithmetic, not video RTF. Preserve
+  10% cache-aware reserve, no new preterminal waits, separate same-operand and
+  model-quality gates, and no full generation. Refresh on source/checkpoint,
+  mask/segment/history, precision, hardware/toolchain or missing evidence.

@@ -1305,3 +1305,13 @@ qualified here. Exact stall attribution requires a different profiler
 capability or a discriminating ablation, not a weaker accuracy/memory guard.
 Refresh on source/cache/fixture, geometry/schedule, precision/lifetime,
 toolchain/device/OS, capture configuration, or missing external evidence.
+
+## Research priority after the deep audit, 2026-10-26
+
+[The performance introspection](hy-nomas-performance-introspection.md) supersedes
+the loader-map ablation as the immediate research priority. The K16 loss and
+descriptive counters remain valid, but the repeated-text projection is not a
+complete-video speed proxy. First inventory the unmeasured PixelUMM decoder's
+checkpoint, geometry and residency; use unused DiT text-row removal as the first
+low-cost implementation probe, and qualify Q4 quality separately. No new
+kernel, default, tolerance, guard or GPU run is introduced by this audit.
