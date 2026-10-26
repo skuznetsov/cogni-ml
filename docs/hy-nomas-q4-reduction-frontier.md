@@ -1,16 +1,13 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: reservation-only K32 controls show that reserving
-32 KiB instead of the addressed 16 KiB increases complete-projection time:
-median same-round ratios are 1.16433 for dense F16 and 1.17983 for direct Q4.
-The 32 KiB arm loses all 12 pairs per representation across opposite initial
-orders. Keep the existing 16 KiB K32 path for this geometry. The same pipeline,
-generated kernel source, arguments, geometry and ascending K8 order are used
-within each pair; only dynamic threadgroup-memory reservation changes. This
-isolates a reservation-related timing penalty; occupancy causality remains
-open. See "K32 shared-reservation experiment" below. Production dispatch is
-unchanged; the separate Q4 versus original-BF16 quality gate still fails.
-No full block, model, capture or generation was run.
+Current frontier, 2026-10-26: K16/8 KiB preserves output bits but loses to
+K32/16 KiB at fixed M64/N64, 256 threads and ascending K8 MMA order. Median
+same-round duration ratios are 1.13572 for dense F16 and 1.19665 for direct
+Q4; K16 loses all 12 pairs per representation across opposite initial orders.
+Keep K32/16 KiB for this geometry. Dense-first qualification, both final byte
+replays and the 10% memory guard pass. See "K16 panel experiment" below.
+Production dispatch is unchanged; the separate Q4 versus original-BF16
+quality gate still fails. No full block, model, capture or generation ran.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
@@ -1073,3 +1070,121 @@ handoffs may outweigh lower reservation. It has not been implemented or
 measured here. Refresh on the source/cache/fixture, geometry/schedule,
 precision/ownership, toolchain/device/OS/MPS or evidence-loss triggers above.
 Full-block and generation throughput remain open.
+
+## K16 panel experiment (2026-10-26, VERIFIED within scope)
+
+Compare K16/8 KiB with the exact prior K32/16 KiB kernel at M1280/K8192/N2048,
+with M64/N64 tiles, 256 threads, one K group and 1024 ascending K8 MMAs per
+output. K16 changes the two ping-pong panel sizes and loader coverage/cursors,
+not arithmetic precision, MMA order, merge or bias. Dense resident F16 is the
+first falsifier; only after zero bit differences against prior B64 and
+identical-operand MPS controls may direct Q4 enter the GPU schedule.
+
+CAUTION: smaller storage can lose to twice as many panel handoffs, while an
+incorrect loader mask or Q4 group cursor can produce silent holes or out-of-
+bounds accesses. Admit only the fixed complete-tile geometry. Check unique
+loader coverage, all four panel ranges inside 8192 bytes and the exact K8
+sequence before launch. Keep checked source anchors and injected comparator
+controls. Any output bit difference, changed arithmetic order, failed guard or
+missing timed-root isolation invalidates the comparison. Rollback removes the
+new opt-in target and examples; production kernels and defaults stay intact.
+
+DoD: guarded release builds, dense-only qualification, then profiler-off paired
+forward/reverse complete-projection schedules with two warmup and six measured
+rounds, 16 repetitions/root. Preserve finite atol=rtol=2e-5, one terminal wait
+and packed readback, zero preterminal reads/waits and zero tracked encode
+MetalBuffer allocations. Replay complete bytes, comparator controls, cyclic
+saved real rows, launch/source bindings and schedules with frozen checkers;
+seed corruption and metadata failures. Require within-round ratios to improve
+in both initial orders and order strata before calling a speedup. Keep the
+file-cache-aware 10% floor, 2 GiB/120 s native cap, 64 MiB swap-growth stop,
+4 GiB/600 s build cap and 1 GiB/120 s CPU helper cap. No full generation.
+
+Artifacts: `/opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026`; opt-in target
+`hy_nomas_q4_k16_benchmark`, dense-only v1 followed by paired v2. Source/cache/
+fixture, geometry/schedule, precision/ownership, toolchain/device/OS/MPS changes
+or lost external evidence expire this certificate. Q4 versus original BF16
+quality is a separate unwaived gate; this timing experiment cannot qualify it.
+
+Observed on Apple M2 Max, macOS 26.6.2, SDK 27.0, Crystal 1.22.1 / LLVM
+23.1.4. The exact prior K-panel source digest remains
+`0304fee3a1025da22694a048e974661c296e4422dd2dc3bae3a0b98b43acaf39`;
+the generated source with both appended K16 kernels is
+`6b4e4db6963df40da303e58717f19ebba89cb410bd6eb5e820ed8e38162dcdc8`,
+identical in the dense-only and final builds. Dense-only v1 passed byte replay
+before the first packed K16 launch. No production source or default changed.
+
+Complete-projection GPU medians, milliseconds, profiler disabled:
+
+| Path | Forward initial order | Reverse initial order |
+| --- | ---: | ---: |
+| Dense F16, K16 / 8 KiB | 4.9766 | 5.0526 |
+| Dense F16, K32 / 16 KiB | 4.3673 | 4.4592 |
+| Direct Q4, K16 / 8 KiB | 5.8542 | 5.8654 |
+| Direct Q4, K32 / 16 KiB | 5.0140 | 4.8719 |
+| Resident identical-operand F32 MPS | 4.2507 | 4.1274 |
+| Decode then F32 MPS | 4.3255 | 4.3505 |
+
+The median paired K16/K32 ratios are 1.13572 dense (+13.57% duration) and
+1.19665 Q4 (+19.66%). K16 loses all 12 same-round pairs per representation,
+including six candidate-first and six control-first. Dense stratum medians
+are 1.13683/1.11631; Q4 1.18471/1.20516. Resident MPS medians drift -2.90%
+between runs and decode-MPS +0.58%; the loss persists within both order
+strata. Run ranges are not confidence intervals. K16 halves shared storage,
+but doubles panel iterations and reduces per-panel loader concurrency. These
+are hypotheses for the penalty; no occupancy, stall or handoff causality was
+measured. Total Q4 sub-block decodes and input elements over K remain equal.
+
+All four candidates equal prior B64 and identical-operand MPS bitwise, before
+and after bias. All 28 final output banks repeat between orders; all 24 dense-
+stage and 20 pinned prior-control banks remain fixed. The 23 saved real rows
+repeat on GPU to M1280, not a new full-prefix activation distribution. Saved
+upstream revision `911cea6458a89c2663513ff7099561ec190dd491` is replayed;
+no new full upstream model run. Finite F32 atol=rtol=2e-5 is unchanged. G2
+still fails 949 entries. Original-BF16 Q4 G1 quality still fails: RMSE
+0.6173250074, relative L2 0.047034245, max abs 3.2914271355, 2,621,164 failures.
+Panel exactness does not qualify the lossy Q4 representation.
+
+Each final run has 48 samples, 97 roots, 96 asynchronous continuations, zero
+timed-root overlap, one terminal wait/readback, zero preterminal reads/waits
+and zero tracked encode-time MetalBuffer allocations. Named storage is
+868,056,672 bytes, including controls and packing. Maximum sampled native
+process-group footprint is 1,420.53 MiB, minimum cache-aware headroom
+30.9962 GiB, swap growth zero. The 10% floor, 2 GiB/120 s native cap and
+64 MiB swap stop pass. Samples do not bound true peaks; file cache is an
+estimate and named counters exclude private MPS allocations.
+
+All three real byte replays pass, including 42 same-operand and three saved-
+BF16 comparisons in each final report, comparator positive controls, authentic/
+cyclic row bands, source/launch bindings, root isolation, schedule and guards.
+The frozen checkers pass 60 CPU corruption/metadata tests; eleven pre-Metal
+admission negatives pass with artifacts preserved. Both lineages pin 31
+selected sources, binaries and ten linked objects; integrity replay verifies
+live v2 sources, fixture bytes and Q4 payload. Receipts are not a hermetic
+build or driver attestation. Correlated Mini-Quad source/math/API review is
+ROBUST within scope; the K16 speedup hypothesis is refuted at this geometry.
+
+Evidence: `.landmark/evidence/2026-10-26-hy-nomas-q4-k16.json`. Raw reports,
+sidecars, frozen checkers, source/binary snapshots, exact argv, guards,
+aggregate and integrity replay are retained in the external artifact root.
+Executed DoD entry points (the runner applies the guard):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py build-k16-v2 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_k16_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py k16-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/build/hy_nomas_q4_k16_benchmark-v2 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-forward-v1.json --rows 1280 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py k16-reverse-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/build/hy_nomas_q4_k16_benchmark-v2 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-reverse-v1.json --rows 1280 --repeats 16 --reverse-first
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py verify-forward-v2 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/verify_k16_v2.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-forward-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py verify-reverse-v2 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/verify_k16_v2.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/reports/k16-reverse-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py tests-final-v1 1024 120 python3 -B -m unittest discover -s /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source -p 'test_verify_k16_v*.py' -v
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/tmp/run_guarded.py closure-integrity-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-k16-20261026/source/closure_integrity_v1.py
+crystal tool format --check examples/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_k16_benchmark.cr
+git diff --check
+```
+
+These are the executed identities, not overwrite commands; reruns need fresh
+report/log names and the matching frozen source stage. Keep K32/16 KiB at this
+geometry. The next diagnostic discriminator would separate panel handoff cost
+from loader parallelism using resource/stall profiling, without claiming that
+smaller reservation alone helps. No follow-on kernel variant is admitted by
+this result. Refresh on the expiry triggers above; whole-block and generation
+throughput and original-BF16 Q4 quality remain open.

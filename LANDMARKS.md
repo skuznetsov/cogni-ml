@@ -34293,3 +34293,36 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next unmeasured falsifier: K16 panels/8 KiB, same ascending K8 order. Refresh
   on source/cache/fixture, geometry/schedule, precision/ownership, toolchain/
   device/OS/MPS changes or lost external evidence.
+
+### 2026-10-26: K16 halves panel storage but loses to K32 in dense F16 and Q4
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K16 panel experiment",
+  and .landmark/evidence/2026-10-26-hy-nomas-q4-k16.json.
+- Dense-only qualification precedes Q4. Opt-in clones keep M1280/K8192/N2048,
+  M64/N64, 256 threads, F16 operands/F32 accumulation, common merge/bias and
+  1,024 ascending K8 MMAs. K16 uses 8 KiB shared/512 panels; K32 16 KiB/256.
+  Both loader maps cover panels exactly; the fixed-shape guard excludes the
+  16 KiB edge scratch path. The 23 saved real rows repeat on GPU to M1280.
+- K16 loses all 12 paired rounds per representation across opposite initial
+  orders, including six candidate-first/six control-first. Median K16/K32
+  duration ratios 1.13572 dense (+13.57%) and 1.19665 Q4 (+19.66%). Keep K32.
+  Twice as many handoffs and lower per-panel loader concurrency are hypotheses,
+  not measured causal attribution. Resident MPS run drift is -2.90%.
+- All four candidates equal B64/MPS raw/biased outputs bitwise; all 28 final
+  banks repeat both orders, all 24 dense-stage and 20 prior banks remain fixed.
+  Finite atol=rtol=2e-5; G2's 949 failures and original-BF16 Q4 relative L2
+  0.0470342 remain unwaived. Saved upstream revision 911cea6458a89c2663513ff7099561ec190dd491.
+- Each final run has 48 samples/97 roots/96 async continuations, one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled footprint <=1,420.53 MiB, cache-aware
+  headroom >=30.9962 GiB, swap flat. Unchanged 10% floor, 2 GiB/120 s cap and
+  64 MiB swap stop. Samples are not peaks; MPS private allocations uncounted.
+- Three full byte replays, 60 frozen CPU checker tests, 11 pre-Metal negatives
+  and selected-source/fixture/Q4-payload integrity replay PASS. Both lineages
+  pin 31 sources, binaries and ten linked objects. Correlated Mini-Quad source/
+  math/API review ROBUST; K16 speedup hypothesis refuted within this scope.
+  No production/default, full block/model/capture/generation change or run.
+- Next discriminator: resource/stall evidence separating handoff cost from
+  loader concurrency. No new kernel variant admitted. Refresh on source/cache/
+  fixture, geometry/schedule, precision/ownership, toolchain/device/OS/MPS
+  changes or missing external evidence. Receipts are not hermetic attestation.

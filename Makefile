@@ -227,6 +227,13 @@ $(BUILD_DIR)/hy_nomas_q4_shared_reserve_benchmark: examples/hy_nomas_q4_shared_r
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
+.PHONY: hy_nomas_q4_k16_benchmark
+hy_nomas_q4_k16_benchmark: $(BUILD_DIR)/hy_nomas_q4_k16_benchmark
+
+$(BUILD_DIR)/hy_nomas_q4_k16_benchmark: examples/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_k16_benchmark.cr examples/support/hy_nomas_q4_kpanel_benchmark.cr examples/support/hy_nomas_q4_b64_schedule_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_reuse_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction.metal examples/support/hy_nomas_probe_instrumentation.cr src/ml/gguf/kernels/gemm_q4k.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
 $(BUILD_DIR)/hy_nomas_q4_dit_pack: examples/hy_nomas_q4_dit_pack.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
