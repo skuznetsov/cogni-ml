@@ -34260,3 +34260,36 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next falsifier: K32 with unused shared reservation padded to 32 KiB versus
   16 KiB, retaining geometry/order. Refresh on source/cache/fixture, geometry,
   precision/ownership, toolchain/device/OS/MPS changes or lost external evidence.
+
+
+### 2026-10-26: K32 reservation-only controls reject unused 32 KiB storage
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K32 shared-reservation
+  experiment", and .landmark/evidence/2026-10-26-hy-nomas-q4-shared-reserve.json.
+- Opt-in controls keep the exact generated K32 source and one pipeline per
+  precision, M1280/K8192/N2048, M64/N64, 256 threads and 1,024 ascending K8 MMAs.
+  Only reservation changes (16/32 KiB); the addressed range remains 16 KiB.
+  Dense qualification passes first; 23 saved real rows repeat on GPU.
+- Two opposite-initial-order schedules: median paired 32/16 KiB ratios 1.16433
+  dense F16 (+16.43%) and 1.17983 Q4 (+17.98%); 32 KiB loses all 12 pairs per
+  representation, six candidate-first/six control-first. Keep 16 KiB K32.
+  Reservation timing cost is isolated; occupancy causality and subtraction of
+  prior K64 timings are not admitted. MPS resident drift is -1.90% between runs.
+- All four candidates equal B64/MPS raw/biased results bitwise. All 28 final
+  banks repeat both orders, all 24 dense-stage/20 prior banks stay fixed.
+  Finite atol=rtol=2e-5; G2's 949 failures and original-BF16 Q4 relative L2
+  0.0470342 remain unwaived. Saved upstream revision 911cea6458a89c2663513ff7099561ec190dd491.
+- Each final run: 48 samples/97 roots/96 async continuations; one terminal
+  wait/readback, zero preterminal reads/waits or tracked encode allocations.
+  Named bytes 868,056,672; sampled peak 1,714.20 MiB, headroom >=33.3707 GiB,
+  swap flat. Unchanged 10% cache-aware floor, 2 GiB/120 s, 64 MiB swap stop.
+  Samples are not peak bounds; named counters exclude private MPS allocations.
+- Three real byte replays, 56 frozen checker tests, 11 admission negatives and
+  selected-source/fixture/Q4-payload integrity replay PASS. Both native lineages
+  pin 31 sources and ten linked objects. An obsolete admission-helper error
+  label was corrected with no native behavior change; both attempts retained.
+  Correlated Mini-Quad ROBUST within this scope; no production change, full
+  block, model, capture or generation. Receipts are not hermetic attestation.
+- Next unmeasured falsifier: K16 panels/8 KiB, same ascending K8 order. Refresh
+  on source/cache/fixture, geometry/schedule, precision/ownership, toolchain/
+  device/OS/MPS changes or lost external evidence.
