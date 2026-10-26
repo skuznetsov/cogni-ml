@@ -34326,3 +34326,30 @@ Refresh after source/toolchain/device/model/workload changes.
   loader concurrency. No new kernel variant admitted. Refresh on source/cache/
   fixture, geometry/schedule, precision/ownership, toolchain/device/OS/MPS
   changes or missing external evidence. Receipts are not hermetic attestation.
+
+### 2026-10-26: K16/K32 hardware profiling finds higher buffer-load pressure
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "K16/K32 hardware-counter
+  profile", and .landmark/evidence/2026-10-26-hy-nomas-q4-panel-profile.json.
+- Actual v6/v7 Performance Limiters captures succeed after a lean external
+  harness reduces named GPU storage to 381,515,040 bytes. Four earlier captures
+  exceed the unchanged 2 GiB cap and remain rejected. The 10% cache-aware floor,
+  120 s deadline, 64 MiB swap stop, one terminal wait/read and zero early
+  reads/waits or tracked encode allocations remain unchanged. No generation.
+- v7 has 54 shader intervals/eight GEMMs and 31 device-wide counter types/four
+  ring indexes. Sampled buffer-load pressure is higher in K16 windows while
+  occupancy is similar. Device-wide samples, irregular spacing, unknown ring
+  weights and startup perturbation prohibit exclusive-workload utilization or
+  barrier-cost claims. No barrier/stall/PC counter is available; exact panel
+  handoff versus loading time stays open. Never subtract the captured timings
+  or interpret exported bandwidth zeros as absent physical traffic.
+- Fresh profiler-off K16/K32 paired ratios: 1.155866 dense, 1.229616 Q4, zero
+  wins in 12 pairs per representation across both orders. Keep K32/16 KiB at
+  M1280/K8192/N2048, M64/N64, 256 threads and ascending K8 MMA. Inputs are GPU
+  cyclic repeats of 23 saved real rows. Same-operand bits stay exact; saved
+  upstream replay only, original-BF16 Q4 quality remains failed at 2e-5.
+- Next falsifier: loader-map-only K16 ablation with unchanged panel/barrier
+  counts, shared bytes and MMA order. Proposed only; no production change or
+  full-block/generation throughput claim. Refresh on source/cache/fixture,
+  geometry/schedule, precision/lifetime, toolchain/device/OS/capture changes or
+  missing external evidence. Correlated Mini-Quad is not independent replication.

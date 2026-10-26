@@ -1,13 +1,16 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: K16/8 KiB preserves output bits but loses to
-K32/16 KiB at fixed M64/N64, 256 threads and ascending K8 MMA order. Median
-same-round duration ratios are 1.13572 for dense F16 and 1.19665 for direct
-Q4; K16 loses all 12 pairs per representation across opposite initial orders.
-Keep K32/16 KiB for this geometry. Dense-first qualification, both final byte
-replays and the 10% memory guard pass. See "K16 panel experiment" below.
-Production dispatch is unchanged; the separate Q4 versus original-BF16
-quality gate still fails. No full block, model, capture or generation ran.
+Current frontier, 2026-10-26: real Performance Limiters and Shader Timeline
+captures now cover K16/K32 dense F16 and direct Q4 GEMMs. K16 has higher
+sampled buffer-load pressure; exact panel-handoff versus loading time remains
+unresolved because the available counter set has no barrier/stall attribution.
+Fresh profiler-off median K16/K32 duration ratios are 1.15587 dense and 1.22962
+Q4, with zero wins in 12 pairs per representation across opposite initial
+orders. Keep K32/16 KiB at fixed M64/N64, 256 threads and ascending K8 MMA.
+Candidate outputs retain exact bits; finite atol=rtol=2e-5 and the 10% memory
+floor stay unchanged. Production dispatch is unchanged and the separate Q4
+versus original-BF16 quality gate still fails. No full block/model/generation
+ran. See "K16/K32 hardware-counter profile" below.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
@@ -1188,3 +1191,117 @@ from loader parallelism using resource/stall profiling, without claiming that
 smaller reservation alone helps. No follow-on kernel variant is admitted by
 this result. Refresh on the expiry triggers above; whole-block and generation
 throughput and original-BF16 Q4 quality remain open.
+
+
+## K16/K32 hardware-counter profile, 2026-10-26
+
+The external lean harness profiles the four existing dense/Q4 K16/K32 arms
+at M1280/K8192/N2048, M64/N64, 256 threads and 1,024 ascending K8 MMAs per
+output. It preserves the generated kernel sources, operand bytes, launch
+geometry and measured root: GEMM, one-group F32 merge, then BF16 bias.
+The 23 saved real activation rows repeat cyclically on GPU; this is not a new
+full-prefix activation distribution. All input replication and neural math
+stay on GPU. Setup, raw-bank capture, comparisons and terminal packing remain
+outside the eight timed roots. No production kernel, dispatch, internal
+barrier or synchronization was added by the profiling harness. K16 naturally
+executes more existing loop barriers than K32, as counted below.
+
+Risk is CAUTION (profiler perturbation and attribution). The rollback is to
+stop only the owned target/recorder and retain K32 unchanged. DoD requires
+terminal-byte replay, actual counter values, an unambiguous target/device/GPU
+interval inventory, fresh profiler-off controls and guard admission. A device
+limiter percentage is an overlapping observation, not an additive duration.
+Missing stall attribution must leave the exact handoff/load split open.
+
+The first four captures exceeded the unchanged 2 GiB process-group cap and
+are rejected. Their incomplete traces/native reports cannot support captured
+performance claims. The bounded pivot retains eight candidate raw/bias banks
+instead of all 28 qualification banks and omits unused MPS plans. Named GPU
+storage is 381,515,040 bytes (363.84 MiB), below the 400 MiB lean cap. The full
+28-bank qualification and all eight lean baseline bank identities pass;
+second-round finite GPU bit comparisons and a virtual one-bit corruption
+control preserve the comparator checks. The saved upstream fixture is the
+numerical anchor, not a fresh upstream execution. The independent original-
+BF16 quality gate remains false (relative L2 0.0470342); tolerance is unchanged.
+
+Two lean recordings succeed: v6 Performance Limiters alone; v7 Performance
+Limiters plus Shader Timeline. Each has 17 target GPU command buffers and eight
+isolated timed roots. v7 contains 54 shader intervals, including the eight
+GEMMs, each uniquely contained in one target GPU interval. There are 31 actual
+counter types and four `gpu-counter-value` ring indexes (0-3). These are not
+equated with indexes in other counter tables. The counter tables are device-
+wide and have no process/command-buffer key; their time-window association does
+not prove exclusive target activity. The unique single-M2-Max inventory joins
+observed accelerator IDs 1436 and 4294968732 across schemas; no undocumented
+numeric conversion is asserted.
+
+Counter observations are equal-sample descriptive means per ring and per GEMM,
+not time-weighted workload utilization. Actual sample spacing is irregular
+(roughly 28-186 us across the two recordings), despite interval metadata 10000
+with an undeclared unit. Boundary gaps and sparse samples prevent a full-time
+coverage claim; ring weights are unknown. The Shader Timeline is used for
+containment, not a profiler-derived speed comparison: the first dense K16 GEMM
+is strongly perturbed (11.80 ms versus 4.56 ms in the reverse round).
+
+Ranges below cover eight separate means per arm: four ring streams in each
+of two order rounds. Units are the exported percentage values. These are
+descriptive means of samples in the GEMM windows, not exclusive target
+utilization or measured fractions of runtime.
+
+| Device counter sample mean | Dense K16 | Dense K32 | Q4 K16 | Q4 K32 |
+| --- | ---: | ---: | ---: | ---: |
+| Buffer Read Limiter | 69.96-80.43 | 43.43-45.41 | 41.21-45.14 | 23.99-24.41 |
+| Buffer Load Utilization | 67.01-74.28 | 41.47-42.37 | 28.57-31.61 | 21.20-21.63 |
+| Compute Occupancy | 31.03-34.50 | 30.73-31.20 | 28.29-31.04 | 30.82-31.42 |
+
+Both load counters are higher in every K16 ring/round window than its matched
+K32 window; individual sample-value ranges still overlap. Occupancy does not
+show the same separation. This is a load-pressure pattern, not proof of a
+causal change in occupancy or physical bandwidth.
+
+K16 executes 512 panels and 513 barriers per full-tile threadgroup; K32 executes
+256 panels and 257 barriers. Total staged A/B elements and K8 MMA counts stay
+equal, but each K16 panel uses fewer loader lanes. Logical staged/requested
+bytes are not measured DRAM traffic. The counter set has no barrier-stall,
+PC or source-line attribution, and its exported bandwidth zeros are not proof
+of absent traffic. Consequently neither timing subtraction nor summing limiter
+percentages identifies barrier cost. Higher buffer-load pressure is consistent
+with reduced loader concurrency; it does not separate handoffs, instruction
+issue, cache service, or external bandwidth quantitatively.
+
+Fresh profiler-off controls retain the full 28-bank path, two warmup and six
+measured rounds, 16 projections per timed root and opposite initial orders.
+Median paired K16/K32 ratios are 1.155866 dense and 1.229616 Q4, with zero wins
+in all 12 pairs per representation (six candidate-first/six control-first).
+All 28 final banks repeat both runs and match the pinned prior baseline.
+These observations retain K32/16 KiB; no full-block or generation speed claim
+follows from this projection.
+
+Both admitted recordings keep one terminal wait/readback, zero preterminal
+reads/waits and zero tracked encode-time allocations. The cache-aware 10%
+reserve, 2 GiB/120 s native-plus-recorder cap and 64 MiB swap-growth stop pass.
+Sampled group peaks are 581.43 MiB (v6) and 642.72 MiB (v7), minimum headroom
+27.73/28.52 GiB, swap growth zero. Samples are not true peak bounds and file
+cache is an estimate. Build keeps 4 GiB/600 s; CPU replay keeps 1 GiB/120 s.
+
+Executed byte-replay DoD: `verify-capture-v6` and `verify-capture-v7` both return
+ACCEPTED for all eight banks, source/binary/receipt/attach identities, execution
+counters and guards; the inherited quality failure is recomputed from bytes.
+The guarded `counter-observations-final-v1` emitter returns zero, reproduces the
+earlier observations byte-for-byte, and preserves raw export identities,
+ring/sample counts and interval edges. Ten targeted counter-join/parser tests
+and two capture-version selection tests pass. Exact commands are retained in
+`logs/<run>.argv.json`; fresh reruns require fresh artifact names.
+Correlated Mini-Quad verdict is ROBUST for capture, identity and descriptive
+window observations; causal load-versus-handoff attribution remains open.
+
+Evidence: `.landmark/evidence/2026-10-26-hy-nomas-q4-panel-profile.json`.
+External source snapshots, exact argv, receipts, native reports/sidecars,
+traces, sanitized XML exports, byte replays and counter observations remain in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026`.
+The next discriminator is a K16 loader-map-only ablation that preserves panel
+count, barriers, shared bytes and K8 order; it is proposed, not implemented or
+qualified here. Exact stall attribution requires a different profiler
+capability or a discriminating ablation, not a weaker accuracy/memory guard.
+Refresh on source/cache/fixture, geometry/schedule, precision/lifetime,
+toolchain/device/OS, capture configuration, or missing external evidence.

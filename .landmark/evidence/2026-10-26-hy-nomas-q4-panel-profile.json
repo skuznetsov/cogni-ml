@@ -1,0 +1,604 @@
+{
+  "base_commit": "d272151b2d92d6b457786d081ff478a67887f31f",
+  "claim": "K16 has higher sampled buffer-load pressure in the observed GEMM windows; quiet paired projection controls retain K32. No exact barrier/load time attribution.",
+  "decay_trigger": "Source/cache/fixture, geometry/schedule, precision/lifetime, toolchain/device/OS/capture configuration changes or missing external evidence",
+  "design": {
+    "added_by_profile_harness": {
+      "gpu_waits": 0,
+      "internal_barriers": 0,
+      "production_kernel_changes": 0
+    },
+    "geometry": {
+      "k": 8192,
+      "m": 1280,
+      "m_tile": 64,
+      "n": 2048,
+      "n_tile": 64,
+      "threads": 256
+    },
+    "input": "23 saved real rows cyclically repeated on GPU; not a new full-prefix activation distribution",
+    "k16": {
+      "executed_barriers_per_full_tile_threadgroup": 513,
+      "panel_iterations": 512,
+      "shared_bytes": 8192
+    },
+    "k32": {
+      "executed_barriers_per_full_tile_threadgroup": 257,
+      "panel_iterations": 256,
+      "shared_bytes": 16384
+    },
+    "math": "Exact existing F16-operand/F32-accumulation kernels; 1024 ascending K8 MMA steps; common merge and BF16 bias",
+    "named_gpu_bytes": 381515040,
+    "no_full_block_model_or_generation": true,
+    "per_capture": {
+      "preterminal_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_readbacks": 1,
+      "terminal_waits": 1,
+      "tracked_encode_allocations": 0
+    },
+    "profile_schedule": "Two opposite-order rounds, zero warmup, one projection/sample, eight timed roots and seventeen total command roots",
+    "timed_root": "GEMM -> one-group F32 merge -> BF16 bias"
+  },
+  "dod": {
+    "command_identity_directory": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs",
+    "executed_runs": [
+      "build-lean-v3",
+      "lean-check-v2",
+      "preflight-lean-bytes-v1",
+      "capture-v6",
+      "capture-v7",
+      "export-v6",
+      "export-v7",
+      "verify-capture-v6",
+      "verify-capture-v7",
+      "counter-observations-final-v1",
+      "test-counter-audit-v1",
+      "test-verify-lean-v1"
+    ],
+    "expected_observed_signal": "Guarded zero exits; both full eight-bank byte replays ACCEPTED; one terminal wait/readback; exact source/binary/attach pins; actual counter values and strict shader/CB joins; twelve targeted CPU tests OK",
+    "fallback": "Full 28-bank prior byte lineage, fresh profiler-off opposite-order controls, strict terminal GPU bit comparisons and injected one-bit comparator control",
+    "falsifier": "Missing/ambiguous kernel interval or device/CB/time-window mapping prevents attribution; unavailable barrier/stall counters leave exact handoff/load cost open"
+  },
+  "evidence": {
+    "artifact_identities": [
+      {
+        "nbytes": 8587,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/lean-v3.json",
+        "sha256": "e9a64f4121698014e460c7fa77eaf6c893da9d357f8d9c7870cfc2d416000634"
+      },
+      {
+        "nbytes": 3575,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/lean-v3-receipt.json",
+        "sha256": "c991a2554c5668ca390ab397934882cb53aca2612c5256df48ff31c4c999b9d8"
+      },
+      {
+        "nbytes": 3575,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/profile-v6-receipt.json",
+        "sha256": "c991a2554c5668ca390ab397934882cb53aca2612c5256df48ff31c4c999b9d8"
+      },
+      {
+        "nbytes": 3569,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/profile-v7-receipt.json",
+        "sha256": "06f3d0958300b0cc9a2123bed9e47973594ef853ed613d786d2103f600ef91c1"
+      },
+      {
+        "nbytes": 47838,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/verify_lean_v1.py",
+        "sha256": "66c31ad686fa70888da1bb937a982c6710eed5a4a86f4d5f988ab9357d470894"
+      },
+      {
+        "nbytes": 1437,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/test_verify_lean_v1.py",
+        "sha256": "9fc695e3cd21ff622bb7a9b60ecc9c017c2cbd9637dd5941c8f280c550c88df0"
+      },
+      {
+        "nbytes": 79429,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/verify_profile_v1.py",
+        "sha256": "9d21f7754561877ff5fae10318c92ebbe0ac2569bbfb0cd7c1b6ac4c044c060b"
+      },
+      {
+        "nbytes": 50513,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/profile_counter_audit_v1.py",
+        "sha256": "5268d461040100a7974a204916d67abec08fe175e520d791b799306b33e3b77d"
+      },
+      {
+        "nbytes": 10094,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/test_profile_counter_audit_v1.py",
+        "sha256": "885ba94a56ac1c9c7e7aca4702a768880a44fd7b98537d94743aa0d70a8c0a27"
+      },
+      {
+        "nbytes": 10719,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/source/write_panel_packet_v1.py",
+        "sha256": "ec2b241b389fd71b9afef772e8cfa45a3efc2eefdedbb7a7ff8d15945001390d"
+      },
+      {
+        "nbytes": 196128,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/counter-observations-final-v1.json",
+        "sha256": "2ec90acf733ec4b0644170916e99f72cddf35b6f90c0cdb2cb7e8cefaf570b9f"
+      },
+      {
+        "nbytes": 3952,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/quiet-controls-v1.json",
+        "sha256": "8905c58bc385577f996628e7723be2ba75155df5ee08bbbf4c1b93e7092851e7"
+      },
+      {
+        "nbytes": 2668,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/rejected-captures-v1.json",
+        "sha256": "19c7291caff4f3842749f34fd2dcad9ca908a8b5bbdb33eb33e20d5797b6c6c0"
+      },
+      {
+        "nbytes": 14868,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/panel-profile-v6.json",
+        "sha256": "3baf89e536d84f2c6c451fc4662f16a8703fa796c9108af346daaf442ff4e2dd"
+      },
+      {
+        "nbytes": 83886224,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/panel-profile-v6.json.f32le",
+        "sha256": "604ba22f286d881d63398b9e1604d4cb05453705bb6abd327d8bd2a8e02c1b12"
+      },
+      {
+        "nbytes": 22793,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/panel-profile-v6/exports.json",
+        "sha256": "4d75f2cb67d66245efc3edc3a1206b14d1192c61d59ff3f3937ad64b3dcb7bca"
+      },
+      {
+        "nbytes": 1187,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/attach-v6.json",
+        "sha256": "2d0796f249bc162953b400cb0898eac18086cf5dc903122423f311bac650046d"
+      },
+      {
+        "nbytes": 14889,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/panel-profile-v7.json",
+        "sha256": "9e6237d0910dc55162377151890cb5029b934174fd6247d80a66b9fb3fdadb28"
+      },
+      {
+        "nbytes": 83886224,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/reports/panel-profile-v7.json.f32le",
+        "sha256": "604ba22f286d881d63398b9e1604d4cb05453705bb6abd327d8bd2a8e02c1b12"
+      },
+      {
+        "nbytes": 22795,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/panel-profile-v7/exports.json",
+        "sha256": "97fa10aeca8e0e353c73f4e1f8defe8d384ce4ff54282f846dd70f3251a613fe"
+      },
+      {
+        "nbytes": 1179,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/attach-v7.json",
+        "sha256": "09858905da1b9c97cce5bf3e4ea0029aab27ed302a0cb1599506720bfac237b1"
+      },
+      {
+        "nbytes": 987,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/panel-profile-v6/metal-gpu-info.xml",
+        "sha256": "ea3b492d24392ac3c3eb778528b0d869e3dc9b8265d402a86aa7f0473f4d56f9"
+      },
+      {
+        "nbytes": 217,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/profiles/panel-profile-v6/device-bridge-identity.json",
+        "sha256": "e7b21252634c0e1f0dd2c301c29e52a55102d50d6387c7b4bf48968875230c5a"
+      },
+      {
+        "nbytes": 1821,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/build-lean-v3.argv.json",
+        "sha256": "446154e9ab5de211155ea3f80b12fecc79c29d4c62ed91db0d347aa356204e45"
+      },
+      {
+        "nbytes": 5355,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/build-lean-v3.guard.jsonl",
+        "sha256": "df1679d095987b9f033db78e62500102fc5bc45a88b3e70d2f9159fd6d204d68"
+      },
+      {
+        "nbytes": 0,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/build-lean-v3.out",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "nbytes": 805,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/lean-check-v2.argv.json",
+        "sha256": "12f58fa5bdc7498cb6a1ca82316a2321af8c6822e5f473d71f1dba54f3db015f"
+      },
+      {
+        "nbytes": 1968,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/lean-check-v2.guard.jsonl",
+        "sha256": "87fcac624316d70ebaf53f493475f2703005b794ce48d0a8551b15b75b2fafd2"
+      },
+      {
+        "nbytes": 521,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/lean-check-v2.out",
+        "sha256": "346b09ac27aad383941e09e0b353d7e4636bb4d163bbc80336ef477cf42fc264"
+      },
+      {
+        "nbytes": 661,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/preflight-lean-bytes-v1.argv.json",
+        "sha256": "83754c1ad6e62e365dc0df475073ddf3202314dac3b9153b497e0b5cdeaf2451"
+      },
+      {
+        "nbytes": 1664,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/preflight-lean-bytes-v1.guard.jsonl",
+        "sha256": "be10a596a1e84b768b196d517d055dc4076db30476c35a3dc7879eeae4cfb586"
+      },
+      {
+        "nbytes": 462,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/preflight-lean-bytes-v1.out",
+        "sha256": "4d718a644a28aec6648606b06bee4f7da289f7ba03a5b5f0383b6dcb351416d3"
+      },
+      {
+        "nbytes": 939,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v6.argv.json",
+        "sha256": "dcafddc2a68ceb418c9aa66d3adb62832103eefeaf50722e55d0d4a65a3c8211"
+      },
+      {
+        "nbytes": 5951,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v6.guard.jsonl",
+        "sha256": "a66bc86a3deba4285f8640d54e811aea45000cbf92ca8ffd239d7d7c6c33ed1c"
+      },
+      {
+        "nbytes": 216,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v6.out",
+        "sha256": "151a9ab2a80d38e4769b623c7c5b8b8d00e6fb01916ba0b5de65824d7fbfd791"
+      },
+      {
+        "nbytes": 939,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v7.argv.json",
+        "sha256": "7c6e3693d2bcb0c59986f7f9bb1a0fb98ec02882356199fc4b3b12bbb8c751f4"
+      },
+      {
+        "nbytes": 5651,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v7.guard.jsonl",
+        "sha256": "ec93f60168e4cefb39ff896bf0ea1b2c2340dfb4207691e74d5e1e1dc0e2fec3"
+      },
+      {
+        "nbytes": 215,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/capture-v7.out",
+        "sha256": "ab14903b6d74988792ebd0848dd7389d435b099cea3057d1da9da1cc7196b91a"
+      },
+      {
+        "nbytes": 663,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v6.argv.json",
+        "sha256": "7e31bf0d0d2ae2f667184e0e060c9c8603d6806aef674e8681a702022c7834e5"
+      },
+      {
+        "nbytes": 20094,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v6.guard.jsonl",
+        "sha256": "a143735cb1a83696098c98eafd94d0147ba4436092fda91feac83379fba18fef"
+      },
+      {
+        "nbytes": 19336,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v6.out",
+        "sha256": "1bfd1dfca72c644d43b9bea0279a327b6659d84ec09ed02c75322b2230a80da8"
+      },
+      {
+        "nbytes": 663,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v7.argv.json",
+        "sha256": "181b2853e4ea346c5ac3e5d9d88d16560473b04c53b04a0aea27c2c2f9cdefd7"
+      },
+      {
+        "nbytes": 20095,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v7.guard.jsonl",
+        "sha256": "036a0901ac1e875a8a89d6311f03e2f39ed757057fa540c522099880710ae0a8"
+      },
+      {
+        "nbytes": 19337,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/export-v7.out",
+        "sha256": "2b7dad7e40d647401ce775d0f4a777c3f8e3774226f1caeab84f30e0eef44594"
+      },
+      {
+        "nbytes": 786,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v6.argv.json",
+        "sha256": "54a3517dcd62d1e685d8e91e58a35ae4ec1a22d2168b21b2a6ad2e3d7f99a782"
+      },
+      {
+        "nbytes": 7502,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v6.guard.jsonl",
+        "sha256": "d1b47a929672bc17b334bd519507d5428b8b748084fda09a5ec402288d5c0750"
+      },
+      {
+        "nbytes": 719,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v6.out",
+        "sha256": "af37a44f60051cf4d4fb315100748e68a27bc64cfd8be2140e0dd26d4a1f49ab"
+      },
+      {
+        "nbytes": 786,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v7.argv.json",
+        "sha256": "2d39a7b10b35a049792ecf1056d8a4a987160bca30b6ac02744ecd007bb47f88"
+      },
+      {
+        "nbytes": 7507,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v7.guard.jsonl",
+        "sha256": "2757e3a5d926b2204805b54c7b89d74576814b977f1e782b0927340c09bb1679"
+      },
+      {
+        "nbytes": 719,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/verify-capture-v7.out",
+        "sha256": "80c64b8fa6b0775c90b2291580d733dcffa36344533759dedabab7bce765850e"
+      },
+      {
+        "nbytes": 1272,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/counter-observations-final-v1.argv.json",
+        "sha256": "39c2064bb188c25371baabb9c9d6a5dca0d9cb401a4fdf8e9b68e4aef7d0cff8"
+      },
+      {
+        "nbytes": 2576,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/counter-observations-final-v1.guard.jsonl",
+        "sha256": "f44da6924e4dd0eb788b30b6a304c3c909f72a2fa3a3d0d02007f485466129e2"
+      },
+      {
+        "nbytes": 0,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/counter-observations-final-v1.out",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "nbytes": 722,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-counter-audit-v1.argv.json",
+        "sha256": "75b5e1ddcd12a9e9fcbc6d0f1f2e688c356ef9f9631ff0926e49bbc7b4571262"
+      },
+      {
+        "nbytes": 1661,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-counter-audit-v1.guard.jsonl",
+        "sha256": "ef2307fe87af5a954c41c9475ba00197d9d1b6f7fc68f34b99b5f1c682968376"
+      },
+      {
+        "nbytes": 109,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-counter-audit-v1.out",
+        "sha256": "006ac55040db8bd82eeb2e5abab682d80dc719e313b23af3bbac2921bafb69a1"
+      },
+      {
+        "nbytes": 710,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-verify-lean-v1.argv.json",
+        "sha256": "f1541d557214136a24516094ae3518113f92594c8abdb486ff9fd66b0f0d0d62"
+      },
+      {
+        "nbytes": 1660,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-verify-lean-v1.guard.jsonl",
+        "sha256": "2bd4e9f96392bc9fcd6dd35469409520e3d750840879e27ebff8dfce8b2c9db6"
+      },
+      {
+        "nbytes": 100,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026/logs/test-verify-lean-v1.out",
+        "sha256": "a6707d4eff38012da33ddc34bc6dc076a3b17151cfc9aef223c8790cbe64c3da"
+      }
+    ],
+    "limitation": "Curated integrity index, not substantive proof, hermetic build attestation or sealed raw trace; exports.json binds exported tables",
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-panel-profile-20261026"
+  },
+  "failure_policy": "Reopen dependent claims, retain K32 and failed original-BF16 quality gate, reject guard failures without weakening thresholds",
+  "guards": {
+    "admitted_captures": {
+      "6": {
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_sampled_headroom_bytes": 29778067456,
+        "peak_sampled_group_bytes": 609671000,
+        "sample_count": 17
+      },
+      "7": {
+        "maximum_sampled_swap_growth_bytes": 0,
+        "minimum_sampled_headroom_bytes": 30627823616,
+        "peak_sampled_group_bytes": 673945744,
+        "sample_count": 16
+      }
+    },
+    "build_cap_mib": 4096,
+    "build_deadline_seconds": 600,
+    "cpu_cap_mib": 1024,
+    "cpu_deadline_seconds": 120,
+    "limitation": "Sampled process-group footprints are not peak bounds; file cache is an estimate",
+    "memory_accounting": "file-cache",
+    "native_deadline_seconds": 120,
+    "native_plus_recorder_cap_mib": 2048,
+    "runtime_floor_pct": 10,
+    "swap_growth_stop_mib": 64
+  },
+  "id": "2026-10-26-hy-nomas-q4-panel-profile",
+  "mini_quad": {
+    "attack": "Closed 17-CB/native-root inventory, exact CB-ID order, eight named shader strict containments, ring-by-ring counter recomputation, device-global attribution, startup outlier and unchanged negative BF16 quality gate",
+    "provenance": "Correlated same-lineage reviews and separate raw-data recomputation, not independent experimental replication",
+    "verdict": "ROBUST for captures, identity and descriptive counter-window observations; causal load-versus-handoff cost remains open"
+  },
+  "next_falsifier": "Proposed loader-map-only K16 ablation keeping panel/barrier counts, shared bytes and ascending K8 MMA; require exact terminal bits and paired quiet timing. Not implemented in this slice.",
+  "open_boundaries": [
+    "Counter values are device-level and contain no process or command-buffer key; same-time co-running GPU work could contribute.",
+    "Per-ring means are equal-sample descriptive statistics. Edge offsets and irregular timestamp gaps show incomplete/uneven temporal coverage; no full-window or time-weighted claim is made.",
+    "The exported sample-interval metadata is preserved as a raw value and is not used as an assumed cadence or unit.",
+    "Literal zero exports for selected counters are reported as literal values only, not as proof of no hardware activity or absent traffic.",
+    "Shader Timeline rows report sampled shader name, sample duration, and work percentage; they provide no PC, source line, barrier/stall counter, or isolated panel-handoff duration.",
+    "No counter or shader-sample duration is aggregated into a speed or performance result.",
+    "Exact panel handoff/barrier duration versus buffer-load duration is not available from this counter set.",
+    "Logical staged/requested bytes are not measured DRAM traffic; literal bandwidth zeros do not prove absent traffic.",
+    "Ring indexes 0-3 in gpu-counter-value are not equated with indexes in other tables or weighted into a device utilization.",
+    "Observed M2 Max accelerator IDs 1436 and 4294968732 remain distinct; no numeric conversion contract is claimed.",
+    "Profile timings are not a speed result; first dense K16 shader is strongly perturbed.",
+    "No whole-block, model, full generation, full-prefix-distribution or original-BF16 Q4 quality qualification."
+  ],
+  "refresh": "Use fresh guarded artifact names; rebuild only matching frozen source stages; repeat terminal byte replay, window join and profiler-off pairs before reusing the claim",
+  "results": {
+    "candidate_bank_bits_preserved": true,
+    "counter_ids": {
+      "10": "Buffer Read Limiter",
+      "11": "Buffer Load Utilization",
+      "24": "Compute Occupancy"
+    },
+    "counter_range_semantics": "Minimum/maximum of eight separate per-ring equal-sample means (4 ring streams x 2 rounds), exported percentage values; not duration-weighted utilization",
+    "counter_window_join": {
+      "counter_value_rows_have_process_or_command_buffer_key": false,
+      "exclusive_target_counter_attribution": false,
+      "gemm_rows": 8,
+      "gemm_sample_roots": [
+        1,
+        3,
+        5,
+        7,
+        9,
+        11,
+        13,
+        15
+      ],
+      "gpu_interval_to_target_command_buffer": "exact command-buffer ID match",
+      "gpu_intervals": 17,
+      "gpu_intervals_nonoverlapping": true,
+      "shader_to_gpu_interval": "unique strict interval containment on same exported xctrace elapsed axis",
+      "target_command_buffer_to_native_root": "ordered target submissions map positionally to contiguous native root sequences 0..16; exact native report record supplies the measured arm/root sequence",
+      "target_submissions": 17
+    },
+    "counter_window_ranges": {
+      "dense.k16": {
+        "10": {
+          "maximum_equal_sample_mean": 80.4260829843937,
+          "minimum_equal_sample_mean": 69.96459206816542
+        },
+        "11": {
+          "maximum_equal_sample_mean": 74.27534303310526,
+          "minimum_equal_sample_mean": 67.01461239742106
+        },
+        "24": {
+          "maximum_equal_sample_mean": 34.4959003718504,
+          "minimum_equal_sample_mean": 31.03212818423308
+        }
+      },
+      "dense.k32": {
+        "10": {
+          "maximum_equal_sample_mean": 45.41467120311607,
+          "minimum_equal_sample_mean": 43.43276633727027
+        },
+        "11": {
+          "maximum_equal_sample_mean": 42.36502605176577,
+          "minimum_equal_sample_mean": 41.473459627098215
+        },
+        "24": {
+          "maximum_equal_sample_mean": 31.203287911693696,
+          "minimum_equal_sample_mean": 30.725814119803573
+        }
+      },
+      "packed.k16": {
+        "10": {
+          "maximum_equal_sample_mean": 45.14040521180128,
+          "minimum_equal_sample_mean": 41.209578484153845
+        },
+        "11": {
+          "maximum_equal_sample_mean": 31.614889407474358,
+          "minimum_equal_sample_mean": 28.567067977935896
+        },
+        "24": {
+          "maximum_equal_sample_mean": 31.03870600473718,
+          "minimum_equal_sample_mean": 28.285424176166664
+        }
+      },
+      "packed.k32": {
+        "10": {
+          "maximum_equal_sample_mean": 24.408115036661155,
+          "minimum_equal_sample_mean": 23.98967842110569
+        },
+        "11": {
+          "maximum_equal_sample_mean": 21.63485828285124,
+          "minimum_equal_sample_mean": 21.204078543666668
+        },
+        "24": {
+          "maximum_equal_sample_mean": 31.422122113999997,
+          "minimum_equal_sample_mean": 30.818417643504066
+        }
+      }
+    },
+    "original_bf16_quality_gate_passed": false,
+    "production_promoted": false,
+    "quiet_paired_ratios": {
+      "dense.k16.over.dense.k32": {
+        "by_order": {
+          "candidate_first": {
+            "count": 6,
+            "median_ratio": 1.151279048820741,
+            "wins": 0
+          },
+          "control_first": {
+            "count": 6,
+            "median_ratio": 1.1558662657711793,
+            "wins": 0
+          }
+        },
+        "count": 12,
+        "max_ratio": 1.2017763933149783,
+        "median_ratio": 1.1558662657711793,
+        "min_ratio": 1.0055017229893388,
+        "wins": 0
+      },
+      "dense.k32.over.mps.resident": {
+        "by_order": {
+          "candidate_first": {
+            "count": 6,
+            "median_ratio": 1.0726485695145271,
+            "wins": 1
+          },
+          "control_first": {
+            "count": 6,
+            "median_ratio": 1.0418954552001756,
+            "wins": 0
+          }
+        },
+        "count": 12,
+        "max_ratio": 1.0863806946575292,
+        "median_ratio": 1.0583440772097605,
+        "min_ratio": 0.9840776169850345,
+        "wins": 1
+      },
+      "packed.k16.over.packed.k32": {
+        "by_order": {
+          "candidate_first": {
+            "count": 6,
+            "median_ratio": 1.2077389866099613,
+            "wins": 0
+          },
+          "control_first": {
+            "count": 6,
+            "median_ratio": 1.2369610809473137,
+            "wins": 0
+          }
+        },
+        "count": 12,
+        "max_ratio": 1.2970098317474261,
+        "median_ratio": 1.2296161652603463,
+        "min_ratio": 1.0573115395902108,
+        "wins": 0
+      },
+      "packed.k32.over.mps.resident": {
+        "by_order": {
+          "candidate_first": {
+            "count": 6,
+            "median_ratio": 1.1699043423473525,
+            "wins": 0
+          },
+          "control_first": {
+            "count": 6,
+            "median_ratio": 1.1434186821321952,
+            "wins": 0
+          }
+        },
+        "count": 12,
+        "max_ratio": 1.2363166396149143,
+        "median_ratio": 1.1554551307358383,
+        "min_ratio": 1.0579288649878726,
+        "wins": 0
+      }
+    },
+    "time_axis": {
+      "counter_column": {
+        "engineering_type": "event-time",
+        "mnemonic": "timestamp"
+      },
+      "counter_equal_sample_format": "00:01.850.950",
+      "interpretation": "The identical raw value and formatted elapsed timestamp show an observed shared xctrace elapsed axis for these exports. Raw-difference-to-microsecond conversion divides by 1000, consistent with the displayed format; this is not an independent hardware-clock calibration.",
+      "observed_equal_sample": 1850950833,
+      "shader_column": {
+        "engineering_type": "start-time",
+        "mnemonic": "start"
+      },
+      "shader_equal_sample_format": "00:01.850.950"
+    },
+    "unchanged_finite_tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "upstream_anchor": "Saved upstream fixture revision 911cea6458a89c2663513ff7099561ec190dd491; replay only, no fresh upstream run"
+  },
+  "risk": "CAUTION: profiler perturbation and device-wide counter attribution",
+  "rollback": "Production unchanged; revert this documentation/evidence commit if the record is refuted",
+  "schema": "landmark-evidence-packet-v1",
+  "status": "VERIFIED within capture, same-operand identity and descriptive counter-window scope; exact causal cost split remains IN_PROGRESS"
+}
