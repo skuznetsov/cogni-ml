@@ -12,6 +12,7 @@ module HyNomasQ4ReductionProbe
 
   ROOT                   = "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-reduction-20261025/reports"
   GROUP_ROOT             = "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports"
+  PACKED_ROOT            = "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports"
   FIXTURE_PATH           = "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json"
   FIXTURE_SHA256         = "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e"
   FIXTURE_SIDECAR_SHA256 = "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849"
@@ -51,14 +52,17 @@ module HyNomasQ4ReductionProbe
       {name: "#{interleaved ? "strided32" : "contiguous"}.g#{groups}", groups: groups, interleaved: interleaved}
     end
   end
-  GROUP_MERGES         = ["fold", "tree"]
-  GROUP_TILE_COUNT     = INPUT_DIM // 32
-  GROUP_COVERAGE_WORDS = GROUP_CASES.size * GROUP_TILE_COUNT
-  STATS_WORDS          = DECODE_STATS_WORDS + GROUP_COVERAGE_WORDS
-  GROUP_OUTPUTS        = GROUP_CASES.flat_map { |c| GROUP_MERGES.flat_map { |m| ["group.#{c[:name]}.#{m}.raw", "group.#{c[:name]}.#{m}.bias"] } }
-  OUTPUT_VARIANTS      = ["direct.raw", "direct.bias", "dense.raw", "dense.bias",
-                          "mps.canonical.raw", "mps.canonical.bias", "mps.helper.raw", "mps.helper.bias",
-                          "compensated.raw", "compensated.bias"] + PREFIXES.flat_map { |k| ["dense.k#{k}", "mps.k#{k}"] } + GROUP_OUTPUTS
+  GROUP_MERGES          = ["fold", "tree"]
+  GROUP_TILE_COUNT      = INPUT_DIM // 32
+  GROUP_COVERAGE_WORDS  = GROUP_CASES.size * GROUP_TILE_COUNT
+  PACKED_GROUPS         = [1, 2]
+  PACKED_COVERAGE_WORDS = PACKED_GROUPS.size * 2 * GROUP_TILE_COUNT
+  STATS_WORDS           = DECODE_STATS_WORDS + GROUP_COVERAGE_WORDS + PACKED_COVERAGE_WORDS
+  GROUP_OUTPUTS         = GROUP_CASES.flat_map { |c| GROUP_MERGES.flat_map { |m| ["group.#{c[:name]}.#{m}.raw", "group.#{c[:name]}.#{m}.bias"] } }
+  PACKED_OUTPUTS        = PACKED_GROUPS.flat_map { |groups| ["packed.contiguous.g#{groups}.raw", "packed.contiguous.g#{groups}.bias"] }
+  OUTPUT_VARIANTS       = ["direct.raw", "direct.bias", "dense.raw", "dense.bias",
+                           "mps.canonical.raw", "mps.canonical.bias", "mps.helper.raw", "mps.helper.bias",
+                           "compensated.raw", "compensated.bias"] + PREFIXES.flat_map { |k| ["dense.k#{k}", "mps.k#{k}"] } + GROUP_OUTPUTS + PACKED_OUTPUTS
   DIAGNOSTIC_SOURCE = ML::Video::HyNomasQ4Cache::SOURCE + {{ read_file("#{__DIR__}/hy_nomas_q4_reduction.metal") }}
   HELPER_SOURCE     = <<-METAL
     kernel void hy_q4_dump_helper(device const block_q4_K *packed [[buffer(0)]],
@@ -127,6 +131,43 @@ module HyNomasQ4ReductionProbe
                   atomic_fetch_add_explicit(coverage + (start_k + iter * step_k) / MM_NK, 1u, memory_order_relaxed);
       METAL
     source + kernel
+  end
+
+  # Keep the original packed decoder and full row pitch. The second partition
+  # starts inside each packed row, not at a row with a shortened K dimension.
+  def packed_grouped_source : String
+    original = ML::GGUF::Qwen35Metal::GEMM_Q4K_SOURCE
+    start = original.index("kernel void simd_mm_q4k_h16(") || raise "Missing packed F16 kernel"
+    finish = original.index("kernel void simd_mm_q4k_h16_b48(", start) || raise "Missing packed F16 kernel boundary"
+    kernel = original[start...finish]
+    kernel = sub_once(kernel, "kernel void simd_mm_q4k_h16(", "kernel void hy_q4_packed_grouped_h16(")
+    binding = "constant     uint&    batch   [[buffer(5)]],"
+    kernel = sub_once(kernel, binding, binding + <<-METAL)
+
+          constant uint& groups [[buffer(6)]],
+          device atomic_uint* coverage [[buffer(7)]],
+      METAL
+    kernel = sub_once(kernel, "const int r0 = tgpig.y * MM_NR0;", <<-METAL)
+      const uint n_iter = in_dim / MM_NK / groups;
+          const uint start_k = tgpig.z * n_iter * MM_NK;
+          output += tgpig.z * batch * out_dim;
+          const int r0 = tgpig.y * MM_NR0;
+      METAL
+    kernel = sub_once(kernel, "const uint n_iter = (in_dim + MM_NK - 1) / MM_NK;", "")
+    kernel = sub_once(kernel,
+      "(device const block_q4_K *)(w_raw + (r0 + lr0) * row_bytes) + il0 / MM_NL;",
+      "(device const block_q4_K *)(w_raw + (r0 + lr0) * row_bytes) + start_k / QK_K + il0 / MM_NL;")
+    kernel = sub_once(kernel, "x + (r1 + lr1) * in_dim + iy;", "x + (r1 + lr1) * in_dim + start_k + iy;")
+    kernel = sub_once(kernel, "for (uint iter = 0; iter < n_iter; iter++) {", <<-METAL)
+      for (uint iter = 0; iter < n_iter; iter++) {
+              if (tgpig.x == 0 && tgpig.y == 0 && tiitg == 0) {
+                  const uint tile = start_k / MM_NK + iter;
+                  atomic_fetch_add_explicit(coverage + tile, 1u, memory_order_relaxed);
+                  atomic_fetch_or_explicit(coverage + in_dim / MM_NK + tile, 1u << tgpig.z, memory_order_relaxed);
+              }
+      METAL
+    raise "Packed grouping changed decoder calls" unless kernel.scan("dequantize_q4_K_fn(xw, il, temp_a);").size == 2
+    grouped_source + kernel
   end
 
   private def sub_once(source : String, needle : String, replacement : String) : String
@@ -260,8 +301,10 @@ module HyNomasQ4ReductionProbe
         buffer("decode.stats").write_bytes(stats.to_unsafe.as(UInt8*), DECODE_STATS_WORDS * sizeof(UInt32))
         coverage = Array(UInt32).new(GROUP_COVERAGE_WORDS, 0_u32)
         buffer("group.coverage").write_bytes(coverage.to_unsafe.as(UInt8*), GROUP_COVERAGE_WORDS * sizeof(UInt32))
-        qwen_source = HyNomasQ4ReductionProbe.grouped_source
-        ["simd_mm_q4k_h16", "hy_q4_dump_helper", "hy_q4_dense_h16", "hy_q4_grouped_h16"].each do |name|
+        packed_coverage = Array(UInt32).new(PACKED_COVERAGE_WORDS, 0_u32)
+        buffer("packed.coverage").write_bytes(packed_coverage.to_unsafe.as(UInt8*), PACKED_COVERAGE_WORDS * sizeof(UInt32))
+        qwen_source = HyNomasQ4ReductionProbe.packed_grouped_source
+        ["simd_mm_q4k_h16", "hy_q4_dump_helper", "hy_q4_dense_h16", "hy_q4_grouped_h16", "hy_q4_packed_grouped_h16"].each do |name|
           @pipelines[name] = ML::Metal::ComputePipeline.new(name, qwen_source)
         end
         ["hy_q4_round_input", "hy_q4_canonical", "hy_q4_compare", "hy_q4_pack_prefix",
@@ -364,12 +407,43 @@ module HyNomasQ4ReductionProbe
             .set_value(OUTPUT_ELEMENTS.to_u32, 5).dispatch_1d(OUTPUT_ELEMENTS.to_i32)
         end
       end
+      PACKED_GROUPS.each_with_index do |groups, i|
+        # Reuse the existing partial scratch, poisoning all banks before each
+        # case so a missed write propagates to the terminal finite checks.
+        e.set_pipeline(@pipelines["hy_q4_poison_partials"])
+          .set_buffer(buffer("group.partials"), 0, ML::Metal::BufferAccess::Write)
+          .set_value((32 * OUTPUT_ELEMENTS).to_u32, 1).dispatch_1d((32 * OUTPUT_ELEMENTS).to_i32)
+        e.set_pipeline(@pipelines["hy_q4_packed_grouped_h16"])
+          .set_buffer(@cache.resident_payload, 0, offset: Q4_WEIGHT_OFFSET)
+          .set_buffer(buffer("input.h16"), 1)
+          .set_buffer(buffer("group.partials"), 2, ML::Metal::BufferAccess::Write)
+          .set_value(INPUT_DIM.to_u32, 3).set_value(OUTPUT_DIM.to_u32, 4).set_value(ROWS.to_u32, 5)
+          .set_value(groups.to_u32, 6)
+          .set_buffer(buffer("packed.coverage"), 7, ML::Metal::BufferAccess::ReadWrite,
+            offset: i.to_i64 * 2 * GROUP_TILE_COUNT * sizeof(UInt32))
+          .set_threadgroup_memory(MM_SHMEM, 0)
+          .dispatch_threadgroups({(ROWS + MM_NR1 - 1) // MM_NR1, (OUTPUT_DIM + MM_NR0 - 1) // MM_NR0, groups}, {MM_TG, 1, 1})
+        name = "packed.contiguous.g#{groups}"
+        e.set_pipeline(@pipelines["hy_q4_merge_partials"])
+          .set_buffer(buffer("group.partials"), 0)
+          .set_buffer(buffer("output.#{name}.raw"), 1, ML::Metal::BufferAccess::Write)
+          .set_value(OUTPUT_ELEMENTS.to_u32, 2).set_value(groups.to_u32, 3)
+          .set_value(0_u32, 4).dispatch_1d(OUTPUT_ELEMENTS.to_i32)
+        copy(e, buffer("output.#{name}.raw"), buffer("output.#{name}.bias"), OUTPUT_ELEMENTS.to_i32, 0)
+        e.set_pipeline(@pipelines["bias"])
+          .set_buffer(buffer("output.#{name}.bias"), 0, ML::Metal::BufferAccess::ReadWrite)
+          .set_buffer(buffer("bias.bf16"), 1).set_buffer(buffer("bias.bf16"), 2)
+          .set_value(OUTPUT_DIM.to_u32, 3).set_value(1_u32, 4)
+          .set_value(OUTPUT_ELEMENTS.to_u32, 5).dispatch_1d(OUTPUT_ELEMENTS.to_i32)
+      end
       OUTPUT_VARIANTS.each_with_index do |name, i|
         copy(e, buffer("output.#{name}"), buffer("output.packed"), OUTPUT_ELEMENTS.to_i32, (i * OUTPUT_ELEMENTS).to_i32)
       end
       copy(e, buffer("decode.stats"), buffer("output.packed"), DECODE_STATS_WORDS, (OUTPUT_VARIANTS.size * OUTPUT_ELEMENTS).to_i32)
       copy(e, buffer("group.coverage"), buffer("output.packed"), GROUP_COVERAGE_WORDS,
         (OUTPUT_VARIANTS.size * OUTPUT_ELEMENTS + DECODE_STATS_WORDS).to_i32)
+      copy(e, buffer("packed.coverage"), buffer("output.packed"), PACKED_COVERAGE_WORDS,
+        (OUTPUT_VARIANTS.size * OUTPUT_ELEMENTS + DECODE_STATS_WORDS + GROUP_COVERAGE_WORDS).to_i32)
     end
 
     def values(chain : ML::Metal::MPSCommandChain) : Array(Float32)
@@ -457,6 +531,7 @@ module HyNomasQ4ReductionProbe
       "bias.bf16"         => BIAS_BYTES,
       "decode.stats"      => DECODE_STATS_WORDS.to_i64 * sizeof(UInt32),
       "group.coverage"    => GROUP_COVERAGE_WORDS.to_i64 * sizeof(UInt32),
+      "packed.coverage"   => PACKED_COVERAGE_WORDS.to_i64 * sizeof(UInt32),
       "group.partials"    => 32_i64 * OUTPUT_BYTES,
     }
     OUTPUT_VARIANTS.each { |name| resources["output.#{name}"] = OUTPUT_BYTES }
@@ -515,7 +590,7 @@ module HyNomasQ4ReductionProbe
       raise ArgumentError.new("Report basename is unsafe")
     end
     parent_real = File.realpath(File.dirname(path))
-    unless [ROOT, GROUP_ROOT].any? { |root| File.directory?(root) && parent_real == File.realpath(root) }
+    unless [ROOT, GROUP_ROOT, PACKED_ROOT].any? { |root| File.directory?(root) && parent_real == File.realpath(root) }
       raise ArgumentError.new("Report must be a direct child of the dedicated reduction reports directory")
     end
     raise ArgumentError.new("Refusing to replace existing report") if File.info?(path, false)

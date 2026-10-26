@@ -215,3 +215,113 @@ GEMM without expanded global weight storage, then repeat same-operand and
 upstream gates before timing or promotion. Rollback: revert the opt-in diagnostic
 commit. Refresh on changed source/cache/fixture, geometry, precision, ownership,
 compiler/SDK/OS/device or MPS runtime.
+
+
+## Direct packed-Q4 split frontier, 2026-10-26
+
+Status: VERIFIED for the bounded same-operand projection diagnostic. The old
+direct kernel retains 17 same-F16-operand MPS failures on authenticated
+M23/K8192/N2048 operands. The new opt-in probe transfers the measured contiguous
+G2 dense grouping to packed Q4 while
+retaining the full packed row stride, the existing Qwen decoder, SIMD geometry,
+and F32 MMA order inside each K4096 partition. Bias is applied once after merge.
+This is a CAUTION numerical change confined to the opt-in diagnostic; production
+kernels and defaults remain unchanged. Rollback is a revert of this diagnostic
+commit.
+
+Falsifier-first prediction: packed G1 must reproduce the old direct kernel
+bitwise, and packed G2 must reproduce dense G2 and full-K MPS bitwise, raw and
+biased. Any mismatch rejects qualification. Preserve all 68 old output hashes
+and unchanged finite Float32 atol=rtol=2e-5. Compare against the saved original
+BF16 upstream output separately; the existing Q4 lossy gate is not waived.
+
+The strongest likely implementation failure is treating a partition as a short
+packed row: z=1 must start 16 Q4 blocks into each original 32-block row, and both
+output store paths must use the z offset. A GPU counter and partition-owner mask
+for every K32 tile, a poisoned reused partial buffer, G1 controls, and all-output
+packed-versus-dense comparisons guard these failures. Ownership counters cover a
+representative output threadgroup, not every threadgroup. The packed branch
+reads the resident Q4 payload directly and introduces no global expanded-weight
+buffer; the diagnostic still retains decoded-weight buffers for its MPS and
+dense controls.
+
+DoD: guarded release build; two fresh native packed-v1/v2 reports; a separate
+postterminal checker recomputing output summaries, all previous bank hashes,
+coverage and ownership, source identities and guard evidence. Require one
+command segment, one terminal wait/readback, zero tracked encode allocations or
+preterminal reads, 10% file-cache-aware reserve, 2 GiB process cap, 64 MiB swap
+stop and 120-second run deadline. Add admission/validator negative controls and
+run Crystal formatting and git diff --check. Combined diagnostic timing is not
+a kernel speed benchmark. No full block or generation. Evidence root:
+/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026. Refresh on changed
+source/cache/fixture, geometry, precision, ownership, compiler/SDK/OS/device or
+MPS runtime.
+
+
+The guarded release build and two native runs passed. Direct packed G2 matches
+both dense G2 and full-K MPS bitwise over all 47,104 raw outputs and all 47,104
+biased outputs: zero tolerance failures, bit differences, maximum error and
+RMSE. Packed G1 reproduces the old direct kernel bitwise, including its 17 MPS
+failures. All 72 output banks repeat across runs; all 68 previous bank hashes
+remain fixed. GPU decoder self/single-bit controls remain unchanged.
+
+The packed kernels retain the Q4 decoder in shared-memory tile loading. They
+bind the original resident payload and reuse the existing partial buffer; they
+have no dependency on a globally expanded weight buffer. Each packed G1/G2
+coverage slice records all 256 K32 tiles exactly once with the expected owner
+mask. Counters track computed loop offsets in one representative output
+threadgroup; actual load correctness is supported by source review and the
+all-output comparisons, not address-level instrumentation. The exercised output
+store is the cooperative edge path for M=23; fast-store geometry is unqualified.
+
+Both runs retain one command segment, one terminal wait/readback, zero tracked
+encode-time buffer allocations and zero preterminal reads. Named GPU storage is
+255,112,432 bytes, including all dense/MPS controls and the unchanged 6,029,312
+bytes of reusable partial scratch. Guards retain the 10% file-cache-aware floor,
+2 GiB process cap, 64 MiB swap-growth stop and 120-second deadline. Sampled minimum
+headroom is 36,171,628,544 and 36,261,904,384 bytes with zero observed swap growth;
+short-run samples do not bound the Metal/MPS peak or guarantee cache reclamation.
+
+The separate checker recomputes all 122 comparison summaries per run from the
+captured terminal bytes and saved upstream fixture, verifies the 68 previous
+bank hashes, raw decoder/coverage/owner words and guard evidence. Five CPU-only
+checker tests pass. Four additional captured-data falsifiers reject widened
+tolerance, a fabricated passing packed-G1 comparison, a flipped G2 owner mask
+and an altered packed-bank hash. Budget, report-collision and sidecar-collision
+admission tests reject before Metal initialization without changing existing
+reports. Native exit zero means diagnostic completion; G2 qualification comes
+from the separately recomputed byte comparisons, not its summary booleans.
+
+The original-BF16 upstream lossy gate remains failed: packed G2 has 47,098
+failures, RMSE 0.6173029922206691 and relative L2 0.0470375792911417. No quality,
+kernel speedup, production-default, full-block or generation claim follows from
+this result. Mini-Quad source and terminal-evidence review is correlated; its
+ROBUST verdict is limited to this projection, input and representation.
+
+Evidence reports are reports/packed-v1.json and reports/packed-v2.json under the
+external root above; their sidecars share SHA-256
+6f13dfede1e5fab0c893cfd1809b050f16e2923db11c8116fdee93d10357000f.
+The selected 18-file source snapshot predates native execution and was rechecked
+after both runs; source/native-v1-receipt.json records the frozen binary and link
+objects. This is source/build identity evidence, not a hermetic attestation.
+The generic Landmark packet template/graph validator is absent in this checkout;
+the curated index is instead JSON-parsed and every referenced external file is
+digest-checked. That checks index integrity, not the numerical claim itself.
+
+Executed DoD commands (the runner supplies guards and external TMPDIR/cache):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py build-v1 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_reduction_probe
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py packed-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/build/hy_nomas_q4_direct_split_probe-v1 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py packed-v2 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/build/hy_nomas_q4_direct_split_probe-v1 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v2.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py verify-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/verify_direct_split_v1.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v1.json /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v2.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/test_verify_direct_split_v1.py
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/admission_checks_v1.py
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py checker-pressure-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/checker_pressure_v1.py
+crystal tool format --check examples/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction_probe.cr
+git diff --check
+```
+
+Next falsifier: isolated paired packed-G1/G2 versus MPS timings on identical
+operands, then numerical qualification at larger real token counts before any
+full-block integration. The original-BF16 lossy gate remains separately open.

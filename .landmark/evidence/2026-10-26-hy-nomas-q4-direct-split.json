@@ -1,0 +1,337 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-direct-split",
+  "status": "VERIFIED within the bounded projection diagnostic",
+  "base_commit": "783584b0be8884fc79c9412bd5c865e563ded804",
+  "risk": "CAUTION: opt-in numerical partitioning diagnostic; production kernels/defaults unchanged",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "On authenticated M23/K8192/N2048 operands, direct packed-Q4 contiguous G2 K4096 partials plus GPU F32 merge match dense G2 and full-K MPS bitwise before and after bias in two guarded runs."
+  },
+  "provenance": "Measured terminal GPU outputs with postterminal comparison and correlated source/Adversary review.",
+  "not_claimed": [
+    "Private MPS reduction schedule",
+    "Generalization to other inputs, shapes, full-tile output stores or dtypes",
+    "Q4-versus-original-BF16 quality qualification",
+    "Kernel speedup, full-block performance or generation throughput",
+    "Hermetic build/driver attestation or peak-memory bound"
+  ],
+  "problem": "The old direct Q4 kernel retains 17 failures against the same decoded F16 operands in MPS; test the successful dense G2 grouping directly on packed Q4 without global weight expansion.",
+  "design": {
+    "groups": [
+      1,
+      2
+    ],
+    "k_per_g2_partition": 4096,
+    "full_packed_row_bytes": 4608,
+    "g2_second_partition_q4_block_offset": 16,
+    "partial_output_elements": 47104,
+    "scratch_reused_bytes": 6029312,
+    "packed_branch_global_weight_expansion": false,
+    "control_branches_still_use_global_expanded_buffers": true,
+    "bias": "Applied once after GPU F32 partial merge",
+    "coverage": "Per-tile visits and owner masks from computed loop offsets in a representative output threadgroup; source review and output equality establish load correctness",
+    "sentinel": "All reusable partial banks poisoned with GPU NaN before every candidate"
+  },
+  "dod": {
+    "build": "build-v1 guarded release build exit0",
+    "native": "packed-v1/v2 guarded native exit0",
+    "postterminal": "verify-v1 exit0; all122 comparison summaries per run recomputed from captured bytes",
+    "negative_controls": "Five CPU checker tests and four captured-data rejection probes; budget/report/sidecar admission negatives reject before Metal initialization",
+    "hygiene": "Scoped Crystal format check and git diff --check",
+    "rollback": "Revert this opt-in diagnostic commit"
+  },
+  "observations": {
+    "runs": 2,
+    "output_banks_reproduced": 72,
+    "previous_banks_preserved": 68,
+    "elements_per_output": 47104,
+    "g2_same_f16_operand_failures": 0,
+    "g2_raw_bit_differences": 0,
+    "g2_biased_bit_differences": 0,
+    "g1_old_mps_failures": 17,
+    "tolerance": {
+      "serialized_atol": 2e-05,
+      "serialized_rtol": 2e-05,
+      "effective_f32_atol": 1.9999999494757503e-05,
+      "effective_f32_rtol": 1.9999999494757503e-05
+    },
+    "packed_grouping_coverage": [
+      {
+        "name": "contiguous.g1",
+        "groups": 1,
+        "tiles_per_partition": 256,
+        "visited_tiles": 256,
+        "every_tile_once": true,
+        "partition_ownership_verified": true
+      },
+      {
+        "name": "contiguous.g2",
+        "groups": 2,
+        "tiles_per_partition": 128,
+        "visited_tiles": 256,
+        "every_tile_once": true,
+        "partition_ownership_verified": true
+      }
+    ],
+    "named_gpu_bytes": 255112432,
+    "command_segments_per_run": 1,
+    "terminal_waits_per_run": 1,
+    "terminal_packed_reads_per_run": 1,
+    "tracked_encode_allocations": 0,
+    "preterminal_reads": 0,
+    "guard_floor_percent": 10,
+    "process_cap_bytes": 2147483648,
+    "swap_growth_stop_bytes": 67108864,
+    "deadline_seconds": 120,
+    "guard_samples": {
+      "packed-v1": {
+        "sample_count": 4,
+        "minimum_sampled_headroom_bytes": 36171628544,
+        "maximum_sampled_process_footprint_bytes": 98812576,
+        "maximum_sampled_swap_growth_bytes": 0
+      },
+      "packed-v2": {
+        "sample_count": 3,
+        "minimum_sampled_headroom_bytes": 36261904384,
+        "maximum_sampled_process_footprint_bytes": 3686808,
+        "maximum_sampled_swap_growth_bytes": 0
+      }
+    },
+    "original_bf16_lossy_gate": {
+      "name": "packed.contiguous.g2.bias.vs.original_bf16_saved_upstream",
+      "elements": 47104,
+      "failures": 47098,
+      "raw_bit_differences": 47104,
+      "max_abs": 3.2914328575134277,
+      "rmse": 0.6173029922206691,
+      "relative_l2": 0.0470375792911417,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "examples/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction_probe.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-direct-split.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_q4_reduction_probe.cr",
+      "examples/support/hy_nomas_q4_reduction_probe.cr",
+      "docs/hy-nomas-q4-reduction-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-26-hy-nomas-q4-direct-split.json"
+    ],
+    "excluded": [
+      "Production dispatch selection and Qwen source kernels",
+      "Full model or video generation",
+      "Global memory notes",
+      "Unrelated primary-checkout changes"
+    ]
+  },
+  "adversary": {
+    "verdict": "ROBUST within this input/shape/representation",
+    "independence": "Correlated Mini-Quad source review; separate postterminal checker, not an independent lineage",
+    "limits": [
+      "Counters validate computed tile ownership, not physical load addresses",
+      "Only M23 edge output stores exercised",
+      "Native exit0 is diagnostic completion; numerical qualification is recomputed separately"
+    ]
+  },
+  "next_falsifier": "Isolated paired packed-G1/G2 versus MPS timings on identical operands; numerical qualification at larger real token counts before full-block integration; keep original-BF16 lossy gate open.",
+  "decay_trigger": "Changed source/cache/fixture, geometry, precision, ownership, compiler/SDK/OS/device or MPS runtime; missing/damaged artifacts invalidate dependent reproducibility claims.",
+  "packet_validation": "Generic Landmark template/graph validator absent in checkout; JSON parse, allowed-path equality and every referenced external digest checked instead. Index checks do not establish numerical truth.",
+  "evidence": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/terminal-verification-v1.json",
+      "sha256": "942b36e448c0088bbb4360909b68f0d9c21a90f852d3922648e5f4d0611d148e",
+      "nbytes": 3245,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/checker-pressure-v1.json",
+      "sha256": "74386ee6533c28e75cb96aebeffcfbd0b0cdecbca6f3fb971a7bb7181ad081bb",
+      "nbytes": 876,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/admission-checks-v1.json",
+      "sha256": "1c4bd3b449f3ebcedc0bdcf15cc74895c2c6f507bbe2b9630a23c71294b68c85",
+      "nbytes": 909,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/native-v1.json",
+      "sha256": "99ee985fa0a276b4d75bfbdce5d0603d56fb36c011ecb27c8d8f5c592e4e403d",
+      "nbytes": 3321,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/native-v1-receipt.json",
+      "sha256": "64fadf91fd4eebff8dd1faf9f4420ae967eae983350c7752f76c532aebedc703",
+      "nbytes": 3101,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/verify_direct_split_v1.py",
+      "sha256": "4bc4f127c3ac9f83f0c8634aa662524faa7a5cd0744a7f9233e49054bef8f5f4",
+      "nbytes": 39927,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/test_verify_direct_split_v1.py",
+      "sha256": "39a50a7abd162b0c1f2c2281565fe99ca6b75567430e8a51f5d3e57f655c711f",
+      "nbytes": 2468,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/checker_pressure_v1.py",
+      "sha256": "fda254a86fe3fa42da0fe990a881d6a80bdfcd842c772dbbf241409b16c563ec",
+      "nbytes": 2111,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/source/admission_checks_v1.py",
+      "sha256": "f229f79d738c65051a14c05ce06ab102fc5e65af6e1136da71bf6b695648a853",
+      "nbytes": 2351,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/build/hy_nomas_q4_direct_split_probe-v1",
+      "sha256": "f121b84bcd094e70b4c0fa10b30ae1e0bb646a5166c313657a7dfa1a481c4784",
+      "nbytes": 1751656,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/tmp/run_guarded.py",
+      "sha256": "34cd776e0fb35ec8a545fce7b5696ea95f5bac5677954afd3bf9bce22b84cb72",
+      "nbytes": 1165,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/build-v1.argv.json",
+      "sha256": "dd5113f748b8008e2b54abd04cb2ab0d27fa4b64941103c5bf8ed34402335d33",
+      "nbytes": 648,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/build-v1.guard.jsonl",
+      "sha256": "03b7fe4120a47e72bce9887df94c32ee43a17bac8cb1955264203e077d5083f8",
+      "nbytes": 5352,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/build-v1.out",
+      "sha256": "7f11df4441fbd8b131b0692e7531858b28164e06cc5aef3476aeafca0466f59f",
+      "nbytes": 1209,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v1.argv.json",
+      "sha256": "73b15dfc9e6e652a80f83a03b3cf81183b8cce8a3b3c9685589219131496e18d",
+      "nbytes": 730,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v1.guard.jsonl",
+      "sha256": "9aa7664421e52ea9e6768c5ca5c08023629e23f17c5440bb350e3bf6379e6084",
+      "nbytes": 1966,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v1.out",
+      "sha256": "b3d7aa59111c2fdb8fe38736386c1a1689c64531aa0937fe39228829719c3d86",
+      "nbytes": 441,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v2.argv.json",
+      "sha256": "2e38e0a3d25557a7495b39d53a3dc658a86665cdb4102b4ff29027b27b074182",
+      "nbytes": 730,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v2.guard.jsonl",
+      "sha256": "ca7edfce3d7c1ef32af3942117aefc724c2e7138ba66c2432c4da4b1783a46d8",
+      "nbytes": 1659,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/packed-v2.out",
+      "sha256": "0fe80aca9f8dcb3b1fce74065d2d2af7c96d022109c7fb43293bef5f2edde410",
+      "nbytes": 441,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/verify-v1.argv.json",
+      "sha256": "e5befdc10f65df11e45bc0a4f48bb4424a1a72ee714851d0ad6cf65e3ade95d2",
+      "nbytes": 817,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/verify-v1.guard.jsonl",
+      "sha256": "2f268c57d618bbce5812471f3aa4bd31cb4d9e7daf7cc324f489f70e98e2a9df",
+      "nbytes": 3501,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/verify-v1.out",
+      "sha256": "da1dce0da8dc44c38404e3931eae4c8529fdc8242dc4043a2bfe83d763cdbbc4",
+      "nbytes": 560,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/checker-pressure-v1.argv.json",
+      "sha256": "fb4da5786701488164e72d3daafd7394bc8e2f32b82054e7f3b047926d8f45f1",
+      "nbytes": 650,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/checker-pressure-v1.guard.jsonl",
+      "sha256": "4f5dec12c2c409691db9d07f6e0c88ee1e056c1220034a44e90145fa88041f07",
+      "nbytes": 1662,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/logs/checker-pressure-v1.out",
+      "sha256": "b61b4608577381e0feec23e1f87bdc545213cf35fc6fff5704c862d1a631ab26",
+      "nbytes": 752,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v1.json",
+      "sha256": "4055dcb6645339443a2fa6db28fffb3b18fc2f4bb95ff5bc340b329ef922acbb",
+      "nbytes": 72643,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v1.json.f32le",
+      "sha256": "6f13dfede1e5fab0c893cfd1809b050f16e2923db11c8116fdee93d10357000f",
+      "nbytes": 13582456,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v2.json",
+      "sha256": "a15740f8114d3b723e5c561cbebcf73317104ddd6701eac498c615444f6c161d",
+      "nbytes": 72647,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/packed-v2.json.f32le",
+      "sha256": "6f13dfede1e5fab0c893cfd1809b050f16e2923db11c8116fdee93d10357000f",
+      "nbytes": 13582456,
+      "availability": "local external SSD"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-direct-split-20261026/reports/mini-quad-review-v1.json",
+      "sha256": "06d597f0571e761671a4b1c4f681e38fcafc228ad7fd8fb9a12c86c04185bba4",
+      "nbytes": 1304,
+      "availability": "local external SSD"
+    }
+  ]
+}

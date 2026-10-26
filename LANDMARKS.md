@@ -34053,3 +34053,30 @@ Refresh after source/toolchain/device/model/workload changes.
   weight expansion; repeat same-operand/upstream gates before timing/promotion.
   No full generation. Refresh on source/cache/fixture loss or change, geometry,
   precision, ownership, compiler/SDK/OS/device or MPS runtime changes.
+
+
+### 2026-10-26: direct packed-Q4 G2 matches identical-operand MPS
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-q4-direct-split.json.
+- On authenticated M23/K8192/N2048 inputs, the opt-in packed Q4 kernel computes
+  contiguous K4096 F32 partials and merges them on GPU. All 47,104 raw and biased
+  outputs match dense G2 and MPS bitwise in two guarded runs. Full packed row
+  pitch and the original decoder are retained; no global expansion is consumed
+  by the new branch. Dense/MPS controls still allocate expanded weight buffers.
+- Packed G1 reproduces the old direct kernel and its 17 MPS failures. All 72
+  bank hashes repeat and all 68 previous hashes remain fixed. Reused partials
+  are NaN-poisoned; GPU K32 visits and owner masks pass for G1/G2. Counters track
+  computed offsets; reviewed pointer arithmetic and outputs support actual loads.
+- One segment and terminal wait/readback; zero tracked encode allocations/early
+  reads. Named GPU bytes 255,112,432. Both 10% file-cache-aware guards pass with
+  2 GiB cap, 64 MiB swap stop and 120-second deadline; no observed swap growth.
+  Samples do not bound peak memory. Separate checker recomputes 122 summaries
+  per run; captured-data and admission negatives pass. Correlated Mini-Quad
+  Adversary ROBUST only within this diagnostic scope.
+- Original-BF16 lossy gate still fails: 47,098 values, RMSE 0.6173029922, relative
+  L2 0.0470375793. No speed, quality, production/default or full-block claim.
+  Next: isolated paired Q4 G1/G2 versus MPS timings, then larger-token numerical
+  gates before integration. Refresh on changed source/cache/fixture, geometry,
+  precision, ownership, compiler/SDK/OS/device or MPS runtime; artifacts must remain
+  available. No full generation.
