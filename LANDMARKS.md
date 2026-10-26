@@ -34080,3 +34080,38 @@ Refresh after source/toolchain/device/model/workload changes.
   gates before integration. Refresh on changed source/cache/fixture, geometry,
   precision, ownership, compiler/SDK/OS/device or MPS runtime; artifacts must remain
   available. No full generation.
+
+
+### 2026-10-26: paired Q4 timings expose a shape-dependent reduction boundary
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-q4-paired.json.
+- Five guarded projection runs compare packed G1/G2 (tile decode, F32 merge,
+  bias), resident F32 MPS, and Q4 expansion plus MPS on K8192/N2048. Timed roots
+  exclude counters, copies and correctness controls; each contains 16 complete
+  calls. Balanced directions give six measured samples per arm per run.
+- M23 G2 is 0.239-0.240 ms versus resident MPS 0.320-0.339 ms and expansion+MPS
+  0.532-0.547 ms; every one of 12 paired rounds favors G2. M32 G2 is 0.238 ms
+  versus MPS 0.336 ms. G2 is bitwise MPS at both shapes.
+- At M1280 G2 is 4.999-5.302 ms versus resident MPS 3.999-4.151 ms; every one of
+  12 pairs favors MPS. G2 equals dense G2 but fails 949 elements against MPS;
+  G1 now matches MPS bitwise and is also slower. Reject all-M G2 promotion.
+- Cyclic byte checks show every direct/dense/packed bank unchanged across M.
+  Only MPS raw/biased banks change at M1280, where they equal cyclic M23 G1. This supports
+  shape-dependent accumulation, not a claim about MPS's private implementation.
+  Larger M repeats 23 saved real rows; full-prefix distributions are untested.
+- All runs have 65 async roots/64 continuations, zero timed-root overlap, one
+  final wait/readback, no preterminal reads or tracked encode buffer allocation.
+  Named control storage is 192,699,488/195,132,512/532,511,840 bytes. Packed
+  projection weights use 9 MiB versus a 64 MiB resident F32 MPS matrix.
+- The 10% file-cache-aware reserve, 2 GiB run cap, 64 MiB swap stop and 120-second
+  deadline hold; sampled swap is flat, minimum headroom 31,811,829,760 bytes.
+  Sampling is not a peak bound; counters exclude private MPS allocations.
+- Postterminal byte checker, 13 CPU tests, seven captured-report falsifiers
+  and five pre-Metal admission negatives pass. Correlated Mini-Quad ROBUST
+  within projection scope. Original-BF16 saved-output quality gate still fails.
+  No production/default, full-block, full-prefix or generation claim.
+- Next: reduce repeated Q4 decode across M tiles while preserving full-K G1
+  accumulation at M1280. No M32-to-M1280 dispatch threshold is qualified.
+  Refresh on changed source/cache/fixture, geometry, repetition/order schedule,
+  precision, ownership, compiler/SDK/OS/device/MPS or missing external artifacts.

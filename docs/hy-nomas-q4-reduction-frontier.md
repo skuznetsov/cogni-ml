@@ -1,6 +1,11 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Status: VERIFIED for this diagnostic scope, 2026-10-25; the direct Q4 numerical
+Current frontier, 2026-10-26: the opt-in paired benchmark verifies a small-M G2
+speedup and rejects all-M G2 promotion at M1280. See "Paired projection benchmark
+frontier" below for timing, shape-dependent numerical gates and the next probe.
+Production dispatch remains unchanged; no generation was launched.
+
+Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
 the authenticated block-0 text FF down projection (M=23, K=8192, N=2048).
 This diagnostic does not change production kernels or run generation.
@@ -325,3 +330,116 @@ git diff --check
 Next falsifier: isolated paired packed-G1/G2 versus MPS timings on identical
 operands, then numerical qualification at larger real token counts before any
 full-block integration. The original-BF16 lossy gate remains separately open.
+
+## Paired projection benchmark frontier, 2026-10-26
+
+Status: bounded benchmark verified; general G2 promotion rejected at M1280.
+The implementation is opt-in; production kernels and defaults remain unchanged. This CAUTION
+slice removes diagnostic coverage atomics from a source-derived packed kernel,
+then compares contiguous G1/G2 including tile decoding, F32 merge and one bias
+against resident MPS and Q4-to-F32 expansion plus MPS separately. Resident MPS
+retains a 64 MiB F32 matrix; that storage and setup are not free. Rollback is a
+revert of this benchmark slice.
+
+The falsifier is an unchanged-tolerance mismatch, changed M23 baseline hash,
+nonfinite or stale output, invalid/shared GPU timestamp range, order-dependent
+performance reversal, intermediate readback/wait, or named allocation during
+encoding. A GPU positive control must make the output comparator fail. Poisoned
+correctness controls and output checks stay outside measured roots. Each timed
+root contains only repeated complete projection calls, with balanced forward
+and reverse case order. Asynchronous root continuations are diagnostic command
+boundaries, not CPU completion waits. Exactly one terminal wait/readback per
+run remains mandatory. Report CPU encode time separately from GPU root time.
+
+DoD: release build under the existing guard, two order-reversed M23 runs,
+postterminal byte-based comparison/timing checks, then M32 and M1280 geometry
+checks. Larger M initially repeats the authenticated 23 real activation rows on
+GPU, so it checks store geometry and shape-dependent MPS behavior, not a new real
+full-prefix distribution. Stop promotion if the larger-M gate fails. Preserve
+Float32 atol=rtol=2e-5, a 10% file-cache-aware floor, 2 GiB run cap, 64 MiB swap
+growth stop and 120-second run deadline. No full block or generation, and no
+full-video speed or original-BF16 quality claim. Artifacts belong under
+/opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026. Refresh after source, input,
+cache, geometry, order/repetition schedule, compiler/SDK/OS/device or MPS drift.
+
+Five guarded runs on Apple M2 Max exercise K8192/N2048, with 16 complete
+projections per timed root, two warmup and six measured rounds per arm. Each
+round alternates forward/reverse arm order; M23 and M1280 additionally have
+separate reverse-first runs. The table contains median GPU milliseconds per
+projection; ranges span the two runs, not confidence intervals.
+
+| M | Packed G1 | Packed G2 | Resident F32 MPS | Q4 expand + MPS |
+|---|---:|---:|---:|---:|
+| 23 | 0.340-0.343 | 0.239-0.240 | 0.320-0.339 | 0.532-0.547 |
+| 32 | 0.348 | 0.238 | 0.336 | 0.550 |
+| 1280 | 5.040-5.312 | 4.999-5.302 | 3.999-4.151 | 4.185-4.402 |
+
+All 12 measured M23 pairs favor G2 over resident MPS (paired speed ratio
+1.199-1.562, median 1.377); all 12 M1280 pairs favor MPS (resident/G2 ratio
+0.768-0.834, median 0.798). Thus the small-M speedup does not generalize to
+large M. M1280 G1 is also slower than MPS including expansion. These are warm,
+isolated repeated-projection timings; they do not establish a full-block,
+mixed-layer cache, cold-load or generation speedup. No profiler is enabled.
+
+Numerical gates remain finite F32 atol=rtol=2e-5. Packed G2 equals dense G2,
+packed G1 equals the original direct kernel, and expanded MPS equals resident
+MPS bitwise at every tested M, before and after bias. G2 matches MPS bitwise at
+M23/M32; G1 has 17 failures at M23 and 27 at M32. At M1280, G1 instead matches MPS bitwise;
+G2 has 949 failures per 2,621,440-element raw/biased output, max absolute error
+0.000247955322265625 and raw RMSE 1.8545895110040667e-5. Both M1280 runs reproduce
+every bank hash and failure. The all-M G2 promotion falsifier therefore fires.
+
+The postterminal cross-geometry byte check localizes the changed result to MPS:
+all eight direct/dense/packed raw/biased banks remain exact cyclic repeats of
+their M23 bank at M32/M1280. Only the four MPS banks change at M1280; all four
+then equal cyclic M23 G1 bytes. This supports a shape-dependent accumulation
+interaction, but does not identify MPS's private reduction algorithm. The
+separate original-BF16 saved-output gate still fails (M23 G2 RMSE 0.617303).
+Neither same-quantized-operand parity nor this repeated-row geometry check
+qualifies original-BF16 quality or a real full-prefix activation distribution.
+
+Each run has 65 asynchronous command roots, zero timed-root overlap, one
+terminal wait/readback, zero tracked encode-time MetalBuffer allocations and
+zero preterminal reads. Root timestamp intervals are checked against every
+other root and rejected on overlap; they are not kernel hardware counters.
+Named storage including all correctness controls is 192,699,488 / 195,132,512 /
+532,511,840 bytes for M23/M32/M1280. The projection's packed weight is 9 MiB
+versus the resident MPS matrix's 64 MiB. The benchmark retains both plus a
+32 MiB F16 dense control, so it does not measure a minimal production footprint.
+MetalBuffer counters do not include private MPS allocations. Guards pass with
+minimum sampled headroom 31,811,829,760 bytes and no observed swap growth;
+sampling does not establish peak memory or guarantee file-cache reclamation.
+
+The separate checker recomputes ten same-operand and three saved-BF16 summaries
+per run from terminal bytes, verifies all 140 raw comparator words, M23 baseline
+hashes, schedules, 65 GPU-root timestamps and guard logs. Decoder and output
+comparators both include injected-bit positive controls. Thirteen CPU checker/
+analyzer tests pass; seven captured-report falsifiers reject widened tolerance,
+forged G1 success, wrong segment/root counts, overlap, bank hash and metric words.
+Five admission negatives reject before Metal initialization and preserve
+existing artifacts. Correlated Mini-Quad source/evidence review is ROBUST only
+for this bounded diagnostic. Native exit zero alone does not establish parity.
+
+Evidence is indexed by .landmark/evidence/2026-10-26-hy-nomas-q4-paired.json.
+Reports and sidecars are paired-m23-forward-v1, paired-m23-reverse-v1,
+paired-m32-forward-v1, paired-m1280-forward-v1 and paired-m1280-reverse-v1 under
+the external reports directory. verify-small-v1.json, verify-large-v1.json and
+cross-geometry-v1.json contain postterminal results. The selected 21-file source
+snapshot predates native execution; its frozen binary and ten linked objects
+were rechecked after all runs. This is not a hermetic build/driver attestation.
+
+Executed DoD entry points (the runner supplies the unchanged guards):
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_paired_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/tmp/run_guarded.py paired-m23-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/build/hy_nomas_q4_paired_benchmark-v1 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/reports/paired-m23-forward-v1.json --rows 23 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/source/verify_paired_v1.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/reports/paired-m23-forward-v1.json /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/reports/paired-m23-reverse-v1.json /opt/mldata_ssd/cogni-ml/hy-nomas-q4-paired-20261026/reports/paired-m32-forward-v1.json
+crystal tool format --check examples/hy_nomas_q4_paired_benchmark.cr examples/support/hy_nomas_q4_paired_benchmark.cr
+git diff --check
+```
+
+Next falsifier: retain full-K G1 accumulation at M1280 while reducing repeated
+Q4 decoding across M tiles, first against the same MPS controls. Keep G2's
+small-M result separate; no dispatch threshold is qualified between M32 and
+M1280. Original-BF16 quality, real full-prefix inputs, full-block performance
+and generation remain open. No full generation was launched.
