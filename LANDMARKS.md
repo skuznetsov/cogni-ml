@@ -34001,3 +34001,30 @@ Refresh after source/toolchain/device/model/workload changes.
   2e-5 gates, 10% reserve, process/swap/deadline guards. Refresh after scoped
   source/cache/fixture loss or change, quantizer/dtype/geometry/mask, ownership,
   execution, compiler/SDK/OS/device or MPS runtime changes.
+
+### 2026-10-25: direct Hy-Nomas Q4 mismatch localized to long-K numerical path
+
+- Return pointer: `docs/hy-nomas-q4-reduction-frontier.md` and
+  `.landmark/evidence/2026-10-25-hy-nomas-q4-reduction.json`.
+- The block-0 text FF down projection (M23/K8192/N2048) reproduces the same
+  17/47,104 failures against identical-F16-operand MPS at finite 2e-5. GPU
+  comparison finds zero bit differences across all 16,777,216 canonical/Qwen
+  decoded F16 weights. Same-kernel self/one-bit-injection controls pass. Dense
+  SIMD clone and actual direct Q4 outputs are bitwise equal before/after bias;
+  both MPS decoder branches are also bitwise equal. Decode mismatch is refuted
+  for this projection/input; direct Q4 is still unqualified.
+- Tested K32/256/2048/4096 prefixes match MPS bitwise; K6144 has 5 tolerance
+  failures and K8192 has 17. Raw and biased full-K failures are the same indices.
+  Numerical accumulation is isolated, but internal MPS order, precision, fusion
+  and kernel choice remain unknown. Prefix geometry changes are not captures
+  inside the full-K dispatch. No production arithmetic/default changes.
+- Two guarded runs reproduce all common bank hashes. One command segment,
+  one terminal wait/readback, zero tracked encode allocations/early reads;
+  10% cache-aware reserve and 64 MiB swap stop retained, zero sampled swap
+  growth. v2 named bytes 229,455,088; short-run telemetry does not establish a
+  reliable Metal/MPS peak. The terminal sidecar independently reproduces all
+  15 comparison summaries. Mini-Quad ROBUST within this diagnostic scope.
+- Next falsifier: alternative partial-sum grouping on identical full-K operands,
+  followed by upstream gates before promotion. This does not fix Q4-versus-BF16
+  quality or establish full-block/generation performance. Refresh on source,
+  fixture/cache, geometry, precision, ownership, toolchain/OS/device/MPS changes.
