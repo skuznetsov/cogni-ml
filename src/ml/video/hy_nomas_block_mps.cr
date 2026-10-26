@@ -215,10 +215,13 @@ module ML::Video
     # intermediates remain fixed; each block has distinct final output banks.
     # No plans or GPU storage are created when selecting a registered block.
     def register_serial_blocks!(blocks : Array(HyNomasDualStreamBlock),
-                                inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer))) : Nil
+                                inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer)),
+                                *, full_dit : Bool = false) : Nil
       raise ArgumentError.new("Hy-Nomas serial registration must precede encode") if @released || @last_chain || !@serial_bindings.empty?
-      unless (2..8).includes?(blocks.size) && inputs.size == blocks.size && blocks[0].same?(@block)
-        raise ArgumentError.new("Hy-Nomas serial registration requires two to eight ordered blocks beginning with the prepared block")
+      count_valid = full_dit ? blocks.size == 54 : (2..8).includes?(blocks.size)
+      unless count_valid && inputs.size == blocks.size && blocks[0].same?(@block)
+        expected = full_dit ? "exactly 54" : "two to eight"
+        raise ArgumentError.new("Hy-Nomas serial registration requires #{expected} ordered blocks beginning with the prepared block")
       end
       bindings = [] of SerialBinding
       allowed = @fixed_inputs.dup

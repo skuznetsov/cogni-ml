@@ -242,11 +242,8 @@ module ML::Video
       arena.resident_bytes + @attention_plans.sum(&.resident_bytes)
     end
 
-    # Append the complete compaction, two timestep paths, context projection,
-    # and two refiner blocks to the caller's existing serial MPS command chain.
-    # Every pipeline, buffer and graph is setup-owned; this method never
-    # allocates, waits, reads a GPU buffer, or submits a command.
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+    # Complete CPU-only admission before another producer appends to this chain.
+    def validate_for!(chain : ML::Metal::MPSCommandChain) : Nil
       ensure_live!
       chain.encoder
       if previous = @last_chain
@@ -255,6 +252,14 @@ module ML::Video
         end
       end
       validate_bindings!
+    end
+
+    # Append the complete compaction, two timestep paths, context projection,
+    # and two refiner blocks to the caller's existing serial MPS command chain.
+    # Every pipeline, buffer and graph is setup-owned; this method never
+    # allocates, waits, reads a GPU buffer, or submits a command.
+    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+      validate_for!(chain)
       @last_chain = chain
 
       encode_compaction(chain.encoder)

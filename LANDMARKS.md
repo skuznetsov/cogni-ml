@@ -33944,3 +33944,60 @@ Refresh after source/toolchain/device/model/workload changes.
   Hy-Nomas text-conditioning pipeline. Keep opt-in; no full generation. Refresh
   on scoped source/input/fixture, precision/geometry, toolchain/SDK/OS/device,
   execution/lifecycle changes, artifact loss or hash mismatch.
+
+
+## 2026-10-25 — Full saved-input Hy-Nomas DiT and authenticated Q4 loader
+
+- Active task: complete the DiT checkpoint/cache and one GPU forward before
+  diffusion generation. The complete 34,213,991,280-byte F32 checkpoint at HF
+  `bac719a80c8d02f91c485fca804bb8221e149b70` was downloaded and its whole LFS
+  digest verified. All 54 blocks plus 48 global bindings are authenticated.
+  Return pointer: `docs/hy-nomas-q4-dit-frontier.md` and
+  `.landmark/evidence/2026-10-25-hy-nomas-q4-dit.json`.
+- Q4 block/vector payloads total 4,593,162,240 bytes versus 16,314,144,768 BF16
+  payload bytes. Native keeps compact blocks resident and reconstructs one
+  reused BF16 block on GPU, sharing F32 MPS staging and block scratch. This is
+  not full-model expansion. Full-stack APIs remain opt-in; existing 2--8 block
+  defaults are unchanged. Rollback: omit/revert the new full-stack path.
+- Frozen-source upstream BF16 and Q4 forwards each execute all 54 blocks at
+  B1/V5280/T1280/J6560, valid attention prefix 5303, timestep 500. Corresponding
+  native runs each pass 14 selected captures raw exact twice, including blocks
+  0/7/53, conditioning and final latent. Repeat poisons 214 exposed mutable
+  buffers; in-flight release is rejected. Each native request has zero tracked
+  encode allocations/preterminal reads, 1,244 command segments and one terminal
+  wait. This uses a saved Qwen26 crop, not live Qwen-to-full-DiT generation.
+- Native BF16 named storage 22,616,779,332 bytes, Q4 storage 10,895,796,804.
+  Observed v3 encode-through-terminal times are 6.42 s BF16 and 6.55--6.56 s Q4;
+  earlier 13 s Q4 latency did not reproduce. These are not interleaved speedup
+  measurements or seconds-of-video claims. All four v3 guards pass with 10%
+  file-cache-aware reserve, bounded footprints/deadlines and 64 MiB swap-growth
+  stop; zero observed swap growth. Periodic samples are not peak guarantees.
+- Same-weight execution correctness does not establish compressed quality:
+  Q4-vs-original-BF16 final latent relative-L2=1.184475, cosine=.638643,
+  RMSE=.323331. All captures are finite, but the unchanged 2e-5 threshold fails
+  for 10/14 captures. Keep Q4 opt-in; no quality promotion or tolerance widening.
+- Direct Qwen Q4 projection discriminator runs on GPU without a decoded weight
+  buffer in its direct branch. F32-input and preconverted-F16-input paths match
+  bitwise. Qwen uses F16 operands/F32 accumulation, unlike the qualified BF16-
+  decoded/F32-MPS path. Even a both-operands-F16 MPS control leaves 17/47,104
+  failures at 2e-5. Decode arithmetic and reduction have not been isolated;
+  direct kernel is not promoted. Combined six-branch timing is not its speed.
+- Original mapped-source BF16 upstream runs hit the unchanged swap stop.
+  Stable driver allocation refuted accumulation of 54 GPU weight sets. Short
+  transfer-only mapped/clone probes did not reproduce host growth; source review
+  refuted whole-checkpoint registration per tensor. An explicit owned-raw-F32
+  source alternative passes 54 blocks, but does not diagnose/fix the mapped
+  route. Its math/rounding remain on MPS. Upstream uploads can block internally;
+  only the native chain is qualified for the declared terminal-wait discipline.
+- Verification: 25 CPU tests, 7 new Crystal/Metal examples, 11 existing-path
+  regression examples, release builds, scoped format/diff checks; correlated
+  Mini-Quad ROBUST for the declared saved-input scope. Oracle 59-file source
+  snapshot is preserved/hash-checked. Native binary/object/source hashes are a
+  post-run identity capture, not a hermetic build attestation.
+- Next falsifier: localize Q4 sensitivity on identical-input projections and
+  test higher precision/sparse corrections; independently match direct-GEMM
+  decoded weights/reductions before full-block timing. No full generation.
+  Standing authority: GPU compute/handoffs, no new intermediate waits, finite
+  2e-5 gates, 10% reserve, process/swap/deadline guards. Refresh after scoped
+  source/cache/fixture loss or change, quantizer/dtype/geometry/mask, ownership,
+  execution, compiler/SDK/OS/device or MPS runtime changes.

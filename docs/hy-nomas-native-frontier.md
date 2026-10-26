@@ -1,6 +1,15 @@
 # Hy-Nomas native Metal frontier
 
-Document status (2026-10-25): the opt-in natural-prompt Qwen26 prefix, GPU crop,
+Current continuation (2026-10-25): the complete pinned DiT checkpoint is now
+downloaded and authenticated. A compact Q4 loader executes all 54 blocks and
+matches a same-decoded-weight upstream forward at the selected saved-input
+boundaries. The independent full BF16 control also passes; Q4 distortion is
+measured and substantial at the final latent, so compact-weight quality remains
+unqualified. See `hy-nomas-q4-dit-frontier.md` for the active frontier. No
+diffusion generation has been qualified. The eight-block evidence below retains its
+original live-conditioning scope and does not become a full Qwen-to-DiT claim.
+
+Previous qualified boundary (2026-10-25): the opt-in natural-prompt Qwen26 prefix, GPU crop,
 actual-weight text refiner/time embedding and pretrained DiT blocks 0 to 7 now
 pass a connected upstream gate at full B1/V5280/T1280/J6560. The bounded MPS
 adapter excludes padded attention rows and explicitly zeros their results;

@@ -5,6 +5,15 @@
 require "./hy_nomas_block_mps"
 
 module ML::Video
+  # Typed setup/encode contract for a trusted serial weight source. Validation
+  # must be CPU-only and complete before the serial owner appends any command;
+  # encode! may only append work to the caller's existing chain.
+  abstract class HyNomasSerialWeightLoader
+    abstract def validate_for!(block_index : Int32, arena : Arena) : Nil
+    abstract def encode!(chain : ML::Metal::MPSCommandChain,
+                         block_index : Int32, arena : Arena) : Nil
+  end
+
   class HyNomasMPSSerialWorkspace
     @blocks = [] of HyNomasDualStreamBlock
     getter scratch_bytes : Int64 = 0_i64
@@ -14,6 +23,8 @@ module ML::Video
     @views = [] of Arena
     @workspace : HyNomasMPSWorkspace? = nil
     @inputs : Array(ML::MetalBuffer)
+    @weight_arenas : Array(Arena)
+    @weight_loader : HyNomasSerialWeightLoader?
     @block_inputs = [] of Tuple(ML::MetalBuffer, ML::MetalBuffer)
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -25,12 +36,31 @@ module ML::Video
                    *, attention_query_chunk : Int32 = 0,
                    attention_heads_per_group : Int32 = 0,
                    valid_text_tokens : Int32? = nil,
-                   allow_shared_modulation : Bool = false)
+                   allow_shared_modulation : Bool = false,
+                   full_dit : Bool = false,
+                   weight_loader : HyNomasSerialWeightLoader? = nil)
       config.validate!
       attention_tokens = HyNomasMPSWorkspace.attention_tokens_for(config, valid_text_tokens)
-      unless (2..8).includes?(weights.size)
-        raise ArgumentError.new("Hy-Nomas serial workspace requires between two and eight weight Arenas")
+      count_valid = full_dit ? weights.size == 54 : (2..8).includes?(weights.size)
+      unless count_valid
+        expected = full_dit ? "exactly 54" : "between two and eight"
+        raise ArgumentError.new("Hy-Nomas serial workspace requires #{expected} weight Arenas")
       end
+      if full_dit
+        unless loader = weight_loader
+          raise ArgumentError.new("Hy-Nomas full DiT serial workspace requires a weight loader")
+        end
+        unless weights.all? { |arena| arena.same?(weights[0]) }
+          raise ArgumentError.new("Hy-Nomas full DiT serial weights must share one fixed staging Arena")
+        end
+        @weight_loader = loader
+      else
+        if weight_loader
+          raise ArgumentError.new("A serial weight loader requires full_dit mode")
+        end
+        @weight_loader = nil
+      end
+      @weight_arenas = weights.dup
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(config.batches,
           attention_tokens, config.heads, config.head_dim,
@@ -66,7 +96,8 @@ module ML::Video
           attention_heads_per_group: attention_heads_per_group,
           allow_shared_modulation: allow_shared_modulation,
           valid_text_tokens: valid_text_tokens)
-        workspace.register_serial_blocks!(@blocks, @block_inputs)
+        workspace.register_serial_blocks!(@blocks, @block_inputs,
+          full_dit: full_dit)
         @scratch_bytes = @arena.resident_bytes
         @mps_workspace_bytes = workspace.resident_bytes
       rescue ex
@@ -89,14 +120,11 @@ module ML::Video
       @blocks.dup
     end
 
-    # after_block is a trusted diagnostic hook for preallocated GPU snapshots.
-    # It may append copies to the same chain's current encoder, but must not
-    # mutate bindings, commit command buffers, wait, or recursively encode.
-    # Those diagnostic dispatches belong outside performance measurements.
-    # If it raises after an append, the caller must drain the chain before
-    # releasing this owner, exactly as for an encode failure.
-    def encode(chain : ML::Metal::MPSCommandChain,
-               *, after_block : Proc(Int32, HyNomasDualStreamBlock, Nil)? = nil) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+    # Public CPU-only preflight for callers that have a GPU prelude to append.
+    # This validates every registered block and loader binding without claiming
+    # the chain or appending commands. `encode` repeats it immediately before
+    # its own first append to close the validation/use gap.
+    def validate_for!(chain : ML::Metal::MPSCommandChain) : Nil
       raise ArgumentError.new("Hy-Nomas serial workspace has been released") if @released
       chain.encoder
       if previous = @last_chain
@@ -105,18 +133,32 @@ module ML::Video
         end
       end
       _, _, vec, vec_txt, cos, sin = @inputs
-      # Validate every registered view before the first GPU append, including
-      # a later successor whose owner map changed after setup.
       @blocks.each_with_index do |block, index|
         img, txt = @block_inputs[index]
+        if loader = @weight_loader
+          loader.validate_for!(index.to_i32, @weight_arenas[index])
+        end
         workspace.validate_for!(block, chain, img, txt, vec, vec_txt, cos, sin,
           bind_chain: false)
       end
+    end
+
+    # after_block is a trusted diagnostic hook for preallocated GPU snapshots.
+    # It may append copies to the same chain's current encoder, but must not
+    # mutate bindings, commit command buffers, wait, or recursively encode.
+    # Those diagnostic dispatches belong outside performance measurements.
+    # If it raises after an append, the caller must drain the chain before
+    # releasing this owner, exactly as for an encode failure.
+    def encode(chain : ML::Metal::MPSCommandChain,
+               *, after_block : Proc(Int32, HyNomasDualStreamBlock, Nil)? = nil) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+      validate_for!(chain)
+      _, _, vec, vec_txt, cos, sin = @inputs
       # Claim this chain only after the complete preflight succeeds. The first
       # block's normal backend validation then binds the workspace itself.
       @last_chain = chain
       @blocks.each_with_index do |block, index|
         img, txt = @block_inputs[index]
+        @weight_loader.try(&.encode!(chain, index.to_i32, @weight_arenas[index]))
         img, txt = block.encode_mps(chain, img, txt, vec, vec_txt, cos, sin, workspace)
         after_block.try(&.call(index.to_i32, block))
       end
