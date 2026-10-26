@@ -1,10 +1,14 @@
 # Hy-Nomas direct Q4 reduction diagnostic
 
-Current frontier, 2026-10-26: M64/M128 weight-tile reuse at M1280 preserves G1
-bits and gives a measured 1.071/1.073x speedup over M32, but remains slower than
-both MPS controls. The preceding benchmark rejects all-M G2 promotion. See the
-respective frontiers below for timing, numerical gates and the next falsifier.
-Production dispatch remains unchanged; no generation was launched.
+Current frontier, 2026-10-26: same-geometry dense F16 loading takes
+4.277-4.279 ms at B64 versus packed Q4's 4.683-4.693 ms, with bitwise equal
+outputs in both initial orders. This is about 8.7% less complete-projection
+time, not a pure decoder-cost measurement. Dense B128 remains slower than
+dense B64; even dense B64 remains slower than resident F32 MPS. These tested tile and
+loading variants do not close the native GEMM gap.
+See "Same-geometry Q4/F16 tile frontier" for exact scope, separate profile
+coverage, numerical gates and the next falsifier. Production dispatch is
+unchanged; the original-BF16 quality gate still fails. No generation was run.
 
 Original diagnostic status: VERIFIED within its scope, 2026-10-25; the direct Q4 numerical
 gate remains failed. Localize the 17 finite-tolerance failures on
@@ -557,3 +561,143 @@ Real full-prefix inputs, original-BF16 quality, other projections and full-block
 performance remain open before production promotion. Refresh on changed
 source/cache/fixture, geometry, repetition/order schedule, precision, ownership,
 compiler/SDK/OS/device/MPS or missing external artifacts. No full generation.
+
+
+## Same-geometry Q4/F16 tile frontier, 2026-10-26
+
+Status: VERIFIED within the bounded M1280 projection comparison. An opt-in
+benchmark derives dense F16 B64/B128 kernels from the existing Qwen Q4 kernels
+by changing the kernel name and replacing only the two Q4 decoder calls with
+canonical F16 loads. Checked source anchors preserve the shared panels,
+barriers, full-K MMA order, stores, one-group F32 merge and bias. No production
+kernel or dispatch is changed. The canonical 32 MiB F16 matrix was already
+retained by the preceding probe's correctness controls.
+
+Risk: CAUTION (derived shader source and diagnostic scratch lifetime). Rollback:
+revert only this opt-in target and example. The strongest failure is a dense
+control that silently changes accumulation or staging, followed by a decoder
+attribution based on incompatible work. Require matching kernel geometry,
+all-output bit identity, baseline hashes and unchanged finite F32
+`atol=rtol=2e-5`; report the traffic/register confound explicitly.
+
+DoD: guarded release build, opposite-initial-order M1280 runs, postterminal
+byte/row-band/comparator/root/guard replay and seeded checker failures, then a
+separate bounded GPU capture with target PID/pipeline coverage. The native
+budget remains a 10% file-cache-aware available-memory floor, 2 GiB process-group
+cap, 64 MiB swap-growth stop and 120 s deadline. No full block/model/generation.
+All neural math and repetition stay on GPU; there is one final wait/readback,
+no preterminal reads and no tracked encode-time MetalBuffer allocations.
+
+Both profiler-off runs use M1280/K8192/N2048, two warmup and six measured rounds
+per arm, alternating direction and opposite first order. Each isolated timed
+root contains 16 complete projections. M1280 cyclically repeats the same 23
+saved real input rows on GPU, not a new full-prefix activation distribution.
+Ranges are the two run medians, not confidence intervals.
+
+| Complete projection | Median GPU ms/call | M tile | Threads | Shared bytes |
+|---|---:|---:|---:|---:|
+| Packed G1 control | 5.043-5.048 | 32 | 128 | 12,288 |
+| Packed B64 G1 | 4.683-4.693 | 64 | 256 | 16,384 |
+| Dense F16 B64 G1 | 4.277-4.279 | 64 | 256 | 16,384 |
+| Packed B128/SG8 G1 | 4.699-4.701 | 128 | 256 | 24,576 |
+| Dense F16 B128/SG8 G1 | 4.469-4.469 | 128 | 256 | 24,576 |
+| Resident F32 MPS | 3.999-4.005 | internal | internal | internal |
+| Q4 expansion + MPS | 4.190-4.193 | internal | internal | internal |
+
+All 12 measured paired rounds favor dense over packed at both geometries.
+Median paired packed/dense ratios are 1.095997 at B64 and 1.051755 at B128.
+Dense B64 takes 8.65-8.81% less time than packed B64; dense B128 remains
+4.44-4.47% slower than dense B64. Dense B64 still takes 6.84-6.95% longer than
+resident MPS. Removing decode in this control does not remove the native GEMM
+gap. The representation substitution also changes weight traffic (9 MiB Q4
+versus 32 MiB F16), cache behavior, instructions and compiler register allocation;
+it does not measure isolated decoder cost or establish a bandwidth bottleneck.
+One-time expansion/setup is excluded, and no resident-F16 production policy is
+qualified by this comparison.
+
+All four B64/B128 packed/dense candidate gates require both finite 2e-5
+agreement and zero raw bit differences; all pass before and after bias for
+2,621,440 outputs per bank. All 20 bank hashes repeat between orders and all
+16 prior M1280 hashes remain fixed. Separate row-band checks cover authentic
+and cyclic rows, including B128's two-band boundary. G2 still fails 949 entries
+against identical-operand MPS. The separate original-BF16 quality gate still
+fails: G1 RMSE 0.6173250074, relative L2 0.047034245, max abs 3.2914271355,
+2,621,164 failures. Neither failure is waived or hidden by bitwise Q4 controls.
+
+Each full-schedule run has 113 command roots and 112 asynchronous continuations,
+with no timed-root overlap. Named storage is 700,284,768 bytes, including all
+control representations, twenty output banks and terminal packing. The largest
+sampled native process-group footprint is 1,315.77 MiB; minimum sampled
+cache-aware headroom is 26.5709 GiB; observed swap growth is zero. Samples do
+not bound true peaks, and MetalBuffer counters exclude private MPS allocations.
+The diagnostic does not measure minimal production storage.
+
+The separate CPU replay recomputes 26 same-operand and three saved-BF16
+comparisons from bytes, validates 236 raw comparator words with injected-bit
+controls, bank hashes, all row bands, root isolation, launch geometry, schedules
+and guard logs. Twenty checker tests pass, including a row-64 mutation with
+recomputed bank/sidecar hashes, widened tolerance, false candidate/G2 summaries,
+wrong source/geometry/root/launch, overlap, metrics and profiler intent. Six
+admission negatives pass against the current build before Metal initialization;
+three additional cases reject an invalid attach-gate scope or pre-existing
+ready/release artifacts without modifying the artifacts.
+
+The current companion adds an opt-in CPU ready/release gate after resource
+setup and before command-chain creation, for attaching Instruments to a live
+process. It requires `--profile-run`, checks a 30 s deadline before accepting
+release, rejects stale gate files and adds no GPU work, barrier or wait. A fresh
+profiler-off smoke of this current build passes the same 56-sample/113-root
+checks at one call per sample. Its timings do not enter the primary aggregate.
+Primary timings bind to frozen binary v1 / native-v2 sources; the CPU-gate
+companion binds to binary v3 / native-v4. Their shader identities are identical.
+
+A separate Instruments attach capture is qualified for target PID 91018 and
+named pipeline-family presence. It contains 29 target command-buffer submissions,
+58 target application intervals, 35 target GPU intervals and 667 target shader
+sample rows. Submission/application/GPU tables resolve the same 29 command-buffer
+IDs. Packed B64/B128, dense B64/B128, MPS projection/bias and expansion pipeline
+labels are present. Shader sample rows are not dispatch counts or additive times;
+their schema has no command-buffer/submission ID. The selected exports expose
+no launch dimensions or counters. Source-derived geometry is checked by the
+native report/replay, not observed directly in this trace. The capture cannot
+split resident/expand MPS projection labels or distinguish Q4 decoding, loads,
+staging and MMA inside a fused GEMM. No occupancy, instruction-stall percentage
+or decoder-only time is claimed.
+
+The successful profile uses an external checked clone with zero warmup and two
+opposite-order rounds at one call per sample: 14 samples, 29 roots and 68 stats
+words, with all 20 qualification banks and numerical checks retained. Its bank
+and shader hashes equal the primary runs. It records the same kernel geometries
+and workload shape, but its timings never enter the profiler-off aggregate.
+The sampled target-plus-recorder group peak is 2,036.34 MiB, headroom at least
+23.4880 GiB and swap flat, within the unchanged guard. Earlier launch captures
+failed target coverage; the first attach was stopped too early during saving,
+and the corrected full-schedule attach hit the 2 GiB cap at 2,068 MiB. Reducing
+only capture repetitions enabled the successful trace. All owned processes
+were reaped and stopped raw traces removed; only sanitized selected exports
+remain. Correlated Mini-Quad review is ROBUST within the measured comparison
+and target/pipeline coverage, not an independent-model assessment.
+
+Evidence: `.landmark/evidence/2026-10-26-hy-nomas-q4-tile-dense.json`. Reports,
+sidecars, exact guarded commands and selected source/binary/object receipts live
+under `/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026`. This is a curated
+index to executed evidence, not a hermetic build or driver attestation.
+
+Executed DoD entry points (the recorded runner supplies the unchanged guard):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/tmp/run_guarded.py build-v4 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_tile_dense_benchmark
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/tmp/run_guarded.py dense-m1280-forward-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/build/hy_nomas_q4_tile_dense_benchmark-v1 --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/reports/dense-m1280-forward-v1.json --rows 1280 --repeats 16
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/tmp/run_guarded.py verify-forward-v1 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/source/verify_tile_dense_v1.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026/reports/dense-m1280-forward-v1.json
+crystal tool format --check examples/hy_nomas_q4_tile_dense_benchmark.cr examples/support/hy_nomas_q4_tile_dense_benchmark.cr
+git diff --check
+```
+
+Next falsifier: optimize B64's shared-panel staging/MMA schedule while retaining
+full-K per-output order, starting with the dense control before applying the
+same change to Q4. Require identical bits and a balanced complete-projection
+speedup against the unchanged MPS controls. Do not widen precision or make the
+larger B128 tile the default from nominal reuse counts. Original-BF16 quality,
+new real full-prefix inputs, other projections and full-block performance remain
+open. Refresh on changed source/cache/fixture, geometry/schedule, precision,
+resource ownership, compiler/SDK/OS/device/MPS, or unavailable external evidence.

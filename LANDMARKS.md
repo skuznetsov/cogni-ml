@@ -34151,3 +34151,45 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on changed source/cache/fixture, geometry/schedule, precision/ownership,
   compiler/SDK/OS/device/MPS or missing external artifacts. Selected 23 source
   files, binary and ten linked objects rechecked; not a hermetic attestation.
+
+
+### 2026-10-26: same-geometry dense controls narrow the Q4 GEMM frontier
+
+- Return pointer: docs/hy-nomas-q4-reduction-frontier.md, "Same-geometry Q4/F16
+  tile frontier", and .landmark/evidence/2026-10-26-hy-nomas-q4-tile-dense.json.
+- The opt-in B64/B128 dense F16 clones change only two weight-load sites and
+  symbols, retaining full-K MMA order, staging/barriers, stores, merge and bias.
+  Both initial-order runs preserve all 20 output-bank hashes; all four candidate
+  branches equal G1/MPS bitwise under unchanged finite F32 atol=rtol=2e-5.
+  M1280/K8192/N2048 still repeats 23 saved real rows on GPU.
+- Complete-projection medians: Q4 B64 4.683-4.693 ms, dense B64 4.277-4.279 ms,
+  Q4 B128 4.699-4.701 ms, dense B128 4.469 ms, resident F32 MPS 3.999-4.005 ms.
+  All 12 paired rounds favor dense at each geometry; B64 reduction 8.65-8.81%.
+  Dense B128 is still 4.44-4.47% slower than dense B64; dense B64 remains
+  6.84-6.95% slower than MPS. Representation also changes traffic/cache/register
+  allocation, so this is not isolated decoder cost or a bandwidth diagnosis.
+- Two full schedules: 56 samples/113 roots each, one terminal wait/readback,
+  zero preterminal reads or tracked encode buffer allocations. Named bytes
+  700,284,768 include controls. Both 10% cache-aware guards pass with 2 GiB cap,
+  64 MiB swap stop and 120 s deadline; sampled peak 1,315.77 MiB, swap flat.
+  Sampling does not bound true peaks; counters exclude MPS private allocations.
+- CPU byte/comparator/row-band/root/guard replay, 20 checker tests, six current
+  pre-Metal negatives and three attach-gate admission cases pass. Current-build
+  smoke and separate compact profile have identical 20 banks/shader hashes.
+  Primary timings bind to binary v1/native-v2; CPU attach-gate companion is
+  binary v3/native-v4; the gate adds no GPU work or wait.
+- Instruments compact attach qualifies target PID/pipeline presence: 29 matching
+  command-buffer IDs, packed/dense B64/B128 and MPS labels. No observed launch
+  dimensions or per-instruction counters; overlapping shader samples cannot
+  separate decode/loads/staging/MMA or resident/expand MPS instances. Profiling
+  timings are excluded. Reducing only capture repetitions fits the unchanged
+  guard (sampled recorder/target peak 2,036.34 MiB); raw traces removed after
+  owned processes reaped. Correlated Mini-Quad ROBUST within this scope.
+- Separate G2 still fails 949 entries; original-BF16 G1 quality still fails
+  (RMSE 0.617325, relative L2 0.0470342). No production/default, new full-prefix,
+  full-block/model or video performance claim. No generation was launched.
+- Next falsifier: change B64 shared-panel staging/MMA scheduling first in dense
+  control, then Q4, preserving full-K order and bits; require balanced complete
+  projection gain against MPS. These measured tile/load variants do not close
+  the native gap. Refresh on source/cache/fixture, geometry/schedule, precision,
+  ownership, compiler/SDK/OS/device/MPS changes or lost external evidence.

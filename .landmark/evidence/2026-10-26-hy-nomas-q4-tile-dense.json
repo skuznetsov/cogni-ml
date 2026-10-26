@@ -1,0 +1,693 @@
+{
+  "schema": "landmark-evidence-packet-v1",
+  "id": "2026-10-26-hy-nomas-q4-tile-dense",
+  "status": "VERIFIED within the bounded M1280 projection comparison; no production promotion",
+  "base_commit": "db1da073da6605249023290ab619a1f25cee9ded",
+  "risk": "CAUTION: opt-in derived-kernel performance diagnostic and scratch lifetime; production unchanged",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Same-geometry F16 controls preserve every Q4/MPS output bit. At B64 the representation substitution reduces complete-projection time by 8.65-8.81%; B128 remains slower than B64 even without decode. Dense B64 still trails resident F32 MPS. This does not isolate pure Q4 decode cost."
+  },
+  "problem": "Separate representation substitution from increased M-tile reuse without changing staging, barriers or full-K per-output accumulation order.",
+  "provenance": "Native GPU terminal bytes and isolated command-root timings; CPU byte/root/guard replay and seeded checker falsifiers; correlated same-lineage Mini-Quad review.",
+  "design": {
+    "geometry": {
+      "m": 1280,
+      "k": 8192,
+      "n": 2048,
+      "original_rows": 23,
+      "larger_m_input": "GPU cyclic repetition of the 23 saved real rows; not a new full-prefix activation distribution"
+    },
+    "packed_launches": [
+      {
+        "arm": "packed.g1",
+        "kernel": "hy_q4_bench_packed_h16",
+        "m_tile": 32,
+        "n_tile": 64,
+        "threads": 128,
+        "shared_bytes": 12288,
+        "threadgroups": [
+          40,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "packed.b64",
+        "kernel": "simd_mm_q4k_h16_b64",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "packed.b128",
+        "kernel": "simd_mm_q4k_h16_b128_sg8",
+        "m_tile": 128,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 24576,
+        "threadgroups": [
+          10,
+          32,
+          1
+        ],
+        "k_groups": 1
+      }
+    ],
+    "dense_launches": [
+      {
+        "arm": "dense.b64",
+        "kernel": "hy_q4_bench_dense_b64",
+        "m_tile": 64,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 16384,
+        "threadgroups": [
+          20,
+          32,
+          1
+        ],
+        "k_groups": 1
+      },
+      {
+        "arm": "dense.b128",
+        "kernel": "hy_q4_bench_dense_b128_sg8",
+        "m_tile": 128,
+        "n_tile": 64,
+        "threads": 256,
+        "shared_bytes": 24576,
+        "threadgroups": [
+          10,
+          32,
+          1
+        ],
+        "k_groups": 1
+      }
+    ],
+    "arms": [
+      "packed.g1",
+      "packed.b64",
+      "dense.b64",
+      "mps.resident",
+      "packed.b128",
+      "dense.b128",
+      "mps.expand"
+    ],
+    "primary_runs": 2,
+    "repeats_per_root": 16,
+    "warmup_rounds": 2,
+    "measured_rounds": 6,
+    "schedule": "Alternating forward/reverse rounds with opposite first order across runs.",
+    "dense_source_delta": "Kernel symbol and two Q4 decoder calls become canonical F16 loads; full-K MMA, staging/barriers, stores, one-group F32 merge and bias retained.",
+    "timed_packed": "tile decode + SIMD GEMM + F32 merge + in-place BF16 bias",
+    "timed_dense": "resident canonical F16 loads + same-geometry SIMD GEMM + F32 merge + in-place BF16 bias",
+    "timed_mps_resident": "prepared resident F32 matrix MPS projection + in-place BF16 bias",
+    "timed_mps_expand": "Q4 helper F16 decode widened to F32 + MPS projection + in-place BF16 bias",
+    "excluded": "Setup/input replication/qualification/poisoning/comparators/packing; primary timings have no profiler.",
+    "storage": "9 MiB packed Q4, 32 MiB canonical F16, 64 MiB resident F32 MPS. Probe retains all controls; not minimal production storage."
+  },
+  "dod": {
+    "build": "Guarded release build-v2 passes for primary binary v1; build-v4 passes for current CPU-gate binary v3; compact profile build-v2 passes.",
+    "primary_native": "Forward/reverse M1280 runs exit0; all 20 bank hashes match each other and 16 prior baseline banks.",
+    "replay": "Both primary byte/root/guard checkers PASS: 26 identical-operand and three original-BF16 comparisons, 236 comparator words with injected controls, row bands, geometry/schedules/root isolation.",
+    "negative_controls": "20 CPU checker tests PASS; six pre-Metal admission cases PASS against current binary plus three attach-scope/stale-file cases PASS.",
+    "current_companion": "Current build smoke PASS at full 56-sample/113-root schedule and one call per root; compact capture PASS at 14 samples/29 roots; all 20 bank and shader hashes equal primary runs. Neither contributes timing to primary aggregate.",
+    "profile": "Compact attach target and recorder exit0 under unchanged native guard; CPU coverage replay exit0: target PID 91018, all 29 command-buffer ID sets agree across target tables, packed/dense B64/B128 and MPS pipeline-family presence. No per-instruction/counter attribution.",
+    "hygiene": "Scoped Crystal format and git diff checks pass; selected 25 current sources, three binaries, ten linked objects, all four report sidecars and eight postterminal scripts rechecked.",
+    "command_records": "Exact commands/caps/deadlines/exits in external argv.json and guard.jsonl logs; fresh report paths are one-shot and reject collisions.",
+    "rollback": "Revert only Makefile opt-in target, two new examples and this diagnostic documentation."
+  },
+  "results": {
+    "gpu_median_ms_by_run": {
+      "dense-m1280-forward-v1": {
+        "packed.g1": 5.042798177328223,
+        "packed.b64": 4.692834635989129,
+        "dense.b64": 4.279276041870617,
+        "mps.resident": 4.005497396065039,
+        "packed.b128": 4.701019531239581,
+        "dense.b128": 4.4691757811961,
+        "mps.expand": 4.1898190102074295
+      },
+      "dense-m1280-reverse-v1": {
+        "packed.g1": 5.048246093792841,
+        "packed.b64": 4.682516927459801,
+        "dense.b64": 4.277302083210088,
+        "mps.resident": 3.9992851561692078,
+        "packed.b128": 4.699183593402267,
+        "dense.b128": 4.4685221350846405,
+        "mps.expand": 4.192542968667112
+      }
+    },
+    "paired_ratios": {
+      "packed.b64.over.dense.b64": {
+        "count": 12,
+        "median": 1.0959971293286093,
+        "min": 1.0912587747686942,
+        "max": 1.1023993669836702
+      },
+      "packed.b128.over.dense.b128": {
+        "count": 12,
+        "median": 1.0517552958281011,
+        "min": 1.051149799999011,
+        "max": 1.0531183636461108
+      },
+      "packed.b64.over.packed.b128": {
+        "count": 12,
+        "median": 0.9977614235339705,
+        "min": 0.9936860189120142,
+        "max": 1.0041037031987234
+      },
+      "dense.b64.over.dense.b128": {
+        "count": 12,
+        "median": 0.9575310405660378,
+        "min": 0.9546712045483742,
+        "max": 0.958267332989341
+      },
+      "packed.b128.over.mps.resident": {
+        "count": 12,
+        "median": 1.1739882397829473,
+        "min": 1.16859694536024,
+        "max": 1.1776322915426112
+      },
+      "dense.b128.over.mps.resident": {
+        "count": 12,
+        "median": 1.1162165976900211,
+        "min": 1.1115877604575959,
+        "max": 1.1195876206089022
+      }
+    },
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "candidate_gate": "All four B64/B128 packed/dense summaries require finite tolerance pass AND zero bit differences, raw and biased.",
+    "all_20_banks_equal_between_primary_orders": true,
+    "all_four_lineages_bank_and_shader_hashes_equal": true,
+    "g2_mps_finite_failures": 949,
+    "original_bf16_quality_gate_passed": false,
+    "original_bf16_g1": {
+      "name": "packed.g1.bias.vs.original_bf16_saved_upstream_rows",
+      "elements": 2621440,
+      "failures": 2621164,
+      "raw_bit_differences": 2621440,
+      "max_abs": 3.2914271354675293,
+      "rmse": 0.6173250074231923,
+      "relative_l2": 0.04703424499104567,
+      "finite": true,
+      "gate_passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "production_promoted": false,
+    "execution": {
+      "full_samples": 56,
+      "command_roots": 113,
+      "async_continuations": 112,
+      "terminal_waits": 1,
+      "terminal_packed_reads": 1,
+      "preterminal_reads": 0,
+      "tracked_encode_time_metalbuffer_allocations": 0,
+      "private_mps_allocations_tracked": false,
+      "named_bytes": 700284768
+    },
+    "sampled_guards": {
+      "dense-m1280-forward-v1": {
+        "peak_sampled_process_group_mib": 1107.0169296264648,
+        "min_cache_aware_headroom_gib": 26.57086181640625,
+        "swap_growth_mib": 0.0
+      },
+      "dense-m1280-reverse-v1": {
+        "peak_sampled_process_group_mib": 1315.7671813964844,
+        "min_cache_aware_headroom_gib": 26.974044799804688,
+        "swap_growth_mib": 0.0
+      },
+      "dense-m1280-current-smoke-v1": {
+        "peak_sampled_process_group_mib": 1079.5640335083008,
+        "min_cache_aware_headroom_gib": 26.026519775390625,
+        "swap_growth_mib": 0.0
+      },
+      "dense-m1280-profile-compact-v1": {
+        "peak_sampled_process_group_mib": 2036.3379440307617,
+        "min_cache_aware_headroom_gib": 23.488021850585938,
+        "swap_growth_mib": 0.0
+      }
+    }
+  },
+  "guard": {
+    "accounting": "file-cache",
+    "floor_percent": 10,
+    "native_process_group_cap_bytes": 2147483648,
+    "max_swap_growth_bytes": 67108864,
+    "native_deadline_seconds": 120,
+    "build_cap_mib": 4096,
+    "build_deadline_seconds": 600,
+    "checker_cap_mib": 1024,
+    "checker_deadline_seconds": 120,
+    "scope": "Sampled process-group accounting. Samples do not bound true peaks or guarantee file-cache reclamation; the attach orchestrator asserts target and recorder remain in its group."
+  },
+  "lineage": {
+    "primary_timing": "Frozen binary v1 / native-v2 sources; predate both timing runs.",
+    "current_code": "Frozen binary v3 / native-v4 sources; opt-in CPU gate after setup before command-chain creation, no shader change.",
+    "compact_profile": "External checked clone: module/require/schema and 0 warmup +2 measured rounds; same geometry/shaders/20 qualification banks/26 comparisons.",
+    "source_scope": "Selected source/object identities only, not a hermetic build or driver attestation."
+  },
+  "profiling": {
+    "status": "VERIFIED target-process/command-buffer/kernel-family coverage only",
+    "primary_timings_include_profiler": false,
+    "capture_compact": true,
+    "raw_trace_removed": true,
+    "capture_target_pid": 91018,
+    "compact_samples": 14,
+    "compact_roots": 29,
+    "timings_excluded_from_primary": true,
+    "failed_routes": "Two xctrace launch attempts did not qualify target coverage. First attach recorder was terminated too early during save; corrected wait then hit the unchanged 2 GiB guard at 2068 MiB. Compact attach succeeded without raising the cap. Failed traces were removed after owned processes were reaped.",
+    "limitations": "Shader intervals can overlap and are non-additive; coverage is not per-instruction decoding/MMA/staging attribution, occupancy or stall measurement.",
+    "target_rows": {
+      "submission": 29,
+      "application": 58,
+      "gpu": 35,
+      "shader": 667
+    },
+    "matching_target_command_buffer_ids": 29,
+    "pipeline_presence_samples": {
+      "dense_f16_b128": {
+        "pipeline_sample_rows": 162,
+        "present": true
+      },
+      "dense_f16_b64": {
+        "pipeline_sample_rows": 9,
+        "present": true
+      },
+      "mps_bias": {
+        "pipeline_sample_rows": 34,
+        "present": true
+      },
+      "mps_expand_arm_preprocess": {
+        "pipeline_sample_rows": 4,
+        "present": true
+      },
+      "mps_shared_projection": {
+        "arm_split_available": false,
+        "pipeline_sample_rows": 26,
+        "present": true
+      },
+      "packed_b128": {
+        "pipeline_sample_rows": 36,
+        "present": true
+      },
+      "packed_b64": {
+        "pipeline_sample_rows": 39,
+        "present": true
+      }
+    },
+    "geometry": "No launch dimensions/counters in selected exports; source/native report settings only.",
+    "coverage_manifest_policy": "Export manifest deliberately keeps target_gpu_coverage_qualified=false because nonempty tables alone are insufficient; coverage-audit-v1.json supplies the separate PID/ID/label qualification."
+  },
+  "adversary": {
+    "verdict": "ROBUST within the profiler-off comparison and target/kernel-family coverage; VULNERABLE for pure decoder, per-arm profiler or whole-model attribution",
+    "lineage": "Correlated same-lineage source/evidence reviews; no independent-model claim.",
+    "highest_risk": "A source delta, geometry or traffic change misread as isolated decoder cost. Check exact kernel delta, all output bytes, source hashes, baseline/row bands and timed-root overlap; keep traffic/register confounds explicit.",
+    "resolved_attack": "The initial documentation had a pending profile placeholder; integrated the qualified target coverage and narrowed the opening claim to these tested tile/loading variants. No instruction-level decomposition is inferred."
+  },
+  "not_claimed": [
+    "Original-BF16 quality qualification; the lossy gate still fails.",
+    "New real full-prefix activation distribution; M1280 repeats 23 saved real rows on GPU.",
+    "Decoder-only cost, occupancy, instruction-level stalls or DRAM bottleneck.",
+    "Production/default promotion, other projections, cold/mixed-weight-cache, full block/model or video speed.",
+    "True peak memory, private MPS allocation count or hermetic source/driver attestation."
+  ],
+  "next_falsifier": "Optimize B64 shared-panel staging/MMA schedule first on dense control, retaining full-K order and bit identity, then apply same change to packed Q4. Require balanced complete-projection wins against unchanged MPS controls.",
+  "decay_trigger": "Changed source/cache/fixture, geometry/schedule, precision/ownership, compiler/SDK/OS/device/MPS or unavailable external evidence requires affected gates to be rebuilt/replayed.",
+  "input_pins": {
+    "fixture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-text-conditioning-20261025/fixtures/text-conditioning-v2.json",
+      "sha256": "167dd498c75efa396ca1f8ae33b68fa34368d2e4c96feb5d4de2d89c2666992e",
+      "sidecar_sha256": "1668ef1699da4d66cc8d88005fb7c3e3a288feba53999d3019a81af5dfb7b849",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491"
+    },
+    "cache": {
+      "manifest": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/block-0-q4k.json",
+      "manifest_sha256": "d692a899855a813a2c2d92ed5f31782f856398c8dc004feb171bde3b1bb04d3f",
+      "payload_sha256": "7c4ab766d687187d6f2895c3521a1a15a90799a14171ec17ccf2eb2f02055b12",
+      "weight_offset": 61441024,
+      "weight_bytes": 9437184,
+      "bias_offset": 61436928
+    },
+    "baseline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-reuse-20261026/reports/reuse-m1280-forward-v1.json",
+      "sha256": "14d902a8a7572d1aabd319c97df4dd8fb747f2e05e7b7f9d7a6dbfb2ed41e187",
+      "m1280_hashes_checked": 16
+    },
+    "kernel_sources": {
+      "qwen_sha256": "1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5",
+      "benchmark_sha256": "c904ac8240981695bde8c7904bc47f0182bba3a36e4a596ea32f6e28ff925adf",
+      "dense_sha256": "99ca4953cd8c494a330d3f891edf2db39799a3dd185105eb6a263b55e90fbfd5",
+      "diagnostic_sha256": "3f8b91e83b003006c89a5d5e79099456dd99f25e6a716fe03badfa82ea904158"
+    }
+  },
+  "external_artifacts": {
+    "root": "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-tile-dense-20261026",
+    "availability": "External local SSD; generated outputs not committed",
+    "scope": "Curated index to executed evidence, not proof from hashes or JSON structure.",
+    "columns": [
+      "relative_path",
+      "sha256",
+      "nbytes"
+    ],
+    "files": [
+      [
+        "source/native-v2.json",
+        "123e0b550c7f52aad448a5dd10c40f3a40e4964c32e570e64f6d682cb5f8fe26",
+        4596
+      ],
+      [
+        "source/native-v2-receipt.json",
+        "54a0ab655763e890132acb909126cdd8e54b0f9b95686a44cb0f60da2938a262",
+        3037
+      ],
+      [
+        "source/native-v4.json",
+        "900223b93116ba12b940bdaf09f18305be1eee1ea985030f6c09e0ac844e5cf0",
+        4484
+      ],
+      [
+        "source/native-v4-receipt.json",
+        "d79fe5211a2bfb39148414758266e7daee9d3109de23eeb21530c418db9d24e7",
+        3222
+      ],
+      [
+        "source/profile-compact-v1-receipt.json",
+        "46464d5528e137dc9d468cf0a335a1bfdf62d083ef6fdbd08a788a726e06fdae",
+        4174
+      ],
+      [
+        "build/hy_nomas_q4_tile_dense_benchmark-v1",
+        "a547200ce923658021fa349f54d760e58b4a2ece7678ad08cb64f56483fa4ff7",
+        1814608
+      ],
+      [
+        "build/hy_nomas_q4_tile_dense_benchmark-v3",
+        "bf25509910c1c5002081a25a7ff1be0764935532abc0a2a168a954daac82dbf0",
+        1814896
+      ],
+      [
+        "build/hy_nomas_q4_tile_dense_profile_compact-v1",
+        "a5015a77eddf0fa795bfcab01bd7be2122c86c4427da230f1cf00a290d043dae",
+        1815320
+      ],
+      [
+        "tmp/run_guarded.py",
+        "a883a85a20bc32012d96b9830a84f838ed3e8e685cb52a460ef1725391edbe58",
+        1163
+      ],
+      [
+        "source/verify_tile_dense_v1.py",
+        "1fa5fc3e401111105a89a9a4d29c82561c8b125d44977a208e6c665d5bfa19c8",
+        57682
+      ],
+      [
+        "source/test_verify_tile_dense_v1.py",
+        "255d590669869fa7ce9ca86fabab8f9d54561250073dfebd96b78aa7300a601f",
+        18992
+      ],
+      [
+        "source/verify_profile_compact_v1.py",
+        "3be1b60c1a5df05cab5386f4859f2ab984dbd5e2249234b8859a28b0961ee495",
+        57687
+      ],
+      [
+        "source/analyze_tile_dense_v1.py",
+        "01d464a0a314170b6517296e9edb2c157f7acf1a510cf0a5c92172b5db6a0b2f",
+        2745
+      ],
+      [
+        "source/admission_checks_v2.py",
+        "86fd60cc3769627a76ecb2d38d13cc013ff8c4395414e3f8204449845531366a",
+        2068
+      ],
+      [
+        "source/admission_gate_v1.py",
+        "865fcfff9fda4e6802d76c69b0c8a10729c813bca7041421a91a626e97ec16ea",
+        1472
+      ],
+      [
+        "source/capture_attach_compact_v1.py",
+        "82cb8053210f07f8f8cc88da61c74574052c4f45a52fbc78d91671b74eec431c",
+        4676
+      ],
+      [
+        "source/export_profile_compact_v1.py",
+        "8517bb333aba111299a8f9234f3d8c4712675f46a543703289063ab40a1e94ea",
+        3239
+      ],
+      [
+        "source/terminal_identities_v1.py",
+        "d21c312b5f066df7d0188bd88b86f2b0fb4098ab3ef093a906cd2ae51da50343",
+        2408
+      ],
+      [
+        "reports/paired-analysis-v1.json",
+        "780ae69aa99bd05a79d71039fda2017a20d2d84d307ff0b6d28c377e9791bf40",
+        5072
+      ],
+      [
+        "reports/cross-lineage-v1.json",
+        "62017b21d010b5097d0c836b714aa4ae2ab8313f9a058ec0070e048ff1964f6f",
+        1417
+      ],
+      [
+        "reports/terminal-identities-v1.json",
+        "82775fcd23d33632ed3649c5c477e32495f217a8bd68b4d151a6fb099a94cf8c",
+        4953
+      ],
+      [
+        "reports/admission-v2.json",
+        "03cfedce839d158061168dc7adb0edf94746342b4ed1a856bc59573b41ec728f",
+        639
+      ],
+      [
+        "reports/admission-gate-v1.json",
+        "ca1330bfacb55e7de2da899ed80d272f9ed3850b230b4d07c00e67bc29fac9b1",
+        350
+      ],
+      [
+        "profiles/attach-compact-v1.json",
+        "16e8dc697351981bac006e14b9bbd18b1d7f35e0e792992956e85b81d8dead6c",
+        1183
+      ],
+      [
+        "profiles/gpu-compact-v1/capture.json",
+        "c5736c3aa5284ae1ec01e8ad16a8297e363cb83aa31eabc28808e3dc85f2beae",
+        4635
+      ],
+      [
+        "reports/dense-m1280-forward-v1.json",
+        "af8d416961c1a7a982b5e67826422d911974a0ae510ca4db2f3b9208295caee3",
+        68790
+      ],
+      [
+        "logs/dense-m1280-forward-v1.argv.json",
+        "f25944b76ca6cc0bf510627c81317c601b23f747125c44fa5897537160a6a72e",
+        795
+      ],
+      [
+        "logs/dense-m1280-forward-v1.guard.jsonl",
+        "df763f0e31d447c20954de84830511b4dac55d43c805caef9cef0f435c9c8e9e",
+        4726
+      ],
+      [
+        "reports/dense-m1280-reverse-v1.json",
+        "9bd4171c6eddd8b1a68b97718a9687f37bbeebbfca9543753e3f165a6ed4e281",
+        68848
+      ],
+      [
+        "logs/dense-m1280-reverse-v1.argv.json",
+        "49783579f1778b5095a1946fc28b0529f600eb0131e6b9c255f61a342fbb47be",
+        816
+      ],
+      [
+        "logs/dense-m1280-reverse-v1.guard.jsonl",
+        "457a9c8e4911042141f80383008b9e41af1347494a777169493604b6c3516f96",
+        4432
+      ],
+      [
+        "reports/dense-m1280-current-smoke-v1.json",
+        "c00b5c7212c4c6c54e6d3e1c3f6fe4c1cf35a1907132347427b1b4aa95dd81ca",
+        68946
+      ],
+      [
+        "logs/dense-m1280-current-smoke-v1.argv.json",
+        "dd8ad23a564787ad56863b5b4f8358c29ed16f25e999632e84e29b9c531869f5",
+        806
+      ],
+      [
+        "logs/dense-m1280-current-smoke-v1.guard.jsonl",
+        "e012bba3b3e9326adfd1d8a844e75cac1a36bf54cbff351fe6d45a510f326980",
+        2271
+      ],
+      [
+        "reports/dense-m1280-profile-compact-v1.json",
+        "7dbc52c052e7a07ddd3272345a9b7b6c6f79d9bdf67b0c62d82d0b7a0bf91b07",
+        33196
+      ],
+      [
+        "logs/dense-m1280-profile-compact-v1.argv.json",
+        "8f9eb9854fd24a69cc6f290fb63e684d907457797bb0e401f4c7a544929c6dcf",
+        974
+      ],
+      [
+        "logs/dense-m1280-profile-compact-v1.guard.jsonl",
+        "8cc7aa522c56da859d4c555eda0fe57190eaf0c370efaa49f11951b9ffcba68d",
+        18263
+      ],
+      [
+        "reports/verify-forward-v1.json",
+        "cae278aa594b1a2e7cfbff9e57b8438f809b3c6244a7dc9d1b37c05ccee2f0db",
+        35392
+      ],
+      [
+        "logs/verify-forward-v1.out",
+        "bb91953e33ea3233f970beccf6809e4d9c02796092bf4b3dd0690d21b7b8fc89",
+        27408
+      ],
+      [
+        "reports/verify-reverse-v1.json",
+        "43bbeb53044d42b4de1b6fecbbffea3a4adf6ea628a4961e3d08ad9521745b8b",
+        35396
+      ],
+      [
+        "logs/verify-reverse-v1.out",
+        "dbf721a5c849df6e88f35a0396045af0ec6ee196c2ed6d8b88f1148c8fcf2db4",
+        27412
+      ],
+      [
+        "reports/verify-current-smoke-v1.json",
+        "c2b36aeff28a1f8f2e46402ce54f62434a723cbc071a5b50cc8200f1342e162d",
+        35399
+      ],
+      [
+        "logs/verify-current-smoke-v1.out",
+        "ebaba0f72fe5858667cf68950c40554abe51fa6cd0dd0c5bd26ff12d1fc90df2",
+        27415
+      ],
+      [
+        "reports/verify-profile-compact-v1.json",
+        "7341a47739507f2847e68b08b6dcd483355eb59d7cc5e1a1225f1fafc6997ea4",
+        32947
+      ],
+      [
+        "logs/verify-profile-compact-v1.out",
+        "616b64a747fc37e48cfad08dec0481941a55e9e738ecb0ccf9cbb85e13d6df2a",
+        25587
+      ],
+      [
+        "logs/checker-tests-v1.out",
+        "81f9345fceb5c64bd3180faf9222de2c41adb43b9ef59145935884da5b881131",
+        119
+      ],
+      [
+        "logs/build-v2.argv.json",
+        "8cfd2ef5f1ada5287c1775827c98863a96eaa6d6418a371076c84fb764a0ee47",
+        649
+      ],
+      [
+        "logs/build-v4.argv.json",
+        "bbe0064dbdfd7bad06ec7d470f9baf4fcaab1e0d733bafde8faf77e77f452250",
+        649
+      ],
+      [
+        "logs/build-compact-v2.argv.json",
+        "8ed30e2ccb0b58f47846f46330077d2baaf20c4f4f9b34ed2132b9abb0360525",
+        1823
+      ],
+      [
+        "source/profile_coverage_audit_v1.py",
+        "9cf94dc264805eafba453a69d553a5a1547226c10d4b816f8d402e4caff48faf",
+        17695
+      ],
+      [
+        "profiles/gpu-compact-v1/coverage-audit-v1.json",
+        "439d0eb02f08a75b672dce4dc6551d3262f22e87efd08e2a28b69d3ae81b65fb",
+        17851
+      ],
+      [
+        "profiles/gpu-compact-v1/toc.xml",
+        "424c34807fd9fb727a3c245de87174883de07299d1707d4f883f90764185fe92",
+        29693
+      ],
+      [
+        "profiles/gpu-compact-v1/metal-shader-profiler-intervals.xml",
+        "eebd6bee1b9672ff17dd4baf76df0d501c795cf98f777b56a96929ff5373bc8d",
+        323022
+      ],
+      [
+        "profiles/gpu-compact-v1/metal-application-intervals.xml",
+        "3647b08c4a9fd8f1084300ccb458cc0f1d5a95353fff9969655091ac966e7076",
+        41226
+      ],
+      [
+        "profiles/gpu-compact-v1/metal-application-command-buffer-submissions.xml",
+        "e3182d31f46ac426f9699bb138797b42d812d7bd38802f1f459bdf8ba21b260e",
+        23428
+      ],
+      [
+        "profiles/gpu-compact-v1/metal-gpu-intervals.xml",
+        "a56579ff95c73d97fc51199fbbc293c08f7f4fe6dccd2d7590b4f3b53eee2f46",
+        48625481
+      ],
+      [
+        "profiles/shader-timeline.tracetemplate",
+        "3fef015e10591969c2b7c0f3801879abf299fb157057081ab74780b7794aa4f2",
+        51197
+      ],
+      [
+        "logs/profile-coverage-v1.argv.json",
+        "255c351e88ba011a02cbac85b1fb1a5ae485acaf903fcd28ce991ee2c185e74f",
+        650
+      ],
+      [
+        "logs/profile-coverage-v1.guard.jsonl",
+        "e4ad01b442fcf6c5a997183bdcc3d2167823d3e821e3e04030a8d69b5a7dbde5",
+        2580
+      ],
+      [
+        "logs/profile-coverage-v1.out",
+        "ace8042fcad2b67f60a5e766914c055b715c36fbb151d6ce7a46ad5da8974e07",
+        2129
+      ],
+      [
+        "logs/verify-profile-compact-v1.guard.jsonl",
+        "2959ed405ef42914f80712e6f499570748c6220c0d12c4b8425ef864dff567cc",
+        13050
+      ],
+      [
+        "logs/verify-current-smoke-v1.guard.jsonl",
+        "70af6eadbb0ac2f08bef219e4754b3922c3b975b7b0565f345811350083d90b4",
+        13039
+      ],
+      [
+        "logs/terminal-identities-v1.guard.jsonl",
+        "841884c99b13d9d29bffa514a5733c431d240da3775b2bf5d8917806042c49b9",
+        1966
+      ],
+      [
+        "logs/dense-m1280-profile-v4.guard.jsonl",
+        "b3ebba403bef3688eae65fa4f815ce1255409e4c84de3859a737b8fa97b47ab5",
+        16835
+      ],
+      [
+        "logs/export-profile-compact-v1.guard.jsonl",
+        "ebd8ca20b4f2e4bf0f65a3a0afce18199fca07b3ad648e8d460714426880bb11",
+        13345
+      ]
+    ]
+  }
+}
