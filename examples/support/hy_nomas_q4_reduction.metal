@@ -83,3 +83,26 @@ kernel void hy_q4_compensated(device const half *weights [[buffer(0)]],
   }
   output[gid] = sum + correction;
 }
+
+// Reused scratch must not conceal a missing store in a later grouping.
+kernel void hy_q4_poison_partials(device uint *partials [[buffer(0)]],
+    constant uint &count [[buffer(1)]], uint gid [[thread_position_in_grid]]) {
+  if (gid < count) partials[gid] = 0x7fc00001u;
+}
+
+// Every partial is F32; neither merge changes products or drops K terms.
+kernel void hy_q4_merge_partials(device const float *partials [[buffer(0)]],
+    device float *output [[buffer(1)]], constant uint &count [[buffer(2)]],
+    constant uint &groups [[buffer(3)]], constant uint &tree [[buffer(4)]],
+    uint gid [[thread_position_in_grid]]) {
+  if (gid >= count) return;
+  float values[32];
+  for (uint g = 0; g < groups; ++g) values[g] = partials[g * count + gid];
+  if (tree) {
+    for (uint width = groups; width > 1u; width /= 2u)
+      for (uint g = 0; g < width / 2u; ++g) values[g] = values[2u * g] + values[2u * g + 1u];
+  } else {
+    for (uint g = 1; g < groups; ++g) values[0] = values[0] + values[g];
+  }
+  output[gid] = values[0];
+}

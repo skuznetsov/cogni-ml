@@ -126,3 +126,92 @@ Low-budget admission and an existing report target both reject before Metal
 initialization, with the existing report unchanged. Expected nonzero exits are
 recorded in `reports/admission-checks-v1.json`. The positive probe's exit zero
 means the diagnostic completed, not that direct Q4 passed its MPS parity gate.
+
+## Full-K grouping experiment, 2026-10-26
+
+Status: VERIFIED for this one-projection diagnostic; correlated Mini-Quad
+Adversary verdict ROBUST. At M=23/K=8192/N=2048, two contiguous F32 partial sums
+over K=0..4095 and K=4096..8191, followed by one F32 addition, reproduce the
+unchanged full-K MPS output bitwise across all 47,104 values. This holds before
+and after adding the common BF16 bias once. Both merge implementations agree;
+for two partials, their addition trees are equivalent.
+
+The experiment keeps the authenticated decoded F16 operands and full-K MPS
+geometry. It partitions native dense SIMD accumulation into 1/2/4/8/16/32 groups,
+either contiguous or strided by 32-element tiles. Left-fold and adjacent balanced
+tree merges consume the same partial buffers. Failures at the unchanged finite
+`atol=rtol=2e-5` gate, before bias:
+
+| Groups | Contiguous fold | Contiguous tree | Strided fold | Strided tree |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 17 | 17 | 17 | 17 |
+| 2 | 0 | 0 | 59 | 59 |
+| 4 | 20 | 20 | 35 | 34 |
+| 8 | 17 | 19 | 27 | 28 |
+| 16 | 19 | 18 | 23 | 22 |
+| 32 | 19 | 18 | 18 | 19 |
+
+Only contiguous G2 passes, with zero bit differences, maximum error and RMSE,
+both raw and biased. The one-group controls match the existing dense SIMD
+baseline bitwise; its original 17 failures remain unchanged. GPU tile counters
+record one visit for each of all 256 K32 tiles in every case. They count
+aggregate visits from a representative output threadgroup, not ownership by
+partition. Partition ownership is supported by the reviewed start/stride
+arithmetic, not independently established by those counters. Reused partial
+storage is poisoned with NaNs before each case; all output banks are finite
+and nonconstant.
+
+Guarded release build and two native runs passed. All 68 output-bank hashes are
+identical between runs, including all 20 banks pinned by the previous report.
+Each run retains one command segment, one terminal wait/readback, zero tracked
+encode-time buffer allocations and zero preterminal reads. Named GPU storage is
+253,596,912 bytes, including 6,029,312 bytes of reusable partials; MPS/driver
+private storage is excluded. Both guards preserve the 10% file-cache-aware
+reserve, 2 GiB process budget, 64 MiB swap-growth stop and 120-second deadline,
+exit zero and observe no swap growth. Minimum sampled headroom is
+37,356,142,592 and 38,283,542,528 bytes. These samples do not establish peak
+memory or guarantee immediate file-cache reclamation.
+
+The separate postterminal checker recomputes all 112 comparison summaries per
+run, raw buffer hashes, decoder controls, K coverage and guard conditions.
+Its first two attempts failed in the checker: JSON shortest serialization of
+Float32 tolerances was compared directly with binary64, then Python rejected a
+non-byte-to-non-byte memoryview cast. Preserved v3 authenticates the serialized
+literal and uses the original Float32 value for thresholds; no native tolerance
+changed. Budget/report/sidecar admission negatives pass before Metal starts.
+The checker also rejects a widened tolerance, a fabricated grouping pass and
+an altered output-bank hash without modifying the original artifacts.
+
+The saved original-BF16 upstream comparison remains a failed, separate lossy
+gate: contiguous G2 has 47,098 failures and RMSE 0.6173029922, versus 47,099 and
+0.6173029243 for the original direct Q4 result. This is not a quantization-quality
+fix. The candidate uses the dense decoded-F16 diagnostic kernel; the direct
+packed-Q4 kernel is unchanged and remains unqualified. Matching this grouping
+does not identify MPS internals or qualify other inputs/shapes. Combined probe
+timing is not a kernel speed benchmark. No full block or generation was run.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026`.
+Reports: `reports/group-v1.json` and `reports/group-v2.json`; both packed sidecars
+have SHA-256 `ee12b3189b70c8fe7b291888cd500f51344a0654be90b924f235ce496e98ec93`.
+Selected sources, binary and link-object identities are retained under
+`source/native-v1*` and `build/`; this is post-run identity capture, not a
+hermetic build attestation. The repository evidence packet indexes the files.
+
+Executed DoD commands (runner supplies guards, TMPDIR and Crystal cache):
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/tmp/run_guarded.py build-v1 4096 600 make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1 hy_nomas_q4_reduction_probe
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/tmp/run_guarded.py group-v1 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1/hy_nomas_q4_reduction_probe --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v1.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/tmp/run_guarded.py group-v2 2048 120 /opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/build/native-v1/hy_nomas_q4_reduction_probe --report /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v2.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/tmp/run_guarded.py verify-v3 1024 120 python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/verify_grouping_v3.py /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v1.json /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/reports/group-v2.json
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-q4-grouping-20261026/source/admission_checks_v1.py
+crystal tool format --check examples/hy_nomas_q4_reduction_probe.cr examples/support/hy_nomas_q4_reduction_probe.cr
+git diff --check
+```
+
+Artifacts use fresh paths and reject overwrites; use a new run identity for a
+repeat. Next falsifier: transfer the two contiguous partials to direct packed-Q4
+GEMM without expanded global weight storage, then repeat same-operand and
+upstream gates before timing or promotion. Rollback: revert the opt-in diagnostic
+commit. Refresh on changed source/cache/fixture, geometry, precision, ownership,
+compiler/SDK/OS/device or MPS runtime.

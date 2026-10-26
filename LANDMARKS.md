@@ -34028,3 +34028,28 @@ Refresh after source/toolchain/device/model/workload changes.
   followed by upstream gates before promotion. This does not fix Q4-versus-BF16
   quality or establish full-block/generation performance. Refresh on source,
   fixture/cache, geometry, precision, ownership, toolchain/OS/device/MPS changes.
+
+### 2026-10-26: two contiguous full-K partial sums reproduce MPS
+
+- Return pointer: `docs/hy-nomas-q4-reduction-frontier.md` and
+  `.landmark/evidence/2026-10-26-hy-nomas-q4-grouping.json`.
+- At M23/K8192/N2048, splitting the dense decoded-F16 SIMD diagnostic into two
+  contiguous K4096 partials and adding them on GPU reproduces full-K MPS bitwise
+  across all 47,104 raw and biased outputs. One-group controls retain the same
+  17 tolerance failures. All other tested 2/4/8/16/32 contiguous/strided groupings
+  with fold/tree merges fail the unchanged finite 2e-5 gate.
+- Two runs reproduce all 68 bank hashes; the previous 20 baselines stay exact.
+  One segment and terminal wait/readback, zero tracked encode allocations/early
+  reads. All 12 coverage slices count each K32 tile once; partition ownership
+  additionally relies on reviewed address arithmetic. Reused partials are
+  poisoned before dispatch. Named GPU bytes 253,596,912. Both guards pass at 10%
+  cache-aware reserve, 2 GiB process budget, 64 MiB swap stop, 120-second deadline;
+  zero observed swap growth. Samples are not a peak bound.
+- Separate checker recomputes saved outputs and original-BF16 comparisons;
+  correlated Mini-Quad ROBUST within this input/shape. The G2 BF16 lossy gate
+  still fails (47,098 entries, RMSE 0.617303). This result neither identifies MPS
+  internals nor qualifies Q4 quality/performance. Direct packed-Q4 is unchanged.
+- Next falsifier: apply two contiguous partials to direct Q4 without global
+  weight expansion; repeat same-operand/upstream gates before timing/promotion.
+  No full generation. Refresh on source/cache/fixture loss or change, geometry,
+  precision, ownership, compiler/SDK/OS/device or MPS runtime changes.

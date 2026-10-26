@@ -11,6 +11,12 @@ unless ARGV.empty? && !report_path.empty? && max_named_bytes > 0 && max_named_by
   raise ArgumentError.new("Expected report and 0 < named cap <= 1 GiB")
 end
 report_path = HyNomasQ4ReductionProbe.validate_report_path!(report_path)
+raise ArgumentError.new("Refusing to replace existing packed sidecar") if File.info?(report_path + ".f32le", false)
+previous_report_path = File.join(HyNomasQ4ReductionProbe::ROOT, "probe-v2.json")
+previous_report_raw = File.read(previous_report_path)
+previous_report_sha = Digest::SHA256.hexdigest(previous_report_raw)
+raise "Previous diagnostic identity changed" unless previous_report_sha == "7d09512e91c3c84966c2c46141fb4236361b49e6986b22affe1669c9d3f3f26e"
+previous_report = JSON.parse(previous_report_raw)
 
 fixture = HyNomasQ4ReductionProbe::Fixture.new(HyNomasQ4ReductionProbe::FIXTURE_PATH)
 cache = ML::Video::HyNomasQ4Cache::Block.new(
@@ -67,6 +73,19 @@ begin
     HyNomasQ4ReductionProbe::STATS_WORDS].map(&.unsafe_as(UInt32))
   raise "Decoder comparator controls failed" unless [0, 10, 20].all? { |i| stats[i + 8] == 65_536 && stats[i + 9] == 0x51443431 } &&
                                                     stats[10] == 0 && stats[20] == 1 && stats[23] == 17 && stats[24] == 1 && stats[25] == 0
+  previous_report["output_sha256"].as_h.each do |name, sha|
+    raise "Baseline output changed: #{name}" unless hashes[name] == sha.as_s
+  end
+  grouping_coverage = HyNomasQ4ReductionProbe::GROUP_CASES.map_with_index do |c, i|
+    offset = HyNomasQ4ReductionProbe::DECODE_STATS_WORDS + i * HyNomasQ4ReductionProbe::GROUP_TILE_COUNT
+    visits = stats[offset, HyNomasQ4ReductionProbe::GROUP_TILE_COUNT]
+    raise "Full-K tile coverage failed: #{c[:name]}" unless visits.all? { |v| v == 1 }
+    {name: c[:name], groups: c[:groups], interleaved_32_tiles: c[:interleaved],
+     tiles_per_partition: HyNomasQ4ReductionProbe::GROUP_TILE_COUNT // c[:groups],
+     partition_start_step_k: c[:interleaved] ? 32 : HyNomasQ4ReductionProbe::INPUT_DIM // c[:groups],
+     within_partition_step_k: c[:interleaved] ? c[:groups] * 32 : 32,
+     visited_tiles: visits.size, every_tile_once: true}
+  end
   comparisons = [] of HyNomasQ4ReductionProbe::Comparison
   [["direct.raw", "dense.raw"], ["direct.bias", "dense.bias"],
    ["mps.canonical.raw", "mps.helper.raw"], ["mps.canonical.bias", "mps.helper.bias"],
@@ -77,6 +96,29 @@ begin
   end
   prefix_comparisons = HyNomasQ4ReductionProbe::PREFIXES.map do |k|
     HyNomasQ4ReductionProbe.comparison("dense.k#{k}.vs.mps.k#{k}", outputs["dense.k#{k}"], outputs["mps.k#{k}"])
+  end
+  grouping_comparisons = HyNomasQ4ReductionProbe::GROUP_OUTPUTS.map do |name|
+    reference = name.ends_with?(".raw") ? "mps.helper.raw" : "mps.helper.bias"
+    HyNomasQ4ReductionProbe.comparison("#{name}.vs.#{reference}", outputs[name], outputs[reference])
+  end
+  merge_comparisons = HyNomasQ4ReductionProbe::GROUP_CASES.flat_map do |c|
+    ["raw", "bias"].map do |suffix|
+      left = "group.#{c[:name]}.fold.#{suffix}"
+      right = "group.#{c[:name]}.tree.#{suffix}"
+      HyNomasQ4ReductionProbe.comparison("#{left}.vs.#{right}", outputs[left], outputs[right])
+    end
+  end
+  HyNomasQ4ReductionProbe::GROUP_CASES.select { |c| c[:groups] == 1 }.each do |c|
+    HyNomasQ4ReductionProbe::GROUP_MERGES.each do |merge|
+      ["raw", "bias"].each do |suffix|
+        control = HyNomasQ4ReductionProbe.comparison("one-partition-control",
+          outputs["group.#{c[:name]}.#{merge}.#{suffix}"], outputs["dense.#{suffix}"])
+        raise "One-partition SIMD control changed" unless control[:raw_bit_differences] == 0
+      end
+    end
+  end
+  grouping_upstream_lossy = HyNomasQ4ReductionProbe::GROUP_OUTPUTS.select(&.ends_with?(".bias")).map do |name|
+    HyNomasQ4ReductionProbe.comparison("#{name}.vs.original_bf16_saved_upstream", outputs[name], fixture.upstream_output)
   end
   raise "Dense clone did not reproduce actual Q4 GEMM" unless comparisons[0][:raw_bit_differences] == 0 && comparisons[1][:raw_bit_differences] == 0
   decode_exact = stats[0] == 0 && stats[1] == 0 && stats[2] == 0
@@ -103,7 +145,7 @@ begin
   readback_path = report_path + ".f32le"
   saved_upstream = HyNomasQ4ReductionProbe.comparison("direct.bias.vs.original_bf16_saved_upstream", outputs["direct.bias"], fixture.upstream_output)
   result = {
-    schema: "hy-nomas-q4-decoder-reduction-diagnostic-v1", schema_version: 1,
+    schema: "hy-nomas-q4-decoder-reduction-diagnostic-v2", schema_version: 2,
     scope: "One authenticated M23/K8192/N2048 text FF down projection; no block, diffusion or video generation",
     fixture: {path: HyNomasQ4ReductionProbe::FIXTURE_PATH, sha256: fixture.sha256,
               sidecar_sha256: fixture.sidecar_sha256, upstream_revision: HyNomasQ4ReductionProbe::UPSTREAM_REVISION},
@@ -112,7 +154,10 @@ begin
             selected_weight_offset: HyNomasQ4ReductionProbe::Q4_WEIGHT_OFFSET, selected_bias_offset: HyNomasQ4ReductionProbe::BIAS_OFFSET},
     kernel_sources: {qwen_sha256: Digest::SHA256.hexdigest(ML::GGUF::Qwen35Metal::GEMM_Q4K_SOURCE),
                      derived_sha256: Digest::SHA256.hexdigest(HyNomasQ4ReductionProbe.dense_source),
+                     grouped_sha256: Digest::SHA256.hexdigest(HyNomasQ4ReductionProbe.grouped_source),
                      diagnostic_sha256: Digest::SHA256.hexdigest(HyNomasQ4ReductionProbe::DIAGNOSTIC_SOURCE)},
+    previous_report: {path: previous_report_path, sha256: previous_report_sha,
+                      common_output_hashes_verified: previous_report["output_sha256"].as_h.size},
     tolerance: {atol: HyNomasQ4ReductionProbe::ATOL, rtol: HyNomasQ4ReductionProbe::RTOL},
     decode: {elements: 16_777_216, bit_differences: stats[0], nonfinite_canonical: stats[1], nonfinite_helper: stats[2],
              first_difference: stats[0] == 0 ? nil : stats[3], low_nibble_differences: stats[4], high_nibble_differences: stats[5],
@@ -123,11 +168,16 @@ begin
                 named_bytes: owner.named_bytes, named_buffers: owner.resource_bytes, setup_seconds: setup_seconds,
                 encode_seconds: encode_seconds, combined_gpu_seconds: chain.gpu_elapsed_seconds,
                 combined_timing_is_not_a_kernel_benchmark: true, neural_math_and_reconstruction_on_gpu: true},
-    comparisons: comparisons, prefix_comparisons: prefix_comparisons, failures_after_bias: mismatches,
+    comparisons: comparisons, prefix_comparisons: prefix_comparisons,
+    grouping_coverage: grouping_coverage, grouping_comparisons: grouping_comparisons,
+    fold_vs_tree_comparisons: merge_comparisons, grouping_original_bf16_lossy_comparisons: grouping_upstream_lossy,
+    failures_after_bias: mismatches,
     failures_before_bias_indices: raw_mismatch_indices,
     packed_readback: {path: readback_path, sha256: Digest::SHA256.hexdigest(readback_bytes), nbytes: readback_bytes.size,
                       output_variants: HyNomasQ4ReductionProbe::OUTPUT_VARIANTS, elements_per_output: HyNomasQ4ReductionProbe::OUTPUT_ELEMENTS,
-                      stats_words: HyNomasQ4ReductionProbe::STATS_WORDS, encoding: "little-endian F32 output banks followed by raw U32 comparator words"},
+                      stats_words: HyNomasQ4ReductionProbe::STATS_WORDS,
+                      decode_stats_words: HyNomasQ4ReductionProbe::DECODE_STATS_WORDS,
+                      encoding: "little-endian F32 banks then U32 decoder words and per-case K32 tile visits"},
     original_bf16_upstream_lossy_comparison: saved_upstream, output_sha256: hashes,
     summary: {diagnostic_completed: true, dense_clone_bitwise_reproduces_actual_q4: true,
               decoder_bitwise_equal: decode_exact, original_17_failures_reproduced: mismatches.size == 17,
