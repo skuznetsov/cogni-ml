@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare and authenticate a two-block PixelUMM BF16 startup weight cache.
+"""Prepare and authenticate a bounded PixelUMM BF16 startup weight cache.
 
-Only decoder blocks zero and one are loaded. F32 checkpoint weights are moved
-to MPS and cast with PyTorch's BF16 conversion before their raw little-endian
-uint16 words are persisted. The cache is a startup artifact, not an inference
-timing path.
+Only decoder blocks zero and one, or zero through three, are loaded. F32
+checkpoint weights are moved to MPS and cast with PyTorch's BF16 conversion
+before their raw little-endian uint16 words are persisted. The cache is a
+startup artifact, not an inference timing path.
 """
 from __future__ import annotations
 
@@ -111,10 +111,11 @@ def _expected_shapes(blocks: Mapping[int, Mapping[str, tuple[int, ...]]] | None 
         schemas = {index: checkpoint.block_schema(index) for index in (0, 1)}
     else:
         schemas = blocks
-    if set(schemas) != {0, 1}:
-        raise CacheError("cache requires block-zero and block-one schemas")
+    count = len(schemas)
+    if count not in {2, 4} or set(schemas) != set(range(count)):
+        raise CacheError("cache requires exactly consecutive block schemas 0-1 or 0-3")
     result = {}
-    for index in (0, 1):
+    for index in range(count):
         expected = schemas[index]
         if not isinstance(expected, Mapping) or len(expected) != 13:
             raise CacheError(f"block {index} schema must contain 13 weights")
@@ -136,19 +137,30 @@ def validate_manifest(
     """Validate cache metadata, tensor ownership and every byte/hash binding.
 
     ``expected_shapes`` is injectable only to keep the structural unit tests
-    tiny. Production callers use the pinned 26-tensor schema by default.
+    tiny. Production callers use the pinned 26- or 52-tensor schema by default.
     """
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
         raise CacheError("unsupported BF16 cache schema")
     if sys.byteorder != "little":
         raise CacheError("BF16 safetensors-compatible cache requires little-endian host bytes")
+    blocks = manifest.get("blocks") if isinstance(manifest, dict) else None
+    if not isinstance(blocks, dict) or set(blocks) not in ({"0", "1"}, {"0", "1", "2", "3"}):
+        raise CacheError("BF16 cache must authenticate exactly blocks zero and one, or zero through three")
+    block_count = len(blocks)
     if expected_shapes is None:
-        expected_shapes = _expected_shapes()
+        expected_shapes = _expected_shapes({
+            index: checkpoint.block_schema(index) for index in range(block_count)
+        })
     else:
         expected_shapes = dict(expected_shapes)
     expected_keys = set(expected_shapes)
-    if len(expected_keys) != 26 or len(expected_shapes) != 26:
-        raise CacheError("cache schema must describe exactly 26 tensors")
+    expected_prefixes = {f"block{index}." for index in range(block_count)}
+    if (len(expected_keys) != block_count * 13 or len(expected_shapes) != block_count * 13
+            or any(sum(key.startswith(prefix) for key in expected_keys) != 13
+                   for prefix in expected_prefixes)
+            or any(not any(key.startswith(prefix) for prefix in expected_prefixes)
+                   for key in expected_keys)):
+        raise CacheError(f"cache schema must describe exactly {block_count * 13} block-owned tensors")
 
     if require_pinned_identity:
         identities = {
@@ -181,10 +193,7 @@ def validate_manifest(
     if not isinstance(torch_version, str) or not torch_version:
         raise CacheError("BF16 cache torch version is missing")
 
-    blocks = manifest.get("blocks")
-    if not isinstance(blocks, dict) or set(blocks) != {"0", "1"}:
-        raise CacheError("BF16 cache must authenticate exactly blocks zero and one")
-    for index in (0, 1):
+    for index in range(block_count):
         block = blocks[str(index)]
         prefix = f"block{index}."
         keys = sorted(key for key in expected_keys if key.startswith(prefix))
@@ -233,7 +242,7 @@ def validate_manifest(
         raise CacheError("BF16 cache tensor ownership mismatch")
     comparison = manifest.get("comparison")
     if (not isinstance(comparison, dict) or type(comparison.get("tensor_count")) is not int
-            or comparison.get("tensor_count") != 26
+            or comparison.get("tensor_count") != block_count * 13
             or comparison.get("all_raw_uint16_equal") is not True
             or comparison.get("method") != "source MPS BF16 tensor raw uint16 bytes equal persisted payload"):
         raise CacheError("BF16 source-versus-cache comparison did not pass")
@@ -314,7 +323,7 @@ def validate_cache_file(path: Path | str) -> dict:
     payload = path.parent / manifest.get("payload", "")
     result = validate_manifest(manifest, payload)
     raw_header = (CACHE_DIR / "pixelumm-header.json").read_bytes()
-    for index in (0, 1):
+    for index in range(len(manifest["blocks"])):
         block = manifest["blocks"][str(index)]
         subset = CACHE_DIR / block["subset_file"]
         receipt_path = CACHE_DIR / block["source_receipt_file"]
@@ -358,8 +367,10 @@ def make_cache(
     block0: Path | str, receipt0: Path | str,
     block1: Path | str, receipt1: Path | str,
     output: Path | str, device_name: str = "mps",
+    block2: Path | str | None = None, receipt2: Path | str | None = None,
+    block3: Path | str | None = None, receipt3: Path | str | None = None,
 ) -> dict:
-    """Convert and persist exactly two upstream-loaded BF16 blocks."""
+    """Convert and persist exactly two or four upstream-loaded BF16 blocks."""
     if device_name != "mps":
         raise CacheError("production cache conversion must use the pinned PyTorch MPS path")
     if not torch.backends.mps.is_available():
@@ -382,8 +393,17 @@ def make_cache(
     checkpoint.parse_pinned_header(raw_header)
     if header_path.parent != CACHE_DIR:
         raise CacheError("pinned PixelUMM header must be in the task source directory")
-    paths = (Path(block0).expanduser().resolve(), Path(block1).expanduser().resolve())
-    receipts = (Path(receipt0).expanduser().resolve(), Path(receipt1).expanduser().resolve())
+    source_pairs = [(block0, receipt0), (block1, receipt1)]
+    optional_pairs = ((block2, receipt2), (block3, receipt3))
+    if any((subset is None) != (receipt is None) for subset, receipt in optional_pairs):
+        raise CacheError("optional block subset and receipt inputs must be supplied together")
+    for subset, receipt in optional_pairs:
+        if subset is not None:
+            source_pairs.append((subset, receipt))
+    if len(source_pairs) == 3:
+        raise CacheError("four-block cache requires both blocks two and three")
+    paths = tuple(Path(subset).expanduser().resolve() for subset, _ in source_pairs)
+    receipts = tuple(Path(receipt).expanduser().resolve() for _, receipt in source_pairs)
     device = torch.device("mps")
     blocks = {}
     records = {}
@@ -430,8 +450,9 @@ def make_cache(
         if not all(item["raw_uint16_equal"] and item["payload_bytes_equal"]
                    for item in comparisons.values()):
             raise CacheError("source MPS BF16 words differ from persisted cache bytes")
-        if len(records) != 26:
-            raise CacheError("cache conversion did not produce all 26 source tensors")
+        expected_count = len(paths) * 13
+        if len(records) != expected_count:
+            raise CacheError(f"cache conversion did not produce all {expected_count} source tensors")
 
         manifest = {
             "schema": SCHEMA,
@@ -499,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt0", required=True, type=Path)
     parser.add_argument("--block1", required=True, type=Path)
     parser.add_argument("--receipt1", required=True, type=Path)
+    parser.add_argument("--block2", type=Path)
+    parser.add_argument("--receipt2", type=Path)
+    parser.add_argument("--block3", type=Path)
+    parser.add_argument("--receipt3", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", choices=("mps",), default="mps")
     args = parser.parse_args(argv)
@@ -507,6 +532,8 @@ def main(argv: list[str] | None = None) -> int:
             upstream=args.upstream, header=args.header,
             block0=args.block0, receipt0=args.receipt0,
             block1=args.block1, receipt1=args.receipt1,
+            block2=args.block2, receipt2=args.receipt2,
+            block3=args.block3, receipt3=args.receipt3,
             output=args.output, device_name=args.device,
         )
         print(json.dumps(result, sort_keys=True))

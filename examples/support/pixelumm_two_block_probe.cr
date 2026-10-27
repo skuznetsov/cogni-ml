@@ -30,10 +30,23 @@ module PixelUMMTwoBlockProbe
     end
   end
 
-  def validate_capture!(key : String, record : Record, tokens : Int32) : Nil
-    unless key.starts_with?("block0.") || key.starts_with?("block1.")
-      raise ArgumentError.new("capture has unknown block ownership")
-    end
+  def validate_block_count!(block_count : Int32) : Nil
+    raise ArgumentError.new("serial block count must be two or four") unless block_count == 2 || block_count == 4
+  end
+
+  def capture_slot(key : String, block_count : Int32) : Int32
+    validate_block_count!(block_count)
+    slot = (0...block_count).find { |index| key.starts_with?("block#{index}.") }
+    slot || raise ArgumentError.new("capture has unknown block ownership")
+  end
+
+  def validate_input_source!(source : String, slot : Int32) : Nil
+    expected = slot == 0 ? "inputs.x" : "captures.block#{slot - 1}.output"
+    raise ArgumentError.new("block input must reference its immediate predecessor") unless source == expected
+  end
+
+  def validate_capture!(key : String, record : Record, tokens : Int32, block_count : Int32 = 2) : Nil
+    capture_slot(key, block_count)
     name = key[7..]
     dtype, shape = case name
                    when "input_norm_statistics"
@@ -63,7 +76,7 @@ module PixelUMMTwoBlockProbe
   end
 
   # Metadata is small and authenticated before parsing. Large payloads are
-  # streamed only after pair-level memory admission, before GPU allocation.
+  # streamed only after aggregate memory admission, before GPU allocation.
   class TensorFile
     getter path : String
     getter sha256 : String
@@ -149,10 +162,11 @@ module PixelUMMTwoBlockProbe
     end
   end
 
-  def validate_weights!(weights : Hash(String, Record)) : Nil
+  def validate_weights!(weights : Hash(String, Record), block_count : Int32 = 2) : Nil
+    validate_block_count!(block_count)
     expected = PixelUMMBlockProbe.weight_shapes
-    raise ArgumentError.new("two blocks require exactly 26 weights") unless weights.size == 26
-    2.times do |slot|
+    raise ArgumentError.new("serial blocks require exactly #{13 * block_count} weights") unless weights.size == 13 * block_count
+    block_count.times do |slot|
       expected.each do |name, shape|
         record = weights["block#{slot}.#{name}"]? || raise ArgumentError.new("missing block weight")
         unless record.dtype == "BF16" && record.shape == shape
@@ -169,47 +183,50 @@ module PixelUMMTwoBlockProbe
     getter captures : Hash(String, Record)
     getter capture_order : Array(String)
     getter subset_hashes : Array(String)
+    getter block_count : Int32
 
-    def initialize(path : String, trusted_sha256 : String)
-      super
+    def initialize(path : String, trusted_sha256 : String, @block_count : Int32 = 2)
+      PixelUMMTwoBlockProbe.validate_block_count!(@block_count)
+      super(path, trusted_sha256)
       d = @document
       PixelUMMTwoBlockProbe.validate_identity!(d)
-      unless d["schema"].as_s == "cogni_ml.pixelumm_two_block_reference/v1" &&
+      schema = @block_count == 2 ? "cogni_ml.pixelumm_two_block_reference/v1" : "cogni_ml.pixelumm_four_block_reference/v1"
+      unless d["schema"].as_s == schema &&
              d["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
              d["tile_tokens"].as_i == 8 && d["token_order"].as_s == "tile_major"
-        raise ArgumentError.new("two-block fixture provenance/layout mismatch")
+        raise ArgumentError.new("serial fixture provenance/layout mismatch")
       end
       @grid = d["grid"].as_a.map(&.as_i)
       unless @grid == [2, 32, 32] || @grid == [6, 44, 80]
-        raise ArgumentError.new("two-block fixture grid is outside admitted contexts")
+        raise ArgumentError.new("serial fixture grid is outside admitted contexts")
       end
       @inputs, @weights, @captures = records("inputs"), records("weights"), records("captures")
       @capture_order = d["capture_order"].as_a.map(&.as_s)
       unless @inputs.keys.sort == ["cos", "sin", "x"] &&
              @capture_order.uniq == @capture_order && @capture_order.sort == @captures.keys.sort &&
-             {"block0.attention", "block0.output", "block1.attention", "block1.output"}.all? { |name| @captures.has_key?(name) }
-        raise ArgumentError.new("two-block fixture input/capture inventory mismatch")
+             (0...@block_count).all? { |slot| {"attention", "output"}.all? { |name| @captures.has_key?("block#{slot}.#{name}") } }
+        raise ArgumentError.new("serial fixture input/capture inventory mismatch")
       end
       tokens = @grid.reduce(1) { |n, v| n * v }
-      @captures.each { |key, record| PixelUMMTwoBlockProbe.validate_capture!(key, record, tokens) }
+      @captures.each { |key, record| PixelUMMTwoBlockProbe.validate_capture!(key, record, tokens, @block_count) }
       unless @inputs["x"].shape == [1, tokens, 4096] && @inputs["x"].dtype == "BF16" &&
              {"cos", "sin"}.all? { |name| @inputs[name].shape == [1, tokens, 1, 128] && @inputs[name].dtype == "F32" }
-        raise ArgumentError.new("two-block input geometry/dtype mismatch")
+        raise ArgumentError.new("serial input geometry/dtype mismatch")
       end
-      PixelUMMTwoBlockProbe.validate_weights!(@weights)
+      PixelUMMTwoBlockProbe.validate_weights!(@weights, @block_count)
       blocks = d["blocks"].as_a
-      raise ArgumentError.new("two-block source inventory mismatch") unless blocks.size == 2
+      raise ArgumentError.new("serial source inventory mismatch") unless blocks.size == @block_count
       @subset_hashes = blocks.map_with_index do |block, index|
         prefix = "block#{index}."
-        expected_input = index == 0 ? "inputs.x" : "captures.block0.output"
+        PixelUMMTwoBlockProbe.validate_input_source!(block["input_source"].as_s, index)
         digest = block["checkpoint_subset_sha256"].as_s
         unless block["index"].as_i == index && block["weight_prefix"].as_s == prefix &&
-               block["input_source"].as_s == expected_input && block["output_key"].as_s == "captures.block#{index}.output" &&
+               block["output_key"].as_s == "captures.block#{index}.output" &&
                block["weight_keys"].as_a.map(&.as_s).sort == @weights.keys.select(&.starts_with?(prefix)).sort &&
                block["capture_keys"].as_a.map(&.as_s).sort == @captures.keys.select(&.starts_with?(prefix)).sort &&
                PixelUMMBlockProbe.valid_digest?(digest) &&
                PixelUMMBlockProbe.valid_digest?(block["source_receipt_sha256"].as_s)
-          raise ArgumentError.new("two-block source/ownership mismatch")
+          raise ArgumentError.new("serial source/ownership mismatch")
         end
         digest
       end
@@ -220,14 +237,14 @@ module PixelUMMTwoBlockProbe
     end
 
     def captures_by_slot : Array(Array(String))
-      Array.new(2) do |slot|
+      Array.new(@block_count) do |slot|
         prefix = "block#{slot}."
         @capture_order.select(&.starts_with?(prefix)).map { |name| name[prefix.size..] }
       end
     end
 
     def compatible_replay!(other : Fixture) : Nil
-      unless @grid == other.grid && @subset_hashes == other.subset_hashes &&
+      unless @block_count == other.block_count && @grid == other.grid && @subset_hashes == other.subset_hashes &&
              @capture_order == other.capture_order && @weights.keys.all? { |key| @weights[key].sha256 == other.weights[key].sha256 } &&
              {"cos", "sin"}.all? { |key| @inputs[key].sha256 == other.inputs[key].sha256 } &&
              @inputs["x"].sha256 != other.inputs["x"].sha256
@@ -250,20 +267,20 @@ module PixelUMMTwoBlockProbe
         raise ArgumentError.new("BF16 cache stored/runtime source mismatch")
       end
       @weights = records("weights")
-      PixelUMMTwoBlockProbe.validate_weights!(@weights)
+      PixelUMMTwoBlockProbe.validate_weights!(@weights, fixture.block_count)
       conversion = d["conversion"]
       unless conversion["method"].as_s == "torch.Tensor.to(torch.bfloat16)" &&
              conversion["device"].as_s == "mps" && conversion["rounding"].as_s == "round_to_nearest_even" &&
              !conversion["torch_version"].as_s.empty?
         raise ArgumentError.new("BF16 cache conversion provenance mismatch")
       end
-      unless d["blocks"].as_h.keys.sort == ["0", "1"] &&
+      unless d["blocks"].as_h.keys.sort == (0...fixture.block_count).map(&.to_s) &&
              d["comparison"]["all_raw_uint16_equal"].as_bool &&
-             d["comparison"]["tensor_count"].as_i == 26 &&
+             d["comparison"]["tensor_count"].as_i == fixture.block_count * 13 &&
              d["comparison"]["weights"].as_h.keys.sort == @weights.keys.sort
         raise ArgumentError.new("BF16 cache raw-word comparison inventory mismatch")
       end
-      2.times do |slot|
+      fixture.block_count.times do |slot|
         block = d["blocks"][slot.to_s]
         source = fixture.document["blocks"][slot]
         PixelUMMTwoBlockProbe.validate_receipt_binding!(block, source, slot)
@@ -303,7 +320,7 @@ module PixelUMMTwoBlockProbe
     def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64)
       grid = @fixture.grid
       config = Decoder::Config.new(temporal: grid[0], height: grid[1], width: grid[2])
-      weight_bytes = Array.new(2) do |slot|
+      weight_bytes = Array.new(@fixture.block_count) do |slot|
         PixelUMMBlockProbe.weight_shapes.keys.to_h { |name| {name, @fixture.weights["block#{slot}.#{name}"].nbytes} }
       end
       @borrowed_bytes = (@fixture.inputs.values + cache.weights.values).sum(&.nbytes)
@@ -325,16 +342,19 @@ module PixelUMMTwoBlockProbe
           @bindings[name] = buffer = ML::MetalBuffer.new(record.nbytes)
           cache.upload_into!(record, buffer)
         end
-        2.times do |slot|
+        @fixture.block_count.times do |slot|
           weights = PixelUMMBlockProbe.weight_shapes.keys.to_h { |name| {name, @bindings["block#{slot}.#{name}"]} }
-          input = slot == 0 ? @bindings["x"] : @plans[0].stage("output")
+          input = slot == 0 ? @bindings["x"] : @plans[slot - 1].stage("output")
           @plans << Decoder::Plan.new(config, input: input, weights: weights,
             cos: @bindings["cos"], sin: @bindings["sin"], captures: @fixture.captures_by_slot[slot],
             max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot)
         end
-        unless @named_bytes == @borrowed_bytes + @workspace.named_bytes &&
-               @plans[0].stage("output").handle != @plans[1].stage("output").handle
-          raise ArgumentError.new("pair unique-byte/output ownership mismatch")
+        # This loader owns distinct allocations for every authenticated weight,
+        # the external input/tables and retained outputs. Broader caller-provided
+        # Workspace aliases are outside this probe's ownership contract.
+        handles = @bindings.values.map(&.handle) + @plans.map { |plan| plan.stage("output").handle }
+        unless @named_bytes == @borrowed_bytes + @workspace.named_bytes && handles.uniq.size == handles.size
+          raise ArgumentError.new("serial unique-byte/output/weight ownership mismatch")
         end
       rescue error
         @plans.reverse_each(&.release)
@@ -368,12 +388,12 @@ module PixelUMMTwoBlockProbe
     end
 
     def compare : Array(Comparison)
-      chain = @last_chain || raise ArgumentError.new("PixelUMM pair was not encoded")
+      chain = @last_chain || raise ArgumentError.new("PixelUMM serial was not encoded")
       unless chain.completed? && chain.wait_count == 1
-        raise ArgumentError.new("PixelUMM pair diagnostics require one terminal wait")
+        raise ArgumentError.new("PixelUMM serial diagnostics require one terminal wait")
       end
       @fixture.capture_order.map do |key|
-        slot = key.starts_with?("block0.") ? 0 : 1
+        slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
         name = key[7..]
         record, buffer = @fixture.captures[key], @plans[slot].stage(name)
         raise ArgumentError.new("native capture extent mismatch #{key}") unless record.nbytes == buffer.size
@@ -415,9 +435,9 @@ module PixelUMMTwoBlockProbe
     end
 
     private def check_idle! : Nil
-      raise ArgumentError.new("PixelUMM pair session released") if @released
+      raise ArgumentError.new("PixelUMM serial session released") if @released
       if previous = @last_chain
-        raise ArgumentError.new("PixelUMM pair command chain is in flight") unless previous.completed?
+        raise ArgumentError.new("PixelUMM serial command chain is in flight") unless previous.completed?
       end
     end
 

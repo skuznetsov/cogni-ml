@@ -274,6 +274,29 @@ class PixelUMMReferenceTest(unittest.TestCase):
         self.assertEqual(peak, 6_399_526_912)
         self.assertLess(peak, int(9.5 * 1024**3))
 
+    def test_four_block_full_reference_peak_estimate_fits_root_oracle_cap(self):
+        peak = reference._estimated_peak_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN, layers=4
+        )
+        self.assertEqual(peak, 8_555_432_960)
+        self.assertLess(peak, int(9.5 * 1024**3))
+
+    def test_four_block_schema_and_predecessor_edges(self):
+        self.assertEqual(
+            reference.FOUR_BLOCK_SCHEMA,
+            "cogni_ml.pixelumm_four_block_reference/v1",
+        )
+        edges = [reference._block_io_edge(index) for index in range(4)]
+        self.assertEqual(
+            [edge["input_source"] for edge in edges],
+            ["inputs.x", "captures.block0.output", "captures.block1.output",
+             "captures.block2.output"],
+        )
+        self.assertEqual(
+            [edge["output_key"] for edge in edges],
+            [f"captures.block{index}.output" for index in range(4)],
+        )
+
     def test_fixture_binary_records_are_flat_contiguous_and_hash_bound(self):
         tensors = {
             "inputs": {"x": torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)},

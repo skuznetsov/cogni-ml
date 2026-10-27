@@ -1,10 +1,19 @@
-# PixelUMM bounded decoder-block frontier, 2026-10-26
+# PixelUMM bounded decoder-block frontier, 2026-10-27
 
-Status: VERIFIED within the one-block fixture scope below. A native resident
-BF16 block passes the unchanged finite `atol=rtol=2e-5` gate and takes a median
-1.569623 seconds at T6/H44/W80 on this M2 Max. No complete decoder, diffusion
-or video generation ran. The oracle is an adapted upstream-semantics PyTorch
-MPS implementation, not execution of the compiled upstream CUDA Flex kernel.
+Current frontier: four consecutive pretrained blocks, zero through three,
+with a shared GPU workspace and authenticated BF16 cache. The small fixture's
+104 stages and full T6/H44/W80, J21,120 fixture's eight attention/output
+boundaries are bitwise exact, including a different-input replay with poisoned
+scratch, at unchanged finite `atol=rtol=2e-5`. The resident four-block chain
+takes a median 6.420843 seconds on this M2 Max. See the four-block qualification
+below for evidence and limits. No complete decoder, diffusion or video ran.
+The oracle adapts upstream semantics on PyTorch MPS; compiled upstream CUDA
+Flex equivalence is outside this qualification.
+
+## Historical one-block qualification, 2026-10-26
+
+The following one-block measurements and weight inventory describe the
+earlier scope. The two- and four-block sections extend it explicitly.
 
 ## Source and weights
 
@@ -299,3 +308,114 @@ precision, ownership/lifetime or guard changes, or lost external artifacts.
 The next boundary is a memory-admitted larger sequential decoder prefix with
 shared workspace and real decoder inputs, before complete decoding. No claim
 about full generation quality or latency follows from this pair.
+
+## Four-block qualification, 2026-10-27
+
+Status: VERIFIED within the saved four-block fixture scope. Actual decoder
+layers zero through three run consecutively on GPU at T6/H44/W80, J21,120,
+with unchanged finite `atol=rtol=2e-5` and a cache-aware 10% memory floor.
+The existing native Workspace already supports this slot count; no native
+GPU math, kernel, bridge or command-chain implementation changed here.
+
+The probe and oracle now admit exactly two or four blocks. They authenticate
+all 52 four-block weights, per-owner captures and immediate predecessor
+edges. Each block receives the preceding block's actual GPU output buffer.
+Four retained output banks and separate diagnostic captures survive reuse of
+the common transient core/RMS/attention scratch. The loader allocates distinct
+weight/input/table/output buffers and checks handle uniqueness. This evidence
+does not cover arbitrary caller-supplied Workspace aliases or recovery after
+draining an intentionally incomplete prefix; the runner submits all four slots.
+
+The strongest anticipated failure was accepting four metadata owners while
+executing only two blocks, or routing later inputs/captures to block zero or
+one. Five binary preflight negatives reject incorrect block-two and block-three
+predecessors, a missing fourth-block weight, an altered fourth-block receipt
+owner and an aggregate budget one byte below admission. They reject before
+payload authentication and GPU allocation. CPU tests exercise actual fixture
+construction and exact four-slot budget accounting. Full-J alternate-input
+output hashes differ for every block, then all eight replay boundaries match
+after NaN poisoning of mutable shared scratch. Immutable tables, weights,
+retained outputs and diagnostic capture storage are excluded from poisoning.
+
+### Observed numerical, timing and memory results
+
+Small T2/H32/W32 compares all 104 stages on the first and last requests.
+Full J compares attention and output for all four blocks on the first request,
+last timed request and poisoned different-input replay. Every compared tensor
+is finite and **bitwise exact**: zero different words, zero failures and zero
+maximum absolute error. Inputs are controlled synthetic BF16 hidden states
+(seeds 20261026/20261027), not complete-decoder hidden states.
+
+The full resident chain's timed samples after one warmup are
+**6.488500125, 6.393219958 and 6.420842958 seconds**; median
+**6.420842958 seconds**. Median GPU elapsed time is 6.417016500 seconds.
+Preparation takes 5.855484250 seconds including streamed payload authentication
+and upload, excluding metadata parsing. This is not a controlled loading-time
+comparison, a kernel speedup or a video-throughput measurement.
+
+All six full requests use 485 command segments, exactly **one terminal wait**,
+zero named MetalBuffer allocations during encode and zero preterminal
+activation readbacks. The first request also rejects wrong slot order and
+in-flight release/read/reuse. Opaque MPS allocations are outside named counters;
+one chain is not one command buffer. Diagnostics read captures only after the
+terminal wait, and scratch poisoning/input replacement occur between requests.
+
+Unique named storage is **5,419,082,724 bytes (5.05 GiB)**: 3,680,869,348 owned
+and 1,738,213,376 borrowed. Four independent workspaces with equivalent
+attention captures would own 10,571,116,432 bytes. Sharing saves
+**6,890,247,084 bytes (6.42 GiB)** of owned storage by accounting, without a
+separate performance comparison. Full native sampled process-group footprint
+reaches **7,119,492,232 bytes (6.63 GiB)**; sampled cache-aware headroom stays
+at least **24,283,217,920 bytes (22.62 GiB)** and swap does not grow. The guard
+retains a 10% floor, 8 GiB footprint cap, 900-second timeout and 64 MiB
+swap-growth stop. Oracle runs retain the same floor with an 11 GiB cap;
+their maximum sampled footprint is 10,177,808,712 bytes. File-backed memory
+is a reclaimability estimate, and polling is neither a peak bound nor a
+memory reservation. GPU jobs run sequentially.
+
+### Four-block BF16 cache and reproducibility
+
+Only source layers zero through three are downloaded. New layers two and
+three were fetched as pinned HTTP ranges, not as a full checkpoint. The new
+cache contains **52 BF16 tensors, 1,543,571,456 bytes (1.44 GiB)**, half the
+four F32 payloads. Every raw uint16 word matches upstream's own MPS BF16 cast
+and independently exported fixture weights. Native preparation uploads these
+authenticated BF16 bytes directly, without runtime F32 staging or conversion.
+The full checkpoint hash remains unverified, and a full-decoder BF16 cache
+has not been built. No cache-controlled startup speedup is claimed.
+
+The curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json`. Exact executed
+argv, source/binary pins, range receipts, fixture/cache bytes, reports and
+memory-guard logs remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026`. Use fresh output/report/log
+names when repeating a run; a rejected preflight may leave an empty report.
+
+Observed CPU/build DoD commands:
+
+```sh
+python3 -B -m unittest spec/hy_nomas_pixelumm_checkpoint_test.py spec/hy_nomas_pixelumm_reference_test.py spec/hy_nomas_pixelumm_bf16_cache_test.py
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe
+```
+
+The final Python suites pass **34 tests**; native CPU suites pass **11 admission
+and 11 fixture/cache examples**. The final validator authenticates both old
+26-tensor and new 52-tensor caches. Guarded GPU executions of the saved small,
+full, poisoned-replay, old pair and standalone argv all pass; the old pair and
+standalone compare all 52 and 26 stages respectively. Those executions, not
+the CPU/build commands alone, establish numerical and memory scope.
+Correlated Mini-Quad final source/oracle/adversary verdict is ROBUST for this
+bounded contract. Final review maps all 232 sampled four-block comparison
+digests to their correct base/alternate fixtures and checks report, guard and
+receipt bindings; it is not independent replication or hermetic attestation.
+Pre-execution sidecars pin the executed binary and listed source files; the
+four-block entry point and Makefile have closure hashes only. Build logs retain
+the recipe, but do not retroactively attest those two files at compilation.
+
+Risk remains CAUTION for future changes to sequential lifetimes, source ranges
+or inventories. Rollback: omit the four-block entry point and retain the old
+pair/standalone probes. Refresh after source/checkpoint/fixture, toolchain,
+device/OS/backend, geometry, precision, ownership/lifetime or guard changes,
+or lost external artifacts. The next gate is a memory-admitted larger decoder
+prefix and real decoder inputs before complete decoding. No full-generation
+quality or latency claim follows from these four blocks.

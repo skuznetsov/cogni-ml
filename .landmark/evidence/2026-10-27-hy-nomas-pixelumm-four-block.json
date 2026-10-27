@@ -1,0 +1,1177 @@
+{
+  "schema": "cogni_ml.pixelumm_four_block_evidence/v1",
+  "created_at": "2026-10-27T12:19:32.149653+00:00",
+  "base_revision": "b3c7f8b287f88e41c2a5847ebd11652c4460bbad",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "Four actual pretrained PixelUMM blocks pass small/full-J sequential GPU gates with one shared workspace and an exact authenticated BF16 cache, within the saved fixture scope.",
+    "scope": "Blocks 0-3; synthetic BF16 inputs; T2/H32/W32 all 104 stages and T6/H44/W80 J21120 eight attention/output boundaries, including alternate-input poisoned-scratch replay.",
+    "decay_trigger": "Refresh after any source/checkpoint/fixture/toolchain/device/OS/backend/geometry/precision/ownership/lifetime/guard change or loss of external evidence."
+  },
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026",
+  "artifact_alias": "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026",
+  "source": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "upstream_model_path": "hymm/models/vae/pixelumm_decoder/model.py",
+    "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "upstream_clean_at_closure": true,
+    "hf_repository": "tencent/Hy-Nomas",
+    "hf_revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "hf_path": "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+    "header": {
+      "path": "source/pixelumm-header.json",
+      "bytes": 75192,
+      "sha256": "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11"
+    },
+    "source_file_bytes": 31553868864,
+    "full_file_hash_verified": false,
+    "downloaded_weight_scope": "Only selected decoder layers 0-3; bounded authenticated HTTP ranges. Extents are relative to the safetensors data section.",
+    "blocks": [
+      {
+        "index": 0,
+        "subset": {
+          "path": "source/block0-f32.safetensors",
+          "bytes": 771787128,
+          "sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485"
+        },
+        "http_receipt": {
+          "path": "source/block0-f32.receipt.json",
+          "bytes": 3099,
+          "sha256": "72a55054289f432f5be145f61b09eae1560dcb084c5a4bdd5a9f7df76631902d"
+        },
+        "source_data_extent": [
+          102887424,
+          874673152
+        ],
+        "source_f32_payload_bytes": 771785728,
+        "bf16_payload_bytes": 385892864,
+        "weight_count": 13
+      },
+      {
+        "index": 1,
+        "subset": {
+          "path": "source/block1-f32.safetensors",
+          "bytes": 771787128,
+          "sha256": "d33d7cfec3d582bdca30029cdab23bba8fec353ed8937fccf8e66648af080361"
+        },
+        "http_receipt": {
+          "path": "source/block1-f32.receipt.json",
+          "bytes": 3213,
+          "sha256": "11379cf75c6ac2b76ffe0adcc7132009512b1c628713d8a5e0793de9cd02ce0e"
+        },
+        "source_data_extent": [
+          874673152,
+          1646458880
+        ],
+        "source_f32_payload_bytes": 771785728,
+        "bf16_payload_bytes": 385892864,
+        "weight_count": 13
+      },
+      {
+        "index": 2,
+        "subset": {
+          "path": "source/block2-f32.safetensors",
+          "bytes": 771787128,
+          "sha256": "adda91b938bedde4ccab5c53e9a4ec06e0060593c8a05f42d500878f79f1cc89"
+        },
+        "http_receipt": {
+          "path": "source/block2-f32.receipt.json",
+          "bytes": 3223,
+          "sha256": "c85004d6d1f9fa1a1a9eb3d45cc882670cb579d2b929831c13a23e4734e636ae"
+        },
+        "source_data_extent": [
+          9364316160,
+          10136101888
+        ],
+        "source_f32_payload_bytes": 771785728,
+        "bf16_payload_bytes": 385892864,
+        "weight_count": 13
+      },
+      {
+        "index": 3,
+        "subset": {
+          "path": "source/block3-f32.safetensors",
+          "bytes": 771787128,
+          "sha256": "329d4f89c8dae7860b4bc791c6f9ee256e1531443e9b65d0a958362659b64efa"
+        },
+        "http_receipt": {
+          "path": "source/block3-f32.receipt.json",
+          "bytes": 3243,
+          "sha256": "38fcd6aafa51daacbd34b51bf7348c09c4d677b67d2e12b1709c02aefac388ec"
+        },
+        "source_data_extent": [
+          17853959168,
+          18625744896
+        ],
+        "source_f32_payload_bytes": 771785728,
+        "bf16_payload_bytes": 385892864,
+        "weight_count": 13
+      }
+    ]
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "os": "macOS 26.6.2 (25G83)",
+    "crystal": "1.22.1, LLVM 23.1.4",
+    "oracle_torch": "2.6.0",
+    "python": "3.12.2",
+    "precision": "BF16 boundaries, F32 normalization/RoPE/attention accumulation",
+    "oracle": "Adapted upstream-semantics PyTorch MPS, not compiled upstream CUDA Flex execution.",
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "generation": false
+  },
+  "cache": {
+    "path": "source/block0123-bf16-cache-v1.json",
+    "bytes": 46100,
+    "sha256": "c302e06ef2e73a08120cd0ed96fd48cdff3e77bf5e499d6231108e44fbe61846",
+    "payload": {
+      "path": "source/block0123-bf16-cache-v1.bin",
+      "bytes": 1543571456,
+      "sha256": "b743eea7fbd5d744911c52bfa0b5181592027c0812e2e9784ef1b0bf2741e1c6"
+    },
+    "tensors": 52,
+    "all_mps_conversion_raw_uint16_equal": true,
+    "all_three_independently_exported_fixture_weight_digests_equal": true,
+    "no_native_runtime_f32_weight_copy_or_conversion": true,
+    "paired_loading_speedup_measured": false
+  },
+  "fixtures": {
+    "four-reference-small-v1": {
+      "path": "results/four-reference-small-v1.json",
+      "bytes": 52444,
+      "sha256": "fba520150d94e61d9f4a93181e874e7188df48371c38ea59fb7043db2eaa13af",
+      "payload": {
+        "path": "results/four-reference-small-v1.bin",
+        "bytes": 3429992448,
+        "sha256": "9ab912ad40c7c1d30a0617310f91b3d65280c82b31ea9f1df2c4e934838b7db1"
+      },
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "tokens": 2048,
+      "captures": 104,
+      "seed": 20261026,
+      "input_x_sha256": "110040677c432ce6e3f4933ee77d8156d36eb689623befd7704a75fbb4d03010"
+    },
+    "four-reference-full-v1": {
+      "path": "results/four-reference-full-v1.json",
+      "bytes": 22094,
+      "sha256": "9e30aa8f00cb7475b71b29a6d9a0dffdb4d28fd3142d47ba3d64672f2e1fa929",
+      "payload": {
+        "path": "results/four-reference-full-v1.bin",
+        "bytes": 3122333696,
+        "sha256": "d13ad5adf65f3988adc0fbcf4652f607ed0bcc84aefa419cd8fe26c29519b16c"
+      },
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "tokens": 21120,
+      "captures": 8,
+      "seed": 20261026,
+      "input_x_sha256": "153afa9c1ff34b887792df75680858e206bc1ab73bc2bcab749c865db636fff7"
+    },
+    "four-reference-alternate-full-v1": {
+      "path": "results/four-reference-alternate-full-v1.json",
+      "bytes": 22104,
+      "sha256": "941a7dae328e2bbe92e8f4bbfdcdaea46a981388e84532045a3938b41868f77a",
+      "payload": {
+        "path": "results/four-reference-alternate-full-v1.bin",
+        "bytes": 3122333696,
+        "sha256": "a95491df213764c62940b9bb70b628ac66dbc907305744fb7024346c9a4b5f54"
+      },
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "tokens": 21120,
+      "captures": 8,
+      "seed": 20261027,
+      "input_x_sha256": "ba65b32d1a6da8bd460e969bd44c5852916af62be5bb44d21f3252de6ec81626"
+    }
+  },
+  "reports": {
+    "four-native-small-v1": {
+      "path": "results/four-native-small-v1.json",
+      "bytes": 85780,
+      "sha256": "2465a4ad8c13b36a6e2da2f0411ee4f74d835ae56f65d91f585f1f1eaa42a92b",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.597247958,
+          "gpu_elapsed_seconds": 0.5834011667466257,
+          "command_segments": 49,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 104,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.576524999,
+          "gpu_elapsed_seconds": 0.5701010834018234,
+          "command_segments": 49,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 104,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        }
+      ],
+      "named_bytes": 3687245956,
+      "owned_named_bytes": 2124800132,
+      "borrowed_bytes": 1562445824,
+      "preparation_seconds": 4.068532375
+    },
+    "four-native-full-v1": {
+      "path": "results/four-native-full-v1.json",
+      "bytes": 15155,
+      "sha256": "6977b0a56bd706d9d87c219be9bb656bc4d52f642f80db3728165de4ba3a4e9f",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 6.33546425,
+          "gpu_elapsed_seconds": 6.318806542025413,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 8,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 1,
+          "kind": "warmup",
+          "passed": true,
+          "total_seconds": 6.442305167,
+          "gpu_elapsed_seconds": 6.43505033350084,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 0,
+          "all_compared_words_exact_and_finite": false,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 2,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 6.488500125,
+          "gpu_elapsed_seconds": 6.485722916579107,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 0,
+          "all_compared_words_exact_and_finite": false,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 3,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 6.3932199579999995,
+          "gpu_elapsed_seconds": 6.387426625005901,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 0,
+          "all_compared_words_exact_and_finite": false,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 4,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 6.420842958,
+          "gpu_elapsed_seconds": 6.417016499850433,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 8,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 5,
+          "kind": "poisoned_different_input_gate",
+          "passed": true,
+          "total_seconds": 6.336704666,
+          "gpu_elapsed_seconds": 6.3297710416372865,
+          "command_segments": 485,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 8,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": true
+        }
+      ],
+      "named_bytes": 5419082724,
+      "owned_named_bytes": 3680869348,
+      "borrowed_bytes": 1738213376,
+      "preparation_seconds": 5.85548425
+    },
+    "four-pair-regression-v1": {
+      "path": "results/four-pair-regression-v1.json",
+      "bytes": 44179,
+      "sha256": "2e9e3ea33a8410f05f6aaa7fd853494ea1a1dd41e925a92bd1027d28b456c863",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.297164084,
+          "gpu_elapsed_seconds": 0.2849901666631922,
+          "command_segments": 25,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 52,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.292818167,
+          "gpu_elapsed_seconds": 0.2883906665665563,
+          "command_segments": 25,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 52,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        }
+      ],
+      "named_bytes": 1981686916,
+      "owned_named_bytes": 1191026820,
+      "borrowed_bytes": 790660096,
+      "preparation_seconds": 2.652273458
+    },
+    "four-single-regression-v1": {
+      "path": "results/four-single-regression-v1.json",
+      "bytes": 23982,
+      "sha256": "9ea2b5d7ab5514026cd76ec0d2e5015d92f8beb61d749e8ee70704ed596bfc12",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "requests": [
+        {
+          "request": 0,
+          "kind": "numerical_gate",
+          "passed": true,
+          "total_seconds": 0.158056,
+          "gpu_elapsed_seconds": 0.14506245823577046,
+          "command_segments": 13,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 26,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        },
+        {
+          "request": 1,
+          "kind": "timed",
+          "passed": true,
+          "total_seconds": 0.152315375,
+          "gpu_elapsed_seconds": 0.1479710417042952,
+          "command_segments": 13,
+          "terminal_wait_count": 1,
+          "named_allocations_during_encode": 0,
+          "activation_readbacks_before_terminal_wait": 0,
+          "compared_tensors": 26,
+          "all_compared_words_exact_and_finite": true,
+          "poisoned_different_input": false
+        }
+      ],
+      "named_bytes": 1128907396,
+      "owned_named_bytes": 724140164,
+      "borrowed_bytes": 404767232,
+      "preparation_seconds": 0.318947833
+    }
+  },
+  "timing": {
+    "resident_timed_seconds": [
+      6.488500125,
+      6.3932199579999995,
+      6.420842958
+    ],
+    "resident_median_seconds": 6.420842958,
+    "gpu_elapsed_median_seconds": 6.417016499850433,
+    "warmups": 1,
+    "preparation_seconds": 5.85548425,
+    "preparation_scope": "Streamed payload authentication and GPU upload; metadata parsing excluded. No controlled startup comparison.",
+    "video_seconds_per_second_measured": false
+  },
+  "memory": {
+    "unique_named_bytes": 5419082724,
+    "owned_named_bytes": 3680869348,
+    "borrowed_bytes": 1738213376,
+    "four_independent_owned_bytes_same_captures": 10571116432,
+    "owned_bytes_saved_by_sharing": 6890247084,
+    "saving_is_accounting_not_timed_speedup": true,
+    "opaque_mps_allocations_in_named_counters": false,
+    "guard_accounting": "Printed free + file-backed, counting speculative once; 10% physical floor. File-backed bytes estimate reclaimability; polling cannot bound between-sample peaks or reserve memory.",
+    "gpu_jobs_sequential": true
+  },
+  "verification": {
+    "dod_signal": "34 Python tests and 11+11 native CPU examples pass; cache validators pass; small/full/poisoned replay and old pair/standalone GPU gates are finite and bitwise exact; preflight negatives reject before large hashing/GPU allocation.",
+    "dod_argv_receipts": [
+      "logs/four-native-build-v1.argv.json",
+      "logs/four-native-cpu-final-v1.argv.json",
+      "logs/four-python-final-v1.argv.json",
+      "logs/four-native-small-v1.argv.json",
+      "logs/four-native-full-v1.argv.json",
+      "logs/four-pair-regression-v1.argv.json",
+      "logs/four-single-regression-v1.argv.json"
+    ],
+    "adversary_verdict": "ROBUST",
+    "review_lineage": "Correlated Mini-Quad native/oracle/adversary review; not independent replication.",
+    "source_pins": {
+      "Makefile": {
+        "bytes": 34813,
+        "sha256": "d9ef6e49e597d052c8b2bb4119465219b8d89d0a613c58d30512709143902177"
+      },
+      "examples/pixelumm_decoder_two_block_probe.cr": {
+        "bytes": 83,
+        "sha256": "426a9d0775004efe79ade358b03e53b14f215776ae650073223076d585ec3888"
+      },
+      "examples/pixelumm_decoder_four_block_probe.cr": {
+        "bytes": 83,
+        "sha256": "e891fd9663713652802ae4e5cc1a6d7a9b754f0440f2db72b5a09a39f9449bf7"
+      },
+      "examples/support/pixelumm_two_block_probe.cr": {
+        "bytes": 22206,
+        "sha256": "379fbaa4e42bde93be6b5f0a20b1ea17b648904a6521d61f3fffe35f3851a0f3"
+      },
+      "examples/support/pixelumm_serial_probe_runner.cr": {
+        "bytes": 9387,
+        "sha256": "42ca96d23e16ea095b15ec5912ddc66e0b75305916c157f8bb3c81ca106e13b0"
+      },
+      "spec/hy_nomas_pixelumm_bf16_cache_test.py": {
+        "bytes": 7652,
+        "sha256": "3ea3e408579a7d2619c96ce18cb25bc160280200771259ae9dc4494aca933e7e"
+      },
+      "spec/hy_nomas_pixelumm_reference_test.py": {
+        "bytes": 15852,
+        "sha256": "b87773c937c051b3c0d863ff7cb28a0a54e654c37212ce5b6eed97a71e21a8f9"
+      },
+      "spec/pixelumm_decoder_block_admission_spec.cr": {
+        "bytes": 23640,
+        "sha256": "23c59133db95708cbcc85a4ff63918093746e8f796ded660717bcb3d9f559d9a"
+      },
+      "spec/pixelumm_two_block_probe_spec.cr": {
+        "bytes": 11437,
+        "sha256": "e58d0c75d1f1e7369e8245ac2f18273a74415348c9ada337647112cee438a816"
+      },
+      "spec/support/hy_nomas_pixelumm_bf16_cache.py": {
+        "bytes": 26221,
+        "sha256": "f0c7adde8051f95daa442512566cc99d81dd25a1c742008be1a4a20ff347b6e6"
+      },
+      "spec/support/hy_nomas_pixelumm_reference.py": {
+        "bytes": 47412,
+        "sha256": "91f8432b452474c970297e9f47a0921c8c87a79b183a8848a030428a5c28c889"
+      },
+      "examples/support/wan_memory_guard.py": {
+        "bytes": 37589,
+        "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+      },
+      "examples/pixelumm_decoder_block_probe.cr": {
+        "bytes": 5790,
+        "sha256": "94fc6125c786f8c8b74c672572d3e039134fd0d0832cfa4c10935072b99767df"
+      },
+      "spec/support/hy_nomas_pixelumm_checkpoint.py": {
+        "bytes": 18307,
+        "sha256": "4303e2f52ba9b14e76e23879dbe727bf5ffa1c7743078cb7bb349d69f6226ab2"
+      }
+    },
+    "execution_source_and_binary_pins": {
+      "src/ml/video/pixelumm_decoder_block_mps.cr": {
+        "sha256": "2ea5c079eafa6c88ac920b47310ab7acd1e642211414509ccb1d1cef21938a08",
+        "bytes": 47899
+      },
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+        "sha256": "021c7b239adb7be240350e96e89f8dfbbeccdaf4506c85b241f2a99ffde84c6a",
+        "bytes": 78981
+      },
+      "src/ml/video/metal_mps_command_chain.cr": {
+        "sha256": "b606cc0645a54e95c008be3c615adadd29fe97d6804347147737ab25d473b645",
+        "bytes": 22968
+      },
+      "src/ml/video/metal_mps_command_chain.mm": {
+        "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf",
+        "bytes": 63544
+      },
+      "examples/support/pixelumm_block_probe.cr": {
+        "sha256": "0b22a3d8b4e61f4797e5b8bec93cb8380a1eb59b5b5710338bf183d264cf5fb1",
+        "bytes": 12257
+      },
+      "examples/support/pixelumm_two_block_probe.cr": {
+        "sha256": "379fbaa4e42bde93be6b5f0a20b1ea17b648904a6521d61f3fffe35f3851a0f3",
+        "bytes": 22206
+      },
+      "examples/support/pixelumm_serial_probe_runner.cr": {
+        "sha256": "42ca96d23e16ea095b15ec5912ddc66e0b75305916c157f8bb3c81ca106e13b0",
+        "bytes": 9387
+      },
+      "examples/support/hy_nomas_probe_instrumentation.cr": {
+        "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48",
+        "bytes": 931
+      },
+      "spec/support/hy_nomas_pixelumm_checkpoint.py": {
+        "sha256": "4303e2f52ba9b14e76e23879dbe727bf5ffa1c7743078cb7bb349d69f6226ab2",
+        "bytes": 18307
+      },
+      "spec/support/hy_nomas_pixelumm_reference.py": {
+        "sha256": "91f8432b452474c970297e9f47a0921c8c87a79b183a8848a030428a5c28c889",
+        "bytes": 47412
+      },
+      "spec/support/hy_nomas_pixelumm_bf16_cache.py": {
+        "sha256": "f0c7adde8051f95daa442512566cc99d81dd25a1c742008be1a4a20ff347b6e6",
+        "bytes": 26221
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/build/pixelumm_decoder_four_block_probe": {
+        "sha256": "9f3855c0c8c086a38e6086541e628b2b733d4fc0d826f5c7fe425a9b999e9cbf",
+        "bytes": 1280704
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/build/pixelumm_decoder_two_block_probe": {
+        "sha256": "a593f9227a75f955e8ed668df7aa0c0dea396501d6a02c6cf0b121170a16225d",
+        "bytes": 1280688
+      },
+      "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_two_block_probe.cr": {
+        "sha256": "379fbaa4e42bde93be6b5f0a20b1ea17b648904a6521d61f3fffe35f3851a0f3",
+        "bytes": 22206
+      },
+      "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_serial_probe_runner.cr": {
+        "sha256": "42ca96d23e16ea095b15ec5912ddc66e0b75305916c157f8bb3c81ca106e13b0",
+        "bytes": 9387
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026/build/pixelumm_decoder_block_probe": {
+        "sha256": "48adf9ac88c404986ab2b03cfa3c1a64ce423d3dfabb4f0228b2e964641a621c",
+        "bytes": 1239216
+      }
+    },
+    "pre_execution_records": [
+      {
+        "path": "results/four-cache-v1.pre-execution.json",
+        "bytes": 3274,
+        "sha256": "ef9f3f01bb8c888dcadd783c998ade56f6b01df1639a6db93d6212c1f5b79cf0",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-reference-small-v1.pre-execution.json",
+        "bytes": 3385,
+        "sha256": "b256477fc35ad343b6897b83cb8a0f425456d43ef0f6ab455e027e487d7311ac",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-reference-full-v1.pre-execution.json",
+        "bytes": 3388,
+        "sha256": "188f1ede8095eb4f7149b1f11d11391d54d9bdd3593a427ccc87eb5c17018d4d",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-reference-alternate-full-v1.pre-execution.json",
+        "bytes": 3408,
+        "sha256": "43039a8e1c784be1ece272a180de53b1c5b0f45b8298c7ee32844573c482ba22",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-native-small-v1.pre-execution.json",
+        "bytes": 2898,
+        "sha256": "6fda64f1dcf914846124037cdb475f65f5ae49523585293b23775dc9c078e467",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-native-full-v1.pre-execution.json",
+        "bytes": 3149,
+        "sha256": "90eba7dbf88ab967fe00f4bca9b6354ea2ba3dba2921c8519603f75cc9a3ef23",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-pair-regression-v1.pre-execution.json",
+        "bytes": 1489,
+        "sha256": "b74ebff009052fb56ba0a796ebfb4c221859f02ab378de4b8bc0571d2da24a29",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      },
+      {
+        "path": "results/four-single-regression-v1.pre-execution.json",
+        "bytes": 1264,
+        "sha256": "8278b3cfeaa486c99cbdf4aac7481170f637bfa1bc552e19647e1a1494aee720",
+        "all_source_and_binary_pins_match_closure": true,
+        "executed_argv_suffix_matches_command": true
+      }
+    ],
+    "guarded_runs": [
+      {
+        "name": "four-block23-fetch-v1",
+        "argv": {
+          "path": "logs/four-block23-fetch-v1.argv.json",
+          "bytes": 1064,
+          "sha256": "640f75bfc363609725201246d033c73db5609b8adba26c2574275d6d8c2feef4"
+        },
+        "output": {
+          "path": "logs/four-block23-fetch-v1.out",
+          "bytes": 1818,
+          "sha256": "e0f89c4f23e818787cbed524c548d23b6562356b9a9825a51f112324f8fd2ee5"
+        },
+        "guard": {
+          "path": "logs/four-block23-fetch-v1.guard.jsonl",
+          "bytes": 29544,
+          "sha256": "2de17ea8a82425aee646f412316fa6e1a899843b9094e7ab6e3c82c2b8b53d2e"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 1073741824,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 94,
+        "sampled_max_group_footprint_bytes": 51184504,
+        "sampled_min_cache_aware_headroom_bytes": 24561909760,
+        "sampled_min_pressure_free_pct": 88,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-native-build-v1",
+        "argv": {
+          "path": "logs/four-native-build-v1.argv.json",
+          "bytes": 748,
+          "sha256": "ad1a3eb6e681f8f5e568bdced1d351228fd3fc821c6b07b887a9fa208905773d"
+        },
+        "output": {
+          "path": "logs/four-native-build-v1.out",
+          "bytes": 1199,
+          "sha256": "fb32552a8395953c38c67f863b3e6fc9f2b5adf697aeee74ca8fb2bb0be62b8e"
+        },
+        "guard": {
+          "path": "logs/four-native-build-v1.guard.jsonl",
+          "bytes": 9025,
+          "sha256": "8343881d51a0893859644d26a678278ceabd9b902018661a22b623fe8328e342"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 6442450944,
+        "timeout_sec": 1200,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 27,
+        "sampled_max_group_footprint_bytes": 521127160,
+        "sampled_min_cache_aware_headroom_bytes": 29527523328,
+        "sampled_min_pressure_free_pct": 88,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-native-cpu-final-v1",
+        "argv": {
+          "path": "logs/four-native-cpu-final-v1.argv.json",
+          "bytes": 708,
+          "sha256": "4fb05434172320d9e56e68d48941c47bed97e17509ffa14604059cdb7044939f"
+        },
+        "output": {
+          "path": "logs/four-native-cpu-final-v1.out",
+          "bytes": 1100,
+          "sha256": "f317175ad40d228893547d0b4bfdad9106b16ba9ed9f7f20b8f9141097b8cce7"
+        },
+        "guard": {
+          "path": "logs/four-native-cpu-final-v1.guard.jsonl",
+          "bytes": 3824,
+          "sha256": "378ca8b4e2a0b5d087e25ae172c47c286a04ab1bcd46105ce58ad164a29c1202"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_sec": 600,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 10,
+        "sampled_max_group_footprint_bytes": 711706112,
+        "sampled_min_cache_aware_headroom_bytes": 31066193920,
+        "sampled_min_pressure_free_pct": 88,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-cache-v1",
+        "argv": {
+          "path": "logs/four-cache-v1.argv.json",
+          "bytes": 1880,
+          "sha256": "58b3f64f1cfb444b57b667bef7352413388f200abf88dff88126edad3f7b8cbe"
+        },
+        "output": {
+          "path": "logs/four-cache-v1.out",
+          "bytes": 394,
+          "sha256": "e6c0cec4ef904099932594b97d6024610c2938f3bfc7c1370b19467b608ab217"
+        },
+        "guard": {
+          "path": "logs/four-cache-v1.guard.jsonl",
+          "bytes": 11494,
+          "sha256": "6b1291bfb1d0cce444f9a1b469da6192ac31e3d3af088d76989c2ce3d0c2882e"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 4294967296,
+        "timeout_sec": 600,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 35,
+        "sampled_max_group_footprint_bytes": 1426425512,
+        "sampled_min_cache_aware_headroom_bytes": 28084715520,
+        "sampled_min_pressure_free_pct": 86,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-reference-small-v1",
+        "argv": {
+          "path": "logs/four-reference-small-v1.argv.json",
+          "bytes": 1975,
+          "sha256": "6a2bc8a29d1f80899b0193efe8327873bc4ce8c429bd261a42b990ec7a62a8e6"
+        },
+        "output": {
+          "path": "logs/four-reference-small-v1.out",
+          "bytes": 4168,
+          "sha256": "1b255df1d5f8a92fad8c66a5477b2f1619cd3c74d78181a197a19230efef9d10"
+        },
+        "guard": {
+          "path": "logs/four-reference-small-v1.guard.jsonl",
+          "bytes": 9043,
+          "sha256": "30a000bf160c7d6e310d1e412353856222f1ca75f4939d97a8289f58923739fa"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 27,
+        "sampled_max_group_footprint_bytes": 4749068256,
+        "sampled_min_cache_aware_headroom_bytes": 24523669504,
+        "sampled_min_pressure_free_pct": 81,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-native-small-v1",
+        "argv": {
+          "path": "logs/four-native-small-v1.argv.json",
+          "bytes": 1297,
+          "sha256": "7b64e8272e81472da509812cca58c37760507224e59085f4a4b4b1a6e43ced1b"
+        },
+        "output": {
+          "path": "logs/four-native-small-v1.out",
+          "bytes": 565,
+          "sha256": "61df79c974908e6a4c635042b9c7be2bf0049b7a21afa3559f3e24cd4be61767"
+        },
+        "guard": {
+          "path": "logs/four-native-small-v1.guard.jsonl",
+          "bytes": 14499,
+          "sha256": "070dbbabc5afe522d33b3e313c7a160cfeba79a5a2acdf526965d95ad47186cc"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 45,
+        "sampled_max_group_footprint_bytes": 4174007896,
+        "sampled_min_cache_aware_headroom_bytes": 25966444544,
+        "sampled_min_pressure_free_pct": 82,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-reference-full-v1",
+        "argv": {
+          "path": "logs/four-reference-full-v1.argv.json",
+          "bytes": 1979,
+          "sha256": "ebc4ab6884f76741ca38cea1f531fa373c67f9a3ae85217cc168f0c735b05d8e"
+        },
+        "output": {
+          "path": "logs/four-reference-full-v1.out",
+          "bytes": 2143,
+          "sha256": "84fee75b1ec0a708e946df49141b0ee3dde87c85ba2ff20d6da11517145e90d0"
+        },
+        "guard": {
+          "path": "logs/four-reference-full-v1.guard.jsonl",
+          "bytes": 13032,
+          "sha256": "07b43ca2d3bc286d10292535540b2e78d4d79893f2e7b4e5ac8aa8e89fc654f6"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 11811160064,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 40,
+        "sampled_max_group_footprint_bytes": 10176907664,
+        "sampled_min_cache_aware_headroom_bytes": 20388298752,
+        "sampled_min_pressure_free_pct": 73,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-reference-alternate-full-v1",
+        "argv": {
+          "path": "logs/four-reference-alternate-full-v1.argv.json",
+          "bytes": 1999,
+          "sha256": "fcb9fe62c2551edfcb8b0d6cfbcdc4c77e29456c7ada703c7c9029254ab1dd7f"
+        },
+        "output": {
+          "path": "logs/four-reference-alternate-full-v1.out",
+          "bytes": 2163,
+          "sha256": "77e6e70711d750ed39b383a7b52b075bc8151d83dba1886b057ab829e32afdec"
+        },
+        "guard": {
+          "path": "logs/four-reference-alternate-full-v1.guard.jsonl",
+          "bytes": 14329,
+          "sha256": "284f8e0e60f0b41b891e788d9071ab9455ee16c49129d6050392e3b98ffe9a05"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 11811160064,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 44,
+        "sampled_max_group_footprint_bytes": 10177808712,
+        "sampled_min_cache_aware_headroom_bytes": 20015611904,
+        "sampled_min_pressure_free_pct": 73,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-native-full-v1",
+        "argv": {
+          "path": "logs/four-native-full-v1.argv.json",
+          "bytes": 1540,
+          "sha256": "adc04e95d668021e38c6c5e8bd942e0aed6bf22ebba852e07dae6c429a16f1aa"
+        },
+        "output": {
+          "path": "logs/four-native-full-v1.out",
+          "bytes": 759,
+          "sha256": "117f80c6ce3896df8c377548875c1f754ca7830de73e4d8e0449a683b02e0bbb"
+        },
+        "guard": {
+          "path": "logs/four-native-full-v1.guard.jsonl",
+          "bytes": 41089,
+          "sha256": "8c5fab460e67ae3da81f2d2d6e99e440062561b36d5be1b361419cc25d0b1215"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 8589934592,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 131,
+        "sampled_max_group_footprint_bytes": 7119492232,
+        "sampled_min_cache_aware_headroom_bytes": 24283217920,
+        "sampled_min_pressure_free_pct": 80,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-negative-gates-v1",
+        "argv": {
+          "path": "logs/four-negative-gates-v1.argv.json",
+          "bytes": 663,
+          "sha256": "f5b1daab190419184611f41c220900cee9eccac32c400391c976875e857fbf74"
+        },
+        "output": {
+          "path": "logs/four-negative-gates-v1.out",
+          "bytes": 38,
+          "sha256": "9f853b50c06e0636591890fd5072c635efba2a4d155da539bac5d936e5cbb3e2"
+        },
+        "guard": {
+          "path": "logs/four-negative-gates-v1.guard.jsonl",
+          "bytes": 1657,
+          "sha256": "c4ba90884f4f264fca7f25a46f26723adeb16905e518799c60178158dcd16393"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 2147483648,
+        "timeout_sec": 300,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 3,
+        "sampled_max_group_footprint_bytes": 5243264,
+        "sampled_min_cache_aware_headroom_bytes": 32210567168,
+        "sampled_min_pressure_free_pct": 89,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-python-final-v1",
+        "argv": {
+          "path": "logs/four-python-final-v1.argv.json",
+          "bytes": 659,
+          "sha256": "d269b00921e38f84d7f4d877afc2a434a6e045fb29ca167f8c4347cdd6b6bb85"
+        },
+        "output": {
+          "path": "logs/four-python-final-v1.out",
+          "bytes": 526,
+          "sha256": "8d5e398ae4d148038a35547a7be9493426cffdab41ede3fe8c11715aac227acf"
+        },
+        "guard": {
+          "path": "logs/four-python-final-v1.guard.jsonl",
+          "bytes": 9608,
+          "sha256": "4c10889d0c3edd0d17f8541f87c35b3cacbb25da67a85c216c8d836b36b46999"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 2147483648,
+        "timeout_sec": 600,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 29,
+        "sampled_max_group_footprint_bytes": 257378056,
+        "sampled_min_cache_aware_headroom_bytes": 31649906688,
+        "sampled_min_pressure_free_pct": 88,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-pair-regression-v1",
+        "argv": {
+          "path": "logs/four-pair-regression-v1.argv.json",
+          "bytes": 1287,
+          "sha256": "ca14b1470871cb9e90bd50557d5bd7468ef38957bc231628990965f1f9059609"
+        },
+        "output": {
+          "path": "logs/four-pair-regression-v1.out",
+          "bytes": 566,
+          "sha256": "7afed0a3561cd878b33cbe6079637ccd6e17b40dd0c94066362403f73dde592b"
+        },
+        "guard": {
+          "path": "logs/four-pair-regression-v1.guard.jsonl",
+          "bytes": 8372,
+          "sha256": "8a334b1e7ec290a5614f0ca9b638c78b88eea4618e447e5d003a8991088cbf29"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 6442450944,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 25,
+        "sampled_max_group_footprint_bytes": 2433747368,
+        "sampled_min_cache_aware_headroom_bytes": 29515923456,
+        "sampled_min_pressure_free_pct": 84,
+        "sampled_max_swap_growth_bytes": 0
+      },
+      {
+        "name": "four-single-regression-v1",
+        "argv": {
+          "path": "logs/four-single-regression-v1.argv.json",
+          "bytes": 1076,
+          "sha256": "de9d6cd3c8a4cabbd2df1a04e2d55e27da9cf9f1d3efb8a17ce919e8a5685476"
+        },
+        "output": {
+          "path": "logs/four-single-regression-v1.out",
+          "bytes": 553,
+          "sha256": "c0e5d3064cd5ec0ae4f7fc6194751f874d5bef1d3586f65df3560cb5a3c7f4b3"
+        },
+        "guard": {
+          "path": "logs/four-single-regression-v1.guard.jsonl",
+          "bytes": 5013,
+          "sha256": "5310e338d3a5271c202b4f5e3950df81cd2a7e4e3c70e4658eb9b8a3e7b630b5"
+        },
+        "returncode": 0,
+        "footprint_cap_bytes": 6442450944,
+        "timeout_sec": 900,
+        "runtime_floor_pct": 10,
+        "max_swap_growth_bytes": 67108864,
+        "samples": 14,
+        "sampled_max_group_footprint_bytes": 1600210744,
+        "sampled_min_cache_aware_headroom_bytes": 30188306432,
+        "sampled_min_pressure_free_pct": 86,
+        "sampled_max_swap_growth_bytes": 0
+      }
+    ],
+    "cache_validation": {
+      "path": "results/four-cache-validation-final-v1.json",
+      "bytes": 439,
+      "sha256": "8dfded3921ea46899b8261546d8944efaa509d9663e591d1f5e520627ac2d910"
+    },
+    "negative_gates": {
+      "path": "results/four-negative-gates-v1.json",
+      "bytes": 7238,
+      "sha256": "cd812ad78c83e817c4a7ab6e83aa52efa562d5f86cb57818c826b1a4b3ec1d12",
+      "cases": [
+        {
+          "case": "predecessor-2",
+          "returncode": 1,
+          "expected_error": "immediate predecessor",
+          "passed": true
+        },
+        {
+          "case": "predecessor-3",
+          "returncode": 1,
+          "expected_error": "immediate predecessor",
+          "passed": true
+        },
+        {
+          "case": "missing-fourth-weight",
+          "returncode": 1,
+          "expected_error": "exactly 52 weights",
+          "passed": true
+        },
+        {
+          "case": "wrong-cache-owner",
+          "returncode": 1,
+          "expected_error": "source receipt binding",
+          "passed": true
+        },
+        {
+          "case": "budget-one-byte-under",
+          "returncode": 1,
+          "expected_error": "unique workspace/binding bytes exceed admitted byte budget",
+          "passed": true
+        }
+      ]
+    },
+    "external_scripts": [
+      {
+        "path": "tmp/run_guarded.py",
+        "bytes": 1116,
+        "sha256": "6e2782c8785bc62e38e75a45cf6bf02b7694544d16840489ec51d5d4f1c90954"
+      },
+      {
+        "path": "tmp/four_run_phase_v1.py",
+        "bytes": 3445,
+        "sha256": "0922a2a355fe6e1b577832b9aad82b29addfae887f53f35a83dd78dc9c80666f"
+      },
+      {
+        "path": "tmp/four_cpu_finalize_v1.py",
+        "bytes": 718,
+        "sha256": "5c47b84ded6c07366723b37ed144ede5ba3ad7cf6f88e7cffea75740bb8306bc"
+      },
+      {
+        "path": "tmp/four_negative_gates_v1.py",
+        "bytes": 2408,
+        "sha256": "01ce28d65ecdc8bdae79942f87d982efe9db75394724ace51b6f551e4ea76e63"
+      },
+      {
+        "path": "tmp/four_regressions_v1.py",
+        "bytes": 1022,
+        "sha256": "5b4d245041221fb0e733dacb4b11a97756879deaf4a6689d8391e0738b8869f7"
+      },
+      {
+        "path": "tmp/four_evidence_index_v1.py",
+        "bytes": 16970,
+        "sha256": "eaa3f50036bcb3da1c2f39cd906dab31882c8573dfc33fbe6f03b7bd60f4cdfd"
+      }
+    ],
+    "artifact_shape_policy": "Existing repository-specific evidence schema. The shared legacy Landmark graph validator is absent from this checkout and its numeric trust-threshold template conflicts with the user v13.7 typed-coordinate rule; no legacy validator success is claimed. Actual artifact hashes, argv bindings, report comparisons, guards and negative outcomes are checked by the external evidence builder and final read-only review.",
+    "pre_execution_pin_scope": "Pre-execution sidecars authenticate the executed binaries and listed source files. The four-block entry point and Makefile are pinned only at closure, not before compilation/execution. Build output/argv are recorded; no hermetic build or complete pre-execution source attestation is claimed.",
+    "artifact_integrity_check": {
+      "guarded_exit_code": 0,
+      "checked_payload_and_source_files": 103,
+      "argv": {
+        "path": "logs/four-evidence-index-v1.argv.json",
+        "bytes": 663,
+        "sha256": "79c5ba3c8faac5fb68c144dfe95a723c25b57ea6fccd8a1273530d55bd86e95e"
+      },
+      "output": {
+        "path": "logs/four-evidence-index-v1.out",
+        "bytes": 248,
+        "sha256": "226006051fac3bde8af6370d801aee2280ba624768a2f110a2bc7676b2645153"
+      },
+      "guard": {
+        "path": "logs/four-evidence-index-v1.guard.jsonl",
+        "bytes": 11753,
+        "sha256": "3055f13c1c6d0f0b1dc3fb212c3b7b14b379035842ed40c05c81c871d0eab19f"
+      },
+      "scope": "Streamed referenced payload/source hashes, exact capture hashes, pre-execution pin/argv bindings, guards, regressions and negative gate results. The log describes the pre-review packet snapshot only; it is not a final-packet byte attestation or independent reproduction.",
+      "generated_packet_snapshot_bytes": 44157,
+      "generated_packet_snapshot_scope": "The builder output byte-counts its initial 44,157-byte packet before review/provenance notes and this receipt were added. It does not attest the final packet size/hash. Referenced artifacts and executed runtime reports remain the checked evidence; later packet metadata is reviewed separately."
+    },
+    "final_review": {
+      "reviewer": "/root/pixelumm_adversary",
+      "lineage": "Correlated same-family Mini-Quad review, not independent replication.",
+      "verdict": "ROBUST",
+      "scope": "Saved small/full/alternate four-block fixture and artifact bindings; 232 sampled four-block comparison digests match their correct base/alternate fixtures, finite and exact. All four alternate outputs differ; six-request counters and memory guards hold. Builder receipt explicitly covers a pre-review snapshot.",
+      "limits": "Synthetic inputs, adapted MPS oracle, incomplete checkpoint, closure-only entrypoint/Makefile pins, sampled memory, arbitrary caller aliases and partial-prefix recovery remain unqualified."
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "examples/pixelumm_decoder_two_block_probe.cr",
+      "examples/pixelumm_decoder_four_block_probe.cr",
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_serial_probe_runner.cr",
+      "spec/hy_nomas_pixelumm_bf16_cache_test.py",
+      "spec/hy_nomas_pixelumm_reference_test.py",
+      "spec/pixelumm_decoder_block_admission_spec.cr",
+      "spec/pixelumm_two_block_probe_spec.cr",
+      "spec/support/hy_nomas_pixelumm_bf16_cache.py",
+      "spec/support/hy_nomas_pixelumm_reference.py",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "LANDMARKS.md",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "examples/pixelumm_decoder_two_block_probe.cr",
+      "examples/pixelumm_decoder_four_block_probe.cr",
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_serial_probe_runner.cr",
+      "spec/hy_nomas_pixelumm_bf16_cache_test.py",
+      "spec/hy_nomas_pixelumm_reference_test.py",
+      "spec/pixelumm_decoder_block_admission_spec.cr",
+      "spec/pixelumm_two_block_probe_spec.cr",
+      "spec/support/hy_nomas_pixelumm_bf16_cache.py",
+      "spec/support/hy_nomas_pixelumm_reference.py",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json"
+    ],
+    "rollback": "Omit the four-block entry point and retain pair/standalone probes. Native math and API implementation are unchanged.",
+    "fresh_names_required": true
+  },
+  "residual_risk": [
+    "Synthetic initial hidden states are not complete-decoder inputs; no full decoder, diffusion, video or quality/throughput evidence.",
+    "No compiled upstream CUDA Flex equivalence or full checkpoint hash verification.",
+    "Distinct allocations owned by this loader exclude broader arbitrary caller-provided Workspace aliases. Normal requests submit all prepared slots; partial-prefix drain/cancellation recovery is unqualified.",
+    "Named MetalBuffer counters exclude opaque MPS allocations; guard sampling does not guarantee the true peak.",
+    "Source/binary receipts are not hermetic build attestation; a cache-controlled BF16 loading speedup is unmeasured.",
+    "Pre-execution source sidecars omit the four-block entry point and Makefile. Closure hashes and build logs preserve current source/recipe, but cannot retroactively attest those bytes at build time; runtime claims bind the actual pinned executable."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-pixelumm-block-frontier.md",
+    "landmarks": "LANDMARKS.md",
+    "related_packets": [
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-two-block.json"
+    ]
+  }
+}

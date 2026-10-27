@@ -34520,3 +34520,39 @@ Refresh after source/toolchain/device/model/workload changes.
   checkpoint/fixture, backend/device/toolchain/OS, geometry/precision/lifetime,
   guard or missing evidence. Next gate: larger sequential decoder prefix with
   a shared workspace and real decoder inputs, under a fresh memory admission.
+
+### 2026-10-27: PixelUMM four-block shared workspace qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json. Real pretrained
+  layers 0-3, one transient GPU workspace, four retained outputs, direct
+  predecessor-output bindings. Native GPU math/bridge/API remain unchanged.
+- Small J2048 compares 104 stages; full T6/H44/W80, J21,120 compares all eight
+  attention/output boundaries on first/last requests and different-input replay
+  after NaN poisoning of mutable scratch. All compared words are finite and
+  bitwise exact at unchanged atol=rtol=2e-5. Synthetic BF16 input; adapted
+  upstream-semantics MPS oracle, not full-decoder inputs or CUDA Flex parity.
+- Six full requests each use 485 segments, one terminal wait, zero named
+  encode allocations and zero early activation reads. Order and in-flight
+  release/read/reuse guards pass; five preflight negatives reject incorrect
+  later edges, missing/altered fourth-owner weights and a one-byte-low budget.
+- Resident median 6.420842958 s for all four blocks, three timed samples after
+  one warmup. Unique named buffers 5,419,082,724 bytes (5.05 GiB); shared owned
+  3,680,869,348 versus 10,571,116,432 for four independent workspaces with
+  equivalent captures. Saving 6,890,247,084 bytes is accounting, not a speedup.
+- New BF16 cache: 52 tensors, 1,543,571,456 bytes (1.44 GiB), exact raw words
+  versus MPS conversion and independently exported fixtures. Only layers 0-3
+  downloaded; no full checkpoint/hash or complete-decoder cache. Startup
+  speedup remains unmeasured. Exact argv and heavy artifacts stay on SSD.
+- 34 Python tests, 11 admission plus 11 fixture/cache examples, both cache
+  validators and old pair/standalone GPU regressions pass. Full native sampled
+  footprint 7,119,492,232 bytes; headroom >=24,283,217,920; swap flat. Guard
+  retains 10% floor, 8 GiB native / 11 GiB oracle caps and 64 MiB swap stop.
+  Opaque MPS allocations are outside named counters; polling is not a peak bound.
+- Correlated Mini-Quad final verdict is ROBUST within this bounded fixture
+  contract, not independent replication or full-generation quality/latency.
+  Broader caller buffer aliases and incomplete-prefix cancellation recovery
+  are unqualified.
+  Rollback: retain pair/standalone entry points. Refresh on source, weights,
+  fixture, backend/device/toolchain/OS, geometry/precision/lifetime/guard changes
+  or lost artifacts. Next gate: larger prefix and real decoder hidden inputs.

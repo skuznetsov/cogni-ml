@@ -1,10 +1,10 @@
 require "spec"
 require "../examples/support/pixelumm_two_block_probe"
 
-private def pixelumm_pair_weight_records : Hash(String, PixelUMMTwoBlockProbe::Record)
+private def pixelumm_pair_weight_records(block_count : Int32 = 2) : Hash(String, PixelUMMTwoBlockProbe::Record)
   result = {} of String => PixelUMMTwoBlockProbe::Record
   offset = 0_i64
-  2.times do |slot|
+  block_count.times do |slot|
     PixelUMMBlockProbe.weight_shapes.each do |name, shape|
       nbytes = shape.reduce(2_i64) { |n, v| n * v }
       value = JSON.parse({dtype: "BF16", shape: shape, offset: offset,
@@ -88,6 +88,103 @@ describe PixelUMMTwoBlockProbe do
     weights = pixelumm_pair_weight_records
     weights["block2.attn.q_proj.weight"] = weights.delete("block1.attn.q_proj.weight").not_nil!
     expect_raises(ArgumentError, /missing/) { PixelUMMTwoBlockProbe.validate_weights!(weights) }
+  end
+
+  it "admits exactly four owners and rejects missing, extra or swapped fourth-block weights" do
+    weights = pixelumm_pair_weight_records(4)
+    PixelUMMTwoBlockProbe.validate_weights!(weights, 4)
+    weights.size.should eq(52)
+    weights.values.sum(&.nbytes).should eq(1_543_571_456_i64)
+    expect_raises(ArgumentError, /weights/) { PixelUMMTwoBlockProbe.validate_weights!(weights) }
+    weights["block4.attn.q_proj.weight"] = weights.delete("block3.attn.q_proj.weight").not_nil!
+    expect_raises(ArgumentError, /missing/) { PixelUMMTwoBlockProbe.validate_weights!(weights, 4) }
+    weights = pixelumm_pair_weight_records(4)
+    weights.delete("block3.mlp.down_proj.weight")
+    expect_raises(ArgumentError, /weights/) { PixelUMMTwoBlockProbe.validate_weights!(weights, 4) }
+    expect_raises(ArgumentError, /count/) { PixelUMMTwoBlockProbe.validate_weights!(pixelumm_pair_weight_records, 3) }
+  end
+
+  it "requires the immediate predecessor in all four metadata handoffs" do
+    4.times do |slot|
+      expected = slot == 0 ? "inputs.x" : "captures.block#{slot - 1}.output"
+      PixelUMMTwoBlockProbe.validate_input_source!(expected, slot)
+    end
+    {2, 3}.each do |slot|
+      expect_raises(ArgumentError, /predecessor/) do
+        PixelUMMTwoBlockProbe.validate_input_source!("captures.block0.output", slot)
+      end
+    end
+  end
+
+  it "admits fourth-block captures only in the four-block context" do
+    value = JSON.parse({dtype: "BF16", shape: [1, 2048, 4096], offset: 0,
+                        nbytes: 2048_i64 * 4096 * 2, sha256: "a" * 64}.to_json)
+    record = PixelUMMTwoBlockProbe::Record.new(value, 2048_i64 * 4096 * 2)
+    PixelUMMTwoBlockProbe.validate_capture!("block3.output", record, 2048, 4)
+    expect_raises(ArgumentError, /ownership/) { PixelUMMTwoBlockProbe.validate_capture!("block3.output", record, 2048) }
+    expect_raises(ArgumentError, /ownership/) { PixelUMMTwoBlockProbe.validate_capture!("block4.output", record, 2048, 4) }
+  end
+
+  it "rejects wrong predecessor metadata in a complete four-slot fixture before payload authentication" do
+    with_pixelumm_tensor_file do |path, payload, _|
+      weights = pixelumm_pair_weight_records(4).transform_values do |record|
+        JSON.parse({dtype: record.dtype, shape: record.shape, offset: record.offset,
+                    nbytes: record.nbytes, sha256: record.sha256}.to_json)
+      end
+      offset = 1_543_571_456_i64
+      make_record = ->(dtype : String, shape : Array(Int32)) do
+        nbytes = shape.reduce(dtype == "BF16" ? 2_i64 : 4_i64) { |n, value| n * value }
+        value = JSON.parse({dtype: dtype, shape: shape, offset: offset,
+                            nbytes: nbytes, sha256: "a" * 64}.to_json)
+        offset += nbytes
+        value
+      end
+      inputs = {"x"   => make_record.call("BF16", [1, 2048, 4096]),
+                "cos" => make_record.call("F32", [1, 2048, 1, 128]),
+                "sin" => make_record.call("F32", [1, 2048, 1, 128])}
+      captures = {} of String => JSON::Any
+      blocks = Array.new(4) do |slot|
+        {"attention", "output"}.each do |stage|
+          shape = stage == "attention" ? [1, 2048, 32, 128] : [1, 2048, 4096]
+          captures["block#{slot}.#{stage}"] = make_record.call("BF16", shape)
+        end
+        prefix = "block#{slot}."
+        {index: slot, weight_prefix: prefix,
+         input_source: slot == 0 ? "inputs.x" : "captures.block#{slot - 1}.output",
+         output_key: "captures.block#{slot}.output",
+         weight_keys: weights.keys.select(&.starts_with?(prefix)),
+         capture_keys: captures.keys.select(&.starts_with?(prefix)),
+         checkpoint_subset_sha256: slot == 0 ? PixelUMMBlockProbe::SUBSET_SHA256 : "b" * 64,
+         source_receipt_sha256: "c" * 64}
+      end
+      document = JSON.parse({schema: "cogni_ml.pixelumm_four_block_reference/v1",
+                             upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION,
+                             upstream_model_sha256: PixelUMMTwoBlockProbe::MODEL_SHA256,
+                             hf_revision: PixelUMMTwoBlockProbe::HF_REVISION,
+                             hf_source_path: PixelUMMTwoBlockProbe::SOURCE_PATH,
+                             checkpoint_header_sha256: PixelUMMTwoBlockProbe::HEADER_SHA256,
+                             grid: [2, 32, 32], tile_tokens: 8, token_order: "tile_major",
+                             payload: File.basename(payload), payload_bytes: offset, payload_sha256: "d" * 64,
+                             inputs: inputs, weights: weights, captures: captures,
+                             capture_order: captures.keys, blocks: blocks}.to_json)
+      # Sparse extent only: deliberately unauthenticated payload. Fixture
+      # metadata admission must not stream it or allocate any GPU buffers.
+      File.open(payload, "w") { |io| io.truncate(offset) }
+      raw = document.to_json
+      File.write(path, raw)
+      fixture = PixelUMMTwoBlockProbe::Fixture.new(path, Digest::SHA256.hexdigest(raw), 4)
+      fixture.block_count.should eq(4)
+      fixture.captures_by_slot.size.should eq(4)
+      {2, 3}.each do |slot|
+        changed = JSON.parse(document.to_json)
+        changed["blocks"][slot].as_h["input_source"] = JSON::Any.new("captures.block0.output")
+        raw = changed.to_json
+        File.write(path, raw)
+        expect_raises(ArgumentError, /predecessor/) do
+          PixelUMMTwoBlockProbe::Fixture.new(path, Digest::SHA256.hexdigest(raw), 4)
+        end
+      end
+    end
   end
 
   it "requires trusted metadata and rejects payload corruption before upload" do

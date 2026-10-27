@@ -17,10 +17,10 @@ import hy_nomas_pixelumm_checkpoint as checkpoint
 import hy_nomas_pixelumm_reference as reference
 
 
-def _toy_cache(directory: Path):
+def _toy_cache(directory: Path, block_count: int = 2):
     shapes = {
         f"block{block}.weight{index:02d}": [1]
-        for block in (0, 1) for index in range(13)
+        for block in range(block_count) for index in range(13)
     }
     payload = directory / "toy.bin"
     records, observations = {}, {}
@@ -33,7 +33,7 @@ def _toy_cache(directory: Path):
             records[key], observations[key] = record, observed
             offset += record["nbytes"]
     blocks = {}
-    for slot in (0, 1):
+    for slot in range(block_count):
         keys = sorted(key for key in shapes if key.startswith(f"block{slot}."))
         blocks[str(slot)] = {
             "selected_block": slot,
@@ -70,7 +70,7 @@ def _toy_cache(directory: Path):
         "weights": records,
         "comparison": {
             "method": "source MPS BF16 tensor raw uint16 bytes equal persisted payload",
-            "tensor_count": 26, "all_raw_uint16_equal": True,
+            "tensor_count": block_count * 13, "all_raw_uint16_equal": True,
             "weights": observations,
         },
         "payload": payload.name, "payload_bytes": offset,
@@ -129,6 +129,31 @@ class PixelUMMBF16CacheTest(unittest.TestCase):
             damaged["upstream_model_sha256"] = "0" * 64
             with self.assertRaises(cache.CacheError):
                 cache.validate_manifest(damaged, payload, expected_shapes=shapes)
+
+    def test_four_block_cache_accepts_exactly_52_owned_weights(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=4)
+            result = cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+            self.assertEqual(result["tensor_count"], 52)
+            self.assertEqual(result["payload_bytes"], 104)
+
+    def test_four_block_cache_rejects_missing_swapped_or_extra_owners(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=4)
+            missing = copy.deepcopy(manifest)
+            del missing["blocks"]["3"]["weight_keys"][-1]
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(missing, payload, expected_shapes=shapes)
+
+            swapped = copy.deepcopy(manifest)
+            swapped["blocks"]["3"]["selected_block"] = 2
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(swapped, payload, expected_shapes=shapes)
+
+            extra = copy.deepcopy(manifest)
+            extra["blocks"]["4"] = copy.deepcopy(extra["blocks"]["3"])
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(extra, payload, expected_shapes=shapes)
 
     def test_tensor_writer_rejects_non_bf16_sources(self):
         from io import BytesIO

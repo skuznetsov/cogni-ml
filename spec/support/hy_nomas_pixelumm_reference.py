@@ -34,6 +34,7 @@ CHECKPOINT_SUBSET_BYTES = 771_787_128
 CHECKPOINT_PREFIX = "decoder.layers.0."
 SCHEMA = "cogni_ml.pixelumm_block_reference/v1"
 TWO_BLOCK_SCHEMA = "cogni_ml.pixelumm_two_block_reference/v1"
+FOUR_BLOCK_SCHEMA = "cogni_ml.pixelumm_four_block_reference/v1"
 TILE_TOKENS = 8
 ATOL = RTOL = 2e-5
 
@@ -489,8 +490,8 @@ def _physical_memory_bytes() -> int:
 
 
 def _estimated_peak_bytes(grid: tuple[int, int, int], arch, *, layers: int = 1) -> int:
-    if type(layers) is not int or layers not in {1, 2}:
-        raise ReferenceError("reference memory estimate supports one or two resident blocks")
+    if type(layers) is not int or layers not in {1, 2, 4}:
+        raise ReferenceError("reference memory estimate supports one, two, or four resident blocks")
     tokens = math.prod(grid)
     h = arch.hidden_size
     f = arch.intermediate_size
@@ -504,10 +505,11 @@ def _estimated_peak_bytes(grid: tuple[int, int, int], arch, *, layers: int = 1) 
     max_q = min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     max_k = min(3, tiles_h) * min(3, tiles_w) * min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     score = arch.num_heads * max_q * max_k * 4
-    # The second block load briefly retains block zero BF16, block one F32, and
-    # the new block-one BF16 tensors. Its conversion peak is therefore one F32
-    # block plus `layers` BF16 blocks. The extra hidden slots cover pair-boundary
-    # captures while FFN and local score storage remain sequential.
+    # Loading any later block briefly retains all earlier BF16 blocks, the new
+    # block in F32, and its BF16 copy. Thus the conversion peak is one F32
+    # block plus `layers` BF16 blocks. Extra hidden slots conservatively cover
+    # each retained block-boundary capture while FFN and local scores remain
+    # sequential.
     weight_bytes = block_weights_f32 + layers * block_weights_bf16
     hidden_slots = 7 + 4 * (layers - 1)
     return weight_bytes + hidden_slots * hidden + 4 * ffn + 2 * score + 512 * 1024 * 1024
@@ -623,7 +625,7 @@ def _load_layer_for_block(
     source_root = checkpoint_inventory.ROOT.resolve()
     for path in (checkpoint, receipt_path, header_path):
         if path.parent != (source_root / "source").resolve():
-            raise ReferenceError("pair reference source files must be in the task source directory")
+            raise ReferenceError("block reference source files must be in the task source directory")
     try:
         raw_header = header_path.read_bytes()
         receipt, receipt_sha = _read_receipt(receipt_path)
@@ -754,20 +756,37 @@ def make_fixture(
     }
 
 
-def make_two_block_fixture(
-    *, upstream: Path | str, block0: Path | str, block1: Path | str,
-    receipt0: Path | str, receipt1: Path | str, header: Path | str,
-    output: Path | str, grid: Iterable[int], device_name: str = "mps",
-    capture_mode: str = "auto", seed: int = 20261026,
+def _block_io_edge(index: int) -> dict[str, str]:
+    """Describe the predecessor edge for one of the admitted block slots."""
+    if type(index) is not int or not 0 <= index < 4:
+        raise ReferenceError("block I/O edges are defined for block indices zero through three")
+    return {
+        "input_source": "inputs.x" if index == 0 else f"captures.block{index - 1}.output",
+        "output_key": f"captures.block{index}.output",
+    }
+
+
+def _make_block_sequence_fixture(
+    *, upstream: Path | str,
+    block_sources: Iterable[tuple[Path | str, Path | str]],
+    header: Path | str, output: Path | str, grid: Iterable[int],
+    schema: str, device_name: str = "mps", capture_mode: str = "auto",
+    seed: int = 20261026,
 ) -> dict:
-    """Run blocks zero and one on one device with the exact block-zero output as input."""
+    """Execute an admitted block sequence on one device and retain its edges."""
+    block_sources = tuple(block_sources)
+    if len(block_sources) not in {2, 4}:
+        raise ReferenceError("reference fixture requires exactly two or four consecutive blocks")
+    expected_schema = TWO_BLOCK_SCHEMA if len(block_sources) == 2 else FOUR_BLOCK_SCHEMA
+    if schema != expected_schema:
+        raise ReferenceError("block count and reference schema do not match")
     output_path = Path(output).expanduser().absolute()
     payload_path = output_path.with_suffix(".bin")
     if output_path.parent.resolve() != (checkpoint_inventory.ROOT / "results").resolve():
-        raise ReferenceError("pair reference output must be in the task results directory")
+        raise ReferenceError("multi-block reference output must be in the task results directory")
     if (output_path.exists() or output_path.is_symlink()
             or payload_path.exists() or payload_path.is_symlink()):
-        raise ReferenceError("refusing to replace an existing pair reference JSON or payload")
+        raise ReferenceError("refusing to replace an existing multi-block reference JSON or payload")
     grid = _check_grid(grid)
     if device_name not in {"cpu", "mps"}:
         raise ReferenceError("device must be cpu or mps")
@@ -787,15 +806,13 @@ def make_two_block_fixture(
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
     arch = source.QWEN3_8B_GEN
-    memory = mps_memory_floor(device, grid, arch, layers=2)
-    paths = (Path(block0), Path(block1))
-    receipts = (Path(receipt0), Path(receipt1))
+    memory = mps_memory_floor(device, grid, arch, layers=len(block_sources))
     header_path = Path(header)
     layers = []
     subset_provenance = []
-    for index, (checkpoint_path, receipt_path) in enumerate(zip(paths, receipts)):
+    for index, (checkpoint_path, receipt_path) in enumerate(block_sources):
         layer, checked, receipt_sha = _load_layer_for_block(
-            source, checkpoint_path, receipt_path, header_path, device, index
+            source, Path(checkpoint_path), Path(receipt_path), header_path, device, index
         )
         layers.append(layer)
         subset_provenance.append({
@@ -810,7 +827,7 @@ def make_two_block_fixture(
             ],
         })
 
-    # Generate one initial prefix and one tile-major RoPE table for both blocks.
+    # Generate one initial prefix and one tile-major RoPE table for all blocks.
     generator = torch.Generator(device="cpu").manual_seed(seed)
     x_original = torch.randn((1, count, arch.hidden_size), generator=generator, dtype=torch.float32)
     x_original = x_original.to(device=device).to(dtype=torch.bfloat16)
@@ -832,11 +849,11 @@ def make_two_block_fixture(
                 )
                 for stage in chosen:
                     block_captures[f"block{index}.{stage}"] = captures[stage]
-                # This tensor remains on the same device; block one receives it
-                # directly without an intermediate host copy or readback.
+                # No inter-block device-to-host handoff occurs: this tensor
+                # feeds the next layer directly on the selected device.
                 current = result
     if device.type == "mps":
-        # Single terminal synchronization after both decoder blocks complete.
+        # Single terminal synchronization after the entire decoder prefix.
         torch.mps.synchronize()
 
     weights: dict[str, torch.Tensor] = {}
@@ -859,8 +876,7 @@ def make_two_block_fixture(
             "weight_prefix": prefix,
             "weight_keys": weight_keys,
             "capture_keys": capture_keys,
-            "input_source": "inputs.x" if index == 0 else "captures.block0.output",
-            "output_key": f"captures.block{index}.output",
+            **_block_io_edge(index),
         })
     metadata = {
         "upstream_revision": UPSTREAM_REVISION,
@@ -888,7 +904,7 @@ def make_two_block_fixture(
     }
     fixture = _write_fixture(
         output_path, metadata=metadata, inputs={"x": x, "cos": cos, "sin": sin},
-        weights=weights, captures=block_captures, schema=TWO_BLOCK_SCHEMA,
+        weights=weights, captures=block_captures, schema=schema,
     )
     return {
         "fixture": str(output_path.resolve()),
@@ -899,6 +915,40 @@ def make_two_block_fixture(
         "blocks": subset_provenance,
         "estimated_peak_bytes": memory.get("estimated_peak_bytes"),
     }
+
+
+def make_two_block_fixture(
+    *, upstream: Path | str, block0: Path | str, block1: Path | str,
+    receipt0: Path | str, receipt1: Path | str, header: Path | str,
+    output: Path | str, grid: Iterable[int], device_name: str = "mps",
+    capture_mode: str = "auto", seed: int = 20261026,
+) -> dict:
+    """Backward-compatible pair entry point and schema."""
+    return _make_block_sequence_fixture(
+        upstream=upstream,
+        block_sources=((block0, receipt0), (block1, receipt1)),
+        header=header, output=output, grid=grid, schema=TWO_BLOCK_SCHEMA,
+        device_name=device_name, capture_mode=capture_mode, seed=seed,
+    )
+
+
+def make_four_block_fixture(
+    *, upstream: Path | str,
+    block0: Path | str, block1: Path | str, block2: Path | str, block3: Path | str,
+    receipt0: Path | str, receipt1: Path | str, receipt2: Path | str, receipt3: Path | str,
+    header: Path | str, output: Path | str, grid: Iterable[int],
+    device_name: str = "mps", capture_mode: str = "auto", seed: int = 20261026,
+) -> dict:
+    """Run blocks zero through three sequentially on one device."""
+    return _make_block_sequence_fixture(
+        upstream=upstream,
+        block_sources=(
+            (block0, receipt0), (block1, receipt1),
+            (block2, receipt2), (block3, receipt3),
+        ),
+        header=header, output=output, grid=grid, schema=FOUR_BLOCK_SCHEMA,
+        device_name=device_name, capture_mode=capture_mode, seed=seed,
+    )
 
 
 def geometry_report(upstream: Path | str, grid: Iterable[int]) -> dict:
@@ -923,8 +973,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--block0", type=Path)
     parser.add_argument("--block1", type=Path)
+    parser.add_argument("--block2", type=Path)
+    parser.add_argument("--block3", type=Path)
     parser.add_argument("--receipt0", type=Path)
     parser.add_argument("--receipt1", type=Path)
+    parser.add_argument("--receipt2", type=Path)
+    parser.add_argument("--receipt3", type=Path)
     parser.add_argument("--header", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--grid", required=True, type=int, nargs=3, metavar=("T", "H", "W"))
@@ -937,18 +991,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.geometry_only:
             print(json.dumps(geometry_report(args.upstream, args.grid), sort_keys=True))
             return 0
-        pair_inputs = (args.block0, args.block1, args.receipt0, args.receipt1, args.header)
-        if any(pair_inputs):
+        pair_inputs = (args.block0, args.block1, args.receipt0, args.receipt1)
+        four_extras = (args.block2, args.block3, args.receipt2, args.receipt3)
+        if any(pair_inputs) or any(four_extras):
             if args.checkpoint is not None:
-                parser.error("--checkpoint cannot be combined with pair block inputs")
-            if any(value is None for value in pair_inputs) or args.output is None:
-                parser.error("pair reference requires --block0 --block1 --receipt0 --receipt1 --header and --output")
-            report = make_two_block_fixture(
-                upstream=args.upstream, block0=args.block0, block1=args.block1,
-                receipt0=args.receipt0, receipt1=args.receipt1, header=args.header,
-                output=args.output, grid=args.grid, device_name=args.device,
-                capture_mode=args.capture, seed=args.seed,
-            )
+                parser.error("--checkpoint cannot be combined with block inputs")
+            if args.header is None or args.output is None:
+                parser.error("block reference requires --header and --output")
+            if any(value is not None for value in four_extras):
+                all_four = pair_inputs + four_extras
+                if any(value is None for value in all_four):
+                    parser.error("four-block reference requires block and receipt inputs for indices 0 through 3")
+                report = make_four_block_fixture(
+                    upstream=args.upstream,
+                    block0=args.block0, block1=args.block1,
+                    block2=args.block2, block3=args.block3,
+                    receipt0=args.receipt0, receipt1=args.receipt1,
+                    receipt2=args.receipt2, receipt3=args.receipt3,
+                    header=args.header, output=args.output, grid=args.grid,
+                    device_name=args.device, capture_mode=args.capture, seed=args.seed,
+                )
+            else:
+                if any(value is None for value in pair_inputs):
+                    parser.error("pair reference requires --block0 --block1 --receipt0 --receipt1")
+                report = make_two_block_fixture(
+                    upstream=args.upstream, block0=args.block0, block1=args.block1,
+                    receipt0=args.receipt0, receipt1=args.receipt1, header=args.header,
+                    output=args.output, grid=args.grid, device_name=args.device,
+                    capture_mode=args.capture, seed=args.seed,
+                )
         else:
             if args.checkpoint is None or args.output is None:
                 parser.error("--checkpoint and --output are required unless --geometry-only or pair inputs are used")
