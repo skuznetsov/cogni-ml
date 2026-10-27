@@ -2,6 +2,15 @@ require "spec"
 require "../examples/support/pixelumm_decoder_probe"
 
 describe PixelUMMDecoderProbe do
+  it "brackets the profiled input and poison controls with opposite profiler orders on input A" do
+    arms = PixelUMMDecoderProbe.variance_schedule
+    arms.size.should eq(6)
+    arms.map(&.profile).should eq([false, true, true, true, true, false])
+    arms.map(&.alternate).should eq([false, false, true, true, false, false])
+    arms.map(&.poisoned).should eq([false, false, false, true, false, false])
+    arms.map(&.kind).uniq.size.should eq(6)
+  end
+
   it "admits the derived unique full-J aggregate without counting the borrowed head input twice" do
     block_named = 22_958_105_572_i64
     head_weights = 25_188_352_i64

@@ -20,6 +20,21 @@ module PixelUMMDecoderProbe
   CAPTURE_COUNT = 43
   HEAD_PREFIX   = "head."
 
+  record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool
+
+  # Both orders of the same-input profiler control bracket the diagnostic
+  # input/poison pair. This is a drift discriminator, not a throughput estimate.
+  def variance_schedule : Array(RequestArm)
+    [
+      RequestArm.new("a_clean_off_early", false, false, false),
+      RequestArm.new("a_clean_on_early", false, false, true),
+      RequestArm.new("b_clean_on", true, false, true),
+      RequestArm.new("b_poisoned_on", true, true, true),
+      RequestArm.new("a_clean_on_late", false, false, true),
+      RequestArm.new("a_clean_off_late", false, false, false),
+    ]
+  end
+
   struct Admission
     getter block_named_bytes : Int64
     getter head_owned_named_bytes : Int64
@@ -270,9 +285,9 @@ module PixelUMMDecoderProbe
     end
 
     # Enqueue all 36 native plans onto the caller's current command chain.
-    def encode_blocks(chain : ML::Metal::MPSCommandChain) : Nil
+    def encode_blocks(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       check_idle!
-      blocks.encode(chain)
+      blocks.encode(chain, profile: profile)
       @blocks_chain = chain
       @last_chain = chain
     end

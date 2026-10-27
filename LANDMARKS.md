@@ -35021,3 +35021,45 @@ Refresh after source/toolchain/device/model/workload changes.
   Wider decoder/global head and connected stage lifetimes remain the pipeline
   frontier. Refresh on scoped source/artifacts/backend/device/OS/toolchain,
   geometry/precision/capture/lifetime/guard/clock changes or lost evidence.
+
+### 2026-10-27: PixelUMM decoder timing variance and prior GPU work
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-variance.json. Opt-in
+  --profile-variance reuses existing CPU markers and API trace, admitting all
+  4,578 continuations with an 8,192-event host capacity. Metadata is read only
+  after the existing terminal wait; arithmetic, GPU command geometry and
+  synchronization remain unchanged. The Make dependency includes the header.
+- One resident full36+head session at J21120 runs A-off/A-on/B-clean-on/
+  B-poison-on/A-on/A-off in 43.206/46.496/81.439/59.860/51.381/52.809 s.
+  A drifts with profiling off; the on/off contrast reverses. Clean B is slow
+  before poison, but one ordered pair assigns no causal input/poison effect.
+  Neither a constant observer overhead nor stable throughput is established.
+- Attention host markers contain 94.1-94.7% of request wall, with only 1.0-1.5%
+  owner-thread CPU. Long continuation spans nearly coincide with prior
+  submitted GPU-root intervals. This is consistent with queue backpressure,
+  not proof of driver wait or attention-kernel cost. Enclosing Graph and
+  nested continuation clocks are non-additive.
+- A disjoint temporal partition keeps cross-group root candidates ambiguous.
+  FFN/final-residual intervals occupy 49-53% of whole GPU interval union. A-on
+  early to clean B: elapsed+34.942s, union+34.923s; FFN group+19.939s and
+  attention+4.789s. Same-input A-on drift: elapsed+4.885s, union+4.884s,
+  FFN+2.481s. These are command-buffer residency correlations, not exclusive
+  kernel service or causal delay. Head encode 18-24ms and terminal wait 0.9-1.6s
+  are too small to explain the observed span. Next falsifier: FFN projection/
+  cast reuse against the exact native control before selecting an optimization.
+- All 258 captures across 6 requests/two inputs are finite and bitwise exact at
+  unchanged 2e-5; reused authenticated upstream MPS controls, no fresh connected
+  upstream or independent backend. Each request retains 4,579 roots/one wait,
+  zero named encode allocations/preterminal activation reads. No generation.
+- Release build, 80 CPU examples, native collector self-test and receipt audit
+  pass; 11 report/guard mutations reject and 2 overlap controls pass. Failed
+  external harness/analysis epochs are retained. Sampled peak 27.436GiB under
+  28.5GiB cap, minimum cache-aware headroom 14.516GiB, swap growth 0; 10% floor,
+  64MiB swap stop and 900s deadline unchanged. Samples do not bound spikes.
+  Named live bytes/count reach 0 after release, not zero Metal residency.
+- Correlated Mini-Quad verdict is ROBUST for parity/lifecycle, sampled guards
+  and interval arithmetic; physical drift cause remains open. Rollback omits
+  the opt-in flag. Refresh on scoped source/artifacts/backend/device/OS/
+  toolchain/geometry/precision/capture/lifetime/clock/guard changes or evidence
+  loss; launch admission always needs a fresh memory check.

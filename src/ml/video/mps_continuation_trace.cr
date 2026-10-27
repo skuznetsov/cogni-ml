@@ -53,7 +53,7 @@ module ML::Video
   end
 
   struct MPSContinuationTrace
-    CAPACITY = 4096_u64
+    CAPACITY = 8192_u64
     # This bound covers timestamp reporting/conversion only. It is unrelated
     # to and does not widen any tensor comparison tolerance.
     CLOCK_ROUNDING_SECONDS = 2.0e-6

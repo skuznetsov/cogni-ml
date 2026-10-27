@@ -4,7 +4,7 @@ require "../src/ml/video/mps_continuation_trace"
 private def continuation_info(count = 1_u64, roots = 2_u64,
                               denominator = 1_u64, failed = 0_u64)
   ML::Video::MPSContinuationTraceInfo.new(42_u64, 1_u64, denominator.to_u64,
-    1_000_000_000_u64, 4096_u64, count.to_u64, roots.to_u64, failed.to_u64)
+    1_000_000_000_u64, ML::Video::MPSContinuationTrace::CAPACITY, count.to_u64, roots.to_u64, failed.to_u64)
 end
 
 private def continuation_event(begin_ticks = 1_100_000_000_u64,
@@ -44,6 +44,29 @@ private def continuation_profile(wall_ns : UInt64)
 end
 
 describe ML::Video::MPSContinuationTrace do
+  it "retains a full PixelUMM chain above the former 4096-event limit" do
+    count = 4578
+    events = Array(ML::Video::MPSContinuationTraceEvent).new(count) do |index|
+      start = 1_100_000_000_u64 + index.to_u64 * 1_000_000_u64
+      cpu = 1_000_000_u64 + index.to_u64 * 1000_u64
+      ML::Video::MPSContinuationTraceEvent.new(index.to_u64 + 1, start, start + 100_000,
+        cpu, cpu + 200, index.to_u64 + 1, 0_u64, index.to_u64, index.to_u64 + 1,
+        4_u32, 0_u32, 0_u32, 2_u32, 0_u32, 14_u32)
+    end
+    roots = Array(ML::Video::MPSContinuationTraceRoot).new(count + 1) do |index|
+      start = 1_100_200_000_u64 + index.to_u64 * 1_000_000_u64
+      tracked = index == 0 ? 1_000_000_000_u64 : events[index - 1].end_mach_ticks
+      ML::Video::MPSContinuationTraceRoot.new(index.to_u64, tracked, start + 600_000,
+        (start.to_f64 / 1e9).unsafe_as(UInt64), ((start + 500_000).to_f64 / 1e9).unsafe_as(UInt64),
+        0_u32, 4_u32, 0_u32, 1_u32)
+    end
+    trace = ML::Video::MPSContinuationTrace.build(continuation_info(count, count + 1), events, roots)
+    trace.events.size.should eq(count)
+    stale = ML::Video::MPSContinuationTraceInfo.new(42_u64, 1_u64, 1_u64,
+      1_000_000_000_u64, 4096_u64, count.to_u64, (count + 1).to_u64, 0_u64)
+    expect_raises(ArgumentError) { ML::Video::MPSContinuationTrace.build(stale, events, roots) }
+  end
+
   it "accepts a complete trace and preserves separate root and callback timestamps" do
     trace = ML::Video::MPSContinuationTrace.build(continuation_info,
       [continuation_event], continuation_roots)
@@ -53,7 +76,7 @@ describe ML::Video::MPSContinuationTrace do
   end
 
   it "rejects missing, overflowed, failed, or invalid-clock traces" do
-    [continuation_info(2), continuation_info(4097),
+    [continuation_info(2), continuation_info(ML::Video::MPSContinuationTrace::CAPACITY + 1),
      continuation_info(1, 3), continuation_info(1, 2, 0),
      continuation_info(1, 2, 1, 1)].each do |info|
       expect_raises(ArgumentError) do

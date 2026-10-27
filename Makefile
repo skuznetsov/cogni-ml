@@ -108,12 +108,12 @@ spec_pixelumm_decoder_head:
 pixelumm_decoder_integrated_probe: $(BUILD_DIR)/pixelumm_decoder_integrated_probe
 
 # The head object includes the block ABI; do not link PIXELUMM_MPS_OBJ twice.
-$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_decoder_profile.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_decoder_integrated:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr $(ARGS)
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_decoder_profile_spec.cr $(ARGS)
 
 .PHONY: pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe spec_pixelumm_block_profile spec_pixelumm_memory_probe
 pixelumm_decoder_block_probe: $(BUILD_DIR)/pixelumm_decoder_block_probe
@@ -193,7 +193,7 @@ spec_pixelumm_sixteen_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM
 	$(CRYSTAL) spec spec/pixelumm_two_block_probe_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
-$(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm | $(BUILD_SENTINEL)
+$(WAN_MPS_CHAIN_OBJ): src/ml/video/metal_mps_command_chain.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS command chain requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 

@@ -35,7 +35,9 @@ enum {
 };
 
 enum {
-  GS_MPS_CHAIN_TRACE_EVENT_CAPACITY = 4096,
+  // The full PixelUMM decoder uses 4,578 continuations. Host-only storage is
+  // allocated before encoding, only when the optional trace is enabled.
+  GS_MPS_CHAIN_TRACE_EVENT_CAPACITY = 8192,
   GS_MPS_CHAIN_TRACE_EVENT_NESTED_IN_GRAPH = 1u << 0,
   GS_MPS_CHAIN_TRACE_EVENT_BEFORE_ROOT_VALID = 1u << 1,
   GS_MPS_CHAIN_TRACE_EVENT_BEFORE_STATUS_AFTER_CALL_VALID = 1u << 2,

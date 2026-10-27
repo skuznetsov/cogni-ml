@@ -582,17 +582,20 @@ module ML::Video::PixelUMMDecoderBlockMPS
 
     # CPU metadata and existing root timestamps are interpreted only after the
     # caller's successful sole terminal wait, never during inference.
-    def phase_profile(chain : ML::Metal::MPSCommandChain) : ML::Video::PixelUMMBlockPhaseProfile
+    def phase_markers(chain : ML::Metal::MPSCommandChain) : Array(ML::Video::PixelUMMBlockPhaseMarker)
       unless @profiled_encode && @chain.try(&.same?(chain)) && chain.completed? && chain.wait_count == 1
         raise ArgumentError.new("PixelUMM phase profile requires the profiled chain's terminal wait")
       end
-      markers = @profile_markers.map_with_index do |raw, index|
+      @profile_markers.map_with_index do |raw, index|
         raise ArgumentError.new("PixelUMM native phase inventory is incomplete") unless raw.phase == index
         ML::Video::PixelUMMBlockPhaseMarker.new(
           ML::Video::PixelUMMBlockPhaseProfile::MARKER_NAMES[index],
           raw.wall_ns.to_f64 / 1e9, raw.thread_cpu_ns.to_f64 / 1e9, raw.root_count)
       end.to_a
-      ML::Video::PixelUMMBlockPhaseProfile.build(markers, chain.completed_root_timings,
+    end
+
+    def phase_profile(chain : ML::Metal::MPSCommandChain) : ML::Video::PixelUMMBlockPhaseProfile
+      ML::Video::PixelUMMBlockPhaseProfile.build(phase_markers(chain), chain.completed_root_timings,
         chain.gpu_elapsed_seconds, chain.api_profile, @local_attention_tile_count)
     end
 
@@ -903,7 +906,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     # A selected capture promises a stable postterminal value. The initial x is
     # external; other x aliases refer to the previous slot's output bank.
     def self.capture_survives?(name : String, slot : Int32, slot_count : Int32, *,
-                              reuse_outputs : Bool = false) : Bool
+                               reuse_outputs : Bool = false) : Bool
       output_bank_index(slot, slot_count, reuse_outputs: reuse_outputs)
       return true unless reuse_outputs
       case name

@@ -1,12 +1,14 @@
 require "option_parser"
 require "./support/hy_nomas_probe_instrumentation"
 require "./support/pixelumm_decoder_probe"
+require "../src/ml/video/pixelumm_decoder_profile"
 
 reference, reference_sha, alternate, alternate_sha = "", "", "", ""
 head_reference, head_reference_sha, head_alternate, head_alternate_sha = "", "", "", ""
 cache_path, cache_sha, report = "", "", ""
 budget = 0_i64
 repeats = 1
+profile_variance = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -22,11 +24,12 @@ OptionParser.parse do |parser|
   parser.on("--report PATH", "New comparison and memory report") { |v| report = v }
   parser.on("--max-named-bytes N", "Aggregate unique named budget, at most 24 GiB") { |v| budget = v.to_i64 }
   parser.on("--repeats N", "Repeat requests after the gate, 1..3") { |v| repeats = v.to_i }
+  parser.on("--profile-variance", "Six bounded phase/API/continuation controls; repeats must be 1") { profile_variance = true }
 end
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
-       0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3
+       0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 && (!profile_variance || repeats == 1)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
 raise ArgumentError.new("integrated report must be absolute") unless Path[report].absolute?
@@ -42,6 +45,15 @@ named_bytes, block_bytes, head_owned_bytes, head_weight_bytes = 0_i64, 0_i64, 0_
 preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
+schedule = if profile_variance
+             PixelUMMDecoderProbe.variance_schedule
+           else
+             Array(PixelUMMDecoderProbe::RequestArm).new(repeats + 2) do |index|
+               poisoned = index == repeats + 1
+               kind = poisoned ? "poisoned_different_input_gate" : (index == 0 ? "numerical_gate" : "timed")
+               PixelUMMDecoderProbe::RequestArm.new(kind, poisoned, poisoned, false)
+             end
+           end
 begin
   observer.emit("before_metadata")
   block_fixture = PixelUMMTwoBlockProbe::Fixture.new(reference, reference_sha, 36)
@@ -67,10 +79,16 @@ begin
   end
   observer.emit("session_ready")
   STDERR.puts "Integrated PixelUMM admitted #{named_bytes} unique named bytes, full J=21120"
-  (repeats + 2).times do |request|
-    poisoned = request == repeats + 1
+  current_alternate = false
+  schedule.each_with_index do |arm, request|
+    poisoned = arm.poisoned
+    if arm.alternate != current_alternate
+      target = arm.alternate ? replay : fixture
+      session.replay_input!(target)
+      current_alternate = arm.alternate
+      observer.emit("after_replay_input", request: request)
+    end
     if poisoned
-      session.replay_input!(block_replay, head_replay)
       session.poison_transients!
       unless session.head_plan.poison_count == 1 && session.head_plan.last_poisoned_bytes == 1_124_766_720_i64
         raise "integrated replay omitted head transient poison"
@@ -78,6 +96,10 @@ begin
       observer.emit("after_poisoned_replay_input", request: request)
     end
     chain = ML::Metal::MPSCommandChain.new
+    if arm.profile
+      chain.enable_api_profile!(phase_roots: false)
+      chain.enable_continuation_trace!
+    end
     allocations = ML::MetalBuffer.hy_text_probe_allocations
     reads = ML::MetalBuffer.hy_text_probe_readbacks
     head_before_blocks_rejected = false
@@ -94,7 +116,7 @@ begin
     observer.emit("request_before_encode", request: request)
     execution_start = Time.instant
     start = Time.instant
-    session.encode_blocks(chain)
+    session.encode_blocks(chain, profile: arm.profile)
     blocks_encode_seconds = (Time.instant - start).total_seconds
     observer.emit("request_after_blocks_encode", request: request)
     start = Time.instant
@@ -107,6 +129,16 @@ begin
     unless encode_allocations == 0 && early_reads == 0 && chain.wait_count == 0 &&
            session.head_input_aliases_block35_output?
       raise "integrated encode allocated named buffers, read activations, waited or copied the edge"
+    end
+    early_profile_rejected = false
+    if arm.profile
+      begin
+        session.blocks.plans.first.phase_markers(chain)
+      rescue error : ArgumentError
+        raise error unless (error.message || "").includes?("terminal wait")
+        early_profile_rejected = true
+      end
+      raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
     if request == 0
       begin
@@ -141,6 +173,40 @@ begin
     wait_seconds = (Time.instant - start).total_seconds
     execution_seconds = (Time.instant - execution_start).total_seconds
     observer.emit("request_after_terminal_wait", request: request)
+    # All metadata extraction is after the existing wait and outside execution
+    # timing. It does not read activations, allocate GPU buffers or enqueue work.
+    root_profile = nil.as(JSON::Any?)
+    phase_profile = nil.as(JSON::Any?)
+    trace_profile = nil.as(JSON::Any?)
+    if profile_variance
+      roots = chain.completed_root_timings
+      whole = ML::Video::MPSCommandPhaseProfile.build(roots,
+        [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
+        chain.gpu_elapsed_seconds)
+      root_profile = JSON.parse({
+        root_count: whole.root_count, root_duration_seconds: whole.root_duration_seconds,
+        envelope_seconds: whole.envelope_seconds, union_seconds: whole.union_seconds,
+        overlap_seconds: whole.overlap_seconds,
+        roots: roots.map { |root| {sequence: root.sequence, completed: root.completed,
+                                   has_error: root.has_error, gpu_start_seconds: root.gpu_start_seconds,
+                                   gpu_end_seconds: root.gpu_end_seconds} },
+      }.to_json)
+      if arm.profile
+        markers = session.blocks.plans.map(&.phase_markers(chain))
+        phases = ML::Video::PixelUMMDecoderPhaseProfile.build(markers,
+          session.blocks.plans.map(&.local_attention_tile_count),
+          markers.last.last.root_count, roots.size.to_i32, roots,
+          chain.gpu_elapsed_seconds, chain.api_profile)
+        phase_profile = JSON.parse(phases.to_json)
+        trace = chain.continuation_trace
+        trace_profile = JSON.parse({info: trace.info, events: trace.events, roots: trace.roots}.to_json)
+      end
+      raise "integrated profile changed segment topology" unless chain.segment_count == 4579
+      unless chain.wait_count == 1 && ML::MetalBuffer.hy_text_probe_readbacks == reads &&
+             ML::MetalBuffer.hy_text_probe_allocations == allocations
+        raise "integrated profiling added waits, activation reads or named allocations"
+      end
+    end
     comparisons = session.compare(request: request)
     observer.emit("request_after_diagnostic_comparisons", request: request)
     unless comparisons.map { |c| c[:stage] } == capture_order &&
@@ -153,7 +219,7 @@ begin
       first_bad = comparisons.find { |c| !c[:finite] || c[:failures] != 0 }.not_nil!
       failure = "numerical mismatch at request #{request}, stage #{first_bad[:stage]}"
     end
-    kind = poisoned ? "poisoned_different_input_gate" : (request == 0 ? "numerical_gate" : "timed")
+    kind = arm.kind
     request_input_sha = session.blocks.fixture.inputs["x"].sha256
     requests << JSON.parse({
       kind: kind, request: request, passed: numerical_pass, input_sha256: request_input_sha,
@@ -170,6 +236,9 @@ begin
       early_release_rejected: early_release_rejected, early_read_rejected: early_read_rejected,
       early_reuse_rejected: early_reuse_rejected, early_poison_rejected: early_poison_rejected,
       shared_scratch_poisoned_before_request: poisoned, comparisons: comparisons,
+      profiling: arm.profile, early_profile_rejected: early_profile_rejected,
+      per_block_encode_host_seconds: session.blocks.plans.map(&.last_encode_host_seconds),
+      root_profile: root_profile, phase_profile: phase_profile, continuation_trace: trace_profile,
     }.to_json)
     STDERR.puts "#{kind}: passed=#{numerical_pass}, encode+wait=#{blocks_encode_seconds + head_encode_seconds + wait_seconds}s"
     chain.release
@@ -195,7 +264,7 @@ ensure
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: "cogni_ml.pixelumm_native_integrated_probe/v1", generation: false,
+    schema: "cogni_ml.pixelumm_native_integrated_probe/v2", generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -212,13 +281,14 @@ ensure
     oracle: "Reused authenticated upstream MPS controls joined at an exact block35-output/head-input edge; no fresh connected upstream neural run.",
     handoff: "block35 output is the same MetalBuffer consumed by the head on the same command chain, without CPU copy or intermediate wait",
     preparation_seconds: preparation_seconds, repeats: repeats, requests: requests,
+    profile_variance: profile_variance, expected_request_count: schedule.size,
     timing_scope: "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
     memory_telemetry: {categories_additive: false, guard_timestamp_clock: "mach_absolute_time",
                        guard_join_timestamp_field: "guard_monotonic_ns", sampled_peaks_are_bounds: false},
-    memory_phases: observer.events, passed: passed && requests.size == repeats + 2, failure: failure,
+    memory_phases: observer.events, passed: passed && requests.size == schedule.size, failure: failure,
   }
   report_io.puts(result.to_pretty_json)
   report_io.close
   puts({report: report, passed: result[:passed], named_bytes: named_bytes, failure: failure}.to_json)
 end
-raise "PixelUMM integrated qualification failed: #{failure}" unless passed && requests.size == repeats + 2
+raise "PixelUMM integrated qualification failed: #{failure}" unless passed && requests.size == schedule.size

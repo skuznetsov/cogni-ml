@@ -58,7 +58,7 @@ module PixelUMMTwoBlockProbe
   def fixture_payload_limit(block_count : Int32) : Int64
     validate_block_count!(block_count)
     case block_count
-    when 8  then 8_i64 * GIB
+    when  8 then 8_i64 * GIB
     when 16 then 16_i64 * GIB
     when 36 then 32_i64 * GIB
     else         4_i64 * GIB
@@ -155,8 +155,7 @@ module PixelUMMTwoBlockProbe
                  (0...block_count).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
                end
     unless keys.sort == expected.sort
-      message = block_count == 36 ? "36-block fixture requires exactly the two-bank survivor capture inventory" :
-        "#{block_count}-block fixture requires every expected stage at its admitted grid"
+      message = block_count == 36 ? "36-block fixture requires exactly the two-bank survivor capture inventory" : "#{block_count}-block fixture requires every expected stage at its admitted grid"
       raise ArgumentError.new(message)
     end
   end
@@ -506,17 +505,16 @@ module PixelUMMTwoBlockProbe
         unless block["index"].as_i == index && block["weight_prefix"].as_s == prefix &&
                block["output_key"].as_s == "captures.block#{index}.output" &&
                (if @block_count == 36
-                  block["weight_keys"].as_a.map(&.as_s) == PixelUMMBlockProbe.weight_shapes.keys.sort.map { |name| prefix + name }
-                else
-                  block["weight_keys"].as_a.map(&.as_s).sort == @weights.keys.select(&.starts_with?(prefix)).sort
-                end) &&
+                 block["weight_keys"].as_a.map(&.as_s) == PixelUMMBlockProbe.weight_shapes.keys.sort.map { |name| prefix + name }
+               else
+                 block["weight_keys"].as_a.map(&.as_s).sort == @weights.keys.select(&.starts_with?(prefix)).sort
+               end) &&
                (if @block_count == 36
-                  expected_keys = index < 34 ? ["block#{index}.attention"] :
-                    ["block#{index}.attention", "block#{index}.output"]
-                  block["capture_keys"].as_a.map(&.as_s) == expected_keys
-                else
-                  block["capture_keys"].as_a.map(&.as_s).sort == @captures.keys.select(&.starts_with?(prefix)).sort
-                end) &&
+                 expected_keys = index < 34 ? ["block#{index}.attention"] : ["block#{index}.attention", "block#{index}.output"]
+                 block["capture_keys"].as_a.map(&.as_s) == expected_keys
+               else
+                 block["capture_keys"].as_a.map(&.as_s).sort == @captures.keys.select(&.starts_with?(prefix)).sort
+               end) &&
                PixelUMMBlockProbe.valid_digest?(digest) &&
                PixelUMMBlockProbe.valid_digest?(block["source_receipt_sha256"].as_s)
           raise ArgumentError.new("serial source/ownership mismatch")
@@ -737,10 +735,10 @@ module PixelUMMTwoBlockProbe
       end
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+    def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       check_idle!
       @last_chain = chain
-      @plans.each(&.encode(chain))
+      @plans.each(&.encode(chain, profile: profile))
     end
 
     def replay_input!(fixture : Fixture) : Nil
@@ -801,8 +799,8 @@ module PixelUMMTwoBlockProbe
           end
         end
         comparison = {stage: key, elements: count, failures: failures, different_words: different,
-         max_abs: maximum, finite: finite, actual_sha256: Digest::SHA256.hexdigest(actual),
-         first_failure_index: first_failure, first_expected: first_expected, first_actual: first_actual}
+                      max_abs: maximum, finite: finite, actual_sha256: Digest::SHA256.hexdigest(actual),
+                      first_failure_index: first_failure, first_expected: first_expected, first_actual: first_actual}
         memory_phase("compare_stage_done", slot: slot, request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
           observer: phase_observer)

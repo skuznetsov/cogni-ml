@@ -1,5 +1,131 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Integrated timing-variance localization, 2026-10-27
+
+Status: VERIFIED for prepared native timing, interval localization and parity;
+the physical cause of runtime drift remains open. The previous 43-69 s pilot
+confounded alternate input, scratch poisoning and order. A six-arm matrix on
+one resident model now separates clean and poisoned B requests and brackets
+them with both profiler orders on A, at unchanged T6/H44/W80/J21,120.
+
+| Request, in execution order | Phase/API trace | Total seconds | Terminal wait seconds |
+| --- | --- | ---: | ---: |
+| A clean, early | off | 43.205855 | 0.924207 |
+| A clean, early | on | 46.496482 | 1.018246 |
+| B clean | on | 81.438824 | 1.644137 |
+| B poisoned | on | 59.860264 | 1.120451 |
+| A clean, late | on | 51.381373 | 1.029766 |
+| A clean, late | off | 52.808895 | 1.013671 |
+
+Same-input A drifts even with profiling off: 43.206 to 52.809 s. The early
+on/off difference is +3.291 s and the late difference is -1.428 s; one matrix
+does not establish a constant profiling overhead. Clean B is slow before
+poisoning, so poison is not necessary for the slowdown. B has only one
+profile-on ordered pair; neither input nor poison has a causal speed effect
+assigned here. Head encoding is 17.7-23.6 ms; the terminal wait and head do
+not explain the roughly 35 s difference between early profiled A and clean B.
+
+The opt-in `--profile-variance` reuses 11 existing CPU markers per block,
+collects global root cursors and API/continuation clocks, and retrieves all
+metadata after the existing terminal wait and outside execution timing.
+Each request preserves 4,579 command roots, one wait, zero named encode
+allocations, zero preterminal activation reads and 43 postterminal diagnostic
+reads. Four profiled requests each record all 4,578 continuations and 7,025
+Graph calls; the host trace capacity is 8,192 instead of 4,096, with overflow
+still rejected. The native command-chain object now depends on the profiling
+header so a capacity change cannot silently link the old collector. No GPU
+commands, buffers or synchronization points were added by profiling.
+
+| Host/API quantity, seconds | A early/on | B clean/on | B poisoned/on | A late/on |
+| --- | ---: | ---: | ---: | ---: |
+| Attention marker wall | 43.560932 | 77.150799 | 56.556946 | 48.325778 |
+| Attention owner-thread CPU | 0.621637 | 1.154362 | 0.567899 | 0.544718 |
+| Attention continuation wall | 43.003055 | 75.882555 | 56.029333 | 47.829229 |
+| Prior submitted-root coverage of those continuations | 42.998219 | 75.859057 | 55.870369 | 47.824061 |
+
+Attention marker wall contains 94.1-94.7% of total request time. Most of its
+Graph wall is nested `commitAndContinue`; enclosing Graph and continuation
+times must not be added. All 273/403/287/283 attention continuations lasting
+at least 10 ms have prior GPU work present at entry. This is temporal
+association with already submitted command-buffer intervals and little
+owner-thread CPU, consistent with queue backpressure. It does not prove a
+driver wait, its mechanism, or that attention kernels consume that wall time.
+Clock joins use native mach ticks for API/GPU correlation and the existing
+guard mach timestamp field for guard/request windows.
+
+The postterminal CPU analysis makes a disjoint partition of observed GPU
+intervals. A segment receives a coarse group only if every active root's
+candidate phases map to that group; otherwise it stays ambiguous. This
+retains the 288 boundary roots with multiple fine-phase candidates instead
+of assigning them arbitrarily. These are command-buffer interval durations,
+not exclusive kernel service or shader occupancy. The partitions reconcile
+to the whole-chain union without adding overlapping candidate sums.
+
+| Disjoint GPU interval group, seconds | A early/on | B clean/on | B poisoned/on | A late/on |
+| --- | ---: | ---: | ---: | ---: |
+| Input norm, QKV and RoPE preparation | 6.617240 | 12.616348 | 8.988916 | 7.579591 |
+| Attention | 11.929171 | 16.718594 | 13.708547 | 12.615857 |
+| Output projection and post norm | 0.272867 | 0.422736 | 0.327906 | 0.297917 |
+| FFN and final residual | 22.859652 | 42.798280 | 30.241036 | 25.340598 |
+| Head | 0.071520 | 0.120886 | 0.078031 | 0.071480 |
+| Ambiguous between groups | 4.737075 | 8.733722 | 6.352111 | 5.466547 |
+| Whole-chain union | 46.487525 | 81.410567 | 59.696548 | 51.371990 |
+
+FFN/final-residual-labelled intervals occupy about 49-53% of the observed
+union. From early profiled A to clean B, request elapsed rises by 34.942 s;
+separately, root-interval union rises by 34.923 s, including 19.939 s in the
+FFN group, 4.789 s in attention, 5.999 s in input/QKV preparation and 3.997 s
+in ambiguous intervals. Same-input A on/on request elapsed rises by 4.885 s;
+its root union rises by 4.884 s, including 2.481 s in the FFN group and
+0.687 s in attention. These are associated measures, not causal latency
+contributions. Many slow continuation
+calls made in attention overlap previous FFN-labelled roots. Therefore the
+host location of the delay is not sufficient to select attention as the only
+optimization target. Source inspection finds separate gate/up graphs with
+the same BF16 activation, each declaring its own activation and weight casts
+to F32. This does not prove separate physical conversion kernels or temporary
+allocations; MPSGraph may fuse/cache them. Next falsifier: one multi-output
+gate/up graph sharing the activation cast while retaining separate weight
+casts and BF16 outputs, followed by unchanged parity, peak and paired timing
+checks. No speedup or physical cause of the drift is established here.
+
+All 258 comparisons are finite and bitwise exact at unchanged
+`atol=rtol=2e-5`: 43 stages per request, two distinct inputs, including
+attention 0-35, outputs 34/35 and five head stages. Early block outputs 0-33
+remain overwritten GPU handoffs. The references are reused authenticated
+upstream source-method MPS controls joined at exact block35/head edges;
+this is not a fresh connected upstream run or an independent neural backend.
+The whole remote checkpoint digest remains unverified. No diffusion or full
+generation ran; timings exclude preparation and postterminal comparisons.
+
+The serial guard retains a cache-aware 10% reserve (6,871,947,674 bytes),
+28.5 GiB cap, 64 MiB swap-growth stop and 900 s deadline. Its 1,252 samples
+show a peak process footprint of 29,459,664,720 bytes (27.436 GiB), minimum
+headroom 15,586,803,712 bytes (14.516 GiB), minimum pressure-free 71%, and
+zero swap growth. Samples do not bound between-poll spikes. Named inventory
+stays 24,108,145,128 bytes and reaches zero live bytes/count after release;
+that does not assert zero Metal allocator residency.
+
+The release build, 80 focused CPU examples, native collector self-test,
+six-arm gate and receipt/numerical/guard audit pass. Eleven report/guard
+mutations reject, and two synthetic temporal-overlap controls preserve
+ambiguity and avoid double counting. Earlier external self-test and analysis
+failures remain recorded: an invalid wall-versus-CPU ordering assertion and
+mixed list/tuple sorting, respectively. Their corrections change no native
+arithmetic or numerical tolerance. Source/binary/fixture pins and build
+freshness match the successful native epoch. Correlated Mini-Quad review is
+ROBUST for bounded parity, lifecycle, sampled guards and timing arithmetic;
+causal driver attribution and exclusive shader attribution remain unproved.
+
+DoD commands and receipts are indexed in
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-variance.json`; reports live
+under `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-variance-20261027/results/`:
+`native-variance-full-v1.json`, `variance-audit-v2.json` and
+`variance-localization-v1.json`. Rollback omits `--profile-variance` or reverts
+its atomic commit. Refresh after scoped source/artifacts/backend/device/OS,
+toolchain, geometry/precision/capture/lifetime, clocks or guard changes;
+launch-time memory admission always expires and must be refreshed.
+
 ## Integrated 36-block decoder and global-head gate, 2026-10-27
 
 Status: VERIFIED within the bounded full-J decoder scope. One native session
