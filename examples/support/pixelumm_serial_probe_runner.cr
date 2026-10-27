@@ -33,6 +33,8 @@ module PixelUMMSerialProbeRunner
       parser.on("--compare-common-ring-captures", "Compare only captures stable with two output banks, without changing allocated workspace") { compare_common_ring_captures = true }
       parser.on("--memory-phases", "Emit opt-in scalar process/Metal/GC memory phase events") { memory_phases = true }
     end
+    PixelUMMTwoBlockProbe.validate_serial_execution_mode!(block_count,
+      ffn_f32: ffn_f32, reuse_outputs: reuse_outputs)
     unless ARGV.empty? && {reference, expected_sha, cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
            alternate.empty? == alternate_sha.empty? && 0 < budget <= named_budget_limit &&
            0 <= warmups <= 2 && 1 <= repeats <= 6
@@ -55,9 +57,8 @@ module PixelUMMSerialProbeRunner
       if other = replay
         memory_phase(memory_observer, "after_alternate_fixture_metadata_authentication")
         fixture.compatible_replay!(other)
-        unless (0...block_count).all? { |slot| fixture.captures["block#{slot}.output"].sha256 != other.captures["block#{slot}.output"].sha256 }
-          raise ArgumentError.new("alternate oracle outputs must distinguish every block")
-        end
+        PixelUMMTwoBlockProbe.validate_replay_output_distinguishability!(
+          fixture.captures, other.captures, block_count)
       end
       memory_phase(memory_observer, "before_cache_metadata_authentication")
       cache = PixelUMMTwoBlockProbe::WeightCache.new(cache_path, cache_sha, fixture)
@@ -75,29 +76,62 @@ module PixelUMMSerialProbeRunner
       total_requests.times do |request|
         replay_request = request == 1 + warmups + repeats
         if replay_request
-          session.replay_input!(replay.not_nil!)
+          replay_fixture = replay.not_nil!
+          session.replay_input!(replay_fixture)
+          unless session.fixture.inputs["x"].sha256 == replay_fixture.inputs["x"].sha256
+            raise "PixelUMM poisoned replay did not bind the alternate initial input"
+          end
           session.poison_transients!
         end
+        request_input_sha256 = session.fixture.inputs["x"].sha256
         chain = ML::Metal::MPSCommandChain.new
         wrong_order_rejected = false
         stale_output_access_rejected = false
+        wrong_order_slots_rejected = [] of Int32
+        stale_output_slots_rejected = [] of Int32
+        stable_output_slots_accessible = [] of Int32
+        predecessor_input_alias_slots_verified = [] of Int32
         if request == 0
           if reuse_outputs && block_count > 2
-            begin
-              session.plans[0].stage("output")
-            rescue error : ArgumentError
-              raise error unless (error.message || "").includes?("not captured")
-              stale_output_access_rejected = true
+            stale_slots = block_count == 36 ? [16, 18, 33] : [0]
+            stale_slots.each do |slot|
+              begin
+                session.plans[slot].stage("output")
+              rescue error : ArgumentError
+                raise error unless (error.message || "").includes?("not captured")
+                stale_output_slots_rejected << slot
+              end
             end
-            raise "PixelUMM exposed an overwritten output as a persistent capture" unless stale_output_access_rejected
+            if block_count == 36
+              [16, 18, 33, 34, 35].each do |slot|
+                unless session.plans[slot].input.same?(session.workspace.output_buffer(slot - 1))
+                  raise "PixelUMM block input alias did not use its immediate predecessor output bank"
+                end
+                predecessor_input_alias_slots_verified << slot
+              end
+              [34, 35].each do |slot|
+                unless session.plans[slot].stage("output").same?(session.workspace.output_buffer(slot))
+                  raise "PixelUMM final retained output was not backed by its assigned output bank"
+                end
+                stable_output_slots_accessible << slot
+              end
+            end
+            stale_output_access_rejected = stale_output_slots_rejected == stale_slots &&
+                                           (block_count != 36 || predecessor_input_alias_slots_verified == [16, 18, 33, 34, 35] &&
+                                             stable_output_slots_accessible == [34, 35])
+            raise "PixelUMM exposed an overwritten output or input alias as a persistent capture" unless stale_output_access_rejected
           end
-          begin
-            session.plans[block_count - 1].encode(chain)
-          rescue error : ArgumentError
-            raise error unless (error.message || "").includes?("slot")
-            wrong_order_rejected = true
+          wrong_order_slots = block_count == 36 ? [16, 17, 18, 34, 35] : [block_count - 1]
+          wrong_order_slots.each do |slot|
+            begin
+              session.plans[slot].encode(chain)
+            rescue error : ArgumentError
+              raise error unless (error.message || "").includes?("slot")
+              wrong_order_slots_rejected << slot
+            end
           end
-          raise "PixelUMM accepted the last block before block zero" unless wrong_order_rejected
+          wrong_order_rejected = wrong_order_slots_rejected == wrong_order_slots
+          raise "PixelUMM accepted an out-of-order block before block zero" unless wrong_order_rejected
         end
         allocations = ML::MetalBuffer.hy_text_probe_allocations
         reads = ML::MetalBuffer.hy_text_probe_readbacks
@@ -155,12 +189,17 @@ module PixelUMMSerialProbeRunner
         passed &&= numerical_pass && chain.wait_count == 1
         kind = replay_request ? "poisoned_different_input_gate" : (request == 0 ? "numerical_gate" : (request <= warmups ? "warmup" : "timed"))
         requests << JSON.parse({request: request, kind: kind, passed: numerical_pass,
+                                input_sha256: request_input_sha256,
                                 encode_seconds: encode_seconds, terminal_wait_seconds: wait_seconds,
                                 total_seconds: encode_seconds + wait_seconds, gpu_elapsed_seconds: chain.gpu_elapsed_seconds,
                                 command_segments: chain.segment_count, terminal_wait_count: chain.wait_count,
                                 named_allocations_during_encode: encode_allocations, activation_readbacks_before_terminal_wait: early_reads,
                                 diagnostic_readbacks_after_terminal_wait: ML::MetalBuffer.hy_text_probe_readbacks - reads,
                                 wrong_order_rejected: wrong_order_rejected, early_release_rejected: early_release_rejected,
+                                wrong_order_slots_rejected: wrong_order_slots_rejected,
+                                stale_output_slots_rejected: stale_output_slots_rejected,
+                                predecessor_input_alias_slots_verified: predecessor_input_alias_slots_verified,
+                                stable_output_slots_accessible: stable_output_slots_accessible,
                                 early_read_rejected: early_read_rejected, early_reuse_rejected: early_reuse_rejected,
                                 shared_scratch_poisoned_before_request: replay_request, comparisons: comparisons}.to_json)
         requests[-1].as_h["stale_output_access_rejected"] = JSON::Any.new(stale_output_access_rejected)
@@ -187,6 +226,8 @@ module PixelUMMSerialProbeRunner
                 precision: "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; " +
                   (session.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
                   "; graph types do not certify backend physical accumulation precision",
+                max_named_bytes: budget, named_byte_limit: named_budget_limit,
+                warmups: warmups, repeats: repeats, request_count: requests.size,
                 ffn_f32_graph_tensors: session.ffn_f32, ffn_f32_by_slot: session.plans.map(&.ffn_f32),
                 oracle: "adapted upstream-semantics PyTorch MPS; compiled CUDA Flex equivalence is not claimed",
                 tolerance: {atol: PixelUMMBlockProbe::ATOL, rtol: PixelUMMBlockProbe::RTOL},
@@ -199,6 +240,13 @@ module PixelUMMSerialProbeRunner
         session = nil
       end
       report_json = result.to_pretty_json
+      if block_count == 36
+        full36_report_document = JSON.parse(report_json)
+        full36_report_document.as_h["full36_capture_policy"] = fixture.document["full36_capture_policy"]
+        full36_report_document.as_h["unretained_early_output_aliases"] = JSON.parse(
+          PixelUMMTwoBlockProbe.thirty_six_unretained_output_aliases.to_json)
+        report_json = full36_report_document.to_pretty_json
+      end
       if observer = memory_observer
         report_document = JSON.parse(report_json)
         report_document.as_h["memory_telemetry"] = JSON.parse({

@@ -33,7 +33,26 @@ module PixelUMMTwoBlockProbe
   end
 
   def validate_block_count!(block_count : Int32) : Nil
-    raise ArgumentError.new("serial block count must be two, four, eight or sixteen") unless {2, 4, 8, 16}.includes?(block_count)
+    raise ArgumentError.new("serial block count must be two, four, eight, sixteen or thirty-six") unless {2, 4, 8, 16, 36}.includes?(block_count)
+  end
+
+  def validate_grid!(grid : Array(Int32), block_count : Int32) : Nil
+    validate_block_count!(block_count)
+    unless grid == [2, 32, 32] || grid == [6, 44, 80]
+      raise ArgumentError.new("serial fixture grid is outside admitted contexts")
+    end
+    if block_count == 36 && grid != [6, 44, 80]
+      raise ArgumentError.new("36-block fixture requires the full T6/H44/W80 grid")
+    end
+  end
+
+  def validate_serial_execution_mode!(block_count : Int32, *, ffn_f32 : Bool,
+                                      reuse_outputs : Bool) : Nil
+    validate_block_count!(block_count)
+    if block_count == 36
+      raise ArgumentError.new("36-block probe requires --ffn-f32") unless ffn_f32
+      raise ArgumentError.new("36-block probe requires --reuse-output-banks") unless reuse_outputs
+    end
   end
 
   def fixture_payload_limit(block_count : Int32) : Int64
@@ -41,23 +60,32 @@ module PixelUMMTwoBlockProbe
     case block_count
     when 8  then 8_i64 * GIB
     when 16 then 16_i64 * GIB
+    when 36 then 32_i64 * GIB
     else         4_i64 * GIB
     end
   end
 
   def weight_cache_payload_limit(block_count : Int32) : Int64
     validate_block_count!(block_count)
-    block_count == 16 ? 8_i64 * GIB : 4_i64 * GIB
+    case block_count
+    when 16 then 8_i64 * GIB
+    when 36 then 16_i64 * GIB
+    else         4_i64 * GIB
+    end
   end
 
   def named_budget_limit(block_count : Int32) : Int64
     validate_block_count!(block_count)
-    block_count == 16 ? 16_i64 * GIB : 8_i64 * GIB
+    case block_count
+    when 16 then 16_i64 * GIB
+    when 36 then 24_i64 * GIB
+    else         8_i64 * GIB
+    end
   end
 
   def fixture_schema(block_count : Int32) : String
     validate_block_count!(block_count)
-    label = {2 => "two", 4 => "four", 8 => "eight", 16 => "sixteen"}[block_count]
+    label = {2 => "two", 4 => "four", 8 => "eight", 16 => "sixteen", 36 => "thirty_six"}[block_count]
     "cogni_ml.pixelumm_#{label}_block_reference/v1"
   end
 
@@ -79,14 +107,57 @@ module PixelUMMTwoBlockProbe
     end
   end
 
-  def validate_serial_capture_inventory!(keys : Array(String), grid : Array(Int32), block_count : Int32) : Nil
-    unless {8, 16}.includes?(block_count)
-      raise ArgumentError.new("full serial capture inventories are defined for eight or sixteen blocks")
+  def validate_replay_output_distinguishability!(captures : Hash(String, Record),
+                                                 alternate_captures : Hash(String, Record),
+                                                 block_count : Int32) : Nil
+    validate_block_count!(block_count)
+    slots = block_count == 36 ? [34, 35] : (0...block_count).to_a
+    slots.each do |slot|
+      key = "block#{slot}.output"
+      primary = captures[key]? || raise ArgumentError.new("replay output capture missing: #{key}")
+      alternate = alternate_captures[key]? || raise ArgumentError.new("alternate replay output capture missing: #{key}")
+      if primary.sha256 == alternate.sha256
+        raise ArgumentError.new("alternate oracle outputs must distinguish every retained block output")
+      end
     end
-    stages = grid == [2, 32, 32] ? Decoder::Plan::CAPTURE_NAMES.to_a : ["attention", "output"]
-    expected = (0...block_count).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
+  end
+
+  def thirty_six_canonical_capture_order : Array(String)
+    (0...36).flat_map { |slot| ["block#{slot}.attention", "block#{slot}.output"] }
+  end
+
+  def thirty_six_survivor_capture_order : Array(String)
+    (0...36).flat_map do |slot|
+      slot < 34 ? ["block#{slot}.attention"] : ["block#{slot}.attention", "block#{slot}.output"]
+    end
+  end
+
+  def thirty_six_unretained_output_aliases : Array(String)
+    thirty_six_canonical_capture_order - thirty_six_survivor_capture_order
+  end
+
+  def validate_thirty_six_capture_policy!(document : JSON::Any) : Nil
+    policy = document.as_h["full36_capture_policy"]?
+    unless policy && policy.as_s == "two_bank_survivors"
+      raise ArgumentError.new("36-block fixture capture policy mismatch")
+    end
+  end
+
+  def validate_serial_capture_inventory!(keys : Array(String), grid : Array(Int32), block_count : Int32) : Nil
+    validate_grid!(grid, block_count)
+    unless {8, 16, 36}.includes?(block_count)
+      raise ArgumentError.new("full serial capture inventories are defined for eight, sixteen or thirty-six blocks")
+    end
+    expected = if block_count == 36
+                 thirty_six_survivor_capture_order
+               else
+                 stages = grid == [2, 32, 32] ? Decoder::Plan::CAPTURE_NAMES.to_a : ["attention", "output"]
+                 (0...block_count).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
+               end
     unless keys.sort == expected.sort
-      raise ArgumentError.new("#{block_count}-block fixture requires every expected stage at its admitted grid")
+      message = block_count == 36 ? "36-block fixture requires exactly the two-bank survivor capture inventory" :
+        "#{block_count}-block fixture requires every expected stage at its admitted grid"
+      raise ArgumentError.new(message)
     end
   end
 
@@ -94,7 +165,7 @@ module PixelUMMTwoBlockProbe
   # output banks. This changes only which CPU diagnostics are requested; callers
   # still admit and allocate their actual workspace using their own bank mode.
   def common_ring_comparison_capture_order(keys : Array(String), grid : Array(Int32), block_count : Int32) : Array(String)
-    validate_block_count!(block_count)
+    validate_grid!(grid, block_count)
     selected = keys.select do |key|
       slot = capture_slot(key, block_count)
       stage = capture_stage(key, block_count)
@@ -108,6 +179,8 @@ module PixelUMMTwoBlockProbe
                        when [6, 44, 80] then 18
                        else                  nil
                        end
+                     elsif block_count == 36
+                       grid == [6, 44, 80] ? 38 : nil
                      else
                        nil
                      end
@@ -127,13 +200,73 @@ module PixelUMMTwoBlockProbe
     provenance = document["input_provenance"]
     expected_keys = ["kind", "latent_sha256", "xt_sha256", "stem_weights_sha256", "derived_x_sha256"]
     unless provenance.as_h.keys.sort == expected_keys.sort
-      raise ArgumentError.new("sixteen-block fixture provenance metadata fields mismatch")
+      raise ArgumentError.new("serial fixture provenance metadata fields mismatch")
     end
     required_hashes = {"latent_sha256", "xt_sha256", "stem_weights_sha256"}
     valid_hashes = required_hashes.all? { |key| PixelUMMBlockProbe.valid_digest?(provenance[key].as_s) }
     unless provenance["kind"].as_s == "real_latent_xt_pixelumm_stem" && valid_hashes &&
            provenance["derived_x_sha256"].as_s == input.sha256
-      raise ArgumentError.new("sixteen-block fixture lacks valid real-context input provenance metadata")
+      raise ArgumentError.new("serial fixture lacks valid real-context input provenance metadata")
+    end
+  end
+
+  def validate_thirty_six_input_lineage_metadata!(document : JSON::Any) : Nil
+    lineage = document["input_lineage"].as_h
+    manifest_sha = document["real_input_manifest_sha256"].as_s
+    payload_sha = document["real_input_payload_sha256"].as_s
+    payload_bytes = document["real_input_payload_bytes"].as_i64
+    unless !lineage.empty? && PixelUMMBlockProbe.valid_digest?(manifest_sha) &&
+           PixelUMMBlockProbe.valid_digest?(payload_sha) && payload_bytes > 0
+      raise ArgumentError.new("36-block fixture lacks authenticated real-input lineage metadata")
+    end
+  end
+
+  def validate_thirty_six_weight_word_verification!(document : JSON::Any) : Nil
+    verification = document["weight_word_verification"]
+    expected_fields = ["all_equal", "method", "tensor_count"]
+    unless verification.as_h.keys.sort == expected_fields &&
+           verification["method"].as_s == "loaded_mps_bf16_int16_word_equality" &&
+           verification["tensor_count"].as_i == 468 && verification["all_equal"].as_bool
+      raise ArgumentError.new("36-block weight word verification metadata mismatch")
+    end
+  end
+
+  def validate_thirty_six_weight_payload_order!(weights : Hash(String, Record)) : Nil
+    expected = (0...36).flat_map do |slot|
+      PixelUMMBlockProbe.weight_shapes.keys.sort.map { |name| "block#{slot}.#{name}" }
+    end
+    actual = weights.to_a.sort_by { |pair| pair[1].offset }.map { |pair| pair[0] }
+    unless actual == expected
+      raise ArgumentError.new("36-block BF16 weight payload records must be in numeric block/sorted-name order")
+    end
+  end
+
+  def validate_thirty_six_capture_payload_order!(captures : Hash(String, Record),
+                                                 capture_order : Array(String)) : Nil
+    expected = thirty_six_survivor_capture_order
+    payload_order = captures.to_a.sort_by { |pair| pair[1].offset }.map { |pair| pair[0] }
+    unless capture_order == expected && payload_order == expected
+      raise ArgumentError.new("36-block captures must be in numeric block/stage order")
+    end
+  end
+
+  def validate_thirty_six_weight_cache_link_metadata!(document : JSON::Any, weights : Hash(String, Record)) : Nil
+    manifest_sha = document["weight_cache_manifest_sha256"].as_s
+    payload_sha = document["weight_cache_payload_sha256"].as_s
+    payload_bytes = document["weight_cache_payload_bytes"].as_i64
+    expected_bytes = weights.values.sum(&.nbytes)
+    unless PixelUMMBlockProbe.valid_digest?(manifest_sha) &&
+           PixelUMMBlockProbe.valid_digest?(payload_sha) && payload_bytes == expected_bytes
+      raise ArgumentError.new("36-block fixture BF16 cache linkage metadata mismatch")
+    end
+  end
+
+  def validate_thirty_six_weight_cache_binding!(document : JSON::Any, manifest_sha : String,
+                                                payload_sha : String, payload_bytes : Int64) : Nil
+    unless document["weight_cache_manifest_sha256"].as_s == manifest_sha &&
+           document["weight_cache_payload_sha256"].as_s == payload_sha &&
+           document["weight_cache_payload_bytes"].as_i64 == payload_bytes
+      raise ArgumentError.new("36-block fixture is not bound to its authenticated BF16 cache")
     end
   end
 
@@ -199,7 +332,8 @@ module PixelUMMTwoBlockProbe
     @verified = false
 
     def initialize(@path : String, trusted_sha256 : String, max_payload_bytes : Int64 = 4_i64 * 1024**3)
-      unless max_payload_bytes == 4_i64 * GIB || max_payload_bytes == 8_i64 * GIB || max_payload_bytes == 16_i64 * GIB
+      unless max_payload_bytes == 4_i64 * GIB || max_payload_bytes == 8_i64 * GIB ||
+             max_payload_bytes == 16_i64 * GIB || max_payload_bytes == 32_i64 * GIB
         raise ArgumentError.new("unsupported tensor payload byte limit")
       end
       unless Path[@path].absolute? && File.file?(@path) && !File.symlink?(@path) &&
@@ -313,15 +447,25 @@ module PixelUMMTwoBlockProbe
              d["tile_tokens"].as_i == 8 && d["token_order"].as_s == "tile_major"
         raise ArgumentError.new("serial fixture provenance/layout mismatch")
       end
+      PixelUMMTwoBlockProbe.validate_thirty_six_capture_policy!(d) if @block_count == 36
       @grid = d["grid"].as_a.map(&.as_i)
-      unless @grid == [2, 32, 32] || @grid == [6, 44, 80]
-        raise ArgumentError.new("serial fixture grid is outside admitted contexts")
-      end
+      PixelUMMTwoBlockProbe.validate_grid!(@grid, @block_count)
       @inputs, @weights, @captures = records("inputs"), records("weights"), records("captures")
       @capture_order = d["capture_order"].as_a.map(&.as_s)
+      block_captures_valid = if @block_count == 36
+                               (0...36).all? do |slot|
+                                 expected = slot < 34 ? ["attention"] : ["attention", "output"]
+                                 expected.all? { |name| @captures.has_key?("block#{slot}.#{name}") } &&
+                                   @captures.keys.select(&.starts_with?("block#{slot}.")).map { |key| PixelUMMTwoBlockProbe.capture_stage(key, 36) }.sort == expected.sort
+                               end
+                             else
+                               (0...@block_count).all? do |slot|
+                                 {"attention", "output"}.all? { |name| @captures.has_key?("block#{slot}.#{name}") }
+                               end
+                             end
       unless @inputs.keys.sort == ["cos", "sin", "x"] &&
              @capture_order.uniq == @capture_order && @capture_order.sort == @captures.keys.sort &&
-             (0...@block_count).all? { |slot| {"attention", "output"}.all? { |name| @captures.has_key?("block#{slot}.#{name}") } }
+             block_captures_valid
         raise ArgumentError.new("serial fixture input/capture inventory mismatch")
       end
       tokens = @grid.reduce(1) { |n, v| n * v }
@@ -332,17 +476,47 @@ module PixelUMMTwoBlockProbe
         raise ArgumentError.new("serial input geometry/dtype mismatch")
       end
       PixelUMMTwoBlockProbe.validate_weights!(@weights, @block_count)
-      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(d, @inputs["x"]) if @block_count == 16
+      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(d, @inputs["x"]) if {16, 36}.includes?(@block_count)
+      if @block_count == 36
+        PixelUMMTwoBlockProbe.validate_thirty_six_input_lineage_metadata!(d)
+        PixelUMMTwoBlockProbe.validate_thirty_six_weight_word_verification!(d)
+        PixelUMMTwoBlockProbe.validate_thirty_six_weight_cache_link_metadata!(d, @weights)
+        PixelUMMTwoBlockProbe.validate_thirty_six_weight_payload_order!(@weights)
+        PixelUMMTwoBlockProbe.validate_thirty_six_capture_payload_order!(@captures, @capture_order)
+      end
       blocks = d["blocks"].as_a
       raise ArgumentError.new("serial source inventory mismatch") unless blocks.size == @block_count
+      if @block_count == 36
+        blocks.each_with_index do |block, index|
+          subset_bytes = block["checkpoint_subset_bytes"].as_i64
+          source_extent = block["source_extent"].as_a.map(&.as_i64)
+          unless subset_bytes > 0 && source_extent.size == 2 &&
+                 source_extent[0] >= 0 && source_extent[1] > source_extent[0]
+            raise ArgumentError.new("36-block source receipt extent mismatch at slot #{index}")
+          end
+          unless block["weight_word_check_count"].as_i == 13
+            raise ArgumentError.new("36-block weight word verification count mismatch at slot #{index}")
+          end
+        end
+      end
       @subset_hashes = blocks.map_with_index do |block, index|
         prefix = "block#{index}."
         PixelUMMTwoBlockProbe.validate_input_source!(block["input_source"].as_s, index)
         digest = block["checkpoint_subset_sha256"].as_s
         unless block["index"].as_i == index && block["weight_prefix"].as_s == prefix &&
                block["output_key"].as_s == "captures.block#{index}.output" &&
-               block["weight_keys"].as_a.map(&.as_s).sort == @weights.keys.select(&.starts_with?(prefix)).sort &&
-               block["capture_keys"].as_a.map(&.as_s).sort == @captures.keys.select(&.starts_with?(prefix)).sort &&
+               (if @block_count == 36
+                  block["weight_keys"].as_a.map(&.as_s) == PixelUMMBlockProbe.weight_shapes.keys.sort.map { |name| prefix + name }
+                else
+                  block["weight_keys"].as_a.map(&.as_s).sort == @weights.keys.select(&.starts_with?(prefix)).sort
+                end) &&
+               (if @block_count == 36
+                  expected_keys = index < 34 ? ["block#{index}.attention"] :
+                    ["block#{index}.attention", "block#{index}.output"]
+                  block["capture_keys"].as_a.map(&.as_s) == expected_keys
+                else
+                  block["capture_keys"].as_a.map(&.as_s).sort == @captures.keys.select(&.starts_with?(prefix)).sort
+                end) &&
                PixelUMMBlockProbe.valid_digest?(digest) &&
                PixelUMMBlockProbe.valid_digest?(block["source_receipt_sha256"].as_s)
           raise ArgumentError.new("serial source/ownership mismatch")
@@ -380,6 +554,10 @@ module PixelUMMTwoBlockProbe
       d = @document
       PixelUMMTwoBlockProbe.validate_identity!(d)
       raise ArgumentError.new("unsupported BF16 cache schema") unless d["schema"].as_s == "cogni_ml.pixelumm_bf16_weight_cache/v1"
+      if fixture.block_count == 36
+        PixelUMMTwoBlockProbe.validate_thirty_six_weight_cache_binding!(fixture.document, @sha256,
+          d["payload_sha256"].as_s, @payload_bytes)
+      end
       unless d["source_commit"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
              d["stored_dtype"].as_s == "F32" && d["runtime_dtype"].as_s == "BF16" &&
              !d["full_file_hash_verified"].as_bool
@@ -387,6 +565,7 @@ module PixelUMMTwoBlockProbe
       end
       @weights = records("weights")
       PixelUMMTwoBlockProbe.validate_weights!(@weights, fixture.block_count)
+      PixelUMMTwoBlockProbe.validate_thirty_six_weight_payload_order!(@weights) if fixture.block_count == 36
       conversion = d["conversion"]
       unless conversion["method"].as_s == "torch.Tensor.to(torch.bfloat16)" &&
              conversion["device"].as_s == "mps" && conversion["rounding"].as_s == "round_to_nearest_even" &&
@@ -461,6 +640,16 @@ module PixelUMMTwoBlockProbe
         slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
         captures_by_slot[slot].includes?(PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count))
       end
+      if @fixture.block_count == 36
+        stable_ring_order = PixelUMMTwoBlockProbe.common_ring_comparison_capture_order(
+          @workspace_capture_order, grid, 36)
+        unless stable_ring_order == @workspace_capture_order &&
+               stable_ring_order.count(&.ends_with?(".attention")) == 36 &&
+               stable_ring_order.count(&.ends_with?(".output")) == 2 &&
+               stable_ring_order.includes?("block34.output") && stable_ring_order.includes?("block35.output")
+          raise ArgumentError.new("36-block ring must retain exactly 38 stable attention/output comparisons")
+        end
+      end
       @capture_order = if @compare_common_ring_captures
                          PixelUMMTwoBlockProbe.common_ring_comparison_capture_order(
                            @workspace_capture_order, grid, @fixture.block_count)
@@ -529,7 +718,7 @@ module PixelUMMTwoBlockProbe
         # Workspace aliases are outside this probe's ownership contract.
         outputs = @plans.map(&.output.handle)
         banks = outputs.uniq
-        @output_bank_by_slot = outputs.map { |handle| banks.index(handle).not_nil! }
+        @output_bank_by_slot = outputs.map { |handle| banks.index(handle).not_nil!.as(Int32) }
         PixelUMMTwoBlockProbe.validate_output_bank_layout!(@output_bank_by_slot, @fixture.block_count, @reuse_outputs)
         handles = @bindings.values.map(&.handle) + banks
         unless @named_bytes == @borrowed_bytes + @workspace.named_bytes && handles.uniq.size == handles.size

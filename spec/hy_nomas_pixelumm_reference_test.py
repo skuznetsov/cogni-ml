@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+from io import BytesIO
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -375,7 +376,281 @@ class PixelUMMReferenceTest(unittest.TestCase):
             [f"captures.block{index}.output" for index in range(16)],
         )
         with self.assertRaises(reference.ReferenceError):
-            reference._block_io_edge(16)
+            reference._block_io_edge(36)
+
+    def test_thirty_six_block_profile_is_full_grid_with_streamed_one_layer_peak(self):
+        self.assertEqual(
+            reference.THIRTY_SIX_BLOCK_SCHEMA,
+            "cogni_ml.pixelumm_thirty_six_block_reference/v1",
+        )
+        self.assertEqual(reference._block_io_edge(35), {
+            "input_source": "captures.block34.output",
+            "output_key": "captures.block35.output",
+        })
+        with self.assertRaises(reference.ReferenceError):
+            reference._block_io_edge(36)
+
+        peak = reference._estimated_peak_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN,
+            layers=36, resident_layers=1,
+            capture_stages=reference.FULL_TARGET_STAGES,
+            full36_capture_policy="two_bank_survivors",
+        )
+        self.assertEqual(peak, 11_896_145_408)
+        self.assertLess(peak + 194_641_920, 23 * 1024**3)
+        self.assertEqual(17_778_656_768 - peak, 5_882_511_360)
+
+        payload = reference._estimated_fixture_payload_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN,
+            layers=36, capture_stages=reference.FULL_TARGET_STAGES,
+            full36_capture_policy="two_bank_survivors",
+        )
+        self.assertEqual(payload, 20_661_356_544)
+        self.assertLess(payload, 32 * 1024**3)
+        self.assertEqual(26_543_867_904 - payload, 5_882_511_360)
+
+        for estimator in (reference._estimated_peak_bytes, reference._estimated_fixture_payload_bytes):
+            kwargs = {
+                "grid": (6, 44, 80),
+                "arch": self.source.QWEN3_8B_GEN,
+                "layers": 36,
+                "capture_stages": reference.FULL_TARGET_STAGES,
+            }
+            if estimator is reference._estimated_peak_bytes:
+                kwargs["resident_layers"] = 1
+            with self.subTest(estimator=estimator.__name__, policy="missing"), self.assertRaises(
+                reference.ReferenceError
+            ):
+                estimator(**kwargs)
+            with self.subTest(estimator=estimator.__name__, policy="wrong"), self.assertRaises(
+                reference.ReferenceError
+            ):
+                estimator(**kwargs, full36_capture_policy="all_boundaries")
+
+        with self.assertRaises(reference.ReferenceError):
+            reference._estimated_fixture_payload_bytes(
+                (2, 32, 32), self.source.QWEN3_8B_GEN,
+                layers=36, capture_stages=reference.FULL_TARGET_STAGES,
+                full36_capture_policy="two_bank_survivors",
+            )
+        with self.assertRaises(reference.ReferenceError):
+            reference._estimated_peak_bytes(
+                (6, 44, 80), self.source.QWEN3_8B_GEN,
+                layers=37, resident_layers=1,
+                capture_stages=reference.FULL_TARGET_STAGES,
+            )
+
+    def test_full36_two_bank_capture_policy_is_exact_and_strict(self):
+        self.assertEqual(reference.THIRTY_SIX_CAPTURE_POLICY, "two_bank_survivors")
+        self.assertEqual(
+            [reference._full36_capture_stages(index) for index in range(36)],
+            [
+                ("attention",) if index < 34 else ("attention", "output")
+                for index in range(36)
+            ],
+        )
+        expected = [
+            f"block{index}.{stage}"
+            for index in range(36)
+            for stage in (("attention",) if index < 34 else ("attention", "output"))
+        ]
+        self.assertEqual(len(expected), 38)
+        blocks = [
+            {
+                "index": index,
+                "capture_keys": [
+                    f"block{index}.{stage}"
+                    for stage in (("attention",) if index < 34 else ("attention", "output"))
+                ],
+            }
+            for index in range(36)
+        ]
+        reference._validate_full36_capture_inventory(
+            policy="two_bank_survivors", capture_order=expected, blocks=blocks,
+        )
+
+        for policy in (None, "all_boundaries", "two_bank_survivors "):
+            with self.subTest(policy=policy), self.assertRaises(reference.ReferenceError):
+                reference._validate_full36_capture_inventory(
+                    policy=policy, capture_order=expected, blocks=blocks,
+                )
+
+        negative_inventories = []
+        missing_final_output = list(expected)
+        missing_final_output.remove("block35.output")
+        negative_inventories.append(missing_final_output)
+        extra_early_output = list(expected)
+        extra_early_output.insert(67, "block33.output")
+        negative_inventories.append(extra_early_output)
+        wrong_final_stage = list(expected)
+        wrong_final_stage[-1] = "block35.down_proj"
+        negative_inventories.append(wrong_final_stage)
+        for capture_order in negative_inventories:
+            with self.subTest(capture_order=capture_order[-3:]), self.assertRaises(
+                reference.ReferenceError
+            ):
+                reference._validate_full36_capture_inventory(
+                    policy="two_bank_survivors",
+                    capture_order=capture_order, blocks=blocks,
+                )
+
+        missing_block_output = [dict(block) for block in blocks]
+        missing_block_output[-1]["capture_keys"] = ["block35.attention"]
+        with self.assertRaises(reference.ReferenceError):
+            reference._validate_full36_capture_inventory(
+                policy="two_bank_survivors", capture_order=expected,
+                blocks=missing_block_output,
+            )
+        extra_block_stage = [dict(block) for block in blocks]
+        extra_block_stage[33]["capture_keys"] = ["block33.attention", "block33.output"]
+        with self.assertRaises(reference.ReferenceError):
+            reference._validate_full36_capture_inventory(
+                policy="two_bank_survivors", capture_order=expected,
+                blocks=extra_block_stage,
+            )
+
+    def test_thirty_six_block_cli_requires_all_blocks_real_input_and_cache(self):
+        argv = ["--upstream", "upstream", "--header", "header.json",
+                "--output", "fixture.json", "--grid", "6", "44", "80",
+                "--real-input-manifest", "/pinned/source/pixelumm-real-input.json",
+                "--weight-cache-manifest", "/pinned/source/pixelumm-thirty-six-bf16-cache.json"]
+        for index in range(36):
+            argv += [f"--block{index}", f"block{index}.safetensors"]
+            argv += [f"--receipt{index}", f"block{index}.receipt.json"]
+        with mock.patch.object(
+            reference, "make_thirty_six_block_fixture", return_value={"accepted": True}
+        ) as make:
+            with redirect_stdout(StringIO()):
+                status = reference.main(argv)
+        self.assertEqual(status, 0)
+        self.assertEqual(len(make.call_args.kwargs["block_sources"]), 36)
+        self.assertEqual(make.call_args.kwargs["block_sources"][-1],
+                         (Path("block35.safetensors"), Path("block35.receipt.json")))
+        self.assertEqual(
+            make.call_args.kwargs["real_input_manifest"],
+            Path("/pinned/source/pixelumm-real-input.json"),
+        )
+        self.assertEqual(
+            make.call_args.kwargs["weight_cache_manifest"],
+            Path("/pinned/source/pixelumm-thirty-six-bf16-cache.json"),
+        )
+
+        missing_cache = [arg for arg in argv if arg not in {
+            "--weight-cache-manifest", "/pinned/source/pixelumm-thirty-six-bf16-cache.json",
+        }]
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(SystemExit):
+                reference.main(missing_cache)
+
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(SystemExit):
+                reference.main(argv + ["--block36", "block36.safetensors",
+                                       "--receipt36", "block36.receipt.json"])
+
+    def test_streamed_cache_weight_records_bind_all_468_tiny_records(self):
+        names = {f"weight{index:02d}": (1,) for index in range(13)}
+        schema_patch = mock.patch.object(
+            reference.checkpoint_inventory, "block_schema", return_value=names
+        )
+        with tempfile.TemporaryDirectory() as directory, schema_patch:
+            payload_path = Path(directory) / "cache.bin"
+            payload = bytes(index % 256 for index in range(36 * 13 * 2))
+            payload_path.write_bytes(payload)
+            cache_weights = {}
+            cache_blocks = {}
+            cursor = 0
+            for block in range(36):
+                keys = [f"block{block}.{name}" for name in sorted(names)]
+                cache_blocks[str(block)] = {
+                    "selected_block": block,
+                    "weight_keys": keys,
+                }
+                for key in keys:
+                    chunk = payload[cursor:cursor + 2]
+                    cache_weights[key] = {
+                        "dtype": "BF16", "shape": [1], "offset": cursor,
+                        "nbytes": 2, "sha256": hashlib.sha256(chunk).hexdigest(),
+                    }
+                    cursor += 2
+            cache_manifest = {
+                "blocks": cache_blocks,
+                "weights": cache_weights,
+                "payload_bytes": len(payload),
+                "payload_sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            copied, copied_digest, records = BytesIO(), hashlib.sha256(), {}
+            cursor = reference._write_cache_weight_records(
+                copied, cache_manifest=cache_manifest,
+                cache_payload_path=payload_path, records=records,
+                payload_digest=copied_digest, start_offset=0,
+            )
+            self.assertEqual(cursor, len(payload))
+            self.assertEqual(copied.getvalue(), payload)
+            self.assertEqual(copied_digest.hexdigest(), hashlib.sha256(payload).hexdigest())
+            self.assertEqual(len(records), 468)
+            self.assertEqual(records["block35.weight12"]["offset"], len(payload) - 2)
+
+            fixture_path = Path(directory) / "fixture.json"
+            manifest = reference._write_fixture(
+                fixture_path,
+                metadata={"weight_cache_manifest_sha256": "a" * 64},
+                inputs={"x": torch.tensor([1], dtype=torch.bfloat16)},
+                weights={}, captures={"y": torch.tensor([2], dtype=torch.bfloat16)},
+                schema=reference.THIRTY_SIX_BLOCK_SCHEMA,
+                weight_cache=(cache_manifest, payload_path),
+            )
+            self.assertEqual(len(manifest["weights"]), 468)
+            self.assertEqual(manifest["weights"]["block35.weight12"]["offset"],
+                             manifest["payload_bytes"] - 4)
+
+            payload_path.write_bytes(payload[:-1] + bytes((payload[-1] ^ 1,)))
+            with self.assertRaises(reference.ReferenceError):
+                reference._write_cache_weight_records(
+                    BytesIO(), cache_manifest=cache_manifest,
+                    cache_payload_path=payload_path, records={},
+                    payload_digest=hashlib.sha256(), start_offset=0,
+                )
+
+    def test_loaded_cache_word_check_is_per_named_parameter_and_bitwise(self):
+        names = {f"weight{index:02d}": (1,) for index in range(13)}
+        words = torch.arange(13, dtype=torch.int16)
+        model = torch.nn.Module()
+        for index, name in enumerate(sorted(names)):
+            value = words[index:index + 1].view(torch.bfloat16).clone()
+            model.register_parameter(name, torch.nn.Parameter(value, requires_grad=False))
+        keys = [f"block0.{name}" for name in sorted(names)]
+        records = {
+            key: {"dtype": "BF16", "shape": [1], "offset": index * 2, "nbytes": 2}
+            for index, key in enumerate(keys)
+        }
+        cache_manifest = {
+            "blocks": {"0": {"weight_keys": keys}},
+            "weights": records,
+        }
+        with mock.patch.object(
+            reference.checkpoint_inventory, "block_schema", return_value=names
+        ):
+            checks = reference._queue_cache_weight_word_checks(
+                model, cache_manifest=cache_manifest, cache_words=words.clone(),
+                block_index=0, device=torch.device("cpu"),
+            )
+            self.assertEqual(list(checks), keys)
+            self.assertTrue(all(bool(check) for check in checks.values()))
+
+            mismatched = words.clone()
+            mismatched[-1] ^= 1
+            failed = reference._queue_cache_weight_word_checks(
+                model, cache_manifest=cache_manifest, cache_words=mismatched,
+                block_index=0, device=torch.device("cpu"),
+            )
+            self.assertFalse(bool(failed[keys[-1]]))
+
+            model.weight00 = torch.nn.Parameter(torch.ones(1, dtype=torch.float32))
+            with self.assertRaises(reference.ReferenceError):
+                reference._queue_cache_weight_word_checks(
+                    model, cache_manifest=cache_manifest, cache_words=words.clone(),
+                    block_index=0, device=torch.device("cpu"),
+                )
 
     def test_real_input_lineage_uses_authenticated_full_subset_file_bytes(self):
         checked_subsets = {

@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-THIRTY-SIX-2026-10-27] Full-J 36-block two-bank replay matches fresh MPS controls
+
+- Scope: PixelUMM blocks 0-35, T6/H44/W80/J21,120, one shared scratch and two
+  alternating BF16 output banks; existing F32 FFN graph path in every slot.
+  Both fresh connected upstream-semantics MPS controls independently check
+  all 468 loaded BF16 parameter tensors against authenticated cache words.
+  Real DCAE/noise/stem inputs use seeds 42/43 from a repeated static image,
+  not DiT-denoised output. No decoder head, diffusion or video quality claim.
+- Three native requests compare exactly 38 stable captures each: attention
+  0-35 and outputs 34/35. All 114 are finite and bitwise exact at unchanged
+  `atol=rtol=2e-5`, including alternate input after NaN poison. Outputs 0-33
+  are GPU successor handoffs, deliberately overwritten, not direct goldens.
+  Each request has one terminal wait, zero preterminal activation reads and
+  zero named encode allocations. Wrong order/stale aliases/early lifetime
+  operations are rejected; predecessor and surviving bank identities pass.
+- Exact named inventory 22,958,105,572 B; sampled process peak
+  27,084,064,600 B (25.224 GiB), only 26.6 MiB below the 25.25 GiB cap.
+  Minimum native cache-aware headroom is 15.757 GiB; no observed swap growth.
+  All three successful neural processes retain the 10% floor and serial
+  900 s guards. This pilot does not guarantee future/full-pipeline fit.
+  Timed repeat encode+wait is 43.6366 s; observer on, one repeat, no speedup
+  or seconds-per-video-second claim. Named buffers reach zero after release.
+- Release build/fresh make-q, 58 Crystal examples and 55 Python tests pass.
+  CPU audit hashes payloads/36 source subsets, checks 511 pins and guard
+  intervals; validator passes 46 negative/9 positive controls. Correlated
+  Mini-Quad verdict: ROBUST for source/artifact/comparator scope, not a
+  second neural implementation or independently retained native output.
+  Whole upstream checkpoint digest remains unverified; local subset/header
+  and loaded-word bindings are qualified. Failed startup/swap-stop/path
+  epochs remain excluded; dropping unused upstream diagnostics preserves
+  native comparison coverage and does not establish causal peak reduction.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-thirty-six-block.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-36-20261027/results/validator-audit.json`.
+  Rollback: omit the opt-in 36-block probe; older depths/defaults unchanged.
+  Refresh after scoped source/artifact/backend/device/toolchain, precision,
+  geometry, capture/lifetime/guard/clock changes or evidence loss. Next
+  frontier: separately budget the global decoder head before generation.
+
 ### [LM-HY-NOMAS-CONDITIONED-EIGHT-2026-10-25] Eight BF16-cache blocks preserve exact live-conditioning replay at full J
 
 - Scope: native natural-prompt Qwen26 -> GPU BF16 crop -> actual-weight

@@ -116,8 +116,14 @@ pixelumm_decoder_four_block_probe: $(BUILD_DIR)/pixelumm_decoder_four_block_prob
 
 pixelumm_decoder_eight_block_probe: $(BUILD_DIR)/pixelumm_decoder_eight_block_probe
 
-.PHONY: pixelumm_decoder_sixteen_block_probe
+.PHONY: pixelumm_decoder_sixteen_block_probe pixelumm_decoder_thirty_six_block_probe spec_pixelumm_thirty_six_block_probe
 pixelumm_decoder_sixteen_block_probe: $(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe
+
+pixelumm_decoder_thirty_six_block_probe: $(BUILD_DIR)/pixelumm_decoder_thirty_six_block_probe
+
+spec_pixelumm_thirty_six_block_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_memory_probe_spec.cr \
+		spec/pixelumm_serial_probe_runner_spec.cr
 
 spec_pixelumm_memory_probe:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_memory_probe_spec.cr
@@ -127,6 +133,10 @@ $(BUILD_DIR)/pixelumm_decoder_eight_block_probe: examples/pixelumm_decoder_eight
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 $(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe: examples/pixelumm_decoder_sixteen_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/pixelumm_decoder_thirty_six_block_probe: examples/pixelumm_decoder_thirty_six_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 

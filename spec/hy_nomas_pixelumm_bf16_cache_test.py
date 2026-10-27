@@ -8,6 +8,9 @@ import platform
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest import mock
 
 import torch
 
@@ -199,6 +202,68 @@ class PixelUMMBF16CacheTest(unittest.TestCase):
             extra["blocks"]["16"] = copy.deepcopy(extra["blocks"]["15"])
             with self.assertRaises(cache.CacheError):
                 cache.validate_manifest(extra, payload, expected_shapes=shapes)
+
+    def test_thirty_six_block_cache_accepts_exact_468_weights_and_rejects_bad_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=36)
+            result = cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+            self.assertEqual(result["tensor_count"], 468)
+            self.assertEqual(result["payload_bytes"], 936)
+            self.assertEqual(manifest["weights"]["block10.weight00"]["offset"], 260)
+            self.assertEqual(manifest["weights"]["block35.weight00"]["offset"], 910)
+
+            missing_owner = copy.deepcopy(manifest)
+            del missing_owner["blocks"]["35"]["weight_keys"][-1]
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(missing_owner, payload, expected_shapes=shapes)
+
+            wrong_dtype = copy.deepcopy(manifest)
+            wrong_dtype["weights"]["block35.weight00"]["dtype"] = "F32"
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(wrong_dtype, payload, expected_shapes=shapes)
+
+            with payload.open("r+b") as stream:
+                stream.seek(-1, 2)
+                last = stream.read(1)
+                stream.seek(-1, 2)
+                stream.write(bytes((last[0] ^ 1,)))
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+
+    def test_cache_rejects_depth_37(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=37)
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+
+    def test_full_depth_cache_source_route_splits_at_block_sixteen(self):
+        self.assertEqual(cache._source_dir_for_block(36, 0), cache.CACHE_DIR)
+        self.assertEqual(cache._source_dir_for_block(36, 15), cache.CACHE_DIR)
+        self.assertEqual(cache._source_dir_for_block(36, 16), cache.THIRTY_SIX_CACHE_DIR)
+        self.assertEqual(cache._source_dir_for_block(36, 35), cache.THIRTY_SIX_CACHE_DIR)
+        with self.assertRaises(cache.CacheError):
+            cache._source_dir_for_block(36, 36)
+        with self.assertRaises(cache.CacheError):
+            cache._source_dir_for_block(37, 0)
+
+    def test_thirty_six_block_cache_cli_routes_all_receipted_blocks(self):
+        argv = ["--upstream", "upstream", "--header", "header.json",
+                "--output", "cache.json"]
+        for index in range(36):
+            argv += [f"--block{index}", f"block{index}.safetensors"]
+            argv += [f"--receipt{index}", f"block{index}.receipt.json"]
+        with mock.patch.object(cache, "make_cache", return_value={"accepted": True}) as make:
+            with redirect_stdout(StringIO()):
+                status = cache.main(argv)
+        self.assertEqual(status, 0)
+        self.assertEqual(make.call_args.kwargs["block35"], Path("block35.safetensors"))
+        self.assertEqual(make.call_args.kwargs["receipt35"], Path("block35.receipt.json"))
+
+        with mock.patch.object(cache, "make_cache", return_value={"accepted": True}):
+            with redirect_stdout(StringIO()):
+                with self.assertRaises(SystemExit):
+                    cache.main(argv + ["--block36", "block36.safetensors",
+                                       "--receipt36", "block36.receipt.json"])
 
 
     def test_tensor_writer_rejects_non_bf16_sources(self):

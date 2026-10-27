@@ -1,5 +1,118 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Active 36-block two-bank qualification, 2026-10-27
+
+Status: verified bounded layers 0-35 at T6/H44/W80, J=21,120, with two
+alternating BF16 GPU output banks and one shared transient workspace. The
+release probe matches two fresh connected upstream-semantics MPS controls at
+unchanged `atol=rtol=2e-5`. It excludes the global decoder head, display
+postprocessing, diffusion and video generation. Existing depths, arithmetic
+and output-reuse defaults remain unchanged; omit the new probe for rollback.
+
+The exact named inventory is 22,958,105,572 bytes (21.381 GiB): 36 authenticated
+BF16 weight sets, input/RoPE, shared scratch and the two output banks. This is
+an allocation inventory, not a process-peak estimate. The caller's
+`--max-named-bytes` ceiling is 24 GiB; the exact one-byte-short inventory is a
+separate CPU admission falsifier. Of the owned workspace, 6,228,541,440 bytes
+are retained attention diagnostics. Removing those captures in a production
+path has not been measured here and cannot be subtracted from process peak.
+
+The fixture policy is `full36_capture_policy=two_bank_survivors`: exactly 38
+stable boundaries in numeric block order, attention 0-35 plus outputs 34/35.
+Outputs 0-33 immediately feed their successors on GPU but are overwritten by
+slot N+2; they are not persistent diagnostic goldens. The report discloses all
+34 unretained aliases separately from its empty fixture-comparison omission
+arrays. The native comparison enumerates the authenticated survivor order,
+never the overwritten aliases. All 36 slots select the existing qualified
+F32 FFN graph-tensor path while retaining BF16 weight and handoff storage;
+graph types do not certify physical backend accumulation precision.
+
+Two fresh references stream one original checkpoint-derived weight layer at
+a time, connect every output directly to the next input on MPS, retain the 38
+goldens until one terminal synchronization, and independently check all 468
+loaded BF16 parameter tensors against the authenticated cache with GPU word
+equality reductions. Copying cache bytes into a fixture is not that proof.
+Inputs are authenticated real DCAE/noise/stem fixtures with seeds 42/43 from
+a repeated static image; they are not DiT-denoised samples. The attention
+adapter implements the pinned upstream spatial-tile equations on MPS;
+compiled CUDA Flex equivalence remains outside this qualification.
+
+The native process runs a numerical gate, one timed repeat and an alternate
+input after NaN-poisoning scratch and both output banks. All 114 selected
+comparisons are finite and bitwise exact: zero failures, differing words or
+maximum absolute error. Each request has 4,573 command segments, one terminal
+wait, zero named encode allocations, zero preterminal activation reads and
+38 postterminal diagnostic reads. No native decoder/kernel/bridge source
+changes or new inference synchronization are part of this extension.
+
+| Native request | Encode seconds | Terminal wait seconds | Sum seconds |
+| --- | ---: | ---: | ---: |
+| Numerical gate | 43.4600 | 0.8769 | 44.3369 |
+| Timed repeat | 42.7428 | 0.8938 | 43.6366 |
+| Poisoned different-input gate | 43.5099 | 0.9167 | 44.4266 |
+
+These are encode-plus-existing-wait observations with the memory observer
+enabled, excluding preparation and postterminal comparisons. Encode can
+include Metal/MPS backpressure; its wall time is not pure CPU work. One timed
+repeat is not a stable benchmark, a speedup comparison or an end-to-end
+seconds-per-video-second result.
+
+First-request lifecycle falsifiers reject out-of-order slots 16/17/18/34/35,
+persistent output access at 16/18/33, early release/read/reuse, and verify the
+actual predecessor buffer identity at 16/18/33/34/35 plus stable banks 34/35.
+The CPU suites pass 58 Crystal examples and 55 Python tests, including earlier
+depth inventory behavior, exact capture/payload order, replay discrimination,
+unsupported depth 37, unsupported geometry and the one-byte-short budget.
+The release build and exact-target `make -q` freshness check pass.
+
+The native sampled process-tree peak is 27,084,064,600 bytes (25.224 GiB), with
+16,918,626,304 bytes (15.757 GiB) minimum cache-aware headroom and no observed
+system swap growth. Its 25.25 GiB process cap leaves only 27,916,456 bytes
+(26.6 MiB) of observed margin. This successful bounded pilot does not guarantee
+future peak or full-pipeline fit and does not promote an output-reuse default.
+After binding release, named live bytes are zero and process footprint is
+685,229,912 bytes (0.638 GiB); the still-high Metal allocation counter is
+non-additive and cannot independently establish a resident leak.
+
+The two successful oracle peaks are 12.500/12.502 GiB. Across the three
+positive neural processes, minimum sampled headroom is 15.065 GiB and observed
+swap growth is zero. GPU jobs are serial. The cache-aware 10% floor, native
+25.25 GiB / oracle 23 GiB caps, 64 MiB system swap-growth stop and 900-second
+deadlines remain enforced. Limits are stop conditions, not reservations or
+bounds on between-poll spikes. Join phase events to the guard only through
+`guard_monotonic_ns` in the pinned `mach_absolute_time` clock domain.
+
+The original 72-capture oracle stopped on system swap growth after a sampled
+19.371 GiB peak. Initial cleanup was incomplete; later PID and process-group
+observations confirmed termination before the next launch. It produced no
+fixture and supplies no numerical evidence. Two earlier startup refusals
+started no model. Retaining only the same 38 native-comparable boundaries
+removes 5,882,511,360 bytes of unused upstream diagnostic retention and gives
+a 20,661,356,544-byte fixture payload without changing neural arithmetic,
+native coverage, synchronization or safety limits. The failed run and the
+successful rerun are not a matched causal process-peak comparison. One native
+attempt also rejected a noncanonical `/opt` symlink path before GPU setup;
+the successful rerun changes arguments only. These cases remain excluded.
+
+The completed CPU audit hashes both fixture payloads, the BF16 cache, all 36
+F32 source subsets and linked real inputs, verifies 511 source/artifact pins,
+exact capture counts, reported native hashes and non-overlapping guard
+intervals. Its validator passes 46 negative and 9 positive CPU controls.
+This is artifact/comparator consistency evidence, not independently retained
+native output or another neural implementation. Mini-Quad source/adversary
+review is correlated; its verdict is ROBUST within this bounded scope.
+The upstream whole-checkpoint digest remains unverified; qualification binds
+pinned header/ranges, local source subsets and the loaded GPU words.
+
+DoD, commands, source/build bindings, guard history, exact measurements and
+residual risks are indexed in
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-thirty-six-block.json`.
+Large artifacts remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-36-20261027`.
+Refresh after scoped source/artifact/backend/device/OS/toolchain,
+geometry/precision, capture/ownership/lifetime/guard or clock changes, or
+evidence loss. Complete-decoder and generated-video quality remain open.
+
 ## Weight loading and execution memory phases, 2026-10-27
 
 The serial probe now has default-off `--memory-phases` scalar telemetry around

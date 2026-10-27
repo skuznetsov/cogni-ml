@@ -189,4 +189,23 @@ describe PixelUMMTwoBlockProbe do
       PixelUMMTwoBlockProbe::Decoder::Workspace.capture_survives?(stage, slot, 16, reuse_outputs: true)
     end)
   end
+
+  it "selects exactly 38 stable captures across the thirty-six-block output ring" do
+    keys = (0...36).flat_map do |slot|
+      ["attention", "output"].map { |stage| "block#{slot}.#{stage}" }
+    end
+
+    selected = PixelUMMTwoBlockProbe.common_ring_comparison_capture_order(keys, [6, 44, 80], 36)
+    selected.size.should eq(38)
+    selected.should eq(keys.select do |key|
+      slot = PixelUMMTwoBlockProbe.capture_slot(key, 36)
+      stage = PixelUMMTwoBlockProbe.capture_stage(key, 36)
+      PixelUMMTwoBlockProbe::Decoder::Workspace.capture_survives?(stage, slot, 36, reuse_outputs: true)
+    end)
+    selected.count(&.ends_with?(".attention")).should eq(36)
+    selected.count(&.ends_with?(".output")).should eq(2)
+    selected.includes?("block33.output").should be_false
+    selected.includes?("block34.output").should be_true
+    selected.includes?("block35.output").should be_true
+  end
 end

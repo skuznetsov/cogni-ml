@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare and authenticate a bounded PixelUMM BF16 startup weight cache.
 
-Only decoder blocks zero and one, zero through three, zero through seven, or
-zero through fifteen are loaded. F32 checkpoint weights are moved to MPS and cast with PyTorch's
+Only decoder blocks zero and one, zero through three, zero through seven,
+zero through fifteen, or zero through thirty-five are loaded. F32 checkpoint weights are moved to MPS and cast with PyTorch's
 BF16 conversion before their raw little-endian uint16 words are persisted.
 The cache is a startup artifact, not an inference timing path.
 """
@@ -27,6 +27,8 @@ ROOT = checkpoint.ROOT
 CACHE_DIR = (ROOT / "source").resolve()
 SIXTEEN_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen")
 SIXTEEN_CACHE_DIR = (SIXTEEN_ROOT / "source").resolve()
+THIRTY_SIX_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-36-20261027")
+THIRTY_SIX_CACHE_DIR = (THIRTY_SIX_ROOT / "source").resolve()
 UPSTREAM_MODEL_SHA256 = "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
 CONVERSION = {
     "method": "torch.Tensor.to(torch.bfloat16)",
@@ -34,7 +36,7 @@ CONVERSION = {
     "rounding": "round_to_nearest_even",
 }
 CHUNK_BYTES = 8 * 1024 * 1024
-MAX_CACHE_PAYLOAD_BYTES = 8 * 1024 * 1024 * 1024
+MAX_CACHE_PAYLOAD_BYTES = 16 * 1024 * 1024 * 1024
 
 
 class CacheError(ValueError):
@@ -115,8 +117,8 @@ def _expected_shapes(blocks: Mapping[int, Mapping[str, tuple[int, ...]]] | None 
     else:
         schemas = blocks
     count = len(schemas)
-    if count not in {2, 4, 8, 16} or set(schemas) != set(range(count)):
-        raise CacheError("cache requires exactly consecutive block schemas 0-1, 0-3, 0-7, or 0-15")
+    if count not in {2, 4, 8, 16, 36} or set(schemas) != set(range(count)):
+        raise CacheError("cache requires consecutive block schemas 0-1, 0-3, 0-7, 0-15, or 0-35")
     result = {}
     for index in range(count):
         expected = schemas[index]
@@ -127,6 +129,16 @@ def _expected_shapes(blocks: Mapping[int, Mapping[str, tuple[int, ...]]] | None 
                 raise CacheError("invalid block cache schema entry")
             result[f"block{index}.{name}"] = list(shape)
     return result
+
+
+def _source_dir_for_block(block_count: int, index: int) -> Path:
+    """Return the immutable source root for one admitted cache block."""
+    if (type(block_count) is not int or block_count not in {2, 4, 8, 16, 36}
+            or type(index) is not int or not 0 <= index < block_count):
+        raise CacheError("cache block source route is outside an admitted prefix")
+    if block_count == 36 and index >= 16:
+        return THIRTY_SIX_CACHE_DIR
+    return CACHE_DIR
 
 
 def validate_manifest(
@@ -140,7 +152,7 @@ def validate_manifest(
     """Validate cache metadata, tensor ownership and every byte/hash binding.
 
     ``expected_shapes`` is injectable only to keep the structural unit tests
-    tiny. Production callers use the pinned 26-, 52-, or 104-tensor schema.
+    tiny. Production callers use the pinned 26-, 52-, 104-, or 468-tensor schema.
     """
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
         raise CacheError("unsupported BF16 cache schema")
@@ -152,9 +164,10 @@ def validate_manifest(
         {"0", "1", "2", "3"},
         {str(index) for index in range(8)},
         {str(index) for index in range(16)},
+        {str(index) for index in range(36)},
     )
     if not isinstance(blocks, dict) or set(blocks) not in valid_block_sets:
-        raise CacheError("BF16 cache must authenticate blocks 0-1, 0-3, 0-7, or 0-15 exactly")
+        raise CacheError("BF16 cache must authenticate blocks 0-1, 0-3, 0-7, 0-15, or 0-35 exactly")
     block_count = len(blocks)
     if expected_shapes is None:
         expected_shapes = _expected_shapes({
@@ -172,7 +185,7 @@ def validate_manifest(
         raise CacheError(f"cache schema must describe exactly {block_count * 13} block-owned tensors")
     expected_cache_bytes = sum(_shape_bytes(shape, 2) for shape in expected_shapes.values())
     if expected_cache_bytes > MAX_CACHE_PAYLOAD_BYTES:
-        raise CacheError("BF16 cache exceeds the 8 GiB payload cap")
+        raise CacheError("BF16 cache exceeds the 16 GiB payload cap")
 
     if require_pinned_identity:
         identities = {
@@ -269,7 +282,7 @@ def validate_manifest(
         raise CacheError("BF16 cache payload basename mismatch")
     payload_bytes = path.stat().st_size
     if payload_bytes > MAX_CACHE_PAYLOAD_BYTES:
-        raise CacheError("BF16 cache payload exceeds the 8 GiB cap")
+        raise CacheError("BF16 cache payload exceeds the 16 GiB cap")
     if type(manifest.get("payload_bytes")) is not int or manifest["payload_bytes"] != payload_bytes:
         raise CacheError("BF16 cache payload byte count mismatch")
     payload_hash = manifest.get("payload_sha256")
@@ -336,7 +349,7 @@ def validate_cache_file(path: Path | str) -> dict:
     if original_path.is_symlink() or not original_path.is_file():
         raise CacheError("cache manifest must be a regular non-symlink file")
     path = original_path.resolve()
-    if path.parent not in {CACHE_DIR, SIXTEEN_CACHE_DIR}:
+    if path.parent not in {CACHE_DIR, SIXTEEN_CACHE_DIR, THIRTY_SIX_CACHE_DIR}:
         raise CacheError("cache manifest must be in a pinned task source directory")
     try:
         raw = path.read_bytes()
@@ -345,7 +358,11 @@ def validate_cache_file(path: Path | str) -> dict:
         manifest = checkpoint.parse_header(raw)
     except (OSError, checkpoint.InventoryError) as error:
         raise CacheError("cannot parse cache manifest") from error
-    expected_dir = SIXTEEN_CACHE_DIR if len(manifest.get("blocks", {})) == 16 else CACHE_DIR
+    block_count = len(manifest.get("blocks", {}))
+    expected_dir = {
+        16: SIXTEEN_CACHE_DIR,
+        36: THIRTY_SIX_CACHE_DIR,
+    }.get(block_count, CACHE_DIR)
     if path.parent != expected_dir:
         raise CacheError("cache schema and artifact directory do not match")
     payload_name = manifest.get("payload")
@@ -359,8 +376,9 @@ def validate_cache_file(path: Path | str) -> dict:
     raw_header = (CACHE_DIR / "pixelumm-header.json").read_bytes()
     for index in range(len(manifest["blocks"])):
         block = manifest["blocks"][str(index)]
-        subset = CACHE_DIR / block["subset_file"]
-        receipt_path = CACHE_DIR / block["source_receipt_file"]
+        source_dir = _source_dir_for_block(block_count, index)
+        subset = source_dir / block["subset_file"]
+        receipt_path = source_dir / block["source_receipt_file"]
         receipt_raw = receipt_path.read_bytes()
         if hashlib.sha256(receipt_raw).hexdigest() != block["source_receipt_sha256"]:
             raise CacheError(f"block {index} source receipt digest changed")
@@ -415,6 +433,26 @@ def make_cache(
     block13: Path | str | None = None, receipt13: Path | str | None = None,
     block14: Path | str | None = None, receipt14: Path | str | None = None,
     block15: Path | str | None = None, receipt15: Path | str | None = None,
+    block16: Path | str | None = None, receipt16: Path | str | None = None,
+    block17: Path | str | None = None, receipt17: Path | str | None = None,
+    block18: Path | str | None = None, receipt18: Path | str | None = None,
+    block19: Path | str | None = None, receipt19: Path | str | None = None,
+    block20: Path | str | None = None, receipt20: Path | str | None = None,
+    block21: Path | str | None = None, receipt21: Path | str | None = None,
+    block22: Path | str | None = None, receipt22: Path | str | None = None,
+    block23: Path | str | None = None, receipt23: Path | str | None = None,
+    block24: Path | str | None = None, receipt24: Path | str | None = None,
+    block25: Path | str | None = None, receipt25: Path | str | None = None,
+    block26: Path | str | None = None, receipt26: Path | str | None = None,
+    block27: Path | str | None = None, receipt27: Path | str | None = None,
+    block28: Path | str | None = None, receipt28: Path | str | None = None,
+    block29: Path | str | None = None, receipt29: Path | str | None = None,
+    block30: Path | str | None = None, receipt30: Path | str | None = None,
+    block31: Path | str | None = None, receipt31: Path | str | None = None,
+    block32: Path | str | None = None, receipt32: Path | str | None = None,
+    block33: Path | str | None = None, receipt33: Path | str | None = None,
+    block34: Path | str | None = None, receipt34: Path | str | None = None,
+    block35: Path | str | None = None, receipt35: Path | str | None = None,
 ) -> dict:
     """Convert and persist an admitted consecutive prefix of upstream BF16 blocks."""
     if device_name != "mps":
@@ -432,6 +470,16 @@ def make_cache(
         (block10, receipt10), (block11, receipt11),
         (block12, receipt12), (block13, receipt13),
         (block14, receipt14), (block15, receipt15),
+        (block16, receipt16), (block17, receipt17),
+        (block18, receipt18), (block19, receipt19),
+        (block20, receipt20), (block21, receipt21),
+        (block22, receipt22), (block23, receipt23),
+        (block24, receipt24), (block25, receipt25),
+        (block26, receipt26), (block27, receipt27),
+        (block28, receipt28), (block29, receipt29),
+        (block30, receipt30), (block31, receipt31),
+        (block32, receipt32), (block33, receipt33),
+        (block34, receipt34), (block35, receipt35),
     )
     missing_suffix = False
     for index, (subset, receipt) in enumerate(optional_pairs, start=2):
@@ -443,17 +491,29 @@ def make_cache(
         if missing_suffix:
             raise CacheError("block subset and receipt inputs must form a consecutive prefix")
         source_pairs.append((subset, receipt))
-    if len(source_pairs) not in {2, 4, 8, 16}:
-        raise CacheError("cache requires exactly 2, 4, 8, or 16 consecutive blocks")
-    paths = tuple(Path(subset).expanduser().resolve() for subset, _ in source_pairs)
-    receipts = tuple(Path(receipt).expanduser().resolve() for _, receipt in source_pairs)
+    if len(source_pairs) not in {2, 4, 8, 16, 36}:
+        raise CacheError("cache requires exactly 2, 4, 8, 16, or 36 consecutive blocks")
+    subset_inputs = tuple(Path(subset).expanduser() for subset, _ in source_pairs)
+    receipt_inputs = tuple(Path(receipt).expanduser() for _, receipt in source_pairs)
+    if any(path.is_symlink() for path in (*subset_inputs, *receipt_inputs)):
+        raise CacheError("cache source subsets and receipts must not be symlinks")
+    paths = tuple(path.resolve() for path in subset_inputs)
+    receipts = tuple(path.resolve() for path in receipt_inputs)
     output_path = Path(output).expanduser().absolute()
-    expected_output_dir = SIXTEEN_CACHE_DIR if len(paths) == 16 else CACHE_DIR
+    expected_output_dir = {
+        16: SIXTEEN_CACHE_DIR,
+        36: THIRTY_SIX_CACHE_DIR,
+    }.get(len(paths), CACHE_DIR)
     if output_path.parent.resolve() != expected_output_dir:
         raise CacheError("cache output must be in its pinned task source directory")
+    for index, (subset_path, receipt_path) in enumerate(zip(paths, receipts)):
+        expected_source_dir = _source_dir_for_block(len(paths), index)
+        if (subset_path.parent != expected_source_dir
+                or receipt_path.parent != expected_source_dir):
+            raise CacheError(f"block {index} inputs must be in their pinned source directory")
     expected_bytes = len(paths) * 385_892_864
     if expected_bytes > MAX_CACHE_PAYLOAD_BYTES:
-        raise CacheError("BF16 cache request exceeds the 8 GiB payload cap")
+        raise CacheError("BF16 cache request exceeds the 16 GiB payload cap")
     payload_path = output_path.with_suffix(".bin")
     payload_partial = payload_path.with_suffix(payload_path.suffix + ".partial")
     manifest_partial = output_path.with_suffix(output_path.suffix + ".partial")
@@ -598,6 +658,9 @@ def main(argv: list[str] | None = None) -> int:
     for index in range(8, 16):
         parser.add_argument(f"--block{index}", type=Path)
         parser.add_argument(f"--receipt{index}", type=Path)
+    for index in range(16, 36):
+        parser.add_argument(f"--block{index}", type=Path)
+        parser.add_argument(f"--receipt{index}", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", choices=("mps",), default="mps")
     args = parser.parse_args(argv)
@@ -614,6 +677,8 @@ def main(argv: list[str] | None = None) -> int:
             block7=args.block7, receipt7=args.receipt7,
             **{f"block{index}": getattr(args, f"block{index}") for index in range(8, 16)},
             **{f"receipt{index}": getattr(args, f"receipt{index}") for index in range(8, 16)},
+            **{f"block{index}": getattr(args, f"block{index}") for index in range(16, 36)},
+            **{f"receipt{index}": getattr(args, f"receipt{index}") for index in range(16, 36)},
             output=args.output, device_name=args.device,
         )
         print(json.dumps(result, sort_keys=True))

@@ -7,7 +7,7 @@ and replaces FlexAttention with per-spatial-tile gathered QK/softmax/PV. Legacy
 fixtures use controlled synthetic BF16 hidden states. The sixteen-block
 reference requires a provenance-pinned real pose image, VAE latent,
 scheduler-noise xt, and upstream PixelUMM stem result. The full target exports
-only per-block attention and output boundaries.
+all per-block attention boundaries and only the final two output boundaries.
 """
 from __future__ import annotations
 
@@ -40,9 +40,14 @@ TWO_BLOCK_SCHEMA = "cogni_ml.pixelumm_two_block_reference/v1"
 FOUR_BLOCK_SCHEMA = "cogni_ml.pixelumm_four_block_reference/v1"
 EIGHT_BLOCK_SCHEMA = "cogni_ml.pixelumm_eight_block_reference/v1"
 SIXTEEN_BLOCK_SCHEMA = "cogni_ml.pixelumm_sixteen_block_reference/v1"
+THIRTY_SIX_BLOCK_SCHEMA = "cogni_ml.pixelumm_thirty_six_block_reference/v1"
+THIRTY_SIX_CAPTURE_POLICY = "two_bank_survivors"
 SIXTEEN_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen")
 SIXTEEN_SOURCE_DIR = (SIXTEEN_ROOT / "source").resolve()
 SIXTEEN_RESULTS_DIR = (SIXTEEN_ROOT / "results").resolve()
+THIRTY_SIX_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-36-20261027")
+THIRTY_SIX_SOURCE_DIR = (THIRTY_SIX_ROOT / "source").resolve()
+THIRTY_SIX_RESULTS_DIR = (THIRTY_SIX_ROOT / "results").resolve()
 REAL_INPUT_SCHEMA = "cogni_ml.pixelumm_real_input/v1"
 REAL_INPUT_MANIFEST_NAME = "pixelumm-real-input.json"
 REAL_INPUT_SOURCE_IMAGE = Path("/opt/mldata_ssd/cogni-ml/video-scene-20261019/inputs/pose.png")
@@ -66,6 +71,7 @@ REAL_INPUT_ARTIFACTS = {
     },
 }
 SIXTEEN_FIXTURE_PAYLOAD_CAP = 16 * 1024 * 1024 * 1024
+THIRTY_SIX_FIXTURE_PAYLOAD_CAP = 32 * 1024 * 1024 * 1024
 TILE_TOKENS = 8
 ATOL = RTOL = 2e-5
 
@@ -930,10 +936,21 @@ def _capture_bytes_per_token(stage: str, arch) -> int:
 
 def _estimated_peak_bytes(
     grid: tuple[int, int, int], arch, *, layers: int = 1,
+    resident_layers: int | None = None,
     capture_stages: Iterable[str] | None = None,
+    full36_capture_policy: str | None = None,
 ) -> int:
-    if type(layers) is not int or layers not in {1, 2, 4, 8, 16}:
-        raise ReferenceError("reference memory estimate supports one, two, four, eight, or sixteen resident blocks")
+    if type(layers) is not int or layers not in {1, 2, 4, 8, 16, 36}:
+        raise ReferenceError("reference memory estimate supports one, two, four, eight, sixteen, or thirty-six blocks")
+    if (layers == 36) != (full36_capture_policy is not None):
+        raise ReferenceError("thirty-six-block memory estimate requires its explicit capture policy")
+    if layers == 36 and full36_capture_policy != THIRTY_SIX_CAPTURE_POLICY:
+        raise ReferenceError("unsupported thirty-six-block memory capture policy")
+    if resident_layers is None:
+        resident_layers = layers
+    if (type(resident_layers) is not int or not 1 <= resident_layers <= layers
+            or (layers == 36 and resident_layers != 1)):
+        raise ReferenceError("thirty-six-block reference must materialize one resident layer at a time")
     tokens = math.prod(grid)
     h = arch.hidden_size
     f = arch.intermediate_size
@@ -947,21 +964,30 @@ def _estimated_peak_bytes(
     max_q = min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     max_k = min(3, tiles_h) * min(3, tiles_w) * min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     score = arch.num_heads * max_q * max_k * 4
-    # Loading any later block briefly retains all earlier BF16 blocks, the new
-    # block in F32, and its BF16 copy. Thus the conversion peak is one F32
-    # block plus `layers` BF16 blocks. Extra hidden slots conservatively cover
-    # each retained block-boundary capture while FFN and local scores remain
-    # sequential.
-    weight_bytes = block_weights_f32 + layers * block_weights_bf16
-    hidden_slots = 7 + 4 * (layers - 1)
+    # Loading a later block briefly retains the previous resident BF16 layer,
+    # the new block in F32, and its BF16 copy. The full36 oracle streams one
+    # layer at a time while retaining only two-bank survivor captures, so
+    # weight and transient hidden slots scale with `resident_layers`.
+    weight_bytes = block_weights_f32 + resident_layers * block_weights_bf16
+    hidden_slots = 7 + 4 * (resident_layers - 1)
     captured_bytes = 0
+    if layers == 36 and capture_stages is None:
+        raise ReferenceError("thirty-six-block memory estimate requires its capture inventory")
     if capture_stages is not None:
         stages = tuple(capture_stages)
         if not set(stages) <= set(ALL_STAGES):
             raise ReferenceError("memory estimate received an unsupported capture stage")
-        captured_bytes = layers * tokens * sum(
-            _capture_bytes_per_token(stage, arch) for stage in stages
-        )
+        if layers == 36:
+            if stages != FULL_TARGET_STAGES:
+                raise ReferenceError("thirty-six-block memory estimate requires attention/output boundaries")
+            captured_bytes = tokens * (
+                layers * _capture_bytes_per_token("attention", arch)
+                + 2 * _capture_bytes_per_token("output", arch)
+            )
+        else:
+            captured_bytes = layers * tokens * sum(
+                _capture_bytes_per_token(stage, arch) for stage in stages
+            )
     return (weight_bytes + hidden_slots * hidden + 4 * ffn + 2 * score
             + 512 * 1024 * 1024 + captured_bytes)
 
@@ -969,35 +995,55 @@ def _estimated_peak_bytes(
 def _estimated_fixture_payload_bytes(
     grid: tuple[int, int, int], arch, *, layers: int,
     capture_stages: Iterable[str],
+    full36_capture_policy: str | None = None,
 ) -> int:
     """Exact serialized extent for the pinned BF16 inputs, weights and captures."""
-    if type(layers) is not int or layers not in {1, 2, 4, 8, 16}:
-        raise ReferenceError("fixture payload estimate supports one, two, four, eight, or sixteen blocks")
-    tokens = math.prod(_check_grid(grid))
+    if type(layers) is not int or layers not in {1, 2, 4, 8, 16, 36}:
+        raise ReferenceError("fixture payload estimate supports one, two, four, eight, sixteen, or thirty-six blocks")
+    checked_grid = _check_grid(grid)
+    tokens = math.prod(checked_grid)
     stages = tuple(capture_stages)
     if not set(stages) <= set(ALL_STAGES):
         raise ReferenceError("fixture payload estimate received an unsupported capture stage")
+    if (layers == 36) != (full36_capture_policy is not None):
+        raise ReferenceError("thirty-six-block fixture estimate requires its explicit capture policy")
+    if layers == 36 and full36_capture_policy != THIRTY_SIX_CAPTURE_POLICY:
+        raise ReferenceError("unsupported thirty-six-block fixture capture policy")
+    if layers == 36 and (checked_grid != SIXTEEN_GRID or stages != FULL_TARGET_STAGES):
+        raise ReferenceError("thirty-six-block fixture admits full-grid two-bank survivor captures only")
     input_bytes = tokens * (arch.hidden_size * 2 + 2 * arch.head_dim * 4)
     weights = layers * 385_892_864
-    captures = layers * tokens * sum(
-        _capture_bytes_per_token(stage, arch) for stage in stages
-    )
+    if layers == 36:
+        captures = tokens * (
+            layers * _capture_bytes_per_token("attention", arch)
+            + 2 * _capture_bytes_per_token("output", arch)
+        )
+    else:
+        captures = layers * tokens * sum(
+            _capture_bytes_per_token(stage, arch) for stage in stages
+        )
     result = input_bytes + weights + captures
     if layers == 16 and result > SIXTEEN_FIXTURE_PAYLOAD_CAP:
         raise ReferenceError("sixteen-block fixture exceeds its 16 GiB payload cap")
+    if layers == 36 and result > THIRTY_SIX_FIXTURE_PAYLOAD_CAP:
+        raise ReferenceError("thirty-six-block fixture exceeds its 32 GiB payload cap")
     return result
 
 
 def mps_memory_floor(
     device: torch.device, grid: tuple[int, int, int], arch, *, layers: int = 1,
+    resident_layers: int | None = None,
     capture_stages: Iterable[str] | None = None,
+    full36_capture_policy: str | None = None,
 ) -> dict[str, int | bool]:
     if device.type != "mps":
         return {"applies": False}
     total = _physical_memory_bytes()
     allocated = int(torch.mps.driver_allocated_memory())
     estimated = _estimated_peak_bytes(
-        grid, arch, layers=layers, capture_stages=capture_stages
+        grid, arch, layers=layers, resident_layers=resident_layers,
+        capture_stages=capture_stages,
+        full36_capture_policy=full36_capture_policy,
     )
     floor = total // 10
     if total - allocated - estimated < floor:
@@ -1007,7 +1053,8 @@ def mps_memory_floor(
     return {
         "applies": True, "physical_bytes": total, "driver_allocated_bytes": allocated,
         "estimated_peak_bytes": estimated, "required_floor_bytes": floor,
-        "resident_blocks": layers,
+        "resident_blocks": layers if resident_layers is None else resident_layers,
+        "capture_blocks": layers,
     }
 
 
@@ -1021,9 +1068,139 @@ def _tensor_dtype_name(tensor: torch.Tensor) -> str:
     raise ReferenceError(f"fixture does not support tensor dtype {tensor.dtype}")
 
 
+def _write_cache_weight_records(
+    target, *, cache_manifest: Mapping, cache_payload_path: Path,
+    records: dict, payload_digest, start_offset: int,
+) -> int:
+    """Copy validated full36 BF16 weight records with bounded host memory."""
+    block_count = len(cache_manifest.get("blocks", {}))
+    if (block_count != 36 or not isinstance(cache_manifest.get("weights"), dict)
+            or not isinstance(cache_manifest.get("blocks"), dict)):
+        raise ReferenceError("streamed fixture weights require a validated 36-block cache")
+    expected_keys = {
+        f"block{index}.{name}"
+        for index in range(36) for name in checkpoint_inventory.block_schema(index)
+    }
+    cache_weights = cache_manifest["weights"]
+    if set(cache_weights) != expected_keys:
+        raise ReferenceError("full36 cache weight inventory differs from the pinned decoder")
+
+    cache_payload_original = Path(cache_payload_path).expanduser()
+    if cache_payload_original.is_symlink() or not cache_payload_original.is_file():
+        raise ReferenceError("streamed BF16 cache payload must be a regular file")
+    cache_payload_path = cache_payload_original.resolve(strict=True)
+    before = cache_payload_path.stat()
+    if (type(cache_manifest.get("payload_bytes")) is not int
+            or cache_manifest["payload_bytes"] != before.st_size):
+        raise ReferenceError("streamed BF16 cache payload extent differs from its manifest")
+    cache_aggregate = hashlib.sha256()
+    cursor = start_offset
+    cache_cursor = 0
+    with cache_payload_path.open("rb") as source_stream:
+        for index in range(36):
+            block = cache_manifest["blocks"].get(str(index))
+            block_keys = sorted(key for key in expected_keys if key.startswith(f"block{index}."))
+            if (not isinstance(block, dict) or block.get("selected_block") != index
+                    or block.get("weight_keys") != block_keys):
+                raise ReferenceError(f"full36 cache block {index} ownership is malformed")
+            for key in block_keys:
+                source_record = cache_weights[key]
+                shape = list(checkpoint_inventory.block_schema(index)[key.removeprefix(f"block{index}.")])
+                nbytes = math.prod(shape) * 2
+                if (not isinstance(source_record, dict)
+                        or source_record.get("dtype") != "BF16"
+                        or source_record.get("shape") != shape
+                        or source_record.get("offset") != cache_cursor
+                        or source_record.get("nbytes") != nbytes
+                        or not _digest(source_record.get("sha256"))):
+                    raise ReferenceError(f"full36 cache tensor record is malformed: {key}")
+                source_stream.seek(cache_cursor)
+                record_digest = hashlib.sha256()
+                remaining = nbytes
+                while remaining:
+                    chunk = source_stream.read(min(8 * 1024 * 1024, remaining))
+                    if not chunk:
+                        raise ReferenceError(f"full36 cache tensor is truncated: {key}")
+                    target.write(chunk)
+                    payload_digest.update(chunk)
+                    cache_aggregate.update(chunk)
+                    record_digest.update(chunk)
+                    remaining -= len(chunk)
+                actual_sha = record_digest.hexdigest()
+                if actual_sha != source_record["sha256"]:
+                    raise ReferenceError(f"full36 cache tensor digest changed: {key}")
+                records[key] = {
+                    "dtype": "BF16", "shape": shape, "offset": cursor,
+                    "nbytes": nbytes, "sha256": actual_sha,
+                }
+                cursor += nbytes
+                cache_cursor += nbytes
+    after = cache_payload_path.stat()
+    if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+        raise ReferenceError("full36 cache payload changed while copying fixture weights")
+    if (cache_cursor != before.st_size
+            or cache_aggregate.hexdigest() != cache_manifest.get("payload_sha256")):
+        raise ReferenceError("full36 cache payload digest or coverage mismatch")
+    return cursor
+
+
+def _queue_cache_weight_word_checks(
+    layer, *, cache_manifest: Mapping, cache_words: torch.Tensor,
+    block_index: int, device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Queue exact device-side BF16-word checks against the independent cache.
+
+    Cache words move to the selected device in bounded chunks. Each returned
+    scalar stays on device until the sequence's single terminal synchronization.
+    """
+    block = cache_manifest["blocks"].get(str(block_index))
+    if not isinstance(block, dict):
+        raise ReferenceError(f"BF16 cache has no block {block_index} ownership record")
+    parameters = dict(layer.named_parameters())
+    expected_names = sorted(checkpoint_inventory.block_schema(block_index))
+    expected_keys = [f"block{block_index}.{name}" for name in expected_names]
+    if block.get("weight_keys") != expected_keys or set(parameters) != set(expected_names):
+        raise ReferenceError(f"BF16 cache block {block_index} parameter ownership mismatch")
+    cache_records = cache_manifest["weights"]
+    words_per_chunk = (8 * 1024 * 1024) // 2
+    checks: dict[str, torch.Tensor] = {}
+    for name in expected_names:
+        key = f"block{block_index}.{name}"
+        parameter = parameters[name].detach()
+        record = cache_records[key]
+        if (parameter.dtype != torch.bfloat16 or not parameter.is_contiguous()
+                or list(parameter.shape) != record.get("shape")
+                or record.get("dtype") != "BF16"
+                or type(record.get("offset")) is not int
+                or type(record.get("nbytes")) is not int
+                or record["nbytes"] != parameter.numel() * 2
+                or record["offset"] % 2):
+            raise ReferenceError(f"BF16 cache record does not match loaded parameter: {key}")
+        source_words = parameter.view(torch.int16).reshape(-1)
+        cache_start = record["offset"] // 2
+        cache_count = record["nbytes"] // 2
+        if cache_start + cache_count > cache_words.numel():
+            raise ReferenceError(f"BF16 cache record exceeds its payload: {key}")
+        combined = None
+        for first in range(0, cache_count, words_per_chunk):
+            count = min(words_per_chunk, cache_count - first)
+            source_chunk = source_words.narrow(0, first, count)
+            cache_chunk = cache_words.narrow(0, cache_start + first, count).to(device=device)
+            equal = source_chunk.eq(cache_chunk).all()
+            combined = equal if combined is None else combined.logical_and(equal)
+            del source_chunk, cache_chunk, equal
+        if combined is None:
+            raise ReferenceError(f"BF16 cache record is empty: {key}")
+        checks[key] = combined
+    del parameters
+    return checks
+
+
 def _write_fixture(path: Path, *, metadata: Mapping, inputs: Mapping[str, torch.Tensor],
                    weights: Mapping[str, torch.Tensor], captures: Mapping[str, torch.Tensor],
-                   schema: str = SCHEMA) -> dict:
+                   schema: str = SCHEMA,
+                   weight_cache: tuple[Mapping, Path] | None = None) -> dict:
     path = path.expanduser().absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload_path = path.with_suffix(".bin")
@@ -1039,6 +1216,17 @@ def _write_fixture(path: Path, *, metadata: Mapping, inputs: Mapping[str, torch.
     }
     with payload_path.open("xb") as stream:
         for group_name, tensors in (("inputs", inputs), ("weights", weights), ("captures", captures)):
+            if group_name == "weights" and weight_cache is not None:
+                if tensors:
+                    raise ReferenceError("fixture weights cannot mix tensors and streamed cache records")
+                cache_manifest, cache_payload_path = weight_cache
+                payload_bytes = _write_cache_weight_records(
+                    stream, cache_manifest=cache_manifest,
+                    cache_payload_path=cache_payload_path,
+                    records=manifest["weights"], payload_digest=payload_digest,
+                    start_offset=payload_bytes,
+                )
+                continue
             for name, tensor in tensors.items():
                 cpu = tensor.detach().contiguous().cpu()
                 dtype_name = _tensor_dtype_name(cpu)
@@ -1095,13 +1283,24 @@ def _load_layer_for_block(
         from safetensors import safe_open
     except ImportError as error:
         raise ReferenceError("safetensors is required to load bounded block subsets") from error
-    checkpoint = checkpoint.expanduser().resolve()
-    receipt_path = receipt_path.expanduser().resolve()
-    header_path = header_path.expanduser().resolve()
-    source_root = checkpoint_inventory.ROOT.resolve()
-    for path in (checkpoint, receipt_path, header_path):
-        if path.parent != (source_root / "source").resolve():
-            raise ReferenceError("block reference source files must be in the task source directory")
+    checkpoint_original = Path(checkpoint).expanduser()
+    receipt_original = Path(receipt_path).expanduser()
+    header_original = Path(header_path).expanduser()
+    if any(path.is_symlink() for path in (
+        checkpoint_original, receipt_original, header_original,
+    )):
+        raise ReferenceError("block reference source files must not be symlinks")
+    checkpoint = checkpoint_original.resolve()
+    receipt_path = receipt_original.resolve()
+    header_path = header_original.resolve()
+    base_source_dir = (checkpoint_inventory.ROOT / "source").resolve()
+    expected_source_dir = (
+        THIRTY_SIX_SOURCE_DIR if block_index >= 16 else base_source_dir
+    )
+    if (checkpoint.parent != expected_source_dir
+            or receipt_path.parent != expected_source_dir
+            or header_path.parent != base_source_dir):
+        raise ReferenceError("block reference source files must be in their pinned task source directory")
     try:
         raw_header = header_path.read_bytes()
         receipt, receipt_sha = _read_receipt(receipt_path)
@@ -1239,12 +1438,52 @@ def make_fixture(
 
 def _block_io_edge(index: int) -> dict[str, str]:
     """Describe the predecessor edge for one of the admitted block slots."""
-    if type(index) is not int or not 0 <= index < 16:
-        raise ReferenceError("block I/O edges are defined for block indices zero through fifteen")
+    if type(index) is not int or not 0 <= index < 36:
+        raise ReferenceError("block I/O edges are defined for block indices zero through thirty-five")
     return {
         "input_source": "inputs.x" if index == 0 else f"captures.block{index - 1}.output",
         "output_key": f"captures.block{index}.output",
     }
+
+
+def _full36_capture_stages(index: int) -> tuple[str, ...]:
+    """Return the survivor stages retained for one full-depth block."""
+    if type(index) is not int or not 0 <= index < 36:
+        raise ReferenceError("full36 capture slots are defined for blocks zero through thirty-five")
+    return ("attention",) if index < 34 else FULL_TARGET_STAGES
+
+
+def _full36_capture_order() -> tuple[str, ...]:
+    return tuple(
+        f"block{index}.{stage}"
+        for index in range(36)
+        for stage in _full36_capture_stages(index)
+    )
+
+
+def _validate_full36_capture_inventory(
+    *, policy: object, capture_order: Iterable[str], blocks: Iterable[Mapping],
+) -> None:
+    """Fail closed unless the fixture contains the exact two-bank survivors."""
+    if policy != THIRTY_SIX_CAPTURE_POLICY:
+        raise ReferenceError("full36 fixture requires the two-bank survivor capture policy")
+    if (not isinstance(capture_order, (list, tuple))
+            or tuple(capture_order) != _full36_capture_order()):
+        raise ReferenceError("full36 fixture capture inventory is not the exact 38 survivor keys")
+    if not isinstance(blocks, (list, tuple)):
+        raise ReferenceError("full36 fixture block capture inventories are malformed")
+    blocks = tuple(blocks)
+    if len(blocks) != 36:
+        raise ReferenceError("full36 fixture must describe exactly 36 block capture inventories")
+    for index, block in enumerate(blocks):
+        expected_keys = [
+            f"block{index}.{stage}" for stage in _full36_capture_stages(index)
+        ]
+        if (not isinstance(block, Mapping)
+                or type(block.get("index")) is not int
+                or block.get("index") != index
+                or block.get("capture_keys") != expected_keys):
+            raise ReferenceError(f"full36 block {index} capture inventory is malformed")
 
 
 def _make_block_sequence_fixture(
@@ -1253,25 +1492,29 @@ def _make_block_sequence_fixture(
     header: Path | str, output: Path | str, grid: Iterable[int],
     schema: str, device_name: str = "mps", capture_mode: str = "auto",
     seed: int = 20261026, real_input_manifest: Path | str | None = None,
+    weight_cache_manifest: Path | str | None = None,
 ) -> dict:
     """Execute an admitted block sequence on one device and retain its edges."""
     block_sources = tuple(block_sources)
-    if len(block_sources) not in {2, 4, 8, 16}:
-        raise ReferenceError("reference fixture requires exactly 2, 4, 8, or 16 consecutive blocks")
+    if len(block_sources) not in {2, 4, 8, 16, 36}:
+        raise ReferenceError("reference fixture requires exactly 2, 4, 8, 16, or 36 consecutive blocks")
     expected_schema = {
         2: TWO_BLOCK_SCHEMA,
         4: FOUR_BLOCK_SCHEMA,
         8: EIGHT_BLOCK_SCHEMA,
         16: SIXTEEN_BLOCK_SCHEMA,
+        36: THIRTY_SIX_BLOCK_SCHEMA,
     }[len(block_sources)]
     if schema != expected_schema:
         raise ReferenceError("block count and reference schema do not match")
     output_path = Path(output).expanduser().absolute()
     payload_path = output_path.with_suffix(".bin")
     block_count = len(block_sources)
-    expected_results_dir = SIXTEEN_RESULTS_DIR if block_count == 16 else (
-        checkpoint_inventory.ROOT / "results"
-    ).resolve()
+    expected_results_dir = THIRTY_SIX_RESULTS_DIR if block_count == 36 else (
+        SIXTEEN_RESULTS_DIR if block_count == 16 else (
+            checkpoint_inventory.ROOT / "results"
+        ).resolve()
+    )
     if output_path.parent.resolve() != expected_results_dir:
         raise ReferenceError("multi-block reference output must be in its pinned task results directory")
     if (output_path.exists() or output_path.is_symlink()
@@ -1280,10 +1523,12 @@ def _make_block_sequence_fixture(
     grid = _check_grid(grid)
     if device_name not in {"cpu", "mps"}:
         raise ReferenceError("device must be cpu or mps")
-    if block_count == 16 and device_name != "mps":
-        raise ReferenceError("sixteen-block neural reference requires MPS execution")
-    if (block_count == 16) != (real_input_manifest is not None):
-        raise ReferenceError("sixteen-block reference requires exactly one real-input manifest")
+    if block_count in {16, 36} and device_name != "mps":
+        raise ReferenceError("sixteen- and thirty-six-block neural references require MPS execution")
+    if (block_count in {16, 36}) != (real_input_manifest is not None):
+        raise ReferenceError("sixteen- and thirty-six-block references require exactly one real-input manifest")
+    if (block_count == 36) != (weight_cache_manifest is not None):
+        raise ReferenceError("thirty-six-block reference requires exactly one BF16 weight-cache manifest")
     device = torch.device(device_name)
     if device.type == "mps" and not torch.backends.mps.is_available():
         raise ReferenceError("PyTorch MPS is not available")
@@ -1291,17 +1536,21 @@ def _make_block_sequence_fixture(
         raise ReferenceError("capture mode must be auto, all, or boundary")
     count = math.prod(grid)
     real_input = None
-    if block_count == 16:
+    if block_count in {16, 36}:
         if tuple(grid) not in {SIXTEEN_GRID, SMALL_REAL_INPUT_GRID}:
             raise ReferenceError(
-                "sixteen-block reference admits only grids [6, 44, 80] and [2, 32, 32]"
+                "sixteen- and thirty-six-block references admit only grids [6, 44, 80] and [2, 32, 32]"
             )
+        if block_count == 36 and tuple(grid) != SIXTEEN_GRID:
+            raise ReferenceError("thirty-six-block reference requires the full [6, 44, 80] grid")
         manifest_path = Path(real_input_manifest).expanduser()
         if manifest_path.name not in REAL_INPUT_ARTIFACTS:
-            raise ReferenceError("sixteen-block reference requires a pinned real-input manifest")
+            raise ReferenceError("multi-block reference requires a pinned real-input manifest")
         profile, _, _ = REAL_INPUT_ARTIFACTS[manifest_path.name]
         if ((profile == "full") != (tuple(grid) == SIXTEEN_GRID)):
             raise ReferenceError("real-input profile does not match the requested token grid")
+        if block_count == 36 and profile != "full":
+            raise ReferenceError("thirty-six-block reference requires a full real-input manifest")
         if (profile == "small" and capture_mode == "boundary"):
             raise ReferenceError("small real-input profile requires all-stage captures")
         if (profile == "full" and capture_mode == "all"):
@@ -1316,14 +1565,48 @@ def _make_block_sequence_fixture(
         416 if tuple(grid) == SMALL_REAL_INPUT_GRID else 32
     ):
         raise ReferenceError("sixteen-block profile has an unsupported capture inventory")
+    if block_count == 36 and chosen != FULL_TARGET_STAGES:
+        raise ReferenceError("thirty-six-block reference captures attention and output boundaries only")
+    full36_capture_policy = (
+        THIRTY_SIX_CAPTURE_POLICY if block_count == 36 else None
+    )
 
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
     arch = source.QWEN3_8B_GEN
-    memory = mps_memory_floor(
-        device, grid, arch, layers=len(block_sources), capture_stages=chosen
+    estimated_payload_bytes = _estimated_fixture_payload_bytes(
+        grid, arch, layers=block_count, capture_stages=chosen,
+        full36_capture_policy=full36_capture_policy,
     )
-    if block_count == 16:
+    memory = mps_memory_floor(
+        device, grid, arch, layers=len(block_sources),
+        resident_layers=1 if block_count == 36 else None,
+        capture_stages=chosen,
+        full36_capture_policy=full36_capture_policy,
+    )
+    cache_manifest = None
+    cache_manifest_sha = None
+    cache_payload_path = None
+    if block_count == 36:
+        cache_input = Path(weight_cache_manifest).expanduser()
+        if (cache_input.is_symlink() or not cache_input.is_absolute()
+                or cache_input.parent.resolve() != THIRTY_SIX_SOURCE_DIR
+                or cache_input.name != "pixelumm-thirty-six-bf16-cache.json"):
+            raise ReferenceError("thirty-six-block reference requires the pinned full-depth BF16 cache")
+        cache_path = cache_input.resolve(strict=True)
+        try:
+            import hy_nomas_pixelumm_bf16_cache as cache_module
+
+            cache_module.validate_cache_file(cache_path)
+            raw_cache_manifest = cache_path.read_bytes()
+            cache_manifest = checkpoint_inventory.parse_header(raw_cache_manifest)
+        except (OSError, checkpoint_inventory.InventoryError, ValueError) as error:
+            raise ReferenceError(f"thirty-six-block BF16 cache was rejected: {error}") from error
+        cache_manifest_sha = hashlib.sha256(raw_cache_manifest).hexdigest()
+        cache_payload_path = cache_path.parent / cache_manifest["payload"]
+        if cache_payload_path.is_symlink() or not cache_payload_path.is_file():
+            raise ReferenceError("thirty-six-block BF16 cache payload is missing or a symlink")
+    if block_count in {16, 36}:
         real_input = validate_real_input_manifest(real_input_manifest)
         if tuple(real_input["grid"]) != tuple(grid):
             raise ReferenceError("real-input manifest grid differs from the requested grid")
@@ -1339,22 +1622,23 @@ def _make_block_sequence_fixture(
     header_path = Path(header)
     layers = []
     subset_provenance = []
-    for index, (checkpoint_path, receipt_path) in enumerate(block_sources):
-        layer, checked, receipt_sha = _load_layer_for_block(
-            source, Path(checkpoint_path), Path(receipt_path), header_path, device, index
-        )
-        layers.append(layer)
-        subset_provenance.append({
-            "index": index,
-            "checkpoint_subset_sha256": checked["subset_sha256"],
-            "checkpoint_subset_bytes": checked["subset_bytes"],
-            "checkpoint_subset_file": checked["subset_file"],
-            "source_receipt_sha256": receipt_sha,
-            "source_extent": checked["block_data_offsets"],
-            "legacy_extent_derived_from_pinned_header": checked[
-                "legacy_extent_derived_from_pinned_header"
-            ],
-        })
+    if block_count != 36:
+        for index, (checkpoint_path, receipt_path) in enumerate(block_sources):
+            layer, checked, receipt_sha = _load_layer_for_block(
+                source, Path(checkpoint_path), Path(receipt_path), header_path, device, index
+            )
+            layers.append(layer)
+            subset_provenance.append({
+                "index": index,
+                "checkpoint_subset_sha256": checked["subset_sha256"],
+                "checkpoint_subset_bytes": checked["subset_bytes"],
+                "checkpoint_subset_file": checked["subset_file"],
+                "source_receipt_sha256": receipt_sha,
+                "source_extent": checked["block_data_offsets"],
+                "legacy_extent_derived_from_pinned_header": checked[
+                    "legacy_extent_derived_from_pinned_header"
+                ],
+            })
 
     permutation = torch.tensor(plan.permutation, dtype=torch.long, device=device)
     if real_input is None:
@@ -1373,34 +1657,109 @@ def _make_block_sequence_fixture(
 
     block_captures: dict[str, torch.Tensor] = {}
     current = x
+    weight_word_checks: dict[str, torch.Tensor] = {}
+    weight_word_check_count = 0
+    cache_words = None
+    if block_count == 36:
+        cache_payload_bytes = cache_manifest["payload_bytes"]
+        if cache_payload_bytes % 2 or cache_payload_bytes > 16 * 1024**3:
+            raise ReferenceError("full36 BF16 cache payload extent is unsupported")
+        # A read-only file mapping avoids materializing another 13 GiB CPU copy.
+        cache_bytes = torch.from_file(
+            str(cache_payload_path), shared=False,
+            size=cache_payload_bytes, dtype=torch.uint8,
+        )
+        cache_words = cache_bytes.view(torch.int16)
+        del cache_bytes
     with torch.inference_mode():
         context = torch.autocast(device_type=device.type, dtype=torch.bfloat16)
         with context:
-            for index, layer in enumerate(layers):
-                result, captures = run_layer_reference(
-                    layer, current, cos, sin, plan, capture_stages=chosen
+            for index in range(block_count):
+                if block_count == 36:
+                    checkpoint_path, receipt_path = block_sources[index]
+                    layer, checked, receipt_sha = _load_layer_for_block(
+                        source, Path(checkpoint_path), Path(receipt_path),
+                        header_path, device, index,
+                    )
+                    cache_block = cache_manifest["blocks"][str(index)]
+                    if (cache_block.get("subset_sha256") != checked["subset_sha256"]
+                            or cache_block.get("subset_bytes") != checked["subset_bytes"]
+                            or cache_block.get("source_extent") != checked["block_data_offsets"]
+                            or cache_block.get("source_receipt_sha256") != receipt_sha):
+                        raise ReferenceError(
+                            f"full36 cache source provenance differs for block {index}"
+                        )
+                    subset_provenance.append({
+                        "index": index,
+                        "checkpoint_subset_sha256": checked["subset_sha256"],
+                        "checkpoint_subset_bytes": checked["subset_bytes"],
+                        "checkpoint_subset_file": checked["subset_file"],
+                        "source_receipt_sha256": receipt_sha,
+                        "source_extent": checked["block_data_offsets"],
+                        "legacy_extent_derived_from_pinned_header": checked[
+                            "legacy_extent_derived_from_pinned_header"
+                        ],
+                    })
+                    weight_word_checks.update(_queue_cache_weight_word_checks(
+                        layer, cache_manifest=cache_manifest,
+                        cache_words=cache_words, block_index=index, device=device,
+                    ))
+                else:
+                    layer = layers[index]
+                block_stages = (
+                    _full36_capture_stages(index) if block_count == 36 else chosen
                 )
-                for stage in chosen:
+                result, captures = run_layer_reference(
+                    layer, current, cos, sin, plan, capture_stages=block_stages
+                )
+                for stage in block_stages:
                     block_captures[f"block{index}.{stage}"] = captures[stage]
                 # No inter-block device-to-host handoff occurs: this tensor
                 # feeds the next layer directly on the selected device.
                 current = result
+                if block_count == 36:
+                    del layer, captures, result
+    word_check_vector = None
+    if block_count == 36:
+        expected_check_keys = {
+            f"block{index}.{name}"
+            for index in range(36)
+            for name in checkpoint_inventory.block_schema(index)
+        }
+        if set(weight_word_checks) != expected_check_keys or len(weight_word_checks) != 468:
+            raise ReferenceError("full36 MPS weight-word checks did not cover all 468 parameters")
+        weight_word_check_count = len(weight_word_checks)
+        word_check_vector = torch.stack([
+            weight_word_checks[key] for key in sorted(weight_word_checks)
+        ])
     if device.type == "mps":
         # Single terminal synchronization after the entire decoder prefix.
         torch.mps.synchronize()
 
+    if block_count == 36:
+        if not all(word_check_vector.cpu().tolist()):
+            raise ReferenceError("loaded MPS BF16 words differ from authenticated cache records")
+        del word_check_vector, weight_word_checks, cache_words
+
     weights: dict[str, torch.Tensor] = {}
     blocks_metadata = []
-    for index, layer in enumerate(layers):
+    for index in range(block_count):
         prefix = f"block{index}."
-        state = {name: parameter.detach() for name, parameter in layer.named_parameters()}
-        if len(state) != 13:
-            raise ReferenceError(f"loaded block-{index} parameter inventory changed")
-        for name in sorted(state):
-            weights[prefix + name] = state[name]
-        weight_keys = [prefix + name for name in sorted(state)]
-        capture_keys = [f"block{index}.{stage}" for stage in chosen]
-        blocks_metadata.append({
+        if block_count == 36:
+            weight_keys = list(cache_manifest["blocks"][str(index)]["weight_keys"])
+        else:
+            layer = layers[index]
+            state = {name: parameter.detach() for name, parameter in layer.named_parameters()}
+            if len(state) != 13:
+                raise ReferenceError(f"loaded block-{index} parameter inventory changed")
+            for name in sorted(state):
+                weights[prefix + name] = state[name]
+            weight_keys = [prefix + name for name in sorted(state)]
+        block_stages = (
+            _full36_capture_stages(index) if block_count == 36 else chosen
+        )
+        capture_keys = [f"block{index}.{stage}" for stage in block_stages]
+        block_metadata = {
             "index": index,
             "checkpoint_subset_sha256": subset_provenance[index]["checkpoint_subset_sha256"],
             "checkpoint_subset_bytes": subset_provenance[index]["checkpoint_subset_bytes"],
@@ -1410,7 +1769,10 @@ def _make_block_sequence_fixture(
             "weight_keys": weight_keys,
             "capture_keys": capture_keys,
             **_block_io_edge(index),
-        })
+        }
+        if block_count == 36:
+            block_metadata["weight_word_check_count"] = 13
+        blocks_metadata.append(block_metadata)
     metadata = {
         "upstream_revision": UPSTREAM_REVISION,
         "upstream_model_path": UPSTREAM_MODEL_PATH,
@@ -1444,15 +1806,30 @@ def _make_block_sequence_fixture(
         metadata["real_input_manifest_sha256"] = real_input["manifest_sha256"]
         metadata["real_input_payload_sha256"] = real_input["payload_sha256"]
         metadata["real_input_payload_bytes"] = real_input["payload_bytes"]
+    if block_count == 36:
+        metadata.update({
+            "full36_capture_policy": full36_capture_policy,
+            "weight_cache_manifest_sha256": cache_manifest_sha,
+            "weight_cache_payload_sha256": cache_manifest["payload_sha256"],
+            "weight_cache_payload_bytes": cache_manifest["payload_bytes"],
+            "weight_word_verification": {
+                "method": "loaded_mps_bf16_int16_word_equality",
+                "tensor_count": 468,
+                "all_equal": True,
+            },
+        })
+        _validate_full36_capture_inventory(
+            policy=metadata.get("full36_capture_policy"),
+            capture_order=tuple(block_captures),
+            blocks=blocks_metadata,
+        )
     fixture = _write_fixture(
         output_path, metadata=metadata, inputs={"x": x, "cos": cos, "sin": sin},
         weights=weights, captures=block_captures, schema=schema,
+        weight_cache=(cache_manifest, cache_payload_path) if block_count == 36 else None,
     )
-    estimated_payload_bytes = _estimated_fixture_payload_bytes(
-        grid, arch, layers=len(block_sources), capture_stages=chosen
-    )
-    if block_count == 16 and fixture["payload_bytes"] != estimated_payload_bytes:
-        raise ReferenceError("sixteen-block fixture payload differs from its exact estimate")
+    if block_count in {16, 36} and fixture["payload_bytes"] != estimated_payload_bytes:
+        raise ReferenceError("multi-block fixture payload differs from its exact estimate")
     return {
         "fixture": str(output_path.resolve()),
         "payload": str(payload_path.resolve()),
@@ -1462,6 +1839,12 @@ def _make_block_sequence_fixture(
         "payload_sha256": fixture["payload_sha256"],
         "blocks": subset_provenance,
         "estimated_peak_bytes": memory.get("estimated_peak_bytes"),
+        **({
+            "weight_cache_manifest_sha256": cache_manifest_sha,
+            "weight_cache_payload_sha256": cache_manifest["payload_sha256"],
+            "weight_cache_payload_bytes": cache_manifest["payload_bytes"],
+            "weight_word_check_count": weight_word_check_count,
+        } if block_count == 36 else {}),
     }
 
 
@@ -1537,6 +1920,22 @@ def make_sixteen_block_fixture(
     )
 
 
+def make_thirty_six_block_fixture(
+    *, upstream: Path | str, block_sources: Iterable[tuple[Path | str, Path | str]],
+    header: Path | str, output: Path | str, grid: Iterable[int],
+    real_input_manifest: Path | str, weight_cache_manifest: Path | str,
+    device_name: str = "mps", capture_mode: str = "auto",
+) -> dict:
+    """Run a fresh, streamed real-input reference through blocks 0–35."""
+    return _make_block_sequence_fixture(
+        upstream=upstream, block_sources=block_sources,
+        header=header, output=output, grid=grid,
+        schema=THIRTY_SIX_BLOCK_SCHEMA, device_name=device_name,
+        capture_mode=capture_mode, real_input_manifest=real_input_manifest,
+        weight_cache_manifest=weight_cache_manifest,
+    )
+
+
 def geometry_report(upstream: Path | str, grid: Iterable[int]) -> dict:
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
@@ -1567,6 +1966,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--block7", type=Path)
     for index in range(8, 16):
         parser.add_argument(f"--block{index}", type=Path)
+    for index in range(16, 36):
+        parser.add_argument(f"--block{index}", type=Path)
     parser.add_argument("--receipt0", type=Path)
     parser.add_argument("--receipt1", type=Path)
     parser.add_argument("--receipt2", type=Path)
@@ -1577,6 +1978,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt7", type=Path)
     for index in range(8, 16):
         parser.add_argument(f"--receipt{index}", type=Path)
+    for index in range(16, 36):
+        parser.add_argument(f"--receipt{index}", type=Path)
     parser.add_argument("--header", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--grid", required=True, type=int, nargs=3, metavar=("T", "H", "W"))
@@ -1585,13 +1988,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=20261026)
     parser.add_argument("--geometry-only", action="store_true")
     parser.add_argument("--real-input-manifest", type=Path)
+    parser.add_argument("--weight-cache-manifest", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.geometry_only:
             print(json.dumps(geometry_report(args.upstream, args.grid), sort_keys=True))
             return 0
-        block_paths = tuple(getattr(args, f"block{index}") for index in range(16))
-        receipt_paths = tuple(getattr(args, f"receipt{index}") for index in range(16))
+        block_paths = tuple(getattr(args, f"block{index}") for index in range(36))
+        receipt_paths = tuple(getattr(args, f"receipt{index}") for index in range(36))
         if any(path is not None for path in (*block_paths, *receipt_paths)):
             if args.checkpoint is not None:
                 parser.error("--checkpoint cannot be combined with block inputs")
@@ -1604,12 +2008,16 @@ def main(argv: list[str] | None = None) -> int:
                 if subset is not None:
                     present.append(index)
             count = len(present)
-            if count not in {2, 4, 8, 16} or present != list(range(count)):
-                parser.error("block inputs must be consecutive indices 0-1, 0-3, 0-7, or 0-15")
-            if count == 16 and args.real_input_manifest is None:
-                parser.error("sixteen-block reference requires --real-input-manifest")
-            if count != 16 and args.real_input_manifest is not None:
-                parser.error("--real-input-manifest is reserved for the sixteen-block reference")
+            if count not in {2, 4, 8, 16, 36} or present != list(range(count)):
+                parser.error("block inputs must be consecutive indices 0-1, 0-3, 0-7, 0-15, or 0-35")
+            if count in {16, 36} and args.real_input_manifest is None:
+                parser.error("sixteen- and thirty-six-block references require --real-input-manifest")
+            if count not in {16, 36} and args.real_input_manifest is not None:
+                parser.error("--real-input-manifest is reserved for the sixteen- and thirty-six-block references")
+            if count == 36 and args.weight_cache_manifest is None:
+                parser.error("thirty-six-block reference requires --weight-cache-manifest")
+            if count != 36 and args.weight_cache_manifest is not None:
+                parser.error("--weight-cache-manifest is reserved for the thirty-six-block reference")
             common = {
                 "upstream": args.upstream, "header": args.header,
                 "output": args.output, "grid": args.grid,
@@ -1636,16 +2044,24 @@ def main(argv: list[str] | None = None) -> int:
                         **{f"receipt{i}": receipt_paths[i] for i in range(8)},
                     )
                 else:
-                    report = make_sixteen_block_fixture(
+                    factory = make_sixteen_block_fixture
+                    extra = {}
+                    if count == 36:
+                        factory = make_thirty_six_block_fixture
+                        extra["weight_cache_manifest"] = args.weight_cache_manifest
+                    report = factory(
                         upstream=args.upstream,
-                        block_sources=tuple(zip(block_paths, receipt_paths)),
+                        block_sources=tuple(zip(block_paths[:count], receipt_paths[:count])),
                         header=args.header, output=args.output, grid=args.grid,
                         real_input_manifest=args.real_input_manifest,
                         device_name=args.device, capture_mode=args.capture,
+                        **extra,
                     )
         else:
             if args.real_input_manifest is not None:
-                parser.error("--real-input-manifest requires blocks 0–15")
+                parser.error("--real-input-manifest requires blocks 0–15 or 0–35")
+            if args.weight_cache_manifest is not None:
+                parser.error("--weight-cache-manifest requires blocks 0–35")
             if args.checkpoint is None or args.output is None:
                 parser.error("--checkpoint and --output are required unless --geometry-only or pair inputs are used")
             report = make_fixture(
