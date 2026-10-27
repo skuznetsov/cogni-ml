@@ -180,3 +180,122 @@ precision, neighborhood semantics, ownership/lifetime or guard changes, or loss
 of external artifacts. Next useful gate: a memory-admitted phase-separated
 decoder assembly with shared workspace and sequential block comparisons before
 complete generation.
+
+## Two sequential blocks and BF16 startup cache, 2026-10-27
+
+Status: VERIFIED within the two-block fixture scope below. The preceding
+single-block qualification remains historical evidence at its pinned source
+state. This extension admits actual decoder layers zero and one at the same
+small and full-J geometries. It does not admit complete decoding or generation.
+
+The shared `Workspace` owns transient core and attention/RMS storage once,
+plus a persistent output bank and requested diagnostic captures for each slot.
+Block one's input is exactly block zero's GPU output, without a copy. Both
+blocks submit to one command chain, with no intermediate wait. Aggregate
+unique-byte admission precedes GPU allocation and large payload reads. A host
+mutex covers validation, native submission and state publication; it adds no
+GPU wait. All slots must be prepared before submission. Wrong slot order,
+cross-chain submission, premature reads/reuse/release and incomplete failed
+requests are fenced until the existing terminal completion boundary.
+
+This is CAUTION work because cross-plan buffer lifetimes change. The strongest
+failure is overwriting block zero's retained output or consuming stale scratch.
+The full-J replay changes the initial input and poisons mutable shared storage
+with NaNs after the previous terminal wait. It excludes weights, index tables,
+the exponent, output banks and captures. Both blocks still match the alternate
+upstream result. Poisoning and the diagnostic input upload are outside encode;
+the replay adds no synchronization inside either block. The standalone API is
+preserved and its original small fixture passes on the rebuilt binary. Rollback
+is to omit the pair probe and use the standalone plan.
+
+| Native report | Geometry | Compared boundaries | Result |
+| --- | --- | --- | --- |
+| `native-pair-small-final-v2.json` | T2/H32/W32, J2048 | All 26 stages of both blocks, first/last requests | All 52 stages bitwise exact and finite |
+| `native-pair-full-v1.json` | T6/H44/W80, J21,120 | Attention/output of both blocks, first/last and alternate poisoned replay | All four boundaries bitwise exact and finite |
+| `native-single-regression-v1.json` | T2/H32/W32, J2048 | Original standalone block, all 26 stages, first/last | Bitwise exact and finite |
+
+All comparisons retain `atol=rtol=2e-5`, with zero violations. Inputs are
+synthetic BF16 hidden states, seeds 20261026 and 20261027; block one receives
+block zero's computed output in both native and reference paths. The reference
+uses the pinned upstream layer semantics adapted to PyTorch MPS, not compiled
+CUDA Flex. All 26 BF16 weight tensors also match the independently produced
+pair fixtures by exact bytes. Complete decoder hidden states and pixel quality
+remain unqualified.
+
+The full pair has one gate, one warmup, three timed requests and one untimed
+different-input poisoned replay. Timed totals are 3.169756624 / 3.174909918 /
+3.167769917 seconds; median **3.169756624 seconds**. Median GPU elapsed is
+3.167306417 seconds and median encode time is 1.926368708 seconds. Encoding
+overlaps GPU work; those times must not be added. Preparation is 3.112975
+seconds including streamed payload authentication and upload, excluding
+metadata parsing. This is not a controlled loading-time comparison or video
+throughput measurement.
+
+Every full request uses 243 command segments, exactly one terminal wait,
+zero named Metal allocations during encode and zero preterminal activation
+readbacks. Four captures are read only after completion on the three compared
+requests. Named storage totals **3,955,236,836 bytes**: 2,988,809,188 owned and
+966,427,648 borrowed. Two separate workspaces with equivalent captures own
+5,285,558,216 bytes; sharing saves **2,296,749,028 bytes (2.14 GiB)** of owned
+storage. This is allocation accounting, not a measured speedup. Opaque MPS
+allocations are outside the named counters.
+
+The full native guard retains the 10% cache-aware floor, 8 GiB footprint cap,
+900-second timeout and 64 MiB swap-growth stop. Sampled group footprint reaches
+5,443,013,176 bytes; sampled headroom stays at least 24,304,386,048 bytes and
+swap does not grow. File-backed memory is a reclaimability estimate;
+sampling is not a peak bound or a reservation. Reference generation uses the
+same floor with a separate 9.5 GiB footprint cap. Only one GPU job runs at a
+time.
+
+### BF16 cache scope and integrity
+
+Only source blocks zero and one have been downloaded and converted. The two
+F32 weight payloads total 1,543,571,456 bytes; the BF16 cache payload is
+**771,785,728 bytes (0.719 GiB)**. Its 26 tensors match upstream's own
+`Tensor.to(torch.bfloat16)` conversion on MPS as raw uint16 words. Conversion
+is a one-time startup operation. Native preparation reads the resulting BF16
+bytes directly into GPU buffers, without an intermediate F32 weight copy or
+runtime cast.
+
+The cache manifest binds the pinned HF revision/path/header and upstream model
+source, each selected subset and HTTP-range receipt, all tensor shapes/extents
+and SHA-256 digests, and the conversion method. The final validator checks
+actual receipt/subset chunks and cache bytes. The complete checkpoint's
+advertised LFS digest remains unverified. The complete decoder's BF16 weight
+payload would be 13,943,586,816 bytes (12.99 GiB); that cache has not been built.
+Half-sized payload and removal of the conversion are established; a loading
+speedup needs paired startup measurements with controlled cache state.
+
+### Reproduction and next boundary
+
+The new curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-two-block.json`. It pins the
+final sources, binaries, fixture/cache manifests and payloads, reports and
+guard receipts under the same external artifact root. Exact executed arguments
+are in `logs/pair-*.argv.json`; use fresh report/log names for a new execution.
+The failed `pair-native-build-final-v2` attempted a canonical path containing
+spaces, which this Makefile does not support; v3 uses the external SSD's
+`/opt/mldata_ssd` alias and passes. No numerical failure occurred in that build.
+
+Observed DoD on the source state pinned in the new index:
+
+```sh
+python3 -B -m unittest spec/hy_nomas_pixelumm_checkpoint_test.py spec/hy_nomas_pixelumm_reference_test.py spec/hy_nomas_pixelumm_bf16_cache_test.py
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe
+```
+
+The Python suites pass 30 tests; native CPU suites pass 10 admission and seven
+fixture/cache examples. The final cache validator and the saved guarded
+small/full/standalone GPU argv all execute successfully. Those guarded GPU
+executions, not the commands above alone, establish numerical and memory scope.
+Correlated Mini-Quad source/oracle/adversary review is ROBUST within this
+bounded contract. Final review checks report/argv/guard/source/binary hashes,
+fixture bindings, the poisoned replay and lifetime guards. It is not independent
+replication or a hermetic build attestation.
+
+Refresh after source/checkpoint/fixture, toolchain/device/OS/backend, geometry,
+precision, ownership/lifetime or guard changes, or lost external artifacts.
+The next boundary is a memory-admitted larger sequential decoder prefix with
+shared workspace and real decoder inputs, before complete decoding. No claim
+about full generation quality or latency follows from this pair.

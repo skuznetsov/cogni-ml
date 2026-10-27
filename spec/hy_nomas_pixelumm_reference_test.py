@@ -267,6 +267,13 @@ class PixelUMMReferenceTest(unittest.TestCase):
         self.assertEqual(max(r.query_stop - r.query_start for r in plan.regions), 384)
         self.assertEqual(max(len(r.key_positions) for r in plan.regions), 3456)
 
+    def test_two_block_full_reference_peak_estimate_fits_root_oracle_cap(self):
+        peak = reference._estimated_peak_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN, layers=2
+        )
+        self.assertEqual(peak, 6_399_526_912)
+        self.assertLess(peak, int(9.5 * 1024**3))
+
     def test_fixture_binary_records_are_flat_contiguous_and_hash_bound(self):
         tensors = {
             "inputs": {"x": torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)},

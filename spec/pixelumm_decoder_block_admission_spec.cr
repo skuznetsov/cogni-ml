@@ -329,3 +329,104 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Plan do
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
   end
 end
+
+describe ML::Video::PixelUMMDecoderBlockMPS::Workspace do
+  it "counts two full-grid slots with one transient set and disjoint outputs" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 6, height: 44, width: 80)
+    layout = config.layout
+    captures = [["x", "output"], ["x", "output"]]
+    workspace_bytes = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, layout, captures)
+    workspace_bytes.should eq(2_642_779_108_i64)
+    workspace_bytes.should eq(
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(config, layout) +
+      config.tokens.to_i64 * config.model_dim * 2)
+
+    no_capture_bytes = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, layout, [[] of String, [] of String])
+    no_capture_bytes.should eq(workspace_bytes)
+  end
+
+  it "preflights all borrowed bindings and unique outputs before Metal allocation" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25)
+    weights = pixelumm_layer0_weight_bytes
+    captures = [["x", "output"], ["x", "output"]]
+    owned = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, captures)
+    owned.should eq(249_816_940_i64)
+    unique = owned + config.tokens.to_i64 * 4_096 * 2 +
+             config.tokens.to_i64 * 128 * 8 + weights.values.sum * 2
+    unique.should eq(1_036_809_068_i64)
+
+    accepted = ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+      input_bytes: config.tokens.to_i64 * 4_096 * 2,
+      cosine_bytes: config.tokens.to_i64 * 128 * 4,
+      sine_bytes: config.tokens.to_i64 * 128 * 4,
+      weights_bytes_by_slot: [weights, weights.dup],
+      captures_by_slot: captures,
+      max_unique_bytes: unique)
+    accepted.should eq(unique)
+
+    expect_raises(ArgumentError, /budget/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: config.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: config.tokens.to_i64 * 128 * 4,
+        sine_bytes: config.tokens.to_i64 * 128 * 4,
+        weights_bytes_by_slot: [weights, weights.dup],
+        captures_by_slot: captures,
+        max_unique_bytes: unique - 1)
+    end
+
+    expect_raises(ArgumentError, /slot counts/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: config.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: config.tokens.to_i64 * 128 * 4,
+        sine_bytes: config.tokens.to_i64 * 128 * 4,
+        weights_bytes_by_slot: [weights],
+        captures_by_slot: captures,
+        max_unique_bytes: Int64::MAX)
+    end
+
+    malformed = weights.dup
+    malformed["attn.q_proj.weight"] -= 2
+    expect_raises(ArgumentError, /q_proj.weight/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: config.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: config.tokens.to_i64 * 128 * 4,
+        sine_bytes: config.tokens.to_i64 * 128 * 4,
+        weights_bytes_by_slot: [weights, malformed],
+        captures_by_slot: captures,
+        max_unique_bytes: Int64::MAX)
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "counts captures once per slot and treats x/output as aliases" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25)
+    no_captures = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, [[] of String, [] of String])
+    alias_captures = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, [["x", "output"], ["x", "output"]])
+    alias_captures.should eq(no_captures)
+
+    one_capture = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, [["input_norm"], [] of String])
+    one_capture.should eq(no_captures + config.tokens.to_i64 * 4_096 * 2)
+    two_captures = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, [["input_norm"], ["input_norm"]])
+    two_captures.should eq(no_captures + config.tokens.to_i64 * 4_096 * 4)
+
+    expect_raises(ArgumentError, /unique/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+        config, config.layout, [["x", "x"], [] of String])
+    end
+    expect_raises(ArgumentError, /unknown/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+        config, config.layout, [["global_scores"], [] of String])
+    end
+  end
+end

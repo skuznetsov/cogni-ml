@@ -27,6 +27,20 @@ module PixelUMMBlockProbe
     value.matches?(/\A[0-9a-f]{64}\z/)
   end
 
+  def weight_shapes : Hash(String, Array(Int32))
+    result = {"input_norm.weight" => [4096], "post_attn_norm.weight" => [4096]}
+    {"q" => 4096, "k" => 1024, "v" => 1024, "o" => 4096}.each do |name, out_dim|
+      result["attn.#{name}_proj.weight"] = [out_dim, 4096]
+    end
+    {"q", "k"}.each do |name|
+      {"t", "hw"}.each { |section| result["attn.#{name}_norm_#{section}.weight"] = [64] }
+    end
+    result["mlp.gate_proj.weight"] = [12288, 4096]
+    result["mlp.up_proj.weight"] = [12288, 4096]
+    result["mlp.down_proj.weight"] = [4096, 12288]
+    result
+  end
+
   struct Record
     getter dtype : String
     getter shape : Array(Int32)
@@ -129,17 +143,7 @@ module PixelUMMBlockProbe
     end
 
     private def expected_weights : Hash(String, Array(Int32))
-      result = {"input_norm.weight" => [4096], "post_attn_norm.weight" => [4096]}
-      {"q" => 4096, "k" => 1024, "v" => 1024, "o" => 4096}.each do |name, out_dim|
-        result["attn.#{name}_proj.weight"] = [out_dim, 4096]
-      end
-      {"q", "k"}.each do |name|
-        {"t", "hw"}.each { |section| result["attn.#{name}_norm_#{section}.weight"] = [64] }
-      end
-      result["mlp.gate_proj.weight"] = [12288, 4096]
-      result["mlp.up_proj.weight"] = [12288, 4096]
-      result["mlp.down_proj.weight"] = [4096, 12288]
-      result
+      PixelUMMBlockProbe.weight_shapes
     end
   end
 

@@ -34472,3 +34472,51 @@ Refresh after source/toolchain/device/model/workload changes.
   the standalone probe. Refresh on source/checkpoint/fixture, backend/device/
   toolchain/OS, geometry/precision/neighborhood, lifetime/guard changes or
   missing external artifacts.
+
+### 2026-10-27: PixelUMM two-block shared workspace and authenticated BF16 cache
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-two-block.json. Only actual
+  layers zero/one are downloaded and resident; no complete decoder or video.
+- Shared transient core/RMS/attention storage, separate persistent outputs and
+  captures. Block zero's GPU output is block one's exact input binding. Both
+  submit to one chain; every full request has 243 segments, one terminal wait,
+  zero named encode Metal allocations and zero early activation reads.
+  Submission validation/native encode/state publication share one host mutex;
+  all slots must be prepared. Failed submission, wrong order, cross-chain and
+  in-flight reuse/release/read attempts are fenced without another GPU wait.
+- Final small pair compares all 52 stages; full T6/H44/W80, J21,120 compares
+  both attention/output boundaries on the first/last requests and an alternate
+  input replay with NaN-poisoned mutable scratch. All compared words are exact
+  and finite at unchanged atol=rtol=2e-5. Retained output/capture/index/weight
+  storage is excluded from poisoning. Old standalone API passes its 26-stage
+  regression fixture on the rebuilt binary. Inputs remain synthetic BF16,
+  seeds 20261026/20261027; the oracle is adapted upstream-semantics MPS, not
+  compiled CUDA Flex or complete decoder hidden states.
+- Pair resident median 3.169756624 s, three timed samples after one warmup.
+  Preparation 3.112975 s includes payload authentication/upload, so it is not
+  comparable to the old one-block preparation field. No speedup or full-video
+  throughput claim. Shared owned bytes 2,988,809,188 versus 5,285,558,216 for
+  two independent workspaces with equivalent captures: saves 2,296,749,028
+  bytes (2.14 GiB). Total unique named bytes 3,955,236,836 (3.68 GiB).
+- Both source F32 subsets produce a 771,785,728-byte BF16 cache (half the F32
+  payload), all 26 tensor bytes equal upstream's own MPS BF16 conversion and
+  independently generated pair fixtures. Native load reads BF16 directly to
+  allocated GPU buffers. Receipt/chunk/subset/header/source/tensor hashes are
+  bound and validated. Full checkpoint hash remains unverified. Complete
+  decoder BF16 payload would be 12.99 GiB; only the two-block cache exists.
+  A paired cache-controlled startup timing remains unmeasured.
+- Final checks: 30 Python tests, 10 native CPU admission examples and seven
+  fixture/cache examples pass, plus guarded small/full/standalone GPU runs and
+  final cache validation. Full native sampled footprint <=5,443,013,176 bytes,
+  cache-aware headroom >=24,304,386,048 bytes, swap flat; 10% floor, 8 GiB cap,
+  900-second timeout and 64 MiB swap stop retained. Sampling is not a peak bound;
+  opaque MPS allocations are outside named counters. Exact argv and artifacts
+  remain on the external SSD, pinned by the evidence index.
+- Correlated Mini-Quad final review is ROBUST for this bounded two-block
+  contract; source/report/argv/guard/binary bindings and the poisoned replay
+  were checked. This is not independent replication or full-generation proof.
+- Rollback: omit pair probe and use the standalone API. Refresh on source,
+  checkpoint/fixture, backend/device/toolchain/OS, geometry/precision/lifetime,
+  guard or missing evidence. Next gate: larger sequential decoder prefix with
+  a shared workspace and real decoder inputs, under a fresh memory admission.

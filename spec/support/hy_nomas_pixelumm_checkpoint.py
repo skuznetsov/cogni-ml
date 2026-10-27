@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inventory the pinned PixelUMM header and extract only decoder layer zero.
+"""Inventory the pinned PixelUMM header and extract one decoder layer.
 
 This metadata/byte-transfer tool performs no tensor conversion or inference.
 It reuses the existing strict bounded HF range transport. The full-file LFS
@@ -136,18 +136,34 @@ def inventory(header):
                        "kv_heads": 8, "head_dim": 128, "rms_eps": 1e-6}}
 
 
-def subset_header(header):
-    selected = {k: v for k, v in header.items() if k.startswith("decoder.layers.0.")}
+def block_schema(index: int) -> dict[str, tuple[int, ...]]:
+    if type(index) is not int or not 0 <= index < 36:
+        raise InventoryError("decoder block index must be in [0, 36)")
+    prefix = f"decoder.layers.{index}."
+    return {name.removeprefix(prefix): shape
+            for name, shape in decoder_schema().items() if name.startswith(prefix)}
+
+
+def subset_header(header, block_index: int = 0):
+    if type(block_index) is not int or not 0 <= block_index < 36:
+        raise InventoryError("decoder block index must be in [0, 36)")
+    prefix = f"decoder.layers.{block_index}."
+    expected = {prefix + name: shape for name, shape in block_schema(block_index).items()}
+    selected = {k: v for k, v in header.items() if k.startswith(prefix)}
     if len(selected) != 13:
-        raise InventoryError("expected exactly 13 layer-zero tensors")
+        raise InventoryError(f"expected exactly 13 layer-{block_index} tensors")
+    if set(selected) != set(expected):
+        raise InventoryError(f"layer-{block_index} tensor ownership mismatch")
     ordered = sorted(selected.items(), key=lambda item: item[1]["data_offsets"][0])
     start = ordered[0][1]["data_offsets"][0]
     cursor = start
     result = {}
     for name, value in ordered:
+        if value.get("dtype") != "F32" or tuple(value.get("shape", ())) != expected[name]:
+            raise InventoryError(f"layer-{block_index} tensor shape/dtype mismatch")
         lo, hi = value["data_offsets"]
         if lo != cursor:
-            raise InventoryError("layer-zero extent is not contiguous")
+            raise InventoryError(f"layer-{block_index} extent is not contiguous")
         result[name] = {"dtype": "F32", "shape": value["shape"],
                         "data_offsets": [lo - start, hi - start]}
         cursor = hi
@@ -164,8 +180,10 @@ def _sha_file(path):
     return digest.hexdigest()
 
 
-def extract_block0(raw_header, output):
+def extract_block(raw_header, output, block_index: int):
     header = parse_pinned_header(raw_header)
+    if type(block_index) is not int or not 0 <= block_index < 36:
+        raise InventoryError("decoder block index must be in [0, 36)")
     output = Path(output)
     # Scope the network-writing command to its task's external-SSD scratch.
     if output.parent.resolve() != (ROOT / "source").resolve():
@@ -174,7 +192,7 @@ def extract_block0(raw_header, output):
     partial = output.with_suffix(output.suffix + ".partial")
     if output.exists() or receipt.exists() or partial.exists():
         raise InventoryError("refusing to replace an existing subset or receipt")
-    encoded, lo, hi = subset_header(header)
+    encoded, lo, hi = subset_header(header, block_index)
     chunks = []
     with partial.open("xb") as sink:
         sink.write(encoded)
@@ -192,7 +210,9 @@ def extract_block0(raw_header, output):
                               "total_layer_bytes": hi - lo}), flush=True)
     if partial.stat().st_size != len(encoded) + hi - lo:
         raise InventoryError("subset file extent mismatch")
-    receipt_data = {**inventory(header), "selected_block": 0, "range_chunks": chunks,
+    receipt_data = {**inventory(header), "selected_block": block_index,
+                    "block_data_offsets": [lo, hi], "block_f32_bytes": hi - lo,
+                    "range_chunks": chunks,
                     "subset_file": output.name, "subset_bytes": partial.stat().st_size,
                     "subset_sha256": _sha_file(partial)}
     # No overwrite even if another caller creates the destination during transfer.
@@ -205,11 +225,106 @@ def extract_block0(raw_header, output):
     return receipt_data
 
 
+def extract_block0(raw_header, output):
+    """Backward-compatible block-zero extractor."""
+    return extract_block(raw_header, output, 0)
+
+
+def validate_block_receipt(raw_header, receipt, subset_path, block_index: int) -> dict:
+    """Validate a local extracted block against the pinned header and receipt."""
+    header = parse_pinned_header(raw_header)
+    if type(block_index) is not int or not 0 <= block_index < 36:
+        raise InventoryError("decoder block index must be in [0, 36)")
+    if not isinstance(receipt, dict):
+        raise InventoryError("block receipt must be a JSON object")
+    expected_inventory = inventory(header)
+    for field in ("hf_revision", "source_commit", "source_path", "source_file_bytes",
+                  "header_bytes", "header_sha256", "stored_dtype", "full_file_hash_verified"):
+        if receipt.get(field) != expected_inventory[field]:
+            raise InventoryError(f"block receipt {field} mismatch")
+    if receipt.get("selected_block") != block_index:
+        raise InventoryError("block receipt index mismatch")
+    encoded, lo, hi = subset_header(header, block_index)
+    block_bytes = hi - lo
+    has_offsets = "block_data_offsets" in receipt
+    has_byte_count = "block_f32_bytes" in receipt
+    legacy_block0 = block_index == 0 and not has_offsets and not has_byte_count
+    if legacy_block0:
+        # The already-fetched v1 block-zero receipt predates these redundant
+        # fields. Its extent is rederived from the authenticated pinned header.
+        pass
+    elif not has_offsets or not has_byte_count:
+        raise InventoryError("block receipt is missing source extent metadata")
+    if has_offsets and receipt["block_data_offsets"] != [lo, hi]:
+        raise InventoryError("block receipt source extent mismatch")
+    if has_byte_count and receipt["block_f32_bytes"] != block_bytes:
+        raise InventoryError("block receipt source byte count mismatch")
+    chunks = receipt.get("range_chunks")
+    if not isinstance(chunks, list) or not chunks:
+        raise InventoryError("block receipt is missing fetched range chunks")
+    expected_chunks = []
+    for start in range(lo, hi, 64 * 1024 * 1024):
+        end_exclusive = min(start + 64 * 1024 * 1024, hi)
+        expected_chunks.append((start + 8 + HEADER_BYTES, end_exclusive + 8 + HEADER_BYTES - 1))
+    if len(chunks) != len(expected_chunks):
+        raise InventoryError("block receipt range chunk count mismatch")
+    for item, (start, end_inclusive) in zip(chunks, expected_chunks):
+        if (not isinstance(item, dict) or item.get("start") != start
+                or item.get("end_inclusive") != end_inclusive):
+            raise InventoryError("block receipt range chunk extent mismatch")
+        digest = item.get("sha256")
+        if not isinstance(digest, str) or len(digest) != 64 or any(
+            c not in "0123456789abcdef" for c in digest
+        ):
+            raise InventoryError("invalid block receipt range digest")
+    subset_path = Path(subset_path).expanduser().resolve()
+    if receipt.get("subset_file") != subset_path.name:
+        raise InventoryError("block receipt filename mismatch")
+    if not subset_path.is_file():
+        raise InventoryError("block subset file is missing")
+    if receipt.get("subset_bytes") != subset_path.stat().st_size:
+        raise InventoryError("block subset byte count mismatch")
+    if subset_path.stat().st_size != len(encoded) + block_bytes:
+        raise InventoryError("block subset extent does not match its pinned tensors")
+    digest = hashlib.sha256()
+    actual_chunk_hashes = []
+    with subset_path.open("rb") as stream:
+        prefix = stream.read(len(encoded))
+        if prefix != encoded:
+            raise InventoryError("block subset header differs from the pinned selection")
+        digest.update(prefix)
+        for start, end_inclusive in expected_chunks:
+            chunk_bytes = end_inclusive - start + 1
+            chunk = stream.read(chunk_bytes)
+            if len(chunk) != chunk_bytes:
+                raise InventoryError("block subset payload is truncated")
+            digest.update(chunk)
+            actual_chunk_hashes.append(hashlib.sha256(chunk).hexdigest())
+        if stream.read(1):
+            raise InventoryError("block subset has trailing data")
+    for item, actual in zip(chunks, actual_chunk_hashes):
+        if item["sha256"] != actual:
+            raise InventoryError("block receipt range digest does not match subset payload")
+    digest = digest.hexdigest()
+    if receipt.get("subset_sha256") != digest:
+        raise InventoryError("block subset digest does not match its receipt")
+    return {
+        "selected_block": block_index,
+        "subset_file": subset_path.name,
+        "subset_bytes": subset_path.stat().st_size,
+        "subset_sha256": digest,
+        "block_data_offsets": [lo, hi],
+        "block_f32_bytes": block_bytes,
+        "legacy_extent_derived_from_pinned_header": legacy_block0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--header", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--extract-block0", type=Path)
+    parser.add_argument("--extract-block", nargs=2, action="append", metavar=("INDEX", "PATH"))
     args = parser.parse_args()
     # Reject known collisions before any large transfer or subset mutation.
     if args.report.exists() or args.report.is_symlink():
@@ -219,8 +334,36 @@ def main():
     raw = args.header.read_bytes()
     header = parse_pinned_header(raw)
     report = inventory(header)
+    requests = []
     if args.extract_block0:
-        report["subset"] = extract_block0(raw, args.extract_block0)
+        requests.append((0, args.extract_block0))
+    for raw_index, path in args.extract_block or ():
+        try:
+            index = int(raw_index)
+        except ValueError as error:
+            raise InventoryError("--extract-block INDEX must be an integer") from error
+        requests.append((index, Path(path)))
+    if len({index for index, _ in requests}) != len(requests):
+        raise InventoryError("each decoder block may be extracted only once per invocation")
+    # Validate every destination before starting any bounded source transfer.
+    for index, path in requests:
+        if type(index) is not int or not 0 <= index < 36:
+            raise InventoryError("decoder block index must be in [0, 36)")
+        path = Path(path)
+        if path.parent.resolve() != (ROOT / "source").resolve():
+            raise InventoryError("subset output must be in the task source directory")
+        receipt = path.with_suffix(".receipt.json")
+        partial = path.with_suffix(path.suffix + ".partial")
+        if any(candidate.exists() or candidate.is_symlink()
+               for candidate in (path, receipt, partial)):
+            raise InventoryError("refusing to replace an existing subset or receipt")
+    subsets = {}
+    for index, path in requests:
+        subsets[str(index)] = extract_block(raw, path, index)
+    if args.extract_block0:
+        report["subset"] = subsets["0"]
+    if args.extract_block:
+        report["subsets"] = subsets
     with args.report.open("x") as sink:
         json.dump(report, sink, indent=2)
         sink.write("\n")

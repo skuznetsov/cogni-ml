@@ -290,13 +290,13 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter local_attention_tile_count : Int32
     getter attention_graph_encodes : Int32 = 0
     getter last_encode_host_seconds : Float64 = 0.0
+    getter slot : Int32
 
     @cosine : ML::MetalBuffer
     @sine : ML::MetalBuffer
     @weights : Array(ML::MetalBuffer)
     @core = {} of String => ML::MetalBuffer
     @captures = {} of String => ML::MetalBuffer
-    @owned = [] of ML::MetalBuffer
     @query_indices : ML::MetalBuffer? = nil
     @key_indices : ML::MetalBuffer? = nil
     @query_gather_f32 : ML::MetalBuffer? = nil
@@ -312,6 +312,10 @@ module ML::Video::PixelUMMDecoderBlockMPS
     @q_norm_inverse : ML::MetalBuffer? = nil
     @k_norm_inverse : ML::MetalBuffer? = nil
     @native = Pointer(Void).null
+    @workspace : Workspace? = nil
+    @owns_workspace = false
+    @workspace_attached = false
+    @slot = 0_i32
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
     @error_text = Bytes.new(1024, 0_u8)
@@ -321,7 +325,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     def initialize(@config : Config, *, input : ML::MetalBuffer,
                    weights : Hash(String, ML::MetalBuffer), cos : ML::MetalBuffer,
                    sin : ML::MetalBuffer, max_named_bytes : Int64,
-                   captures : Array(String) = [] of String)
+                   captures : Array(String) = [] of String,
+                   workspace : Workspace? = nil, slot : Int32 = 0)
       @input = input
       @cosine = cos
       @sine = sin
@@ -343,22 +348,38 @@ module ML::Video::PixelUMMDecoderBlockMPS
         input_bytes: @input.size, cosine_bytes: @cosine.size,
         sine_bytes: @sine.size, weights_bytes: metadata_bytes,
         max_named_bytes: max_named_bytes, captures: selected)
-      required_bytes = self.class.owned_bytes(@config, layout, selected)
-      @named_bytes = required_bytes
+      if workspace
+        workspace.validate_plan_binding!(@config, slot, @input, @cosine, @sine, @weights, selected)
+        @workspace = workspace
+        @slot = slot
+      else
+        @owns_workspace = true
+        @slot = 0_i32
+      end
 
       {% if flag?(:cpu_only) %}
         raise "Metal disabled (cpu_only)"
       {% else %}
         begin
-          allocate_core!
-          allocate_attention_scratch!(layout)
-          allocate_captures!(selected)
+          unless @workspace
+            @workspace = Workspace.new(@config,
+              captures_by_slot: [selected], max_owned_bytes: max_named_bytes)
+          end
+          workspace = @workspace.not_nil!
+          workspace.attach_plan!(@slot, @input, @cosine, @sine, @weights, selected)
+          @workspace_attached = true
+          bind_workspace_buffers!(workspace)
+          @named_bytes = workspace.named_bytes
+          @named_bytes_by_name = workspace.named_bytes_by_name.dup
           setup_native!(layout, weights)
           @@retained_mutex.synchronize { @@retained << self }
         rescue ex
           release_native_plan
-          @owned.each(&.release)
-          @owned.clear
+          if workspace = @workspace
+            workspace.detach_failed_plan!(@slot) if @workspace_attached
+            @workspace_attached = false
+            workspace.release if @owns_workspace
+          end
           @core.clear
           @captures.clear
           @stages.clear
@@ -478,33 +499,39 @@ module ML::Video::PixelUMMDecoderBlockMPS
       @stages[name]? || raise ArgumentError.new("PixelUMM stage was not captured: #{name}")
     end
 
+    def workspace : Workspace
+      @workspace || raise ArgumentError.new("PixelUMM plan has no workspace")
+    end
+
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
       check_live!
-      chain.encoder
-      if previous = @chain
-        unless previous.same?(chain) || previous.completed?
-          raise ArgumentError.new("PixelUMM plan cannot move between in-flight command chains")
-        end
-      end
-      @chain = chain
       started = Time.instant
-      {% if flag?(:darwin) && !flag?(:cpu_only) %}
-        chain.pause!
-        status = -1
-        begin
-          status = PixelUMMDecoderBlockMPSFFI.encode(@native, chain.handle,
-            @error_text.to_unsafe, @error_text.size)
-        ensure
-          chain.resume!
+      @workspace.not_nil!.submit_encode!(@slot, chain) do
+        chain.encoder
+        if previous = @chain
+          unless previous.same?(chain) || previous.completed?
+            raise ArgumentError.new("PixelUMM plan cannot move between in-flight command chains")
+          end
         end
-        raise ArgumentError.new("PixelUMM MPS encode failed (#{status}): #{error_message}") unless status == 0
-        # Each tile schedules separately materialized QK, softmax, and PV
-        # MPSGraphs. No graph is encoded for a padding row or unused head group.
-        @attention_graph_encodes = @local_attention_tile_count * 3
-        @last_encode_host_seconds = (Time.instant - started).total_seconds
-      {% else %}
-        raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
-      {% end %}
+        @chain = chain
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          chain.pause!
+          status = -1
+          begin
+            status = PixelUMMDecoderBlockMPSFFI.encode(@native, chain.handle,
+              @error_text.to_unsafe, @error_text.size)
+          ensure
+            chain.resume!
+          end
+          raise ArgumentError.new("PixelUMM MPS encode failed (#{status}): #{error_message}") unless status == 0
+          # Each tile schedules separately materialized QK, softmax, and PV
+          # MPSGraphs. No graph is encoded for a padding row or unused head group.
+          @attention_graph_encodes = @local_attention_tile_count * 3
+          @last_encode_host_seconds = (Time.instant - started).total_seconds
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
     end
 
     def release : Nil
@@ -514,14 +541,15 @@ module ML::Video::PixelUMMDecoderBlockMPS
           raise ArgumentError.new("complete PixelUMM command chain before releasing its plan")
         end
       end
-      release_native_plan
-      @owned.each(&.release)
-      @owned.clear
+      @workspace.not_nil!.release_plan!(@slot) do
+        release_native_plan
+      end
       @core.clear
       @captures.clear
       @stages.clear
       @released = true
       @@retained_mutex.synchronize { @@retained.reject! { |plan| plan.same?(self) } }
+      @workspace.not_nil!.release if @owns_workspace
     end
 
     private def validate_bindings!(weights : Hash(String, ML::MetalBuffer)) : Nil
@@ -560,83 +588,28 @@ module ML::Video::PixelUMMDecoderBlockMPS
       validate_disjoint!(borrowed, "borrowed PixelUMM bindings must not alias")
     end
 
-    private def allocate_core! : Nil
-      j = @config.tokens.to_i64
-      d = @config.model_dim.to_i64
-      f = @config.ff_dim.to_i64
-      kv = @config.kv_heads.to_i64 * @config.head_dim
-      {"input_norm" => j * d * 2, "q" => j * d * 2,
-       "k" => j * kv * 2, "v" => j * kv * 2,
-       "attention" => j * d * 2, "residual" => j * d * 2,
-       "gate" => j * f * 2, "up" => j * f * 2,
-       "output" => j * d * 2}.each do |name, bytes|
-        @core[name] = own_buffer("workspace.#{name}", bytes)
-      end
-    end
-
-    private def allocate_attention_scratch!(layout : AttentionLayout) : Nil
-      max_q = layout.max_query_tokens.to_i64
-      max_k = layout.max_key_tokens.to_i64
-      dh = @config.head_dim.to_i64
-      heads = @config.query_heads.to_i64
-      @query_gather_f32 = own_buffer("attention.query_gather_f32", heads * max_q * dh * 4)
-      @key_gather_f32 = own_buffer("attention.key_gather_f32", heads * max_k * dh * 4)
-      @value_gather_f32 = own_buffer("attention.value_gather_f32", heads * max_k * dh * 4)
-      @scores_f32 = own_buffer("attention.scores_f32", heads * max_q * max_k * 4)
-      @probabilities_f32 = own_buffer("attention.probabilities_f32", heads * max_q * max_k * 4)
-      @attended_f32 = own_buffer("attention.attended_f32", heads * max_q * dh * 4)
-      q_table = layout.query_index_table
-      k_table = layout.key_index_table
-      @query_indices = own_buffer("attention.query_indices_i32", q_table.size.to_i64 * 4)
-      @key_indices = own_buffer("attention.key_indices_i32", k_table.size.to_i64 * 4)
-      @query_indices.not_nil!.write_bytes(q_table.to_unsafe.as(Pointer(UInt8)), q_table.size * 4)
-      @key_indices.not_nil!.write_bytes(k_table.to_unsafe.as(Pointer(UInt8)), k_table.size * 4)
-      @rms_exponent = own_buffer("rms.power_exponent_f32", 4)
-      @rms_exponent.not_nil!.write([2.0_f32])
-      # Keep graph-written RMS rows separate from CPU-initialized attention
-      # index tables, which are reused on every encode.
-      @rms_statistics = own_buffer("rms.statistics_f32", @config.tokens.to_i64 * 4)
-      @q_norm_statistics = own_buffer("q_norm.statistics_f32",
-        @config.tokens.to_i64 * @config.query_heads * 2 * 4)
-      @k_norm_statistics = own_buffer("k_norm.statistics_f32",
-        @config.tokens.to_i64 * @config.kv_heads * 2 * 4)
-      @q_norm_inverse = own_buffer("q_norm.inverse_f32",
-        @config.tokens.to_i64 * @config.query_heads * 2 * 4)
-      @k_norm_inverse = own_buffer("k_norm.inverse_f32",
-        @config.tokens.to_i64 * @config.kv_heads * 2 * 4)
-    end
-
-    private def allocate_captures!(selected : Array(String)) : Nil
-      selected.each do |name|
-        if name == "x"
-          @stages[name] = @input
-          next
-        end
-        if name == "output"
-          @captures[name] = @core["output"]
-          @stages[name] = @core["output"]
-          next
-        end
-        kind = CAPTURE_BYTES[name]
-        j = @config.tokens.to_i64
-        d = @config.model_dim.to_i64
-        f = @config.ff_dim.to_i64
-        kv = @config.kv_heads.to_i64 * @config.head_dim
-        bytes = case kind
-                when :bf16_d           then j * d * 2
-                when :bf16_kv          then j * kv * 2
-                when :bf16_f           then j * f * 2
-                when :f32_q            then j * d * 4
-                when :f32_kv           then j * kv * 4
-                when :f32_rows         then j * 4
-                when :f32_q_norm_pair  then j * @config.query_heads * 2 * 4
-                when :f32_kv_norm_pair then j * @config.kv_heads * 2 * 4
-                else                        raise ArgumentError.new("unknown PixelUMM capture type")
-                end
-        buffer = own_buffer("capture.#{name}", bytes)
-        @captures[name] = buffer
+    private def bind_workspace_buffers!(workspace : Workspace) : Nil
+      @core = workspace.core_for_slot(@slot)
+      @captures = workspace.captures_for_slot(@slot)
+      @captures.each do |name, buffer|
         @stages[name] = buffer
       end
+      @stages["x"] = @input if workspace.capture_x?(@slot)
+      scratch = workspace.scratch_buffers
+      @query_gather_f32 = scratch[0]
+      @key_gather_f32 = scratch[1]
+      @value_gather_f32 = scratch[2]
+      @scores_f32 = scratch[3]
+      @probabilities_f32 = scratch[4]
+      @attended_f32 = scratch[5]
+      @query_indices = scratch[6]
+      @key_indices = scratch[7]
+      @rms_exponent = scratch[8]
+      @rms_statistics = scratch[9]
+      @q_norm_statistics = scratch[10]
+      @k_norm_statistics = scratch[11]
+      @q_norm_inverse = scratch[12]
+      @k_norm_inverse = scratch[13]
     end
 
     private def setup_native!(layout : AttentionLayout,
@@ -681,14 +654,6 @@ module ML::Video::PixelUMMDecoderBlockMPS
       mask
     end
 
-    private def own_buffer(name : String, bytes : Int64) : ML::MetalBuffer
-      raise ArgumentError.new("invalid PixelUMM buffer extent for #{name}") unless bytes > 0
-      buffer = ML::MetalBuffer.new(bytes)
-      @owned << buffer
-      @named_bytes_by_name[name] = bytes
-      buffer
-    end
-
     private def check_shared_exact!(buffer : ML::MetalBuffer, bytes : Int64,
                                     name : String) : Nil
       unless buffer.valid? && buffer.storage_mode.shared? && buffer.size == bytes
@@ -718,6 +683,491 @@ module ML::Video::PixelUMMDecoderBlockMPS
 
     private def check_live! : Nil
       raise ArgumentError.new("PixelUMM MPS plan has been released") if @released || @native.null?
+    end
+  end
+
+  # Owns one set of transient activations and attention/RMS scratch for one or
+  # more sequential decoder plans. Each plan gets a private persistent output
+  # and private capture buffers; slot N may consume slot N-1's output directly.
+  class Workspace
+    getter config : Config
+    getter named_bytes : Int64
+    getter slot_count : Int32
+
+    @layout : AttentionLayout
+    @capture_sets : Array(Array(String))
+    @core_shared = {} of String => ML::MetalBuffer
+    @outputs = [] of ML::MetalBuffer
+    @slot_captures = [] of Hash(String, ML::MetalBuffer)
+    @slot_captures_x = [] of Bool
+    @scratch = [] of ML::MetalBuffer
+    @scratch_names = [] of String
+    @owned = [] of ML::MetalBuffer
+    @named_bytes_by_name = {} of String => Int64
+    @claimed : Array(Bool)
+    @released_slots : Array(Bool)
+    @last_chains : Array(ML::Metal::MPSCommandChain?)
+    @bound_weights = [] of Array(ML::MetalBuffer)
+    @bound_cosine : ML::MetalBuffer? = nil
+    @bound_sine : ML::MetalBuffer? = nil
+    @request_chain : ML::Metal::MPSCommandChain? = nil
+    @next_encode_slot = 0_i32
+    @request_failed = false
+    @released = false
+    @mutex = Mutex.new
+    @@retained_mutex = Mutex.new
+    @@retained = [] of Workspace
+
+    def initialize(@config : Config, *, captures_by_slot : Array(Array(String)),
+                   max_owned_bytes : Int64)
+      @config.validate!
+      if @config.tiles_h <= 3 && @config.tiles_w <= 3 &&
+         @config.tokens > Plan::FULL_ATTENTION_MAX_TOKENS
+        raise ArgumentError.new("PixelUMM full-attention fallback exceeds 2048 tokens")
+      end
+      raise ArgumentError.new("PixelUMM workspace requires at least one plan slot") if captures_by_slot.empty?
+      @layout = @config.layout
+      @capture_sets = captures_by_slot.map do |captures|
+        self.class.validate_capture_set!(captures)
+        captures.dup
+      end
+      @slot_count = @capture_sets.size.to_i32
+      @named_bytes = self.class.owned_bytes(@config, @layout, @capture_sets)
+      unless max_owned_bytes > 0 && @named_bytes <= max_owned_bytes
+        raise ArgumentError.new("PixelUMM workspace buffers exceed admitted byte budget")
+      end
+      @claimed = Array(Bool).new(@slot_count, false)
+      @released_slots = Array(Bool).new(@slot_count, false)
+      @last_chains = Array(ML::Metal::MPSCommandChain?).new(@slot_count, nil)
+      @bound_weights = Array(Array(ML::MetalBuffer)).new(@slot_count) { [] of ML::MetalBuffer }
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        begin
+          allocate_buffers!
+          unless @named_bytes_by_name.values.sum == @named_bytes
+            raise ArgumentError.new("PixelUMM workspace named-byte accounting mismatch")
+          end
+          @@retained_mutex.synchronize { @@retained << self }
+        rescue ex
+          @owned.each(&.release)
+          @owned.clear
+          @core_shared.clear
+          @outputs.clear
+          @slot_captures.clear
+          @scratch.clear
+          @named_bytes_by_name.clear
+          raise ex
+        end
+      {% end %}
+    end
+
+    # Unique bytes across both borrowed bindings and workspace-owned buffers.
+    # Slot 0 borrows the external activation; each later slot consumes the
+    # previous slot's already-counted output bank.
+    def self.validate_admission!(config : Config, *, input_bytes : Int64,
+                                 cosine_bytes : Int64, sine_bytes : Int64,
+                                 weights_bytes_by_slot : Array(Hash(String, Int64)),
+                                 captures_by_slot : Array(Array(String)),
+                                 max_unique_bytes : Int64) : Int64
+      config.validate!
+      unless weights_bytes_by_slot.size == captures_by_slot.size && !captures_by_slot.empty?
+        raise ArgumentError.new("PixelUMM workspace weight/capture slot counts must match")
+      end
+      validate_capture_sets!(captures_by_slot)
+      captures_by_slot.each_with_index do |captures, slot|
+        Plan.validate_admission!(config,
+          input_bytes: input_bytes,
+          cosine_bytes: cosine_bytes,
+          sine_bytes: sine_bytes,
+          weights_bytes: weights_bytes_by_slot[slot],
+          max_named_bytes: Int64::MAX,
+          captures: captures)
+      end
+      layout = config.layout
+      owned = owned_bytes(config, layout, captures_by_slot)
+      borrowed = input_bytes + cosine_bytes + sine_bytes
+      weights_bytes_by_slot.each do |metadata|
+        borrowed += metadata.values.sum
+      end
+      unique = owned + borrowed
+      unless max_unique_bytes > 0 && unique <= max_unique_bytes
+        raise ArgumentError.new("PixelUMM unique workspace/binding bytes exceed admitted byte budget")
+      end
+      unique
+    end
+
+    # Core transients and native scratch are shared once. Output banks and
+    # selected persistent captures are unique to each plan slot.
+    def self.owned_bytes(config : Config, layout : AttentionLayout,
+                         captures_by_slot : Array(Array(String))) : Int64
+      config.validate!
+      validate_capture_sets!(captures_by_slot)
+      raise ArgumentError.new("PixelUMM workspace requires at least one plan slot") if captures_by_slot.empty?
+      output_bytes = config.tokens.to_i64 * config.model_dim * 2
+      one_slot = Plan.owned_bytes(config, layout)
+      shared = one_slot - output_bytes
+      total = shared + output_bytes * captures_by_slot.size
+      captures_by_slot.each do |captures|
+        total += Plan.owned_bytes(config, layout, captures) - one_slot
+      end
+      total
+    end
+
+    def self.validate_capture_sets!(captures_by_slot : Array(Array(String))) : Nil
+      captures_by_slot.each { |captures| validate_capture_set!(captures) }
+    end
+
+    def self.validate_capture_set!(captures : Array(String)) : Nil
+      if captures.uniq.size != captures.size
+        raise ArgumentError.new("PixelUMM capture stages must be unique")
+      end
+      unknown = captures.reject { |name| name == "x" || Plan::CAPTURE_NAMES.includes?(name) }
+      raise ArgumentError.new("unknown PixelUMM capture stage(s): #{unknown.join(",")}") unless unknown.empty?
+    end
+
+    def named_bytes_by_name : Hash(String, Int64)
+      @named_bytes_by_name.dup
+    end
+
+    def validate_plan_binding!(config : Config, slot : Int32,
+                               input : ML::MetalBuffer, cosine : ML::MetalBuffer,
+                               sine : ML::MetalBuffer, weights : Array(ML::MetalBuffer),
+                               captures : Array(String)) : Nil
+      @mutex.synchronize do
+        validate_plan_binding_unlocked!(config, slot, input, cosine, sine, weights, captures)
+      end
+    end
+
+    def attach_plan!(slot : Int32, input : ML::MetalBuffer,
+                     cosine : ML::MetalBuffer, sine : ML::MetalBuffer,
+                     weights : Array(ML::MetalBuffer), captures : Array(String)) : Nil
+      @mutex.synchronize do
+        validate_plan_binding_unlocked!(@config, slot, input, cosine, sine, weights, captures)
+        @claimed[slot] = true
+        @bound_cosine ||= cosine
+        @bound_sine ||= sine
+        @bound_weights[slot] = weights.dup
+      end
+    end
+
+    def detach_failed_plan!(slot : Int32) : Nil
+      @mutex.synchronize do
+        return if @released || slot < 0 || slot >= @slot_count || !@claimed[slot]
+        @claimed[slot] = false
+        @released_slots[slot] = false
+        @bound_weights[slot].clear
+        if @bound_weights.all?(&.empty?)
+          @bound_cosine = nil
+          @bound_sine = nil
+        end
+      end
+    end
+
+    def release_plan!(slot : Int32, &block : -> Nil) : Nil
+      @mutex.synchronize do
+        check_live!
+        validate_slot!(slot)
+        unless @claimed[slot] && !@released_slots[slot]
+          raise ArgumentError.new("PixelUMM workspace plan slot is not live")
+        end
+        if chain = @last_chains[slot]
+          unless chain.completed?
+            raise ArgumentError.new("complete PixelUMM command chain before releasing its plan")
+          end
+        end
+        yield
+        @released_slots[slot] = true
+      end
+    end
+
+    # The host-side submission is serialized for the duration of the native
+    # encode call. This closes same-slot double admission without adding a GPU
+    # wait or changing the command-chain schedule.
+    def submit_encode!(slot : Int32, chain : ML::Metal::MPSCommandChain,
+                       &block : -> Nil) : Nil
+      @mutex.synchronize do
+        check_live!
+        validate_slot!(slot)
+        unless @claimed[slot] && !@released_slots[slot]
+          raise ArgumentError.new("PixelUMM workspace plan slot is not live")
+        end
+        if @slot_count > 1 && !@claimed.all?
+          raise ArgumentError.new("prepare every PixelUMM workspace plan before encoding")
+        end
+
+        if previous = @last_chains[slot]
+          unless previous.same?(chain) || previous.completed?
+            raise ArgumentError.new("PixelUMM plan cannot move between in-flight command chains")
+          end
+        end
+
+        if @slot_count > 1
+          if @request_failed || @next_encode_slot == @slot_count
+            if @request_chain && @request_chain.not_nil!.completed?
+              @request_chain = nil
+              @next_encode_slot = 0_i32
+              @request_failed = false
+            else
+              raise ArgumentError.new("complete the prior PixelUMM workspace request before reuse")
+            end
+          end
+          unless slot == @next_encode_slot
+            raise ArgumentError.new("PixelUMM workspace plans must encode once in slot order")
+          end
+          if request_chain = @request_chain
+            unless request_chain.same?(chain)
+              raise ArgumentError.new("PixelUMM workspace slots must use one command chain")
+            end
+          else
+            @request_chain = chain
+          end
+        end
+
+        begin
+          yield
+          @last_chains[slot] = chain
+          @next_encode_slot += 1 if @slot_count > 1
+        rescue ex
+          # If native submission fails part-way through, shared buffers stay
+          # unavailable until that same chain reaches terminal completion.
+          @last_chains[slot] = chain
+          @request_failed = true if @slot_count > 1
+          raise ex
+        end
+      end
+    end
+
+    def core_for_slot(slot : Int32) : Hash(String, ML::MetalBuffer)
+      check_live!
+      validate_slot!(slot)
+      @core_shared.merge({"output" => @outputs[slot]})
+    end
+
+    def captures_for_slot(slot : Int32) : Hash(String, ML::MetalBuffer)
+      check_live!
+      validate_slot!(slot)
+      @slot_captures[slot].dup
+    end
+
+    def output_buffer(slot : Int32) : ML::MetalBuffer
+      check_live!
+      validate_slot!(slot)
+      @outputs[slot]
+    end
+
+    def capture_x?(slot : Int32) : Bool
+      check_live!
+      validate_slot!(slot)
+      @slot_captures_x[slot]
+    end
+
+    def scratch_buffers : Array(ML::MetalBuffer)
+      check_live!
+      @scratch.dup
+    end
+
+    # Mutable shared buffers can be overwritten by a new request. The
+    # diagnostic view refuses access while a prior command chain is in flight.
+    # It intentionally omits immutable index tables, the power exponent, all
+    # output banks, and all per-plan captures.
+    def mutable_shared_buffers : Hash(String, ML::MetalBuffer)
+      @mutex.synchronize do
+        check_live!
+        @last_chains.each do |chain|
+          if chain && !chain.completed?
+            raise ArgumentError.new("complete the PixelUMM command chain before inspecting shared transients")
+          end
+        end
+        result = {} of String => ML::MetalBuffer
+        @core_shared.each { |name, buffer| result["core.#{name}"] = buffer }
+        {0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13}.each do |index|
+          result[@scratch_names[index]] = @scratch[index]
+        end
+        result
+      end
+    end
+
+    def release : Nil
+      @mutex.synchronize do
+        return if @released
+        if chain = @request_chain
+          unless chain.completed?
+            raise ArgumentError.new("complete PixelUMM command chain before releasing its workspace")
+          end
+        end
+        @claimed.each_with_index do |claimed, index|
+          if claimed && !@released_slots[index]
+            raise ArgumentError.new("release every PixelUMM plan before its workspace")
+          end
+        end
+        @owned.each(&.release)
+        @owned.clear
+        @core_shared.clear
+        @outputs.clear
+        @slot_captures.clear
+        @scratch.clear
+        @named_bytes_by_name.clear
+        @released = true
+      end
+      @@retained_mutex.synchronize { @@retained.reject! { |workspace| workspace.same?(self) } }
+    end
+
+    private def allocate_buffers! : Nil
+      j = @config.tokens.to_i64
+      d = @config.model_dim.to_i64
+      f = @config.ff_dim.to_i64
+      kv = @config.kv_heads.to_i64 * @config.head_dim
+      {"input_norm" => j * d * 2, "q" => j * d * 2,
+       "k" => j * kv * 2, "v" => j * kv * 2,
+       "attention" => j * d * 2, "residual" => j * d * 2,
+       "gate" => j * f * 2, "up" => j * f * 2}.each do |name, bytes|
+        @core_shared[name] = own_buffer("workspace.#{name}", bytes)
+      end
+      output_bytes = j * d * 2
+      @slot_count.times do |slot|
+        name = @slot_count == 1 ? "workspace.output" : "workspace.output.slot#{slot}"
+        @outputs << own_buffer(name, output_bytes)
+      end
+
+      max_q = @layout.max_query_tokens.to_i64
+      max_k = @layout.max_key_tokens.to_i64
+      heads = @config.query_heads.to_i64
+      dh = @config.head_dim.to_i64
+      @scratch_names = [
+        "attention.query_gather_f32", "attention.key_gather_f32",
+        "attention.value_gather_f32", "attention.scores_f32",
+        "attention.probabilities_f32", "attention.attended_f32",
+        "attention.query_indices_i32", "attention.key_indices_i32",
+        "rms.power_exponent_f32", "rms.statistics_f32",
+        "q_norm.statistics_f32", "k_norm.statistics_f32",
+        "q_norm.inverse_f32", "k_norm.inverse_f32",
+      ]
+      scratch_sizes = [
+        heads * max_q * dh * 4,
+        heads * max_k * dh * 4,
+        heads * max_k * dh * 4,
+        heads * max_q * max_k * 4,
+        heads * max_q * max_k * 4,
+        heads * max_q * dh * 4,
+        @layout.query_index_table.size.to_i64 * 4,
+        @layout.key_index_table.size.to_i64 * 4,
+        4_i64,
+        j * 4,
+        j * @config.query_heads * 2 * 4,
+        j * @config.kv_heads * 2 * 4,
+        j * @config.query_heads * 2 * 4,
+        j * @config.kv_heads * 2 * 4,
+      ]
+      scratch_sizes.each_with_index do |bytes, index|
+        @scratch << own_buffer(@scratch_names[index], bytes)
+      end
+      q_table = @layout.query_index_table
+      k_table = @layout.key_index_table
+      @scratch[6].write_bytes(q_table.to_unsafe.as(Pointer(UInt8)), q_table.size * 4)
+      @scratch[7].write_bytes(k_table.to_unsafe.as(Pointer(UInt8)), k_table.size * 4)
+      @scratch[8].write([2.0_f32])
+
+      @slot_count.times do |slot|
+        captures = {} of String => ML::MetalBuffer
+        @slot_captures_x << @capture_sets[slot].includes?("x")
+        @capture_sets[slot].each do |name|
+          next if name == "x"
+          if name == "output"
+            captures[name] = @outputs[slot]
+            next
+          end
+          bytes = capture_bytes(name)
+          prefix = @slot_count == 1 ? "capture" : "capture.slot#{slot}"
+          captures[name] = own_buffer("#{prefix}.#{name}", bytes)
+        end
+        @slot_captures << captures
+      end
+    end
+
+    private def capture_bytes(name : String) : Int64
+      j = @config.tokens.to_i64
+      d = @config.model_dim.to_i64
+      f = @config.ff_dim.to_i64
+      kv = @config.kv_heads.to_i64 * @config.head_dim
+      case Plan::CAPTURE_BYTES[name]?
+      when :bf16_d           then j * d * 2
+      when :bf16_kv          then j * kv * 2
+      when :bf16_f           then j * f * 2
+      when :f32_q            then j * d * 4
+      when :f32_kv           then j * kv * 4
+      when :f32_rows         then j * 4
+      when :f32_q_norm_pair  then j * @config.query_heads * 2 * 4
+      when :f32_kv_norm_pair then j * @config.kv_heads * 2 * 4
+      else                        raise ArgumentError.new("unknown PixelUMM capture type for #{name}")
+      end
+    end
+
+    private def own_buffer(name : String, bytes : Int64) : ML::MetalBuffer
+      raise ArgumentError.new("invalid PixelUMM buffer extent for #{name}") unless bytes > 0
+      buffer = ML::MetalBuffer.new(bytes)
+      @owned << buffer
+      @named_bytes_by_name[name] = bytes
+      buffer
+    end
+
+    private def same_config?(other : Config) : Bool
+      {@config.temporal, @config.height, @config.width, @config.tile_tokens,
+       @config.model_dim, @config.ff_dim, @config.query_heads, @config.kv_heads,
+       @config.head_dim, @config.rms_norm_eps, @config.rope_theta_t, @config.rope_theta_hw} ==
+        {other.temporal, other.height, other.width, other.tile_tokens,
+         other.model_dim, other.ff_dim, other.query_heads, other.kv_heads,
+         other.head_dim, other.rms_norm_eps, other.rope_theta_t, other.rope_theta_hw}
+    end
+
+    private def validate_plan_binding_unlocked!(config : Config, slot : Int32,
+                                                input : ML::MetalBuffer,
+                                                cosine : ML::MetalBuffer,
+                                                sine : ML::MetalBuffer,
+                                                weights : Array(ML::MetalBuffer),
+                                                captures : Array(String)) : Nil
+      check_live!
+      validate_slot!(slot)
+      unless same_config?(config)
+        raise ArgumentError.new("PixelUMM plan configuration does not match its workspace")
+      end
+      unless captures.sort == @capture_sets[slot].sort
+        raise ArgumentError.new("PixelUMM plan captures do not match its workspace slot")
+      end
+      if @claimed[slot]
+        raise ArgumentError.new("PixelUMM workspace slot is already assigned")
+      end
+      if slot > 0
+        unless @claimed[slot - 1] && input.same?(@outputs[slot - 1])
+          raise ArgumentError.new("PixelUMM workspace slot input must be the prior slot output")
+        end
+      end
+      if shared_cosine = @bound_cosine
+        unless cosine.same?(shared_cosine) && sine.same?(@bound_sine.not_nil!)
+          raise ArgumentError.new("PixelUMM workspace slots must share MRoPE tables")
+        end
+      end
+      @bound_weights.each_with_index do |previous_weights, previous_slot|
+        next if previous_slot == slot || previous_weights.empty?
+        previous_weights.each do |previous|
+          weights.each do |current|
+            if MetalOps.overlap?(previous, current)
+              raise ArgumentError.new("PixelUMM layer weight bindings must be disjoint across slots")
+            end
+          end
+        end
+      end
+    end
+
+    private def validate_slot!(slot : Int32) : Nil
+      unless 0 <= slot < @slot_count
+        raise ArgumentError.new("PixelUMM workspace slot is outside its allocation")
+      end
+    end
+
+    private def check_live! : Nil
+      raise ArgumentError.new("PixelUMM workspace has been released") if @released
     end
   end
 end

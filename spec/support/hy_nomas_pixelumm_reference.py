@@ -18,11 +18,14 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 from typing import Iterable, Mapping
 
 import torch
+
+import hy_nomas_pixelumm_checkpoint as checkpoint_inventory
 
 UPSTREAM_REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
 UPSTREAM_MODEL_PATH = "hymm/models/vae/pixelumm_decoder/model.py"
@@ -30,6 +33,7 @@ CHECKPOINT_SUBSET_SHA256 = "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98ed
 CHECKPOINT_SUBSET_BYTES = 771_787_128
 CHECKPOINT_PREFIX = "decoder.layers.0."
 SCHEMA = "cogni_ml.pixelumm_block_reference/v1"
+TWO_BLOCK_SCHEMA = "cogni_ml.pixelumm_two_block_reference/v1"
 TILE_TOKENS = 8
 ATOL = RTOL = 2e-5
 
@@ -484,7 +488,9 @@ def _physical_memory_bytes() -> int:
             raise ReferenceError("cannot determine physical memory for the MPS safety floor")
 
 
-def _estimated_peak_bytes(grid: tuple[int, int, int], arch) -> int:
+def _estimated_peak_bytes(grid: tuple[int, int, int], arch, *, layers: int = 1) -> int:
+    if type(layers) is not int or layers not in {1, 2}:
+        raise ReferenceError("reference memory estimate supports one or two resident blocks")
     tokens = math.prod(grid)
     h = arch.hidden_size
     f = arch.intermediate_size
@@ -498,17 +504,23 @@ def _estimated_peak_bytes(grid: tuple[int, int, int], arch) -> int:
     max_q = min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     max_k = min(3, tiles_h) * min(3, tiles_w) * min(TILE_TOKENS, height) * min(TILE_TOKENS, width) * grid[0]
     score = arch.num_heads * max_q * max_k * 4
-    # Conservative live activations for projections, residuals, three MLP
-    # intermediates, a single local score/probability pair, and allocator slack.
-    return block_weights_f32 + block_weights_bf16 + 7 * hidden + 4 * ffn + 2 * score + 512 * 1024 * 1024
+    # The second block load briefly retains block zero BF16, block one F32, and
+    # the new block-one BF16 tensors. Its conversion peak is therefore one F32
+    # block plus `layers` BF16 blocks. The extra hidden slots cover pair-boundary
+    # captures while FFN and local score storage remain sequential.
+    weight_bytes = block_weights_f32 + layers * block_weights_bf16
+    hidden_slots = 7 + 4 * (layers - 1)
+    return weight_bytes + hidden_slots * hidden + 4 * ffn + 2 * score + 512 * 1024 * 1024
 
 
-def mps_memory_floor(device: torch.device, grid: tuple[int, int, int], arch) -> dict[str, int | bool]:
+def mps_memory_floor(
+    device: torch.device, grid: tuple[int, int, int], arch, *, layers: int = 1,
+) -> dict[str, int | bool]:
     if device.type != "mps":
         return {"applies": False}
     total = _physical_memory_bytes()
     allocated = int(torch.mps.driver_allocated_memory())
-    estimated = _estimated_peak_bytes(grid, arch)
+    estimated = _estimated_peak_bytes(grid, arch, layers=layers)
     floor = total // 10
     if total - allocated - estimated < floor:
         raise ReferenceError(
@@ -517,6 +529,7 @@ def mps_memory_floor(device: torch.device, grid: tuple[int, int, int], arch) -> 
     return {
         "applies": True, "physical_bytes": total, "driver_allocated_bytes": allocated,
         "estimated_peak_bytes": estimated, "required_floor_bytes": floor,
+        "resident_blocks": layers,
     }
 
 
@@ -531,7 +544,8 @@ def _tensor_dtype_name(tensor: torch.Tensor) -> str:
 
 
 def _write_fixture(path: Path, *, metadata: Mapping, inputs: Mapping[str, torch.Tensor],
-                   weights: Mapping[str, torch.Tensor], captures: Mapping[str, torch.Tensor]) -> dict:
+                   weights: Mapping[str, torch.Tensor], captures: Mapping[str, torch.Tensor],
+                   schema: str = SCHEMA) -> dict:
     path = path.expanduser().absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload_path = path.with_suffix(".bin")
@@ -541,7 +555,7 @@ def _write_fixture(path: Path, *, metadata: Mapping, inputs: Mapping[str, torch.
     payload_bytes = 0
     manifest = {
         **metadata,
-        "schema": SCHEMA,
+        "schema": schema,
         "payload": payload_path.name,
         "inputs": {}, "weights": {}, "captures": {},
     }
@@ -582,6 +596,74 @@ def _write_fixture(path: Path, *, metadata: Mapping, inputs: Mapping[str, torch.
         stream.flush()
         os.fsync(stream.fileno())
     return manifest
+
+
+def _read_receipt(path: Path) -> tuple[dict, str]:
+    path = path.expanduser().resolve()
+    try:
+        raw = path.read_bytes()
+        value = checkpoint_inventory.parse_header(raw)
+    except (OSError, checkpoint_inventory.InventoryError) as error:
+        raise ReferenceError(f"cannot read block subset receipt: {path.name}") from error
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def _load_layer_for_block(
+    source, checkpoint: Path, receipt_path: Path, header_path: Path,
+    device: torch.device, block_index: int,
+):
+    """Load one individually receipted source block into the pinned GenLayer."""
+    try:
+        from safetensors import safe_open
+    except ImportError as error:
+        raise ReferenceError("safetensors is required to load bounded block subsets") from error
+    checkpoint = checkpoint.expanduser().resolve()
+    receipt_path = receipt_path.expanduser().resolve()
+    header_path = header_path.expanduser().resolve()
+    source_root = checkpoint_inventory.ROOT.resolve()
+    for path in (checkpoint, receipt_path, header_path):
+        if path.parent != (source_root / "source").resolve():
+            raise ReferenceError("pair reference source files must be in the task source directory")
+    try:
+        raw_header = header_path.read_bytes()
+        receipt, receipt_sha = _read_receipt(receipt_path)
+        checked = checkpoint_inventory.validate_block_receipt(
+            raw_header, receipt, checkpoint, block_index
+        )
+    except (OSError, checkpoint_inventory.InventoryError) as error:
+        raise ReferenceError(f"block-{block_index} source receipt rejected: {error}") from error
+
+    arch = source.QWEN3_8B_GEN
+    with torch.device("meta"):
+        layer = source.GenLayer(arch)
+    expected = set(layer.state_dict())
+    prefix = f"decoder.layers.{block_index}."
+    state: dict[str, torch.Tensor] = {}
+    try:
+        with safe_open(str(checkpoint), framework="pt", device="cpu") as file:
+            original_keys = set(file.keys())
+            expected_keys = {prefix + key for key in expected}
+            if original_keys != expected_keys:
+                raise ReferenceError(f"block-{block_index} file does not contain exactly 13 expected tensors")
+            for original in sorted(original_keys):
+                name = original.removeprefix(prefix)
+                tensor = file.get_tensor(original)
+                if (tensor.dtype != torch.float32
+                        or tuple(tensor.shape) != tuple(layer.state_dict()[name].shape)):
+                    raise ReferenceError(f"block-{block_index} checkpoint tensor shape/dtype mismatch: {original}")
+                state[name] = tensor
+        layer.load_state_dict(state, strict=True, assign=True)
+    except ReferenceError:
+        raise
+    except Exception as error:
+        raise ReferenceError(f"cannot load checkpoint block {block_index}: {error}") from error
+    del state
+    layer.eval()
+    layer.requires_grad_(False)
+    # Match the pinned source runtime order: transfer F32, then cast on device.
+    layer.to(device=device)
+    layer.to(dtype=torch.bfloat16)
+    return layer, checked, receipt_sha
 
 
 def make_fixture(
@@ -672,6 +754,153 @@ def make_fixture(
     }
 
 
+def make_two_block_fixture(
+    *, upstream: Path | str, block0: Path | str, block1: Path | str,
+    receipt0: Path | str, receipt1: Path | str, header: Path | str,
+    output: Path | str, grid: Iterable[int], device_name: str = "mps",
+    capture_mode: str = "auto", seed: int = 20261026,
+) -> dict:
+    """Run blocks zero and one on one device with the exact block-zero output as input."""
+    output_path = Path(output).expanduser().absolute()
+    payload_path = output_path.with_suffix(".bin")
+    if output_path.parent.resolve() != (checkpoint_inventory.ROOT / "results").resolve():
+        raise ReferenceError("pair reference output must be in the task results directory")
+    if (output_path.exists() or output_path.is_symlink()
+            or payload_path.exists() or payload_path.is_symlink()):
+        raise ReferenceError("refusing to replace an existing pair reference JSON or payload")
+    grid = _check_grid(grid)
+    if device_name not in {"cpu", "mps"}:
+        raise ReferenceError("device must be cpu or mps")
+    device = torch.device(device_name)
+    if device.type == "mps" and not torch.backends.mps.is_available():
+        raise ReferenceError("PyTorch MPS is not available")
+    if capture_mode not in {"auto", "all", "boundary"}:
+        raise ReferenceError("capture mode must be auto, all, or boundary")
+    count = math.prod(grid)
+    if count <= 2048:
+        chosen = ALL_STAGES if capture_mode in {"auto", "all"} else FULL_TARGET_STAGES
+    else:
+        chosen = FULL_TARGET_STAGES if capture_mode in {"auto", "boundary"} else ALL_STAGES
+    if count > 2048 and chosen == ALL_STAGES:
+        raise ReferenceError("all-stage captures are restricted to at most 2048 tokens")
+
+    source, source_sha = load_upstream(upstream)
+    plan, _, _ = make_attention_plan(source, grid)
+    arch = source.QWEN3_8B_GEN
+    memory = mps_memory_floor(device, grid, arch, layers=2)
+    paths = (Path(block0), Path(block1))
+    receipts = (Path(receipt0), Path(receipt1))
+    header_path = Path(header)
+    layers = []
+    subset_provenance = []
+    for index, (checkpoint_path, receipt_path) in enumerate(zip(paths, receipts)):
+        layer, checked, receipt_sha = _load_layer_for_block(
+            source, checkpoint_path, receipt_path, header_path, device, index
+        )
+        layers.append(layer)
+        subset_provenance.append({
+            "index": index,
+            "checkpoint_subset_sha256": checked["subset_sha256"],
+            "checkpoint_subset_bytes": checked["subset_bytes"],
+            "checkpoint_subset_file": checked["subset_file"],
+            "source_receipt_sha256": receipt_sha,
+            "source_extent": checked["block_data_offsets"],
+            "legacy_extent_derived_from_pinned_header": checked[
+                "legacy_extent_derived_from_pinned_header"
+            ],
+        })
+
+    # Generate one initial prefix and one tile-major RoPE table for both blocks.
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    x_original = torch.randn((1, count, arch.hidden_size), generator=generator, dtype=torch.float32)
+    x_original = x_original.to(device=device).to(dtype=torch.bfloat16)
+    permutation = torch.tensor(plan.permutation, dtype=torch.long, device=device)
+    x = x_original.index_select(1, permutation)
+    del x_original
+    cos, sin = source.mrope_tables(arch, grid, device)
+    cos = cos.index_select(1, permutation)
+    sin = sin.index_select(1, permutation)
+
+    block_captures: dict[str, torch.Tensor] = {}
+    current = x
+    with torch.inference_mode():
+        context = torch.autocast(device_type=device.type, dtype=torch.bfloat16)
+        with context:
+            for index, layer in enumerate(layers):
+                result, captures = run_layer_reference(
+                    layer, current, cos, sin, plan, capture_stages=chosen
+                )
+                for stage in chosen:
+                    block_captures[f"block{index}.{stage}"] = captures[stage]
+                # This tensor remains on the same device; block one receives it
+                # directly without an intermediate host copy or readback.
+                current = result
+    if device.type == "mps":
+        # Single terminal synchronization after both decoder blocks complete.
+        torch.mps.synchronize()
+
+    weights: dict[str, torch.Tensor] = {}
+    blocks_metadata = []
+    for index, layer in enumerate(layers):
+        prefix = f"block{index}."
+        state = {name: parameter.detach() for name, parameter in layer.named_parameters()}
+        if len(state) != 13:
+            raise ReferenceError(f"loaded block-{index} parameter inventory changed")
+        for name in sorted(state):
+            weights[prefix + name] = state[name]
+        weight_keys = [prefix + name for name in sorted(state)]
+        capture_keys = [f"block{index}.{stage}" for stage in chosen]
+        blocks_metadata.append({
+            "index": index,
+            "checkpoint_subset_sha256": subset_provenance[index]["checkpoint_subset_sha256"],
+            "checkpoint_subset_bytes": subset_provenance[index]["checkpoint_subset_bytes"],
+            "source_receipt_sha256": subset_provenance[index]["source_receipt_sha256"],
+            "source_extent": subset_provenance[index]["source_extent"],
+            "weight_prefix": prefix,
+            "weight_keys": weight_keys,
+            "capture_keys": capture_keys,
+            "input_source": "inputs.x" if index == 0 else "captures.block0.output",
+            "output_key": f"captures.block{index}.output",
+        })
+    metadata = {
+        "upstream_revision": UPSTREAM_REVISION,
+        "upstream_model_path": UPSTREAM_MODEL_PATH,
+        "upstream_model_sha256": source_sha,
+        "hf_revision": checkpoint_inventory.REVISION,
+        "hf_source_path": checkpoint_inventory.SOURCE_PATH,
+        "checkpoint_header_sha256": checkpoint_inventory.HEADER_SHA256,
+        "blocks": blocks_metadata,
+        "grid": list(grid),
+        "tile_tokens": TILE_TOKENS,
+        "token_order": "tile_major",
+        "permutation_sha256": plan.permutation_sha256,
+        "runtime_dtype": "BF16",
+        "input_generator": {"distribution": "standard_normal", "seed": seed, "cast": "BF16"},
+        "source_config": asdict(arch),
+        "attention_adapter": "gathered_spatial_tiles_qk_softmax_pv_fp32_accum",
+        "gqa_group_size": arch.num_heads // arch.num_kv_heads,
+        "comparison": {"atol": ATOL, "rtol": RTOL},
+        "memory_preflight": memory,
+        "captures_are_tile_major": True,
+        "block_execution": "same_device_output_to_next_input",
+        "torch_version": torch.__version__,
+        "python_version": platform.python_version(),
+    }
+    fixture = _write_fixture(
+        output_path, metadata=metadata, inputs={"x": x, "cos": cos, "sin": sin},
+        weights=weights, captures=block_captures, schema=TWO_BLOCK_SCHEMA,
+    )
+    return {
+        "fixture": str(output_path.resolve()),
+        "payload": str(payload_path.resolve()),
+        "grid": list(grid), "tokens": count, "capture_order": fixture["capture_order"],
+        "payload_bytes": fixture["payload_bytes"],
+        "payload_sha256": fixture["payload_sha256"],
+        "blocks": subset_provenance,
+        "estimated_peak_bytes": memory.get("estimated_peak_bytes"),
+    }
+
+
 def geometry_report(upstream: Path | str, grid: Iterable[int]) -> dict:
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
@@ -692,6 +921,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--upstream", required=True, type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--block0", type=Path)
+    parser.add_argument("--block1", type=Path)
+    parser.add_argument("--receipt0", type=Path)
+    parser.add_argument("--receipt1", type=Path)
+    parser.add_argument("--header", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--grid", required=True, type=int, nargs=3, metavar=("T", "H", "W"))
     parser.add_argument("--device", choices=("cpu", "mps"), default="mps")
@@ -703,12 +937,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.geometry_only:
             print(json.dumps(geometry_report(args.upstream, args.grid), sort_keys=True))
             return 0
-        if args.checkpoint is None or args.output is None:
-            parser.error("--checkpoint and --output are required unless --geometry-only is used")
-        report = make_fixture(
-            upstream=args.upstream, checkpoint=args.checkpoint, output=args.output,
-            grid=args.grid, device_name=args.device, capture_mode=args.capture, seed=args.seed,
-        )
+        pair_inputs = (args.block0, args.block1, args.receipt0, args.receipt1, args.header)
+        if any(pair_inputs):
+            if args.checkpoint is not None:
+                parser.error("--checkpoint cannot be combined with pair block inputs")
+            if any(value is None for value in pair_inputs) or args.output is None:
+                parser.error("pair reference requires --block0 --block1 --receipt0 --receipt1 --header and --output")
+            report = make_two_block_fixture(
+                upstream=args.upstream, block0=args.block0, block1=args.block1,
+                receipt0=args.receipt0, receipt1=args.receipt1, header=args.header,
+                output=args.output, grid=args.grid, device_name=args.device,
+                capture_mode=args.capture, seed=args.seed,
+            )
+        else:
+            if args.checkpoint is None or args.output is None:
+                parser.error("--checkpoint and --output are required unless --geometry-only or pair inputs are used")
+            report = make_fixture(
+                upstream=args.upstream, checkpoint=args.checkpoint, output=args.output,
+                grid=args.grid, device_name=args.device, capture_mode=args.capture, seed=args.seed,
+            )
         print(json.dumps(report, sort_keys=True))
         return 0
     except ReferenceError as error:
