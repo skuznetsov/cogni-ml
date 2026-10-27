@@ -34424,3 +34424,51 @@ Refresh after source/toolchain/device/model/workload changes.
   evidence. Original-BF16 Q4 quality failure remains open. Resume decoder
   checkpoint/geometry/residency inventory before any bounded decoder probe;
   neither full generation nor another text tile sweep is the next frontier.
+
+### 2026-10-26: PixelUMM layer zero is exact at full local-attention geometry
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-pixelumm-block.json. A standalone native
+  probe only; no complete decoder, diffusion, video generation or default route.
+- Pinned source 911cea6458a89c2663513ff7099561ec190dd491 matches the HF header at
+  c67f2c52b3fbe0193cbc202769bbe5cb7264807b. All 645 stored tensors are F32.
+  Decoder BF16 weights need 13,943,586,816 bytes (12.99 GiB); one layer needs
+  385,892,864 bytes (368.016 MiB). Only layer-zero ranges were downloaded;
+  the complete 31,553,868,864-byte checkpoint and its advertised hash remain
+  unverified. The selected subset and range receipt are hashed separately.
+- Saved latent geometry implies T6/H44/W80, J21,120, 60 local spatial tiles.
+  Preserve inward-shifted 3x3 border neighborhoods and all-time visibility.
+  Physically gathered Q/K extents are 384/3456, 384/2880 or 192/2880. Never
+  allocate the hypothetical 53.17 GiB global F32 score matrix. The largest
+  actual local score panel is 162 MiB; large global fallback is rejected.
+- Refuted routes: unmaterialized BF16 RMS gain; safe-math-only and precise
+  sqrt/division fixes; four-head attention grouping (74 eager/525 fused strict
+  violations on identical feeds). Selected path materializes BF16 RMS gain
+  boundaries, preserves MPS statistics/legacy inverse-root geometry and uses
+  32-head rank3 QK/PV with rank4 softmax and actual unpadded tile extents.
+  Immutable index tables cannot alias mutable RMS statistics.
+- Current-source small v13 compares all 26 stages; full v1 compares attention
+  and output, first/last requests. Both are bitwise exact and finite at the
+  unchanged atol=rtol=2e-5. Actual pretrained layer-zero weights, controlled
+  synthetic BF16 input, adapted upstream-semantics MPS oracle; not full-decoder
+  hidden states or compiled upstream CUDA Flex parity. Small v12 is historical.
+- Full-J resident request median 1.569623 s, three samples 1.568477-1.570300 s
+  after one warmup. Preparation 0.393273 s excludes fixture parsing/hashing.
+  Each request has 122 segments, one terminal wait, zero named encode Metal
+  allocations and zero early activation reads. Encode overlaps GPU work.
+- Named buffers total 3,223,313,892 bytes; sampled footprint <=4,808,345,760,
+  cache-aware headroom >=28,193,882,112; swap flat. Guard: 10% reserve,
+  8 GiB/900 s process cap, 64 MiB swap stop. Opaque MPS allocations are outside
+  named counters; sampling is not a peak bound. Only one block was resident.
+- 18 Python tests and seven native CPU admission examples pass. Correlated
+  Mini-Quad ROBUST within this bounded scope; final report/guard bytes are
+  pinned in evidence to close a mutable-result provenance gap. Receipts are
+  not hermetic attestation or independent replication.
+- Qwen S1280 + compact DiT named bytes + all decoder BF16 weights already
+  total 34.17 GiB, excluding decoder workspace/pixels/opaque allocations.
+  Simultaneous pipeline residency is not admitted by the observed snapshot.
+  Next frontier: phase-separated decoder assembly, shared workspace and
+  sequential block comparisons before complete generation. Rollback: omit
+  the standalone probe. Refresh on source/checkpoint/fixture, backend/device/
+  toolchain/OS, geometry/precision/neighborhood, lifetime/guard changes or
+  missing external artifacts.

@@ -1,0 +1,532 @@
+{
+  "schema": "cogni_ml.pixelumm_block_evidence/v1",
+  "base_revision": "b499185b90a8659b4d75e2a2d9b51abb3fbf3fd9",
+  "claim": "Verified inventory, physical local-attention geometry, guarded native one-block parity and descriptive full-J resident timing within the pinned fixture scope.",
+  "artifact_root": "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026",
+  "source": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "upstream_clean_at_closure": true,
+    "upstream_model_path": "hymm/models/vae/pixelumm_decoder/model.py",
+    "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "hf_repository": "tencent/Hy-Nomas",
+    "hf_revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "hf_path": "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+    "stored_dtype": "F32",
+    "runtime_dtype": "BF16",
+    "source_file_bytes": 31553868864,
+    "advertised_lfs_sha256": "0bbfe8fd44bd2ebf1059fe65079caba50fd6f52ea8e1b5b35393e3050b9b8378",
+    "full_file_hash_verified": false,
+    "downloaded_weight_scope": "decoder layer zero only",
+    "subset_bytes": 771787128,
+    "subset_sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485",
+    "header_sha256": "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11",
+    "decoder_bf16_weight_bytes": 13943586816,
+    "block_bf16_weight_bytes": 385892864
+  },
+  "toolchain_observed_at_closure": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "macos": "26.6.2 (25G83)",
+    "crystal": "1.22.1 / LLVM 23.1.4",
+    "clang_on_path": "Homebrew clang++ 23.1.4",
+    "xcrun_clang": "Apple clang 21.0.0",
+    "selected_xcrun_sdk": "27.0",
+    "limitation": "Current command observations, not hermetic build attestation; see build logs and pinned binary/objects."
+  },
+  "geometry": {
+    "layers": 36,
+    "dim": 4096,
+    "ffn_dim": 12288,
+    "query_heads": 32,
+    "kv_heads": 8,
+    "head_dim": 128,
+    "full_grid": [
+      6,
+      44,
+      80
+    ],
+    "tokens": 21120,
+    "spatial_tile_tokens": 8,
+    "tile_count": 60,
+    "actual_q_k_extents": [
+      [
+        384,
+        3456
+      ],
+      [
+        384,
+        2880
+      ],
+      [
+        192,
+        2880
+      ]
+    ],
+    "temporal_visibility": "all times in the local spatial neighborhood",
+    "permutation_sha256": "4e81c6026e99ee2c17c176c4394682ca632602c198c3065ad311a83a3839cf33",
+    "forbidden_global_score_bytes": 57094963200,
+    "largest_local_score_bytes": 169869312,
+    "all_six_f32_attention_panels_bytes": 465567744,
+    "global_fallback_max_tokens": 2048
+  },
+  "oracle": "Adapted pinned upstream-semantics PyTorch MPS; separate reduced-width CPU Flex/dense-mask equivalence. Does not execute compiled upstream CUDA Flex.",
+  "input_scope": "Actual pretrained layer-zero BF16 weights; synthetic standard-normal BF16 hidden states, seed 20261026; not full-decoder hidden states.",
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "finite_required": true,
+    "widened": false
+  },
+  "qualification": {
+    "native-small-v13": {
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "stages_first_and_last": 26,
+      "stages": [
+        "input_norm_statistics",
+        "input_norm_pre_gain",
+        "input_norm",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "q_norm_statistics",
+        "q_norm_inverse",
+        "k_norm_statistics",
+        "k_norm_inverse",
+        "q_norm",
+        "k_norm",
+        "q_rope",
+        "k_rope",
+        "q_ready",
+        "k_ready",
+        "attention",
+        "o_proj",
+        "attn_residual",
+        "post_attn_norm",
+        "gate_proj",
+        "up_proj",
+        "silu_gate",
+        "product",
+        "down_proj",
+        "output"
+      ],
+      "first_last_bitwise_equal": true,
+      "finite": true,
+      "tolerance_failures": 0,
+      "requests": 2,
+      "source_fixture_binary_hashes_refreshed": 7,
+      "named_bytes": 1128907396,
+      "borrowed_bytes": 404767232,
+      "owned_named_bytes": 724140164,
+      "early_release_rejected": true
+    },
+    "native-full-v1": {
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "stages_first_and_last": 2,
+      "stages": [
+        "attention",
+        "output"
+      ],
+      "first_last_bitwise_equal": true,
+      "finite": true,
+      "tolerance_failures": 0,
+      "requests": 5,
+      "source_fixture_binary_hashes_refreshed": 7,
+      "named_bytes": 3223313892,
+      "borrowed_bytes": 580534784,
+      "owned_named_bytes": 2642779108,
+      "early_release_rejected": true
+    }
+  },
+  "timing": {
+    "total_seconds": [
+      1.568477208,
+      1.5696225419999998,
+      1.5703002499999998
+    ],
+    "gpu_elapsed_seconds": [
+      1.5679775417374913,
+      1.5691494582424639,
+      1.5698509165958967
+    ],
+    "encode_seconds": [
+      0.331012458,
+      0.331452417,
+      0.3322495
+    ],
+    "terminal_wait_seconds": [
+      1.23746475,
+      1.238170125,
+      1.23805075
+    ],
+    "median_total_seconds": 1.5696225419999998,
+    "median_gpu_elapsed_seconds": 1.5691494582424639,
+    "median_encode_seconds": 0.331452417,
+    "median_terminal_wait_seconds": 1.23805075,
+    "preparation_seconds": 0.393273167,
+    "gate_seconds": 1.5829575,
+    "warmups": 1,
+    "measured_requests": 3,
+    "scope": "Resident block zero on frozen synthetic BF16 input, not full decoder/video throughput. Encoding overlaps GPU work; do not sum encode and GPU elapsed."
+  },
+  "counters_per_full_request": {
+    "command_segments": 122,
+    "terminal_waits": 1,
+    "named_metal_allocations_during_encode": 0,
+    "preterminal_activation_readbacks": 0,
+    "diagnostic_readbacks_after_wait": "2 on first/last, 0 otherwise",
+    "opaque_mps_allocations_counted": false
+  },
+  "memory": {
+    "full_owned_without_capture_bytes": 2469764068,
+    "full_owned_with_capture_bytes": 2642779108,
+    "borrowed_bytes": 580534784,
+    "total_named_bytes": 3223313892,
+    "physical_bytes": 68719476736,
+    "reserve_pct": 10,
+    "accounting": "file-cache, speculative already included",
+    "guard_observations": {
+      "build-v14": {
+        "max_footprint_bytes": 6442450944,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 1200,
+        "sample_count": 16,
+        "peak_sampled_group_footprint_bytes": 499991776,
+        "minimum_sampled_headroom_bytes": 33028669440,
+        "swap_growth_bytes": 0,
+        "finished_returncode": 0
+      },
+      "reference-full-v1": {
+        "max_footprint_bytes": 12884901888,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 900,
+        "sample_count": 15,
+        "peak_sampled_group_footprint_bytes": 6966036544,
+        "minimum_sampled_headroom_bytes": 25213992960,
+        "swap_growth_bytes": 0,
+        "finished_returncode": 0
+      },
+      "native-small-v13": {
+        "max_footprint_bytes": 8589934592,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 600,
+        "sample_count": 12,
+        "peak_sampled_group_footprint_bytes": 1521321664,
+        "minimum_sampled_headroom_bytes": 31697534976,
+        "swap_growth_bytes": 0,
+        "finished_returncode": 0
+      },
+      "native-full-v1": {
+        "max_footprint_bytes": 8589934592,
+        "max_swap_growth_bytes": 67108864,
+        "timeout_sec": 900,
+        "sample_count": 26,
+        "peak_sampled_group_footprint_bytes": 4808345760,
+        "minimum_sampled_headroom_bytes": 28193882112,
+        "swap_growth_bytes": 0,
+        "finished_returncode": 0
+      }
+    },
+    "simultaneous_qwen_dit_decoder_named_lower_bound_bytes": 36685117252,
+    "minimum_headroom_for_that_lower_bound_and_reserve_bytes": 43557064926,
+    "simultaneous_pipeline_admitted": false,
+    "limitation": "Lower bound excludes decoder workspace/pixels/opaque allocations; sampling is not a peak bound or memory reservation."
+  },
+  "checks": {
+    "python_command": "python3 -B -m unittest spec/hy_nomas_pixelumm_checkpoint_test.py spec/hy_nomas_pixelumm_reference_test.py",
+    "python_tests": 18,
+    "python_last_observed_seconds": 0.864,
+    "native_guarded_build_argv": "logs/build-v14.argv.json",
+    "native_cpu_examples": 7,
+    "native_failures": 0,
+    "executed_gpu_argv": [
+      "logs/native-small-v13.argv.json",
+      "logs/native-full-v1.argv.json"
+    ],
+    "interpretation": "Checks above were executed; this JSON is a curated index, not itself numerical replication."
+  },
+  "refuted_routes": {
+    "unmaterialized_rms_gain": "Statistics/pre-gain matched, gain failed; separate BF16 handoff passed.",
+    "safe_metal_math_only": "Failing stage hashes unchanged.",
+    "precise_sqrt_division": "Did not improve strict gate.",
+    "four_head_attention": "Identical-feed eager replay has 74 violations; fused native 525. Canonical 32-head materialized path passes.",
+    "immutable_index_table_as_rms_scratch": "Rejected by source review before GPU execution."
+  },
+  "fixtures": {
+    "block0-small-v4": {
+      "metadata_sha256": "65f6cf4513951d42088743f3cca7bafb5b1d450de196c9154a63ed11e0b2fa5e",
+      "payload_bytes": 871653888,
+      "payload_sha256": "de2c4c90df4fab80c47fc0c1a32eb9ef6608ada89ef4ae8686c93c7fef11feba",
+      "payload_verified_by_native_loader": true,
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "seed": 20261026,
+      "capture_order": [
+        "input_norm_statistics",
+        "input_norm_pre_gain",
+        "input_norm",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "q_norm_statistics",
+        "q_norm_inverse",
+        "k_norm_statistics",
+        "k_norm_inverse",
+        "q_norm",
+        "k_norm",
+        "q_rope",
+        "k_rope",
+        "q_ready",
+        "k_ready",
+        "attention",
+        "o_proj",
+        "attn_residual",
+        "post_attn_norm",
+        "gate_proj",
+        "up_proj",
+        "silu_gate",
+        "product",
+        "down_proj",
+        "output"
+      ]
+    },
+    "block0-full-v1": {
+      "metadata_sha256": "ecec716b1204cf7aae12827164ab9af31122c073f55749505cab934bd64575ca",
+      "payload_bytes": 926564864,
+      "payload_sha256": "fc5882f0cbb6379f5695a068e55d9b7e29480e0c986d07587f8f69c305d402f5",
+      "payload_verified_by_native_loader": true,
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "seed": 20261026,
+      "capture_order": [
+        "attention",
+        "output"
+      ]
+    }
+  },
+  "source_sha256": {
+    "Makefile": {
+      "bytes": 33140,
+      "sha256": "bf549bebcd14d0dcaf7b63722a41cbfeb080711589cd1e998d1d4e17d29c2de9"
+    },
+    "src/ml/video/pixelumm_decoder_block_mps.cr": {
+      "bytes": 30805,
+      "sha256": "939f928307533ce5655fa65a99a319e5e9ca1d663db3fd8e221731cac44256c2"
+    },
+    "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+      "bytes": 78981,
+      "sha256": "021c7b239adb7be240350e96e89f8dfbbeccdaf4506c85b241f2a99ffde84c6a"
+    },
+    "examples/support/pixelumm_block_probe.cr": {
+      "bytes": 12184,
+      "sha256": "621c6aa06a87b6524f3d094978e9e228083145014583960530832ba3d782a5bf"
+    },
+    "examples/pixelumm_decoder_block_probe.cr": {
+      "bytes": 5790,
+      "sha256": "94fc6125c786f8c8b74c672572d3e039134fd0d0832cfa4c10935072b99767df"
+    },
+    "spec/support/hy_nomas_pixelumm_checkpoint.py": {
+      "bytes": 10616,
+      "sha256": "222ef27ea517093163238f26ee4270b4f0e5c6eec614cbd98c65cf98ef0eeba3"
+    },
+    "spec/support/hy_nomas_pixelumm_reference.py": {
+      "bytes": 31773,
+      "sha256": "0c19bb9cfaf9a1b99387c93264d016d408f4ee2d0a75e782aa84cb387d16b8fb"
+    },
+    "spec/hy_nomas_pixelumm_checkpoint_test.py": {
+      "bytes": 4429,
+      "sha256": "66f6a7fc02c13bd8aa380cb2ce88074eba90aef678679445e92c22255cb6749a"
+    },
+    "spec/hy_nomas_pixelumm_reference_test.py": {
+      "bytes": 14630,
+      "sha256": "24371be13cad04727c653a4e9d40c177bdeca70b426f2a1703e6b1f03d270542"
+    },
+    "spec/pixelumm_decoder_block_admission_spec.cr": {
+      "bytes": 15376,
+      "sha256": "7116d71b10b90a96e253f9fcf757e1e57f974bf4ddac4f93a4ee6179231fd7bb"
+    },
+    "examples/support/hy_nomas_probe_instrumentation.cr": {
+      "bytes": 931,
+      "sha256": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48"
+    },
+    "examples/support/wan_memory_guard.py": {
+      "bytes": 37589,
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    },
+    "src/ml/core/buffer.cr": {
+      "bytes": 16934,
+      "sha256": "a28570a5b7163eef67aef7ad96af66d2168da68f104afbacc9714bbefb55334d"
+    },
+    "src/ml/video/metal_mps_command_chain.cr": {
+      "bytes": 22968,
+      "sha256": "b606cc0645a54e95c008be3c615adadd29fe97d6804347147737ab25d473b645"
+    },
+    "src/ml/video/metal_mps_command_chain.mm": {
+      "bytes": 63544,
+      "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf"
+    },
+    "src/ml/video/metal_ops.cr": {
+      "bytes": 19872,
+      "sha256": "b31c1bfa9eb9028389e69b546377f26cf7980e726a488ce5fc061e0bbc79098a"
+    }
+  },
+  "artifacts": {
+    "source/pixelumm-header.json": {
+      "bytes": 75192,
+      "sha256": "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11"
+    },
+    "source/pixelumm-header-prefix.bin": {
+      "bytes": 8,
+      "sha256": "456a4f059a323157c4c5f88f29cd0c2a993c6c361c83c4744407d97d27a3bfb1"
+    },
+    "source/pixelumm-tree.json": {
+      "bytes": 512,
+      "sha256": "898590fbb8d5c2a628388d7439af036466c15cb2075af9087748fdff009d6f62"
+    },
+    "source/hub-metadata.json": {
+      "bytes": 4384,
+      "sha256": "cd03c13ffdf8e7bb33ffeccbc5ba0d1a7d5d28724f1b0c79f875514456c07dc0"
+    },
+    "source/block0-f32.receipt.json": {
+      "bytes": 3099,
+      "sha256": "72a55054289f432f5be145f61b09eae1560dcb084c5a4bdd5a9f7df76631902d"
+    },
+    "results/inventory.json": {
+      "bytes": 4325,
+      "sha256": "eecab507848f703ca5ad87b34430932e214914d271a01a51416bf271fcf0c021"
+    },
+    "results/memory-plan-v1.json": {
+      "bytes": 1843,
+      "sha256": "5e4f0339f34acb00fb6bde7a7ef4e43e035328e6e23d960d94fd3a3174572197"
+    },
+    "results/block0-small-v4.json": {
+      "bytes": 12504,
+      "sha256": "65f6cf4513951d42088743f3cca7bafb5b1d450de196c9154a63ed11e0b2fa5e"
+    },
+    "results/block0-full-v1.json": {
+      "bytes": 5981,
+      "sha256": "ecec716b1204cf7aae12827164ab9af31122c073f55749505cab934bd64575ca"
+    },
+    "results/native-small-v13.json": {
+      "bytes": 23993,
+      "sha256": "5d9605826d55b363d3646683fbc8a6f8eae3539b471a24326afad5d1e99effd1"
+    },
+    "results/native-small-v13.provenance.json": {
+      "bytes": 1294,
+      "sha256": "af4ee93d88b8d60fae12cb25eefeb0075d401710a461e34b1c59cfd3ac55fe84"
+    },
+    "results/native-full-v1.json": {
+      "bytes": 5863,
+      "sha256": "8a1bd99ef3a5ac7fda42dbc57ccd36cc8bad916c2b2f08eb95f224215b21dc85"
+    },
+    "results/native-full-v1.provenance.json": {
+      "bytes": 1293,
+      "sha256": "6999d67451ab55223fb63502b6b74c0d9662eea981a06edc27099bf9ec035ebd"
+    },
+    "build/pixelumm_decoder_block_probe": {
+      "bytes": 1204352,
+      "sha256": "e22685ae62494b6d77b19688a4924fd6aef1683ad658b1bef739985d2b8ec3ef"
+    },
+    "build/bridge.o": {
+      "bytes": 129096,
+      "sha256": "a5689350b2929b77a6d07ebc55867d515cea2c6a1098d63081f9fa58ecbb2385"
+    },
+    "build/metal_mps_command_chain.o": {
+      "bytes": 121072,
+      "sha256": "dd85e85e8afccff327ccbb6317cb76b47d67a2e3c3e3c40a58828f3150f4af09"
+    },
+    "build/pixelumm_decoder_block_mps_bridge.o": {
+      "bytes": 283632,
+      "sha256": "2f42acf20131c276a1668b4ecde2c42ec925c84b33908733fb1165374a950d38"
+    },
+    "tmp/run_guarded.py": {
+      "bytes": 1116,
+      "sha256": "6e2782c8785bc62e38e75a45cf6bf02b7694544d16840489ec51d5d4f1c90954"
+    },
+    "logs/build-v14.argv.json": {
+      "bytes": 693,
+      "sha256": "a2907fbf458f886ad9ff782068a1890c2777eb9f8fbeefd40957c2b44d2e1889"
+    },
+    "logs/build-v14.out": {
+      "bytes": 1109,
+      "sha256": "a32260464296056719282f118edaed2b7e9ae45315f5a2a2b88e5c8b5548c990"
+    },
+    "logs/build-v14.guard.jsonl": {
+      "bytes": 5685,
+      "sha256": "03014c260ca1162818f90dfff0c96ce73cb3a96c238c29341b768627d87dc087"
+    },
+    "logs/reference-full-v1.argv.json": {
+      "bytes": 1006,
+      "sha256": "c69085d4593d60ccf6384441b36162041f3a15b6926f0836898c1bb0fb7c8b77"
+    },
+    "logs/reference-full-v1.out": {
+      "bytes": 406,
+      "sha256": "b2308465a5261d46be53934687885b30947c937ee4e3311f6ed0c56b963a3c2c"
+    },
+    "logs/reference-full-v1.guard.jsonl": {
+      "bytes": 5373,
+      "sha256": "d9dd573323e593b76ad256b2433ada19b545e4cb5305ff48ecea7f14004e479c"
+    },
+    "logs/native-small-v13.argv.json": {
+      "bytes": 1034,
+      "sha256": "4f4ad7e988d5ced18954319fe6d56b206b2868ed3eb0ffa3d2685c47355cf135"
+    },
+    "logs/native-small-v13.out": {
+      "bytes": 543,
+      "sha256": "1fd7ef50b11b0c001ab6ba198eee8f51b628410e22459c2dca237cac7d4ab18d"
+    },
+    "logs/native-small-v13.guard.jsonl": {
+      "bytes": 4455,
+      "sha256": "af7b17140f6745884b1d9bc71979c9d58f56f19346a7a77e47cd4d021aad7ede"
+    },
+    "logs/native-full-v1.argv.json": {
+      "bytes": 1029,
+      "sha256": "d7bca2b62f2ba501907b00db33659bc62897b52f5c689359d121fc40ee4e8660"
+    },
+    "logs/native-full-v1.out": {
+      "bytes": 669,
+      "sha256": "f531e4bc428d69447cbabe49a6e5c97be9ca27e4f45020f12212b27f2c7fbd60"
+    },
+    "logs/native-full-v1.guard.jsonl": {
+      "bytes": 8763,
+      "sha256": "fb73401d14f3a069031b143baccda929505fcbc317d532182bc22d1c6ec28b8a"
+    }
+  },
+  "adversary": {
+    "verdict": "ROBUST within bounded code/probe, numerical, lifecycle and descriptive timing scope; report and guard hashes pinned to close the final review provenance gap.",
+    "lineage": "Correlated same-family Mini-Quad, not independent replication.",
+    "residual": "Not full decoder assembly, complete generation, arbitrary-input quality or compiled CUDA Flex parity."
+  },
+  "limitations": [
+    "Only block zero and frozen fixture inputs.",
+    "Full grid compares attention and output only; small grid compares all 26 captures.",
+    "No full decoder/diffusion/video generation or pixel quality evaluation.",
+    "CPU fixture setup/loading and post-terminal diagnostics are outside GPU neural math.",
+    "Opaque MPS allocations are outside named allocation counters.",
+    "No hermetic build attestation; source manifests bind the base revision plus uncommitted measured bytes.",
+    "No full-file checkpoint hash verification.",
+    "External artifacts must be retained for byte replay; old small-v12 is historical only."
+  ],
+  "rollback": "Omit the standalone probe; no production route consumes the new module.",
+  "refresh_on": [
+    "source/checkpoint/fixture change",
+    "toolchain/device/OS/backend change",
+    "geometry/precision/neighborhood change",
+    "buffer ownership/lifetime or guard change",
+    "missing external artifacts"
+  ],
+  "next_frontier": "Proposed phase-separated decoder assembly with shared workspace and sequential block checks; not executed in this task."
+}

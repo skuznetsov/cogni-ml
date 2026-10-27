@@ -1,0 +1,331 @@
+require "spec"
+require "../src/ml/video/pixelumm_decoder_block_mps"
+require "./support/video_allocation_counter"
+
+private def pixelumm_original_index(temporal : Int32, height : Int32, width : Int32,
+                                    t : Int32, h : Int32, w : Int32) : Int32
+  ((t * height) + h) * width + w
+end
+
+private def pixelumm_expected_originals(layout,
+                                        temporal : Int32, height : Int32, width : Int32,
+                                        tile_tokens : Int32, tile : Int32,
+                                        query : Bool) : Array(Int32)
+  tiles_w = (width + tile_tokens - 1) // tile_tokens
+  tile_h, tile_w = tile.divmod(tiles_w)
+  center_h = tile_h.clamp(1, Math.max((height + tile_tokens - 1) // tile_tokens - 2, 1))
+  center_w = tile_w.clamp(1, Math.max(tiles_w - 2, 1))
+  inverse = layout.inverse_permutation
+  originals = [] of Int32
+
+  temporal.times do |t|
+    height.times do |h|
+      width.times do |w|
+        same_query_tile = h // tile_tokens == tile_h && w // tile_tokens == tile_w
+        in_key_neighborhood = (h // tile_tokens - center_h).abs <= 1 &&
+                              (w // tile_tokens - center_w).abs <= 1
+        if query ? same_query_tile : in_key_neighborhood
+          originals << pixelumm_original_index(temporal, height, width, t, h, w)
+        end
+      end
+    end
+  end
+
+  originals.sort_by! { |original| inverse[original] }
+  originals
+end
+
+private def pixelumm_assert_local_layout(layout,
+                                         temporal : Int32, height : Int32, width : Int32,
+                                         tile_tokens : Int32) : Nil
+  tokens = temporal * height * width
+  tiles_h = (height + tile_tokens - 1) // tile_tokens
+  tiles_w = (width + tile_tokens - 1) // tile_tokens
+  layout.local_attention?.should be_true
+  layout.tile_count.should eq(tiles_h * tiles_w)
+  layout.permutation.size.should eq(tokens)
+  layout.inverse_permutation.size.should eq(tokens)
+
+  permutation = layout.permutation
+  inverse = layout.inverse_permutation
+  sorted_permutation = permutation.dup.sort!
+  sorted_permutation.should eq(Array(Int32).new(tokens) { |index| index.to_i32 })
+  permutation.each_with_index do |original, tile_slot|
+    inverse[original].should eq(tile_slot.to_i32)
+  end
+
+  observed_max_query = 0
+  observed_max_key = 0
+  layout.tile_count.times do |tile|
+    query_slots = layout.query_indices(tile.to_i32)
+    key_slots = layout.key_indices(tile.to_i32)
+    query_originals = query_slots.map { |slot| layout.permutation[slot] }
+    key_originals = key_slots.map { |slot| layout.permutation[slot] }
+    query_originals.should eq(pixelumm_expected_originals(layout, temporal, height, width,
+      tile_tokens, tile.to_i32, true))
+    key_originals.should eq(pixelumm_expected_originals(layout, temporal, height, width,
+      tile_tokens, tile.to_i32, false))
+    key_slots.uniq.size.should eq(key_slots.size)
+    observed_max_query = Math.max(observed_max_query, query_slots.size)
+    observed_max_key = Math.max(observed_max_key, key_slots.size)
+  end
+
+  layout.max_query_tokens.should eq(observed_max_query)
+  layout.max_key_tokens.should eq(observed_max_key)
+end
+
+describe ML::Video::PixelUMMDecoderBlockMPS::Config do
+  it "matches the pinned fixed architecture and rejects malformed CPU-only configs" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25)
+    config.layout.local_attention?.should be_true
+
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 0, height: 33, width: 25)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 2, height: 0, width: 25)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 2, height: 33, width: 25,
+        query_heads: 30)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 2, height: 33, width: 25,
+        ff_dim: 12_287)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 2, height: 33, width: 25,
+        tile_tokens: 4)
+    end
+  end
+
+  it "matches upstream tile-major mask semantics for shifted edges and partial tiles" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25, tile_tokens: 8)
+    layout = config.layout
+    pixelumm_assert_local_layout(layout, 2, 33, 25, 8)
+
+    # A corner tile is shifted inward by the upstream clamp, and remains
+    # connected across every temporal slice.
+    corner_keys = layout.key_indices(0_i32).map { |slot| layout.permutation[slot] }
+    corner_times = corner_keys.map { |index| index // (33 * 25) }.uniq.sort
+    corner_times.should eq([0, 1])
+
+    # Tile (4, 3) is the one-token-high, one-token-wide partial corner.
+    layout.query_indices(19_i32).size.should eq(2)
+    layout.max_query_tokens.should eq(128)
+    layout.max_key_tokens.should eq(1_152)
+    layout.max_key_tokens.should be < (2 * 33 * 25)
+  end
+
+  it "falls back to full attention when both spatial tile counts are at most three" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 16, width: 24, tile_tokens: 8)
+    layout = config.layout
+    tokens = 2 * 16 * 24
+    full_slots = Array(Int32).new(tokens) { |index| index.to_i32 }
+
+    layout.local_attention?.should be_false
+    layout.tile_count.should eq(1)
+    layout.max_query_tokens.should eq(tokens)
+    layout.max_key_tokens.should eq(tokens)
+    layout.query_indices(0_i32).should eq(full_slots)
+    layout.key_indices(0_i32).should eq(full_slots)
+  end
+
+  it "keeps the pinned T6/H44/W80 decoder schedule physically neighborhood-bounded" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 6, height: 44, width: 80)
+    layout = config.layout
+
+    layout.local_attention?.should be_true
+    layout.tile_count.should eq(60)
+    layout.max_query_tokens.should eq(384)
+    layout.max_key_tokens.should eq(3_456)
+    layout.max_key_tokens.should be < config.tokens
+    layout.query_index_table.size.should eq(60 * (384 + 1))
+    layout.key_index_table.size.should eq(60 * (3_456 + 1))
+    ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(config, layout)
+      .should eq(2_469_764_068_i64)
+  end
+end
+
+private def pixelumm_layer0_weight_bytes : Hash(String, Int64)
+  {
+    "input_norm.weight"     => 4_096_i64 * 2,
+    "attn.q_proj.weight"    => 4_096_i64 * 4_096 * 2,
+    "attn.k_proj.weight"    => 1_024_i64 * 4_096 * 2,
+    "attn.v_proj.weight"    => 1_024_i64 * 4_096 * 2,
+    "attn.o_proj.weight"    => 4_096_i64 * 4_096 * 2,
+    "attn.q_norm_t.weight"  => 64_i64 * 2,
+    "attn.q_norm_hw.weight" => 64_i64 * 2,
+    "attn.k_norm_t.weight"  => 64_i64 * 2,
+    "attn.k_norm_hw.weight" => 64_i64 * 2,
+    "post_attn_norm.weight" => 4_096_i64 * 2,
+    "mlp.gate_proj.weight"  => 12_288_i64 * 4_096 * 2,
+    "mlp.up_proj.weight"    => 12_288_i64 * 4_096 * 2,
+    "mlp.down_proj.weight"  => 4_096_i64 * 12_288 * 2,
+  }
+end
+
+describe ML::Video::PixelUMMDecoderBlockMPS::Plan do
+  it "rejects bad weight/input/table extents before requiring Metal buffers" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25)
+    weights = pixelumm_layer0_weight_bytes
+    input_bytes = config.tokens.to_i64 * 4_096 * 2
+    cosine_bytes = config.tokens.to_i64 * 128 * 4
+    sine_bytes = cosine_bytes
+    required = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(config, config.layout)
+
+    ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+      input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+      weights_bytes: weights, max_named_bytes: required)
+
+    short_input = input_bytes - 2
+    expect_raises(ArgumentError, /extent/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: short_input, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: weights, max_named_bytes: required)
+    end
+
+    short_cosine = cosine_bytes - 4
+    expect_raises(ArgumentError, /extent/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: short_cosine, sine_bytes: sine_bytes,
+        weights_bytes: weights, max_named_bytes: required)
+    end
+
+    expect_raises(ArgumentError, /extent/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes - 4,
+        weights_bytes: weights, max_named_bytes: required)
+    end
+
+    malformed_weights = weights.dup
+    malformed_weights["attn.k_proj.weight"] -= 2
+    expect_raises(ArgumentError, /attn.k_proj.weight/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: malformed_weights, max_named_bytes: required)
+    end
+
+    missing_weight = weights.dup
+    missing_weight.delete("attn.v_proj.weight")
+    expect_raises(ArgumentError, /exact 13/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: missing_weight, max_named_bytes: required)
+    end
+
+    extra_weight = weights.dup
+    extra_weight["decoder.head.weight"] = 1_i64
+    expect_raises(ArgumentError, /exact 13/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: extra_weight, max_named_bytes: required)
+    end
+
+    expect_raises(ArgumentError, /unique/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: weights, max_named_bytes: required,
+        captures: ["q_rope", "q_rope"])
+    end
+    expect_raises(ArgumentError, /unknown/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes: weights, max_named_bytes: required,
+        captures: ["unbounded_scores"])
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "adopts exact plan-owned budget and rejects a one-byte underestimate" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 2, height: 33, width: 25)
+    weights = pixelumm_layer0_weight_bytes
+    required = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(config, config.layout)
+    # This shape has a 128-query by 1,152-key maximum local attention geometry.
+    required.should eq(236_300_140_i64)
+    ML::Video::PixelUMMDecoderBlockMPS::Plan::CAPTURE_NAMES.size.should eq(26)
+    statistics_capture_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, ["input_norm_statistics"])
+    statistics_capture_bytes.should eq(required + config.tokens.to_i64 * 4)
+    q_statistics_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, ["q_norm_statistics"])
+    q_statistics_bytes.should eq(required + config.tokens.to_i64 * 32 * 2 * 4)
+    k_statistics_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, ["k_norm_statistics"])
+    k_statistics_bytes.should eq(required + config.tokens.to_i64 * 8 * 2 * 4)
+    q_inverse_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, ["q_norm_inverse"])
+    q_inverse_bytes.should eq(required + config.tokens.to_i64 * 32 * 2 * 4)
+    k_inverse_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, ["k_norm_inverse"])
+    k_inverse_bytes.should eq(required + config.tokens.to_i64 * 8 * 2 * 4)
+    qk_diagnostics = ["q_norm_statistics", "k_norm_statistics",
+                      "q_norm_inverse", "k_norm_inverse"]
+    qk_diagnostic_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout, qk_diagnostics)
+    qk_diagnostic_bytes.should eq(required + config.tokens.to_i64 * 640)
+    ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+      input_bytes: config.tokens.to_i64 * 4_096 * 2,
+      cosine_bytes: config.tokens.to_i64 * 128 * 4,
+      sine_bytes: config.tokens.to_i64 * 128 * 4,
+      weights_bytes: weights, max_named_bytes: qk_diagnostic_bytes,
+      captures: qk_diagnostics)
+    ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+      input_bytes: config.tokens.to_i64 * 4_096 * 2,
+      cosine_bytes: config.tokens.to_i64 * 128 * 4,
+      sine_bytes: config.tokens.to_i64 * 128 * 4,
+      weights_bytes: weights, max_named_bytes: required)
+    expect_raises(ArgumentError, /budget/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(config,
+        input_bytes: config.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: config.tokens.to_i64 * 128 * 4,
+        sine_bytes: config.tokens.to_i64 * 128 * 4,
+        weights_bytes: weights, max_named_bytes: required - 1)
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "admits the exact global fallback token bound and rejects larger grids before Metal allocation" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    weights = pixelumm_layer0_weight_bytes
+
+    # Keep Config.layout's geometric fallback formula independent from Plan's
+    # admission cap: exactly 2048 tokens still uses full attention and admits.
+    boundary = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 8, height: 16, width: 16)
+    boundary.tokens.should eq(2_048)
+    boundary.layout.local_attention?.should be_false
+    boundary.layout.max_query_tokens.should eq(2_048)
+    ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(boundary,
+      input_bytes: boundary.tokens.to_i64 * 4_096 * 2,
+      cosine_bytes: boundary.tokens.to_i64 * 128 * 4,
+      sine_bytes: boundary.tokens.to_i64 * 128 * 4,
+      weights_bytes: weights, max_named_bytes: Int64::MAX)
+
+    # The geometry formula remains full attention above the operational cap;
+    # the CPU-only admission gate rejects it before constructing GPU buffers.
+    oversized = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 4, height: 24, width: 22)
+    oversized.tokens.should eq(2_112)
+    oversized.layout.local_attention?.should be_false
+    oversized.layout.max_query_tokens.should eq(2_112)
+    oversized.layout.max_key_tokens.should eq(2_112)
+    expect_raises(ArgumentError, /full-attention.*2048/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Plan.validate_admission!(oversized,
+        input_bytes: oversized.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: oversized.tokens.to_i64 * 128 * 4,
+        sine_bytes: oversized.tokens.to_i64 * 128 * 4,
+        weights_bytes: weights, max_named_bytes: Int64::MAX)
+    end
+
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+end
