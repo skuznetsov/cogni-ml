@@ -2,6 +2,26 @@ require "./hy_nomas_q4_dit_io"
 require "./hy_nomas_conditioned_eight_probe"
 require "../../src/ml/video/hy_nomas_bf16_stack"
 
+# Diagnostic-only accessors keep poison controls out of the production API.
+# Inactive RMS rows must be irrelevant even when their scratch contains NaNs.
+class ML::Video::HyNomasMPSRMS::Plan
+  def hy_dit_probe_scratch : Array(ML::MetalBuffer)
+    [square, mean]
+  end
+end
+
+class ML::Video::HyNomasMPSWorkspace
+  def hy_dit_probe_rms_scratch : Array(ML::MetalBuffer)
+    @rms_plans.values.flat_map(&.hy_dit_probe_scratch)
+  end
+end
+
+class ML::Video::HyNomasMPSSerialWorkspace
+  def hy_dit_probe_rms_scratch : Array(ML::MetalBuffer)
+    workspace.hy_dit_probe_rms_scratch
+  end
+end
+
 # One camera-off DiT forward. The authenticated upstream Qwen hidden tensor is
 # a saved producer boundary, never an expected DiT activation fed back as input.
 module HyNomasQ4DiTProbe
@@ -187,13 +207,25 @@ module HyNomasQ4DiTProbe
     end
   end
 
-  def serial_bytes : Int64
-    c = CONFIG
+  def dit_config(compact_text : Bool = false, compact_text_tokens : Int32 = 23) : ML::Video::HyNomasConfig
+    if compact_text
+      CONFIG.compact_valid_text_prefix(23, compact_text_tokens)
+    else
+      raise ArgumentError.new("Compact storage requires compact text mode") unless compact_text_tokens == 23
+      CONFIG
+    end
+  end
+
+  def serial_bytes(compact_text : Bool = false, compact_text_tokens : Int32 = 23) : Int64
+    c = dit_config(compact_text, compact_text_tokens)
     scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(c).sum { |_, n| n.to_i64 * 4 }
     scratch += 53_i64 * c.joint_rows * c.dim * 4
     compact = ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(1, 5303, 16, 128, 256, 16)
     scratch + ML::Video::HyNomasMPSWorkspace.required_weight_stage_count(c).to_i64 * 4 +
-      compact.resident_bytes + 2_i64 * c.joint_rows * (c.dim + c.heads) * 4
+      # Q/K RMS keeps the source MPSGraph mean geometry so changing storage
+      # does not change its reduction arithmetic. Other text scratch is M rows.
+      compact.resident_bytes + 2_i64 * CONFIG.joint_rows * (c.dim + c.heads) * 4 +
+      (compact_text ? ML::Video::HyNomasMPSSerialWorkspace.compaction_resident_bytes(CONFIG, 23, compact_text_tokens) : 0_i64)
   end
 
   def boundary_bytes : Int64
@@ -202,11 +234,30 @@ module HyNomasQ4DiTProbe
     patch + final
   end
 
+  # Pure metadata admission for a pair of resident Q4 sessions. This must run
+  # before constructing either model; actual allocations are checked again by
+  # Session against the authenticated loader's independent admitted total.
+  def q4_named_bytes(index : ML::Video::HyNomasQ4StackIndex::Index,
+                     compact_text : Bool = false, compact_text_tokens : Int32 = 23) : Int64
+    globals = HyNomasQ4DiTIO::GLOBAL_BINDINGS.sum do |binding|
+      binding.shape.reduce(1_i64) { |a, b| a * b } * 2
+    end
+    inputs = shapes.select { |name, _| name.starts_with?("input.") }.values.sum do |shape|
+      shape.reduce(1_i64) { |a, b| a * b } * 4
+    end
+    index.caches.sum(&.payload_bytes) + STAGE_BYTES + globals + inputs +
+      1280_i64 * 3584 * 2 + boundary_bytes + serial_bytes(compact_text, compact_text_tokens) +
+      ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total +
+      (compact_text ? 1280_i64 * 2048 * 4 : 0_i64)
+  end
+
   class Session
     @@live = [] of Session
     getter named_bytes : Int64 = 0_i64
     getter cache_payload_bytes : Int64 = 0_i64
     getter poison_count : Int32 = 0
+    getter compact_text : Bool
+    getter dit_text_tokens : Int32
     @inputs = ML::Video::Arena.new
     @globals = ML::Video::Arena.new
     @stage = ML::Video::Arena.new
@@ -229,9 +280,11 @@ module HyNomasQ4DiTProbe
 
     def initialize(@fixture : Fixture, index_path : String, index_sha : String,
                    index : ML::Video::HyNomasQ4StackIndex::Index, @mode : String,
-                   budget : Int64)
+                   budget : Int64, *, @compact_text : Bool = false,
+                   compact_text_tokens : Int32 = 23)
       # All headers, payloads, independent BF16 controls, and aggregate sizes
       # are admitted before constructing the first MetalBuffer.
+      @dit_text_tokens = HyNomasQ4DiTProbe.dit_config(@compact_text, compact_text_tokens).text_tokens
       file = ML::Video::BF16WeightCache.authenticate(index.globals_bf16_path, index.globals_bf16_sha256)
       @global_file = file
       begin
@@ -247,7 +300,8 @@ module HyNomasQ4DiTProbe
           shape.reduce(1_i64) { |a, b| a * b } * 4
         end
         reserve = plan.destination_bytes + input_bytes + 1280_i64 * 3584 * 2 +
-                  HyNomasQ4DiTProbe.boundary_bytes + HyNomasQ4DiTProbe.serial_bytes +
+                  HyNomasQ4DiTProbe.boundary_bytes + HyNomasQ4DiTProbe.serial_bytes(@compact_text, compact_text_tokens) +
+                  (@compact_text ? 1280_i64 * 2048 * 4 : 0_i64) +
                   ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total
         loader = if @mode == "q4"
                    ML::Video::HyNomasQ4Stack.new(index_path, index_sha, HyNomasQ4DiTIO::SOURCE_SHA,
@@ -268,6 +322,9 @@ module HyNomasQ4DiTProbe
         loader.load!(@stage)
         HyNomasQ4DiTProbe.shapes.keys.select(&.starts_with?("input.")).each { |name| @fixture.upload_input!(name, @inputs) }
         @inputs.alloc_weight("qwen_bf16", 1280 * 3584, ML::Video::WeightDType::BF16)
+        # Diagnostic backup is never an inference input. Only the excluded-tail
+        # poison control uses it, outside performance samples, entirely on GPU.
+        @inputs.alloc("diagnostic.text_tail_backup", 1280 * 2048) if @compact_text
         @convert = ML::Metal::ComputePipeline.new("video_weight_encode_bf16", ML::Video::PreparedWeights::SOURCE)
         @patch = patch = ML::Video::HyNomasPatchMPSPlan.new(@inputs["input.latent"], 5280, @globals)
         @refiner = refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(@inputs["qwen_bf16"], MASK, 500_f32, @globals,
@@ -276,7 +333,9 @@ module HyNomasQ4DiTProbe
           Array(ML::Video::Arena).new(54) { @stage }, patch.output, refiner.text_output,
           refiner.vec, refiner.vec_txt, @inputs["input.rope_cos"], @inputs["input.rope_sin"],
           attention_query_chunk: 256, attention_heads_per_group: 16, valid_text_tokens: 23,
-          allow_shared_modulation: true, full_dit: true, weight_loader: loader)
+          allow_shared_modulation: true, full_dit: true, weight_loader: loader,
+          compact_valid_text: @compact_text,
+          compact_text_tokens: @compact_text ? compact_text_tokens : nil)
         last = serial.blocks.last
         @final = final = ML::Video::HyNomasFinalMPSPlan.new(last.image_output, refiner.vec, 5280, @globals)
         @captures["img_in"] = patch.output
@@ -291,7 +350,12 @@ module HyNomasQ4DiTProbe
           raise "Full DiT native capture inventory mismatch"
         end
         @captures.each do |name, buffer|
-          raise "Full DiT capture extent mismatch: #{name}" unless buffer.size == @fixture.document["tensors"][name]["nbytes"].as_i64
+          expected_bytes = if @compact_text && name.starts_with?("block") && name.ends_with?(".txt.output")
+                             @dit_text_tokens.to_i64 * 2048 * 4
+                           else
+                             @fixture.document["tensors"][name]["nbytes"].as_i64
+                           end
+          raise "Full DiT capture extent mismatch: #{name}" unless buffer.size == expected_bytes
         end
         actual_bytes = @cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes + @inputs.resident_bytes +
                        patch.resident_bytes + refiner.resident_bytes + serial.resident_bytes + final.resident_bytes
@@ -306,17 +370,24 @@ module HyNomasQ4DiTProbe
         serial.blocks.each do |block|
           scratch, _ = block.mps_workspace_buffers
           scratch.each_with_index do |buffer, slot|
-            next if ML::Video::HyNomasDualStreamBlock.scratch_plan(CONFIG)[slot][0] == "hy_nomas.zero_head_bias"
+            next if ML::Video::HyNomasDualStreamBlock.scratch_plan(serial.block_config)[slot][0] == "hy_nomas.zero_head_bias"
             @poison_buffers << buffer unless @poison_buffers.any?(&.same?(buffer))
           end
         end
+        if buffer = serial.compact_text_input
+          @poison_buffers << buffer
+        end
+        serial.hy_dit_probe_rms_scratch.each do |buffer|
+          @poison_buffers << buffer unless @poison_buffers.any?(&.same?(buffer))
+        end
+        @poison_buffers << @inputs["diagnostic.text_tail_backup"] if @compact_text
         final.checkpoints.each_value { |buffer| @poison_buffers << buffer unless @poison_buffers.any?(&.same?(buffer)) }
         @poison_count = @poison_buffers.size
         @poison = ML::Metal::ComputePipeline.new("hy_nomas_dit_poison_f32", <<-METAL)
           #include <metal_stdlib>
           using namespace metal;
-          kernel void hy_nomas_dit_poison_f32(device float *p [[buffer(0)]], constant uint &n [[buffer(1)]], uint i [[thread_position_in_grid]]) {
-            if (i < n) p[i] = as_type<float>(0x7fc00000u);
+          kernel void hy_nomas_dit_poison_f32(device float *p [[buffer(0)]], constant uint &n [[buffer(1)]], constant uint &offset [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+            if (i < n) p[offset + i] = as_type<float>(0x7fc00000u);
           }
           METAL
       rescue ex
@@ -325,8 +396,10 @@ module HyNomasQ4DiTProbe
       end
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain, *, poison : Bool) : Nil
+    def encode(chain : ML::Metal::MPSCommandChain, *, poison : Bool,
+               poison_text_suffix : Bool = false) : Nil
       raise ArgumentError.new("Full DiT session has been released") if @released
+      raise ArgumentError.new("Excluded-tail poison requires compact DiT") if poison_text_suffix && !@compact_text
       if previous = @last_chain
         raise ArgumentError.new("Full DiT previous command chain is pending") unless previous.completed? && !previous.same?(chain)
       end
@@ -341,7 +414,7 @@ module HyNomasQ4DiTProbe
       if poison
         @poison_buffers.each do |buffer|
           chain.encoder.set_pipeline(@poison.not_nil!).set_buffer(buffer, 0, ML::Metal::BufferAccess::Write)
-            .set_value((buffer.size // 4).to_u32, 1).dispatch_1d((buffer.size // 4).to_i32)
+            .set_value((buffer.size // 4).to_u32, 1).set_value(0_u32, 2).dispatch_1d((buffer.size // 4).to_i32)
         end
       end
       chain.encoder.set_pipeline(@convert.not_nil!).set_buffer(@inputs["input.qwen_hidden"], 0)
@@ -349,7 +422,17 @@ module HyNomasQ4DiTProbe
         .set_value((1280 * 3584).to_u32, 2).dispatch_1d(1280 * 3584)
       @patch.not_nil!.encode(chain)
       @refiner.not_nil!.encode(chain)
+      if poison_text_suffix
+        ML::Video::MetalOps.copy(chain.encoder, @refiner.not_nil!.text_output,
+          @inputs["diagnostic.text_tail_backup"], 1280 * 2048)
+        chain.encoder.set_pipeline(@poison.not_nil!).set_buffer(@refiner.not_nil!.text_output, 0, ML::Metal::BufferAccess::Write)
+          .set_value((1257 * 2048).to_u32, 1).set_value((23 * 2048).to_u32, 2).dispatch_1d(1257 * 2048)
+      end
       @serial.not_nil!.encode(chain)
+      if poison_text_suffix
+        ML::Video::MetalOps.copy(chain.encoder, @inputs["diagnostic.text_tail_backup"],
+          @refiner.not_nil!.text_output, 1280 * 2048)
+      end
       @final.not_nil!.encode(chain)
     end
 
@@ -358,7 +441,13 @@ module HyNomasQ4DiTProbe
       raise ArgumentError.new("Full DiT diagnostics require terminal wait") unless chain.completed? && chain.wait_count == 1
       @captures.keys.sort.map do |name|
         buffer = @captures[name]
-        count = (buffer.size // 4).to_i32
+        # Aligned storage may retain excluded rows. Only the valid prefix is a
+        # semantic output; poisoned suffix rows are deliberately not read.
+        count = if @compact_text && name.starts_with?("block") && name.ends_with?(".txt.output")
+                  23 * 2048
+                else
+                  (buffer.size // 4).to_i32
+                end
         actual = Slice.new(@diagnostic.to_unsafe, count)
         buffer.read_to_slice(actual)
         hash = Digest::SHA256.hexdigest(Bytes.new(actual.to_unsafe.as(UInt8*), count * 4))

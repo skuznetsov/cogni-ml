@@ -20,6 +20,8 @@ module ML::Video::HyNomasMPSRMS
     @weight_dtype : WeightDType
     @rows : Int32
     @count : Int32
+    @reduction_rows : Int32
+    @reduction_count : Int32
     @arena : Arena
     @square : ML::MetalBuffer? = nil
     @mean : ML::MetalBuffer? = nil
@@ -33,16 +35,25 @@ module ML::Video::HyNomasMPSRMS
                    @weight : ML::MetalBuffer,
                    @output : ML::MetalBuffer,
                    @weight_dtype : WeightDType,
-                   @tokens : Int32)
+                   @tokens : Int32,
+                   *, reduction_tokens : Int32? = nil)
       @config.validate!
       unless @tokens == @config.video_tokens || @tokens == @config.text_tokens
         raise ArgumentError.new("Hy-Nomas MPS RMS token count must match an image or text stream")
+      end
+      reduction = reduction_tokens || @tokens
+      unless reduction >= @tokens
+        raise ArgumentError.new("Hy-Nomas MPS RMS reduction tokens must cover the active tokens")
       end
       @head_dim = @config.head_dim
       @rows = HyNomasDualStreamBlock.checked_count(
         @config.batches, @tokens, @config.heads,
       )
       @count = HyNomasDualStreamBlock.checked_count(@rows, @head_dim)
+      @reduction_rows = HyNomasDualStreamBlock.checked_count(
+        @config.batches, reduction, @config.heads,
+      )
+      @reduction_count = HyNomasDualStreamBlock.checked_count(@reduction_rows, @head_dim)
 
       # Warm both cached dispatch pipelines before any command is encoded.
       WanT5.pipeline("wan_t5_rms_square")
@@ -54,18 +65,18 @@ module ML::Video::HyNomasMPSRMS
 
       @arena = Arena.new
       begin
-        @square = @arena.alloc("hy_nomas_mps_rms.square", @count)
-        @mean = @arena.alloc("hy_nomas_mps_rms.mean", @rows)
+        @square = @arena.alloc("hy_nomas_mps_rms.square", @reduction_count)
+        @mean = @arena.alloc("hy_nomas_mps_rms.mean", @reduction_rows)
         validate_bindings!
 
-        flat_tokens = HyNomasDualStreamBlock.checked_count(@tokens, @config.heads)
+        flat_tokens = HyNomasDualStreamBlock.checked_count(reduction, @config.heads)
         mps_config = WanT5Config.new(
           vocab: 1, dim: @head_dim, ffn_dim: @head_dim,
           heads: 1, layers: 1, batches: @config.batches,
           tokens: flat_tokens, eps: @config.norm_eps,
         )
         mps_config.validate!
-        unless mps_config.rows == @rows && mps_config.dim == @head_dim &&
+        unless mps_config.rows == @reduction_rows && mps_config.dim == @head_dim &&
                mps_config.eps == @config.norm_eps
           raise ArgumentError.new("Hy-Nomas MPS RMS flattened geometry mismatch")
         end
@@ -109,7 +120,7 @@ module ML::Video::HyNomasMPSRMS
       @last_chain = chain
       WanT5.rms_norm_mps_mean(
         chain, mean_plan, @mps_config.not_nil!, @input, weight, @output,
-        square, mean, weight_dtype,
+        square, mean, weight_dtype, @rows,
       )
     end
 
@@ -177,8 +188,8 @@ module ML::Video::HyNomasMPSRMS
 
     private def validate_scratch!(square : ML::MetalBuffer,
                                   mean : ML::MetalBuffer) : Nil
-      validate_tensor!(square, @count, "square scratch")
-      validate_tensor!(mean, @rows, "mean scratch")
+      validate_tensor!(square, @reduction_count, "square scratch")
+      validate_tensor!(mean, @reduction_rows, "mean scratch")
     end
 
     private def validate_distinct!(input : ML::MetalBuffer,

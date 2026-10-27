@@ -97,6 +97,30 @@ module ML::Video
       HyNomasDualStreamBlock.checked_count(txt_mod_rows, dim)
       HyNomasDualStreamBlock.checked_count(video_tokens, head_dim)
     end
+
+    # Return the block geometry used when padded text rows are omitted after
+    # the refiner. Storage may be rounded above the valid prefix to preserve a
+    # backend-friendly row count; attention still receives the exact valid
+    # prefix separately. Text modulation must remain a broadcast row.
+    def compact_valid_text_prefix(valid_tokens : Int32,
+                                  storage_tokens : Int32? = nil) : HyNomasConfig
+      validate!
+      unless batches == 1
+        raise ArgumentError.new("Hy-Nomas valid-text compaction requires batch-one geometry")
+      end
+      unless valid_tokens > 0 && valid_tokens <= text_tokens
+        raise ArgumentError.new("Hy-Nomas valid text prefix must be positive and no greater than text_tokens")
+      end
+      storage = storage_tokens || valid_tokens
+      unless storage >= valid_tokens && storage <= text_tokens
+        raise ArgumentError.new("Hy-Nomas compact text storage must contain the valid prefix and not exceed text_tokens")
+      end
+      unless effective_txt_modulation_rows == batches
+        raise ArgumentError.new("Hy-Nomas valid-text compaction requires broadcast text modulation")
+      end
+
+      copy_with(text_tokens: storage)
+    end
   end
 
   # Encoder-only F32-math first slice of Hy-Nomas double_blocks.0.

@@ -96,10 +96,19 @@ module ML::Video
                    *, attention_query_chunk : Int32 = 0,
                    attention_heads_per_group : Int32 = 0,
                    allow_shared_modulation : Bool = false,
-                   valid_text_tokens : Int32? = nil)
+                   valid_text_tokens : Int32? = nil,
+                   text_rms_tokens : Int32? = nil)
       @config = @block.config
       @allow_shared_modulation = allow_shared_modulation
       @attention_tokens = self.class.attention_tokens_for(@config, valid_text_tokens)
+      if reduction_tokens = text_rms_tokens
+        unless reduction_tokens >= @config.text_tokens
+          raise ArgumentError.new("Hy-Nomas text RMS reduction tokens must cover the block text storage")
+        end
+        HyNomasDualStreamBlock.checked_count(
+          @config.batches, reduction_tokens, @config.heads, @config.head_dim,
+        )
+      end
       if attention_query_chunk != 0 || attention_heads_per_group != 0
         HyNomasCompactAttentionMPSPlan.workspace_geometry(@config.batches,
           @attention_tokens, @config.heads, @config.head_dim,
@@ -141,9 +150,11 @@ module ML::Video
         end
         @block.mps_rms_operations.each do |operation|
           @rms_operations[operation.name] = operation
+          reduction_tokens = operation.name.starts_with?("txt.") ? text_rms_tokens : nil
           @rms_plans[operation.name] = HyNomasMPSRMS::Plan.new(@config,
             operation.input, operation.weight.weight, operation.output,
-            operation.weight.dtype, operation.tokens)
+            operation.weight.dtype, operation.tokens,
+            reduction_tokens: reduction_tokens)
         end
         if @attention_tokens < @config.joint_tokens
           @attention_clear_pipeline = ML::Metal::PipelineCache.get(ATTENTION_CLEAR_KERNEL) do

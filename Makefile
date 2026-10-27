@@ -242,8 +242,23 @@ $(BUILD_DIR)/hy_nomas_q4_dit_probe: examples/hy_nomas_q4_dit_probe.cr $(wildcard
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
+.PHONY: hy_nomas_text_compaction_benchmark
+hy_nomas_text_compaction_benchmark: $(BUILD_DIR)/hy_nomas_text_compaction_benchmark
+
+$(BUILD_DIR)/hy_nomas_text_compaction_benchmark: examples/hy_nomas_text_compaction_benchmark.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: hy_nomas_text_row_projection_probe hy_nomas_text_row_stages_probe
+hy_nomas_text_row_projection_probe: $(BUILD_DIR)/hy_nomas_text_row_projection_probe
+hy_nomas_text_row_stages_probe: $(BUILD_DIR)/hy_nomas_text_row_stages_probe
+
+$(BUILD_DIR)/hy_nomas_text_row_projection_probe $(BUILD_DIR)/hy_nomas_text_row_stages_probe: $(BUILD_DIR)/%: examples/%.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
 spec_hy_nomas_q4_dit: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
-	$(CRYSTAL) spec spec/hy_nomas_dit_boundaries_spec.cr spec/hy_nomas_q4_cache_spec.cr spec/hy_nomas_q4_stack_spec.cr spec/hy_nomas_q4_bf16_finite_spec.cr \
+	$(CRYSTAL) spec spec/hy_nomas_dit_boundaries_spec.cr spec/hy_nomas_q4_cache_spec.cr spec/hy_nomas_q4_stack_spec.cr spec/hy_nomas_q4_bf16_finite_spec.cr spec/hy_nomas_serial_compaction_admission_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 .PHONY: hy_nomas_conditioned_eight_probe spec_hy_nomas_conditioned_eight

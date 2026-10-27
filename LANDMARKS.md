@@ -34385,3 +34385,42 @@ Refresh after source/toolchain/device/model/workload changes.
   10% cache-aware reserve, no new preterminal waits, separate same-operand and
   model-quality gates, and no full generation. Refresh on source/checkpoint,
   mask/segment/history, precision, hardware/toolchain or missing evidence.
+
+### 2026-10-26: DiT M64 text compaction preserves upstream bits and saves 797 MiB
+
+- Return pointer: docs/hy-nomas-text-compaction-frontier.md and
+  .landmark/evidence/2026-10-26-hy-nomas-text-compaction.json. Opt-in only;
+  the padded path remains the default. No diffusion generation or decode ran.
+- The full Qwen producer/refiner stays at T1280. Only DiT text storage shrinks
+  to M64; attention still uses exactly 23 valid text tokens with 5,280 image
+  tokens. Serial text input, scratch and output banks are allocated once and
+  handed off on GPU. Original text Q/K RMS mean geometry/scratch remains
+  T1280 while native square/normalize dispatch only active M64 rows.
+- Refuted exact-prefix route: original M23 full-forward gate fails. Isolated
+  real text FFN-down M23/M32 has 15 failures vs M1280 (max abs 0.000205994),
+  M64 and larger tested sizes are bitwise exact. M64 alone still has one FFN
+  failure; preserving full RMS mean geometry makes all 40 selected block-0
+  checkpoints bitwise exact. Other storage shapes are not full-model qualified.
+- Current full54 clean/reuse and timing-bracketing requests match all 14
+  selected frozen same-Q4 upstream outputs, including latent, bitwise at
+  unchanged finite 2e-5. Excluded refiner suffix and scratch NaN poison do not
+  change valid outputs; in-flight release is rejected. Selected checkpoints
+  are not a streaming comparison of every layer boundary.
+- Six adjacent pairs in one process with both warm orders favor compact:
+  median padded/compact wall ratio 1.119019 (10.64% less compact time), GPU
+  ratio 1.120324. Absolute epoch medians drift +44.35%/+45.93%; this is a
+  fixed saved-input forward observation, not stable latency or video speed.
+- Named bytes 10,895,796,804 -> 10,060,081,732, saving 835,715,072 (797 MiB).
+  Every forward retains 1,244 segments/one terminal wait, zero tracked encode
+  Metal allocations and zero early activation reads. Both-session guard:
+  10% cache-aware floor, 22 GiB cap/900 s/64 MiB swap stop; sampled footprint
+  <=20.09684 GiB, headroom >=15.25545 GiB, swap flat. Sampling is not a peak bound.
+- 22 Crystal examples and 12 CPU receipt tests pass. Correlated Mini-Quad
+  ROBUST within this source/fixture/timing scope, not independent replication.
+  Exact argv/reports/source/binaries live under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-text-compaction-20261026/.
+- Rollback: leave compaction disabled. Refresh on source/backend/device,
+  fixture/weights, text/mask/segment/history, precision/lifetime or missing
+  evidence. Original-BF16 Q4 quality failure remains open. Resume decoder
+  checkpoint/geometry/residency inventory before any bounded decoder probe;
+  neither full generation nor another text tile sweep is the next frontier.

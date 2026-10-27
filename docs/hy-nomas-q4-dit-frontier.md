@@ -268,3 +268,15 @@ upstream fixtures and sidecars are in `weights/`. The curated repository packet
 is `.landmark/evidence/2026-10-25-hy-nomas-q4-dit.json`. Refresh the scoped
 runtime checks after any change listed in the definition of done. A packet is
 an index to evidence, not a substitute for the executed neural checks.
+
+## Opt-in text compaction follow-up
+
+The [text-compaction frontier](hy-nomas-text-compaction-frontier.md) qualifies
+M64 text storage after the unchanged refiner, preserving 23 valid attention
+tokens and the original text Q/K RMS mean shape. All 14 selected outputs match
+this same-decoded-Q4 upstream fixture bitwise on clean and poisoned requests.
+Named residency is 10,060,081,732 bytes, 797 MiB below the padded control.
+Six adjacent complete saved-input forward pairs favor compaction, median
+padded/compact ratio 1.119019; substantial absolute drift remains. The padded
+route stays default. This does not qualify Q4 quality against original BF16,
+other text lengths, multi-segment history, live Qwen or pixel decoding.

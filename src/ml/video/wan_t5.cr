@@ -423,16 +423,22 @@ module ML::Video
                                x : ML::MetalBuffer, weight : ML::MetalBuffer,
                                y : ML::MetalBuffer, square : ML::MetalBuffer,
                                mean : ML::MetalBuffer,
-                               weight_dtype : WeightDType = WeightDType::F32) : Nil
+                               weight_dtype : WeightDType = WeightDType::F32,
+                               active_rows : Int32? = nil) : Nil
       cfg.validate!
       rows = cfg.rows
       dim = cfg.dim
+      active = active_rows || rows
+      unless active > 0 && active <= rows
+        raise ArgumentError.new("Wan T5 RMS active rows must be positive and no greater than the prepared rows")
+      end
       n = rows.to_i64 * dim
+      active_n = active.to_i64 * dim
       plan.validate!(cfg, square, mean)
-      MetalOps.check(x, n)
+      MetalOps.check(x, active_n)
       MetalOps.check(square, n)
       MetalOps.check(mean, rows.to_i64)
-      MetalOps.check(y, n)
+      MetalOps.check(y, active_n)
       MetalOps.check_storage(weight, dim.to_i64, weight_dtype)
       MetalOps.inplace_or_distinct(x, y)
       MetalOps.distinct(y, weight)
@@ -442,7 +448,7 @@ module ML::Video
       encoder = chain.encoder
       encoder.set_pipeline(pipeline("wan_t5_rms_square"))
       encoder.set_buffer(x, 0).set_buffer(square, 1, ML::Metal::BufferAccess::Write)
-      encoder.set_value(n.to_u32, 2).dispatch_1d(n.to_i32)
+      encoder.set_value(active_n.to_u32, 2).dispatch_1d(active_n.to_i32)
 
       chain.pause!
       plan.encode(chain.handle)
@@ -452,10 +458,10 @@ module ML::Video
       encoder.set_pipeline(pipeline("wan_t5_rms_from_mean"))
       encoder.set_buffer(x, 0).set_buffer(weight, 1)
       encoder.set_buffer(y, 2, ML::Metal::BufferAccess::Write).set_buffer(mean, 3)
-      encoder.set_value(rows.to_u32, 4).set_value(dim.to_u32, 5).set_value(cfg.eps, 6)
+      encoder.set_value(active.to_u32, 4).set_value(dim.to_u32, 5).set_value(cfg.eps, 6)
       encoder.set_value(weight_dtype.bf16? ? 1_u32 : 0_u32, 7)
       encoder.set_buffer(weight_dtype.bf16? ? x : weight, 8)
-      encoder.dispatch_threadgroups({rows, 1, 1}, {threads, 1, 1})
+      encoder.dispatch_threadgroups({active, 1, 1}, {threads, 1, 1})
     end
 
     # Opt-in diagnostic path matching the pinned Wan UMT5 GELU expression's

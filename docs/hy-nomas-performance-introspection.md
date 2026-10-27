@@ -5,6 +5,12 @@ benchmark or a generation-quality result. The three fresh-context Quad audits
 are correlated review. No model, Studio, build, profiler or generation was
 launched for this audit; production code and numerical gates are unchanged.
 
+Subsequent implementation and guarded full-forward measurements are recorded
+in [the text-compaction frontier](hy-nomas-text-compaction-frontier.md): M64
+storage with the original text RMS reduction shape passes the same-Q4 upstream
+gate and saves 797 MiB. All six adjacent timing pairs favor it, with median
+10.64% lower compact time; absolute drift prevents a stable-latency claim.
+
 ## Decision
 
 Pause K16 loader tuning as the primary speed frontier. Keep K32 and the current
@@ -261,8 +267,10 @@ and measured slowdown.
 1. Inventory the actual PixelUMM checkpoint, target segment/window geometry and
    aggregate resident memory. This is a decision probe, not a decoder-port
    commitment or a phase-timing result.
-2. Implement the opt-in DiT valid-text compaction falsifier, then measure the
-   same saved-input stack with interleaved orders if it passes.
+2. Keep the qualified opt-in M64 text-compaction route and padded control;
+   [numerical checks and paired timings](hy-nomas-text-compaction-frontier.md)
+   now pass on the fixed saved-input fixture. Reopen on text/geometry or backend
+   changes instead of assuming exact-prefix storage preserves MPS arithmetic.
 3. Qualify and time a bounded decoder block only after the inventory admits it,
    with physically local attention and an explicitly scoped upstream control.
    Treat block timing as provisional until a complete decode is measured.
