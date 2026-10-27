@@ -155,6 +155,28 @@ class PixelUMMBF16CacheTest(unittest.TestCase):
             with self.assertRaises(cache.CacheError):
                 cache.validate_manifest(extra, payload, expected_shapes=shapes)
 
+    def test_eight_block_cache_accepts_only_104_weights_and_exact_owners(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=8)
+            result = cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+            self.assertEqual(result["tensor_count"], 104)
+            self.assertEqual(result["payload_bytes"], 208)
+
+            missing = copy.deepcopy(manifest)
+            del missing["blocks"]["7"]["weight_keys"][-1]
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(missing, payload, expected_shapes=shapes)
+
+            swapped = copy.deepcopy(manifest)
+            swapped["blocks"]["7"]["selected_block"] = 6
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(swapped, payload, expected_shapes=shapes)
+
+            extra = copy.deepcopy(manifest)
+            extra["blocks"]["8"] = copy.deepcopy(extra["blocks"]["7"])
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(extra, payload, expected_shapes=shapes)
+
     def test_tensor_writer_rejects_non_bf16_sources(self):
         from io import BytesIO
         with self.assertRaises(cache.CacheError):

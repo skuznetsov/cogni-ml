@@ -109,6 +109,9 @@ module PixelUMMSerialProbeRunner
         wait_seconds = (Time.instant - start).total_seconds
         compare_request = request == 0 || request == warmups + repeats || replay_request
         comparisons = compare_request ? session.compare : [] of PixelUMMTwoBlockProbe::Comparison
+        if compare_request && comparisons.size != fixture.captures.size
+          raise "PixelUMM comparison omitted expected captures"
+        end
         numerical_pass = comparisons.all? { |result| result[:finite] && result[:failures] == 0 }
         passed &&= numerical_pass && chain.wait_count == 1
         kind = replay_request ? "poisoned_different_input_gate" : (request == 0 ? "numerical_gate" : (request <= warmups ? "warmup" : "timed"))
@@ -126,7 +129,8 @@ module PixelUMMSerialProbeRunner
         chain = nil
         break unless passed
       end
-      result = {schema: (block_count == 2 ? "cogni_ml.pixelumm_native_two_block_probe/v1" : "cogni_ml.pixelumm_native_four_block_probe/v1"), reference: reference,
+      schema = PixelUMMTwoBlockProbe.fixture_schema(block_count).sub("pixelumm_", "pixelumm_native_").sub("_reference/", "_probe/")
+      result = {schema: schema, reference: reference,
                 reference_sha256: expected_sha, alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
                 bf16_cache: cache_path, bf16_cache_sha256: cache_sha, grid: fixture.grid, block_indices: (0...block_count).to_a,
                 generation: false, shared_transient_workspace: true, persistent_output_banks: block_count,

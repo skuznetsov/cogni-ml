@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Prepare and authenticate a bounded PixelUMM BF16 startup weight cache.
 
-Only decoder blocks zero and one, or zero through three, are loaded. F32
-checkpoint weights are moved to MPS and cast with PyTorch's BF16 conversion
-before their raw little-endian uint16 words are persisted. The cache is a
-startup artifact, not an inference timing path.
+Only decoder blocks zero and one, zero through three, or zero through seven
+are loaded. F32 checkpoint weights are moved to MPS and cast with PyTorch's
+BF16 conversion before their raw little-endian uint16 words are persisted.
+The cache is a startup artifact, not an inference timing path.
 """
 from __future__ import annotations
 
@@ -112,8 +112,8 @@ def _expected_shapes(blocks: Mapping[int, Mapping[str, tuple[int, ...]]] | None 
     else:
         schemas = blocks
     count = len(schemas)
-    if count not in {2, 4} or set(schemas) != set(range(count)):
-        raise CacheError("cache requires exactly consecutive block schemas 0-1 or 0-3")
+    if count not in {2, 4, 8} or set(schemas) != set(range(count)):
+        raise CacheError("cache requires exactly consecutive block schemas 0-1, 0-3, or 0-7")
     result = {}
     for index in range(count):
         expected = schemas[index]
@@ -137,15 +137,20 @@ def validate_manifest(
     """Validate cache metadata, tensor ownership and every byte/hash binding.
 
     ``expected_shapes`` is injectable only to keep the structural unit tests
-    tiny. Production callers use the pinned 26- or 52-tensor schema by default.
+    tiny. Production callers use the pinned 26-, 52-, or 104-tensor schema.
     """
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
         raise CacheError("unsupported BF16 cache schema")
     if sys.byteorder != "little":
         raise CacheError("BF16 safetensors-compatible cache requires little-endian host bytes")
     blocks = manifest.get("blocks") if isinstance(manifest, dict) else None
-    if not isinstance(blocks, dict) or set(blocks) not in ({"0", "1"}, {"0", "1", "2", "3"}):
-        raise CacheError("BF16 cache must authenticate exactly blocks zero and one, or zero through three")
+    valid_block_sets = (
+        {"0", "1"},
+        {"0", "1", "2", "3"},
+        {str(index) for index in range(8)},
+    )
+    if not isinstance(blocks, dict) or set(blocks) not in valid_block_sets:
+        raise CacheError("BF16 cache must authenticate blocks 0-1, 0-3, or 0-7 exactly")
     block_count = len(blocks)
     if expected_shapes is None:
         expected_shapes = _expected_shapes({
@@ -369,8 +374,12 @@ def make_cache(
     output: Path | str, device_name: str = "mps",
     block2: Path | str | None = None, receipt2: Path | str | None = None,
     block3: Path | str | None = None, receipt3: Path | str | None = None,
+    block4: Path | str | None = None, receipt4: Path | str | None = None,
+    block5: Path | str | None = None, receipt5: Path | str | None = None,
+    block6: Path | str | None = None, receipt6: Path | str | None = None,
+    block7: Path | str | None = None, receipt7: Path | str | None = None,
 ) -> dict:
-    """Convert and persist exactly two or four upstream-loaded BF16 blocks."""
+    """Convert and persist exactly two, four, or eight upstream-loaded BF16 blocks."""
     if device_name != "mps":
         raise CacheError("production cache conversion must use the pinned PyTorch MPS path")
     if not torch.backends.mps.is_available():
@@ -394,14 +403,23 @@ def make_cache(
     if header_path.parent != CACHE_DIR:
         raise CacheError("pinned PixelUMM header must be in the task source directory")
     source_pairs = [(block0, receipt0), (block1, receipt1)]
-    optional_pairs = ((block2, receipt2), (block3, receipt3))
-    if any((subset is None) != (receipt is None) for subset, receipt in optional_pairs):
-        raise CacheError("optional block subset and receipt inputs must be supplied together")
-    for subset, receipt in optional_pairs:
-        if subset is not None:
-            source_pairs.append((subset, receipt))
-    if len(source_pairs) == 3:
-        raise CacheError("four-block cache requires both blocks two and three")
+    optional_pairs = (
+        (block2, receipt2), (block3, receipt3),
+        (block4, receipt4), (block5, receipt5),
+        (block6, receipt6), (block7, receipt7),
+    )
+    missing_suffix = False
+    for index, (subset, receipt) in enumerate(optional_pairs, start=2):
+        if (subset is None) != (receipt is None):
+            raise CacheError(f"block {index} subset and receipt must be supplied together")
+        if subset is None:
+            missing_suffix = True
+            continue
+        if missing_suffix:
+            raise CacheError("block subset and receipt inputs must form a consecutive prefix")
+        source_pairs.append((subset, receipt))
+    if len(source_pairs) not in {2, 4, 8}:
+        raise CacheError("cache requires exactly two, four, or eight consecutive blocks")
     paths = tuple(Path(subset).expanduser().resolve() for subset, _ in source_pairs)
     receipts = tuple(Path(receipt).expanduser().resolve() for _, receipt in source_pairs)
     device = torch.device("mps")
@@ -524,6 +542,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt2", type=Path)
     parser.add_argument("--block3", type=Path)
     parser.add_argument("--receipt3", type=Path)
+    parser.add_argument("--block4", type=Path)
+    parser.add_argument("--receipt4", type=Path)
+    parser.add_argument("--block5", type=Path)
+    parser.add_argument("--receipt5", type=Path)
+    parser.add_argument("--block6", type=Path)
+    parser.add_argument("--receipt6", type=Path)
+    parser.add_argument("--block7", type=Path)
+    parser.add_argument("--receipt7", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", choices=("mps",), default="mps")
     args = parser.parse_args(argv)
@@ -534,6 +560,10 @@ def main(argv: list[str] | None = None) -> int:
             block1=args.block1, receipt1=args.receipt1,
             block2=args.block2, receipt2=args.receipt2,
             block3=args.block3, receipt3=args.receipt3,
+            block4=args.block4, receipt4=args.receipt4,
+            block5=args.block5, receipt5=args.receipt5,
+            block6=args.block6, receipt6=args.receipt6,
+            block7=args.block7, receipt7=args.receipt7,
             output=args.output, device_name=args.device,
         )
         print(json.dumps(result, sort_keys=True))

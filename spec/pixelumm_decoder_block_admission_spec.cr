@@ -503,4 +503,79 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Workspace do
         max_unique_bytes: Int64::MAX)
     end
   end
+
+  it "admits eight full-grid slots with exact unique-byte accounting" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 6, height: 44, width: 80)
+    weights = pixelumm_layer0_weight_bytes
+    weights_by_slot = Array.new(8) { weights.dup }
+    captures = Array.new(8) { ["attention", "output"] }
+
+    output_bytes = config.tokens.to_i64 * config.model_dim * 2
+    attention_capture_bytes = output_bytes
+    single_plan_bytes = ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(
+      config, config.layout)
+    no_capture_bytes = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, Array.new(8) { [] of String })
+    owned = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(
+      config, config.layout, captures)
+
+    # Shared transients/scratch are allocated once; each slot owns one output
+    # bank, while output capture aliases that bank and attention is copied to a
+    # separate per-slot capture buffer.
+    no_capture_bytes.should eq(single_plan_bytes + 7 * output_bytes)
+    no_capture_bytes.should eq(3_680_869_348_i64)
+    owned.should eq(no_capture_bytes + 8 * attention_capture_bytes)
+    owned.should eq(5_064_989_668_i64)
+
+    input_bytes = config.tokens.to_i64 * 4_096 * 2
+    cosine_bytes = config.tokens.to_i64 * 128 * 4
+    sine_bytes = cosine_bytes
+    borrowed = input_bytes + cosine_bytes + sine_bytes + weights.values.sum * 8
+    borrowed.should eq(3_281_784_832_i64)
+    unique = owned + borrowed
+    unique.should eq(8_346_774_500_i64)
+    unique.should be > UInt32::MAX
+
+    accepted = ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+      input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+      weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures,
+      max_unique_bytes: unique)
+    accepted.should eq(unique)
+
+    expect_raises(ArgumentError, /budget/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures,
+        max_unique_bytes: unique - 1)
+    end
+
+    expect_raises(ArgumentError, /slot counts/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes_by_slot: weights_by_slot[0...7], captures_by_slot: captures,
+        max_unique_bytes: Int64::MAX)
+    end
+
+    missing_slot7_weight = weights.dup
+    missing_slot7_weight.delete("mlp.down_proj.weight")
+    malformed_slots = weights_by_slot[0...7] + [missing_slot7_weight]
+    expect_raises(ArgumentError, /exact 13 PixelUMM layer0 weight metadata entries/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: cosine_bytes, sine_bytes: sine_bytes,
+        weights_bytes_by_slot: malformed_slots, captures_by_slot: captures,
+        max_unique_bytes: Int64::MAX)
+    end
+
+    fallback = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 4, height: 24, width: 24)
+    expect_raises(ArgumentError, /fallback exceeds 2048 tokens/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(fallback,
+        input_bytes: fallback.tokens.to_i64 * 4_096 * 2,
+        cosine_bytes: fallback.tokens.to_i64 * 128 * 4,
+        sine_bytes: fallback.tokens.to_i64 * 128 * 4,
+        weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures,
+        max_unique_bytes: Int64::MAX)
+    end
+  end
 end

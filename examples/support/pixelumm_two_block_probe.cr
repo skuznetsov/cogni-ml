@@ -31,13 +31,27 @@ module PixelUMMTwoBlockProbe
   end
 
   def validate_block_count!(block_count : Int32) : Nil
-    raise ArgumentError.new("serial block count must be two or four") unless block_count == 2 || block_count == 4
+    raise ArgumentError.new("serial block count must be two, four or eight") unless block_count == 2 || block_count == 4 || block_count == 8
+  end
+
+  def fixture_schema(block_count : Int32) : String
+    validate_block_count!(block_count)
+    label = {2 => "two", 4 => "four", 8 => "eight"}[block_count]
+    "cogni_ml.pixelumm_#{label}_block_reference/v1"
   end
 
   def capture_slot(key : String, block_count : Int32) : Int32
     validate_block_count!(block_count)
     slot = (0...block_count).find { |index| key.starts_with?("block#{index}.") }
     slot || raise ArgumentError.new("capture has unknown block ownership")
+  end
+
+  def validate_eight_capture_inventory!(keys : Array(String), grid : Array(Int32)) : Nil
+    stages = grid == [2, 32, 32] ? Decoder::Plan::CAPTURE_NAMES.to_a : ["attention", "output"]
+    expected = (0...8).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
+    unless keys.sort == expected.sort
+      raise ArgumentError.new("eight-block fixture requires every expected stage at its admitted grid")
+    end
   end
 
   def validate_input_source!(source : String, slot : Int32) : Nil
@@ -85,7 +99,10 @@ module PixelUMMTwoBlockProbe
     getter payload_bytes : Int64
     @verified = false
 
-    def initialize(@path : String, trusted_sha256 : String)
+    def initialize(@path : String, trusted_sha256 : String, max_payload_bytes : Int64 = 4_i64 * 1024**3)
+      unless max_payload_bytes == 4_i64 * 1024**3 || max_payload_bytes == 8_i64 * 1024**3
+        raise ArgumentError.new("unsupported tensor payload byte limit")
+      end
       unless Path[@path].absolute? && File.file?(@path) && !File.symlink?(@path) &&
              File.realpath(@path) == @path && File.size(@path) <= 1024 * 1024
         raise ArgumentError.new("tensor metadata must be a bounded canonical regular file")
@@ -106,7 +123,7 @@ module PixelUMMTwoBlockProbe
       end
       @payload_bytes = File.size(@payload)
       unless @payload_bytes == @document["payload_bytes"].as_i64 &&
-             0 < @payload_bytes <= 4_i64 * 1024 * 1024 * 1024 &&
+             0 < @payload_bytes <= max_payload_bytes &&
              PixelUMMBlockProbe.valid_digest?(@document["payload_sha256"].as_s)
         raise ArgumentError.new("tensor payload extent/identity mismatch")
       end
@@ -187,10 +204,12 @@ module PixelUMMTwoBlockProbe
 
     def initialize(path : String, trusted_sha256 : String, @block_count : Int32 = 2)
       PixelUMMTwoBlockProbe.validate_block_count!(@block_count)
-      super(path, trusted_sha256)
+      # Eight owners plus diagnostic captures exceed the legacy file bound.
+      # Weight caches and pair/four fixtures retain their 4 GiB ceiling.
+      super(path, trusted_sha256, (@block_count == 8 ? 8_i64 : 4_i64) * 1024**3)
       d = @document
       PixelUMMTwoBlockProbe.validate_identity!(d)
-      schema = @block_count == 2 ? "cogni_ml.pixelumm_two_block_reference/v1" : "cogni_ml.pixelumm_four_block_reference/v1"
+      schema = PixelUMMTwoBlockProbe.fixture_schema(@block_count)
       unless d["schema"].as_s == schema &&
              d["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
              d["tile_tokens"].as_i == 8 && d["token_order"].as_s == "tile_major"
@@ -209,6 +228,7 @@ module PixelUMMTwoBlockProbe
       end
       tokens = @grid.reduce(1) { |n, v| n * v }
       @captures.each { |key, record| PixelUMMTwoBlockProbe.validate_capture!(key, record, tokens, @block_count) }
+      PixelUMMTwoBlockProbe.validate_eight_capture_inventory!(@capture_order, @grid) if @block_count == 8
       unless @inputs["x"].shape == [1, tokens, 4096] && @inputs["x"].dtype == "BF16" &&
              {"cos", "sin"}.all? { |name| @inputs[name].shape == [1, tokens, 1, 128] && @inputs[name].dtype == "F32" }
         raise ArgumentError.new("serial input geometry/dtype mismatch")
@@ -233,7 +253,7 @@ module PixelUMMTwoBlockProbe
       unless @subset_hashes[0] == PixelUMMBlockProbe::SUBSET_SHA256
         raise ArgumentError.new("block zero source identity mismatch")
       end
-      validate_ranges!(@inputs.values + @weights.values + @captures.values)
+      validate_ranges!(@inputs.values + @weights.values + @captures.values, contiguous: @block_count == 8)
     end
 
     def captures_by_slot : Array(Array(String))

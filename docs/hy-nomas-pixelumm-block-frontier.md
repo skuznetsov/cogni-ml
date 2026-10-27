@@ -1,19 +1,20 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
-Current frontier: four consecutive pretrained blocks, zero through three,
-with a shared GPU workspace and authenticated BF16 cache. The small fixture's
-104 stages and full T6/H44/W80, J21,120 fixture's eight attention/output
-boundaries are bitwise exact, including a different-input replay with poisoned
-scratch, at unchanged finite `atol=rtol=2e-5`. The resident four-block chain
-takes a median 6.420843 seconds on this M2 Max. See the four-block qualification
-below for evidence and limits. No complete decoder, diffusion or video ran.
-The oracle adapts upstream semantics on PyTorch MPS; compiled upstream CUDA
-Flex equivalence is outside this qualification.
+Current frontier: eight consecutive pretrained decoder blocks, zero through
+seven, with shared GPU scratch and an authenticated BF16 cache. Small J2048
+matches all 208 stages; full T6/H44/W80, J21,120 matches all 16 attention/output
+boundaries, including different-input replay after poisoning mutable scratch.
+Every compared word is finite and bitwise exact at unchanged
+`atol=rtol=2e-5`. The eight-block resident median is 13.597055 seconds on this
+M2 Max (three samples, 12.660567-14.520376 seconds). These are bounded block
+measurements, not full-decoder or video latency. See the eight-block section
+below for evidence, memory and limits. The oracle adapts upstream semantics
+on PyTorch MPS; compiled upstream CUDA Flex equivalence is unqualified.
 
 ## Historical one-block qualification, 2026-10-26
 
 The following one-block measurements and weight inventory describe the
-earlier scope. The two- and four-block sections extend it explicitly.
+earlier scope. The two-, four- and eight-block sections extend it explicitly.
 
 ## Source and weights
 
@@ -419,3 +420,132 @@ device/OS/backend, geometry, precision, ownership/lifetime or guard changes,
 or lost external artifacts. The next gate is a memory-admitted larger decoder
 prefix and real decoder inputs before complete decoding. No full-generation
 quality or latency claim follows from these four blocks.
+
+## Eight-block qualification, 2026-10-27
+
+Observed gates pass for actual decoder layers zero through seven. The change
+extends only the bounded probe, cache/oracle orchestration and validation;
+native GPU math, kernel, bridge, command chain and Workspace API are unchanged.
+The four-block entry point remains the rollback path. This is CAUTION work:
+wrong later-owner edges, overwritten scratch or incomplete diagnostics could
+otherwise produce a misleading pass.
+
+The eight-slot loader authenticates all 104 weights, source receipts and
+immediate predecessor edges before large payload authentication or GPU upload.
+Each output bank is the next block's actual input GPU buffer. Common
+core/RMS/local-attention scratch is shared; all eight output banks and per-owner
+attention captures remain distinct. The runner submits the entire prefix on
+one chain. Arbitrary caller-supplied aliases and partial-prefix cancellation
+recovery are outside this qualification.
+
+### Numerical and lifetime gates
+
+| Gate | Geometry | Captures per checked request | Result |
+| --- | --- | ---: | --- |
+| Small, first/last requests | T2/H32/W32, J2048 | 208, all 26 stages per block | Finite, bitwise exact |
+| Full, first/last timed requests | T6/H44/W80, J21,120 | 16 attention/output boundaries | Finite, bitwise exact |
+| Full, different-input poisoned replay | T6/H44/W80, J21,120 | 16 attention/output boundaries | Finite, bitwise exact |
+
+All 464 compared tensors have zero different words, zero tolerance failures
+and zero maximum absolute error at unchanged `atol=rtol=2e-5`. Seeds
+20261026/20261027 create different synthetic BF16 initial hidden states; every
+replay block's expected output hash differs from baseline. Native replay is
+compared against its matching alternate fixture. RoPE tables and all weights
+are identical. This is an adapted upstream-semantics MPS oracle, not compiled
+CUDA Flex, actual decoder latent inputs or image/video-quality evidence.
+
+The first full request also rejects last-slot-before-first-slot execution and
+in-flight release, read and reuse. All six full requests have 969 command
+segments, **one terminal wait**, zero named MetalBuffer allocations during
+encode and zero preterminal activation readbacks. Intermediate states remain
+on GPU. Postterminal diagnostics read captures; input replacement and NaN
+poisoning run between completed requests. No new inference synchronization was
+introduced. Startup cache conversion remains a separate operation with its
+existing synchronization boundaries. Opaque MPS resources are outside named
+allocation counters; one chain is not one command buffer.
+
+Mini-Quad review exposed a weak capture gate: an incomplete small fixture
+could pass by comparing only the retained tensors. Eight-block fixtures now
+require exactly 208 small stages or 16 full boundaries, with contiguous record
+coverage and no trailing bytes. Only this fixture schema receives an 8 GiB
+payload bound; pair/four fixtures and weight caches retain 4 GiB. Small/full
+payloads are 6,841,110,528/6,050,025,472 bytes, external to Git.
+
+Eight compiled-CLI negatives reject wrong block-six/seven predecessors, a
+missing block-seven weight, altered cache owner, a small-fixture aggregate
+budget one byte below admission, an omitted stage, wrong schema and malformed
+record ranges. They use valid metadata hashes with deliberately invalid global
+payload hashes: the expected validation error occurs before payload-hash
+failure, no Metal-init marker appears and the fresh report stays empty.
+Failed-preflight allocation/read counters are not exported, so these are
+ordering checks rather than measured zero-allocation claims. Separate CPU
+checks cover exact full-grid accounting, full-grid budget minus one byte,
+missing owner metadata, wrong capture inventory and file bounds.
+
+### Timing and memory
+
+After one warmup the resident eight-block samples are **12.660567374,
+13.597054874 and 14.520376250 seconds**; median **13.597054874 seconds**.
+Median GPU elapsed time is 13.594401834 seconds. The increasing three-sample
+series is retained as observed variability; no stable speedup is established.
+Preparation takes 11.320959917 seconds, including streamed authentication,
+upload and graph preparation, excluding metadata parsing. A cache-controlled
+loading comparison and complete video latency remain unmeasured.
+
+| Full eight-block inventory | Bytes |
+| --- | ---: |
+| Owned shared workspace with captures | 5,064,989,668 |
+| Borrowed input, RoPE tables and BF16 weights | 3,281,784,832 |
+| Unique named total | 8,346,774,500 (7.77 GiB) |
+| Maximum sampled process-group footprint | 10,129,972,472 (9.43 GiB) |
+| Minimum sampled cache-aware headroom | 21,021,835,264 (19.58 GiB) |
+
+Eight independent owned workspaces with equivalent captures would use
+21,142,232,864 bytes. Sharing saves **16,077,243,196 bytes (14.97 GiB)** by
+accounting; no timed independent-workspace comparison was run. The 8 GiB
+named-buffer ceiling has 243,160,092 bytes left and is distinct from the
+system reserve. Full native uses an 11 GiB process cap, full upstream MPS
+uses 17 GiB, both with a **10% physical-memory floor**, 900-second deadline
+and 64 MiB swap-growth stop. Native swap growth is zero. File-backed cache is
+included once in headroom; reclaimability and sampled footprints are not
+reservations or between-sample peak guarantees. GPU jobs run sequentially.
+
+### BF16 cache, reproduction and remaining boundary
+
+Only decoder layers zero through seven are downloaded as pinned authenticated
+HTTP ranges; this is not the complete 31,553,868,864-byte checkpoint. The new
+cache holds **104 BF16 tensors, 3,087,142,912 bytes (2.875 GiB)**. All raw
+uint16 words match upstream's own MPS BF16 conversion and all three separately
+exported fixtures. Native load uploads these BF16 bytes directly, without an
+intermediate F32 weight copy or runtime conversion. The complete checkpoint
+hash and complete-decoder cache remain unverified/unbuilt.
+
+Observed CPU/build DoD commands:
+
+```sh
+python3 -B -m unittest spec/hy_nomas_pixelumm_checkpoint_test.py spec/hy_nomas_pixelumm_reference_test.py spec/hy_nomas_pixelumm_bf16_cache_test.py
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_eight_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_two_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe
+```
+
+The suites pass **37 Python tests, 12 admission examples and 15 fixture/cache
+examples**. Guarded small/full/poisoned replay gates pass. The rebuilt old
+four- and two-block probes also match their saved 104-/52-stage fixtures, and
+the final validator authenticates all three 26-/52-/104-tensor caches. These
+executed GPU gates, not the CPU/build commands alone, establish numerical scope.
+
+The curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-eight-block.json`. Exact argv,
+pre-execution source/binary pins, build-object/toolchain pins, range receipts,
+payload hashes, reports and memory guards live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026`. All three entry points
+and the Makefile were pinned before the build. Source/binary receipts are not
+hermetic build attestation. Final correlated Mini-Quad native/oracle/adversary
+review is ROBUST within this eight-block fixture scope. The external evidence
+index run checked 134 payload/source files and exited zero; its argv, output and
+guard receipts are linked separately in the packet, without a recursive packet
+self-hash. This review does not establish independent replication.
+
+Refresh after source, weight, fixture, backend/device/toolchain/OS, geometry,
+precision, ownership/lifetime or guard changes, or lost external artifacts.
+Next gate: a fresh memory-admitted larger prefix and real decoder inputs before
+complete decoding. No complete decoder, diffusion, Studio or generation ran.

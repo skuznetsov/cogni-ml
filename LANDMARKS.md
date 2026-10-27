@@ -34556,3 +34556,51 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback: retain pair/standalone entry points. Refresh on source, weights,
   fixture, backend/device/toolchain/OS, geometry/precision/lifetime/guard changes
   or lost artifacts. Next gate: larger prefix and real decoder hidden inputs.
+
+### 2026-10-27: PixelUMM eight-block shared scratch qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-eight-block.json. Actual
+  pretrained decoder layers 0-7, one shared transient GPU workspace, eight
+  distinct retained outputs and attention captures. Native math/bridge/API
+  unchanged; output N is the direct GPU input of N+1.
+- Small J2048 compares all 208 stages on two requests. Full T6/H44/W80,
+  J21,120 compares all 16 attention/output boundaries on initial, last timed
+  and different-input NaN-poisoned-scratch requests. All 464 comparisons are
+  finite and bitwise exact at unchanged atol=rtol=2e-5. Synthetic BF16 inputs,
+  seeds 20261026/20261027; adapted upstream-semantics MPS, not compiled CUDA
+  Flex parity or actual complete-decoder hidden states.
+- Six full requests each use 969 command segments, one terminal wait, zero
+  named encode allocations and zero early activation reads. Order and
+  in-flight release/read/reuse checks pass. Eight compiled-CLI metadata/budget
+  negatives reject before deliberately invalid payload authentication, with
+  no Metal-init marker and empty fresh reports. Failed-preflight allocation
+  counts are not exported. Exact 208/16 capture inventories and contiguous
+  coverage prevent weakened fixtures from silently reducing the gate.
+- Eight-specific fixtures have an 8 GiB payload bound; old pair/four fixtures
+  and caches retain 4 GiB. BF16 cache: 104 tensors, 3,087,142,912 bytes
+  (2.875 GiB), raw-word exact against upstream MPS cast and all three separate
+  fixtures. Only source layers 0-7 downloaded; complete checkpoint/hash and
+  complete-decoder cache remain unqualified. Heavy artifacts stay on SSD.
+- Resident eight-block median 13.597054874 s; three samples after one warmup
+  are 12.660567374/13.597054874/14.520376250 s. Preserve this observed drift;
+  no stable speedup or video latency claim. Unique named bytes 8,346,774,500
+  (7.77 GiB), shared owned 5,064,989,668. Accounting versus eight independent
+  workspaces saves 16,077,243,196 bytes (14.97 GiB), not a timed speedup.
+- 37 Python tests, 12 admission plus 15 fixture/cache examples, all three cache
+  validators and rebuilt old pair/four GPU regressions pass. Full native
+  sampled footprint 10,129,972,472 bytes (9.43 GiB), minimum cache-aware
+  headroom 21,021,835,264 bytes; swap flat. Guard retains 10% physical floor,
+  11 GiB native/17 GiB full-oracle caps, 900-second timeout and 64 MiB swap stop.
+  The 8 GiB named ceiling is separate from the system reserve; opaque MPS
+  allocations and between-sample peaks are outside named/sampled guarantees.
+- Correlated Mini-Quad native/oracle/adversary verdicts are ROBUST within this
+  eight-block fixture scope, including final artifact/argv/guard bindings. The
+  external evidence index checked 134 payload/source files and exited zero;
+  its run receipts are linked separately without a recursive packet self-hash.
+  This is not independent replication or full-generation quality/latency proof.
+- Rollback: retain four/pair/standalone entry points. Refresh on source,
+  weights/fixtures, backend/device/toolchain/OS, geometry/precision/lifetime,
+  guard changes or lost evidence. Next gate: a newly memory-admitted larger
+  decoder prefix with real decoder inputs, before complete decoding. Broader
+  caller-supplied buffer aliases and partial-prefix cancellation stay unqualified.

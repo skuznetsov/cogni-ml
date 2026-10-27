@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import hashlib
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import sys
 import tempfile
@@ -296,6 +298,71 @@ class PixelUMMReferenceTest(unittest.TestCase):
             [edge["output_key"] for edge in edges],
             [f"captures.block{index}.output" for index in range(4)],
         )
+
+    def test_eight_block_full_reference_estimate_schema_and_predecessor_edges(self):
+        base_peak = reference._estimated_peak_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN, layers=8
+        )
+        full_peak = reference._estimated_peak_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN, layers=8,
+            capture_stages=reference.FULL_TARGET_STAGES,
+        )
+        small_all_peak = reference._estimated_peak_bytes(
+            (2, 32, 32), self.source.QWEN3_8B_GEN, layers=8,
+            capture_stages=reference.ALL_STAGES,
+        )
+        small_all_payload = reference._estimated_fixture_payload_bytes(
+            (2, 32, 32), self.source.QWEN3_8B_GEN, layers=8,
+            capture_stages=reference.ALL_STAGES,
+        )
+        full_boundary_payload = reference._estimated_fixture_payload_bytes(
+            (6, 44, 80), self.source.QWEN3_8B_GEN, layers=8,
+            capture_stages=reference.FULL_TARGET_STAGES,
+        )
+        self.assertEqual(base_peak, 12_867_245_056)
+        self.assertEqual(full_peak, 15_635_485_696)
+        self.assertEqual(small_all_peak, 8_957_170_688)
+        self.assertEqual(small_all_payload, 6_841_110_528)
+        self.assertGreater(small_all_payload, 4 * 1024**3)
+        self.assertEqual(full_boundary_payload, 6_050_025_472)
+        self.assertGreater(full_boundary_payload, 4 * 1024**3)
+        self.assertEqual(
+            reference.EIGHT_BLOCK_SCHEMA,
+            "cogni_ml.pixelumm_eight_block_reference/v1",
+        )
+        edges = [reference._block_io_edge(index) for index in range(8)]
+        self.assertEqual(
+            [edge["input_source"] for edge in edges],
+            ["inputs.x"] + [f"captures.block{index}.output" for index in range(7)],
+        )
+        self.assertEqual(
+            [edge["output_key"] for edge in edges],
+            [f"captures.block{index}.output" for index in range(8)],
+        )
+
+    def test_eight_block_cli_routes_only_a_complete_consecutive_prefix(self):
+        argv = ["--upstream", "upstream", "--header", "header.json",
+                "--output", "fixture.json", "--grid", "6", "44", "80"]
+        for index in range(8):
+            argv += [f"--block{index}", f"block{index}.safetensors"]
+            argv += [f"--receipt{index}", f"block{index}.receipt.json"]
+        with mock.patch.object(
+            reference, "make_eight_block_fixture", return_value={"accepted": True}
+        ) as make_eight:
+            with redirect_stdout(StringIO()):
+                status = reference.main(argv)
+        self.assertEqual(status, 0)
+        self.assertEqual(make_eight.call_args.kwargs["block7"], Path("block7.safetensors"))
+        self.assertEqual(make_eight.call_args.kwargs["receipt7"], Path("block7.receipt.json"))
+
+        partial = ["--upstream", "upstream", "--header", "header.json",
+                   "--output", "fixture.json", "--grid", "6", "44", "80",
+                   "--block0", "block0.safetensors", "--receipt0", "block0.receipt.json",
+                   "--block1", "block1.safetensors", "--receipt1", "block1.receipt.json",
+                   "--block4", "block4.safetensors", "--receipt4", "block4.receipt.json"]
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(SystemExit):
+                reference.main(partial)
 
     def test_fixture_binary_records_are_flat_contiguous_and_hash_bound(self):
         tensors = {
