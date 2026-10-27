@@ -14,6 +14,8 @@ module PixelUMMSerialProbeRunner
     warmups, repeats = 1, 3
     ffn_f32 = false
     reuse_outputs = false
+    compare_common_ring_captures = false
+    memory_phases = false
     OptionParser.parse do |parser|
       parser.banner = "#{block_count} sequential PixelUMM blocks only; named budget capped at #{named_budget_limit} bytes and external 10% memory guard required."
       parser.on("--reference PATH", "Sequential upstream-adapted GPU fixture") { |v| reference = v }
@@ -28,6 +30,8 @@ module PixelUMMSerialProbeRunner
       parser.on("--repeats N", "Timed requests after numerical gate, 1..6") { |v| repeats = v.to_i }
       parser.on("--ffn-f32", "Opt-in F32 graph tensors for every gate/up/down, retaining BF16 boundaries") { ffn_f32 = true }
       parser.on("--reuse-output-banks", "Opt-in two output banks; omit overwritten diagnostic output aliases") { reuse_outputs = true }
+      parser.on("--compare-common-ring-captures", "Compare only captures stable with two output banks, without changing allocated workspace") { compare_common_ring_captures = true }
+      parser.on("--memory-phases", "Emit opt-in scalar process/Metal/GC memory phase events") { memory_phases = true }
     end
     unless ARGV.empty? && {reference, expected_sha, cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
            alternate.empty? == alternate_sha.empty? && 0 < budget <= named_budget_limit &&
@@ -38,23 +42,34 @@ module PixelUMMSerialProbeRunner
     fd = LibC.open(report, LibC::O_WRONLY | LibC::O_CREAT | LibC::O_EXCL, 0o600)
     raise IO::Error.new("serial probe report must be fresh and writable") if fd < 0
     report_io = IO::FileDescriptor.new(fd)
+    memory_observer = memory_phases ? PixelUMMMemoryProbe::Recorder.system : nil
     session = nil.as(PixelUMMTwoBlockProbe::Session?)
     chain = nil.as(ML::Metal::MPSCommandChain?)
     requests = [] of JSON::Any
     passed = true
     begin
+      memory_phase(memory_observer, "before_metadata")
       fixture = PixelUMMTwoBlockProbe::Fixture.new(reference, expected_sha, block_count)
+      memory_phase(memory_observer, "after_fixture_metadata_authentication")
       replay = alternate.empty? ? nil : PixelUMMTwoBlockProbe::Fixture.new(alternate, alternate_sha, block_count)
       if other = replay
+        memory_phase(memory_observer, "after_alternate_fixture_metadata_authentication")
         fixture.compatible_replay!(other)
         unless (0...block_count).all? { |slot| fixture.captures["block#{slot}.output"].sha256 != other.captures["block#{slot}.output"].sha256 }
           raise ArgumentError.new("alternate oracle outputs must distinguish every block")
         end
       end
+      memory_phase(memory_observer, "before_cache_metadata_authentication")
       cache = PixelUMMTwoBlockProbe::WeightCache.new(cache_path, cache_sha, fixture)
+      memory_phase(memory_observer, "after_cache_metadata_authentication")
+      memory_phase(memory_observer, "after_metadata")
       preparation = Time.instant
-      session = PixelUMMTwoBlockProbe::Session.new(fixture, cache, budget, ffn_f32: ffn_f32, reuse_outputs: reuse_outputs)
+      session = PixelUMMTwoBlockProbe::Session.new(fixture, cache, budget,
+        ffn_f32: ffn_f32, reuse_outputs: reuse_outputs,
+        compare_common_ring_captures: compare_common_ring_captures,
+        phase_observer: memory_observer)
       preparation_seconds = (Time.instant - preparation).total_seconds
+      memory_phase(memory_observer, "session_ready")
       STDERR.puts "PixelUMM serial admitted #{session.named_bytes} unique named bytes, grid=#{fixture.grid}"
       total_requests = 1 + warmups + repeats + (replay ? 1 : 0)
       total_requests.times do |request|
@@ -86,9 +101,11 @@ module PixelUMMSerialProbeRunner
         end
         allocations = ML::MetalBuffer.hy_text_probe_allocations
         reads = ML::MetalBuffer.hy_text_probe_readbacks
+        memory_phase(memory_observer, "request_before_encode", request: request)
         start = Time.instant
         session.encode(chain)
         encode_seconds = (Time.instant - start).total_seconds
+        memory_phase(memory_observer, "request_after_encode", request: request)
         encode_allocations = ML::MetalBuffer.hy_text_probe_allocations - allocations
         early_reads = ML::MetalBuffer.hy_text_probe_readbacks - reads
         unless encode_allocations == 0 && early_reads == 0 && chain.wait_count == 0
@@ -122,8 +139,15 @@ module PixelUMMSerialProbeRunner
         start = Time.instant
         chain.commit_and_wait
         wait_seconds = (Time.instant - start).total_seconds
+        memory_phase(memory_observer, "request_after_terminal_wait", request: request)
         compare_request = request == 0 || request == warmups + repeats || replay_request
-        comparisons = compare_request ? session.compare : [] of PixelUMMTwoBlockProbe::Comparison
+        comparisons = if compare_request
+                        memory_phase(memory_observer, "before_cpu_diagnostic_comparisons", request: request)
+                        session.compare(request: request, phase_observer: memory_observer)
+                      else
+                        [] of PixelUMMTwoBlockProbe::Comparison
+                      end
+        memory_phase(memory_observer, "after_cpu_diagnostic_comparisons", request: request) if compare_request
         if compare_request && comparisons.map { |value| value[:stage] } != session.capture_order
           raise "PixelUMM comparison omitted expected captures"
         end
@@ -143,6 +167,7 @@ module PixelUMMSerialProbeRunner
         STDERR.puts "#{kind} #{request}: passed=#{numerical_pass}, total=#{encode_seconds + wait_seconds}s"
         chain.release
         chain = nil
+        memory_phase(memory_observer, "after_chain_release", request: request)
         break unless passed
       end
       schema = PixelUMMTwoBlockProbe.fixture_schema(block_count).sub("pixelumm_", "pixelumm_native_").sub("_reference/", "_probe/")
@@ -151,8 +176,12 @@ module PixelUMMSerialProbeRunner
                 bf16_cache: cache_path, bf16_cache_sha256: cache_sha, grid: fixture.grid, block_indices: (0...block_count).to_a,
                 generation: false, shared_transient_workspace: true, persistent_output_banks: session.workspace.output_bank_count,
                 reuse_output_banks: reuse_outputs, output_bank_by_slot: session.output_bank_by_slot,
+                compare_common_ring_captures: compare_common_ring_captures,
+                comparison_coverage_mode: compare_common_ring_captures ? "common_ring_survivors" : "workspace_capture_order",
                 compared_capture_order: session.capture_order,
-                omitted_overwritten_capture_aliases: fixture.capture_order - session.capture_order,
+                comparison_capture_omissions: fixture.capture_order - session.capture_order,
+                omitted_comparison_capture_aliases: fixture.capture_order - session.capture_order,
+                omitted_overwritten_capture_aliases: fixture.capture_order - session.workspace_capture_order,
                 authenticated_fixture_capture_count: fixture.captures.size,
                 handoff: "each physical block output is the next block input on GPU, without a copy or intermediate wait; reused banks are ephemeral",
                 precision: "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; " +
@@ -164,9 +193,31 @@ module PixelUMMSerialProbeRunner
                 preparation_seconds: preparation_seconds, named_bytes: session.named_bytes,
                 borrowed_bytes: session.borrowed_bytes, owned_named_bytes: session.workspace.named_bytes,
                 requests: requests, passed: passed && requests.size == total_requests}
-      report_io.puts(result.to_pretty_json)
+      if memory_observer
+        session.release
+        memory_phase(memory_observer, "runner_after_session_release")
+        session = nil
+      end
+      report_json = result.to_pretty_json
+      if observer = memory_observer
+        report_document = JSON.parse(report_json)
+        report_document.as_h["memory_telemetry"] = JSON.parse({
+          enabled: true,
+          schema: PixelUMMMemoryProbe::SCHEMA,
+          event_prefix: PixelUMMMemoryProbe::PREFIX,
+          timestamp_clock: "CLOCK_MONOTONIC",
+          guard_timestamp_clock: "mach_absolute_time",
+          guard_join_timestamp_field: "guard_monotonic_ns",
+          categories_additive: false,
+          category_notes: "Process footprint, RSS, Metal allocation, named MetalBuffer counters, and Crystal GC counters overlap; do not sum them. Opaque MPS bytes are not estimated.",
+        }.to_json)
+        report_document.as_h["memory_phases"] = JSON::Any.new(observer.events)
+        report_json = report_document.to_pretty_json
+      end
+      report_io.puts(report_json)
       report_io.flush
-      puts({report: report, passed: result[:passed]}.to_json)
+      puts({report: report, passed: result[:passed], memory_phases: memory_phases,
+            compare_common_ring_captures: compare_common_ring_captures}.to_json)
       raise "PixelUMM serial failed at unchanged upstream tolerance" unless result[:passed]
     ensure
       begin
@@ -175,8 +226,13 @@ module PixelUMMSerialProbeRunner
             active.commit_and_wait
           ensure
             if active.completed?
-              session.try(&.release)
-              active.release
+              cleanup = PixelUMMMemoryProbe::Cleanup.new
+              begin
+                cleanup.attempt { session.try(&.release) }
+              ensure
+                cleanup.attempt { active.release }
+              end
+              cleanup.raise_first!
             end
           end
         else
@@ -186,5 +242,15 @@ module PixelUMMSerialProbeRunner
         report_io.close
       end
     end
+  end
+
+  private def memory_phase(observer : PixelUMMMemoryProbe::Recorder?, phase : String, *,
+                           slot : Int32? = nil, request : Int32? = nil,
+                           phase_bytes_kind : String? = nil, phase_bytes : Int64? = nil) : Nil
+    observer.try do |active|
+      active.emit(phase, slot: slot, request: request,
+        phase_bytes_kind: phase_bytes_kind, phase_bytes: phase_bytes)
+    end
+    nil
   end
 end

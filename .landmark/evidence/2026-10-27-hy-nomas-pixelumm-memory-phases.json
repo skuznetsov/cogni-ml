@@ -1,0 +1,604 @@
+{
+  "schema": "cogni_ml.pixelumm_memory_phase_evidence/v1",
+  "created_at": "2026-10-27T19:26:14.759167+00:00",
+  "base_revision": "46e4048c404144db2139ab19c651b9fce28a7ea2",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in phase telemetry and matched physical-footprint observations for the existing PixelUMM layers0-15 probe. Historical ring-higher peak cause remains open. No complete decoder, diffusion or video generation.",
+    "decay_trigger": "Refresh after scoped source/artifact/backend/device/OS/toolchain, geometry/precision, capture/ownership/lifetime/guard or clock changes, or evidence loss."
+  },
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "prior_oracle_qualification": ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-sixteen-block.json",
+  "historical_inverted_peak": ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-output-ring.json",
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027",
+  "options": {
+    "memory_phases_default": false,
+    "compare_common_ring_captures_default": false,
+    "output_reuse_default": false,
+    "ffn_f32_default": false,
+    "qualification_ffn_f32": true,
+    "bf16_weight_and_boundary_storage": true,
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "dod": {
+    "release_build_log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/logs/telemetry-build-green-v2.out",
+      "sha256": "512c7d20e7de36d06cd1c1e51cbd7c70a4d10c691005c61de4631acb9eb8152d"
+    },
+    "release_build_command": [
+      "make",
+      "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-memory-20261027/build",
+      "pixelumm_decoder_sixteen_block_probe"
+    ],
+    "freshness_check": "Each pre-execution receipt records successful make -q on the exact binary target before native launch; source pinsets are equal across the admitted matrix.",
+    "regression_log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/logs/memory-regressions-green-v1.out",
+      "sha256": "7665f4546f7e0b197de00d6c45c12f93816ed7dcfdc015cc76142b39b3303cff"
+    },
+    "regression_command": [
+      "make",
+      "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-memory-20261027/build",
+      "spec_pixelumm_memory_probe",
+      "spec_pixelumm_decoder_block",
+      "spec_pixelumm_two_block_probe"
+    ],
+    "crystal_examples": 51,
+    "analyzer": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/analyze_memory_v1.py",
+      "sha256": "9eb26d485ba087ef50230a62dcb5e9c6539ef313a7c590b79b3049b158942400"
+    },
+    "validation_command": [
+      "python3",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/analyze_memory_v1.py",
+      "--final",
+      "--output",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/memory-phase-validation-v1.json"
+    ],
+    "validation": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/memory-phase-validation-v1.json",
+      "sha256": "12f24135513391ea71e12d47e19018c61eb70304bf2f046cc8c23b914f47ff0a"
+    },
+    "synthetic_self_test": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/analyze_memory_v1.selftest.v11.json",
+      "sha256": "bd23f7d38a9599dcb121dcd1ef8344ee866b846aeaf599deb3826eec8717604c"
+    },
+    "synthetic_control_count": 15,
+    "launcher": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/run_guarded_v1.py",
+      "sha256": "d9347c342c84b0cc268e9bd018824b0e75b30c407b7f6c75bb78406adfa84400"
+    },
+    "short_case_launcher": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/run_case_v1.py",
+      "sha256": "69477e7efbedcc5d3b37ce4e5fe240942ee3349b4b404c78ab652df7ba13af79"
+    },
+    "cadence_launcher": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/run_cadence_v1.py",
+      "sha256": "cac67ca2f4284518c0f990d67d7eee3aa7d43e483fc4cd6397522b81e20839ca"
+    },
+    "experiment_plan": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/source/experiment-plan-v2.json",
+      "sha256": "d0806177c26b6ae1af8c01c0e8fb9803f0aec61f35ec7eff557939919689482c"
+    },
+    "cadence_plan": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/source/cadence-plan-v1.json",
+      "sha256": "5505887f0173203a825c31704528bb9b7b6ce62961af30b26516e76a86309a00"
+    },
+    "supplemental_counter_source_bindings": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/source/supplemental-counter-sources-v1.json",
+      "sha256": "2e05f469f196d0f68d09ce7c26e8913151e9a2de7338d57901aae2ea78891630"
+    },
+    "source_build_pin_count": 34,
+    "source_build_pin_map_sha256": "ab7dbca93a6924f2e8d080727ba6a9ad744beb67305ac617a9f99c26f15f6296"
+  },
+  "matrix_checks": {
+    "source_pinset_identity_equal": true,
+    "guard_intervals_nonoverlapping": true,
+    "short_v2_abba_complete": true,
+    "original_cadence_pair_complete": true,
+    "all_expected_success_labels": true
+  },
+  "numeric_and_execution_contract": {
+    "requests": 26,
+    "requests_with_cpu_comparison": 20,
+    "selected_comparisons": 1128,
+    "finite_bitwise_exact": true,
+    "full_selected_captures_per_compared_request": 18,
+    "small_selected_captures_per_compared_request": 402,
+    "full_command_segments_per_request": 2033,
+    "one_terminal_wait_per_request": true,
+    "preterminal_activation_reads": 0,
+    "named_encode_allocations": 0,
+    "poisoned_different_input_replay": true,
+    "oracle_scope": "Saved pinned upstream-semantics fixtures adapted to PyTorch MPS; no fresh upstream inference or compiled CUDA Flex equivalence. Native requests have no PyTorch.",
+    "scope": "core_seven_case_phase_matrix"
+  },
+  "guard": {
+    "cache_aware_floor_pct": 10,
+    "small_cap_gib": 18,
+    "full_cap_gib": 23,
+    "max_system_swap_growth_mib": 64,
+    "deadline_seconds": 900,
+    "minimum_full_sampled_headroom_bytes": 19633192960,
+    "maximum_observed_swap_growth_bytes": 0,
+    "serial_gpu_intervals": true,
+    "polling_is_not_an_instantaneous_peak_bound": true
+  },
+  "clock_contract": {
+    "phase_order_clock": "CLOCK_MONOTONIC",
+    "guard_clock": "mach_absolute_time",
+    "join_field": "guard_monotonic_ns",
+    "constant_epoch_offset_join_supported": false,
+    "python_clock_implementation_pinned_per_receipt": true
+  },
+  "memory_interpretation": {
+    "categories_additive": false,
+    "opaque_mps_bytes_estimated": false,
+    "named_full_retained_bytes": 14202158052,
+    "named_full_ring_bytes": 11779947492,
+    "unchanged_borrowed_bytes": 6368927744,
+    "exact_named_saving_bytes": 2422210560,
+    "observed_short_pair_peak_savings_bytes": [
+      2596358016,
+      2596898664
+    ],
+    "observed_cadence_pair_peak_saving_bytes": 2596816696,
+    "causal_historical_inversion_explained": false,
+    "finding": "Weight upload physical footprint is unchanged (~5.953 GiB). Plan construction reaches ~6.26 GiB. Matched runtime peaks are retained~16.845 GiB and ring~14.426 GiB, including the original six-request cadence. Execution has a similar Metal allocation uplift in both modes; no pure MPS total is inferred. Named live bytes reach zero and process footprint falls below 1 GiB after teardown, although the Metal resource counter stays high."
+  },
+  "source_audit": {
+    "weight_upload": "examples/support/pixelumm_two_block_probe.cr: Fixture.upload_into! writes authenticated payload bytes directly into the shared GPU allocation; no full CPU weight copy or dtype conversion.",
+    "mps_feeds": "src/ml/video/pixelumm_decoder_block_mps_bridge.mm: pixel_add_feed binds existing MTLBuffer owners; F32 FFN casts are graph nodes, not an explicit persistent F32 weight owner.",
+    "request_lifetimes": "Native encode has a per-call autorelease pool; completed command-chain retained roots are released. These observations do not rule out framework caches.",
+    "observer_failure": "The actual Cleanup helper is tested with injected sampler and output failures; source review checks constructor rollback, session releases and nested completed-chain release. Not every native release error was injected."
+  },
+  "excluded_exploratory_cases": {
+    "names": [
+      "native-small-ring-v1",
+      "native-full-retained-a1"
+    ],
+    "reason": "Numerically successful exploratory runs used a binary predating the final clock-report metadata source edit. Excluded and rerun after a fresh release build; final labels end in v2."
+  },
+  "cases": [
+    {
+      "name": "native-small-ring-v2",
+      "request_count": 2,
+      "selected_compared_requests": [
+        0,
+        1
+      ],
+      "comparisons_per_request": [
+        402,
+        402
+      ],
+      "comparison_count": 804,
+      "mode": "ring",
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "named_bytes": 13685719172,
+      "artifact_sha256": {
+        "report": "b6139095f3967f0322655926c81f9a287848800e7b8dd65c76096a245bad86ef",
+        "guard_log": "8d88dc35796a9370477527c72d42f3d4562df68c83ccf981cbf5edb481ce87db",
+        "pre_execution_receipt": "664b4737e7ada6d8e5e03f1cfbf11d68ccf2fecf386364996c2098adc1c653f9",
+        "completion_receipt": "094c1480ce93fc1e56d9e21aa25a7e977d2cd4af259ac552f9dbad35b809a9dc"
+      },
+      "sampled_peak_bytes": 14807509696,
+      "minimum_sampled_headroom_bytes": 24949817344,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6210245576,
+        "session_ready": 6464541976,
+        "first_after_encode": 13500765728,
+        "maximum_observed_process_phase_point": 14807395008,
+        "after_wait_for_peak_request": 14773840576,
+        "after_named_binding_release": 478735136
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 1,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 13686112256,
+        "first_after_encode": 14227816448,
+        "maximum_observed_process_phase_point": 14244593664,
+        "after_named_binding_release": 13686358016
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-retained-a1-v2",
+      "request_count": 3,
+      "selected_compared_requests": [
+        0,
+        1,
+        2
+      ],
+      "comparisons_per_request": [
+        18,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "retained",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 14202158052,
+      "artifact_sha256": {
+        "report": "b15deb930e14347e5c5bc974d7d6f2baeddbd89a606aa1948401fc20c920913a",
+        "guard_log": "2a4074e0380a7ec275991c5a5b09534384e4f7c4831522293af4ee3abb8edd47",
+        "pre_execution_receipt": "7a6fd95d74f7eb26ad7ce5d0939db647d45790a3471a956a4a748521b8aa28c6",
+        "completion_receipt": "a272e3b47e1ad6479a1fe640089a921592cbe3c31d0dc15a23d21c4ef8e82d3a"
+      },
+      "sampled_peak_bytes": 18086882968,
+      "minimum_sampled_headroom_bytes": 20770652160,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391534656,
+        "session_ready": 6720673216,
+        "first_after_encode": 16875968176,
+        "maximum_observed_process_phase_point": 18086506136,
+        "after_wait_for_peak_request": 17740476056,
+        "after_named_binding_release": 923365016
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 2,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 14202601472,
+        "first_after_encode": 16834641920,
+        "maximum_observed_process_phase_point": 17008705536,
+        "after_named_binding_release": 14202847232
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-ring-b1-v2",
+      "request_count": 3,
+      "selected_compared_requests": [
+        0,
+        1,
+        2
+      ],
+      "comparisons_per_request": [
+        18,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "ring",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 11779947492,
+      "artifact_sha256": {
+        "report": "bad04ee94c33900abf3586ec169afa2dacc4f8742a8d1886839673a6c1f9735b",
+        "guard_log": "b559019c8e22de3981d9db35701e4e90deb97e8b4a58493072576c9724476390",
+        "pre_execution_receipt": "b51783da8c4e0663543ffa196f772619dccce0bc3726e0064435dcd0af30d357",
+        "completion_receipt": "fd356c626554be4fd702487eab023d980b12dbcf88d04d68e116dd7bfdea4beb"
+      },
+      "sampled_peak_bytes": 15490524952,
+      "minimum_sampled_headroom_bytes": 20660060160,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391616576,
+        "session_ready": 6719133096,
+        "first_after_encode": 14625101488,
+        "maximum_observed_process_phase_point": 15490344728,
+        "after_wait_for_peak_request": 15144134424,
+        "after_named_binding_release": 749299480
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 2,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 11780390912,
+        "first_after_encode": 14412431360,
+        "maximum_observed_process_phase_point": 14586494976,
+        "after_named_binding_release": 11780636672
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-ring-b2-v2",
+      "request_count": 3,
+      "selected_compared_requests": [
+        0,
+        1,
+        2
+      ],
+      "comparisons_per_request": [
+        18,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "ring",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 11779947492,
+      "artifact_sha256": {
+        "report": "7de99365da15e4094dc54996700356dfea4fdf3106f45e2b7be7bb72a7945f52",
+        "guard_log": "7a00eea18c93b4d76f43bfc618b8a1af391243abc7564e22fc78fb1d6a4d8332",
+        "pre_execution_receipt": "b6e794d0e931ea75f9811b3069e92de49a848cb4044a502db80121abddd6b6c4",
+        "completion_receipt": "e2069cca78d57dfb401aafd8bddd212125aea8b7f1ae9ffa6023934e2f01193a"
+      },
+      "sampled_peak_bytes": 15489804056,
+      "minimum_sampled_headroom_bytes": 20946862080,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391600216,
+        "session_ready": 6717461976,
+        "first_after_encode": 14623610568,
+        "maximum_observed_process_phase_point": 15489787672,
+        "after_wait_for_peak_request": 15143757592,
+        "after_named_binding_release": 748857112
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 2,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 11780390912,
+        "first_after_encode": 14412431360,
+        "maximum_observed_process_phase_point": 14586494976,
+        "after_named_binding_release": 11780636672
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-retained-a2-v2",
+      "request_count": 3,
+      "selected_compared_requests": [
+        0,
+        1,
+        2
+      ],
+      "comparisons_per_request": [
+        18,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "retained",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 14202158052,
+      "artifact_sha256": {
+        "report": "2ee37957b8e09d61eff6f072d071d73aeabe48fe55e67df7de3028c5b47026db",
+        "guard_log": "6bb6c6a7dda74bb94312998e2ac3e2f3427b845b0fde249a5b01c06eba12c54b",
+        "pre_execution_receipt": "3a371f6d4fa1cf18b6e4e17f32ba2a60f69bd122954f8d9a137ccee31d416ceb",
+        "completion_receipt": "e8da85ea57cd78bfbd884e7666c3c3a30e4881c4edbfa5525a906b39968e9128"
+      },
+      "sampled_peak_bytes": 18086702720,
+      "minimum_sampled_headroom_bytes": 21997764608,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391338024,
+        "session_ready": 6718494120,
+        "first_after_encode": 16873871000,
+        "maximum_observed_process_phase_point": 18086522496,
+        "after_wait_for_peak_request": 17740492416,
+        "after_named_binding_release": 923496064
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 2,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 14202601472,
+        "first_after_encode": 16834641920,
+        "maximum_observed_process_phase_point": 17008705536,
+        "after_named_binding_release": 14202847232
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-ring-cadence-b3-v2",
+      "request_count": 6,
+      "selected_compared_requests": [
+        0,
+        4,
+        5
+      ],
+      "comparisons_per_request": [
+        18,
+        0,
+        0,
+        0,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "ring",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 11779947492,
+      "artifact_sha256": {
+        "report": "f7ae3c3e5979ee04d38915318ba43434ca04647ea20fea8821aa9439560954d3",
+        "guard_log": "3ecec9a611a0ff90c37530cdfe75683bb84f7cf98c019376cf1813360aed08d1",
+        "pre_execution_receipt": "0c7997c2de0269e1949507839ebb07b80704f4b9d8087b576c6533be943ebdd8",
+        "completion_receipt": "81b094b2e40d79ad222e0c6ceceacb58619228652495a189239e9b3454d4cd63"
+      },
+      "sampled_peak_bytes": 15489836872,
+      "minimum_sampled_headroom_bytes": 24147492864,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391501936,
+        "session_ready": 6719329800,
+        "first_after_encode": 14625363704,
+        "maximum_observed_process_phase_point": 15489640264,
+        "after_wait_for_peak_request": 15143610184,
+        "after_named_binding_release": 748431176
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 5,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 11780390912,
+        "first_after_encode": 14412431360,
+        "maximum_observed_process_phase_point": 14586494976,
+        "after_named_binding_release": 11780636672
+      },
+      "named_live_bytes_after_binding_release": 0
+    },
+    {
+      "name": "native-full-retained-cadence-a3-v2",
+      "request_count": 6,
+      "selected_compared_requests": [
+        0,
+        4,
+        5
+      ],
+      "comparisons_per_request": [
+        18,
+        0,
+        0,
+        0,
+        18,
+        18
+      ],
+      "comparison_count": 54,
+      "mode": "retained",
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "named_bytes": 14202158052,
+      "artifact_sha256": {
+        "report": "f04fa34aba2930e40229e6407792caa18a21942d9692a34621346dddc154b178",
+        "guard_log": "163aac90d2a226142cff1683b7f2772474959333f4a0ed2fa9a809eea58e296d",
+        "pre_execution_receipt": "734b7269248da5c2de536d12faea37637264f186c7996b19ca87013a4e30fdc4",
+        "completion_receipt": "10f7a3f97a6201f1b6a16b7483c3d75dcdd1562ef3da2377e54b2bd05d383ffd"
+      },
+      "sampled_peak_bytes": 18086653568,
+      "minimum_sampled_headroom_bytes": 19633192960,
+      "observed_swap_growth_bytes": 0,
+      "physical_footprint_phase_anchors_bytes": {
+        "after_last_weight_upload": 6391452712,
+        "session_ready": 6718657960,
+        "first_after_encode": 16873936584,
+        "maximum_observed_process_phase_point": 18086276736,
+        "after_wait_for_peak_request": 17740246656,
+        "after_named_binding_release": 923217536
+      },
+      "peak_phase": "request_after_encode",
+      "peak_request": 5,
+      "metal_counter_phase_anchors_bytes": {
+        "after_last_weight_upload": null,
+        "session_ready": 14202601472,
+        "first_after_encode": 16834641920,
+        "maximum_observed_process_phase_point": 17008705536,
+        "after_named_binding_release": 14202847232
+      },
+      "named_live_bytes_after_binding_release": 0
+    }
+  ],
+  "adversary": {
+    "verdict": "ROBUST for opt-in telemetry and fresh matched-coverage observations; historical cause open",
+    "review_type": "Correlated same-lineage source review plus executed numerical and negative controls; not independent neural replication.",
+    "reviewed_artifact_hashes": 39,
+    "attacks": [
+      "Exact selected request/capture totals and source/artifact bindings",
+      "Observer sampler/output failures cannot prevent attempted sibling releases",
+      "No normal-path wait or activation read added",
+      "Non-additive counters and unknown-before-initialization preserved",
+      "Old inverted peak not promoted to a causal explanation, leak, speedup or default change"
+    ],
+    "residual": "Constructor rollback preserves its original error and may mask a release error; native release faults were not all injected. Scope is attempted sibling cleanup.",
+    "supplemental_observer_off_review": "ROBUST for the underlying one-control result and combined coverage; stale selftest/validation bindings identified in review and refreshed to the frozen v3 selftest before closure."
+  },
+  "limitations": [
+    "The older ring-higher peak has no historical phase trace and is not reproduced. Comparison coverage, instrumentation, code/build epoch and host/runtime state differ; historical causality remains open.",
+    "Scalar instrumentation alters CPU pacing; no causal speedup, uninstrumented peak guarantee, or default promotion is claimed.",
+    "Metal resource counters, process footprint/RSS, named allocations and Crystal GC overlap; do not sum them or compute MPS as their residual.",
+    "The Metal counter is unknown before Device singleton initialization and can remain high immediately after release; this alone is not a resident leak.",
+    "Selected comparisons omit early output aliases that two-bank reuse overwrites. Uncompared warmup/timed requests are not additional numerical comparisons.",
+    "Receipts and hashes bind bytes, not hermetic build provenance or independent neural origin.",
+    "Only layers0-15 on static encoded-image diagnostic fixtures were tested; layers16-35, global decoder head, complete decoder/pipeline and video quality remain unqualified.",
+    "One observer-off ring control repeats the lower peak; it does not provide an uninstrumented retained/ring A/B, prove general observer noninterference, or resolve historical causality."
+  ],
+  "rollback": "Omit --memory-phases and --compare-common-ring-captures; output-bank reuse remains default-off.",
+  "next_signal": "If the historical high ring peak recurs, repeat telemetry-enabled original asymmetric capture coverage before changing MPS ownership or adding cache purges; then qualify wider decoder/global head and connected stage lifetimes.",
+  "case_artifact_paths_relative_to_artifact_root": {
+    "report": "results/<name>.json",
+    "guard_log": "logs/<name>.guard.jsonl",
+    "pre_execution_receipt": "results/<name>.pre-execution.json",
+    "completion_receipt": "results/<name>.completion.json"
+  },
+  "observer_off_control": {
+    "name": "native-full-ring-no-observer-c1-v2",
+    "reference_case": "native-full-ring-cadence-b3-v2",
+    "change": "Only --memory-phases removed from the same six-request ring command; comparison workload and source/binary pins unchanged.",
+    "plan": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/source/observer-control-plan-v1.json",
+      "sha256": "003dda57a06ff03cfea556dec258b2a7e028980b80cdb998049c4f3522120c10"
+    },
+    "launcher": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/run_observer_control_v1.py",
+      "sha256": "b5cc92aa11c3a625d7c7121903bdad79a9b3543ec74964a23abb07b59f1dc000"
+    },
+    "validator": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/validate_observer_control_v1.py",
+      "sha256": "1d54fadef8ba0295d4bb223feadae36849fb6e106b55c03a9cb3906daa1b79bf"
+    },
+    "validation": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/observer-control-validation-v1.json",
+      "sha256": "755ffc801ae9060b57df3aaac44091dd1a3b7e3d06e677fc91c5952e6248db7a"
+    },
+    "validator_selftest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/tmp/observer_control_validator_selftest_v3.json",
+      "sha256": "a390567d9ba7b69622f98019c186f5a25b39d7d585ef4bf9a21e9dedfbabafff"
+    },
+    "validator_check_count": 12,
+    "report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/native-full-ring-no-observer-c1-v2.json",
+      "sha256": "08417e61f18cd289c4dad4630858fe9d7426f8a889f7443791ac409ba937845d"
+    },
+    "guard_log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/logs/native-full-ring-no-observer-c1-v2.guard.jsonl",
+      "sha256": "691076bb031b5e3af78210c54fcda6b4ecf26908251302ee1448e1d52b818ab2"
+    },
+    "pre_execution_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/native-full-ring-no-observer-c1-v2.pre-execution.json",
+      "sha256": "f5748fc6c80613ff212af2049df38c17c6d2640a46d6ee71b1f38b671b33fd36"
+    },
+    "completion_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-memory-20261027/results/native-full-ring-no-observer-c1-v2.completion.json",
+      "sha256": "fcb3df3075aca64534d03956a5987717c3996ea93e6a36fd1693973e341227b6"
+    },
+    "requests": 6,
+    "requests_with_cpu_comparison": 3,
+    "selected_comparisons": 54,
+    "finite_bitwise_exact": true,
+    "sampled_peak_bytes": 15489607424,
+    "minimum_sampled_headroom_bytes": 22967894016,
+    "observed_swap_growth_bytes": 0,
+    "peak_difference_from_observer_on_bytes": -229448,
+    "inference": "Removing telemetry does not restore the historical high peak on this build; one control is not a general proof of observer noninterference."
+  },
+  "aggregate_qualification": {
+    "processes": 8,
+    "requests": 32,
+    "requests_with_cpu_comparison": 23,
+    "selected_comparisons": 1182,
+    "finite_bitwise_exact": true,
+    "phase_matrix_processes": 7,
+    "supplemental_observer_off_processes": 1
+  }
+}

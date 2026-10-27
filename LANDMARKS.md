@@ -34845,3 +34845,58 @@ Refresh after source/toolchain/device/model/workload changes.
   execution/display postprocessing and measured prompt adherence, memory and
   video latency. Refresh on scoped source/upstream temporal ratio/parser/range,
   geometry, Python/NumPy/FFmpeg or evidence changes.
+
+### 2026-10-27: PixelUMM loading versus execution memory phases
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-memory-phases.json. Default-off
+  --memory-phases samples process footprint/RSS, Metal allocation, named-buffer
+  and Crystal GC counters around upload, plan construction, request execution,
+  postterminal diagnostics and teardown. Categories overlap; no sum, residual
+  MPS estimate or unknown-as-zero interpretation. --compare-common-ring-captures
+  matches CPU comparison coverage without changing actual workspace allocation.
+- Fresh short retained/ring/ring/retained controls and a reverse six-request
+  cadence pair put retained peaks at16.845GiB and ring at14.426-14.427GiB:
+  approximately2.418GiB lower for ring. Exact named saving remains2.256GiB.
+  Both modes finish input/weight upload at5.953GiB process footprint and plan
+  construction at6.26GiB. Largest observed phase points occur after encode.
+  The old ring-higher19GiB peak is not reproduced; its historical cause remains
+  open because coverage, instrumentation, build epoch and runtime state differ.
+  This establishes no causal speedup or default promotion; ring stays opt-in.
+- Source inspection finds direct authenticated BF16 file-to-shared-GPU upload
+  and MPSGraph feeds wrapping those buffers. F32 FFN casts are graph nodes;
+  framework-private transformed/cache representations remain unaccounted.
+  Metal resource-counter uplift during execution is similar across modes.
+  After named releases, named live bytes reach0 and process footprint falls
+  below1GiB while Metal's counter remains high; that counter alone is no leak
+  proof. CPU expected/actual diagnostic buffers are postterminal and separately
+  marked; allocation-ready does not mean GPU readback has populated them.
+- Seven guarded processes run26 requests;20 requests compare1,128 selected
+  captures, finite and bitwise exact at unchanged atol=rtol=2e-5. One terminal
+  wait/request, zero named encode allocations or preterminal activation reads;
+  full requests2033 segments. Poisoned different-input replay passes. Saved
+  pinned MPS-adapted upstream-semantics fixtures, not fresh upstream or compiled
+  CUDA Flex equivalence. No full decoder, diffusion, Studio or generation ran.
+- A supplemental six-request ring control removes only --memory-phases and
+  still peaks at14.426GiB;54 selected comparisons are finite and bitwise exact.
+  It does not restore the historical high peak. Combined coverage is32 requests,
+  23 compared requests and1,182 captures; no general observer-noninterference
+  or uninstrumented retained/ring speedup claim follows from this one control.
+- Release build and51 Crystal examples pass; external analysis passes15
+  synthetic controls, observer-off validation passes 12 checks, and both check
+  exact captures, matching source pins, clocks,
+  build freshness and serial guard intervals. Full sampled headroom>=18.285GiB,
+  swap growth0; cache-aware10% reserve,18/23GiB caps,64MiB swap stop and900s
+  deadlines retained. Polling cannot bound between-sample spikes. Observer
+  failures attempt sibling cleanup; injected helper tests are not every native
+  release fault. Correlated Mini-Quad review is not independent replication.
+- Native CLOCK_MONOTONIC differs from Python mach_absolute_time on this host.
+  Join guard logs only on guard_monotonic_ns with receipt-pinned Python clock,
+  not a constant epoch offset. Exploratory stale-binary runs were excluded and
+  rerun after a fresh release build. Byte receipts are not hermetic attestation.
+- Rollback omits both new options; arithmetic and output-reuse defaults stay
+  unchanged. Next falsifier if the old peak recurs: original asymmetric capture
+  workload with phase traces before altering MPS ownership or purging caches.
+  Wider decoder/global head and connected stage lifetimes remain the pipeline
+  frontier. Refresh on scoped source/artifacts/backend/device/OS/toolchain,
+  geometry/precision/capture/lifetime/guard/clock changes or lost evidence.

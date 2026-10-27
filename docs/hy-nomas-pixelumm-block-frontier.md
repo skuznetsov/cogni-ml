@@ -1,5 +1,111 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Weight loading and execution memory phases, 2026-10-27
+
+The serial probe now has default-off `--memory-phases` scalar telemetry around
+metadata/payload authentication, workspace allocation, input/weight upload,
+each plan build, encode, the existing terminal wait, CPU diagnostics and
+teardown. `--compare-common-ring-captures` gives both bank modes the same
+postterminal comparison workload while preserving their actual workspace
+allocation and GPU capture copies. It compares all 16 attention boundaries
+and the last two outputs at full J; the retained mode still owns 16 outputs.
+The original retained-output default and arithmetic remain unchanged.
+
+The diagnostic failure mode is a misleading subtraction of overlapping
+counters, or an observer error that skips resource release. Events therefore
+label process physical footprint, RSS, Metal device allocation, named buffers
+and Crystal GC counters as non-additive, preserve unknown values as null,
+and never estimate an opaque MPS byte total. Teardown attempts every sibling
+release even if telemetry sampling or output raises. CPU tests inject those
+observer failures into the actual cleanup helper; they do not fault-inject
+every native release path. Rollback omits both new CLI options.
+
+The phase-separated full-J controls give the following physical-footprint
+anchors. These are sampled process observations, not sums of allocations.
+
+| Stage / counter | Retained outputs | Two output banks |
+| --- | ---: | ---: |
+| After input and all 16 weight uploads, process footprint | 5.953 GiB | 5.953 GiB |
+| After all plan builds, process footprint | 6.259 GiB | 6.258 GiB |
+| Exact named input/weight/workspace inventory | 13.227 GiB | 10.971 GiB |
+| Short ABBA process-tree peak, first process of each mode | 16.845 GiB | 14.427 GiB |
+| Short ABBA process-tree peak, second process of each mode | 16.845 GiB | 14.426 GiB |
+| Six-request cadence process-tree peak, reverse-order pair | 16.845 GiB | 14.426 GiB |
+
+Both short ABBA pairs reduce sampled peak by about 2.418 GiB. The exact named
+saving remains 2.256 GiB: 14 BF16 output banks. Weight upload footprints are
+the same; the large increase appears during execution, with the highest
+observed phase point at `request_after_encode`. The loader reads authenticated
+BF16 payloads directly into shared GPU allocations. Source inspection finds
+no full CPU weight copy, and MPSGraph tensor-data wrappers bind those existing
+Metal buffers. F32 FFN casts are graph operations, not an explicit persistent
+F32 weight owner. Backend execution can still allocate or cache private
+representations; these probes do not identify their exact composition.
+
+For the first request, the Metal device counter increases by about 2.451 GiB
+over its prepared baseline in both modes; subsequent observed requests reach
+about 2.613 GiB above baseline. This is an execution-associated allocation
+change, not a pure MPS bucket or an additive process-memory component. The
+counter is null before the Crystal device singleton is initialized. It also
+remains high immediately after named buffers are released while process
+footprint falls below 1 GiB. Its value alone cannot establish a resident leak.
+Postterminal expected/actual CPU comparison buffers and GC heap are measured
+separately; `compare_buffers_ready` marks allocation, before the actual GPU
+readback populates the destination. They are outside neural execution timing.
+
+The phase matrix includes a small ring control, short retained/ring/ring/
+retained controls and a ring/retained pair with the original six-request
+cadence. The short controls compare every request. The six-request controls
+compare requests 0/4/5, with no comparisons between warmup and the first two
+timed requests. Across seven processes there are 26 requests, of which 20
+compare 1,128 selected captures: all finite and bitwise exact. Every request
+has one terminal wait, zero preterminal activation reads and zero named encode
+allocations; full requests retain 2,033 segments. Different-input replay after
+NaN-poisoning scratch and output banks passes. This does not compare overwritten
+early output aliases or revalidate the neural origin of saved fixtures.
+
+One supplemental ring control removes only `--memory-phases` from the same
+six-request command. Its sampled peak is 14.426 GiB and its 54 selected
+comparisons are finite and bitwise exact. Removing the observer does not restore
+the historical high peak on this build. This single control is not a general
+proof that instrumentation never changes resource lifetime or pacing. Including
+it, eight processes run 32 requests, with 23 requests comparing 1,182 captures.
+
+The release build and 51 Crystal regression examples pass. The phase analyzer
+passes 15 synthetic controls; the observer-off validator passes 12 checks.
+They check exact capture/marker inventories,
+source/binary/fixture bindings, both clock domains, fresh build dependencies
+and non-overlapping guard intervals. Full runs retain at least 18.285 GiB
+sampled cache-aware headroom with zero system swap growth. These are scoped
+measurements and byte bindings, not hermetic build attestation. Mini-Quad
+source/adversary review is correlated, not independent neural replication.
+
+The historical ring-higher peak below remains an observation from an older
+epoch. It is not reproduced by matched short or six-request controls. That does not
+prove its cause, establish a speedup, or qualify a default change. Instrumented
+runs alter CPU pacing, and historical capture workloads differ between modes.
+Keep two-bank reuse opt-in. The next discriminator is an instrumentation and
+capture-workload control if that older peak recurs, before changing MPS
+resource ownership or adding a cache purge.
+
+The curated phase analysis, original-cadence controls, commands, source/binary
+receipts and verification counts are indexed in
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-memory-phases.json`; large files
+remain under `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-memory-20261027`.
+Native event timestamps expose both `CLOCK_MONOTONIC` and `mach_absolute_time`.
+The guard uses the latter: join only on `guard_monotonic_ns`, with the exact
+Python clock implementation pinned by the receipt. Their epochs differ on
+this host; a constant offset is not the join contract.
+
+Qualification is limited to layers 0-15 and the saved pinned upstream-semantics
+MPS-adapted fixtures at unchanged `atol=rtol=2e-5`. No fresh upstream inference,
+compiled CUDA Flex equivalence, complete decoder, diffusion or video quality
+is claimed. Scalar diagnostics add no GPU wait or activation read. The
+cache-aware 10% reserve, 18/23 GiB process caps, 64 MiB system swap-growth stop,
+900-second deadlines and serial GPU jobs remain enforced. Samples cannot bound
+between-poll spikes. Refresh after scoped source/artifact/backend/device/OS/
+toolchain, geometry/precision, capture/lifetime/guard or clock changes.
+
 ## Two-bank output-ring qualification, 2026-10-27
 
 An opt-in `--reuse-output-banks` mode reuses two output banks for the qualified

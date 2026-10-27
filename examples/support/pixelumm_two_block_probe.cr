@@ -1,4 +1,5 @@
 require "./pixelumm_block_probe"
+require "./pixelumm_memory_probe"
 
 module PixelUMMTwoBlockProbe
   extend self
@@ -87,6 +88,33 @@ module PixelUMMTwoBlockProbe
     unless keys.sort == expected.sort
       raise ArgumentError.new("#{block_count}-block fixture requires every expected stage at its admitted grid")
     end
+  end
+
+  # Select the common postterminal capture subset that survives two alternating
+  # output banks. This changes only which CPU diagnostics are requested; callers
+  # still admit and allocate their actual workspace using their own bank mode.
+  def common_ring_comparison_capture_order(keys : Array(String), grid : Array(Int32), block_count : Int32) : Array(String)
+    validate_block_count!(block_count)
+    selected = keys.select do |key|
+      slot = capture_slot(key, block_count)
+      stage = capture_stage(key, block_count)
+      Decoder::Workspace.capture_survives?(stage, slot, block_count, reuse_outputs: true)
+    end
+    raise ArgumentError.new("common-ring comparison capture selection must not be empty") if selected.empty?
+
+    expected_count = if block_count == 16
+                       case grid
+                       when [2, 32, 32] then 402
+                       when [6, 44, 80] then 18
+                       else                  nil
+                       end
+                     else
+                       nil
+                     end
+    if expected_count && selected.size != expected_count
+      raise ArgumentError.new("common-ring comparison capture count mismatch: expected #{expected_count}, got #{selected.size}")
+    end
+    selected
   end
 
   def validate_eight_capture_inventory!(keys : Array(String), grid : Array(Int32)) : Nil
@@ -407,13 +435,18 @@ module PixelUMMTwoBlockProbe
     getter workspace : Decoder::Workspace
     getter plans = [] of Decoder::Plan
     getter capture_order : Array(String)
+    getter workspace_capture_order : Array(String)
     getter output_bank_by_slot : Array(Int32)
+    getter compare_common_ring_captures : Bool
     @bindings = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
+    @phase_observer : PixelUMMMemoryProbe::Recorder?
 
     def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64, *,
-                   @ffn_f32 : Bool = false, @reuse_outputs : Bool = false)
+                   @ffn_f32 : Bool = false, @reuse_outputs : Bool = false,
+                   @compare_common_ring_captures : Bool = false,
+                   @phase_observer : PixelUMMMemoryProbe::Recorder? = nil)
       grid = @fixture.grid
       config = Decoder::Config.new(temporal: grid[0], height: grid[1], width: grid[2])
       weight_bytes = Array.new(@fixture.block_count) do |slot|
@@ -424,10 +457,16 @@ module PixelUMMTwoBlockProbe
           Decoder::Workspace.capture_survives?(name, slot, @fixture.block_count, reuse_outputs: @reuse_outputs)
         end
       end
-      @capture_order = @fixture.capture_order.select do |key|
+      @workspace_capture_order = @fixture.capture_order.select do |key|
         slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
         captures_by_slot[slot].includes?(PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count))
       end
+      @capture_order = if @compare_common_ring_captures
+                         PixelUMMTwoBlockProbe.common_ring_comparison_capture_order(
+                           @workspace_capture_order, grid, @fixture.block_count)
+                       else
+                         @workspace_capture_order
+                       end
       @output_bank_by_slot = [] of Int32
       @borrowed_bytes = (@fixture.inputs.values + cache.weights.values).sum(&.nbytes)
       @named_bytes = Decoder::Workspace.validate_admission!(config,
@@ -435,18 +474,44 @@ module PixelUMMTwoBlockProbe
         sine_bytes: @fixture.inputs["sin"].nbytes, weights_bytes_by_slot: weight_bytes,
         captures_by_slot: captures_by_slot, max_unique_bytes: max_named_bytes, reuse_outputs: @reuse_outputs)
       # No file-sized read or Metal allocation precedes the aggregate gate.
+      memory_phase("before_fixture_payload_authentication")
       @fixture.verify_payload!
+      memory_phase("after_fixture_payload_authentication")
+      memory_phase("before_cache_payload_authentication")
       cache.verify_payload!
+      memory_phase("after_cache_payload_authentication")
       @workspace = Decoder::Workspace.new(config, captures_by_slot: captures_by_slot,
         max_owned_bytes: max_named_bytes - @borrowed_bytes, reuse_outputs: @reuse_outputs)
+      input_uploaded_bytes = 0_i64
       begin
+        memory_phase("after_workspace_alloc", phase_bytes_kind: "workspace_named_bytes",
+          phase_bytes: @workspace.named_bytes) if @phase_observer
         @fixture.inputs.each do |name, record|
           @bindings[name] = buffer = ML::MetalBuffer.new(record.nbytes)
           @fixture.upload_into!(record, buffer)
+          input_uploaded_bytes += record.nbytes if @phase_observer
+        end
+        memory_phase("after_input_upload", phase_bytes_kind: "fixture_input_buffers_uploaded_bytes",
+          phase_bytes: input_uploaded_bytes) if @phase_observer
+
+        expected_weight_bytes_by_slot = nil.as(Array(Int64)?)
+        uploaded_weight_bytes_by_slot = nil.as(Array(Int64)?)
+        if @phase_observer
+          expected_weight_bytes_by_slot = weight_bytes.map { |per_slot| per_slot.values.sum }
+          uploaded_weight_bytes_by_slot = Array.new(@fixture.block_count, 0_i64)
         end
         cache.weights.each do |name, record|
           @bindings[name] = buffer = ML::MetalBuffer.new(record.nbytes)
           cache.upload_into!(record, buffer)
+          if @phase_observer
+            slot = PixelUMMTwoBlockProbe.capture_slot(name, @fixture.block_count)
+            uploaded = uploaded_weight_bytes_by_slot.not_nil!
+            uploaded[slot] += record.nbytes
+            if uploaded[slot] == expected_weight_bytes_by_slot.not_nil![slot]
+              memory_phase("after_weight_slot_upload", slot: slot,
+                phase_bytes_kind: "weight_slot_uploaded_bytes", phase_bytes: uploaded[slot])
+            end
+          end
         end
         @fixture.block_count.times do |slot|
           weights = PixelUMMBlockProbe.weight_shapes.keys.to_h { |name| {name, @bindings["block#{slot}.#{name}"]} }
@@ -455,6 +520,8 @@ module PixelUMMTwoBlockProbe
             cos: @bindings["cos"], sin: @bindings["sin"], captures: captures_by_slot[slot],
             max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot,
             ffn_f32: @ffn_f32)
+          memory_phase("after_plan_build", slot: slot, phase_bytes_kind: "plan_named_bytes",
+            phase_bytes: @plans.last.named_bytes) if @phase_observer
         end
         PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(@plans.map(&.ffn_f32), @fixture.block_count, @ffn_f32)
         # This loader owns distinct allocations for every authenticated weight,
@@ -469,9 +536,14 @@ module PixelUMMTwoBlockProbe
           raise ArgumentError.new("serial unique-byte/output/weight ownership mismatch")
         end
       rescue error
-        @plans.reverse_each(&.release)
-        @workspace.release
-        @bindings.each_value(&.release)
+        cleanup = PixelUMMMemoryProbe::Cleanup.new
+        cleanup.phase(@phase_observer, "session_construction_rollback_before_release")
+        @plans.reverse_each { |plan| cleanup.attempt { plan.release } }
+        cleanup.phase(@phase_observer, "session_construction_rollback_after_plan_release")
+        cleanup.attempt { @workspace.release }
+        cleanup.phase(@phase_observer, "session_construction_rollback_after_workspace_release")
+        @bindings.each_value { |binding| cleanup.attempt { binding.release } }
+        cleanup.phase(@phase_observer, "session_construction_rollback_after_binding_release")
         raise error
       end
     end
@@ -499,7 +571,8 @@ module PixelUMMTwoBlockProbe
       end
     end
 
-    def compare : Array(Comparison)
+    def compare(*, request : Int32? = nil,
+                phase_observer : PixelUMMMemoryProbe::Recorder? = nil) : Array(Comparison)
       chain = @last_chain || raise ArgumentError.new("PixelUMM serial was not encoded")
       unless chain.completed? && chain.wait_count == 1
         raise ArgumentError.new("PixelUMM serial diagnostics require one terminal wait")
@@ -509,7 +582,14 @@ module PixelUMMTwoBlockProbe
         name = PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count)
         record, buffer = @fixture.captures[key], @plans[slot].stage(name)
         raise ArgumentError.new("native capture extent mismatch #{key}") unless record.nbytes == buffer.size
+        comparison_bytes = record.nbytes &* 2_i64
+        memory_phase("before_compare_buffers", slot: slot, request: request,
+          phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
+          observer: phase_observer)
         expected, actual = @fixture.read(record), Bytes.new(record.nbytes.to_i32)
+        memory_phase("compare_buffers_ready", slot: slot, request: request,
+          phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
+          observer: phase_observer)
         buffer.read_bytes(actual.to_unsafe, actual.size)
         width = record.dtype == "BF16" ? 2 : 4
         count, failures, different = record.nbytes // width, 0_i64, 0_i64
@@ -531,19 +611,43 @@ module PixelUMMTwoBlockProbe
             first_failure, first_expected, first_actual = index, a.to_s, b.to_s if first_failure.nil?
           end
         end
-        {stage: key, elements: count, failures: failures, different_words: different,
+        comparison = {stage: key, elements: count, failures: failures, different_words: different,
          max_abs: maximum, finite: finite, actual_sha256: Digest::SHA256.hexdigest(actual),
          first_failure_index: first_failure, first_expected: first_expected, first_actual: first_actual}
+        memory_phase("compare_stage_done", slot: slot, request: request,
+          phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
+          observer: phase_observer)
+        comparison
       end
     end
 
     def release : Nil
       return if @released
       check_idle!
-      @plans.reverse_each(&.release)
-      @workspace.release
-      @bindings.each_value(&.release)
+      # The session becomes unusable before teardown starts. Even if a resource
+      # fails to release, attempt every sibling and prevent reuse of partial state.
       @released = true
+      cleanup = PixelUMMMemoryProbe::Cleanup.new
+      cleanup.phase(@phase_observer, "before_session_plan_release")
+      @plans.reverse_each { |plan| cleanup.attempt { plan.release } }
+      cleanup.phase(@phase_observer, "after_session_plan_release")
+      cleanup.attempt { @workspace.release }
+      cleanup.phase(@phase_observer, "after_session_workspace_release")
+      @bindings.each_value { |binding| cleanup.attempt { binding.release } }
+      cleanup.phase(@phase_observer, "after_session_binding_release")
+      cleanup.phase(@phase_observer, "after_session_release")
+      cleanup.raise_first!
+      nil
+    end
+
+    private def memory_phase(phase : String, *, slot : Int32? = nil, request : Int32? = nil,
+                             phase_bytes_kind : String? = nil, phase_bytes : Int64? = nil,
+                             observer : PixelUMMMemoryProbe::Recorder? = nil) : Nil
+      (observer || @phase_observer).try do |active|
+        active.emit(phase, slot: slot, request: request,
+          phase_bytes_kind: phase_bytes_kind, phase_bytes: phase_bytes)
+      end
+      nil
     end
 
     private def check_idle! : Nil
