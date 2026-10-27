@@ -6,6 +6,47 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-INTEGRATED-2026-10-27] Full-J decoder and global head match composed upstream controls
+
+- VERIFIED bounded 36 blocks + global head at T6/H44/W80/J21,120 -> BF16
+  `[1,3,24,704,1280]`. All 129 comparisons (43/request, seed42 gate/repeat
+  and distinct seed43 poisoned replay) are finite and bitwise exact at
+  unchanged `atol=rtol=2e-5`. Saved upstream source-method MPS controls are
+  joined at exact authenticated block35/head-input edges; this is not a
+  fresh connected upstream run or an independent neural backend.
+- The head borrows block35's exact MetalBuffer on the same chain. Blocks
+  share one workspace and two output banks; head scratch is separate.
+  Unique named inventory 24,108,145,128 B, no duplicate head input. Every
+  request has one terminal wait, zero named encode allocations/preterminal
+  activation reads, and 43 diagnostics afterward. Attention 0-35, outputs
+  34/35 and five head stages are retained; outputs 0-33 are overwritten
+  GPU handoffs, not direct goldens. Existing F32 math is unchanged.
+- Successful v2: 682 guard samples, process-group peak 28,585,872,368 B
+  (26.623 GiB), native phase peak 28,585,724,912 B; unchanged 28.5 GiB cap,
+  10% file-cache-aware reserve, 64 MiB swap stop and serial 900 s deadline.
+  Minimum headroom 15,875,194,880 B (14.785 GiB), observed swap growth zero.
+  Sampled limits do not bound inter-poll spikes or full-pipeline fit.
+  Named bytes/count reach zero after release; Metal still reports
+  24,108,908,544 B, not proof of zero device residency/backend caching.
+  The process exits 0. Earlier v1 startup refusal is retained/excluded.
+- Repeat encode+wait 43.356 s; alternate poisoned request 69.456 s remains
+  unexplained variance. One repeat, telemetry enabled, preparation and
+  diagnostics excluded; no speedup/stable throughput/video-second claim.
+  Real DCAE/noise/static-image inputs are not DiT-denoised output.
+- Release/fresh make-q, format and 44 focused Crystal examples pass.
+  One-byte-short budget rejects before named allocation/upload; order and
+  in-flight lifecycle falsifiers pass. Seven composition and five report
+  mutations reject. Source/binary/fixture/guard/clock receipt audit passes.
+  Correlated Mini-Quad verdict ROBUST within parity/lifecycle/sampled scope.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-integrated.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/qualification-audit-full-v2.json`.
+  Rollback omits the opt-in probe or reverts its atomic commit. Refresh after
+  scoped source/artifact/backend/device/OS/Torch/toolchain, precision/layout,
+  geometry/lifetime/guard/clock changes or evidence loss; admission expires
+  at launch. Next: remaining-pipeline handoff/RGB-export budget and timing
+  variance. No diffusion, video quality or full-generation claim.
+
 ### [LM-HY-NOMAS-PIXELUMM-HEAD-2026-10-27] Standalone global decoder head is exact at full J
 
 - Scope: authenticated saved block35 outputs, T6/H44/W80/J21,120 -> BF16

@@ -1,5 +1,97 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Integrated 36-block decoder and global-head gate, 2026-10-27
+
+Status: VERIFIED within the bounded full-J decoder scope. One native session
+connects all 36 PixelUMM blocks and the global head at T6/H44/W80/J21,120.
+The head consumes block35's exact BF16 MetalBuffer on the same command chain,
+with no CPU copy or intervening terminal wait. Blocks retain the shared
+workspace and two output banks; head scratch is separately preallocated.
+Existing F32 FFN/RMS/linear math and `atol=rtol=2e-5` remain unchanged.
+
+All 129 comparisons are finite and bitwise exact: 43 stages per request,
+across a seed42 gate/repeat and a distinct seed43 input after NaN-poisoning
+block/head transients. Captures are attention 0-35, outputs 34/35 and five
+head stages. Earlier block outputs 0-33 are overwritten GPU handoffs, not
+separately retained goldens. The output is BF16 `[1,3,24,704,1280]`.
+The real DCAE/noise/stem fixtures come from a repeated static image, not
+DiT-denoised video; this qualifies decoder arithmetic and composition.
+
+The oracle reuses separately authenticated upstream source-method MPS
+controls joined at byte-identical block35-output/head-input edges for both
+seeds. Native construction authenticates the block/cache/head payloads;
+the CPU composition audit freshly streams the selected edges and head-weight
+ranges and checks common source/weight identities. This is not a fresh
+connected upstream run or an independent neural backend. The whole remote
+checkpoint digest remains outside the source-subset/header qualification.
+
+| Integrated named allocation inventory | Bytes |
+| --- | ---: |
+| Existing blocks, shared workspace and two output banks | 22,958,105,572 |
+| Head-owned output and scratch | 1,124,851,204 |
+| Four additional head weights | 25,188,352 |
+| Unique total | 24,108,145,128 |
+| Duplicate head input | 0 |
+
+The successful guard startup admits 39,332,544,512 bytes of cache-aware
+headroom against 37,473,589,658 required. This is the v2 guard sample; the
+separate earlier `preflight-snapshot-v2.json` remains a failed historical
+snapshot. The successful epoch's 682 external samples show a process-group peak of
+28,585,872,368 bytes (26.623 GiB), below the unchanged 28.5 GiB process cap
+by 1.877 GiB. The 497 native memory phases peak at 28,585,724,912 bytes,
+after block encoding on the alternate request. Minimum cache-aware headroom
+is 15,875,194,880 bytes (14.785 GiB), above the 10% physical-memory reserve;
+observed system swap growth is zero. The serial 900 s guard and 64 MiB
+swap-growth stop remain enforced. File-backed cache is a reclaimability
+estimate, and samples cannot bound between-poll spikes. Process footprint,
+RSS, Metal allocation, named counters and GC overlap and must not be added.
+
+After session release, named live count/bytes are zero and process footprint
+is 1,730,661,912 bytes. Metal's counter still reports 24,108,908,544 bytes;
+its attribution/lifetime is not decomposed. Cleanup proves named ownership
+release, not zero Metal residency or absence of opaque backend caching.
+The integrated probe process then exits successfully.
+
+| Integrated request | Encode API seconds | Terminal wait seconds | Observed total seconds |
+| --- | ---: | ---: | ---: |
+| numerical_gate | 43.467002 | 0.985569 | 44.454365 |
+| timed | 42.414827 | 0.940822 | 43.355927 |
+| poisoned_different_input_gate | 68.164240 | 1.289664 | 69.455765 |
+
+Preparation takes 49.650 seconds, excluding metadata/head-payload
+authentication before session construction. Total time includes intervening
+memory telemetry and first-request lifecycle checks, and excludes preparation
+and post-wait comparisons. Each request preserves 4,579 command segments,
+one terminal wait, zero named GPU allocations during encode, zero preterminal
+CPU activation reads and 43 postterminal diagnostic reads. Counters cover
+`ML::MetalBuffer`; opaque MPS resources are covered by sampled process telemetry.
+The alternate request's 69.456 s versus the repeat's 43.356 s is unexplained
+variance, not a causal poison/input effect or a stable throughput result.
+No speedup or seconds-per-video-second estimate is admitted by this pilot.
+
+The release build, fresh make-q and 44 focused CPU examples pass. A budget
+of 24,108,145,127 bytes rejects before upload with zero named live/peak bytes
+and no requests. Head-before-block encoding and in-flight release/read/reuse/
+poison reject before adding work. Seven fixture-composition and five report-
+audit mutations reject. The earlier epoch v1 remains recorded as a startup
+refusal before child launch; it is excluded from successful measurements.
+The full-v2 receipt audit binds current source/binary/fixture pins, capture
+order/hashes/shapes/dtypes, clock intervals, guard limits and cleanup.
+
+DoD commands, failed/successful epochs, receipts and review scope are indexed
+by `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-integrated.json`.
+Final report: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-integrated-20261027/results/native-integrated-full-v2.json`.
+The correlated Mini-Quad verdict is ROBUST only for the declared integrated
+parity, lifecycle and sampled-memory scope. Diffusion, display conversion,
+video quality, full-pipeline fit, throughput and full generation are excluded.
+Rollback omits the opt-in wrapper/probe or reverts its atomic commit. Refresh
+after scoped source/artifact/backend/device/OS/Torch/toolchain, geometry,
+precision/layout/lifetime, guard/clock changes or evidence loss; startup
+admission must always be refreshed. Next: budget the handoff with the remaining
+pipeline and RGB/export stages, and localize timing variance before treating
+this decoder pilot as a throughput prediction. No full generation is authorized
+by this qualification step.
+
 ## Global decoder-head qualification, 2026-10-27
 
 Status: verified standalone global head at T6/H44/W80/J21,120, consuming
