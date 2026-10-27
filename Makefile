@@ -33,6 +33,7 @@ HY_NOMAS_MPS_OBJ := $(BUILD_DIR)/hy_nomas_mps_reductions.o
 HY_NOMAS_COMPACT_ATTENTION_OBJ := $(BUILD_DIR)/hy_nomas_attention_compact.o
 QWEN25_MPS_OBJ := $(BUILD_DIR)/qwen25_mps_bridge.o
 PIXELUMM_MPS_OBJ := $(BUILD_DIR)/pixelumm_decoder_block_mps_bridge.o
+PIXELUMM_HEAD_OBJ := $(BUILD_DIR)/pixelumm_decoder_head_mps_bridge.o
 PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
 QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
@@ -86,6 +87,22 @@ $(QWEN25_MPS_OBJ): src/ml/gguf/qwen25_mps_bridge.mm | $(BUILD_SENTINEL)
 $(PIXELUMM_MPS_OBJ): src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+.PHONY: pixelumm_decoder_head_probe spec_pixelumm_decoder_head
+pixelumm_decoder_head_probe: $(BUILD_DIR)/pixelumm_decoder_head_probe
+
+$(PIXELUMM_HEAD_OBJ): src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM head MPS requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+# The head translation unit reuses the block graph helpers and includes its ABI.
+# Do not also link PIXELUMM_MPS_OBJ into this diagnostic executable.
+$(BUILD_DIR)/pixelumm_decoder_head_probe: examples/pixelumm_decoder_head_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+spec_pixelumm_decoder_head:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr $(ARGS)
 
 .PHONY: pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe spec_pixelumm_block_profile spec_pixelumm_memory_probe
 pixelumm_decoder_block_probe: $(BUILD_DIR)/pixelumm_decoder_block_probe

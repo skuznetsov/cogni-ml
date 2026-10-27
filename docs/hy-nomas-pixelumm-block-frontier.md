@@ -1,5 +1,100 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Global decoder-head qualification, 2026-10-27
+
+Status: verified standalone global head at T6/H44/W80/J21,120, consuming
+saved, authenticated block-35 outputs from the qualified seed-42/43 controls.
+The output is BF16 `[1,3,24,704,1280]`. All 15 comparisons are finite and
+bitwise exact at unchanged `atol=rtol=2e-5`: final RMS in tile order, inverse
+permutation to THW, PixelHead RMS, biased linear and unpatchified RGB output,
+across three requests using two distinct inputs: a seed-42 numerical gate
+and repeat, then a poisoned seed-43 replay.
+This excludes an integrated 36-block-plus-head peak, display conversion,
+diffusion, generated video and quality or seconds-per-video-second claims.
+
+The first native gate localized a mismatch to PixelHead RMS while the custom
+final RMS and inverse permutation were already bitwise exact. The head now
+matches pinned PyTorch 2.6's composite RMS contract: F32 power/reduction,
+epsilon rounded through BF16, normalized values rounded to BF16 before a
+separate gain step. The custom final norm retains its own F32 epsilon.
+The F32 linear graph is unchanged: its source-level rounding risk did not
+materialize in either full-J control. This empirical equality does not prove
+universal equivalence to every MPSGraph BF16 lowering or device.
+
+| Named allocation inventory | Bytes |
+| --- | ---: |
+| Borrowed block-35 BF16 input | 173,015,040 |
+| Four borrowed BF16 head weights | 25,188,352 |
+| Owned output and scratch | 1,124,851,204 |
+| Standalone unique named total | 1,323,054,596 |
+
+Owned buffers retain five `[J,4096]` BF16 planes, two `[J,3072]` BF16 planes,
+two F32 row-statistic planes, inverse Int32 indices and a F32 power exponent.
+They are preallocated and reused. If the previous 36-block bank already owns
+the input, added named head buffers and weights total 1,150,039,556 bytes;
+the combined named inventory would be 24,108,145,128 bytes. This is an
+allocation inventory, not a process-peak estimate or integrated fit proof.
+The previous full36 sampled peak had only 26.6 MiB of cap margin, so its
+process cap is not qualified for an appended head.
+
+The final head-only guard sampled a process-tree peak of
+2,432,026,688 bytes (2.265 GiB), with minimum cache-aware
+headroom 29,584,490,496 bytes (27.553 GiB), and zero observed
+system swap growth. The 10% file-cache-aware floor, 4 GiB native / 6 GiB
+oracle process caps, 64 MiB swap-growth stop and 300-second deadlines remain
+enforced; GPU jobs are serial. Samples cannot bound between-poll spikes,
+and reclaimable file cache is an estimate. Process footprint, named buffers,
+Metal allocations, RSS and GC overlap and must not be added.
+
+After release, named live count/bytes are zero and process footprint is
+552,290,536 bytes. Metal's counter remains 1,852,211,200 bytes; this is
+an unattributed Metal-side allocation whose source and lifetime are not
+decomposed, not proof that every device resource has returned to zero or
+that an integrated pipeline cannot retain memory.
+
+| Final native request | Encode seconds | Terminal wait seconds | Sum seconds |
+| --- | ---: | ---: | ---: |
+| numerical_gate | 0.004655 | 0.100321 | 0.104976 |
+| timed | 0.000595 | 0.071246 | 0.071841 |
+| poisoned_different_input_gate | 0.000447 | 0.072423 | 0.072871 |
+
+Preparation takes 0.183 seconds, excluding fixture authentication. The timed
+repeat is about 72 ms, with the observer enabled and comparisons excluded;
+one repeat is not a stable benchmark, a controlled speedup or a pipeline
+throughput estimate. Each request has seven command segments, one existing
+terminal wait, zero named GPU allocations during encode, zero CPU activation
+readbacks before that wait and five diagnostic reads afterward. Source audit
+finds no additional wait/readback or explicit Metal buffer allocation in the
+head encode path. GPU stage buffers connect directly to their successors.
+
+The one-byte-short aggregate budget rejects before named GPU allocation or
+inference. Aliased weights and in-flight read/release/reuse/poison are rejected.
+A different input remains exact after NaN-filling all 1,124,766,720 transient
+bytes. A CPU regression checks poison writes beyond the first 1 MiB slab.
+Ten focused Crystal examples and nine Python tests, the final release build,
+format check, make-q freshness and the qualification audit pass.
+
+The upstream oracle executes pinned source methods on MPS, with CPU fallback
+rejected and a single explicit terminal synchronization before serialization.
+A streamed CPU audit hashes both fresh 976,771,072-byte fixture payloads and
+all records, compares the selected 173,015,040-byte old block-35 slices to
+the copied inputs, checks exact F32-to-BF16 RNE head weights and independently
+checks every unpatchified BF16 word's index mapping. It does not rehash the
+old 20.66 GB full36 payloads in this task. Only the four required head tensors
+were downloaded as a pinned 50,376,704-byte F32 source range; the whole
+checkpoint digest remains unverified.
+
+DoD execution commands, source/binary pins, failed epochs and final receipts
+are indexed in `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-head.json`.
+Final native report: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.json`.
+The Mini-Quad review is correlated same-lineage review, ROBUST only for the
+declared standalone head, source/artifact/comparator and guarded memory scope;
+it is not a second neural backend. Rollback omits the opt-in head module/probe
+or reverts its atomic commit. Refresh after scoped source/artifact/backend,
+Torch/OS/device/toolchain, precision, geometry, layout, ownership/lifetime,
+guard or clock changes, or evidence loss. Next frontier: integrate and measure
+36 blocks plus head with explicit scratch lifetime and a new peak-memory cap.
+
 ## Active 36-block two-bank qualification, 2026-10-27
 
 Status: verified bounded layers 0-35 at T6/H44/W80, J=21,120, with two

@@ -1,0 +1,1029 @@
+{
+  "schema": "cogni_ml.pixelumm_head_evidence/v1",
+  "created_at": "2026-10-27T22:20:21.600750+00:00",
+  "base_revision": "20b2b9ffbee645964adf62e6f8c63c3be1e957d4",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Standalone global PixelUMM decoder head on authenticated saved full36 block35 outputs. Full J21120; fresh pinned source-method MPS controls; 15/15 finite bitwise-exact stage comparisons at unchanged tolerance. No integrated peak or generated video.",
+    "adversary_verdict": "ROBUST within declared standalone source/artifact/comparator/guarded-memory scope.",
+    "review_correlation": "Mini-Quad reviewers share model lineage; they are not an independent neural backend.",
+    "decay_trigger": "Refresh after scoped source/artifact, backend/device/OS/Torch/toolchain, precision, geometry/layout, ownership/lifetime, guard/clock changes or evidence loss."
+  },
+  "boundaries": {
+    "changed_paths": [
+      "Makefile",
+      "examples/pixelumm_decoder_head_probe.cr",
+      "examples/support/pixelumm_head_probe.cr",
+      "spec/hy_nomas_pixelumm_head_reference_test.py",
+      "spec/pixelumm_decoder_head_admission_spec.cr",
+      "spec/pixelumm_head_probe_spec.cr",
+      "spec/support/hy_nomas_pixelumm_head_checkpoint.py",
+      "spec/support/hy_nomas_pixelumm_head_reference.py",
+      "src/ml/video/pixelumm_decoder_head_mps.cr",
+      "src/ml/video/pixelumm_decoder_head_mps_bridge.mm",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-head.json"
+    ],
+    "rollback": "Omit the new opt-in head module/probe or revert this atomic commit; existing decoder depths/defaults are unchanged.",
+    "excluded": [
+      "Integrated 36-block-plus-head execution or memory peak",
+      "Display/postprocessing",
+      "Diffusion",
+      "Video generation/quality",
+      "Stable performance or seconds-per-video-second claim"
+    ]
+  },
+  "geometry": {
+    "grid": [
+      6,
+      44,
+      80
+    ],
+    "J": 21120,
+    "hidden_width": 4096,
+    "linear_width": 3072,
+    "input_token_order": "tile_major",
+    "output_shape": [
+      1,
+      3,
+      24,
+      704,
+      1280
+    ],
+    "output_layout": "BCTHW",
+    "tubelet_order": [
+      4,
+      16,
+      16,
+      3
+    ],
+    "dtype": "BF16"
+  },
+  "source_contract": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "upstream_model_path": "hymm/models/vae/pixelumm_decoder/model.py",
+    "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "torch_version": "2.6.0",
+    "source_methods": "Actual custom final_norm, inverse permutation, nn.RMSNorm, nn.Linear and unpatchify, on MPS; no 36-block constructor or diffusion.",
+    "final_rms": "Existing qualified F32 power/reduction, F32 epsilon, BF16 pre-gain boundary, separate gain.",
+    "head_rms": "Torch2.6 composite: F32 power/reduction with BF16-rounded scalar epsilon; BF16 normalized pre-gain boundary, separate BF16 gain product.",
+    "linear": "Native F32 matmul+bias with BF16 handoff remains unchanged. Actual source-method MPS output is bitwise equal for both tested inputs; no universal equivalence to every MPSGraph BF16 lowering/accumulation.",
+    "oracle_cpu_fallback_rejected": true,
+    "oracle_explicit_terminal_syncs": 1,
+    "oracle_cpu_loading_and_post_sync_serialization_are_outside_inference": true,
+    "torch_primary_source": "https://github.com/pytorch/pytorch/blob/v2.6.0/aten/src/ATen/native/layer_norm.cpp#L265-L308",
+    "torch_mps_linear_source": "https://github.com/pytorch/pytorch/blob/v2.6.0/aten/src/ATen/native/mps/operations/Linear.mm#L11-L105",
+    "pinned_source_evidence": [
+      {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/torch-v2.6.0/RUNTIME-DISPATCH.txt",
+        "bytes": 1368,
+        "sha256": "1f20f3c451385838ea7e8eb48027dc717537abff844dd7887891b3800e3ba892",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/torch-v2.6.0/SOURCE-PROVENANCE.txt",
+        "bytes": 1598,
+        "sha256": "06759c5a6872dd321752576bd116998a1d8d24855cbadcdc3c70fbf48068d178",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    ]
+  },
+  "numerical_contract": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "epsilon": 1e-06,
+    "capture_order": [
+      "final_norm_tile_major",
+      "restored_thw",
+      "head_norm_thw",
+      "linear_thw",
+      "output_thw"
+    ],
+    "requests": 3,
+    "distinct_inputs": 2,
+    "comparisons": 15,
+    "all_finite": true,
+    "tolerance_failures": 0,
+    "different_bf16_words": 0,
+    "max_abs": 0,
+    "total_bf16_words_compared": 1167851520,
+    "native_output_bytes_independently_retained": false,
+    "interpretation": "Native comparison report records hashes after diagnostic readback. Fixture bytes and layouts are separately audited; native outputs are not a separately retained corpus."
+  },
+  "execution_contract": {
+    "request_kinds": [
+      "numerical_gate",
+      "timed",
+      "poisoned_different_input_gate"
+    ],
+    "segments_per_request": 7,
+    "terminal_waits_per_request": 1,
+    "named_allocations_during_encode": 0,
+    "cpu_activation_readbacks_before_wait": 0,
+    "diagnostic_readbacks_after_wait": 5,
+    "gpu_stages_feed_successors_directly": true,
+    "scratch_reused_between_requests": true,
+    "poisoned_transient_bytes": 1124766720,
+    "in_flight_read_release_reuse_poison_rejected": true,
+    "aliased_weights_rejected": true,
+    "encode_source_audit": "No explicit wait, CPU activation readback or Metal buffer allocation in the native head encode path; MPS graph execution uses waitUntilCompleted=NO."
+  },
+  "memory": {
+    "borrowed_block35_input_bytes": 173015040,
+    "four_borrowed_head_weights_bf16_bytes": 25188352,
+    "owned_output_scratch_bytes": 1124851204,
+    "standalone_unique_named_bytes": 1323054596,
+    "inventory_formula": "5*J*4096*2 + 2*J*3072*2 + 2*J*4 + J*4 + 4 owned bytes, plus borrowed input and weights.",
+    "one_byte_short_budget_bytes": 1323054595,
+    "one_byte_short_rejected_before_named_allocation": true,
+    "existing_full36_named_bytes": 22958105572,
+    "added_head_owned_and_new_weights_bytes": 1150039556,
+    "hypothetical_combined_named_bytes": 24108145128,
+    "integrated_process_peak_measured": false,
+    "integrated_fit_claim": false,
+    "native_sampled_process_tree_peak_bytes": 2432026688,
+    "native_minimum_sampled_headroom_bytes": 29584490496,
+    "observed_native_swap_growth_bytes": 0,
+    "after_session_release": {
+      "schema": "cogni_ml.pixelumm_memory_phase/v1",
+      "sequence": 20,
+      "timestamp_clock": "CLOCK_MONOTONIC",
+      "monotonic_ns": 189809097528000,
+      "guard_timestamp_clock": "mach_absolute_time",
+      "guard_monotonic_ns": 189816300621458,
+      "phase": "after_session_release",
+      "slot": null,
+      "request": null,
+      "phase_bytes_kind": null,
+      "phase_bytes": null,
+      "process_phys_footprint_bytes": 552290536,
+      "process_rss_bytes": 571916288,
+      "metal_device_allocated_bytes": 1852211200,
+      "named_metal_buffer_live_count": 0,
+      "named_metal_buffer_live_bytes": 0,
+      "named_metal_buffer_peak_bytes": 1323054596,
+      "crystal_gc_heap_bytes": 587644928,
+      "crystal_gc_free_bytes": 413237248,
+      "crystal_gc_unmapped_bytes": 52822016,
+      "crystal_gc_total_bytes": 5049206832,
+      "memory_categories_additive": false,
+      "memory_category_notes": "Process footprint, RSS, Metal allocation, named MetalBuffer counters, and Crystal GC counters overlap; do not sum them. Opaque MPS bytes are not estimated."
+    },
+    "memory_categories_additive": false,
+    "interpretation": "Named inventory is not resident process peak. Footprint/RSS/Metal/GC overlap; sampled guards cannot bound between-poll spikes. Named release zero does not imply opaque Metal/cache allocations returned to zero. Previous full36 cap had only26.6MiB margin; no integrated fit follows by summing deltas."
+  },
+  "timing": {
+    "preparation_seconds": 0.182782167,
+    "requests": [
+      {
+        "kind": "numerical_gate",
+        "encode_seconds": 0.004655083,
+        "terminal_wait_seconds": 0.100320625,
+        "total_seconds": 0.104975708,
+        "gpu_elapsed_seconds": 0.07333975002984516
+      },
+      {
+        "kind": "timed",
+        "encode_seconds": 0.000594792,
+        "terminal_wait_seconds": 0.071245834,
+        "total_seconds": 0.07184062599999999,
+        "gpu_elapsed_seconds": 0.06540558335836977
+      },
+      {
+        "kind": "poisoned_different_input_gate",
+        "encode_seconds": 0.0004475,
+        "terminal_wait_seconds": 0.072423459,
+        "total_seconds": 0.072870959,
+        "gpu_elapsed_seconds": 0.06727037506061606
+      }
+    ],
+    "interpretation": "Observer enabled; encode plus existing terminal wait, excludes fixture authentication/setup and postterminal comparisons. One timed repeat, no controlled cold-cache comparison, stable benchmark, speedup or pipeline throughput claim."
+  },
+  "guard": {
+    "runtime_floor_pct": 10,
+    "accounting": "file-cache",
+    "native_cap_bytes": 4294967296,
+    "oracle_cap_bytes": 6442450944,
+    "max_system_swap_growth_bytes": 67108864,
+    "native_oracle_deadline_seconds": 300,
+    "gpu_jobs_serial": true,
+    "positive_and_negative_receipts": [
+      {
+        "name": "head-reference42-v2",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference42-v2.pre-execution.json",
+          "bytes": 8004,
+          "sha256": "899049d914008cecf1100fd9b9506a58caea7e1ad58fe10aa6dffe12926e0b6f"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference42-v2.completion.json",
+          "bytes": 61,
+          "sha256": "ee710e8678cec29a38d3d73e7f3e485ab49cc73c3f3e472ff7805e4ce7572eae"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference42-v2.guard.jsonl",
+          "bytes": 4141,
+          "sha256": "2796e06871b3c83b325a2dcc32db957d2f7bf672ffaa0be3386f64de7fdd2469"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference42-v2.out",
+          "bytes": 866,
+          "sha256": "65aee9b3e2ed45d3d54c78a9b5ba30901e2154306eb2524047bca24bfdecdc11"
+        },
+        "sampled_peak_bytes": 3941566192,
+        "minimum_sampled_headroom_bytes": 35975544832,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          188996.870184416,
+          189001.557178166
+        ],
+        "source_pins": 29,
+        "preserved_small_source_snapshots": 29,
+        "current_matching_sources": 25,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "head-reference43-v1",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference43-v1.pre-execution.json",
+          "bytes": 8004,
+          "sha256": "de81bb3572d2fc2bc0eb75d58abb1477da533bf3ec1a9844f4f91a364122b3a3"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference43-v1.completion.json",
+          "bytes": 61,
+          "sha256": "282932e7fd6a02edf558b271ca824d8984a6a1d1c346a9ed523ceb23603d9ba9"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference43-v1.guard.jsonl",
+          "bytes": 3836,
+          "sha256": "5552cd8e403008a79feb5c8003f6ac909ec060a416937da7a38fc949847e3a70"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference43-v1.out",
+          "bytes": 866,
+          "sha256": "aa062173a41271bf560e5e748b0d06c0532f6a50c56c3a14f820fc494f8037ba"
+        },
+        "sampled_peak_bytes": 3942156064,
+        "minimum_sampled_headroom_bytes": 36085022720,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          189039.516448833,
+          189043.676166625
+        ],
+        "source_pins": 29,
+        "preserved_small_source_snapshots": 29,
+        "current_matching_sources": 25,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "head-build-v6",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v6.pre-execution.json",
+          "bytes": 7686,
+          "sha256": "c34b6b7fad78ac80b615c99154d8b1c20d4aad3c88827a1c4c0aaee19e035c08"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v6.completion.json",
+          "bytes": 61,
+          "sha256": "6e21e7e79afd5125cb9701a7b37347a188c500c736491c4ae4bc777be75283b2"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v6.guard.jsonl",
+          "bytes": 5079,
+          "sha256": "84c467ffd4bc7579838caeaa51e6d61ec91ba1bdb25a8e7f228456001c8488e9"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v6.out",
+          "bytes": 631,
+          "sha256": "c2a5f75f4be1152cb602ae7383f65d95fc75733205b0012cf5ec7e17c0338855"
+        },
+        "sampled_peak_bytes": 466781408,
+        "minimum_sampled_headroom_bytes": 38219120640,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          189712.576430208,
+          189718.853228791
+        ],
+        "source_pins": 29,
+        "preserved_small_source_snapshots": 29,
+        "current_matching_sources": 29,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "cpu-head-spec-v4",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-spec-v4.pre-execution.json",
+          "bytes": 7526,
+          "sha256": "48149bd74940606d8012385a724faab41f25f977783cb5b11be2fa5fdb2eabc8"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-spec-v4.completion.json",
+          "bytes": 61,
+          "sha256": "0edcc43c002ceabc00955e31aef1ff0f2c5afd147c4158a709d08d7f03277781"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-spec-v4.guard.jsonl",
+          "bytes": 2599,
+          "sha256": "7ea8061b94277a3e4dbb6079481b1cb0ae5b8ba23444283143ee0b614423fc69"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-spec-v4.out",
+          "bytes": 191,
+          "sha256": "45372af68569954421c68fd75fba50c9c069da6efd52450aefca47e4dde98c65"
+        },
+        "sampled_peak_bytes": 444187944,
+        "minimum_sampled_headroom_bytes": 37560238080,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          189785.163885416,
+          189787.282827291
+        ],
+        "source_pins": 29,
+        "preserved_small_source_snapshots": 29,
+        "current_matching_sources": 29,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "cpu-head-python-v3",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-python-v3.pre-execution.json",
+          "bytes": 7730,
+          "sha256": "a5a8903c7e4120cf780a3d2bedc58881b9202363e276bfbf3d097df9c7e987be"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-python-v3.completion.json",
+          "bytes": 62,
+          "sha256": "69eab9a0503cbd5ccef1c775bc22be15d45a98e78d4737b68ce8ad9b9e6ff217"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-python-v3.guard.jsonl",
+          "bytes": 2899,
+          "sha256": "a772837d16bf24b7cb9f5c3ea2b5d7049123156735a7db6ceaacd5e8b547871a"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-python-v3.out",
+          "bytes": 107,
+          "sha256": "5c91a2c39174ca5f208ca123a55f6f241d5f0d5ba9daa928fb0a3b914be28334"
+        },
+        "sampled_peak_bytes": 200393784,
+        "minimum_sampled_headroom_bytes": 38812172288,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          190201.369798166,
+          190203.988911
+        ],
+        "source_pins": 29,
+        "preserved_small_source_snapshots": 29,
+        "current_matching_sources": 29,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "native-head-full-v3",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.pre-execution.json",
+          "bytes": 10527,
+          "sha256": "552960d3807032681297a1274e5902670eb56f98ecbae09cab0e8f791e2eed41"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.completion.json",
+          "bytes": 61,
+          "sha256": "694121684d625cdf6f2a0a940ddab3bbd49c3d54218f9687cfc79deba105ab0b"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v3.guard.jsonl",
+          "bytes": 5706,
+          "sha256": "e1a49de1223e772dbbc13a29e5324f3eb23b7d428d21e49f4c911fa83cc763d8"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v3.out",
+          "bytes": 18927,
+          "sha256": "6552a1c78f3bfaa67629a825ad8e6c1a4fcf0ad76a04d99ef11a1dfbfccf6598"
+        },
+        "sampled_peak_bytes": 2432026688,
+        "minimum_sampled_headroom_bytes": 29584490496,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          189809.2790575,
+          189816.616565708
+        ],
+        "source_pins": 33,
+        "preserved_small_source_snapshots": 33,
+        "current_matching_sources": 33,
+        "expected_exit_code": 0
+      },
+      {
+        "name": "native-head-short-budget-v2",
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-short-budget-v2.pre-execution.json",
+          "bytes": 10551,
+          "sha256": "80f356f0ddc1a644d3dd09861d6d5ab3a7e186c0bab2baf32b749238918012c2"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-short-budget-v2.completion.json",
+          "bytes": 62,
+          "sha256": "a6aeec52166da24753aac596ed0963be70eb7b25b7d8c9b0b6fc674dae1ea7e8"
+        },
+        "guard": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-short-budget-v2.guard.jsonl",
+          "bytes": 2282,
+          "sha256": "144151da89a39542ed6cbe73d5b0511ddab95db01b66ec4f2f5d4fb9eabfc841"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-short-budget-v2.out",
+          "bytes": 3283,
+          "sha256": "2c7f1f64cfea0eb1106d2ccb2851acab564fbcf5301053b886fd1178577e8e56"
+        },
+        "sampled_peak_bytes": 5570944,
+        "minimum_sampled_headroom_bytes": 38947569664,
+        "maximum_observed_swap_growth_bytes": 0,
+        "guard_interval": [
+          189745.2286735,
+          189746.819718958
+        ],
+        "source_pins": 33,
+        "preserved_small_source_snapshots": 33,
+        "current_matching_sources": 33,
+        "expected_exit_code": 1
+      }
+    ],
+    "cache_note": "File-backed bytes estimate reclaimability, not guaranteed clean/immediately free memory."
+  },
+  "verification": {
+    "crystal_examples": 10,
+    "python_tests": 9,
+    "release_build_pass": true,
+    "make_q_freshness_pass": true,
+    "format_check_pass": true,
+    "source_pin_match_final_native": 33,
+    "commands": [
+      {
+        "name": "head-build-v6",
+        "observed_command": [
+          "make",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/build",
+          "pixelumm_decoder_head_probe"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v6.pre-execution.json",
+          "bytes": 7686,
+          "sha256": "c34b6b7fad78ac80b615c99154d8b1c20d4aad3c88827a1c4c0aaee19e035c08",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      },
+      {
+        "name": "cpu-head-spec-v4",
+        "observed_command": [
+          "make",
+          "spec_pixelumm_decoder_head"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-spec-v4.pre-execution.json",
+          "bytes": 7526,
+          "sha256": "48149bd74940606d8012385a724faab41f25f977783cb5b11be2fa5fdb2eabc8",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      },
+      {
+        "name": "cpu-head-python-v3",
+        "observed_command": [
+          "python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "spec",
+          "-p",
+          "hy_nomas_pixelumm_head_reference_test.py"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-python-v3.pre-execution.json",
+          "bytes": 7730,
+          "sha256": "a5a8903c7e4120cf780a3d2bedc58881b9202363e276bfbf3d097df9c7e987be",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      },
+      {
+        "name": "head-reference42-v2",
+        "observed_command": [
+          "python3",
+          "-B",
+          "spec/support/hy_nomas_pixelumm_head_reference.py",
+          "--root",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027",
+          "--upstream",
+          "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024",
+          "--seed",
+          "42"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference42-v2.pre-execution.json",
+          "bytes": 8004,
+          "sha256": "899049d914008cecf1100fd9b9506a58caea7e1ad58fe10aa6dffe12926e0b6f",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      },
+      {
+        "name": "head-reference43-v1",
+        "observed_command": [
+          "python3",
+          "-B",
+          "spec/support/hy_nomas_pixelumm_head_reference.py",
+          "--root",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027",
+          "--upstream",
+          "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024",
+          "--seed",
+          "43"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference43-v1.pre-execution.json",
+          "bytes": 8004,
+          "sha256": "de81bb3572d2fc2bc0eb75d58abb1477da533bf3ec1a9844f4f91a364122b3a3",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      },
+      {
+        "name": "native-head-short-budget-v2",
+        "observed_command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/build/pixelumm_decoder_head_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full42-v1.json",
+          "--reference-sha256",
+          "fffe14810d335bd964919cf1dc1f890b93791541fcf638a165d2470d527cb02a",
+          "--alternate-reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full43-v1.json",
+          "--alternate-reference-sha256",
+          "1f1b1d3c271ffa96e95339797b1eeb05f83130cab6e2ed1e8e9dafca6920347f",
+          "--max-named-bytes",
+          "1323054595",
+          "--repeats",
+          "1",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-short-budget-v2.json"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-short-budget-v2.pre-execution.json",
+          "bytes": 10551,
+          "sha256": "80f356f0ddc1a644d3dd09861d6d5ab3a7e186c0bab2baf32b749238918012c2",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 1
+      },
+      {
+        "name": "native-head-full-v3",
+        "observed_command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/build/pixelumm_decoder_head_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full42-v1.json",
+          "--reference-sha256",
+          "fffe14810d335bd964919cf1dc1f890b93791541fcf638a165d2470d527cb02a",
+          "--alternate-reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full43-v1.json",
+          "--alternate-reference-sha256",
+          "1f1b1d3c271ffa96e95339797b1eeb05f83130cab6e2ed1e8e9dafca6920347f",
+          "--max-named-bytes",
+          "1323054596",
+          "--repeats",
+          "1",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.json"
+        ],
+        "receipt": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.pre-execution.json",
+          "bytes": 10527,
+          "sha256": "552960d3807032681297a1274e5902670eb56f98ecbae09cab0e8f791e2eed41",
+          "availability": "Local external SSD; refresh if missing or changed."
+        },
+        "expected_exit": 0
+      }
+    ],
+    "native_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v3.json",
+      "bytes": 31414,
+      "sha256": "39e32666e03d71c63504fa4713a19212fa383de83474136634c6042b6b207fa2",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "one_byte_short_report": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-short-budget-v2.json",
+      "bytes": 4249,
+      "sha256": "6fa6dd09858f8580032ba25b59668383d7b7d33b3bbee93cd128d29ef647dce3",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "qualification_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/qualification-audit-v3.json",
+      "bytes": 11584,
+      "sha256": "91acebbc306557c13666228f3fd20798fa9da1bdc1403ec3ab30d46423374974",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "qualification_audit_script": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/tmp/audit_qualification_v2.py",
+      "bytes": 9716,
+      "sha256": "252e9011b964139b722ffffaf0c664b22f4aaaaa2e76ad52631b94c469c5f744",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "fixture_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-fixture-audit-v1.json",
+      "bytes": 9761,
+      "sha256": "db44047a5fb1140cec45f413ddefe5da2f345d0c7b34fb422d61cfbe4ab644c1",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "fixture_audit_script_snapshot": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/pinned-sources/a507f57f0f158e93c2193fee10720b712c37cc29f842d9d9fa7bc211b5ad5d74",
+      "bytes": 18451,
+      "sha256": "a507f57f0f158e93c2193fee10720b712c37cc29f842d9d9fa7bc211b5ad5d74",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "audit_scope": "Receipt validators execute integrity/coverage/guard predicates, not independent neural arithmetic or hermetic build proof."
+  },
+  "fixtures": [
+    {
+      "seed": 42,
+      "manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full42-v1.json",
+        "bytes": 6183,
+        "sha256": "fffe14810d335bd964919cf1dc1f890b93791541fcf638a165d2470d527cb02a",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "payload": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full42-v1.bin",
+        "bytes": 976771072,
+        "sha256": "fd699409a9ddebfcfb117de23fa6e7232b61a212667ce00a80f2d83859e6c1ce",
+        "fresh_full_hash_audit": true
+      },
+      "selected_old_block35_source": {
+        "byte_identical": true,
+        "capture_dtype": "BF16",
+        "capture_shape": [
+          1,
+          21120,
+          4096
+        ],
+        "fixture_input_offset": 0,
+        "head_fixture_input_sha256": "d70e09efa819ae38e5f3fba9f58ccde4375ca1e220e966beb573d3d4a5ca15b4",
+        "nbytes_compared": 173015040,
+        "seed": 42,
+        "source_capture": "block35.output",
+        "source_capture_offset": 20488341504,
+        "source_manifest": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full42-v4.json",
+        "source_manifest_sha256": "6efc8a15dc83c3e5e0d1cff824522ea8e98e3649d7178d143b8aaf35f2a0e592",
+        "source_payload": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full42-v4.bin",
+        "source_payload_full_hash_verified_by_this_audit": false,
+        "source_payload_sha256_claimed_but_not_rehashed": "d3879fa5f1bcf0aa3227127f312b6190e47ce97eef36e2aaa3952cb41975bb89",
+        "source_payload_size_bytes_claimed": 20661356544,
+        "source_selected_slice_sha256": "d70e09efa819ae38e5f3fba9f58ccde4375ca1e220e966beb573d3d4a5ca15b4",
+        "token_order": "tile_major"
+      }
+    },
+    {
+      "seed": 43,
+      "manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full43-v1.json",
+        "bytes": 6183,
+        "sha256": "1f1b1d3c271ffa96e95339797b1eeb05f83130cab6e2ed1e8e9dafca6920347f",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "payload": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/pixelumm-head-full43-v1.bin",
+        "bytes": 976771072,
+        "sha256": "8f59d7a17149f58c24e15eff1699b1f9c3a8968e0cc6f3abcec790395536c359",
+        "fresh_full_hash_audit": true
+      },
+      "selected_old_block35_source": {
+        "byte_identical": true,
+        "capture_dtype": "BF16",
+        "capture_shape": [
+          1,
+          21120,
+          4096
+        ],
+        "fixture_input_offset": 0,
+        "head_fixture_input_sha256": "523a6f7af4f2d14c576859df2b9ee9414f999e5ec62bc2dad971a046dff80192",
+        "nbytes_compared": 173015040,
+        "seed": 43,
+        "source_capture": "block35.output",
+        "source_capture_offset": 20488341504,
+        "source_manifest": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full43-v2.json",
+        "source_manifest_sha256": "429c010be440de4834bf5f0a0a8d9e658579d808d5e8f4b68605ebbf088ff7c8",
+        "source_payload": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-36-20261027/results/thirty-six-reference-full43-v2.bin",
+        "source_payload_full_hash_verified_by_this_audit": false,
+        "source_payload_sha256_claimed_but_not_rehashed": "a976d84925fd262e81c047cc0436cefd40f6cba4baa7947e8887d6ca37b9a963",
+        "source_payload_size_bytes_claimed": 20661356544,
+        "source_selected_slice_sha256": "523a6f7af4f2d14c576859df2b9ee9414f999e5ec62bc2dad971a046dff80192",
+        "token_order": "tile_major"
+      }
+    }
+  ],
+  "checkpoint": {
+    "hf_repository": "tencent/Hy-Nomas",
+    "revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "file": "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors",
+    "header_sha256": "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11",
+    "source_data_offsets": [
+      52510720,
+      102887424
+    ],
+    "source_f32_tensor_bytes": 50376704,
+    "head_subset": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/head-f32.safetensors",
+      "bytes": 50377080,
+      "sha256": "d0e985e45b6b5fcebde381dd4b61f3b77394bd288323cd8afe2a7604584e6e9f",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "head_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/head-f32.receipt.json",
+      "bytes": 1639,
+      "sha256": "331bfb93206dd1b9f6976ac48776b8432ad98ccfa56eb0adc1ca039d3f0e058d",
+      "availability": "Local external SSD; refresh if missing or changed."
+    },
+    "weight_conversion_audit": {
+      "conversion_audit": "prior independent NumPy CPU audit: exact converted bytes and hashes matched both fixture weight record slices",
+      "method": "exact IEEE-754 F32 to BF16 round-to-nearest-even using ((u32 + 0x7fff + ((u32 >> 16) & 1)) >> 16)",
+      "receipt_sha256": "331bfb93206dd1b9f6976ac48776b8432ad98ccfa56eb0adc1ca039d3f0e058d",
+      "source_byte_range": {
+        "end_exclusive": 102887424,
+        "nbytes": 50376704,
+        "start": 52510720
+      },
+      "source_subset_sha256": "d0e985e45b6b5fcebde381dd4b61f3b77394bd288323cd8afe2a7604584e6e9f",
+      "tensors": {
+        "final_norm_weight": {
+          "bf16_sha256": "3953e889d2cd19501244734abc0b3195ea1b4e9c3d9185d126f37f6df33dacef",
+          "f32_finite_values": 4096,
+          "shape": [
+            4096
+          ]
+        },
+        "head_linear_bias": {
+          "bf16_sha256": "b241ec37744e031957341ad8fce104ae1d63e91d2d2d811838b601b76d010c9b",
+          "f32_finite_values": 3072,
+          "shape": [
+            3072
+          ]
+        },
+        "head_linear_weight": {
+          "bf16_sha256": "3da204cd0d451fa4dfedd84e46fd80c9ceaa9191b3dfe386cf8adfd0d1a49637",
+          "f32_finite_values": 12582912,
+          "shape": [
+            3072,
+            4096
+          ]
+        },
+        "head_norm_weight": {
+          "bf16_sha256": "4103fdfcdbd8468a1395446bd387355e254a20ed5c5f792026ebcc1b0f4544a8",
+          "f32_finite_values": 4096,
+          "shape": [
+            4096
+          ]
+        }
+      }
+    },
+    "whole_checkpoint_sha256_verified": false,
+    "provenance_scope": "Pinned HF revision/header plus TLS range response and locally hashed subset/receipt; no independent pre-known range digest or whole-checkpoint authentication claim."
+  },
+  "failed_or_superseded_epochs": [
+    {
+      "name": "cpu-head-python-v2",
+      "outcome": "Nine tests passed at an earlier source epoch; superseded by final-byte cpu-head-python-v3, not a current-source verification receipt.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-python-v2.pre-execution.json",
+        "bytes": 7731,
+        "sha256": "42f380a28d99a433ea988421e737eadea4588830ab009b8bb64b173ce3f56d48",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/cpu-head-python-v2.completion.json",
+        "bytes": 61,
+        "sha256": "36f2b434f1a7348c810fd7ab29e20a8aa72013ace581744feda5a340709e85bc",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-python-v2.guard.jsonl",
+        "bytes": 2595,
+        "sha256": "830b83761046c928d5d41f6290b2177de3dd77d5ba16d13f9ad9a829e5703486",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/cpu-head-python-v2.out",
+        "bytes": 107,
+        "sha256": "f5d18dbe54dea0335f9a0434c17fec94d1ea6f58639ac94aa2f31537eb655aff",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "head-build-v1",
+      "outcome": "Build path containing spaces was rejected by make before compilation; /opt alias used afterward.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v1.pre-execution.json",
+        "bytes": 7709,
+        "sha256": "cef7ab523fd0c635e04b7583132f02a8906450d74a97de031a0cff26411748a8",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v1.completion.json",
+        "bytes": 62,
+        "sha256": "5257c3e7ab1529f528a48229a7f0107ed5a54f1b03f7785fb8fe7d191eebd4a9",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v1.guard.jsonl",
+        "bytes": 1671,
+        "sha256": "e1544e166662b1d5db4f1722708b716099756e6f0826ad32b635ec7b2161d56c",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v1.out",
+        "bytes": 6454,
+        "sha256": "bd93ab28d30101de038ecb9fd2a41fdbc364c7fd9538f5477de41c9c2f14615d",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "head-build-v2",
+      "outcome": "Crystal Array/Tuple type error during compilation; no neural result.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v2.pre-execution.json",
+        "bytes": 7685,
+        "sha256": "a6329c265131cfecc3323b569f51ed4e4282e8be63055f19062bd932cc95f31c",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-build-v2.completion.json",
+        "bytes": 60,
+        "sha256": "658aa4a777be025399a396e746819d4a8df841818f1571323b8fe4d7afdd4dbd",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v2.guard.jsonl",
+        "bytes": 3213,
+        "sha256": "c82fd245e54922b1ffe76c040562bf632b1201d3b02ef66f5e0f9978ca79a499",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-build-v2.out",
+        "bytes": 2398,
+        "sha256": "5f68fc1ea6c99f1c1982030ef4eefdad18d28df51d1aafd3b965ebcc958cad24",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "head-download-v1",
+      "outcome": "Noncanonical header path rejected before download.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-download-v1.pre-execution.json",
+        "bytes": 8393,
+        "sha256": "35fd9bfd490bd5afd5f4ed5ff76f1acc0fa5f7515d8a2339b331fa4861952922",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-download-v1.completion.json",
+        "bytes": 62,
+        "sha256": "dca2f23bc2203727a1e1fbf3e304c81d964b7e55c89724a26ea850ca245784c8",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-download-v1.guard.jsonl",
+        "bytes": 1670,
+        "sha256": "8c2337dae132543d8b3ceb1fecf238e09f449f74cc86df17175089291013cc78",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-download-v1.out",
+        "bytes": 55,
+        "sha256": "71b5d8fcad5e058478dfcc7d804a6f3b6a3480def72da59e1a594740f35681bc",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "head-reference42-v1",
+      "outcome": "Noncanonical old-input root rejected before neural inference; no fixture.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference42-v1.pre-execution.json",
+        "bytes": 8005,
+        "sha256": "37ee293a0c34e2ccdde2a8b19e48a9493dceb8beb4221c3fffdba51951d08fb7",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/head-reference42-v1.completion.json",
+        "bytes": 62,
+        "sha256": "f25f3bf410dadcec27f4482109eff00f8e164d4f9417c2b7b02f78e3b01c2350",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference42-v1.guard.jsonl",
+        "bytes": 2279,
+        "sha256": "4501aeca1d0e7210b3c52dd0acd18edadf05544af65d72f253b884ca6f3ec1fe",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/head-reference42-v1.out",
+        "bytes": 63,
+        "sha256": "7f05e857672e9e8d941b0a9f8a72693caed96dd66817a7563aeab8bb4b9cfd20",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "native-head-full-v1",
+      "outcome": "Numerical falsifier: custom final RMS/restore exact; first mismatch at PixelHead RMS. Corrected BF16 epsilon/pre-gain/power contract without widening tolerance.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v1.pre-execution.json",
+        "bytes": 10527,
+        "sha256": "684bcb0d396d3155f9f7eea50d2507f3afcccd96074704ebf73a3144f566fd2e",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v1.completion.json",
+        "bytes": 61,
+        "sha256": "cc7225ab99fa96060ded22aeb1799e68894fd06a8cc93148814a5352ada73b60",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v1.guard.jsonl",
+        "bytes": 3843,
+        "sha256": "95d62ef60d90fc867505b40b5c3b7bf64b8252d068171a8a0a10d9726ef7d5ba",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v1.out",
+        "bytes": 9033,
+        "sha256": "9117f56c88753d3e4733825954496f97c5a1f4493591d5317d4943c716cb92cc",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v1.json",
+        "bytes": 13746,
+        "sha256": "0843443d60c2e8019001d25262f48d8bd3a27c29ee14770359abd299c929e603",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    },
+    {
+      "name": "native-head-full-v2",
+      "outcome": "All15 comparisons passed before formatting-only Crystal changes. Superseded by final-byte v3 run, not pooled for performance.",
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v2.pre-execution.json",
+        "bytes": 10527,
+        "sha256": "57b5f1952a3bf4b73e83ad59473299015cc77fd964d5bd226cd7a6a856dd29e3",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v2.completion.json",
+        "bytes": 61,
+        "sha256": "530c4b085bb8c04b8a534a8037f88dc70dda567c684637360003938affaaf09a",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v2.guard.jsonl",
+        "bytes": 6299,
+        "sha256": "4e947e53605b232c10441ca85e08b299529539d01c6be7231c4c97717948dea7",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/logs/native-head-full-v2.out",
+        "bytes": 18928,
+        "sha256": "d0a9fb1f4c3a65aa3b2b847578dd02fa0313ef1d583aaa2effea2618b248d6bf",
+        "availability": "Local external SSD; refresh if missing or changed."
+      },
+      "report": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/results/native-head-full-v2.json",
+        "bytes": 31417,
+        "sha256": "621baae9f7d1bc934d644a096120999209f0ed3300ad7edd2a686ac157702aef",
+        "availability": "Local external SSD; refresh if missing or changed."
+      }
+    }
+  ],
+  "source_lineage": "Per-run actual source, binary/object, fixture metadata and build-freshness pins; small source snapshots preserved under source/pinned-sources/<sha256>. Local operator custody, not hermetic build attestation.",
+  "experiment_plan": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/source/experiment-plan-v1.json",
+    "bytes": 1787,
+    "sha256": "e814166aa40d3ab1e5b0162383aaf91752b38e5f9a282da03d86f65547af1af1",
+    "availability": "Local external SSD; refresh if missing or changed."
+  },
+  "launcher": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027/tmp/run_guarded_v1.py",
+    "bytes": 5846,
+    "sha256": "0132754d189163dc05f46c014c36529450acfeef3b16860c99ca46b7aeb8b485",
+    "availability": "Local external SSD; refresh if missing or changed."
+  },
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-head-20261027",
+  "residual_risk": [
+    "Standalone saved-input head does not qualify integrated36-plus-head peak, lifetime overlap or full-pipeline fit.",
+    "No generated video, diffusion, display postprocessing or quality evidence.",
+    "One observed repeat and sampled peaks do not establish stable throughput or instantaneous memory bounds.",
+    "Opaque Metal allocations remain after named bindings release; counters overlap.",
+    "MPS source-method oracle shares Apple backend, not an independent CUDA/CPU implementation.",
+    "F32 linear equality is measured for two actual full-J inputs, not a universal rounding theorem.",
+    "Old20.66GB input payloads are not rehashed in this task; only their selected block35 slices and small manifests are freshly verified.",
+    "Whole upstream checkpoint digest remains unverified."
+  ],
+  "links": {
+    "frontier": "docs/hy-nomas-pixelumm-block-frontier.md",
+    "prior_full36_evidence": ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-thirty-six-block.json"
+  }
+}

@@ -6,6 +6,47 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-HEAD-2026-10-27] Standalone global decoder head is exact at full J
+
+- Scope: authenticated saved block35 outputs, T6/H44/W80/J21,120 -> BF16
+  `[1,3,24,704,1280]`. All five source-method MPS head stages match bitwise
+  across three requests using two distinct inputs (seed42 gate/repeat and
+  seed43 poisoned replay): 15 comparisons, finite,
+  zero errors/differing words, unchanged `atol=rtol=2e-5`. No integrated
+  full36+head peak, diffusion, video generation or quality claim.
+- First failure was PixelHead's framework RMS, while final custom RMS and
+  THW restoration were already exact. Source-matched Torch 2.6 BF16 epsilon
+  and pre-gain rounding plus power/reduction resolve it. F32 linear remains
+  unchanged and matches both actual controls; no universal backend claim.
+- Named inventory: 1,124,851,204 B owned + 198,203,392 B borrowed =
+  1,323,054,596 B (1.232 GiB). Added head-owned/new-weight bytes above an
+  existing block35 bank would be 1,150,039,556 B. Combined named inventory
+  24,108,145,128 B does not establish integrated process fit; old full36 had
+  only 26.6 MiB of cap margin. Final standalone sampled peak
+  2,432,026,688 B (2.265 GiB), minimum cache-aware headroom
+  29,584,490,496 B, swap growth zero, 10% floor / native 4 GiB cap /
+  oracle 6 GiB cap / 300 s deadline / 64 MiB swap stop, serial GPU execution.
+- Each request: seven segments, one terminal wait, zero encode named
+  allocations/preterminal CPU activation reads, five postterminal diagnostics.
+  Reused scratch is exact after poisoning all 1,124,766,720 transient bytes.
+  Budget minus one byte rejects before allocation; alias/in-flight lifecycle
+  negatives pass. Named buffers reach zero after release; Metal counter
+  remains 1,852,211,200 B, not a zero-residency or full-cache-release proof.
+- Final timed repeat encode+wait 0.071841 s; one observed repeat,
+  excludes setup/comparisons, no controlled speedup/pipeline throughput claim.
+  Release/fresh make-q, format, 10 Crystal examples and nine Python tests pass.
+  Streamed audit verifies fresh fixture payloads/records, exact selected old
+  block35 slices, BF16 head-weight conversion and all RGB unpatchify indices.
+  Old entire full36 payloads and whole checkpoint are not freshly rehashed.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-head.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/results/qualification-audit-v3.json`.
+  Correlated Mini-Quad verdict: ROBUST within standalone scope. Rollback:
+  omit new opt-in module/probe or revert this atomic commit. Refresh after
+  scoped source/artifact/backend/device/OS/Torch/toolchain, precision, layout,
+  geometry, ownership/lifetime/guard/clock changes or evidence loss. Next:
+  integrated decoder scratch lifetime and measured peak before generation.
+
 ### [LM-HY-NOMAS-PIXELUMM-THIRTY-SIX-2026-10-27] Full-J 36-block two-bank replay matches fresh MPS controls
 
 - Scope: PixelUMM blocks 0-35, T6/H44/W80/J21,120, one shared scratch and two
