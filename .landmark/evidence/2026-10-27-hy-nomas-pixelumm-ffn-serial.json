@@ -1,0 +1,1005 @@
+{
+  "schema": "cogni_ml.pixelumm_ffn_serial_evidence/v1",
+  "created_at": "2026-10-27T15:52:22.222279+00:00",
+  "base_revision": "9ce5efd00b3b2866d3c78875a635181ec87169b3",
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-20261026",
+  "claim": {
+    "level": "VERIFIED",
+    "verdict": "ROBUST within the declared saved-fixture prefix comparisons and observed balanced request timings; same-lineage review is correlated.",
+    "scope": "Default-off F32 FFN graph operands across pretrained PixelUMM prefixes of two, four and eight sequential blocks with a shared GPU workspace; not a complete decoder or video latency claim.",
+    "decay_trigger": "Refresh on scoped source, fixture/weights, backend/device/toolchain/OS, geometry/precision, captures, ownership, guard changes or lost external evidence."
+  },
+  "contract": {
+    "risk": "CAUTION",
+    "reason": "The prior block0 result did not qualify retained opaque backend resources, slot mode propagation or numerical/lifetime behavior across a shared-workspace prefix.",
+    "candidate": "Forward the existing default-off ffn_f32 option to every serial Plan. Gate/up/down graph feeds are cast from resident BF16 to F32; existing BF16 output boundaries and weight storage remain.",
+    "default": false,
+    "rollback": "Omit ffn_f32: true / --ffn-f32.",
+    "falsifier": "A nonfinite or tolerance failure, incomplete capture inventory, mixed slot mode, early activation read, named encode allocation, additional terminal wait, lifetime-negative failure or guard stop rejects qualification.",
+    "unchanged_tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "no_native_kernel_handoff_or_wait_site_changes": true,
+    "ltp_wba_claim": false
+  },
+  "path_policy": {
+    "allowed_paths": [
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_serial_probe_runner.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-serial.json"
+    ],
+    "changed_paths": [
+      "examples/support/pixelumm_two_block_probe.cr",
+      "examples/support/pixelumm_serial_probe_runner.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-serial.json"
+    ],
+    "preserved_untracked": [
+      "examples/support/__pycache__/",
+      "spec/__pycache__/",
+      "spec/support/__pycache__/"
+    ]
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "clean_in_pre_execution_receipts": true,
+    "model_py_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "hf_revision": "c67f2c52b3fbe0193cbc202769bbe5cb7264807b",
+    "oracle": "Existing saved pretrained BF16 seeded-synthetic-input fixtures from the adapted upstream-semantics PyTorch MPS implementation. Not rerun in this slice; no real decoder latent or compiled CUDA Flex qualification.",
+    "downloaded_decoder_layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "complete_checkpoint_downloaded": false,
+    "complete_checkpoint_hash_verified": false,
+    "fixture_lineage_packets": {
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-two-block.json": {
+        "bytes": 36693,
+        "sha256": "c9c504c5082b5ce6fbfeff4c83d2c25621fa41d32ebfef4259359b119e018931"
+      },
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-four-block.json": {
+        "bytes": 46793,
+        "sha256": "7530dbfcfad25bf133b3b2444026458571c247e6f18a2ed327cc235ac83d2b0f"
+      },
+      ".landmark/evidence/2026-10-27-hy-nomas-pixelumm-eight-block.json": {
+        "bytes": 53681,
+        "sha256": "6044165ffbee80e9ccca9defb22f10775d1de8f163fd7425f54b255aae780b1d"
+      }
+    }
+  },
+  "validation": {
+    "command": "python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/tmp/validate_ffn_serial_v1.py",
+    "exit_code": 0,
+    "summary": {
+      "path": "results/ffn-serial-validation-v1.json",
+      "bytes": 42660,
+      "sha256": "5234b5401eb8f369e4861dd8ff3ae0e40b79ae7e7c4a20980a15bcf5798d41bc"
+    },
+    "validator": {
+      "path": "tmp/validate_ffn_serial_v1.py",
+      "bytes": 11202,
+      "sha256": "e1add59f66fcc435d8063b57469c9ba8789c215182949fe79ec18e2166ef3ad5"
+    },
+    "indexed_external_artifacts": 134,
+    "checks": [
+      "Complete ordered capture inventory, element counts, finite results, unchanged tolerances, exact words and per-stage oracle hashes.",
+      "Every report, receipt and full guard argv binds the intended command, mode, budget and authenticated fixture/cache.",
+      "Pre-execution source/binary/object pins match current tested files; fixture/cache payload hashes are streamed and recomputed.",
+      "All declared guarded intervals are non-overlapping and execute in the two/four/eight ABBA then four BAAB order.",
+      "Every sampled floor, pressure, process footprint, swap-growth and deadline outcome passes; release build log records both 15-example suites."
+    ],
+    "validator_correction": "First execution rejected an assumed fixed small-J command-segment formula. The corrected check preserves observed per-request counts without asserting their cause; full-J count checks and terminal-wait/read/allocation checks remain strict. No measured report was changed.",
+    "not_proven": [
+      "Hermetic source-to-binary build attestation.",
+      "Physical backend arithmetic or exclusive shader-cycle timing.",
+      "Quiet GPU, timing drift cause or statistical confidence interval.",
+      "Between-sample memory peak bound."
+    ]
+  },
+  "verification": {
+    "gpu_processes": 19,
+    "connected_requests": 105,
+    "cpu_compared_requests": 54,
+    "capture_comparisons": 1160,
+    "all_compared_words_finite_bitwise_equal": true,
+    "small_geometry": {
+      "grid": [
+        2,
+        32,
+        32
+      ],
+      "tokens": 2048,
+      "stages_per_prefix": {
+        "two": 52,
+        "four": 104,
+        "eight": 208
+      }
+    },
+    "full_geometry": {
+      "grid": [
+        6,
+        44,
+        80
+      ],
+      "tokens": 21120,
+      "stages_per_prefix": {
+        "two": 4,
+        "four": 8,
+        "eight": 16
+      }
+    },
+    "alternate_input_poison_gate": "Each of the 16 full-J processes replaces the input, poisons mutable shared scratch with NaNs and checks every retained attention/output boundary against the alternate fixture.",
+    "per_request": {
+      "terminal_wait_count": 1,
+      "named_allocations_during_encode": 0,
+      "activation_readbacks_before_terminal_wait": 0
+    },
+    "lifecycle_negatives_per_process": [
+      "wrong slot order",
+      "in-flight release",
+      "early compare",
+      "early reuse"
+    ],
+    "note": "All requests retain GPU captures; only the stated 54 requests run postterminal CPU comparisons. No PyTorch in the measured native path."
+  },
+  "timing": {
+    "definition": "Native encode wall time plus existing terminal wait; includes GPU diagnostic capture copies. Excludes preparation/compilation/upload, scratch poisoning and postterminal CPU comparisons.",
+    "method": "Each full process runs a numerical gate, one warmup, three timed requests and an alternate-input gate. BF16=A, F32=B. Separate-process ABBA per depth, plus four-block BAAB reverse control.",
+    "paired_results": [
+      {
+        "depth": 2,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-two-full-bf16-a1-v1",
+        "candidate": "ffn-serial-two-full-f32-b1-v1",
+        "latency_reduction_pct": 25.14299684651825,
+        "candidate_faster": true
+      },
+      {
+        "depth": 2,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-two-full-bf16-a2-v1",
+        "candidate": "ffn-serial-two-full-f32-b2-v1",
+        "latency_reduction_pct": 25.12488758030362,
+        "candidate_faster": true
+      },
+      {
+        "depth": 4,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-four-full-bf16-a1-v1",
+        "candidate": "ffn-serial-four-full-f32-b1-v1",
+        "latency_reduction_pct": 23.768154797711226,
+        "candidate_faster": true
+      },
+      {
+        "depth": 4,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-four-full-bf16-a2-v1",
+        "candidate": "ffn-serial-four-full-f32-b2-v1",
+        "latency_reduction_pct": 24.229936120281405,
+        "candidate_faster": true
+      },
+      {
+        "depth": 8,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-eight-full-bf16-a1-v1",
+        "candidate": "ffn-serial-eight-full-f32-b1-v1",
+        "latency_reduction_pct": 19.973972571256116,
+        "candidate_faster": true
+      },
+      {
+        "depth": 8,
+        "quartet": "ABBA",
+        "baseline": "ffn-serial-eight-full-bf16-a2-v1",
+        "candidate": "ffn-serial-eight-full-f32-b2-v1",
+        "latency_reduction_pct": 19.17522616415632,
+        "candidate_faster": true
+      },
+      {
+        "depth": 4,
+        "quartet": "BAAB",
+        "baseline": "ffn-serial-four-full-bf16-d1-v1",
+        "candidate": "ffn-serial-four-full-f32-c1-v1",
+        "latency_reduction_pct": 16.76526507265671,
+        "candidate_faster": true
+      },
+      {
+        "depth": 4,
+        "quartet": "BAAB",
+        "baseline": "ffn-serial-four-full-bf16-d2-v1",
+        "candidate": "ffn-serial-four-full-f32-c2-v1",
+        "latency_reduction_pct": 24.626957694048123,
+        "candidate_faster": true
+      }
+    ],
+    "retained_drift": "Four-block ABBA BF16 medians rise from 6.282318416 to 8.974072875 seconds (~43%); F32 medians also drift. BAAB favors F32 in both directions but does not erase those samples or establish a stable percentage.",
+    "gpu_elapsed_definition": "Sum of observed command-root GPUEndTime-GPUStartTime intervals, not exclusive shader execution time. Changes track slow total requests; cause is unproven."
+  },
+  "memory": {
+    "accounting": "file-cache; reclaimable file-backed pages counted once in headroom",
+    "runtime_floor_pct": 10,
+    "small_process_caps_gib": {
+      "two": 6,
+      "four": 8,
+      "eight": 12
+    },
+    "full_process_caps_gib": {
+      "two": 10,
+      "four": 14,
+      "eight": 22
+    },
+    "max_swap_growth_mib": 64,
+    "timeout_seconds": 900,
+    "minimum_sampled_headroom_bytes": 14874345472,
+    "maximum_sampled_swap_growth_bytes": 0,
+    "note": "Named buffers exclude opaque MPS resources; sampled footprints are observations, not peak guarantees or a linear prediction for 36 retained plans."
+  },
+  "regressions": {
+    "command": "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe",
+    "examples": 30,
+    "failures": 0,
+    "suites": {
+      "admission_precision_legacy_abi": 15,
+      "fixture_cache": 15
+    },
+    "build_log": {
+      "path": "logs/ffn-serial-build-v1.out",
+      "bytes": 2854,
+      "sha256": "333b8fad08441d046bfc82e71565b47a604d3e2a79afc2070331ca9882546cde"
+    },
+    "guard": {
+      "path": "logs/ffn-serial-build-v1.guard.jsonl",
+      "bytes": 14329,
+      "sha256": "81d074b1827a6d63ec6264fde6be71b8b75f658573a985818b0e55d84b7eecf7"
+    },
+    "pre_execution_receipt": {
+      "path": "results/ffn-serial-build-v1.pre-execution.json",
+      "bytes": 6616,
+      "sha256": "a31356dec93666f75229fad9cc7a8ba8b0bd620aef505f878970a9fdfac670e6"
+    }
+  },
+  "tested_implementation_pins": {
+    "examples/support/pixelumm_two_block_probe.cr": {
+      "bytes": 23616,
+      "sha256": "1f0bb77738483d1ae1c4a5d9c7d9bd9b8ea8517aa2c13876a9013306605ca52f"
+    },
+    "examples/support/pixelumm_serial_probe_runner.cr": {
+      "bytes": 10073,
+      "sha256": "d9e4d0b5637cb9e029be9f52c90cb078f1cbf6ddb1c4b45a3c4f0c3dfbfab2b0"
+    },
+    "src/ml/video/pixelumm_decoder_block_mps.cr": {
+      "bytes": 50783,
+      "sha256": "77b69c730c71aa7af4bf208afcb385f543a1f174212c9a140364ae63b431bc65"
+    },
+    "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+      "bytes": 85730,
+      "sha256": "0347878391b910bf2c6b113bcdc2a73d397dc365682c74ccf7497417d72d233d"
+    },
+    "src/ml/video/metal_mps_command_chain.cr": {
+      "bytes": 23232,
+      "sha256": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893"
+    },
+    "src/ml/video/metal_mps_command_chain.mm": {
+      "bytes": 63544,
+      "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf"
+    },
+    "examples/support/wan_memory_guard.py": {
+      "bytes": 37589,
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df"
+    }
+  },
+  "runs": [
+    {
+      "name": "ffn-serial-two-small-f32-v1",
+      "depth": 2,
+      "geometry": "small",
+      "mode": "f32",
+      "timed_seconds": [
+        0.204831876
+      ],
+      "median_seconds": 0.204831876,
+      "named_bytes": 1981686916,
+      "sampled_peak_footprint_bytes": 2908146088,
+      "minimum_sampled_headroom_bytes": 33827291136,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        33,
+        33,
+        32
+      ],
+      "report": {
+        "path": "results/ffn-serial-two-small-f32-v1.json",
+        "bytes": 45093,
+        "sha256": "f93831a6e108a13891d4b9f84c0105eaacfe1b6578c080c98703ca85ae8ad875"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-two-small-f32-v1.pre-execution.json",
+        "bytes": 7382,
+        "sha256": "4b708e9d1f48f61dc4838ddb022f1440ab608d7a31e517edefd5772e1b9c5238"
+      },
+      "requests": 3,
+      "cpu_compared_requests": 2,
+      "capture_comparisons": 104
+    },
+    {
+      "name": "ffn-serial-two-full-bf16-a1-v1",
+      "depth": 2,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        3.141679875,
+        3.144104125,
+        3.150755208
+      ],
+      "median_seconds": 3.144104125,
+      "named_bytes": 3955236836,
+      "sampled_peak_footprint_bytes": 5613621328,
+      "minimum_sampled_headroom_bytes": 31083429888,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        243,
+        243,
+        243,
+        243,
+        243,
+        243
+      ],
+      "report": {
+        "path": "results/ffn-serial-two-full-bf16-a1-v1.json",
+        "bytes": 10546,
+        "sha256": "6b4e398ff6299003702297021b52c4628f9a3f30578eccc3367e4e8d83fc6314"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-two-full-bf16-a1-v1.pre-execution.json",
+        "bytes": 7614,
+        "sha256": "86fa7245829a9b6edd7517ad8803c0e829b93a8fb87895e4520efb7bdd60c21a"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 12
+    },
+    {
+      "name": "ffn-serial-two-full-f32-b1-v1",
+      "depth": 2,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        2.353582124,
+        2.3528267080000003,
+        2.356599334
+      ],
+      "median_seconds": 2.353582124,
+      "named_bytes": 3955236836,
+      "sampled_peak_footprint_bytes": 7203785344,
+      "minimum_sampled_headroom_bytes": 29228253184,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        255,
+        255,
+        255,
+        255,
+        255,
+        255
+      ],
+      "report": {
+        "path": "results/ffn-serial-two-full-f32-b1-v1.json",
+        "bytes": 10576,
+        "sha256": "c56b526e3d297b9645010e6505f707100aefd9a9a4b1d65a729075f36408030c"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-two-full-f32-b1-v1.pre-execution.json",
+        "bytes": 7629,
+        "sha256": "113c952be1bb1d9e9fbdba85d7fff950f42fee33cfea2b5c63ecf5736ce0a2ed"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 12
+    },
+    {
+      "name": "ffn-serial-two-full-f32-b2-v1",
+      "depth": 2,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        2.351079792,
+        2.352882833,
+        2.353426917
+      ],
+      "median_seconds": 2.352882833,
+      "named_bytes": 3955236836,
+      "sampled_peak_footprint_bytes": 7549831976,
+      "minimum_sampled_headroom_bytes": 28926935040,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        255,
+        255,
+        255,
+        255,
+        255,
+        255
+      ],
+      "report": {
+        "path": "results/ffn-serial-two-full-f32-b2-v1.json",
+        "bytes": 10567,
+        "sha256": "8555b2eb3b6952d9409771c686f650c9fddd07df9b836a6ef7579f3af6b7ba92"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-two-full-f32-b2-v1.pre-execution.json",
+        "bytes": 7629,
+        "sha256": "e95941603609443871c453db5e2b9192a973c00a93fe106dfb8100f8b9ade0b1"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 12
+    },
+    {
+      "name": "ffn-serial-two-full-bf16-a2-v1",
+      "depth": 2,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        3.1421887909999997,
+        3.1424097499999997,
+        3.153649292
+      ],
+      "median_seconds": 3.1424097499999997,
+      "named_bytes": 3955236836,
+      "sampled_peak_footprint_bytes": 5442865768,
+      "minimum_sampled_headroom_bytes": 31232770048,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        243,
+        243,
+        243,
+        243,
+        243,
+        243
+      ],
+      "report": {
+        "path": "results/ffn-serial-two-full-bf16-a2-v1.json",
+        "bytes": 10549,
+        "sha256": "216012293a37bd8fc523ee22f984e3a5ea5282e5a57a76cce778c175965fbca2"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-two-full-bf16-a2-v1.pre-execution.json",
+        "bytes": 7614,
+        "sha256": "dee3825ae95d6c4ec345bc13bbd5c816ea8810088127b1b4a6096cc553a7bce1"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 12
+    },
+    {
+      "name": "ffn-serial-four-small-f32-v1",
+      "depth": 4,
+      "geometry": "small",
+      "mode": "f32",
+      "timed_seconds": [
+        0.409342333
+      ],
+      "median_seconds": 0.409342333,
+      "named_bytes": 3687245956,
+      "sampled_peak_footprint_bytes": 4695608992,
+      "minimum_sampled_headroom_bytes": 31265275904,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        67,
+        67,
+        66
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-small-f32-v1.json",
+        "bytes": 86711,
+        "sha256": "e05fc4bc933bcb0a38781dd17c7de740718608f88f43b6b3c95a0c5c2d31c6dc"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-small-f32-v1.pre-execution.json",
+        "bytes": 7401,
+        "sha256": "9769ee350f4a369c1b5ed9507223080ffe32e78fd0cec5aca38001d6989dfa8e"
+      },
+      "requests": 3,
+      "cpu_compared_requests": 2,
+      "capture_comparisons": 208
+    },
+    {
+      "name": "ffn-serial-four-full-bf16-a1-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        6.281309834,
+        6.282318416,
+        6.282905126
+      ],
+      "median_seconds": 6.282318416,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 7293408512,
+      "minimum_sampled_headroom_bytes": 29239115776,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        485,
+        485,
+        485,
+        485,
+        485,
+        485
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-bf16-a1-v1.json",
+        "bytes": 15367,
+        "sha256": "bcf29b1e08557139d844d4a5aaf581213df6256aecb0783aa56c2a22478e07aa"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-bf16-a1-v1.pre-execution.json",
+        "bytes": 7643,
+        "sha256": "9a800ce8b29d3f8faf69ebee2309c918ea73bd90ba4ccc2cfc52126bb6b691bd"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-f32-b1-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        4.70445525,
+        4.78912725,
+        4.993012041999999
+      ],
+      "median_seconds": 4.78912725,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 9053017344,
+      "minimum_sampled_headroom_bytes": 27337031680,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        509,
+        509,
+        509,
+        509,
+        509,
+        509
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-f32-b1-v1.json",
+        "bytes": 15400,
+        "sha256": "4cc83a7c0063d37583fac72b5abf9df7bc69dbbaf51ea2f599f3280c6daf4f73"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-f32-b1-v1.pre-execution.json",
+        "bytes": 7658,
+        "sha256": "fa8de9d0eeff14173c38c45010bc34bc45defe9a0f4af7d2ea66e461dc9afaa0"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-f32-b2-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        5.606604626,
+        6.850915375,
+        6.79966075
+      ],
+      "median_seconds": 6.79966075,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 8879723680,
+      "minimum_sampled_headroom_bytes": 27668529152,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        509,
+        509,
+        509,
+        509,
+        509,
+        509
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-f32-b2-v1.json",
+        "bytes": 15387,
+        "sha256": "e7ee523f7baba5aa34c860b650195be32d5b481b9b3b056f6e8e6c2bd0f2f3f3"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-f32-b2-v1.pre-execution.json",
+        "bytes": 7658,
+        "sha256": "363993f0093d25d04941f193efde0b1843e548cfd52e54c95c6143dd84ab5120"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-bf16-a2-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        9.161614416,
+        8.974072875000001,
+        8.189053667
+      ],
+      "median_seconds": 8.974072875000001,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 7119475824,
+      "minimum_sampled_headroom_bytes": 28927803392,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        485,
+        485,
+        485,
+        485,
+        485,
+        485
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-bf16-a2-v1.json",
+        "bytes": 15383,
+        "sha256": "539e1bbf47a8dd58c24fd0a75a84af80cd3bd4e4cba3d752d3df42aee56be2c4"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-bf16-a2-v1.pre-execution.json",
+        "bytes": 7643,
+        "sha256": "bb4dec62fe31d99135aaac8536cba37bb4886bda0ab21c29df8c0759fbf94028"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-eight-small-f32-v1",
+      "depth": 8,
+      "geometry": "small",
+      "mode": "f32",
+      "timed_seconds": [
+        0.8981940829999999
+      ],
+      "median_seconds": 0.8981940829999999,
+      "named_bytes": 7098364036,
+      "sampled_peak_footprint_bytes": 8074418176,
+      "minimum_sampled_headroom_bytes": 28724854784,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        135,
+        135,
+        134
+      ],
+      "report": {
+        "path": "results/ffn-serial-eight-small-f32-v1.json",
+        "bytes": 169939,
+        "sha256": "712aa63df2b527a75409481d142084f4cef55cdaeef2e5eba3e91d67346419e9"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-eight-small-f32-v1.pre-execution.json",
+        "bytes": 7410,
+        "sha256": "19c77eff112af4a030f60df55dd2c251981943457aa2eae28aabcd888f2acd1f"
+      },
+      "requests": 3,
+      "cpu_compared_requests": 2,
+      "capture_comparisons": 416
+    },
+    {
+      "name": "ffn-serial-eight-full-bf16-a1-v1",
+      "depth": 8,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        12.555677542,
+        12.579932625000001,
+        12.781174125
+      ],
+      "median_seconds": 12.579932625000001,
+      "named_bytes": 8346774500,
+      "sampled_peak_footprint_bytes": 10130382096,
+      "minimum_sampled_headroom_bytes": 24329879552,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        969,
+        969,
+        969,
+        969,
+        969,
+        969
+      ],
+      "report": {
+        "path": "results/ffn-serial-eight-full-bf16-a1-v1.json",
+        "bytes": 25027,
+        "sha256": "bb2ee2186a6f1a646115517154da95c25e9bf08987998f470fc365ba7bfd6f46"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-eight-full-bf16-a1-v1.pre-execution.json",
+        "bytes": 7653,
+        "sha256": "744ba3b9c6b2848bef04c42aa78ad70b2a2ba8ae90e3e5618b0d47841a80542d"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 48
+    },
+    {
+      "name": "ffn-serial-eight-full-f32-b1-v1",
+      "depth": 8,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        10.067220333000002,
+        10.009593541,
+        10.357683749
+      ],
+      "median_seconds": 10.067220333000002,
+      "named_bytes": 8346774500,
+      "sampled_peak_footprint_bytes": 11890629880,
+      "minimum_sampled_headroom_bytes": 15482060800,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        1017,
+        1017,
+        1017,
+        1017,
+        1017,
+        1017
+      ],
+      "report": {
+        "path": "results/ffn-serial-eight-full-f32-b1-v1.json",
+        "bytes": 25065,
+        "sha256": "f917b00bfef2ef55568279b2a05079192d2d7b3ae23ffee1f61cca6ce9f3a749"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-eight-full-f32-b1-v1.pre-execution.json",
+        "bytes": 7668,
+        "sha256": "05d23ceea7beb0c1553667e2f04d4a96adbfc3f1faabfa96d4e29ba5b2d04e5f"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 48
+    },
+    {
+      "name": "ffn-serial-eight-full-f32-b2-v1",
+      "depth": 8,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        10.519820584,
+        10.451315416,
+        10.374928084
+      ],
+      "median_seconds": 10.451315416,
+      "named_bytes": 8346774500,
+      "sampled_peak_footprint_bytes": 11890433296,
+      "minimum_sampled_headroom_bytes": 19414532096,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        1017,
+        1017,
+        1017,
+        1017,
+        1017,
+        1017
+      ],
+      "report": {
+        "path": "results/ffn-serial-eight-full-f32-b2-v1.json",
+        "bytes": 25051,
+        "sha256": "64da0edba55d775011d85ec9446d5f2be6b23af14a0778c4c2d425c1d0aa2a74"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-eight-full-f32-b2-v1.pre-execution.json",
+        "bytes": 7668,
+        "sha256": "3dc2dbf550c044b5e252ec7968090a5d29c90e3c710a419b786b4ba28d938141"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 48
+    },
+    {
+      "name": "ffn-serial-eight-full-bf16-a2-v1",
+      "depth": 8,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        12.845442834,
+        12.930831625,
+        13.383776541000001
+      ],
+      "median_seconds": 12.930831625,
+      "named_bytes": 8346774500,
+      "sampled_peak_footprint_bytes": 10130414864,
+      "minimum_sampled_headroom_bytes": 14874345472,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        969,
+        969,
+        969,
+        969,
+        969,
+        969
+      ],
+      "report": {
+        "path": "results/ffn-serial-eight-full-bf16-a2-v1.json",
+        "bytes": 25022,
+        "sha256": "883a5d2e02ba03092f4cad562c6ab428eda0bf18d2cba5319021713c3f7e715d"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-eight-full-bf16-a2-v1.pre-execution.json",
+        "bytes": 7653,
+        "sha256": "fcf80abd727c18c0a88bc8a0cdc90f1c4865639101e7aeb4d6ef0441b658ee93"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 48
+    },
+    {
+      "name": "ffn-serial-four-full-f32-c1-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        5.291882293,
+        5.229960999999999,
+        5.196933417
+      ],
+      "median_seconds": 5.229960999999999,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 9053164776,
+      "minimum_sampled_headroom_bytes": 29647929344,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        509,
+        509,
+        509,
+        509,
+        509,
+        509
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-f32-c1-v1.json",
+        "bytes": 15398,
+        "sha256": "47f69fe09062b4f6d95f72bf0077896c4c56b466e3d14fd6619d8b9eb759a1a4"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-f32-c1-v1.pre-execution.json",
+        "bytes": 7658,
+        "sha256": "9573ca51f817f8916d3b158133ee5a86ece112946513488f57780eec4257e92c"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-bf16-d1-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        6.285802542000001,
+        6.283387584,
+        6.281861625
+      ],
+      "median_seconds": 6.283387584,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 7293048064,
+      "minimum_sampled_headroom_bytes": 30836391936,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        485,
+        485,
+        485,
+        485,
+        485,
+        485
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-bf16-d1-v1.json",
+        "bytes": 15371,
+        "sha256": "464c32d407710e7213352c8a4eca619154aa3f95cc1f2c6d996bb68cfa7d9256"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-bf16-d1-v1.pre-execution.json",
+        "bytes": 7643,
+        "sha256": "5f701ab80a2cbb97119c1052a9a9933e4ac2d86d353b80ffa713a4bfb7f8fe73"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-bf16-d2-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "bf16",
+      "timed_seconds": [
+        6.285214874,
+        6.285703083,
+        6.2829190829999995
+      ],
+      "median_seconds": 6.285214874,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 7293064448,
+      "minimum_sampled_headroom_bytes": 33083506688,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        485,
+        485,
+        485,
+        485,
+        485,
+        485
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-bf16-d2-v1.json",
+        "bytes": 15364,
+        "sha256": "bb0253a6e4b677e963dff375e633b331044f99117f98884c59abbce74b1e69c8"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-bf16-d2-v1.pre-execution.json",
+        "bytes": 7643,
+        "sha256": "c080196c69acc900b780383c97a832e66a66a22e070027010f8ba59711660997"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    },
+    {
+      "name": "ffn-serial-four-full-f32-c2-v1",
+      "depth": 4,
+      "geometry": "full",
+      "mode": "f32",
+      "timed_seconds": [
+        4.731158582,
+        4.746806583,
+        4.737357666
+      ],
+      "median_seconds": 4.737357666,
+      "named_bytes": 5419082724,
+      "sampled_peak_footprint_bytes": 9053197520,
+      "minimum_sampled_headroom_bytes": 31069716480,
+      "sampled_swap_growth_bytes": 0,
+      "command_segments_by_request": [
+        509,
+        509,
+        509,
+        509,
+        509,
+        509
+      ],
+      "report": {
+        "path": "results/ffn-serial-four-full-f32-c2-v1.json",
+        "bytes": 15408,
+        "sha256": "4aa2a198515b38378e404a807cf140949f64e4327a888ca2f51c122613c47b34"
+      },
+      "pre_execution_receipt": {
+        "path": "results/ffn-serial-four-full-f32-c2-v1.pre-execution.json",
+        "bytes": 7658,
+        "sha256": "29fd21c416d88c48f0c67cdafde2b3a84157dca363962cd02cb633237d424c3a"
+      },
+      "requests": 6,
+      "cpu_compared_requests": 3,
+      "capture_comparisons": 24
+    }
+  ],
+  "mini_quad": {
+    "verify": "Inspect current source, pinned fixture/cache lineage, guarded build and unchanged BF16 baseline.",
+    "criticize": "Uniform FFN mode propagation does not imply stable arithmetic or bounded opaque workspace memory.",
+    "build": "Gate small and full two/four/eight prefixes serially, then balanced BF16/F32 processes and alternate-input poisoned replay.",
+    "adversary": "Check complete capture/argv/guard/order bindings; retain four-block drift and add reverse BAAB. Same-lineage read-only review is correlated, not independent replication.",
+    "verdict": "ROBUST for bounded compared stages, guard observations and observed paired timings; no default promotion or complete-decoder readiness."
+  },
+  "next_gate": "Keep default false. Admit retained resources for a larger prefix and verify on real decoder inputs before wider/default use; all 36 blocks and global projections remain unqualified.",
+  "not_run": [
+    "complete decoder",
+    "diffusion",
+    "Studio",
+    "full generation"
+  ],
+  "evidence_semantics": "This packet is a curated index to checked external evidence, not proof from packet shape or hermetic attestation."
+}

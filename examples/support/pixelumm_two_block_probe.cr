@@ -331,13 +331,14 @@ module PixelUMMTwoBlockProbe
     getter fixture : Fixture
     getter borrowed_bytes : Int64
     getter named_bytes : Int64
+    getter ffn_f32 : Bool
     getter workspace : Decoder::Workspace
     getter plans = [] of Decoder::Plan
     @bindings = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64)
+    def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64, *, @ffn_f32 : Bool = false)
       grid = @fixture.grid
       config = Decoder::Config.new(temporal: grid[0], height: grid[1], width: grid[2])
       weight_bytes = Array.new(@fixture.block_count) do |slot|
@@ -367,7 +368,11 @@ module PixelUMMTwoBlockProbe
           input = slot == 0 ? @bindings["x"] : @plans[slot - 1].stage("output")
           @plans << Decoder::Plan.new(config, input: input, weights: weights,
             cos: @bindings["cos"], sin: @bindings["sin"], captures: @fixture.captures_by_slot[slot],
-            max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot)
+            max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot,
+            ffn_f32: @ffn_f32)
+        end
+        unless @plans.all? { |plan| plan.ffn_f32 == @ffn_f32 }
+          raise ArgumentError.new("serial plans must share the selected FFN graph precision")
         end
         # This loader owns distinct allocations for every authenticated weight,
         # the external input/tables and retained outputs. Broader caller-provided

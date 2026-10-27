@@ -34690,3 +34690,50 @@ Refresh after source/toolchain/device/model/workload changes.
   promotion. Prior eight-block BF16 parity does not qualify the new mode. Refresh
   on source, fixtures/weights, backend/device/toolchain/OS, geometry/precision,
   ownership, capture, guard changes or lost artifacts. No full generation ran.
+
+### 2026-10-27: PixelUMM F32 FFN across shared-workspace prefixes
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-serial.json. Serial Session
+  forwards the default-off F32 FFN graph option to every Plan, checks uniform
+  slot modes and reports actual selection. Native kernels, workspace ownership,
+  direct GPU handoffs and encode/submit/wait sites are unchanged.
+- Two/four/eight blocks pass all 52/104/208 small-J stages and 4/8/16 full-J
+  attention/output boundaries at unchanged atol=rtol=2e-5. Across 19 processes,
+  54 of 105 connected requests run CPU comparisons: 1160 capture comparisons
+  are finite and bitwise exact. Other requests retain GPU captures. Every full
+  process passes distinct alternate-input replay after NaN-poisoning shared
+  scratch. Saved seeded adapted-upstream MPS fixtures; no fresh upstream,
+  compiled CUDA Flex or real decoder latent qualification.
+- Every request has one terminal wait, zero named encode allocations and no
+  early activation reads. Every process rejects wrong order, in-flight release,
+  early compare and reuse. Full-J BF16/F32 segments are 243/255, 485/509 and
+  969/1017; execution topology is not identical. Preserve varying small-J counts
+  without inferring their cause; the first validator's fixed-count assumption
+  was rejected and corrected, with numerical/wait/read/allocation checks intact.
+- Full-J ABBA paired latency reductions: two blocks 25.14%/25.12%; four blocks
+  23.77%/24.23%; eight blocks 19.97%/19.18%. Eight-block BF16 medians are
+  12.579933/12.930832 s versus F32 10.067220/10.451315 s. Four-block baseline
+  ABBA drifts 6.282318->8.974073 s; retain it. Additional BAAB reductions are
+  16.77%/24.63%, supporting direction without establishing a stable percentage
+  or drift cause. Timings include encoding, terminal wait and GPU capture
+  copies; preparation and postterminal CPU comparison are excluded.
+- Eight-block named storage stays 8,346,774,500 bytes (7.77 GiB), but sampled
+  process footprint rises 9.43->11.07 GiB. Opaque backend cost matters before
+  retaining more plans; do not extrapolate linearly to 36 blocks. All serial
+  guards pass the cache-aware 10% floor, process caps, 64 MiB swap-growth stop
+  and 900-second deadlines. Sampled headroom >=13.85 GiB; swap growth zero.
+  Polling is not a between-sample peak guarantee.
+- Guarded release builds and 30 regression examples pass. Executed external
+  validator checks complete captures, report/receipt/guard bindings, intended
+  budgets, non-overlapping matrix order, source/binary pins and fixture/cache
+  payload hashes; 134 external artifacts are indexed on SSD. Correlated
+  Mini-Quad verdict ROBUST within the declared prefix scope, not independent
+  replication or hermetic attestation. Existing user pycache remains untracked.
+- Rollback omits ffn_f32/--ffn-f32; default false. This discharges the earlier
+  sequential gate only for two/four/eight prefixes. Next falsifier: memory-admit
+  a larger prefix and verify real decoder inputs before wider/default use.
+  Only layers 0-7 downloaded; complete checkpoint/hash, all 36 blocks and global
+  projections remain unqualified. No full decoder, diffusion, Studio or
+  generation ran. Refresh on scoped source, fixtures/weights, device/backend/
+  toolchain/OS, geometry/precision, capture/ownership/guard changes or lost evidence.

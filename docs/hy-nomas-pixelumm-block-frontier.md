@@ -1,15 +1,41 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
 Current frontier: eight consecutive pretrained decoder blocks, zero through
-seven, with shared GPU scratch and an authenticated BF16 cache. Small J2048
-matches all 208 stages; full T6/H44/W80, J21,120 matches all 16 attention/output
-boundaries, including different-input replay after poisoning mutable scratch.
-Every compared word is finite and bitwise exact at unchanged
-`atol=rtol=2e-5`. The eight-block resident median is 13.597055 seconds on this
-M2 Max (three samples, 12.660567-14.520376 seconds). These are bounded block
-measurements, not full-decoder or video latency. See the eight-block section
-below for evidence, memory and limits. The oracle adapts upstream semantics
-on PyTorch MPS; compiled upstream CUDA Flex equivalence is unqualified.
+seven, with shared GPU scratch, an authenticated BF16 cache and an opt-in F32
+FFN graph mode qualified across two/four/eight blocks. Small J2048 matches all
+208 stages of the eight-block prefix; full T6/H44/W80, J21,120 matches all 16
+attention/output boundaries, including different-input replay after poisoning
+mutable scratch. Every compared word is finite and bitwise exact at unchanged
+`atol=rtol=2e-5`. New paired eight-block medians are 12.580/12.931 seconds for
+BF16 graph feeds versus 10.067/10.451 seconds for F32 FFN graph operands on
+this M2 Max, with higher sampled memory. The default remains BF16. See the
+sequential F32 qualification below for timing drift, memory and limits. These
+are bounded block measurements, not complete-decoder or video latency. The
+saved oracle adapts upstream semantics on PyTorch MPS; compiled upstream CUDA
+Flex equivalence is unqualified.
+
+## F32 FFN sequential qualification contract, 2026-10-27
+
+The earlier single-block speed result alone did not admit sequential F32 FFN
+plans. This slice forwards one default-off mode to every owner of the existing
+shared workspace; it changes no arithmetic kernel, handoff, encode or wait site.
+Two, then four and eight blocks were admitted after each preceding memory and
+numerical gate passed. Check every available saved upstream stage at J2048 and every
+attention/output boundary at full J21120. Different-input replay must overwrite
+NaN-poisoned mutable scratch and match each owner's alternate output.
+
+This is CAUTION work: opaque MPSGraph temporaries can multiply across retained
+plans even when named storage is unchanged. Process-tree caps and the cache-aware
+10% physical floor, 64 MiB swap-growth stop and deadlines guard each serial job.
+Use separate BF16/F32 processes in both orders for full-J timings. A regression,
+missing comparison, mixed slot mode, early activation read, named encode
+allocation, extra terminal wait or guard stop rejects promotion. Rollback omits
+`--ffn-f32`; BF16 remains the default. Qualification commands are the guarded
+release two/four/eight-block probes with authenticated existing fixtures/cache,
+plus `make spec_pixelumm_decoder_block spec_pixelumm_two_block_probe` using the
+external build directory. DoD requires finite results at unchanged
+`atol=rtol=2e-5`, all ownership/lifetime negatives, one terminal wait and the
+declared process budget. No full decoder or generation is authorized here.
 
 ## Historical one-block qualification, 2026-10-26
 
@@ -743,7 +769,7 @@ this retains the patched disabled Graph hook. Refresh after source, fixture,
 weight, device/OS/toolchain/backend, geometry, precision, capture, lifetime or
 guard changes, or loss of external evidence.
 
-## Opt-in F32 FFN graph qualification, 2026-10-27
+## Earlier single-block F32 FFN graph qualification, 2026-10-27
 
 The measured FFN lever is MPSGraph operand typing. For gate/up/down only,
 `ffn_f32: true` casts the resident BF16 input and weight feeds to F32 graph
@@ -851,4 +877,120 @@ boundaries, and an admitted process-footprint budget. The earlier eight-block
 BF16 qualification does not qualify the new mode. Refresh after source,
 fixture/weights, device/OS/toolchain/backend, geometry, precision, ownership,
 captures, guards or lost external artifacts. No full decoder, diffusion,
+Studio or generation ran in this slice.
+
+## Sequential F32 FFN qualification, 2026-10-27
+
+The serial Session now forwards `ffn_f32: true` to every Plan and verifies the
+selected mode for every slot. Two-, four- and eight-block probes accept
+`--ffn-f32` and report the actual per-slot modes. The shared workspace, direct
+GPU output-to-input handoffs, buffer ownership, arithmetic kernels and native
+encode/submit/wait sites are unchanged. Both modes retain BF16 weights and
+inter-block outputs; the option changes only gate/up/down graph operand types.
+This is ordinary workspace reuse, with no LTP/WBA claim.
+
+### Numerical and lifecycle gates
+
+Nineteen serial guarded processes execute 105 connected prefix requests.
+CPU comparisons after the terminal wait cover 54 requests: the numerical gate
+and final timed request of each process, plus every full-J alternate-input
+replay. Other requests retain GPU captures but skip CPU comparisons. All 1160
+capture comparisons are finite, bitwise equal and pass unchanged
+`atol=rtol=2e-5`. Small J2048 inventories contain 52/104/208 stages for
+two/four/eight blocks. Full J21120 inventories contain 4/8/16 attention/output
+boundaries. Each full process also replaces the input, poisons mutable scratch
+with NaNs and matches every block's distinct alternate output.
+
+Every request records one terminal wait, zero named buffer allocations during
+encode and zero activation reads before that wait. Every process rejects
+wrong slot order, in-flight release, early compare and early reuse. Backend
+segments differ between modes: full-J counts are 243/485/969 for BF16 versus
+255/509/1017 for F32. Small F32 counts are respectively [33,33,32], [67,67,66]
+and [135,135,134] across gate/warmup/timed requests. The validator initially
+rejected an assumed fixed small-J count; it now records those observations
+without claiming a cause or identical execution topology. Wait/read/allocation
+checks remain strict.
+
+The oracle is the existing saved pretrained BF16 reference on seeded synthetic
+inputs, produced by the adapted upstream-semantics PyTorch MPS path. Payload
+hashes, complete ordered capture inventories and per-capture hashes were
+rechecked. This slice does not rerun upstream, qualify CUDA Flex or use real
+decoder latents. PyTorch is absent from the measured native requests.
+
+### Balanced timings and retained drift
+
+A denotes BF16 graph feeds and B denotes F32 FFN graph operands. Each full-J
+process prepares one resident prefix, runs a numerical gate and one warmup,
+then three timed requests. ABBA executes A1/B1/B2/A2; the four-block reverse
+control executes B1/A1/A2/B2. Each row lists the corresponding two per-process
+medians. Separate processes bound retained opaque resources; these are not
+same-process pairs or a quiet-GPU guarantee.
+
+| Blocks / order | BF16 medians, s | F32 medians, s | Paired latency reductions |
+| --- | ---: | ---: | ---: |
+| 2 / ABBA | 3.144104, 3.142410 | 2.353582, 2.352883 | 25.14%, 25.12% |
+| 4 / ABBA | 6.282318, 8.974073 | 4.789127, 6.799661 | 23.77%, 24.23% |
+| 4 / BAAB | 6.283388, 6.285215 | 5.229961, 4.737358 | 16.77%, 24.63% |
+| 8 / ABBA | 12.579933, 12.930832 | 10.067220, 10.451315 | 19.97%, 19.18% |
+
+The four-block ABBA baseline drifts by about 43%; keep those samples rather
+than replacing them with the reverse control. The reverse control also favors
+F32 in both pair directions but does not establish one stable reduction or a
+cause for the drift. Slow requests show changes in both encode wall time and
+the sum of observed GPU command-root elapsed intervals. Those intervals are
+not exclusive shader execution time. No driver-wait, thermal or background-GPU
+cause is established.
+
+Timing includes native encoding, the existing terminal wait and GPU capture
+copies. Preparation/compilation/upload, scratch poisoning and postterminal CPU
+comparison are excluded. The improvement applies to these prepared captured
+prefix requests, not complete decoder or video latency.
+
+### Memory, verification and next boundary
+
+| Full-J prefix | Named bytes, both modes | Sampled BF16 footprint, GiB | Sampled F32 footprint, GiB |
+| --- | ---: | ---: | ---: |
+| 2 | 3,955,236,836 | 5.07-5.23 | 6.71-7.03 |
+| 4, including reverse control | 5,419,082,724 | 6.63-6.79 | 8.27-8.43 |
+| 8 | 8,346,774,500 | 9.43 | 11.07 |
+
+Named storage does not include opaque MPS allocations. Do not extrapolate
+these sampled footprints linearly to all 36 blocks. Every process is serially
+guarded by the cache-aware 10% physical floor and pressure check, a process-tree
+cap, 64 MiB swap-growth stop and 900-second deadline. Small-J caps are 6/8/12
+GiB and full-J caps are 10/14/22 GiB for two/four/eight blocks. Minimum sampled
+cache-aware headroom across this matrix is 13.85 GiB; sampled swap growth is
+zero. Guard polling does not establish a between-sample peak bound.
+
+Executed release build and regression command:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe
+```
+
+All 30 examples pass: 15 admission/precision/legacy-ABI and 15 fixture/cache
+examples. External `tmp/ffn_serial_case_v1.py` records the exact guarded commands
+for the small gates and full ABBA/BAAB matrices. The executed external check is:
+
+```sh
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/tmp/validate_ffn_serial_v1.py
+```
+
+It exits zero, checking complete capture coverage, 105 requests, source and
+binary pins, fixture/cache payload hashes, report/receipt/guard command binding,
+declared serial order, and all sampled guard limits. Its output indexes 134
+external artifacts. Receipts are not hermetic build attestation. Existing
+reports use exclusive creation; reproductions need fresh report names.
+The curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-serial.json`; heavy logs,
+payloads, scripts and preserved executables remain on the external SSD.
+
+Rollback omits `ffn_f32: true` / `--ffn-f32`. The default remains false. This
+closes the earlier sequential two/four/eight-block gate only. Before wider or
+default use, admit the full decoder's retained resources and verify a larger
+prefix on real decoder inputs; the remaining layers and global projections
+are unqualified. Only layers 0-7 have been downloaded for this decoder scope;
+the complete checkpoint hash remains unverified. Refresh after scoped source,
+fixture/weights, backend/device/toolchain/OS, geometry/precision, ownership,
+capture or guard changes, or loss of evidence. No full decoder, diffusion,
 Studio or generation ran in this slice.
