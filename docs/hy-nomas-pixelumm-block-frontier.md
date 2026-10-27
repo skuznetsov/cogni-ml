@@ -549,3 +549,167 @@ Refresh after source, weight, fixture, backend/device/toolchain/OS, geometry,
 precision, ownership/lifetime or guard changes, or lost external artifacts.
 Next gate: a fresh memory-admitted larger prefix and real decoder inputs before
 complete decoding. No complete decoder, diffusion, Studio or generation ran.
+
+## Full-J phase profiling qualification, 2026-10-27
+
+One resident pretrained block zero is profiled at T6/H44/W80 (J21,120).
+The strongest next optimization candidate is **FFN matrix work**. Resident
+unprofiled encode-plus-terminal-wait medians are approximately **1.59-1.68
+seconds per block**, including GPU diagnostic capture copies but excluding
+preparation and postterminal comparisons. This is not complete-decoder latency
+or seconds of video. No arithmetic optimization is promoted by this change.
+
+The CAUTION contract preserves arithmetic, BF16 boundaries, graph geometry,
+captures and existing command submission/wait sites. The old unprofiled FFI
+entry point remains available; the Crystal API defaults to `profile: false`.
+All observed full-J requests retain 122 command roots and one terminal wait.
+Equal root counts do not establish identical off/on continuation placement.
+
+Opt-in, preallocated CPU markers delimit input normalization, QKV, QK
+normalization/RoPE, local attention, output projection, residual/post-norm,
+gate/up, activation/product, down and final residual. Existing API collector
+IDs retain their original meanings; the PixelUMM report explicitly maps the
+used coarse buckets to preparation, local attention, output/residual/norm and
+FFN. Graph scopes measure host wall/thread CPU, including nested continuation
+calls. They are not GPU kernel timestamps. Root observations may register
+tracking metadata but must not create, submit or wait for command roots.
+
+The report preserves completed-root sum, union, envelope and overlap separately
+from host API inclusive/nested/exclusive accounting. Phase boundary roots can
+contain both phases; per-phase candidate sums cannot be added as exclusive
+costs. The bounded Instruments attach gate waits on CPU before any request
+encoding/timing; it adds no GPU wait. Profile snapshots reject before the
+request's existing terminal wait.
+
+### Timings and attribution
+
+Three controls without Instruments use balanced in-process off/on pairs: one
+warmup per arm and four alternating-order timed pairs. The first two also
+record CPU continuation chronology; the third enables API profiling only.
+
+| Control | Off median, s | On median, s | Individual paired deltas |
+| --- | ---: | ---: | --- |
+| Off-on initial order, continuation trace | 1.683734 | 1.686453 | -0.38% to +0.33% |
+| On-off initial order, continuation trace | 1.589550 | 1.591180 | -0.15% to +0.42% |
+| Off-on initial order, API only | 1.641722 | 1.637838 | -2.29% to +1.79% |
+
+These controls measure enabled profiling against the patched disabled path.
+The Graph-scope hook is also invoked when disabled; no pre-patch binary
+comparison was run. Process drift and the wider API-only pair spread preclude
+zero-overhead or speedup claims. Instruments timing is kept separate.
+
+The Instruments capture contains four requests, 488 command-buffer submissions
+and 780 Graph encoding intervals. XML references are resolved per table;
+exact-PID Compute rows are joined to ordered submissions. The two profiled
+requests provide 244 native root timestamps: maximum envelope-duration
+difference and common-clock-offset spread are both about 42 ns, within the
+unchanged 2 us telemetry alignment check. Off-arm root placement relies on
+chronological grouping and counts, not native per-root validation.
+
+An initial broad-channel join failed that alignment check on two Fragment
+rows with conflicting inherited command-buffer identities. The corrected
+analysis retains those rejected rows and restricts to Compute, consistent
+with this native encoder having no rendering pipeline. It also excludes
+17,771 foreign GPU rows and 1,549 foreign shader rows. This telemetry repair
+does not change numerical tolerances.
+
+| Root-local matrix timeline candidates | Gate request, s | Timed request, s |
+| --- | ---: | ---: |
+| QKV candidate roots 2-4 | 0.161088 | 0.161076 |
+| Output-projection boundary root 115 | 0.105842 | 0.106195 |
+| FFN candidate roots 118-120 | 0.946366 | 0.949459 |
+
+These are unions of **sampled `NDArrayMatrixMultiply`-labelled shader timeline
+intervals**, clipped to target Compute root windows. Shader rows have no
+command-buffer IDs: attribution uses PID and temporal clipping after the
+root join. The FFN candidates account for 59.9%/59.4% of the requests' target
+Compute interval unions (1.579923/1.599647 s). This is non-exclusive sampled
+interval attribution, not exclusive kernel time, cycles, occupancy, or a
+predicted speedup. Root 118 also touches residual/post-norm; root 120 crosses
+gate/up, activation and down. Exact subprojection attribution is unavailable.
+
+Across eight traced timed arms, native attention-only roots 6-114 have
+interval unions of **0.317-0.330 s**. Including boundary candidates 5-115
+gives 0.434-0.453 s, overlapping the output-projection candidate. The FFN
+aggregate, including activation and final residual, has definite roots
+119-121 at 0.651-0.713 s and candidates 118-121 at 0.966-1.047 s. These are
+command-root interval bounds, a different measurement from shader samples.
+
+Each traced attention phase has 110 continuation calls. Their wall-time sums
+are **0.319-0.340 s**, versus **0.00070-0.00109 s** of owner-thread CPU.
+Union intersections with already-submitted roots cover **98.1-98.5%** of that
+wall time. The longest recurring calls overlap earlier QKV work. This shows
+little owner-thread CPU while prior GPU roots execute, consistent with queued
+work/backpressure. It does not distinguish queue admission, driver waits,
+scheduler delay or other off-thread causes. Wall minus thread CPU is not an
+exact GPU-cost measurement.
+
+### Numerical, allocation and memory gates
+
+Six indexed reports cover **48 requests and 288 tensor comparisons**. Small
+J2048 requests compare all 26 stages; full J compares both attention/output
+boundaries on every request, including warmups and both profile arms. All
+words are finite and bitwise exact against the saved adapted-upstream MPS
+fixtures and between arms, at unchanged `atol=rtol=2e-5`. The oracle was not
+rerun this turn; it is not compiled CUDA Flex or real decoder latent input.
+
+Full J records the expected 60 attention tiles and **195 Graph calls**:
+9 preparation, 180 local attention, 3 output/residual/norm and 3 FFN.
+Every request has one terminal wait, zero named encode allocations and zero
+preterminal activation reads. The first request's in-flight release guard and
+every profiled request's prewait snapshot guard reject as expected. Opaque MPS
+resources are outside named allocation counters. Postterminal capture reads
+are diagnostics; no activation is read on CPU in the measured inference path.
+
+One full-J block has 3,223,313,892 unique named bytes (3.00 GiB):
+2,642,779,108 owned and 580,534,784 borrowed. Full standalone runs use an
+8 GiB process cap; the Instruments process group uses 12 GiB. Across the six
+native/report runs, maximum sampled group footprint is 7,135,402,368 bytes
+(6.65 GiB, including the profiler) and minimum sampled cache-aware headroom
+is 26,855,391,232 bytes (25.01 GiB). Swap growth is zero. Jobs remain serial,
+with a **10% physical floor**, 64 MiB swap-growth stop and deadlines.
+File cache is included once; polling is not a true peak guarantee or a memory
+reservation. No complete decoder, Studio, diffusion or generation ran.
+
+### Verification, reproduction and next falsifier
+
+Executed final build/CPU command:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_block_probe spec_pixelumm_block_profile spec_pixelumm_decoder_block spec_pixelumm_two_block_probe
+```
+
+Release build, 28 profile/API/trace examples, 12 admission examples and
+15 fixture/cache examples pass. The final binary also passes the small
+all-stage off/on GPU gate. Core native/profile/support source hashes match
+all indexed full-J run receipts; CLI attach/report handling, Makefile and a
+spec comment evolved afterward. Historical generic executables were
+overwritten by later builds; their hashes remain pinned but their bytes are
+not archived. The latest checked executable is preserved separately as
+`build/pixelumm_decoder_block_probe-profile-v3`. These receipts are not
+hermetic build attestation.
+
+The captured Instruments executable hash exactly matches the later API-only
+run's pre-execution receipt, whose core-source pins match this checkout.
+The capture has no separate pre-capture source receipt: this cross-run byte
+identity links the observation to the source-pinned run, without proving a
+pre-capture source state or a hermetic source-to-binary build.
+
+The curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-profile.json`. Exact argv,
+pre-execution source/binary pins, guards, reports, analysis scripts, XML
+exports and the retained Instruments trace live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026`. The index checks report
+comparisons, fixture/report hashes, all sampled guard limits and live core
+source pins; packet shape alone does not prove those runtime claims.
+Correlated Mini-Quad review is ROBUST within the bounded profile and the
+qualified FFN-candidate claim, not independent replication.
+
+Next falsifier: isolate gate/up/down at their real dense BF16 geometry against
+MPS, first preserving BF16 rounding/reduction and checking upstream boundaries.
+Only promote an alternative or fusion after paired block timings improve.
+Activation/residual fusion alone cannot address the measured large matrix
+candidate. Roll back profiling by omitting `profile: true` / `--profile-order`;
+this retains the patched disabled Graph hook. Refresh after source, fixture,
+weight, device/OS/toolchain/backend, geometry, precision, capture, lifetime or
+guard changes, or loss of external evidence.

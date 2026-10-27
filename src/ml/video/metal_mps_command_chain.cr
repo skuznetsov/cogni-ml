@@ -267,6 +267,14 @@ module ML::Metal
       @api_profile_enabled
     end
 
+    # Borrowed only by native CPU phase-marker recording. This is the chain
+    # owner, distinct from handle's MPS wrapper; it does not submit or wait.
+    def api_profile_handle : Pointer(Void)
+      check_live!
+      require_api_profile!
+      @native
+    end
+
     # The fixed native trace buffer is allocated once before block encoding.
     # Enabling it does not enqueue work or change continuation boundaries.
     def enable_continuation_trace! : Nil

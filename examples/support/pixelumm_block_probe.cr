@@ -188,13 +188,13 @@ module PixelUMMBlockProbe
       @plan || raise ArgumentError.new("PixelUMM probe plan is unavailable")
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+    def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       raise ArgumentError.new("PixelUMM probe session released") if @released
       if previous = @last_chain
         raise ArgumentError.new("previous PixelUMM probe command chain is in flight") unless previous.completed?
       end
       @last_chain = chain
-      plan.encode(chain)
+      plan.encode(chain, profile: profile)
     end
 
     def compare : Array(Comparison)

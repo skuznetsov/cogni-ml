@@ -34604,3 +34604,50 @@ Refresh after source/toolchain/device/model/workload changes.
   guard changes or lost evidence. Next gate: a newly memory-admitted larger
   decoder prefix with real decoder inputs, before complete decoding. Broader
   caller-supplied buffer aliases and partial-prefix cancellation stay unqualified.
+
+### 2026-10-27: PixelUMM full-J phase profiling
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-profile.json. Opt-in CPU
+  phase markers, existing Metal/MPS API/continuation collectors and Instruments
+  profile pretrained block0 at T6/H44/W80, J21120. Arithmetic, BF16 boundaries
+  and existing command-submit/wait sites are unchanged. No complete generation.
+- Six reports cover 48 requests and 288 comparisons, all finite and bitwise
+  exact at unchanged atol=rtol=2e-5. Small J2048 checks all 26 stages; full J
+  checks both attention/output boundaries on every arm. Saved adapted-upstream
+  MPS fixtures, not a fresh oracle run, CUDA Flex or real decoder latent input.
+  Full requests retain 122 roots, 195 Graph calls, one terminal wait, zero named
+  encode allocations and zero preterminal activation reads. Root-count parity
+  does not prove exact off/on continuation placement.
+- Without-Instruments off medians are 1.590/1.642/1.684 s per captured block.
+  Same-binary controls preserve observed drift; API-only pair deltas span
+  -2.29% to +1.79%.
+  The patched disabled Graph hook remains, so no prepatch/zero-overhead claim.
+- Instruments resolves 488 submissions; 244 profiled roots match native timing
+  with about 42 ns maximum duration error/offset spread. Broad-channel join was
+  rejected; Compute-only join retains two excluded Fragment rows and rejects
+  foreign-PID rows. Shader rows lack CBIDs: attribution uses PID/time clipping.
+- NDArrayMatrixMultiply-labelled sampled timeline unions in FFN-candidate
+  roots 118-120 are 0.946/0.949 s, 59.9%/59.4% of target Compute unions. This makes
+  FFN dense matrix work the next optimization candidate. Shared boundary roots
+  and non-exclusive samples prevent exact gate/up/down or kernel-cycle claims.
+- Across eight traced timed arms, attention continuation wall spans 0.319-0.340 s
+  versus 0.00070-0.00109 s owner-thread CPU; 98.1-98.5% overlaps older submitted
+  GPU roots. Consistent with queue/backpressure, not proof of driver wait cause.
+- Final release build plus 28 profile/API/trace, 12 admission and 15 fixture/cache
+  examples pass; latest binary repeats small all-stage off/on parity. Full-J
+  core sources match pinned run receipts. Historical generic binaries were
+  overwritten; latest checked executable is preserved externally. Pins are
+  not hermetic attestation. Instruments binary hash equals the later API-only
+  run's source-pinned binary; no separate pre-capture source receipt exists.
+  Heavy reports/XML/trace/scripts stay on SSD.
+- Serial guards retain 10% physical floor, 8 GiB standalone/12 GiB profiler caps,
+  64 MiB swap-growth stop and deadlines. Sampled footprint <=7,135,402,368 bytes,
+  headroom >=26,855,391,232 bytes including file cache once; swap growth zero.
+  Polling is not a peak guarantee; opaque MPS resources are outside named counts.
+- Correlated Mini-Quad verdict ROBUST for bounded parity/counts and the qualified
+  FFN candidate. Next gate: real-geometry FFN dense projections against MPS,
+  preserving BF16 reduction/rounding, then paired block speed before promotion.
+  Rollback: leave profiling off; old FFI retained. Refresh on scoped source,
+  fixtures/weights, device/OS/toolchain/backend, geometry, precision, lifetime,
+  captures, guards or lost evidence. No complete-decoder/video-latency claim.

@@ -3,6 +3,16 @@
 require "../core/buffer"
 require "./metal_mps_command_chain"
 require "./metal_ops"
+require "./pixelumm_block_profile"
+
+lib PixelUMMDecoderBlockMPSFFI
+  struct PhaseMarker
+    wall_ns : UInt64
+    thread_cpu_ns : UInt64
+    root_count : Int32
+    phase : Int32
+  end
+end
 
 {% if flag?(:darwin) && !flag?(:cpu_only) %}
   @[Link(ldflags: "-framework Foundation -framework Metal -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph")]
@@ -22,6 +32,11 @@ require "./metal_ops"
     ) : Void*
     fun encode = gs_pixelumm_decoder_block_encode(plan : Void*, chain : Void*,
                                                   error : UInt8*, error_capacity : LibC::SizeT) : Int32
+    fun encode_profiled = gs_pixelumm_decoder_block_encode_profiled(
+      plan : Void*, command_buffer : Void*, profile_chain : Void*,
+      markers : PhaseMarker*, marker_capacity : UInt32,
+      error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
     fun plan_release = gs_pixelumm_decoder_block_plan_release(plan : Void*) : Void
   end
 {% end %}
@@ -317,6 +332,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     @workspace_attached = false
     @slot = 0_i32
     @chain : ML::Metal::MPSCommandChain? = nil
+    @profiled_encode = false
+    @profile_markers = Slice(PixelUMMDecoderBlockMPSFFI::PhaseMarker).new(11) { PixelUMMDecoderBlockMPSFFI::PhaseMarker.new }
     @released = false
     @error_text = Bytes.new(1024, 0_u8)
     @@retained_mutex = Mutex.new
@@ -503,8 +520,10 @@ module ML::Video::PixelUMMDecoderBlockMPS
       @workspace || raise ArgumentError.new("PixelUMM plan has no workspace")
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+    def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       check_live!
+      raise ArgumentError.new("PixelUMM phase profiling requires an enabled fresh API chain") if profile && !chain.api_profile_enabled?
+      @profiled_encode = false
       started = Time.instant
       @workspace.not_nil!.submit_encode!(@slot, chain) do
         chain.encoder
@@ -518,8 +537,14 @@ module ML::Video::PixelUMMDecoderBlockMPS
           chain.pause!
           status = -1
           begin
-            status = PixelUMMDecoderBlockMPSFFI.encode(@native, chain.handle,
-              @error_text.to_unsafe, @error_text.size)
+            if profile
+              status = PixelUMMDecoderBlockMPSFFI.encode_profiled(@native, chain.handle,
+                chain.api_profile_handle, @profile_markers.to_unsafe, @profile_markers.size.to_u32,
+                @error_text.to_unsafe, @error_text.size)
+            else
+              status = PixelUMMDecoderBlockMPSFFI.encode(@native, chain.handle,
+                @error_text.to_unsafe, @error_text.size)
+            end
           ensure
             chain.resume!
           end
@@ -527,11 +552,28 @@ module ML::Video::PixelUMMDecoderBlockMPS
           # Each tile schedules separately materialized QK, softmax, and PV
           # MPSGraphs. No graph is encoded for a padding row or unused head group.
           @attention_graph_encodes = @local_attention_tile_count * 3
+          @profiled_encode = profile
           @last_encode_host_seconds = (Time.instant - started).total_seconds
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
         {% end %}
       end
+    end
+
+    # CPU metadata and existing root timestamps are interpreted only after the
+    # caller's successful sole terminal wait, never during inference.
+    def phase_profile(chain : ML::Metal::MPSCommandChain) : ML::Video::PixelUMMBlockPhaseProfile
+      unless @profiled_encode && @chain.try(&.same?(chain)) && chain.completed? && chain.wait_count == 1
+        raise ArgumentError.new("PixelUMM phase profile requires the profiled chain's terminal wait")
+      end
+      markers = @profile_markers.map_with_index do |raw, index|
+        raise ArgumentError.new("PixelUMM native phase inventory is incomplete") unless raw.phase == index
+        ML::Video::PixelUMMBlockPhaseMarker.new(
+          ML::Video::PixelUMMBlockPhaseProfile::MARKER_NAMES[index],
+          raw.wall_ns.to_f64 / 1e9, raw.thread_cpu_ns.to_f64 / 1e9, raw.root_count)
+      end.to_a
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, chain.completed_root_timings,
+        chain.gpu_elapsed_seconds, chain.api_profile, @local_attention_tile_count)
     end
 
     def release : Nil

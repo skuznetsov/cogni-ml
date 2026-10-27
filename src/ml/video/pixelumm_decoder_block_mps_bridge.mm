@@ -13,7 +13,65 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <time.h>
 #include <vector>
+#include "mps_api_profile.h"
+
+extern "C" int32_t gs_mps_chain_root_count(void *, int32_t *);
+
+// CPU-only metadata, supplied in a fixed caller-owned array before encoding.
+// No counter sampling, command submission or GPU synchronization is added.
+struct PixelUMMPhaseMarker {
+  uint64_t wall_ns;
+  uint64_t thread_cpu_ns;
+  int32_t root_count;
+  int32_t phase;
+};
+static constexpr uint32_t kPixelPhaseMarkerCount = 11;
+
+class PixelUMMPhaseRecorder {
+public:
+  PixelUMMPhaseRecorder(void *chain, PixelUMMPhaseMarker *markers,
+                       uint32_t capacity) : chain_(chain), markers_(markers),
+                                            capacity_(capacity) {}
+  bool mark(int32_t phase, int32_t apiPhase) {
+    if (!markers_) return true;
+    if (!chain_ || capacity_ != kPixelPhaseMarkerCount ||
+        phase != int32_t(cursor_) || cursor_ >= capacity_ ||
+        gs_mps_chain_api_profile_set_phase(chain_, apiPhase) != 0) return false;
+    int32_t roots = 0;
+    timespec wall{}, cpu{};
+    if (gs_mps_chain_root_count(chain_, &roots) != 0 || roots <= 0 ||
+        clock_gettime(CLOCK_MONOTONIC, &wall) != 0 ||
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu) != 0) return false;
+    const uint64_t wallNS = uint64_t(wall.tv_sec) * 1000000000u + wall.tv_nsec;
+    const uint64_t cpuNS = uint64_t(cpu.tv_sec) * 1000000000u + cpu.tv_nsec;
+    if (cursor_ == 0) { baseWall_ = wallNS; baseCPU_ = cpuNS; }
+    if (wallNS < baseWall_ || cpuNS < baseCPU_) return false;
+    markers_[cursor_++] = {wallNS - baseWall_, cpuNS - baseCPU_, roots, phase};
+    return true;
+  }
+private:
+  void *chain_;
+  PixelUMMPhaseMarker *markers_;
+  uint32_t capacity_, cursor_ = 0;
+  uint64_t baseWall_ = 0, baseCPU_ = 0;
+};
+
+class PixelUMMGraphAPIScope {
+public:
+  explicit PixelUMMGraphAPIScope(MPSCommandBuffer *commandBuffer) {
+    if (gs_mps_api_profile_scope_begin)
+      gs_mps_api_profile_scope_begin(GS_MPS_API_PROFILE_OP_GRAPH_ENCODE,
+                                    (__bridge void *)commandBuffer, &scope_);
+  }
+  ~PixelUMMGraphAPIScope() {
+    if (scope_.active && gs_mps_api_profile_scope_end)
+      gs_mps_api_profile_scope_end(&scope_);
+  }
+private:
+  gs_mps_api_profile_scope scope_{};
+};
 
 static const NSUInteger kPixelWeightCount = 13;
 static const NSUInteger kPixelCoreCount = 9;
@@ -863,9 +921,13 @@ static bool pixel_encode_graph(MPSCommandBuffer *commandBuffer,
     pixel_set_error(errorText, errorCapacity, "incomplete prepared PixelUMM graph step");
     return false;
   }
-  NSArray<MPSGraphTensorData *> *result = [step.executable
-      encodeToCommandBuffer:commandBuffer inputsArray:step.inputs
-      resultsArray:step.outputs executionDescriptor:step.execution];
+  NSArray<MPSGraphTensorData *> *result;
+  {
+    PixelUMMGraphAPIScope scope(commandBuffer);
+    result = [step.executable encodeToCommandBuffer:commandBuffer
+        inputsArray:step.inputs resultsArray:step.outputs
+        executionDescriptor:step.execution];
+  }
   if (!result || result.count != step.outputs.count) {
     pixel_set_ns_error(errorText, errorCapacity,
         [NSString stringWithFormat:@"failed encoding PixelUMM graph %@", step.name]);
@@ -1330,11 +1392,13 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create(
   return nullptr;
 }
 
-extern "C" int32_t gs_pixelumm_decoder_block_encode(
+static int32_t pixel_encode_block(
     void *planHandle, void *commandChainHandle, char *errorText,
-    size_t errorCapacity) {
+    size_t errorCapacity, void *profileChain,
+    PixelUMMPhaseMarker *markers, uint32_t markerCapacity) {
   if (errorText && errorCapacity) errorText[0] = '\0';
-  if (!planHandle || !commandChainHandle) {
+  if (!planHandle || !commandChainHandle ||
+      (markers && (!profileChain || markerCapacity != kPixelPhaseMarkerCount))) {
     pixel_set_error(errorText, errorCapacity, "required PixelUMM plan/chain handle is null");
     return -1;
   }
@@ -1350,6 +1414,7 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
                         "PixelUMM MPSCommandChain root is unavailable, committed or on another device");
         return -2;
       }
+      PixelUMMPhaseRecorder profile(profileChain, markers, markerCapacity);
       @try {
         id<MTLBuffer> input = plan.resident[0];
         const uint64_t dBytes = uint64_t(plan.tokens) * plan.dim * 2u;
@@ -1357,6 +1422,7 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
         const uint64_t ffBytes = uint64_t(plan.tokens) * plan.ffn * 2u;
         const uint64_t qStatisticsBytes = uint64_t(plan.tokens) * plan.heads * 2u * 4u;
         const uint64_t kStatisticsBytes = uint64_t(plan.tokens) * plan.kvHeads * 2u * 4u;
+        if (!profile.mark(0, GS_MPS_API_PROFILE_PHASE_SELF_PREPARE)) return -18;
         if (!pixel_encode_graph(commandBuffer, plan.inputNorm, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelInputNormStatistics,
                 plan.scratch[9], uint64_t(plan.tokens) * 4u, errorText, errorCapacity) ||
@@ -1364,12 +1430,14 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
                 plan.core[1], dBytes, errorText, errorCapacity) ||
             !pixel_encode_graph(commandBuffer, plan.inputNormGain, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelInputNorm, plan.core[0], dBytes, errorText, errorCapacity)) return -3;
+        if (!profile.mark(1, GS_MPS_API_PROFILE_PHASE_SELF_PREPARE)) return -18;
         if (!pixel_encode_graph(commandBuffer, plan.qProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelQProj, plan.core[1], dBytes, errorText, errorCapacity)) return -4;
         if (!pixel_encode_graph(commandBuffer, plan.kProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelKProj, plan.core[2], kvBytes, errorText, errorCapacity)) return -5;
         if (!pixel_encode_graph(commandBuffer, plan.vProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelVProj, plan.core[3], kvBytes, errorText, errorCapacity)) return -6;
+        if (!profile.mark(2, GS_MPS_API_PROFILE_PHASE_SELF_PREPARE)) return -18;
         if (!pixel_encode_graph(commandBuffer, plan.qNormStatistics, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelQNormStatistics,
                 plan.scratch[10], qStatisticsBytes, errorText, errorCapacity) ||
@@ -1394,6 +1462,7 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
               plan.scratch[13], errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelQReady, plan.core[1], dBytes, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelKReady, plan.core[2], kvBytes, errorText, errorCapacity)) return -7;
+        if (!profile.mark(3, GS_MPS_API_PROFILE_PHASE_SELF_ATTENTION)) return -18;
         id<MTLBuffer> queryIndices = plan.scratch[6];
         id<MTLBuffer> keyIndices = plan.scratch[7];
         const int32_t *queryTable = (const int32_t *)queryIndices.contents;
@@ -1443,9 +1512,11 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
                 &scatterParams, sizeof(scatterParams), panelCount,
                 false, errorText, errorCapacity)) return -11;
         }
-        if (!pixel_copy_capture(commandBuffer, plan, PixelAttention, plan.core[4], dBytes, errorText, errorCapacity) ||
-            !pixel_encode_graph(commandBuffer, plan.oProjection, errorText, errorCapacity) ||
+        if (!pixel_copy_capture(commandBuffer, plan, PixelAttention, plan.core[4], dBytes, errorText, errorCapacity)) return -11;
+        if (!profile.mark(4, GS_MPS_API_PROFILE_PHASE_SELF_PROJECTION_RESIDUAL)) return -18;
+        if (!pixel_encode_graph(commandBuffer, plan.oProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelOProj, plan.core[1], dBytes, errorText, errorCapacity)) return -11;
+        if (!profile.mark(5, GS_MPS_API_PROFILE_PHASE_SELF_PROJECTION_RESIDUAL)) return -18;
         PixelCountParams hiddenCount{plan.tokens * plan.dim};
         if (!pixel_encode_kernel(commandBuffer, plan.device, plan.residual,
               @[input, plan.core[1], plan.core[5]], &hiddenCount,
@@ -1455,10 +1526,12 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
             !pixel_encode_graph(commandBuffer, plan.postNorm, errorText, errorCapacity) ||
             !pixel_encode_graph(commandBuffer, plan.postNormGain, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelPostNorm, plan.core[1], dBytes, errorText, errorCapacity)) return -12;
+        if (!profile.mark(6, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         if (!pixel_encode_graph(commandBuffer, plan.gateProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelGateProj, plan.core[6], ffBytes, errorText, errorCapacity) ||
             !pixel_encode_graph(commandBuffer, plan.upProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelUpProj, plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
+        if (!profile.mark(7, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         PixelCountParams ffnCount{plan.tokens * plan.ffn};
         if (!pixel_encode_kernel(commandBuffer, plan.device, plan.silu,
               @[plan.core[6]], &ffnCount,
@@ -1469,14 +1542,17 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
               @[plan.core[6], plan.core[7]], &ffnCount,
               sizeof(PixelCountParams), uint64_t(plan.tokens) * plan.ffn,
               false, errorText, errorCapacity) ||
-            !pixel_copy_capture(commandBuffer, plan, PixelProduct, plan.core[7], ffBytes, errorText, errorCapacity) ||
-            !pixel_encode_graph(commandBuffer, plan.downProjection, errorText, errorCapacity) ||
+            !pixel_copy_capture(commandBuffer, plan, PixelProduct, plan.core[7], ffBytes, errorText, errorCapacity)) return -14;
+        if (!profile.mark(8, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
+        if (!pixel_encode_graph(commandBuffer, plan.downProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelDownProj, plan.core[4], dBytes, errorText, errorCapacity)) return -14;
+        if (!profile.mark(9, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         if (!pixel_encode_kernel(commandBuffer, plan.device, plan.residual,
               @[plan.core[5], plan.core[4], plan.core[8]], &hiddenCount,
               sizeof(PixelCountParams), uint64_t(plan.tokens) * plan.dim,
               false, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelOutput, plan.core[8], dBytes, errorText, errorCapacity)) return -15;
+        if (!profile.mark(10, GS_MPS_API_PROFILE_PHASE_UNASSIGNED)) return -18;
         return 0;
       } @catch (NSException *exception) {
         pixel_set_ns_error(errorText, errorCapacity,
@@ -1487,6 +1563,22 @@ extern "C" int32_t gs_pixelumm_decoder_block_encode(
   }
   pixel_set_error(errorText, errorCapacity, "PixelUMM MPS encode requires macOS 14 or newer");
   return -17;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_encode(
+    void *plan, void *commandBuffer, char *error, size_t capacity) {
+  return pixel_encode_block(plan, commandBuffer, error, capacity,
+                            nullptr, nullptr, 0);
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_encode_profiled(
+    void *plan, void *commandBuffer, void *profileChain,
+    PixelUMMPhaseMarker *markers, uint32_t markerCapacity,
+    char *error, size_t capacity) {
+  if (!profileChain || !markers || markerCapacity != kPixelPhaseMarkerCount)
+    return -18;
+  return pixel_encode_block(plan, commandBuffer, error, capacity,
+                            profileChain, markers, markerCapacity);
 }
 
 extern "C" void gs_pixelumm_decoder_block_plan_release(void *planHandle) {
