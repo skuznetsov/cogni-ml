@@ -156,7 +156,7 @@ module PixelUMMBlockProbe
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    def initialize(@fixture : Fixture, max_named_bytes : Int64)
+    def initialize(@fixture : Fixture, max_named_bytes : Int64, *, ffn_f32 : Bool = false)
       begin
         @borrowed_bytes = (@fixture.inputs.values + @fixture.weights.values).sum(&.nbytes)
         raise ArgumentError.new("borrowed bindings exceed named memory budget") unless @borrowed_bytes < max_named_bytes
@@ -174,7 +174,8 @@ module PixelUMMBlockProbe
         @fixture.weights.each { |name, record| weights[name] = @bindings[name] = upload(record) }
         @plan = ML::Video::PixelUMMDecoderBlockMPS::Plan.new(config,
           input: @bindings["x"], weights: weights, cos: @bindings["cos"], sin: @bindings["sin"],
-          max_named_bytes: max_named_bytes - @borrowed_bytes, captures: @fixture.capture_order)
+          max_named_bytes: max_named_bytes - @borrowed_bytes, captures: @fixture.capture_order,
+          ffn_f32: ffn_f32)
         @named_bytes = @borrowed_bytes + plan.named_bytes
         raise ArgumentError.new("prepared PixelUMM bindings exceed named budget") if @named_bytes > max_named_bytes
       rescue error

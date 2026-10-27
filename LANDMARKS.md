@@ -34651,3 +34651,42 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback: leave profiling off; old FFI retained. Refresh on scoped source,
   fixtures/weights, device/OS/toolchain/backend, geometry, precision, lifetime,
   captures, guards or lost evidence. No complete-decoder/video-latency claim.
+
+### 2026-10-27: PixelUMM opt-in F32 FFN graph qualification
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-f32.json. Gate/up/down
+  accept opt-in BF16-to-F32 graph operand casts with existing BF16 outputs.
+  Weights/handoffs stay BF16; graph types do not certify physical arithmetic.
+  Default false, old C ABI mode-zero wrapper retained; invalid modes fail early.
+- Serial full-J block0 order BF16/F32/F32/BF16, one warmup and three timed
+  requests per process: medians 1.709523/1.207000/1.194168/1.592808 s.
+  Balanced pair latency reductions are 29.40% and 25.03%, including encoding,
+  terminal wait and GPU diagnostic captures, excluding preparation and CPU
+  comparison. Preserve BF16 drift; no exclusive-kernel/decoder/video claim.
+- Matrix attention/output comparisons are finite and bitwise exact. Final
+  preserved binary passes all 26 J2048 stages twice plus two full-J attention/
+  output pairs. Saved seeded adapted upstream-semantics MPS oracle; not fresh
+  upstream, CUDA Flex or real decoder latents. Unchanged atol=rtol=2e-5.
+- One terminal wait, zero named encode allocations and no preterminal activation
+  reads remain. Backend segments change 122->128 at full J, 13->16 at small J;
+  submit/wait sites are unchanged but topology is not identical. Named full-J
+  bytes remain 3,223,313,892; sampled process footprint rises from 4.80-4.90 to
+  6.44 GiB. Keep this opaque-backend cost in multi-block admission. Serial guards
+  retain 10% physical floor, process caps, 64 MiB swap-growth stop and deadlines;
+  swap is flat in the paired runs. Sampling is not a peak guarantee.
+- Three small-J projection probes qualify all MPS arms exactly and reject native
+  F16 K8 MMA: gate149/up108/down288 tolerance failures. GPU seeded-NaN and F16
+  under/overflow controls pass; independent postterminal CPU metrics agree.
+  Repeated-row M21120 BF16/F32 root timings overlap diagnostic work and cannot
+  support exclusive speed rankings. The real connected block supplies the gain.
+- Release builds and 62 regression examples pass. External hash/numeric/guard
+  validator and source/binary receipts index curated evidence on SSD; they are
+  not hermetic attestation. One projection receipt's unrelated decoder CLI pin
+  predates precision-metadata wording; projection sources and preserved/final
+  binary identity bind that result. Final decoder reruns bind current sources.
+- Rollback: omit ffn_f32/--ffn-f32. Next falsifier: sequential shared-workspace
+  blocks with upstream output parity and admitted process memory, before default
+  promotion. Prior eight-block BF16 parity does not qualify the new mode. Refresh
+  on source, fixtures/weights, backend/device/toolchain/OS, geometry/precision,
+  ownership, capture, guard changes or lost artifacts. No full generation ran.

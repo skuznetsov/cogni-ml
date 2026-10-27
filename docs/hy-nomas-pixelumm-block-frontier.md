@@ -557,12 +557,41 @@ The strongest next optimization candidate is **FFN matrix work**. Resident
 unprofiled encode-plus-terminal-wait medians are approximately **1.59-1.68
 seconds per block**, including GPU diagnostic capture copies but excluding
 preparation and postterminal comparisons. This is not complete-decoder latency
-or seconds of video. No arithmetic optimization is promoted by this change.
+or seconds of video. This profiling-only slice promotes no arithmetic change;
+the separately qualified opt-in FFN path is recorded below.
+
+### FFN follow-up contract
+
+The follow-up CAUTION slice isolates the pretrained block-zero gate/up/down
+projections before changing the connected decoder. The baseline is the current
+resident BF16 MPSGraph linear step. Candidates must consume the same saved
+BF16 post-attention-normalized input (gate/up), or the same BF16 product input
+(down), and the same authenticated weights. Initial qualification uses saved
+upstream J2048 captures and full K4096/K12288; larger-M timing must identify
+whether its rows are real full-J activations or GPU-repeated saved rows.
+
+The falsifier is any nonfinite value or failure at the existing
+`atol=rtol=2e-5`, including BF16 rounding boundaries. Alternative operand loads,
+partial-sum grouping, casts and gate/up fusion may change those boundaries;
+no speed result overrides a failed numerical gate. Timings include required
+per-request conversions and packing. Resident alternative weight storage is
+reported separately, including its preparation and memory cost. All neural
+work stays on GPU, with comparisons only after the sole terminal wait.
+
+DoD: build and run the bounded projection probe under the existing cache-aware
+10% physical reserve, process-footprint cap, 64 MiB swap-growth stop and
+deadline; qualify its comparator with a seeded defect; compare all three
+projections against the saved upstream captures and the current MPS control.
+A passing candidate then needs balanced resident pairs and a connected full-J
+block comparison before promotion. The rollback is to retain the unchanged
+MPS default and keep any rejected candidate confined to the diagnostic probe.
+No complete decoder, diffusion, Studio or generation belongs to this slice.
 
 The CAUTION contract preserves arithmetic, BF16 boundaries, graph geometry,
 captures and existing command submission/wait sites. The old unprofiled FFI
 entry point remains available; the Crystal API defaults to `profile: false`.
-All observed full-J requests retain 122 command roots and one terminal wait.
+All full-J requests in this earlier profiling-only qualification retain 122
+command roots and one terminal wait. The later F32 FFN path uses 128 roots.
 Equal root counts do not establish identical off/on continuation placement.
 
 Opt-in, preallocated CPU markers delimit input normalization, QKV, QK
@@ -713,3 +742,113 @@ candidate. Roll back profiling by omitting `profile: true` / `--profile-order`;
 this retains the patched disabled Graph hook. Refresh after source, fixture,
 weight, device/OS/toolchain/backend, geometry, precision, capture, lifetime or
 guard changes, or loss of external evidence.
+
+## Opt-in F32 FFN graph qualification, 2026-10-27
+
+The measured FFN lever is MPSGraph operand typing. For gate/up/down only,
+`ffn_f32: true` casts the resident BF16 input and weight feeds to F32 graph
+tensors before matmul, then retains the existing BF16 output cast. The
+standalone probe exposes `--ffn-f32`; the Plan option is fixed at preparation.
+Q/K/V/output projections, activation/residual stages and caller-owned BF16
+storage are unchanged. Graph types do not certify backend physical arithmetic
+or explain MPS's kernel selection. The default remains false; the old C create
+symbol forwards to mode zero, and the new entry point rejects modes outside
+0/1 before inspecting handles or allocating resources.
+
+### Projection falsifiers
+
+The diagnostic probe compares current BF16 MPSGraph, explicit F32 operands,
+BF16-to-F16-to-F32 graph operands, and a native F16-operand K8 MMA candidate.
+All consume the same pretrained weights and saved upstream BF16 activations,
+with full K4096 for gate/up and K12288 for down. Four alternating-order timed
+rounds follow one warmup. Per-request casts are included; upload, compilation,
+poison, row repetition, comparisons and terminal readback are excluded.
+
+| J2048 projection | BF16 root union, ms | F32 root union, ms | Native F16 tolerance failures |
+| --- | ---: | ---: | ---: |
+| gate | 31.104 | 18.756 | 149 |
+| up | 32.351 | 19.490 | 108 |
+| down | 31.721 | 19.521 | 288 |
+
+The measured intervals in these three small-J reports do not overlap other
+observed root lifetimes. These are command-root unions, not shader cycle
+measurements. All three MPS arms match saved BF16 output words exactly; the
+native F16 candidate fails the unchanged `atol=rtol=2e-5` and remains confined
+to diagnostics. GPU comparison coverage, injected-NaN detection and an
+independent postterminal CPU comparator are checked. F16 roundtrip counters
+also detect a seeded underflow and overflow. Actual operand losses, including
+tiny nonzero-to-zero values, are recorded; they do not alone establish the
+cause of native reduction differences.
+
+A larger-M projection report repeats the J2048 activation rows cyclically on
+GPU to M21120. Its BF16/F32 root intervals overlap diagnostic work, so those
+timings are retained but disqualified from an exclusive speed comparison.
+This repeated-row probe is not the connected full-J block used below.
+
+### Connected full-J result and memory tradeoff
+
+Serial process order is BF16, F32, F32, BF16. Each process prepares one resident
+block0 plan at T6/H44/W80, J21120, runs a numerical gate and one warmup, then
+three timed requests. Separate processes avoid retaining two plans and their
+opaque MPS workspaces at once; these are balanced serial pairs, not
+same-process pairs.
+
+| Pair order | BF16 request median, s | F32 request median, s | Latency reduction |
+| --- | ---: | ---: | ---: |
+| BF16 then F32 | 1.709523 | 1.207000 | 29.40% |
+| F32 then BF16 | 1.592808 | 1.194168 | 25.03% |
+
+Time includes native encoding, the existing terminal wait and GPU capture
+copies. It excludes preparation/compilation/upload and postterminal CPU
+comparisons. Retain the BF16 drift between pairs; the result is a 25-29%
+prepared-request reduction in this bounded fixture, not exclusive FFN kernel
+time, complete-decoder latency or seconds of video.
+
+Across the four matrix reports, 16 attention/output comparisons from the first
+and last requests are finite and bitwise exact against saved adapted
+upstream-semantics PyTorch MPS captures. Other requests retain captures but
+skip CPU comparison. The final rebuilt binary separately passes 52 comparisons
+over all 26 J2048 stages and four full-J attention/output comparisons. Fixtures
+use seeded synthetic inputs, not real decoder latents; no fresh upstream or
+compiled CUDA Flex run is claimed.
+
+Each connected request has one terminal wait, zero named encode allocations
+and zero preterminal activation readbacks. Existing encode/submit/wait sites
+are unchanged, but observed backend command segments increase from 122 to 128
+at full J and 13 to 16 at small J. Execution topology is not identical.
+
+Full-J named storage stays 3,223,313,892 bytes (3.00 GiB). The four paired runs
+sample process-group footprints of approximately 4.80-4.90 GiB for BF16 and
+6.44 GiB for F32. This cost is outside named-buffer accounting and is material
+to later multi-block admission. All serial guards preserve the cache-aware
+10% physical floor, 8 GiB full-block/4 GiB projection caps, 64 MiB swap-growth
+stop and deadlines. Sampled swap growth is zero; polling does not guarantee
+between-sample peaks or reserve opaque MPS memory.
+
+### Verification, rollback and next gate
+
+Executed release build and regression commands:
+
+```sh
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build pixelumm_decoder_block_probe pixelumm_ffn_projection_probe
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261026/build spec_pixelumm_decoder_block spec_pixelumm_two_block_probe spec_pixelumm_block_profile spec_pixelumm_ffn_projection
+```
+
+All 62 examples pass: 15 admission/precision/legacy-ABI, 15 fixture/cache,
+28 profile/API/trace and four independent CPU-comparator checks. GPU runs are
+separately guarded and indexed in
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-f32.json`. The external
+validator recomputes fixture payload hashes, compares saved stage hashes,
+checks all sampled guards, source/binary receipts and balanced medians. The
+repository has no `scripts/validate-landmark-graph.sh`; no structural-validator
+success is implied. Same-lineage Mini-Quad review is correlated, not
+independent replication. Heavy artifacts and preserved executables stay on SSD.
+
+Rollback is to omit `ffn_f32: true` / `--ffn-f32`; rejected native/F16 paths
+cannot be selected by a decoder Plan. Before default promotion, qualify this
+mode on sequential blocks with shared scratch, all available upstream output
+boundaries, and an admitted process-footprint budget. The earlier eight-block
+BF16 qualification does not qualify the new mode. Refresh after source,
+fixture/weights, device/OS/toolchain/backend, geometry, precision, ownership,
+captures, guards or lost external artifacts. No full decoder, diffusion,
+Studio or generation ran in this slice.

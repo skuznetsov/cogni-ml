@@ -7,6 +7,7 @@ budget = 0_i64
 warmups, repeats = 1, 3
 profile_order = "none"
 continuation_trace = false
+ffn_f32 = false
 trace_ready, trace_release = "", ""
 OptionParser.parse do |parser|
   parser.banner = "One PixelUMM block only; external 10% memory guard required."
@@ -18,6 +19,7 @@ OptionParser.parse do |parser|
   parser.on("--repeats N", "Timed requests after the numerical gate, 1..6") { |v| repeats = v.to_i }
   parser.on("--profile-order ORDER", "none, off-on or on-off; balanced pairs in one resident session") { |v| profile_order = v }
   parser.on("--continuation-trace", "Opt-in CPU continuation chronology on profiled arms") { continuation_trace = true }
+  parser.on("--ffn-f32", "Opt-in F32 graph tensors for gate/up/down, retaining BF16 boundaries") { ffn_f32 = true }
   parser.on("--trace-ready-file PATH", "Fresh PID receipt for bounded Instruments attach before encoding") { |v| trace_ready = v }
   parser.on("--trace-release-file PATH", "Fresh CPU release file paired with --trace-ready-file") { |v| trace_release = v }
 end
@@ -60,7 +62,7 @@ capture_hashes = nil.as(Hash(String, String)?)
 begin
   fixture = PixelUMMBlockProbe::Fixture.new(reference, expected_sha)
   preparation = Time.instant
-  session = PixelUMMBlockProbe::Session.new(fixture, budget)
+  session = PixelUMMBlockProbe::Session.new(fixture, budget, ffn_f32: ffn_f32)
   preparation_seconds = (Time.instant - preparation).total_seconds
   STDERR.puts "PixelUMM one block admitted #{session.named_bytes} named bytes, grid=#{fixture.grid}"
   unless trace_ready.empty?
@@ -151,10 +153,13 @@ begin
   end
   result = {schema: "cogni_ml.pixelumm_native_block_probe/v1", reference: reference,
             reference_sha256: expected_sha, grid: fixture.grid, block_index: 0,
-            generation: false, precision: "BF16 boundaries with F32 normalization/RoPE/attention accumulation",
+            generation: false, precision: "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; " +
+              (session.plan.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
+              "; graph types do not certify backend physical arithmetic",
             oracle: "adapted upstream-semantics PyTorch MPS; tiny CPU Flex equivalence is separate",
             tolerance: {atol: PixelUMMBlockProbe::ATOL, rtol: PixelUMMBlockProbe::RTOL},
             profile_order: profile_order, continuation_trace_enabled: continuation_trace,
+            ffn_f32_graph_tensors: session.plan.ffn_f32,
             instruments_attach_gate: !trace_ready.empty?,
             capture_order: fixture.capture_order,
             preparation_seconds: preparation_seconds, named_bytes: session.named_bytes,

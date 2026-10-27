@@ -157,6 +157,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic) uint32_t maxQuery;
 @property(nonatomic) uint32_t maxKey;
 @property(nonatomic) uint32_t tileCount;
+@property(nonatomic) BOOL ffnF32;
 @property(nonatomic) uint64_t captureMask;
 @end
 @implementation PixelUMMDecoderPlan
@@ -551,7 +552,7 @@ static PixelUMMGraphStep *pixel_linear_step(
     id<MTLDevice> device, id<MTLBuffer> inputBuffer, id<MTLBuffer> weightBuffer,
     id<MTLBuffer> outputBuffer, uint32_t tokens, uint32_t inputWidth,
     uint32_t outputWidth, NSString *name,
-    char *errorText, size_t errorCapacity) {
+    char *errorText, size_t errorCapacity, bool castOperandsToF32) {
   MPSGraph *graph = [MPSGraph new];
   graph.options = MPSGraphOptionsNone;
   NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
@@ -564,9 +565,15 @@ static PixelUMMGraphStep *pixel_linear_step(
       inputBuffer, inputShape, MPSDataTypeBFloat16, [name stringByAppendingString:@"_input"]);
   MPSGraphTensor *weight = pixel_add_feed(graph, feeds, placeholders, inputData,
       weightBuffer, weightShape, MPSDataTypeBFloat16, [name stringByAppendingString:@"_weight"]);
-  MPSGraphTensor *flat = input ? [graph reshapeTensor:input
+  MPSGraphTensor *matmulInput = castOperandsToF32 && input
+      ? [graph castTensor:input toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_input_f32"]] : input;
+  MPSGraphTensor *matmulWeight = castOperandsToF32 && weight
+      ? [graph castTensor:weight toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_weight_f32"]] : weight;
+  MPSGraphTensor *flat = matmulInput ? [graph reshapeTensor:matmulInput
       withShape:pixel_shape({tokens, inputWidth}) name:[name stringByAppendingString:@"_flat"]] : nil;
-  MPSGraphTensor *transpose = weight ? [graph transposeTensor:weight dimension:0
+  MPSGraphTensor *transpose = matmulWeight ? [graph transposeTensor:matmulWeight dimension:0
       withDimension:1 name:[name stringByAppendingString:@"_weight_transpose"]] : nil;
   MPSGraphTensor *product = flat && transpose
       ? [graph matrixMultiplicationWithPrimaryTensor:flat secondaryTensor:transpose
@@ -576,7 +583,8 @@ static PixelUMMGraphStep *pixel_linear_step(
     bf16 = pixel_cast_bf16(graph, bf16, [name stringByAppendingString:@"_bf16"]);
   MPSGraphTensor *reshaped = bf16 ? [graph reshapeTensor:bf16 withShape:outputShape
       name:[name stringByAppendingString:@"_output"]] : nil;
-  if (!input || !weight || !flat || !transpose || !product || !bf16 || !reshaped) {
+  if (!input || !weight || !matmulInput || !matmulWeight || !flat ||
+      !transpose || !product || !bf16 || !reshaped) {
     pixel_set_ns_error(errorText, errorCapacity,
         [NSString stringWithFormat:@"unable to build PixelUMM linear graph %@", name]);
     return nil;
@@ -907,9 +915,11 @@ static bool pixel_validate_table(id<MTLBuffer> table, uint32_t rows,
 static PixelUMMGraphStep *pixel_append_linear(
     PixelUMMDecoderPlan *plan, id<MTLBuffer> input, id<MTLBuffer> weight,
     id<MTLBuffer> output, uint32_t tokens, uint32_t inputWidth,
-    uint32_t outputWidth, NSString *name, char *errorText, size_t errorCapacity) {
+    uint32_t outputWidth, NSString *name, char *errorText, size_t errorCapacity,
+    bool castOperandsToF32 = false) {
   PixelUMMGraphStep *step = pixel_linear_step(plan.device, input, weight, output,
-      tokens, inputWidth, outputWidth, name, errorText, errorCapacity);
+      tokens, inputWidth, outputWidth, name, errorText, errorCapacity,
+      castOperandsToF32);
   return step;
 }
 
@@ -1043,15 +1053,20 @@ static bool pixel_copy_capture(MPSCommandBuffer *commandBuffer,
                        errorText, errorCapacity);
 }
 
-extern "C" void *gs_pixelumm_decoder_block_plan_create(
+static void *pixelumm_decoder_block_plan_create(
     void *deviceHandle, int32_t temporal, int32_t height, int32_t width,
     int32_t tile, int32_t dim, int32_t ffn, int32_t heads,
     int32_t kvHeads, int32_t headDim, float epsilon, void *inputHandle,
     void *cosineHandle, void *sineHandle, void **weightHandles,
     void **coreHandles, void **captureHandles, uint64_t captureMask,
     void **scratchHandles, int32_t maxQuery, int32_t maxKey,
-    int32_t tileCount, char *errorText, size_t errorCapacity) {
+    int32_t tileCount, int32_t ffnF32, char *errorText, size_t errorCapacity) {
   if (errorText && errorCapacity) errorText[0] = '\0';
+  if (ffnF32 != 0 && ffnF32 != 1) {
+    pixel_set_error(errorText, errorCapacity,
+                    "PixelUMM FFN F32 mode must be 0 or 1");
+    return nullptr;
+  }
   if (@available(macOS 14.0, *)) {
     @autoreleasepool {
       @try {
@@ -1232,6 +1247,7 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create(
         plan.heads = (uint32_t)heads; plan.kvHeads = (uint32_t)kvHeads;
         plan.headDim = (uint32_t)headDim; plan.maxQuery = (uint32_t)maxQuery;
         plan.maxKey = (uint32_t)maxKey; plan.tileCount = (uint32_t)tileCount;
+        plan.ffnF32 = ffnF32 != 0;
         plan.captureMask = captureMask;
         NSMutableArray *allResident = [NSMutableArray array];
         [allResident addObject:input]; [allResident addObject:cosine]; [allResident addObject:sine];
@@ -1363,11 +1379,14 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create(
         plan.postNormGain = pixel_rms_gain_step(device, core[0], weights[9], core[1],
             tokens, (uint32_t)dim, @"post_attn_norm_gain", errorText, errorCapacity);
         plan.gateProjection = pixel_append_linear(plan, core[1], weights[10], core[6],
-            tokens, (uint32_t)dim, (uint32_t)ffn, @"gate_projection", errorText, errorCapacity);
+            tokens, (uint32_t)dim, (uint32_t)ffn, @"gate_projection", errorText, errorCapacity,
+            plan.ffnF32);
         plan.upProjection = pixel_append_linear(plan, core[1], weights[11], core[7],
-            tokens, (uint32_t)dim, (uint32_t)ffn, @"up_projection", errorText, errorCapacity);
+            tokens, (uint32_t)dim, (uint32_t)ffn, @"up_projection", errorText, errorCapacity,
+            plan.ffnF32);
         plan.downProjection = pixel_append_linear(plan, core[7], weights[12], core[4],
-            tokens, (uint32_t)ffn, (uint32_t)dim, @"down_projection", errorText, errorCapacity);
+            tokens, (uint32_t)ffn, (uint32_t)dim, @"down_projection", errorText, errorCapacity,
+            plan.ffnF32);
         if (!plan.oProjection || !plan.postNorm || !plan.postNormGain || !plan.gateProjection ||
             !plan.upProjection || !plan.downProjection) return nullptr;
         [steps addObjectsFromArray:@[plan.qNormStatistics, plan.kNormStatistics,
@@ -1390,6 +1409,37 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create(
   }
   pixel_set_error(errorText, errorCapacity, "PixelUMM MPS path requires macOS 14 or newer");
   return nullptr;
+}
+
+// Keep the original ABI and its BF16-only behavior for existing callers.
+extern "C" void *gs_pixelumm_decoder_block_plan_create(
+    void *deviceHandle, int32_t temporal, int32_t height, int32_t width,
+    int32_t tile, int32_t dim, int32_t ffn, int32_t heads,
+    int32_t kvHeads, int32_t headDim, float epsilon, void *inputHandle,
+    void *cosineHandle, void *sineHandle, void **weightHandles,
+    void **coreHandles, void **captureHandles, uint64_t captureMask,
+    void **scratchHandles, int32_t maxQuery, int32_t maxKey,
+    int32_t tileCount, char *errorText, size_t errorCapacity) {
+  return pixelumm_decoder_block_plan_create(deviceHandle, temporal, height,
+      width, tile, dim, ffn, heads, kvHeads, headDim, epsilon, inputHandle,
+      cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
+      captureMask, scratchHandles, maxQuery, maxKey, tileCount, 0, errorText,
+      errorCapacity);
+}
+
+extern "C" void *gs_pixelumm_decoder_block_plan_create_with_ffn_f32(
+    void *deviceHandle, int32_t temporal, int32_t height, int32_t width,
+    int32_t tile, int32_t dim, int32_t ffn, int32_t heads,
+    int32_t kvHeads, int32_t headDim, float epsilon, void *inputHandle,
+    void *cosineHandle, void *sineHandle, void **weightHandles,
+    void **coreHandles, void **captureHandles, uint64_t captureMask,
+    void **scratchHandles, int32_t maxQuery, int32_t maxKey,
+    int32_t tileCount, int32_t ffnF32, char *errorText, size_t errorCapacity) {
+  return pixelumm_decoder_block_plan_create(deviceHandle, temporal, height,
+      width, tile, dim, ffn, heads, kvHeads, headDim, epsilon, inputHandle,
+      cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
+      captureMask, scratchHandles, maxQuery, maxKey, tileCount, ffnF32,
+      errorText, errorCapacity);
 }
 
 static int32_t pixel_encode_block(

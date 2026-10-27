@@ -30,6 +30,16 @@ end
       max_key : Int32, tile_count : Int32, error : UInt8*,
       error_capacity : LibC::SizeT,
     ) : Void*
+    fun plan_create_with_ffn_f32 = gs_pixelumm_decoder_block_plan_create_with_ffn_f32(
+      device : Void*, temporal : Int32, height : Int32, width : Int32,
+      tile : Int32, dim : Int32, ffn : Int32, heads : Int32,
+      kv_heads : Int32, head_dim : Int32, epsilon : Float32,
+      input : Void*, cosine : Void*, sine : Void*, weights : Void**,
+      core : Void**, captures : Void**, capture_mask : UInt64,
+      scratch : Void**, max_query : Int32,
+      max_key : Int32, tile_count : Int32, ffn_f32 : Int32,
+      error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Void*
     fun encode = gs_pixelumm_decoder_block_encode(plan : Void*, chain : Void*,
                                                   error : UInt8*, error_capacity : LibC::SizeT) : Int32
     fun encode_profiled = gs_pixelumm_decoder_block_encode_profiled(
@@ -306,6 +316,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter attention_graph_encodes : Int32 = 0
     getter last_encode_host_seconds : Float64 = 0.0
     getter slot : Int32
+    getter ffn_f32 : Bool
 
     @cosine : ML::MetalBuffer
     @sine : ML::MetalBuffer
@@ -343,10 +354,12 @@ module ML::Video::PixelUMMDecoderBlockMPS
                    weights : Hash(String, ML::MetalBuffer), cos : ML::MetalBuffer,
                    sin : ML::MetalBuffer, max_named_bytes : Int64,
                    captures : Array(String) = [] of String,
-                   workspace : Workspace? = nil, slot : Int32 = 0)
+                   workspace : Workspace? = nil, slot : Int32 = 0,
+                   ffn_f32 : Bool = false)
       @input = input
       @cosine = cos
       @sine = sin
+      @ffn_f32 = ffn_f32
       @config.validate!
       layout = @config.layout
       @local_attention_query_tokens = layout.max_query_tokens
@@ -663,7 +676,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
         capture_handles = CAPTURE_NAMES.map do |name|
           @captures[name]?.try(&.handle) || Pointer(Void).null
         end.to_a
-        @native = PixelUMMDecoderBlockMPSFFI.plan_create(
+        @native = PixelUMMDecoderBlockMPSFFI.plan_create_with_ffn_f32(
           ML::Metal::Device.instance.device_handle,
           @config.temporal, @config.height, @config.width, @config.tile_tokens,
           @config.model_dim, @config.ff_dim, @config.query_heads,
@@ -681,6 +694,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
            @k_norm_inverse.not_nil!.handle]
             .to_unsafe,
           layout.max_query_tokens, layout.max_key_tokens, layout.tile_count,
+          @ffn_f32 ? 1 : 0,
           @error_text.to_unsafe, @error_text.size)
         raise ArgumentError.new("PixelUMM plan preparation failed: #{error_message}") if @native.null?
       {% else %}
