@@ -7,13 +7,14 @@ module PixelUMMSerialProbeRunner
 
   def run(block_count : Int32) : Nil
     PixelUMMTwoBlockProbe.validate_block_count!(block_count)
+    named_budget_limit = PixelUMMTwoBlockProbe.named_budget_limit(block_count)
     reference, expected_sha, cache_path, cache_sha, report = "", "", "", "", ""
     alternate, alternate_sha = "", ""
     budget = 0_i64
     warmups, repeats = 1, 3
     ffn_f32 = false
     OptionParser.parse do |parser|
-      parser.banner = "#{block_count} sequential PixelUMM blocks only; external 10% memory guard required."
+      parser.banner = "#{block_count} sequential PixelUMM blocks only; named budget capped at #{named_budget_limit} bytes and external 10% memory guard required."
       parser.on("--reference PATH", "Sequential upstream-adapted GPU fixture") { |v| reference = v }
       parser.on("--reference-sha256 SHA", "Trusted fixture metadata SHA-256") { |v| expected_sha = v }
       parser.on("--bf16-cache PATH", "Authenticated preconverted BF16 weights") { |v| cache_path = v }
@@ -21,13 +22,13 @@ module PixelUMMSerialProbeRunner
       parser.on("--alternate-reference PATH", "Different-input fixture for poisoned shared-scratch replay") { |v| alternate = v }
       parser.on("--alternate-reference-sha256 SHA", "Trusted alternate fixture metadata SHA-256") { |v| alternate_sha = v }
       parser.on("--report PATH", "New comparison/timing report") { |v| report = v }
-      parser.on("--max-named-bytes N", "Aggregate unique named budget, up to 8 GiB") { |v| budget = v.to_i64 }
+      parser.on("--max-named-bytes N", "Aggregate unique named budget, up to #{named_budget_limit} bytes") { |v| budget = v.to_i64 }
       parser.on("--warmups N", "Untimed warm-up requests, 0..2") { |v| warmups = v.to_i }
       parser.on("--repeats N", "Timed requests after numerical gate, 1..6") { |v| repeats = v.to_i }
       parser.on("--ffn-f32", "Opt-in F32 graph tensors for every gate/up/down, retaining BF16 boundaries") { ffn_f32 = true }
     end
     unless ARGV.empty? && {reference, expected_sha, cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
-           alternate.empty? == alternate_sha.empty? && 0 < budget <= 8_i64 * 1024 * 1024 * 1024 &&
+           alternate.empty? == alternate_sha.empty? && 0 < budget <= named_budget_limit &&
            0 <= warmups <= 2 && 1 <= repeats <= 6
       raise ArgumentError.new("expected authenticated fixtures/cache, new report and bounded memory/request counts")
     end

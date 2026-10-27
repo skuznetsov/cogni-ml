@@ -34737,3 +34737,50 @@ Refresh after source/toolchain/device/model/workload changes.
   projections remain unqualified. No full decoder, diffusion, Studio or
   generation ran. Refresh on scoped source, fixtures/weights, device/backend/
   toolchain/OS, geometry/precision, capture/ownership/guard changes or lost evidence.
+
+### 2026-10-27: PixelUMM sixteen-block real-input prefix and pipeline budget
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-sixteen-block.json. Blocks 0-15
+  share GPU scratch and authenticated BF16 weights with default-off F32 FFN
+  graph operands. Actual pinned DCAE encoder, PixelUMM noise and stem produce
+  the input from a repeated real image: static diagnostic clip, not a denoised
+  DiT sample or a generated-video quality test. Native timing has no PyTorch.
+- J2048 compares 416 stages twice; J21120 compares 32 attention/output boundaries
+  across both seeds and poisoned shared-scratch replay: 1,024 finite bitwise-exact
+  comparisons at unchanged atol=rtol=2e-5. Earlier 2/4/8-depth regressions add 728.
+  Every native request has one terminal wait, zero early activation reads and
+  zero named encode allocations; fifteen block edges remain on GPU. All 16 slots
+  use F32 FFN graph operands, which do not certify physical accumulation types.
+- Full-J medians are 20.753748/19.138901 s, including encoding, GPU captures and
+  terminal wait, excluding loading/preparation and postterminal CPU comparisons.
+  These epochs are not controlled A/A drift or input-speed comparisons. Named
+  bytes 14,202,158,052; sampled process-tree footprint <=18.623 GiB under 23 GiB
+  caps, cache-aware 10% reserve, 64 MiB swap-growth stop and deadlines. Swap flat;
+  polling does not bound between-sample peaks or opaque resources at larger depth.
+- Release builds pass 38 Crystal examples and 55 Python checks. Extending to
+  block 10 exposed fixed-width capture slicing and lexical/numeric cache-key
+  assumptions; both have regression coverage. Earlier depth caps remain intact.
+  No production arithmetic or synchronization sources changed. The upstream
+  oracle adapts semantics on MPS; compiled CUDA Flex remains unqualified.
+- Pipeline planning for 24 frames at 704x1280, CFG1, eight DiT calls, no history/camera:
+  all-resident component named subtotal 42.340 GiB; upstream SP1 dense BF16 KV
+  plus bool masks conditionally add 5.406 GiB. With 10% reserve that is 54.146 GiB
+  before opaque/loading/output/OS/background costs. Proposed stage release gives
+  PixelUMM 21.107 GiB with KV released or 26.513 GiB with KV retained, before
+  reserve/extras. Lifetime policy is unimplemented. A two-output-bank ring could
+  save 5.479 GiB but needs alias/lifetime falsifiers; diagnostic plans retain all
+  outputs. CPU offload alone does not free unified physical memory.
+- Component timing projection 100.53-130.55 s for the first video second assumes
+  qualified M64 compaction with 23 valid text tokens and 36/16 scaling of decoder
+  cost; it excludes Qwen/global stem/head/scheduler/loading/output, uses unmatched
+  epochs, and is not measured pipeline latency. Plain-text seg_ar does not need
+  the diagnostic DCAE encode. Other text lengths/history/longer decode windows
+  require fresh timing and storage qualification.
+- Only decoder layers 0-15, DCAE encoder and input stem are downloaded here;
+  remaining 20 layers/global head/full checkpoint hash/complete generation remain
+  unqualified. Rollback omits the 16-block probe and --ffn-f32. Next falsifier:
+  output-ring ownership, wider prefix and global projections, then connected
+  phase lifetimes before any full-pipeline peak/latency or quality claim. Refresh
+  on scoped source/artifacts/toolchain/backend/device/OS, geometry/precision,
+  capture/ownership/lifetimes/guards or loss of external evidence.

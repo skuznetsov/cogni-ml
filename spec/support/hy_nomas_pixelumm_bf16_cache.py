@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare and authenticate a bounded PixelUMM BF16 startup weight cache.
 
-Only decoder blocks zero and one, zero through three, or zero through seven
-are loaded. F32 checkpoint weights are moved to MPS and cast with PyTorch's
+Only decoder blocks zero and one, zero through three, zero through seven, or
+zero through fifteen are loaded. F32 checkpoint weights are moved to MPS and cast with PyTorch's
 BF16 conversion before their raw little-endian uint16 words are persisted.
 The cache is a startup artifact, not an inference timing path.
 """
@@ -25,6 +25,8 @@ import hy_nomas_pixelumm_reference as reference
 SCHEMA = "cogni_ml.pixelumm_bf16_weight_cache/v1"
 ROOT = checkpoint.ROOT
 CACHE_DIR = (ROOT / "source").resolve()
+SIXTEEN_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen")
+SIXTEEN_CACHE_DIR = (SIXTEEN_ROOT / "source").resolve()
 UPSTREAM_MODEL_SHA256 = "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
 CONVERSION = {
     "method": "torch.Tensor.to(torch.bfloat16)",
@@ -32,6 +34,7 @@ CONVERSION = {
     "rounding": "round_to_nearest_even",
 }
 CHUNK_BYTES = 8 * 1024 * 1024
+MAX_CACHE_PAYLOAD_BYTES = 8 * 1024 * 1024 * 1024
 
 
 class CacheError(ValueError):
@@ -112,8 +115,8 @@ def _expected_shapes(blocks: Mapping[int, Mapping[str, tuple[int, ...]]] | None 
     else:
         schemas = blocks
     count = len(schemas)
-    if count not in {2, 4, 8} or set(schemas) != set(range(count)):
-        raise CacheError("cache requires exactly consecutive block schemas 0-1, 0-3, or 0-7")
+    if count not in {2, 4, 8, 16} or set(schemas) != set(range(count)):
+        raise CacheError("cache requires exactly consecutive block schemas 0-1, 0-3, 0-7, or 0-15")
     result = {}
     for index in range(count):
         expected = schemas[index]
@@ -148,9 +151,10 @@ def validate_manifest(
         {"0", "1"},
         {"0", "1", "2", "3"},
         {str(index) for index in range(8)},
+        {str(index) for index in range(16)},
     )
     if not isinstance(blocks, dict) or set(blocks) not in valid_block_sets:
-        raise CacheError("BF16 cache must authenticate blocks 0-1, 0-3, or 0-7 exactly")
+        raise CacheError("BF16 cache must authenticate blocks 0-1, 0-3, 0-7, or 0-15 exactly")
     block_count = len(blocks)
     if expected_shapes is None:
         expected_shapes = _expected_shapes({
@@ -163,9 +167,12 @@ def validate_manifest(
     if (len(expected_keys) != block_count * 13 or len(expected_shapes) != block_count * 13
             or any(sum(key.startswith(prefix) for key in expected_keys) != 13
                    for prefix in expected_prefixes)
-            or any(not any(key.startswith(prefix) for prefix in expected_prefixes)
+        or any(not any(key.startswith(prefix) for prefix in expected_prefixes)
                    for key in expected_keys)):
         raise CacheError(f"cache schema must describe exactly {block_count * 13} block-owned tensors")
+    expected_cache_bytes = sum(_shape_bytes(shape, 2) for shape in expected_shapes.values())
+    if expected_cache_bytes > MAX_CACHE_PAYLOAD_BYTES:
+        raise CacheError("BF16 cache exceeds the 8 GiB payload cap")
 
     if require_pinned_identity:
         identities = {
@@ -261,15 +268,25 @@ def validate_manifest(
     if manifest.get("payload") != (payload_basename or path.name):
         raise CacheError("BF16 cache payload basename mismatch")
     payload_bytes = path.stat().st_size
+    if payload_bytes > MAX_CACHE_PAYLOAD_BYTES:
+        raise CacheError("BF16 cache payload exceeds the 8 GiB cap")
     if type(manifest.get("payload_bytes")) is not int or manifest["payload_bytes"] != payload_bytes:
         raise CacheError("BF16 cache payload byte count mismatch")
     payload_hash = manifest.get("payload_sha256")
     if not _digest(payload_hash):
         raise CacheError("BF16 cache payload digest is malformed")
 
+    # The producer serializes one numeric block at a time. Lexicographic key
+    # ordering would place block10 before block2 and reject a valid 16-block
+    # payload despite its contiguous, authenticated ranges.
+    ordered_keys = [
+        key
+        for index in range(block_count)
+        for key in sorted(key for key in expected_keys if key.startswith(f"block{index}."))
+    ]
     records = []
     cursor = 0
-    for key in sorted(expected_keys):
+    for key in ordered_keys:
         record = weights[key]
         if not isinstance(record, dict):
             raise CacheError(f"invalid BF16 cache record: {key}")
@@ -315,9 +332,12 @@ def validate_manifest(
 
 def validate_cache_file(path: Path | str) -> dict:
     """Load a production cache and bind it to the currently pinned receipts."""
-    path = Path(path).expanduser().resolve()
-    if path.parent != CACHE_DIR or path.is_symlink() or not path.is_file():
-        raise CacheError("cache manifest must be a regular file in the task source directory")
+    original_path = Path(path).expanduser()
+    if original_path.is_symlink() or not original_path.is_file():
+        raise CacheError("cache manifest must be a regular non-symlink file")
+    path = original_path.resolve()
+    if path.parent not in {CACHE_DIR, SIXTEEN_CACHE_DIR}:
+        raise CacheError("cache manifest must be in a pinned task source directory")
     try:
         raw = path.read_bytes()
         if len(raw) > 2 * 1024 * 1024:
@@ -325,7 +345,16 @@ def validate_cache_file(path: Path | str) -> dict:
         manifest = checkpoint.parse_header(raw)
     except (OSError, checkpoint.InventoryError) as error:
         raise CacheError("cannot parse cache manifest") from error
-    payload = path.parent / manifest.get("payload", "")
+    expected_dir = SIXTEEN_CACHE_DIR if len(manifest.get("blocks", {})) == 16 else CACHE_DIR
+    if path.parent != expected_dir:
+        raise CacheError("cache schema and artifact directory do not match")
+    payload_name = manifest.get("payload")
+    if (not isinstance(payload_name, str) or Path(payload_name).name != payload_name
+            or payload_name in {"", ".", ".."}):
+        raise CacheError("cache payload must be a basename in the manifest directory")
+    payload = path.parent / payload_name
+    if payload.is_symlink():
+        raise CacheError("cache payload must be a regular non-symlink file")
     result = validate_manifest(manifest, payload)
     raw_header = (CACHE_DIR / "pixelumm-header.json").read_bytes()
     for index in range(len(manifest["blocks"])):
@@ -378,17 +407,53 @@ def make_cache(
     block5: Path | str | None = None, receipt5: Path | str | None = None,
     block6: Path | str | None = None, receipt6: Path | str | None = None,
     block7: Path | str | None = None, receipt7: Path | str | None = None,
+    block8: Path | str | None = None, receipt8: Path | str | None = None,
+    block9: Path | str | None = None, receipt9: Path | str | None = None,
+    block10: Path | str | None = None, receipt10: Path | str | None = None,
+    block11: Path | str | None = None, receipt11: Path | str | None = None,
+    block12: Path | str | None = None, receipt12: Path | str | None = None,
+    block13: Path | str | None = None, receipt13: Path | str | None = None,
+    block14: Path | str | None = None, receipt14: Path | str | None = None,
+    block15: Path | str | None = None, receipt15: Path | str | None = None,
 ) -> dict:
-    """Convert and persist exactly two, four, or eight upstream-loaded BF16 blocks."""
+    """Convert and persist an admitted consecutive prefix of upstream BF16 blocks."""
     if device_name != "mps":
         raise CacheError("production cache conversion must use the pinned PyTorch MPS path")
     if not torch.backends.mps.is_available():
         raise CacheError("PyTorch MPS is not available")
     if sys.byteorder != "little":
         raise CacheError("BF16 cache serialization requires a little-endian host")
+    source_pairs = [(block0, receipt0), (block1, receipt1)]
+    optional_pairs = (
+        (block2, receipt2), (block3, receipt3),
+        (block4, receipt4), (block5, receipt5),
+        (block6, receipt6), (block7, receipt7),
+        (block8, receipt8), (block9, receipt9),
+        (block10, receipt10), (block11, receipt11),
+        (block12, receipt12), (block13, receipt13),
+        (block14, receipt14), (block15, receipt15),
+    )
+    missing_suffix = False
+    for index, (subset, receipt) in enumerate(optional_pairs, start=2):
+        if (subset is None) != (receipt is None):
+            raise CacheError(f"block {index} subset and receipt must be supplied together")
+        if subset is None:
+            missing_suffix = True
+            continue
+        if missing_suffix:
+            raise CacheError("block subset and receipt inputs must form a consecutive prefix")
+        source_pairs.append((subset, receipt))
+    if len(source_pairs) not in {2, 4, 8, 16}:
+        raise CacheError("cache requires exactly 2, 4, 8, or 16 consecutive blocks")
+    paths = tuple(Path(subset).expanduser().resolve() for subset, _ in source_pairs)
+    receipts = tuple(Path(receipt).expanduser().resolve() for _, receipt in source_pairs)
     output_path = Path(output).expanduser().absolute()
-    if output_path.parent.resolve() != CACHE_DIR:
-        raise CacheError("cache output must be in the task source directory")
+    expected_output_dir = SIXTEEN_CACHE_DIR if len(paths) == 16 else CACHE_DIR
+    if output_path.parent.resolve() != expected_output_dir:
+        raise CacheError("cache output must be in its pinned task source directory")
+    expected_bytes = len(paths) * 385_892_864
+    if expected_bytes > MAX_CACHE_PAYLOAD_BYTES:
+        raise CacheError("BF16 cache request exceeds the 8 GiB payload cap")
     payload_path = output_path.with_suffix(".bin")
     payload_partial = payload_path.with_suffix(payload_path.suffix + ".partial")
     manifest_partial = output_path.with_suffix(output_path.suffix + ".partial")
@@ -402,26 +467,6 @@ def make_cache(
     checkpoint.parse_pinned_header(raw_header)
     if header_path.parent != CACHE_DIR:
         raise CacheError("pinned PixelUMM header must be in the task source directory")
-    source_pairs = [(block0, receipt0), (block1, receipt1)]
-    optional_pairs = (
-        (block2, receipt2), (block3, receipt3),
-        (block4, receipt4), (block5, receipt5),
-        (block6, receipt6), (block7, receipt7),
-    )
-    missing_suffix = False
-    for index, (subset, receipt) in enumerate(optional_pairs, start=2):
-        if (subset is None) != (receipt is None):
-            raise CacheError(f"block {index} subset and receipt must be supplied together")
-        if subset is None:
-            missing_suffix = True
-            continue
-        if missing_suffix:
-            raise CacheError("block subset and receipt inputs must form a consecutive prefix")
-        source_pairs.append((subset, receipt))
-    if len(source_pairs) not in {2, 4, 8}:
-        raise CacheError("cache requires exactly two, four, or eight consecutive blocks")
-    paths = tuple(Path(subset).expanduser().resolve() for subset, _ in source_pairs)
-    receipts = tuple(Path(receipt).expanduser().resolve() for _, receipt in source_pairs)
     device = torch.device("mps")
     blocks = {}
     records = {}
@@ -550,6 +595,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt6", type=Path)
     parser.add_argument("--block7", type=Path)
     parser.add_argument("--receipt7", type=Path)
+    for index in range(8, 16):
+        parser.add_argument(f"--block{index}", type=Path)
+        parser.add_argument(f"--receipt{index}", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", choices=("mps",), default="mps")
     args = parser.parse_args(argv)
@@ -564,6 +612,8 @@ def main(argv: list[str] | None = None) -> int:
             block5=args.block5, receipt5=args.receipt5,
             block6=args.block6, receipt6=args.receipt6,
             block7=args.block7, receipt7=args.receipt7,
+            **{f"block{index}": getattr(args, f"block{index}") for index in range(8, 16)},
+            **{f"receipt{index}": getattr(args, f"receipt{index}") for index in range(8, 16)},
             output=args.output, device_name=args.device,
         )
         print(json.dumps(result, sort_keys=True))

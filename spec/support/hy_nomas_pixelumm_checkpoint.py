@@ -144,6 +144,67 @@ def block_schema(index: int) -> dict[str, tuple[int, ...]]:
             for name, shape in decoder_schema().items() if name.startswith(prefix)}
 
 
+def named_subset_schema(kind: str) -> dict[str, tuple[int, ...]]:
+    """Return the pinned encoder or PixelUMM input-stem tensor inventory."""
+    if kind == "encoder":
+        # The checkpoint header is SHA-256 pinned and inventory() validates all
+        # 169 encoder tensors, their F32 extents, and complete payload ownership.
+        # Their individual architecture shapes are authenticated by that exact
+        # header rather than duplicated here.
+        return {}
+    if kind == "stem":
+        return {
+            "decoder.cond_proj.bias": (16384,),
+            "decoder.cond_proj.weight": (16384, 32),
+            "decoder.embed.bias": (4096,),
+            "decoder.embed.weight": (4096, 3072),
+        }
+    raise InventoryError("named subset kind must be encoder or stem")
+
+
+def named_subset_header(header, kind: str):
+    """Build a rebased safetensors header for an exact contiguous named subset."""
+    pinned = named_subset_schema(kind)
+    if kind == "encoder":
+        selected = {key: value for key, value in header.items()
+                    if key.startswith("encoder.")}
+        if len(selected) != 169:
+            raise InventoryError("encoder subset must contain exactly 169 pinned tensors")
+    else:
+        selected = {key: value for key, value in header.items()
+                    if key in pinned}
+        if set(selected) != set(pinned):
+            raise InventoryError("stem subset tensor ownership mismatch")
+
+    ordered = sorted(selected.items(), key=lambda item: item[1]["data_offsets"][0])
+    if not ordered:
+        raise InventoryError("named subset is empty")
+    start = ordered[0][1]["data_offsets"][0]
+    cursor = start
+    result = {}
+    for name, value in ordered:
+        shape = value.get("shape")
+        offsets = value.get("data_offsets")
+        if (value.get("dtype") != "F32" or not isinstance(shape, list)
+                or not isinstance(offsets, list) or len(offsets) != 2):
+            raise InventoryError(f"named subset tensor metadata is malformed: {name}")
+        if kind == "stem" and tuple(shape) != pinned[name]:
+            raise InventoryError(f"stem tensor shape mismatch: {name}")
+        lo, hi = offsets
+        if lo != cursor:
+            raise InventoryError(f"{kind} subset extent is not contiguous")
+        result[name] = {"dtype": "F32", "shape": shape,
+                        "data_offsets": [lo - start, hi - start]}
+        cursor = hi
+    if kind == "encoder" and cursor - start != 3_666_620_032:
+        raise InventoryError("encoder subset byte extent mismatch")
+    if kind == "stem" and cursor - start != 52_510_720:
+        raise InventoryError("stem subset byte extent mismatch")
+    raw = json.dumps(result, separators=(",", ":")).encode()
+    raw += b" " * (-len(raw) % 8)
+    return struct.pack("<Q", len(raw)) + raw, start, cursor, tuple(name for name, _ in ordered)
+
+
 def subset_header(header, block_index: int = 0):
     if type(block_index) is not int or not 0 <= block_index < 36:
         raise InventoryError("decoder block index must be in [0, 36)")
@@ -223,6 +284,123 @@ def extract_block(raw_header, output, block_index: int):
         json.dump(receipt_data, sink, indent=2)
         sink.write("\n")
     return receipt_data
+
+
+def extract_named_subset(raw_header, output, kind: str):
+    """Transfer one pinned encoder/stem range into an authenticated subset."""
+    header = parse_pinned_header(raw_header)
+    output = Path(output)
+    if output.parent.resolve() != (ROOT / "source").resolve():
+        raise InventoryError("named subset output must be in the task source directory")
+    receipt = output.with_suffix(".receipt.json")
+    partial = output.with_suffix(output.suffix + ".partial")
+    if any(candidate.exists() or candidate.is_symlink()
+           for candidate in (output, receipt, partial)):
+        raise InventoryError("refusing to replace an existing named subset or receipt")
+    encoded, lo, hi, keys = named_subset_header(header, kind)
+    chunks = []
+    with partial.open("xb") as sink:
+        sink.write(encoded)
+        for start in range(lo, hi, 64 * 1024 * 1024):
+            end = min(start + 64 * 1024 * 1024, hi) - 1
+            absolute_start = start + 8 + HEADER_BYTES
+            absolute_end = end + 8 + HEADER_BYTES
+            endpoint = URL + f"?pixelumm_named_{kind}={absolute_start}-{absolute_end}"
+            with transport._request(endpoint, byte_range=(absolute_start, absolute_end)) as response:
+                digest = transport.copy_verified_range_body(
+                    response, absolute_start, absolute_end, SOURCE_BYTES, sink)
+            chunks.append({"start": absolute_start, "end_inclusive": absolute_end,
+                           "sha256": digest})
+            print(json.dumps({"downloaded_named_subset_bytes": end + 1 - lo,
+                              "total_named_subset_bytes": hi - lo,
+                              "kind": kind}), flush=True)
+    if partial.stat().st_size != len(encoded) + hi - lo:
+        raise InventoryError("named subset file extent mismatch")
+    receipt_data = {
+        **inventory(header),
+        "selected_subset": kind,
+        "tensor_keys": list(keys),
+        "source_data_offsets": [lo, hi],
+        "source_f32_bytes": hi - lo,
+        "range_chunks": chunks,
+        "subset_file": output.name,
+        "subset_bytes": partial.stat().st_size,
+        "subset_sha256": _sha_file(partial),
+    }
+    import os
+    os.link(partial, output)
+    partial.unlink()
+    with receipt.open("x") as sink:
+        json.dump(receipt_data, sink, indent=2)
+        sink.write("\n")
+    return receipt_data
+
+
+def validate_named_subset_receipt(raw_header, receipt, subset_path, kind: str) -> dict:
+    """Re-derive an encoder/stem subset extent and verify receipt/file bindings."""
+    header = parse_pinned_header(raw_header)
+    if not isinstance(receipt, dict):
+        raise InventoryError("named subset receipt must be a JSON object")
+    expected_inventory = inventory(header)
+    for field in ("hf_revision", "source_commit", "source_path", "source_file_bytes",
+                  "header_bytes", "header_sha256", "stored_dtype", "full_file_hash_verified"):
+        if receipt.get(field) != expected_inventory[field]:
+            raise InventoryError(f"named subset receipt {field} mismatch")
+    encoded, lo, hi, keys = named_subset_header(header, kind)
+    if (receipt.get("selected_subset") != kind or receipt.get("tensor_keys") != list(keys)
+            or receipt.get("source_data_offsets") != [lo, hi]
+            or receipt.get("source_f32_bytes") != hi - lo):
+        raise InventoryError("named subset receipt ownership or source extent mismatch")
+    chunks = receipt.get("range_chunks")
+    expected_chunks = []
+    for start in range(lo, hi, 64 * 1024 * 1024):
+        end_exclusive = min(start + 64 * 1024 * 1024, hi)
+        expected_chunks.append((start + 8 + HEADER_BYTES,
+                                end_exclusive + 8 + HEADER_BYTES - 1))
+    if not isinstance(chunks, list) or len(chunks) != len(expected_chunks):
+        raise InventoryError("named subset receipt range chunk count mismatch")
+    for item, (start, end_inclusive) in zip(chunks, expected_chunks):
+        if not isinstance(item, dict):
+            raise InventoryError("named subset receipt range chunk malformed")
+        digest = item.get("sha256")
+        if (type(item.get("start")) is not int or item.get("start") != start
+                or type(item.get("end_inclusive")) is not int
+                or item.get("end_inclusive") != end_inclusive
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)):
+            raise InventoryError("named subset receipt range chunk malformed")
+
+    subset_path = Path(subset_path).expanduser()
+    if subset_path.is_symlink():
+        raise InventoryError("named subset file must not be a symlink")
+    subset_path = subset_path.resolve()
+    if receipt.get("subset_file") != subset_path.name or not subset_path.is_file():
+        raise InventoryError("named subset receipt filename or file mismatch")
+    expected_size = len(encoded) + hi - lo
+    if receipt.get("subset_bytes") != expected_size or subset_path.stat().st_size != expected_size:
+        raise InventoryError("named subset file size mismatch")
+    digest = hashlib.sha256()
+    actual_chunk_hashes = []
+    with subset_path.open("rb") as stream:
+        prefix = stream.read(len(encoded))
+        if prefix != encoded:
+            raise InventoryError("named subset header differs from pinned selection")
+        digest.update(prefix)
+        for item, (start, end_inclusive) in zip(chunks, expected_chunks):
+            chunk = stream.read(end_inclusive - start + 1)
+            if len(chunk) != end_inclusive - start + 1:
+                raise InventoryError("named subset payload is truncated")
+            digest.update(chunk)
+            actual_chunk_hashes.append(hashlib.sha256(chunk).hexdigest())
+        if stream.read(1):
+            raise InventoryError("named subset has trailing data")
+    if any(item["sha256"] != actual for item, actual in zip(chunks, actual_chunk_hashes)):
+        raise InventoryError("named subset range digest does not match payload")
+    if receipt.get("subset_sha256") != digest.hexdigest():
+        raise InventoryError("named subset digest does not match receipt")
+    return {"selected_subset": kind, "subset_file": subset_path.name,
+            "subset_bytes": expected_size, "subset_sha256": digest.hexdigest(),
+            "source_data_offsets": [lo, hi], "source_f32_bytes": hi - lo}
 
 
 def extract_block0(raw_header, output):
@@ -325,6 +503,8 @@ def main():
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--extract-block0", type=Path)
     parser.add_argument("--extract-block", nargs=2, action="append", metavar=("INDEX", "PATH"))
+    parser.add_argument("--extract-named", nargs=2, action="append", metavar=("KIND", "PATH"),
+                        help="extract the pinned encoder or stem range and write a receipt")
     args = parser.parse_args()
     # Reject known collisions before any large transfer or subset mutation.
     if args.report.exists() or args.report.is_symlink():
@@ -343,8 +523,11 @@ def main():
         except ValueError as error:
             raise InventoryError("--extract-block INDEX must be an integer") from error
         requests.append((index, Path(path)))
+    named_requests = [(kind, Path(path)) for kind, path in args.extract_named or ()]
     if len({index for index, _ in requests}) != len(requests):
         raise InventoryError("each decoder block may be extracted only once per invocation")
+    if len({kind for kind, _ in named_requests}) != len(named_requests):
+        raise InventoryError("each named subset may be extracted only once per invocation")
     # Validate every destination before starting any bounded source transfer.
     for index, path in requests:
         if type(index) is not int or not 0 <= index < 36:
@@ -357,13 +540,28 @@ def main():
         if any(candidate.exists() or candidate.is_symlink()
                for candidate in (path, receipt, partial)):
             raise InventoryError("refusing to replace an existing subset or receipt")
+    for kind, path in named_requests:
+        if kind not in {"encoder", "stem"}:
+            raise InventoryError("named subset kind must be encoder or stem")
+        if path.parent.resolve() != (ROOT / "source").resolve():
+            raise InventoryError("named subset output must be in the task source directory")
+        receipt = path.with_suffix(".receipt.json")
+        partial = path.with_suffix(path.suffix + ".partial")
+        if any(candidate.exists() or candidate.is_symlink()
+               for candidate in (path, receipt, partial)):
+            raise InventoryError("refusing to replace an existing named subset or receipt")
     subsets = {}
     for index, path in requests:
         subsets[str(index)] = extract_block(raw, path, index)
+    named_subsets = {}
+    for kind, path in named_requests:
+        named_subsets[kind] = extract_named_subset(raw, path, kind)
     if args.extract_block0:
         report["subset"] = subsets["0"]
     if args.extract_block:
         report["subsets"] = subsets
+    if named_subsets:
+        report["named_subsets"] = named_subsets
     with args.report.open("x") as sink:
         json.dump(report, sink, indent=2)
         sink.write("\n")

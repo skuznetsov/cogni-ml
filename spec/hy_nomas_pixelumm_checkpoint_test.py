@@ -109,6 +109,87 @@ class InventoryTest(unittest.TestCase):
             with self.assertRaises(pixel.InventoryError):
                 pixel.block_schema(index)
 
+    def test_named_encoder_and_stem_ranges_are_exact_and_contiguous(self):
+        value = header()
+        encoded, start, end, keys = pixel.named_subset_header(value, "encoder")
+        parsed = json.loads(encoded[8:])
+        self.assertEqual(len(keys), 169)
+        self.assertEqual(set(keys), {name for name in value if name.startswith("encoder.")})
+        self.assertEqual(min(item["data_offsets"][0] for item in parsed.values()), 0)
+        self.assertEqual(max(item["data_offsets"][1] for item in parsed.values()), end - start)
+        self.assertEqual((end - start), 3_666_620_032)
+
+        encoded, start, end, keys = pixel.named_subset_header(value, "stem")
+        parsed = json.loads(encoded[8:])
+        self.assertEqual(set(keys), set(pixel.named_subset_schema("stem")))
+        self.assertEqual(min(item["data_offsets"][0] for item in parsed.values()), 0)
+        self.assertEqual(max(item["data_offsets"][1] for item in parsed.values()), end - start)
+        self.assertEqual((end - start), 52_510_720)
+
+    def test_named_subset_rejects_unknown_kind_shape_and_gap(self):
+        value = header()
+        with self.assertRaises(pixel.InventoryError):
+            pixel.named_subset_header(value, "decoder")
+        value["decoder.embed.weight"]["shape"] = [4096, 3071]
+        with self.assertRaises(pixel.InventoryError):
+            pixel.named_subset_header(value, "stem")
+
+        value = header()
+        encoder_name = sorted((name for name in value if name.startswith("encoder.")),
+                              key=lambda name: value[name]["data_offsets"][0])[1]
+        value[encoder_name]["data_offsets"][0] += 4
+        with self.assertRaises(pixel.InventoryError):
+            pixel.named_subset_header(value, "encoder")
+
+    def test_named_subset_receipt_binds_extent_chunks_and_file_bytes(self):
+        expected_inventory = {
+            "hf_revision": pixel.REVISION,
+            "source_commit": pixel.SOURCE_COMMIT,
+            "source_path": pixel.SOURCE_PATH,
+            "source_file_bytes": pixel.SOURCE_BYTES,
+            "header_bytes": pixel.HEADER_BYTES,
+            "header_sha256": pixel.HEADER_SHA256,
+            "stored_dtype": "F32",
+            "full_file_hash_verified": False,
+        }
+        encoded = b"fixture-header"
+        payload = b"tiny-payload"
+        lo, hi = 10, 10 + len(payload)
+        start = lo + 8 + pixel.HEADER_BYTES
+        end_inclusive = hi + 8 + pixel.HEADER_BYTES - 1
+        chunk_hash = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            subset = Path(directory) / "stem-f32.safetensors"
+            subset.write_bytes(encoded + payload)
+            receipt = {
+                **expected_inventory,
+                "selected_subset": "stem",
+                "tensor_keys": list(pixel.named_subset_schema("stem")),
+                "source_data_offsets": [lo, hi],
+                "source_f32_bytes": len(payload),
+                "range_chunks": [{"start": start, "end_inclusive": end_inclusive,
+                                  "sha256": chunk_hash}],
+                "subset_file": subset.name,
+                "subset_bytes": len(encoded) + len(payload),
+                "subset_sha256": hashlib.sha256(encoded + payload).hexdigest(),
+            }
+            with patch.object(pixel, "parse_pinned_header", return_value={}), \
+                    patch.object(pixel, "inventory", return_value=expected_inventory), \
+                    patch.object(pixel, "named_subset_header",
+                                 return_value=(encoded, lo, hi, tuple(pixel.named_subset_schema("stem")))):
+                checked = pixel.validate_named_subset_receipt(b"header", receipt, subset, "stem")
+                self.assertEqual(checked["source_data_offsets"], [lo, hi])
+
+                bad_extent = dict(receipt)
+                bad_extent["source_data_offsets"] = [lo + 1, hi]
+                with self.assertRaises(pixel.InventoryError):
+                    pixel.validate_named_subset_receipt(b"header", bad_extent, subset, "stem")
+
+                bad_chunk = dict(receipt)
+                bad_chunk["range_chunks"] = [dict(receipt["range_chunks"][0], sha256="0" * 64)]
+                with self.assertRaises(pixel.InventoryError):
+                    pixel.validate_named_subset_receipt(b"header", bad_chunk, subset, "stem")
+
     def test_extraction_cannot_bypass_header_identity(self):
         with patch.object(pixel.transport, "_request") as request:
             with self.assertRaises(pixel.InventoryError):

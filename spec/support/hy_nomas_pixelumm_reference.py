@@ -3,9 +3,11 @@
 
 The helper imports pinned upstream GenLayer/RoPE/layout code, loads only the
 authenticated subset for the requested decoder block or consecutive prefix,
-and replaces FlexAttention with per-spatial-tile gathered QK/softmax/PV. Fixture
-inputs are controlled synthetic BF16 hidden states, not full decoder activations.
-The full target exports only per-block attention and output boundaries.
+and replaces FlexAttention with per-spatial-tile gathered QK/softmax/PV. Legacy
+fixtures use controlled synthetic BF16 hidden states. The sixteen-block
+reference requires a provenance-pinned real pose image, VAE latent,
+scheduler-noise xt, and upstream PixelUMM stem result. The full target exports
+only per-block attention and output boundaries.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import hashlib
 import importlib
 import json
 import math
+import mmap
 import os
 from pathlib import Path
 import platform
@@ -36,6 +39,33 @@ SCHEMA = "cogni_ml.pixelumm_block_reference/v1"
 TWO_BLOCK_SCHEMA = "cogni_ml.pixelumm_two_block_reference/v1"
 FOUR_BLOCK_SCHEMA = "cogni_ml.pixelumm_four_block_reference/v1"
 EIGHT_BLOCK_SCHEMA = "cogni_ml.pixelumm_eight_block_reference/v1"
+SIXTEEN_BLOCK_SCHEMA = "cogni_ml.pixelumm_sixteen_block_reference/v1"
+SIXTEEN_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen")
+SIXTEEN_SOURCE_DIR = (SIXTEEN_ROOT / "source").resolve()
+SIXTEEN_RESULTS_DIR = (SIXTEEN_ROOT / "results").resolve()
+REAL_INPUT_SCHEMA = "cogni_ml.pixelumm_real_input/v1"
+REAL_INPUT_MANIFEST_NAME = "pixelumm-real-input.json"
+REAL_INPUT_SOURCE_IMAGE = Path("/opt/mldata_ssd/cogni-ml/video-scene-20261019/inputs/pose.png")
+REAL_INPUT_SOURCE_IMAGE_SHA256 = "53a5d9b435adaf15dd8ffcab1a833b61da4a63079200fb9cec33127ee10f733b"
+REAL_INPUT_DCAE_SOURCE_SHA256 = "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+REAL_INPUT_PIXELUMM_SOURCE_SHA256 = "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
+REAL_INPUT_NOISE_SOURCE_SHA256 = "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf"
+REAL_INPUT_NOISE_OWNER = (
+    "hymm.models.vae.pixelumm_decoder.autoencoder.PixelUMMDCAELatentDecoder._make_noise"
+)
+SIXTEEN_GRID = (6, 44, 80)
+SIXTEEN_TOKENS = math.prod(SIXTEEN_GRID)
+SMALL_REAL_INPUT_GRID = (2, 32, 32)
+REAL_INPUT_ARTIFACTS = {
+    "pixelumm-real-input.json": ("full", 42, "pixelumm-real-input.bin"),
+    **{
+        f"pixelumm-real-input-{profile}-seed{seed}.json": (
+            profile, seed, f"pixelumm-real-input-{profile}-seed{seed}.bin",
+        )
+        for profile in ("small", "full") for seed in (42, 43)
+    },
+}
+SIXTEEN_FIXTURE_PAYLOAD_CAP = 16 * 1024 * 1024 * 1024
 TILE_TOKENS = 8
 ATOL = RTOL = 2e-5
 
@@ -88,6 +118,374 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _digest(value: object) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value))
+
+
+def _admitted_real_input_manifest_path(manifest_path: Path | str) -> Path:
+    """Require an admitted manifest's canonical path under the pinned source dir."""
+    original = Path(manifest_path).expanduser()
+    if (not original.is_absolute() or original.parent != SIXTEEN_SOURCE_DIR
+            or original.name not in REAL_INPUT_ARTIFACTS or original.is_symlink()):
+        raise ReferenceError("real-input manifest must be a regular non-symlink file")
+    try:
+        canonical = original.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ReferenceError("real-input manifest must be a regular non-symlink file") from error
+    if (canonical != original or canonical.parent != SIXTEEN_SOURCE_DIR
+            or not canonical.is_file()):
+        raise ReferenceError("real-input manifest must use its canonical non-symlink path")
+    return canonical
+
+
+def _bf16_bytes_are_finite(raw: bytes) -> bool:
+    """Check one little-endian BF16 payload chunk on CPU without device transfer."""
+    if len(raw) % 2:
+        return False
+    if not raw:
+        return True
+    values = torch.frombuffer(bytearray(raw), dtype=torch.bfloat16)
+    return bool(torch.isfinite(values).all())
+
+
+def _validate_real_input_subset_sizes(lineage: Mapping, checked_subsets: Mapping) -> None:
+    """Bind producer byte counts to authenticated full-file and tensor-payload extents."""
+    for kind in ("encoder", "stem"):
+        checked = checked_subsets.get(kind)
+        if not isinstance(checked, Mapping):
+            raise ReferenceError(f"authenticated {kind} subset receipt is missing")
+        subset_bytes = checked.get("subset_bytes")
+        source_f32_bytes = checked.get("source_f32_bytes")
+        lineage_bytes = lineage.get(f"{kind}_subset_bytes")
+        # `subset_bytes` includes the safetensors header; `source_f32_bytes`
+        # counts only the selected raw tensor payload authenticated by the receipt.
+        if (type(subset_bytes) is not int or type(source_f32_bytes) is not int
+                or source_f32_bytes <= 0 or subset_bytes <= source_f32_bytes
+                or type(lineage_bytes) is not int or lineage_bytes != subset_bytes):
+            raise ReferenceError(f"real-input {kind} complete subset byte count mismatch")
+
+
+def _real_input_source_subsets(lineage: Mapping) -> dict[str, object]:
+    """Revalidate the fixed encoder/stem subset receipts behind a real input."""
+    source_dir = (checkpoint_inventory.ROOT / "source").resolve()
+    header_path = source_dir / "pixelumm-header.json"
+    if header_path.is_symlink() or not header_path.is_file():
+        raise ReferenceError("pinned PixelUMM header is missing or is a symlink")
+    raw_header = header_path.read_bytes()
+    checkpoint_inventory.parse_pinned_header(raw_header)
+    checked_subsets = {}
+    for kind in ("encoder", "stem"):
+        subset_path = source_dir / f"{kind}-f32.safetensors"
+        receipt_path = source_dir / f"{kind}-f32.receipt.json"
+        if (subset_path.is_symlink() or receipt_path.is_symlink()
+                or not subset_path.is_file() or not receipt_path.is_file()):
+            raise ReferenceError(f"pinned {kind} subset or receipt is missing")
+        receipt_raw = receipt_path.read_bytes()
+        if len(receipt_raw) > 2 * 1024 * 1024:
+            raise ReferenceError(f"pinned {kind} receipt exceeds metadata limit")
+        if hashlib.sha256(receipt_raw).hexdigest() != lineage[f"{kind}_receipt_sha256"]:
+            raise ReferenceError(f"pinned {kind} receipt digest changed")
+        try:
+            receipt = checkpoint_inventory.parse_header(receipt_raw)
+            checked = checkpoint_inventory.validate_named_subset_receipt(
+                raw_header, receipt, subset_path, kind
+            )
+        except checkpoint_inventory.InventoryError as error:
+            raise ReferenceError(f"pinned {kind} subset receipt rejected: {error}") from error
+        if checked["subset_sha256"] != lineage[f"{kind}_subset_sha256"]:
+            raise ReferenceError(f"pinned {kind} subset digest changed")
+        if checked["subset_bytes"] != lineage[f"{kind}_subset_bytes"]:
+            raise ReferenceError(f"pinned {kind} subset byte count changed")
+        checked_subsets[kind] = checked
+
+    _validate_real_input_subset_sizes(lineage, checked_subsets)
+
+    # The stem provenance digest is the raw F32 tensor payload, excluding its
+    # safetensors header. The receipt separately authenticates the full file.
+    stem_path = source_dir / "stem-f32.safetensors"
+    with stem_path.open("rb") as stream:
+        prefix = stream.read(8)
+        if len(prefix) != 8:
+            raise ReferenceError("stem subset header is truncated")
+        header_size = int.from_bytes(prefix, "little")
+        if header_size <= 0 or header_size > 2 * 1024 * 1024:
+            raise ReferenceError("stem subset header size is invalid")
+        if len(stream.read(header_size)) != header_size:
+            raise ReferenceError("stem subset header is truncated")
+        digest = hashlib.sha256()
+        remaining = 52_510_720
+        while remaining:
+            chunk = stream.read(min(8 * 1024 * 1024, remaining))
+            if not chunk:
+                raise ReferenceError("stem subset payload is truncated")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if stream.read(1):
+            raise ReferenceError("stem subset has trailing data")
+    if digest.hexdigest() != lineage["stem_weights_sha256"]:
+        raise ReferenceError("stem source-weight digest changed")
+    checked_subsets["stem_weights_sha256"] = digest.hexdigest()
+    return checked_subsets
+
+
+def validate_real_input_manifest(manifest_path: Path | str) -> dict:
+    """Validate one admitted real-pose latent/xt/x artifact without loading a model."""
+    path = _admitted_real_input_manifest_path(manifest_path)
+    profile, expected_seed, expected_payload_name = REAL_INPUT_ARTIFACTS[path.name]
+    raw_manifest = path.read_bytes()
+    if len(raw_manifest) > 2 * 1024 * 1024:
+        raise ReferenceError("real-input manifest exceeds the metadata limit")
+    try:
+        manifest = checkpoint_inventory.parse_header(raw_manifest)
+    except checkpoint_inventory.InventoryError as error:
+        raise ReferenceError(f"cannot parse real-input manifest: {error}") from error
+    if manifest.get("schema") != REAL_INPUT_SCHEMA:
+        raise ReferenceError("unsupported real-input schema")
+    profile_shapes = {
+        "full": {
+            "grid": [6, 44, 80], "frames": 24,
+            "latent_shape": [1, 32, 6, 22, 40],
+            "xt_shape": [1, 3, 24, 704, 1280],
+        },
+        "small": {
+            "grid": [2, 32, 32], "frames": 8,
+            "latent_shape": [1, 32, 2, 16, 16],
+            "xt_shape": [1, 3, 8, 512, 512],
+        },
+    }
+    profile_spec = profile_shapes[profile]
+    expected_x_shape = [1, math.prod(profile_spec["grid"]), 4096]
+    profile_arrays = {
+        "grid": profile_spec["grid"],
+        "latent_shape": profile_spec["latent_shape"],
+        "xt_shape": profile_spec["xt_shape"],
+        "x_shape": expected_x_shape,
+    }
+    if (manifest.get("profile") != profile or type(manifest.get("noise_seed")) is not int
+            or manifest.get("noise_seed") != expected_seed
+            or any(not isinstance(manifest.get(key), list)
+                   or any(type(value) is not int for value in manifest[key])
+                   or manifest[key] != expected
+                   for key, expected in profile_arrays.items())
+            or manifest.get("token_order") != "tile_major"):
+        raise ReferenceError("real-input profile geometry or token ordering mismatch")
+    payload_name = manifest.get("payload")
+    if payload_name != expected_payload_name or Path(payload_name).name != payload_name:
+        raise ReferenceError("real-input payload must use its pinned basename")
+    payload_path = path.parent / payload_name
+    if payload_path.is_symlink() or not payload_path.is_file():
+        raise ReferenceError("real-input payload is missing or is a symlink")
+
+    inputs = manifest.get("inputs")
+    if not isinstance(inputs, dict) or set(inputs) != {"latent", "xt", "x"}:
+        raise ReferenceError("real-input manifest must contain exactly latent, xt, and x")
+    expected = {
+        "latent": ("BF16", profile_spec["latent_shape"]),
+        "xt": ("F32", profile_spec["xt_shape"]),
+        "x": ("BF16", expected_x_shape),
+    }
+    cursor = 0
+    records = []
+    for name in ("latent", "xt", "x"):
+        record = inputs[name]
+        if not isinstance(record, dict) or set(record) != {"dtype", "shape", "offset", "nbytes", "sha256"}:
+            raise ReferenceError(f"real-input {name} record is malformed")
+        dtype_name, shape = expected[name]
+        width = 2 if dtype_name == "BF16" else 4
+        nbytes = math.prod(shape) * width
+        actual_shape = record.get("shape")
+        if (record.get("dtype") != dtype_name or not isinstance(actual_shape, list)
+                or any(type(value) is not int for value in actual_shape)
+                or actual_shape != shape
+                or type(record.get("offset")) is not int or record["offset"] != cursor
+                or type(record.get("nbytes")) is not int or record["nbytes"] != nbytes
+                or not _digest(record.get("sha256"))):
+            raise ReferenceError(f"real-input {name} shape, dtype, extent, or digest mismatch")
+        records.append((name, cursor, nbytes, record["sha256"]))
+        cursor += nbytes
+    if (type(manifest.get("payload_bytes")) is not int
+            or manifest["payload_bytes"] != cursor
+            or payload_path.stat().st_size != cursor
+            or not _digest(manifest.get("payload_sha256"))):
+        raise ReferenceError("real-input payload extent or aggregate digest is malformed")
+
+    provenance = manifest.get("input_provenance")
+    provenance_fields = {
+        "kind", "latent_sha256", "xt_sha256", "stem_weights_sha256", "derived_x_sha256",
+    }
+    if not isinstance(provenance, dict) or set(provenance) != provenance_fields:
+        raise ReferenceError("real-input provenance fields are malformed")
+    if provenance.get("kind") != "real_latent_xt_pixelumm_stem":
+        raise ReferenceError("real-input provenance kind mismatch")
+    for key in provenance_fields - {"kind"}:
+        if not _digest(provenance.get(key)):
+            raise ReferenceError(f"real-input provenance digest is malformed: {key}")
+    if (provenance["latent_sha256"] != inputs["latent"]["sha256"]
+            or provenance["xt_sha256"] != inputs["xt"]["sha256"]
+            or provenance["derived_x_sha256"] != inputs["x"]["sha256"]):
+        raise ReferenceError("real-input provenance digests disagree with tensor records")
+
+    lineage = manifest.get("input_lineage")
+    if not isinstance(lineage, dict):
+        raise ReferenceError("real-input lineage is missing")
+    expected_lineage = {
+        "source_image_sha256": REAL_INPUT_SOURCE_IMAGE_SHA256,
+        "source_image_width": 1280,
+        "source_image_height": 720,
+        "source_image_color_order": "RGB",
+        "source_image_crop_xyxy": ([0, 8, 1280, 712] if profile == "full"
+                                    else [384, 104, 896, 616]),
+        "source_image_resize": False,
+        "clip_frames": profile_spec["frames"],
+        "clip_construction": "repeat_static_image",
+        "vae_input_range": [-1.0, 1.0],
+        "upstream_revision": UPSTREAM_REVISION,
+        "dcae_encoder_source_sha256": REAL_INPUT_DCAE_SOURCE_SHA256,
+        "pixelumm_model_source_sha256": REAL_INPUT_PIXELUMM_SOURCE_SHA256,
+        "pixelumm_noise_source_sha256": REAL_INPUT_NOISE_SOURCE_SHA256,
+        "upstream_model_sha256": REAL_INPUT_PIXELUMM_SOURCE_SHA256,
+        "num_pad_frames": 0,
+        "encode_temporal_tile_size": 40,
+        "encode_temporal_tile_latent_size": 10,
+        "encode_temporal_tile_overlap_factor": 0.0,
+        "latent_shape": profile_spec["latent_shape"],
+        "latent_dtype": "BF16",
+        "latent_device": "mps",
+        "xt_shape": profile_spec["xt_shape"],
+        "xt_dtype": "F32",
+        "xt_device": "mps",
+        "xt_seed": expected_seed,
+        "xt_frame_seed_formula": "seed*1000003+frame_index",
+        "xt_noise_source": REAL_INPUT_NOISE_OWNER,
+        "stem_weights_sha256": provenance["stem_weights_sha256"],
+        "stem_weights_hash_definition": (
+            "SHA256 of the contiguous raw F32 safetensors payload for the four stem tensors "
+            "in original checkpoint data-offset order; the safetensors header is excluded"
+        ),
+        "x_shape": expected_x_shape,
+        "x_dtype": "BF16",
+        "x_token_order": "tile_major",
+        "x_stem_expression": "embed(patchify(xt.to(dtype))) + _condition_tokens(latent.to(dtype))",
+    }
+    lineage_fields = set(expected_lineage) | {
+        "encoder_subset_sha256", "encoder_receipt_sha256", "encoder_subset_bytes",
+        "stem_subset_sha256", "stem_receipt_sha256", "stem_subset_bytes",
+        "x_permutation_sha256",
+    }
+    if set(lineage) != lineage_fields:
+        raise ReferenceError("real-input lineage must contain only the pinned provenance fields")
+    for key, value in expected_lineage.items():
+        if lineage.get(key) != value:
+            raise ReferenceError(f"real-input lineage mismatch: {key}")
+    int_fields = (
+        "clip_frames", "num_pad_frames", "encode_temporal_tile_size",
+        "encode_temporal_tile_latent_size", "xt_seed",
+    )
+    shape_fields = ("latent_shape", "xt_shape", "x_shape")
+    if (any(type(lineage.get(key)) is not int for key in int_fields)
+            or any(not isinstance(lineage.get(key), list)
+                   or any(type(value) is not int for value in lineage[key])
+                   for key in shape_fields)
+            or type(lineage.get("source_image_resize")) is not bool
+            or type(lineage.get("encode_temporal_tile_overlap_factor")) is not float
+            or not isinstance(lineage.get("vae_input_range"), list)
+            or any(type(value) is not float for value in lineage["vae_input_range"])
+            or not isinstance(lineage.get("source_image_crop_xyxy"), list)
+            or any(type(value) is not int for value in lineage["source_image_crop_xyxy"])):
+        raise ReferenceError("real-input lineage contains malformed profile scalar types")
+    for key in ("encoder_subset_sha256", "encoder_receipt_sha256",
+                "stem_subset_sha256", "stem_receipt_sha256"):
+        if not _digest(lineage.get(key)):
+            raise ReferenceError(f"real-input lineage digest is malformed: {key}")
+    if not _digest(lineage.get("x_permutation_sha256")):
+        raise ReferenceError("real-input tile permutation digest is malformed")
+    if (type(lineage.get("encoder_subset_bytes")) is not int
+            or type(lineage.get("stem_subset_bytes")) is not int):
+        raise ReferenceError("real-input encoder/stem subset byte count is malformed")
+    for key in ("source_image_width", "source_image_height"):
+        if type(lineage.get(key)) is not int:
+            raise ReferenceError(f"real-input lineage scalar type mismatch: {key}")
+
+    producer = manifest.get("producer")
+    producer_script = Path(__file__).with_name("hy_nomas_pixelumm_real_input.py")
+    if (producer_script.is_symlink() or not producer_script.is_file()
+            or not isinstance(producer, dict)
+            or producer.get("tool") != "hy_nomas_pixelumm_real_input.py"
+            or producer.get("source_sha256") != _sha256_file(producer_script)
+            or not isinstance(producer.get("python_version"), str)
+            or not producer["python_version"]
+            or not isinstance(producer.get("torch_version"), str)
+            or not producer["torch_version"]
+            or producer.get("inference_device") != "mps"
+            or producer.get("terminal_mps_synchronize_before_readback") is not True
+            or producer.get("cpu_fallback") is not False):
+        raise ReferenceError("real-input producer receipt does not bind the pinned MPS helper")
+    if (REAL_INPUT_SOURCE_IMAGE.is_symlink() or not REAL_INPUT_SOURCE_IMAGE.is_file()
+            or _sha256_file(REAL_INPUT_SOURCE_IMAGE) != REAL_INPUT_SOURCE_IMAGE_SHA256):
+        raise ReferenceError("official real-input source image is missing or changed")
+
+    before = payload_path.stat()
+    aggregate = hashlib.sha256()
+    with payload_path.open("rb") as stream:
+        for name, offset, nbytes, expected_sha in records:
+            digest = hashlib.sha256()
+            stream.seek(offset)
+            remaining = nbytes
+            while remaining:
+                chunk = stream.read(min(8 * 1024 * 1024, remaining))
+                if not chunk:
+                    raise ReferenceError(f"real-input {name} payload is truncated")
+                if name == "x" and not _bf16_bytes_are_finite(chunk):
+                    raise ReferenceError("real-input x contains a non-finite BF16 value")
+                digest.update(chunk)
+                aggregate.update(chunk)
+                remaining -= len(chunk)
+            actual = digest.hexdigest()
+            if actual != expected_sha:
+                raise ReferenceError(f"real-input {name} payload digest mismatch")
+    after = payload_path.stat()
+    if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+        raise ReferenceError("real-input payload changed during validation")
+    aggregate_sha = aggregate.hexdigest()
+    if aggregate_sha != manifest["payload_sha256"]:
+        raise ReferenceError("real-input aggregate payload digest mismatch")
+    _real_input_source_subsets(lineage)
+
+    return {
+        "manifest_path": str(path),
+        "manifest_sha256": hashlib.sha256(raw_manifest).hexdigest(),
+        "payload_path": str(payload_path),
+        "payload_bytes": cursor,
+        "payload_sha256": aggregate_sha,
+        "grid": profile_spec["grid"],
+        "profile": profile,
+        "seed": expected_seed,
+        "x_permutation_sha256": lineage.get("x_permutation_sha256"),
+        "inputs": inputs,
+        "input_provenance": provenance,
+        "input_lineage": lineage,
+    }
+
+
+def _load_real_input_x(validated: Mapping, device: torch.device) -> torch.Tensor:
+    """Map the validated pair payload and copy only its x tensor to the device."""
+    payload_path = Path(validated["payload_path"])
+    record = validated["inputs"]["x"]
+    with payload_path.open("rb") as stream:
+        mapped = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_COPY)
+    try:
+        byte_tensor = torch.frombuffer(mapped, dtype=torch.uint8, count=validated["payload_bytes"])
+        raw_x = byte_tensor.narrow(0, record["offset"], record["nbytes"])
+        x_cpu = raw_x.view(torch.bfloat16).view(record["shape"])
+        x = x_cpu.to(device=device)
+        del x_cpu, raw_x, byte_tensor
+        return x
+    finally:
+        mapped.close()
 
 
 def _upstream_permutation_formula(
@@ -534,8 +932,8 @@ def _estimated_peak_bytes(
     grid: tuple[int, int, int], arch, *, layers: int = 1,
     capture_stages: Iterable[str] | None = None,
 ) -> int:
-    if type(layers) is not int or layers not in {1, 2, 4, 8}:
-        raise ReferenceError("reference memory estimate supports one, two, four, or eight resident blocks")
+    if type(layers) is not int or layers not in {1, 2, 4, 8, 16}:
+        raise ReferenceError("reference memory estimate supports one, two, four, eight, or sixteen resident blocks")
     tokens = math.prod(grid)
     h = arch.hidden_size
     f = arch.intermediate_size
@@ -573,8 +971,8 @@ def _estimated_fixture_payload_bytes(
     capture_stages: Iterable[str],
 ) -> int:
     """Exact serialized extent for the pinned BF16 inputs, weights and captures."""
-    if type(layers) is not int or layers not in {1, 2, 4, 8}:
-        raise ReferenceError("fixture payload estimate supports one, two, four, or eight blocks")
+    if type(layers) is not int or layers not in {1, 2, 4, 8, 16}:
+        raise ReferenceError("fixture payload estimate supports one, two, four, eight, or sixteen blocks")
     tokens = math.prod(_check_grid(grid))
     stages = tuple(capture_stages)
     if not set(stages) <= set(ALL_STAGES):
@@ -584,7 +982,10 @@ def _estimated_fixture_payload_bytes(
     captures = layers * tokens * sum(
         _capture_bytes_per_token(stage, arch) for stage in stages
     )
-    return input_bytes + weights + captures
+    result = input_bytes + weights + captures
+    if layers == 16 and result > SIXTEEN_FIXTURE_PAYLOAD_CAP:
+        raise ReferenceError("sixteen-block fixture exceeds its 16 GiB payload cap")
+    return result
 
 
 def mps_memory_floor(
@@ -838,8 +1239,8 @@ def make_fixture(
 
 def _block_io_edge(index: int) -> dict[str, str]:
     """Describe the predecessor edge for one of the admitted block slots."""
-    if type(index) is not int or not 0 <= index < 8:
-        raise ReferenceError("block I/O edges are defined for block indices zero through seven")
+    if type(index) is not int or not 0 <= index < 16:
+        raise ReferenceError("block I/O edges are defined for block indices zero through fifteen")
     return {
         "input_source": "inputs.x" if index == 0 else f"captures.block{index - 1}.output",
         "output_key": f"captures.block{index}.output",
@@ -851,41 +1252,70 @@ def _make_block_sequence_fixture(
     block_sources: Iterable[tuple[Path | str, Path | str]],
     header: Path | str, output: Path | str, grid: Iterable[int],
     schema: str, device_name: str = "mps", capture_mode: str = "auto",
-    seed: int = 20261026,
+    seed: int = 20261026, real_input_manifest: Path | str | None = None,
 ) -> dict:
     """Execute an admitted block sequence on one device and retain its edges."""
     block_sources = tuple(block_sources)
-    if len(block_sources) not in {2, 4, 8}:
-        raise ReferenceError("reference fixture requires exactly two, four, or eight consecutive blocks")
+    if len(block_sources) not in {2, 4, 8, 16}:
+        raise ReferenceError("reference fixture requires exactly 2, 4, 8, or 16 consecutive blocks")
     expected_schema = {
         2: TWO_BLOCK_SCHEMA,
         4: FOUR_BLOCK_SCHEMA,
         8: EIGHT_BLOCK_SCHEMA,
+        16: SIXTEEN_BLOCK_SCHEMA,
     }[len(block_sources)]
     if schema != expected_schema:
         raise ReferenceError("block count and reference schema do not match")
     output_path = Path(output).expanduser().absolute()
     payload_path = output_path.with_suffix(".bin")
-    if output_path.parent.resolve() != (checkpoint_inventory.ROOT / "results").resolve():
-        raise ReferenceError("multi-block reference output must be in the task results directory")
+    block_count = len(block_sources)
+    expected_results_dir = SIXTEEN_RESULTS_DIR if block_count == 16 else (
+        checkpoint_inventory.ROOT / "results"
+    ).resolve()
+    if output_path.parent.resolve() != expected_results_dir:
+        raise ReferenceError("multi-block reference output must be in its pinned task results directory")
     if (output_path.exists() or output_path.is_symlink()
             or payload_path.exists() or payload_path.is_symlink()):
         raise ReferenceError("refusing to replace an existing multi-block reference JSON or payload")
     grid = _check_grid(grid)
     if device_name not in {"cpu", "mps"}:
         raise ReferenceError("device must be cpu or mps")
+    if block_count == 16 and device_name != "mps":
+        raise ReferenceError("sixteen-block neural reference requires MPS execution")
+    if (block_count == 16) != (real_input_manifest is not None):
+        raise ReferenceError("sixteen-block reference requires exactly one real-input manifest")
     device = torch.device(device_name)
     if device.type == "mps" and not torch.backends.mps.is_available():
         raise ReferenceError("PyTorch MPS is not available")
     if capture_mode not in {"auto", "all", "boundary"}:
         raise ReferenceError("capture mode must be auto, all, or boundary")
     count = math.prod(grid)
+    real_input = None
+    if block_count == 16:
+        if tuple(grid) not in {SIXTEEN_GRID, SMALL_REAL_INPUT_GRID}:
+            raise ReferenceError(
+                "sixteen-block reference admits only grids [6, 44, 80] and [2, 32, 32]"
+            )
+        manifest_path = Path(real_input_manifest).expanduser()
+        if manifest_path.name not in REAL_INPUT_ARTIFACTS:
+            raise ReferenceError("sixteen-block reference requires a pinned real-input manifest")
+        profile, _, _ = REAL_INPUT_ARTIFACTS[manifest_path.name]
+        if ((profile == "full") != (tuple(grid) == SIXTEEN_GRID)):
+            raise ReferenceError("real-input profile does not match the requested token grid")
+        if (profile == "small" and capture_mode == "boundary"):
+            raise ReferenceError("small real-input profile requires all-stage captures")
+        if (profile == "full" and capture_mode == "all"):
+            raise ReferenceError("full real-input profile permits attention/output captures only")
     if count <= 2048:
         chosen = ALL_STAGES if capture_mode in {"auto", "all"} else FULL_TARGET_STAGES
     else:
         chosen = FULL_TARGET_STAGES if capture_mode in {"auto", "boundary"} else ALL_STAGES
     if count > 2048 and chosen == ALL_STAGES:
         raise ReferenceError("all-stage captures are restricted to at most 2048 tokens")
+    if block_count == 16 and len(block_sources) * len(chosen) != (
+        416 if tuple(grid) == SMALL_REAL_INPUT_GRID else 32
+    ):
+        raise ReferenceError("sixteen-block profile has an unsupported capture inventory")
 
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
@@ -893,6 +1323,19 @@ def _make_block_sequence_fixture(
     memory = mps_memory_floor(
         device, grid, arch, layers=len(block_sources), capture_stages=chosen
     )
+    if block_count == 16:
+        real_input = validate_real_input_manifest(real_input_manifest)
+        if tuple(real_input["grid"]) != tuple(grid):
+            raise ReferenceError("real-input manifest grid differs from the requested grid")
+        if real_input["x_permutation_sha256"] != plan.permutation_sha256:
+            raise ReferenceError(
+                "real-input x tile-major permutation differs from the pinned upstream plan"
+            )
+        dcae_source = Path(upstream).expanduser().resolve() / "hymm/models/vae/autoencoder_dcae_v.py"
+        if (dcae_source.is_symlink() or not dcae_source.is_file()
+                or _sha256_file(dcae_source) != REAL_INPUT_DCAE_SOURCE_SHA256
+                or source_sha != REAL_INPUT_PIXELUMM_SOURCE_SHA256):
+            raise ReferenceError("real-input upstream source hashes changed")
     header_path = Path(header)
     layers = []
     subset_provenance = []
@@ -913,13 +1356,17 @@ def _make_block_sequence_fixture(
             ],
         })
 
-    # Generate one initial prefix and one tile-major RoPE table for all blocks.
-    generator = torch.Generator(device="cpu").manual_seed(seed)
-    x_original = torch.randn((1, count, arch.hidden_size), generator=generator, dtype=torch.float32)
-    x_original = x_original.to(device=device).to(dtype=torch.bfloat16)
     permutation = torch.tensor(plan.permutation, dtype=torch.long, device=device)
-    x = x_original.index_select(1, permutation)
-    del x_original
+    if real_input is None:
+        # Preserve the established synthetic path unchanged for 2/4/8 blocks.
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        x_original = torch.randn((1, count, arch.hidden_size), generator=generator, dtype=torch.float32)
+        x_original = x_original.to(device=device).to(dtype=torch.bfloat16)
+        x = x_original.index_select(1, permutation)
+        del x_original
+    else:
+        # The producer already applies upstream THW -> tile-major ordering.
+        x = _load_real_input_x(real_input, device)
     cos, sin = source.mrope_tables(arch, grid, device)
     cos = cos.index_select(1, permutation)
     sin = sin.index_select(1, permutation)
@@ -977,7 +1424,6 @@ def _make_block_sequence_fixture(
         "token_order": "tile_major",
         "permutation_sha256": plan.permutation_sha256,
         "runtime_dtype": "BF16",
-        "input_generator": {"distribution": "standard_normal", "seed": seed, "cast": "BF16"},
         "source_config": asdict(arch),
         "attention_adapter": "gathered_spatial_tiles_qk_softmax_pv_fp32_accum",
         "gqa_group_size": arch.num_heads // arch.num_kv_heads,
@@ -988,18 +1434,31 @@ def _make_block_sequence_fixture(
         "torch_version": torch.__version__,
         "python_version": platform.python_version(),
     }
+    if real_input is None:
+        metadata["input_generator"] = {
+            "distribution": "standard_normal", "seed": seed, "cast": "BF16",
+        }
+    else:
+        metadata["input_provenance"] = real_input["input_provenance"]
+        metadata["input_lineage"] = real_input["input_lineage"]
+        metadata["real_input_manifest_sha256"] = real_input["manifest_sha256"]
+        metadata["real_input_payload_sha256"] = real_input["payload_sha256"]
+        metadata["real_input_payload_bytes"] = real_input["payload_bytes"]
     fixture = _write_fixture(
         output_path, metadata=metadata, inputs={"x": x, "cos": cos, "sin": sin},
         weights=weights, captures=block_captures, schema=schema,
     )
+    estimated_payload_bytes = _estimated_fixture_payload_bytes(
+        grid, arch, layers=len(block_sources), capture_stages=chosen
+    )
+    if block_count == 16 and fixture["payload_bytes"] != estimated_payload_bytes:
+        raise ReferenceError("sixteen-block fixture payload differs from its exact estimate")
     return {
         "fixture": str(output_path.resolve()),
         "payload": str(payload_path.resolve()),
         "grid": list(grid), "tokens": count, "capture_order": fixture["capture_order"],
         "payload_bytes": fixture["payload_bytes"],
-        "estimated_payload_bytes": _estimated_fixture_payload_bytes(
-            grid, arch, layers=len(block_sources), capture_stages=chosen
-        ),
+        "estimated_payload_bytes": estimated_payload_bytes,
         "payload_sha256": fixture["payload_sha256"],
         "blocks": subset_provenance,
         "estimated_peak_bytes": memory.get("estimated_peak_bytes"),
@@ -1063,6 +1522,21 @@ def make_eight_block_fixture(
     )
 
 
+def make_sixteen_block_fixture(
+    *, upstream: Path | str, block_sources: Iterable[tuple[Path | str, Path | str]],
+    header: Path | str, output: Path | str, grid: Iterable[int],
+    real_input_manifest: Path | str, device_name: str = "mps",
+    capture_mode: str = "auto",
+) -> dict:
+    """Run the bounded real-input reference through decoder blocks 0–15."""
+    return _make_block_sequence_fixture(
+        upstream=upstream, block_sources=block_sources,
+        header=header, output=output, grid=grid,
+        schema=SIXTEEN_BLOCK_SCHEMA, device_name=device_name,
+        capture_mode=capture_mode, real_input_manifest=real_input_manifest,
+    )
+
+
 def geometry_report(upstream: Path | str, grid: Iterable[int]) -> dict:
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
@@ -1091,6 +1565,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--block5", type=Path)
     parser.add_argument("--block6", type=Path)
     parser.add_argument("--block7", type=Path)
+    for index in range(8, 16):
+        parser.add_argument(f"--block{index}", type=Path)
     parser.add_argument("--receipt0", type=Path)
     parser.add_argument("--receipt1", type=Path)
     parser.add_argument("--receipt2", type=Path)
@@ -1099,6 +1575,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt5", type=Path)
     parser.add_argument("--receipt6", type=Path)
     parser.add_argument("--receipt7", type=Path)
+    for index in range(8, 16):
+        parser.add_argument(f"--receipt{index}", type=Path)
     parser.add_argument("--header", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--grid", required=True, type=int, nargs=3, metavar=("T", "H", "W"))
@@ -1106,13 +1584,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--capture", choices=("auto", "all", "boundary"), default="auto")
     parser.add_argument("--seed", type=int, default=20261026)
     parser.add_argument("--geometry-only", action="store_true")
+    parser.add_argument("--real-input-manifest", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.geometry_only:
             print(json.dumps(geometry_report(args.upstream, args.grid), sort_keys=True))
             return 0
-        block_paths = tuple(getattr(args, f"block{index}") for index in range(8))
-        receipt_paths = tuple(getattr(args, f"receipt{index}") for index in range(8))
+        block_paths = tuple(getattr(args, f"block{index}") for index in range(16))
+        receipt_paths = tuple(getattr(args, f"receipt{index}") for index in range(16))
         if any(path is not None for path in (*block_paths, *receipt_paths)):
             if args.checkpoint is not None:
                 parser.error("--checkpoint cannot be combined with block inputs")
@@ -1125,8 +1604,12 @@ def main(argv: list[str] | None = None) -> int:
                 if subset is not None:
                     present.append(index)
             count = len(present)
-            if count not in {2, 4, 8} or present != list(range(count)):
-                parser.error("block inputs must be consecutive indices 0-1, 0-3, or 0-7")
+            if count not in {2, 4, 8, 16} or present != list(range(count)):
+                parser.error("block inputs must be consecutive indices 0-1, 0-3, 0-7, or 0-15")
+            if count == 16 and args.real_input_manifest is None:
+                parser.error("sixteen-block reference requires --real-input-manifest")
+            if count != 16 and args.real_input_manifest is not None:
+                parser.error("--real-input-manifest is reserved for the sixteen-block reference")
             common = {
                 "upstream": args.upstream, "header": args.header,
                 "output": args.output, "grid": args.grid,
@@ -1146,12 +1629,23 @@ def main(argv: list[str] | None = None) -> int:
                     **{f"receipt{i}": receipt_paths[i] for i in range(4)},
                 )
             else:
-                report = make_eight_block_fixture(
-                    **common,
-                    **{f"block{i}": block_paths[i] for i in range(8)},
-                    **{f"receipt{i}": receipt_paths[i] for i in range(8)},
-                )
+                if count == 8:
+                    report = make_eight_block_fixture(
+                        **common,
+                        **{f"block{i}": block_paths[i] for i in range(8)},
+                        **{f"receipt{i}": receipt_paths[i] for i in range(8)},
+                    )
+                else:
+                    report = make_sixteen_block_fixture(
+                        upstream=args.upstream,
+                        block_sources=tuple(zip(block_paths, receipt_paths)),
+                        header=args.header, output=args.output, grid=args.grid,
+                        real_input_manifest=args.real_input_manifest,
+                        device_name=args.device, capture_mode=args.capture,
+                    )
         else:
+            if args.real_input_manifest is not None:
+                parser.error("--real-input-manifest requires blocks 0–15")
             if args.checkpoint is None or args.output is None:
                 parser.error("--checkpoint and --output are required unless --geometry-only or pair inputs are used")
             report = make_fixture(

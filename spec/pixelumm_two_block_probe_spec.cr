@@ -133,6 +133,147 @@ describe PixelUMMTwoBlockProbe do
     end
   end
 
+  it "admits exactly sixteen weight owners and the fifteen direct GPU handoffs" do
+    weights = pixelumm_pair_weight_records(16)
+    PixelUMMTwoBlockProbe.validate_weights!(weights, 16)
+    weights.size.should eq(208)
+    weights.values.sum(&.nbytes).should eq(6_174_285_824_i64)
+    16.times do |slot|
+      expected = slot == 0 ? "inputs.x" : "captures.block#{slot - 1}.output"
+      PixelUMMTwoBlockProbe.validate_input_source!(expected, slot)
+    end
+    PixelUMMTwoBlockProbe.capture_slot("block15.output", 16).should eq(15)
+    expect_raises(ArgumentError, /missing/) do
+      weights["block16.attn.q_proj.weight"] = weights.delete("block15.attn.q_proj.weight").not_nil!
+      PixelUMMTwoBlockProbe.validate_weights!(weights, 16)
+    end
+    expect_raises(ArgumentError, /count/) { PixelUMMTwoBlockProbe.validate_weights!(pixelumm_pair_weight_records(16), 17) }
+    expect_raises(ArgumentError, /predecessor/) do
+      PixelUMMTwoBlockProbe.validate_input_source!("captures.block0.output", 15)
+    end
+  end
+
+  it "keeps prior depth ceilings while setting explicit sixteen-block byte ceilings" do
+    {2, 4, 8}.each do |count|
+      PixelUMMTwoBlockProbe.validate_block_count!(count)
+      PixelUMMTwoBlockProbe.named_budget_limit(count).should eq(8_i64 * 1024**3)
+      PixelUMMTwoBlockProbe.weight_cache_payload_limit(count).should eq(4_i64 * 1024**3)
+    end
+    PixelUMMTwoBlockProbe.fixture_payload_limit(2).should eq(4_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.fixture_payload_limit(4).should eq(4_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.fixture_payload_limit(8).should eq(8_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.fixture_payload_limit(16).should eq(16_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.weight_cache_payload_limit(16).should eq(8_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.named_budget_limit(16).should eq(16_i64 * 1024**3)
+    PixelUMMTwoBlockProbe.fixture_schema(16).should eq("cogni_ml.pixelumm_sixteen_block_reference/v1")
+    expect_raises(ArgumentError, /count/) { PixelUMMTwoBlockProbe.validate_block_count!(17) }
+    expect_raises(ArgumentError, /count/) { PixelUMMTwoBlockProbe.named_budget_limit(17) }
+  end
+
+  it "requires the exact sixteen-block real-context workspace byte budget" do
+    config = PixelUMMTwoBlockProbe::Decoder::Config.new(temporal: 6, height: 44, width: 80)
+    slot_weights = PixelUMMBlockProbe.weight_shapes.to_h do |name, shape|
+      {name, shape.reduce(2_i64) { |bytes, extent| bytes * extent }}
+    end
+    weights_by_slot = Array.new(16) { slot_weights.dup }
+    captures_by_slot = Array.new(16) { ["attention", "output"] }
+    tokens = 6 * 44 * 80
+    input_bytes = tokens.to_i64 * 4096 * 2
+    table_bytes = tokens.to_i64 * 128 * 4
+    required = PixelUMMTwoBlockProbe::Decoder::Workspace.validate_admission!(config,
+      input_bytes: input_bytes, cosine_bytes: table_bytes, sine_bytes: table_bytes,
+      weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures_by_slot,
+      max_unique_bytes: Int64::MAX)
+    required.should eq(14_202_158_052_i64)
+    PixelUMMTwoBlockProbe::Decoder::Workspace.validate_admission!(config,
+      input_bytes: input_bytes, cosine_bytes: table_bytes, sine_bytes: table_bytes,
+      weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures_by_slot,
+      max_unique_bytes: required).should eq(required)
+    expect_raises(ArgumentError, /budget/) do
+      PixelUMMTwoBlockProbe::Decoder::Workspace.validate_admission!(config,
+        input_bytes: input_bytes, cosine_bytes: table_bytes, sine_bytes: table_bytes,
+        weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures_by_slot,
+        max_unique_bytes: required - 1)
+    end
+  end
+
+  it "requires complete sixteen-block capture inventories at each admitted grid" do
+    small = (0...16).flat_map do |slot|
+      PixelUMMTwoBlockProbe::Decoder::Plan::CAPTURE_NAMES.map { |stage| "block#{slot}.#{stage}" }.to_a
+    end
+    full = (0...16).flat_map { |slot| ["block#{slot}.attention", "block#{slot}.output"] }
+    small.size.should eq(416)
+    full.size.should eq(32)
+    PixelUMMTwoBlockProbe.validate_serial_capture_inventory!(small, [2, 32, 32], 16)
+    PixelUMMTwoBlockProbe.validate_serial_capture_inventory!(full, [6, 44, 80], 16)
+    expect_raises(ArgumentError, /every expected/) do
+      PixelUMMTwoBlockProbe.validate_serial_capture_inventory!(full, [2, 32, 32], 16)
+    end
+    expect_raises(ArgumentError, /every expected/) do
+      PixelUMMTwoBlockProbe.validate_serial_capture_inventory!(small[0...-1], [2, 32, 32], 16)
+    end
+  end
+
+  it "validates capture records across the double-digit block boundary" do
+    value = JSON.parse({dtype: "BF16", shape: [1, 2048, 4096], offset: 0,
+                        nbytes: 2048_i64 * 4096 * 2, sha256: "a" * 64}.to_json)
+    record = PixelUMMTwoBlockProbe::Record.new(value, 2048_i64 * 4096 * 2)
+    {9, 10, 15}.each do |slot|
+      PixelUMMTwoBlockProbe.validate_capture!("block#{slot}.output", record, 2048, 16)
+      PixelUMMTwoBlockProbe.capture_stage("block#{slot}.output", 16).should eq("output")
+    end
+  end
+
+  it "authenticates exact numeric block ownership without depending on string sort order" do
+    {2, 4, 8, 16}.each do |count|
+      keys = (0...count).map(&.to_s).reverse
+      PixelUMMTwoBlockProbe.validate_cache_block_keys!(keys, count)
+      missing = keys[0...-1]
+      expect_raises(ArgumentError, /inventory/) { PixelUMMTwoBlockProbe.validate_cache_block_keys!(missing, count) }
+      keys[0] = count.to_s
+      expect_raises(ArgumentError, /inventory/) { PixelUMMTwoBlockProbe.validate_cache_block_keys!(keys, count) }
+    end
+  end
+
+  it "rejects mixed FFN graph precision across sixteen serial slots" do
+    {false, true}.each do |enabled|
+      PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(Array(Bool).new(16, enabled), 16, enabled)
+    end
+    mixed = Array(Bool).new(16, false)
+    mixed[15] = true
+    expect_raises(ArgumentError, /precision/) do
+      PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(mixed, 16, false)
+    end
+    expect_raises(ArgumentError, /precision/) do
+      PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(Array(Bool).new(15, false), 16, false)
+    end
+  end
+
+  it "checks sixteen-block real-context input provenance metadata" do
+    input_sha = "a" * 64
+    record = PixelUMMTwoBlockProbe::Record.new(JSON.parse({dtype: "BF16", shape: [1, 1, 4096],
+                                                           offset: 0, nbytes: 8192, sha256: input_sha}.to_json), 8192_i64)
+    document = JSON.parse({input_provenance: {kind: "real_latent_xt_pixelumm_stem",
+                                              latent_sha256: "b" * 64, xt_sha256: "c" * 64,
+                                              stem_weights_sha256: "d" * 64,
+                                              derived_x_sha256: input_sha}}.to_json)
+    PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(document, record)
+    document["input_provenance"].as_h["kind"] = JSON::Any.new("seeded_standard_normal")
+    expect_raises(ArgumentError, /provenance metadata/) do
+      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(document, record)
+    end
+    document["input_provenance"].as_h["kind"] = JSON::Any.new("real_latent_xt_pixelumm_stem")
+    document["input_provenance"].as_h["derived_x_sha256"] = JSON::Any.new("e" * 64)
+    expect_raises(ArgumentError, /provenance metadata/) do
+      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(document, record)
+    end
+    document["input_provenance"].as_h["derived_x_sha256"] = JSON::Any.new(input_sha)
+    document["input_provenance"].as_h["extra_claim"] = JSON::Any.new("ignored")
+    expect_raises(ArgumentError, /fields/) do
+      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(document, record)
+    end
+  end
+
   it "limits eighth-block captures to the eight-block context" do
     value = JSON.parse({dtype: "BF16", shape: [1, 2048, 4096], offset: 0,
                         nbytes: 2048_i64 * 4096 * 2, sha256: "a" * 64}.to_json)

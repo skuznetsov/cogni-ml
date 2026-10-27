@@ -9,6 +9,7 @@ module PixelUMMTwoBlockProbe
   HEADER_SHA256 = "7e7a92cfe84d54c0da3a132099a9472766ae0034042515a0f76b6198bbd09d11"
   MODEL_SHA256  = "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec"
   SOURCE_PATH   = "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors"
+  GIB           = 1024_i64 * 1024 * 1024
 
   def validate_identity!(document : JSON::Any) : Nil
     unless document["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
@@ -31,12 +32,31 @@ module PixelUMMTwoBlockProbe
   end
 
   def validate_block_count!(block_count : Int32) : Nil
-    raise ArgumentError.new("serial block count must be two, four or eight") unless block_count == 2 || block_count == 4 || block_count == 8
+    raise ArgumentError.new("serial block count must be two, four, eight or sixteen") unless {2, 4, 8, 16}.includes?(block_count)
+  end
+
+  def fixture_payload_limit(block_count : Int32) : Int64
+    validate_block_count!(block_count)
+    case block_count
+    when 8  then 8_i64 * GIB
+    when 16 then 16_i64 * GIB
+    else         4_i64 * GIB
+    end
+  end
+
+  def weight_cache_payload_limit(block_count : Int32) : Int64
+    validate_block_count!(block_count)
+    block_count == 16 ? 8_i64 * GIB : 4_i64 * GIB
+  end
+
+  def named_budget_limit(block_count : Int32) : Int64
+    validate_block_count!(block_count)
+    block_count == 16 ? 16_i64 * GIB : 8_i64 * GIB
   end
 
   def fixture_schema(block_count : Int32) : String
     validate_block_count!(block_count)
-    label = {2 => "two", 4 => "four", 8 => "eight"}[block_count]
+    label = {2 => "two", 4 => "four", 8 => "eight", 16 => "sixteen"}[block_count]
     "cogni_ml.pixelumm_#{label}_block_reference/v1"
   end
 
@@ -46,11 +66,53 @@ module PixelUMMTwoBlockProbe
     slot || raise ArgumentError.new("capture has unknown block ownership")
   end
 
-  def validate_eight_capture_inventory!(keys : Array(String), grid : Array(Int32)) : Nil
+  def capture_stage(key : String, block_count : Int32) : String
+    slot = capture_slot(key, block_count)
+    key["block#{slot}.".size..]
+  end
+
+  def validate_cache_block_keys!(keys : Array(String), block_count : Int32) : Nil
+    validate_block_count!(block_count)
+    unless keys.sort == (0...block_count).map(&.to_s).sort
+      raise ArgumentError.new("BF16 cache block inventory mismatch")
+    end
+  end
+
+  def validate_serial_capture_inventory!(keys : Array(String), grid : Array(Int32), block_count : Int32) : Nil
+    unless {8, 16}.includes?(block_count)
+      raise ArgumentError.new("full serial capture inventories are defined for eight or sixteen blocks")
+    end
     stages = grid == [2, 32, 32] ? Decoder::Plan::CAPTURE_NAMES.to_a : ["attention", "output"]
-    expected = (0...8).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
+    expected = (0...block_count).flat_map { |slot| stages.map { |stage| "block#{slot}.#{stage}" } }
     unless keys.sort == expected.sort
-      raise ArgumentError.new("eight-block fixture requires every expected stage at its admitted grid")
+      raise ArgumentError.new("#{block_count}-block fixture requires every expected stage at its admitted grid")
+    end
+  end
+
+  def validate_eight_capture_inventory!(keys : Array(String), grid : Array(Int32)) : Nil
+    validate_serial_capture_inventory!(keys, grid, 8)
+  end
+
+  # This checks the authenticated fixture's metadata contract. The probe does
+  # not independently recompute the upstream PixelUMM stem from latent/xt.
+  def validate_real_input_provenance_metadata!(document : JSON::Any, input : Record) : Nil
+    provenance = document["input_provenance"]
+    expected_keys = ["kind", "latent_sha256", "xt_sha256", "stem_weights_sha256", "derived_x_sha256"]
+    unless provenance.as_h.keys.sort == expected_keys.sort
+      raise ArgumentError.new("sixteen-block fixture provenance metadata fields mismatch")
+    end
+    required_hashes = {"latent_sha256", "xt_sha256", "stem_weights_sha256"}
+    valid_hashes = required_hashes.all? { |key| PixelUMMBlockProbe.valid_digest?(provenance[key].as_s) }
+    unless provenance["kind"].as_s == "real_latent_xt_pixelumm_stem" && valid_hashes &&
+           provenance["derived_x_sha256"].as_s == input.sha256
+      raise ArgumentError.new("sixteen-block fixture lacks valid real-context input provenance metadata")
+    end
+  end
+
+  def validate_ffn_precision_slots!(slots : Array(Bool), block_count : Int32, enabled : Bool) : Nil
+    validate_block_count!(block_count)
+    unless slots.size == block_count && slots.all? { |value| value == enabled }
+      raise ArgumentError.new("serial plans must share one FFN graph precision across every slot")
     end
   end
 
@@ -60,8 +122,7 @@ module PixelUMMTwoBlockProbe
   end
 
   def validate_capture!(key : String, record : Record, tokens : Int32, block_count : Int32 = 2) : Nil
-    capture_slot(key, block_count)
-    name = key[7..]
+    name = capture_stage(key, block_count)
     dtype, shape = case name
                    when "input_norm_statistics"
                      {"F32", [1, tokens, 1]}
@@ -100,7 +161,7 @@ module PixelUMMTwoBlockProbe
     @verified = false
 
     def initialize(@path : String, trusted_sha256 : String, max_payload_bytes : Int64 = 4_i64 * 1024**3)
-      unless max_payload_bytes == 4_i64 * 1024**3 || max_payload_bytes == 8_i64 * 1024**3
+      unless max_payload_bytes == 4_i64 * GIB || max_payload_bytes == 8_i64 * GIB || max_payload_bytes == 16_i64 * GIB
         raise ArgumentError.new("unsupported tensor payload byte limit")
       end
       unless Path[@path].absolute? && File.file?(@path) && !File.symlink?(@path) &&
@@ -204,9 +265,8 @@ module PixelUMMTwoBlockProbe
 
     def initialize(path : String, trusted_sha256 : String, @block_count : Int32 = 2)
       PixelUMMTwoBlockProbe.validate_block_count!(@block_count)
-      # Eight owners plus diagnostic captures exceed the legacy file bound.
-      # Weight caches and pair/four fixtures retain their 4 GiB ceiling.
-      super(path, trusted_sha256, (@block_count == 8 ? 8_i64 : 4_i64) * 1024**3)
+      # Larger serial fixtures need explicit per-depth payload ceilings.
+      super(path, trusted_sha256, PixelUMMTwoBlockProbe.fixture_payload_limit(@block_count))
       d = @document
       PixelUMMTwoBlockProbe.validate_identity!(d)
       schema = PixelUMMTwoBlockProbe.fixture_schema(@block_count)
@@ -228,12 +288,13 @@ module PixelUMMTwoBlockProbe
       end
       tokens = @grid.reduce(1) { |n, v| n * v }
       @captures.each { |key, record| PixelUMMTwoBlockProbe.validate_capture!(key, record, tokens, @block_count) }
-      PixelUMMTwoBlockProbe.validate_eight_capture_inventory!(@capture_order, @grid) if @block_count == 8
+      PixelUMMTwoBlockProbe.validate_serial_capture_inventory!(@capture_order, @grid, @block_count) if @block_count >= 8
       unless @inputs["x"].shape == [1, tokens, 4096] && @inputs["x"].dtype == "BF16" &&
              {"cos", "sin"}.all? { |name| @inputs[name].shape == [1, tokens, 1, 128] && @inputs[name].dtype == "F32" }
         raise ArgumentError.new("serial input geometry/dtype mismatch")
       end
       PixelUMMTwoBlockProbe.validate_weights!(@weights, @block_count)
+      PixelUMMTwoBlockProbe.validate_real_input_provenance_metadata!(d, @inputs["x"]) if @block_count == 16
       blocks = d["blocks"].as_a
       raise ArgumentError.new("serial source inventory mismatch") unless blocks.size == @block_count
       @subset_hashes = blocks.map_with_index do |block, index|
@@ -253,7 +314,7 @@ module PixelUMMTwoBlockProbe
       unless @subset_hashes[0] == PixelUMMBlockProbe::SUBSET_SHA256
         raise ArgumentError.new("block zero source identity mismatch")
       end
-      validate_ranges!(@inputs.values + @weights.values + @captures.values, contiguous: @block_count == 8)
+      validate_ranges!(@inputs.values + @weights.values + @captures.values, contiguous: @block_count >= 8)
     end
 
     def captures_by_slot : Array(Array(String))
@@ -277,7 +338,7 @@ module PixelUMMTwoBlockProbe
     getter weights : Hash(String, Record)
 
     def initialize(path : String, trusted_sha256 : String, fixture : Fixture)
-      super(path, trusted_sha256)
+      super(path, trusted_sha256, PixelUMMTwoBlockProbe.weight_cache_payload_limit(fixture.block_count))
       d = @document
       PixelUMMTwoBlockProbe.validate_identity!(d)
       raise ArgumentError.new("unsupported BF16 cache schema") unless d["schema"].as_s == "cogni_ml.pixelumm_bf16_weight_cache/v1"
@@ -294,8 +355,8 @@ module PixelUMMTwoBlockProbe
              !conversion["torch_version"].as_s.empty?
         raise ArgumentError.new("BF16 cache conversion provenance mismatch")
       end
-      unless d["blocks"].as_h.keys.sort == (0...fixture.block_count).map(&.to_s) &&
-             d["comparison"]["all_raw_uint16_equal"].as_bool &&
+      PixelUMMTwoBlockProbe.validate_cache_block_keys!(d["blocks"].as_h.keys, fixture.block_count)
+      unless d["comparison"]["all_raw_uint16_equal"].as_bool &&
              d["comparison"]["tensor_count"].as_i == fixture.block_count * 13 &&
              d["comparison"]["weights"].as_h.keys.sort == @weights.keys.sort
         raise ArgumentError.new("BF16 cache raw-word comparison inventory mismatch")
@@ -371,9 +432,7 @@ module PixelUMMTwoBlockProbe
             max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot,
             ffn_f32: @ffn_f32)
         end
-        unless @plans.all? { |plan| plan.ffn_f32 == @ffn_f32 }
-          raise ArgumentError.new("serial plans must share the selected FFN graph precision")
-        end
+        PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(@plans.map(&.ffn_f32), @fixture.block_count, @ffn_f32)
         # This loader owns distinct allocations for every authenticated weight,
         # the external input/tables and retained outputs. Broader caller-provided
         # Workspace aliases are outside this probe's ownership contract.
@@ -419,7 +478,7 @@ module PixelUMMTwoBlockProbe
       end
       @fixture.capture_order.map do |key|
         slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
-        name = key[7..]
+        name = PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count)
         record, buffer = @fixture.captures[key], @plans[slot].stage(name)
         raise ArgumentError.new("native capture extent mismatch #{key}") unless record.nbytes == buffer.size
         expected, actual = @fixture.read(record), Bytes.new(record.nbytes.to_i32)

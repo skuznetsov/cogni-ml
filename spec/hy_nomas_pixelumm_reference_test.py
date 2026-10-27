@@ -340,6 +340,129 @@ class PixelUMMReferenceTest(unittest.TestCase):
             [f"captures.block{index}.output" for index in range(8)],
         )
 
+    def test_sixteen_block_schema_profiles_and_predecessor_edges(self):
+        self.assertEqual(
+            reference.SIXTEEN_BLOCK_SCHEMA,
+            "cogni_ml.pixelumm_sixteen_block_reference/v1",
+        )
+        self.assertEqual(
+            reference.REAL_INPUT_NOISE_OWNER,
+            "hymm.models.vae.pixelumm_decoder.autoencoder."
+            "PixelUMMDCAELatentDecoder._make_noise",
+        )
+        self.assertEqual(
+            set(reference.REAL_INPUT_ARTIFACTS),
+            {
+                "pixelumm-real-input.json",
+                "pixelumm-real-input-full-seed42.json",
+                "pixelumm-real-input-full-seed43.json",
+                "pixelumm-real-input-small-seed42.json",
+                "pixelumm-real-input-small-seed43.json",
+            },
+        )
+        self.assertEqual(reference.REAL_INPUT_ARTIFACTS["pixelumm-real-input.json"],
+                         ("full", 42, "pixelumm-real-input.bin"))
+        self.assertEqual(reference.REAL_INPUT_ARTIFACTS[
+            "pixelumm-real-input-small-seed43.json"
+        ], ("small", 43, "pixelumm-real-input-small-seed43.bin"))
+        edges = [reference._block_io_edge(index) for index in range(16)]
+        self.assertEqual(
+            [edge["input_source"] for edge in edges],
+            ["inputs.x"] + [f"captures.block{index}.output" for index in range(15)],
+        )
+        self.assertEqual(
+            [edge["output_key"] for edge in edges],
+            [f"captures.block{index}.output" for index in range(16)],
+        )
+        with self.assertRaises(reference.ReferenceError):
+            reference._block_io_edge(16)
+
+    def test_real_input_lineage_uses_authenticated_full_subset_file_bytes(self):
+        checked_subsets = {
+            "encoder": {
+                "subset_bytes": 3_666_640_744,
+                "source_f32_bytes": 3_666_620_032,
+            },
+            "stem": {
+                "subset_bytes": 52_511_088,
+                "source_f32_bytes": 52_510_720,
+            },
+        }
+        lineage = {
+            "encoder_subset_bytes": checked_subsets["encoder"]["subset_bytes"],
+            "stem_subset_bytes": checked_subsets["stem"]["subset_bytes"],
+        }
+        reference._validate_real_input_subset_sizes(lineage, checked_subsets)
+
+        # Producer lineage records complete safetensors file sizes, while the
+        # receipt's source_f32_bytes field excludes the encoded header.
+        payload_only = dict(lineage)
+        payload_only["encoder_subset_bytes"] = checked_subsets["encoder"]["source_f32_bytes"]
+        with self.assertRaises(reference.ReferenceError):
+            reference._validate_real_input_subset_sizes(payload_only, checked_subsets)
+
+    def test_real_input_manifest_path_must_be_canonical_and_non_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            root.mkdir()
+            manifest = root / "pixelumm-real-input.json"
+            manifest.write_text("{}", encoding="utf-8")
+            with mock.patch.object(reference, "SIXTEEN_SOURCE_DIR", root.resolve()):
+                self.assertEqual(
+                    reference._admitted_real_input_manifest_path(manifest.resolve()),
+                    manifest.resolve(),
+                )
+                linked_manifest = root / "pixelumm-real-input-small-seed42.json"
+                linked_manifest.symlink_to(manifest)
+                with self.assertRaises(reference.ReferenceError):
+                    reference._admitted_real_input_manifest_path(linked_manifest)
+
+                linked_parent = Path(temporary) / "source-alias"
+                linked_parent.symlink_to(root, target_is_directory=True)
+                with self.assertRaises(reference.ReferenceError):
+                    reference._admitted_real_input_manifest_path(
+                        linked_parent / "pixelumm-real-input.json"
+                    )
+
+    def test_real_input_x_bf16_finiteness_guard_uses_cpu_payload_bytes(self):
+        self.assertTrue(reference._bf16_bytes_are_finite(bytes.fromhex("803f00c0")))
+        self.assertFalse(reference._bf16_bytes_are_finite(bytes.fromhex("807f")))
+        self.assertFalse(reference._bf16_bytes_are_finite(bytes.fromhex("c17f")))
+        self.assertFalse(reference._bf16_bytes_are_finite(bytes.fromhex("80")))
+
+    def test_sixteen_block_cli_routes_only_complete_prefix_with_real_manifest(self):
+        argv = ["--upstream", "upstream", "--header", "header.json",
+                "--output", "fixture.json", "--grid", "2", "32", "32",
+                "--real-input-manifest",
+                "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/"
+                "source/pixelumm-real-input-small-seed42.json"]
+        for index in range(16):
+            argv += [f"--block{index}", f"block{index}.safetensors"]
+            argv += [f"--receipt{index}", f"block{index}.receipt.json"]
+        with mock.patch.object(
+            reference, "make_sixteen_block_fixture", return_value={"accepted": True}
+        ) as make_sixteen:
+            with redirect_stdout(StringIO()):
+                status = reference.main(argv)
+        self.assertEqual(status, 0)
+        self.assertEqual(len(make_sixteen.call_args.kwargs["block_sources"]), 16)
+        self.assertEqual(
+            make_sixteen.call_args.kwargs["real_input_manifest"],
+            Path("/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-20261027-sixteen/"
+                 "source/pixelumm-real-input-small-seed42.json"),
+        )
+
+        missing_manifest = [arg for arg in argv if arg != "--real-input-manifest"
+                            and "pixelumm-real-input-small-seed42.json" not in arg]
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(SystemExit):
+                reference.main(missing_manifest)
+
+        partial = argv[:-4]
+        with redirect_stdout(StringIO()):
+            with self.assertRaises(SystemExit):
+                reference.main(partial)
+
     def test_eight_block_cli_routes_only_a_complete_consecutive_prefix(self):
         argv = ["--upstream", "upstream", "--header", "header.json",
                 "--output", "fixture.json", "--grid", "6", "44", "80"]

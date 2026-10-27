@@ -1,18 +1,228 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
-Current frontier: eight consecutive pretrained decoder blocks, zero through
-seven, with shared GPU scratch, an authenticated BF16 cache and an opt-in F32
-FFN graph mode qualified across two/four/eight blocks. Small J2048 matches all
-208 stages of the eight-block prefix; full T6/H44/W80, J21,120 matches all 16
+Current frontier: sixteen consecutive pretrained decoder blocks, zero through
+fifteen, with shared GPU scratch, an authenticated BF16 weight cache and opt-in
+F32 FFN graph operands. Inputs come from the pinned upstream DCAE encoder,
+actual PixelUMM noise initializer and input stem on an encoded static image
+clip. Small J2048 covers all 416 stages; full T6/H44/W80, J21,120 covers all 32
 attention/output boundaries, including different-input replay after poisoning
-mutable scratch. Every compared word is finite and bitwise exact at unchanged
-`atol=rtol=2e-5`. New paired eight-block medians are 12.580/12.931 seconds for
-BF16 graph feeds versus 10.067/10.451 seconds for F32 FFN graph operands on
-this M2 Max, with higher sampled memory. The default remains BF16. See the
-sequential F32 qualification below for timing drift, memory and limits. These
-are bounded block measurements, not complete-decoder or video latency. The
-saved oracle adapts upstream semantics on PyTorch MPS; compiled upstream CUDA
-Flex equivalence is unqualified.
+mutable scratch. Compared words are finite and bitwise exact at unchanged
+`atol=rtol=2e-5`. Full-J sixteen-block timed medians are 20.754/19.139 seconds
+on this M2 Max. The default remains BF16. These are bounded block measurements,
+not complete-decoder or video latency. The oracle adapts upstream semantics on
+PyTorch MPS; compiled upstream CUDA Flex equivalence is unqualified. See the
+qualification and pipeline planning below for the evidence and limits.
+
+## Active sixteen-block real-input contract, 2026-10-27
+
+The admitted slice is layers 0-15 with one shared workspace, authenticated
+BF16 weight owners, and F32 FFN graph operands. It does not authorize a full
+decoder or diffusion generation. Existing seeded hidden-state fixtures remain
+regression controls; they cannot establish the requested real-input claim.
+The fixture must bind decoder-stem output to an authentic upstream-produced
+latent and the decoder's actual initialized `xt`, the exact stem weights,
+geometry, producer/source revision and payload hashes. A single DiT flow
+prediction is not a completed scheduler latent. The admitted bounded route is
+an upstream encoder/stem input probe, without a diffusion sampling loop.
+
+This is CAUTION work: a wider retained plan set can multiply opaque MPS
+temporaries. The exact full-J named Workspace requirement for 16 slots and
+attention/output captures is 14,202,158,052 bytes; it is an admission inventory,
+not a measured process footprint or a complete-pipeline estimate. Each serial
+job must first fit its process cap plus the cache-aware 10% physical reserve,
+retain the 64 MiB swap-growth stop and deadline, and stop on a guard failure.
+There may be no new inference wait, preterminal activation read or named encode
+allocation. GPU jobs remain serial and heavy artifacts stay on the external
+SSD. Rollback omits the new 16-block probe and `--ffn-f32`; earlier probes and
+the BF16 default remain available.
+
+DoD is the guarded release `pixelumm_decoder_sixteen_block_probe` on the
+authenticated real-input fixture, comparison of all 32 full-J attention/output
+boundaries with upstream at unchanged `atol=rtol=2e-5`, and successful
+ownership/lifetime, alternate-input/poisoned-scratch and earlier-depth
+regressions. Build and CPU admission checks are `make` targets
+`pixelumm_decoder_sixteen_block_probe`, `spec_pixelumm_decoder_block`, and
+`spec_pixelumm_two_block_probe`, plus the checkpoint/cache/reference Python
+unit suites. Missing provenance, incomplete capture coverage, a numerical or
+lifecycle failure, extra synchronization or a memory stop rejects closure.
+Whole-pipeline memory and seconds per video second must distinguish exact
+inventories, observed bounded requests and extrapolation; no end-to-end timing
+claim is admitted without an end-to-end run.
+
+The real-input producer crops the pinned upstream 1280x720 RGB pose image,
+without resizing, and repeats it into a static clip. The small crop is
+512x512x8 frames; the full crop is 1280x704x24. Only the 169 DCAE encoder
+tensors and four PixelUMM stem tensors are loaded. Actual upstream encoder,
+per-latent-frame MPS noise generation and `embed(patchify(xt)) +
+_condition_tokens(latent)` produce the BF16 tile-major block input. These are
+real encoded-image latents, not denoised DiT output or a moving video sample.
+Seeds 42 and 43 distinguish noise and stem output while preserving the source
+image, encoder latent, weights and positional tables.
+
+The manifest binds source/producer hashes, exact shapes and permutation,
+authenticated complete subset-file sizes and raw tensor hashes. Producer
+finiteness checks use the existing terminal CPU serialization copies; the
+consumer checks imported x chunks before its block sequence. Neither adds a
+native inference synchronization. Canonical non-symlink paths, exact receipt
+bindings and payload checks reject malformed artifacts; they do not independently
+prove the neural computation or replace the numerical oracle. The producer uses
+MPS Conv3d with CPU fallback disabled and an explicit allocator cap.
+
+### Sixteen-block qualification
+
+The real small fixture exports 416 ordered stages. Two native requests compare
+all stages, for 832 finite bitwise-exact comparisons. Two full-J fixtures use
+the same encoded latent and different actual noise seeds. Their stem inputs and
+every block output differ. Each native full process runs a numerical gate,
+one warmup, three timed requests and a poisoned different-input replay. The
+warmup and first two timed requests retain their captures on the GPU.
+Comparisons run on the numerical gate, last timed request and poisoned replay,
+outside the measured interval. Across both full processes, all 192 boundary
+comparisons are finite and bitwise exact. Thus sixteen-block coverage is 1,024
+comparisons; two/four/eight-block regressions add 728 at unchanged tolerances.
+
+| Native full-J real-input series | Three timed requests, seconds | Median, seconds |
+| --- | --- | ---: |
+| Seed 42, then poisoned seed 43 | 20.754 / 20.658 / 21.691 | 20.754 |
+| Seed 43, then poisoned seed 42 | 19.139 / 19.115 / 19.457 | 19.139 |
+
+The two epochs are not a controlled A/A drift test or a speed comparison of
+inputs. Timings include command encoding, execution, capture copies and the
+terminal wait; loading, preparation and postterminal CPU comparison are
+excluded. All full-J requests use 2,033 command segments, one terminal wait,
+zero preterminal activation reads and zero named encode allocations. Fifteen
+block boundaries hand their GPU output directly to the next plan. All sixteen
+plans select F32 FFN graph operands; BF16 boundary storage remains unchanged.
+
+Full-J named storage is 14,202,158,052 bytes (13.227 GiB). The largest sampled
+native process-tree footprint is 18.623 GiB, including diagnostic outputs and
+opaque backend resources. Both native processes fit a 23 GiB cap with zero
+system swap growth. A second full reference was initially rejected at startup
+under a 26 GiB cap; after the first reference measured 19.484 GiB, a stricter
+23 GiB cap admitted its retry. The 10% reserve, 64 MiB swap-growth stop and
+deadlines were retained. Sampling does not bound between-poll spikes.
+
+Release builds pass 38 Crystal examples; 55 Python admission/producer/cache/
+reference checks pass. These include two-digit block ownership and capture
+names, exact inventories, old depth caps, malformed real-input provenance and
+finite-payload checks. Extending to block 10 exposed fixed-width capture slicing
+and numeric-versus-lexical cache-key assumptions; both are corrected with
+regression coverage. No production arithmetic kernel or synchronization site
+changed. Source/binary receipts and external payload auditing are evidence
+bindings, not hermetic build attestation or independent neural recomputation.
+The correlated Mini-Quad review covers this bounded prefix only.
+
+The source-linked result is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-sixteen-block.json`; large
+payloads, guarded commands and validation results stay on the external SSD.
+Only decoder layers 0-15, the encoder and input stem have been downloaded for
+this slice. Layers 16-35, global decoder head, full-decoder quality and the
+connected pipeline remain unqualified. Refresh after source, artifacts,
+device/backend/toolchain/OS, geometry/precision, ownership or guard changes.
+
+## Pipeline resource planning, 2026-10-27
+
+The target for this estimate is one first-segment second at 24 fps,
+24x704x1280 pixels: DiT latent geometry `[6,22,40]` (5,280 video tokens),
+and PixelUMM token grid `[6,44,80]` (21,120 tokens). Camera, action, history,
+cache preservation and segment streaming decode are disabled. The pinned preset
+uses eight diffusion steps, CFG 1.0 and a
+one-step PixelUMM decoder; this needs eight DiT forwards and one temporal
+decoder window, rather than 40 diffusion steps or two CFG branches.
+This is a deliberate frame-limited 704x1280 target; the pinned preset defaults
+to 720x1280 and event-length generation. Set `video_size=[704,1280]`,
+`video_length=frame`, `num_frames=24` and `parallelism.sp_size=1` for this estimate
+to apply; the pinned distributed preset uses SP8. The pinned
+`seg_ar` route accepts plain text and initializes the first latent from noise.
+Qwen receives token IDs and an attention mask, without image pixels. Its
+PixelUMM loader explicitly skips `encoder.*`. Therefore the DCAE encode used
+to construct these diagnostic inputs is not a mandatory text-to-video phase.
+Image/video-conditioned modes need a separate encoder budget.
+
+| Component inventory at this shape | Bytes | GiB |
+| --- | ---: | ---: |
+| Qualified Qwen S1280 probe named admission | 12,738,809,672 | 11.864 |
+| Qualified compact-text Q4 DiT forward named admission | 10,060,081,732 | 9.369 |
+| Projected 36-slot PixelUMM Workspace without captures | 8,525,290,468 | 7.940 |
+| Complete decoder BF16 weights, including stem/head | 13,943,586,816 | 12.986 |
+| PixelUMM borrowed input and RoPE | 194,641,920 | 0.181 |
+| Projected PixelUMM named subtotal | 22,663,519,204 | 21.107 |
+| Sum of Qwen, compact DiT and PixelUMM subtotals | 45,462,410,608 | 42.340 |
+| Conditional upstream dense KV plus per-block bool masks | 5,804,576,640 | 5.406 |
+| Component sum with that upstream cache policy | 51,266,987,248 | 47.746 |
+
+The 36-slot Workspace formula shares core/scratch once and retains one BF16
+output bank per slot; it is not linear extrapolation of process footprints.
+Its decoder weight inventory comes from the pinned checkpoint header, whose
+full-file payload hash remains unverified. The component sum does not
+identity-deduplicate cross-stage boundaries. Neither sum includes opaque MPS
+temporaries, extra global-head intermediates, scheduler/output/codec storage,
+load-time copies, OS or other applications. A single 24-frame RGB F32 output
+alone is another 259,522,560 bytes. Therefore 42.34 GiB is a planning subtotal,
+not an application memory cap or a measured all-resident peak.
+
+The pinned `seg_ar` route additionally preallocates K/V for all 54 DiT blocks,
+even on this first, final chunk. At batch one and SP1, without compressed KV,
+capacity is `2 * (5280 + 1280) = 13120` tokens. Two BF16 tensors of shape
+`[1,13120,16,128]` per block cost 5,803,868,160 bytes; its 54 bool masks add
+708,480 bytes. The 5.406 GiB total is conditional upstream storage, absent from
+the measured standalone component inventories. M64 compute compaction does not
+automatically reduce the upstream `text_len` used for this capacity. A connected
+native pipeline's cache omission or release policy remains unqualified; budget
+it explicitly rather than assuming the final chunk allocates no cache. Later
+attention masks, history and larger cache capacities remain additional costs.
+
+The 10% physical reserve on this 64 GiB machine is 6.4 GiB. Adding it to the
+all-resident component subtotal gives 48.74 GiB, or 54.15 GiB with the conditional
+upstream cache, before the exclusions above. Releasing Qwen after conditioning
+and DiT after denoising would instead give a 21.11 GiB named PixelUMM phase if
+the KV cache is also released, or 26.51 GiB if it remains live. Including the
+reserve gives 27.51 or 32.91 GiB respectively, before exclusions.
+For this non-streaming request, upstream drops its cache references before VAE
+decoding. The proposed native
+stage-lifetime policy, including physical backing release, is unqualified in a
+connected pipeline. Moving weights to CPU alone does not release physical unified
+memory. The upstream non-CUDA PixelUMM loader also builds a BF16 CPU state
+dictionary before transferring its model to MPS; retained loading copies must
+be controlled rather than added blindly to the forward inventory.
+
+A further unimplemented option is a two-bank output ring for non-diagnostic
+decoding. Current plans retain 36 distinct output banks so every block can be
+compared after the terminal wait. Replacing those with two banks would save
+5,882,511,360 named bytes (5.479 GiB), projecting a 15.63 GiB PixelUMM phase.
+That requires an explicit alias/lifetime contract: each plan's input/output
+must remain disjoint, and no consumer may read a bank after the next writer
+reuses it. The present diagnostic qualification keeps all distinct banks.
+Opaque F32 FFN graph intermediates remain outside these named inventories.
+
+The qualified compact-text timing regime is M64 storage with 23 valid text
+tokens from a saved 1280-row fixture. Applying the following projection requires
+that compaction and matching text-length regime; arbitrary text lengths, live
+Qwen conditioning and the un-compacted preset are not qualified by these runs.
+Latest compact-text 54-block forwards have per-epoch medians 7.183 and 10.482 s
+(overall 9.106 s), with substantial drift. Eight times the overall median is
+72.85 s for the DiT component of this one-second target. Historical padded-Q4
+forwards of 6.545/6.563 s belong to another measurement epoch. Qwen's observed
+2.796 s GPU interval is from a correctness request, not a fresh throughput
+benchmark. Scaling the measured sixteen-block medians by 36/16 projects
+43.06-46.70 s for the decoder block sequence only. Combining this hypothesis
+with the two compact-DiT epoch medians gives 100.53-130.55 s for
+`8 * DiT + 36 PixelUMM blocks` per first-segment video second. This excludes
+Qwen, global decoder stem/head, scheduler/output, loading and compilation, and
+combines unmatched measurement epochs. It makes the target of a few minutes
+plausible; it does not establish end-to-end throughput. Complete PixelUMM,
+scheduler and pipeline latency remain unmeasured.
+Do not sum overlapping GPU/encode/wait intervals or call the component
+projection an end-to-end measurement. Non-final chunks also perform a
+cache-write forward, and context/geometry growth can change forward cost.
+
+The source-linked calculation is external
+`hy-nomas-pixelumm-20261027-sixteen/results/pipeline-budget-v2.json`, generated
+by `tmp/pipeline_budget_v2.py`. Its inputs are the prior Qwen, Q4 DiT and text
+compaction reports, measured sixteen-block requests, the current Workspace
+formula, checkpoint header and the pinned upstream schedule and text route.
+Refresh after component geometry, storage, lifetimes, schedule,
+backend or source changes. No full pipeline or generation ran for this audit.
 
 ## F32 FFN sequential qualification contract, 2026-10-27
 

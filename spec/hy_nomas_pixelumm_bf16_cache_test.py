@@ -27,7 +27,11 @@ def _toy_cache(directory: Path, block_count: int = 2):
     aggregate = hashlib.sha256()
     offset = 0
     with payload.open("w+b") as stream:
-        for index, key in enumerate(sorted(shapes)):
+        ordered_keys = [
+            f"block{block}.weight{weight:02d}"
+            for block in range(block_count) for weight in range(13)
+        ]
+        for index, key in enumerate(ordered_keys):
             tensor = torch.tensor([index + 0.5], dtype=torch.bfloat16)
             record, observed = cache._tensor_record(stream, aggregate, key, tensor, offset)
             records[key], observations[key] = record, observed
@@ -176,6 +180,26 @@ class PixelUMMBF16CacheTest(unittest.TestCase):
             extra["blocks"]["8"] = copy.deepcopy(extra["blocks"]["7"])
             with self.assertRaises(cache.CacheError):
                 cache.validate_manifest(extra, payload, expected_shapes=shapes)
+
+    def test_sixteen_block_cache_accepts_exact_208_weights_under_existing_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest, payload, shapes = _toy_cache(Path(directory), block_count=16)
+            result = cache.validate_manifest(manifest, payload, expected_shapes=shapes)
+            self.assertEqual(result["tensor_count"], 208)
+            self.assertEqual(result["payload_bytes"], 416)
+            self.assertEqual(manifest["weights"]["block10.weight00"]["offset"], 260)
+            self.assertEqual(manifest["weights"]["block2.weight00"]["offset"], 52)
+
+            missing = copy.deepcopy(manifest)
+            del missing["blocks"]["15"]["weight_keys"][-1]
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(missing, payload, expected_shapes=shapes)
+
+            extra = copy.deepcopy(manifest)
+            extra["blocks"]["16"] = copy.deepcopy(extra["blocks"]["15"])
+            with self.assertRaises(cache.CacheError):
+                cache.validate_manifest(extra, payload, expected_shapes=shapes)
+
 
     def test_tensor_writer_rejects_non_bf16_sources(self):
         from io import BytesIO

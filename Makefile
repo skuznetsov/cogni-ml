@@ -116,7 +116,14 @@ pixelumm_decoder_four_block_probe: $(BUILD_DIR)/pixelumm_decoder_four_block_prob
 
 pixelumm_decoder_eight_block_probe: $(BUILD_DIR)/pixelumm_decoder_eight_block_probe
 
+.PHONY: pixelumm_decoder_sixteen_block_probe
+pixelumm_decoder_sixteen_block_probe: $(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe
+
 $(BUILD_DIR)/pixelumm_decoder_eight_block_probe: examples/pixelumm_decoder_eight_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/pixelumm_decoder_sixteen_block_probe: examples/pixelumm_decoder_sixteen_block_probe.cr examples/support/pixelumm_serial_probe_runner.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
@@ -137,6 +144,11 @@ spec_pixelumm_decoder_block: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_O
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
 spec_pixelumm_two_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+	$(CRYSTAL) spec spec/pixelumm_two_block_probe_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
+
+.PHONY: spec_pixelumm_sixteen_block_probe
+spec_pixelumm_sixteen_block_probe: $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
 	$(CRYSTAL) spec spec/pixelumm_two_block_probe_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)" $(ARGS)
 
