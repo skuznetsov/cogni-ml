@@ -34819,3 +34819,29 @@ Refresh after source/toolchain/device/model/workload changes.
   then wider decoder/head and connected lifetimes. No full generation ran.
   Refresh on scoped source/artifact/backend/device/toolchain/OS, geometry,
   precision, ownership/capture/lifetime or guard changes or evidence loss.
+
+
+### 2026-10-27: Offline Hy-Nomas director timeline and terminal MP4
+
+- Return pointer: docs/video-director-timeline.md and
+  .landmark/evidence/2026-10-27-hy-nomas-offline-director.json. The JSON project
+  compiler holds a prompt until the next timestamp, rounds changes/end upward
+  to four-pixel-frame boundaries at24fps, and reports requested/effective times.
+  Explicit event boundaries, num_frames, prompt fields/count and [height,width]
+  overrides avoid implicit timestamp rescaling. This is compile-only, with no
+  connected native timeline executor, camera track, resume or generation claim.
+- 11 timeline and6 terminal-export tests pass, including tiny FFmpeg/ffprobe
+  roundtrip, no-clobber writes, exact geometry/latent counts and malformed files.
+  AST-extracted original pinned _load_from_json/pure helpers preserve two sample
+  prompts and one nondefault640x1024 single prompt. Hydra/pipeline and latent
+  boundary conversion remain source-traced only. Reserved ||| is rejected.
+- Hy export accepts completed display-range B1C3THW F32_LE bytes, not raw decoder
+  pixels; it uses zero-to-one conversion. Existing Wan default and operation
+  order remain minus-one-to-one. File encoding is terminal CPU handling, not
+  neural inference or an added inference wait. Existing files are never replaced.
+- Upstream rev911cea6458a89c2663513ff7099561ec190dd491. External artifacts are
+  under hy-nomas-pixelumm-ring-20261027 on /opt/mldata_ssd. Correlated review is
+  ROBUST only for compile/export scope. Next signal is connected segment
+  execution/display postprocessing and measured prompt adherence, memory and
+  video latency. Refresh on scoped source/upstream temporal ratio/parser/range,
+  geometry, Python/NumPy/FFmpeg or evidence changes.

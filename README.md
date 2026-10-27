@@ -1497,6 +1497,10 @@ open. See the
 [Hy-Nomas frontier and reproduction commands](docs/hy-nomas-native-frontier.md)
 and [source notices](third_party/VIDEO_NOTICES.md#hy-nomas).
 
+The [offline director timeline](docs/video-director-timeline.md) prepares
+timestamped prompt changes and exports completed Hy-Nomas pixel files to MP4.
+Timeline compilation and terminal export do not run the generation pipeline.
+
 ## Metal Kernels
 
 | Kernel | Purpose |

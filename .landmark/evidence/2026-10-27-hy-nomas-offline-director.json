@@ -1,0 +1,94 @@
+{
+  "schema": "cogni_ml.hy_nomas_offline_director_evidence/v1",
+  "created_at": "2026-10-27T18:32:49.675711+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "JSON timeline compilation and terminal completed-file MP4 export only; connected model generation is unimplemented.",
+    "decay_trigger": "Refresh on scoped source, upstream revision/prompt parser/temporal ratio/geometry/output-range changes, Python/NumPy/FFmpeg changes or evidence loss."
+  },
+  "contract": {
+    "prompt_lifetime": "Holds until next change",
+    "fps": 24,
+    "pixel_boundary_multiple": 4,
+    "alignment": "Round exact requested time up; report both requested and effective frames/times. Reject collisions.",
+    "single_prompt_field": "prompt",
+    "multi_prompt_fields": [
+      "prompt",
+      "prompt"
+    ],
+    "upstream_geometry_order": "[height,width]",
+    "mp4_input": "Completed postprocessed display-range B1C3THW little-endian F32 file, not raw decoder pixels.",
+    "mp4_range": "zero_to_one",
+    "wan_default_range": "minus_one_to_one",
+    "no_clobber": true,
+    "neural_inference": false
+  },
+  "checks": {
+    "tests": 17,
+    "timeline_tests": 11,
+    "export_tests": 6,
+    "ffmpeg_roundtrip": "Observed successful 4-frame 16x16 output with ffprobe frame-count/geometry/rate checks.",
+    "execution_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/director-checks-v1.json",
+      "sha256": "04e6dbbfa00a14105954d24ae58c4b5307dbd282f7a7490a6c4fa466b4773e79"
+    },
+    "log": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/logs/director-checks-v1.out",
+      "sha256": "a5f323272d9a48966ae3ad9e8212cad45ca62dfc59571d8dc688638119d3a843"
+    },
+    "source_sha256": {
+      "examples/hy_nomas_timeline.py": "3fc01085751cb38f562aeaceac563730d5671d56b5b87a875c1d99b7d5f63fa7",
+      "examples/hy_nomas_export.py": "7f56aaa3b6e3661bd3ecc39f0241d1ca3978475f20729fa17d6a279e8621d487",
+      "examples/wan_s2v_export.py": "4d9c0385393addc255c785f4b4897b951f0d850d1879fc4bcaa1e4853bb79719",
+      "spec/hy_nomas_timeline_test.py": "2d470e8411354c6ad163f9b97078b2b67c142803e3739889e70736f0b9339a54",
+      "spec/hy_nomas_export_test.py": "a84222f9afd37454aa65f4fc85b20278d1494513e6e246c61e3dcc3c736b53dc",
+      "examples/data/hy_nomas_director_project.json": "f4f54f6b9c6e73fc58d95e3e5dbbd19133a6dffa43e95141bad23cce30a6135e"
+    },
+    "compiled_sample": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/results/kite-to-sea.compiled.json",
+      "sha256": "d1d0f3097860283b997241f80480dcf047a32f0e2b55d1f819a5f1c60802b918"
+    }
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "loader_execution": "Original _load_from_json and pure helpers AST-extracted from pinned source; no-op logger, standard-library dependencies. Full inference module/Torch not imported.",
+    "cases": "Two exact sample prompts and one single-prompt nondefault640x1024 project; prompt counts match max_segments; no JSON boundaries; explicit overrides preserved.",
+    "result": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/tmp/director_upstream_contract_probe_v1.json",
+      "sha256": "43a6a669b96ba59db18660c9b40282449a9f16905c63084eadf363f1abef6c67"
+    },
+    "probe": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/tmp/check_director_upstream_v1.py",
+      "sha256": "df99efd01416a91a62e5d0bbb25a31e2caf68f348cd6cf6dfd022dbe1cc967b5"
+    },
+    "source_snapshot": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ring-20261027/tmp/director_upstream_source_snapshot_v1.txt",
+      "sha256": "c045ab0c0273f64be4ac733e61cde8611ea2fbb2c634f26b390f41c70e85fd77"
+    },
+    "source_sha256": {
+      "hymm/inference.py": "7b0a8152c9ab5c1682dc7e4aee41d7fb3b2f3416873b3b4a6795a45e65b82e6d",
+      "hymm/pipeline/causal_ar.py": "f9aae49b14becb87d958665f763e510c28eeaaad9292f00ac511d1146202949f"
+    },
+    "pipeline_or_hydra_executed": false,
+    "boundary_to_latent_mapping": "Source-traced only."
+  },
+  "adversary": {
+    "verdict": "ROBUST within compile/export scope",
+    "provenance": "Correlated same-lineage source review and observed CPU tests; not independent video-generation qualification.",
+    "closed_attacks": [
+      "Geometry override explicitly emits [height,width] rather than descriptive-only dimensions.",
+      "Reserved upstream ||| separator rejected before loader joins/splits prompts.",
+      "Hy display range separated from raw decoder range and existing Wan default.",
+      "Compiler and exporter publish without overwriting existing files."
+    ]
+  },
+  "limitations": [
+    "No connected native timeline executor, full generation, generated-scene quality or prompt-adherence test.",
+    "No arbitrary subframe control, resumable generation, camera trajectory or image/video-conditioning feature.",
+    "Exact-decimal requested-frame reporting does not reproduce binary-float timestamp parsing at arbitrarily close boundaries; explicit integer boundaries are the execution contract.",
+    "Terminal FFmpeg file encoding is CPU/file handling after completed model output, not GPU neural inference."
+  ],
+  "rollback": "Omit the new Hy-Nomas tools; existing Wan callers retain default normalization.",
+  "next_signal": "Connect the qualified native pipeline to explicit segment boundaries and terminal display postprocessing/export, then measure adherence, peak memory and seconds per video second.",
+  "base_revision": "bba72e6bcbd835ebb789dc32c614b45c5a684f80"
+}
