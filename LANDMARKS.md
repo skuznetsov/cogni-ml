@@ -34784,3 +34784,38 @@ Refresh after source/toolchain/device/model/workload changes.
   phase lifetimes before any full-pipeline peak/latency or quality claim. Refresh
   on scoped source/artifacts/toolchain/backend/device/OS, geometry/precision,
   capture/ownership/lifetimes/guards or loss of external evidence.
+
+
+### 2026-10-27: PixelUMM two-bank output ring, opt-in
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-output-ring.json. Layers 0-15
+  share two alternating BF16 output banks. Default retains distinct outputs;
+  --reuse-output-banks is opt-in. No arithmetic/bridge/synchronization source
+  changed. Plan.output is ephemeral and overwritten by slot N+2, not a stable
+  diagnostic capture. Stale output/interior-x captures fail before allocation;
+  global external aliases, wrong predecessor/order and in-flight reuse fail.
+- 43 Crystal examples pass. Small J2048 compares 402/416 stages twice, explicitly
+  omitting 14 overwritten early outputs. Full J21120 retains all16 attention
+  boundaries and last2 outputs (18 versus retained32). Across small and serial
+  full retained/ring/ring/retained runs: 26 requests, 1,104 finite bitwise-exact
+  comparisons at unchanged atol=rtol=2e-5, including alternate input after NaN
+  poisoning shared scratch and output banks. One terminal wait/request, zero
+  preterminal activation reads or named encode allocations; full2033 segments.
+- Named full bytes fall 14,202,158,052 -> 11,779,947,492: exactly 2,422,210,560 B
+  (2.256 GiB). Both ring sampled process peaks are higher: retained16.683/16.844
+  GiB, ring19.112/18.950 GiB. Timed total medians in ABBA order27.143/35.181/
+  25.180/24.136 s drift substantially. No causal speedup or process-memory
+  reduction established; keep default off. Do not update historical pipeline
+  timing from this epoch. A 36-bank-to-two projection saves5.479 GiB named only;
+  the complete 36-block decoder/global head is unqualified.
+- Cache-aware10% floor, caps18GiB small/23GiB full, swap-growth64MiB and900s
+  deadline preserved; successful runs show zero swap growth and do not overlap.
+  Historical small14GiB cap stopped safely, excluded from numeric qualification.
+  External audit verifies all32 source/build pins and cache/fixture payloads;
+  negative controls reject missing comparisons/wrong banks. Byte bindings are
+  not hermetic provenance; Mini-Quad review is correlated, not independent.
+- Next falsifier: separate loading/opaque MPS phase peaks from named memory,
+  then wider decoder/head and connected lifetimes. No full generation ran.
+  Refresh on scoped source/artifact/backend/device/toolchain/OS, geometry,
+  precision, ownership/capture/lifetime or guard changes or evidence loss.

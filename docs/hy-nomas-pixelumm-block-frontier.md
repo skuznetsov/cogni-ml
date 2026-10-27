@@ -1,17 +1,93 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
-Current frontier: sixteen consecutive pretrained decoder blocks, zero through
-fifteen, with shared GPU scratch, an authenticated BF16 weight cache and opt-in
-F32 FFN graph operands. Inputs come from the pinned upstream DCAE encoder,
-actual PixelUMM noise initializer and input stem on an encoded static image
-clip. Small J2048 covers all 416 stages; full T6/H44/W80, J21,120 covers all 32
-attention/output boundaries, including different-input replay after poisoning
-mutable scratch. Compared words are finite and bitwise exact at unchanged
-`atol=rtol=2e-5`. Full-J sixteen-block timed medians are 20.754/19.139 seconds
-on this M2 Max. The default remains BF16. These are bounded block measurements,
-not complete-decoder or video latency. The oracle adapts upstream semantics on
-PyTorch MPS; compiled upstream CUDA Flex equivalence is unqualified. See the
-qualification and pipeline planning below for the evidence and limits.
+## Two-bank output-ring qualification, 2026-10-27
+
+An opt-in `--reuse-output-banks` mode reuses two output banks for the qualified
+16-block prefix. The retained-output default remains the rollback. Slot N
+writes bank N modulo two and consumes the immediately preceding bank on the
+same ordered command chain. Initial input, positional tables and weights must
+be disjoint from every owned workspace buffer, including future output banks.
+The public `Plan#output` is an ephemeral GPU handoff, overwritten by slot N+2;
+it is not a persistent diagnostic capture. Requesting an `output` or `x`
+capture that a later slot would overwrite fails before workspace allocation.
+Ordinary selected captures remain private. No arithmetic kernel, native bridge
+or synchronization source changed.
+
+The CAUTION failure mode was a correct final result with silently overwritten
+intermediate diagnostics. The admission gate rejects stale captures, invalid
+slots and a budget one byte below the exact unique inventory. The runtime probe
+checks actual alternating buffer identities, wrong predecessor/order,
+in-flight reuse/read/release and the missing persistent early-output capture.
+Different-input replay poisons both shared transients and output banks after
+the previous terminal wait. Raw buffer references still require the caller to
+honor the documented ephemeral lifetime; persistent-capture rejection is not
+a dynamic borrow checker for `Plan#output`.
+
+Release probe builds pass, along with 43 admission/fixture Crystal examples.
+At J2048, the ring
+compares 402 selected stages twice: all ordinary stages and the last two output
+banks, with 14 overwritten early-output aliases explicitly omitted from the
+authenticated 416-stage fixture. That is 804 finite bitwise-exact comparisons.
+At full T6/H44/W80, J21,120, each retained run compares 32 boundaries three
+times; each ring run compares all 16 attention boundaries and both surviving
+outputs three times. Across two runs of each mode, this adds 300 comparisons,
+for 1,104 in this experiment at unchanged `atol=rtol=2e-5`. The existing oracle
+adapts pinned upstream semantics on PyTorch MPS; no new oracle inference or
+compiled CUDA Flex equivalence was established here. Native measured requests
+contain no PyTorch.
+
+All 26 successful requests have one terminal wait, zero preterminal activation
+reads and zero named encode allocations. Full requests retain 2,033 command
+segments. The four full processes run serially in retained/ring/ring/retained
+order, each with a numerical gate, one warmup, three timed requests and a
+poisoned alternate-input replay. Seed 42 inputs, seed 43 replay, weights,
+geometry and F32 FFN graph selection match between modes. Timings cover
+encoding and terminal completion, excluding loading, preparation, poisoning
+and postterminal CPU comparisons. The selected diagnostic coverage differs
+explicitly between retained and ring modes.
+
+| Full-J process, in execution order | Three timed requests, seconds | Median, seconds | Sampled process-tree peak, GiB |
+| --- | --- | ---: | ---: |
+| Retained A1 | 24.265 / 27.143 / 33.883 | 27.143 | 16.683 |
+| Ring B1 | 34.394 / 35.181 / 35.834 | 35.181 | 19.112 |
+| Ring B2 | 25.180 / 25.032 / 25.644 | 25.180 | 18.950 |
+| Retained A2 | 24.136 / 24.126 / 25.553 | 24.136 | 16.844 |
+
+Exact full-J named storage falls from 14,202,158,052 to 11,779,947,492 bytes
+(13.227 to 10.971 GiB). The saving is 2,422,210,560 bytes (2.256 GiB), exactly
+14 omitted BF16 output banks; borrowed input/table/weight bytes are unchanged.
+This is an allocation-inventory result. Both ring processes have a higher
+sampled process peak than either retained process. Opaque backend resources,
+loading/allocator state and host/runtime drift have not been separated, so
+neither a process-memory reduction nor a causal latency improvement is
+established. Keep the ring opt-in. These new observations do not update the
+historical component-to-pipeline timing projection below.
+
+The first small attempt stopped at its 14 GiB process cap; it is negative
+guard evidence, not numerical qualification. The admitted retry peaked at
+14.832 GiB under an 18 GiB cap. Full cases use 23 GiB caps. All successful
+cases preserve the cache-aware 10% physical reserve, 64 MiB system swap-growth
+stop and 900-second deadline, with zero observed swap growth. Guard intervals
+do not overlap. Sampling does not bound between-poll spikes or guarantee that
+all file cache is immediately reclaimable.
+
+The curated index is
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-output-ring.json`; large
+fixtures, source/build receipts, guard logs and payload validation stay under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ring-20261027`. Receipts and hashes
+bind the measured bytes; they are not hermetic build attestation or independent
+neural recomputation. Correlated Mini-Quad review covers only this bounded
+prefix. No complete decoder, diffusion generation or generated-video quality
+was tested. Refresh after source/artifact, backend/device/toolchain/OS,
+geometry/precision, capture/ownership/lifetime or guard changes. The next
+falsifier is a phase-separated account of the higher ring process footprint,
+then wider decoder/global-head qualification before any pipeline claim.
+
+The retained-output sixteen-block qualification below remains the prior
+baseline. Its historical 20.754/19.139-second medians belong to a different
+epoch, not a speed comparison against the ring. F32 FFN graph operands and
+output-bank reuse are separate default-off options; BF16 boundary storage and
+the BF16 FFN default remain unchanged.
 
 ## Active sixteen-block real-input contract, 2026-10-27
 
@@ -186,14 +262,14 @@ memory. The upstream non-CUDA PixelUMM loader also builds a BF16 CPU state
 dictionary before transferring its model to MPS; retained loading copies must
 be controlled rather than added blindly to the forward inventory.
 
-A further unimplemented option is a two-bank output ring for non-diagnostic
-decoding. Current plans retain 36 distinct output banks so every block can be
-compared after the terminal wait. Replacing those with two banks would save
-5,882,511,360 named bytes (5.479 GiB), projecting a 15.63 GiB PixelUMM phase.
-That requires an explicit alias/lifetime contract: each plan's input/output
-must remain disjoint, and no consumer may read a bank after the next writer
-reuses it. The present diagnostic qualification keeps all distinct banks.
-Opaque F32 FFN graph intermediates remain outside these named inventories.
+The opt-in two-bank output ring is implemented with alias/lifetime checks in
+the bounded prefix; its qualification is recorded above. Applying its allocation
+formula to all 36 slots would save 5,882,511,360 named bytes (5.479 GiB),
+projecting a 15.63 GiB PixelUMM named phase. The complete 36-slot decoder has
+not been executed, and this projection excludes opaque F32 FFN graph
+intermediates. Default diagnostic plans retain distinct outputs. An earlier
+bank value cannot be compared after its next writer; the ring rejects such
+persistent captures instead of silently reporting the wrong block.
 
 The qualified compact-text timing regime is M64 storage with 23 valid text
 tokens from a saved 1280-row fixture. Applying the following projection requires

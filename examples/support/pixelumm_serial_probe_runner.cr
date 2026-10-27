@@ -13,6 +13,7 @@ module PixelUMMSerialProbeRunner
     budget = 0_i64
     warmups, repeats = 1, 3
     ffn_f32 = false
+    reuse_outputs = false
     OptionParser.parse do |parser|
       parser.banner = "#{block_count} sequential PixelUMM blocks only; named budget capped at #{named_budget_limit} bytes and external 10% memory guard required."
       parser.on("--reference PATH", "Sequential upstream-adapted GPU fixture") { |v| reference = v }
@@ -26,6 +27,7 @@ module PixelUMMSerialProbeRunner
       parser.on("--warmups N", "Untimed warm-up requests, 0..2") { |v| warmups = v.to_i }
       parser.on("--repeats N", "Timed requests after numerical gate, 1..6") { |v| repeats = v.to_i }
       parser.on("--ffn-f32", "Opt-in F32 graph tensors for every gate/up/down, retaining BF16 boundaries") { ffn_f32 = true }
+      parser.on("--reuse-output-banks", "Opt-in two output banks; omit overwritten diagnostic output aliases") { reuse_outputs = true }
     end
     unless ARGV.empty? && {reference, expected_sha, cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
            alternate.empty? == alternate_sha.empty? && 0 < budget <= named_budget_limit &&
@@ -51,7 +53,7 @@ module PixelUMMSerialProbeRunner
       end
       cache = PixelUMMTwoBlockProbe::WeightCache.new(cache_path, cache_sha, fixture)
       preparation = Time.instant
-      session = PixelUMMTwoBlockProbe::Session.new(fixture, cache, budget, ffn_f32: ffn_f32)
+      session = PixelUMMTwoBlockProbe::Session.new(fixture, cache, budget, ffn_f32: ffn_f32, reuse_outputs: reuse_outputs)
       preparation_seconds = (Time.instant - preparation).total_seconds
       STDERR.puts "PixelUMM serial admitted #{session.named_bytes} unique named bytes, grid=#{fixture.grid}"
       total_requests = 1 + warmups + repeats + (replay ? 1 : 0)
@@ -63,7 +65,17 @@ module PixelUMMSerialProbeRunner
         end
         chain = ML::Metal::MPSCommandChain.new
         wrong_order_rejected = false
+        stale_output_access_rejected = false
         if request == 0
+          if reuse_outputs && block_count > 2
+            begin
+              session.plans[0].stage("output")
+            rescue error : ArgumentError
+              raise error unless (error.message || "").includes?("not captured")
+              stale_output_access_rejected = true
+            end
+            raise "PixelUMM exposed an overwritten output as a persistent capture" unless stale_output_access_rejected
+          end
           begin
             session.plans[block_count - 1].encode(chain)
           rescue error : ArgumentError
@@ -112,7 +124,7 @@ module PixelUMMSerialProbeRunner
         wait_seconds = (Time.instant - start).total_seconds
         compare_request = request == 0 || request == warmups + repeats || replay_request
         comparisons = compare_request ? session.compare : [] of PixelUMMTwoBlockProbe::Comparison
-        if compare_request && comparisons.size != fixture.captures.size
+        if compare_request && comparisons.map { |value| value[:stage] } != session.capture_order
           raise "PixelUMM comparison omitted expected captures"
         end
         numerical_pass = comparisons.all? { |result| result[:finite] && result[:failures] == 0 }
@@ -127,6 +139,7 @@ module PixelUMMSerialProbeRunner
                                 wrong_order_rejected: wrong_order_rejected, early_release_rejected: early_release_rejected,
                                 early_read_rejected: early_read_rejected, early_reuse_rejected: early_reuse_rejected,
                                 shared_scratch_poisoned_before_request: replay_request, comparisons: comparisons}.to_json)
+        requests[-1].as_h["stale_output_access_rejected"] = JSON::Any.new(stale_output_access_rejected)
         STDERR.puts "#{kind} #{request}: passed=#{numerical_pass}, total=#{encode_seconds + wait_seconds}s"
         chain.release
         chain = nil
@@ -136,8 +149,12 @@ module PixelUMMSerialProbeRunner
       result = {schema: schema, reference: reference,
                 reference_sha256: expected_sha, alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
                 bf16_cache: cache_path, bf16_cache_sha256: cache_sha, grid: fixture.grid, block_indices: (0...block_count).to_a,
-                generation: false, shared_transient_workspace: true, persistent_output_banks: block_count,
-                handoff: "each block output is the next block input on GPU, without a copy or intermediate wait",
+                generation: false, shared_transient_workspace: true, persistent_output_banks: session.workspace.output_bank_count,
+                reuse_output_banks: reuse_outputs, output_bank_by_slot: session.output_bank_by_slot,
+                compared_capture_order: session.capture_order,
+                omitted_overwritten_capture_aliases: fixture.capture_order - session.capture_order,
+                authenticated_fixture_capture_count: fixture.captures.size,
+                handoff: "each physical block output is the next block input on GPU, without a copy or intermediate wait; reused banks are ephemeral",
                 precision: "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; " +
                   (session.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
                   "; graph types do not certify backend physical accumulation precision",

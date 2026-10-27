@@ -529,6 +529,13 @@ module ML::Video::PixelUMMDecoderBlockMPS
       @stages[name]? || raise ArgumentError.new("PixelUMM stage was not captured: #{name}")
     end
 
+    # Direct GPU handoff. With a reused-output workspace this is an ephemeral
+    # bank, overwritten by slot N+2; it is not a persistent diagnostic capture.
+    def output : ML::MetalBuffer
+      check_live!
+      @core["output"]
+    end
+
     def workspace : Workspace
       @workspace || raise ArgumentError.new("PixelUMM plan has no workspace")
     end
@@ -743,12 +750,14 @@ module ML::Video::PixelUMMDecoderBlockMPS
   end
 
   # Owns one set of transient activations and attention/RMS scratch for one or
-  # more sequential decoder plans. Each plan gets a private persistent output
-  # and private capture buffers; slot N may consume slot N-1's output directly.
+  # more sequential decoder plans. Outputs are retained by default. The opt-in
+  # ring reuses two banks; only captures that survive every writer are admitted.
   class Workspace
     getter config : Config
     getter named_bytes : Int64
     getter slot_count : Int32
+    getter reuse_outputs : Bool
+    getter output_bank_count : Int32
 
     @layout : AttentionLayout
     @capture_sets : Array(Array(String))
@@ -775,7 +784,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     @@retained = [] of Workspace
 
     def initialize(@config : Config, *, captures_by_slot : Array(Array(String)),
-                   max_owned_bytes : Int64)
+                   max_owned_bytes : Int64, @reuse_outputs : Bool = false)
       @config.validate!
       if @config.tiles_h <= 3 && @config.tiles_w <= 3 &&
          @config.tokens > Plan::FULL_ATTENTION_MAX_TOKENS
@@ -788,7 +797,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
         captures.dup
       end
       @slot_count = @capture_sets.size.to_i32
-      @named_bytes = self.class.owned_bytes(@config, @layout, @capture_sets)
+      @output_bank_count = self.class.output_bank_count(@slot_count, reuse_outputs: @reuse_outputs)
+      @named_bytes = self.class.owned_bytes(@config, @layout, @capture_sets, reuse_outputs: @reuse_outputs)
       unless max_owned_bytes > 0 && @named_bytes <= max_owned_bytes
         raise ArgumentError.new("PixelUMM workspace buffers exceed admitted byte budget")
       end
@@ -826,7 +836,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
                                  cosine_bytes : Int64, sine_bytes : Int64,
                                  weights_bytes_by_slot : Array(Hash(String, Int64)),
                                  captures_by_slot : Array(Array(String)),
-                                 max_unique_bytes : Int64) : Int64
+                                 max_unique_bytes : Int64, reuse_outputs : Bool = false) : Int64
       config.validate!
       unless weights_bytes_by_slot.size == captures_by_slot.size && !captures_by_slot.empty?
         raise ArgumentError.new("PixelUMM workspace weight/capture slot counts must match")
@@ -842,7 +852,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
           captures: captures)
       end
       layout = config.layout
-      owned = owned_bytes(config, layout, captures_by_slot)
+      owned = owned_bytes(config, layout, captures_by_slot, reuse_outputs: reuse_outputs)
       borrowed = input_bytes + cosine_bytes + sine_bytes
       weights_bytes_by_slot.each do |metadata|
         borrowed += metadata.values.sum
@@ -854,21 +864,53 @@ module ML::Video::PixelUMMDecoderBlockMPS
       unique
     end
 
-    # Core transients and native scratch are shared once. Output banks and
-    # selected persistent captures are unique to each plan slot.
+    # Core transients and native scratch are shared once. Ring banks are counted
+    # once each, not once per slot. Ordinary captures remain private to a slot.
     def self.owned_bytes(config : Config, layout : AttentionLayout,
-                         captures_by_slot : Array(Array(String))) : Int64
+                         captures_by_slot : Array(Array(String)), *,
+                         reuse_outputs : Bool = false) : Int64
       config.validate!
       validate_capture_sets!(captures_by_slot)
       raise ArgumentError.new("PixelUMM workspace requires at least one plan slot") if captures_by_slot.empty?
+      captures_by_slot.each_with_index do |captures, slot|
+        captures.each do |name|
+          unless capture_survives?(name, slot, captures_by_slot.size, reuse_outputs: reuse_outputs)
+            raise ArgumentError.new("PixelUMM capture #{name} in slot #{slot} would be overwritten by a later output-ring writer")
+          end
+        end
+      end
       output_bytes = config.tokens.to_i64 * config.model_dim * 2
       one_slot = Plan.owned_bytes(config, layout)
       shared = one_slot - output_bytes
-      total = shared + output_bytes * captures_by_slot.size
+      total = shared + output_bytes * output_bank_count(captures_by_slot.size, reuse_outputs: reuse_outputs)
       captures_by_slot.each do |captures|
         total += Plan.owned_bytes(config, layout, captures) - one_slot
       end
       total
+    end
+
+    def self.output_bank_count(slot_count : Int32, *, reuse_outputs : Bool = false) : Int32
+      raise ArgumentError.new("PixelUMM workspace requires at least one plan slot") unless slot_count > 0
+      reuse_outputs ? Math.min(slot_count, 2) : slot_count
+    end
+
+    def self.output_bank_index(slot : Int32, slot_count : Int32, *, reuse_outputs : Bool = false) : Int32
+      count = output_bank_count(slot_count, reuse_outputs: reuse_outputs)
+      raise ArgumentError.new("PixelUMM workspace slot is outside its allocation") unless 0 <= slot < slot_count
+      slot % count
+    end
+
+    # A selected capture promises a stable postterminal value. The initial x is
+    # external; other x aliases refer to the previous slot's output bank.
+    def self.capture_survives?(name : String, slot : Int32, slot_count : Int32, *,
+                              reuse_outputs : Bool = false) : Bool
+      output_bank_index(slot, slot_count, reuse_outputs: reuse_outputs)
+      return true unless reuse_outputs
+      case name
+      when "output" then slot >= slot_count - 2
+      when "x"      then slot == 0 || slot == slot_count - 1
+      else               true
+      end
     end
 
     def self.validate_capture_sets!(captures_by_slot : Array(Array(String))) : Nil
@@ -1026,9 +1068,9 @@ module ML::Video::PixelUMMDecoderBlockMPS
 
     # Mutable shared buffers can be overwritten by a new request. The
     # diagnostic view refuses access while a prior command chain is in flight.
-    # It intentionally omits immutable index tables, the power exponent, all
-    # output banks, and all per-plan captures.
-    def mutable_shared_buffers : Hash(String, ML::MetalBuffer)
+    # It omits immutable index tables, the power exponent and private captures.
+    # Output poisoning is an explicit replay diagnostic, never an encode action.
+    def mutable_shared_buffers(*, include_outputs : Bool = false) : Hash(String, ML::MetalBuffer)
       @mutex.synchronize do
         check_live!
         @last_chains.each do |chain|
@@ -1040,6 +1082,9 @@ module ML::Video::PixelUMMDecoderBlockMPS
         @core_shared.each { |name, buffer| result["core.#{name}"] = buffer }
         {0, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13}.each do |index|
           result[@scratch_names[index]] = @scratch[index]
+        end
+        if include_outputs
+          @outputs.uniq.each_with_index { |buffer, index| result["output.bank#{index}"] = buffer }
         end
         result
       end
@@ -1082,9 +1127,16 @@ module ML::Video::PixelUMMDecoderBlockMPS
         @core_shared[name] = own_buffer("workspace.#{name}", bytes)
       end
       output_bytes = j * d * 2
+      banks = Array.new(@output_bank_count) do |index|
+        name = if @reuse_outputs
+                 "workspace.output.bank#{index}"
+               else
+                 @slot_count == 1 ? "workspace.output" : "workspace.output.slot#{index}"
+               end
+        own_buffer(name, output_bytes)
+      end
       @slot_count.times do |slot|
-        name = @slot_count == 1 ? "workspace.output" : "workspace.output.slot#{slot}"
-        @outputs << own_buffer(name, output_bytes)
+        @outputs << banks[self.class.output_bank_index(slot, @slot_count, reuse_outputs: @reuse_outputs)]
       end
 
       max_q = @layout.max_query_tokens.to_i64
@@ -1197,6 +1249,15 @@ module ML::Video::PixelUMMDecoderBlockMPS
       if slot > 0
         unless @claimed[slot - 1] && input.same?(@outputs[slot - 1])
           raise ArgumentError.new("PixelUMM workspace slot input must be the prior slot output")
+        end
+      end
+      # Validate the entire workspace, including banks used by future slots.
+      # The sole allowed owned input is the exact predecessor's output bank.
+      borrowed = [cosine, sine] + weights
+      borrowed << input if slot == 0
+      borrowed.each do |buffer|
+        if @owned.any? { |owned| MetalOps.overlap?(owned, buffer) }
+          raise ArgumentError.new("PixelUMM external bindings must not alias any workspace buffer")
         end
       end
       if shared_cosine = @bound_cosine

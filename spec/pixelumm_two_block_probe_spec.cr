@@ -34,6 +34,25 @@ private def with_pixelumm_tensor_file(&)
 end
 
 describe PixelUMMTwoBlockProbe do
+  it "admits only the observed retained or alternating bank identity pattern" do
+    PixelUMMTwoBlockProbe.validate_output_bank_layout!((0...16).to_a, 16, false)
+    PixelUMMTwoBlockProbe.validate_output_bank_layout!(Array.new(16) { |slot| slot % 2 }, 16, true)
+    expect_raises(ArgumentError, /bank/) do
+      PixelUMMTwoBlockProbe.validate_output_bank_layout!(Array.new(16, 0), 16, true)
+    end
+    expect_raises(ArgumentError, /bank/) do
+      PixelUMMTwoBlockProbe.validate_output_bank_layout!((0...16).to_a, 16, true)
+    end
+    wrong = Array.new(16) { |slot| slot % 2 }
+    wrong[10] = 1
+    expect_raises(ArgumentError, /bank/) do
+      PixelUMMTwoBlockProbe.validate_output_bank_layout!(wrong, 16, true)
+    end
+    expect_raises(ArgumentError, /bank/) do
+      PixelUMMTwoBlockProbe.validate_output_bank_layout!([0, 1], 16, true)
+    end
+  end
+
   it "rejects a valid-looking receipt digest from another source" do
     source = JSON.parse({checkpoint_subset_sha256: "a" * 64, source_receipt_sha256: "b" * 64,
                          checkpoint_subset_bytes: 1000, source_extent: [20, 1020]}.to_json)

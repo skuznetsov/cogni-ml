@@ -116,6 +116,16 @@ module PixelUMMTwoBlockProbe
     end
   end
 
+  def validate_output_bank_layout!(indices : Array(Int32), block_count : Int32, reuse_outputs : Bool) : Nil
+    validate_block_count!(block_count)
+    expected = Array.new(block_count) do |slot|
+      Decoder::Workspace.output_bank_index(slot, block_count, reuse_outputs: reuse_outputs)
+    end
+    unless indices == expected
+      raise ArgumentError.new("serial output bank identities do not match the admitted layout")
+    end
+  end
+
   def validate_input_source!(source : String, slot : Int32) : Nil
     expected = slot == 0 ? "inputs.x" : "captures.block#{slot - 1}.output"
     raise ArgumentError.new("block input must reference its immediate predecessor") unless source == expected
@@ -393,28 +403,42 @@ module PixelUMMTwoBlockProbe
     getter borrowed_bytes : Int64
     getter named_bytes : Int64
     getter ffn_f32 : Bool
+    getter reuse_outputs : Bool
     getter workspace : Decoder::Workspace
     getter plans = [] of Decoder::Plan
+    getter capture_order : Array(String)
+    getter output_bank_by_slot : Array(Int32)
     @bindings = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64, *, @ffn_f32 : Bool = false)
+    def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64, *,
+                   @ffn_f32 : Bool = false, @reuse_outputs : Bool = false)
       grid = @fixture.grid
       config = Decoder::Config.new(temporal: grid[0], height: grid[1], width: grid[2])
       weight_bytes = Array.new(@fixture.block_count) do |slot|
         PixelUMMBlockProbe.weight_shapes.keys.to_h { |name| {name, @fixture.weights["block#{slot}.#{name}"].nbytes} }
       end
+      captures_by_slot = @fixture.captures_by_slot.map_with_index do |captures, slot|
+        captures.select do |name|
+          Decoder::Workspace.capture_survives?(name, slot, @fixture.block_count, reuse_outputs: @reuse_outputs)
+        end
+      end
+      @capture_order = @fixture.capture_order.select do |key|
+        slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
+        captures_by_slot[slot].includes?(PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count))
+      end
+      @output_bank_by_slot = [] of Int32
       @borrowed_bytes = (@fixture.inputs.values + cache.weights.values).sum(&.nbytes)
       @named_bytes = Decoder::Workspace.validate_admission!(config,
         input_bytes: @fixture.inputs["x"].nbytes, cosine_bytes: @fixture.inputs["cos"].nbytes,
         sine_bytes: @fixture.inputs["sin"].nbytes, weights_bytes_by_slot: weight_bytes,
-        captures_by_slot: @fixture.captures_by_slot, max_unique_bytes: max_named_bytes)
+        captures_by_slot: captures_by_slot, max_unique_bytes: max_named_bytes, reuse_outputs: @reuse_outputs)
       # No file-sized read or Metal allocation precedes the aggregate gate.
       @fixture.verify_payload!
       cache.verify_payload!
-      @workspace = Decoder::Workspace.new(config, captures_by_slot: @fixture.captures_by_slot,
-        max_owned_bytes: max_named_bytes - @borrowed_bytes)
+      @workspace = Decoder::Workspace.new(config, captures_by_slot: captures_by_slot,
+        max_owned_bytes: max_named_bytes - @borrowed_bytes, reuse_outputs: @reuse_outputs)
       begin
         @fixture.inputs.each do |name, record|
           @bindings[name] = buffer = ML::MetalBuffer.new(record.nbytes)
@@ -426,17 +450,21 @@ module PixelUMMTwoBlockProbe
         end
         @fixture.block_count.times do |slot|
           weights = PixelUMMBlockProbe.weight_shapes.keys.to_h { |name| {name, @bindings["block#{slot}.#{name}"]} }
-          input = slot == 0 ? @bindings["x"] : @plans[slot - 1].stage("output")
+          input = slot == 0 ? @bindings["x"] : @plans[slot - 1].output
           @plans << Decoder::Plan.new(config, input: input, weights: weights,
-            cos: @bindings["cos"], sin: @bindings["sin"], captures: @fixture.captures_by_slot[slot],
+            cos: @bindings["cos"], sin: @bindings["sin"], captures: captures_by_slot[slot],
             max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot,
             ffn_f32: @ffn_f32)
         end
         PixelUMMTwoBlockProbe.validate_ffn_precision_slots!(@plans.map(&.ffn_f32), @fixture.block_count, @ffn_f32)
         # This loader owns distinct allocations for every authenticated weight,
-        # the external input/tables and retained outputs. Broader caller-provided
+        # the external input/tables and unique output banks. Broader caller-provided
         # Workspace aliases are outside this probe's ownership contract.
-        handles = @bindings.values.map(&.handle) + @plans.map { |plan| plan.stage("output").handle }
+        outputs = @plans.map(&.output.handle)
+        banks = outputs.uniq
+        @output_bank_by_slot = outputs.map { |handle| banks.index(handle).not_nil! }
+        PixelUMMTwoBlockProbe.validate_output_bank_layout!(@output_bank_by_slot, @fixture.block_count, @reuse_outputs)
+        handles = @bindings.values.map(&.handle) + banks
         unless @named_bytes == @borrowed_bytes + @workspace.named_bytes && handles.uniq.size == handles.size
           raise ArgumentError.new("serial unique-byte/output/weight ownership mismatch")
         end
@@ -464,7 +492,7 @@ module PixelUMMTwoBlockProbe
 
     def poison_transients! : Nil
       check_idle!
-      @workspace.mutable_shared_buffers.each_value do |buffer|
+      @workspace.mutable_shared_buffers(include_outputs: true).each_value do |buffer|
         # BF16 and F32 interpret all-one words as NaN. Only diagnostic setup
         # touches shared memory on the host, after the previous terminal wait.
         buffer.contents.as(UInt8*).to_slice(buffer.size.to_i32).fill(0xff_u8)
@@ -476,7 +504,7 @@ module PixelUMMTwoBlockProbe
       unless chain.completed? && chain.wait_count == 1
         raise ArgumentError.new("PixelUMM serial diagnostics require one terminal wait")
       end
-      @fixture.capture_order.map do |key|
+      @capture_order.map do |key|
         slot = PixelUMMTwoBlockProbe.capture_slot(key, @fixture.block_count)
         name = PixelUMMTwoBlockProbe.capture_stage(key, @fixture.block_count)
         record, buffer = @fixture.captures[key], @plans[slot].stage(name)

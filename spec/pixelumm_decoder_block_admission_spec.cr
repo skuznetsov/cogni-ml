@@ -331,6 +331,129 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Plan do
 end
 
 describe ML::Video::PixelUMMDecoderBlockMPS::Workspace do
+  it "reuses only two output banks and preserves the retained-output default" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 6, height: 44, width: 80)
+    output_bytes = 173_015_040_i64
+    {1, 2, 3, 4, 16, 36}.each do |count|
+      captures = Array.new(count) { [] of String }
+      retained = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, captures)
+      ring = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, captures,
+        reuse_outputs: true)
+      (retained - ring).should eq(Math.max(count - 2, 0).to_i64 * output_bytes)
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_count(count,
+        reuse_outputs: true).should eq(Math.min(count, 2))
+      count.times do |slot|
+        ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_index(slot, count,
+          reuse_outputs: true).should eq(slot % 2)
+        ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_index(slot, count).should eq(slot)
+      end
+    end
+    expect_raises(ArgumentError, /slot/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_index(3, 3, reuse_outputs: true)
+    end
+    expect_raises(ArgumentError, /slot/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_index(-1, 4, reuse_outputs: true)
+    end
+    expect_raises(ArgumentError, /slot/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.output_bank_count(0, reuse_outputs: true)
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  it "rejects captures overwritten by later ring writers, including input aliases" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 6, height: 44, width: 80)
+    {3, 4, 16}.each do |count|
+      captures = Array.new(count) { ["attention"] }
+      captures[count - 2] << "output"
+      captures[count - 1].concat(["x", "output"])
+      captures[0] << "x"
+      ring = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, captures,
+        reuse_outputs: true)
+      ring.should be > 0
+      stale_output = captures.map(&.dup)
+      stale_output[0] << "output"
+      expect_raises(ArgumentError, /overwritten/) do
+        ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, stale_output,
+          reuse_outputs: true)
+      end
+      (1...count - 1).each do |slot|
+        stale_input = captures.map(&.dup)
+        stale_input[slot] << "x"
+        expect_raises(ArgumentError, /overwritten/) do
+          ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, stale_input,
+            reuse_outputs: true)
+        end
+      end
+      # The same diagnostic aliases remain valid in the retained-output mode.
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, stale_output).should be > ring
+    end
+  end
+
+  it "admits the exact ring budget and rejects one byte less before Metal allocation" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 6, height: 44, width: 80)
+    weights = Array.new(16) { pixelumm_layer0_weight_bytes }
+    captures = Array.new(16) { [] of String }
+    owned = ML::Video::PixelUMMDecoderBlockMPS::Workspace.owned_bytes(config, config.layout, captures,
+      reuse_outputs: true)
+    unique = owned + config.tokens.to_i64 * (4096 * 2 + 128 * 8) + weights.sum(&.values.sum)
+    ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+      input_bytes: config.tokens.to_i64 * 4096 * 2,
+      cosine_bytes: config.tokens.to_i64 * 128 * 4, sine_bytes: config.tokens.to_i64 * 128 * 4,
+      weights_bytes_by_slot: weights, captures_by_slot: captures,
+      max_unique_bytes: unique, reuse_outputs: true).should eq(unique)
+    expect_raises(ArgumentError, /budget/) do
+      ML::Video::PixelUMMDecoderBlockMPS::Workspace.validate_admission!(config,
+        input_bytes: config.tokens.to_i64 * 4096 * 2,
+        cosine_bytes: config.tokens.to_i64 * 128 * 4, sine_bytes: config.tokens.to_i64 * 128 * 4,
+        weights_bytes_by_slot: weights, captures_by_slot: captures,
+        max_unique_bytes: unique - 1, reuse_outputs: true)
+    end
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
+  {% if flag?(:darwin) && !flag?(:cpu_only) %}
+    it "rejects future-bank external aliases and wrong predecessor inputs without encoding" do
+      config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(temporal: 1, height: 1, width: 1)
+      captures = Array.new(3) { [] of String }
+      workspace = ML::Video::PixelUMMDecoderBlockMPS::Workspace.new(config,
+        captures_by_slot: captures, reuse_outputs: true, max_owned_bytes: 1_i64 << 20)
+      external = Array.new(4) { ML::MetalBuffer.new(8192_i64) }
+      x, cosine, sine, weight = external
+      begin
+        a, b = workspace.output_buffer(0), workspace.output_buffer(1)
+        workspace.output_buffer(2).same?(a).should be_true
+        a.same?(b).should be_false
+        workspace.output_bank_count.should eq(2)
+        expect_raises(ArgumentError, /external bindings/) do
+          workspace.validate_plan_binding!(config, 0, b, cosine, sine, [weight], [] of String)
+        end
+        expect_raises(ArgumentError, /external bindings/) do
+          workspace.validate_plan_binding!(config, 0, x, b, sine, [weight], [] of String)
+        end
+        expect_raises(ArgumentError, /external bindings/) do
+          workspace.validate_plan_binding!(config, 0, x, cosine, sine, [b], [] of String)
+        end
+        workspace.attach_plan!(0, x, cosine, sine, [weight], [] of String)
+        expect_raises(ArgumentError, /prior slot output/) do
+          workspace.validate_plan_binding!(config, 1, b, cosine, sine, [] of ML::MetalBuffer, [] of String)
+        end
+        workspace.attach_plan!(1, a, cosine, sine, [] of ML::MetalBuffer, [] of String)
+        expect_raises(ArgumentError, /prior slot output/) do
+          workspace.validate_plan_binding!(config, 2, a, cosine, sine, [] of ML::MetalBuffer, [] of String)
+        end
+        workspace.validate_plan_binding!(config, 2, b, cosine, sine, [] of ML::MetalBuffer, [] of String)
+      ensure
+        workspace.detach_failed_plan!(1)
+        workspace.detach_failed_plan!(0)
+        workspace.release
+        external.each(&.release)
+      end
+    end
+  {% end %}
+
   it "counts two full-grid slots with one transient set and disjoint outputs" do
     config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
       temporal: 6, height: 44, width: 80)
