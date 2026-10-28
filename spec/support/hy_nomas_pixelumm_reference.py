@@ -35,6 +35,7 @@ UPSTREAM_MODEL_PATH = "hymm/models/vae/pixelumm_decoder/model.py"
 CHECKPOINT_SUBSET_SHA256 = "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485"
 CHECKPOINT_SUBSET_BYTES = 771_787_128
 CHECKPOINT_PREFIX = "decoder.layers.0."
+MPS_ORACLE_TORCH_VERSION = "2.6.0"
 SCHEMA = "cogni_ml.pixelumm_block_reference/v1"
 TWO_BLOCK_SCHEMA = "cogni_ml.pixelumm_two_block_reference/v1"
 FOUR_BLOCK_SCHEMA = "cogni_ml.pixelumm_four_block_reference/v1"
@@ -1343,6 +1344,33 @@ def _load_layer_for_block(
     return layer, checked, receipt_sha
 
 
+def single_block_capture_stages(grid: Iterable[int], capture_mode: str) -> tuple[str, ...]:
+    grid = _check_grid(grid)
+    if capture_mode not in {"auto", "all", "boundary"}:
+        raise ReferenceError("capture mode must be auto, all, or boundary")
+    count = math.prod(grid)
+    chosen = (ALL_STAGES if count <= 2048 else FULL_TARGET_STAGES)
+    if capture_mode == "all":
+        chosen = ALL_STAGES
+    elif capture_mode == "boundary":
+        chosen = FULL_TARGET_STAGES
+    if count > 2048 and grid != (10, 18, 32) and chosen == ALL_STAGES:
+        raise ReferenceError("all-stage captures require at most 2048 tokens or the J5760 preview window")
+    return chosen
+
+
+def validate_preview_oracle_runtime(grid: Iterable[int], device_name: str) -> None:
+    # MPS inverse-root lowering changes between Torch 2.6 and 2.8. A new
+    # preview fixture must use the same runtime as the existing decoder/head
+    # controls; otherwise a backend change looks like a native regression.
+    if (tuple(grid) == (10, 18, 32) and device_name == "mps"
+            and torch.__version__ != MPS_ORACLE_TORCH_VERSION):
+        raise ReferenceError(
+            f"preview MPS oracle requires torch {MPS_ORACLE_TORCH_VERSION}; "
+            f"got {torch.__version__} from {sys.executable}"
+        )
+
+
 def make_fixture(
     *, upstream: Path | str, checkpoint: Path | str, output: Path | str,
     grid: Iterable[int], device_name: str = "mps", capture_mode: str = "auto",
@@ -1356,18 +1384,12 @@ def make_fixture(
     grid = _check_grid(grid)
     if device_name not in {"cpu", "mps"}:
         raise ReferenceError("device must be cpu or mps")
+    validate_preview_oracle_runtime(grid, device_name)
     device = torch.device(device_name)
     if device.type == "mps" and not torch.backends.mps.is_available():
         raise ReferenceError("PyTorch MPS is not available")
-    if capture_mode not in {"auto", "all", "boundary"}:
-        raise ReferenceError("capture mode must be auto, all, or boundary")
     count = math.prod(grid)
-    if count <= 2048:
-        chosen = ALL_STAGES if capture_mode in {"auto", "all"} else FULL_TARGET_STAGES
-    else:
-        chosen = FULL_TARGET_STAGES if capture_mode in {"auto", "boundary"} else ALL_STAGES
-    if count > 2048 and chosen == ALL_STAGES:
-        raise ReferenceError("all-stage captures are restricted to at most 2048 tokens")
+    chosen = single_block_capture_stages(grid, capture_mode)
 
     source, source_sha = load_upstream(upstream)
     plan, _, _ = make_attention_plan(source, grid)
@@ -1420,6 +1442,10 @@ def make_fixture(
         "comparison": {"atol": ATOL, "rtol": RTOL},
         "memory_preflight": memory,
         "captures_are_tile_major": True,
+        "torch_version": torch.__version__,
+        "python_version": platform.python_version(),
+        "python_executable": str(Path(sys.executable).resolve()),
+        "torch_module": str(Path(torch.__file__).resolve()),
     }
     fixture = _write_fixture(
         Path(output), metadata=meta, inputs=inputs, weights=state, captures=captures

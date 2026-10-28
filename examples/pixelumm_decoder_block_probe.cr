@@ -266,6 +266,8 @@ begin
                                           (session.plan.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
                                           "; graph types do not certify backend physical arithmetic",
             oracle: "adapted upstream-semantics PyTorch MPS; tiny CPU Flex equivalence is separate",
+            oracle_torch_version: fixture.oracle_torch_version,
+            reference_memory_preflight: fixture.reference_memory_preflight,
             tolerance: {atol: PixelUMMBlockProbe::ATOL, rtol: PixelUMMBlockProbe::RTOL},
             profile_order: profile_order, continuation_trace_enabled: continuation_trace,
             ffn_f32_graph_tensors: session.plan.ffn_f32,

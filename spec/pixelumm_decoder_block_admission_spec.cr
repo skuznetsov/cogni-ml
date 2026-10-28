@@ -158,6 +158,24 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Config do
     ML::Video::PixelUMMDecoderBlockMPS::Plan.owned_bytes(config, layout)
       .should eq(2_469_764_068_i64)
   end
+
+  it "preserves the two distinct key neighborhoods in the preview window" do
+    config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
+      temporal: 10, height: 18, width: 32)
+    layout = config.layout
+    pixelumm_assert_local_layout(layout, 10, 18, 32, 8)
+    layout.tile_count.should eq(12)
+    layout.max_query_tokens.should eq(640)
+    layout.max_key_tokens.should eq(4_320)
+    keys = Array.new(layout.tile_count) { |tile| layout.key_indices(tile.to_i32) }
+    keys.uniq.size.should eq(2)
+    keys.each_slice(4) do |row|
+      row[0].should eq(keys[0])
+      row[1].should eq(keys[0])
+      row[2].should eq(keys[2])
+      row[3].should eq(keys[2])
+    end
+  end
 end
 
 private def pixelumm_layer0_weight_bytes : Hash(String, Int64)

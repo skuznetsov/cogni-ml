@@ -35450,3 +35450,40 @@ Refresh after source/toolchain/device/model/workload changes.
   frontier remains current-J5760 PixelUMM profiling. Refresh evidence after
   source/weights/inputs/geometry/precision/schedule/device/backend/guard changes
   or artifact loss; fresh memory admission per launch. Rollback selector only.
+
+### 2026-10-28: BF16 preview-window oracle and rejected K/V reuse trial
+
+- User rejected the Q4 preview visually; original BF16 is the active quality and
+  performance target. Return pointer: docs/hy-nomas-generation-frontier.md.
+  No complete generation was run in this diagnostic slice.
+- Added exact J5760/T10H18W32 block-probe admission and bounded all-stage oracle
+  capture with real pretrained block0 weights and seeded synthetic inputs.
+  Original production math matches all26 captures bitwise under Torch2.6.0;
+  original head plus poisoned alternate matches all5 captures. Tolerance2e-5,
+  one terminal wait/request, zero instrumented encode allocations/preterminal
+  reads; guarded10%floor/64MiBswapstop, block10GiB/head8GiB caps all passed.
+- Mixed Torch2.8 block oracle initially suggested an RMS error. Experimental
+  inverse-root replacement matched2.8 but failed existing2.6 head controls;
+  all production RMS/KV edits reverted. Preview MPS producer now rejects other
+  runtimes before GPU work and records executable/package paths; native J5760
+  admission also rejects other runtimes/CPU fixtures before payload access.
+  Red constructor falsifier observed; after guard, all26 exact again in
+  results/native-torch26-admission-all.json. This resolves
+  an oracle setup error, not a native numerical defect or full-video parity.
+- KV reuse24->4 gathers had no reliable full-block gain: ABBA profile-off
+  medians0.515/0.531/0.571/0.594s, ~0.6% balanced difference amid GPU drift.
+  These trials used isolated2.8 math and do not qualify production performance.
+  FFN remains a larger target; no grouping/precision/schedule default changed.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-bf16-perf-20261028:
+  reference/block0-j5760-torch26-all.json SHA
+  bf551356434520c0c46643280ff7b5723d7e44f2ba089813990402bb78718307;
+  results/native-torch26-all.json, head-torch26-original.json and guard logs;
+  rejected experiment patch under tmp/torch28-rms-kv-candidate-rejected.patch.
+  CPU DoD:36Crystal examples and26Python tests pass; native block/head builds
+  and the above guarded numerical replays passed. Current geometry tests prove
+  index neighborhoods, not speed. Refresh on source/weights/input/runtime/
+  geometry/precision/backend/device/guard changes or evidence loss.
+- Next falsifier: measure repeated CPU index authentication separately; reuse
+  only an authenticated request-scoped identity with freshness checks. Preserve
+  full BF16 SHA/inventory/direct-copy gates and the existing GPU path. Local
+  SSD mirroring is a separate unmeasured option; do not bypass authentication.

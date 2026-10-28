@@ -29,6 +29,31 @@ class PixelUMMReferenceTest(unittest.TestCase):
     def setUpClass(cls):
         cls.source, _ = reference.load_upstream(UPSTREAM)
 
+    def test_all_stage_capture_budget_only_extends_to_exact_preview_geometry(self):
+        self.assertEqual(reference.single_block_capture_stages((10, 18, 32), "all"), reference.ALL_STAGES)
+        self.assertEqual(reference.single_block_capture_stages((10, 18, 32), "auto"), reference.FULL_TARGET_STAGES)
+        self.assertEqual(reference.single_block_capture_stages((2, 32, 32), "auto"), reference.ALL_STAGES)
+        for grid in ((6, 44, 80), (10, 32, 18), (10, 18, 33)):
+            with self.assertRaisesRegex(reference.ReferenceError, "all-stage captures"):
+                reference.single_block_capture_stages(grid, "all")
+        with self.assertRaisesRegex(reference.ReferenceError, "capture mode"):
+            reference.single_block_capture_stages((10, 18, 32), "unknown")
+
+    def test_preview_oracle_rejects_a_different_mps_runtime_before_gpu_work(self):
+        with mock.patch.object(reference.torch, "__version__", "2.8.0"):
+            with mock.patch.object(reference.torch, "device") as device:
+                with tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaisesRegex(reference.ReferenceError, "requires torch 2.6.0"):
+                        reference.make_fixture(
+                            upstream="/unused", checkpoint="/unused",
+                            output=Path(directory) / "preview.json",
+                            grid=(10, 18, 32), device_name="mps",
+                        )
+                device.assert_not_called()
+            reference.validate_preview_oracle_runtime((10, 18, 32), "cpu")
+        with mock.patch.object(reference.torch, "__version__", "2.6.0"):
+            reference.validate_preview_oracle_runtime((10, 18, 32), "mps")
+
     def test_upstream_permutation_is_bijective_and_tile_major(self):
         grid = (2, 32, 32)
         plan, inverse, _ = reference.make_attention_plan(self.source, grid)

@@ -27,6 +27,15 @@ module PixelUMMBlockProbe
     value.matches?(/\A[0-9a-f]{64}\z/)
   end
 
+  def validate_preview_oracle!(document : JSON::Any, grid : Array(Int32)) : Nil
+    return unless grid == [10, 18, 32]
+    preflight = document["memory_preflight"]?.try(&.as_h?)
+    unless document["torch_version"]?.try(&.as_s?) == "2.6.0" &&
+           preflight.try(&.["applies"]?).try(&.as_bool?) == true
+      raise ArgumentError.new("preview requires the Torch 2.6.0 MPS oracle")
+    end
+  end
+
   def weight_shapes : Hash(String, Array(Int32))
     result = {"input_norm.weight" => [4096], "post_attn_norm.weight" => [4096]}
     {"q" => 4096, "k" => 1024, "v" => 1024, "o" => 4096}.each do |name, out_dim|
@@ -74,6 +83,8 @@ module PixelUMMBlockProbe
     getter weights : Hash(String, Record)
     getter captures : Hash(String, Record)
     getter capture_order : Array(String)
+    getter oracle_torch_version : String?
+    getter reference_memory_preflight : JSON::Any?
 
     def initialize(path : String, expected_sha256 : String)
       raise ArgumentError.new("fixture must be a regular absolute file") unless Path[path].absolute? && File.file?(path) && !File.symlink?(path) && File.realpath(path) == path
@@ -90,7 +101,10 @@ module PixelUMMBlockProbe
         raise ArgumentError.new("fixture provenance/layout mismatch")
       end
       @grid = document["grid"].as_a.map(&.as_i)
-      raise ArgumentError.new("fixture grid is outside qualified contexts") unless @grid == [2, 32, 32] || @grid == [6, 44, 80]
+      raise ArgumentError.new("fixture grid is outside qualified contexts") unless @grid == [2, 32, 32] || @grid == [6, 44, 80] || @grid == [10, 18, 32]
+      PixelUMMBlockProbe.validate_preview_oracle!(document, @grid)
+      @oracle_torch_version = document["torch_version"]?.try(&.as_s?)
+      @reference_memory_preflight = document["memory_preflight"]?
       basename = document["payload"].as_s
       raise ArgumentError.new("fixture payload must be a sibling basename") unless basename.matches?(/\A[A-Za-z0-9_.-]+\z/) && basename != "." && basename != ".."
       @payload = File.join(File.dirname(path), basename)

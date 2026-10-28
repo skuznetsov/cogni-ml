@@ -264,6 +264,10 @@ memory absent from the present preview.
 
 ## Next optimization frontier
 
+The Q4 preview was visually rejected by the user. BF16 remains the quality
+control and the active performance target; do not promote Q4 on memory savings
+or projection-level numerical tests alone.
+
 PixelUMM accounts for 65.4% of the two neural phases. Weight authentication,
 loading and plan construction account for another 45.1 seconds of the native
 request and should be separated before proposing a persistent owner. Do not
@@ -279,6 +283,46 @@ then measure the complete decoder window. This is PROPOSED, not implemented.
 The overlapping windows decode 200 frame positions to produce 120 output
 frames, but later-layer overlap activations depend on different attention
 contexts and cannot be reused solely because their frame indices match.
+
+The bounded block-zero probe now admits T10/H18/W32 (J5760), the preview's
+window geometry, including all 26 intermediate captures. It uses actual
+pretrained weights and seeded synthetic hidden states, not the generated
+clip's activations. The unchanged native implementation matches all 26 tensors
+bitwise against the pinned upstream source under PyTorch 2.6.0 MPS at the
+unchanged 2e-5 gate. The existing decoder-head control and poisoned alternate
+replay also match all five tensors bitwise. Each request retains one terminal
+wait, zero instrumented encode-time named allocations and zero preterminal
+activation readbacks. All launches passed the cache-aware 10% floor, process
+footprint cap and 64 MiB swap-growth guard. Evidence is under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-bf16-perf-20261028/results/`:
+`native-torch26-all.json`, `native-torch26-admission-all.json`,
+`head-torch26-original.json` and their guard logs.
+
+An initially mixed PyTorch 2.8 oracle changed inverse-root lowering and falsely
+suggested a native RMS regression. A proposed RMS replacement matched that
+oracle but failed the existing 2.6 head control; it was reverted. Preview MPS
+fixture production now rejects a runtime other than 2.6.0 before GPU work and
+records interpreter/package provenance. The native J5760 consumer also rejects
+other runtimes or CPU fixtures before payload access and reports the reference
+producer's preflight separately from its own memory guard.
+A runtime migration requires a separate
+consistent block/head lineage, not a relaxed tolerance.
+
+The J5760 layout has 12 query tiles and two distinct ordered key lists. A
+candidate reduced K/V gathers from 24 to four while preserving intermediate
+results in the isolated 2.8 experiment. Four ABBA launches gave profile-off
+full-block medians of 0.515/0.531/0.571/0.594 seconds; GPU drift dominated the
+roughly 0.6% balanced difference. No reliable speedup was established, so that
+candidate and the experimental RMS code remain outside production. Preserve
+the rank-three batch-32 matmuls and rank-four softmax axis 3. The retained
+external patch and reports document the rejected route, not a production gain.
+
+Startup is another bounded target: the current BF16 entry point authenticates
+all Q4 payloads three times through the shared weight index before computing
+with separately authenticated BF16 controls. Request-scoped authentication
+reuse is proposed; it must preserve file-change rejection, full BF16 hashes,
+exact inventories and byte-copy loading. A CPU authentication measurement must
+remain separate from GPU compute or complete-video speed claims.
 
 Refresh all execution claims after changes to source, weights, input identity,
 geometry, precision, schedule, command ordering, backend/device or guard.
