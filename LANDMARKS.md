@@ -35184,3 +35184,54 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on scoped source/artifacts/backend/device/OS/toolchain/geometry/
   precision/command/lifetime/guard/clock changes or lost evidence; every launch
   needs fresh memory admission.
+
+### 2026-10-27: Connected PixelUMM Graph-scope lifetime probe
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md, connected one-block
+  resource section, and .landmark/evidence/2026-10-27-hy-nomas-pixelumm-connected-resources.json.
+  Six exact-source native processes at true J2048/J21120 execute one production
+  block, both FFN topologies prepared, encoded topology fixed per process.
+  Diagnostic-only macro wraps unchanged Graph encode body; defaults unchanged.
+- Per-Graph nested pool tests Graph API/result temporaries only, not all outer
+  block temporaries. Three equal-cadence native samples per Graph, no heap event
+  arrays during encode; sequential/non-atomic readings can observe prior GPU
+  progress. Pool-off third sample is after-scope, not a drain. Missing/unknown/
+  overflowed events reject the report; exact RMS `_pre_gain` names are required.
+- Six requests/process: two warmups plus four balanced pool-mode requests;
+  full matrix separate/shared with normal/reversed warmup and starting orders.
+  One existing terminal wait/request, zero named encode allocations/preterminal
+  reads; 128 scalar metric bytes read afterward. All 252 seven-stage comparisons
+  are finite/bitwise exact at unchanged 2e-5; 36 NaN positives detected. Parity
+  is against authenticated saved upstream-source-method MPS fixture composition,
+  not an independent backend or fresh complete upstream block execution.
+- Full-J measured root-union medians outer/nested, ms: separate normal
+  1234.110/1233.892, separate reverse 1234.617/1235.345, shared normal
+  1233.123/1233.462, shared reverse 1233.360/1232.438. Contrast switches sign,
+  below 0.93 ms/0.08%; no repeatable scope effect observed at this resolution.
+  Two measured samples/mode/cell cannot establish equivalence. Observer-enabled
+  completed command-buffer GPU intervals and ambiguous phase sums are not
+  exclusive shader costs.
+- Named buffers 7,375,674,980 bytes full J. Device peaks 9539.000 MiB separate /
+  9538.969 MiB shared, about 2.446 GiB above preencode. All 2,334 full-J nested
+  drains have zero observed device delta. After named live count/bytes reach 0,
+  device counter falls only 0.33-0.36 MiB to 9538.641 MiB. Retained near-plateau
+  does not establish MPS ownership, cache mechanism or leak; counters overlap.
+- DoD: release diagnostic/macro-off bridge builds, Make freshness, 56 Crystal
+  examples, 7 Python tests, format/diff checks, one-byte-short pre-Metal budget
+  refusal and 16 rejected auditor mutations. Full guard 88 samples: max footprint
+  9.829181 GiB, min cache-aware headroom 31.509201 GiB, swap growth 0. Retained 10%
+  floor, 14 GiB process cap (8 small), 64 MiB swap stop, 240 s deadline. Polling cannot
+  bound transient peaks. No full decoder/head/diffusion/Studio/generation.
+- External reports/connected-audit-v2.json under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027.
+  Early small runs rejected unmatched Graph labels before accepted matrix;
+  failed runs are excluded. Correlated Mini-Quad verdict ROBUST only within
+  diagnostic scope. Block-wide lifetime and earlier full36 drift remain open.
+  Next falsifier: fixed-weight identical-input connected requests through one
+  versus two resident Plans sharing scratch, before extrapolating bank reuse
+  to 36 blocks. First check a reduced bank budget and serialized scratch
+  ownership; duplicating today's Plan exceeds the named cap. Not implemented
+  here. Rollback removes diagnostic and inactive
+  hook. Refresh on scoped source/artifact/backend/device/OS/toolchain/geometry/
+  precision/command/capture/lifetime/guard/clock changes or lost evidence;
+  every launch needs fresh memory admission.

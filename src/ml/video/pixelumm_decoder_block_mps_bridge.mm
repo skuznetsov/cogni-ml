@@ -1001,6 +1001,9 @@ static PixelUMMGraphStep *pixel_append_linear(
 static bool pixel_encode_graph(MPSCommandBuffer *commandBuffer,
                                PixelUMMGraphStep *step,
                                char *errorText, size_t errorCapacity) {
+#if defined(COGNI_PIXELUMM_GRAPH_RESOURCE_PROBE)
+  return pixelumm_connected_resource_scope(commandBuffer, step, [&]() -> bool {
+#endif
   if (!commandBuffer || !step || !step.executable || !step.execution ||
       !step.inputs || !step.outputs) {
     pixel_set_error(errorText, errorCapacity, "incomplete prepared PixelUMM graph step");
@@ -1019,6 +1022,9 @@ static bool pixel_encode_graph(MPSCommandBuffer *commandBuffer,
     return false;
   }
   return true;
+#if defined(COGNI_PIXELUMM_GRAPH_RESOURCE_PROBE)
+  });
+#endif
 }
 
 static id<MTLCommandBuffer> pixel_current_root(MPSCommandBuffer *commandBuffer,

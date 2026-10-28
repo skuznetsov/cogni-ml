@@ -1,5 +1,117 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Connected one-block resource lifetime probe, 2026-10-27
+
+Status: VERIFIED for the bounded native diagnostic, authenticated saved-fixture
+parity and completed command-root/resource observations. No repeatable effect
+of per-Graph autorelease scope is observed at this resolution. This does not
+establish equivalence, rule out block-wide lifetime effects, resolve full36
+drift or promote a production optimization. Separate gate/up stays default.
+
+The new `pixelumm_connected_resource_probe` executes one connected production
+block with BF16 boundaries and F32 FFN operands at actual J2048/J21,120. Both
+gate/up topologies are prepared in every process; one encoded topology stays
+fixed per process. A diagnostic-only compile-time hook wraps the unchanged
+`pixel_encode_graph` body. Pool-on contains only its Graph API/result
+temporaries; surrounding arrays, captures and other block temporaries remain
+under the outer block pool. Pool-off has no nested pool. Production arithmetic,
+command boundaries and the macro-off path are unchanged.
+
+Every Graph call has three fixed-ring samples: before encode, after encode,
+then after nested-pool drain or after scope for pool-off. The latter is not a
+synthetic drain. Timestamps mark observation start; device/process counters
+are sequential, non-atomic and may observe prior asynchronous GPU progress.
+Ring overflow, failed samples, unknown Graphs, missing events, wrong topology
+or wrong phase order reject the report. No heap-backed event arrays are built
+during encoding; event copies occur after the sole terminal wait. This is a
+single-threaded diagnostic, not a concurrent Studio collector.
+
+Six fresh processes each run two warmups and four balanced measured requests:
+two true-small controls and four full-J cells. Full cells cross separate/shared
+encoding with normal/reversed pool warmup and starting orders. Warmup order
+and measured starting order reverse together and are not isolated factors.
+Each request poisons captures, executes the connected block, compares seven
+captures on GPU, then completes one existing terminal wait. All 252 capture
+comparisons are finite and bitwise exact at unchanged `atol=rtol=2e-5`; all 36
+GPU NaN positive controls are detected. Encode-time named allocations and
+preterminal readbacks are zero. Only 128 bytes of metrics are read afterward.
+
+| Full-J encoded topology / order | Outer-pool root union ms | Nested-pool root union ms | Outer-pool encode call ms | Nested-pool encode call ms |
+| --- | ---: | ---: | ---: | ---: |
+| Separate / normal | 1234.110 | 1233.892 | 354.820 | 354.580 |
+| Separate / reversed | 1234.617 | 1235.345 | 355.400 | 355.064 |
+| Shared / normal | 1233.123 | 1233.462 | 351.726 | 351.742 |
+| Shared / reversed | 1233.360 | 1232.438 | 351.331 | 351.115 |
+
+Entries are medians of two measured requests per pool mode per cell. The
+nested-minus-outer root-union contrasts switch sign and stay below 0.93 ms
+(0.08%). Full measured requests span 1231.743-1235.816 ms. These observer-enabled
+completed command-buffer GPU intervals include possible stalls and diagnostic work;
+they are not exclusive shader time or production latency. No observer-off
+overhead correction was measured. Candidate phase sums remain ambiguous:
+gate/up about 388 ms versus about 361 ms definite, down about 262-269 ms versus
+about 187 ms definite. Those sums cannot prove projection-specific causes.
+
+Full named buffers total 7,375,674,980 bytes (6.869133 GiB), including expected
+captures and metrics. Device allocation rises about 2.446 GiB during enqueue,
+from 7,376,093,184 bytes to peaks of 9539.000 MiB for separate or 9538.969 MiB
+for shared encoding. Every one of 2,334 full-J nested Graph drains has zero
+observed device-counter change. After plan, buffers and chain release, named
+bytes/count reach zero; the device counter falls only 0.33-0.36 MiB and remains
+9538.641 MiB. The near-flat retained device-reported plateau does not identify
+MPS ownership, a cache or a leak. Both topologies were prepared, so this is not
+a production separate-versus-shared memory comparison. Named, Metal, RSS,
+physical-footprint and GC counters overlap and must not be summed.
+
+Fresh upstream suffix replay adds the final BF16 residual to the prior oracle
+helper. Its eight old records remain byte-identical; seven selected captures
+compose with saved attention at authenticated boundaries. The small composed
+captures also match the prior complete small-block fixture. This is pinned
+upstream-source-method MPS replay against a saved fixture chain, not an
+independent backend or a fresh complete connected upstream execution. Selected
+parent records are rehashed; the unrelated 20.66 GB parent payload is not
+wholly rehashed. Both new compact fixture payloads are fully hashed. Inputs
+come from the qualified real static-image latent/noise/stem path, not a DiT
+denoised video. Fixture preparation/export is outside native timing.
+
+The cache-aware 10% floor, 14 GiB full-process cap (8 GiB small), 64 MiB
+swap-growth stop and 240 s deadline remain. Across 88 full-run guard samples,
+sampled peak process footprint is 9.829181 GiB, minimum cache-aware headroom
+31.509201 GiB and swap growth zero. Polling and phase snapshots do not bound
+transient peaks. No full decoder, head, diffusion, Studio or generation ran.
+
+DoD observed: release diagnostic build, macro-off production bridge build,
+fresh Make dependency checks, 56 focused Crystal examples, seven Python oracle
+tests, format/diff checks, one-byte-short budget refusal before Metal
+allocation, all six native cells and 16 rejected auditor mutations. Early
+small runs rejected two unmatched RMS Graph names; labels were corrected to
+the production helper's `_pre_gain` names before the complete accepted matrix.
+Failed reports are excluded. Correlated Mini-Quad verdict is ROBUST within
+this scope; it is not independent replication.
+
+Evidence and frozen plan/amendment are under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027`;
+`results/connected-audit-v2.json` joins reports, sources, binary, fixtures,
+root/API inventories and guard receipts. The amendment narrows the original
+block-wide lifetime hypothesis to Graph API/result temporaries. The repository
+index is `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-connected-resources.json`.
+Build/test entrypoints are `make pixelumm_connected_resource_probe` with an
+external `BUILD_DIR`, `make spec_pixelumm_connected_resource_probe`, and
+`python3 -B -m unittest spec/hy_nomas_pixelumm_ffn_reference_test.py`. The native
+runner requires an absolute fixture path, trusted metadata SHA256, exact
+`--rows` and a fresh report path; every launch still needs fresh guard admission.
+
+Next falsifier: identical-weight connected requests through one versus two
+resident Plans with shared scratch, keeping inputs, commands and comparisons
+fixed, with explicit serialized scratch ownership. Duplicating today's full
+Plan would exceed the 8 GiB named cap; this experiment first needs a reduced
+bank design and separately checked budget. It can test Plan/bank resource reuse
+before extrapolating to 36 blocks; it is not implemented or measured here.
+Rollback removes the diagnostic target
+and inactive compile-time hook. Refresh on scoped source/artifact, backend,
+device/OS/toolchain, geometry/precision, command/capture/lifetime/guard/clock
+changes or lost evidence; admission expires at every launch.
+
 ## Isolated full-J FFN resource experiment, 2026-10-27
 
 Status: VERIFIED for the bounded native diagnostic, source-method projection

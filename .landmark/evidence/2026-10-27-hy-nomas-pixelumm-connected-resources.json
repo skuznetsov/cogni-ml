@@ -1,0 +1,771 @@
+{
+  "schema": "landmark.evidence.pixelumm_connected_resources/v1",
+  "date": "2026-10-27",
+  "base_commit": "c06bb53dbce4991d50eecd57c413f5558e24f8bb",
+  "status": {
+    "claim_level": "VERIFIED",
+    "scope": "One connected native PixelUMM block at true J2048/J21120 with observer enabled: GPU fixture parity, Graph event completeness and guard evidence. No production speedup or full36 cause is established.",
+    "production_promoted": false
+  },
+  "problem": {
+    "trigger": "Isolated FFN resource-order effects did not explain earlier full36 shared-FFN drift.",
+    "falsifier": "Compare equal-cadence per-Graph pools in balanced one-block requests at fixed encoded topology. A null narrows Graph API/result temporary lifetime only.",
+    "strongest_failure": "Mistake this narrow probe for block-wide lifetime exclusion, shader attribution, allocator ownership or production equivalence.",
+    "rollback": "Remove diagnostic target/files and inactive compile-time hook; production defaults and arithmetic stay unchanged."
+  },
+  "method": {
+    "arithmetic": "Existing production builders, BF16 boundaries and F32 FFN operands.",
+    "sampling": "Three fixed-ring samples per Graph: before/after encode then after nested-pool drain or after scope. Sequential/non-atomic counters can observe prior asynchronous work.",
+    "pool_scope": "Graph API/result temporaries only; surrounding arrays/captures remain retained by the outer block pool.",
+    "both_topologies_prepared_in_every_process": true,
+    "encoded_topology_fixed_per_process": true,
+    "schedule": "Two warmups plus four balanced measured requests per process. Warmup and measured starting order reverse together.",
+    "gpu_contract": "One existing terminal wait per request; no named buffer allocation or readback during encode. Seven GPU comparisons plus GPU NaN control; 128 metric bytes read after the wait.",
+    "interpretation": "Completed command-buffer GPU intervals include stalls and diagnostics, not exclusive shader time. Phase candidate roots are ambiguous. No observer-off correction. Named, device, RSS, footprint and GC overlap and are nonadditive."
+  },
+  "definition_of_done": {
+    "native_processes": 6,
+    "small_processes": 2,
+    "full_processes": 4,
+    "requests": 36,
+    "full_requests": 24,
+    "terminal_waits_per_request": 1,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "capture_comparisons": 252,
+    "bitwise_exact_comparisons": 252,
+    "positive_nonfinite_controls_detected": 36,
+    "named_encode_allocations": 0,
+    "preterminal_readbacks": 0,
+    "postterminal_metric_bytes_per_request": 128,
+    "crystal_examples": 56,
+    "python_tests": 7,
+    "one_byte_short_preallocation_refusal": true,
+    "rejected_auditor_mutations": [
+      "extra wait",
+      "overstated pool scope",
+      "overstated sampling clock",
+      "overstated ownership",
+      "overstated event clock",
+      "weakened tolerance",
+      "missing capture coverage",
+      "nonfinite output",
+      "changed connected product",
+      "overflow",
+      "missing event",
+      "wrong third sample",
+      "forged root union",
+      "named leak",
+      "missing graph call",
+      "changed requested topology"
+    ],
+    "fresh_release_macro_off_make_format_checks": true
+  },
+  "observations": {
+    "full_cell_medians": [
+      {
+        "cell": "native-full-separate-v1",
+        "outer": {
+          "root_union_ms": 1234.1104166553123,
+          "encode_ms": 354.8199165,
+          "terminal_wait_ms": 880.322208,
+          "gate_up_candidate_root_ms": 388.34770835819654,
+          "down_candidate_root_ms": 262.240791664226,
+          "device_observed_peak_bytes": 10002366464
+        },
+        "nested": {
+          "root_union_ms": 1233.8918332970934,
+          "encode_ms": 354.57997950000004,
+          "terminal_wait_ms": 880.3576034999999,
+          "gate_up_candidate_root_ms": 388.133166678017,
+          "down_candidate_root_ms": 262.37450003100093,
+          "device_observed_peak_bytes": 10002366464
+        },
+        "nested_minus_outer_union_ms": -0.2185833582188934,
+        "device_drain_delta_range_bytes": [
+          0,
+          0
+        ],
+        "after_named_release_device_bytes": 10001989632
+      },
+      {
+        "cell": "native-full-separate-reverse-v1",
+        "outer": {
+          "root_union_ms": 1234.6172290999675,
+          "encode_ms": 355.399792,
+          "terminal_wait_ms": 880.387875,
+          "gate_up_candidate_root_ms": 388.05785415752325,
+          "down_candidate_root_ms": 262.492020818172,
+          "device_observed_peak_bytes": 10002366464
+        },
+        "nested": {
+          "root_union_ms": 1235.345416716882,
+          "encode_ms": 355.06425,
+          "terminal_wait_ms": 881.4453545,
+          "gate_up_candidate_root_ms": 388.4521874715574,
+          "down_candidate_root_ms": 262.90118748147506,
+          "device_observed_peak_bytes": 10002366464
+        },
+        "nested_minus_outer_union_ms": 0.7281876169145107,
+        "device_drain_delta_range_bytes": [
+          0,
+          0
+        ],
+        "after_named_release_device_bytes": 10001989632
+      },
+      {
+        "cell": "native-full-shared-v1",
+        "outer": {
+          "root_union_ms": 1233.1228541734163,
+          "encode_ms": 351.7255205,
+          "terminal_wait_ms": 882.391687,
+          "gate_up_candidate_root_ms": 388.17106251372024,
+          "down_candidate_root_ms": 266.67431253008544,
+          "device_observed_peak_bytes": 10002333696
+        },
+        "nested": {
+          "root_union_ms": 1233.462458345457,
+          "encode_ms": 351.7416045,
+          "terminal_wait_ms": 882.901729,
+          "gate_up_candidate_root_ms": 388.58668752072845,
+          "down_candidate_root_ms": 265.0451458321186,
+          "device_observed_peak_bytes": 10002333696
+        },
+        "nested_minus_outer_union_ms": 0.33960417204070836,
+        "device_drain_delta_range_bytes": [
+          0,
+          0
+        ],
+        "after_named_release_device_bytes": 10001989632
+      },
+      {
+        "cell": "native-full-shared-reverse-v1",
+        "outer": {
+          "root_union_ms": 1233.3604374580318,
+          "encode_ms": 351.330604,
+          "terminal_wait_ms": 882.9770625,
+          "gate_up_candidate_root_ms": 388.2244166597957,
+          "down_candidate_root_ms": 267.3302291514119,
+          "device_observed_peak_bytes": 10002333696
+        },
+        "nested": {
+          "root_union_ms": 1232.4382916849572,
+          "encode_ms": 351.1145415,
+          "terminal_wait_ms": 882.2929165,
+          "gate_up_candidate_root_ms": 388.6357916635461,
+          "down_candidate_root_ms": 266.30474998091813,
+          "device_observed_peak_bytes": 10002333696
+        },
+        "nested_minus_outer_union_ms": -0.9221457730745897,
+        "device_drain_delta_range_bytes": [
+          0,
+          0
+        ],
+        "after_named_release_device_bytes": 10001989632
+      }
+    ],
+    "full_measured_command_buffer_interval_union_range_ms": [
+      1231.7428332462441,
+      1235.815625084797
+    ],
+    "full_named_bytes": 7375674980,
+    "small_named_bytes": 1098228484,
+    "full_device_peak_mib": {
+      "separate": 9539.0,
+      "shared": 9538.96875
+    },
+    "full_device_after_named_release_mib": 9538.640625,
+    "full_nested_graph_drains": 2334,
+    "full_nested_graph_drain_device_delta_bytes": [
+      0,
+      0
+    ],
+    "maximum_full_encode_gc_total_growth_bytes": 27360,
+    "full_guard": {
+      "samples": 88,
+      "sampled_max_footprint_bytes": 10554002768,
+      "minimum_cache_aware_headroom_bytes": 33832747008,
+      "maximum_swap_growth_bytes": 0
+    }
+  },
+  "decision": {
+    "result": "No repeatable observed per-Graph pool-scope effect at this resolution: four full contrasts switch sign and remain below 0.93 ms/0.08%. This is not equivalence.",
+    "resource_alternative": "Near-flat retained device-reported allocation after named handles reach zero. Ownership, cache mechanism and leak status unknown.",
+    "promotion": "Keep separate gate/up default and hooks diagnostic only.",
+    "next_falsifier": "Fixed-weight identical-input connected requests through one versus two resident Plans with shared scratch. First plan a reduced bank budget and serialized scratch ownership: duplicating the current full Plan exceeds the named cap. Not implemented or measured here.",
+    "unresolved": [
+      "Earlier full36 timing drift",
+      "Outer block-wide temporary lifetime",
+      "MPS physical resource/allocator mechanism",
+      "Production or complete pipeline latency"
+    ]
+  },
+  "provenance": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "upstream_model_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "block0_checkpoint_subset_sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485",
+    "oracle": "Pinned upstream-source-method MPS suffix replay and saved locally adapted attention. Exact agreement with authenticated fixture composition, not an independent backend or fresh complete upstream execution.",
+    "parent_authentication": "Selected source records rehashed; unrelated whole 20.66 GB parent payload not wholly rehashed. New compact payloads fully hashed. Eight old suffix records stay byte-identical; small seven-stage composition matches the prior small block fixture.",
+    "input_scope": "Qualified real static-image latent/noise/stem path; not DiT-denoised video.",
+    "whole_checkpoint_hash_verified": false
+  },
+  "adversary": {
+    "verdict": "ROBUST within bounded diagnostic scope; VULNERABLE if widened into equivalence, full36 drift resolution, block-wide lifetime exclusion or physical ownership claims.",
+    "lineage": "Correlated same-lineage Mini-Quad review; not independent replication.",
+    "checks": [
+      "Production builder/default-off hook and macro-off build",
+      "Partial-enqueue ownership and sole successful terminal-wait read/release gating",
+      "Dynamic RMS Graph names and complete event inventory",
+      "Capture extents, nonfinite positives and unchanged tolerances",
+      "Source/binary/fixture/root/API/guard joins",
+      "Phase ambiguity and retained-device plateau",
+      "Pool and timestamp semantic declarations plus poisoned-report rejection"
+    ]
+  },
+  "evidence": {
+    "plan": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/source/experiment-plan-v1.json",
+      "bytes": 3765,
+      "sha256": "48b78dbc8dffedf74e4592c676464c77f79b59811aba4fd58237994eaa87aa09"
+    },
+    "scope_amendment": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/source/experiment-amendment-v1.json",
+      "bytes": 976,
+      "sha256": "4125d6acd10aaa80bff7cd3ca3eac7133b91aeb3f374418be5390224f43cbe11"
+    },
+    "environment": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/source/environment-observed-v1.json",
+      "bytes": 1083,
+      "sha256": "abd91821531d87d3b6ba8453f8a7628dd0cf89e17c3b259b851ee6805d792303"
+    },
+    "analyzer": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/source/analyze_connected_v2.py",
+      "bytes": 22523,
+      "sha256": "740b89ae2351f75861aa4b6bd4983b371f5ba29d698272e1b41fc4db350c9264"
+    },
+    "audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-audit-v2.json",
+      "bytes": 47754,
+      "sha256": "2e3f7bcf23083737be6d27577f7c6718c58fdec1bb228c972da3844bfde5b0e4"
+    },
+    "fixture_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/fixture-audit-v1.json",
+      "bytes": 1296,
+      "sha256": "7ef7397a1c75829d0cbb05e8418640b3f335c2153d762322136385a13bc12ea6"
+    },
+    "stager": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/source/stage_connected_v1.py",
+      "bytes": 5403,
+      "sha256": "9c19adc530f8c2e392f21568a3ad8fdac20292af18f5404dd820553b2fcbe644"
+    },
+    "guard_harness": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/tmp/run_guarded_v2.py",
+      "bytes": 5701,
+      "sha256": "207974d809346cfd1446878136cd80e81df3674ccfd0fbd27bb7b6d8a845bf70"
+    },
+    "native_epochs": [
+      {
+        "name": "native-small-v3",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-v3.json",
+          "bytes": 779732,
+          "sha256": "c62f95563b5017ec83476f81d9b2ce9067ee436c6de9e911792000fa652641e8"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-v3.pre-execution.json",
+          "bytes": 22276,
+          "sha256": "3766cbc1276a49191b3a253f23a466eefd408042c5eaee8ee28e12a4ed71e8e3"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-v3.completion.json",
+          "bytes": 84,
+          "sha256": "b423ca6415be84f306ff25ecf706b65e1c6a65b945f233449c6f548e8900ac37"
+        },
+        "guard": {
+          "samples": 6,
+          "max_footprint_bytes": 1943176872,
+          "min_headroom_bytes": 42502946816,
+          "min_pressure_pct": 87,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-small-v3.guard.jsonl",
+            "bytes": 2592,
+            "sha256": "5c2953fbcb7a3d2f806fa223c5025c185120e5d8b836212dd0cd059c280cf8e7"
+          }
+        }
+      },
+      {
+        "name": "native-small-shared-reverse-v1",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-shared-reverse-v1.json",
+          "bytes": 768178,
+          "sha256": "908801e206443197b80a1d08b8bb84df44538475307f25201715235617bb21bf"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-shared-reverse-v1.pre-execution.json",
+          "bytes": 22448,
+          "sha256": "c892f0c54246b1b505b989a767a426623044303db76d6d57f8ed4cb2c84d4405"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-small-shared-reverse-v1.completion.json",
+          "bytes": 83,
+          "sha256": "2302e1e9fa484dd84e764c788221edf61576d02dbf9894cc0316736102533ce3"
+        },
+        "guard": {
+          "samples": 5,
+          "max_footprint_bytes": 1920157304,
+          "min_headroom_bytes": 42567680000,
+          "min_pressure_pct": 87,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-small-shared-reverse-v1.guard.jsonl",
+            "bytes": 2284,
+            "sha256": "ab78ac83e9bb85556829b13a31c6b2f8974c62bcb9c800ba1bab341121300f4a"
+          }
+        }
+      },
+      {
+        "name": "native-full-separate-v1",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-v1.json",
+          "bytes": 2305088,
+          "sha256": "f1f8ca16935c7501cede75146352f7b990cf242465c0cb4d00e014f59ccb07f7"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-v1.pre-execution.json",
+          "bytes": 22302,
+          "sha256": "692ebedbb1167506a950c7d8e4873ca3eb7c495e98bfc11d49ebad1f6dcfb969"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-v1.completion.json",
+          "bytes": 84,
+          "sha256": "07b3a96e4aaa9c3e4da84a40c87c0ef16ae23388dd40ca8ece5215049d16eaba"
+        },
+        "guard": {
+          "samples": 22,
+          "max_footprint_bytes": 10378382552,
+          "min_headroom_bytes": 34033860608,
+          "min_pressure_pct": 75,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-full-separate-v1.guard.jsonl",
+            "bytes": 7558,
+            "sha256": "71ccf9f56024f2270078ab27a4462c9d7a7875c6964b1ffb69eab299e7ac5ee5"
+          }
+        }
+      },
+      {
+        "name": "native-full-separate-reverse-v1",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-reverse-v1.json",
+          "bytes": 2305048,
+          "sha256": "4a95a39a8cf041aa32ad45f29df9dc67166080577f7f2d633a5f4961f59d85f3"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-reverse-v1.pre-execution.json",
+          "bytes": 22421,
+          "sha256": "c20f611dc6968aab9ced4f4363739aa190e34e054f940a122338b7bcf2ec1752"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-separate-reverse-v1.completion.json",
+          "bytes": 84,
+          "sha256": "3c199fd66fe3f1d4e4b484718fe12528cd1e81ccbd2fc9a968c2b3d525b8ca6a"
+        },
+        "guard": {
+          "samples": 22,
+          "max_footprint_bytes": 10554002768,
+          "min_headroom_bytes": 33832747008,
+          "min_pressure_pct": 75,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-full-separate-reverse-v1.guard.jsonl",
+            "bytes": 7555,
+            "sha256": "70327d6c21a6dc99370a8cf65734bd4f074ed7983c3d13281922d13ebc5699e9"
+          }
+        }
+      },
+      {
+        "name": "native-full-shared-v1",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-v1.json",
+          "bytes": 2293337,
+          "sha256": "0e423953b58df7242743335f9d10db3c37926a8a843479aa13788bdc4e9304b6"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-v1.pre-execution.json",
+          "bytes": 22327,
+          "sha256": "1587337c4dffb130a02794fed90dd66afb51b1759b2450c11a6c16e6f89b8182"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-v1.completion.json",
+          "bytes": 84,
+          "sha256": "af5f3d195ca2dae6790b75f7515f62471a121090b3d5a3006731d0a8b32876ba"
+        },
+        "guard": {
+          "samples": 22,
+          "max_footprint_bytes": 10376645824,
+          "min_headroom_bytes": 33993293824,
+          "min_pressure_pct": 75,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-full-shared-v1.guard.jsonl",
+            "bytes": 7551,
+            "sha256": "1a837e02d95b9529eb0593adf05717b4f056ddbc7bdf20bd30c5b22c01f08609"
+          }
+        }
+      },
+      {
+        "name": "native-full-shared-reverse-v1",
+        "report": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-reverse-v1.json",
+          "bytes": 2293336,
+          "sha256": "0ca331cfb511e7e376dc5cefaed5de93138b22e20cc195d9d799a22ae287c644"
+        },
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-reverse-v1.pre-execution.json",
+          "bytes": 22447,
+          "sha256": "dd236ff1d0fcb0ac3812ca95136375adaf5e4c57c3d4a1324998fcdef8e684c6"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-full-shared-reverse-v1.completion.json",
+          "bytes": 83,
+          "sha256": "3a90b7cb6ae5cd79fc4c70db23ad173eaf4895804f9382746a5d33abe4302b21"
+        },
+        "guard": {
+          "samples": 22,
+          "max_footprint_bytes": 10376350912,
+          "min_headroom_bytes": 33996898304,
+          "min_pressure_pct": 75,
+          "max_swap_growth_bytes": 0,
+          "artifact": {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-full-shared-reverse-v1.guard.jsonl",
+            "bytes": 7551,
+            "sha256": "39301f7ad79fb325287e59d4f96ccdd9b3dca3bef17acd22116fa00d5f1107fb"
+          }
+        }
+      }
+    ],
+    "checks": [
+      {
+        "name": "build-connected-v3",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/build-connected-v3.pre-execution.json",
+          "bytes": 19503,
+          "sha256": "64f3f3502407b790582e8db12445a066c9d2958592fae84d8848d35e2d1e2e1b"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/build-connected-v3.completion.json",
+          "bytes": 82,
+          "sha256": "40ef1a66526273f012da5cb4bedfd58ac9b9ec30dc4b52a2373504147e5f67cb"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/build-connected-v3.out",
+          "bytes": 1739,
+          "sha256": "5d0302a063c2b3f43728cf19da499beb5b049631fa496fb2f279ca3f3f37041d"
+        }
+      },
+      {
+        "name": "build-production-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/build-production-v1.pre-execution.json",
+          "bytes": 19663,
+          "sha256": "108e6e6d6bf21d74f763fe97dd031135448cf53de85f07d787d1299b5f7fabf1"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/build-production-v1.completion.json",
+          "bytes": 84,
+          "sha256": "80f4d85ad703d9fa1c05b6e3dfcdff5469e69d19749c1ab1e41db626d7b444dd"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/build-production-v1.out",
+          "bytes": 906,
+          "sha256": "a0239fc5527ef9195346e7fa16990efebc453f7e571d4293ecf0afaa5b13f700"
+        }
+      },
+      {
+        "name": "cpu-connected-v4",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/cpu-connected-v4.pre-execution.json",
+          "bytes": 23738,
+          "sha256": "819c81509d14690dae2f2a385b9cc852987dfafca751119aba8db7db04090125"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/cpu-connected-v4.completion.json",
+          "bytes": 83,
+          "sha256": "b6e135cc354d66a8e8d042a8bd5e7f1e8ac44764024a6139e12261a837a4236b"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/cpu-connected-v4.out",
+          "bytes": 134,
+          "sha256": "f3f6a6949021bbbc7c9a11d367d3a574c6112d5e3467ab9d72286c54ef7db4e1"
+        }
+      },
+      {
+        "name": "python-oracle-tests-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/python-oracle-tests-v1.pre-execution.json",
+          "bytes": 3601,
+          "sha256": "b4cd7a202b0d65c39af8378c924f13a075a57312f4fbeaa18a9e5786d282162a"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/python-oracle-tests-v1.completion.json",
+          "bytes": 84,
+          "sha256": "aa0ba72ee8f84279921d8947b45be205d39ce86d45deca0b25fb5853a4ef8c80"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/python-oracle-tests-v1.out",
+          "bytes": 105,
+          "sha256": "670a39115e7523a8984e4842e16547cb2094b03fad392b037b4b9dc8b2656e62"
+        }
+      },
+      {
+        "name": "format-native-v2",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/format-native-v2.pre-execution.json",
+          "bytes": 21012,
+          "sha256": "d95d40fd2adf59a745bb0ff630534c0f91e49d855866b45e9724be0a6b6dcf82"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/format-native-v2.completion.json",
+          "bytes": 84,
+          "sha256": "c9feeeb44e5fbfdf2391d50e596b96d2304cf7a19192d1b866375359364e15be"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/format-native-v2.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      },
+      {
+        "name": "oracle-small-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/oracle-small-v1.pre-execution.json",
+          "bytes": 5014,
+          "sha256": "474b424eab624fe43b1905f8f16170ab06e0ec3cd5e370a18b1acca6fa39fc65"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/oracle-small-v1.completion.json",
+          "bytes": 83,
+          "sha256": "f3af92b5ddc51fb6c32f301c95b7b3f1d9d5648a9e298bd484ace11b47f7af2e"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/oracle-small-v1.out",
+          "bytes": 288,
+          "sha256": "710f00768563014182dc01a3274ab6bb345d5bdae4cee62f459ff9d0250e659a"
+        }
+      },
+      {
+        "name": "oracle-full-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/oracle-full-v1.pre-execution.json",
+          "bytes": 5067,
+          "sha256": "4ff812417a4bfc9b280a59c0bec2b621a222fbce6ff5784f6da671af232489fa"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/oracle-full-v1.completion.json",
+          "bytes": 83,
+          "sha256": "484375ea5848db60e909e696b1d83df1b9da4716b8f83f2c68d5d2ff6d799416"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/oracle-full-v1.out",
+          "bytes": 288,
+          "sha256": "91b71b02777a5029a75c09fa310e6cde4c8f66c9d899ceedf5d56775170cd8c7"
+        }
+      },
+      {
+        "name": "staging-small-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/staging-small-v1.pre-execution.json",
+          "bytes": 4062,
+          "sha256": "e05abde3a51978cc08fdea0927c8187779cbe970664ac850cbfc2099f9c74063"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/staging-small-v1.completion.json",
+          "bytes": 84,
+          "sha256": "0f3fc952e97541416fe446edf09d6a975a1c1218fa3de82fa79caea4426f118e"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/staging-small-v1.out",
+          "bytes": 280,
+          "sha256": "670019269e6c914152898b7f1455fea17b9bf9ccab7f1953a6d2c4ad096bab84"
+        }
+      },
+      {
+        "name": "staging-full-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/staging-full-v1.pre-execution.json",
+          "bytes": 4059,
+          "sha256": "912b1c784e254febdc26836b258c7ddb44903623b413bc5ef3e11598d8298153"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/staging-full-v1.completion.json",
+          "bytes": 83,
+          "sha256": "08be1fbaa15c8fdb8c44ab726530af3e4f71d10f031f84682f1854e9d010b7d6"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/staging-full-v1.out",
+          "bytes": 281,
+          "sha256": "3933cafd0234d095436f0f4dcfa93f5dd6180817025eb1c6d996a81a3bea8232"
+        }
+      },
+      {
+        "name": "fixture-audit-v1",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/fixture-audit-v1.pre-execution.json",
+          "bytes": 4117,
+          "sha256": "4fe4ee2a86dec6a7f5685c8127baf50cc05b1169f5aa7b9780cdfb6f915aa03d"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/fixture-audit-v1.completion.json",
+          "bytes": 84,
+          "sha256": "d233f0d59feeb9a7fe57ef86fad516f8ae412684826cb767b4b4c1244821c6dc"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/fixture-audit-v1.out",
+          "bytes": 1134,
+          "sha256": "8dfbcf6ac50f0b6ca70ad2a61588b19e1352a65176b8164fc409768287787b9b"
+        }
+      },
+      {
+        "name": "analyze-connected-v2",
+        "expected_exit": 0,
+        "pre_execution": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/analyze-connected-v2.pre-execution.json",
+          "bytes": 5362,
+          "sha256": "900ddd0780b72ab3f30ee5e29dc188ec018c952871123850985ca70b69b2b7dd"
+        },
+        "completion": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/analyze-connected-v2.completion.json",
+          "bytes": 84,
+          "sha256": "60c490ba4cca3e04233b868f703f34b17503a1534a5bafb1df4d7146f8903fb6"
+        },
+        "stdout": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/analyze-connected-v2.out",
+          "bytes": 214,
+          "sha256": "3188dd56b824a1bbdcdb97ed29ae1518c4a68f24fce6b9cf31ba14fa8634a649"
+        }
+      }
+    ],
+    "budget_negative": {
+      "name": "native-budget-negative-v1",
+      "expected_exit": 1,
+      "pre_execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-budget-negative-v1.pre-execution.json",
+        "bytes": 22628,
+        "sha256": "0a627855c63b7d4bc6f82f954637461127a79f0c12ba7d1ff933c5de9753abfe"
+      },
+      "completion": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/native-budget-negative-v1.completion.json",
+        "bytes": 84,
+        "sha256": "8c49e3da0190e5b378877ff1f961042e850bd18067334ce33727a19609e3872e"
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-budget-negative-v1.out",
+        "bytes": 383,
+        "sha256": "f01e55ec452bacc34919127728f8be4ae3b16ac44543d9e2bedc1c4492f30144"
+      },
+      "guard": {
+        "samples": 5,
+        "max_footprint_bytes": 4506032,
+        "min_headroom_bytes": 45136068608,
+        "min_pressure_pct": 90,
+        "max_swap_growth_bytes": 0,
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/logs/native-budget-negative-v1.guard.jsonl",
+          "bytes": 2277,
+          "sha256": "55ef613606d252ef605b5b1721cc2c67153147fdc5216e31998bf06266a688ad"
+        }
+      },
+      "required_named_bytes": 7375674980,
+      "tested_cap_bytes": 7375674979,
+      "preallocation_rejection_observed": true
+    },
+    "fixtures": {
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.json": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.json",
+        "bytes": 18169,
+        "sha256": "a4c6c7b30ba9c8e4d7c58563c2a32c5c7856f10ac8ea75310b2bcc57f21cebb3"
+      },
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+        "bytes": 18967,
+        "sha256": "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c"
+      }
+    },
+    "native_sources": {
+      "Makefile": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+        "bytes": 46026,
+        "sha256": "739c7699120043e70f75bb02347b36e17ff2efd3c05a96d454884cb87f33f0ef"
+      },
+      "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+        "bytes": 93785,
+        "sha256": "db6baee407c22ad54f54dfa1b6b8218926bcc7e8aaebd9a8d7a904097f564ced"
+      },
+      "examples/pixelumm_connected_resource_probe.cr": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/pixelumm_connected_resource_probe.cr",
+        "bytes": 15136,
+        "sha256": "f49f17ce55ed720a8b0d81216873b06327a91835b6d3c40a6e1f1c5402cc29e8"
+      },
+      "examples/support/pixelumm_connected_resource_bridge.mm": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_connected_resource_bridge.mm",
+        "bytes": 9452,
+        "sha256": "8ebf09ed1e15bc050cd4608aa720c305a0b4561095bb02b066ddbf68d4ecb76f"
+      },
+      "examples/support/pixelumm_connected_resource_probe.cr": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_connected_resource_probe.cr",
+        "bytes": 27056,
+        "sha256": "35e7a082a31a6e14d99fdc649c2c152c7f663fc0a46408a4268655081dd2a51e"
+      },
+      "spec/pixelumm_connected_resource_probe_spec.cr": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/pixelumm_connected_resource_probe_spec.cr",
+        "bytes": 8167,
+        "sha256": "a6522f992b94358d05c6dabc14d14291df8273f943316188e0e30bf56759f65c"
+      },
+      "spec/support/hy_nomas_pixelumm_ffn_reference.py": {
+        "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_ffn_reference.py",
+        "bytes": 13458,
+        "sha256": "f9c8ec179752d23fe02c328cb900b3b2cc0b06451820fa75ef30f6bf9b4003e0"
+      }
+    }
+  },
+  "failed_attempts": {
+    "excluded": [
+      "cpu-connected-v1",
+      "cpu-connected-v2",
+      "native-small-v1",
+      "native-small-v2"
+    ],
+    "reason": "CPU NamedTuple/test corrections and strict rejection of two RMS names missing the production helper suffix. All accepted native cells use corrected labels.",
+    "accepted_native_matrix": [
+      "native-small-v3",
+      "native-small-shared-reverse-v1",
+      "native-full-separate-v1",
+      "native-full-separate-reverse-v1",
+      "native-full-shared-v1",
+      "native-full-shared-reverse-v1"
+    ]
+  },
+  "decay_and_refresh": {
+    "triggers": [
+      "Scoped source/artifact drift",
+      "Metal/MPS/device/OS/toolchain changes",
+      "Geometry/precision/command/capture/lifetime/guard/clock changes",
+      "Lost or mismatched external evidence"
+    ],
+    "refresh": "Fresh memory admission, bounded matched matrix and source/fixture/binary/event/root/guard audit.",
+    "failure_policy": "Downgrade dependent claims; keep production defaults unchanged.",
+    "admission": "10% cache-aware reserve, 14 GiB full/8 GiB small cap, 64 MiB swap-growth stop, 240 s deadline. Fresh admission at every launch."
+  }
+}

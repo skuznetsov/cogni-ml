@@ -115,7 +115,8 @@ def load_parent(path: Path, expected_sha: str):
     return document, count, records, payload
 
 
-def make_fixture(*, reference: Path, reference_sha256: str, upstream: Path, output: Path):
+def make_fixture(*, reference: Path, reference_sha256: str, upstream: Path, output: Path,
+                 include_output: bool = False):
     document, count, records, payload = load_parent(reference, reference_sha256)
     output = output.absolute()
     target_payload = output.with_suffix(".bin")
@@ -162,11 +163,15 @@ def make_fixture(*, reference: Path, reference_sha256: str, upstream: Path, outp
         up = layer.mlp.up_proj(normalized)
         product = torch.nn.functional.silu(gate) * up
         down = layer.mlp.down_proj(product)
+        # GenLayer.forward's final residual, after the same BF16 MLP boundary.
+        final_output = residual + down if include_output else None
     tensors = {
         "inputs": {"post_attn_norm": normalized, "product": product},
         "weights": {name: state[name] for name in WEIGHTS if name.startswith("mlp.")},
         "captures": {"gate_proj": gate, "up_proj": up, "down_proj": down},
     }
+    if include_output:
+        tensors["captures"]["output"] = final_output
     flat = [value for group in tensors.values() for value in group.values()]
     if not all(value.device.type == "mps" and value.dtype == torch.bfloat16 and value.is_contiguous() for value in flat):
         raise FFNReferenceError("suffix tensors must remain contiguous BF16 on MPS")
@@ -179,7 +184,8 @@ def make_fixture(*, reference: Path, reference_sha256: str, upstream: Path, outp
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
         raise FFNReferenceError("parent payload changed during selected-record replay")
     result = {
-        "schema": SCHEMA, "upstream_revision": UPSTREAM_REVISION,
+        "schema": ("cogni_ml.pixelumm_ffn_suffix_reference/v1" if include_output else SCHEMA),
+        "upstream_revision": UPSTREAM_REVISION,
         "upstream_model_sha256": model_sha, "model_sha256": model_sha, "grid": document["grid"],
         "comparison": COMPARISON, "token_order": "tile_major", "tile_tokens": 8,
         "runtime_dtype": "BF16", "torch_version": str(torch.__version__),
@@ -209,7 +215,7 @@ def make_fixture(*, reference: Path, reference_sha256: str, upstream: Path, outp
             "scope": "source-method MPS suffix parity; saved locally adapted attention; not an independent backend",
             "cpu_fallback": False, "explicit_pre_staging_waits": 1,
         },
-        "capture_order": ["gate_proj", "up_proj", "down_proj"],
+        "capture_order": list(tensors["captures"]),
         "payload": target_payload.name,
     }
     digest = hashlib.sha256()
@@ -247,10 +253,13 @@ def main():
     parser.add_argument("--reference-sha256", required=True)
     parser.add_argument("--upstream", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--include-output", action="store_true",
+                        help="Also stage GenLayer's final residual for connected-block comparisons")
     args = parser.parse_args()
     try:
         result = make_fixture(reference=args.reference, reference_sha256=args.reference_sha256,
-                              upstream=args.upstream, output=args.output)
+                              upstream=args.upstream, output=args.output,
+                              include_output=args.include_output)
     except (FFNReferenceError, KeyError, TypeError, OSError) as error:
         parser.exit(1, f"FFN reference rejected: {error}\n")
     print(json.dumps({"schema": result["schema"], "payload_bytes": result["payload_bytes"],
