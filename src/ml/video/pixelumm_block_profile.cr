@@ -30,6 +30,7 @@ module ML::Video
     getter phase_definite_root_duration_sum_seconds : Hash(String, Float64)
     getter roots : Array(MPSCommandRootTiming)
     getter tile_count : Int32
+    getter shared_gate_up : Bool
     # Whole-block root totals, interval union, envelope, and overlap remain the
     # additive-safe summary. Individual roots may overlap temporally.
     getter root_profile : MPSCommandPhaseProfile
@@ -44,14 +45,16 @@ module ML::Video
                            @roots : Array(MPSCommandRootTiming),
                            @tile_count : Int32,
                            @root_profile : MPSCommandPhaseProfile,
-                           @api_profile : MPSAPIProfile)
+                           @api_profile : MPSAPIProfile,
+                           @shared_gate_up : Bool)
     end
 
     def self.build(markers : Array(PixelUMMBlockPhaseMarker),
                    roots : Array(MPSCommandRootTiming),
                    native_duration_sum_seconds : Float64,
                    api_profile : MPSAPIProfile,
-                   tile_count : Int32) : self
+                   tile_count : Int32,
+                   shared_gate_up : Bool = false) : self
       unless markers.map(&.name) == MARKER_NAMES.to_a
         raise ArgumentError.new("PixelUMM phase markers must have the complete source order")
       end
@@ -81,7 +84,7 @@ module ML::Video
         raise ArgumentError.new("PixelUMM phase markers require a fresh root and terminal cursor")
       end
 
-      validate_api_profile!(api_profile, roots.size, tile_count)
+      validate_api_profile!(api_profile, roots.size, tile_count, shared_gate_up)
 
       phase_names = MARKER_NAMES.to_a[0...-1]
       wall_seconds = {} of String => Float64
@@ -129,7 +132,7 @@ module ML::Video
 
       new(markers, wall_seconds, thread_cpu_seconds, root_candidates,
         candidate_duration_sums, definite_duration_sums, roots, tile_count,
-        whole_block, api_profile)
+        whole_block, api_profile, shared_gate_up)
     end
 
     # Keep the shared WAN API phase IDs visible as source coordinates while
@@ -138,6 +141,8 @@ module ML::Video
       json.object do
         json.field "schema", "cogni_ml.pixelumm_block_phase_profile/v1"
         json.field "attention_tile_count", @tile_count
+        json.field "ffn_graph_topology",
+          @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
         json.field "markers" do
           json.array do
             @markers.each do |marker|
@@ -260,17 +265,18 @@ module ML::Video
 
     private def self.validate_api_profile!(profile : MPSAPIProfile,
                                            root_count : Int32,
-                                           tile_count : Int32) : Nil
+                                           tile_count : Int32,
+                                           shared_gate_up : Bool) : Nil
       # Reuse the existing MPS API phase IDs without applying the Wan-specific
       # full-block validator: PixelUMM phase 2 is only its three-per-tile local
       # attention graph, and phase 4 is unused.
       expected_graph_calls = {
         0 => 0_u64,
-        1 => 9_u64,                     # input norm, QKV, Q/K norm statistics and inverse
-        2 => 3_u64 * tile_count.to_u64, # local QK, softmax and PV graphs per tile
-        3 => 3_u64,                     # output projection, post norm and gain
-        4 => 0_u64,                     # PixelUMM has no cross-attention phase
-        5 => 3_u64,                     # FFN gate, up and down projections
+        1 => 9_u64,                            # input norm, QKV, Q/K norm statistics and inverse
+        2 => 3_u64 * tile_count.to_u64,        # local QK, softmax and PV graphs per tile
+        3 => 3_u64,                            # output projection, post norm and gain
+        4 => 0_u64,                            # PixelUMM has no cross-attention phase
+        5 => (shared_gate_up ? 2_u64 : 3_u64), # shared/separate gate-up plus down projection
       }
 
       graph_calls = 0_u64
@@ -297,7 +303,9 @@ module ML::Video
         linear_calls += linear.count
       end
 
-      unless graph_calls == 15_u64 + 3_u64 * tile_count.to_u64
+      expected_total = (shared_gate_up ? 14_u64 : 15_u64) +
+                       3_u64 * tile_count.to_u64
+      unless graph_calls == expected_total
         raise ArgumentError.new("PixelUMM API profile has an unexpected total Graph call count")
       end
       unless linear_calls == 0

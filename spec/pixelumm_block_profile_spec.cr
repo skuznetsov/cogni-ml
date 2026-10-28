@@ -40,6 +40,7 @@ end
 private def pixelumm_api_profile(tile_count : Int32,
                                  root_count : Int32,
                                  graph_attention_override : UInt64? = nil,
+                                 graph_ffn_override : UInt64? = nil,
                                  continuation_override : UInt64? = nil,
                                  linear_calls : UInt64 = 0_u64) : ML::Video::MPSAPIProfile
   graph_counts = {
@@ -48,7 +49,7 @@ private def pixelumm_api_profile(tile_count : Int32,
     2 => graph_attention_override || (3_u64 * tile_count.to_u64),
     3 => 3_u64,
     4 => 0_u64,
-    5 => 3_u64,
+    5 => graph_ffn_override || 3_u64,
   }
   continuation_total = continuation_override || (root_count - 1).to_u64
   continuation_counts = {} of Int32 => UInt64
@@ -145,6 +146,8 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     json = JSON.parse(profile.to_json)
     json["api_profile"]["source_schema"].as_s.should eq("MPSAPIProfile WAN phase IDs")
+    profile.shared_gate_up.should be_false
+    json["ffn_graph_topology"].as_s.should eq("separate_gate_up")
     api_phases = json["api_profile"]["phases"].as_a
     attention = api_phases.find { |phase| phase["source_phase_id"].as_i == 2 }.not_nil!
     attention["pixelumm_phase"].as_s.should eq("local_attention")
@@ -157,6 +160,31 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     json["roots"][1]["candidate_phases"].as_a.map(&.as_s)
       .should contain("qkv_projection")
     json["root_profile"]["union_seconds"].as_f.should eq(3.0)
+  end
+
+  it "accepts a shared gate/up Graph inventory only when declared" do
+    markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
+    roots = pixelumm_profile_roots(5)
+    duration = pixelumm_root_duration_sum(roots)
+    shared_api = pixelumm_api_profile(1, roots.size, graph_ffn_override: 2_u64)
+    separate_api = pixelumm_api_profile(1, roots.size)
+
+    profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, shared_api, 1, shared_gate_up: true)
+    profile.shared_gate_up.should be_true
+    profile.api_profile.phases.find { |phase| phase.phase_id == 5 }.not_nil!
+      .operations["graph_encode"].count.should eq(2_u64)
+    JSON.parse(profile.to_json)["ffn_graph_topology"].as_s
+      .should eq("shared_f32_gate_up")
+
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, shared_api, 1)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, separate_api, 1, shared_gate_up: true)
+    end
   end
 
   it "rejects malformed marker inventory, time, and root cursors" do

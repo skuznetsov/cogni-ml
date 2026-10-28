@@ -9,6 +9,7 @@ profile_order = "none"
 continuation_trace = false
 ffn_f32 = false
 compare_shared_gate_up = false
+profile_shared_gate_up = false
 trace_ready, trace_release = "", ""
 OptionParser.parse do |parser|
   parser.banner = "One PixelUMM block only; external 10% memory guard required."
@@ -22,6 +23,7 @@ OptionParser.parse do |parser|
   parser.on("--continuation-trace", "Opt-in CPU continuation chronology on profiled arms") { continuation_trace = true }
   parser.on("--ffn-f32", "Opt-in F32 graph tensors for gate/up/down, retaining BF16 boundaries") { ffn_f32 = true }
   parser.on("--compare-shared-gate-up", "Compare separate and shared-input F32 gate/up graphs") { compare_shared_gate_up = true }
+  parser.on("--profile-shared-gate-up", "Qualify both F32 gate/up phase topologies on all captures") { profile_shared_gate_up = true }
   parser.on("--trace-ready-file PATH", "Fresh PID receipt for bounded Instruments attach before encoding") { |v| trace_ready = v }
   parser.on("--trace-release-file PATH", "Fresh CPU release file paired with --trace-ready-file") { |v| trace_release = v }
 end
@@ -29,6 +31,9 @@ unless ARGV.empty? && {reference, expected_sha, report}.all? { |v| !v.empty? } &
        0 < budget <= 8_i64 * 1024 * 1024 * 1024 && 0 <= warmups <= 2 && 1 <= repeats <= 6 &&
        {"none", "off-on", "on-off"}.includes?(profile_order)
   raise ArgumentError.new("expected authenticated reference, new report, bounded memory and request counts")
+end
+if profile_shared_gate_up
+  raise ArgumentError.new("shared profiling requires --ffn-f32 and its own bounded schedule") unless ffn_f32 && !compare_shared_gate_up && profile_order == "none" && !continuation_trace
 end
 if compare_shared_gate_up && !(ffn_f32 && profile_order == "none" && !continuation_trace)
   raise ArgumentError.new("--compare-shared-gate-up requires --ffn-f32, --profile-order none, and continuation tracing off")
@@ -45,12 +50,18 @@ raise ArgumentError.new("refusing to replace probe report") if File.info?(report
 report_fd = LibC.open(report, LibC::O_WRONLY | LibC::O_CREAT | LibC::O_EXCL, 0o600)
 raise IO::Error.new("probe report must be fresh and writable") if report_fd < 0
 report_io = IO::FileDescriptor.new(report_fd)
+shared_modes = compare_shared_gate_up || profile_shared_gate_up
+continuation_trace = true if profile_shared_gate_up
 session = nil.as(PixelUMMBlockProbe::Session?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 requests = [] of JSON::Any
 passed = true
 schedule = [] of NamedTuple(kind: String, profile: Bool, pair: Int32, shared_gate_up: Bool)
-if compare_shared_gate_up
+if profile_shared_gate_up
+  [{true, true}, {false, true}, {false, false}, {true, false}, {true, true}, {false, true}].each_with_index do |entry, index|
+    schedule << {kind: index < 2 ? "numerical_gate" : "profile_control", profile: entry[1], pair: (index // 2).to_i32, shared_gate_up: entry[0]}
+  end
+elsif compare_shared_gate_up
   # Run the candidate gate before the baseline can write correct diagnostic
   # captures. Each repeat contributes AB and BA ordering to reduce order bias.
   schedule << {kind: "numerical_gate", profile: false, pair: -1, shared_gate_up: true}
@@ -92,12 +103,12 @@ cross_mode_hashes_equal = nil.as(Bool?)
 begin
   fixture = PixelUMMBlockProbe::Fixture.new(reference, expected_sha)
   preparation = Time.instant
-  if compare_shared_gate_up && fixture.capture_order.size != 26
+  if shared_modes && fixture.capture_order.size != 26
     raise ArgumentError.new("shared gate/up comparison requires all 26 fixture captures")
   end
   session = PixelUMMBlockProbe::Session.new(fixture, budget, ffn_f32: ffn_f32,
-    prepare_shared_gate_up: compare_shared_gate_up)
-  if compare_shared_gate_up && (!session.plan.shared_gate_up_prepared || session.plan.shared_gate_up)
+    prepare_shared_gate_up: shared_modes)
+  if shared_modes && (!session.plan.shared_gate_up_prepared || session.plan.shared_gate_up)
     raise ArgumentError.new("shared gate/up plan capability/default selection mismatch")
   end
   preparation_seconds = (Time.instant - preparation).total_seconds
@@ -119,7 +130,7 @@ begin
   end
   # Numerical gate arms precede all measured requests.
   schedule.each_with_index do |arm, request|
-    if compare_shared_gate_up
+    if shared_modes
       session.plan.use_shared_gate_up!(arm[:shared_gate_up])
       raise "PixelUMM shared gate/up mode selection was not applied" unless session.plan.shared_gate_up == arm[:shared_gate_up]
     end
@@ -148,7 +159,7 @@ begin
         early_release_rejected = true
       end
       raise "PixelUMM accepted in-flight release" unless early_release_rejected
-      if compare_shared_gate_up
+      if shared_modes
         begin
           session.plan.use_shared_gate_up!(!arm[:shared_gate_up])
         rescue error : ArgumentError
@@ -174,16 +185,16 @@ begin
     start = Time.instant
     chain.commit_and_wait
     wait_seconds = (Time.instant - start).total_seconds
-    comparisons = (compare_shared_gate_up || profile_order != "none" || request == 0 || request == schedule.size - 1) ? session.compare : [] of PixelUMMBlockProbe::Comparison
+    comparisons = (shared_modes || profile_order != "none" || request == 0 || request == schedule.size - 1) ? session.compare : [] of PixelUMMBlockProbe::Comparison
     numerical_pass = comparisons.all? { |comparison| comparison[:finite] && comparison[:failures] == 0 }
     capture_hashes_stable = true
     mode_name = arm[:shared_gate_up] ? "shared_gate_up" : "baseline"
     unless comparisons.empty?
-      if compare_shared_gate_up && comparisons.size != 26
+      if shared_modes && comparisons.size != 26
         raise "PixelUMM shared gate/up arm did not compare all 26 captures"
       end
       hashes = comparisons.to_h { |comparison| {comparison[:stage], comparison[:actual_sha256]} }
-      if compare_shared_gate_up
+      if shared_modes
         if previous_hashes = capture_hashes_by_mode[mode_name]?
           capture_hashes_stable = previous_hashes == hashes
         else
@@ -194,7 +205,7 @@ begin
         capture_hashes_stable = capture_hashes == hashes
       end
     end
-    if compare_shared_gate_up
+    if shared_modes
       if expected = expected_segments_by_mode[mode_name]?
         raise "PixelUMM #{mode_name} command-root count changed across arms" unless chain.segment_count == expected
       else
@@ -204,10 +215,23 @@ begin
       expected_segments ||= chain.segment_count
       raise "PixelUMM profiling changed command-root count" unless chain.segment_count == expected_segments
     end
-    if compare_shared_gate_up && capture_hashes_by_mode.has_key?("baseline") && capture_hashes_by_mode.has_key?("shared_gate_up")
+    if shared_modes && capture_hashes_by_mode.has_key?("baseline") && capture_hashes_by_mode.has_key?("shared_gate_up")
       cross_mode_hashes_equal = capture_hashes_by_mode["baseline"] == capture_hashes_by_mode["shared_gate_up"]
     end
-    phase_profile = arm[:profile] ? JSON.parse(session.plan.phase_profile(chain).to_json) : nil
+    snapshot_mode_change_rejected = false
+    phase_profile = nil.as(JSON::Any?)
+    if arm[:profile]
+      # A completed profile belongs to the encoded mode, not the next selection.
+      session.plan.use_shared_gate_up!(!arm[:shared_gate_up]) if profile_shared_gate_up
+      profile = session.plan.phase_profile(chain)
+      if profile_shared_gate_up
+        snapshot_mode_change_rejected = profile.shared_gate_up == arm[:shared_gate_up] &&
+                                        session.plan.shared_gate_up != arm[:shared_gate_up]
+        raise "completed profile was relabelled by idle graph selection" unless snapshot_mode_change_rejected
+        session.plan.use_shared_gate_up!(arm[:shared_gate_up])
+      end
+      phase_profile = JSON.parse(profile.to_json)
+    end
     trace_profile = if arm[:profile] && continuation_trace
                       trace = chain.continuation_trace
                       JSON.parse({info: trace.info, events: trace.events, roots: trace.roots}.to_json)
@@ -221,6 +245,7 @@ begin
                             shared_gate_up_inflight_toggle_rejected: inflight_toggle_rejected,
                             capture_hashes_stable: capture_hashes_stable,
                             prewait_profile_rejected: prewait_profile_rejected,
+                            profile_mode_snapshot_preserved: snapshot_mode_change_rejected,
                             encode_seconds: encode_seconds, terminal_wait_seconds: wait_seconds,
                             total_seconds: encode_seconds + wait_seconds, gpu_elapsed_seconds: chain.gpu_elapsed_seconds,
                             command_segments: chain.segment_count, terminal_wait_count: chain.wait_count,
@@ -233,18 +258,18 @@ begin
     chain = nil
     break unless passed
   end
-  comparison_complete = !compare_shared_gate_up ||
-    (capture_hashes_by_mode.has_key?("baseline") && capture_hashes_by_mode.has_key?("shared_gate_up") && cross_mode_hashes_equal == true)
-  result = {schema: compare_shared_gate_up ? "cogni_ml.pixelumm_native_block_probe/v2" : "cogni_ml.pixelumm_native_block_probe/v1", reference: reference,
+  comparison_complete = !shared_modes ||
+                        (capture_hashes_by_mode.has_key?("baseline") && capture_hashes_by_mode.has_key?("shared_gate_up") && cross_mode_hashes_equal == true)
+  result = {schema: shared_modes ? "cogni_ml.pixelumm_native_block_probe/v2" : "cogni_ml.pixelumm_native_block_probe/v1", reference: reference,
             reference_sha256: expected_sha, grid: fixture.grid, block_index: 0,
             generation: false, precision: "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; " +
-              (session.plan.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
-              "; graph types do not certify backend physical arithmetic",
+                                          (session.plan.ffn_f32 ? "gate/up/down operands cast to F32 graph tensors, with BF16 output casts" : "BF16 gate/up/down graph feeds") +
+                                          "; graph types do not certify backend physical arithmetic",
             oracle: "adapted upstream-semantics PyTorch MPS; tiny CPU Flex equivalence is separate",
             tolerance: {atol: PixelUMMBlockProbe::ATOL, rtol: PixelUMMBlockProbe::RTOL},
             profile_order: profile_order, continuation_trace_enabled: continuation_trace,
             ffn_f32_graph_tensors: session.plan.ffn_f32,
-            shared_gate_up_comparison: compare_shared_gate_up,
+            shared_gate_up_comparison: shared_modes, profile_shared_gate_up: profile_shared_gate_up,
             shared_gate_up_prepared: session.plan.shared_gate_up_prepared,
             shared_gate_up_capture_hashes_equal: cross_mode_hashes_equal,
             shared_gate_up_capture_hashes_by_mode: capture_hashes_by_mode,

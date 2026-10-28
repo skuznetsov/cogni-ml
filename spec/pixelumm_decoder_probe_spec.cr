@@ -31,13 +31,36 @@ describe PixelUMMDecoderProbe do
     end
   end
 
-  it "rejects unqualified shared gate/up phase profiling before submission" do
+  it "qualifies both encoded graph topologies only with the required capabilities" do
     plan = ML::Video::PixelUMMDecoderBlockMPS::Plan
-    plan.validate_encode_mode!(profile: false, shared_gate_up: true)
-    plan.validate_encode_mode!(profile: true, shared_gate_up: false)
-    expect_raises(ArgumentError, /not qualified/) do
-      plan.validate_encode_mode!(profile: true, shared_gate_up: true)
+    [true, false].each do |shared|
+      plan.validate_encode_mode!(profile: true, shared_gate_up: shared,
+        prepared: true, ffn_f32: true, api_profile_enabled: true)
+      expect_raises(ArgumentError, /API chain/) do
+        plan.validate_encode_mode!(profile: true, shared_gate_up: shared,
+          prepared: true, ffn_f32: true, api_profile_enabled: false)
+      end
     end
+    expect_raises(ArgumentError, /prepared/) do
+      plan.validate_encode_mode!(profile: true, shared_gate_up: true,
+        prepared: false, ffn_f32: true, api_profile_enabled: true)
+    end
+    expect_raises(ArgumentError, /F32/) do
+      plan.validate_encode_mode!(profile: true, shared_gate_up: true,
+        prepared: true, ffn_f32: false, api_profile_enabled: true)
+    end
+    plan.validate_encode_mode!(profile: false, shared_gate_up: false,
+      prepared: false, ffn_f32: false, api_profile_enabled: false)
+  end
+
+  it "profiles both shared graph orders after two observer-off warmups within the bounded schedule" do
+    arms = PixelUMMDecoderProbe.shared_gate_up_profile_schedule
+    arms.size.should eq(6)
+    arms.map(&.shared_gate_up).should eq([true, false, false, true, true, false])
+    arms.map(&.profile).should eq([false, false, true, true, true, true])
+    arms.none?(&.alternate).should be_true
+    arms.none?(&.poisoned).should be_true
+    arms.map(&.kind).uniq.size.should eq(6)
   end
 
   it "brackets the profiled input and poison controls with opposite profiler orders on input A" do

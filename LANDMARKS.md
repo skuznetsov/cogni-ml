@@ -6,6 +6,46 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-SHARED-FFN-PROFILE-2026-10-27] Shared FFN profiling localizes broad interval drift
+
+- VERIFIED bounded native profiling for both existing graph topologies. The
+  collectors validate two shared versus three baseline FFN Graph calls per
+  block, snapshot the encoded mode, and reject missing API profiling before
+  recording a Session chain. No profiling GPU marker, buffer, command, wait or
+  arithmetic implementation is added; the chosen topology changes root counts.
+- One resident full36+head, same A42 input, T6/H44/W80/J21,120: two warmups then
+  profiled baseline/shared/shared/baseline take 43.221/71.044/58.164/49.990 s.
+  Disjoint gate/up intervals are 13.165/23.061/18.380/15.528 s and unchanged down
+  7.015/12.615/9.942/8.287 s. Preparation and attention also expand. Most host
+  waiting appears in attention continuations; this does not identify its GPU
+  kernels as the cause. Root residency is not exclusive shader service time.
+  No consistent disproportionate gate/up growth or stable causal regression is
+  established. Shared preparation stays off by default; no speedup promotion.
+- All 414 comparisons (156 small, 258 full) are finite and bitwise exact at
+  unchanged 2e-5 tolerances against reused authenticated upstream source-method
+  MPS controls, not a fresh connected upstream run or independent backend.
+  One terminal wait/request, zero named encode allocations/preterminal reads,
+  and 43 existing diagnostics after each full request. No full generation.
+- Completed guard: 1,122 samples, peak 29,480,470,456 B (27.456 GiB), minimum
+  cache-aware headroom 18,560,139,264 B, swap growth zero, exit 0. The 10% floor,
+  28.5 GiB cap, 64 MiB swap stop and 900 s deadline stay fixed. The earlier
+  eight-arm cap stop has no final JSON and is excluded, not counted as parity.
+- 86 focused CPU examples, release/fresh make-q, one-byte-short admission,
+  snapshot/preflight negatives and a source/fixture/interval audit pass; all
+  17 seeded mutations reject. Only the CLI description changes after the GPU
+  epoch; retained source/executable CAS and a byte-exact bridge qualify that
+  delta. The CLI has no --help handler; its rejection is not a help-display pass.
+  Correlated Mini-Quad verdict ROBUST for this bounded scope, not kernel causality.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-ffn-profile.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-shared-ffn-profile-20261027/results/shared-ffn-profile-audit-v3.json`.
+  Next falsifier: isolate full-J gate/up and unchanged down on identical inputs
+  with both orders before assigning temporary-resource or GEMM causes. Rollback
+  omits the profile flag and shared preparation, or reverts this atomic commit.
+  Refresh after scoped source/artifact/backend/device/OS/toolchain, geometry,
+  precision/capture/lifetime/guard/clock changes or evidence loss; admission
+  expires at launch. No diffusion, video quality or full-pipeline timing claim.
+
 ### [LM-HY-NOMAS-PIXELUMM-INTEGRATED-2026-10-27] Full-J decoder and global head match composed upstream controls
 
 - VERIFIED bounded 36 blocks + global head at T6/H44/W80/J21,120 -> BF16

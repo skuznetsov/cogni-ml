@@ -35,6 +35,7 @@ module ML::Video
     getter roots : Array(MPSCommandRootTiming)
     getter root_profile : MPSCommandPhaseProfile
     getter api_profile : MPSAPIProfile
+    getter shared_gate_up : Bool
 
     private def initialize(@blocks : Array(PixelUMMDecoderBlockPhaseTiming),
                            @aggregate_phase_wall_seconds : Hash(String, Float64),
@@ -46,7 +47,8 @@ module ML::Video
                            @phase_definite_root_duration_sum_seconds : Hash(String, Float64),
                            @roots : Array(MPSCommandRootTiming),
                            @root_profile : MPSCommandPhaseProfile,
-                           @api_profile : MPSAPIProfile)
+                           @api_profile : MPSAPIProfile,
+                           @shared_gate_up : Bool)
     end
 
     def self.build(block_markers : Array(Array(PixelUMMBlockPhaseMarker)),
@@ -55,7 +57,8 @@ module ML::Video
                    head_end_root_count : Int32,
                    roots : Array(MPSCommandRootTiming),
                    native_duration_sum_seconds : Float64,
-                   api_profile : MPSAPIProfile) : self
+                   api_profile : MPSAPIProfile,
+                   shared_gate_up : Bool = false) : self
       unless !block_markers.empty? && block_markers.size == tile_counts.size
         raise ArgumentError.new("PixelUMM decoder profile requires one positive tile count per block")
       end
@@ -96,7 +99,8 @@ module ML::Video
         raise ArgumentError.new("PixelUMM decoder head root cursors do not continue the final block through all roots")
       end
       labels << "head"
-      validate_api_profile!(api_profile, blocks.size, tile_counts, roots.size)
+      validate_api_profile!(api_profile, blocks.size, tile_counts, roots.size,
+        shared_gate_up)
 
       root_candidates = Array(Array(String)).new(roots.size) { [] of String }
       blocks.each do |block|
@@ -129,7 +133,8 @@ module ML::Video
 
       new(blocks, aggregate_wall, aggregate_cpu, head_start_root_count,
         head_end_root_count, root_candidates, candidate_duration_sums,
-        definite_duration_sums, roots, whole_chain, api_profile)
+        definite_duration_sums, roots, whole_chain, api_profile,
+        shared_gate_up)
     end
 
     private def self.validate_markers!(markers : Array(PixelUMMBlockPhaseMarker),
@@ -173,14 +178,15 @@ module ML::Video
     private def self.validate_api_profile!(profile : MPSAPIProfile,
                                            block_count : Int32,
                                            tile_counts : Array(Int32),
-                                           root_count : Int32) : Nil
+                                           root_count : Int32,
+                                           shared_gate_up : Bool) : Nil
       expected_graph_calls = {
         0 => 5_u64,
         1 => 9_u64 * block_count.to_u64,
         2 => 3_u64 * tile_counts.sum(&.to_u64),
         3 => 3_u64 * block_count.to_u64,
         4 => 0_u64,
-        5 => 3_u64 * block_count.to_u64,
+        5 => (shared_gate_up ? 2_u64 : 3_u64) * block_count.to_u64,
       }
 
       graph_calls = 0_u64
@@ -207,7 +213,8 @@ module ML::Video
         linear_calls += linear.count
       end
 
-      expected_total = 5_u64 + 15_u64 * block_count.to_u64 +
+      graphs_per_block = shared_gate_up ? 14_u64 : 15_u64
+      expected_total = 5_u64 + graphs_per_block * block_count.to_u64 +
                        3_u64 * tile_counts.sum(&.to_u64)
       unless graph_calls == expected_total && linear_calls == 0_u64 &&
              continuation_calls == (root_count - 1).to_u64
@@ -219,6 +226,8 @@ module ML::Video
       json.object do
         json.field "schema", "cogni_ml.pixelumm_decoder_phase_profile/v1"
         json.field "block_count", @blocks.size
+        json.field "ffn_graph_topology",
+          @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
         json.field "blocks" do
           json.array do
             @blocks.each do |block|

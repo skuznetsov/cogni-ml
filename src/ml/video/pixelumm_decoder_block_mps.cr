@@ -332,6 +332,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter ffn_f32 : Bool
     getter shared_gate_up_prepared : Bool
     getter shared_gate_up : Bool = false
+    getter profiled_shared_gate_up : Bool = false
 
     @cosine : ML::MetalBuffer
     @sine : ML::MetalBuffer
@@ -569,15 +570,18 @@ module ML::Video::PixelUMMDecoderBlockMPS
       raise ArgumentError.new("shared gate/up graph was not prepared") if enabled && !prepared
     end
 
-    def self.validate_encode_mode!(*, profile : Bool, shared_gate_up : Bool) : Nil
-      if profile && shared_gate_up
-        raise ArgumentError.new("shared gate/up phase profiling is not qualified; use an unprofiled comparison")
-      end
+    def self.validate_encode_mode!(*, profile : Bool, shared_gate_up : Bool,
+                                   prepared : Bool, ffn_f32 : Bool, api_profile_enabled : Bool) : Nil
+      raise ArgumentError.new("shared gate/up graph was not prepared") if shared_gate_up && !prepared
+      raise ArgumentError.new("shared gate/up requires F32 FFN graph tensors") if shared_gate_up && !ffn_f32
+      raise ArgumentError.new("PixelUMM phase profiling requires an enabled fresh API chain") if profile && !api_profile_enabled
     end
 
-    def validate_encode_mode!(*, profile : Bool) : Nil
+    def validate_encode_mode!(*, profile : Bool, api_profile_enabled : Bool) : Nil
       check_live!
-      self.class.validate_encode_mode!(profile: profile, shared_gate_up: @shared_gate_up)
+      self.class.validate_encode_mode!(profile: profile, shared_gate_up: @shared_gate_up,
+        prepared: @shared_gate_up_prepared, ffn_f32: @ffn_f32,
+        api_profile_enabled: api_profile_enabled)
     end
 
     def validate_shared_gate_up_change!(enabled : Bool) : Nil
@@ -605,11 +609,11 @@ module ML::Video::PixelUMMDecoderBlockMPS
     end
 
     def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
-      # Phase collectors qualify the original graph geometry. Do not submit a
-      # differently shaped request and only discover that mismatch after a wait.
-      validate_encode_mode!(profile: profile)
-      raise ArgumentError.new("PixelUMM phase profiling requires an enabled fresh API chain") if profile && !chain.api_profile_enabled?
+      # Reject missing capabilities before submission. Profile topology follows
+      # the encoded request, even if the next idle request selects another mode.
+      validate_encode_mode!(profile: profile, api_profile_enabled: chain.api_profile_enabled?)
       @profiled_encode = false
+      @profiled_shared_gate_up = false
       started = Time.instant
       @workspace.not_nil!.submit_encode!(@slot, chain) do
         chain.encoder
@@ -639,6 +643,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
           # MPSGraphs. No graph is encoded for a padding row or unused head group.
           @attention_graph_encodes = @local_attention_tile_count * 3
           @profiled_encode = profile
+          @profiled_shared_gate_up = profile && @shared_gate_up
           @last_encode_host_seconds = (Time.instant - started).total_seconds
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
@@ -662,7 +667,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
 
     def phase_profile(chain : ML::Metal::MPSCommandChain) : ML::Video::PixelUMMBlockPhaseProfile
       ML::Video::PixelUMMBlockPhaseProfile.build(phase_markers(chain), chain.completed_root_timings,
-        chain.gpu_elapsed_seconds, chain.api_profile, @local_attention_tile_count)
+        chain.gpu_elapsed_seconds, chain.api_profile, @local_attention_tile_count,
+        shared_gate_up: @profiled_shared_gate_up)
     end
 
     def release : Nil

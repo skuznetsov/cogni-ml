@@ -43,14 +43,15 @@ private def decoder_profile_api(block_count : Int32, tile_counts : Array(Int32),
                                 graph_attention_override : UInt64? = nil,
                                 graph_head_override : UInt64? = nil,
                                 continuation_override : UInt64? = nil,
-                                linear_calls : UInt64 = 0_u64) : ML::Video::MPSAPIProfile
+                                linear_calls : UInt64 = 0_u64,
+                                graph_ffn_override : UInt64? = nil) : ML::Video::MPSAPIProfile
   graph_counts = {
     0 => graph_head_override || 5_u64,
     1 => 9_u64 * block_count.to_u64,
     2 => graph_attention_override || (3_u64 * tile_counts.sum(&.to_u64)),
     3 => 3_u64 * block_count.to_u64,
     4 => 0_u64,
-    5 => 3_u64 * block_count.to_u64,
+    5 => graph_ffn_override || (3_u64 * block_count.to_u64),
   }
   continuation_total = continuation_override || (root_count - 1).to_u64
   continuation_counts = {} of Int32 => UInt64
@@ -88,9 +89,11 @@ private def decoder_profile_valid_inputs
   {block_markers, tile_counts, roots, api}
 end
 
-private def decoder_profile_build(block_markers, tile_counts, roots, api)
+private def decoder_profile_build(block_markers, tile_counts, roots, api,
+                                  shared_gate_up : Bool = false)
   ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers, tile_counts,
-    9, roots.size, roots, roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }, api)
+    9, roots.size, roots, roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }, api,
+    shared_gate_up: shared_gate_up)
 end
 
 describe ML::Video::PixelUMMDecoderPhaseProfile do
@@ -148,6 +151,7 @@ describe ML::Video::PixelUMMDecoderPhaseProfile do
     json["roots"][8]["candidate_phases"].as_a.map(&.as_s).should contain("head")
     json["root_profile"]["union_seconds"].as_f.should eq(6.0)
     json["phase_root_duration_sum_semantics"].as_s.should contain("non-additive")
+    json["ffn_graph_topology"].as_s.should eq("separate_gate_up")
     json["api_profile"]["phases"].as_a.size.should eq(6)
     json["api_profile"]["phases"][0]["operations"]["graph_encode"]["count"].as_i.should eq(5)
   end
@@ -227,6 +231,33 @@ describe ML::Video::PixelUMMDecoderPhaseProfile do
         ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers, tile_counts,
           9, roots.size, roots, duration, profile)
       end
+    end
+  end
+
+  it "accepts uniform shared gate/up inventories and rejects mixed block topology" do
+    block_markers, tile_counts, roots, _api = decoder_profile_valid_inputs
+    duration = roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }
+    shared_api = decoder_profile_api(2, tile_counts, roots.size,
+      graph_ffn_override: 4_u64)
+    profile = ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers,
+      tile_counts, 9, roots.size, roots, duration, shared_api,
+      shared_gate_up: true)
+
+    profile.shared_gate_up.should be_true
+    profile.api_profile.phases.find { |phase| phase.phase_id == 5 }.not_nil!
+      .operations["graph_encode"].count.should eq(4_u64)
+    JSON.parse(profile.to_json)["ffn_graph_topology"].as_s
+      .should eq("shared_f32_gate_up")
+
+    # With two blocks, five FFN Graphs means one shared (2) and one separate (3).
+    mixed_api = decoder_profile_api(2, tile_counts, roots.size,
+      graph_ffn_override: 5_u64)
+    expect_raises(ArgumentError) do
+      decoder_profile_build(block_markers, tile_counts, roots, mixed_api,
+        shared_gate_up: true)
+    end
+    expect_raises(ArgumentError) do
+      decoder_profile_build(block_markers, tile_counts, roots, mixed_api)
     end
   end
 end

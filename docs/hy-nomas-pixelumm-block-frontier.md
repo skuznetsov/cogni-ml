@@ -1,5 +1,155 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Shared gate/up FFN localization, 2026-10-27
+
+Status: VERIFIED for bounded native profiling, authenticated numerical parity
+and interval localization. The physical cause of drift remains open; no shared
+gate/up speedup or stable regression is admitted. Separate graphs stay default.
+
+The previous collectors assumed three FFN Graph calls and rejected shared-mode
+profiling. Both collectors now qualify the existing 11 CPU markers against the
+encoded topology: two FFN Graph calls per shared block versus three in the
+baseline. The Plan snapshots that topology, so changing the next idle request
+cannot relabel a completed profile. Session preflights missing API profiling
+before recording an empty chain. No new GPU marker, buffer, command or wait,
+or arithmetic implementation is added by profiling. Selecting shared mode uses
+its existing smaller graph topology. All 36 plans must select that topology.
+
+CAUTION: profile interpretation and host admission change. The main failure
+mode is presenting a slow host API call or a boundary root as exclusive kernel
+cost. Candidate roots and overlapping intervals remain ambiguous; Graph time
+is never added to its nested continuation time. Existing captures stay inside
+markers, so phases measure encode-plus-capture work, not isolated kernels.
+
+One resident full36+head Session runs shared/off warm, baseline/off warm, then
+profiled baseline/shared/shared/baseline, all on the same A42 input at
+T6/H44/W80/J21,120. Warmups are not steady-state controls. There is no late
+observer-off pair, constant profiling-overhead correction, fresh alternate
+input/poison claim or full generation.
+
+| Profiled request, in execution order | Total seconds | Terminal wait seconds | Whole-chain GPU interval union, seconds |
+| --- | ---: | ---: | ---: |
+| Baseline first | 43.221060 | 0.903802 | 43.212381 |
+| Shared first | 71.043819 | 1.550418 | 71.034363 |
+| Shared second | 58.163935 | 1.126479 | 58.155109 |
+| Baseline second | 49.989507 | 0.989735 | 49.980091 |
+
+Preparation and postterminal comparisons are excluded; total includes
+intervening memory telemetry. Observed GPU intervals are command-buffer
+residency, including possible stalls, not exclusive shader service time.
+A disjoint fine partition retains all overlapping or cross-phase boundaries:
+
+| Disjoint GPU interval class, seconds | Baseline first | Shared first | Shared second | Baseline second |
+| --- | ---: | ---: | ---: | ---: |
+| Preparation: norm, QKV, RoPE | 5.937821 | 11.028188 | 8.851861 | 7.363723 |
+| Attention | 11.476158 | 15.251891 | 13.537437 | 12.413038 |
+| FFN gate/up | 13.164539 | 23.061269 | 18.379919 | 15.528342 |
+| FFN down | 7.015229 | 12.614583 | 9.941702 | 8.287003 |
+| Output projection/post norm | 0.264295 | 0.380991 | 0.327923 | 0.288857 |
+| Head | 0.061218 | 0.110233 | 0.077649 | 0.067266 |
+| Ambiguous | 5.293122 | 8.587209 | 7.038619 | 6.031863 |
+
+Activation and final residual have no exclusively attributable fine interval;
+that does not mean their kernels are free. Regrouping all FFN candidates gives
+coarse FFN union bounds of 20.888064-21.210834, 36.550125-37.057515,
+29.101828-29.535653 and 24.551132-24.909238 seconds respectively. The lower
+bound counts only segments whose active candidates are all FFN; the upper
+bound unions any root touching FFN. Do not add these bounds to the fine table.
+
+Shared-minus-baseline total grows by 27.822759 s in the first ordered pair and
+8.174428 s in the reverse pair. Gate/up intervals account for 9.896730 s and
+2.851577 s (about 35% of each change); unchanged down also grows by 5.599354 s
+and 1.654699 s. Preparation, attention and ambiguous intervals all expand.
+Gate/up-to-down ratios remain 1.83-1.88, with no consistent disproportionate
+gate/up growth. These are descriptive contrasts, not proof of physical
+shared-graph overhead. The incomplete earlier epoch printed four profile
+elapsed times near 42.2-42.4 s; its missing final JSON cannot qualify phases,
+but it further prevents a stable regression claim from this one matrix.
+
+| Host quantity, seconds | Baseline first | Shared first | Shared second | Baseline second |
+| --- | ---: | ---: | ---: | ---: |
+| Attention marker wall | 40.467876 | 67.179653 | 54.979683 | 47.007867 |
+| Attention marker owner-thread CPU | 0.379026 | 0.413257 | 0.498862 | 0.445284 |
+| Attention continuation wall | 40.130407 | 66.809708 | 54.527651 | 46.611569 |
+| FFN gate/up marker wall | 0.653004 | 0.762777 | 0.666739 | 0.708760 |
+| FFN down marker wall | 0.333580 | 0.392099 | 0.358710 | 0.366295 |
+| FFN Graph exclusive wall, excluding nested continuations | 0.018683 | 0.017767 | 0.020325 | 0.017676 |
+
+FFN Graph calls fall 108 -> 72 and command roots 4,579 -> 4,543, but this does not
+establish physical cast/kernel elimination. FFN continuation counts are
+324/288/288/324, with zero calls over 10 ms. All 250/310/284/282 slow calls are
+in attention; previously submitted GPU intervals cover nearly all their wall
+span. This is consistent with waiting behind queued work, including earlier
+FFN, but does not prove a driver wait, its cause, or an attention kernel
+bottleneck. Parent Graph link fields are structurally checked; exact parent
+Graph serial/phase membership is not reconstructed from a full Graph timeline.
+Trace capacity 8192 is untruncated. No profiler-based overhead subtraction or
+per-block GPU kernel attribution is admitted.
+
+All 414 comparisons are finite and bitwise exact at unchanged
+`atol=rtol=2e-5`: 156 small (26 stages x6 requests, including gate/up/product/down)
+and 258 full (43 stages x6 requests). Full captures are attention0-35,
+outputs34/35 and five head stages; outputs0-33 are overwritten GPU handoffs.
+Saved authenticated upstream source-method MPS controls are reused, not a fresh
+connected upstream run or independent neural backend. The outer auditor hashes
+metadata and joins stage SHA/shape/size to pre-execution pins without rehashing
+large fixture payloads. Separately, native fixture/cache loaders hash loaded
+payloads and upload records. The whole remote checkpoint digest is unverified.
+Real stem inputs use static-image/noise conditioning, not DiT-denoised video.
+
+Every full request retains one terminal wait, zero named encode allocations,
+zero preterminal activation reads and 43 existing postterminal diagnostics.
+Named inventory is 24,108,145,128 bytes, with direct block35/head GPU aliasing,
+and reaches zero bytes/count after release. Metal still reports 9,092,874,240
+allocated bytes after release; opaque backend residency is not claimed zero.
+The completed six-arm guard epoch has 1,122 samples: peak 29,480,470,456 bytes
+(27.456 GiB), minimum cache-aware headroom 18,560,139,264 bytes (17.285 GiB),
+swap growth zero and exit 0. The 10% floor, 28.5 GiB process cap, 64 MiB swap-growth
+stop and 900 s deadline are unchanged; polling does not bound inter-poll spikes.
+
+The initial eight-arm epoch stopped at the process cap during its last arm's
+postterminal comparison (exit 76); its final JSON is empty. Seven stdout pass
+statuses are not a complete phase result. Plan v2 removes only the late
+off/off pair, preserving both profiled orders and every guard limit. Failed
+auditor receipts are retained: old assumptions confused the separate compare
+mode with profile mode, required the small probe's precision flag for the
+fixed-F32 integrated Session, and treated source-only CPU receipts as artifacts.
+The final auditor checks the actual source/CLI/report contracts instead.
+
+DoD passed: 86 focused Crystal examples, release/fresh make-q for both probes,
+guarded small and full native matrices, one-byte-short budget rejection before
+named allocation, encoded-mode snapshot and missing-API preflight negatives,
+source/fixture/clock/interval audit and 17 rejected report/guard/source mutations.
+The small profile flag uses six fixed arms; its warmup/repeat knobs do not
+change that schedule. Qualification invokes only `--warmups 0 --repeats 1`.
+Its `shared_gate_up_comparison` means both modes were compared; the separate
+`profile_shared_gate_up` flag identifies this schedule. Integrated
+`unsupported_profile_rejected_without_submission` is a deprecated alias; use
+`missing_api_profile_rejected_without_submission` for the current negative.
+
+Correlated Mini-Quad verdict: ROBUST within this numerical/lifecycle/interval
+scope. Next falsifier: isolate full-J FFN gate/up and unchanged down on identical
+captured inputs, then compare execution intervals and MPS temporary-resource
+behavior with both orders. Distinguish shared-specific growth from broad drift
+before changing GEMM, converting weights or adding fusion. Do not infer shader
+occupancy or physical conversion cost from command-root residency alone.
+
+Evidence: `.landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-ffn-profile.json`
+and `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-shared-ffn-profile-20261027/`.
+The frozen plans, source/binary CAS, receipts and final
+`results/shared-ffn-profile-audit-v3.json` identify the measured epoch. Afterward
+only the integrated CLI description changes from eight to six controls, with a
+fresh build and byte-exact source/compiled-literal bridge in
+`results/post-measurement-help-delta-v4.json`. The probe has no `--help` handler;
+the retained guarded invocation rejects before a Session, rather than proving
+a successful help display. The rebuilt bytes are not presented as GPU-timed.
+Rollback omits
+`--profile-shared-gate-up` and keeps shared preparation off, or reverts the
+atomic commit. Refresh after scoped source/artifact/backend/device/OS,
+toolchain, geometry/precision/capture/lifetime, guard or clock changes or
+evidence loss; startup memory admission always expires at launch. No diffusion,
+full generation, video quality or full-pipeline latency/fit claim.
+
 ## Shared-input F32 gate/up experiment, 2026-10-27
 
 Status: VERIFIED for opt-in numerical parity, serial lifecycle and bounded
@@ -16,8 +166,8 @@ temporary resources; sharing a frontend node does not prove physical cast
 elimination. No weight concatenation, named GPU buffer, wait or activation
 readback was added.
 Selection is permitted only between drained requests. All slots are validated
-before serial selection; in-flight changes reject. Shared phase profiling is
-unqualified and rejects before recording the Session's chain or submitting any
+before serial selection; in-flight changes reject. At that experiment epoch, shared phase profiling was
+unqualified and rejected before recording the Session's chain or submitting any
 block. A native negative control immediately reuses that Session without a
 wait, then rejects a mode change after real submission.
 
@@ -59,9 +209,10 @@ reads. Named inventory remains 24,108,145,128 bytes and reaches zero live
 bytes/count after release; this does not assert zero opaque Metal residency.
 
 These are reused authenticated upstream source-method MPS controls, not a fresh
-connected upstream run or an independent neural backend. Large fixture payloads
-were stat-checked against pinned metadata, not rehashed in this experiment; the
-whole remote checkpoint digest remains unverified. Inputs come from the real
+connected upstream run or an independent neural backend. The outer receipt
+audit stat-checked large fixture payloads against pinned metadata. Separately,
+the native loader hashes loaded block/cache/head payloads and uploaded records;
+the whole remote checkpoint digest remains unverified. Inputs come from the real
 stem with repeated static-image/noise conditioning, not DiT-denoised video.
 No diffusion, full generation, video quality or full-pipeline timing is claimed.
 

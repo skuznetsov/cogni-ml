@@ -39,6 +39,19 @@ module PixelUMMDecoderProbe
     ]
   end
 
+  # Same-input phase diagnosis with both profiled orders after warmup. Keep
+  # six requests within the resident-session cap; no observer-off drift pair.
+  def shared_gate_up_profile_schedule : Array(RequestArm)
+    [
+      RequestArm.new("a_warm_shared_off", false, false, false, true),
+      RequestArm.new("a_warm_baseline_off", false, false, false, false),
+      RequestArm.new("a_profile_baseline_first", false, false, true, false),
+      RequestArm.new("a_profile_shared_first", false, false, true, true),
+      RequestArm.new("a_profile_shared_second", false, false, true, true),
+      RequestArm.new("a_profile_baseline_second", false, false, true, false),
+    ]
+  end
+
   # Both orders of the same-input profiler control bracket the diagnostic
   # input/poison pair. This is a drift discriminator, not a throughput estimate.
   def variance_schedule : Array(RequestArm)

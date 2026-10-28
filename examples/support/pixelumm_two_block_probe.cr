@@ -742,9 +742,9 @@ module PixelUMMTwoBlockProbe
 
     def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       check_idle!
-      # Reject unsupported profiling before recording the chain or submitting
+      # Reject invalid profiling before recording the chain or submitting
       # any block. The caller can reuse this idle Session without a GPU wait.
-      @plans.each(&.validate_encode_mode!(profile: true)) if profile
+      @plans.each(&.validate_encode_mode!(profile: true, api_profile_enabled: chain.api_profile_enabled?)) if profile
       @last_chain = chain
       @plans.each(&.encode(chain, profile: profile))
     end
