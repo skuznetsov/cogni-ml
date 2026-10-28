@@ -35235,3 +35235,56 @@ Refresh after source/toolchain/device/model/workload changes.
   hook. Refresh on scoped source/artifact/backend/device/OS/toolchain/geometry/
   precision/command/capture/lifetime/guard/clock changes or lost evidence;
   every launch needs fresh memory admission.
+
+### 2026-10-28: One versus two PixelUMM Plans sharing one Workspace
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md, one/two native Plan
+  section, and .landmark/evidence/2026-10-28-hy-nomas-pixelumm-plan-reuse.json.
+  Diagnostic owner independently prepares 1/2 native Plans through unchanged
+  production factory with identical input/weight/core/capture/scratch bindings.
+  One unattached one-slot Workspace replaces a second buffer bank; production
+  connected-prefix guards remain unchanged. Fixed encoded separate gate/up;
+  both topologies prepared in each Plan. No production promotion or generation.
+- Pre-Metal named budgets identical for 1/2 Plans: 1,098,228,484 bytes J2048,
+  7,375,674,980 bytes J21120 (6.869133 GiB), below 8 GiB named cap. Opaque MPS
+  memory unknown, not zero. Partial enqueue marks resources in flight; only
+  the sole successful terminal wait permits reuse/release. Failed wait quarantines,
+  is not retried, and blocks release. Plans release before common buffers.
+- Accepted v3 matrix: 2 small/4 full fresh processes, 2 warmups+4 measured each;
+  full order one/two/two/one, reversed Plan selection in second two-Plan cell.
+  All 252 seven-stage captures finite/bitwise exact at unchanged 2e-5; all36
+  NaN positives detected. Same authenticated saved upstream-source-method MPS
+  fixture composition, compact payloads fully rehashed, not independent backend
+  or fresh complete upstream execution. Zero named encode allocations or
+  preterminal reads; one wait/request, 128 metric bytes read afterward.
+- Full root-union medians 1235.704/1235.213/1234.719/1236.097 ms. Two-minus-one
+  mean-of-cell-medians -0.934ms/-0.0756%, versus one-Plan A/A drift +0.392ms/
+  +0.0317%. Advantage below0.1%; sparse samples do not establish a repeatable
+  production gain or equivalence. Do not claim contrast below this A/A drift.
+  Completed command-buffer intervals include stalls/diagnostics, not exclusive
+  shader or uninstrumented production latency. Full requests:128roots/195Graphs.
+- Device peaks 9539.016 MiB one Plan, 9539.359 MiB two (+352 KiB, not total Plan
+  memory). Second Plan preparation adds about20 MiB sampled footprint with zero
+  device delta. After named release to zero, device reports5,456,936,960bytes;
+  ownership/cache/leak unknown, overlapping counters nonadditive. Full guard88
+  samples:peak footprint9.415301GiB,min cache-aware headroom25.004135GiB,swap0.
+  10%floor,14GiB processcap(8small),64MiBswapstop,240s deadline retained; sampled
+  checks cannot bound transients. Named cap alone is not the system floor.
+- Early full-two-a failed strict creating-thread guard after preparation/before
+  first request. Cleanup may have masked original exception; root cause open.
+  Original-exception/thread-ID logging added, guard unchanged, v2 matrix passes.
+  Final v3 reruns all cells after report-only opaque-ownership label correction.
+  Failed/historical/diagnostic cells excluded, no claim failure fixed. Offline
+  descriptive-v3 corrects a copied stale contrast/drift interpretation, no native
+  change. Named/aggregate memory is measured; opaque ownership stays unknown.
+  DoD:release/freshMake,45Crystal examples,format/diff,budget-1 refusal and12
+  auditor mutations. Correlated Mini-Quad ROBUST only for accepted bounded matrix.
+- External namespace /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028;
+  plan-reuse-audit-v4.json and descriptive-v3.json join identities and arithmetic.
+  Next falsifier: reduce60tiles*3 local-attention Graph transitions while preserving
+  BF16/reduction, measure full-block gain. Host attention~318ms includes~313ms
+  nested commitAndContinue; waits may simply move, not disappear. No optimization
+  implemented; full36 changing-weight/connected-input effects remain open.
+  Rollback removes diagnostics. Refresh on scoped source/artifact/backend/device/
+  OS/toolchain/geometry/precision/command/capture/lifetime/guard/clock changes or
+  evidence loss; fresh admission each launch, any owner failure reopens diagnosis.

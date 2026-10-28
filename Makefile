@@ -148,6 +148,18 @@ pixelumm_connected_resource_probe: $(BUILD_DIR)/pixelumm_connected_resource_prob
 spec_pixelumm_connected_resource_probe:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_connected_resource_probe_spec.cr
 
+.PHONY: pixelumm_plan_reuse_probe spec_pixelumm_plan_reuse_probe
+pixelumm_plan_reuse_probe: $(BUILD_DIR)/pixelumm_plan_reuse_probe
+
+spec_pixelumm_plan_reuse_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_plan_reuse_probe_spec.cr
+
+# Independent native Plans bind one diagnostic-owned Workspace. The normal
+# production bridge has no per-Graph resource collector in this experiment.
+$(BUILD_DIR)/pixelumm_plan_reuse_probe: examples/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ): examples/support/pixelumm_connected_resource_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM connected resource probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC

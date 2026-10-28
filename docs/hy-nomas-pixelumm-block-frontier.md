@@ -1,4 +1,143 @@
-# PixelUMM bounded decoder-block frontier, 2026-10-27
+# PixelUMM bounded decoder-block frontier, 2026-10-28
+
+## One versus two native Plans sharing one Workspace, 2026-10-28
+
+Status: VERIFIED for the six accepted native diagnostic cells, authenticated
+saved-fixture parity and completed command-root/resource observations. No
+material production speedup from a second resident Plan is established. Its
+descriptive advantage is below 0.1%; this does not establish equivalence, explain
+the earlier full36 drift or promote a production change. One historical
+pre-request ownership failure remains open.
+
+`pixelumm_plan_reuse_probe` prepares one or two distinct native Plans through
+the unchanged production factory. Both FFN topologies are prepared in each
+Plan; separate gate/up is the fixed encoded topology in this experiment.
+All Plans bind the exact same input, RoPE, 13 weights, core, captures, scratch,
+output, expected captures and comparator handles. The diagnostic owner allocates
+one unattached one-slot production Workspace and serializes its reuse; no
+second buffer bank is allocated. Production connected-prefix guards remain
+unchanged: that owner requires ordered, different-weight blocks and cannot
+represent this same-input, same-weight alternative-Plan experiment directly.
+
+CAUTION: attempted partial enqueue marks the shared resources in flight before
+poison, block or comparator submission. Only the sole successful terminal wait
+permits another request or release. A failed wait quarantines the owner and is
+not retried. Native Plans release before the common buffers. The binding audit
+checks the full native ABI (13 weights, 9 core, 26 capture and 14 scratch slots),
+distinct Plan handles, the output/capture alias and otherwise unique nonnull
+buffer handles. Disabled captures remain null. This is a serialized diagnostic,
+not a concurrent production scheduler.
+
+The named budget is checked before fixture loading or Metal allocation:
+
+| Geometry | Workspace | Borrowed inputs/weights | Expected captures + metrics | Total named bytes, one or two Plans |
+| --- | ---: | ---: | ---: | ---: |
+| J2048 | 475,357,316 | 404,767,232 | 218,103,936 | 1,098,228,484 |
+| J21,120 | 4,545,944,548 | 580,534,784 | 2,249,195,648 | 7,375,674,980 |
+
+Full J needs 6.869133 GiB of named buffers under the 8 GiB named cap. Opaque
+native/MPS allocations are unknown, not zero, and are excluded from that sum.
+The external file-cache-aware guard separately admits each launch and retains
+the 10% floor, 14 GiB process cap (8 GiB small), 64 MiB swap-growth stop and 240 s
+deadline. The executable's named cap does not itself implement the system floor.
+
+Two true-small and four full-J fresh processes each run two warmups and four
+measured requests. Full process order is one, two, two, one Plans. Two-Plan
+selection is warmup 0/1 then measured 0/1/1/0; the second two-Plan cell reverses
+both orders. Identical inputs and weights remain resident throughout a process.
+Every request poisons seven captures and compares them on GPU, including the
+final residual, plus a GPU NaN positive control. All 252 capture comparisons
+are finite and bitwise exact at unchanged `atol=rtol=2e-5`; all 36 NaN controls
+are detected. There are zero tracked named encode allocations or preterminal
+activation reads, one existing terminal wait per request and only 128 metric
+bytes read afterward. Full requests have 128 completed roots and 195 Graph
+calls; small requests have 16 roots and 63 Graph calls.
+
+| Full-J cell | Resident Plans | Completed root union median ms | Profiled host encode median ms | Peak observed device allocation MiB |
+| --- | ---: | ---: | ---: | ---: |
+| one-a-v3 | 1 | 1235.704 | 355.428 | 9539.016 |
+| two-a-v3 | 2 | 1235.213 | 355.176 | 9539.359 |
+| two-b-v3, reversed selection | 2 | 1234.719 | 354.695 | 9539.359 |
+| one-b-v3 | 1 | 1236.097 | 355.440 | 9539.016 |
+
+The two-minus-one mean-of-cell-medians contrast is -0.934 ms (-0.0756%); the
+one-Plan A/A drift is +0.392 ms (+0.0317%). The observed two-Plan advantage is
+larger than that particular A/A drift, but four measured requests per process
+do not establish a repeatable production gain, equivalence or a zero effect.
+Root unions use
+completed command-buffer GPU timestamps and include stalls and diagnostic
+poison/comparison work. Host times include the matched API profiling and phase
+markers; no per-Graph resource observer or observer-off correction is used.
+These measurements are not exclusive shader service or production latency.
+
+The extra observed device peak with two Plans is 352 KiB; it is not a complete
+account of opaque Plan memory. Preparing the second Plan increases sampled
+process footprint by about 19.9/20.4 MiB with zero observed device-counter delta
+at that phase. Its device counter grows 376,832 bytes between the first and
+last postwait samples, during the second warmup, then stays flat. All named
+buffers release to zero live bytes/count; the device counter still reports
+5,456,936,960 bytes afterward. Ownership, caching and leak mechanisms are not
+identified. Named, device, RSS, footprint and GC counters overlap and must not
+be added. Across 88 full-run guard samples, peak process footprint is 9.415301
+GiB, minimum cache-aware headroom 25.004135 GiB and swap growth zero. Polling
+and phase samples do not bound transient peaks or a continuous system floor.
+
+The reused fixtures are authenticated saved pinned upstream-source-method MPS
+compositions from the preceding resource experiment. Both compact payloads
+are fully rehashed in this audit. The suffix includes the final BF16 residual;
+attention comes from the saved qualified boundary. This is not an independent
+backend or a fresh complete connected upstream execution. Real J2048/J21,120
+latent/noise/stem inputs are used, not repeated small rows or a DiT denoised
+video. Fixture preparation/export is outside native timing; no PyTorch executes
+in the measured native path.
+
+An early `full-two-a` process failed the strict creating-thread guard after
+Plan preparation, before the first request. Cleanup may have masked the
+original exception. Diagnostics now print the original failure before cleanup
+and include expected/current thread object IDs; the guard predicate is unchanged.
+The cause is unestablished. A complete six-cell v2 matrix passed with those
+diagnostics. A later report-only wording correction explicitly marks opaque
+native/MPS ownership unknown; arithmetic, commands and guards are unchanged.
+The final v3 matrix reruns all six cells after that correction. Neither passing
+matrix proves that intermittent owner failure fixed. Earlier passing cells,
+the diagnostic rerun and failed cell are excluded from the accepted v3 numerical
+matrix. Offline auditor v2 rejected an unknown pre-Metal counter represented
+as null; v3/v4 preserve unknown. The first final-epoch analysis copied a stale
+decision sentence about contrast versus A/A drift; its correct arithmetic is
+retained, while `descriptive-v3.json` corrects the interpretation. No native
+change or tolerance widening follows from that offline correction.
+
+DoD observed: release build with the normal production bridge, fresh Make
+dependency checks, 45 focused Crystal examples, format/diff checks, one-byte-short
+budget refusal before Metal allocation, all six accepted native cells and 12
+rejected auditor mutations. Correlated Mini-Quad verdict is ROBUST for this
+bounded matrix and shared-buffer lifecycle, not general owner reliability or
+independent replication. No full decoder, head, diffusion, Studio or generation ran.
+
+Evidence, frozen design/amendment, receipts and raw reports are under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028`.
+`results/plan-reuse-audit-v4.json` authenticates sources, binary, fixtures,
+bindings, schedules, roots, API counts and guards; `results/descriptive-v3.json`
+contains the contrasts and host phase breakdown. The repository index is
+`.landmark/evidence/2026-10-28-hy-nomas-pixelumm-plan-reuse.json`.
+Build/test entrypoints are `make pixelumm_plan_reuse_probe` with an external
+`BUILD_DIR` and `make spec_pixelumm_plan_reuse_probe`. The native runner requires
+an absolute fixture path, trusted metadata SHA256, exact `--rows`, `--plans 1|2`
+and a fresh report path. Every launch still needs fresh external guard admission.
+
+Next falsifier: reduce local-attention Graph/command transitions at fixed BF16
+boundaries and equal geometry, then compare the whole block on identical inputs.
+Full J has 60 attention tiles, each calling QK, softmax and PV Graphs: 180 of
+195 Graph calls. Host attention takes about 318 ms, including about 312.9-313.9 ms
+inside existing `commit_and_continue` calls. Those nested waits are not additive
+GPU costs, and their removal may only move waiting elsewhere; a whole-block
+gain must be measured. Fusion must preserve rounding/reduction and pass the
+same tolerance gate. This optimization is proposed, not implemented here.
+The older full36 drift may still require changing weights or connected inputs.
+Rollback removes the diagnostic target/files; production arithmetic and defaults
+are unchanged. Refresh on scoped source/artifact, backend, device/OS/toolchain,
+geometry/precision, command/capture/lifetime/guard/clock changes or evidence loss.
+Admission expires at every launch; another owner failure reopens diagnosis.
 
 ## Connected one-block resource lifetime probe, 2026-10-27
 

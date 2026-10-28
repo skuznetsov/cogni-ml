@@ -1,0 +1,1240 @@
+{
+  "schema": "landmark.evidence.pixelumm_plan_reuse/v1",
+  "date": "2026-10-28",
+  "base_commit": "3ce86009ae390b23fd551c38b63b90a01be08c32",
+  "status": {
+    "claim_level": "VERIFIED",
+    "scope": "Six accepted final v3 native one-block cells at actual J2048/J21120: identical bindings across distinct resident Plans, GPU saved-fixture parity, completed command roots and sampled guard observations. Two Plans have a descriptive advantage below0.1%; no reliable production gain is established.",
+    "production_promoted": false,
+    "not_established": [
+      "Equivalence or zero Plan-count effect",
+      "General owner reliability; one pre-request failure remains unexplained",
+      "Earlier full36 drift cause",
+      "Opaque MPS allocation ownership/cache/leak mechanism",
+      "Exclusive shader costs or uninstrumented production latency",
+      "Independent backend or fresh complete connected upstream parity"
+    ]
+  },
+  "problem": {
+    "trigger": "Prior isolated and connected lifetime probes did not explain full36 FFN drift. Test whether distinct resident native Plans alone alter same-input/same-weight block reuse.",
+    "falsifier": "Hold every buffer binding, arithmetic, commands, input and weight fixed; contrast one and two independently prepared native Plans sharing one buffer set, with serialized scratch ownership and opposite selection orders.",
+    "risk_tier": "CAUTION",
+    "strongest_failure": "Reuse or release shared scratch after attempted partial enqueue but before successful completion; stale captures or changed request work can hide the error.",
+    "guard_checks": [
+      "Mark attempted submission before any poison/block/comparator can enqueue; one successful terminal wait unlocks reuse/release",
+      "A failed wait is not retried and quarantines resources",
+      "Poison seven captures; compare all on GPU plus a NaN positive control",
+      "Full binding inventory and distinct native Plan handles; reject unexpected aliases or different inputs",
+      "Assert zero tracked encode allocations/preterminal readbacks, fixed schedule/roots/API counts and unchanged tolerance"
+    ],
+    "rollback": "Remove diagnostic-only Make target, runner/support/spec and dated documentation entry. Production code, prefix guards, arithmetic and defaults are unchanged."
+  },
+  "method": {
+    "owner": "One unattached one-slot production Workspace; 1/2 calls to unchanged native factory with identical native ABI arrays. A diagnostic-only serialized owner, not a production concurrent scheduler.",
+    "why_not_attach_production_Plans": "Production connected-prefix policy requires ordered different-weight blocks and previous-output handoff; identical-weight alternative Plans are outside that policy.",
+    "abi_slots": {
+      "weights": 13,
+      "core": 9,
+      "captures": 26,
+      "scratch": 14
+    },
+    "resident_binding_keys_per_Plan": 73,
+    "unique_named_buffers": 53,
+    "precision": {
+      "boundaries": "BF16",
+      "ffn_operands": "F32",
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "encoded_gate_up": "separate",
+    "both_gate_up_topologies_prepared_in_each_Plan": true,
+    "per_graph_resource_observer": false,
+    "phase_and_API_profiling_enabled_in_both_arms": true,
+    "schedule": {
+      "process_order": [
+        "small-one-v3",
+        "small-two-v3",
+        "full-one-a-v3",
+        "full-two-a-v3",
+        "full-two-b-v3",
+        "full-one-b-v3"
+      ],
+      "requests_per_process": 6,
+      "warmups_per_process": 2,
+      "measured_requests_per_process": 4,
+      "two_Plan_normal": [
+        0,
+        1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "two_Plan_reversed": [
+        1,
+        0,
+        1,
+        0,
+        0,
+        1
+      ],
+      "reversal_couples_warmup_and_measured_start": true
+    },
+    "gpu_contract": "One block per request; all production arithmetic/poison/comparisons on GPU, no new synchronization, one existing terminal wait, then one 128-byte metric read. Upload and preparation are outside timing.",
+    "timing_semantics": {
+      "root_union_ms": "Union of completed command-buffer GPU timestamp intervals, includes stalls and diagnostic poison/comparison; not exclusive shader or uninstrumented production latency",
+      "profiled_encode_call_ms": "Host encode call through API-profiled production bridge and phase markers; matched in both arms",
+      "guard": "External sampled cache-aware 10% floor, process14GiB cap,swap64MiB growth stop; no between-sample peak bound"
+    }
+  },
+  "memory_budget": {
+    "checked_before_fixture_or_Metal": true,
+    "named_cap_bytes": 8589934592,
+    "same_named_bytes_for_one_and_two_Plans": true,
+    "small": {
+      "workspace": 475357316,
+      "borrowed": 404767232,
+      "expected": 218103808,
+      "metrics": 128,
+      "total": 1098228484
+    },
+    "full": {
+      "workspace": 4545944548,
+      "borrowed": 580534784,
+      "expected": 2249195520,
+      "metrics": 128,
+      "total": 7375674980
+    },
+    "opaque_native_MPS_bytes": null,
+    "opaque_bytes_excluded_from_named_budget": true,
+    "counter_categories_additive": false
+  },
+  "guard": {
+    "enforcement": "External wan_memory_guard.py; native named cap alone does not enforce system reserve. Fresh file-cache-aware admission and serial qualification lock for each launch.",
+    "runtime_floor_pct": 10,
+    "headroom_formula": "free_spec_bytes - speculative_bytes + file_backed_bytes",
+    "full_process_cap_bytes": 15032385536,
+    "small_process_cap_bytes": 8589934592,
+    "swap_growth_stop_bytes": 67108864,
+    "native_deadline_seconds": 240,
+    "full_observations": {
+      "samples": 88,
+      "sampled_peak_footprint_gib": 9.415301367640495,
+      "min_cache_headroom_gib": 25.004135131835938,
+      "max_swap_growth_bytes": 0
+    },
+    "sampling_limit": "Polling and phase snapshots do not bound between-sample peaks or a continuous floor."
+  },
+  "definition_of_done": {
+    "observed_native_processes": 6,
+    "requests": 36,
+    "full_requests": 24,
+    "capture_comparisons": 252,
+    "finite_bitwise_exact": 252,
+    "GPU_NaN_positive_controls_detected": 36,
+    "tracked_encode_buffer_allocations": 0,
+    "preterminal_activation_reads": 0,
+    "terminal_waits_per_request": 1,
+    "postterminal_metric_bytes_per_request": 128,
+    "focused_Crystal_examples": 45,
+    "focused_failures_or_errors": 0,
+    "one_byte_short_pre_Metal_refusal": true,
+    "rejected_report_mutations": 12,
+    "release_build_normal_bridge": true,
+    "fresh_Make_dependency_checks_per_native_launch": true,
+    "format_check": "format-final-v2",
+    "diff_check_command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "receipts": {
+      "focused-tests-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "crystal",
+          "spec",
+          "-Dcpu_only",
+          "spec/pixelumm_plan_reuse_probe_spec.cr",
+          "spec/pixelumm_decoder_block_admission_spec.cr",
+          "spec/pixelumm_block_profile_spec.cr",
+          "spec/pixelumm_memory_probe_spec.cr",
+          "spec/pixelumm_connected_resource_probe_spec.cr"
+        ],
+        "mode": "test"
+      },
+      "build-final-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "make",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build",
+          "pixelumm_plan_reuse_probe"
+        ],
+        "mode": "build"
+      },
+      "budget-negative-v3": {
+        "expected_exit_code": 1,
+        "observed_exit_code": 1,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--rows",
+          "21120",
+          "--plans",
+          "2",
+          "--max-named-bytes",
+          "7375674979",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/budget-negative-v3.json"
+        ],
+        "mode": "negative"
+      },
+      "audit-v4": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "python3",
+          "-B",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/audit-v4.py"
+        ],
+        "mode": "python"
+      },
+      "analyze-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "python3",
+          "-B",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/analyze-v3.py"
+        ],
+        "mode": "python"
+      },
+      "format-final-v2": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "crystal",
+          "tool",
+          "format",
+          "--check",
+          "examples/pixelumm_plan_reuse_probe.cr",
+          "examples/support/pixelumm_plan_reuse_probe.cr",
+          "spec/pixelumm_plan_reuse_probe_spec.cr"
+        ],
+        "mode": "test"
+      },
+      "small-one-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.json",
+          "--reference-sha256",
+          "a4c6c7b30ba9c8e4d7c58563c2a32c5c7856f10ac8ea75310b2bcc57f21cebb3",
+          "--rows",
+          "2048",
+          "--plans",
+          "1",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-one-v3.json"
+        ],
+        "mode": "small"
+      },
+      "small-two-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.json",
+          "--reference-sha256",
+          "a4c6c7b30ba9c8e4d7c58563c2a32c5c7856f10ac8ea75310b2bcc57f21cebb3",
+          "--rows",
+          "2048",
+          "--plans",
+          "2",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-two-v3.json"
+        ],
+        "mode": "small"
+      },
+      "full-one-a-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+          "--reference-sha256",
+          "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c",
+          "--rows",
+          "21120",
+          "--plans",
+          "1",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-a-v3.json"
+        ],
+        "mode": "native"
+      },
+      "full-two-a-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+          "--reference-sha256",
+          "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c",
+          "--rows",
+          "21120",
+          "--plans",
+          "2",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a-v3.json"
+        ],
+        "mode": "native"
+      },
+      "full-two-b-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+          "--reference-sha256",
+          "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c",
+          "--rows",
+          "21120",
+          "--plans",
+          "2",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-b-v3.json",
+          "--reverse-warmups",
+          "--reverse-first"
+        ],
+        "mode": "native"
+      },
+      "full-one-b-v3": {
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+          "--reference",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+          "--reference-sha256",
+          "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c",
+          "--rows",
+          "21120",
+          "--plans",
+          "1",
+          "--report",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-b-v3.json"
+        ],
+        "mode": "native"
+      }
+    }
+  },
+  "observations": {
+    "cells": {
+      "small-one-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "gpu_ms": 108.37754172098357,
+        "encode_ms": 1.6457294999999998,
+        "guard_samples": 5,
+        "peak_sampled_footprint_gib": 1.5681775882840157,
+        "min_cache_headroom_gib": 32.74555969238281,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 1560.234375
+      },
+      "small-two-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          16,
+          16,
+          16,
+          16,
+          16,
+          16
+        ],
+        "gpu_ms": 107.86833334714174,
+        "encode_ms": 1.813104,
+        "guard_samples": 5,
+        "peak_sampled_footprint_gib": 1.5832074955105782,
+        "min_cache_headroom_gib": 32.688507080078125,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 1560.5
+      },
+      "full-one-a-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "gpu_ms": 1235.7043749216245,
+        "encode_ms": 355.428208,
+        "guard_samples": 22,
+        "peak_sampled_footprint_gib": 9.395113967359066,
+        "min_cache_headroom_gib": 25.004135131835938,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 9539.015625
+      },
+      "full-two-a-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "gpu_ms": 1235.2130415674765,
+        "encode_ms": 355.17629150000005,
+        "guard_samples": 22,
+        "peak_sampled_footprint_gib": 9.415301367640495,
+        "min_cache_headroom_gib": 25.055206298828125,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 9539.359375
+      },
+      "full-two-b-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "gpu_ms": 1234.7192916058702,
+        "encode_ms": 354.6954585,
+        "guard_samples": 22,
+        "peak_sampled_footprint_gib": 9.413332961499691,
+        "min_cache_headroom_gib": 25.04193115234375,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 9539.359375
+      },
+      "full-one-b-v3": {
+        "bitwise_exact": true,
+        "root_counts": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "gpu_ms": 1236.0966042324435,
+        "encode_ms": 355.4404795,
+        "guard_samples": 22,
+        "peak_sampled_footprint_gib": 9.394015312194824,
+        "min_cache_headroom_gib": 25.0372314453125,
+        "swap_growth_bytes": 0,
+        "device_peak_mib": 9539.015625
+      }
+    },
+    "contrasts": {
+      "two_minus_one_mean_of_cell_medians_ms": -0.9343229903606698,
+      "two_minus_one_mean_of_cell_medians_percent": -0.0755985613923032,
+      "one_plan_AA_drift_ms": 0.39222931081894785,
+      "one_plan_AA_drift_percent": 0.03174135487250543
+    },
+    "full_phase_and_release": {
+      "full-one-a-v3": {
+        "root_union_ms": 1235.7043749216245,
+        "profiled_encode_call_ms": 355.428208,
+        "terminal_wait_call_ms": 881.3023330000001,
+        "phase_wall_medians_ms": {
+          "input_norm": 0.142,
+          "qkv_projection": 0.173,
+          "qk_norm_rope": 0.20450000000000002,
+          "attention": 318.77199999999993,
+          "output_projection": 2.7540000000000067,
+          "residual_post_norm": 5.957999999999991,
+          "ffn_gate_up": 17.886000000000013,
+          "ffn_activation": 0.012999999999985246,
+          "ffn_down": 9.118500000000001,
+          "final_residual": 0.007000000000034756
+        },
+        "api_wall_medians_ms": {
+          "unassigned": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "input_norm_qkv_projection_qk_norm_rope": {
+            "graph_encode": 0.5495,
+            "commit_and_continue": 0.0235
+          },
+          "local_attention": {
+            "graph_encode": 318.095,
+            "commit_and_continue": 313.90049999999997
+          },
+          "output_projection_residual_post_norm": {
+            "graph_encode": 8.690999999999999,
+            "commit_and_continue": 8.571
+          },
+          "unused_cross_attention": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "ffn": {
+            "graph_encode": 26.972,
+            "commit_and_continue": 26.6875
+          }
+        },
+        "second_plan_prepare_footprint_delta_bytes": null,
+        "second_plan_prepare_device_delta_bytes": null,
+        "postwait_device_first_last_delta_bytes": 0,
+        "postwait_footprint_first_last_delta_bytes": 819200,
+        "after_named_release_device_bytes": 5456936960,
+        "after_named_release_live_bytes": 0
+      },
+      "full-two-a-v3": {
+        "root_union_ms": 1235.2130415674765,
+        "profiled_encode_call_ms": 355.17629150000005,
+        "terminal_wait_call_ms": 881.088896,
+        "phase_wall_medians_ms": {
+          "input_norm": 0.163,
+          "qkv_projection": 0.241,
+          "qk_norm_rope": 0.21350000000000002,
+          "attention": 318.594,
+          "output_projection": 2.7540000000000067,
+          "residual_post_norm": 5.948000000000008,
+          "ffn_gate_up": 17.85199999999998,
+          "ffn_activation": 0.013000000000013001,
+          "ffn_down": 9.153500000000008,
+          "final_residual": 0.0060000000000060005
+        },
+        "api_wall_medians_ms": {
+          "unassigned": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "input_norm_qkv_projection_qk_norm_rope": {
+            "graph_encode": 0.6315,
+            "commit_and_continue": 0.0285
+          },
+          "local_attention": {
+            "graph_encode": 317.9565,
+            "commit_and_continue": 313.773
+          },
+          "output_projection_residual_post_norm": {
+            "graph_encode": 8.671,
+            "commit_and_continue": 8.5405
+          },
+          "unused_cross_attention": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "ffn": {
+            "graph_encode": 26.979,
+            "commit_and_continue": 26.672
+          }
+        },
+        "second_plan_prepare_footprint_delta_bytes": 20889624,
+        "second_plan_prepare_device_delta_bytes": 0,
+        "postwait_device_first_last_delta_bytes": 376832,
+        "postwait_footprint_first_last_delta_bytes": 1753112,
+        "after_named_release_device_bytes": 5456936960,
+        "after_named_release_live_bytes": 0
+      },
+      "full-two-b-v3": {
+        "root_union_ms": 1234.7192916058702,
+        "profiled_encode_call_ms": 354.6954585,
+        "terminal_wait_call_ms": 880.9903125000001,
+        "phase_wall_medians_ms": {
+          "input_norm": 0.198,
+          "qkv_projection": 0.2685,
+          "qk_norm_rope": 0.20149999999999996,
+          "attention": 318.04150000000004,
+          "output_projection": 2.728000000000036,
+          "residual_post_norm": 5.91999999999998,
+          "ffn_gate_up": 17.84600000000003,
+          "ffn_activation": 0.012999999999985246,
+          "ffn_down": 9.115499999999999,
+          "final_residual": 0.006499999999992623
+        },
+        "api_wall_medians_ms": {
+          "unassigned": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "input_norm_qkv_projection_qk_norm_rope": {
+            "graph_encode": 0.685,
+            "commit_and_continue": 0.0335
+          },
+          "local_attention": {
+            "graph_encode": 317.365,
+            "commit_and_continue": 312.8965
+          },
+          "output_projection_residual_post_norm": {
+            "graph_encode": 8.6145,
+            "commit_and_continue": 8.461500000000001
+          },
+          "unused_cross_attention": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "ffn": {
+            "graph_encode": 26.926000000000002,
+            "commit_and_continue": 26.6175
+          }
+        },
+        "second_plan_prepare_footprint_delta_bytes": 21430296,
+        "second_plan_prepare_device_delta_bytes": 0,
+        "postwait_device_first_last_delta_bytes": 376832,
+        "postwait_footprint_first_last_delta_bytes": 671744,
+        "after_named_release_device_bytes": 5456936960,
+        "after_named_release_live_bytes": 0
+      },
+      "full-one-b-v3": {
+        "root_union_ms": 1236.0966042324435,
+        "profiled_encode_call_ms": 355.4404795,
+        "terminal_wait_call_ms": 881.9508960000001,
+        "phase_wall_medians_ms": {
+          "input_norm": 0.21699999999999997,
+          "qkv_projection": 0.20400000000000001,
+          "qk_norm_rope": 0.1755,
+          "attention": 318.82000000000005,
+          "output_projection": 2.748,
+          "residual_post_norm": 5.967999999999973,
+          "ffn_gate_up": 17.87849999999999,
+          "ffn_activation": 0.014000000000041757,
+          "ffn_down": 9.118500000000001,
+          "final_residual": 0.008000000000035756
+        },
+        "api_wall_medians_ms": {
+          "unassigned": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "input_norm_qkv_projection_qk_norm_rope": {
+            "graph_encode": 0.5785,
+            "commit_and_continue": 0.0295
+          },
+          "local_attention": {
+            "graph_encode": 318.174,
+            "commit_and_continue": 313.913
+          },
+          "output_projection_residual_post_norm": {
+            "graph_encode": 8.693000000000001,
+            "commit_and_continue": 8.55
+          },
+          "unused_cross_attention": {
+            "graph_encode": 0.0,
+            "commit_and_continue": 0.0
+          },
+          "ffn": {
+            "graph_encode": 26.9655,
+            "commit_and_continue": 26.6825
+          }
+        },
+        "second_plan_prepare_footprint_delta_bytes": null,
+        "second_plan_prepare_device_delta_bytes": null,
+        "postwait_device_first_last_delta_bytes": 0,
+        "postwait_footprint_first_last_delta_bytes": 1048576,
+        "after_named_release_device_bytes": 5456936960,
+        "after_named_release_live_bytes": 0
+      }
+    },
+    "decision": "Two Plans have a descriptive advantage below 0.1% in this sparse matched matrix. No reliable production gain, equivalence, full36 cause or opaque ownership is established. Current one-Plan A/A drift is reported separately; the contrast is not claimed smaller than that drift. Strict owner guard had one historical pre-request failure; cause remains unestablished.",
+    "device_peak_two_minus_one_bytes": 360448,
+    "device_delta_is_total_opaque_Plan_bytes": false,
+    "after_named_release_device_bytes": 5456936960,
+    "after_named_release_named_live_bytes": 0
+  },
+  "upstream_lineage": {
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "model_file": "hymm/models/vae/pixelumm_decoder/model.py",
+    "model_file_sha256": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+    "checkpoint_subset_sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485",
+    "scope": "Authenticated saved pinned upstream-source-method MPS fixture composition. Qualified saved attention plus source-method suffix including final BF16 residual; not a fresh full connected upstream execution or independent backend.",
+    "input_scope": "Actual static-image DCAE latent/noise/stem rows at J2048/J21120, not repeated small-grid rows or DiT denoised video.",
+    "payload_hashing": "Both compact payloads fully rehashed by audit-v4. Prior selected parent boundaries were authenticated in the preceding experiment; unrelated 20.66GB parent payload not wholly rehashed.",
+    "whole_checkpoint_digest_verified": false,
+    "fixtures": {
+      "2048": {
+        "metadata": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.json",
+          "sha256": "a4c6c7b30ba9c8e4d7c58563c2a32c5c7856f10ac8ea75310b2bcc57f21cebb3",
+          "bytes": 18169
+        },
+        "payload": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-small-v1.bin",
+          "sha256": "b71ba4b7ebb4fa1e7274afbce7b079e15eb519667e98734a566e2a954c8abf85",
+          "bytes": 622871040
+        },
+        "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+        "checkpoint_subset_sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485",
+        "capture_sha256": {
+          "attention": "f3f8807338b2915b7893b9d527b719b239e648f89745c21cd50ec2529a0f9f0d",
+          "post_attn_norm": "3e27c293d5a1b2e9dbe8aef0ebae7eeb1d4c7512c0a5ffbdb33e95d86403f367",
+          "gate_proj": "16a98fbc54eb093da0b236ab2e66d18d405c591d61bb376dc96cc3f85759c60b",
+          "up_proj": "c791e7fd287a526d39f8f93de8dc4f45fa34f0c1cd814b9f91a94bf9d6d2321c",
+          "product": "9e9066f2dbf97acef81450460adf2d38effecd38dce9a468af13edd2855b055f",
+          "down_proj": "bf5db3de7a5ec93a2a492b742ab33c6068b62c00ad174984d22965394cd49414",
+          "output": "2fb55f9636b11c3413b02599ec342b7300ee2473319dc005eb9039727cd3f580"
+        }
+      },
+      "21120": {
+        "metadata": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.json",
+          "sha256": "a2ad7f4c3428ab45ff17c6c4732f98073672faf310f819046c1ac3c12742c43c",
+          "bytes": 18967
+        },
+        "payload": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-connected-resources-20261027/results/connected-reference-full-v1.bin",
+          "sha256": "37a31e362455df363e221d8142e90de9f1265dbe341c553e0c9741efb2599371",
+          "bytes": 2829730304
+        },
+        "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+        "checkpoint_subset_sha256": "ae82bb41c121a955493f5b1502dc512ac8aaba05a6cec67e98edeaedfe720485",
+        "capture_sha256": {
+          "attention": "d0aafe5973da116a0da44f425ab5bfbb485bc81e7283cc48affbdf3081183ef1",
+          "post_attn_norm": "1c13aaac1ace053d46b06b4530cdc33a687954adfb6b98221213d458282a5211",
+          "gate_proj": "984c0e16fcee41947644ac5712f700fdd2220b80bf43976ded9d268ce8835c78",
+          "up_proj": "cea20dbe25ba58e3e4191c567ff2499746bc7f15672bb0d2a6c810c5d780c067",
+          "product": "56566d4aaa5505c2c11407535703594b467f3a41e4c389e8b776a1444cb929b7",
+          "down_proj": "00a535e90b3b48aa28c8b7f5a564ed4cd37cb85452b363c64ff563c233217f53",
+          "output": "f78ad7c872adba8b330719e174c05c5107c2e4119b2d4da2a96bde4cf583d938"
+        }
+      }
+    }
+  },
+  "exclusions_and_residuals": {
+    "failed_cell": "full-two-a",
+    "failure": "Strict creating-thread guard failed after second Plan preparation and before the first request; cleanup may have masked original exception.",
+    "cause": "Unestablished; no thread migration or object-ID instability explanation has been proven.",
+    "change": "Original-exception logging before cleanup plus expected/current Thread object IDs. Guard predicate, production arithmetic and memory limits unchanged.",
+    "failure_fixed_claim": false,
+    "accepted_matrix": [
+      {
+        "name": "small-one-v3",
+        "rows": 2048,
+        "plans": 1,
+        "reverse_warmups_and_first": false
+      },
+      {
+        "name": "small-two-v3",
+        "rows": 2048,
+        "plans": 2,
+        "reverse_warmups_and_first": false
+      },
+      {
+        "name": "full-one-a-v3",
+        "rows": 21120,
+        "plans": 1,
+        "reverse_warmups_and_first": false
+      },
+      {
+        "name": "full-two-a-v3",
+        "rows": 21120,
+        "plans": 2,
+        "reverse_warmups_and_first": false
+      },
+      {
+        "name": "full-two-b-v3",
+        "rows": 21120,
+        "plans": 2,
+        "reverse_warmups_and_first": true
+      },
+      {
+        "name": "full-one-b-v3",
+        "rows": 21120,
+        "plans": 1,
+        "reverse_warmups_and_first": false
+      }
+    ],
+    "earlier_passing_cells_historical_only": [
+      "small-one",
+      "small-two",
+      "full-one-a",
+      "full-two-b",
+      "full-two-diagnostic-v2",
+      "small-one-v2",
+      "small-two-v2",
+      "full-one-a-v2",
+      "full-two-a-v2",
+      "full-two-b-v2",
+      "full-one-b-v2"
+    ],
+    "offline_auditor_correction": "v2 rejected unknown pre-Metal device counter as null; v3/v4 preserve unknown instead of treating it as zero. No native arithmetic change.",
+    "final_metadata_change": "Correct memory_accounting report text: opaque native/MPS ownership is unknown and aggregate counters do not isolate it. Only that string changes; arithmetic, commands, guards and synchronization unchanged.",
+    "offline_analysis_correction": "descriptive-v2 retained correct arithmetic but copied a stale sentence saying contrast smaller than A/A drift. Final descriptive-v3 reports the actual below0.1% advantage separately from smaller current A/A drift; no native change."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Accepted six-cell binding, lifecycle, parity, roots and sampled guard claims only. No general owner/production reliability or timing-equivalence claim.",
+    "provenance": "Correlated same-lineage Mini-Quad review; not independent replication.",
+    "strongest_counterexample": "Sparse null Plan-count contrast may coexist with different-weight/connected-layer/full36 resource effects, and one historical owner failure remains unresolved.",
+    "auditor_negative_controls": [
+      "extra wait",
+      "preterminal read",
+      "encode allocation",
+      "wrong Plan selection",
+      "weakened tolerance",
+      "wrong named budget",
+      "failed parity",
+      "missing NaN control",
+      "incomplete root",
+      "duplicate Plan handle",
+      "different input handle",
+      "unknown opaque bytes treated as zero"
+    ]
+  },
+  "next_falsifier": {
+    "proposal_only": true,
+    "source": "src/ml/video/pixelumm_decoder_block_mps_bridge.mm local-attention tile loop",
+    "observation": "60 attention tiles * QK/softmax/PV = 180 of 195 full-J Graph calls; host attention about318ms includes312.9-313.9ms nested commitAndContinue wall time.",
+    "probe": "Reduce same-geometry local-attention Graph/command transitions while preserving BF16 materialization/reduction order; compare unchanged-input full-block parity and completed interval against native control, no new waits.",
+    "failure_mode": "Waiting can move to another API or the terminal wait without reducing full-block time. Fusion may change rounding; unchanged tolerance gate must reject it.",
+    "other_open_question": "Full36 drift may require changing weights, connected inputs or longer lifetimes."
+  },
+  "continuity": {
+    "refresh_triggers": [
+      "Scoped source/artifact changes or evidence loss",
+      "Backend/device/OS/toolchain changes",
+      "Geometry/precision/command/capture/lifetime/guard/clock changes"
+    ],
+    "admission_decay": "At every new launch; prior memory admission is not reusable.",
+    "failure_policy": "Another owner failure reopens diagnosis; do not relax its guard. Reauthenticate external evidence and rerun the bounded DoD after a scope change.",
+    "return_pointer": "docs/hy-nomas-pixelumm-block-frontier.md, dated one/two Plan section"
+  },
+  "qualified_source_identities": {
+    "Makefile": {
+      "sha256": "c339e2f6e4b2659422b5aa8934fe3c728cdedba926a5cfddd8b4d5d035098cee",
+      "bytes": 47314
+    },
+    "examples/pixelumm_plan_reuse_probe.cr": {
+      "sha256": "5e858302b89bb8006ebef0db3ca52d3f28203366d74b02cf5d1866d41f961a6a",
+      "bytes": 10512
+    },
+    "examples/support/pixelumm_plan_reuse_probe.cr": {
+      "sha256": "8d094abd9106e634d140badfcfea6b6a265a91667bbab21b4c457c62ceb3b540",
+      "bytes": 40295
+    },
+    "spec/pixelumm_plan_reuse_probe_spec.cr": {
+      "sha256": "1e20c4f66564de5bc137d2f4d5faa47446628855f047d892566cd25c69e8ef06",
+      "bytes": 7858
+    },
+    "src/ml/video/pixelumm_decoder_block_mps.cr": {
+      "sha256": "d14dbb078d8733da4b659dcc4c949e14e39cf680de03bd3ac99935550f34cd64",
+      "bytes": 58574
+    },
+    "src/ml/video/pixelumm_decoder_block_mps_bridge.mm": {
+      "sha256": "db6baee407c22ad54f54dfa1b6b8218926bcc7e8aaebd9a8d7a904097f564ced",
+      "bytes": 93785
+    },
+    "src/ml/video/metal_mps_command_chain.mm": {
+      "sha256": "6d67dcb5191b01363bf9879f80552ff7fedd354ea33c9c34304a55f110ddd4bf",
+      "bytes": 63544
+    },
+    "examples/support/pixelumm_connected_resource_probe.cr": {
+      "sha256": "35e7a082a31a6e14d99fdc649c2c152c7f663fc0a46408a4268655081dd2a51e",
+      "bytes": 27056
+    },
+    "examples/support/wan_memory_guard.py": {
+      "sha256": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+      "bytes": 37589
+    }
+  },
+  "external_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028",
+  "external_artifacts": {
+    "source/experiment-plan-v1.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/experiment-plan-v1.json",
+      "sha256": "3c4c6f6c0bfbafffd6bc0fe6ffac3f28c882a2025b2ee7f9a0694d67bfb0df1a",
+      "bytes": 3928
+    },
+    "source/experiment-amendment-v1.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/experiment-amendment-v1.json",
+      "sha256": "db7de2584e57e69b68df24ed80d73bdbc6d0d39aa074007fe247f81c2ef4ad8e",
+      "bytes": 1766
+    },
+    "source/experiment-amendment-v2.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/experiment-amendment-v2.json",
+      "sha256": "c1463cb92cc74583c46f879602e9c9c7b416fb5fa4443e5dc6621b54e2d1a4f9",
+      "bytes": 2058
+    },
+    "source/environment-observed-v1.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/environment-observed-v1.json",
+      "sha256": "4826b3660604c932b988dbaa7e07d615009eaeb9caf42b6f82f290571d8618fe",
+      "bytes": 888
+    },
+    "source/audit-v4.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/audit-v4.py",
+      "sha256": "3828c1d19cdac1ad88b07af149c5fb8b1acebb6643344f17652bbd430f643d5a",
+      "bytes": 13779
+    },
+    "source/analyze-v3.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/analyze-v3.py",
+      "sha256": "4129569a2d96077f129d64e090f0d7568c0474c11ed02ef9fd706e1220033239",
+      "bytes": 3775
+    },
+    "source/run-matrix-v3.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/run-matrix-v3.py",
+      "sha256": "f8e8a795cb541eedd095528c70e45cc718ff6ae15be3594e86f992b9bccc83d5",
+      "bytes": 809
+    },
+    "source/validate-packet-v2.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/validate-packet-v2.py",
+      "sha256": "ed74f96107c80f4dde2988b2cba060d0b86b31297a60dd28c4ba529342c68355",
+      "bytes": 8871
+    },
+    "tmp/run_guarded_v1.py": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/tmp/run_guarded_v1.py",
+      "sha256": "1b4a7c9ea3649f986b0b737937618dc88bfc1aa3a5dcf753f19be4d106a76f1e",
+      "bytes": 5839
+    },
+    "results/plan-reuse-audit-v4.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/plan-reuse-audit-v4.json",
+      "sha256": "cb305925b203d29894b10356917bb7e178db363a953acd6f68999c446a886128",
+      "bytes": 392997
+    },
+    "results/descriptive-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/descriptive-v3.json",
+      "sha256": "e7508b2ff322dc0d737cf1aae76ab93c66adaad7e4d4b944bcca4d5613f039a3",
+      "bytes": 8192
+    },
+    "build/pixelumm_plan_reuse_probe": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/build/pixelumm_plan_reuse_probe",
+      "sha256": "8e13f654dbe584cf7461464683333c74f0604f1768d3e1b381aff1e2b4ae9c38",
+      "bytes": 1407192
+    },
+    "results/focused-tests-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/focused-tests-v3.pre-execution.json",
+      "sha256": "11b45495e35ff17c0331cb49060d6d756f254ad687caaf868397c797ab55585d",
+      "bytes": 23198
+    },
+    "results/focused-tests-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/focused-tests-v3.completion.json",
+      "sha256": "845248abaedcbc2dd5a631206d84925ccb31f1eac3d622ad2c0d99673585e27b",
+      "bytes": 84
+    },
+    "logs/focused-tests-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/focused-tests-v3.out",
+      "sha256": "93568afe140dc85e342414851f4988b9e2e7cdea336dc7b0c7131fa18bb5fd15",
+      "bytes": 124
+    },
+    "logs/focused-tests-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/focused-tests-v3.guard.jsonl",
+      "sha256": "d0860b8836f8438441e6bc0e93bf5e0199a710c4010b9ae527fbb41fcf1b8c4f",
+      "bytes": 2586
+    },
+    "results/build-final-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/build-final-v3.pre-execution.json",
+      "sha256": "2f4960335ba2d433baa7668a1787794952cdee450479ab9eeac248685bb3c160",
+      "bytes": 21550
+    },
+    "results/build-final-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/build-final-v3.completion.json",
+      "sha256": "1e5576a64ab3508ff12b86ebc6f0437232ba70728ca0409b85449db91c731484",
+      "bytes": 83
+    },
+    "logs/build-final-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/build-final-v3.out",
+      "sha256": "0caf82f86f579ccec1d802ad6e9ecc531f1648bbccde5fe5783b01f28c4fbf91",
+      "bytes": 669
+    },
+    "logs/build-final-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/build-final-v3.guard.jsonl",
+      "sha256": "77286c2028b5b60d2bb2bca8bb65b063380416862c694d798f8fbc494f89279b",
+      "bytes": 5683
+    },
+    "results/budget-negative-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/budget-negative-v3.pre-execution.json",
+      "sha256": "8a95e9e150accb5bad85ae53df817b6e7b21ce4b148ad5d4c0c1bf54211b868d",
+      "bytes": 23568
+    },
+    "results/budget-negative-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/budget-negative-v3.completion.json",
+      "sha256": "1b52297edbb39a29d1ec706cfb1a89f67824e7886db13a91eeb6ca4f22b0b0ac",
+      "bytes": 84
+    },
+    "logs/budget-negative-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/budget-negative-v3.out",
+      "sha256": "65c0147865f9a58c0b741afaf82bfef8387e095e5b8f7d42831ea30f5be83875",
+      "bytes": 455
+    },
+    "logs/budget-negative-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/budget-negative-v3.guard.jsonl",
+      "sha256": "25a2b763817b1a967801f342e13d12bb0d09c3687f533f555f35bf64cb433ad6",
+      "bytes": 1666
+    },
+    "results/audit-v4.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/audit-v4.pre-execution.json",
+      "sha256": "e051094e07f4769da5dba61f0b2564949cf90b36b942b65971a2c5b536f78301",
+      "bytes": 6865
+    },
+    "results/audit-v4.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/audit-v4.completion.json",
+      "sha256": "9638ed08917bfcc20e98e930fa752c5a134919a62dd349f37ffa0bc76c9482fc",
+      "bytes": 84
+    },
+    "logs/audit-v4.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/audit-v4.out",
+      "sha256": "d66fb444a5031154c039ec016368a4a6c73364b9e2a1dca54ff2f4018cf85807",
+      "bytes": 2048
+    },
+    "logs/audit-v4.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/audit-v4.guard.jsonl",
+      "sha256": "814ff39e38979fbc64e59ce3bbb67d96d65bb719d19c73bbd34bab2c8bb42b6f",
+      "bytes": 2586
+    },
+    "results/analyze-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/analyze-v3.pre-execution.json",
+      "sha256": "c849e1e0b5a0b6a73ef8ae9a1abbda3806a05ad648b09ac30c2fca37a54cb482",
+      "bytes": 7087
+    },
+    "results/analyze-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/analyze-v3.completion.json",
+      "sha256": "5e70290aad426cd5fd8a1c4f8ee268d8180242e57b981e508c6674bc97919f62",
+      "bytes": 84
+    },
+    "logs/analyze-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/analyze-v3.out",
+      "sha256": "34cb5320db5658d1f51586a839bd4d5510c00bd22c05149d3ac5b4d68e4a925c",
+      "bytes": 6532
+    },
+    "logs/analyze-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/analyze-v3.guard.jsonl",
+      "sha256": "a4d3c372636e80c1a18f7bb629f6c8a1a4f7ca5620669224b8d648cdb196d8dc",
+      "bytes": 1668
+    },
+    "results/format-final-v2.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/format-final-v2.pre-execution.json",
+      "sha256": "80c0d9c478743a91b5e09de012eeb2369c1ffb664c4317b5e16755410e476d3e",
+      "bytes": 23031
+    },
+    "results/format-final-v2.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/format-final-v2.completion.json",
+      "sha256": "171abf67cf7cac3caeecbb57008f481fe396d823154e8a291428cfe9892e5800",
+      "bytes": 84
+    },
+    "logs/format-final-v2.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/format-final-v2.out",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "logs/format-final-v2.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/format-final-v2.guard.jsonl",
+      "sha256": "0dffc4a1c39bfa1ef4db759be168781cc3e69ea8e0201c8bad4d7790111eda22",
+      "bytes": 1666
+    },
+    "results/small-one-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-one-v3.pre-execution.json",
+      "sha256": "1715fd0d4f095ad9b7f75e203c5021d5e7fbddf24f3725f08a4987a40e0b1e7d",
+      "bytes": 24206
+    },
+    "results/small-one-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-one-v3.completion.json",
+      "sha256": "23a4e138d01f47b17924d7ab145ed82a8fdfd6a7947e3d830e726e8a2324d4ba",
+      "bytes": 83
+    },
+    "logs/small-one-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/small-one-v3.out",
+      "sha256": "c989167de22505409d3676408de9b987ffbb8510c2e1c53248f10465f04d5122",
+      "bytes": 34503
+    },
+    "logs/small-one-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/small-one-v3.guard.jsonl",
+      "sha256": "c11fdafa500b1c6868659c5f0abe9612f8c2401f986c9aa981183f562e1a221f",
+      "bytes": 2286
+    },
+    "results/small-one-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-one-v3.json",
+      "sha256": "0d7f22a313a77135903f7c312b5d90c5a36df846e5eea213aaacaec9af269f3b",
+      "bytes": 212141
+    },
+    "results/small-two-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-two-v3.pre-execution.json",
+      "sha256": "189c994482e7dff84d9acfd8c7a0a27c178ca6ec93e4d74e3bc8fb5169de3863",
+      "bytes": 24206
+    },
+    "results/small-two-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-two-v3.completion.json",
+      "sha256": "f0cef5d17c7c32487e3c89b46165e443c61419b591551016ba6d1295e883d993",
+      "bytes": 84
+    },
+    "logs/small-two-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/small-two-v3.out",
+      "sha256": "6bc20d70a4b856cbf1eda6b386f8c5f139d30924616061bcb56c10ec98f671b5",
+      "bytes": 37275
+    },
+    "logs/small-two-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/small-two-v3.guard.jsonl",
+      "sha256": "02f18c08403f3fb778acfc9a97f09655c5c3c111bb8c22d17a4f964beac6e16c",
+      "bytes": 2284
+    },
+    "results/small-two-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/small-two-v3.json",
+      "sha256": "12cc02d21e68c8a72249d2c88d660e7729e20313e0497dee02ae5c284de6c22f",
+      "bytes": 219351
+    },
+    "results/full-one-a-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-a-v3.pre-execution.json",
+      "sha256": "6144a5e1464452d2ceab8995f05d1ecac7bc71a7ef44dc75de9b25356c56d719",
+      "bytes": 24211
+    },
+    "results/full-one-a-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-a-v3.completion.json",
+      "sha256": "43fa604698a954c4a0c38bccf4bfa83f53a274c8bc07218bd5f4cfa802ae4198",
+      "bytes": 84
+    },
+    "logs/full-one-a-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-one-a-v3.out",
+      "sha256": "8b8906c278bc0c5ddbe230c13412860ad9a74fed0f2cf0fc2e1b94372c241725",
+      "bytes": 34668
+    },
+    "logs/full-one-a-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-one-a-v3.guard.jsonl",
+      "sha256": "20378b365fc8647a2942e712e1f5f6d2fc2cf6379cc7fbe8690c9bd84e8e840d",
+      "bytes": 7561
+    },
+    "results/full-one-a-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-a-v3.json",
+      "sha256": "5bdc826567a1e73997a95594d193ddaf8e9e40375a80680f6fb645e69d52aaad",
+      "bytes": 498370
+    },
+    "results/full-two-a-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a-v3.pre-execution.json",
+      "sha256": "f9a45754ca39408310acac72dfc787301baaa58a65860b222c9fcc2d8f0bfcda",
+      "bytes": 24211
+    },
+    "results/full-two-a-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a-v3.completion.json",
+      "sha256": "59ef7543a76b90a5d8ffb75b1ca8c1df32b6493fd4c03ab27e54a5c92088d47e",
+      "bytes": 84
+    },
+    "logs/full-two-a-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-a-v3.out",
+      "sha256": "0f34151f9c44a0080dd7770e7058718b97b83e034f0cf0d8a246f29cbb79c810",
+      "bytes": 37437
+    },
+    "logs/full-two-a-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-a-v3.guard.jsonl",
+      "sha256": "bf09a5c959f52bd0317d42aa677b95f9cc0fce3e46a206924d4c2f78308cddc0",
+      "bytes": 7561
+    },
+    "results/full-two-a-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a-v3.json",
+      "sha256": "23a5a3e0653ab903dd8ea0ff50368c5b683aa766e0eef915e76dd7eee3404c29",
+      "bytes": 505375
+    },
+    "results/full-two-b-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-b-v3.pre-execution.json",
+      "sha256": "f417822f9f3a689e33d44c9f074011ae8ebb36cd0283803ce15f59a75dcfa2d3",
+      "bytes": 24308
+    },
+    "results/full-two-b-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-b-v3.completion.json",
+      "sha256": "0db9cd769397c157cd7bf1595032ddc352c0f3cf5aaca6374e22c8b3c5873089",
+      "bytes": 84
+    },
+    "logs/full-two-b-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-b-v3.out",
+      "sha256": "e47b2584b941ef2d487e23edacee70b187fb3cbab86d8ce4f79430d75d30a21f",
+      "bytes": 37434
+    },
+    "logs/full-two-b-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-b-v3.guard.jsonl",
+      "sha256": "fcb74b4ca70d432f534f46a017c8af96eb3d2282e19a7c03516d0266a48ba9e2",
+      "bytes": 7560
+    },
+    "results/full-two-b-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-b-v3.json",
+      "sha256": "34c94cc9ad025e88ec81a177f709dc6eb0d009d909a2aed18967765719fe1474",
+      "bytes": 505464
+    },
+    "results/full-one-b-v3.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-b-v3.pre-execution.json",
+      "sha256": "f63e79f4fac640ec1d4a950c90686baad6bc779b7e4ba3967b9a3e248bcaf881",
+      "bytes": 24211
+    },
+    "results/full-one-b-v3.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-b-v3.completion.json",
+      "sha256": "3a06cdc241fb5ef7ebcc9b3bae2cc9807abcb4023cabc142e3a2e0dc43268ae0",
+      "bytes": 84
+    },
+    "logs/full-one-b-v3.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-one-b-v3.out",
+      "sha256": "90ad5ad42320ab5af7d74c5823e4188c08ac445da85bd33bd78df562562e3e7a",
+      "bytes": 34671
+    },
+    "logs/full-one-b-v3.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-one-b-v3.guard.jsonl",
+      "sha256": "408ef9b7739b803d63c88b218ee2d825dd63093bdfcacfab87be85703609c15b",
+      "bytes": 7551
+    },
+    "results/full-one-b-v3.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-one-b-v3.json",
+      "sha256": "45845ef96ad6aa8ef2147d0ef2876164c3f67cacfb2a9422feb33e3d86d814de",
+      "bytes": 498287
+    },
+    "results/full-two-a.pre-execution.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a.pre-execution.json",
+      "sha256": "43883f26f426cbe8b44443133625ce36a27d583025cb64d9f9abd8a9ad46ccc1",
+      "bytes": 21991
+    },
+    "results/full-two-a.completion.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/full-two-a.completion.json",
+      "sha256": "f3a14748c001a2593fb7463a788285c90b44e32ed75739ff1b277380918cac0d",
+      "bytes": 84
+    },
+    "logs/full-two-a.out": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-a.out",
+      "sha256": "249ca7f8ff838be7714bdeb6da8804eded88288183622e93e4649bf3a56faf65",
+      "bytes": 9057
+    },
+    "logs/full-two-a.guard.jsonl": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/logs/full-two-a.guard.jsonl",
+      "sha256": "a0fdde105993793077a374a30bc00ad5c31268f7b38f9b0c6343ae5bd6f9ada6",
+      "bytes": 2899
+    }
+  },
+  "transitive_artifact_index": {
+    "artifact": "results/plan-reuse-audit-v4.json",
+    "entries": 126,
+    "note": "This packet is a curated index, not proof. Source pins, build objects, report/guard receipts and compact fixtures are authenticated by the linked executed auditor."
+  },
+  "closure_validation": {
+    "command": [
+      "python3",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/tmp/run_guarded_v1.py",
+      "packet-final-v2",
+      "python",
+      "python3",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/source/validate-packet-v2.py"
+    ],
+    "expected_signal": "packet-validation-v2.json status passed, all current direct/transitive hashes and raw report/guard arithmetic agree, unknown opaque ownership label confirmed, exactly seven intended repository paths; git diff --check passes.",
+    "output": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-plan-reuse-20261028/results/packet-validation-v2.json",
+    "scope": "Checks stated semantic counts and artifact identity; does not prove properties outside executed native and sampled guard evidence."
+  }
+}
