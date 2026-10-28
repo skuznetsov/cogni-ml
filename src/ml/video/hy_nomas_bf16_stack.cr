@@ -14,24 +14,26 @@ module ML::Video
     getter source_sha256 : String
     getter index_sha256 : String
     getter block_count : Int32 = BLOCK_COUNT
-    getter cache_payload_bytes : Int64
-    getter admitted_bytes : Int64
+    getter cache_payload_bytes : Int64 = 0_i64
+    getter admitted_bytes : Int64 = 0_i64
     getter budget_bytes : Int64
     getter stage_bytes : Int64
     getter reserve_bytes : Int64
     getter max_forwards_per_chain : Int32
 
-    @block_pins : Array(HyNomasQ4StackIndex::BlockPin)
-    @control_files : Array(CheckpointFile)
-    @control_plans : Array(WeightPlan)
-    @copy_tensors : Array(Array(CopyTensor))
+    @source_sha256 = ""
+    @index_sha256 = ""
+    @block_pins = [] of HyNomasQ4StackIndex::BlockPin
+    @control_files = [] of CheckpointFile
+    @control_plans = [] of WeightPlan
+    @copy_tensors = [] of Array(CopyTensor)
     @control_arenas = [] of Arena
     @prepared = [] of PreparedWeights
     @control_buffers = [] of Hash(String, ML::MetalBuffer)
     @stage_arena : Arena? = nil
     @stage_buffers = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
-    @cursor : HyNomasFullPassCursor
+    @cursor = HyNomasFullPassCursor.new(BLOCK_COUNT)
     @loaded = false
     @released = false
     @poisoned = false
@@ -43,17 +45,40 @@ module ML::Video
                    @budget_bytes : Int64, *, @stage_bytes : Int64,
                    @reserve_bytes : Int64 = 0_i64,
                    @max_forwards_per_chain : Int32 = 1)
+      validate_options!
+      admission = HyNomasQ4StackIndex::Admission.new(index_path,
+        expected_index_sha256, expected_source_sha256, config)
+      initialize_from_admission(admission, expected_index_sha256,
+        expected_source_sha256, config)
+    end
+
+    def initialize(admission : HyNomasQ4StackIndex::Admission,
+                   expected_index_sha256 : String,
+                   expected_source_sha256 : String, config : HyNomasConfig,
+                   @budget_bytes : Int64, *, @stage_bytes : Int64,
+                   @reserve_bytes : Int64 = 0_i64,
+                   @max_forwards_per_chain : Int32 = 1)
+      validate_options!
+      initialize_from_admission(admission, expected_index_sha256,
+        expected_source_sha256, config)
+    end
+
+    private def validate_options! : Nil
       unless (1..8).includes?(@max_forwards_per_chain)
         raise ArgumentError.new("Hy-Nomas BF16 max_forwards_per_chain must be between 1 and 8")
       end
-      @cursor = HyNomasFullPassCursor.new(BLOCK_COUNT, @max_forwards_per_chain)
       unless @budget_bytes > 0 && @stage_bytes > 0 && @reserve_bytes >= 0
         raise ArgumentError.new("Hy-Nomas BF16 stack memory budget is invalid")
       end
+    end
 
-      index = HyNomasQ4StackIndex.load!(index_path, expected_index_sha256,
-        expected_source_sha256, config)
-      pins = index.blocks
+    private def initialize_from_admission(admission : HyNomasQ4StackIndex::Admission,
+                                          expected_index_sha256 : String,
+                                          expected_source_sha256 : String,
+                                          config : HyNomasConfig) : Nil
+      admission.validate!(expected_index_sha256, expected_source_sha256, config)
+      @cursor = HyNomasFullPassCursor.new(BLOCK_COUNT, @max_forwards_per_chain)
+      pins = admission.blocks
       unless pins.size == BLOCK_COUNT &&
              pins.each_with_index.all? { |pin, position| pin.block_index == position }
         raise ArgumentError.new("Hy-Nomas BF16 stack must contain ordered blocks 0...54")
@@ -111,8 +136,8 @@ module ML::Video
         raise ex
       end
 
-      @source_sha256 = index.source_sha256
-      @index_sha256 = index.sha256
+      @source_sha256 = admission.source_sha256
+      @index_sha256 = admission.sha256
       @block_pins = pins
       @control_files = files
       @control_plans = plans

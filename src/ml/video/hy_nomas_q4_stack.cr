@@ -22,10 +22,15 @@ module ML::Video::HyNomasQ4StackIndex
     sha256 : String
 
   def load!(path : String, expected_index_sha256 : String,
-            expected_source_sha256 : String, config : HyNomasConfig) : Index
+            expected_source_sha256 : String, config : HyNomasConfig, *,
+            admitted_snapshots : Array(HyNomasQ4Cache::AdmittedFileSnapshot)? = nil) : Index
     HyNomasQ4Cache::Integrity.validate_sha256!(expected_index_sha256, "index")
     HyNomasQ4Cache::Integrity.validate_sha256!(expected_source_sha256, "source")
     info = HyNomasQ4Cache::Integrity.regular_file_info!(path, "cache index")
+    if snapshots = admitted_snapshots
+      snapshots << HyNomasQ4Cache::AdmittedFileSnapshot.new(path.dup,
+        "cache index", info)
+    end
     unless info.size > 0 && info.size <= HyNomasQ4Cache::MAX_MANIFEST_BYTES
       raise ArgumentError.new("Hy-Nomas Q4 index size is invalid")
     end
@@ -105,6 +110,9 @@ module ML::Video::HyNomasQ4StackIndex
       referenced_infos << manifest_info
       block = HyNomasQ4Cache::Block.new(manifest_path, manifest_sha256,
         expected_source_sha256, config, block_index.to_i32)
+      if snapshots = admitted_snapshots
+        block.admitted_file_snapshots.each { |snapshot| snapshots << snapshot }
+      end
       unless block.source_bytes == source_bytes
         raise ArgumentError.new("Hy-Nomas Q4 block source byte size disagrees with index")
       end
@@ -127,6 +135,10 @@ module ML::Video::HyNomasQ4StackIndex
       bf16_path = File.join(directory, bf16_name)
       bf16_info = HyNomasQ4Cache::Integrity.regular_file_info!(bf16_path,
         "BF16 control")
+      if snapshots = admitted_snapshots
+        snapshots << HyNomasQ4Cache::AdmittedFileSnapshot.new(bf16_path.dup,
+          "BF16 control", bf16_info)
+      end
       ensure_distinct_file!(bf16_info, referenced_infos, "cache index files")
       referenced_infos << bf16_info
       block_pins << BlockPin.new(block_index.to_i32, manifest_path,
@@ -146,10 +158,104 @@ module ML::Video::HyNomasQ4StackIndex
     globals_path = File.join(directory, globals_name)
     globals_info = HyNomasQ4Cache::Integrity.regular_file_info!(globals_path,
       "global BF16 control")
+    if snapshots = admitted_snapshots
+      snapshots << HyNomasQ4Cache::AdmittedFileSnapshot.new(globals_path.dup,
+        "global BF16 control", globals_info)
+    end
     ensure_distinct_file!(globals_info, referenced_infos, "cache index files")
 
     Index.new(source_sha256, source_bytes, globals_path, globals_sha256,
       block_pins, block_objects, sha256)
+  end
+
+  # Reusable, request-scoped proof that the Q4 index and cache payloads passed
+  # one complete hash/inventory admission. Construction always performs that
+  # same full load; reuse only refreshes captured file stat snapshots.
+  class Admission
+    @index_sha256 : String
+    @source_sha256 : String
+    @globals_bf16_path : String
+    @globals_bf16_sha256 : String
+    @block_pins : Array(BlockPin)
+    @payload_bytes : Int64
+    @config : HyNomasConfig
+    @snapshots : Array(HyNomasQ4Cache::AdmittedFileSnapshot)
+
+    def initialize(path : String, expected_index_sha256 : String,
+                   expected_source_sha256 : String, config : HyNomasConfig)
+      snapshots = [] of HyNomasQ4Cache::AdmittedFileSnapshot
+      index = HyNomasQ4StackIndex.load!(path, expected_index_sha256,
+        expected_source_sha256, config, admitted_snapshots: snapshots)
+
+      # Close the admission window across the entire ordered file set before
+      # making this capability observable to its caller.
+      snapshots.each(&.validate_after_admission!)
+
+      payload_bytes = 0_i64
+      index.caches.each do |block|
+        if block.payload_bytes > Int64::MAX - payload_bytes
+          raise ArgumentError.new("Hy-Nomas Q4 cache byte count overflow")
+        end
+        payload_bytes += block.payload_bytes
+      end
+
+      @index_sha256 = index.sha256.dup
+      @source_sha256 = index.source_sha256.dup
+      @globals_bf16_path = index.globals_bf16_path.dup
+      @globals_bf16_sha256 = index.globals_bf16_sha256.dup
+      @block_pins = index.blocks.map { |pin| detached_pin(pin) }
+      @payload_bytes = payload_bytes
+      @config = config
+      @snapshots = snapshots.map(&.detached)
+    end
+
+    def sha256 : String
+      @index_sha256.dup
+    end
+
+    def source_sha256 : String
+      @source_sha256.dup
+    end
+
+    def globals_bf16_path : String
+      @globals_bf16_path.dup
+    end
+
+    def globals_bf16_sha256 : String
+      @globals_bf16_sha256.dup
+    end
+
+    def payload_bytes : Int64
+      @payload_bytes
+    end
+
+    # Pins are copied deeply enough that callers cannot change this admission
+    # by mutating either the returned array or any returned path/hash string.
+    def blocks : Array(BlockPin)
+      @block_pins.map { |pin| detached_pin(pin) }
+    end
+
+    def validate!(expected_index_sha256 : String,
+                  expected_source_sha256 : String,
+                  config : HyNomasConfig) : Nil
+      unless expected_index_sha256 == @index_sha256
+        raise ArgumentError.new("Hy-Nomas Q4 admission index identity mismatch")
+      end
+      unless expected_source_sha256 == @source_sha256
+        raise ArgumentError.new("Hy-Nomas Q4 admission source identity mismatch")
+      end
+      unless config == @config
+        raise ArgumentError.new("Hy-Nomas Q4 admission config identity mismatch")
+      end
+
+      @snapshots.each(&.validate_after_admission!)
+    end
+
+    private def detached_pin(pin : BlockPin) : BlockPin
+      BlockPin.new(pin.block_index, pin.manifest_path.dup,
+        pin.manifest_sha256.dup, pin.payload_sha256.dup,
+        pin.bf16_path.dup, pin.bf16_sha256.dup)
+    end
   end
 
   private def ensure_distinct_file!(candidate : File::Info,

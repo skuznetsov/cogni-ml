@@ -3,7 +3,9 @@ require "digest/sha256"
 require "file_utils"
 require "json"
 require "./support/video_allocation_counter"
+require "../src/ml/metal/device"
 require "../src/ml/video/hy_nomas_q4_stack"
+require "../src/ml/video/hy_nomas_bf16_stack"
 
 private def finish_hy_nomas_pass(cursor : ML::Video::HyNomasFullPassCursor,
                                  chain_id : UInt64) : Nil
@@ -73,6 +75,11 @@ private class HyNomasQ4StackSpecFixture
       source_sha256, @config, budget_bytes,
       stage_bytes: @stage_bytes, reserve_bytes: 32_i64,
       max_forwards_per_chain: max_forwards_per_chain)
+  end
+
+  def admission : ML::Video::HyNomasQ4StackIndex::Admission
+    ML::Video::HyNomasQ4StackIndex::Admission.new(@index_path, @index_sha256,
+      @source_sha256, @config)
   end
 
   private def write_block(block_index : Int32)
@@ -214,6 +221,160 @@ private class HyNomasQ4StackSpecFixture
 
   private def sha256(path : String) : String
     Digest::SHA256.hexdigest(File.read(path))
+  end
+end
+
+describe ML::Video::HyNomasQ4StackIndex::Admission do
+  it "authenticates once, returns detached pins, and refreshes snapshots without Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      admission = fixture.admission
+      admission.sha256.should eq(fixture.index_sha256)
+      admission.source_sha256.should eq(fixture.source_sha256)
+      admission.globals_bf16_path.should eq(File.join(fixture.directory, "globals-bf16.safetensors"))
+      admission.payload_bytes.should eq(fixture.payload_bytes)
+      admission.blocks.map(&.block_index).should eq((0...54).to_a)
+
+      detached = admission.blocks
+      detached.clear
+      detached.size.should eq(0)
+      admission.blocks.size.should eq(54)
+      admission.blocks.first.manifest_path.should eq(File.join(fixture.directory, "block-0.json"))
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects stale identity and config before touching admitted files" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      admission = fixture.admission
+      expect_raises(ArgumentError, /index identity/) do
+        admission.validate!("a" * 64, fixture.source_sha256, fixture.config)
+      end
+      expect_raises(ArgumentError, /source identity/) do
+        admission.validate!(fixture.index_sha256, "b" * 64, fixture.config)
+      end
+      wrong_config = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 1,
+        text_tokens: 1, dim: 64, heads: 1, head_dim: 64, ffn_dim: 128)
+      expect_raises(ArgumentError, /config identity/) do
+        admission.validate!(fixture.index_sha256, fixture.source_sha256, wrong_config)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "rejects replaced, removed, or timestamp-changed admitted file classes" do
+    file_classes = {
+      {"index", "index.json"},
+      {"manifest", "block-7.json"},
+      {"payload", "block-7.bin"},
+      {"control", "block-7-bf16.safetensors"},
+      {"globals", "globals-bf16.safetensors"},
+    }
+    file_classes.each do |label, basename|
+      [:replace, :remove, :mtime].each do |mutation|
+        fixture = HyNomasQ4StackSpecFixture.new
+        begin
+          allocations = ML::MetalBuffer.video_spec_allocations
+          admission = fixture.admission
+          path = File.join(fixture.directory, basename)
+          case mutation
+          when :replace
+            replacement = File.join(fixture.directory, "replacement-#{label}")
+            File.write(replacement, File.read(path))
+            File.rename(replacement, path)
+          when :remove
+            File.delete(path)
+          when :mtime
+            info = File.info(path)
+            File.utime(Time.utc(2020, 1, 1), info.modification_time + 1.second, path)
+          end
+          expect_raises(ArgumentError) do
+            admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+          end
+          ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+        ensure
+          fixture.cleanup
+        end
+      end
+    end
+  end
+
+  it "does not rehash Q4 payload bytes on reuse after the captured stat snapshot matches" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      path = File.join(fixture.directory, "block-7.bin")
+      before = File.info(path)
+      bytes = File.read(path).to_slice.dup
+      bytes[0] = bytes[0] ^ 0xff_u8
+      File.write(path, bytes)
+      File.utime(Time.utc(2020, 1, 1), before.modification_time, path)
+      File.info(path).modification_time.should eq(before.modification_time)
+
+      # The admitted BF16 path does not consume Q4 payload bytes. Reuse checks
+      # the captured identity/size/mtime snapshot; a same-stat content change
+      # is outside that guarantee and demonstrates why it is not a fresh hash.
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "still full-hashes a BF16 control after a same-stat mutation before parsing or Metal" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      path = File.join(fixture.directory, "block-0-bf16.safetensors")
+      before = File.info(path)
+      bytes = File.read(path).to_slice.dup
+      bytes[0] = bytes[0] ^ 0xff_u8
+      File.write(path, bytes)
+      File.utime(Time.utc(2020, 1, 1), before.modification_time, path)
+      File.info(path).modification_time.should eq(before.modification_time)
+
+      # Snapshot reuse remains stat-only, but the actual BF16 consumer must
+      # still authenticate bytes and fail before safetensors parsing/allocation.
+      admission.validate!(fixture.index_sha256, fixture.source_sha256, fixture.config)
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /BF16 cache SHA-256 mismatch/) do
+        ML::Video::HyNomasBF16Stack.new(admission, fixture.index_sha256,
+          fixture.source_sha256, fixture.config,
+          fixture.payload_bytes + fixture.stage_bytes,
+          stage_bytes: fixture.stage_bytes)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
+  it "makes the BF16 stack revalidate a supplied admission before control-file parsing" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      admission = fixture.admission
+      index_info = File.info(fixture.index_path)
+      File.utime(Time.utc(2020, 1, 1), index_info.modification_time + 1.second,
+        fixture.index_path)
+      allocations = ML::MetalBuffer.video_spec_allocations
+
+      expect_raises(ArgumentError, /changed after index admission/) do
+        ML::Video::HyNomasBF16Stack.new(admission, fixture.index_sha256,
+          fixture.source_sha256, fixture.config,
+          fixture.payload_bytes + fixture.stage_bytes,
+          stage_bytes: fixture.stage_bytes)
+      end
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
   end
 end
 

@@ -35487,3 +35487,42 @@ Refresh after source/toolchain/device/model/workload changes.
   only an authenticated request-scoped identity with freshness checks. Preserve
   full BF16 SHA/inventory/direct-copy gates and the existing GPU path. Local
   SSD mirroring is a separate unmeasured option; do not bypass authentication.
+
+### 2026-10-28: BF16 request startup reuses one authenticated index
+
+- Original BF16 remains the selected quality/performance target. Replaced three
+  full Q4 index/payload admissions with one request-local Admission plus two
+  stat refreshes; Q4 inference keeps its full loader path. All consumed BF16
+  files retain full SHA/inventory/direct-copy checks. No GPU math, dispatch,
+  synchronization, precision or named budget changed; no generation ran.
+- Warm-cache CPU-only native ABBA/BAAB, including each case's first scan:
+  four cases/arm, medians6.136654->2.055800s, ratio2.985x, difference4.080854s
+  for authentication only. Same54 blocks/4,593,162,240 Q4 payload bytes; all
+  identities match and zero tracked Metal allocations. Late paired drift
+  10.050/3.427s remains included. No cold/GPU/full-video acceleration claim.
+- Stat refresh rejects replacement/removal/mtime change across all five file
+  classes. Same-inode/size/restored-mtime Q4 byte mutation can evade refresh;
+  unused Q4 bytes are not a BF16 math input. The matching BF16-control mutation
+  fails fresh SHA before parsing/Metal. Do not promote stat reuse to fresh
+  content authentication or a persistent trust cache.
+- Actual CPU BF16Stack admission verifies54 blocks/16,314,144,768 payload bytes
+  with exact plans and zero Metal allocations. Preview release build and
+  guarded --plan-only pass with unchanged DiT/decoder named budgets. Added
+  preflight_seconds and request_seconds; historical total_seconds retains its
+  narrower scope. Evidence root remains hy-nomas-pixelumm-bf16-perf-20261028:
+  results/authentication-summary.json, authentication-paired.jsonl,
+  authentication-bf16-controls.jsonl, generation-plan-admission.jsonl and guard
+  logs; external tmp/authentication_benchmark.cr is hash-pinned in the summary.
+- CPU23 examples and native BF16-cache18 pass, format/diff pass. The broader
+  CPU-only cache suite's two old nested-pending errors were resolved by running
+  those Metal-required cases in native mode, without changing unrelated tests.
+  Correlated adversary ROBUST for this startup boundary. Benchmark guard:
+  10%floor/2GiBcap/64MiBswapstop,85 samples,8,470,936B peak,zero swap growth.
+- Next falsifier: two real J5760 windows/two blocks, comparing window-major
+  versus block-major FFN weight staging with separate activation banks and
+  staging-inclusive time. Existing fixed graph feeds/output cursor forbid a
+  simple loop swap. Three F32 FFN matrices cost576MiB; five pairs of BF16 state
+  banks450MiB (~315--360MiB extra), opaque MPS peak still unknown. Proposal only.
+  Return pointer docs/hy-nomas-generation-frontier.md. Rollback reverts this
+  startup commit. Refresh on source/weight/input/runtime/geometry/backend/
+  device/guard changes or evidence loss; memory admission expires each launch.

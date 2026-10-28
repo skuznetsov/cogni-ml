@@ -21,14 +21,18 @@ unless (16_384..24_576).includes?(budget_mib)
   raise ArgumentError.new("named budget must be within 16..24 GiB; use the external 10% memory guard")
 end
 budget = budget_mib * 1024 * 1024
+request_start = Time.monotonic
 inputs = HyNomasGeneration::Inputs.new(input_path, input_sha)
-index = HyNomasGeneration.authenticate_weight_index
+admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index : nil
+q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index.caches.sum(&.payload_bytes)
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget)
 dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
-  HyNomasGeneration.stage_bytes, index.caches.sum(&.payload_bytes)) + HyNomasGeneration.dit_reserve_bytes(inputs)
+  HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs)
 raise ArgumentError.new("DiT named aggregate exceeds budget") if dit_named > budget
+preflight_seconds = (Time.monotonic - request_start).total_seconds
 HyNomasGeneration.emit("memory_plan", dit_weights: HyNomasGeneration.dit_weights_name(dit_weights), dit_named_bytes: dit_named,
   decoder_named_bytes: metadata.named_bytes, named_budget_bytes: budget,
+  preflight_seconds: preflight_seconds,
   phase_handoff: "one drained chain, latent retained on GPU, weights released before next phase")
 if plan_only
   metadata.close
@@ -48,11 +52,12 @@ dit = nil.as(HyNomasGeneration::DiT?)
 decoder = nil.as(HyNomasGeneration::Decoder?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 timings = {} of String => Float64
+timings["preflight_seconds"] = preflight_seconds
 metrics = {} of String => Int64
 start = Time.monotonic
 begin
   setup = Time.monotonic
-  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights)
+  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights, admission: admission)
   raise "DiT preflight and allocation admission disagree" unless dit.named_bytes == dit_named
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -100,6 +105,9 @@ begin
   path = File.join(output_dir, "pixels.f32le")
   HyNomasGeneration.write_fresh_output(path) { |f| f.write(Bytes.new(pixels.contents.as(UInt8*), pixels.size.to_i32)) }
   timings["total_seconds"] = (Time.monotonic - start).total_seconds
+  # Include preflight authentication and input upload as well as setup/compute.
+  # The historical total_seconds field starts after those earlier stages.
+  timings["request_seconds"] = (Time.monotonic - request_start).total_seconds
   receipt = {schema: "cogni_ml.hy_nomas_native_preview/v1", upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION,
              prompt: inputs.prompt, inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              qwen_input: "authenticated saved upstream state26 crop; native live text encoding excluded",

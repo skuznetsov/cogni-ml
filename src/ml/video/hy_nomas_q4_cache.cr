@@ -38,6 +38,22 @@ module ML::Video::HyNomasQ4Cache
     manifest_sha256 : String, payload_sha256 : String,
     payload_bytes : Int64
 
+  # A request-scoped admission may refresh these stat snapshots after the
+  # complete content-hash pass without retaining a mutable cache Block.
+  record AdmittedFileSnapshot, path : String, label : String,
+    info : File::Info do
+    def detached : self
+      self.class.new(path.dup, label.dup, info)
+    end
+
+    def validate_after_admission! : Nil
+      current = Integrity.regular_file_info!(path, label)
+      unless Integrity.same_snapshot?(info, current)
+        raise ArgumentError.new("Hy-Nomas Q4 #{label} changed after index admission")
+      end
+    end
+  end
+
   # Strict CPU-only authentication and GPU-resident access for one encoded
   # block. Construction hashes and validates both files before Metal is used.
   class Block
@@ -193,6 +209,15 @@ module ML::Video::HyNomasQ4Cache
 
     def tensors : Array(Tensor)
       @tensors.map(&.snapshot)
+    end
+
+    # Return value snapshots only. The Block and its Metal payload stay owned
+    # by the cache stack; callers cannot use this to load or release it.
+    def admitted_file_snapshots : Array(AdmittedFileSnapshot)
+      [
+        AdmittedFileSnapshot.new(@manifest_path.dup, "block manifest", @manifest_info),
+        AdmittedFileSnapshot.new(@payload_path.dup, "block payload", @payload_info),
+      ]
     end
 
     # The stack uses this read-only identity for cross-block alias checks.

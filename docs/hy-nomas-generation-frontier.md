@@ -317,12 +317,83 @@ candidate and the experimental RMS code remain outside production. Preserve
 the rank-three batch-32 matmuls and rank-four softmax axis 3. The retained
 external patch and reports document the rejected route, not a production gain.
 
-Startup is another bounded target: the current BF16 entry point authenticates
-all Q4 payloads three times through the shared weight index before computing
-with separately authenticated BF16 controls. Request-scoped authentication
-reuse is proposed; it must preserve file-change rejection, full BF16 hashes,
-exact inventories and byte-copy loading. A CPU authentication measurement must
-remain separate from GPU compute or complete-video speed claims.
+### Measured BF16 startup improvement
+
+The BF16 entry point previously authenticated all Q4 payloads three times
+through the shared weight index before computing with separately authenticated
+BF16 controls. It now creates one request-scoped `HyNomasQ4StackIndex::Admission`
+and refreshes its captured file identities, sizes and modification times at the
+two later admission boundaries. Construction still performs the original full
+index/manifest/payload hash and inventory checks. Every consumed BF16 control
+and the globals still receive their full SHA-256, inventory and direct-copy
+checks. Q4 inference retains its full loader path and rejects the reusable BF16
+admission. No GPU arithmetic, dispatch, synchronization or precision changed.
+
+The freshness guarantee is stat-based: replacement, removal or an mtime change
+rejects across all five file classes. A same-inode, same-size Q4 byte mutation
+with restored mtime can evade refresh; this is not fresh content authentication.
+The BF16 runtime does not consume those Q4 bytes. The corresponding same-stat
+mutation of a consumed BF16 control still fails its full hash before parsing
+or Metal allocation. Reuse is local to this request, not a persistent trust
+cache or authorization for skipping BF16 hashes.
+
+A native Crystal CPU benchmark compared three complete index loads with one
+complete admission plus two refreshes, including the first full scan in each
+case. It used the same 54 ordered blocks and 4,593,162,240 Q4 payload bytes,
+one untimed full-scan warmup, no cache purge, and ABBA followed by BAAB. Across
+four timed cases per arm, medians were **6.136654 s versus 2.055800 s**, a
+2.985x ratio and 4.080854 s difference for this authentication portion. Both
+order groups retained approximately 3x ratios. The last two cases slowed
+together (10.050/3.427 s); these are warm-cache startup observations, not a
+cold-start guarantee or a GPU/complete-video speedup. All identity fingerprints
+matched and tracked Metal allocations were zero. The cache-aware guard passed
+the 10% floor, 2 GiB process cap, 64 MiB swap-growth stop and 180 s timeout:
+85 samples, 8,470,936 B sampled peak, no swap growth.
+
+The real supplied-admission BF16Stack constructor also authenticated all 54
+BF16 controls (16,314,144,768 payload bytes), admitted exact raw-copy plans and
+released with no Metal allocation. The release preview binary passed
+`--plan-only` on the pinned input, reporting BF16 selection and the unchanged
+21,011,384,964/16,563,852,432 B DiT/decoder named budgets. No generation ran.
+The receipt now records `preflight_seconds` and `request_seconds`; the latter
+includes preflight and input upload through pixel-file export. Historical
+`total_seconds` continues to start after preflight/input upload, so compare
+like scopes. External MP4 encoding and process startup remain excluded.
+
+DoD: release `make hy_nomas_generate`; CPU-only specs
+`hy_nomas_q4_stack_spec.cr`, `hy_nomas_generation_admission_spec.cr` and
+`hy_nomas_bf16_serial_admission_spec.cr` (23 examples passed); native
+`make spec_hy_nomas_bf16_cache` (18 examples passed); real guarded authentication
+benchmark and BF16 control admission; guarded preview `--plan-only`;
+format/diff checks. An initial CPU-only run of the broader BF16 cache suite hit
+two existing nested-`pending` errors in its Metal-required cases; those cases
+passed in the proper native suite. No unrelated skip/stub code was changed.
+Evidence in the same external namespace: `tmp/authentication_benchmark.cr`,
+`results/authentication-paired.jsonl`, `authentication-summary.json`,
+`authentication-bf16-controls.jsonl`, `generation-plan-admission.jsonl` and
+their guard logs. The summary pins benchmark source/binary and preview binary
+hashes. Correlated mini-Quad verdict is ROBUST for this startup change and its
+stated stat boundary; unchanged block/head math retains the numerical control
+above. This does not requalify complete-video quality or throughput.
+
+### Next FFN falsifier
+
+Each independent decoder window currently feeds BF16 FFN weights into graphs
+containing F32 casts. Amortizing those casts across five windows is a possible
+larger lever, but its cost is not yet isolated. Simple loop reordering is
+invalid: prepared graphs bind fixed inputs/outputs and the shared two-bank
+workspace cursor requires complete slot-ordered passes. A block-major runner
+needs separate window activation banks and explicit per-window graph bindings.
+One block's three F32 FFN matrices require 576 MiB of staging; retained current
+and next states for five windows require 450 MiB, about 315--360 MiB more than
+the current stem/output banks. Opaque MPS resources need separate measurement.
+
+Before implementing that schedule, compare two real J5760 windows through two
+adjacent blocks in both orders with exact contexts and the same MPS matmul
+geometry/BF16 boundaries. Require unchanged tolerances at each block and
+gate/up/down boundary, one terminal wait, no preterminal readback, fresh memory
+admission and staging-inclusive timing. This remains PROPOSED; no claimed
+weight-cast or decoder speedup follows from source inspection alone.
 
 Refresh all execution claims after changes to source, weights, input identity,
 geometry, precision, schedule, command ordering, backend/device or guard.

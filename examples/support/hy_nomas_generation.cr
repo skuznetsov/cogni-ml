@@ -145,6 +145,11 @@ module HyNomasGeneration
       HyNomasQ4DiTIO::SOURCE_SHA, weight_cache_config)
   end
 
+  def authenticate_bf16_index
+    ML::Video::HyNomasQ4StackIndex::Admission.new(File.realpath(INDEX), INDEX_SHA,
+      HyNomasQ4DiTIO::SOURCE_SHA, weight_cache_config)
+  end
+
   def stage_bytes : Int64
     ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(CONFIG).sum do |b|
       b.shape.reduce(1_i64) { |n, d| n * d } * 2
@@ -229,10 +234,19 @@ module HyNomasGeneration
     @released = false
 
     def initialize(inputs : Inputs, @latent : ML::MetalBuffer, budget : Int64,
-                   mode : DiTWeights = DiTWeights::BF16)
+                   mode : DiTWeights = DiTWeights::BF16, *,
+                   admission : ML::Video::HyNomasQ4StackIndex::Admission? = nil)
       # Every authenticated file and the exact aggregate are admitted first.
       index_path = File.realpath(INDEX)
-      index = HyNomasGeneration.authenticate_weight_index
+      index = if mode == DiTWeights::BF16
+                admitted = admission || HyNomasGeneration.authenticate_bf16_index
+                admitted.validate!(INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                  HyNomasGeneration.weight_cache_config)
+                admitted
+              else
+                raise ArgumentError.new("BF16 index admission cannot be used for Q4 inference") if admission
+                HyNomasGeneration.authenticate_weight_index
+              end
       @file = ML::Video::BF16WeightCache.authenticate(index.globals_bf16_path, index.globals_bf16_sha256)
       bindings = HyNomasQ4DiTIO::GLOBAL_BINDINGS.map do |b|
         ML::Video::WeightBinding.new(b.target, b.source, b.shape, ML::GGUF::SafeTensorDType::BF16)
@@ -241,7 +255,7 @@ module HyNomasGeneration
         resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
       raise ArgumentError.new("DiT globals must be exact BF16") unless plan.staging_bytes == 0 && plan.entries.size == 48
       @loader = if mode == DiTWeights::BF16
-                  ML::Video::HyNomasBF16Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                  ML::Video::HyNomasBF16Stack.new(index.as(ML::Video::HyNomasQ4StackIndex::Admission), INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
                     reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
                 else
