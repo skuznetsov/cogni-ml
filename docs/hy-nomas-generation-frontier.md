@@ -1,9 +1,89 @@
 # Hy-Nomas first native video frontier
 
-Current bounded result: host allocations and GC pauses were measured on the
-original BF16 PixelUMM path. The experiment does not justify promoting
-`GC.disable`; ordinary GC remains selected. The 10% memory reserve is unchanged.
-The historical preview boundary below is not a new generation launch request.
+## Active experiment: prepared CogniGraph native islands (2026-10-28)
+
+Implemented opt-in, CAUTION: share the existing CogniGraph dependency compiler with
+prepared native PixelUMM islands. MPSGraph remains the projection, normalization
+and attention backend. Compile access/range dependencies and copy fixed dispatch
+parameters once during plan preparation. Each island borrows the current root;
+it must close its encoder before any MPSGraph call or capture blit. Retain all
+bound resources under the existing serialized Plan/Workspace lifetime.
+
+The first bounded candidates are independent Q/K preparation, Q/K/V panel
+gathers together with the preceding tile's independent output scatter, and
+SiLU followed by product with one dependency barrier. The final tile retains
+its trailing scatter. Capture blits remain ordered and may split the FFN island.
+No operation may cross an opaque MPSGraph boundary. The control keeps the
+original encoders; selection is explicit and defaults off. This is reuse of CogniGraph scheduling,
+not a new LTP/WBA certificate or a claim about the historical Nomic MoE speedup.
+
+Prediction: fewer native encoders can reduce whole-block request time without
+changing BF16 rounding or MPS reduction geometry. Strongest failure: concurrent
+dispatches alias mutable scratch or escape the current MPS root. Guard it with
+shared scheduler dependency tests, prepared-plan validation, poisoned transients,
+the six upstream capture points per block (`post_attn_norm`, `gate_proj`,
+`up_proj`, `product`, `down_proj`, `output`), output-only candidate comparisons, and
+one terminal wait/readback. Keep `atol=rtol=2e-5`, a cache-aware 10% reserve,
+the existing 16 GiB process cap and 64 MiB swap-growth bound. No full generation.
+
+Implementation/rollback: factor the scheduler in `src/ml/metal/compute_graph.cr`,
+add its CPU-testable native schedule adapter, and integrate opt-in prepared
+islands in `src/ml/video/pixelumm_decoder_block_mps_bridge.mm`. Add a balanced
+same-process probe over the pinned J5760 two-window/two-block fixture. Rollback
+is leaving the candidate disabled; do not change production selection without
+numerical and paired whole-block evidence. DoD: focused scheduler/probe specs,
+release `pixelumm_cognigraph_probe`, unchanged upstream gates including a seeded
+nonfinite control, then guarded ABBA/BAAB whole-request timing with both arms
+sharing weights, inputs, scratch and MPS graphs. Record root/encoder counts,
+host encode wall/CPU, terminal wait, GPU intervals and peak memory separately.
+
+Observed result: all 40 requests pass the unchanged upstream gates. The baseline
+and candidate correctness requests each compare six stages for each of four
+plans; every request compares all four block outputs. All compared words are
+bitwise equal to the saved authenticated upstream-source-method MPS captures;
+the seeded NaN control detects exactly once. This is J5760, blocks 0/1 on two
+windows, not a fresh connected upstream run, full-J21,120 qualification, the
+36-block decoder, head or full generation. Optional Q/K captures and the
+SiLU-capture fallback have source review but no direct runtime qualification
+from this fixture.
+
+Four ABBA+BAAB cycles give 16 adjacent timed pairs. Raw full-request medians are
+1.599111 s baseline and 1.602950 s candidate; paired median change is -0.1124%
+(mean +0.0897%, range -2.145% to +2.716%, eight wins in sixteen pairs). This run
+does not demonstrate a meaningful speedup; it does not prove zero effect.
+Calling-thread CPU medians are 12.057/13.718 ms, with a noisy paired median
+change of +20.165%. Each arm retains 125 MPS roots/request. Native encoder
+counts of 66/29 per block are prepared-plan model counters, not measured API
+calls. Recipes, bindings and dependency waves are reused; Metal commands are
+still encoded into each current root, not replayed from a preencoded command
+buffer. Candidate selection remains off by default.
+
+Every request has one terminal wait, zero tracked named encode allocations or
+preterminal readbacks, and one 464-byte metrics read after completion. Sampled
+process-group peak is 7.619 GiB against the 16 GiB cap; minimum cache-aware
+headroom is 29.868 GiB and swap growth is zero. The 10% reserve remains intact.
+The footprint includes both retained alternatives; it is not a candidate-only
+memory comparison. Sampled limits do not bound inter-poll transients.
+
+Validation: release build and fresh `make -q`, 37 focused CPU examples, four
+Python analyzer tests, three existing GPU ComputeGraph examples, format/diff
+checks, and the guarded 40-request run pass. The guard launches the binary
+directly so its PID matches the report. Its analyzer rejects missing process
+liveness, wrong guard policy, changed tolerance/pins, extra reads and wrong
+mode transitions. The execution receipt pins unchanged measured source and
+binary hashes. Correlated Mini-Quad verdict: ROBUST for bounded correctness and
+the absence of a demonstrated gain in this run; no general speedup claim.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cognigraph-20261028/results/summary.json`,
+SHA256 `26b34c70cb12f4cbcdb9e0e452086f62a5a4c7d37f1acae9220e53f97d830dac`.
+It pins the raw report, guard, execution receipt, analysis sources and curator.
+Refresh after scoped source/artifact/backend/device/OS/toolchain, geometry,
+precision, scheduling, lifetime, guard or clock changes, or evidence loss;
+memory admission is fresh per launch. Next falsifier: use the existing phase
+and root profile on identical operands to target dominant GPU FFN/attention
+work; fewer host encoders alone did not improve this request. Ordinary GC
+remains selected. The historical preview boundary below is not a new generation
+launch request.
 
 ## Preview scope and admitted composition
 

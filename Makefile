@@ -39,6 +39,7 @@ PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
 PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ := $(BUILD_DIR)/pixelumm_connected_resource_bridge.o
 PIXELUMM_FFN_WEIGHT_REUSE_OBJ := $(BUILD_DIR)/pixelumm_ffn_weight_reuse_bridge.o
 PIXELUMM_GC_OBSERVER_OBJ := $(BUILD_DIR)/pixelumm_gc_observer.o
+COGNIGRAPH_NATIVE_HEADERS := src/ml/metal/cognigraph_native.h src/ml/metal/cognigraph_schedule.h
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
 QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
@@ -51,6 +52,9 @@ LINK_FLAGS := -framework Metal -framework Foundation -lc++
 .PHONY: all spec_video_staging spec_wan spec_hy_nomas spec_hy_nomas_residency spec_hy_nomas_bf16_cache spec_qwen25 hy_nomas_block_benchmark hy_nomas_serial_benchmark hy_nomas_pretrained_serial_probe hy_nomas_bf16_cache_probe hy_nomas_bf16_serial_probe hy_nomas_residency_plan spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
+
+# Each of these translation units includes the PixelUMM block bridge.
+$(PIXELUMM_MPS_OBJ) $(PIXELUMM_HEAD_OBJ) $(PIXELUMM_FFN_PROBE_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ) $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): $(COGNIGRAPH_NATIVE_HEADERS)
 
 $(BUILD_SENTINEL):
 	@mkdir -p $(BUILD_DIR)
@@ -205,6 +209,17 @@ spec_pixelumm_drift_probe:
 $(BUILD_DIR)/pixelumm_drift_probe: examples/pixelumm_drift_probe.cr examples/support/pixelumm_drift_probe.cr examples/support/pixelumm_drift_profile.cr examples/support/pixelumm_gc_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ) $(PIXELUMM_GC_OBSERVER_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(abspath $(PIXELUMM_GC_OBSERVER_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+.PHONY: pixelumm_cognigraph_probe spec_pixelumm_cognigraph_probe
+pixelumm_cognigraph_probe: $(BUILD_DIR)/pixelumm_cognigraph_probe
+
+spec_pixelumm_cognigraph_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/compute_graph_schedule_spec.cr spec/pixelumm_cognigraph_probe_spec.cr
+
+# The diagnostic bridge includes the production block ABI exactly once.
+$(BUILD_DIR)/pixelumm_cognigraph_probe: examples/pixelumm_cognigraph_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # Independent native Plans bind one diagnostic-owned Workspace. The normal
 # production bridge has no per-Graph resource collector in this experiment.

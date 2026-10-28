@@ -13,9 +13,11 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <time.h>
 #include <vector>
 #include "mps_api_profile.h"
+#include "../metal/cognigraph_native.h"
 
 extern "C" int32_t gs_mps_chain_root_count(void *, int32_t *);
 
@@ -111,7 +113,17 @@ enum PixelCapture : NSUInteger {
 @implementation PixelUMMAttentionGeometry
 @end
 
-@interface PixelUMMDecoderPlan : NSObject
+struct PixelUMMNativeIslands {
+  cogni::PreparedNativeGraph qkCaptured, qkPlain, ffn;
+  std::vector<std::unique_ptr<cogni::PreparedNativeGraph>> gathers;
+  uint64_t captureMask = 0;
+  uint64_t stats[8]{};
+};
+
+@interface PixelUMMDecoderPlan : NSObject {
+@public
+  std::unique_ptr<PixelUMMNativeIslands> nativeIslands;
+}
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) NSArray<id<MTLBuffer>> *weights;
 @property(nonatomic, strong) NSArray<id<MTLBuffer>> *core;
@@ -169,6 +181,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic) BOOL softmaxPVPrepared;
 @property(nonatomic) BOOL useSoftmaxPV;
 @property(nonatomic) BOOL encodingStarted;
+@property(nonatomic) BOOL useNativeIslands;
 @property(nonatomic) uint64_t captureMask;
 @end
 @implementation PixelUMMDecoderPlan
@@ -1231,6 +1244,178 @@ static bool pixel_copy_capture(MPSCommandBuffer *commandBuffer,
                        errorText, errorCapacity);
 }
 
+static cogni::NativeGraphBinding pixel_native_binding(
+    id<MTLBuffer> buffer, uint32_t index, int32_t access) {
+  return {buffer, index, 0, int64_t(buffer.length), access};
+}
+
+template <typename P>
+static cogni::NativeGraphOp pixel_native_op(
+    id<MTLComputePipelineState> pipeline,
+    std::vector<cogni::NativeGraphBinding> bindings, const P &params,
+    uint64_t count, bool groups = false) {
+  cogni::NativeGraphOp op;
+  op.pipeline = pipeline;
+  op.parameterIndex = uint32_t(bindings.size());
+  op.buffers = std::move(bindings);
+  op.parameters.resize(sizeof(P));
+  std::memcpy(op.parameters.data(), &params, sizeof(P));
+  op.grid = MTLSizeMake(count, 1, 1);
+  op.threads = MTLSizeMake(groups ? 128 : MIN(NSUInteger(256),
+      pipeline.maxTotalThreadsPerThreadgroup), 1, 1);
+  op.threadgroups = groups;
+  return op;
+}
+
+static bool pixel_prepare_native_islands(PixelUMMDecoderPlan *plan,
+                                         GsCogniGraphCompile compiler) {
+  if (!compiler || plan.encodingStarted || plan->nativeIslands ||
+      !plan.tileCount || plan.softmaxPVCompare) return false;
+  auto islands = std::make_unique<PixelUMMNativeIslands>();
+  islands->captureMask = plan.captureMask;
+  auto compile = [&](cogni::PreparedNativeGraph &graph,
+                     std::vector<cogni::NativeGraphOp> ops) {
+    if (!graph.prepare(plan.device, std::move(ops), compiler)) return false;
+    ++islands->stats[0];
+    islands->stats[1] += graph.opCount();
+    islands->stats[2] += graph.waveCount();
+    islands->stats[3] += graph.barrierCount();
+    islands->stats[4] = std::max(islands->stats[4], uint64_t(graph.maxWidth()));
+    return true;
+  };
+  for (uint32_t captures = 0; captures < 2; ++captures) {
+    std::vector<cogni::NativeGraphOp> ops;
+    for (uint32_t which = 0; which < 2; ++which) {
+      const uint32_t heads = which ? plan.kvHeads : plan.heads;
+      const PixelCapture norm = which ? PixelKNorm : PixelQNorm;
+      const PixelCapture rope = which ? PixelKRope : PixelQRope;
+      const bool captureNorm = captures && pixel_capture_enabled(plan, norm);
+      const bool captureRope = captures && pixel_capture_enabled(plan, rope);
+      PixelQKParams params{plan.tokens, heads, uint32_t(captureNorm), uint32_t(captureRope)};
+      ops.push_back(pixel_native_op(plan.qkPrepare, {
+          pixel_native_binding(plan.core[which ? 2 : 1], 0, 2),
+          pixel_native_binding(plan.weights[which ? 7 : 5], 1, 0),
+          pixel_native_binding(plan.weights[which ? 8 : 6], 2, 0),
+          pixel_native_binding(plan.resident[1], 3, 0),
+          pixel_native_binding(plan.resident[2], 4, 0),
+          pixel_native_binding(captureNorm ? plan.captures[norm] : plan.resident[1], 5,
+                               captureNorm ? 1 : 0),
+          pixel_native_binding(captureRope ? plan.captures[rope] : plan.resident[1], 6,
+                               captureRope ? 1 : 0),
+          pixel_native_binding(plan.scratch[which ? 13 : 12], 7, 0)},
+          params, uint64_t(plan.tokens) * heads, true));
+    }
+    auto &graph = captures ? islands->qkCaptured : islands->qkPlain;
+    if (!compile(graph, std::move(ops)) || graph.opCount() != 2 ||
+        graph.waveCount() != 1) return false;
+  }
+  const int32_t *queryTable = (const int32_t *)[plan.scratch[6] contents];
+  const int32_t *keyTable = (const int32_t *)[plan.scratch[7] contents];
+  if (!queryTable || !keyTable) return false;
+  for (uint32_t tile = 0; tile < plan.tileCount; ++tile) {
+    const uint32_t queryCount = uint32_t(queryTable[uint64_t(tile) * (plan.maxQuery + 1u)]);
+    const uint32_t keyCount = uint32_t(keyTable[uint64_t(tile) * (plan.maxKey + 1u)]);
+    if (!queryCount || queryCount > plan.maxQuery || !keyCount || keyCount > plan.maxKey)
+      return false;
+    std::vector<cogni::NativeGraphOp> ops;
+    if (tile) {
+      const uint32_t previousCount = uint32_t(queryTable[uint64_t(tile - 1) * (plan.maxQuery + 1u)]);
+      PixelScatterParams params{tile - 1, plan.maxQuery, previousCount};
+      ops.push_back(pixel_native_op(plan.scatterAttention, {
+          pixel_native_binding(plan.scratch[5], 0, 0),
+          pixel_native_binding(plan.scratch[6], 1, 0),
+          pixel_native_binding(plan.core[4], 2, 1)}, params,
+          uint64_t(plan.heads) * previousCount * plan.headDim));
+    }
+    PixelGatherQParams qParams{tile, plan.maxQuery, queryCount};
+    PixelGatherKVParams kvParams{tile, plan.maxKey, keyCount};
+    ops.push_back(pixel_native_op(plan.gatherQ, {
+        pixel_native_binding(plan.core[1], 0, 0),
+        pixel_native_binding(plan.scratch[6], 1, 0),
+        pixel_native_binding(plan.scratch[0], 2, 1)}, qParams,
+        uint64_t(plan.heads) * queryCount * plan.headDim));
+    for (uint32_t which = 0; which < 2; ++which)
+      ops.push_back(pixel_native_op(plan.gatherKV, {
+          pixel_native_binding(plan.core[which + 2], 0, 0),
+          pixel_native_binding(plan.scratch[7], 1, 0),
+          pixel_native_binding(plan.scratch[which + 1], 2, 1)}, kvParams,
+          uint64_t(plan.heads) * keyCount * plan.headDim));
+    auto graph = std::make_unique<cogni::PreparedNativeGraph>();
+    if (!compile(*graph, std::move(ops)) || graph->opCount() != (tile ? 4u : 3u) ||
+        graph->waveCount() != 1) return false;
+    islands->gathers.push_back(std::move(graph));
+  }
+  PixelCountParams params{plan.tokens * plan.ffn};
+  std::vector<cogni::NativeGraphOp> ffnOps;
+  ffnOps.push_back(pixel_native_op(plan.silu, {
+      pixel_native_binding(plan.core[6], 0, 2)}, params, uint64_t(plan.tokens) * plan.ffn));
+  ffnOps.push_back(pixel_native_op(plan.product, {
+      pixel_native_binding(plan.core[6], 0, 0),
+      pixel_native_binding(plan.core[7], 1, 2)}, params, uint64_t(plan.tokens) * plan.ffn));
+  if (!compile(islands->ffn, std::move(ffnOps)) || islands->ffn.opCount() != 2 ||
+      islands->ffn.waveCount() != 2 || islands->ffn.barrierCount() != 1) return false;
+  islands->stats[5] = islands->stats[6] = uint64_t(plan.tileCount) * 5 + 6;
+  islands->stats[7] = uint64_t(plan.tileCount) * 2 + 5;
+  plan->nativeIslands = std::move(islands);
+  return true;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_native_islands(
+    void *handle, GsCogniGraphCompile compiler, char *error, size_t capacity) {
+  if (error && capacity) error[0] = '\0';
+  if (!handle || !compiler) return -1;
+  @try {
+    PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)handle;
+    @synchronized(plan) {
+      if (!pixel_prepare_native_islands(plan, compiler)) {
+        pixel_set_error(error, capacity, "PixelUMM CogniGraph preparation or dependency certificate failed");
+        return -2;
+      }
+    }
+    return 0;
+  } @catch (NSException *exception) {
+    pixel_set_ns_error(error, capacity, exception.reason);
+    return -3;
+  }
+}
+
+// The serialized owner may select a prepared alternative only between drained
+// requests. As with the existing FFN setter, the owner enforces chain lifetime.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_set_native_islands(
+    void *handle, int32_t enabled, char *error, size_t capacity) {
+  if (error && capacity) error[0] = '\0';
+  if (!handle || (enabled != 0 && enabled != 1)) return -1;
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)handle;
+  @synchronized(plan) {
+    if (enabled && !plan->nativeIslands) {
+      pixel_set_error(error, capacity, "PixelUMM CogniGraph islands were not prepared");
+      return -2;
+    }
+    plan.useNativeIslands = enabled != 0;
+  }
+  return 0;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_native_island_stats(
+    void *handle, uint64_t *out, uint32_t capacity) {
+  if (!handle || !out || capacity != 8) return -1;
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)handle;
+  if (!plan->nativeIslands) return -2;
+  std::memcpy(out, plan->nativeIslands->stats, sizeof(plan->nativeIslands->stats));
+  return 0;
+}
+
+static bool pixel_encode_native_island(MPSCommandBuffer *commandBuffer,
+    PixelUMMDecoderPlan *plan, const cogni::PreparedNativeGraph &graph,
+    char *error, size_t capacity) {
+  id<MTLCommandBuffer> root = pixel_current_root(commandBuffer, plan.device, error, capacity);
+  if (!root || !graph.encode(root)) {
+    pixel_set_error(error, capacity, "PixelUMM CogniGraph current-root encode failed");
+    return false;
+  }
+  return true;
+}
+
 static void *pixelumm_decoder_block_plan_create(
     void *deviceHandle, int32_t temporal, int32_t height, int32_t width,
     int32_t tile, int32_t dim, int32_t ffn, int32_t heads,
@@ -1884,9 +2069,11 @@ static int32_t pixel_encode_block(
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       BOOL useSharedGateUp = NO;
       BOOL useSoftmaxPV = NO;
+      BOOL useNativeIslands = NO;
       @synchronized(plan) {
         useSharedGateUp = plan.useSharedGateUp;
         useSoftmaxPV = plan.useSoftmaxPV;
+        useNativeIslands = plan.useNativeIslands;
         plan.encodingStarted = YES;
       }
       MPSCommandBuffer *commandBuffer = (__bridge MPSCommandBuffer *)commandChainHandle;
@@ -1897,6 +2084,15 @@ static int32_t pixel_encode_block(
         pixel_set_error(errorText, errorCapacity,
                         "PixelUMM MPSCommandChain root is unavailable, committed or on another device");
         return -2;
+      }
+      if (useNativeIslands && (!plan->nativeIslands || plan.softmaxPVCompare ||
+          plan->nativeIslands->gathers.size() != plan.tileCount ||
+          (plan.captureMask != plan->nativeIslands->captureMask &&
+           plan.captureMask != (plan->nativeIslands->captureMask &
+                                (uint64_t(1) << PixelOutput))))) {
+        pixel_set_error(errorText, errorCapacity,
+                        "PixelUMM CogniGraph recipe does not match the active plan");
+        return -19;
       }
       PixelUMMPhaseRecorder profile(profileChain, markers, markerCapacity);
       @try {
@@ -1938,13 +2134,18 @@ static int32_t pixel_encode_block(
         id<MTLBuffer> qRope = pixel_capture_enabled(plan, PixelQRope) ? plan.captures[PixelQRope] : nil;
         id<MTLBuffer> kNorm = pixel_capture_enabled(plan, PixelKNorm) ? plan.captures[PixelKNorm] : nil;
         id<MTLBuffer> kRope = pixel_capture_enabled(plan, PixelKRope) ? plan.captures[PixelKRope] : nil;
-        if (!pixel_run_qk_prepare(commandBuffer, plan, plan.core[1], plan.heads,
+        if (useNativeIslands) {
+          const auto &graph = plan.captureMask == plan->nativeIslands->captureMask
+              ? plan->nativeIslands->qkCaptured : plan->nativeIslands->qkPlain;
+          if (!pixel_encode_native_island(commandBuffer, plan, graph,
+                                         errorText, errorCapacity)) return -7;
+        } else if (!pixel_run_qk_prepare(commandBuffer, plan, plan.core[1], plan.heads,
               plan.weights[5], plan.weights[6], qNorm, qRope,
               plan.scratch[12], errorText, errorCapacity) ||
             !pixel_run_qk_prepare(commandBuffer, plan, plan.core[2], plan.kvHeads,
               plan.weights[7], plan.weights[8], kNorm, kRope,
-              plan.scratch[13], errorText, errorCapacity) ||
-            !pixel_copy_capture(commandBuffer, plan, PixelQReady, plan.core[1], dBytes, errorText, errorCapacity) ||
+              plan.scratch[13], errorText, errorCapacity)) return -7;
+        if (!pixel_copy_capture(commandBuffer, plan, PixelQReady, plan.core[1], dBytes, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelKReady, plan.core[2], kvBytes, errorText, errorCapacity)) return -7;
         if (!profile.mark(3, GS_MPS_API_PROFILE_PHASE_SELF_ATTENTION)) return -18;
         id<MTLBuffer> queryIndices = plan.scratch[6];
@@ -1971,8 +2172,15 @@ static int32_t pixel_encode_block(
           uint64_t panelCount = uint64_t(plan.heads) * queryCount * plan.headDim;
           uint64_t scoreCount = uint64_t(plan.heads) * queryCount * keyCount;
           uint64_t kvPanelCount = uint64_t(plan.heads) * keyCount * plan.headDim;
-          if (geometry.queryCount != queryCount || geometry.keyCount != keyCount ||
-              !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherQ,
+          if (geometry.queryCount != queryCount || geometry.keyCount != keyCount)
+            return -9;
+          if (useNativeIslands) {
+            // The preceding MPS PV has finished encoding before its output is
+            // scattered alongside the next tile's independent panel gathers.
+            if (!pixel_encode_native_island(commandBuffer, plan,
+                    *plan->nativeIslands->gathers[tileIndex],
+                    errorText, errorCapacity)) return -9;
+          } else if (!pixel_encode_kernel(commandBuffer, plan.device, plan.gatherQ,
                   @[plan.core[1], queryIndices, plan.scratch[0]], &qParams,
                   sizeof(qParams), panelCount, false, errorText, errorCapacity) ||
               !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
@@ -1982,8 +2190,9 @@ static int32_t pixel_encode_block(
               !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
                   @[plan.core[3], keyIndices, plan.scratch[2]], &kvParams,
                   sizeof(kvParams), kvPanelCount, false,
-                  errorText, errorCapacity) ||
-              !pixel_encode_graph(commandBuffer, geometry.qk, errorText, errorCapacity)) return -9;
+                  errorText, errorCapacity)) return -9;
+          if (!pixel_encode_graph(commandBuffer, geometry.qk,
+                                  errorText, errorCapacity)) return -9;
           PixelScaleParams scaleParams{(uint32_t)scoreCount, 1.0f / sqrtf(128.0f)};
           if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scaleScores,
                 @[plan.scratch[3]], &scaleParams, sizeof(scaleParams), scoreCount,
@@ -2000,7 +2209,8 @@ static int32_t pixel_encode_block(
               !pixel_check_softmax_pv_tile(commandBuffer, plan, geometry, scoreCount,
                   panelCount, useSoftmaxPV, tileIndex == 0, errorText, errorCapacity)) return -10;
           PixelScatterParams scatterParams{tileIndex, plan.maxQuery, queryCount};
-          if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scatterAttention,
+          if ((!useNativeIslands || tileIndex + 1 == plan.tileCount) &&
+              !pixel_encode_kernel(commandBuffer, plan.device, plan.scatterAttention,
                 @[plan.scratch[5], queryIndices, plan.core[4]],
                 &scatterParams, sizeof(scatterParams), panelCount,
                 false, errorText, errorCapacity)) return -11;
@@ -2034,7 +2244,10 @@ static int32_t pixel_encode_block(
                    !pixel_copy_capture(commandBuffer, plan, PixelUpProj, plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
         if (!profile.mark(7, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         PixelCountParams ffnCount{plan.tokens * plan.ffn};
-        if (!pixel_encode_kernel(commandBuffer, plan.device, plan.silu,
+        if (useNativeIslands && !pixel_capture_enabled(plan, PixelSiluGate)) {
+          if (!pixel_encode_native_island(commandBuffer, plan,
+                  plan->nativeIslands->ffn, errorText, errorCapacity)) return -14;
+        } else if (!pixel_encode_kernel(commandBuffer, plan.device, plan.silu,
               @[plan.core[6]], &ffnCount,
               sizeof(PixelCountParams), uint64_t(plan.tokens) * plan.ffn,
               false, errorText, errorCapacity) ||
@@ -2042,8 +2255,8 @@ static int32_t pixel_encode_block(
             !pixel_encode_kernel(commandBuffer, plan.device, plan.product,
               @[plan.core[6], plan.core[7]], &ffnCount,
               sizeof(PixelCountParams), uint64_t(plan.tokens) * plan.ffn,
-              false, errorText, errorCapacity) ||
-            !pixel_copy_capture(commandBuffer, plan, PixelProduct, plan.core[7], ffBytes, errorText, errorCapacity)) return -14;
+              false, errorText, errorCapacity)) return -14;
+        if (!pixel_copy_capture(commandBuffer, plan, PixelProduct, plan.core[7], ffBytes, errorText, errorCapacity)) return -14;
         if (!profile.mark(8, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         if (!pixel_encode_graph(commandBuffer, plan.downProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelDownProj, plan.core[4], dBytes, errorText, errorCapacity)) return -14;

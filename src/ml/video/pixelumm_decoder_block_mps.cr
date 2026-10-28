@@ -1,6 +1,7 @@
 # Opt-in, one-layer PixelUMM decoder execution. This path is deliberately
 # independent of the existing Qwen and Hy-Nomas decoder modules.
 require "../core/buffer"
+require "../metal/compute_graph_schedule"
 require "./metal_mps_command_chain"
 require "./metal_ops"
 require "./pixelumm_block_profile"
@@ -52,6 +53,16 @@ end
     ) : Void*
     fun set_shared_gate_up = gs_pixelumm_decoder_block_plan_set_shared_gate_up(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun prepare_native_islands = gs_pixelumm_decoder_block_plan_prepare_native_islands(
+      plan : Void*, compiler : ML::Metal::CogniGraphSchedule::Callback,
+      error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun set_native_islands = gs_pixelumm_decoder_block_plan_set_native_islands(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun native_island_stats = gs_pixelumm_decoder_block_plan_native_island_stats(
+      plan : Void*, out : UInt64*, capacity : UInt32,
     ) : Int32
     fun plan_prepare_softmax_pv = gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
@@ -716,6 +727,34 @@ module ML::Video::PixelUMMDecoderBlockMPS
             @error_text.to_unsafe, @error_text.size)
           raise ArgumentError.new("PixelUMM gate/up selection failed: #{error_message}") unless status == 0
           @shared_gate_up = enabled
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    # Preparation reuses CogniGraph's dependency compiler; no tensor or Metal
+    # buffer is allocated. Native recipes retain the Plan's existing bindings.
+    def prepare_native_islands! : Nil
+      check_live!
+      @workspace.not_nil!.configure_plan!(@slot) do
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.prepare_native_islands(@native,
+            ML::Metal::CogniGraphSchedule.callback, @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM CogniGraph preparation failed: #{error_message}") unless status == 0
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    def use_native_islands!(enabled : Bool) : Nil
+      check_live!
+      @workspace.not_nil!.configure_plan!(@slot) do
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.set_native_islands(@native, enabled ? 1 : 0,
+            @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM CogniGraph selection failed: #{error_message}") unless status == 0
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
         {% end %}

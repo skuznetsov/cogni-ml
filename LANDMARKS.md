@@ -6,6 +6,47 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-COGNIGRAPH-2026-10-28] Prepared native islands preserve bounded parity without a demonstrated block gain
+
+- VERIFIED bounded shared CogniGraph dependency compilation and opt-in native
+  PixelUMM recipes. Q/K preparation and independent panel gathers/previous-tile
+  scatter share concurrent encoders; SiLU/product use two waves and one GPU
+  dependency barrier. MPS calls and capture blits remain outside the islands.
+  Pipelines/buffers/parameters are retained; no root is reused across MPS calls.
+  Commands are encoded per request; this is not preencoded command replay or
+  a new LTP/WBA certificate. The historical twofold gain was Nomic MoE.
+- The J5760 two-window/two-block four-plan probe passes all 40 requests at
+  unchanged atol=rtol=2e-5. Every compared output is bitwise equal; baseline and
+  candidate correctness requests also match all six captures per plan against
+  saved authenticated upstream-source-method MPS controls. The NaN control
+  detects exactly once. Optional Q/K captures and the SiLU-capture fallback
+  retain source-review-only coverage. No full-J21,120, head, 36-block decoder,
+  fresh connected upstream or full-generation qualification is claimed.
+- Sixteen AB/BA pairs across four ABBA+BAAB cycles show full-request medians
+  1.599111/1.602950 s baseline/candidate; paired median -0.1124%, mean +0.0897%,
+  range -2.145% to +2.716%, eight candidate wins. No meaningful gain established;
+  candidate remains off by default. Calling-thread CPU raw medians 12.057/13.718
+  ms (noisy paired median +20.165%). Both arms retain 125 MPS roots/request.
+  Native encoder counts 66->29 are prepared-plan model counters, not measured
+  API calls. This does not establish a true zero effect or a causal CPU cost.
+- One terminal wait/request, zero tracked named encode allocations/preterminal
+  reads, one 464-byte metrics read afterward. Guard PID/PGID joins the report;
+  all 158 runtime samples contain one live process. Across 160 samples: peak
+  7.619 GiB, minimum file-cache-aware headroom 29.868 GiB, swap growth zero;
+  unchanged 16 GiB cap, 10% reserve, 64 MiB swap stop and 600 s deadline.
+  Sampling does not bound transients; both alternatives remain resident.
+- Release/fresh Make, 37 focused CPU examples, four analyzer tests, three
+  existing GPU ComputeGraph examples, format/diff and guarded run pass.
+  Correlated Mini-Quad verdict ROBUST within this bounded scope. Evidence:
+  `docs/hy-nomas-generation-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cognigraph-20261028/results/summary.json`
+  (SHA256 `26b34c70cb12f4cbcdb9e0e452086f62a5a4c7d37f1acae9220e53f97d830dac`).
+  Next falsifier: target dominant GPU FFN/attention phases on identical operands
+  using existing root/phase profiling. Rollback leaves the explicit candidate
+  disabled or reverts the atomic change. Refresh on scoped source/artifact/
+  backend/device/OS/toolchain, geometry/precision/scheduling/lifetime/guard/clock
+  changes or evidence loss; memory admission expires at each launch.
+
 ### [LM-HY-NOMAS-PIXELUMM-F32-KERNEL-2026-10-28] Exact F32 FFN tiles preserve parity but lose to MPS
 
 - VERIFIED bounded native projection parity and rejection of two diagnostic
