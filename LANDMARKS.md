@@ -35142,3 +35142,45 @@ Refresh after source/toolchain/device/model/workload changes.
   or reverts the atomic commit. Refresh on scoped source/artifacts/backend/
   device/OS/toolchain/geometry/precision/capture/lifetime/clock/guard changes or
   evidence loss; launch admission always expires.
+
+### 2026-10-27: PixelUMM isolated full-J FFN and order-sensitive resources
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-ffn-isolated.json. New diagnostic
+  reuses production separate/shared F32-operand MPSGraph builders at actual
+  J2048/J21120, with identical bindings. Down consumes one saved upstream product
+  through one unchanged compiled graph. Activation/product execution is excluded;
+  no repeated small-grid rows, full decoder, diffusion, Studio or generation.
+- Final exact-source epoch: two small and six full processes, 48 requests.
+  Each chain has two warmups plus B/S/S/B or S/B/B/S, one terminal wait,
+  zero named encode allocations/preterminal activation reads; only 400 scalar
+  diagnostic bytes read afterward. All 144 upstream projection comparisons and 48
+  GPU down-canonical comparisons are finite and bitwise exact at unchanged 2e-5;
+  eight NaN positives detected. Source-method MPS replay, not independent backend.
+- Full measured roots are isolated from outside roots; first warmup can overlap
+  and is excluded. Aggregate separate/shared gate/up medians 373.667/372.128 ms,
+  down 202.622/201.637 ms. Large previous shared penalty does not reproduce here;
+  tiny contrasts are comparable to unchanged-down/order variation. No stable
+  speedup or default promotion; root residency is not shader service or causality.
+- Identical named buffers 3,589,276,048 bytes. Device peaks 5927.516 MiB or 5789.516 MiB
+  with gate/up first, versus 5267.516 MiB with down first in both tested warmup
+  orders. Increase appears during first encodes, then plateaus; GC heap 1.672 MiB
+  during encoding. The 522/660 MiB gap matches possible F32 tensor sizes, but no
+  allocator mechanism is proven. Down-first cannot reorder the dependent FFN.
+  All named handles/plans/chain release; device counter remains 5.144-5.789 GiB,
+  unattributed. Named/device/process/GC counters overlap and are not additive.
+- Fresh build/Make check, 50 Crystal examples, 7 Python tests, format/diff checks,
+  one-byte-short budget refusal and 8 auditor mutation negatives pass. Full guard
+  sampled peak 5.843830 GiB, phase peak 5.837497 GiB, minimum cache-aware headroom
+  36.424103 GiB, swap growth 0 in 84 samples. 10% floor, 12 GiB cap, 64 MiB swap stop,
+  240 s deadline; sampling cannot bound spikes. Mini-Quad verdict ROBUST for
+  bounded diagnostic, correlated rather than independent replication.
+- External final reports and isolated-audit-v2.json under
+  /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027. Earlier passing
+  epochs are historical; a two-indent format correction triggered fresh build
+  and complete final matrix. Next falsifier: connected-block resource/lifetime
+  interference against this same-input isolated baseline before GEMM replacement
+  or shared-mode promotion. Rollback removes diagnostics; defaults unchanged.
+  Refresh on scoped source/artifacts/backend/device/OS/toolchain/geometry/
+  precision/command/lifetime/guard/clock changes or lost evidence; every launch
+  needs fresh memory admission.

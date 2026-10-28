@@ -35,6 +35,8 @@ QWEN25_MPS_OBJ := $(BUILD_DIR)/qwen25_mps_bridge.o
 PIXELUMM_MPS_OBJ := $(BUILD_DIR)/pixelumm_decoder_block_mps_bridge.o
 PIXELUMM_HEAD_OBJ := $(BUILD_DIR)/pixelumm_decoder_head_mps_bridge.o
 PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
+PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
+PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
 QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
 WAN_SPEC_OBJS := $(if $(IS_DARWIN),$(WAN_MPS_OBJS) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ) $(QWEN25_MPS_OBJ),)
@@ -125,8 +127,18 @@ pixelumm_ffn_projection_probe: $(BUILD_DIR)/pixelumm_ffn_projection_probe
 spec_pixelumm_ffn_projection:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_projection_spec.cr
 
+.PHONY: pixelumm_ffn_isolated_probe spec_pixelumm_ffn_isolated_probe
+pixelumm_ffn_isolated_probe: $(BUILD_DIR)/pixelumm_ffn_isolated_probe
+
+spec_pixelumm_ffn_isolated_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_isolated_probe_spec.cr
+
 $(PIXELUMM_FFN_PROBE_OBJ): examples/support/pixelumm_ffn_projection_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN probe requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(PIXELUMM_FFN_ISOLATED_PROBE_OBJ): examples/support/pixelumm_ffn_isolated_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM isolated FFN probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
 # The diagnostic bridge includes the production bridge translation unit.
@@ -134,6 +146,12 @@ $(PIXELUMM_FFN_PROBE_OBJ): examples/support/pixelumm_ffn_projection_bridge.mm sr
 $(BUILD_DIR)/pixelumm_ffn_projection_probe: examples/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+# The isolated diagnostic bridge includes production FFN builders; do not also
+# link PIXELUMM_MPS_OBJ or PIXELUMM_FFN_PROBE_OBJ into its executable.
+$(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_block_profile:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr

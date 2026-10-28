@@ -1,5 +1,124 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Isolated full-J FFN resource experiment, 2026-10-27
+
+Status: VERIFIED for the bounded native diagnostic, source-method projection
+parity and completed command-root interval/resource observations. No shared
+mode speedup, stable regression, physical MPS allocation mechanism or default
+promotion is established. Production arithmetic and defaults are unchanged.
+
+`pixelumm_ffn_isolated_probe` calls the exact production `pixel_linear_step`
+and `pixel_linear_shared_input_pair_step` builders: BF16 boundaries, F32
+operands, BF16 outputs. Both gate/up modes use identical resident inputs,
+weights and output bindings. One unchanged down executable always consumes
+the same saved upstream SiLU-times-up product; activation/product computation
+is outside this experiment. The old standalone diagnostic repeats J2048 rows;
+that route is rejected here. Native fixtures use actual J2048 or J21,120 rows.
+
+The pinned upstream block0 suffix replays saved `inputs.x` and
+`block0.attention`: output projection, residual, post-attention norm and FFN.
+Its five small-grid stages match the previous 26-stage oracle bitwise. The
+full-grid input comes from the qualified real-latent/noise/stem path. Attention
+itself is saved from the previous MPS-adapted oracle. This is a source-method
+MPS comparison, not independent backend or full connected-model equivalence.
+Seven selected parent records are hashed; the unrelated 20.66 GB parent payload
+is not rehashed. The new compact payload is fully hashed, including each record.
+The oracle has one explicit pre-staging MPS wait outside native timing and
+exports eight BF16 records. Native computation and comparisons stay on GPU;
+only 400 bytes of scalar diagnostic counters are read after the terminal wait.
+
+CAUTION: command/resource interpretation and partial-enqueue lifetime. Every
+blit/Graph/comparator attempt marks resources in flight before it can partially
+submit work. A successful single terminal drain permits release; an errored
+wait does not. Native commands add asynchronous diagnostic root boundaries,
+not production synchronization. Uploads, preparation, poison/canonical blits,
+GPU comparisons and teardown are outside timed stage roots. The unchanged down
+output is copied and compared on GPU, with no CPU activation scan. Named
+allocations and activation readbacks during encoding are zero.
+
+Eight fresh final-source processes run 48 requests: two true-small and six full
+order cells. Each chain contains two warmups and four balanced measured arms,
+with one terminal wait. Four full cells cross both preparation/warmup orders
+with both measured starting orders; two more execute down before gate/up.
+Preparation and warmup reversal are coupled and cannot be attributed separately.
+All 144 upstream projection comparisons and 48 unchanged-down canonical checks
+are finite and bitwise exact at unchanged `atol=rtol=2e-5`. Eight GPU NaN positive
+controls are detected. All measured stage roots have zero overlap with other
+roots; first warmup roots can overlap and are excluded from speed comparisons.
+
+| Warmup/preparation order | Measured arms | Stage order | Gate/up separate ms | Gate/up shared ms | Down in separate arm ms | Down in shared arm ms |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Separate, shared | B/S/S/B | Gate/up, down | 373.147 | 370.316 | 201.951 | 201.594 |
+| Separate, shared | S/B/B/S | Gate/up, down | 373.316 | 373.644 | 202.060 | 200.376 |
+| Shared, separate | B/S/S/B | Gate/up, down | 373.982 | 372.699 | 202.876 | 201.886 |
+| Shared, separate | S/B/B/S | Gate/up, down | 373.679 | 372.168 | 202.602 | 199.111 |
+| Separate, shared | B/S/S/B | Down, gate/up | 375.953 | 372.214 | 201.768 | 202.814 |
+| Shared, separate | S/B/B/S | Down, gate/up | 372.625 | 371.222 | 201.815 | 204.034 |
+
+B means separate graphs, S shared input-pair graph. Each entry is a median of
+its two measured arms in that process. Aggregate medians are 373.667/372.128 ms
+for gate/up and 202.622/201.637 ms for down. These are GPU command-root lifetime
+unions, not exclusive shader service time. The large earlier integrated shared
+penalty does not repeat here. The four gate/up-first ratios range 0.9924-1.0009;
+unchanged down also varies. Whole-chain API profiles are unassigned to stages,
+and do not establish per-projection waits or physical cast/kernel counts.
+No stable performance promotion follows from these small contrasts.
+
+| Full-J resource order | Maximum observed Metal allocation MiB | Metal allocation after plan/buffer/chain release MiB |
+| --- | ---: | ---: |
+| Gate/up first; separate/shared warmup | 5927.516 | 5927.375 |
+| Gate/up first; shared/separate warmup | 5789.516 | 5789.375 |
+| Down first; either tested warmup order | 5267.516 | 5267.375 |
+
+Named buffers are identical at 3,589,276,048 bytes (3.342774 GiB). Preparation
+changes device allocation only from 3423.375 to 3423.391 MiB. The order-dependent
+increase appears in the first encoded projections and plateaus after warmup;
+Crystal GC heap remains 1.672 MiB during encoding. Down-first reduces the
+observed device allocation by 522 or 660 MiB in this diagnostic. Those differences
+match one 330 MiB F32 hidden activation plus one 192 MiB F32 weight, or two hidden
+activations; this is a size-based hypothesis, not proof of MPS resource reuse.
+Down-first is an isolation control, not a legal reorder of the connected FFN,
+whose down input depends on gate/up.
+
+All named live bytes/counts reach zero. Metal allocation remains 5.144-5.789 GiB
+after plan, buffer and chain release; this does not establish a leak or exclusive
+MPS ownership. Named, Metal, physical-footprint, RSS and GC counters overlap and
+must not be summed. Phase snapshots and guard polling do not bound transient
+peaks. Full-process sampled footprint peaks at 5.843830 GiB; phase snapshots at
+5.837497 GiB. In 84 full-run guard samples, minimum cache-aware headroom is
+36.424103 GiB and swap growth is zero. File-cache-aware 10% reserve, 12 GiB full
+process cap, 64 MiB swap-growth stop and 240 s deadline are retained. Small runs
+have a 6 GiB cap. No full decoder, diffusion, Studio or generation ran.
+
+DoD observed: fresh release build and Make freshness check, 50 focused Crystal
+examples, seven Python oracle tests, final format/diff checks, one-byte-short
+preallocation refusal before named Metal allocation, both true-small controls,
+six full order cells and eight rejected report mutations. The final matrix and
+`isolated-audit-v2.json` live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027`.
+`source/experiment-plan-v1.json` fixes the admitted geometry/guards before GPU
+work; pre-execution/completion receipts pin sources, builders, binary, fixture
+and upstream. An earlier matrix passed, then a two-indent formatting correction
+triggered a fresh build and the complete final matrix. Earlier results remain
+historical and are excluded from final-source timing claims. Correlated
+Mini-Quad review is not independent replication.
+
+Build/test entrypoints: `make pixelumm_ffn_isolated_probe` with an external
+`BUILD_DIR`, `make spec_pixelumm_ffn_isolated_probe`, and
+`python3 -B -m unittest spec/hy_nomas_pixelumm_ffn_reference_test.py`.
+The runner requires an absolute canonical fixture path, its trusted metadata
+SHA256, exact `--rows`, and a fresh report path under `/Volumes`. Options
+`--reverse-warmups`, `--reverse-first` and `--down-first` select the order cells.
+The new oracle helper is `spec/support/hy_nomas_pixelumm_ffn_reference.py`.
+
+Next falsifier: connected block resource/lifetime interference against this
+same-input projection baseline, before replacing GEMM or promoting shared mode.
+Only a connected measurement can test whether the order-sensitive allocation
+pattern explains the earlier drift. Rollback removes the diagnostic target;
+production defaults stay unchanged. Refresh on scoped source, artifacts,
+Metal/MPS/device/OS/toolchain, geometry/precision, command/lifetime/guard/clock
+changes or lost evidence. Every launch requires fresh memory admission.
+
 ## Shared gate/up FFN localization, 2026-10-27
 
 Status: VERIFIED for bounded native profiling, authenticated numerical parity
