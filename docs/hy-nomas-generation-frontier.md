@@ -376,11 +376,12 @@ hashes. Correlated mini-Quad verdict is ROBUST for this startup change and its
 stated stat boundary; unchanged block/head math retains the numerical control
 above. This does not requalify complete-video quality or throughput.
 
-### Next FFN falsifier
+### Bounded FFN weight staging: exact, no established speedup
 
 Each independent decoder window currently feeds BF16 FFN weights into graphs
-containing F32 casts. Amortizing those casts across five windows is a possible
-larger lever, but its cost is not yet isolated. Simple loop reordering is
+containing F32 casts. Amortizing those casts across five windows was a possible
+lever; the bounded two-window experiment below did not establish a gain.
+Simple loop reordering is
 invalid: prepared graphs bind fixed inputs/outputs and the shared two-bank
 workspace cursor requires complete slot-ordered passes. A block-major runner
 needs separate window activation banks and explicit per-window graph bindings.
@@ -388,12 +389,106 @@ One block's three F32 FFN matrices require 576 MiB of staging; retained current
 and next states for five windows require 450 MiB, about 315--360 MiB more than
 the current stem/output banks. Opaque MPS resources need separate measurement.
 
-Before implementing that schedule, compare two real J5760 windows through two
-adjacent blocks in both orders with exact contexts and the same MPS matmul
-geometry/BF16 boundaries. Require unchanged tolerances at each block and
-gate/up/down boundary, one terminal wait, no preterminal readback, fresh memory
-admission and staging-inclusive timing. This remains PROPOSED; no claimed
-weight-cast or decoder speedup follows from source inspection alone.
+The diagnostic compares two J5760 windows through blocks 0 and 1: ordinary
+BF16 graph feeds against block-major reuse of one 576 MiB F32 staging set.
+It supports both window-major and block-major baseline ordering so a same-order
+control can isolate staging from loop reordering.
+Each window/block has a distinct output binding; all four plans share transient
+scratch and both graph variants remain resident. GPU conversion of all three
+FFN matrices is included once per block in the staged timing. Staging must not
+alias weights, live window states, captures or metrics, and the next block may
+overwrite it only after both windows have consumed the current block.
+
+Inputs are overlapping slices of the saved preview initial-noise conditioning,
+passed through the actual pretrained upstream stem, at latent starts 0 and 5
+(noise-frame starts 0 and 20). They are not final generated DiT latents. The
+fixture must retain this provenance limitation and exact source, payload and
+weight identities. Local temporal RoPE resets in each upstream decoder window.
+
+DoD: build `pixelumm_ffn_weight_reuse_probe`; pass its CPU schedule/admission
+specs and strict GPU comparison of post-attention normalization, gate, up,
+product, down and output for both windows/blocks against pinned Torch 2.6.0
+upstream at unchanged `atol=rtol=2e-5`; reject poison/known mismatches and verify
+staged weight words exactly. Only then run four ABBA warmups and eight timed
+ABBA/BAAB requests with intermediate capture copies disabled, staging included,
+one terminal wait and one packed metrics read. Track named and opaque resources,
+fresh cache-aware admission, the 10% reserve and the 64 MiB swap-growth stop.
+No full generation or production schedule change is admitted by this probe.
+
+Risk: stale fixed graph bindings or staging overwrite could silently mix
+windows/blocks; distinct retained outputs, schedule guards, poison and per-boundary
+upstream checks are the falsifiers. Rollback is removal of the new diagnostic
+target and sources; production math and defaults remain unchanged.
+
+Both arms matched all 24 upstream captures bitwise. The staged correctness
+request additionally checked 603,979,776 expanded F32 weight words across its
+four consumers, with no differences, failures or nonfinite values. Poisoned
+buffers were refreshed before every request and the NaN positive control fired.
+Each launch used two correctness requests, four ABBA warmups and eight timed
+ABBA/BAAB requests, four per arm. Timed requests disabled intermediate capture
+copies and exact-weight checker kernels, included both block conversions,
+and retained four terminal output comparisons. Every request had one terminal
+wait, one 464-byte packed metrics read, zero tracked encode-time MetalBuffer
+allocations and zero preterminal readbacks. These counters do not prove zero
+Crystal or Objective-C allocations.
+
+Profile-off request medians on Apple M2 Max, in seconds:
+
+| Baseline order / run | Ordinary BF16 graph | Shared F32 staging | Wall reduction |
+| --- | ---: | ---: | ---: |
+| Window-major / initial | 1.459559 | 1.465904 | -0.435% |
+| Block-major / first control | 2.319832 | 2.312451 | +0.318% |
+| Block-major / corrected report | 1.700959 | 1.710128 | -0.539% |
+
+The initial comparison also changed scheduling. The two same-order controls
+have mixed signs and substantial process-to-process drift; the corrected run
+was slower in three of four adjacent pairs. Its body-encoding median fell
+from 0.793150 to 0.628362 seconds while terminal waiting rose from 0.907483 to
+1.086075 seconds. Encoding overlaps GPU work and may block inside Metal/MPS;
+this is not evidence of a corresponding CPU saving or faster inference.
+The measured GPU interval is the command-chain span, not isolated kernel time.
+Request wall time also includes common poison/comparators, terminal readback
+and a memory sample. No reliable staging speedup or default promotion follows.
+
+The named live inventory was 7,381,500,468 bytes, including the 603,979,776-byte
+staging set and 2,264,924,160 bytes of expected captures. Native launches passed
+the cache-aware 10% reserve, 16 GiB footprint cap, 64 MiB swap-growth stop and
+600-second timeout. Across them, sampled peak footprint was 8,182,353,184 bytes
+and swap growth was zero. The corrected launch retained at least
+37,270,994,944 bytes of cache-aware headroom. Upstream production passed its
+separate 12 GiB cap with a 5,910,612,224-byte sampled peak and zero swap growth.
+Named bytes, GC heap, RSS, footprint and Metal device allocation overlap and
+must not be added; opaque MPS bytes were not independently estimated. These
+diagnostic capture inventories do not forecast full-pipeline memory.
+
+The first two reports accidentally retained an alias to the native handle
+array, which release then cleared. Preparation guards and nested resource
+metadata still verified four distinct plans. The runner now snapshots the
+array before release; the corrected run also verifies all four top-level
+handles. Earlier reports and their measured source/binary remain preserved
+under `measured-source-v1/` and `results/summary-v1.json`, without rewriting
+the original evidence.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-staging-20261028/`.
+`results/summary.json` SHA-256 is
+`8905d2e45b8ac37f14ff5c2c9b84c9de7ede986dc5b4cb4415d6dfbe80123bec`;
+it pins execution sources, binaries, the upstream fixture, raw reports and
+guards, including the preserved earlier lineage. Fixture metadata SHA-256 is
+`e9b1ddce57fac94efb0262bd3e5f0be2963ef9df4255dc74cf254ff4b0217ddc`.
+Release build, eight Crystal CPU examples, nine Python CPU tests, format/diff
+checks and the guarded numerical/timing replays passed. Correlated mini-Quad
+adversary verdict is ROBUST for this fixed two-window/two-block numerical reuse
+boundary; a speedup claim remains unsupported. No full generation ran.
+
+The next proposed exact-path falsifier is batching independent windows' FFN
+rows, following Qwen's prefill GEMM routing, while keeping attention contexts
+and local RoPE separate. Another small candidate is fusing SiLU/product while
+retaining the intermediate BF16 rounding in registers. Current shared scratch,
+direct block-to-block GPU handoff and prepared graphs already reuse the Qwen
+lifetime pattern. Qwen decode GEMV bandwidth gains and GDN affine recurrence
+parallelization do not directly apply to J5760 PixelUMM FFN/softmax attention.
+None of these proposals has a speedup certificate here.
 
 Refresh all execution claims after changes to source, weights, input identity,
 geometry, precision, schedule, command ordering, backend/device or guard.

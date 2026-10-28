@@ -35526,3 +35526,35 @@ Refresh after source/toolchain/device/model/workload changes.
   Return pointer docs/hy-nomas-generation-frontier.md. Rollback reverts this
   startup commit. Refresh on source/weight/input/runtime/geometry/backend/
   device/guard changes or evidence loss; memory admission expires each launch.
+
+### 2026-10-28: PixelUMM FFN weight staging is exact, no established speedup
+
+- Bounded diagnostic only: two overlapping saved initial-noise preview windows
+  through pretrained blocks0/1 at J5760; actual upstream stem, local RoPE reset.
+  Not final DiT latents or a complete-video quality/throughput requalification.
+  Production BF16 math, defaults and synchronization remain unchanged.
+- Added four fixed native plans with one shared scratch, separate window/block
+  outputs and one576MiB F32 FFN staging set, converted once/block on GPU.
+  Both arms match24/24 upstream Torch2.6.0 captures bitwise at unchanged2e-5;
+  staged checks603,979,776 exact weight words. NaN positive control fires.
+  Each request: one terminal wait/read464B, zero tracked encode MetalBuffer
+  allocations/preterminal reads; this does not prove zero host allocations.
+- Initial schedule-confounded medians1.459559->1.465904s. Same-order controls
+  2.319832->2.312451s and1.700959->1.710128s have mixed signs/drift; corrected
+  run loses3/4 pairs. No reliable speedup, no production promotion. Lower
+  encoding time is offset by waiting and is not pure CPU savings.
+- Native named7,381,500,468B, peakfootprint8,182,353,184B;10%cache-aware reserve,
+  16GiBcap/64MiBswapstop passed, zero swap growth. Upstream12GiBcap passed.
+  Resource categories overlap; diagnostic capture inventory is not a pipeline
+  forecast. Report handle-array alias fixed with snapshot before release;
+  preserved v1 source/binary/reports retain their original lineage.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-staging-20261028;
+  results/summary.json SHA8905d2e45b8ac37f14ff5c2c9b84c9de7ede986dc5b4cb4415d6dfbe80123bec.
+  Release build,8CrystalCPUexamples,9PythonCPUtests,format/diff and guarded GPU
+  replays pass; correlated adversary ROBUST for bounded numerical reuse only.
+- Next proposed falsifier: batch independent windows' FFN rows while keeping
+  attention contexts separate, or fuse SiLU/product retaining BF16 rounding.
+  Qwen scratch leases/handoff already partly reused; decode GEMV/GDN algebra
+  does not transfer directly. Return pointer docs/hy-nomas-generation-frontier.md.
+  Refresh on source/weights/input/runtime/geometry/precision/schedule/backend/
+  device/guard changes or artifact loss; fresh memory admission each launch.
