@@ -106,6 +106,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic, strong) PixelUMMGraphStep *qk;
 @property(nonatomic, strong) PixelUMMGraphStep *softmax;
 @property(nonatomic, strong) PixelUMMGraphStep *pv;
+@property(nonatomic, strong) PixelUMMGraphStep *softmaxPV;
 @end
 @implementation PixelUMMAttentionGeometry
 @end
@@ -145,6 +146,10 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic, strong) id<MTLComputePipelineState> residual;
 @property(nonatomic, strong) id<MTLComputePipelineState> silu;
 @property(nonatomic, strong) id<MTLComputePipelineState> product;
+@property(nonatomic, strong) id<MTLComputePipelineState> softmaxPVCompare;
+@property(nonatomic, strong) id<MTLBuffer> probabilitySnapshot;
+@property(nonatomic, strong) id<MTLBuffer> attendedSnapshot;
+@property(nonatomic, strong) id<MTLBuffer> softmaxPVCheckMetrics;
 @property(nonatomic) uint32_t temporal;
 @property(nonatomic) uint32_t height;
 @property(nonatomic) uint32_t width;
@@ -161,6 +166,9 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic) BOOL ffnF32;
 @property(nonatomic) BOOL sharedGateUpPrepared;
 @property(nonatomic) BOOL useSharedGateUp;
+@property(nonatomic) BOOL softmaxPVPrepared;
+@property(nonatomic) BOOL useSoftmaxPV;
+@property(nonatomic) BOOL encodingStarted;
 @property(nonatomic) uint64_t captureMask;
 @end
 @implementation PixelUMMDecoderPlan
@@ -189,6 +197,14 @@ struct PixelScatterParams {
   uint32_t queryCount;
 };
 struct PixelCountParams { uint32_t count; };
+struct PixelF32CompareParams {
+  uint32_t count;
+  uint32_t slot;
+  float atol;
+  float rtol;
+  uint32_t positive;
+};
+static_assert(sizeof(PixelF32CompareParams) == 20, "PixelUMM F32 comparator ABI");
 
 static void pixel_set_error(char *destination, size_t capacity,
                             const char *message) {
@@ -772,6 +788,50 @@ static PixelUMMGraphStep *pixel_attention_pv_step(
       attended4, outputBuffer, outputShape4, name, errorText, errorCapacity);
 }
 
+// Diagnostic alternative: retain the F32 probability output as well as PV.
+// The public path keeps the separate graphs until matched whole-block timing
+// and saved-upstream captures qualify a change. No dtype or batch rank changes.
+static PixelUMMGraphStep *pixel_attention_softmax_pv_step(
+    id<MTLDevice> device, id<MTLBuffer> scoresBuffer,
+    id<MTLBuffer> probabilitiesBuffer, id<MTLBuffer> vBuffer,
+    id<MTLBuffer> outputBuffer, uint32_t queryCount, uint32_t keyCount,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  MPSGraph *graph = [MPSGraph new];
+  graph.options = MPSGraphOptionsNone;
+  NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
+  NSMutableArray *placeholders = [NSMutableArray array];
+  NSMutableArray *inputData = [NSMutableArray array];
+  NSArray *scoreShape = pixel_shape({1, 32, queryCount, keyCount});
+  NSArray *probabilityShape3 = pixel_shape({32, queryCount, keyCount});
+  NSArray *vShape = pixel_shape({32, keyCount, 128});
+  NSArray *outputShape3 = pixel_shape({32, queryCount, 128});
+  NSArray *outputShape4 = pixel_shape({1, 32, queryCount, 128});
+  MPSGraphTensor *scores = pixel_add_feed(graph, feeds, placeholders, inputData,
+      scoresBuffer, scoreShape, MPSDataTypeFloat32, @"local_scaled_scores_f32");
+  MPSGraphTensor *probabilities4 = scores
+      ? [graph softMaxWithTensor:scores axis:3 name:@"local_softmax_f32"] : nil;
+  MPSGraphTensor *probabilities3 = probabilities4
+      ? [graph reshapeTensor:probabilities4 withShape:probabilityShape3
+          name:@"local_probabilities_rank3_view"] : nil;
+  MPSGraphTensor *v = pixel_add_feed(graph, feeds, placeholders, inputData,
+      vBuffer, vShape, MPSDataTypeFloat32, @"local_v_f32");
+  MPSGraphTensor *attended3 = probabilities3 && v
+      ? [graph matrixMultiplicationWithPrimaryTensor:probabilities3 secondaryTensor:v
+          name:@"local_pv_bmm_f32"] : nil;
+  MPSGraphTensor *attended4 = attended3
+      ? [graph reshapeTensor:attended3 withShape:outputShape4
+          name:@"local_pv_rank4_view"] : nil;
+  if (!scores || !probabilities4 || !probabilities3 || !v || !attended3 ||
+      !attended4 || ![attended3.shape isEqualToArray:outputShape3]) {
+    pixel_set_ns_error(errorText, errorCapacity,
+        [NSString stringWithFormat:@"unable to build PixelUMM softmax/PV graph %@", name]);
+    return nil;
+  }
+  return pixel_compile_step_outputs(device, graph, feeds, placeholders, inputData,
+      @[probabilities4, attended4], @[probabilitiesBuffer, outputBuffer],
+      @[scoreShape, outputShape4], name, errorText, errorCapacity);
+}
+
 static const char *pixel_metal_source = R"metal(
 #include <metal_stdlib>
 using namespace metal;
@@ -788,6 +848,9 @@ struct PixelGatherKVParams { uint tile; uint maxKey; uint keyCount; };
 struct PixelScaleParams { uint count; float scale; };
 struct PixelScatterParams { uint tile; uint maxQuery; uint queryCount; };
 struct PixelCountParams { uint count; };
+struct PixelF32CompareParams {
+  uint count; uint slot; float atol; float rtol; uint positive;
+};
 
 inline float pixel_bf16_to_float(ushort value) {
   return as_type<float>(uint(value) << 16);
@@ -941,6 +1004,40 @@ kernel void pixelumm_product(
   if (index >= p.count) return;
   rightAndOutput[index] = pixel_float_to_bf16(pixel_bf16_to_float(left[index]) *
                                              pixel_bf16_to_float(rightAndOutput[index]));
+}
+
+// Correctness-only reduction. The timed path never creates this pipeline or
+// snapshots panels. Count all elements, including NaNs, before one terminal read.
+kernel void pixelumm_softmax_pv_compare_f32(
+    device const float *actual [[buffer(0)]],
+    device const float *reference [[buffer(1)]],
+    device atomic_uint *metrics [[buffer(2)]],
+    constant PixelF32CompareParams &p [[buffer(3)]],
+    uint index [[thread_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdGroup [[simdgroup_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]]) {
+  threadgroup uint4 partial[8];
+  uint4 values = uint4(0);
+  if (index < p.count) {
+    const float a = p.positive ? as_type<float>(0x7fc00000u) : actual[index];
+    const float r = reference[index];
+    const bool finite = isfinite(a) && isfinite(r);
+    const bool failure = !finite || abs(a - r) > p.atol + p.rtol * abs(r);
+    values = uint4(uint(failure), uint(as_type<uint>(a) != as_type<uint>(r)),
+                   uint(!finite), 1u);
+  }
+  values = simd_sum(values);
+  if (lane == 0) partial[simdGroup] = values;
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (simdGroup == 0 && lane == 0) {
+    uint4 total = uint4(0);
+    const uint groups = (threads + 31u) / 32u;
+    for (uint group = 0; group < groups; ++group) total += partial[group];
+    for (uint field = 0; field < 4; ++field)
+      if (total[field]) atomic_fetch_add_explicit(metrics + p.slot * 4u + field,
+                                                 total[field], memory_order_relaxed);
+  }
 }
 )metal";
 
@@ -1586,6 +1683,192 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_set_shared_gate_up(
   return 0;
 }
 
+// Preparation only: immutable selection after the first attempted encode.
+// Both alternatives bind the same caller-owned panels. The serialized owner
+// must still drain its sole terminal wait before reusing or releasing them.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity,
+        "PixelUMM softmax/PV preparation requires a plan and a 0/1 value");
+    return -1;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+      @synchronized(plan) {
+        if (plan.encodingStarted || plan.softmaxPVPrepared ||
+            plan.attentionGeometries.count == 0 || plan.scratch.count != kPixelScratchCount) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM softmax/PV must be prepared once before the first encode");
+          return -2;
+        }
+        @try {
+          NSMutableArray<PixelUMMGraphStep *> *alternatives = [NSMutableArray array];
+          for (PixelUMMAttentionGeometry *geometry in plan.attentionGeometries) {
+            NSString *name = [NSString stringWithFormat:@"attention_softmax_pv_q%u_k%u",
+                geometry.queryCount, geometry.keyCount];
+            PixelUMMGraphStep *step = pixel_attention_softmax_pv_step(plan.device,
+                plan.scratch[3], plan.scratch[4], plan.scratch[2], plan.scratch[5],
+                geometry.queryCount, geometry.keyCount, name, errorText, errorCapacity);
+            if (!step) return -3;
+            [alternatives addObject:step];
+          }
+          for (NSUInteger index = 0; index < alternatives.count; ++index)
+            plan.attentionGeometries[index].softmaxPV = alternatives[index];
+          plan.softmaxPVPrepared = YES;
+          plan.useSoftmaxPV = enabled != 0;
+          return 0;
+        } @catch (NSException *exception) {
+          pixel_set_ns_error(errorText, errorCapacity,
+              [NSString stringWithFormat:@"PixelUMM softmax/PV preparation exception %@: %@",
+               exception.name, exception.reason]);
+          return -4;
+        }
+      }
+    }
+  }
+  pixel_set_error(errorText, errorCapacity, "PixelUMM MPS path requires macOS 14 or newer");
+  return -5;
+}
+
+// Correctness-only admission; the caller owns and serializes these three extra
+// buffers under the same lifecycle as the Plan's ordinary scratch bindings.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
+    void *planHandle, void *probabilitySnapshotHandle, void *attendedSnapshotHandle,
+    void *metricsHandle, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || !probabilitySnapshotHandle || !attendedSnapshotHandle || !metricsHandle) {
+    pixel_set_error(errorText, errorCapacity, "required PixelUMM F32 check binding is null");
+    return -1;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+      @synchronized(plan) {
+        if (plan.encodingStarted || !plan.softmaxPVPrepared || plan.softmaxPVCompare ||
+            plan.scratch.count != kPixelScratchCount) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM F32 check requires prepared softmax/PV before the first encode");
+          return -2;
+        }
+        id<MTLBuffer> probabilities = (__bridge id<MTLBuffer>)probabilitySnapshotHandle;
+        id<MTLBuffer> attended = (__bridge id<MTLBuffer>)attendedSnapshotHandle;
+        id<MTLBuffer> metrics = (__bridge id<MTLBuffer>)metricsHandle;
+        NSArray<id<MTLBuffer>> *extra = @[probabilities, attended, metrics];
+        if (!pixel_buffer(probabilities, plan.device, plan.scratch[4].length) ||
+            !pixel_buffer(attended, plan.device, plan.scratch[5].length) ||
+            !pixel_buffer(metrics, plan.device, 11u * 4u * sizeof(uint32_t))) {
+          pixel_set_error(errorText, errorCapacity, "PixelUMM F32 check buffer size/device mismatch");
+          return -3;
+        }
+        for (NSUInteger i = 0; i < extra.count; ++i) {
+          for (NSUInteger j = i + 1; j < extra.count; ++j)
+            if (!pixel_disjoint(extra[i], extra[j])) {
+              pixel_set_error(errorText, errorCapacity, "PixelUMM F32 check buffers alias");
+              return -3;
+            }
+          for (id<MTLBuffer> resident in plan.resident)
+            if (!pixel_disjoint(extra[i], resident)) {
+              pixel_set_error(errorText, errorCapacity, "PixelUMM F32 check aliases a Plan binding");
+              return -3;
+            }
+        }
+        const int32_t *queries = (const int32_t *)plan.scratch[6].contents;
+        const int32_t *keys = (const int32_t *)plan.scratch[7].contents;
+        uint64_t scoreElements = 0, attendedElements = 0;
+        for (uint32_t tile = 0; tile < plan.tileCount; ++tile) {
+          const uint32_t q = uint32_t(queries[uint64_t(tile) * (plan.maxQuery + 1u)]);
+          const uint32_t k = uint32_t(keys[uint64_t(tile) * (plan.maxKey + 1u)]);
+          scoreElements += uint64_t(plan.heads) * q * k;
+          attendedElements += uint64_t(plan.heads) * q * plan.headDim;
+        }
+        if (!scoreElements || !attendedElements || scoreElements > UINT32_MAX ||
+            attendedElements > UINT32_MAX) {
+          pixel_set_error(errorText, errorCapacity, "PixelUMM F32 check metric count overflows");
+          return -3;
+        }
+        @try {
+          id<MTLComputePipelineState> pipeline = pixel_pipeline(plan.device, plan.metalLibrary,
+              @"pixelumm_softmax_pv_compare_f32", errorText, errorCapacity);
+          if (!pipeline) return -4;
+          if (pipeline.threadExecutionWidth != 32 || pipeline.maxTotalThreadsPerThreadgroup < 32) {
+            pixel_set_error(errorText, errorCapacity, "PixelUMM F32 comparator requires SIMD width 32");
+            return -4;
+          }
+          plan.probabilitySnapshot = probabilities;
+          plan.attendedSnapshot = attended;
+          plan.softmaxPVCheckMetrics = metrics;
+          plan.softmaxPVCompare = pipeline;
+          return 0;
+        } @catch (NSException *exception) {
+          pixel_set_ns_error(errorText, errorCapacity,
+              [NSString stringWithFormat:@"PixelUMM F32 check preparation exception %@: %@",
+               exception.name, exception.reason]);
+          return -5;
+        }
+      }
+    }
+  }
+  pixel_set_error(errorText, errorCapacity, "PixelUMM MPS path requires macOS 14 or newer");
+  return -6;
+}
+
+static bool pixel_softmax_pv_snapshot(MPSCommandBuffer *commandBuffer,
+    PixelUMMDecoderPlan *plan, uint64_t scoreBytes, uint64_t attendedBytes,
+    bool restore, char *errorText, size_t errorCapacity) {
+  id<MTLCommandBuffer> root = pixel_current_root(commandBuffer, plan.device,
+                                                errorText, errorCapacity);
+  if (!root) return false;
+  id<MTLBlitCommandEncoder> blit = [root blitCommandEncoder];
+  if (!blit) {
+    pixel_set_error(errorText, errorCapacity, "PixelUMM F32 check snapshot blit unavailable");
+    return false;
+  }
+  [blit copyFromBuffer:restore ? plan.probabilitySnapshot : plan.scratch[4]
+         sourceOffset:0 toBuffer:restore ? plan.scratch[4] : plan.probabilitySnapshot
+    destinationOffset:0 size:scoreBytes];
+  [blit copyFromBuffer:restore ? plan.attendedSnapshot : plan.scratch[5]
+         sourceOffset:0 toBuffer:restore ? plan.scratch[5] : plan.attendedSnapshot
+    destinationOffset:0 size:attendedBytes];
+  [blit endEncoding];
+  return true;
+}
+
+static bool pixel_check_softmax_pv_tile(MPSCommandBuffer *commandBuffer,
+    PixelUMMDecoderPlan *plan, PixelUMMAttentionGeometry *geometry,
+    uint64_t scoreCount, uint64_t panelCount, bool fusedFirst, bool positive,
+    char *errorText, size_t errorCapacity) {
+  if (!pixel_softmax_pv_snapshot(commandBuffer, plan, scoreCount * 4u,
+                                panelCount * 4u, false, errorText, errorCapacity)) return false;
+  if (fusedFirst) {
+    if (!pixel_encode_graph(commandBuffer, geometry.softmax, errorText, errorCapacity) ||
+        !pixel_encode_graph(commandBuffer, geometry.pv, errorText, errorCapacity)) return false;
+  } else if (!pixel_encode_graph(commandBuffer, geometry.softmaxPV,
+                                 errorText, errorCapacity)) return false;
+  for (uint32_t field = 0; field < 2; ++field) {
+    id<MTLBuffer> snapshot = field ? plan.attendedSnapshot : plan.probabilitySnapshot;
+    id<MTLBuffer> current = plan.scratch[field ? 5 : 4];
+    const uint32_t count = uint32_t(field ? panelCount : scoreCount);
+    PixelF32CompareParams params{count, 8u + field, 2e-5f, 2e-5f, 0u};
+    if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+          @[fusedFirst ? snapshot : current, fusedFirst ? current : snapshot,
+            plan.softmaxPVCheckMetrics], &params, sizeof(params), count,
+          false, errorText, errorCapacity)) return false;
+  }
+  if (positive) {
+    PixelF32CompareParams params{1u, 10u, 2e-5f, 2e-5f, 1u};
+    if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+          @[plan.scratch[5], plan.attendedSnapshot, plan.softmaxPVCheckMetrics],
+          &params, sizeof(params), 1u, false, errorText, errorCapacity)) return false;
+  }
+  // Scatter must still consume the initially selected implementation. Restoring
+  // its panels keeps correctness instrumentation out of the numerical contrast.
+  return pixel_softmax_pv_snapshot(commandBuffer, plan, scoreCount * 4u,
+                                  panelCount * 4u, true, errorText, errorCapacity);
+}
+
 static int32_t pixel_encode_block(
     void *planHandle, void *commandChainHandle, char *errorText,
     size_t errorCapacity, void *profileChain,
@@ -1600,8 +1883,11 @@ static int32_t pixel_encode_block(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       BOOL useSharedGateUp = NO;
+      BOOL useSoftmaxPV = NO;
       @synchronized(plan) {
         useSharedGateUp = plan.useSharedGateUp;
+        useSoftmaxPV = plan.useSoftmaxPV;
+        plan.encodingStarted = YES;
       }
       MPSCommandBuffer *commandBuffer = (__bridge MPSCommandBuffer *)commandChainHandle;
       id<MTLCommandBuffer> root = commandBuffer.rootCommandBuffer;
@@ -1701,9 +1987,18 @@ static int32_t pixel_encode_block(
           PixelScaleParams scaleParams{(uint32_t)scoreCount, 1.0f / sqrtf(128.0f)};
           if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scaleScores,
                 @[plan.scratch[3]], &scaleParams, sizeof(scaleParams), scoreCount,
-                false, errorText, errorCapacity) ||
-              !pixel_encode_graph(commandBuffer, geometry.softmax, errorText, errorCapacity) ||
-              !pixel_encode_graph(commandBuffer, geometry.pv, errorText, errorCapacity)) return -10;
+                false, errorText, errorCapacity)) return -10;
+          if (useSoftmaxPV) {
+            if (!plan.softmaxPVPrepared ||
+                !pixel_encode_graph(commandBuffer, geometry.softmaxPV,
+                    errorText, errorCapacity)) return -10;
+          } else if (!pixel_encode_graph(commandBuffer, geometry.softmax,
+                         errorText, errorCapacity) ||
+                     !pixel_encode_graph(commandBuffer, geometry.pv,
+                         errorText, errorCapacity)) return -10;
+          if (plan.softmaxPVCompare &&
+              !pixel_check_softmax_pv_tile(commandBuffer, plan, geometry, scoreCount,
+                  panelCount, useSoftmaxPV, tileIndex == 0, errorText, errorCapacity)) return -10;
           PixelScatterParams scatterParams{tileIndex, plan.maxQuery, queryCount};
           if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scatterAttention,
                 @[plan.scratch[5], queryIndices, plan.core[4]],

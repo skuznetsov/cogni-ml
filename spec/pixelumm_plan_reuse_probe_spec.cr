@@ -2,6 +2,38 @@ require "spec"
 require "../examples/support/pixelumm_plan_reuse_probe"
 
 describe PixelUMMPlanReuseProbe do
+  it "admits softmax/PV mode only for the two-Plan unshared comparison before Metal setup" do
+    PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(2, false, true).should be_nil
+    PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(1, false, false).should be_nil
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(1, false, true)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(2, true, true)
+    end
+
+    PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(true, 2, false, 0).should be_false
+    PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(true, 2, false, 1).should be_true
+    PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(false, 1, false, 0).should be_false
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(true, 2, false, 2)
+    end
+  end
+
+  it "admits the direct F32 check only inside the two-Plan softmax/PV experiment" do
+    PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(true, true, 2, false).should be_nil
+    PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(false, false, 2, false).should be_nil
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(false, true, 2, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(true, true, 1, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(true, true, 2, true)
+    end
+  end
+
   it "keeps the connected named-buffer budget independent of resident Plan count" do
     small_one = PixelUMMPlanReuseProbe.validate_budget!(2048, 1,
       PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES)
@@ -27,6 +59,105 @@ describe PixelUMMPlanReuseProbe do
     end
     expect_raises(ArgumentError) { PixelUMMPlanReuseProbe.validate_budget!(21120, 0, 8_i64 * PixelUMMPlanReuseProbe::GIB) }
     expect_raises(ArgumentError) { PixelUMMPlanReuseProbe.validate_budget!(21120, 3, 8_i64 * PixelUMMPlanReuseProbe::GIB) }
+  end
+
+  it "preflights F32 panels and the 176-byte eleven-slot metrics read before Metal" do
+    small = PixelUMMPlanReuseProbe.validate_budget!(2048, 2,
+      PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES, true)
+    small[:metric_bytes].should eq(176_i64)
+    small[:total_bytes].should eq(1_119_200_052_i64)
+
+    full = PixelUMMPlanReuseProbe.validate_budget!(21120, 2,
+      PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES, true)
+    full[:metric_bytes].should eq(176_i64)
+    full[:total_bytes].should eq(7_551_835_796_i64)
+    full[:total_bytes].should be <= 8_i64 * PixelUMMPlanReuseProbe::GIB
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_budget!(21120, 2, full[:total_bytes] - 1, true)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_budget!(21120, 2,
+        PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES + 1, true)
+    end
+  end
+
+  it "derives bounded per-tile F32 coverage and checks both aggregates plus the NaN positive control" do
+    small = PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(2048)
+    small[:tiles].size.should eq(16)
+    small[:probabilities_snapshot_bytes].should eq(18_874_368_i64)
+    small[:attended_snapshot_bytes].should eq(2_097_152_i64)
+    small[:probability_elements].should eq(75_497_472_u32)
+    small[:attended_elements].should eq(8_388_608_u32)
+    PixelUMMPlanReuseProbe.validate_f32_snapshot_sizes!(small,
+      18_874_368_i64, 2_097_152_i64).should be_nil
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_f32_snapshot_sizes!(small,
+        18_874_367_i64, 2_097_152_i64)
+    end
+
+    full = PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(21120)
+    full[:tiles].size.should eq(60)
+    full[:probabilities_snapshot_bytes].should eq(169_869_312_i64)
+    full[:attended_snapshot_bytes].should eq(6_291_456_i64)
+    full[:probability_elements].should eq(2_229_534_720_u32)
+    full[:attended_elements].should eq(86_507_520_u32)
+    full[:tiles].map(&.[:query_tokens]).sum.should eq(21_120)
+
+    metrics = Array.new(PixelUMMPlanReuseProbe::F32_CHECK_METRIC_SLOTS) do
+      {failures: 0_u32, different_words: 0_u32, nonfinite: 0_u32, elements: 0_u32}
+    end
+    # Tolerance-qualified numeric differences are reported without imposing
+    # an accidental bitwise-equality requirement on the F32 comparator.
+    metrics[8] = {failures: 0_u32, different_words: 17_u32, nonfinite: 0_u32,
+                  elements: full[:probability_elements]}
+    metrics[9] = {failures: 0_u32, different_words: 0_u32, nonfinite: 0_u32,
+                  elements: full[:attended_elements]}
+    metrics[10] = {failures: 1_u32, different_words: 1_u32, nonfinite: 1_u32,
+                   elements: 1_u32}
+    PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(metrics, full).should be_nil
+
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(metrics[0...10], full)
+    end
+    wrong_coverage = metrics.dup
+    wrong_coverage[8] = wrong_coverage[8].merge({elements: full[:probability_elements] - 1_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(wrong_coverage, full)
+    end
+    wrong_finite = metrics.dup
+    wrong_finite[9] = wrong_finite[9].merge({nonfinite: 1_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(wrong_finite, full)
+    end
+    broken_positive_control = metrics.dup
+    broken_positive_control[10] = broken_positive_control[10].merge({different_words: 0_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(broken_positive_control, full)
+    end
+  end
+
+  it "requires F32 snapshot bindings to be distinct from every other owner binding" do
+    base = {"fixture.input.x" => 10_u64, "comparator.metrics" => 20_u64}
+    good = base.merge({
+      "comparator.local_probabilities_f32_snapshot" => 30_u64,
+      "comparator.local_attended_f32_snapshot"      => 40_u64,
+    })
+    PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(good).should be_nil
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(base)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(base.merge({
+        "comparator.local_probabilities_f32_snapshot" => 30_u64,
+        "comparator.local_attended_f32_snapshot"      => 30_u64,
+      }))
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(base.merge({
+        "comparator.local_probabilities_f32_snapshot" => 10_u64,
+        "comparator.local_attended_f32_snapshot"      => 40_u64,
+      }))
+    end
   end
 
   it "validates the connected fixture geometry and shared binding identity" do

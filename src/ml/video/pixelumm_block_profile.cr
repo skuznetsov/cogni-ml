@@ -31,6 +31,8 @@ module ML::Video
     getter roots : Array(MPSCommandRootTiming)
     getter tile_count : Int32
     getter shared_gate_up : Bool
+    getter fused_softmax_pv : Bool
+    getter check_softmax_pv_f32 : Bool
     # Whole-block root totals, interval union, envelope, and overlap remain the
     # additive-safe summary. Individual roots may overlap temporally.
     getter root_profile : MPSCommandPhaseProfile
@@ -46,7 +48,9 @@ module ML::Video
                            @tile_count : Int32,
                            @root_profile : MPSCommandPhaseProfile,
                            @api_profile : MPSAPIProfile,
-                           @shared_gate_up : Bool)
+                           @shared_gate_up : Bool,
+                           @fused_softmax_pv : Bool,
+                           @check_softmax_pv_f32 : Bool)
     end
 
     def self.build(markers : Array(PixelUMMBlockPhaseMarker),
@@ -54,12 +58,17 @@ module ML::Video
                    native_duration_sum_seconds : Float64,
                    api_profile : MPSAPIProfile,
                    tile_count : Int32,
-                   shared_gate_up : Bool = false) : self
+                   shared_gate_up : Bool = false,
+                   fused_softmax_pv : Bool = false,
+                   check_softmax_pv_f32 : Bool = false) : self
       unless markers.map(&.name) == MARKER_NAMES.to_a
         raise ArgumentError.new("PixelUMM phase markers must have the complete source order")
       end
       raise ArgumentError.new("PixelUMM phase profile requires command roots") if roots.empty?
       raise ArgumentError.new("PixelUMM attention tile count must be positive") unless tile_count > 0
+      if check_softmax_pv_f32 && shared_gate_up
+        raise ArgumentError.new("PixelUMM direct F32 softmax/PV check cannot use shared gate/up")
+      end
 
       previous_wall = 0.0
       previous_thread_cpu = 0.0
@@ -84,7 +93,8 @@ module ML::Video
         raise ArgumentError.new("PixelUMM phase markers require a fresh root and terminal cursor")
       end
 
-      validate_api_profile!(api_profile, roots.size, tile_count, shared_gate_up)
+      validate_api_profile!(api_profile, roots.size, tile_count, shared_gate_up,
+        fused_softmax_pv, check_softmax_pv_f32)
 
       phase_names = MARKER_NAMES.to_a[0...-1]
       wall_seconds = {} of String => Float64
@@ -132,7 +142,13 @@ module ML::Video
 
       new(markers, wall_seconds, thread_cpu_seconds, root_candidates,
         candidate_duration_sums, definite_duration_sums, roots, tile_count,
-        whole_block, api_profile, shared_gate_up)
+        whole_block, api_profile, shared_gate_up, fused_softmax_pv,
+        check_softmax_pv_f32)
+    end
+
+    def attention_graph_topology : String
+      return "f32_softmax_pv_dual_path_check" if @check_softmax_pv_f32
+      @fused_softmax_pv ? "separate_qk_fused_softmax_pv" : "separate_qk_separate_softmax_pv"
     end
 
     # Keep the shared WAN API phase IDs visible as source coordinates while
@@ -141,6 +157,10 @@ module ML::Video
       json.object do
         json.field "schema", "cogni_ml.pixelumm_block_phase_profile/v1"
         json.field "attention_tile_count", @tile_count
+        json.field "fused_softmax_pv", @fused_softmax_pv
+        json.field "check_softmax_pv_f32", @check_softmax_pv_f32
+        json.field "timing_eligible", !@check_softmax_pv_f32
+        json.field "attention_graph_topology", attention_graph_topology
         json.field "ffn_graph_topology",
           @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
         json.field "markers" do
@@ -266,14 +286,16 @@ module ML::Video
     private def self.validate_api_profile!(profile : MPSAPIProfile,
                                            root_count : Int32,
                                            tile_count : Int32,
-                                           shared_gate_up : Bool) : Nil
+                                           shared_gate_up : Bool,
+                                           fused_softmax_pv : Bool,
+                                           check_softmax_pv_f32 : Bool) : Nil
       # Reuse the existing MPS API phase IDs without applying the Wan-specific
-      # full-block validator: PixelUMM phase 2 is only its three-per-tile local
-      # attention graph, and phase 4 is unused.
+      # full-block validator: PixelUMM phase 2 is its two-, three-, or
+      # four-per-tile local attention graph, and phase 4 is unused.
       expected_graph_calls = {
         0 => 0_u64,
-        1 => 9_u64,                            # input norm, QKV, Q/K norm statistics and inverse
-        2 => 3_u64 * tile_count.to_u64,        # local QK, softmax and PV graphs per tile
+        1 => 9_u64, # input norm, QKV, Q/K norm statistics and inverse
+        2 => (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64,
         3 => 3_u64,                            # output projection, post norm and gain
         4 => 0_u64,                            # PixelUMM has no cross-attention phase
         5 => (shared_gate_up ? 2_u64 : 3_u64), # shared/separate gate-up plus down projection
@@ -304,7 +326,7 @@ module ML::Video
       end
 
       expected_total = (shared_gate_up ? 14_u64 : 15_u64) +
-                       3_u64 * tile_count.to_u64
+                       (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64
       unless graph_calls == expected_total
         raise ArgumentError.new("PixelUMM API profile has an unexpected total Graph call count")
       end

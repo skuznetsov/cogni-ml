@@ -42,11 +42,14 @@ private def pixelumm_api_profile(tile_count : Int32,
                                  graph_attention_override : UInt64? = nil,
                                  graph_ffn_override : UInt64? = nil,
                                  continuation_override : UInt64? = nil,
-                                 linear_calls : UInt64 = 0_u64) : ML::Video::MPSAPIProfile
+                                 linear_calls : UInt64 = 0_u64,
+                                 fused_softmax_pv : Bool = false,
+                                 check_softmax_pv_f32 : Bool = false) : ML::Video::MPSAPIProfile
   graph_counts = {
     0 => 0_u64,
     1 => 9_u64,
-    2 => graph_attention_override || (3_u64 * tile_count.to_u64),
+    2 => graph_attention_override ||
+         ((check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64),
     3 => 3_u64,
     4 => 0_u64,
     5 => graph_ffn_override || 3_u64,
@@ -147,7 +150,9 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     json = JSON.parse(profile.to_json)
     json["api_profile"]["source_schema"].as_s.should eq("MPSAPIProfile WAN phase IDs")
     profile.shared_gate_up.should be_false
+    profile.fused_softmax_pv.should be_false
     json["ffn_graph_topology"].as_s.should eq("separate_gate_up")
+    json["attention_graph_topology"].as_s.should eq("separate_qk_separate_softmax_pv")
     api_phases = json["api_profile"]["phases"].as_a
     attention = api_phases.find { |phase| phase["source_phase_id"].as_i == 2 }.not_nil!
     attention["pixelumm_phase"].as_s.should eq("local_attention")
@@ -160,6 +165,95 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     json["roots"][1]["candidate_phases"].as_a.map(&.as_s)
       .should contain("qkv_projection")
     json["root_profile"]["union_seconds"].as_f.should eq(3.0)
+  end
+
+  it "accepts fused F32 softmax/PV only with two attention Graphs per tile" do
+    markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
+    roots = pixelumm_profile_roots(5)
+    duration = pixelumm_root_duration_sum(roots)
+    fused_api = pixelumm_api_profile(1, roots.size, fused_softmax_pv: true)
+
+    profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, fused_api, 1, fused_softmax_pv: true)
+    profile.fused_softmax_pv.should be_true
+    profile.attention_graph_topology.should eq("separate_qk_fused_softmax_pv")
+    profile.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
+      .operations["graph_encode"].count.should eq(2_u64)
+    json = JSON.parse(profile.to_json)
+    json["fused_softmax_pv"].as_bool.should be_true
+    json["attention_graph_topology"].as_s.should eq("separate_qk_fused_softmax_pv")
+
+    full_api = pixelumm_api_profile(60, roots.size, fused_softmax_pv: true)
+    full_profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, full_api, 60, fused_softmax_pv: true)
+    full_graph_calls = full_profile.api_profile.phases.sum do |phase|
+      phase.operations["graph_encode"].count
+    end
+    full_graph_calls.should eq(135_u64)
+
+    separate_api = pixelumm_api_profile(1, roots.size)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, separate_api, 1, fused_softmax_pv: true)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, fused_api, 1)
+    end
+    wrong_fused_count = pixelumm_api_profile(1, roots.size,
+      graph_attention_override: 3_u64, fused_softmax_pv: true)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, wrong_fused_count, 1, fused_softmax_pv: true)
+    end
+    wrong_separate_count = pixelumm_api_profile(1, roots.size,
+      graph_attention_override: 2_u64)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, wrong_separate_count, 1)
+    end
+  end
+
+  it "profiles the correctness-only dual-path F32 check with four attention Graphs per tile" do
+    markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
+    roots = pixelumm_profile_roots(5)
+    duration = pixelumm_root_duration_sum(roots)
+    check_api = pixelumm_api_profile(1, roots.size,
+      fused_softmax_pv: true, check_softmax_pv_f32: true)
+
+    profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, check_api, 1, fused_softmax_pv: true,
+      check_softmax_pv_f32: true)
+    profile.fused_softmax_pv.should be_true
+    profile.check_softmax_pv_f32.should be_true
+    profile.attention_graph_topology.should eq("f32_softmax_pv_dual_path_check")
+    profile.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
+      .operations["graph_encode"].count.should eq(4_u64)
+    json = JSON.parse(profile.to_json)
+    json["check_softmax_pv_f32"].as_bool.should be_true
+    json["timing_eligible"].as_bool.should be_false
+    json["attention_graph_topology"].as_s.should eq("f32_softmax_pv_dual_path_check")
+
+    full_api = pixelumm_api_profile(60, roots.size,
+      check_softmax_pv_f32: true)
+    full_profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, full_api, 60, check_softmax_pv_f32: true)
+    full_graph_calls = full_profile.api_profile.phases.sum do |phase|
+      phase.operations["graph_encode"].count
+    end
+    full_graph_calls.should eq(255_u64)
+
+    wrong_count = pixelumm_api_profile(1, roots.size,
+      graph_attention_override: 3_u64, check_softmax_pv_f32: true)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, wrong_count, 1, check_softmax_pv_f32: true)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, check_api, 1, shared_gate_up: true,
+        check_softmax_pv_f32: true)
+    end
   end
 
   it "accepts a shared gate/up Graph inventory only when declared" do

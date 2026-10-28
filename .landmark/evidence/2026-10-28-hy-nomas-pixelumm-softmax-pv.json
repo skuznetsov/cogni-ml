@@ -1,0 +1,255 @@
+{
+  "schema": "landmark.evidence.pixelumm_softmax_pv/v1",
+  "date": "2026-10-28",
+  "base_commit": "a84bcb7648595c007ead1f2929a4c8c5d723c9fb",
+  "status": {
+    "claim_level": "VERIFIED",
+    "scope": "Seven accepted native one-block cells at actual J2048/J21120. Saved-source-method upstream BF16 capture parity and direct native F32 panel parity. Graph-call coalescing only; no material repeatable production gain established.",
+    "production_promoted": false
+  },
+  "problem": {
+    "risk_tier": "CAUTION",
+    "trigger": "Full attention makes180 of195 Graph calls; test softmax/PV coalescing without changing numerical boundaries.",
+    "falsifier": "Any unchanged-tolerance/nonfinite/capture failure, altered waits/readbacks/lifetime/budgets, unmatched inputs/work, or lack of material repeatable whole-block benefit blocks promotion.",
+    "strongest_failure": "A compiler reduction changes behind a BF16 boundary or fewer API calls merely move waits while retaining GPU work.",
+    "rollback": "Omit diagnostic opt-in flags or revert this atomic change. Default production selection stays separate."
+  },
+  "method": {
+    "candidate": "One MPSGraph invocation computes rank4 axis3 F32 softmax and rank3 batch32 F32 PV; both probability and attended outputs remain materialized. No demonstrated kernel fusion.",
+    "fixed": "BF16 gather/scatter; separate F32 QK and custom scaling; geometry,inputs,weights,separate gate/up and unchanged2e-5 atol/rtol.",
+    "owner": "Two independently prepared native Plans share every binding under one serialized lifetime; both alternatives prepared in both Plans; selection immutable after first encode.",
+    "correctness_only": "Every local tile snapshots selected P/Y, computes alternate on same scores/V, compares in F32 with baseline reference, restores selected P/Y before scatter. Six requests per geometry; excluded from speed estimates.",
+    "guard": "Fresh file-cache-aware admission every launch,10%floor,14GiBfull/8GiBsmall process caps,64MiBswap-growth stop,240sdeadline.",
+    "gpu_contract": "Zero tracked named allocations/preterminal activation reads; one existing terminal wait/request. One128Bnormal or176Bcorrectness-only metrics read after wait.",
+    "schedule": {
+      "warmups_per_process": 2,
+      "normal_selected_plans": [
+        0,
+        1,
+        0,
+        1,
+        1,
+        0
+      ],
+      "reversed_selected_plans": [
+        1,
+        0,
+        1,
+        0,
+        0,
+        1
+      ],
+      "accepted_cells": [
+        "small-check-v3",
+        "full-check-v3",
+        "small-one-v3",
+        "small-ab-v3",
+        "small-ba-v3",
+        "full-ab-v3",
+        "full-ba-v3"
+      ],
+      "correctness_only_cells": [
+        "small-check-v3",
+        "full-check-v3"
+      ],
+      "compatibility_cell": "small-one-v3",
+      "timed_samples_per_arm_per_order": 2
+    }
+  },
+  "observed": {
+    "saved_upstream_BF16_comparisons": 294,
+    "all_saved_captures_finite_and_bitwise": true,
+    "BF16_nan_controls_detected": 42,
+    "F32_nan_controls_detected": 12,
+    "F32_panels_finite_and_bitwise": true,
+    "F32_elements_per_full_request": {
+      "probabilities": 2229534720,
+      "attended": 86507520
+    },
+    "tolerance_gate_not_strengthened_to_bitwise": true,
+    "normal_full_Graph_calls": {
+      "separate": 195,
+      "coalesced": 135
+    },
+    "normal_full_completed_roots": {
+      "separate": 128,
+      "coalesced": 128
+    },
+    "full_timing": {
+      "gpu_union_ms": {
+        "separate_mean_of_cell_medians": 1234.926593657292,
+        "fused_mean_of_cell_medians": 1233.7219271576032,
+        "fused_minus_separate_ms": -1.2046664996887557,
+        "percent": -0.0975496443170019
+      },
+      "request_wall_ms": {
+        "separate_mean_of_cell_medians": 1236.074177,
+        "fused_mean_of_cell_medians": 1234.8754685,
+        "fused_minus_separate_ms": -1.1987085000000661,
+        "percent": -0.09697706839158943
+      },
+      "block_encode_ms": {
+        "separate_mean_of_cell_medians": 354.9393125,
+        "fused_mean_of_cell_medians": 354.79497925,
+        "fused_minus_separate_ms": -0.14433325000004515,
+        "percent": -0.04066420509563734
+      },
+      "separate_cell_drift_ms": 0.7134375773603097,
+      "fused_cell_drift_ms": 1.329645630903542
+    },
+    "no_timing_inference_from_correctness_cells": true,
+    "adversary": {
+      "verdict": "ROBUST",
+      "correlated": true,
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/results/correlated-adversary-v1.json",
+        "sha256": "d147e8a825517235d2fcf4a8b14fc96b63ab9928daaa8e30f156991194f82a5a",
+        "bytes": 2832
+      }
+    }
+  },
+  "memory": {
+    "named_bytes": {
+      "small_normal": 1098228484,
+      "small_check": 1119200052,
+      "full_normal": 7375674980,
+      "full_check": 7551835796
+    },
+    "normal_alternatives_same_named_budget": true,
+    "opaque_native_MPS_bytes": null,
+    "all_named_release_counts_and_bytes_zero": true,
+    "native_guard_samples": 90,
+    "sampled_peak_footprint_gib": 9.605471633374691,
+    "sampled_min_cache_headroom_gib": 24.2247314453125,
+    "observed_swap_growth_bytes": 0,
+    "counter_categories_additive": false
+  },
+  "verification": {
+    "commands_and_raw_receipts": "Exact commands, pre-execution source/artifact pins and guard logs are dereferenced by the external numerical and quality audits; use them rather than reconstructing historical argv from prose.",
+    "focused_Crystal_examples": 52,
+    "auditor_rejected_mutations": 19,
+    "bitwise_flag_counterfactuals": 2,
+    "release_build": "build-v4",
+    "one_byte_short_pre_Metal_rejections": [
+      "budget-short-v3",
+      "budget-f32-short-v3"
+    ],
+    "format_diff_passed": true
+  },
+  "limitations": [
+    "Sparse matched profiled diagnostic timings do not establish significance,equivalence or production speed.",
+    "Root unions include stalls and diagnostic poison/comparisons; nested host timings and overlapping counters are not additive.",
+    "Saved pinned upstream-source-method MPS fixtures are not an independent backend or newly executed full upstream block.",
+    "Direct F32 checks compare native alternatives; no saved upstream F32 local panels exist.",
+    "Real latent/noise/stem input is not DiT-denoised video; no full decoder/head/diffusion/generation or video-quality result.",
+    "Both Plans retain both alternatives,so no minimal-candidate opaque-memory reduction was measured.",
+    "Sampled guards do not bound transients or a continuous floor; device residual does not identify a leak/cache mechanism.",
+    "Earlier intermittent pre-request ownership failure and full36 drift remain unexplained."
+  ],
+  "excluded_or_superseded": [
+    "Earlier C++ range-loop and Metal grid-signature compile failures precede accepted final source/build.",
+    "Early offline auditor had a wrong BF16 NaN word-difference expectation; v3 matches the existing injection-after-word-compare comparator.",
+    "An inline negative-check harness expected a wrong legacy exception substring; the saved process rejected correctly and the quality audit verifies it without rerunning."
+  ],
+  "decision": "Keep the candidate diagnostic and default separate. A 60-Graph-call reduction produces only a sparse approximately 0.10% whole-block advantage, with 128 roots unchanged. Test actual F32 FFN/GEMM kernel execution cost next.",
+  "next_falsifier": "Identical-operand full-J F32 FFN/GEMM experiment must pass the same upstream gates and lower whole-block root union and request wall time; Graph-wrapper reductions alone are insufficient.",
+  "sources": [
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/pixelumm_plan_reuse_probe.cr",
+      "sha256": "76d5e3f45affecfab61db9c71a081d8fe9d87f9a94d01580af72943b0d2b2a68",
+      "bytes": 14900
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_plan_reuse_probe.cr",
+      "sha256": "16a5d552c1b3311768aef9cc8ba652e78fa90221c57397d16343d7b01d98c1c7",
+      "bytes": 53750
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/pixelumm_block_profile_spec.cr",
+      "sha256": "8af2ce58c3d82b3d6b8fb3511f3a6c167df74131dd9fa3b2f371a9078013a113",
+      "bytes": 17536
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/pixelumm_plan_reuse_probe_spec.cr",
+      "sha256": "eaa15bde88a6e39a1e124d489cbeb05fd5b6a78ef5f22fe54d22e7c632478251",
+      "bytes": 14199
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/pixelumm_block_profile.cr",
+      "sha256": "2d984211f077b564c41af5119a2c5ac33338242b4218ce2b159c09e687e7108a",
+      "bytes": 16155
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/pixelumm_decoder_block_mps.cr",
+      "sha256": "48b7dc10336f120f9ec68da2a1fe71de4cdd544a295e331bf1f58334e1c8c8c0",
+      "bytes": 59015
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/pixelumm_decoder_block_mps_bridge.mm",
+      "sha256": "e5c5aa81dcbcf9fec845bbea4d05496a6ac3be593ffa86d2f998357061186e29",
+      "bytes": 109116
+    }
+  ],
+  "external_evidence": [
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/experiment-plan-v1.json",
+      "sha256": "c687a4a8f9e672b7420aa1ddfa76055ba4e0e3a6a373caa9904b00cef2984a96",
+      "bytes": 4552
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/experiment-amendment-v2.json",
+      "sha256": "9547d721481036b6ef5d4f329eb58a4857e5970aec23662f2b84ac2b727b9a94",
+      "bytes": 2213
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/environment-observed-v1.json",
+      "sha256": "37132b7a04871a2d83b5a7a011b1d0e4a26e124561446147d0a7913d0713fb35",
+      "bytes": 1050
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/audit-v3.py",
+      "sha256": "ba3f741624f138d1e52d8c60cb67aa856350d98ccfd87e7e76e5db355717d488",
+      "bytes": 17795
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/analyze-v1.py",
+      "sha256": "8eeb8c4de9a6bcf4d64bdff2a3c7b759276c9ce1c7363b4639f1f98da72db8be",
+      "bytes": 7561
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/source/quality-audit-v1.py",
+      "sha256": "3b0ed51a0b2c56b2d15ed1e6823f39dc39b0454e5f9e09ea5d653232465ac22c",
+      "bytes": 3797
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/tmp/run_guarded_v1.py",
+      "sha256": "c7099e4f08395dd8919e7ec6841d5824f3cc42148ac2c18f76467d5258c05291",
+      "bytes": 5839
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/results/softmax-pv-audit-v3.json",
+      "sha256": "be7686cc046c88e1a2b067d66c65370a58f723d1dc0b60752ac164101223eb4f",
+      "bytes": 43832
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/results/descriptive-v1.json",
+      "sha256": "8422fb62c780dd02b6bed100cc3f0ee729106b766928766534d1388f4539ba85",
+      "bytes": 30389
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/results/quality-audit-v1.json",
+      "sha256": "b759906060aa6afe6dd403ee6e83443f37686ab724ed17610d830d7c94c49c86",
+      "bytes": 31461
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028/results/correlated-adversary-v1.json",
+      "sha256": "d147e8a825517235d2fcf4a8b14fc96b63ab9928daaa8e30f156991194f82a5a",
+      "bytes": 2832
+    }
+  ],
+  "decay": {
+    "refresh_on": "Scoped source/artifact/backend/device/OS/toolchain,geometry/precision,commands,captures,lifetime,guards or clock changes,or evidence loss.",
+    "admission_expires": "Every launch.",
+    "failure_policy": "Reopen dependent claim and leave candidate disabled; no silent tolerance widening."
+  }
+}

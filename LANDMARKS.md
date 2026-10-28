@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-SOFTMAX-PV-2026-10-28] Fewer Graph calls preserve precision without a material block gain
+
+- VERIFIED for seven accepted native diagnostic cells at actual J2048/J21,120.
+  One Graph retains F32 rank-4 axis-3 softmax probabilities and rank-3 batch-32 PV
+  output; this is Graph-call coalescing, not demonstrated kernel fusion.
+  BF16 boundaries, separate QK/custom scale, geometry and 2e-5 tolerances stay
+  fixed. Production selection stays separate; candidate is diagnostic opt-in.
+- All 294 saved-source-method upstream BF16 capture comparisons and both native
+  F32 panels in 12 correctness-only requests are finite and bitwise exact;
+  all 42 BF16 and 12 F32 NaN controls detect. Native alternatives are correlated,
+  not an independent backend or saved upstream F32 panels. Correctness requests
+  are excluded from speed estimates. No full decoder/head/diffusion/generation.
+- Full ABBA/BAAB medians are 1234.570/1235.283 ms separate versus
+  1233.057/1234.387 ms coalesced. Mean-of-cell-medians difference is -1.205 ms
+  (-0.09755%); wall difference -1.199 ms. Only two timed samples/arm/order;
+  no material repeatable production gain established. Graph calls 195->135,
+  command roots 128 unchanged. FFN definite-root intervals remain 547-549 ms;
+  intervals include stalls and are not exclusive shader costs.
+- One terminal wait/request, zero tracked named encode allocations/preterminal
+  reads; one 128 B normal/176 B correctness-only metrics read afterward. Full
+  named bytes: 7,375,674,980 normal/7,551,835,796 check. Both one-byte-short
+  budgets refuse before fixture/Metal. Fresh 10% cache-aware guard: 90 samples,
+  peak 9.605472 GiB, minimum headroom 24.224731 GiB, swap growth 0; sampled
+  limits do not bound transients.
+  All named buffers release to zero; opaque MPS bytes and residual ownership
+  remain unknown. Both alternatives are retained in both Plans.
+- Final release/fresh build, standalone Metal compiler check, 52 focused examples,
+  format/diff, 19 auditor mutations and 2 bitwise-claim counterfactuals pass.
+  Correlated Mini-Quad verdict ROBUST within this bounded scope. Evidence:
+  `.landmark/evidence/2026-10-28-hy-nomas-pixelumm-softmax-pv.json`,
+  `docs/hy-nomas-pixelumm-block-frontier.md`, and external namespace
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028`.
+- Next falsifier: measure actual full-J F32 FFN/GEMM cost on identical operands
+  and qualify a kernel-level change with upstream outputs and whole-block time.
+  Rollback omits opt-in flags or reverts this atomic change. Refresh on scoped
+  source/artifact/backend/device/OS/toolchain, geometry, precision, commands,
+  capture/lifetime/guard/clock changes or evidence loss; admission expires at
+  launch. Prior owner failure/full36 drift remain unexplained.
+
 ### [LM-HY-NOMAS-PIXELUMM-SHARED-FFN-PROFILE-2026-10-27] Shared FFN profiling localizes broad interval drift
 
 - VERIFIED bounded native profiling for both existing graph topologies. The

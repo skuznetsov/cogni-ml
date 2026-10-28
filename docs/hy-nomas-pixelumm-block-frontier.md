@@ -1,5 +1,124 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-28
 
+## Local softmax/PV transition experiment, 2026-10-28
+
+Status: VERIFIED for seven accepted bounded native cells, saved-upstream BF16
+capture parity and direct native F32 intermediate parity. Coalescing softmax
+and PV reduces Graph calls but establishes no material repeatable production
+speedup. The candidate remains an explicit diagnostic opt-in; production
+selection and numerical tolerances are unchanged.
+
+The candidate joins rank-4 axis-3 F32 softmax and rank-3 batch-32 F32 PV in one
+MPSGraph invocation with two outputs. It retains the F32 probability panel;
+this is Graph-call coalescing, not demonstrated kernel fusion or elimination
+of an intermediate. Separate QK, custom F32 scaling, BF16 gather/scatter,
+actual ragged tile geometry and separate gate/up remain fixed. Both
+independently prepared Plans retain both attention alternatives and share one
+serialized input/weight/core/capture/scratch set. Selection freezes before the
+first encode; partial-enqueue/failed-wait quarantine and production prefix
+ownership guards remain in force.
+
+Two correctness-only cells run at J2048 and J21,120 before the timing matrix.
+For every tile, the GPU snapshots the selected F32 probability/PV panels,
+computes the alternative on identical scaled scores and V, compares both
+panels, and restores the selected outputs before BF16 scatter. The baseline
+is always the tolerance reference. Two max-sized snapshots are preallocated
+and reused. Six requests per cell cover both orders and all ragged tiles:
+full J has 60 tiles, 2,229,534,720 probability and 86,507,520 attended elements
+per request. All F32 comparisons are finite and bitwise exact; all 12 forced
+NaN controls are detected. These dual-path requests encode four attention
+Graphs per tile and are excluded from all speed estimates.
+
+Normal timing uses one small legacy/default-Plan compatibility cell, then
+small AB/BA and full AB/BA fresh processes. Each has two warmups and four timed
+requests. Normal order is warmups 0/1, measured 0/1/1/0; the second process
+reverses both. Plan0 is separate and Plan1 coalesced. Across all seven cells,
+294 seven-stage saved-upstream BF16 comparisons are finite and bitwise exact
+at unchanged `atol=rtol=2e-5`, and all 42 BF16 NaN controls are detected. There
+are zero tracked named encode allocations or preterminal activation reads,
+one existing terminal wait per request, and one postwait metrics read:
+128 bytes for normal requests, 176 bytes for direct F32 controls. Different
+stored words within tolerance remain admissible; bitwise equality is an
+observed result, not a tightened numerical gate. Two counterfactual audits
+verify that differing words turn off the corresponding bitwise claim.
+
+| Full-J order | Separate root-union median ms | Coalesced root-union median ms | Difference ms | Separate / coalesced request wall ms |
+| --- | ---: | ---: | ---: | ---: |
+| ABBA | 1234.570 | 1233.057 | -1.513 | 1235.749 / 1234.116 |
+| BAAB | 1235.283 | 1234.387 | -0.897 | 1236.399 / 1235.635 |
+
+The full mean-of-cell-medians contrast is -1.205 ms (-0.09755%) in completed
+root union and -1.199 ms (-0.09698%) in request wall time. Each arm has only
+two timed requests per order, four total. Separate-cell drift is +0.713 ms
+and coalesced-cell drift +1.330 ms. These are descriptive measurements, not
+statistical significance, equivalence, a stable production gain or causal
+explanation of prior full36 drift. Small-J root union changes from 106.602
+to 105.972 ms (-0.591%); its result does not substitute for the full geometry.
+
+Full requests have 195 versus 135 Graph calls but the same 128 completed
+command roots. Attention Graph exclusive host wall medians decrease from
+4.322/4.443 to 3.900/4.252 ms across the two orders; nested continuation waits
+remain about 313 ms. Host attention remains about 318 ms. FFN gate/up plus
+down definite-root interval sums remain about 547-549 ms. These intervals
+include stalls and are not exclusive shader costs; candidate phase sums can
+double-count shared roots. Host Graph and continuation times are nested and
+must not be added. Fewer API calls alone did not remove the dominant work.
+
+Named bytes are unchanged between normal alternatives: 1,098,228,484 small
+and 7,375,674,980 full. Correctness controls require 1,119,200,052 and
+7,551,835,796 bytes respectively, including snapshot panels and extra metrics.
+Both exact one-byte-short full budgets reject before fixture reads or Metal
+initialization. The external file-cache-aware guard retains the 10% floor,
+14 GiB full/8 GiB small process caps, 64 MiB swap-growth stop and 240 s deadline.
+Across 90 native guard samples, peak sampled footprint is 9.605472 GiB,
+minimum cache-aware headroom 24.224731 GiB and swap growth zero. Full timing
+alone peaks at 9.418262 GiB; its minimum headroom is 24.530533 GiB. All named
+buffers release to zero live bytes/count. Opaque native/MPS bytes remain
+unknown, and the residual device counter does not identify caching or a leak.
+Categories overlap and are not additive. Samples do not bound transient peaks
+or a continuous floor. Preparing both alternatives in both Plans also means
+this experiment does not measure a minimal single-candidate memory footprint.
+
+The authenticated saved upstream-source-method MPS fixtures include all seven
+BF16 stages through final residual, with real latent/noise/stem inputs and exact
+row counts. This is not a fresh whole connected upstream run or independent
+backend. Direct F32 panels compare two native alternatives on the same scores/V;
+no saved upstream F32 panels exist. Fixture/export/upload/preparation are outside
+timing; no PyTorch is in the measured native path. Diagnostic poison, capture,
+comparison, API profiling and stalls remain in matched request/root measurements.
+No full decoder, head, diffusion, Studio, video generation or quality test ran.
+
+DoD observed: final release build and fresh Make dependencies, standalone Metal
+library/pipeline compilation, 52 focused Crystal examples, format/diff checks,
+both pre-Metal budget negatives, all seven native cells, 19 rejected auditor
+mutations and two bitwise-claim counterfactuals. Early C++/Metal compilation
+failures precede the accepted final build and are excluded. Offline audit-v2's
+BF16 NaN word-difference expectation was corrected in v3 to the existing
+injection-after-word-comparison semantics; numerical admission did not change.
+An inline negative-check harness initially expected the wrong legacy exception
+text; the saved process had rejected correctly and the quality audit verifies
+the exact pre-Metal cause without rerunning that process.
+
+Evidence is under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-softmax-pv-20261028`:
+`results/softmax-pv-audit-v3.json`, `results/descriptive-v1.json` and
+`results/quality-audit-v1.json` authenticate sources, fixtures, binary,
+commands, guards and observations. The repository index is
+`.landmark/evidence/2026-10-28-hy-nomas-pixelumm-softmax-pv.json`.
+The probe flags are `--plans 2 --softmax-pv`; add
+`--check-softmax-pv-f32` only for correctness, never speed estimates.
+Every launch still needs fresh external guard admission.
+
+Next falsifier: isolate actual full-J F32 FFN/GEMM execution cost with identical
+operands, then test a kernel-level change against the same upstream outputs
+and whole-block timing. Do not infer kernel work or large savings from fewer
+Graph wrappers. A probability-output-free attention graph is a separate,
+unqualified experiment: it would need its own precision check and memory
+accounting. Rollback omits the opt-in flags or reverts this atomic commit.
+Refresh after scoped source/artifact/backend/device/OS/toolchain, geometry,
+precision, commands, capture/lifetime/guard/clock changes or evidence loss.
+The earlier intermittent pre-request owner failure remains unexplained.
+
 ## One versus two native Plans sharing one Workspace, 2026-10-28
 
 Status: VERIFIED for the six accepted native diagnostic cells, authenticated
@@ -132,7 +251,7 @@ Full J has 60 attention tiles, each calling QK, softmax and PV Graphs: 180 of
 inside existing `commit_and_continue` calls. Those nested waits are not additive
 GPU costs, and their removal may only move waiting elsewhere; a whole-block
 gain must be measured. Fusion must preserve rounding/reduction and pass the
-same tolerance gate. This optimization is proposed, not implemented here.
+same tolerance gate. The later softmax/PV experiment above tests this proposal without establishing a material gain.
 The older full36 drift may still require changing weights or connected inputs.
 Rollback removes the diagnostic target/files; production arithmetic and defaults
 are unchanged. Refresh on scoped source/artifact, backend, device/OS/toolchain,

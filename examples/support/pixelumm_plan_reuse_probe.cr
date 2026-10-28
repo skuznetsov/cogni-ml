@@ -9,17 +9,28 @@ require "./pixelumm_block_probe"
 module PixelUMMPlanReuseProbe
   extend self
 
-  SCHEMA               = "cogni_ml.pixelumm_plan_reuse_probe/v1"
-  ATOL                 = PixelUMMConnectedResourceProbe::ATOL
-  RTOL                 = PixelUMMConnectedResourceProbe::RTOL
-  GIB                  = PixelUMMConnectedResourceProbe::GIB
-  MAX_NAMED_BYTES      = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
-  MAX_RESIDENT_PLANS   =  2
-  REQUESTS             =  6
-  MEMORY_FLOOR_PERCENT = 10
+  SCHEMA                = "cogni_ml.pixelumm_plan_reuse_probe/v1"
+  SOFTMAX_PV_SCHEMA     = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv/v1"
+  SOFTMAX_PV_F32_SCHEMA = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_f32_check/v1"
+  ATOL                  = PixelUMMConnectedResourceProbe::ATOL
+  RTOL                  = PixelUMMConnectedResourceProbe::RTOL
+  GIB                   = PixelUMMConnectedResourceProbe::GIB
+  MAX_NAMED_BYTES       = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
+  MAX_RESIDENT_PLANS    =  2
+  REQUESTS              =  6
+  MEMORY_FLOOR_PERCENT  = 10
 
   alias Budget = PixelUMMConnectedResourceProbe::Budget
   alias ScheduleEntry = NamedTuple(index: Int32, plan_index: Int32, warmup: Bool)
+  alias F32TileGeometry = NamedTuple(tile_index: Int32, query_tokens: Int32,
+    key_tokens: Int32, probability_elements: UInt32, attended_elements: UInt32)
+  alias F32Geometry = NamedTuple(probabilities_snapshot_bytes: Int64,
+    attended_snapshot_bytes: Int64, probability_elements: UInt32,
+    attended_elements: UInt32, tiles: Array(F32TileGeometry))
+  alias Metric = PixelUMMConnectedResourceProbe::Metric
+
+  F32_CHECK_METRIC_SLOTS = 11
+  F32_CHECK_METRIC_BYTES = F32_CHECK_METRIC_SLOTS.to_i64 * 4 * sizeof(UInt32)
 
   def validate_resident_plan_count!(resident_plans : Int32) : Nil
     unless 1 <= resident_plans <= MAX_RESIDENT_PLANS
@@ -27,11 +38,143 @@ module PixelUMMPlanReuseProbe
     end
   end
 
+  def validate_softmax_pv_configuration!(resident_plans : Int32,
+                                         shared_gate_up : Bool,
+                                         prepare_softmax_pv : Bool) : Nil
+    validate_resident_plan_count!(resident_plans)
+    return unless prepare_softmax_pv
+    unless resident_plans == 2
+      raise ArgumentError.new("PixelUMM softmax/PV comparison requires exactly two resident native Plans")
+    end
+    if shared_gate_up
+      raise ArgumentError.new("PixelUMM softmax/PV comparison cannot be combined with shared gate/up")
+    end
+  end
+
+  def validate_softmax_pv_f32_configuration!(prepare_softmax_pv : Bool,
+                                             check_softmax_pv_f32 : Bool,
+                                             resident_plans : Int32,
+                                             shared_gate_up : Bool) : Nil
+    return unless check_softmax_pv_f32
+    unless prepare_softmax_pv
+      raise ArgumentError.new("direct F32 softmax/PV checking requires --softmax-pv")
+    end
+    validate_softmax_pv_configuration!(resident_plans, shared_gate_up, true)
+  end
+
+  def fused_softmax_pv_for_plan!(prepare_softmax_pv : Bool,
+                                 resident_plans : Int32,
+                                 shared_gate_up : Bool,
+                                 plan_index : Int32) : Bool
+    validate_softmax_pv_configuration!(resident_plans, shared_gate_up, prepare_softmax_pv)
+    unless 0 <= plan_index < resident_plans
+      raise ArgumentError.new("PixelUMM attention mode selected an invalid native Plan index")
+    end
+    prepare_softmax_pv && plan_index == 1
+  end
+
   # `maximum` caps named MetalBuffers. Opaque native Plan and MPS allocations
   # are outside this inventory and are guarded separately by the runner.
-  def validate_budget!(tokens : Int32, resident_plans : Int32, maximum : Int64) : Budget
+  def validate_budget!(tokens : Int32, resident_plans : Int32, maximum : Int64,
+                       check_softmax_pv_f32 : Bool = false) : Budget
     validate_resident_plan_count!(resident_plans)
-    PixelUMMConnectedResourceProbe.validate_budget!(tokens, maximum)
+    base = PixelUMMConnectedResourceProbe.validate_budget!(tokens, maximum)
+    return base unless check_softmax_pv_f32
+
+    geometry = softmax_pv_f32_geometry(tokens)
+    extra_bytes = geometry[:probabilities_snapshot_bytes] +
+                  geometry[:attended_snapshot_bytes] +
+                  F32_CHECK_METRIC_BYTES - base[:metric_bytes]
+    total_bytes = base[:total_bytes] + extra_bytes
+    if total_bytes > maximum
+      raise ArgumentError.new("PixelUMM direct F32 comparator buffers exceed named-memory cap before Metal allocation")
+    end
+    {plan_bytes: base[:plan_bytes], borrowed_bytes: base[:borrowed_bytes],
+     expected_bytes: base[:expected_bytes], metric_bytes: F32_CHECK_METRIC_BYTES,
+     total_bytes: total_bytes}
+  end
+
+  # Derive direct comparator coverage from the same production tile index lists
+  # and panel dimensions used by the native attention path.
+  def softmax_pv_f32_geometry(tokens : Int32) : F32Geometry
+    config = PixelUMMConnectedResourceProbe.config(tokens)
+    layout = config.layout
+    unless layout.local_attention?
+      raise ArgumentError.new("direct F32 softmax/PV check requires bounded local attention")
+    end
+
+    tiles = Array(F32TileGeometry).new(layout.tile_count) do |tile_index|
+      query_tokens = layout.query_indices(tile_index.to_i32).size.to_i32
+      key_tokens = layout.key_indices(tile_index.to_i32).size.to_i32
+      probability_elements = checked_u32!(query_tokens.to_i64 * key_tokens * config.query_heads,
+        "PixelUMM probability F32 tile element count")
+      attended_elements = checked_u32!(query_tokens.to_i64 * config.query_heads * config.head_dim,
+        "PixelUMM attended F32 tile element count")
+      {tile_index: tile_index.to_i32, query_tokens: query_tokens,
+       key_tokens: key_tokens, probability_elements: probability_elements,
+       attended_elements: attended_elements}
+    end
+    probability_total = tiles.reduce(0_u64) { |total, tile| total + tile[:probability_elements].to_u64 }
+    probability_elements = checked_u32!(probability_total,
+      "PixelUMM probability F32 aggregate element count")
+    attended_total = tiles.reduce(0_u64) { |total, tile| total + tile[:attended_elements].to_u64 }
+    attended_elements = checked_u32!(attended_total,
+      "PixelUMM attended F32 aggregate element count")
+    probabilities_snapshot_bytes = config.query_heads.to_i64 * layout.max_query_tokens *
+                                   layout.max_key_tokens * sizeof(Float32)
+    attended_snapshot_bytes = config.query_heads.to_i64 * layout.max_query_tokens *
+                              config.head_dim * sizeof(Float32)
+    unless probabilities_snapshot_bytes > 0 && attended_snapshot_bytes > 0
+      raise ArgumentError.new("PixelUMM direct F32 snapshot panel size must be positive")
+    end
+    {probabilities_snapshot_bytes: probabilities_snapshot_bytes,
+     attended_snapshot_bytes: attended_snapshot_bytes,
+     probability_elements: probability_elements,
+     attended_elements: attended_elements, tiles: tiles}
+  end
+
+  def validate_softmax_pv_f32_metrics!(metrics : Array(Metric), geometry : F32Geometry) : Nil
+    unless metrics.size == F32_CHECK_METRIC_SLOTS
+      raise ArgumentError.new("PixelUMM direct F32 comparator requires eleven aggregate metric slots")
+    end
+    validate_f32_stage_metric!(metrics[8], geometry[:probability_elements], 8)
+    validate_f32_stage_metric!(metrics[9], geometry[:attended_elements], 9)
+    positive_control = metrics[10]
+    unless positive_control[:elements] == 1_u32 && positive_control[:failures] == 1_u32 &&
+           positive_control[:different_words] == 1_u32 && positive_control[:nonfinite] == 1_u32
+      raise ArgumentError.new("PixelUMM direct F32 comparator NaN positive control was not exact")
+    end
+  end
+
+  def validate_f32_snapshot_sizes!(geometry : F32Geometry,
+                                   probabilities_bytes : Int64,
+                                   attended_bytes : Int64) : Nil
+    unless probabilities_bytes == geometry[:probabilities_snapshot_bytes] &&
+           attended_bytes == geometry[:attended_snapshot_bytes]
+      raise ArgumentError.new("PixelUMM direct F32 snapshot buffers must exactly match scratch[4] and scratch[5]")
+    end
+  end
+
+  private def checked_u32!(value : Int64, label : String) : UInt32
+    unless value > 0 && value <= UInt32::MAX.to_i64
+      raise ArgumentError.new("#{label} is outside the nonzero UInt32 range")
+    end
+    value.to_u32
+  end
+
+  private def validate_f32_stage_metric!(metric : Metric, expected_elements : UInt32,
+                                         slot : Int32) : Nil
+    unless metric[:elements] == expected_elements && metric[:failures] == 0_u32 &&
+           metric[:nonfinite] == 0_u32
+      raise ArgumentError.new("PixelUMM direct F32 comparator aggregate failed for slot #{slot}")
+    end
+  end
+
+  private def checked_u32!(value : UInt64, label : String) : UInt32
+    unless value > 0 && value <= UInt32::MAX.to_u64
+      raise ArgumentError.new("#{label} is outside the nonzero UInt32 range")
+    end
+    value.to_u32
   end
 
   def validate_geometry!(grid : Array(Int32), tokens : Int32) : Nil
@@ -86,6 +229,20 @@ module PixelUMMPlanReuseProbe
       unless identity.keys.sort == first.keys.sort && identity == first
         raise ArgumentError.new("resident PixelUMM native Plans do not share identical bindings")
       end
+    end
+  end
+
+  def validate_f32_snapshot_identity!(identity : Hash(String, UInt64)) : Nil
+    probability_role = "comparator.local_probabilities_f32_snapshot"
+    attended_role = "comparator.local_attended_f32_snapshot"
+    probability = identity[probability_role]? || raise ArgumentError.new("PixelUMM direct F32 probability snapshot binding is missing")
+    attended = identity[attended_role]? || raise ArgumentError.new("PixelUMM direct F32 attended snapshot binding is missing")
+    unless probability > 0_u64 && attended > 0_u64 && probability != attended
+      raise ArgumentError.new("PixelUMM direct F32 snapshot bindings must be distinct and non-null")
+    end
+    other_handles = identity.reject { |role, _| role == probability_role || role == attended_role }.values
+    if other_handles.includes?(probability) || other_handles.includes?(attended)
+      raise ArgumentError.new("PixelUMM direct F32 snapshot bindings must not alias another owner buffer")
     end
   end
 
@@ -246,6 +403,9 @@ module PixelUMMPlanReuseProbe
       getter tile_count : Int32
       getter resident_plans : Int32
       getter shared_gate_up : Bool
+      getter prepare_softmax_pv : Bool
+      getter check_softmax_pv_f32 : Bool
+      getter f32_geometry : F32Geometry?
       getter resources : Hash(String, Int64)
       getter binding_bytes : Hash(String, Int64)
       getter binding_identity : Array(Hash(String, UInt64))
@@ -255,6 +415,11 @@ module PixelUMMPlanReuseProbe
 
       def native_plan_handles : Array(UInt64)
         @native_plan_handles.dup
+      end
+
+      def fused_softmax_pv_for_plan(plan_index : Int32) : Bool
+        PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(
+          @prepare_softmax_pv, @resident_plans, @shared_gate_up, plan_index)
       end
 
       CORE_ORDER    = ML::Video::PixelUMMDecoderBlockMPS::Plan::CORE_NAMES.to_a
@@ -272,6 +437,8 @@ module PixelUMMPlanReuseProbe
       @scratch_buffers = [] of ML::MetalBuffer
       @expected_buffers = {} of String => ML::MetalBuffer
       @metrics_buffer : ML::MetalBuffer? = nil
+      @probabilities_snapshot_buffer : ML::MetalBuffer? = nil
+      @attended_snapshot_buffer : ML::MetalBuffer? = nil
       @pipeline : ML::Metal::ComputePipeline? = nil
       @request_chain : ML::Metal::MPSCommandChain? = nil
       @seen_chains = [] of ML::Metal::MPSCommandChain
@@ -290,13 +457,21 @@ module PixelUMMPlanReuseProbe
 
       def initialize(@fixture : PixelUMMBlockProbe::Fixture, maximum : Int64,
                      @resident_plans : Int32, @shared_gate_up : Bool = false,
-                     @memory : PixelUMMMemoryProbe::Recorder = PixelUMMMemoryProbe::Recorder.system)
+                     @memory : PixelUMMMemoryProbe::Recorder = PixelUMMMemoryProbe::Recorder.system,
+                     *, @prepare_softmax_pv : Bool = false,
+                     @check_softmax_pv_f32 : Bool = false)
         @lifecycle = SubmissionLifecycle.new
         @owner_thread_id = Thread.current.object_id.to_u64
+        PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(
+          @resident_plans, @shared_gate_up, @prepare_softmax_pv)
+        PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(
+          @prepare_softmax_pv, @check_softmax_pv_f32, @resident_plans, @shared_gate_up)
         @tokens = @fixture.grid.reduce(1) { |product, dim| product * dim }
         PixelUMMPlanReuseProbe.validate_geometry!(@fixture.grid, @tokens)
         PixelUMMConnectedResourceProbe.validate_fixture!(@fixture, @tokens)
-        budget = PixelUMMPlanReuseProbe.validate_budget!(@tokens, @resident_plans, maximum)
+        budget = PixelUMMPlanReuseProbe.validate_budget!(@tokens, @resident_plans, maximum,
+          @check_softmax_pv_f32)
+        @f32_geometry = @check_softmax_pv_f32 ? PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(@tokens) : nil
         @borrowed_bytes = budget[:borrowed_bytes]
         @expected_bytes = budget[:expected_bytes]
         @metric_bytes = budget[:metric_bytes]
@@ -483,9 +658,10 @@ module PixelUMMPlanReuseProbe
         validate_request_chain!(chain)
         @lifecycle.require_readable!(completed: chain.completed?, wait_count: chain.wait_count)
         raise ArgumentError.new("PixelUMM GPU comparator metrics are unavailable") unless @comparisons_encode_succeeded
-        words = Array(UInt32).new(PixelUMMConnectedResourceProbe::METRIC_SLOTS * PixelUMMConnectedResourceProbe::METRIC_WORDS, 0_u32)
+        metric_slots = @check_softmax_pv_f32 ? F32_CHECK_METRIC_SLOTS : PixelUMMConnectedResourceProbe::METRIC_SLOTS
+        words = Array(UInt32).new(metric_slots * PixelUMMConnectedResourceProbe::METRIC_WORDS, 0_u32)
         metrics_buffer.read_bytes(words.to_unsafe.as(UInt8*), @metric_bytes.to_i32)
-        Array.new(PixelUMMConnectedResourceProbe::METRIC_SLOTS) do |index|
+        Array.new(metric_slots) do |index|
           {failures: words[index * 4], different_words: words[index * 4 + 1],
            nonfinite: words[index * 4 + 2], elements: words[index * 4 + 3]}
         end
@@ -504,9 +680,12 @@ module PixelUMMPlanReuseProbe
             raw.wall_ns.to_f64 / 1e9, raw.thread_cpu_ns.to_f64 / 1e9,
             raw.root_count)
         end.to_a
+        plan_index = @request_plan_index || raise ArgumentError.new("PixelUMM phase profile has no selected Plan")
         ML::Video::PixelUMMBlockPhaseProfile.build(markers,
           chain.completed_root_timings, chain.gpu_elapsed_seconds,
-          chain.api_profile, @tile_count, shared_gate_up: @shared_gate_up)
+          chain.api_profile, @tile_count, shared_gate_up: @shared_gate_up,
+          fused_softmax_pv: fused_softmax_pv_for_plan(plan_index),
+          check_softmax_pv_f32: @check_softmax_pv_f32)
       end
 
       def release_after_terminal! : Nil
@@ -587,6 +766,16 @@ module PixelUMMPlanReuseProbe
       private def setup_comparator! : Nil
         @metrics_buffer = ML::MetalBuffer.new(@metric_bytes)
         add_resource!("comparator.metrics", metrics_buffer)
+        if geometry = @f32_geometry
+          PixelUMMPlanReuseProbe.validate_f32_snapshot_sizes!(geometry,
+            @scratch_buffers[4].size, @scratch_buffers[5].size)
+          @probabilities_snapshot_buffer = ML::MetalBuffer.new(geometry[:probabilities_snapshot_bytes])
+          @attended_snapshot_buffer = ML::MetalBuffer.new(geometry[:attended_snapshot_bytes])
+          add_resource!("comparator.local_probabilities_f32_snapshot",
+            probabilities_snapshot_buffer)
+          add_resource!("comparator.local_attended_f32_snapshot",
+            attended_snapshot_buffer)
+        end
         @pipeline = ML::Metal::ComputePipeline.new("pixelumm_ffn_compare_bf16",
           PixelUMMConnectedResourceProbe::SOURCE)
         @memory.emit("after_gpu_comparator_compile", phase_bytes_kind: "owned_named_metal_bytes",
@@ -614,6 +803,26 @@ module PixelUMMPlanReuseProbe
             @shared_gate_up ? 1 : 0, @error_text.to_unsafe, @error_text.size)
           unless status == 0
             raise ArgumentError.new("PixelUMM native Plan FFN selection failed (#{status}): #{error_message}")
+          end
+          if @prepare_softmax_pv
+            @error_text.fill(0_u8)
+            fused = PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(
+              true, @resident_plans, @shared_gate_up, plan_index)
+            status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv(
+              native, fused ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+            unless status == 0
+              raise ArgumentError.new("PixelUMM native softmax/PV preparation failed (#{status}): #{error_message}")
+            end
+          end
+          if @check_softmax_pv_f32
+            @error_text.fill(0_u8)
+            status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv_check(
+              native, probabilities_snapshot_buffer.handle,
+              attended_snapshot_buffer.handle, metrics_buffer.handle,
+              @error_text.to_unsafe, @error_text.size)
+            unless status == 0
+              raise ArgumentError.new("PixelUMM native direct F32 check preparation failed (#{status}): #{error_message}")
+            end
           end
           @binding_identity << identity.dup
           PixelUMMPlanReuseProbe.validate_shared_bindings!(@binding_identity)
@@ -667,6 +876,11 @@ module PixelUMMPlanReuseProbe
         end
         @expected_buffers.each { |name, buffer| identity["expected.capture.#{name}"] = buffer.handle.address.to_u64 }
         identity["comparator.metrics"] = metrics_buffer.handle.address.to_u64
+        if @check_softmax_pv_f32
+          identity["comparator.local_probabilities_f32_snapshot"] = probabilities_snapshot_buffer.handle.address.to_u64
+          identity["comparator.local_attended_f32_snapshot"] = attended_snapshot_buffer.handle.address.to_u64
+          PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(identity)
+        end
         @binding_bytes["native.input.x"] = @fixture_bindings["x"].size
         @binding_bytes["native.input.cos"] = @fixture_bindings["cos"].size
         @binding_bytes["native.input.sin"] = @fixture_bindings["sin"].size
@@ -686,6 +900,10 @@ module PixelUMMPlanReuseProbe
           @binding_bytes["expected.capture.#{name}"] = buffer.size
         end
         @binding_bytes["comparator.metrics"] = metrics_buffer.size
+        if @check_softmax_pv_f32
+          @binding_bytes["comparator.local_probabilities_f32_snapshot"] = probabilities_snapshot_buffer.size
+          @binding_bytes["comparator.local_attended_f32_snapshot"] = attended_snapshot_buffer.size
+        end
         unless identity["workspace.core.output"] == identity["workspace.capture.output"]
           raise ArgumentError.new("PixelUMM output capture must alias the shared workspace output")
         end
@@ -727,6 +945,14 @@ module PixelUMMPlanReuseProbe
         @metrics_buffer || raise ArgumentError.new("PixelUMM comparator metrics buffer is unavailable")
       end
 
+      private def probabilities_snapshot_buffer : ML::MetalBuffer
+        @probabilities_snapshot_buffer || raise ArgumentError.new("PixelUMM probability F32 snapshot buffer is unavailable")
+      end
+
+      private def attended_snapshot_buffer : ML::MetalBuffer
+        @attended_snapshot_buffer || raise ArgumentError.new("PixelUMM attended F32 snapshot buffer is unavailable")
+      end
+
       private def workspace : ML::Video::PixelUMMDecoderBlockMPS::Workspace
         @workspace || raise ArgumentError.new("PixelUMM shared Workspace is unavailable")
       end
@@ -765,6 +991,16 @@ module PixelUMMPlanReuseProbe
                @expected_buffers.values.sum(&.size) == budget[:expected_bytes] &&
                metrics_buffer.size == budget[:metric_bytes] && workspace.named_bytes == budget[:plan_bytes]
           raise ArgumentError.new("PixelUMM role-keyed named allocation inventory does not match preflight")
+        end
+        if geometry = @f32_geometry
+          PixelUMMPlanReuseProbe.validate_f32_snapshot_sizes!(geometry,
+            probabilities_snapshot_buffer.size, attended_snapshot_buffer.size)
+          unless probabilities_snapshot_buffer.valid? && probabilities_snapshot_buffer.storage_mode.shared? &&
+                 attended_snapshot_buffer.valid? && attended_snapshot_buffer.storage_mode.shared?
+            raise ArgumentError.new("PixelUMM direct F32 snapshots must use exact shared MetalBuffers")
+          end
+        elsif @probabilities_snapshot_buffer || @attended_snapshot_buffer
+          raise ArgumentError.new("PixelUMM direct F32 snapshots exist outside correctness mode")
         end
         unless @fixture_bindings.size == 16 && @native_plans.size == @resident_plans
           raise ArgumentError.new("PixelUMM reuse owner does not hold the exact shared fixture/Plan inventory")
@@ -825,6 +1061,14 @@ module PixelUMMPlanReuseProbe
           @metrics_buffer.try(&.release)
         rescue
         end
+        begin
+          @probabilities_snapshot_buffer.try(&.release)
+        rescue
+        end
+        begin
+          @attended_snapshot_buffer.try(&.release)
+        rescue
+        end
         @fixture_bindings.clear
         @expected_buffers.clear
         @released = true
@@ -846,6 +1090,10 @@ module PixelUMMPlanReuseProbe
         @expected_buffers.clear
         cleanup.attempt { metrics_buffer.release }
         @metrics_buffer = nil
+        cleanup.attempt { probabilities_snapshot_buffer.release } if @probabilities_snapshot_buffer
+        @probabilities_snapshot_buffer = nil
+        cleanup.attempt { attended_snapshot_buffer.release } if @attended_snapshot_buffer
+        @attended_snapshot_buffer = nil
         @fixture_bindings.each_value { |buffer| cleanup.attempt { buffer.release } }
         @fixture_bindings.clear
         cleanup.phase(@memory, "after_fixture_binding_release")

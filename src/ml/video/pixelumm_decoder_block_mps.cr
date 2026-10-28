@@ -53,6 +53,13 @@ end
     fun set_shared_gate_up = gs_pixelumm_decoder_block_plan_set_shared_gate_up(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
     ) : Int32
+    fun plan_prepare_softmax_pv = gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun plan_prepare_softmax_pv_check = gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
+      plan : Void*, probabilities_snapshot : Void*, attended_snapshot : Void*,
+      metrics : Void*, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
     fun encode = gs_pixelumm_decoder_block_encode(plan : Void*, chain : Void*,
                                                   error : UInt8*, error_capacity : LibC::SizeT) : Int32
     fun encode_profiled = gs_pixelumm_decoder_block_encode_profiled(
