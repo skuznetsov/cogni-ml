@@ -783,10 +783,17 @@ module PixelUMMFFNWeightReuseProbe
       end
 
       def encode_request!(chain : ML::Metal::MPSCommandChain,
-                          entry : ScheduleEntry) : NamedTuple(body_encode_seconds: Float64,
+                          entry : ScheduleEntry,
+                          profile_markers : Array(Slice(PixelUMMDecoderBlockMPSFFI::PhaseMarker))? = nil) : NamedTuple(body_encode_seconds: Float64,
         comparator_encode_seconds: Float64,
         stage_conversion_count: Int32,
         stage_identity_check_count: Int32)
+        if markers = profile_markers
+          unless entry[:mode] == "baseline" && chain.api_profile_enabled? &&
+                 markers.size == 4 && markers.all? { |values| values.size == 11 }
+            raise ArgumentError.new("FFN phase profiling requires four fixed marker arrays and a baseline API chain")
+          end
+        end
         order = PixelUMMFFNWeightReuseProbe.plan_order(entry[:mode], entry[:baseline_schedule])
         stage_conversion_count = 0
         stage_identity_check_count = 0
@@ -805,7 +812,7 @@ module PixelUMMFFNWeightReuseProbe
               stage_identity_check_count += 1
             end
           end
-          encode_plan!(chain, @native_plans[plan_slot], plan_slot)
+          encode_plan!(chain, @native_plans[plan_slot], plan_slot, profile_markers.try(&.[plan_slot]))
           @lifecycle.mark_plan_encoded!(plan_slot)
         end
         body_seconds = (Time.instant - body_started).total_seconds
@@ -1086,13 +1093,20 @@ module PixelUMMFFNWeightReuseProbe
       end
 
       private def encode_plan!(chain : ML::Metal::MPSCommandChain,
-                               plan : Pointer(Void), plan_slot : Int32) : Nil
+                               plan : Pointer(Void), plan_slot : Int32,
+                               markers : Slice(PixelUMMDecoderBlockMPSFFI::PhaseMarker)? = nil) : Nil
         @error_text.fill(0_u8)
         status = -1
         chain.pause!
         begin
-          status = PixelUMMDecoderBlockMPSFFI.encode(plan, chain.handle,
-            @error_text.to_unsafe, @error_text.size)
+          status = if values = markers
+                     PixelUMMDecoderBlockMPSFFI.encode_profiled(plan, chain.handle,
+                       chain.api_profile_handle, values.to_unsafe, values.size.to_u32,
+                       @error_text.to_unsafe, @error_text.size)
+                   else
+                     PixelUMMDecoderBlockMPSFFI.encode(plan, chain.handle,
+                       @error_text.to_unsafe, @error_text.size)
+                   end
         ensure
           chain.resume!
         end

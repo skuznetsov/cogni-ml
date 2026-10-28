@@ -500,6 +500,135 @@ geometry, precision, schedule, command ordering, backend/device or guard.
 Each launch requires fresh memory admission; missing external artifacts reopen
 the corresponding numerical or performance claim.
 
+### Bounded PixelUMM drift localization (2026-10-28)
+
+The GC experiment below observed a common GPU-chain increase from about 2 to
+4.6 seconds, while its single natural collection lasted about one millisecond.
+The diagnostic keeps the same J5760, two-window/two-block BF16 inputs,
+four resident Plans, shared scratch and window-major schedule. Compare ordinary
+unprofiled requests with interleaved requests using the existing native phase,
+Metal/MPS API and continuation collectors. Profiling must not split roots or
+add commands, waits, tensor transfers or conversions.
+
+This is CAUTION diagnostic work. The strongest false positive is assigning
+Metal/MPS submission backpressure to CPU computation, or summing overlapping
+root intervals as independent GPU phase costs. Preserve shared root candidates
+at phase and plan boundaries. Keep graph-inclusive and nested continuation
+times separate, and report whole-chain interval union and envelope. A
+profile-on/off comparison is required because CPU instrumentation can perturb
+submission timing. No production optimization is admitted by this probe alone.
+
+DoD: release-build `make pixelumm_drift_probe`, pass its focused CPU accounting
+tests, and run two correctness requests, four warmups and 96 balanced timed
+requests under the existing memory guard: 16 GiB process-group footprint,
+10% cache-aware reserve, 64 MiB swap-growth stop and 600-second timeout. Both
+correctness requests must pass all 24 pinned upstream captures and the existing
+NaN positive control at unchanged atol=rtol=2e-5. Each request retains one
+terminal wait and one packed metrics read; tracked encode-time buffer
+allocations and preterminal readbacks remain zero. CPU-only profile extraction
+follows that wait. Full generation is excluded. If drift does not recur, report
+its non-reproduction instead of inventing a causal attribution.
+
+Rollback removes this diagnostic and its optional probe-only profiling hook;
+production math, synchronization and GC defaults remain unchanged. Refresh the
+evidence after changing sources, inputs, geometry, precision, scheduling,
+backend/device or guard settings.
+
+Observed result: all 102 requests completed (two correctness, four warmup,
+96 timed; 48 timed/profile arm) in a 167.121-second measured loop. The original
+4.6-second severe drift was not reproduced; its preceding GC experiment ran
+454.663 seconds. This shorter run reproduced a smaller chronological increase
+in both arms. The last GPU root-duration sum was 2.076724 seconds. First/last
+16 timed-request medians, including both profile arms:
+
+| Observation | First 16 | Last 16 |
+| --- | ---: | ---: |
+| Sum of GPU command-root intervals | 1.405981 s | 1.862077 s |
+| Host encode wall | 0.676150 s | 0.877546 s |
+| Host encode thread CPU | 11.095 ms | 9.218 ms |
+| Terminal wait envelope | 0.751987 s | 1.004449 s |
+
+The normal-path terminal wait includes encoder closure. The native GPU elapsed
+value is the sum of command-root intervals, not exclusive kernel-active time
+or the whole-chain envelope. In the 48 profiled timed requests, the median
+interval-union gap was 74.4 us (maximum 88.2 us), with 1.63 ms median overlap
+between roots. This rules out large gaps *between those root intervals* for
+this run; it does not measure stalls inside them or establish GPU utilization.
+
+The same root topology, 125 roots/request, was retained in both arms. Comparing
+the first/last eight profiled timed requests, nested `commitAndContinue` wall
+time increased as follows. These call spans identify the CPU-side location of
+waiting and must not be added to inclusive MPSGraph time or treated as the
+exclusive GPU cost of the named phase.
+
+| Metal/MPS API phase | First eight | Last eight |
+| --- | ---: | ---: |
+| FFN | 273.532 ms | 381.803 ms |
+| Self-attention preparation | 158.545 ms | 210.163 ms |
+| Self-attention | 226.477 ms | 270.613 ms |
+| Self projection/residual | 7.663 ms | 9.128 ms |
+
+FFN continuation wall overlaps earlier submitted roots for a median 99.983%
+of call time early and 99.988% late (per-request wall-weighted fractions).
+The root being submitted by the current call is excluded from this calculation.
+Root intervals whose sole marker-candidate phase kind is gate/up also increase
+from 0.400821 to 0.566966 seconds; shared boundary roots retain every candidate.
+These are root durations rather than exclusive kernel timings. FFN is the
+largest measured continuation-wait contributor, while several phases grow.
+The evidence supports descriptive localization to widening command-root
+intervals and Metal/MPS call waiting; the underlying cause remains open.
+
+Instrumentation control: the 48 adjacent on/off pairs have median GPU
+root-duration-sum change +0.0808% (range -3.292% to +5.868%) and total host wall
+change +0.1036%. Encode thread CPU changes +8.425%, so the observer is not
+neutral. Both arms drift, but these results do not establish equivalence or a
+production performance change. Three natural collections occur after the wait,
+during profile extraction: 2.070416 ms total collection envelope, 1.829666 ms
+rendezvous-inclusive pause, 1.809873 ms fully stopped, overlapping categories.
+They cannot account for the observed seconds-scale change. Advisory thermal
+state changes from nominal to fair at request 50, after drift has started;
+this is not a GPU clock measurement or evidence of thermal causation.
+
+Numerical and guard DoD passed: both correctness requests match all 24 saved
+upstream Torch2.6.0 captures bitwise, all timed output comparisons pass, and
+the NaN positive control fires at unchanged atol=rtol=2e-5. Every request has
+one terminal wait, one 464-byte packed read afterward, zero preterminal reads,
+zero tracked encode MetalBuffer allocations and zero stage conversions.
+No GPU math, command geometry, production defaults or GC policy changed.
+Sampled peak footprint was 8,180,731,168 bytes (7.62 GiB), minimum cache-aware
+headroom 32,139,329,536 bytes, minimum pressure-free 80%, with zero positive
+swap growth across 360 guard samples. Categories overlap; the diagnostic's
+7,381,500,468 named bytes include an unused 576 MiB stage and are not a full
+pipeline memory forecast. Correlated adversary verdict: ROBUST for this bounded
+descriptive localization; causal attribution and extrapolation to 4.6 seconds
+remain unverified.
+
+Reproduction: `make pixelumm_drift_probe` builds the native diagnostic;
+keep `BUILD_DIR` and `TMPDIR` under the external evidence root for builds.
+`make spec_pixelumm_drift_probe spec_pixelumm_block_profile` passes 36 CPU
+examples, and `python3 -B -m unittest spec/pixelumm_drift_analysis_test.py`
+passes eight accounting/guard falsifier tests. The existing GC observer and
+reuse suite passes its real-collection qualification and 12 CPU examples.
+Use the guarded argv in the external execution receipt, with fresh report and
+guard paths and fresh memory admission, rather than running the binary bare.
+Run the CPU analyzer with its report positional argument, `--guard LOG` and
+`--output FRESH_JSON`. Source/binary snapshots, raw report, guard, validated
+analysis and a compact independently recomputed index are under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-drift-20261028`; the index is
+`results/summary.json`. The raw report SHA256 is
+`e9758ab1c917493afad4e7960147f7f86fb6a2adc46a42b6c8e75ff13605ecc4`.
+The compact index SHA256 is
+`b7f254bf9b29879963309a68be1241f519088f8a88683e11f363db5d59a46d88`;
+it pins the final analyzer, execution receipt, binary/source lineage and raw
+guard/report hashes. Earlier exploratory analyzer summaries are not the
+selected evidence.
+
+Next falsifier for the severe drift: a longer matched serial exposure that
+actually reproduces the hump, with direct device frequency/power/utilization
+telemetry and a check of profiler intrusion. Separate system competition and
+device state from per-Plan resource behavior before changing GC or command
+scheduling. This diagnostic alone does not select a production optimization.
+
 ### Bounded host-allocation and GC experiment (2026-10-28)
 
 Compare normal Boehm GC with GC disabled only from request admission through

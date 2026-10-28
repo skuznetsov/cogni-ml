@@ -35603,3 +35603,56 @@ Refresh after source/toolchain/device/model/workload changes.
   default. Return pointer docs/hy-nomas-generation-frontier.md; refresh on
   source/input/weights/runtime/geometry/precision/schedule/backend/device/guard
   changes or evidence loss; fresh memory admission every launch.
+
+### 2026-10-28: PixelUMM mild drift localizes to root intervals and MPS waiting
+
+- Added a standalone J5760 diagnostic on the same two saved initial-noise
+  windows/blocks0/1, four baseline BF16 Plans/shared scratch/window-major order.
+  Uses existing CPU phase/API/continuation collectors, phase_roots=false;
+  no GPU math, geometry, command/wait, readback, conversion or default change.
+  Source/binary/inputs authenticated; not a full decoder or generation run.
+- All102 requests complete:2correctness/4warmup/96timed,48profile-on/off timed
+  each, ABBA/BAAB repeated12. Both24-capture controls match pinned Torch2.6.0
+  upstream bitwise at unchanged2e-5, NaN control fires, all outputs pass.
+  Each request:125roots, one terminal wait/read464B, zero preterminal reads,
+  zero tracked encode MetalBuffer allocations. These counters do not establish
+  zero host/native allocations. Failed terminal waits are not retried; in-flight
+  resources remain rooted rather than released during unsuccessful cleanup.
+- First/last16 timed medians: GPU root-duration sum1.405981->1.862077s,
+  encodewall0.676150->0.877546s, encodeCPU11.095->9.218ms, terminal wait envelope
+  0.751987->1.004449s. GPU sum is not the interval union/envelope or pure kernel
+  active time. Timed profile roots have median74.4us interval gaps and1.63ms
+  overlap; this does not prove GPU utilization or absence of internal stalls.
+- First/last8 profiled timed continuations: FFN273.532->381.803ms,
+  selfprepare158.545->210.163ms, attention226.477->270.613ms. FFN earlier-root
+  overlap medians99.983%->99.988% are weighted by call wall per request;
+  exclude the root currently being submitted. Do not add nested calls to
+  inclusive graph timings or interpret shared candidate roots as exclusive
+  phase kernel costs. Several phases grow; underlying cause remains open.
+- On/off paired median GPU sum+0.0808%, totalwall+0.1036%, encodeCPU+8.425%;
+  observer is not neutral, no equivalence or production speedup claim.
+  Three post-wait/profile-extraction GCs total2.070416ms envelope/1.829666ms
+  rendezvous/1.809873ms stopped, overlapping categories. Thermal advisory0->1
+  at request50 after drift starts; not GPU-clock or causal thermal evidence.
+- Loop167.121s does not reproduce old4.6s severe drift from454.663s GC loop.
+  Correlated adversary ROBUST for bounded descriptive localization; causal
+  attribution/extrapolation remains unverified. Next severe-drift falsifier:
+  longer matched exposure that reproduces it with direct device telemetry,
+  profiling-intrusion control and separation of system/device vs Plan state.
+- Guard10%cache-aware reserve/16GiBcap/64MiBswapstop/600s passes:360samples,
+  peakfootprint8,180,731,168B, minheadroom32,139,329,536B, pressure80%, no swap
+  growth. Named7,381,500,468B still includes unused576MiB stage; overlapping
+  diagnostic resource categories are not a pipeline memory forecast.
+- Release build,36phase/API/trace/schedule CPU examples,8Python accounting and
+  guard falsifier tests, existing GC real-collection qualification/12examples,
+  format/diff checks pass. Analyzer recomputes all29metric slots/request,
+  markers/root candidates, overlap union, nested API/trace and guard counters;
+  per-call overlap medians and wall-weighted ratios are distinct.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-drift-20261028;
+  results/summary.json SHA
+  b7f254bf9b29879963309a68be1241f519088f8a88683e11f363db5d59a46d88
+  pins raw report/guard, source/binary receipt, final analyzer and recomputed
+  compact statistics. Return pointer docs/hy-nomas-generation-frontier.md.
+  Rollback removes diagnostic/optional probe hook; no production promotion.
+  Refresh after source/input/weights/runtime/device/geometry/precision/schedule/
+  guard changes or evidence loss; every launch needs fresh memory admission.

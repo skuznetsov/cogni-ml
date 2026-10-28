@@ -288,3 +288,9 @@ extern "C" void gs_pixelumm_ffn_weight_reuse_release(void *handle) {
     reuse.plan.captureMask = reuse.captureMask;
   }
 }
+
+// CPU-only advisory state, sampled outside graph encoding. This is not a
+// frequency/power measurement and does not change the memory guard policy.
+extern "C" int32_t gs_pixelumm_probe_thermal_state(void) {
+  return int32_t(NSProcessInfo.processInfo.thermalState);
+}
