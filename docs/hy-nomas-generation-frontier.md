@@ -1,6 +1,11 @@
 # Hy-Nomas first native video frontier
 
-## Active request and admitted scope
+Current bounded result: host allocations and GC pauses were measured on the
+original BF16 PixelUMM path. The experiment does not justify promoting
+`GC.disable`; ordinary GC remains selected. The 10% memory reserve is unchanged.
+The historical preview boundary below is not a new generation launch request.
+
+## Preview scope and admitted composition
 
 The user authorized a real five-second preview before further kernel tuning.
 The first bounded target is one first segment, 120 frames at 24 fps,
@@ -494,3 +499,108 @@ Refresh all execution claims after changes to source, weights, input identity,
 geometry, precision, schedule, command ordering, backend/device or guard.
 Each launch requires fresh memory admission; missing external artifacts reopen
 the corresponding numerical or performance claim.
+
+### Bounded host-allocation and GC experiment (2026-10-28)
+
+Compare normal Boehm GC with GC disabled only from request admission through
+the existing terminal GPU wait. Use the authenticated two-window/two-block
+J5760 BF16 diagnostic above, with both arms executing the ordinary baseline
+graphs in window-major order. A standalone driver is required: GC disabling
+is process-wide and is not admitted in Studio or concurrent inference here.
+Restore GC in an exception-safe scope, before metrics, teardown and reporting.
+Keep those costs and following-request collection debt visible in end-to-end
+time; a shorter encode interval alone cannot qualify a speedup.
+
+This is CAUTION diagnostic work. The strongest false positive is shifting a
+collection outside the disabled interval or mistaking Metal/MPS backpressure
+for GC. Record allocation bytes, collection events and rendezvous-inclusive
+and fully stopped intervals at existing CPU phase boundaries, without new GPU
+waits or tensor readbacks. Qualify the allocation-free native observer with
+real collections in a separate CPU-only positive control. Refuse an occupied
+collector callback, unsupported GC or an already disabled collector. No forced
+collections or artificial allocation pressure belong in measured GPU requests.
+Zero observed collections after warmup cannot establish a general GC verdict.
+
+DoD: release-build `make pixelumm_gc_probe`, run its CPU lifecycle/observer
+qualification, then run two correctness trials, four warmups and 64 balanced
+timed trials, each followed by one matched normal-GC tail (140 requests total),
+under `examples/support/wan_memory_guard.py` with a 16 GiB
+footprint cap, 10% cache-aware reserve, 64 MiB swap-growth stop and 600-second
+timeout. Expected signal: both arms pass all 24 pinned Torch 2.6.0 captures at
+unchanged atol=rtol=2e-5; the NaN positive control fires; each request retains
+one terminal wait, one packed metrics read and zero tracked encode-time named
+MetalBuffer allocations/preterminal reads. Numerical checking stays on GPU.
+Report setup and diagnostics separately from the bounded inference body.
+
+Rollback removes the new diagnostic and restores the previous diagnostic's
+default request-count gate. Production inference, precision, synchronization
+and GC policy are unchanged.
+
+The guarded native run completed all 140 requests in 474.119 seconds, including
+admission/setup/reporting. The observed request loop was 454.663 seconds.
+Both correctness primaries matched all 24 saved Torch 2.6.0 captures bitwise;
+the unchanged tolerance gate and NaN positive control passed. All requests
+retained their single terminal wait and 464-byte packed metrics read, with zero
+tracked encode-time named-buffer allocations or preterminal reads. No full
+generation or production policy change ran.
+
+The 64 timed primaries used ABBA/BAAB repeated eight times, 32 per arm. Results
+below are descriptive because both arms experienced large common drift:
+
+| Metric | Ordinary GC | Scoped `GC.disable` |
+| --- | ---: | ---: |
+| Primary wall median | 3.516415 s | 3.560862 s |
+| Primary plus ordinary-GC tail median | 7.019055 s | 7.102461 s |
+| Boehm allocation bytes per primary, median | 22,056 B | 24,624 B |
+| Collections in timed primaries | 0 | 0 |
+| Collections including matched tails | 0 | 1 |
+
+The median paired `(normal - disabled) / normal` difference was -0.9701% for
+primaries and -0.4741% including tails; disabled won 13/32 pairs. This is no
+established speedup, slowdown or equivalence. Keep ordinary GC enabled.
+
+The entire loop allocated 3,301,280 Boehm-managed bytes. Its heap remained
+7,159,808 bytes at both endpoints. Exactly one natural collection occurred in
+trial 56's ordinary-GC tail after a disabled primary, during encoding. Its
+collector envelope was 1.104083 ms, rendezvous-inclusive pause 0.888000 ms and
+fully stopped interval 0.840875 ms. These windows overlap; do not add them.
+This one event cannot characterize a pause distribution or establish a causal
+transfer of GC debt. The ordinary timed arm had no collections to contrast.
+Allocation volume covers this diagnostic's process-wide Boehm activity, not
+allocation counts, production inference or Objective-C/Metal allocation bytes.
+
+Primary GPU command-chain spans also drifted: ordinary-GC early/late medians
+1.950924 -> 4.650484 s, disabled 2.051612 -> 4.618436 s. Body encoding and
+terminal waits grew together. The reported GPU span includes queue/gap effects;
+it is not pure kernel active time, and encoding includes Metal/MPS backpressure.
+The observed GC event cannot explain this seconds-scale drift. Its cause is
+still unlocalized; further bounded GPU/MPS/queue-state measurement is a better
+next falsifier than removing Crystal's collector or rewriting the runtime.
+
+Sampled peak process-group footprint was 8,180,682,040 bytes (7.62 GiB), minimum
+cache-aware headroom 25,697,992,704 bytes (23.93 GiB), with zero positive swap
+growth and no guard trigger across 879 samples. The named inventory stayed
+7,381,500,468 bytes, including an unused 576 MiB F32 staging set inherited from
+the diagnostic; it is not an optimized production memory forecast. Limits are
+sampled, and file-cache headroom remains a reclaimability estimate.
+
+CPU qualification passed real collection/suppression/callback-ownership tests,
+12 Crystal examples and 7 Python analyzer tests. An uncontended 10,001-point
+CPU sampling qualification allocated zero bytes, observed no collection and
+averaged 0.111 microseconds/point. It does not measure contended GC locks;
+instrumentation costs were not subtracted. Release build and format/diff checks
+passed. The correlated adversary verdict is ROBUST for these bounded numerical
+and measurement claims, not a general GC-policy or production performance claim.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gc-20261028`.
+`results/summary.json` SHA256
+`3dff8dbcc9f413ba20206bcb111b08a013e1ceb639839e485c0e0834823790f5`
+pins the raw report, guard, execution receipt, analyzer v2 and qualified sources.
+Measured executable sources/binary are unchanged; the subsequent Makefile edit
+only adds transitive build prerequisites. Request phase deltas are recomputed
+from raw points; trial-inclusive values have lower/outer bounds rather than
+exact endpoint reconstruction because those two points were not serialized.
+The single ordinary tail exposes immediate carryover only, not all future GC
+debt. Refresh on measured source, fixture, weights, runtime, geometry, precision,
+schedule, backend, device or guard changes, or artifact loss; admit memory afresh
+before any GPU replay.

@@ -88,6 +88,12 @@ module PixelUMMFFNWeightReuseProbe
       "nonfinite=#{metric[:nonfinite]} elements=#{metric[:elements]}"
   end
 
+  def validate_request_count!(count : Int32) : Nil
+    unless 1 <= count <= 140
+      raise ArgumentError.new("bounded PixelUMM diagnostic requires 1..140 requests")
+    end
+  end
+
   def validate_stage_geometry!(dtype : String, shape : Array(Int32), nbytes : Int64) : Nil
     raise ArgumentError.new("FFN weight reuse captures must be BF16") unless dtype == "BF16"
     expected = case shape
@@ -680,7 +686,10 @@ module PixelUMMFFNWeightReuseProbe
       @maximum : Int64
 
       def initialize(@fixture : Fixture, @cache : WeightCache, @maximum : Int64,
-                     @memory : PixelUMMMemoryProbe::Recorder)
+                     @memory : PixelUMMMemoryProbe::Recorder,
+                     @expected_request_count : Int32 = 14,
+                     @emit_request_memory : Bool = true)
+        PixelUMMFFNWeightReuseProbe.validate_request_count!(@expected_request_count)
         @lifecycle = RequestLifecycle.new
         @config = ML::Video::PixelUMMDecoderBlockMPS::Config.new(
           temporal: 10, height: 18, width: 32)
@@ -836,8 +845,10 @@ module PixelUMMFFNWeightReuseProbe
         validate_request_metrics!(metrics, entry)
         chain.release
         @last_chain = nil
-        @memory.emit("after_chain_release", request: entry[:index],
-          phase_bytes_kind: "owned_named_metal_bytes", phase_bytes: @budget[:total_bytes])
+        if @emit_request_memory
+          @memory.emit("after_chain_release", request: entry[:index],
+            phase_bytes_kind: "owned_named_metal_bytes", phase_bytes: @budget[:total_bytes])
+        end
         metrics
       end
 
@@ -846,7 +857,7 @@ module PixelUMMFFNWeightReuseProbe
         if chain = @last_chain
           raise ArgumentError.new("FFN command chain has not been released") unless chain.completed?
         end
-        unless @lifecycle.next_index == 14 && !@lifecycle.aborted
+        unless @lifecycle.next_index == @expected_request_count && !@lifecycle.aborted
           raise ArgumentError.new("FFN probe resources require all scheduled requests to finish")
         end
         release_resources!

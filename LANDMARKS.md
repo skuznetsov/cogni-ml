@@ -35558,3 +35558,48 @@ Refresh after source/toolchain/device/model/workload changes.
   does not transfer directly. Return pointer docs/hy-nomas-generation-frontier.md.
   Refresh on source/weights/input/runtime/geometry/precision/schedule/backend/
   device/guard changes or artifact loss; fresh memory admission each launch.
+
+### 2026-10-28: Bounded PixelUMM GC probe does not justify disabling GC
+
+- Standalone diagnostic only: two saved initial-noise preview windows through
+  pretrained blocks0/1 at J5760, ordinary BF16 graphs/window-major order in both
+  arms. GC disabling is process-wide; not admitted for Studio/concurrent
+  inference. Exception-safe scope ends after the existing sole terminal wait,
+  before metrics/release. Every primary has one matched ordinary-GC tail.
+- All140 requests completed;64 timed primaries,32/arm, ABBA/BAAB repeated8.
+  Both correctness primaries match24/24 pinned Torch2.6.0 captures bitwise at
+  unchanged2e-5, NaN control fires. One terminal wait/read464B per request;
+  zero tracked encode MetalBuffer allocations/preterminal reads. No generation,
+  GPU math/synchronization/default or production GC policy change.
+- Primary medians normal3.516415/disabled3.560862s; including normal tails
+  7.019055/7.102461s. Paired median normal-minus-disabled -0.9701%/-0.4741%,
+  disabled13/32 wins. Large shared drift prevents speedup/slowdown/equivalence
+  claims. Ordinary GC remains selected; removing GC/runtime is not justified.
+- Whole observed loop454.663s allocated3,301,280 Boehm bytes; heap7,159,808B
+  unchanged. Exactly one natural collection in trial56's normal tail after a
+  disabled primary: envelope1.104083ms, rendezvous-inclusive pause0.888000ms,
+  fully-stopped0.840875ms, overlapping. Normal timed primaries/tails had no GC.
+  No pause-distribution or causal debt claim; one tail is not full future debt.
+- GPU command-chain spans also drifted early/late: normal1.950924->4.650484s,
+  disabled2.051612->4.618436s. These include queue/gaps, not pure kernel active
+  time. Observed GC cannot explain seconds-scale drift; cause is still open.
+  Next bounded falsifier: localize GPU/MPS/queue-state drift before GC changes.
+- Guard10% cache-aware reserve/16GiBcap/64MiBswapstop/600s passed:474.119s
+  complete run, sampledpeak8,180,682,040B, minheadroom25,697,992,704B, zero
+  positive swap growth,879samples. Named7,381,500,468B includes unused576MiB
+  stage; resource categories overlap, not a pipeline memory forecast.
+- Native observer is allocation-free and refuses occupied/replaced callbacks;
+  CPU real-collection qualification,12Crystalexamples,7Pythonanalyzer tests,
+  release build,format/diff pass. CPU10001-point qualification: zero allocation
+  or GC, mean0.111us, uncontended only. Correlated adversary ROBUST only for the
+  bounded measurement/numerical claims. Boehm bytes exclude native allocations.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gc-20261028;
+  results/summary.json SHA
+  3dff8dbcc9f413ba20206bcb111b08a013e1ceb639839e485c0e0834823790f5.
+  Analyzer v2/raw/guard/source/binary pinned. Inclusive trial endpoints are not
+  serialized; validator recomputes request phases but only bounds trial totals.
+  Post-run Makefile edit adds build prerequisites only, measured binary/code
+  unchanged. Rollback removes the diagnostic and restores old request-count
+  default. Return pointer docs/hy-nomas-generation-frontier.md; refresh on
+  source/input/weights/runtime/geometry/precision/schedule/backend/device/guard
+  changes or evidence loss; fresh memory admission every launch.

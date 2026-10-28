@@ -38,6 +38,7 @@ PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
 PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
 PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ := $(BUILD_DIR)/pixelumm_connected_resource_bridge.o
 PIXELUMM_FFN_WEIGHT_REUSE_OBJ := $(BUILD_DIR)/pixelumm_ffn_weight_reuse_bridge.o
+PIXELUMM_GC_OBSERVER_OBJ := $(BUILD_DIR)/pixelumm_gc_observer.o
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
 QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
 WAN_MPS_OBJS := $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(WAN_T5_ATTENTION_MPS_OBJ) $(WAN_ATTENTION_MPS_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ)
@@ -176,6 +177,24 @@ $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): examples/support/pixelumm_ffn_weight_reuse_bri
 $(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe: examples/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+.PHONY: pixelumm_gc_probe spec_pixelumm_gc_probe
+pixelumm_gc_probe: $(BUILD_DIR)/pixelumm_gc_probe
+
+$(PIXELUMM_GC_OBSERVER_OBJ): examples/support/pixelumm_gc_observer.cc examples/support/pixelumm_gc_observer.h | $(BUILD_SENTINEL)
+	clang++ -c $< -o $@ -std=c++17 -O2 -Wall -Wextra -Werror -I$(BREW_PREFIX)/include
+
+$(BUILD_DIR)/pixelumm_gc_observer_qualification: spec/support/pixelumm_gc_observer_qualification.c $(PIXELUMM_GC_OBSERVER_OBJ)
+	clang -c $< -o $(BUILD_DIR)/pixelumm_gc_observer_qualification.o -std=c11 -Wall -Wextra -Werror -I$(BREW_PREFIX)/include
+	clang++ $(BUILD_DIR)/pixelumm_gc_observer_qualification.o $(PIXELUMM_GC_OBSERVER_OBJ) -L$(BREW_PREFIX)/lib -lgc -o $@
+
+spec_pixelumm_gc_probe: $(PIXELUMM_GC_OBSERVER_OBJ) $(BUILD_DIR)/pixelumm_gc_observer_qualification
+	$(BUILD_DIR)/pixelumm_gc_observer_qualification
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_gc_probe_spec.cr spec/pixelumm_ffn_weight_reuse_probe_spec.cr --link-flags="$(abspath $(PIXELUMM_GC_OBSERVER_OBJ))" $(ARGS)
+
+$(BUILD_DIR)/pixelumm_gc_probe: examples/pixelumm_gc_probe.cr examples/support/pixelumm_gc_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ) $(PIXELUMM_GC_OBSERVER_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(abspath $(PIXELUMM_GC_OBSERVER_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # Independent native Plans bind one diagnostic-owned Workspace. The normal
 # production bridge has no per-Graph resource collector in this experiment.
