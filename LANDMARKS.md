@@ -35415,3 +35415,38 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback removes opt-in glue and repeat opt-ins. Refresh on source/weights/
   inputs/geometry/precision/schedule/backend/device/guard changes or evidence
   loss; re-admit memory on every launch.
+
+### 2026-10-28: Experimental Q4 Hy-Nomas preview with identical inputs
+
+- Return pointer: docs/hy-nomas-generation-frontier.md, experimental Q4 and
+  duration sections. `--dit-weights q4-k` switches only the existing authenticated
+  54-block loader; BF16 remains default, globals/PixelUMM/Euler boundaries stay
+  BF16. Q4 decodes on GPU into the same one-block stage, eight ordered forwards,
+  no new waits/readbacks. Direct Q4 GEMM is not substituted. Full generated-video
+  upstream parity and Q4 quality remain unqualified; tolerance stays2e-5.
+- Same inputs/prompt/seed42/schedule as first BF16 clip. Q4 produced120frames,
+  512x288/24fps/5s. Contact frames show much more blurred/distorted buildings
+  and tram contours. Keep Q4 opt-in; finite/nonconstant output is not quality.
+- Q4 named DiT9,290,402,436B vs BF1621,011,384,964B; unchanged decoder
+  16,563,852,432B dominates the peak. Guard324samples: peak18,021,842,016B
+  (16.784GiB), min cache-aware headroom23,878,877,184B, swap growth0, exit0;
+  same10%floor/23GiBcap/64MiBswapstop/900s. Encode named allocations/readbacks/
+  preterminal waits0 under existing scoped counters, one terminal wait/phase.
+- Q4 setup7.296+22.313s, DiT48.976s, decoder85.906s, guarded168.534s,
+  export0.311s. Prior BF16guard155.672s; separate unpaired launches, unchanged
+  decoder also slowed, no causal speed claim. Weights reside externally and
+  load during setup; disk speed does not directly reduce resident GPU compute.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-q4-preview-20261028:
+  launch.json source/binary/baseline hashes, two CPU plans, specs21pass,
+  invalid-mode negative, generation/guard/receipt, comparison/export/ffprobe,
+  contact sheet and standalone/side-by-side MP4s. Q4 pixels SHA
+  dc7a80be9c802b134e91ae784f7be0c05a5bae398cdd1fdd7e8cfe2d6cff94ae;
+  Q4 MP4 SHAfb4cfacc8f7a8abd2be264e9a2f083dad2bbe6c6837afa572b62a505f3434074.
+- Continuous native duration is exactly5s: config rejects history/multiple
+  segments. PixelUMM windows decode one latent, not AR continuation. Arithmetic
+  from one BF16launch suggests~1m55s independent output/hour, neural-only~2m54s;
+  neither is sustained throughput or a long-duration forecast. Port/cache/RoPE
+  continuation before admitting longer continuous clips. Next exact-performance
+  frontier remains current-J5760 PixelUMM profiling. Refresh evidence after
+  source/weights/inputs/geometry/precision/schedule/device/backend/guard changes
+  or artifact loss; fresh memory admission per launch. Rollback selector only.

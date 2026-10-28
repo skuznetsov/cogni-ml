@@ -31,6 +31,31 @@ module HyNomasGeneration
   alias TensorFile = PixelUMMTwoBlockProbe::TensorFile
   alias Record = PixelUMMBlockProbe::Record
 
+  enum DiTWeights
+    BF16
+    Q4K
+  end
+
+  def parse_dit_weights(value : String) : DiTWeights
+    case value
+    when "bf16" then DiTWeights::BF16
+    when "q4-k" then DiTWeights::Q4K
+    else             raise ArgumentError.new("DiT weights must be bf16 or q4-k")
+    end
+  end
+
+  def dit_weights_name(mode : DiTWeights) : String
+    mode == DiTWeights::BF16 ? "bf16" : "q4-k"
+  end
+
+  # Both loaders keep the same fixed BF16 block stage. Only the all-block
+  # residents differ; Q4 payloads include their exact BF16 vector exceptions.
+  def dit_resident_weight_bytes(mode : DiTWeights, stage : Int64, q4_payload : Int64) : Int64
+    raise ArgumentError.new("DiT payload and stage bytes must be positive") unless stage > 0 && q4_payload > 0
+    payload = mode == DiTWeights::BF16 ? 54_i64 * stage : q4_payload
+    payload + stage
+  end
+
   # Crystal's string modes do not support Python's "x" flag. Preserve the
   # no-replacement contract with the same exclusive descriptor API as probes.
   def write_fresh_output(path : String, & : IO::FileDescriptor ->) : Nil
@@ -194,7 +219,7 @@ module HyNomasGeneration
     @stage : ML::Video::Arena
     @file : ML::Video::CheckpointFile
     @prepared : ML::Video::PreparedWeights
-    @loader : ML::Video::HyNomasBF16Stack
+    @loader : ML::Video::HyNomasBF16Stack | ML::Video::HyNomasQ4Stack
     @patch : ML::Video::HyNomasPatchMPSPlan
     @refiner : ML::Video::HyNomasTextRefinerMPSPlan
     @serial : ML::Video::HyNomasMPSSerialWorkspace
@@ -203,7 +228,8 @@ module HyNomasGeneration
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    def initialize(inputs : Inputs, @latent : ML::MetalBuffer, budget : Int64)
+    def initialize(inputs : Inputs, @latent : ML::MetalBuffer, budget : Int64,
+                   mode : DiTWeights = DiTWeights::BF16)
       # Every authenticated file and the exact aggregate are admitted first.
       index_path = File.realpath(INDEX)
       index = HyNomasGeneration.authenticate_weight_index
@@ -214,9 +240,15 @@ module HyNomasGeneration
       plan = ML::Video::WeightPlan.new([@file], bindings, budget,
         resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
       raise ArgumentError.new("DiT globals must be exact BF16") unless plan.staging_bytes == 0 && plan.entries.size == 48
-      @loader = ML::Video::HyNomasBF16Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
-        HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
-        reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
+      @loader = if mode == DiTWeights::BF16
+                  ML::Video::HyNomasBF16Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                    HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
+                else
+                  ML::Video::HyNomasQ4Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                    HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
+                end
       @named_bytes = @loader.admitted_bytes
       @inputs_arena = ML::Video::Arena.new
       @globals = ML::Video::Arena.new

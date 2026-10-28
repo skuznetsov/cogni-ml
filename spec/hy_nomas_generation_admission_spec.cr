@@ -1,6 +1,26 @@
 require "spec"
 require "../examples/support/hy_nomas_generation"
 
+describe "preview DiT weight selection" do
+  it "keeps BF16 as the control and makes Q4_K explicit" do
+    HyNomasGeneration.parse_dit_weights("bf16").should eq(HyNomasGeneration::DiTWeights::BF16)
+    HyNomasGeneration.parse_dit_weights("q4-k").should eq(HyNomasGeneration::DiTWeights::Q4K)
+    expect_raises(ArgumentError, /bf16 or q4-k/) do
+      HyNomasGeneration.parse_dit_weights("q4")
+    end
+  end
+
+  it "admits only the selected block residents plus the same fixed stage" do
+    bf16 = HyNomasGeneration::DiTWeights::BF16
+    q4 = HyNomasGeneration::DiTWeights::Q4K
+    HyNomasGeneration.dit_resident_weight_bytes(bf16, 302_113_792_i64, 4_593_162_240_i64).should eq(16_616_258_560_i64)
+    HyNomasGeneration.dit_resident_weight_bytes(q4, 302_113_792_i64, 4_593_162_240_i64).should eq(4_895_276_032_i64)
+    expect_raises(ArgumentError, /positive/) do
+      HyNomasGeneration.dit_resident_weight_bytes(q4, 302_113_792_i64, 0_i64)
+    end
+  end
+end
+
 describe "preview terminal output" do
   it "writes a fresh file and refuses to replace it" do
     path = File.tempname("hy-nomas-terminal-output", ".bin")

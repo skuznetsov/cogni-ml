@@ -9,8 +9,13 @@ conditioning off. Its DiT grid is `[30,9,16]` (4320 tokens). PixelUMM uses the
 pinned preset's ten-latent windows, five-latent overlap, no spatial cropping,
 and the existing eight-token local attention layout on grid `[10,18,32]`.
 
-Use the authenticated BF16 DiT control weights. Same-decoded-Q4 numerical
-parity does not establish acceptable image quality: the recorded Q4 versus
+BF16 remains the default DiT control. The user also authorized an experimental
+Q4_K DiT preview with the identical pinned inputs and schedule for visual
+comparison. PixelUMM and the global DiT adapters remain BF16. Q4 is decoded on
+GPU into the existing single-block BF16 stage; it does not introduce another
+wait or a CPU activation handoff. This experiment does not promote Q4 quality
+or change the numerical tolerance. Same-decoded-Q4 numerical parity does not
+establish acceptable image quality: the recorded Q4 versus
 BF16 full-forward discrepancy is large. The first prompt may reuse the
 authenticated saved Qwen state-26 crop; that boundary must be stated in the
 run receipt rather than presented as live native text encoding.
@@ -169,6 +174,93 @@ and diff checks; bit-exact upstream checks for the newly composed Euler and
 stem/merge boundaries as described above. Correlated adversary review found
 no enqueue-order/lifetime blocker and required the metric-scope correction.
 This does not add a full generated-video upstream comparison.
+
+## Experimental Q4 preview, 2026-10-28
+
+The opt-in `--dit-weights q4-k` selector uses the authenticated existing
+`HyNomasQ4Stack`, including its eight-forward order/chain limit. The default
+remains `bf16`. Only DiT block weights differ: all pinned input bytes, global
+adapters, Euler schedule, decoder noise, BF16 PixelUMM weights, and export
+settings match the accepted BF16 preview. This is the staged Q4_K path, not
+the separate direct-Q4 GEMM experiment. Compact block payloads occupy
+4,593,162,240 bytes. Their GPU decode reuses one BF16 block stage; the complete
+Q4 DiT phase admits 9,290,402,436 bytes instead of 21,011,384,964 for BF16.
+The decoder admission remains 16,563,852,432 bytes and dominates the Q4 peak.
+
+DoD: release build, focused selection/admission/order specs, CPU admission in
+both modes, invalid-mode rejection before Metal, and one guarded complete
+preview with the identical input manifest. Memory estimates must match actual
+owner admission. A mode mismatch, input/schedule mismatch, added encode-time
+readback/wait, guard stop or nonfinite output rejects the execution result.
+Q4-versus-BF16 quality remains a visual experiment; it is not a passing 2e-5
+parity test. Existing same-decoded-weight kernel gates retain that tolerance.
+
+The Q4 run completed all 120 frames at 512x288/24 fps. Contact frames show a
+recognizable tram but substantially more blurred and distorted buildings and
+tram contours than the BF16 control. Q4 quality is not promoted. The raw output
+is finite and nonconstant in all 120 frames, and ffprobe independently confirms
+the frame count, geometry, frame rate and five-second duration. These checks
+establish execution and export, not acceptable perceptual quality.
+
+| Phase | Prior BF16 launch | Q4 launch |
+| --- | ---: | ---: |
+| DiT preparation | 22.877 s | 7.296 s |
+| Eight DiT steps | 35.768 s | 48.976 s |
+| PixelUMM preparation | 22.221 s | 22.313 s |
+| Five decoder windows/display | 67.547 s | 85.906 s |
+| Guarded process | 155.672 s | 168.534 s |
+| MP4 export | 0.417 s | 0.311 s |
+| Sampled peak group footprint | 19.874 GiB | 16.784 GiB |
+
+These are separate single launches, not an interleaved speed experiment.
+The unchanged decoder also took longer in the Q4 launch. Do not attribute the
+whole timing difference to quantization or claim an acceleration. Faster DiT
+preparation and lower resident bytes do not remove PixelUMM compute cost.
+All weight files currently resolve through `/opt/mldata_ssd` to the external
+SSD. Disk reads occur during setup; the block payloads are GPU resident during
+encode. A local mirror could improve startup but has not been benchmarked.
+
+The Q4 guard recorded 324 samples, peak footprint 18,021,842,016 bytes, minimum
+cache-aware headroom 23,878,877,184 bytes, zero swap growth and exit zero under
+the unchanged 10% reserve, 23 GiB process cap, 64 MiB swap stop and 900 s deadline.
+There is one terminal wait per phase, zero preterminal waits/readbacks and zero
+instrumented MetalBuffer encode allocations. Opaque MPS resources and terminal
+pixel-file export remain outside the counter scope. The Q4 receipt explicitly
+records the mode, experimental quantization, BF16 global/decoder weights and
+Euler boundary rounding; full generated-video upstream parity remains untested.
+
+Artifacts: `/opt/mldata_ssd/cogni-ml/hy-nomas-q4-preview-20261028/` contains
+`launch.json` (source/binary/baseline digests), `plan-bf16.jsonl`,
+`plan-q4.jsonl`, `specs.log`, `invalid-mode.log`, `generation.log`,
+`generation.guard.jsonl`, `results/receipt.json`, `comparison.json`,
+`export.json`, `ffprobe.json`, `contact-sheet-comparison.jpg`,
+`preview-q4.mp4`, and `comparison-bf16-left-q4-right.mp4`.
+Q4 pixels SHA256:
+`dc7a80be9c802b134e91ae784f7be0c05a5bae398cdd1fdd7e8cfe2d6cff94ae`.
+Q4 MP4 SHA256:
+`fb4cfacc8f7a8abd2be264e9a2f083dad2bbe6c6837afa572b62a505f3434074`.
+The focused suite passed 21 examples. Correlated adversary review found no
+composition/lifetime blocker; it required explicit Euler-rounding wording.
+The final artifact review returned ROBUST for matching input/schedule/decoder
+identities, guarded execution and finite output; it does not qualify visual
+quality, full upstream parity or a speed improvement.
+
+## Duration boundary
+
+The native configuration explicitly admits one first segment and rejects
+history/multiple segments. The current input, latent, RoPE and assembly are
+fixed to 120 output frames. Five overlapping decoder windows are not five
+autoregressive segments. Upstream implements segment continuation with K/V
+history and temporal RoPE offsets; that state contract is not ported here.
+
+Pure division of the first BF16 launch gives about 1 minute 55 seconds of
+independent five-second output per wall-clock hour at 512x288. Dividing only
+the neural phases gives about 2 minutes 54 seconds per hour, excluding setup
+and requiring a future reuse design. Neither number is sustained throughput
+or a maximum continuous duration. In particular, two continuous minutes
+cannot yet be requested from this entry point. Long-duration timing and memory
+must be measured after continuation is implemented; history adds work and
+memory absent from the present preview.
 
 ## Next optimization frontier
 
