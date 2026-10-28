@@ -161,6 +161,72 @@ module ML::Video::HyNomasQ4StackIndex
 end
 
 module ML::Video
+  # Pure order/chain cursor shared by the Q4 and BF16 full-stack loaders.
+  # Chain state is supplied by the owner so the state machine can be tested
+  # without creating a Metal command buffer or submitting GPU work.
+  class HyNomasFullPassCursor
+    getter block_count : Int32
+    getter max_forwards_per_chain : Int32
+    getter forwards_on_chain : Int32
+    getter next_block : Int32
+
+    @active_chain_id : UInt64? = nil
+
+    def initialize(@block_count : Int32, @max_forwards_per_chain : Int32 = 1)
+      unless @block_count > 0
+        raise ArgumentError.new("Hy-Nomas full-pass block count must be positive")
+      end
+      unless (1..8).includes?(@max_forwards_per_chain)
+        raise ArgumentError.new("Hy-Nomas max_forwards_per_chain must be between 1 and 8")
+      end
+      @forwards_on_chain = 0
+      @next_block = 0
+    end
+
+    # Validate the next block before any copy/decode command is appended.
+    def validate_block!(chain_id : UInt64, block_index : Int32, *,
+                        previous_terminal : Bool,
+                        previous_wait_count : Int32) : Nil
+      unless (0...@block_count).includes?(block_index)
+        raise ArgumentError.new("Hy-Nomas full-pass block index is out of range")
+      end
+
+      if block_index == 0
+        if @next_block == @block_count
+          active_chain_id = @active_chain_id || raise ArgumentError.new("Hy-Nomas previous chain identity is missing")
+          if active_chain_id == chain_id
+            unless @forwards_on_chain < @max_forwards_per_chain
+              raise ArgumentError.new("Hy-Nomas stack reached its per-chain forward limit")
+            end
+          else
+            unless previous_terminal && previous_wait_count == 1
+              raise ArgumentError.new("Hy-Nomas stack may start a new chain only after terminal completion")
+            end
+            @forwards_on_chain = 0
+          end
+          @next_block = 0
+        elsif @next_block != 0
+          raise ArgumentError.new("Hy-Nomas serial block order was interrupted")
+        end
+        @active_chain_id = chain_id
+      else
+        unless block_index == @next_block && @active_chain_id == chain_id
+          raise ArgumentError.new("Hy-Nomas blocks must run in order on one command chain")
+        end
+      end
+    end
+
+    # Advance only after the caller successfully appended this block's native
+    # work. A caller that sees an append failure must poison its owning stack.
+    def finish_block!(chain_id : UInt64, block_index : Int32) : Nil
+      unless block_index == @next_block && @active_chain_id == chain_id
+        raise ArgumentError.new("Hy-Nomas full-pass cursor changed during block encoding")
+      end
+      @next_block += 1
+      @forwards_on_chain += 1 if @next_block == @block_count
+    end
+  end
+
   # One setup-admitted resident Q4_K full-DiT cache. The serialized BF16 files
   # named by the index are independent controls and are deliberately loaded by
   # BF16WeightCache, never treated as Q4 inference weights here.
@@ -173,13 +239,14 @@ module ML::Video
     getter budget_bytes : Int64
     getter stage_bytes : Int64
     getter reserve_bytes : Int64
+    getter max_forwards_per_chain : Int32
 
     @blocks : Array(HyNomasQ4Cache::Block)
     @block_pins : Array(HyNomasQ4StackIndex::BlockPin)
     @stage_arena : Arena? = nil
     @stage_buffers = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
-    @next_block = 0
+    @cursor : HyNomasFullPassCursor
     @loaded = false
     @released = false
     @poisoned = false
@@ -187,7 +254,13 @@ module ML::Video
     def initialize(index_path : String, expected_index_sha256 : String,
                    expected_source_sha256 : String, config : HyNomasConfig,
                    @budget_bytes : Int64, *, @stage_bytes : Int64,
-                   @reserve_bytes : Int64 = 0_i64)
+                   @reserve_bytes : Int64 = 0_i64,
+                   @max_forwards_per_chain : Int32 = 1)
+      unless (1..8).includes?(@max_forwards_per_chain)
+        raise ArgumentError.new("Hy-Nomas Q4 max_forwards_per_chain must be between 1 and 8")
+      end
+      @cursor = HyNomasFullPassCursor.new(HyNomasQ4Cache::DIT_BLOCK_COUNT,
+        @max_forwards_per_chain)
       unless @budget_bytes > 0 && @stage_bytes > 0 && @reserve_bytes >= 0
         raise ArgumentError.new("Hy-Nomas Q4 stack memory budget is invalid")
       end
@@ -226,6 +299,10 @@ module ML::Video
     # mutate the cache objects owned by this stack.
     def blocks : Array(HyNomasQ4StackIndex::BlockPin)
       @block_pins.dup
+    end
+
+    def forwards_on_chain : Int32
+      @cursor.forwards_on_chain
     end
 
     # Loading is a setup-only operation after every manifest, payload, index,
@@ -288,30 +365,16 @@ module ML::Video
                 block_index : Int32, arena : Arena) : Nil
       validate_for!(block_index, arena)
       chain.encoder
+      previous = @last_chain
+      @cursor.validate_block!(chain.object_id.to_u64, block_index,
+        previous_terminal: previous.try(&.completed?) || false,
+        previous_wait_count: previous.try(&.wait_count) || 0)
       if block_index == 0
-        if @next_block == HyNomasQ4Cache::DIT_BLOCK_COUNT
-          previous = @last_chain || raise ArgumentError.new("Hy-Nomas Q4 previous chain is missing")
-          unless previous.completed? && previous.wait_count == 1 && !previous.same?(chain)
-            raise ArgumentError.new("Hy-Nomas Q4 stack may restart only on a fresh chain after terminal completion")
-          end
-          @next_block = 0
-        elsif @next_block != 0
-          raise ArgumentError.new("Hy-Nomas Q4 serial block order was interrupted")
-        end
         @last_chain = chain
-      else
-        same_chain = if previous = @last_chain
-                       previous.same?(chain)
-                     else
-                       false
-                     end
-        unless block_index == @next_block && same_chain
-          raise ArgumentError.new("Hy-Nomas Q4 blocks must decode in order on one command chain")
-        end
       end
       begin
         @blocks[block_index].decode_into(chain.encoder, arena)
-        @next_block += 1
+        @cursor.finish_block!(chain.object_id.to_u64, block_index)
       rescue ex
         @poisoned = true
         raise ex

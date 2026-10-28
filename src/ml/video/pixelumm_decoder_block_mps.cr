@@ -72,6 +72,113 @@ end
 {% end %}
 
 module ML::Video::PixelUMMDecoderBlockMPS
+  # CPU-only cursor for a sequence of decoder plans that share one writable
+  # workspace. It counts only complete ordered passes and quarantines a
+  # command chain after any native submission failure until terminal wait.
+  class SerialPassCursor
+    getter slot_count : Int32
+    getter max_passes_per_chain : Int32
+    getter passes_on_chain : Int32
+    getter next_slot : Int32
+
+    @active_chain_id : UInt64? = nil
+
+    def initialize(@slot_count : Int32, @max_passes_per_chain : Int32 = 1)
+      raise ArgumentError.new("PixelUMM serial pass cursor needs at least one slot") unless @slot_count > 0
+      unless (1..5).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and 5")
+      end
+      @passes_on_chain = 0
+      @next_slot = 0
+      @poisoned = false
+    end
+
+    def poisoned? : Bool
+      @poisoned
+    end
+
+    # Validate before a plan appends native work. A new chain may take over a
+    # partial or complete pass only after its previous chain has drained once.
+    def validate_slot!(chain_id : UInt64, slot : Int32, *,
+                       previous_terminal : Bool,
+                       previous_wait_count : Int32) : Nil
+      unless (0...@slot_count).includes?(slot)
+        raise ArgumentError.new("PixelUMM serial pass slot is out of range")
+      end
+
+      active_chain_id = @active_chain_id
+      if @poisoned
+        unless active_chain_id && active_chain_id != chain_id &&
+               previous_terminal && previous_wait_count == 1
+          raise ArgumentError.new("PixelUMM pass remains poisoned until prior chain terminal completion")
+        end
+        unless slot == 0
+          raise ArgumentError.new("PixelUMM workspace plans must restart each pass at slot zero")
+        end
+        restart_for_new_chain!(chain_id)
+      elsif active_chain_id.nil?
+        unless slot == 0
+          raise ArgumentError.new("PixelUMM workspace plans must encode once in slot order")
+        end
+        @active_chain_id = chain_id
+      elsif @next_slot == @slot_count
+        if active_chain_id == chain_id
+          unless @passes_on_chain < @max_passes_per_chain
+            raise ArgumentError.new("PixelUMM workspace reached its per-chain pass limit")
+          end
+          unless slot == 0
+            raise ArgumentError.new("PixelUMM workspace plans must restart each pass at slot zero")
+          end
+          @next_slot = 0
+        else
+          unless previous_terminal && previous_wait_count == 1
+            raise ArgumentError.new("PixelUMM workspace may start a new chain only after terminal completion")
+          end
+          unless slot == 0
+            raise ArgumentError.new("PixelUMM workspace plans must restart each pass at slot zero")
+          end
+          restart_for_new_chain!(chain_id)
+        end
+      elsif active_chain_id != chain_id
+        unless previous_terminal && previous_wait_count == 1
+          raise ArgumentError.new("PixelUMM workspace may start a new chain only after terminal completion")
+        end
+        unless slot == 0
+          raise ArgumentError.new("PixelUMM workspace plans must restart each pass at slot zero")
+        end
+        restart_for_new_chain!(chain_id)
+      end
+
+      unless slot == @next_slot
+        raise ArgumentError.new("PixelUMM workspace plans must encode once in slot order")
+      end
+    end
+
+    # Advance only after the plan's native submission succeeds.
+    def finish_slot!(chain_id : UInt64, slot : Int32) : Nil
+      unless @active_chain_id == chain_id && slot == @next_slot &&
+             (0...@slot_count).includes?(slot)
+        raise ArgumentError.new("PixelUMM serial pass cursor changed during encode")
+      end
+      @next_slot += 1
+      @passes_on_chain += 1 if @next_slot == @slot_count
+    end
+
+    def poison!(chain_id : UInt64) : Nil
+      unless @active_chain_id == chain_id
+        raise ArgumentError.new("PixelUMM failure belongs to a different pass command chain")
+      end
+      @poisoned = true
+    end
+
+    private def restart_for_new_chain!(chain_id : UInt64) : Nil
+      @active_chain_id = chain_id
+      @next_slot = 0
+      @passes_on_chain = 0
+      @poisoned = false
+    end
+  end
+
   # The PixelUMM v1 decoder architecture is intentionally fixed. Geometry is
   # varied for qualification; model dimensions and rotary policy may not drift.
   struct Config
@@ -841,6 +948,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter slot_count : Int32
     getter reuse_outputs : Bool
     getter output_bank_count : Int32
+    getter max_passes_per_chain : Int32
 
     @layout : AttentionLayout
     @capture_sets : Array(Array(String))
@@ -859,15 +967,18 @@ module ML::Video::PixelUMMDecoderBlockMPS
     @bound_cosine : ML::MetalBuffer? = nil
     @bound_sine : ML::MetalBuffer? = nil
     @request_chain : ML::Metal::MPSCommandChain? = nil
-    @next_encode_slot = 0_i32
-    @request_failed = false
+    @pass_cursor : SerialPassCursor
     @released = false
     @mutex = Mutex.new
     @@retained_mutex = Mutex.new
     @@retained = [] of Workspace
 
     def initialize(@config : Config, *, captures_by_slot : Array(Array(String)),
-                   max_owned_bytes : Int64, @reuse_outputs : Bool = false)
+                   max_owned_bytes : Int64, @reuse_outputs : Bool = false,
+                   @max_passes_per_chain : Int32 = 1)
+      unless (1..5).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and 5")
+      end
       @config.validate!
       if @config.tiles_h <= 3 && @config.tiles_w <= 3 &&
          @config.tokens > Plan::FULL_ATTENTION_MAX_TOKENS
@@ -880,6 +991,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
         captures.dup
       end
       @slot_count = @capture_sets.size.to_i32
+      @pass_cursor = SerialPassCursor.new(@slot_count, @max_passes_per_chain)
       @output_bank_count = self.class.output_bank_count(@slot_count, reuse_outputs: @reuse_outputs)
       @named_bytes = self.class.owned_bytes(@config, @layout, @capture_sets, reuse_outputs: @reuse_outputs)
       unless max_owned_bytes > 0 && @named_bytes <= max_owned_bytes
@@ -1098,37 +1210,22 @@ module ML::Video::PixelUMMDecoderBlockMPS
           end
         end
 
-        if @slot_count > 1
-          if @request_failed || @next_encode_slot == @slot_count
-            if @request_chain && @request_chain.not_nil!.completed?
-              @request_chain = nil
-              @next_encode_slot = 0_i32
-              @request_failed = false
-            else
-              raise ArgumentError.new("complete the prior PixelUMM workspace request before reuse")
-            end
-          end
-          unless slot == @next_encode_slot
-            raise ArgumentError.new("PixelUMM workspace plans must encode once in slot order")
-          end
-          if request_chain = @request_chain
-            unless request_chain.same?(chain)
-              raise ArgumentError.new("PixelUMM workspace slots must use one command chain")
-            end
-          else
-            @request_chain = chain
-          end
-        end
+        previous_request_chain = @request_chain
+        @pass_cursor.validate_slot!(chain.object_id.to_u64, slot,
+          previous_terminal: previous_request_chain.try(&.completed?) || false,
+          previous_wait_count: previous_request_chain.try(&.wait_count) || 0)
+        @request_chain = chain if slot == 0
 
         begin
           yield
           @last_chains[slot] = chain
-          @next_encode_slot += 1 if @slot_count > 1
+          @pass_cursor.finish_slot!(chain.object_id.to_u64, slot)
         rescue ex
           # If native submission fails part-way through, shared buffers stay
           # unavailable until that same chain reaches terminal completion.
           @last_chains[slot] = chain
-          @request_failed = true if @slot_count > 1
+          @request_chain = chain
+          @pass_cursor.poison!(chain.object_id.to_u64)
           raise ex
         end
       end

@@ -7,6 +7,15 @@ private def pixelumm_original_index(temporal : Int32, height : Int32, width : In
   ((t * height) + h) * width + w
 end
 
+private def pixelumm_finish_pass(cursor : ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor,
+                                 chain_id : UInt64) : Nil
+  cursor.slot_count.times do |slot|
+    cursor.validate_slot!(chain_id, slot.to_i32,
+      previous_terminal: false, previous_wait_count: 0)
+    cursor.finish_slot!(chain_id, slot.to_i32)
+  end
+end
+
 private def pixelumm_expected_originals(layout,
                                         temporal : Int32, height : Int32, width : Int32,
                                         tile_tokens : Int32, tile : Int32,
@@ -700,5 +709,91 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Workspace do
         weights_bytes_by_slot: weights_by_slot, captures_by_slot: captures,
         max_unique_bytes: Int64::MAX)
     end
+  end
+end
+
+describe ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor do
+  it "supports the five-window 36-plan ceiling and rejects wider caps" do
+    expect_raises(ArgumentError, /between 1 and 5/) do
+      ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 0)
+    end
+    expect_raises(ArgumentError, /between 1 and 5/) do
+      ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 6)
+    end
+
+    cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 5)
+    5.times { pixelumm_finish_pass(cursor, 36_u64) }
+    cursor.passes_on_chain.should eq(5)
+    expect_raises(ArgumentError, /per-chain pass limit/) do
+      cursor.validate_slot!(36_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+  end
+
+  it "preserves one-pass default and allows only bounded ordered same-chain passes" do
+    default_cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(3)
+    pixelumm_finish_pass(default_cursor, 1_u64)
+    default_cursor.passes_on_chain.should eq(1)
+    expect_raises(ArgumentError, /per-chain pass limit/) do
+      default_cursor.validate_slot!(1_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+
+    bounded_cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(3, 2)
+    pixelumm_finish_pass(bounded_cursor, 7_u64)
+    bounded_cursor.validate_slot!(7_u64, 0,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_slot!(7_u64, 0)
+    expect_raises(ArgumentError, /slot order/) do
+      bounded_cursor.validate_slot!(7_u64, 2,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+    bounded_cursor.validate_slot!(7_u64, 1,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_slot!(7_u64, 1)
+    bounded_cursor.validate_slot!(7_u64, 2,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_slot!(7_u64, 2)
+    bounded_cursor.passes_on_chain.should eq(2)
+    expect_raises(ArgumentError, /per-chain pass limit/) do
+      bounded_cursor.validate_slot!(7_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+  end
+
+  it "requires terminal wait for chain changes and keeps failed submissions poisoned" do
+    cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(2, 5)
+    pixelumm_finish_pass(cursor, 10_u64)
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_slot!(11_u64, 0,
+        previous_terminal: false, previous_wait_count: 1)
+    end
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_slot!(11_u64, 0,
+        previous_terminal: true, previous_wait_count: 0)
+    end
+    cursor.validate_slot!(11_u64, 0,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.passes_on_chain.should eq(0)
+    cursor.finish_slot!(11_u64, 0)
+    cursor.poison!(11_u64)
+    cursor.poisoned?.should be_true
+    expect_raises(ArgumentError, /poisoned until prior chain terminal completion/) do
+      cursor.validate_slot!(12_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+    expect_raises(ArgumentError, /poisoned until prior chain terminal completion/) do
+      cursor.validate_slot!(11_u64, 1,
+        previous_terminal: true, previous_wait_count: 1)
+    end
+    expect_raises(ArgumentError, /slot zero/) do
+      cursor.validate_slot!(12_u64, 1,
+        previous_terminal: true, previous_wait_count: 1)
+    end
+    cursor.poisoned?.should be_true
+    cursor.validate_slot!(12_u64, 0,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.poisoned?.should be_false
+    cursor.passes_on_chain.should eq(0)
   end
 end

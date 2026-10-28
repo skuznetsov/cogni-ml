@@ -19,6 +19,7 @@ module ML::Video
     getter budget_bytes : Int64
     getter stage_bytes : Int64
     getter reserve_bytes : Int64
+    getter max_forwards_per_chain : Int32
 
     @block_pins : Array(HyNomasQ4StackIndex::BlockPin)
     @control_files : Array(CheckpointFile)
@@ -30,7 +31,7 @@ module ML::Video
     @stage_arena : Arena? = nil
     @stage_buffers = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
-    @next_block = 0
+    @cursor : HyNomasFullPassCursor
     @loaded = false
     @released = false
     @poisoned = false
@@ -40,7 +41,12 @@ module ML::Video
     def initialize(index_path : String, expected_index_sha256 : String,
                    expected_source_sha256 : String, config : HyNomasConfig,
                    @budget_bytes : Int64, *, @stage_bytes : Int64,
-                   @reserve_bytes : Int64 = 0_i64)
+                   @reserve_bytes : Int64 = 0_i64,
+                   @max_forwards_per_chain : Int32 = 1)
+      unless (1..8).includes?(@max_forwards_per_chain)
+        raise ArgumentError.new("Hy-Nomas BF16 max_forwards_per_chain must be between 1 and 8")
+      end
+      @cursor = HyNomasFullPassCursor.new(BLOCK_COUNT, @max_forwards_per_chain)
       unless @budget_bytes > 0 && @stage_bytes > 0 && @reserve_bytes >= 0
         raise ArgumentError.new("Hy-Nomas BF16 stack memory budget is invalid")
       end
@@ -129,6 +135,10 @@ module ML::Video
       @released
     end
 
+    def forwards_on_chain : Int32
+      @cursor.forwards_on_chain
+    end
+
     # Allocate all block-local BF16 residents only after CPU admission has
     # completed. No F32 source or conversion staging is retained.
     def load!(arena : Arena) : Nil
@@ -198,26 +208,12 @@ module ML::Video
                 block_index : Int32, arena : Arena) : Nil
       validate_for!(block_index, arena)
       encoder = chain.encoder
+      previous = @last_chain
+      @cursor.validate_block!(chain.object_id.to_u64, block_index,
+        previous_terminal: previous.try(&.completed?) || false,
+        previous_wait_count: previous.try(&.wait_count) || 0)
       if block_index == 0
-        if @next_block == BLOCK_COUNT
-          previous = @last_chain || raise ArgumentError.new("Hy-Nomas BF16 previous chain is missing")
-          unless previous.completed? && previous.wait_count == 1 && !previous.same?(chain)
-            raise ArgumentError.new("Hy-Nomas BF16 stack may restart only on a fresh chain after terminal completion")
-          end
-          @next_block = 0
-        elsif @next_block != 0
-          raise ArgumentError.new("Hy-Nomas BF16 serial block order was interrupted")
-        end
         @last_chain = chain
-      else
-        same_chain = if previous = @last_chain
-                       previous.same?(chain)
-                     else
-                       false
-                     end
-        unless block_index == @next_block && same_chain
-          raise ArgumentError.new("Hy-Nomas BF16 blocks must copy in order on one command chain")
-        end
       end
 
       begin
@@ -234,7 +230,7 @@ module ML::Video
             .set_value(tensor.elements.to_u32, 2)
             .dispatch_1d(tensor.elements)
         end
-        @next_block += 1
+        @cursor.finish_block!(chain.object_id.to_u64, block_index)
       rescue ex
         @poisoned = true
         raise ex

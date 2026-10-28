@@ -349,6 +349,28 @@ $(BUILD_DIR)/hy_nomas_conditioned_eight_probe: examples/hy_nomas_conditioned_eig
 hy_nomas_q4_dit_pack: $(BUILD_DIR)/hy_nomas_q4_dit_pack
 hy_nomas_q4_dit_probe: $(BUILD_DIR)/hy_nomas_q4_dit_probe
 
+.PHONY: hy_nomas_generate
+hy_nomas_generate: $(BUILD_DIR)/hy_nomas_generate
+
+.PHONY: pixelumm_generation_probe
+pixelumm_generation_probe: $(BUILD_DIR)/pixelumm_generation_probe
+
+.PHONY: hy_nomas_euler_probe
+hy_nomas_euler_probe: $(BUILD_DIR)/hy_nomas_euler_probe
+
+$(BUILD_DIR)/hy_nomas_euler_probe: examples/hy_nomas_euler_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+$(BUILD_DIR)/pixelumm_generation_probe: examples/pixelumm_generation_probe.cr examples/support/pixelumm_generation_probe.metal examples/support/hy_nomas_generation.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+# The head object includes the PixelUMM block ABI; do not link the block twice.
+$(BUILD_DIR)/hy_nomas_generate: examples/hy_nomas_generate.cr examples/support/hy_nomas_generation.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 .PHONY: hy_nomas_q4_reduction_probe
 hy_nomas_q4_reduction_probe: $(BUILD_DIR)/hy_nomas_q4_reduction_probe
 

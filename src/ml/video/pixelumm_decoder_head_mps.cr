@@ -169,12 +169,14 @@ module ML::Video::PixelUMMDecoderHeadMPS
     getter named_bytes_by_name = {} of String => Int64
     getter poison_count : Int32 = 0_i32
     getter last_poisoned_bytes : Int64 = 0_i64
+    getter max_passes_per_chain : Int32
 
     @weights : Hash(String, ML::MetalBuffer)
     @buffers = {} of String => ML::MetalBuffer
     @selected_captures : Array(String)
     @native = Pointer(Void).null
     @chain : ML::Metal::MPSCommandChain? = nil
+    @pass_cursor : ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor
     @released = false
     @error_text = Bytes.new(1024, 0_u8)
 
@@ -184,7 +186,13 @@ module ML::Video::PixelUMMDecoderHeadMPS
     def initialize(@config : Config, *, input : ML::MetalBuffer,
                    weights : Hash(String, ML::MetalBuffer),
                    max_named_bytes : Int64,
-                   captures : Array(String) = [] of String)
+                   captures : Array(String) = [] of String,
+                   @max_passes_per_chain : Int32 = 1)
+      unless (1..5).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM head max_passes_per_chain must be between 1 and 5")
+      end
+      @pass_cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(
+        1, @max_passes_per_chain)
       @input = input
       @weights = weights
       @selected_captures = captures.dup
@@ -260,25 +268,30 @@ module ML::Video::PixelUMMDecoderHeadMPS
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
       check_live!
       chain.encoder
-      if previous = @chain
-        unless previous.completed?
-          raise ArgumentError.new("PixelUMM head plan cannot be reused while its command chain is in flight")
-        end
-      end
+      previous = @chain
+      @pass_cursor.validate_slot!(chain.object_id.to_u64, 0,
+        previous_terminal: previous.try(&.completed?) || false,
+        previous_wait_count: previous.try(&.wait_count) || 0)
       @chain = chain
-      {% if flag?(:darwin) && !flag?(:cpu_only) %}
-        chain.pause!
-        status = -1
-        begin
-          status = PixelUMMDecoderHeadMPSFFI.encode(
-            @native, chain.handle, @error_text.to_unsafe, @error_text.size)
-        ensure
-          chain.resume!
-        end
-        raise ArgumentError.new("PixelUMM head encode failed (#{status}): #{error_message}") unless status == 0
-      {% else %}
-        raise ArgumentError.new("PixelUMM head requires macOS Metal Performance Shaders")
-      {% end %}
+      begin
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          chain.pause!
+          status = -1
+          begin
+            status = PixelUMMDecoderHeadMPSFFI.encode(
+              @native, chain.handle, @error_text.to_unsafe, @error_text.size)
+          ensure
+            chain.resume!
+          end
+          raise ArgumentError.new("PixelUMM head encode failed (#{status}): #{error_message}") unless status == 0
+        {% else %}
+          raise ArgumentError.new("PixelUMM head requires macOS Metal Performance Shaders")
+        {% end %}
+        @pass_cursor.finish_slot!(chain.object_id.to_u64, 0)
+      rescue ex
+        @pass_cursor.poison!(chain.object_id.to_u64)
+        raise ex
+      end
     end
 
     # The buffer handle is available for same-chain GPU chaining before encode.

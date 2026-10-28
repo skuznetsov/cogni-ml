@@ -35364,3 +35364,54 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback removes diagnostics. Refresh on scoped source/artifact/backend/device/
   OS/toolchain/geometry/precision/command/capture/lifetime/guard/clock changes or
   evidence loss; fresh admission each launch, any owner failure reopens diagnosis.
+
+### 2026-10-28: First native five-second Hy-Nomas preview
+
+- Return pointer: docs/hy-nomas-generation-frontier.md. Opt-in entry point
+  examples/hy_nomas_generate.cr composes authenticated saved Qwen state26,
+  BF16 DiT control weights, eight GPU Euler forwards, and five PixelUMM
+  windows through 36 blocks plus head. Output is 120 frames, 512x288, 24 fps,
+  seed42/shift5/CFG1, tram prompt; no live text encoder, camera/action or audio.
+  Same-decoded-Q4 checks do not establish BF16 quality; Q4 is excluded here.
+- One explicit terminal wait separates weight phases. The latent retains its
+  GPU allocation; no per-block/step/window wait or activation readback. New
+  bounded repeat cursors keep default single-pass behavior and reject order,
+  chain, limit and poisoned-use errors. Decoder uses common scratch/two banks.
+- Newly composed boundaries match pinned source bit-exactly at unchanged
+  2e-5: initial BF16 rounding, eight Euler steps/timesteps, real-weight Pixel
+  stem and synthetic full five-window assembly/display conversion. NaN negative
+  detected. Pixel oracle initially failed because large MPS int64 remainder
+  corrupted synthetic inputs; exact period-before-repeat fixes the oracle,
+  not tolerance. Full generated-video upstream parity remains untested.
+- Accepted generation-v3: DiT35.768s, PixelUMM67.547s, setup22.877+22.221s;
+  guarded process155.672s, MP4 export0.417s. About31.2s per second of video
+  including startup at this resolution; single preview, not warmed benchmark
+  or Wan/480p/720p comparison. ffprobe confirms120frames/5s; decoded contact
+  sheet shows moving tram/street. All frames finite/nonconstant; statistics
+  and sampled images do not certify temporal consistency or upstream quality.
+- Guard300samples: peak group footprint21,340,353,160B (19.874GiB), minimum
+  cache-aware headroom23,171,694,592B (21.580GiB), swap growth0, exit0. Retained
+  10%floor/23GiBprocesscap/64MiBswapstop/900sdeadline; sampled, not transient
+  guarantees. Instrumented MetalBuffer allocations/readbacks0 during encode,
+  excludes opaque MPS resources and terminal pixel-file export. Two terminal
+  waits total. Adversary required this counter-scope clarification.
+- External namespace /opt/mldata_ssd/cogni-ml/hy-nomas-first-video-20261028.
+  Inputs SHA5b162b8bf4b28c6cfacd8a3d8c14a7758b699034b2a46e84c224522eb0a75a7b;
+  pixels SHAf13481b1d5790761df94943b6eac9e768177a240998c859d3ea9f21a633c2f85;
+  MP4 SHA7a323eb0b9e02443eedf45a5576f36a3c738ea41b687d1a476cbbdcfd0ea1cd3.
+  Logs/guard/receipt/export/ffprobe/video-analysis/contact-sheet index the run.
+  Earlier cache geometry refusal and terminal unsupported-wx failure excluded;
+  runtimeV4320 keeps cacheV5280 architecture/bindings, writer uses O_EXCL.
+- DoD: release builds,39Crystal examples,13Python tests, format/diff checks,
+  authenticated numerical probes and guarded actual MP4. Correlated Mini-Quad
+  ROBUST for bounded composition/order/lifetime; no independent full-video
+  equivalence claim. Receipt metric wording added after accepted GPU run.
+- Next frontier: profile current J5760 decoder window, then batch same-sized
+  local-attention tiles with identical contexts/BF16/reduction; measure full
+  window before promotion. Decoder is65.4% of neural time. Five overlapping
+  windows decode200frame positions for120output; overlap indices alone do not
+  permit reusing later hidden states across changed attention contexts. Loading
+  and plan setup45.1s is a separate target; do not bypass authentication.
+  Rollback removes opt-in glue and repeat opt-ins. Refresh on source/weights/
+  inputs/geometry/precision/schedule/backend/device/guard changes or evidence
+  loss; re-admit memory on every launch.

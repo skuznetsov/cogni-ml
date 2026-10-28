@@ -5,6 +5,15 @@ require "json"
 require "./support/video_allocation_counter"
 require "../src/ml/video/hy_nomas_q4_stack"
 
+private def finish_hy_nomas_pass(cursor : ML::Video::HyNomasFullPassCursor,
+                                 chain_id : UInt64) : Nil
+  cursor.block_count.times do |block_index|
+    cursor.validate_block!(chain_id, block_index.to_i32,
+      previous_terminal: false, previous_wait_count: 0)
+    cursor.finish_block!(chain_id, block_index.to_i32)
+  end
+end
+
 private class HyNomasQ4StackSpecFixture
   getter directory : String
   getter index_path : String
@@ -58,10 +67,12 @@ private class HyNomasQ4StackSpecFixture
   end
 
   def stack(*, budget_bytes : Int64 = @payload_bytes + @stage_bytes + 32_i64,
-            source_sha256 : String = @source_sha256) : ML::Video::HyNomasQ4Stack
+            source_sha256 : String = @source_sha256,
+            max_forwards_per_chain : Int32 = 1) : ML::Video::HyNomasQ4Stack
     ML::Video::HyNomasQ4Stack.new(@index_path, @index_sha256,
       source_sha256, @config, budget_bytes,
-      stage_bytes: @stage_bytes, reserve_bytes: 32_i64)
+      stage_bytes: @stage_bytes, reserve_bytes: 32_i64,
+      max_forwards_per_chain: max_forwards_per_chain)
   end
 
   private def write_block(block_index : Int32)
@@ -243,6 +254,30 @@ describe ML::Video::HyNomasQ4Stack do
     end
   end
 
+  it "bounds opt-in same-chain forwards without widening the default admission" do
+    fixture = HyNomasQ4StackSpecFixture.new
+    begin
+      allocations = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 0)
+      end
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 9)
+      end
+      default_stack = fixture.stack
+      default_stack.max_forwards_per_chain.should eq(1)
+      default_stack.forwards_on_chain.should eq(0)
+      bounded_stack = fixture.stack(max_forwards_per_chain: 8)
+      bounded_stack.max_forwards_per_chain.should eq(8)
+      bounded_stack.forwards_on_chain.should eq(0)
+      default_stack.release
+      bounded_stack.release
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+    ensure
+      fixture.cleanup
+    end
+  end
+
   it "rejects duplicate cache payload identities and corrupt payload files" do
     fixture = HyNomasQ4StackSpecFixture.new
     begin
@@ -265,5 +300,59 @@ describe ML::Video::HyNomasQ4Stack do
     ensure
       fixture.cleanup
     end
+  end
+end
+
+describe ML::Video::HyNomasFullPassCursor do
+  it "keeps the default at one pass and allows only a bounded ordered restart" do
+    default_cursor = ML::Video::HyNomasFullPassCursor.new(3)
+    finish_hy_nomas_pass(default_cursor, 1_u64)
+    default_cursor.forwards_on_chain.should eq(1)
+    expect_raises(ArgumentError, /per-chain forward limit/) do
+      default_cursor.validate_block!(1_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+
+    bounded_cursor = ML::Video::HyNomasFullPassCursor.new(3, 2)
+    finish_hy_nomas_pass(bounded_cursor, 7_u64)
+    bounded_cursor.validate_block!(7_u64, 0,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 0)
+    expect_raises(ArgumentError, /in order on one command chain/) do
+      bounded_cursor.validate_block!(7_u64, 2,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+    bounded_cursor.validate_block!(7_u64, 1,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 1)
+    bounded_cursor.validate_block!(7_u64, 2,
+      previous_terminal: false, previous_wait_count: 0)
+    bounded_cursor.finish_block!(7_u64, 2)
+    bounded_cursor.forwards_on_chain.should eq(2)
+    expect_raises(ArgumentError, /per-chain forward limit/) do
+      bounded_cursor.validate_block!(7_u64, 0,
+        previous_terminal: false, previous_wait_count: 0)
+    end
+  end
+
+  it "requires terminal completion before a new chain starts" do
+    cursor = ML::Video::HyNomasFullPassCursor.new(2, 2)
+    finish_hy_nomas_pass(cursor, 10_u64)
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_block!(11_u64, 0,
+        previous_terminal: false, previous_wait_count: 1)
+    end
+    expect_raises(ArgumentError, /terminal completion/) do
+      cursor.validate_block!(11_u64, 0,
+        previous_terminal: true, previous_wait_count: 0)
+    end
+    cursor.validate_block!(11_u64, 0,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.forwards_on_chain.should eq(0)
+    cursor.finish_block!(11_u64, 0)
+    cursor.validate_block!(11_u64, 1,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.finish_block!(11_u64, 1)
+    cursor.forwards_on_chain.should eq(1)
   end
 end
