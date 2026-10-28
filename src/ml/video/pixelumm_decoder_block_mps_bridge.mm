@@ -134,6 +134,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic, strong) PixelUMMGraphStep *postNormGain;
 @property(nonatomic, strong) PixelUMMGraphStep *gateProjection;
 @property(nonatomic, strong) PixelUMMGraphStep *upProjection;
+@property(nonatomic, strong) PixelUMMGraphStep *sharedGateUpProjection;
 @property(nonatomic, strong) PixelUMMGraphStep *downProjection;
 @property(nonatomic, strong) id<MTLLibrary> metalLibrary;
 @property(nonatomic, strong) id<MTLComputePipelineState> qkPrepare;
@@ -158,6 +159,8 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic) uint32_t maxKey;
 @property(nonatomic) uint32_t tileCount;
 @property(nonatomic) BOOL ffnF32;
+@property(nonatomic) BOOL sharedGateUpPrepared;
+@property(nonatomic) BOOL useSharedGateUp;
 @property(nonatomic) uint64_t captureMask;
 @end
 @implementation PixelUMMDecoderPlan
@@ -591,6 +594,78 @@ static PixelUMMGraphStep *pixel_linear_step(
   }
   return pixel_compile_step(device, graph, feeds, placeholders, inputData,
       reshaped, outputBuffer, outputShape, name, errorText, errorCapacity);
+}
+
+static MPSGraphTensor *pixel_linear_f32_weight_projection(
+    MPSGraph *graph, MPSGraphTensor *flatInput, MPSGraphTensor *weightF32,
+    uint32_t tokens, uint32_t outputWidth,
+    NSString *name) {
+  MPSGraphTensor *transpose = weightF32
+      ? [graph transposeTensor:weightF32 dimension:0 withDimension:1
+          name:[name stringByAppendingString:@"_weight_transpose"]] : nil;
+  MPSGraphTensor *product = flatInput && transpose
+      ? [graph matrixMultiplicationWithPrimaryTensor:flatInput secondaryTensor:transpose
+          name:[name stringByAppendingString:@"_matmul"]] : nil;
+  MPSGraphTensor *bf16 = product;
+  if (bf16 && bf16.dataType != MPSDataTypeBFloat16)
+    bf16 = pixel_cast_bf16(graph, bf16,
+        [name stringByAppendingString:@"_bf16"]);
+  return bf16
+      ? [graph reshapeTensor:bf16 withShape:pixel_shape({1, tokens, outputWidth})
+          name:[name stringByAppendingString:@"_output"]] : nil;
+}
+
+static PixelUMMGraphStep *pixel_linear_shared_input_pair_step(
+    id<MTLDevice> device, id<MTLBuffer> inputBuffer,
+    id<MTLBuffer> gateWeightBuffer, id<MTLBuffer> upWeightBuffer,
+    id<MTLBuffer> gateOutputBuffer, id<MTLBuffer> upOutputBuffer,
+    uint32_t tokens, uint32_t inputWidth, uint32_t outputWidth,
+    NSString *name, char *errorText, size_t errorCapacity) {
+  MPSGraph *graph = [MPSGraph new];
+  graph.options = MPSGraphOptionsNone;
+  NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
+  NSMutableArray *placeholders = [NSMutableArray array];
+  NSMutableArray *inputData = [NSMutableArray array];
+  NSArray *inputShape = pixel_shape({1, tokens, inputWidth});
+  NSArray *weightShape = pixel_shape({outputWidth, inputWidth});
+  NSArray *outputShape = pixel_shape({1, tokens, outputWidth});
+  MPSGraphTensor *input = pixel_add_feed(graph, feeds, placeholders, inputData,
+      inputBuffer, inputShape, MPSDataTypeBFloat16,
+      [name stringByAppendingString:@"_input"]);
+  MPSGraphTensor *gateWeight = pixel_add_feed(graph, feeds, placeholders, inputData,
+      gateWeightBuffer, weightShape, MPSDataTypeBFloat16,
+      [name stringByAppendingString:@"_gate_weight"]);
+  MPSGraphTensor *upWeight = pixel_add_feed(graph, feeds, placeholders, inputData,
+      upWeightBuffer, weightShape, MPSDataTypeBFloat16,
+      [name stringByAppendingString:@"_up_weight"]);
+  MPSGraphTensor *inputF32 = input
+      ? [graph castTensor:input toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_input_f32"]] : nil;
+  MPSGraphTensor *gateWeightF32 = gateWeight
+      ? [graph castTensor:gateWeight toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_gate_weight_f32"]] : nil;
+  MPSGraphTensor *upWeightF32 = upWeight
+      ? [graph castTensor:upWeight toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_up_weight_f32"]] : nil;
+  MPSGraphTensor *flatInput = inputF32
+      ? [graph reshapeTensor:inputF32 withShape:pixel_shape({tokens, inputWidth})
+          name:[name stringByAppendingString:@"_flat"]] : nil;
+  MPSGraphTensor *gateOutput = pixel_linear_f32_weight_projection(
+      graph, flatInput, gateWeightF32, tokens, outputWidth,
+      [name stringByAppendingString:@"_gate"]);
+  MPSGraphTensor *upOutput = pixel_linear_f32_weight_projection(
+      graph, flatInput, upWeightF32, tokens, outputWidth,
+      [name stringByAppendingString:@"_up"]);
+  if (!input || !gateWeight || !upWeight || !inputF32 || !gateWeightF32 ||
+      !upWeightF32 || !flatInput ||
+      !gateOutput || !upOutput) {
+    pixel_set_ns_error(errorText, errorCapacity,
+        [NSString stringWithFormat:@"unable to build shared-input PixelUMM graph %@", name]);
+    return nil;
+  }
+  return pixel_compile_step_outputs(device, graph, feeds, placeholders, inputData,
+      @[gateOutput, upOutput], @[gateOutputBuffer, upOutputBuffer],
+      @[outputShape, outputShape], name, errorText, errorCapacity);
 }
 
 static PixelUMMGraphStep *pixel_attention_qk_step(
@@ -1060,11 +1135,22 @@ static void *pixelumm_decoder_block_plan_create(
     void *cosineHandle, void *sineHandle, void **weightHandles,
     void **coreHandles, void **captureHandles, uint64_t captureMask,
     void **scratchHandles, int32_t maxQuery, int32_t maxKey,
-    int32_t tileCount, int32_t ffnF32, char *errorText, size_t errorCapacity) {
+    int32_t tileCount, int32_t ffnF32, int32_t prepareSharedGateUp,
+    char *errorText, size_t errorCapacity) {
   if (errorText && errorCapacity) errorText[0] = '\0';
   if (ffnF32 != 0 && ffnF32 != 1) {
     pixel_set_error(errorText, errorCapacity,
                     "PixelUMM FFN F32 mode must be 0 or 1");
+    return nullptr;
+  }
+  if (prepareSharedGateUp != 0 && prepareSharedGateUp != 1) {
+    pixel_set_error(errorText, errorCapacity,
+                    "PixelUMM shared gate/up preparation flag must be 0 or 1");
+    return nullptr;
+  }
+  if (prepareSharedGateUp && !ffnF32) {
+    pixel_set_error(errorText, errorCapacity,
+                    "PixelUMM shared gate/up graph requires F32 FFN mode");
     return nullptr;
   }
   if (@available(macOS 14.0, *)) {
@@ -1248,6 +1334,8 @@ static void *pixelumm_decoder_block_plan_create(
         plan.headDim = (uint32_t)headDim; plan.maxQuery = (uint32_t)maxQuery;
         plan.maxKey = (uint32_t)maxKey; plan.tileCount = (uint32_t)tileCount;
         plan.ffnF32 = ffnF32 != 0;
+        plan.sharedGateUpPrepared = prepareSharedGateUp != 0;
+        plan.useSharedGateUp = NO;
         plan.captureMask = captureMask;
         NSMutableArray *allResident = [NSMutableArray array];
         [allResident addObject:input]; [allResident addObject:cosine]; [allResident addObject:sine];
@@ -1384,15 +1472,26 @@ static void *pixelumm_decoder_block_plan_create(
         plan.upProjection = pixel_append_linear(plan, core[1], weights[11], core[7],
             tokens, (uint32_t)dim, (uint32_t)ffn, @"up_projection", errorText, errorCapacity,
             plan.ffnF32);
+        // Keep the shared-input experiment opt-in: the baseline plan retains
+        // only its existing independent gate/up executables and preparation cost.
+        if (plan.sharedGateUpPrepared) {
+          plan.sharedGateUpProjection = pixel_linear_shared_input_pair_step(
+              device, core[1], weights[10], weights[11], core[6], core[7],
+              tokens, (uint32_t)dim, (uint32_t)ffn, @"shared_gate_up_projection",
+              errorText, errorCapacity);
+        }
         plan.downProjection = pixel_append_linear(plan, core[7], weights[12], core[4],
             tokens, (uint32_t)ffn, (uint32_t)dim, @"down_projection", errorText, errorCapacity,
             plan.ffnF32);
         if (!plan.oProjection || !plan.postNorm || !plan.postNormGain || !plan.gateProjection ||
             !plan.upProjection || !plan.downProjection) return nullptr;
+        if (plan.sharedGateUpPrepared && !plan.sharedGateUpProjection) return nullptr;
         [steps addObjectsFromArray:@[plan.qNormStatistics, plan.kNormStatistics,
             plan.qNormInverse, plan.kNormInverse,
             plan.oProjection, plan.postNorm, plan.postNormGain,
             plan.gateProjection, plan.upProjection, plan.downProjection]];
+        if (plan.sharedGateUpProjection)
+          [steps addObject:plan.sharedGateUpProjection];
         plan.steps = [steps copy];
         if (!plan.steps || plan.resident.count == 0) {
           pixel_set_error(errorText, errorCapacity, "unable to retain PixelUMM prepared plan");
@@ -1423,7 +1522,7 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create(
   return pixelumm_decoder_block_plan_create(deviceHandle, temporal, height,
       width, tile, dim, ffn, heads, kvHeads, headDim, epsilon, inputHandle,
       cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
-      captureMask, scratchHandles, maxQuery, maxKey, tileCount, 0, errorText,
+      captureMask, scratchHandles, maxQuery, maxKey, tileCount, 0, 0, errorText,
       errorCapacity);
 }
 
@@ -1438,8 +1537,47 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create_with_ffn_f32(
   return pixelumm_decoder_block_plan_create(deviceHandle, temporal, height,
       width, tile, dim, ffn, heads, kvHeads, headDim, epsilon, inputHandle,
       cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
-      captureMask, scratchHandles, maxQuery, maxKey, tileCount, ffnF32,
+      captureMask, scratchHandles, maxQuery, maxKey, tileCount, ffnF32, 0,
       errorText, errorCapacity);
+}
+
+extern "C" void *gs_pixelumm_decoder_block_plan_create_with_ffn_f32_shared_gate_up(
+    void *deviceHandle, int32_t temporal, int32_t height, int32_t width,
+    int32_t tile, int32_t dim, int32_t ffn, int32_t heads,
+    int32_t kvHeads, int32_t headDim, float epsilon, void *inputHandle,
+    void *cosineHandle, void *sineHandle, void **weightHandles,
+    void **coreHandles, void **captureHandles, uint64_t captureMask,
+    void **scratchHandles, int32_t maxQuery, int32_t maxKey,
+    int32_t tileCount, int32_t ffnF32, int32_t prepareSharedGateUp,
+    char *errorText, size_t errorCapacity) {
+  return pixelumm_decoder_block_plan_create(deviceHandle, temporal, height,
+      width, tile, dim, ffn, heads, kvHeads, headDim, epsilon, inputHandle,
+      cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
+      captureMask, scratchHandles, maxQuery, maxKey, tileCount, ffnF32,
+      prepareSharedGateUp, errorText, errorCapacity);
+}
+
+// Mode changes are host-side plan selection only. Callers must select only
+// while the session is idle, after prior command-chain work has completed.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_set_shared_gate_up(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity,
+        "PixelUMM shared gate/up selection requires a plan and a 0/1 value");
+    return -1;
+  }
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+  @synchronized(plan) {
+    if (enabled && (!plan.ffnF32 || !plan.sharedGateUpPrepared ||
+                    !plan.sharedGateUpProjection)) {
+      pixel_set_error(errorText, errorCapacity,
+          "PixelUMM shared gate/up graph was not prepared for this F32 plan");
+      return -2;
+    }
+    plan.useSharedGateUp = enabled != 0;
+  }
+  return 0;
 }
 
 static int32_t pixel_encode_block(
@@ -1455,6 +1593,10 @@ static int32_t pixel_encode_block(
   if (@available(macOS 14.0, *)) {
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+      BOOL useSharedGateUp = NO;
+      @synchronized(plan) {
+        useSharedGateUp = plan.useSharedGateUp;
+      }
       MPSCommandBuffer *commandBuffer = (__bridge MPSCommandBuffer *)commandChainHandle;
       id<MTLCommandBuffer> root = commandBuffer.rootCommandBuffer;
       if (!plan.device || !plan.steps || !plan.resident || !root ||
@@ -1577,10 +1719,18 @@ static int32_t pixel_encode_block(
             !pixel_encode_graph(commandBuffer, plan.postNormGain, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelPostNorm, plan.core[1], dBytes, errorText, errorCapacity)) return -12;
         if (!profile.mark(6, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
-        if (!pixel_encode_graph(commandBuffer, plan.gateProjection, errorText, errorCapacity) ||
-            !pixel_copy_capture(commandBuffer, plan, PixelGateProj, plan.core[6], ffBytes, errorText, errorCapacity) ||
-            !pixel_encode_graph(commandBuffer, plan.upProjection, errorText, errorCapacity) ||
-            !pixel_copy_capture(commandBuffer, plan, PixelUpProj, plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
+        if (useSharedGateUp) {
+          if (!plan.sharedGateUpPrepared || !plan.sharedGateUpProjection ||
+              !pixel_encode_graph(commandBuffer, plan.sharedGateUpProjection,
+                  errorText, errorCapacity) ||
+              !pixel_copy_capture(commandBuffer, plan, PixelGateProj,
+                  plan.core[6], ffBytes, errorText, errorCapacity) ||
+              !pixel_copy_capture(commandBuffer, plan, PixelUpProj,
+                  plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
+        } else if (!pixel_encode_graph(commandBuffer, plan.gateProjection, errorText, errorCapacity) ||
+                   !pixel_copy_capture(commandBuffer, plan, PixelGateProj, plan.core[6], ffBytes, errorText, errorCapacity) ||
+                   !pixel_encode_graph(commandBuffer, plan.upProjection, errorText, errorCapacity) ||
+                   !pixel_copy_capture(commandBuffer, plan, PixelUpProj, plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
         if (!profile.mark(7, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
         PixelCountParams ffnCount{plan.tokens * plan.ffn};
         if (!pixel_encode_kernel(commandBuffer, plan.device, plan.silu,

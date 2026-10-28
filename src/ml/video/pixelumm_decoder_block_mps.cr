@@ -40,6 +40,19 @@ end
       max_key : Int32, tile_count : Int32, ffn_f32 : Int32,
       error : UInt8*, error_capacity : LibC::SizeT,
     ) : Void*
+    fun plan_create_with_shared_gate_up = gs_pixelumm_decoder_block_plan_create_with_ffn_f32_shared_gate_up(
+      device : Void*, temporal : Int32, height : Int32, width : Int32,
+      tile : Int32, dim : Int32, ffn : Int32, heads : Int32,
+      kv_heads : Int32, head_dim : Int32, epsilon : Float32,
+      input : Void*, cosine : Void*, sine : Void*, weights : Void**,
+      core : Void**, captures : Void**, capture_mask : UInt64,
+      scratch : Void**, max_query : Int32,
+      max_key : Int32, tile_count : Int32, ffn_f32 : Int32,
+      prepare_shared_gate_up : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Void*
+    fun set_shared_gate_up = gs_pixelumm_decoder_block_plan_set_shared_gate_up(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
     fun encode = gs_pixelumm_decoder_block_encode(plan : Void*, chain : Void*,
                                                   error : UInt8*, error_capacity : LibC::SizeT) : Int32
     fun encode_profiled = gs_pixelumm_decoder_block_encode_profiled(
@@ -317,6 +330,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter last_encode_host_seconds : Float64 = 0.0
     getter slot : Int32
     getter ffn_f32 : Bool
+    getter shared_gate_up_prepared : Bool
+    getter shared_gate_up : Bool = false
 
     @cosine : ML::MetalBuffer
     @sine : ML::MetalBuffer
@@ -355,11 +370,14 @@ module ML::Video::PixelUMMDecoderBlockMPS
                    sin : ML::MetalBuffer, max_named_bytes : Int64,
                    captures : Array(String) = [] of String,
                    workspace : Workspace? = nil, slot : Int32 = 0,
-                   ffn_f32 : Bool = false)
+                   ffn_f32 : Bool = false, prepare_shared_gate_up : Bool = false)
       @input = input
       @cosine = cos
       @sine = sin
       @ffn_f32 = ffn_f32
+      @shared_gate_up_prepared = prepare_shared_gate_up
+      self.class.validate_shared_gate_up_configuration!(ffn_f32: @ffn_f32,
+        prepare_shared_gate_up: @shared_gate_up_prepared)
       @config.validate!
       layout = @config.layout
       @local_attention_query_tokens = layout.max_query_tokens
@@ -540,8 +558,56 @@ module ML::Video::PixelUMMDecoderBlockMPS
       @workspace || raise ArgumentError.new("PixelUMM plan has no workspace")
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
+    def self.validate_shared_gate_up_configuration!(*, ffn_f32 : Bool, prepare_shared_gate_up : Bool) : Nil
+      if prepare_shared_gate_up && !ffn_f32
+        raise ArgumentError.new("shared gate/up requires F32 FFN graph tensors")
+      end
+    end
+
+    def self.validate_shared_gate_up_change!(*, prepared : Bool, enabled : Bool, idle : Bool) : Nil
+      raise ArgumentError.new("PixelUMM command chain is in flight") unless idle
+      raise ArgumentError.new("shared gate/up graph was not prepared") if enabled && !prepared
+    end
+
+    def self.validate_encode_mode!(*, profile : Bool, shared_gate_up : Bool) : Nil
+      if profile && shared_gate_up
+        raise ArgumentError.new("shared gate/up phase profiling is not qualified; use an unprofiled comparison")
+      end
+    end
+
+    def validate_encode_mode!(*, profile : Bool) : Nil
       check_live!
+      self.class.validate_encode_mode!(profile: profile, shared_gate_up: @shared_gate_up)
+    end
+
+    def validate_shared_gate_up_change!(enabled : Bool) : Nil
+      check_live!
+      self.class.validate_shared_gate_up_change!(prepared: @shared_gate_up_prepared,
+        enabled: enabled, idle: @chain.nil? || @chain.not_nil!.completed?)
+    end
+
+    # Changes only the next request's precompiled graph selection. The workspace
+    # lock serializes this CPU mutation with encoding and rejects in-flight GPU
+    # work without waiting for it. Buffers and the current request stay intact.
+    def use_shared_gate_up!(enabled : Bool) : Nil
+      validate_shared_gate_up_change!(enabled)
+      @workspace.not_nil!.configure_plan!(@slot) do
+        validate_shared_gate_up_change!(enabled)
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.set_shared_gate_up(@native, enabled ? 1 : 0,
+            @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM gate/up selection failed: #{error_message}") unless status == 0
+          @shared_gate_up = enabled
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
+      # Phase collectors qualify the original graph geometry. Do not submit a
+      # differently shaped request and only discover that mismatch after a wait.
+      validate_encode_mode!(profile: profile)
       raise ArgumentError.new("PixelUMM phase profiling requires an enabled fresh API chain") if profile && !chain.api_profile_enabled?
       @profiled_encode = false
       started = Time.instant
@@ -686,7 +752,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
         capture_handles = CAPTURE_NAMES.map do |name|
           @captures[name]?.try(&.handle) || Pointer(Void).null
         end.to_a
-        @native = PixelUMMDecoderBlockMPSFFI.plan_create_with_ffn_f32(
+        @native = PixelUMMDecoderBlockMPSFFI.plan_create_with_shared_gate_up(
           ML::Metal::Device.instance.device_handle,
           @config.temporal, @config.height, @config.width, @config.tile_tokens,
           @config.model_dim, @config.ff_dim, @config.query_heads,
@@ -705,6 +771,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
             .to_unsafe,
           layout.max_query_tokens, layout.max_key_tokens, layout.tile_count,
           @ffn_f32 ? 1 : 0,
+          @shared_gate_up_prepared ? 1 : 0,
           @error_text.to_unsafe, @error_text.size)
         raise ArgumentError.new("PixelUMM plan preparation failed: #{error_message}") if @native.null?
       {% else %}
@@ -980,6 +1047,20 @@ module ML::Video::PixelUMMDecoderBlockMPS
         end
         yield
         @released_slots[slot] = true
+      end
+    end
+
+    def configure_plan!(slot : Int32, &block : -> Nil) : Nil
+      @mutex.synchronize do
+        check_live!
+        validate_slot!(slot)
+        unless @claimed[slot] && !@released_slots[slot]
+          raise ArgumentError.new("PixelUMM workspace plan slot is not live")
+        end
+        if @last_chains.any? { |chain| chain && !chain.completed? }
+          raise ArgumentError.new("PixelUMM workspace command chain is in flight")
+        end
+        yield
       end
     end
 

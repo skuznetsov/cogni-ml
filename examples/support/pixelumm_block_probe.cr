@@ -156,8 +156,12 @@ module PixelUMMBlockProbe
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
-    def initialize(@fixture : Fixture, max_named_bytes : Int64, *, ffn_f32 : Bool = false)
+    def initialize(@fixture : Fixture, max_named_bytes : Int64, *, ffn_f32 : Bool = false,
+                   prepare_shared_gate_up : Bool = false)
       begin
+        if prepare_shared_gate_up && !ffn_f32
+          raise ArgumentError.new("shared gate/up comparison requires F32 FFN mode")
+        end
         @borrowed_bytes = (@fixture.inputs.values + @fixture.weights.values).sum(&.nbytes)
         raise ArgumentError.new("borrowed bindings exceed named memory budget") unless @borrowed_bytes < max_named_bytes
         grid = @fixture.grid
@@ -175,7 +179,7 @@ module PixelUMMBlockProbe
         @plan = ML::Video::PixelUMMDecoderBlockMPS::Plan.new(config,
           input: @bindings["x"], weights: weights, cos: @bindings["cos"], sin: @bindings["sin"],
           max_named_bytes: max_named_bytes - @borrowed_bytes, captures: @fixture.capture_order,
-          ffn_f32: ffn_f32)
+          ffn_f32: ffn_f32, prepare_shared_gate_up: prepare_shared_gate_up)
         @named_bytes = @borrowed_bytes + plan.named_bytes
         raise ArgumentError.new("prepared PixelUMM bindings exceed named budget") if @named_bytes > max_named_bytes
       rescue error

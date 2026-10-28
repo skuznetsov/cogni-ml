@@ -9,6 +9,7 @@ cache_path, cache_sha, report = "", "", ""
 budget = 0_i64
 repeats = 1
 profile_variance = false
+compare_shared_gate_up = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -25,11 +26,14 @@ OptionParser.parse do |parser|
   parser.on("--max-named-bytes N", "Aggregate unique named budget, at most 24 GiB") { |v| budget = v.to_i64 }
   parser.on("--repeats N", "Repeat requests after the gate, 1..3") { |v| repeats = v.to_i }
   parser.on("--profile-variance", "Six bounded phase/API/continuation controls; repeats must be 1") { profile_variance = true }
+  parser.on("--compare-shared-gate-up", "Warm both F32 graph modes, unprofiled ABBA and two poisoned-input gates") { compare_shared_gate_up = true }
 end
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
-       0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 && (!profile_variance || repeats == 1)
+       0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
+       (!(profile_variance || compare_shared_gate_up) || repeats == 1) &&
+       !(profile_variance && compare_shared_gate_up)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
 raise ArgumentError.new("integrated report must be absolute") unless Path[report].absolute?
@@ -45,7 +49,9 @@ named_bytes, block_bytes, head_owned_bytes, head_weight_bytes = 0_i64, 0_i64, 0_
 preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
-schedule = if profile_variance
+schedule = if compare_shared_gate_up
+             PixelUMMDecoderProbe.shared_gate_up_schedule
+           elsif profile_variance
              PixelUMMDecoderProbe.variance_schedule
            else
              Array(PixelUMMDecoderProbe::RequestArm).new(repeats + 2) do |index|
@@ -67,7 +73,8 @@ begin
   observer.emit("after_metadata_and_head_payload_authentication")
   start = Time.instant
   session = PixelUMMDecoderProbe::Session.new(fixture, cache,
-    max_named_bytes: budget, phase_observer: observer)
+    max_named_bytes: budget, phase_observer: observer,
+    prepare_shared_gate_up: compare_shared_gate_up)
   preparation_seconds = (Time.instant - start).total_seconds
   named_bytes, block_bytes = session.named_bytes, session.block_named_bytes
   head_owned_bytes, head_weight_bytes = session.head_owned_named_bytes, session.head_weight_named_bytes
@@ -80,6 +87,8 @@ begin
   observer.emit("session_ready")
   STDERR.puts "Integrated PixelUMM admitted #{named_bytes} unique named bytes, full J=21120"
   current_alternate = false
+  head_poison_count = 0
+  segments_by_mode = {} of Bool => Int32
   schedule.each_with_index do |arm, request|
     poisoned = arm.poisoned
     if arm.alternate != current_alternate
@@ -90,10 +99,15 @@ begin
     end
     if poisoned
       session.poison_transients!
-      unless session.head_plan.poison_count == 1 && session.head_plan.last_poisoned_bytes == 1_124_766_720_i64
+      head_poison_count += 1
+      unless session.head_plan.poison_count == head_poison_count && session.head_plan.last_poisoned_bytes == 1_124_766_720_i64
         raise "integrated replay omitted head transient poison"
       end
       observer.emit("after_poisoned_replay_input", request: request)
+    end
+    session.use_shared_gate_up!(arm.shared_gate_up) if compare_shared_gate_up
+    unless session.blocks.plans.all? { |plan| plan.shared_gate_up == arm.shared_gate_up }
+      raise "integrated gate/up selection must cover every block"
     end
     chain = ML::Metal::MPSCommandChain.new
     if arm.profile
@@ -104,7 +118,26 @@ begin
     reads = ML::MetalBuffer.hy_text_probe_readbacks
     head_before_blocks_rejected = false
     early_release_rejected, early_read_rejected, early_reuse_rejected, early_poison_rejected = false, false, false, false
+    early_mode_change_rejected = false
+    unsupported_profile_rejected_without_submission = false
     if request == 0
+      if compare_shared_gate_up
+        prior_segments = chain.segment_count
+        begin
+          session.encode_blocks(chain, profile: true)
+        rescue error : ArgumentError
+          raise error unless (error.message || "").includes?("not qualified")
+          unsupported_profile_rejected_without_submission = true
+        end
+        # This fails if rejection incorrectly latched the empty chain. No
+        # terminal wait is allowed between rejection and this idle operation.
+        session.use_shared_gate_up!(arm.shared_gate_up)
+        unless unsupported_profile_rejected_without_submission && chain.segment_count == prior_segments &&
+               chain.wait_count == 0 && ML::MetalBuffer.hy_text_probe_readbacks == reads &&
+               ML::MetalBuffer.hy_text_probe_allocations == allocations
+          raise "unsupported shared gate/up profiling changed submission state"
+        end
+      end
       begin
         session.encode_head(chain)
       rescue error : ArgumentError
@@ -141,6 +174,18 @@ begin
       raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
     if request == 0
+      if compare_shared_gate_up
+        before_modes = session.blocks.plans.map(&.shared_gate_up)
+        begin
+          session.use_shared_gate_up!(!arm.shared_gate_up)
+        rescue error : ArgumentError
+          raise error unless (error.message || "").includes?("in flight")
+          early_mode_change_rejected = true
+        end
+        unless early_mode_change_rejected && session.blocks.plans.map(&.shared_gate_up) == before_modes
+          raise "integrated in-flight gate/up selection mutated one or more blocks"
+        end
+      end
       begin
         session.release
       rescue error : ArgumentError
@@ -178,7 +223,7 @@ begin
     root_profile = nil.as(JSON::Any?)
     phase_profile = nil.as(JSON::Any?)
     trace_profile = nil.as(JSON::Any?)
-    if profile_variance
+    if profile_variance || compare_shared_gate_up
       roots = chain.completed_root_timings
       whole = ML::Video::MPSCommandPhaseProfile.build(roots,
         [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
@@ -201,7 +246,14 @@ begin
         trace = chain.continuation_trace
         trace_profile = JSON.parse({info: trace.info, events: trace.events, roots: trace.roots}.to_json)
       end
-      raise "integrated profile changed segment topology" unless chain.segment_count == 4579
+      if profile_variance
+        raise "integrated profile changed segment topology" unless chain.segment_count == 4579
+      else
+        segments_by_mode[arm.shared_gate_up] ||= chain.segment_count
+        unless chain.segment_count == segments_by_mode[arm.shared_gate_up]
+          raise "integrated gate/up mode changed segment topology between requests"
+        end
+      end
       unless chain.wait_count == 1 && ML::MetalBuffer.hy_text_probe_readbacks == reads &&
              ML::MetalBuffer.hy_text_probe_allocations == allocations
         raise "integrated profiling added waits, activation reads or named allocations"
@@ -237,6 +289,11 @@ begin
       early_reuse_rejected: early_reuse_rejected, early_poison_rejected: early_poison_rejected,
       shared_scratch_poisoned_before_request: poisoned, comparisons: comparisons,
       profiling: arm.profile, early_profile_rejected: early_profile_rejected,
+      shared_gate_up: arm.shared_gate_up,
+      shared_gate_up_block_count: session.blocks.plans.count(&.shared_gate_up),
+      shared_gate_up_prepared_block_count: session.blocks.plans.count(&.shared_gate_up_prepared),
+      early_mode_change_rejected: early_mode_change_rejected,
+      unsupported_profile_rejected_without_submission: unsupported_profile_rejected_without_submission,
       per_block_encode_host_seconds: session.blocks.plans.map(&.last_encode_host_seconds),
       root_profile: root_profile, phase_profile: phase_profile, continuation_trace: trace_profile,
     }.to_json)
@@ -282,6 +339,8 @@ ensure
     handoff: "block35 output is the same MetalBuffer consumed by the head on the same command chain, without CPU copy or intermediate wait",
     preparation_seconds: preparation_seconds, repeats: repeats, requests: requests,
     profile_variance: profile_variance, expected_request_count: schedule.size,
+    compare_shared_gate_up: compare_shared_gate_up,
+    shared_gate_up_schedule: schedule.map { |arm| {kind: arm.kind, shared_gate_up: arm.shared_gate_up} },
     timing_scope: "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
     memory_telemetry: {categories_additive: false, guard_timestamp_clock: "mach_absolute_time",
                        guard_join_timestamp_field: "guard_monotonic_ns", sampled_peaks_are_bounds: false},

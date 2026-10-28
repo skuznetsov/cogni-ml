@@ -2,6 +2,44 @@ require "spec"
 require "../examples/support/pixelumm_decoder_probe"
 
 describe PixelUMMDecoderProbe do
+  it "warms both gate/up modes before same-input ABBA and poisoned alternate-input controls" do
+    arms = PixelUMMDecoderProbe.shared_gate_up_schedule
+    arms.size.should eq(8)
+    arms.first.kind.should eq("a_warm_shared")
+    arms.map(&.shared_gate_up).should eq([true, false, false, true, true, false, false, true])
+    arms.map(&.alternate).should eq([false, false, false, false, false, false, true, true])
+    arms.map(&.poisoned).should eq([false, false, false, false, false, false, true, true])
+    arms.none?(&.profile).should be_true
+    arms.map(&.kind).uniq.size.should eq(8)
+  end
+
+  it "admits shared gate/up only with F32 FFN capability and an idle chain" do
+    plan = ML::Video::PixelUMMDecoderBlockMPS::Plan
+    plan.validate_shared_gate_up_configuration!(ffn_f32: true, prepare_shared_gate_up: true)
+    plan.validate_shared_gate_up_configuration!(ffn_f32: false, prepare_shared_gate_up: false)
+    expect_raises(ArgumentError, /F32/) do
+      plan.validate_shared_gate_up_configuration!(ffn_f32: false, prepare_shared_gate_up: true)
+    end
+    plan.validate_shared_gate_up_change!(prepared: true, enabled: true, idle: true)
+    expect_raises(ArgumentError, /prepared/) do
+      plan.validate_shared_gate_up_change!(prepared: false, enabled: true, idle: true)
+    end
+    [true, false].each do |enabled|
+      expect_raises(ArgumentError, /in flight/) do
+        plan.validate_shared_gate_up_change!(prepared: true, enabled: enabled, idle: false)
+      end
+    end
+  end
+
+  it "rejects unqualified shared gate/up phase profiling before submission" do
+    plan = ML::Video::PixelUMMDecoderBlockMPS::Plan
+    plan.validate_encode_mode!(profile: false, shared_gate_up: true)
+    plan.validate_encode_mode!(profile: true, shared_gate_up: false)
+    expect_raises(ArgumentError, /not qualified/) do
+      plan.validate_encode_mode!(profile: true, shared_gate_up: true)
+    end
+  end
+
   it "brackets the profiled input and poison controls with opposite profiler orders on input A" do
     arms = PixelUMMDecoderProbe.variance_schedule
     arms.size.should eq(6)

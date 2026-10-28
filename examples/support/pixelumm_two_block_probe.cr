@@ -615,6 +615,7 @@ module PixelUMMTwoBlockProbe
     getter workspace_capture_order : Array(String)
     getter output_bank_by_slot : Array(Int32)
     getter compare_common_ring_captures : Bool
+    getter shared_gate_up_prepared : Bool
     @bindings = {} of String => ML::MetalBuffer
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -623,7 +624,11 @@ module PixelUMMTwoBlockProbe
     def initialize(@fixture : Fixture, cache : WeightCache, max_named_bytes : Int64, *,
                    @ffn_f32 : Bool = false, @reuse_outputs : Bool = false,
                    @compare_common_ring_captures : Bool = false,
+                   prepare_shared_gate_up : Bool = false,
                    @phase_observer : PixelUMMMemoryProbe::Recorder? = nil)
+      @shared_gate_up_prepared = prepare_shared_gate_up
+      Decoder::Plan.validate_shared_gate_up_configuration!(ffn_f32: @ffn_f32,
+        prepare_shared_gate_up: @shared_gate_up_prepared)
       grid = @fixture.grid
       config = Decoder::Config.new(temporal: grid[0], height: grid[1], width: grid[2])
       weight_bytes = Array.new(@fixture.block_count) do |slot|
@@ -706,7 +711,7 @@ module PixelUMMTwoBlockProbe
           @plans << Decoder::Plan.new(config, input: input, weights: weights,
             cos: @bindings["cos"], sin: @bindings["sin"], captures: captures_by_slot[slot],
             max_named_bytes: max_named_bytes - @borrowed_bytes, workspace: @workspace, slot: slot,
-            ffn_f32: @ffn_f32)
+            ffn_f32: @ffn_f32, prepare_shared_gate_up: @shared_gate_up_prepared)
           memory_phase("after_plan_build", slot: slot, phase_bytes_kind: "plan_named_bytes",
             phase_bytes: @plans.last.named_bytes) if @phase_observer
         end
@@ -737,8 +742,22 @@ module PixelUMMTwoBlockProbe
 
     def encode(chain : ML::Metal::MPSCommandChain, *, profile : Bool = false) : Nil
       check_idle!
+      # Reject unsupported profiling before recording the chain or submitting
+      # any block. The caller can reuse this idle Session without a GPU wait.
+      @plans.each(&.validate_encode_mode!(profile: true)) if profile
       @last_chain = chain
       @plans.each(&.encode(chain, profile: profile))
+    end
+
+    def use_shared_gate_up!(enabled : Bool) : Nil
+      check_idle!
+      # Validate every slot before changing any, so a missing capability cannot
+      # leave a partially selected serial model. This Session has one host owner.
+      @plans.each(&.validate_shared_gate_up_change!(enabled))
+      @plans.each(&.use_shared_gate_up!(enabled))
+      unless @plans.size == @fixture.block_count && @plans.all? { |plan| plan.shared_gate_up == enabled }
+        raise ArgumentError.new("PixelUMM shared gate/up mode must cover every block")
+      end
     end
 
     def replay_input!(fixture : Fixture) : Nil

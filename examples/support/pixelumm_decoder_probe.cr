@@ -20,7 +20,24 @@ module PixelUMMDecoderProbe
   CAPTURE_COUNT = 43
   HEAD_PREFIX   = "head."
 
-  record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool
+  record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool,
+    shared_gate_up : Bool = false
+
+  # Run the candidate first, before baseline-correct capture bytes can exist.
+  # Both graphs are warmed before the timed ABBA pair. The alternate-input
+  # gates are separately poisoned for each mode and excluded from timing claims.
+  def shared_gate_up_schedule : Array(RequestArm)
+    [
+      RequestArm.new("a_warm_shared", false, false, false, true),
+      RequestArm.new("a_warm_baseline", false, false, false, false),
+      RequestArm.new("a_timed_baseline_first", false, false, false, false),
+      RequestArm.new("a_timed_shared_first", false, false, false, true),
+      RequestArm.new("a_timed_shared_second", false, false, false, true),
+      RequestArm.new("a_timed_baseline_second", false, false, false, false),
+      RequestArm.new("b_poisoned_baseline", true, true, false, false),
+      RequestArm.new("b_poisoned_shared", true, true, false, true),
+    ]
+  end
 
   # Both orders of the same-input profiler control bracket the diagnostic
   # input/poison pair. This is a drift discriminator, not a throughput estimate.
@@ -219,6 +236,7 @@ module PixelUMMDecoderProbe
     @released = false
 
     def initialize(@fixture : Fixture, cache : WeightCache, *, max_named_bytes : Int64,
+                   prepare_shared_gate_up : Bool = false,
                    @phase_observer : PixelUMMMemoryProbe::Recorder? = nil)
       # All shape, provenance linkage and aggregate budget decisions happen
       # before constructing the block Session, which is the first GPU uploader.
@@ -233,6 +251,7 @@ module PixelUMMDecoderProbe
         memory_phase("before_integrated_block_session")
         @blocks = BlockSession.new(@fixture.blocks, cache, @block_named_bytes,
           ffn_f32: true, reuse_outputs: true, compare_common_ring_captures: true,
+          prepare_shared_gate_up: prepare_shared_gate_up,
           phase_observer: @phase_observer)
         unless blocks.named_bytes == @block_named_bytes && blocks.capture_order.size == 38
           raise ArgumentError.new("integrated PixelUMM block inventory differs from CPU admission")
@@ -282,6 +301,11 @@ module PixelUMMDecoderProbe
 
     def head_input_aliases_block35_output? : Bool
       head_plan.input.handle == blocks.plans[35].output.handle
+    end
+
+    def use_shared_gate_up!(enabled : Bool) : Nil
+      check_idle!
+      blocks.use_shared_gate_up!(enabled)
     end
 
     # Enqueue all 36 native plans onto the caller's current command chain.

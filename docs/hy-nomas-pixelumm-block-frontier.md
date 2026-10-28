@@ -1,5 +1,102 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-27
 
+## Shared-input F32 gate/up experiment, 2026-10-27
+
+Status: VERIFIED for opt-in numerical parity, serial lifecycle and bounded
+prepared timing. Speedup is not admitted; the original graphs remain default.
+`--compare-shared-gate-up` prepares a two-output MPSGraph alongside the baseline
+in one resident session. It shares one BF16 activation placeholder and F32
+cast/reshape between gate and up. Weight casts, F32 matmuls, geometry, separate
+BF16 outputs, capture buffers/order, SiLU/product and down/residual are unchanged.
+The production capability defaults to `prepare_shared_gate_up=false`.
+
+The falsifiable prediction was that shared conversion might reduce FFN work.
+MPSGraph may already fuse/cache conversions or select different kernels and
+temporary resources; sharing a frontend node does not prove physical cast
+elimination. No weight concatenation, named GPU buffer, wait or activation
+readback was added.
+Selection is permitted only between drained requests. All slots are validated
+before serial selection; in-flight changes reject. Shared phase profiling is
+unqualified and rejects before recording the Session's chain or submitting any
+block. A native negative control immediately reuses that Session without a
+wait, then rejects a mode change after real submission.
+
+One model at T6/H44/W80/J21,120 runs candidate-first warmup, baseline warmup,
+same-input baseline/shared/shared/baseline, and separately poisoned B controls
+in both modes. Every arm is unprofiled; root metadata is read postterminal.
+
+| Request, in execution order | Shared graph | Total seconds | Terminal wait seconds |
+| --- | --- | ---: | ---: |
+| A warm | yes | 42.700752 | 0.888902 |
+| A warm | no | 45.149046 | 0.978248 |
+| A timed, baseline first | no | 43.925612 | 0.930050 |
+| A timed, shared first | yes | 54.646036 | 1.104597 |
+| A timed, shared second | yes | 50.970565 | 1.031910 |
+| A timed, baseline second | no | 47.495678 | 0.966538 |
+| B poisoned control | no | 46.138127 | 0.924080 |
+| B poisoned control | yes | 45.200234 | 0.920700 |
+
+The two timed A pairs are slower with the shared graph: +24.4059% and
++7.3162%, or +10.7204 s and +3.4749 s. B has the opposite sign and is excluded
+from speed acceptance. Two observations per mode in one matrix do not establish
+a stable general regression or a causal MPS explanation. Total seconds include
+intervening memory telemetry and first-request lifecycle checks; preparation
+(36.514694 s) and postterminal comparisons are excluded. Source-derived Graph
+calls fall 7,025 -> 6,989 and observed command roots 4,579 -> 4,543. Neither is
+a measured kernel/cast count or evidence of faster execution. The next falsifier
+is qualified shared-mode phase profiling to isolate FFN kernel and temporary
+resource behavior before any promotion.
+
+All 500 comparisons are finite and bitwise exact at unchanged
+`atol=rtol=2e-5`: 156 small-block comparisons (all26 stages in six requests,
+including gate/up/product/down), and 344 full comparisons (43 stages in eight
+requests on two inputs). Full captures are attention0-35, outputs34/35 and five
+head stages. Outputs0-33 remain overwritten GPU handoffs. All36 plans select
+the requested mode, and the head consumes the exact block35 GPU output buffer.
+Each full request preserves one terminal wait, zero named encode allocations,
+zero preterminal activation reads and 43 existing postterminal diagnostic
+reads. Named inventory remains 24,108,145,128 bytes and reaches zero live
+bytes/count after release; this does not assert zero opaque Metal residency.
+
+These are reused authenticated upstream source-method MPS controls, not a fresh
+connected upstream run or an independent neural backend. Large fixture payloads
+were stat-checked against pinned metadata, not rehashed in this experiment; the
+whole remote checkpoint digest remains unverified. Inputs come from the real
+stem with repeated static-image/noise conditioning, not DiT-denoised video.
+No diffusion, full generation, video quality or full-pipeline timing is claimed.
+
+The unchanged guard retains cache-aware10% headroom, a28.5GiB process cap,
+64MiB swap-growth stop and900s deadline. Its1,441 samples observe peak footprint
+30,202,351,920 bytes (28.128GiB), minimum headroom14,685,372,416 bytes
+(13.677GiB) and system swap growth1,960,837 bytes (1.870MiB), not attributed to
+this process. Sampling cannot bound between-poll spikes. The process exits0.
+
+The release build and83 focused CPU examples pass. A budget one byte below
+the aggregate named requirement rejects before any named upload/allocation.
+The final source/binary/fixture receipts, build freshness, all500 captures,
+timing arithmetic and guard epoch pass audit; all18 seeded report/guard
+mutations reject. Correlated Mini-Quad verdict is ROBUST within this bounded
+scope, not independent backend replication. An earlier full pilot was stopped
+to harden unsupported-profile preflight and is excluded. Auditor parser/path
+and lifecycle-observation corrections change no native arithmetic; failed
+reports v2-v4 remain, while the initial failed v1 JSON was overwritten by an
+immediate retry and cannot be offered as a retained receipt.
+
+DoD: `make BUILD_DIR=<external-build> spec_pixelumm_decoder_integrated
+spec_pixelumm_block_profile` (83 examples), release builds of both native probes,
+the guarded one-block gate and full36/head `--compare-shared-gate-up` matrix
+(both exit0, all captures exact), one-byte negative admission (expected exit1),
+and `audit_shared_gate_up_v1.py` (passed,18 mutations rejected). Exact commands,
+source/artifact pins and receipts are indexed in
+`.landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-gate-up.json`.
+External reports live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-shared-gate-up-20261027/results/`:
+`native-small-v3.json`, `native-full-v2.json`, `audit-shared-gate-up-v5.json`.
+Rollback omits the comparison flag and leaves preparation disabled, or reverts
+the atomic commit. Refresh after scoped source/artifacts/backend/device/OS,
+toolchain, geometry/precision/capture/lifetime, clock or guard changes or loss
+of evidence; startup memory admission always needs a fresh check.
+
 ## Integrated timing-variance localization, 2026-10-27
 
 Status: VERIFIED for prepared native timing, interval localization and parity;
@@ -84,10 +181,10 @@ host location of the delay is not sufficient to select attention as the only
 optimization target. Source inspection finds separate gate/up graphs with
 the same BF16 activation, each declaring its own activation and weight casts
 to F32. This does not prove separate physical conversion kernels or temporary
-allocations; MPSGraph may fuse/cache them. Next falsifier: one multi-output
-gate/up graph sharing the activation cast while retaining separate weight
-casts and BF16 outputs, followed by unchanged parity, peak and paired timing
-checks. No speedup or physical cause of the drift is established here.
+allocations; MPSGraph may fuse/cache them. The multi-output gate/up experiment
+above now tests that next falsifier while retaining separate weight casts and
+BF16 outputs: parity passes, but its two timed A pairs do not show a speedup.
+No physical cause of the drift is established here.
 
 All 258 comparisons are finite and bitwise exact at unchanged
 `atol=rtol=2e-5`: 43 stages per request, two distinct inputs, including

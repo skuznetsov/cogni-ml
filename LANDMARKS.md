@@ -35063,3 +35063,42 @@ Refresh after source/toolchain/device/model/workload changes.
   the opt-in flag. Refresh on scoped source/artifacts/backend/device/OS/
   toolchain/geometry/precision/capture/lifetime/clock/guard changes or evidence
   loss; launch admission always needs a fresh memory check.
+
+### 2026-10-27: PixelUMM shared-input F32 gate/up, default off
+
+- Return pointer: docs/hy-nomas-pixelumm-block-frontier.md and
+  .landmark/evidence/2026-10-27-hy-nomas-pixelumm-shared-gate-up.json. Opt-in
+  --compare-shared-gate-up prepares one two-output graph with a shared BF16
+  activation/F32 cast. Separate weight casts, F32 matmuls, BF16 outputs and
+  capture order remain unchanged. No extra named buffer/wait/readback; baseline
+  defaults remain. In-flight mode changes and unqualified shared profiling
+  reject, including Session preflight before recording/submitting a chain.
+- One resident full36+head at J21120 runs shared/baseline warmups, A baseline/
+  shared/shared/baseline and separately poisoned B modes. Timed A pairs are
+  43.925612 vs54.646036 s and47.495678 vs50.970565 s: candidate +24.4059% and
+  +7.3162%. B46.138127 vs45.200234 s has opposite sign and is only a numerical
+  control. No speedup/default promotion, stable regression or causal backend
+  mechanism follows. Observed roots4579->4543; source Graph calls7025->6989
+  are not measured physical cast/kernel counts. Preparation excluded36.515s.
+- All500 comparisons are finite and bitwise exact at unchanged2e-5:156 small
+  all26-stage captures and344 full43-stage captures. Full coverage retains all36
+  attention boundaries, last2 outputs and5 head stages; early outputs are
+  overwritten GPU handoffs. Both inputs match across modes, all36 flags agree,
+  and head input aliases block35 GPU output. One terminal wait/request, zero
+  named encode allocations/preterminal reads;43 postterminal diagnostics.
+- Release build,83 CPU examples, one-byte-below-budget rejection and audited
+  receipts pass;18 seeded mutations reject. Reused authenticated upstream MPS
+  controls, not fresh upstream or independent backend. Large payloads stat-
+  checked, not rehashed; whole checkpoint digest unverified. Mini-Quad review
+  is correlated. Earlier full pilot was stopped for profile-preflight hardening;
+  excluded. Failed auditor v2-v4 retained; failed v1 JSON was overwritten.
+- Cache-aware10% floor,28.5GiB cap,64MiB swap stop and900s deadline retained.
+  In1441 samples: peak28.128GiB, min headroom13.677GiB, system swap growth
+  1.870MiB without process attribution. Named bytes24,108,145,128; release reaches
+  zero named live bytes/count, not zero Metal residency. Sampling misses spikes.
+  Native process exits0; no diffusion or full generation ran.
+- Next falsifier: qualify shared-graph phase profiling and isolate FFN kernel/
+  temporary-resource behavior before promotion. Rollback leaves capability off
+  or reverts the atomic commit. Refresh on scoped source/artifacts/backend/
+  device/OS/toolchain/geometry/precision/capture/lifetime/clock/guard changes or
+  evidence loss; launch admission always expires.
