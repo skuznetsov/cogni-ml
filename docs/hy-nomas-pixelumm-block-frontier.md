@@ -1,5 +1,110 @@
 # PixelUMM bounded decoder-block frontier, 2026-10-28
 
+## Native F32 FFN kernel falsifier, 2026-10-28
+
+Status: VERIFIED for bounded native projection parity and rejecting two F32
+tiles as performance candidates. Twelve cells use actual pretrained weights
+and exact J2048 or J21,120 fixture rows, without repetition. Ten cells admit
+timing; two full-J reverse-order cells fail root isolation and are excluded
+from timing inference. Production selection remains unchanged.
+
+The deep-Quad audit identifies approximately 6.378 trillion floating-point
+operations across the three full-J FFN projections. Minimum logical BF16
+input/weight/output traffic is 2,378,170,368 bytes; materializing every F32
+cast and intermediate in a simple traffic model increases this to about
+11.89 GB. These are arithmetic/traffic models, not measured DRAM traffic or
+hardware speedup bounds. The previous 547-549 ms FFN root intervals contain
+stalls; they do not establish exclusive shader service or proximity to peak.
+The preceding Graph-coalescing probes did not establish a useful speedup.
+
+The diagnostic reads BF16 inputs/weights directly, expands them exactly to F32
+inside threadgroup tiles, uses F32 SIMDgroup operands/accumulation and rounds
+output to BF16. A 64x32/K32 tile uses 128 threads and 12,288 bytes of shared
+memory, without a separate global F32 conversion buffer. F32 operands alone
+do not qualify the candidate: a different reduction can cross BF16 rounding
+boundaries. Every output is compared on GPU at unchanged `atol=rtol=2e-5`
+against the hash-verified saved MPS suffix fixture with pinned upstream-source-
+method metadata.
+The separate diagnostic MPSGraph builder mirrors production's F32 cast,
+reshape, transpose, matmul and BF16 output boundary. This is not an independent
+backend or a fresh whole connected upstream run.
+
+The original tile is preserved byte-for-byte as a 5,090-byte source prefix.
+An opt-in `--reuse-b` variant loads two B fragments once per K8 step, reuses
+them across four row blocks, and unrolls fixed fragment loops. Geometry,
+per-accumulator K8 order, resources, barriers and arithmetic remain fixed.
+Compiler hoisting and physical memory traffic are unknown. Source-level load
+counts do not establish DRAM traffic or a causal runtime improvement.
+
+| Full-J gate, admitted AB cell | MPS F32 median ms | Native F32 median ms | Native / MPS |
+| --- | ---: | ---: | ---: |
+| Original tile | 181.807 | 861.740 | 4.740 |
+| Explicit B reuse and unrolling | 181.451 | 835.695 | 4.606 |
+
+These are medians of four measured samples per arm after two warmups, using
+the frozen balanced schedule MPS/native/native/MPS/native/MPS/MPS/native.
+The paired process reverses warmups and measured arms separately. Both full
+reverse cells preserve numerical parity but measured MPS slot 3 overlaps
+outside roots (33.811 ms original, 31.436 ms reuse); their statuses are failed
+and descriptive medians cannot select an optimization. Neither failed cell
+was retried. Full up/down and connected-block follow-ups did not run. The
+cross-build movement from 861.740 to 835.695 ms is descriptive, not an isolated
+causal B-reuse effect. Neither tile approaches MPS, and both remain diagnostic.
+
+All 120 ordinary GPU output comparisons across the twelve cells are finite
+and bitwise exact, including the timing-rejected cells; all twelve injected
+NaN controls detect one failure. Different stored words within tolerance
+remain admissible: bitwise equality is observed, not a stronger gate. Each
+cell encodes ten projections plus diagnostics before one terminal chain wait,
+then reads 176 bytes of scalar metrics. There are zero tracked named encode
+allocations or preterminal activation reads, and all named live bytes/counts
+release to zero. Preparation, uploads, poison and comparisons lie outside
+timed projection roots. Completed-root unions still include stalls and are
+not exclusive shader service or uninstrumented production latency.
+
+Named admission precedes fixture reads and Metal initialization. The named
+full gate/up working-set budget is 1,311,768,752 bytes; full down is
+965,738,672 bytes.
+The one-byte-short full-gate control rejects before accessing a nonexistent
+fixture. The matched owner retains MPS and native alternatives, so absence of
+a global F32 staging buffer does not measure a native-only total-memory saving.
+The guard keeps a fresh cache-aware 10% floor, 6 GiB small/8 GiB full process
+caps, 64 MiB swap-growth stop and 120/180 s deadlines. Across the twelve
+MPS/native probe cells, 93 cache-aware guard samples record:
+peak group footprint is 2,937,571,080 bytes (2.735826 GiB), minimum headroom
+32,430,456,832 bytes (30.203217 GiB), and swap growth zero. Samples do not bound
+transient peaks or guarantee a continuous floor; opaque MPS ownership is unknown.
+
+DoD observed: final release/fresh Make dependencies, 26 focused Crystal
+examples, runtime Metal compilation and fixed-pipeline checks, pre-Metal budget
+negative, all twelve bounded cells, format/diff checks, and a scalar evidence
+audit rejecting 19 report mutations plus twelve argv/receipt mutations. The
+auditor binds starting order, geometry, kernel, budget, fixture and report to
+the executed command; a counterfactual differing word turns off the bitwise
+claim without failing tolerance. Standalone `metal` compilation was unavailable
+because the optional Metal toolchain is missing; runtime compilation succeeded.
+Both full reverse timing gates rejected correctly. Correlated Mini-Quad verdict:
+ROBUST for bounded parity and rejection, not independent-backend equivalence,
+physical roofline conclusions or a causal speedup.
+
+Frozen plans v3/v4 and heavy artifacts live under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028`; use
+`results/audit-v4.json` and its pinned reports, receipts and guards. The repository
+index is `.landmark/evidence/2026-10-28-hy-nomas-pixelumm-f32-kernel.json`.
+At least 3% lower median in both clean orders was required merely to admit a
+connected follow-up; neither pair qualifies. This is an experiment-selection
+rule, not statistical significance. No full decoder/head, diffusion, Studio,
+video generation or quality test ran. Rollback omits the diagnostic target/flag
+or reverts its atomic commit. Refresh on scoped source/artifact/backend/device/
+OS/toolchain, geometry, precision, lifetime/guard/clock changes or evidence loss;
+memory admission expires at every launch.
+
+After two unsuccessful F32 tiles, change frame before more tile tuning. The
+next discriminating probe is to localize the earlier F16 SIMDgroup reduction
+failure on identical BF16/F16-roundtrip operands against the F32 control,
+keeping the same tolerances. No F16 speedup or production eligibility follows
+from the current result.
+
 ## Local softmax/PV transition experiment, 2026-10-28
 
 Status: VERIFIED for seven accepted bounded native cells, saved-upstream BF16

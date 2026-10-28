@@ -124,6 +124,12 @@ pixelumm_decoder_block_probe: $(BUILD_DIR)/pixelumm_decoder_block_probe
 .PHONY: pixelumm_ffn_projection_probe
 pixelumm_ffn_projection_probe: $(BUILD_DIR)/pixelumm_ffn_projection_probe
 
+.PHONY: pixelumm_ffn_f32_kernel_probe spec_pixelumm_ffn_f32_kernel_probe
+pixelumm_ffn_f32_kernel_probe: $(BUILD_DIR)/pixelumm_ffn_f32_kernel_probe
+
+spec_pixelumm_ffn_f32_kernel_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_f32_kernel_probe_spec.cr
+
 .PHONY: spec_pixelumm_ffn_projection
 spec_pixelumm_ffn_projection:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_projection_spec.cr
@@ -175,6 +181,12 @@ $(BUILD_DIR)/pixelumm_connected_resource_probe: examples/pixelumm_connected_reso
 $(BUILD_DIR)/pixelumm_ffn_projection_probe: examples/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_projection_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_block_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+# Reuse the diagnostic builder matching the production F32 graph operations.
+# The candidate reads BF16 directly without a global F32 conversion buffer.
+$(BUILD_DIR)/pixelumm_ffn_f32_kernel_probe: examples/pixelumm_ffn_f32_kernel_probe.cr examples/support/pixelumm_ffn_f32_kernel_probe.cr examples/support/pixelumm_ffn_f32_gemm.metal examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_PROBE_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 # The isolated diagnostic bridge includes production FFN builders; do not also
 # link PIXELUMM_MPS_OBJ or PIXELUMM_FFN_PROBE_OBJ into its executable.

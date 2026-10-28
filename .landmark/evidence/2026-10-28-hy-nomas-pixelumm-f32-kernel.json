@@ -1,0 +1,573 @@
+{
+  "schema": "landmark.evidence.pixelumm_f32_kernel/v1",
+  "date": "2026-10-28",
+  "base_commit": "f1acb7a2ef9b48ad8da0da925ccc589661754c6e",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded native FFN projection parity and rejection of two diagnostic F32 tiles at true J2048/J21120. Ten cells admit timing; two full BA cells reject timing. No production acceleration claim.",
+    "production_promoted": false
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "Makefile",
+      "examples/pixelumm_ffn_f32_kernel_probe.cr",
+      "examples/support/pixelumm_ffn_f32_kernel_probe.cr",
+      "examples/support/pixelumm_ffn_f32_gemm.metal",
+      "spec/pixelumm_ffn_f32_kernel_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-28-hy-nomas-pixelumm-f32-kernel.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/pixelumm_ffn_f32_kernel_probe.cr",
+      "examples/support/pixelumm_ffn_f32_kernel_probe.cr",
+      "examples/support/pixelumm_ffn_f32_gemm.metal",
+      "spec/pixelumm_ffn_f32_kernel_probe_spec.cr",
+      "docs/hy-nomas-pixelumm-block-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-10-28-hy-nomas-pixelumm-f32-kernel.json"
+    ],
+    "excluded": "Production kernel selection; full decoder/head/diffusion/generation; unrelated untracked bytecode."
+  },
+  "problem": {
+    "risk_tier": "CAUTION",
+    "trigger": "Earlier Graph coalescing did not materially reduce full-block cost; isolate actual FFN matrix work.",
+    "strongest_failure": "A changed reduction crosses BF16 rounding boundaries, or reduced staging/repeated loads do not reduce dominant service/wait cost.",
+    "falsifier": "Any unchanged-tolerance/nonfinite/NaN/extent/lifetime/guard failure rejects the candidate. Timing selection requires both clean orders and at least 3% lower median per order.",
+    "rollback": "Omit diagnostic target/opt-in flags or revert this atomic change; production MPS selection is unchanged."
+  },
+  "method": {
+    "geometry": "64x32/K32, 128 threads, 12288 shared bytes. Exact BF16 expansion to F32, F32 SIMDgroup operands/accumulation, final BF16 RNE.",
+    "variants": [
+      "Original exact F32 panel tile.",
+      "Appended opt-in B-fragment reuse plus fixed-loop unrolling; original 5090-byte source prefix unchanged."
+    ],
+    "scope": "Real pretrained selected projection weights and saved upstream-source-method MPS suffix captures. No independent backend or fresh whole connected upstream run; no PyTorch in the measured path.",
+    "schedule": {
+      "warmups_per_cell": 2,
+      "measured_arms": [
+        "mps",
+        "native",
+        "native",
+        "mps",
+        "native",
+        "mps",
+        "mps",
+        "native"
+      ],
+      "reverse_cell": "Reverse warmups and measured sequence independently.",
+      "timed_samples_per_arm_per_order": 4
+    },
+    "gpu_contract": "Ten projection outputs and one NaN control per cell; all comparisons GPU. One terminal chain wait and one 176-byte scalar read after it. Zero tracked named encode allocations/preterminal activation reads.",
+    "timing": "Projection-root unions only. Preparation/upload/poison/comparison are outside timed projection roots; unions can include stalls and are not exclusive shader service.",
+    "guard": "Fresh cache-aware 10% floor; 6GiB small/8GiB full caps; 64MiB swap-growth stop; 120/180s deadlines. Failed cells stop their matrices without retry."
+  },
+  "observed": {
+    "cells": {
+      "small-gate-ab-v4": {
+        "rows": 2048,
+        "projection": "gate",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.437708349665627,
+        "native_ms_if_eligible": 75.77299998956732
+      },
+      "small-gate-ba-v4": {
+        "rows": 2048,
+        "projection": "gate",
+        "order": "reverse",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.41435414098669,
+        "native_ms_if_eligible": 75.74606248817872
+      },
+      "small-up-ab-v4": {
+        "rows": 2048,
+        "projection": "up",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.435895835864358,
+        "native_ms_if_eligible": 75.75000000360887
+      },
+      "small-down-ab-v4": {
+        "rows": 2048,
+        "projection": "down",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 19.20089582563378,
+        "native_ms_if_eligible": 92.3099583160365
+      },
+      "full-gate-ab-v4": {
+        "rows": 21120,
+        "projection": "gate",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 181.80702083918732,
+        "native_ms_if_eligible": 861.739874992054
+      },
+      "full-gate-ba-v4": {
+        "rows": 21120,
+        "projection": "gate",
+        "order": "reverse",
+        "timing_eligible": false,
+        "mps_ms_if_eligible": null,
+        "native_ms_if_eligible": null
+      },
+      "reuse-small-gate-ab-v1": {
+        "rows": 2048,
+        "projection": "gate",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.373916653217748,
+        "native_ms_if_eligible": 71.82435416325461
+      },
+      "reuse-small-gate-ba-v1": {
+        "rows": 2048,
+        "projection": "gate",
+        "order": "reverse",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.38097916333936,
+        "native_ms_if_eligible": 71.86500000534579
+      },
+      "reuse-small-up-ab-v1": {
+        "rows": 2048,
+        "projection": "up",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 18.482249986846,
+        "native_ms_if_eligible": 71.73581249662675
+      },
+      "reuse-small-down-ab-v1": {
+        "rows": 2048,
+        "projection": "down",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 19.18802081490867,
+        "native_ms_if_eligible": 88.58012499695178
+      },
+      "reuse-full-gate-ab-v1": {
+        "rows": 21120,
+        "projection": "gate",
+        "order": "forward",
+        "timing_eligible": true,
+        "mps_ms_if_eligible": 181.45110417390242,
+        "native_ms_if_eligible": 835.6947708380176
+      },
+      "reuse-full-gate-ba-v1": {
+        "rows": 21120,
+        "projection": "gate",
+        "order": "reverse",
+        "timing_eligible": false,
+        "mps_ms_if_eligible": null,
+        "native_ms_if_eligible": null
+      }
+    },
+    "ordinary_gpu_comparisons": 120,
+    "nan_controls_detected": 12,
+    "all_observed_outputs_finite_and_bitwise": true,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "bitwise_gate_strengthened": false,
+    "timing_admitted_cells": 10,
+    "timing_rejected_cells": [
+      "full-gate-ba-v4",
+      "reuse-full-gate-ba-v1"
+    ],
+    "selection_pairs": {
+      "original_gate_full": {
+        "cells": [
+          "full-gate-ab-v4",
+          "full-gate-ba-v4"
+        ],
+        "connected_followup_eligible": false,
+        "reason": "Requires two clean orders and >=3% lower median in each; no rejected cell may contribute."
+      },
+      "reuse_b_gate_full": {
+        "cells": [
+          "reuse-full-gate-ab-v1",
+          "reuse-full-gate-ba-v1"
+        ],
+        "connected_followup_eligible": false,
+        "reason": "Requires two clean orders and >=3% lower median in each; no rejected cell may contribute."
+      }
+    },
+    "full_up_down_or_connected_followups_ran": false,
+    "adversary": {
+      "verdict": "ROBUST",
+      "correlated": true,
+      "artifact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/correlated-adversary-v2.json",
+        "sha256": "b06aaaaef790cee68322c9d45da96db6ac64c2353a1731784110e7a64ce87ced",
+        "bytes": 2544
+      }
+    }
+  },
+  "memory": {
+    "named_full_gate_or_up_bytes": 1311768752,
+    "named_full_down_bytes": 965738672,
+    "all_named_release_bytes_and_counts_zero": true,
+    "guard": {
+      "samples": 93,
+      "peak_group_footprint_bytes": 2937571080,
+      "minimum_headroom_bytes": 32430456832,
+      "max_swap_growth_bytes": 0
+    },
+    "opaque_MPS_ownership": null,
+    "sampled_not_continuous": true,
+    "native_only_peak_memory_saving_measured": false
+  },
+  "verification": {
+    "runs": {
+      "build-v6": {
+        "command": [
+          "make",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/build",
+          "pixelumm_ffn_f32_kernel_probe"
+        ],
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "artifacts": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/build-v6.pre-execution.json",
+            "sha256": "89ac629cb89a1e34abbc48a41fdad96f85204ffff7389c54564de66f335e8a60",
+            "bytes": 21578
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/build-v6.completion.json",
+            "sha256": "9afb2ebe7a09c4dfb756b4da394659e2d6a0c17ca5069d5b3f0dca5c57ca5d2b",
+            "bytes": 83
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/build-v6.out",
+            "sha256": "0a49a421860a2805cbc69f9f280a16b5014e1610f1fb6512a7a1f2f11fbef7c3",
+            "bytes": 674
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/build-v6.guard.jsonl",
+            "sha256": "c16791b58c53a723cb357cfd72a4c1291a1ba5c1f31c273e12d38289b78b40c7",
+            "bytes": 5064
+          }
+        ]
+      },
+      "test-v5": {
+        "command": [
+          "make",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/build",
+          "spec_pixelumm_ffn_f32_kernel_probe",
+          "spec_pixelumm_ffn_isolated_probe",
+          "spec_pixelumm_ffn_projection",
+          "spec_pixelumm_memory_probe"
+        ],
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "artifacts": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/test-v5.pre-execution.json",
+            "sha256": "91860770148fd3a427210ef3104932db0e35771a65fe50096e19d8d03df736b1",
+            "bytes": 22707
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/test-v5.completion.json",
+            "sha256": "2599b80778e119bd6a2cc821fc9876762d3d327680687931ecf8bc67c3f90ab5",
+            "bytes": 83
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/test-v5.out",
+            "sha256": "62a903c91a26cc851539cb73298828a0d990a376fe4f18f8d226a6b842a0fe12",
+            "bytes": 581
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/test-v5.guard.jsonl",
+            "sha256": "990bd2e4d198d996ccc9e01302e763b62eced03afbdf342058db76f1f90145d1",
+            "bytes": 5366
+          }
+        ]
+      },
+      "budget-negative-v2": {
+        "command": [
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/build/pixelumm_ffn_f32_kernel_probe",
+          "--reuse-b",
+          "--reference",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/tmp/does-not-exist.json",
+          "--reference-sha256",
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "--report",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/budget-negative-report-v2.json",
+          "--projection",
+          "gate",
+          "--rows",
+          "21120",
+          "--max-named-bytes",
+          "1311768751"
+        ],
+        "expected_exit_code": 1,
+        "observed_exit_code": 1,
+        "source_drift": [],
+        "artifacts": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/budget-negative-v2.pre-execution.json",
+            "sha256": "70a7d8829784548c1f9845b9e7cfd093169fd2e045a37478a029a5a4af64c39e",
+            "bytes": 23854
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/budget-negative-v2.completion.json",
+            "sha256": "402e4469cb25d865775a4d3e3de1acebec03f090234606ce3b84fcf600800ac3",
+            "bytes": 84
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/budget-negative-v2.out",
+            "sha256": "abf0377d2e7b3d1d7e28ddd3d53b60fa7d16b66a8e802f848feeb9da8a4d40ad",
+            "bytes": 475
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/budget-negative-v2.guard.jsonl",
+            "sha256": "ae0f5e72fb49550526e08b641839b0efeddf401729a781b4fb8822c0f5e72f77",
+            "bytes": 1663
+          }
+        ]
+      },
+      "audit-v4": {
+        "command": [
+          "python3",
+          "-B",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/audit-v1.py",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.json",
+          "reuse-small-gate-ab-v1",
+          "reuse-small-gate-ba-v1",
+          "reuse-small-up-ab-v1",
+          "reuse-small-down-ab-v1",
+          "reuse-full-gate-ab-v1",
+          "reuse-full-gate-ba-v1"
+        ],
+        "expected_exit_code": 0,
+        "observed_exit_code": 0,
+        "source_drift": [],
+        "artifacts": [
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.pre-execution.json",
+            "sha256": "ebc6bcee30bfdf1cedc9dce4c98f2aa6f744779670ce0954344d30ce0ec0fc82",
+            "bytes": 6745
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.completion.json",
+            "sha256": "7e807eea66fe1d31467859a6b399b6898220f3c4aff32bc4541af30f3330e637",
+            "bytes": 84
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/audit-v4.out",
+            "sha256": "406d385f803544e1a74313b84d3c9fd29100ece4d346f4574b6ceb3c45c27bad",
+            "bytes": 1815
+          },
+          {
+            "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/logs/audit-v4.guard.jsonl",
+            "sha256": "7b6f4641fb47ca37435c30b66e722ca0799d3d9fc1f917de19c6d33052323602",
+            "bytes": 1666
+          }
+        ]
+      }
+    },
+    "focused_Crystal_examples": 26,
+    "runtime_Metal_pipeline_compilation": "Passed in all twelve cells, execution width32 and static shared12288B checked.",
+    "standalone_Metal_toolchain": "Unavailable; no successful offline AIR compilation claimed.",
+    "report_mutations_rejected": 19,
+    "command_mutations_rejected": 12,
+    "different_word_within_tolerance_turns_bitwise_claim_off": true,
+    "final_static_checks": {
+      "format": {
+        "command": [
+          "crystal",
+          "tool",
+          "format",
+          "--check",
+          "examples/pixelumm_ffn_f32_kernel_probe.cr",
+          "examples/support/pixelumm_ffn_f32_kernel_probe.cr",
+          "spec/pixelumm_ffn_f32_kernel_probe_spec.cr"
+        ],
+        "exit_code": 0
+      },
+      "freshness": {
+        "command": [
+          "make",
+          "-q",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/build",
+          "pixelumm_ffn_f32_kernel_probe"
+        ],
+        "exit_code": 0
+      },
+      "diff": {
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      "artifact_verification": {
+        "packet_identities_recomputed": 38,
+        "final_compiled_source_pins_match": 5,
+        "no_CPU_activation_scan": true
+      },
+      "repository_validator": "No validate-landmark-graph.sh or packet template exists in this checkout; direct JSON, artifact identity, source-pin and scalar semantic checks were executed."
+    }
+  },
+  "fixtures": [
+    {
+      "metadata": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027/results/ffn-reference-small-v1.json",
+      "metadata_sha256": "28713c3fb99ab8ada3b18ae11cf9c362aee5134f6fd13c46cb6ff1789e7372a8",
+      "payload": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027/results/ffn-reference-small-v1.bin",
+      "payload_sha256": "9ff235edca8b91bbd2292c43dc26b833a78a67bbebd614efcbc59566d63b7968",
+      "payload_bytes": 486539264,
+      "current_preflight_full_payload_and_all_eight_records_rehashed": true,
+      "scope": "Saved upstream-source-method MPS suffix, not an independent backend or fresh connected upstream run."
+    },
+    {
+      "metadata": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027/results/ffn-reference-full-v1.json",
+      "metadata_sha256": "ad3c8401c11cf61f3f16f85b526622e3d006011c4a001c397e81a5bc0131496e",
+      "payload": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-ffn-isolated-20261027/results/ffn-reference-full-v1.bin",
+      "payload_sha256": "3b8765ae0890a83caf6cab01c2bd89c3dc8b82d3befc5b99899c60d19d40a0c7",
+      "payload_bytes": 2205155328,
+      "current_preflight_full_payload_and_all_eight_records_rehashed": true,
+      "scope": "Saved upstream-source-method MPS suffix, not an independent backend or fresh connected upstream run."
+    }
+  ],
+  "arithmetic_model": {
+    "J": 21120,
+    "H": 4096,
+    "F": 12288,
+    "flops_per_projection": 2126008811520,
+    "three_projection_flops": 6378026434560,
+    "minimal_logical_bf16_bytes": 2378170368,
+    "fully_materialized_conversion_model_bytes": 11890851840,
+    "interpretation": "Models only; not measured physical traffic, exclusive shader time or speedup ceiling."
+  },
+  "sources": [
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/Makefile",
+      "sha256": "89efef4d58d8fb1508099262f5ec79acadbc07c394c7a8e7f51d143149099a51",
+      "bytes": 48376
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/pixelumm_ffn_f32_kernel_probe.cr",
+      "sha256": "e84decf58e97c6bdf78b03895127f617fb3e38b92a5fcdd2c812d9d098657d10",
+      "bytes": 17729
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_ffn_f32_kernel_probe.cr",
+      "sha256": "dae4498e6f0e6e299ab5e76f51f3d2cdf42aeb8ed19b74559230d2670e7bad98",
+      "bytes": 15426
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/pixelumm_ffn_f32_gemm.metal",
+      "sha256": "a8663582632578e971dfa270e24736ac4ffbddab991efe73aad4012ac88b2560",
+      "bytes": 9403
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/pixelumm_ffn_f32_kernel_probe_spec.cr",
+      "sha256": "94ed8103d6af97eb3f6dd2f3c33cd388f3eb9e9657f96d6e41129fcbb9d141f7",
+      "bytes": 6055
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/docs/hy-nomas-pixelumm-block-frontier.md",
+      "sha256": "793137a98f7ec27888321b06f43899f43142645481f27da7915095df13446321",
+      "bytes": 166461
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/LANDMARKS.md",
+      "sha256": "64eb96d79d48af2be5eb35efd3b8124baa985fe04acbd383c1bc673b31fa4818",
+      "bytes": 4673141
+    }
+  ],
+  "external_evidence": [
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/experiment-plan-v1.json",
+      "sha256": "45f55bccf0f694d1d5f7c95be0bfeec849f0f1203ab18269acd90071a94a6727",
+      "bytes": 3444
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/experiment-plan-v2.json",
+      "sha256": "c6b520c573217b6e4729291bdb99d59998a1c7b50d7ab1a7560ca2e9e6fe21b8",
+      "bytes": 5403
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/experiment-plan-v3.json",
+      "sha256": "c64b1e8e7d8dac22fa81d9d78f23f00c05431fdccf333954d478adaeacc5da3b",
+      "bytes": 6234
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/experiment-plan-v4.json",
+      "sha256": "63c5f89e8424c1361a7f2be839306147a9e9e43c442bca17219f75e397896649",
+      "bytes": 7608
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/environment-v1.json",
+      "sha256": "60396a2fbc0bd69d97e03d9ea268ed0b38775d14876564728723c6a86292befd",
+      "bytes": 490
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/preflight-v1.py",
+      "sha256": "7aa448309c112117acffd53266e44d1b0b1e43336b444d14a0645f4e91fd4a4e",
+      "bytes": 2743
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/audit-v1.py",
+      "sha256": "ed75b33a3f7e67a024f0588fd161009d70cd88ff056b75e4ff968e68e0512e2e",
+      "bytes": 23876
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/run_matrix_v1.py",
+      "sha256": "ec44afe4383eb201642184b7cf8ced379a854b912df49bafb6b459b631a3befd",
+      "bytes": 1575
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/source/run_reuse_matrix_v1.py",
+      "sha256": "60755fba74db3efca742eba17d7600405e681d4b5fb6ea6e23e5fcdd98dff94c",
+      "bytes": 1621
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/tmp/run_guarded_v1.py",
+      "sha256": "2f9a6e5d081a56c2d58e3aeb1092be9a8f06257fa755aceb392095e65c24946d",
+      "bytes": 5855
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/preflight-v1.json",
+      "sha256": "da670831dc832d38c68727e9fa0a4c1099390875100cac23868f024ed8dda027",
+      "bytes": 20111
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.json",
+      "sha256": "cead0da2cc8cd73c509ffc0e22a27efe8aecc0e1cc204a48ed6890023e175b00",
+      "bytes": 32136
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/correlated-adversary-v1.json",
+      "sha256": "8856230b0e47e6564eda3a86b1668cebe667818c34e9a1064c26c646ccc8ff8a",
+      "bytes": 1771
+    },
+    {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/correlated-adversary-v2.json",
+      "sha256": "b06aaaaef790cee68322c9d45da96db6ac64c2353a1731784110e7a64ce87ced",
+      "bytes": 2544
+    }
+  ],
+  "excluded_or_superseded": [
+    "Earlier build/spec/Metal-source attempts precede final source/build and are not performance evidence.",
+    "Audit-v1 used an incorrect relative external-script path; audit-v2 omitted the legitimate guard started event. Audit-v4 supersedes audit-v3 and authenticates command/report bindings.",
+    "Both full reverse cell medians remain descriptive only; neither is retried or used for selection."
+  ],
+  "limitations": [
+    "Cross-build 861.740-to-835.695ms movement does not isolate causal B-reuse benefit; B reuse and unrolling changed together.",
+    "No clean full bidirectional timing, production speedup, statistical significance, physical DRAM/roofline, native-only memory or exclusive shader-time claim.",
+    "The matched owner retains both MPS/native alternatives; opaque backend ownership remains unknown. Sampled guards do not bound transients.",
+    "Saved suffix controls are not a new whole upstream run or independent backend. Inputs are latent/noise/stem fixtures, not generated video."
+  ],
+  "decision": "Keep both F32 kernels diagnostic. Clean full AB is 4.740x/4.606x slower than MPS; neither pair qualifies for connected testing. Change frame after two unsuccessful tile attempts.",
+  "next_falsifier": "Localize the earlier F16 SIMDgroup reduction failures against F32 on identical BF16/F16-roundtrip operands before further tile tuning, without widening tolerances.",
+  "decay": {
+    "refresh_on": "Scoped source/artifact/backend/device/OS/toolchain, geometry/precision, command/clock/capture/lifetime/guard changes or evidence loss.",
+    "admission_expires": "Every launch.",
+    "failure_policy": "Reopen dependent claims; leave diagnostic candidates unpromoted."
+  }
+}

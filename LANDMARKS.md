@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-F32-KERNEL-2026-10-28] Exact F32 FFN tiles preserve parity but lose to MPS
+
+- VERIFIED bounded native projection parity and rejection of two diagnostic
+  64x32/K32 F32 tiles. BF16 expands exactly inside shared memory; output rounds
+  to BF16. Explicit B-fragment reuse/unrolling preserves the original 5,090-byte
+  source prefix, per-accumulator K8 order, 128 threads and 12,288 shared bytes.
+  Production MPS selection is unchanged; no global F32 candidate staging buffer.
+- Twelve cells at true J2048/J21,120 yield 120 finite, bitwise-exact GPU output
+  comparisons against saved authenticated upstream-source-method MPS suffixes
+  and twelve detected NaN controls, at unchanged atol=rtol=2e-5. This is neither
+  independent-backend equivalence nor a fresh connected upstream run.
+- Clean full-gate AB medians: original MPS/native 181.807/861.740 ms; reuse
+  181.451/835.695 ms. Both full reverse cells fail measured MPS-root isolation
+  and are excluded from timing selection, without retry. Ten cells admit timing;
+  full up/down and connected follow-ups did not run. Cross-build movement does
+  not prove a causal B-reuse gain; both candidates are far slower than MPS.
+- One terminal wait per ten-projection cell, one 176-byte metrics read afterward,
+  zero tracked named encode allocations/preterminal activation reads; named
+  bytes/counts release to zero. Full gate/up named budget 1,311,768,752 B. Guard
+  retains cache-aware 10% floor, 6/8 GiB small/full caps and 64 MiB swap stop.
+  Across 93 samples: peak 2.735826 GiB, minimum headroom 30.203217 GiB, swap
+  growth zero. Samples do not bound transients; matched MPS ownership prevents
+  a native-only total-memory claim. Root unions include stalls, not shader time.
+- Final release/fresh Make, runtime Metal compilation, 26 focused examples,
+  one-byte-short pre-Metal rejection and format/diff pass. Offline Metal toolchain
+  is unavailable. Scalar audit rejects 19 report plus twelve argv mutations;
+  the bitwise-claim counterfactual passes. Correlated Mini-Quad: ROBUST for
+  bounded parity/rejection, VULNERABLE for independent or causal speed claims.
+- Evidence: `docs/hy-nomas-pixelumm-block-frontier.md`,
+  `.landmark/evidence/2026-10-28-hy-nomas-pixelumm-f32-kernel.json`, and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-f32-kernel-20261028/results/audit-v4.json`.
+  Next falsifier: localize earlier F16 SIMDgroup reduction failures on identical
+  operands against F32 before more tile tuning. Rollback omits diagnostic
+  target/flag or reverts this atomic commit. Refresh on scoped source/artifact/
+  backend/device/OS/toolchain, geometry/precision/lifetime/guard/clock changes
+  or evidence loss; admission expires per launch. No full generation ran.
+
 ### [LM-HY-NOMAS-PIXELUMM-SOFTMAX-PV-2026-10-28] Fewer Graph calls preserve precision without a material block gain
 
 - VERIFIED for seven accepted native diagnostic cells at actual J2048/J21,120.
