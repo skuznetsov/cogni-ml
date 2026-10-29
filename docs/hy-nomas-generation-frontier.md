@@ -1,5 +1,96 @@
 # Hy-Nomas first native video frontier
 
+## Combined attention on 36 PixelUMM blocks and head (2026-10-29)
+
+Status: VERIFIED for the bounded opt-in diagnostic, saved-output parity and
+sampled memory fit. The prospective timing screen passes descriptively;
+a causal or stable generation-speed claim remains VULNERABLE. Production
+selectors stay off. No diffusion or full generation was run.
+
+`pixelumm_decoder_integrated_probe --compare-combined-attention` prepares the
+existing scale/softmax alternative once on every Plan, then selects it together
+with fused K/V gather on all 36 idle Plans. Shared gate/up remains disabled.
+Four poisoned gates cover both modes on both authenticated inputs. Four timed
+same-input requests use ABBA; another process reverses warm and timed orders.
+A third process repeats ABBA. All three runs use the same 197 source files,
+runner, objects, fixtures and release binary. Its SHA256 is
+`ed8fca7b1ad8d65d79c74232c939de7edac3c3bcec4bcf65a4f38502df0de290`.
+
+The connected T6/H44/W80/J21,120 decoder and head completed 24 requests and
+1,032 finite bitwise-equal comparisons at unchanged atol=rtol=2e-5. Every
+request retains the direct same-buffer block35/head handoff, one terminal
+wait, zero tracked named encode allocations and no preterminal activation
+readbacks. Its 43 existing diagnostic CPU reads happen after that wait and
+outside request timing. Retained captures are 36 attention outputs, block34/35
+outputs and five head stages. Outputs 0-33 are overwritten GPU handoffs, not
+separate saved goldens. The oracle composes authenticated saved upstream MPS
+controls; it is not fresh connected independent-backend inference or internal
+softmax-probability parity. In-flight selector rejection and poisoned replay
+checks pass; exceptional failed-wait quarantine is source-reviewed, not injected.
+
+| Run | Timed order | Baseline median | Combined median | Median adjacent paired time reduction |
+| --- | --- | ---: | ---: | ---: |
+| normal-1 | ABBA | 48.999847 s | 45.762902 s | 6.5132% |
+| reverse-1 | BAAB | 49.977961 s | 47.533238 s | 4.9058% |
+| normal-2 | ABBA | 49.965031 s | 48.135272 s | 3.2761% |
+
+All three per-run medians exceed the prospective 3% screen, with both orders
+and a confirming repeat. The six paired reductions range from -1.4346% to
++9.8273%; four pairs improve. Baseline-then-candidate pairs have a +9.1331%
+median, while candidate-then-baseline pairs have a -0.0158% median. The pooled
+paired median is +5.9400%, but six pairs and this order sensitivity do not
+establish a causal or stable speedup. Do not promote defaults from the screen
+alone or interpret request wall time as kernel-only work or video throughput.
+
+The diagnostic preallocates one distinct expected/actual host pair after
+aggregate admission and before GPU setup: 173,015,040 bytes each, 346,030,080
+bytes total (330 MiB). All 43 captures and requests reuse exact prefix slices.
+Expected records are reauthenticated on every read; actual reads, element
+scans, tolerance checks and hashes remain unchanged. Post-return collection
+runs equally outside both arms' timed intervals. Comparison allocation churn
+is bounded by the audited 64 MiB limit, and the reported post-GC host heap does
+not grow across these eight-request processes. This bounds those two arrays,
+not every host allocation or opaque MPS resource.
+
+All 4,559 guard samples pass the unchanged 27.5 GiB process cap, cache-aware
+10% reserve, 64 MiB positive-swap-growth stop and 900 s per-process deadline.
+The largest sampled peak is 26.286456 GiB, minimum headroom 19.468338 GiB,
+and observed swap growth is zero. The guard's historical formula label is
+inaccurate: pinned code and all samples use `free_spec - speculative +
+file_backed`, avoiding speculative-page double counting. The final audit
+explicitly records this label mismatch; it does not reinterpret the label as
+arithmetic or weaken admission. Sampled bounds do not cover between-poll spikes
+or guarantee future admission. Native processes have ended.
+
+Release build, formatting, 60 focused CPU examples and 30 validator corruption
+controls pass. The native DoD was executed serially by `run_integrated.py`
+with labels `normal-1`, `reverse-1`, `normal-2`, each returning zero with
+unchanged sources; `validate_integrated.py` over all three reports returns zero.
+The runner refuses consumed labels. Preserve evidence rather than overwrite it.
+Correlated Mini-Quad reviews support the bounded parity/lifecycle/guard claim;
+they are not independent backend agreement.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-combined-full-reuse-20261029/`.
+Final index: `results/audit-final.json`, SHA256
+`6c09bd6bbf51ce3372dbc94ab1dcda806f967346c904c666e66daabf984d1e40`.
+Validator SHA256:
+`a58d12cd75811eef8ca8f0e10649a299361a5850f36e4ab2fcc301e8d59db322`.
+Receipts pin report, fixture and measured-source identities; source snapshots
+and raw guard/log/report files remain external. Rollback omits combined mode
+or reverts the scoped diagnostic change. Refresh on scoped source/artifact,
+fixture, geometry, precision, schedule/lifetime, backend/device/toolchain or
+guard changes; each new process still requires live memory admission.
+
+Earlier epochs remain excluded from timing: the original 28.5 GiB launch was
+refused before native execution; the stricter-cap attempt stopped at request5
+with a 27.597 GiB sampled peak; post-return GC alone stopped before request4
+completed at 27.595798 GiB. Tracked Metal inventory stayed constant while the
+old host heap grew; this did not prove a GPU leak or its retention mechanism.
+The reusable comparison pair is the subsequent successful source epoch. Raw
+attempts remain in the sibling `combined-full`, `combined-full-cap27p5` and
+`combined-full-postgc` evidence directories, all dated 20261029.
+
 ## Combined K/V gather and score-scale/softmax experiment (2026-10-29)
 
 Prospective bounded test: `pixelumm_fused_kv_gather_probe --scale-softmax`

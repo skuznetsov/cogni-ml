@@ -11,6 +11,9 @@ repeats = 1
 profile_variance = false
 compare_shared_gate_up = false
 profile_shared_gate_up = false
+compare_combined_attention = false
+reverse_combined_attention = false
+correctness_only = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -29,13 +32,17 @@ OptionParser.parse do |parser|
   parser.on("--profile-variance", "Six bounded phase/API/continuation controls; repeats must be 1") { profile_variance = true }
   parser.on("--compare-shared-gate-up", "Warm both F32 graph modes, unprofiled ABBA and two poisoned-input gates") { compare_shared_gate_up = true }
   parser.on("--profile-shared-gate-up", "Six same-input shared/baseline phase controls; no generation") { profile_shared_gate_up = true }
+  parser.on("--compare-combined-attention", "Both inputs/modes upstream gates, then unprofiled combined K/V + scale/softmax ABBA") { compare_combined_attention = true }
+  parser.on("--reverse-combined-attention", "Reverse both warm and timed combined-attention orders") { reverse_combined_attention = true }
+  parser.on("--correctness-only", "Only the four poisoned combined-attention gates") { correctness_only = true }
 end
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
        0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
-       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up) || repeats == 1) &&
-       {profile_variance, compare_shared_gate_up, profile_shared_gate_up}.count(true) <= 1
+       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention) || repeats == 1) &&
+       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention}.count(true) <= 1 &&
+       (!(reverse_combined_attention || correctness_only) || compare_combined_attention)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
 raise ArgumentError.new("integrated report must be absolute") unless Path[report].absolute?
@@ -45,6 +52,8 @@ report_io = IO::FileDescriptor.new(fd)
 observer = PixelUMMMemoryProbe::Recorder.system
 session = nil.as(PixelUMMDecoderProbe::Session?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
+terminal_wait_attempted = false
+cleanup_quarantined = false
 requests = [] of JSON::Any
 capture_order = [] of String
 named_bytes, block_bytes, head_owned_bytes, head_weight_bytes = 0_i64, 0_i64, 0_i64, 0_i64
@@ -52,7 +61,9 @@ preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
 shared_modes = compare_shared_gate_up || profile_shared_gate_up
-schedule = if profile_shared_gate_up
+schedule = if compare_combined_attention
+             PixelUMMDecoderProbe.combined_attention_schedule(reverse_combined_attention, correctness_only)
+           elsif profile_shared_gate_up
              PixelUMMDecoderProbe.shared_gate_up_profile_schedule
            elsif compare_shared_gate_up
              PixelUMMDecoderProbe.shared_gate_up_schedule
@@ -79,7 +90,8 @@ begin
   start = Time.instant
   session = PixelUMMDecoderProbe::Session.new(fixture, cache,
     max_named_bytes: budget, phase_observer: observer,
-    prepare_shared_gate_up: shared_modes)
+    prepare_shared_gate_up: shared_modes,
+    prepare_combined_attention: compare_combined_attention)
   preparation_seconds = (Time.instant - start).total_seconds
   named_bytes, block_bytes = session.named_bytes, session.block_named_bytes
   head_owned_bytes, head_weight_bytes = session.head_owned_named_bytes, session.head_weight_named_bytes
@@ -111,10 +123,15 @@ begin
       observer.emit("after_poisoned_replay_input", request: request)
     end
     session.use_shared_gate_up!(arm.shared_gate_up) if shared_modes
+    session.use_combined_attention!(arm.combined_attention) if compare_combined_attention
     unless session.blocks.plans.all? { |plan| plan.shared_gate_up == arm.shared_gate_up }
       raise "integrated gate/up selection must cover every block"
     end
+    if compare_combined_attention && !session.blocks.plans.all? { |plan| plan.fused_kv_gather == arm.combined_attention && plan.scale_softmax == arm.combined_attention && plan.scale_softmax_prepared }
+      raise "integrated combined attention selection must cover every block"
+    end
     chain = ML::Metal::MPSCommandChain.new
+    terminal_wait_attempted = false
     if arm.profile
       chain.enable_api_profile!(phase_roots: false)
       chain.enable_continuation_trace!
@@ -124,6 +141,7 @@ begin
     head_before_blocks_rejected = false
     early_release_rejected, early_read_rejected, early_reuse_rejected, early_poison_rejected = false, false, false, false
     early_mode_change_rejected = false
+    early_attention_change_rejected = false
     unsupported_profile_rejected_without_submission = false
     if request == 0
       if shared_modes
@@ -179,6 +197,18 @@ begin
       raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
     if request == 0
+      if compare_combined_attention
+        before_modes = session.blocks.plans.map { |plan| {plan.fused_kv_gather, plan.scale_softmax} }
+        begin
+          session.use_combined_attention!(!arm.combined_attention)
+        rescue error : ArgumentError
+          raise error unless (error.message || "").includes?("in flight")
+          early_attention_change_rejected = true
+        end
+        unless early_attention_change_rejected && session.blocks.plans.map { |plan| {plan.fused_kv_gather, plan.scale_softmax} } == before_modes
+          raise "integrated in-flight attention selection mutated one or more blocks"
+        end
+      end
       if shared_modes
         before_modes = session.blocks.plans.map(&.shared_gate_up)
         begin
@@ -219,6 +249,7 @@ begin
       end
     end
     start = Time.instant
+    terminal_wait_attempted = true
     chain.commit_and_wait
     wait_seconds = (Time.instant - start).total_seconds
     execution_seconds = (Time.instant - execution_start).total_seconds
@@ -292,6 +323,7 @@ begin
       terminal_wait_count: chain.wait_count, named_allocations_during_encode: encode_allocations,
       activation_readbacks_before_terminal_wait: early_reads,
       diagnostic_readbacks_after_terminal_wait: ML::MetalBuffer.hy_text_probe_readbacks - reads,
+      diagnostic_cpu_scratch_bytes: session.diagnostic_cpu_scratch_bytes,
       head_before_blocks_rejected: head_before_blocks_rejected,
       early_release_rejected: early_release_rejected, early_read_rejected: early_read_rejected,
       early_reuse_rejected: early_reuse_rejected, early_poison_rejected: early_poison_rejected,
@@ -300,6 +332,11 @@ begin
       shared_gate_up: arm.shared_gate_up,
       shared_gate_up_block_count: session.blocks.plans.count(&.shared_gate_up),
       shared_gate_up_prepared_block_count: session.blocks.plans.count(&.shared_gate_up_prepared),
+      combined_attention: arm.combined_attention,
+      fused_kv_gather_block_count: session.blocks.plans.count(&.fused_kv_gather),
+      scale_softmax_block_count: session.blocks.plans.count(&.scale_softmax),
+      scale_softmax_prepared_block_count: session.blocks.plans.count(&.scale_softmax_prepared),
+      early_attention_change_rejected: early_attention_change_rejected,
       early_mode_change_rejected: early_mode_change_rejected,
       unsupported_profile_rejected_without_submission: unsupported_profile_rejected_without_submission,
       missing_api_profile_rejected_without_submission: unsupported_profile_rejected_without_submission,
@@ -310,6 +347,13 @@ begin
     chain.release
     chain = nil
     observer.emit("after_chain_release", request: request)
+    if compare_combined_attention
+      # Collect small diagnostic summaries outside request timing. Large
+      # comparison arrays are session-owned and reused across all captures.
+      observer.emit("before_post_diagnostic_gc", request: request)
+      GC.collect
+      observer.emit("after_post_diagnostic_gc", request: request)
+    end
     break unless passed
   end
 rescue error
@@ -319,18 +363,26 @@ rescue error
 ensure
   begin
     if active = chain
-      active.commit_and_wait unless active.completed?
+      if terminal_wait_attempted && !active.completed?
+        cleanup_quarantined = true
+        raise "failed terminal wait: retaining chain and session until process exit"
+      end
+      unless active.completed?
+        terminal_wait_attempted = true
+        active.commit_and_wait
+      end
       active.release
     end
     session.try(&.release)
   rescue error
+    cleanup_quarantined = true if chain && terminal_wait_attempted && !chain.not_nil!.completed?
     passed = false
     failure = "#{failure}; cleanup: #{error.class}: #{error.message}"
   end
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: "cogni_ml.pixelumm_native_integrated_probe/v2", generation: false,
+    schema: compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2", generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -349,6 +401,10 @@ ensure
     preparation_seconds: preparation_seconds, repeats: repeats, requests: requests,
     profile_variance: profile_variance, expected_request_count: schedule.size,
     compare_shared_gate_up: compare_shared_gate_up, profile_shared_gate_up: profile_shared_gate_up,
+    compare_combined_attention: compare_combined_attention,
+    reverse_combined_attention: reverse_combined_attention, correctness_only: correctness_only,
+    cleanup_quarantined: cleanup_quarantined,
+    combined_attention_schedule: schedule.map { |arm| {kind: arm.kind, combined_attention: arm.combined_attention, alternate: arm.alternate, poisoned: arm.poisoned} },
     shared_gate_up_schedule: schedule.map { |arm| {kind: arm.kind, shared_gate_up: arm.shared_gate_up, profiling: arm.profile} },
     timing_scope: "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
     memory_telemetry: {categories_additive: false, guard_timestamp_clock: "mach_absolute_time",

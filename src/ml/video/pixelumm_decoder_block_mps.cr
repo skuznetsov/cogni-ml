@@ -473,6 +473,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter shared_gate_up_prepared : Bool
     getter shared_gate_up : Bool = false
     getter fused_kv_gather : Bool = false
+    getter scale_softmax_prepared : Bool = false
+    getter scale_softmax : Bool = false
     getter profiled_shared_gate_up : Bool = false
 
     @cosine : ML::MetalBuffer
@@ -793,6 +795,54 @@ module ML::Video::PixelUMMDecoderBlockMPS
             enabled ? 1 : 0, @error_text.to_unsafe, @error_text.size)
           raise ArgumentError.new("PixelUMM fused K/V gather selection failed: #{error_message}") unless status == 0
           @fused_kv_gather = enabled
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    # Prepare the existing scale/softmax graph before the first request. Both
+    # alternatives retain exactly the same scratch bindings. This is setup,
+    # never an encode-time graph/resource allocation.
+    def prepare_scale_softmax! : Nil
+      check_live!
+      @workspace.not_nil!.configure_plan!(@slot) do
+        unless @chain.nil? && !@scale_softmax_prepared
+          raise ArgumentError.new("PixelUMM scale/softmax preparation requires an unencoded, unprepared plan")
+        end
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.plan_prepare_scale_softmax(@native, 0,
+            @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM scale/softmax preparation failed: #{error_message}") unless status == 0
+          @scale_softmax_prepared = true
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    def self.validate_scale_softmax_change!(*, prepared : Bool, enabled : Bool, idle : Bool) : Nil
+      raise ArgumentError.new("PixelUMM command chain is in flight") unless idle
+      raise ArgumentError.new("PixelUMM scale/softmax was not prepared") unless prepared
+    end
+
+    def validate_scale_softmax_change!(enabled : Bool) : Nil
+      check_live!
+      self.class.validate_scale_softmax_change!(prepared: @scale_softmax_prepared,
+        enabled: enabled, idle: @chain.nil? || @chain.not_nil!.completed?)
+    end
+
+    # The workspace lock also excludes another slot's in-flight work. Neither
+    # selecting nor rejecting a selection submits work or waits for the GPU.
+    def use_scale_softmax!(enabled : Bool) : Nil
+      validate_scale_softmax_change!(enabled)
+      @workspace.not_nil!.configure_plan!(@slot) do
+        validate_scale_softmax_change!(enabled)
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.plan_set_scale_softmax(@native, enabled ? 1 : 0,
+            @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM scale/softmax selection failed: #{error_message}") unless status == 0
+          @scale_softmax = enabled
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
         {% end %}

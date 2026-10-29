@@ -12,6 +12,28 @@ module PixelUMMTwoBlockProbe
   SOURCE_PATH   = "VAE/PixelUMM_FT/diffusion_pytorch_model.safetensors"
   GIB           = 1024_i64 * 1024 * 1024
 
+  # Host-only diagnostics after the terminal wait. Prefix slices keep their
+  # original owners alive and must be overwritten before every comparison.
+  class ComparisonScratch
+    getter named_cpu_bytes : Int64
+    @expected : Bytes
+    @actual : Bytes
+
+    def initialize(capacity : Int32)
+      raise ArgumentError.new("diagnostic scratch capacity must be positive") unless capacity > 0
+      @expected = Bytes.new(capacity)
+      @actual = Bytes.new(capacity)
+      @named_cpu_bytes = capacity.to_i64 * 2
+    end
+
+    def buffers(nbytes : Int64) : Tuple(Bytes, Bytes)
+      unless 0 < nbytes <= @expected.size
+        raise ArgumentError.new("diagnostic scratch capture extent exceeds capacity")
+      end
+      {@expected[0, nbytes.to_i32], @actual[0, nbytes.to_i32]}
+    end
+  end
+
   def validate_identity!(document : JSON::Any) : Nil
     unless document["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
            document["upstream_model_sha256"].as_s == MODEL_SHA256 &&
@@ -400,7 +422,9 @@ module PixelUMMTwoBlockProbe
       read_into(record, buffer.contents.as(UInt8*).to_slice(record.nbytes.to_i32))
     end
 
-    private def read_into(record : Record, bytes : Bytes) : Nil
+    def read_into(record : Record, bytes : Bytes) : Nil
+      raise ArgumentError.new("tensor payload was not authenticated") unless @verified
+      raise ArgumentError.new("tensor read extent mismatch") unless bytes.size.to_i64 == record.nbytes
       File.open(@payload) do |io|
         io.seek(record.offset)
         io.read_fully(bytes)
@@ -777,7 +801,7 @@ module PixelUMMTwoBlockProbe
       end
     end
 
-    def compare(*, request : Int32? = nil,
+    def compare(*, comparison_scratch : ComparisonScratch? = nil, request : Int32? = nil,
                 phase_observer : PixelUMMMemoryProbe::Recorder? = nil) : Array(Comparison)
       chain = @last_chain || raise ArgumentError.new("PixelUMM serial was not encoded")
       unless chain.completed? && chain.wait_count == 1
@@ -792,7 +816,13 @@ module PixelUMMTwoBlockProbe
         memory_phase("before_compare_buffers", slot: slot, request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
           observer: phase_observer)
-        expected, actual = @fixture.read(record), Bytes.new(record.nbytes.to_i32)
+        expected, actual = if scratch = comparison_scratch
+                             expected_slice, actual_slice = scratch.buffers(record.nbytes)
+                             @fixture.read_into(record, expected_slice)
+                             {expected_slice, actual_slice}
+                           else
+                             {@fixture.read(record), Bytes.new(record.nbytes.to_i32)}
+                           end
         memory_phase("compare_buffers_ready", slot: slot, request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
           observer: phase_observer)

@@ -35,6 +35,24 @@ private def with_pixelumm_tensor_file(&)
 end
 
 describe PixelUMMTwoBlockProbe do
+  it "reuses separate diagnostic buffers across differently sized captures" do
+    scratch = PixelUMMTwoBlockProbe::ComparisonScratch.new(8)
+    expected, actual = scratch.buffers(8_i64)
+    expected.fill(0x12_u8)
+    actual.fill(0x34_u8)
+    shorter_expected, shorter_actual = scratch.buffers(2_i64)
+    shorter_expected.to_unsafe.should eq(expected.to_unsafe)
+    shorter_actual.to_unsafe.should eq(actual.to_unsafe)
+    shorter_expected.size.should eq(2)
+    shorter_actual.size.should eq(2)
+    shorter_expected.fill(0x56_u8)
+    actual.should eq(Bytes.new(8, 0x34_u8))
+    scratch.named_cpu_bytes.should eq(16_i64)
+    expect_raises(ArgumentError, /extent/) { scratch.buffers(0_i64) }
+    expect_raises(ArgumentError, /extent/) { scratch.buffers(9_i64) }
+    expect_raises(ArgumentError, /capacity/) { PixelUMMTwoBlockProbe::ComparisonScratch.new(0) }
+  end
+
   it "admits only the observed retained or alternating bank identity pattern" do
     PixelUMMTwoBlockProbe.validate_output_bank_layout!((0...16).to_a, 16, false)
     PixelUMMTwoBlockProbe.validate_output_bank_layout!(Array.new(16) { |slot| slot % 2 }, 16, true)
@@ -373,7 +391,7 @@ describe PixelUMMTwoBlockProbe do
   it "checks replay output distinction only for outputs retained by the depth's capture policy" do
     make_output = ->(digest : String) do
       PixelUMMBlockProbe::Record.new(JSON.parse({dtype: "BF16", shape: [1], offset: 0,
-        nbytes: 2, sha256: digest}.to_json), 2_i64)
+                                                 nbytes: 2, sha256: digest}.to_json), 2_i64)
     end
     primary36 = {
       "block34.output" => make_output.call("a" * 64),
@@ -548,8 +566,8 @@ describe PixelUMMTwoBlockProbe do
         if block_count == 36
           document.as_h["full36_capture_policy"] = JSON::Any.new("two_bank_survivors")
           document.as_h["input_provenance"] = JSON.parse({kind: "real_latent_xt_pixelumm_stem",
-            latent_sha256: "e" * 64, xt_sha256: "f" * 64,
-            stem_weights_sha256: "9" * 64, derived_x_sha256: "a" * 64}.to_json)
+                                                          latent_sha256: "e" * 64, xt_sha256: "f" * 64,
+                                                          stem_weights_sha256: "9" * 64, derived_x_sha256: "a" * 64}.to_json)
           document.as_h["input_lineage"] = JSON.parse({source_image_sha256: "8" * 64}.to_json)
           document.as_h["real_input_manifest_sha256"] = JSON::Any.new("7" * 64)
           document.as_h["real_input_payload_sha256"] = JSON::Any.new("6" * 64)
@@ -746,10 +764,17 @@ describe PixelUMMTwoBlockProbe do
       expect_raises(ArgumentError, /overlapping/) { fixture.validate_ranges!([record, record]) }
       expect_raises(ArgumentError, /trailing/) { fixture.validate_ranges!([record], contiguous: true) }
       expect_raises(ArgumentError, /authenticated/) { fixture.read(record) }
+      target = Bytes.new(2)
+      expect_raises(ArgumentError, /authenticated/) { fixture.read_into(record, target) }
       fixture.verify_payload!
       String.new(fixture.read(record)).should eq("ab")
+      fixture.read_into(record, target)
+      String.new(target).should eq("ab")
+      expect_raises(ArgumentError, /extent/) { fixture.read_into(record, Bytes.new(1)) }
+      expect_raises(ArgumentError, /extent/) { fixture.read_into(record, Bytes.new(3)) }
       File.write(payload, "xbcd")
       expect_raises(ArgumentError, /record hash/) { fixture.read(record) }
+      expect_raises(ArgumentError, /record hash/) { fixture.read_into(record, target) }
     end
   end
 end

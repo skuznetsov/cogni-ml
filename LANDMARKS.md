@@ -6,6 +6,35 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-COMBINED-FULL-2026-10-29] Full decoder combined attention is numerically exact; timing remains order-sensitive
+
+- VERIFIED bounded opt-in T6/H44/W80/J21,120 36-block PixelUMM plus head:
+  three identical-source/binary serial ABBA/BAAB/ABBA processes, 24 requests,
+  1,032 finite bitwise-equal retained upstream comparisons at unchanged 2e-5.
+  Direct block35/head GPU handoff, one wait, zero named encode allocations and
+  no preterminal reads pass; 43 existing CPU diagnostics stay after the wait.
+  Saved upstream MPS captures are not fresh independent-backend inference;
+  no probability parity, diffusion, full generation or full-pipeline fit claim.
+- Per-run median paired reductions +6.5132/+4.9058/+3.2761% pass the stated
+  descriptive 3%/both-orders/repeat screen. Only 4/6 pairs improve: range
+  -1.4346..+9.8273%; baseline-first median +9.1331%, candidate-first -0.0158%.
+  Causal/stable speed claim VULNERABLE; production defaults stay off.
+- One reusable distinct host-only expected/actual pair (330 MiB) replaces
+  per-capture temporary arrays; record authentication and exact extents remain.
+  Post-return GC alone had failed at 27.595798 GiB and is not pooled for timing.
+  Current 4,559 samples fit the unchanged 27.5 GiB cap/10% reserve/64 MiB swap/
+  900 s guard; peak 26.286456 GiB, min headroom 19.468338 GiB, swap growth0.
+  Host-heap growth does not recur in these processes; retention mechanism is
+  not proven. Headroom label is wrong, while pinned arithmetic and samples use
+  free_spec - speculative + file_backed; final audit explicitly bounds it.
+- Release, 60 CPU examples, 30 validator negatives, format/diff checks pass.
+  Correlated Mini-Quad ROBUST for bounded saved-output/lifecycle/guard scope.
+  Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-combined-full-reuse-20261029;
+  results/audit-final.json SHA 6c09bd6bbf51ce3372dbc94ab1dcda806f967346c904c666e66daabf984d1e40.
+  Return docs/hy-nomas-generation-frontier.md. Rollback omits combined mode;
+  refresh after scoped source/input/weights/runtime/device/geometry/precision/
+  schedule/guard changes or evidence loss, with live admission each new run.
+
 ### [LM-HY-NOMAS-PIXELUMM-COMBINED-KV-SOFTMAX-2026-10-29] Combined attention rewrites pass the bounded request screen
 
 - Opt-in `pixelumm_fused_kv_gather_probe --scale-softmax` prepares the scale

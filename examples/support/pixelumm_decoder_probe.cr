@@ -21,7 +21,23 @@ module PixelUMMDecoderProbe
   HEAD_PREFIX   = "head."
 
   record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool,
-    shared_gate_up : Bool = false
+    shared_gate_up : Bool = false, combined_attention : Bool = false
+
+  # Both inputs and both modes must pass poisoned upstream gates before timing.
+  # Reverse both the gate warm order and the same-input timed ABBA order.
+  def combined_attention_schedule(reverse : Bool = false, correctness_only : Bool = false) : Array(RequestArm)
+    modes = reverse ? [false, true, true, false] : [true, false, false, true]
+    arms = modes.map_with_index do |mode, index|
+      RequestArm.new("gate_#{index}", index >= 2, true, false, false, mode)
+    end
+    unless correctness_only
+      timed = reverse ? [true, false, false, true] : [false, true, true, false]
+      timed.each_with_index do |mode, index|
+        arms << RequestArm.new("timed_#{index}", false, false, false, false, mode)
+      end
+    end
+    arms
+  end
 
   # Run the candidate first, before baseline-correct capture bytes can exist.
   # Both graphs are warmed before the timed ABBA pair. The alternate-input
@@ -246,10 +262,12 @@ module PixelUMMDecoderProbe
     @blocks_chain : ML::Metal::MPSCommandChain? = nil
     @head_chain : ML::Metal::MPSCommandChain? = nil
     @last_chain : ML::Metal::MPSCommandChain? = nil
+    @comparison_scratch : PixelUMMTwoBlockProbe::ComparisonScratch? = nil
     @released = false
 
     def initialize(@fixture : Fixture, cache : WeightCache, *, max_named_bytes : Int64,
                    prepare_shared_gate_up : Bool = false,
+                   prepare_combined_attention : Bool = false,
                    @phase_observer : PixelUMMMemoryProbe::Recorder? = nil)
       # All shape, provenance linkage and aggregate budget decisions happen
       # before constructing the block Session, which is the first GPU uploader.
@@ -261,6 +279,12 @@ module PixelUMMDecoderProbe
       @capture_order = @fixture.capture_order.dup
 
       begin
+        if prepare_combined_attention
+          capacity = (@fixture.blocks.captures.values + @fixture.head.captures.values).max_of(&.nbytes).to_i32
+          @comparison_scratch = PixelUMMTwoBlockProbe::ComparisonScratch.new(capacity)
+          memory_phase("after_integrated_comparison_scratch", phase_bytes_kind: "reusable_cpu_comparison_scratch_bytes",
+            phase_bytes: diagnostic_cpu_scratch_bytes)
+        end
         memory_phase("before_integrated_block_session")
         @blocks = BlockSession.new(@fixture.blocks, cache, @block_named_bytes,
           ffn_f32: true, reuse_outputs: true, compare_common_ring_captures: true,
@@ -298,6 +322,13 @@ module PixelUMMDecoderProbe
         end
         memory_phase("after_integrated_head_plan", phase_bytes_kind: "head_owned_named_bytes",
           phase_bytes: head_plan.named_bytes)
+        if prepare_combined_attention
+          blocks.plans.each(&.prepare_scale_softmax!)
+          unless blocks.plans.size == BLOCK_COUNT && blocks.plans.all?(&.scale_softmax_prepared)
+            raise ArgumentError.new("integrated PixelUMM scale/softmax preparation omitted a block")
+          end
+          memory_phase("after_integrated_scale_softmax_preparation")
+        end
       rescue error
         rollback_construction
         raise error
@@ -316,9 +347,27 @@ module PixelUMMDecoderProbe
       head_plan.input.handle == blocks.plans[35].output.handle
     end
 
+    def diagnostic_cpu_scratch_bytes : Int64
+      @comparison_scratch.try(&.named_cpu_bytes) || 0_i64
+    end
+
     def use_shared_gate_up!(enabled : Bool) : Nil
       check_idle!
       blocks.use_shared_gate_up!(enabled)
+    end
+
+    def use_combined_attention!(enabled : Bool) : Nil
+      check_idle!
+      # Validate every slot before changing any. Native selection errors abort
+      # the diagnostic; no partially selected model is ever encoded.
+      blocks.plans.each(&.validate_scale_softmax_change!(enabled))
+      blocks.plans.each do |plan|
+        plan.use_scale_softmax!(enabled)
+        plan.use_fused_kv_gather!(enabled)
+      end
+      unless blocks.plans.size == BLOCK_COUNT && blocks.plans.all? { |plan| plan.scale_softmax == enabled && plan.fused_kv_gather == enabled }
+        raise ArgumentError.new("integrated PixelUMM combined attention must cover every block")
+      end
     end
 
     # Enqueue all 36 native plans onto the caller's current command chain.
@@ -380,7 +429,8 @@ module PixelUMMDecoderProbe
       unless chain.completed? && chain.wait_count == 1 && @blocks_chain.try(&.same?(chain))
         raise ArgumentError.new("integrated PixelUMM diagnostics require one terminal wait after same-chain block/head encoding")
       end
-      results = blocks.compare(request: request, phase_observer: phase_observer || @phase_observer)
+      results = blocks.compare(comparison_scratch: @comparison_scratch,
+        request: request, phase_observer: phase_observer || @phase_observer)
       observer = phase_observer || @phase_observer
       fixture.head.capture_order.each do |name|
         record = fixture.head.captures[name]
@@ -390,8 +440,13 @@ module PixelUMMDecoderProbe
         memory_phase("before_integrated_head_compare_buffers", request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
           observer: observer)
-        expected = fixture.head.read(record)
-        actual = Bytes.new(record.nbytes.to_i32)
+        expected, actual = if scratch = @comparison_scratch
+                             expected_slice, actual_slice = scratch.buffers(record.nbytes)
+                             fixture.head.read_into(record, expected_slice)
+                             {expected_slice, actual_slice}
+                           else
+                             {fixture.head.read(record), Bytes.new(record.nbytes.to_i32)}
+                           end
         buffer.read_bytes(actual.to_unsafe, actual.size)
         memory_phase("integrated_head_compare_buffers_ready", request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
@@ -399,7 +454,7 @@ module PixelUMMDecoderProbe
         results << PixelUMMHeadProbe.compare_bytes(HEAD_PREFIX + name, expected, actual)
         expected = Bytes.empty
         actual = Bytes.empty
-        GC.collect
+        GC.collect unless @comparison_scratch
         memory_phase("integrated_head_compare_stage_done", request: request,
           phase_bytes_kind: "cpu_expected_and_actual_buffer_bytes", phase_bytes: comparison_bytes,
           observer: observer)
@@ -414,6 +469,7 @@ module PixelUMMDecoderProbe
       return if @released
       check_idle!
       @released = true
+      @comparison_scratch = nil
       first_error = nil.as(Exception?)
       begin
         @head_plan.try(&.release)

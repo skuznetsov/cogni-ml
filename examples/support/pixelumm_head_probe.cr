@@ -93,6 +93,12 @@ module PixelUMMHeadProbe
 
     def read(record : Record) : Bytes
       bytes = Bytes.new(record.nbytes.to_i32)
+      read_into(record, bytes)
+      bytes
+    end
+
+    def read_into(record : Record, bytes : Bytes) : Nil
+      raise ArgumentError.new("head fixture tensor read extent mismatch") unless bytes.size.to_i64 == record.nbytes
       File.open(@payload) do |io|
         io.seek(record.offset)
         io.read_fully(bytes)
@@ -100,7 +106,6 @@ module PixelUMMHeadProbe
       unless Digest::SHA256.hexdigest(bytes) == record.sha256
         raise ArgumentError.new("head fixture tensor hash mismatch")
       end
-      bytes
     end
 
     def compatible_replay!(other : Fixture) : Nil

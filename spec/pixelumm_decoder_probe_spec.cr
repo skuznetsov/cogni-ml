@@ -13,6 +13,56 @@ describe PixelUMMDecoderProbe do
     arms.map(&.kind).uniq.size.should eq(8)
   end
 
+  it "gates combined attention on both inputs before unpoisoned same-input ABBA timing" do
+    arms = PixelUMMDecoderProbe.combined_attention_schedule
+    arms.size.should eq(8)
+
+    gates = arms[0, 4]
+    timed = arms[4, 4]
+    gates.all? { |arm| arm.kind.starts_with?("gate_") }.should be_true
+    timed.all? { |arm| arm.kind.starts_with?("timed_") }.should be_true
+    arms.map(&.kind).uniq.size.should eq(8)
+
+    gates.map(&.combined_attention).should eq([true, false, false, true])
+    gates.map(&.alternate).should eq([false, false, true, true])
+    gates.all?(&.poisoned).should be_true
+
+    timed.map(&.combined_attention).should eq([false, true, true, false])
+    timed.none?(&.alternate).should be_true
+    timed.none?(&.poisoned).should be_true
+
+    arms.none?(&.profile).should be_true
+    arms.none?(&.shared_gate_up).should be_true
+  end
+
+  it "reverses combined-attention warm and timing orders and limits correctness-only to gates" do
+    normal = PixelUMMDecoderProbe.combined_attention_schedule
+    reverse = PixelUMMDecoderProbe.combined_attention_schedule(reverse: true)
+    normal.size.should eq(8)
+    reverse.size.should eq(8)
+    reverse.map(&.combined_attention).should eq(normal.map { |arm| !arm.combined_attention })
+    reverse.map(&.alternate).should eq(normal.map(&.alternate))
+    reverse.map(&.poisoned).should eq(normal.map(&.poisoned))
+    reverse[0, 2].map(&.combined_attention).should eq([false, true])
+    reverse[2, 2].map(&.combined_attention).should eq([true, false])
+    reverse[4, 4].map(&.combined_attention).should eq([true, false, false, true])
+
+    correctness = PixelUMMDecoderProbe.combined_attention_schedule(correctness_only: true)
+    correctness.size.should eq(4)
+    correctness.all? { |arm| arm.kind.starts_with?("gate_") }.should be_true
+    correctness.all?(&.poisoned).should be_true
+    correctness.map(&.combined_attention).should eq([true, false, false, true])
+    correctness.none?(&.profile).should be_true
+    correctness.none?(&.shared_gate_up).should be_true
+
+    reverse_correctness = PixelUMMDecoderProbe.combined_attention_schedule(
+      reverse: true, correctness_only: true)
+    reverse_correctness.size.should eq(4)
+    reverse_correctness.map(&.combined_attention).should eq([false, true, true, false])
+    reverse_correctness.map(&.alternate).should eq([false, false, true, true])
+    reverse_correctness.all?(&.poisoned).should be_true
+  end
+
   it "admits shared gate/up only with F32 FFN capability and an idle chain" do
     plan = ML::Video::PixelUMMDecoderBlockMPS::Plan
     plan.validate_shared_gate_up_configuration!(ffn_f32: true, prepare_shared_gate_up: true)
@@ -27,6 +77,19 @@ describe PixelUMMDecoderProbe do
     [true, false].each do |enabled|
       expect_raises(ArgumentError, /in flight/) do
         plan.validate_shared_gate_up_change!(prepared: true, enabled: enabled, idle: false)
+      end
+    end
+  end
+
+  it "changes scale/softmax selection only when prepared and idle" do
+    plan = ML::Video::PixelUMMDecoderBlockMPS::Plan
+    [true, false].each do |enabled|
+      plan.validate_scale_softmax_change!(prepared: true, enabled: enabled, idle: true)
+      expect_raises(ArgumentError, /in flight/) do
+        plan.validate_scale_softmax_change!(prepared: true, enabled: enabled, idle: false)
+      end
+      expect_raises(ArgumentError, /prepared/) do
+        plan.validate_scale_softmax_change!(prepared: false, enabled: enabled, idle: true)
       end
     end
   end
