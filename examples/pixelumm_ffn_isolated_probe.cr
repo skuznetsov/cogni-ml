@@ -8,6 +8,7 @@ reference = ""
 reference_sha = ""
 report = ""
 tokens = 21120
+row_tile = 0
 reverse_warmups = false
 reverse_first = false
 down_first = false
@@ -19,11 +20,13 @@ OptionParser.parse do |parser|
   parser.on("--reference-sha256 SHA", "Trusted fixture metadata SHA256") { |value| reference_sha = value }
   parser.on("--report PATH", "Fresh absolute JSON report under /Volumes") { |value| report = value }
   parser.on("--rows N", "Exact fixture row count: 2048 or 21120; no row repetition") { |value| tokens = value.to_i32 }
+  parser.on("--row-tile N", "Independent full-K gate/up row tiles; zero keeps the shared-graph control") { |value| row_tile = value.to_i32 }
   parser.on("--reverse-warmups", "Reverse warmup order and graph preparation/release order") { reverse_warmups = true }
   parser.on("--reverse-first", "Reverse only the measured gate/up ABBA starting order") { reverse_first = true }
   parser.on("--down-first", "Run the unchanged down graph before gate/up in each request") { down_first = true }
   parser.on("--max-named-bytes N", "Preallocation cap, at most 4 GiB") { |value| max_named_bytes = value.to_i64 }
 end
+PixelUMMTiledGateUpProbe.validate_rows!(tokens, row_tile) if row_tile != 0
 
 unless ARGV.empty? && {2048, 21120}.includes?(tokens)
   raise ArgumentError.new("invalid isolated FFN probe arguments")
@@ -40,7 +43,8 @@ unless fixture.metadata.tokens == tokens
   raise ArgumentError.new("isolated FFN row count must equal the saved fixture grid; repetition is forbidden")
 end
 named_bytes = B.validate_budget!(tokens, max_named_bytes)
-requests = B.schedule(reverse_warmups, reverse_first)
+candidate_mode = row_tile > 0 ? "tiled" : "shared"
+requests = B.schedule(reverse_warmups, reverse_first, candidate_mode)
 stage_order = B.stage_order(down_first)
 memory = PixelUMMMemoryProbe::Recorder.system(STDERR)
 owner = nil.as(B::Owner?)
@@ -51,7 +55,7 @@ result = nil.as(JSON::Any?)
 
 begin
   setup_started = Time.instant
-  owner = B::Owner.new(fixture, max_named_bytes, reverse_warmups, memory)
+  owner = B::Owner.new(fixture, max_named_bytes, reverse_warmups, memory, row_tile)
   setup_seconds = (Time.instant - setup_started).total_seconds
   chain = ML::Metal::MPSCommandChain.new
   chain.enable_api_profile!(phase_roots: false)
@@ -137,9 +141,9 @@ begin
       raise "isolated FFN GPU comparator did not cover an exact output extent"
     end
   end
-  unless metrics[0, 24].all? { |metric| metric[:failures] == 0 && metric[:nonfinite] == 0 } &&
-         metrics.each_with_index.all? { |metric, index| index == 24 || metric[:elements] == (index % 4 < 2 ? expected_gate_up_elements : expected_down_elements) }
-    raise "isolated FFN GPU comparator rejected a captured output or reported an invalid element count"
+  numerical_pass = metrics[0, 24].all? { |metric| metric[:failures] == 0 && metric[:nonfinite] == 0 }
+  unless metrics.each_with_index.all? { |metric, index| index == 24 || metric[:elements] == (index % 4 < 2 ? expected_gate_up_elements : expected_down_elements) }
+    raise "isolated FFN GPU comparator reported an invalid element count"
   end
   unless metrics[24][:failures] == 1 && metrics[24][:nonfinite] == 1 &&
          metrics[24][:elements] == expected_down_elements
@@ -149,7 +153,7 @@ begin
     raise "unchanged down graph output was not bitwise identical across requests"
   end
 
-  summaries = ["separate", "shared"].map do |mode|
+  summaries = ["separate", candidate_mode].map do |mode|
     selected = per_sample.select { |sample| sample["mode"].as_s == mode && !sample["warmup"].as_bool }
     stage_summary = ["gate_up", "down"].map do |stage|
       values = selected.map { |sample| sample["stages"][stage]["gpu"]["gpu_root_union_seconds"].as_f }
@@ -163,7 +167,7 @@ begin
     {mode: mode, measured_requests: selected.size, stages: stage_summary}
   end
   separate = summaries.find { |summary| summary[:mode] == "separate" }.not_nil!
-  shared = summaries.find { |summary| summary[:mode] == "shared" }.not_nil!
+  shared = summaries.find { |summary| summary[:mode] == candidate_mode }.not_nil!
   separate_gate = separate[:stages].find { |stage| stage[:stage] == "gate_up" }.not_nil![:median_gpu_root_union_seconds]
   shared_gate = shared[:stages].find { |stage| stage[:stage] == "gate_up" }.not_nil![:median_gpu_root_union_seconds]
   separate_down = separate[:stages].find { |stage| stage[:stage] == "down" }.not_nil![:median_gpu_root_union_seconds]
@@ -171,13 +175,14 @@ begin
   ratio_reference = {
     descriptive_slowdown_reference:   1.10,
     interpretation:                   "10% is descriptive only; this diagnostic applies no performance promotion threshold",
+    candidate_mode:                   candidate_mode,
     gate_up_shared_to_separate_ratio: shared_gate / separate_gate,
     down_shared_to_separate_ratio:    shared_down / separate_down,
   }
 
   source = fixture.metadata.source_replay
   result = JSON.parse({
-    schema:   "cogni_ml.pixelumm_ffn_isolated_probe/v1",
+    schema:   row_tile > 0 ? "cogni_ml.pixelumm_ffn_row_tiled_probe/v1" : "cogni_ml.pixelumm_ffn_isolated_probe/v1",
     scope:    "saved full-J or true J2048 FFN boundaries; production MPSGraph source-method diagnostic; no attention execution, decoder, generation, or causal shader claim",
     geometry: {grid: fixture.metadata.grid, tokens: tokens, hidden: B::HIDDEN, ffn: B::FFN,
                token_order: "tile_major", fixture_rows_used_exactly_once: true},
@@ -186,8 +191,9 @@ begin
               upstream_revision: B::UPSTREAM_REVISION, upstream_model_sha256: B::MODEL_SHA256,
               source_replay: source},
     comparison: {atol: B::ATOL, rtol: B::RTOL, comparator: "GPU BF16 values, abs(a-e) <= atol + rtol*abs(e); nonfinite always fails"},
-    topology:   {gate_up_modes: ["separate_gate_then_up", "shared_input_pair"],
-               production_builders: ["pixel_linear_step(castOperandsToF32=true)", "pixel_linear_shared_input_pair_step"],
+    topology:   {gate_up_modes: ["separate_gate_then_up", row_tile > 0 ? "separate_row_tiled_gate_then_up" : "shared_input_pair"],
+               production_builders: ["pixel_linear_step(castOperandsToF32=true)", row_tile > 0 ? "pixel_linear_row_tiled_step" : "pixel_linear_shared_input_pair_step"],
+               row_tile: row_tile, row_ranges: row_tile > 0 ? PixelUMMTiledGateUpProbe.row_ranges(tokens, row_tile) : nil,
                input_boundary: "BF16; F32 operands; BF16 output", down_graph_same_prepared_executable_for_all_requests: true,
                down_graph: "pixel_linear_step(castOperandsToF32=true)", common_candidate_output_buffers: true,
                down_canonical_buffer_bytes: fixture.metadata.captures["down_proj"].nbytes,
@@ -198,7 +204,7 @@ begin
                confounding_note: "reverse-warmups changes warmup order and graph preparation/release order together; reverse-first changes only measured gate/up order"},
     timing: {unit: "union of completed GPU root lifetimes for the named stage; overlaps are reported and can disqualify exclusive timing",
              excluded_from_stage: "fixture upload, graph preparation, poison/canonical blit, GPU comparisons, terminal wait and host readback",
-             stage_host_encode_wall_scope: "gate_up combines both separate graph encodes or the one shared graph encode; no per-projection host attribution",
+             stage_host_encode_wall_scope: "gate_up combines its selected gate/up graph encodes; no per-projection host attribution",
              api_profile_scope: "whole command chain; not attributed to individual stages",
              summaries: summaries, samples: per_sample, ratio_reference: ratio_reference},
     execution: {named_bytes: named_bytes, resources: owner.resources, maximum_named_bytes: max_named_bytes,
@@ -217,7 +223,7 @@ begin
     source_hashes: {diagnostic_bridge_sha256: Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "support", "pixelumm_ffn_isolated_bridge.mm"))),
                     production_bridge_sha256: Digest::SHA256.hexdigest(File.read(File.join(__DIR__, "..", "src", "ml", "video", "pixelumm_decoder_block_mps_bridge.mm"))),
                     comparator_sha256: Digest::SHA256.hexdigest(B::SOURCE)},
-    summary: {diagnostic_completed: true, production_promoted: false},
+    summary: {diagnostic_completed: true, numerical_pass: numerical_pass, production_promoted: false},
   }.to_json)
 
   owner.release_after_terminal!(chain)
@@ -235,6 +241,7 @@ begin
     report_file.close
   end
   puts report_result["summary"].to_json
+  raise "isolated FFN GPU comparator rejected a captured output; diagnostics were retained" unless numerical_pass
 ensure
   active_owner = owner
   if active_chain = chain

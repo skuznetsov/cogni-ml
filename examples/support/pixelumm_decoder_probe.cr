@@ -21,10 +21,21 @@ module PixelUMMDecoderProbe
   HEAD_PREFIX   = "head."
 
   record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool,
-    shared_gate_up : Bool = false, combined_attention : Bool = false
+    shared_gate_up : Bool = false, combined_attention : Bool = false,
+    tiled_gate_up : Bool = false
 
   AA_PAUSE_NS            = 50_000_000_000_i64
   AA_ALLOWED_LATENESS_NS =    250_000_000_i64
+
+  # Same paired input and observer-off controls as the paced A/A experiment.
+  # Candidate preparation remains live in both arms; only graph selection moves.
+  def tiled_gate_up_schedule(reverse : Bool = false) : Array(RequestArm)
+    modes = [true, false, false, true, true, false]
+    modes.map_with_index do |mode, index|
+      kind = index < 2 ? "tiled_warm_#{index}" : "tiled_timed_#{index - 2}"
+      RequestArm.new(kind, false, index == 0, false, false, false, reverse ? !mode : mode)
+    end
+  end
 
   # All inference selectors and input A stay fixed. Only the CPU/API observer
   # changes; reverse its middle OFF/ON/ON/OFF order in a serial second process.

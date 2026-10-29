@@ -1,6 +1,7 @@
 require "option_parser"
 require "./support/hy_nomas_probe_instrumentation"
 require "./support/pixelumm_decoder_probe"
+require "./support/pixelumm_tiled_gate_up_probe"
 require "../src/ml/video/pixelumm_decoder_profile"
 
 reference, reference_sha, alternate, alternate_sha = "", "", "", ""
@@ -17,6 +18,8 @@ reverse_combined_attention = false
 profile_aa = false
 reverse_aa_profile = false
 correctness_only = false
+tiled_rows = 0
+reverse_tiled = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -40,16 +43,22 @@ OptionParser.parse do |parser|
   parser.on("--reverse-combined-attention", "Reverse both warm and timed combined-attention orders") { reverse_combined_attention = true }
   parser.on("--profile-aa", "Fixed baseline/input A, six requests, 50s post-wait gaps and crossed API observers") { profile_aa = true }
   parser.on("--reverse-aa-profile", "Reverse only the middle A/A observer order") { reverse_aa_profile = true }
+  parser.on("--tiled-gate-up-rows N", "Observer-off row-tiled FFN crossover, six paced requests") { |v| tiled_rows = v.to_i32 }
+  parser.on("--reverse-tiled-gate-up", "Reverse both warm and timed row-tiled FFN orders") { reverse_tiled = true }
   parser.on("--correctness-only", "Only the four poisoned combined-attention gates") { correctness_only = true }
 end
+PixelUMMTiledGateUpProbe.validate_rows!(21120, tiled_rows) if tiled_rows != 0
+tiled_modes = tiled_rows > 0
+paced_requests = profile_aa || tiled_modes
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
        0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
-       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention || profile_aa) || repeats == 1) &&
-       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention, profile_aa}.count(true) <= 1 &&
+       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention || profile_aa || tiled_modes) || repeats == 1) &&
+       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention, profile_aa, tiled_modes}.count(true) <= 1 &&
        (!reverse_combined_attention || compare_combined_attention || profile_combined_attention) &&
        (!reverse_aa_profile || profile_aa) &&
+       (!reverse_tiled || tiled_modes) &&
        (!correctness_only || compare_combined_attention)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
@@ -59,6 +68,7 @@ raise IO::Error.new("integrated report must be fresh and writable") if fd < 0
 report_io = IO::FileDescriptor.new(fd)
 observer = PixelUMMMemoryProbe::Recorder.system
 session = nil.as(PixelUMMDecoderProbe::Session?)
+tiled_selection = nil.as(PixelUMMTiledGateUpProbe::Selection?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 terminal_wait_attempted = false
 cleanup_quarantined = false
@@ -72,7 +82,9 @@ failure = nil.as(String?)
 passed = true
 shared_modes = compare_shared_gate_up || profile_shared_gate_up
 attention_modes = compare_combined_attention || profile_combined_attention || profile_aa
-schedule = if profile_aa
+schedule = if tiled_modes
+             PixelUMMDecoderProbe.tiled_gate_up_schedule(reverse_tiled)
+           elsif profile_aa
              PixelUMMDecoderProbe.aa_profile_schedule(reverse_aa_profile)
            elsif profile_combined_attention
              PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse_combined_attention)
@@ -107,6 +119,7 @@ begin
     max_named_bytes: budget, phase_observer: observer,
     prepare_shared_gate_up: shared_modes,
     prepare_combined_attention: attention_modes)
+  tiled_selection = PixelUMMTiledGateUpProbe::Selection.new(session.blocks.plans, tiled_rows) if tiled_modes
   preparation_seconds = (Time.instant - start).total_seconds
   named_bytes, block_bytes = session.named_bytes, session.block_named_bytes
   head_owned_bytes, head_weight_bytes = session.head_owned_named_bytes, session.head_weight_named_bytes
@@ -120,7 +133,7 @@ begin
   STDERR.puts "Integrated PixelUMM admitted #{named_bytes} unique named bytes, full J=21120"
   current_alternate = false
   head_poison_count = 0
-  segments_by_mode = {} of Tuple(Bool, Bool) => Int32
+  segments_by_mode = {} of Tuple(Bool, Bool, Bool) => Int32
   schedule.each_with_index do |arm, request|
     poisoned = arm.poisoned
     if arm.alternate != current_alternate
@@ -137,6 +150,7 @@ begin
       end
       observer.emit("after_poisoned_replay_input", request: request)
     end
+    tiled_selection.try(&.select!(arm.tiled_gate_up))
     session.use_shared_gate_up!(arm.shared_gate_up) if shared_modes
     session.use_combined_attention!(arm.combined_attention) if attention_modes
     unless session.blocks.plans.all? { |plan| plan.shared_gate_up == arm.shared_gate_up }
@@ -149,7 +163,7 @@ begin
     aa_sleep_ns = 0_i64
     aa_target_ns = nil.as(Int64?)
     aa_spacing = nil.as(JSON::Any?)
-    if profile_aa
+    if paced_requests
       aa_ready_ns = PixelUMMMemoryProbe.guard_monotonic_ns.not_nil!
       aa_sleep_ns = PixelUMMDecoderProbe.aa_pause_remaining_ns(previous_terminal_ns, aa_ready_ns)
       aa_target_ns = previous_terminal_ns.try { |value| value + PixelUMMDecoderProbe::AA_PAUSE_NS }
@@ -169,7 +183,7 @@ begin
     early_attention_change_rejected = false
     unsupported_profile_rejected_without_submission = false
     if request == 0
-      if shared_modes || profile_combined_attention || profile_aa
+      if shared_modes || profile_combined_attention || paced_requests
         prior_segments = chain.segment_count
         begin
           session.encode_blocks(chain, profile: true)
@@ -195,7 +209,7 @@ begin
       end
       raise "integrated head accepted encoding before block35" unless head_before_blocks_rejected
     end
-    if profile_aa
+    if paced_requests
       before_ns = PixelUMMMemoryProbe.guard_monotonic_ns.not_nil!
       lateness_ns = aa_target_ns.try { |value| before_ns - value }
       if lateness_ns && !(0 <= lateness_ns <= PixelUMMDecoderProbe::AA_ALLOWED_LATENESS_NS)
@@ -241,7 +255,20 @@ begin
       end
       raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
+    early_tiled_change_rejected = false
     if request == 0
+      if selection = tiled_selection
+        before_mode = selection.selected
+        begin
+          selection.select!(!arm.tiled_gate_up)
+        rescue error : ArgumentError
+          raise error unless (error.message || "").includes?("in flight")
+          early_tiled_change_rejected = true
+        end
+        unless early_tiled_change_rejected && selection.selected == before_mode
+          raise "integrated in-flight tiled gate/up selection mutated plans"
+        end
+      end
       if attention_modes
         before_modes = session.blocks.plans.map { |plan| {plan.fused_kv_gather, plan.scale_softmax} }
         begin
@@ -298,16 +325,16 @@ begin
     chain.commit_and_wait
     wait_seconds = (Time.instant - start).total_seconds
     execution_seconds = (Time.instant - execution_start).total_seconds
-    terminal_ns = profile_aa ? PixelUMMMemoryProbe.guard_monotonic_ns.not_nil! : nil
-    previous_terminal_ns = terminal_ns if profile_aa
-    STDERR.puts "AA_WAIT request=#{request} pid=#{Process.pid} mach_ns=#{terminal_ns}" if profile_aa
+    terminal_ns = paced_requests ? PixelUMMMemoryProbe.guard_monotonic_ns.not_nil! : nil
+    previous_terminal_ns = terminal_ns if paced_requests
+    STDERR.puts "AA_WAIT request=#{request} pid=#{Process.pid} mach_ns=#{terminal_ns}" if paced_requests
     observer.emit("request_after_terminal_wait", request: request)
     # All metadata extraction is after the existing wait and outside execution
     # timing. It does not read activations, allocate GPU buffers or enqueue work.
     root_profile = nil.as(JSON::Any?)
     phase_profile = nil.as(JSON::Any?)
     trace_profile = nil.as(JSON::Any?)
-    if profile_variance || shared_modes || profile_combined_attention || profile_aa
+    if profile_variance || shared_modes || profile_combined_attention || paced_requests
       roots = chain.completed_root_timings
       whole = ML::Video::MPSCommandPhaseProfile.build(roots,
         [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
@@ -339,7 +366,7 @@ begin
       if profile_variance
         raise "integrated profile changed segment topology" unless chain.segment_count == 4579
       else
-        mode_key = {arm.shared_gate_up, arm.combined_attention}
+        mode_key = {arm.shared_gate_up, arm.combined_attention, arm.tiled_gate_up}
         segments_by_mode[mode_key] ||= chain.segment_count
         unless chain.segment_count == segments_by_mode[mode_key]
           raise "integrated mode changed segment topology between requests"
@@ -350,7 +377,7 @@ begin
         raise "integrated profiling added waits, activation reads or named allocations"
       end
     end
-    observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention || profile_aa
+    observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention || paced_requests
     comparisons = session.compare(request: request)
     observer.emit("request_after_diagnostic_comparisons", request: request)
     unless comparisons.map { |c| c[:stage] } == capture_order &&
@@ -382,6 +409,10 @@ begin
       early_reuse_rejected: early_reuse_rejected, early_poison_rejected: early_poison_rejected,
       shared_scratch_poisoned_before_request: poisoned, comparisons: comparisons,
       profiling: arm.profile, early_profile_rejected: early_profile_rejected,
+      tiled_gate_up: arm.tiled_gate_up, tiled_gate_up_rows: tiled_rows,
+      tiled_gate_up_block_count: tiled_selection.try { |selection| selection.selected ? selection.plans.size : 0 } || 0,
+      tiled_gate_up_prepared_block_count: tiled_selection.try(&.plans.size) || 0,
+      early_tiled_change_rejected: early_tiled_change_rejected,
       shared_gate_up: arm.shared_gate_up,
       shared_gate_up_block_count: session.blocks.plans.count(&.shared_gate_up),
       shared_gate_up_prepared_block_count: session.blocks.plans.count(&.shared_gate_up_prepared),
@@ -401,9 +432,9 @@ begin
     chain.release
     chain = nil
     observer.emit("after_chain_release", request: request)
-    if attention_modes
-      # Collect small diagnostic summaries outside request timing. Large
-      # comparison arrays are session-owned and reused across all captures.
+    if attention_modes || tiled_modes
+      # Post-wait GC is outside timing. Prepared attention diagnostics reuse
+      # comparison arrays; row-tiling diagnostics retain per-capture host buffers.
       observer.emit("before_post_diagnostic_gc", request: request)
       GC.collect
       observer.emit("after_post_diagnostic_gc", request: request)
@@ -428,6 +459,7 @@ ensure
       end
       active.release
     end
+    tiled_selection.try(&.release)
     session.try(&.release)
   rescue error
     cleanup_quarantined = true if spacing_abort_before_submission || (chain && terminal_wait_attempted && !chain.not_nil!.completed?)
@@ -437,7 +469,7 @@ ensure
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: profile_aa ? "cogni_ml.pixelumm_native_aa_profile/v1" : (profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2")), generation: false,
+    schema: tiled_modes ? "cogni_ml.pixelumm_native_row_tiled_ffn/v1" : profile_aa ? "cogni_ml.pixelumm_native_aa_profile/v1" : (profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2")), generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -460,6 +492,9 @@ ensure
     profile_combined_attention: profile_combined_attention,
     reverse_combined_attention: reverse_combined_attention, correctness_only: correctness_only,
     profile_aa: profile_aa, reverse_aa_profile: reverse_aa_profile,
+    tiled_gate_up_rows: tiled_rows, reverse_tiled_gate_up: reverse_tiled,
+    tiled_gate_up_schedule: tiled_modes ? schedule.map { |arm| {kind: arm.kind, tiled_gate_up: arm.tiled_gate_up, alternate: arm.alternate, poisoned: arm.poisoned, profiling: arm.profile} } : nil,
+    row_ranges: tiled_modes ? PixelUMMTiledGateUpProbe.row_ranges(21120, tiled_rows) : nil,
     aa_pause_seconds: PixelUMMDecoderProbe::AA_PAUSE_NS / 1e9,
     aa_allowed_lateness_seconds: PixelUMMDecoderProbe::AA_ALLOWED_LATENESS_NS / 1e9,
     spacing_abort_before_submission: spacing_abort_before_submission,

@@ -6,6 +6,49 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-GATE-UP-ROWS-2026-10-29] Full-K row tiling preserves outputs but does not qualify as acceleration
+
+- VERIFIED bounded qualification of opt-in separate F32 gate/up graphs with
+  M4096 tiles, full K4096 and original BF16 boundaries at full J21120. Ordinary
+  MPS remains the default; rollback omits the diagnostic flag. No generation.
+- Full-J isolated FFN passes 24 finite bitwise-equal GPU comparisons and rejects
+  the NaN positive control. Median gate/up is 371.139729 ms baseline versus
+  372.344271 ms tiled (0.3246% slower; two measured samples per mode).
+- Two serial 36-block plus head crossovers pass 516 finite bitwise-equal saved
+  upstream comparisons at unchanged atol=rtol=2e-5. Each request retains one
+  terminal wait, direct GPU handoff, zero tracked named encode allocations or
+  preterminal activation reads and 43 existing post-wait diagnostic reads.
+  Saved Torch 2.6 MPS source-method outputs are not fresh independent-backend
+  inference, all intermediate boundaries or a generated-video quality check.
+- Complete-request median reductions are 14.8949% normal and 0.4832% reverse;
+  reverse fails the prospective 3% criterion. The apparent normal win includes
+  baseline drift 44.938757 -> 84.561390 -> 50.566983 s. No stable speedup,
+  slowdown, equivalence or production throughput claim is admitted.
+- Matched terminal-return-to-pre-recorder gaps are 50.001163..50.009773 s.
+  Both arms use legacy per-capture host diagnostic buffers and post-wait GC,
+  not pooled comparison arrays. These are outside timing but can carry state
+  into the next request. GPU-root intervals also grow; they do not identify
+  active shader cycles or establish thermal/queue-admission causality.
+- All 2,445 full-run samples pass the cache-aware 10% reserve, 27.5 GiB process
+  cap, 64 MiB swap-growth stop and 900 s deadline: peak 27.346103 GiB, minimum
+  headroom 14.280060 GiB, positive swap growth zero. Sampled bounds do not
+  guarantee opaque transients or future fit. Both processes exited normally.
+- Release builds, 67 integrated Crystal examples, 24 focused examples, six
+  Python tests, four CLI negatives and 14 CPU report-corruption challenges
+  pass. Correlated Mini-Quad ROBUST covers parity/guards/nonqualification;
+  stable performance attribution remains VULNERABLE. Source and binary are
+  archived; a later two-comment correction leaves all executable lines intact.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gate-up-rows-20261029;
+  results/gate-up-rows-analysis.json SHA 22c9ea1aa1abb21498dad4a6aa94a176317f808ad061bc77fe39712f1eeba181;
+  results/comment-only-annotation.json SHA 2e3ced87676ac0d82ad15300707733a735c3be55bc6a49c6bc361449302fdb5d.
+  Final CPU/CLI commands, exit codes and output: results/final-cpu-checks.json
+  SHA 8a90e5913bb23e3c177f8f2f0e45e78e843c71b68b1e833a41b32a513bdcaa44.
+  Return docs/hy-nomas-generation-frontier.md. Refresh on executable source,
+  artifacts/fixtures/weights, geometry/precision, schedule/lifetime, backend/
+  device/toolchain or guards; admit memory afresh. Next timing falsifier is a
+  short replicated FFN A/A retaining GPU checks while removing per-capture
+  host allocation/GC between measured samples, not a blind tile-size grid.
+
 ### [LM-HY-NOMAS-PIXELUMM-PACED-AA-2026-10-29] Matched-spacing A/A narrows observed drift; delayed calls align with the queue boundary
 
 - VERIFIED bounded full-J 36-block plus head A/A: two serial six-request

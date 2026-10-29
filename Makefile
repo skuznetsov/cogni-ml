@@ -121,12 +121,12 @@ spec_pixelumm_decoder_head:
 pixelumm_decoder_integrated_probe: $(BUILD_DIR)/pixelumm_decoder_integrated_probe
 
 # The head object includes the block ABI; do not link PIXELUMM_MPS_OBJ twice.
-$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_decoder_profile.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
+$(BUILD_DIR)/pixelumm_decoder_integrated_probe: examples/pixelumm_decoder_integrated_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_tiled_gate_up_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/pixelumm_decoder_head_mps.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_decoder_profile.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_decoder_integrated:
-	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_decoder_profile_spec.cr $(ARGS)
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_tiled_gate_up_probe_spec.cr spec/pixelumm_decoder_probe_spec.cr spec/pixelumm_decoder_head_admission_spec.cr spec/pixelumm_head_probe_spec.cr spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_decoder_profile_spec.cr $(ARGS)
 
 .PHONY: pixelumm_decoder_block_probe pixelumm_decoder_two_block_probe pixelumm_decoder_four_block_probe pixelumm_decoder_eight_block_probe spec_pixelumm_decoder_block spec_pixelumm_two_block_probe spec_pixelumm_block_profile spec_pixelumm_memory_probe
 pixelumm_decoder_block_probe: $(BUILD_DIR)/pixelumm_decoder_block_probe
@@ -328,7 +328,7 @@ $(BUILD_DIR)/pixelumm_ffn_f32_kernel_probe: examples/pixelumm_ffn_f32_kernel_pro
 
 # The isolated diagnostic bridge includes production FFN builders; do not also
 # link PIXELUMM_MPS_OBJ or PIXELUMM_FFN_PROBE_OBJ into its executable.
-$(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)
+$(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_tiled_gate_up_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 

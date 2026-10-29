@@ -181,6 +181,7 @@ struct PixelUMMNativeIslands {
 @property(nonatomic) BOOL ffnF32;
 @property(nonatomic) BOOL sharedGateUpPrepared;
 @property(nonatomic) BOOL useSharedGateUp;
+@property(nonatomic) BOOL tiledGateUpPrepared;
 @property(nonatomic) BOOL softmaxPVPrepared;
 @property(nonatomic) BOOL useSoftmaxPV;
 @property(nonatomic) BOOL softmaxPVOutputOnlyPrepared;
@@ -196,6 +197,17 @@ struct PixelUMMNativeIslands {
 #endif
 @end
 @implementation PixelUMMDecoderPlan
+@end
+
+@interface PixelUMMTiledGateUp : NSObject
+@property(nonatomic, strong) PixelUMMDecoderPlan *plan;
+@property(nonatomic, strong) PixelUMMGraphStep *baselineGate;
+@property(nonatomic, strong) PixelUMMGraphStep *baselineUp;
+@property(nonatomic, strong) PixelUMMGraphStep *tiledGate;
+@property(nonatomic, strong) PixelUMMGraphStep *tiledUp;
+@property(nonatomic) BOOL active;
+@end
+@implementation PixelUMMTiledGateUp
 @end
 
 #if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
@@ -644,6 +656,92 @@ static PixelUMMGraphStep *pixel_linear_step(
       !transpose || !product || !bf16 || !reshaped) {
     pixel_set_ns_error(errorText, errorCapacity,
         [NSString stringWithFormat:@"unable to build PixelUMM linear graph %@", name]);
+    return nil;
+  }
+  return pixel_compile_step(device, graph, feeds, placeholders, inputData,
+      reshaped, outputBuffer, outputShape, name, errorText, errorCapacity);
+}
+
+// Diagnostic-only M-axis tiling. Operands retain the production BF16 bindings,
+// each cast and the weight transpose are shared across the statically sized
+// row slices, and every slice completes its full K reduction before the
+// existing BF16 output boundary is restored.
+static PixelUMMGraphStep *pixel_linear_row_tiled_step(
+    id<MTLDevice> device, id<MTLBuffer> inputBuffer, id<MTLBuffer> weightBuffer,
+    id<MTLBuffer> outputBuffer, uint32_t tokens, uint32_t inputWidth,
+    uint32_t outputWidth, NSString *name,
+    char *errorText, size_t errorCapacity, bool castOperandsToF32,
+    uint32_t rowTile) {
+  if (!device || !inputBuffer || !weightBuffer || !outputBuffer || !name ||
+      tokens == 0 || inputWidth == 0 || outputWidth == 0 || rowTile == 0 ||
+      rowTile >= tokens || !castOperandsToF32) {
+    pixel_set_error(errorText, errorCapacity,
+        "invalid PixelUMM row-tiled linear graph configuration");
+    return nil;
+  }
+
+  MPSGraph *graph = [MPSGraph new];
+  graph.options = MPSGraphOptionsNone;
+  NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
+  NSMutableArray *placeholders = [NSMutableArray array];
+  NSMutableArray *inputData = [NSMutableArray array];
+  NSArray *inputShape = pixel_shape({1, tokens, inputWidth});
+  NSArray *weightShape = pixel_shape({outputWidth, inputWidth});
+  NSArray *outputShape = pixel_shape({1, tokens, outputWidth});
+  MPSGraphTensor *input = pixel_add_feed(graph, feeds, placeholders, inputData,
+      inputBuffer, inputShape, MPSDataTypeBFloat16,
+      [name stringByAppendingString:@"_input"]);
+  MPSGraphTensor *weight = pixel_add_feed(graph, feeds, placeholders, inputData,
+      weightBuffer, weightShape, MPSDataTypeBFloat16,
+      [name stringByAppendingString:@"_weight"]);
+  MPSGraphTensor *inputF32 = input
+      ? [graph castTensor:input toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_input_f32"]] : nil;
+  MPSGraphTensor *weightF32 = weight
+      ? [graph castTensor:weight toType:MPSDataTypeFloat32
+          name:[name stringByAppendingString:@"_weight_f32"]] : nil;
+  MPSGraphTensor *flat = inputF32
+      ? [graph reshapeTensor:inputF32
+          withShape:pixel_shape({tokens, inputWidth})
+          name:[name stringByAppendingString:@"_flat"]] : nil;
+  MPSGraphTensor *transpose = weightF32
+      ? [graph transposeTensor:weightF32 dimension:0 withDimension:1
+          name:[name stringByAppendingString:@"_weight_transpose"]] : nil;
+  if (!input || !weight || !inputF32 || !weightF32 || !flat || !transpose) {
+    pixel_set_ns_error(errorText, errorCapacity,
+        [NSString stringWithFormat:@"unable to build PixelUMM row-tiled linear graph %@", name]);
+    return nil;
+  }
+
+  const NSUInteger chunkCount = NSUInteger((tokens - 1u) / rowTile) + 1u;
+  NSMutableArray<MPSGraphTensor *> *bf16Chunks =
+      [NSMutableArray arrayWithCapacity:chunkCount];
+  for (uint32_t start = 0; start < tokens;) {
+    const uint32_t length = std::min(rowTile, tokens - start);
+    MPSGraphTensor *rows = [graph sliceTensor:flat dimension:0 start:start
+        length:length name:[name stringByAppendingFormat:@"_rows_%u", start]];
+    MPSGraphTensor *product = rows
+        ? [graph matrixMultiplicationWithPrimaryTensor:rows
+            secondaryTensor:transpose
+            name:[name stringByAppendingFormat:@"_matmul_%u", start]] : nil;
+    MPSGraphTensor *bf16 = pixel_cast_bf16(graph, product,
+        [name stringByAppendingFormat:@"_bf16_%u", start]);
+    if (!rows || !product || !bf16) {
+      pixel_set_ns_error(errorText, errorCapacity,
+          [NSString stringWithFormat:@"unable to build PixelUMM row tile at M=%u", start]);
+      return nil;
+    }
+    [bf16Chunks addObject:bf16];
+    start += length;
+  }
+  MPSGraphTensor *joined = [graph concatTensors:bf16Chunks dimension:0
+      name:[name stringByAppendingString:@"_bf16_concat"]];
+  MPSGraphTensor *reshaped = joined
+      ? [graph reshapeTensor:joined withShape:outputShape
+          name:[name stringByAppendingString:@"_output"]] : nil;
+  if (!joined || !reshaped || bf16Chunks.count != chunkCount) {
+    pixel_set_ns_error(errorText, errorCapacity,
+        [NSString stringWithFormat:@"unable to assemble PixelUMM row-tiled output %@", name]);
     return nil;
   }
   return pixel_compile_step(device, graph, feeds, placeholders, inputData,
@@ -1940,6 +2038,199 @@ extern "C" void *gs_pixelumm_decoder_block_plan_create_with_ffn_f32_shared_gate_
       cosineHandle, sineHandle, weightHandles, coreHandles, captureHandles,
       captureMask, scratchHandles, maxQuery, maxKey, tileCount, ffnF32,
       prepareSharedGateUp, errorText, errorCapacity);
+}
+
+// Prepare two diagnostic M-axis tiled graphs without changing the active
+// baseline projections. Selection and release are host-side pointer changes;
+// the serialized owner must call them only while idle and after prior work has
+// drained. Preparation is limited to the first encode because plan state
+// records whether encoding has ever started.
+extern "C" void *gs_pixelumm_tiled_gate_up_prepare(
+    void *planHandle, int32_t rowTile,
+    char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || rowTile <= 0) {
+    pixel_set_error(errorText, errorCapacity,
+        "M-axis tiled gate/up requires a plan and positive row tile");
+    return nullptr;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      @try {
+        PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+        PixelUMMGraphStep *baselineGate = nil;
+        PixelUMMGraphStep *baselineUp = nil;
+        @synchronized(plan) {
+          if (!plan.ffnF32 || plan.encodingStarted ||
+              plan.dim != 4096u || plan.ffn != 12288u ||
+              (plan.tokens != 21120u && plan.tokens != 2048u) ||
+              uint32_t(rowTile) >= plan.tokens ||
+              plan.sharedGateUpPrepared || plan.useSharedGateUp ||
+              plan.sharedGateUpProjection || plan.tiledGateUpPrepared ||
+              !plan.gateProjection || !plan.upProjection ||
+              ![plan.steps containsObject:plan.gateProjection] ||
+              ![plan.steps containsObject:plan.upProjection]) {
+            pixel_set_error(errorText, errorCapacity,
+                "M-axis tiled gate/up requires an idle baseline F32 T21120/T2048 K4096 N12288 plan without shared gate/up");
+            return nullptr;
+          }
+          baselineGate = plan.gateProjection;
+          baselineUp = plan.upProjection;
+        }
+
+        uint64_t inputBytes = 0, weightBytes = 0, outputBytes = 0;
+        if (!pixel_product(plan.tokens, uint64_t(plan.dim) * 2u, &inputBytes) ||
+            !pixel_product(plan.ffn, uint64_t(plan.dim) * 2u, &weightBytes) ||
+            !pixel_product(plan.tokens, uint64_t(plan.ffn) * 2u, &outputBytes) ||
+            plan.core.count <= 7 || plan.weights.count <= 11 ||
+            !pixel_buffer(plan.core[1], plan.device, inputBytes) ||
+            !pixel_buffer(plan.weights[10], plan.device, weightBytes) ||
+            !pixel_buffer(plan.weights[11], plan.device, weightBytes) ||
+            !pixel_buffer(plan.core[6], plan.device, outputBytes) ||
+            !pixel_buffer(plan.core[7], plan.device, outputBytes)) {
+          pixel_set_error(errorText, errorCapacity,
+              "M-axis tiled gate/up plan buffers do not match BF16 K4096/N12288 geometry");
+          return nullptr;
+        }
+        NSArray<id<MTLBuffer>> *bindings = @[
+          plan.core[1], plan.weights[10], plan.weights[11],
+          plan.core[6], plan.core[7],
+        ];
+        for (NSUInteger i = 0; i < bindings.count; ++i) {
+          for (NSUInteger j = i + 1; j < bindings.count; ++j) {
+            if (!pixel_disjoint(bindings[i], bindings[j])) {
+              pixel_set_error(errorText, errorCapacity,
+                  "M-axis tiled gate/up bindings must be pairwise disjoint");
+              return nullptr;
+            }
+          }
+        }
+
+        PixelUMMGraphStep *tiledGate = pixel_linear_row_tiled_step(
+            plan.device, plan.core[1], plan.weights[10], plan.core[6],
+            plan.tokens, plan.dim, plan.ffn, @"tiled_gate_projection",
+            errorText, errorCapacity, true, uint32_t(rowTile));
+        PixelUMMGraphStep *tiledUp = tiledGate
+            ? pixel_linear_row_tiled_step(plan.device, plan.core[1],
+                plan.weights[11], plan.core[7], plan.tokens, plan.dim,
+                plan.ffn, @"tiled_up_projection", errorText, errorCapacity,
+                true, uint32_t(rowTile)) : nil;
+        if (!tiledGate || !tiledUp) return nullptr;
+
+        PixelUMMTiledGateUp *wrapper = [PixelUMMTiledGateUp new];
+        wrapper.plan = plan;
+        wrapper.baselineGate = baselineGate;
+        wrapper.baselineUp = baselineUp;
+        wrapper.tiledGate = tiledGate;
+        wrapper.tiledUp = tiledUp;
+        @synchronized(plan) {
+          if (plan.encodingStarted || plan.tiledGateUpPrepared ||
+              plan.sharedGateUpPrepared || plan.useSharedGateUp ||
+              plan.sharedGateUpProjection || plan.gateProjection != baselineGate ||
+              plan.upProjection != baselineUp) {
+            pixel_set_error(errorText, errorCapacity,
+                "M-axis tiled gate/up plan changed during preparation");
+            return nullptr;
+          }
+          wrapper.active = YES;
+          plan.tiledGateUpPrepared = YES;
+        }
+        return (__bridge_retained void *)wrapper;
+      } @catch (NSException *exception) {
+        pixel_set_ns_error(errorText, errorCapacity,
+            [NSString stringWithFormat:@"M-axis tiled gate/up preparation exception %@: %@",
+             exception.name, exception.reason]);
+        return nullptr;
+      }
+    }
+  }
+  pixel_set_error(errorText, errorCapacity,
+      "M-axis tiled gate/up requires macOS 14 or newer");
+  return nullptr;
+}
+
+// Call only from the serialized idle owner after the previous request's
+// terminal wait. encodingStarted is intentionally not a selection guard:
+// normal reuse encodes set it permanently after the first request.
+extern "C" int32_t gs_pixelumm_tiled_gate_up_select(
+    void *wrapperHandle, int32_t enabled,
+    char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!wrapperHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity,
+        "invalid M-axis tiled gate/up selection");
+    return -1;
+  }
+  @autoreleasepool {
+    @try {
+      PixelUMMTiledGateUp *wrapper =
+          (__bridge PixelUMMTiledGateUp *)wrapperHandle;
+      PixelUMMDecoderPlan *plan = wrapper.plan;
+      if (!wrapper.active || !plan || !wrapper.baselineGate ||
+          !wrapper.baselineUp || !wrapper.tiledGate || !wrapper.tiledUp) {
+        pixel_set_error(errorText, errorCapacity,
+            "M-axis tiled gate/up selection requires an active wrapper");
+        return -2;
+      }
+      @synchronized(plan) {
+        const BOOL baselineSelected =
+            plan.gateProjection == wrapper.baselineGate &&
+            plan.upProjection == wrapper.baselineUp;
+        const BOOL tiledSelected =
+            plan.gateProjection == wrapper.tiledGate &&
+            plan.upProjection == wrapper.tiledUp;
+        if (!wrapper.active || !plan.tiledGateUpPrepared ||
+            plan.sharedGateUpPrepared || plan.useSharedGateUp ||
+            plan.sharedGateUpProjection ||
+            (!baselineSelected && !tiledSelected)) {
+          pixel_set_error(errorText, errorCapacity,
+              "M-axis tiled gate/up selection found stale, shared, or foreign plan state");
+          return -3;
+        }
+        if (enabled) {
+          plan.gateProjection = wrapper.tiledGate;
+          plan.upProjection = wrapper.tiledUp;
+        } else {
+          plan.gateProjection = wrapper.baselineGate;
+          plan.upProjection = wrapper.baselineUp;
+        }
+        return 0;
+      }
+    } @catch (NSException *exception) {
+      pixel_set_ns_error(errorText, errorCapacity,
+          [NSString stringWithFormat:@"M-axis tiled gate/up selection exception %@: %@",
+           exception.name, exception.reason]);
+      return -4;
+    }
+  }
+}
+
+// The caller must drain the serialized chain before release. Restore the
+// original graph pair so no plan retains a pointer into the diagnostic wrapper.
+extern "C" void gs_pixelumm_tiled_gate_up_release(void *wrapperHandle) {
+  if (!wrapperHandle) return;
+  @autoreleasepool {
+    PixelUMMTiledGateUp *wrapper =
+        (__bridge_transfer PixelUMMTiledGateUp *)wrapperHandle;
+    PixelUMMDecoderPlan *plan = wrapper.plan;
+    if (!plan) {
+      wrapper.active = NO;
+      return;
+    }
+    @try {
+      @synchronized(plan) {
+        if (wrapper.active) {
+          plan.gateProjection = wrapper.baselineGate;
+          plan.upProjection = wrapper.baselineUp;
+          plan.tiledGateUpPrepared = NO;
+          wrapper.active = NO;
+        }
+      }
+    } @catch (NSException *exception) {
+      (void)exception;
+      wrapper.active = NO;
+    }
+  }
 }
 
 // Mode changes are host-side plan selection only. Callers must select only

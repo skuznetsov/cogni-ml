@@ -1,5 +1,132 @@
 # Hy-Nomas first native video frontier
 
+## Gate/up row tiling does not qualify as acceleration (2026-10-29)
+
+Status: VERIFIED for bounded saved-output parity, lifecycle/guard checks and
+failure to meet the declared speed-admission criterion. No stable speedup,
+slowdown, equivalence or production throughput claim is admitted. The ordinary
+MPS path remains the default. No diffusion or full generation ran.
+
+The preceding matched-pause profile identifies gate/up as a candidate family
+(13.3822 s of overlapping command intervals), not an exclusive shader cost.
+The new diagnostic partitions only M: separate gate/up graphs retain the full
+K=4096 F32 reduction, cast each result to BF16, concatenate rows in order and
+write the existing buffers. At J=21,120, M4096 covers five full tiles plus a
+640-row tail. Each projection has six matmul graph nodes instead of one; this
+does not establish the optimized GPU kernel count or its bandwidth cost.
+
+`pixelumm_ffn_isolated_probe --rows 21120 --row-tile 4096` uses the authenticated
+full-J FFN fixture, not repeated short rows. Its 24 normal GPU comparisons are
+finite and bitwise equal, including unchanged down controls; the NaN positive
+control rejects. Median gate/up device intervals are 371.139729 ms baseline
+and 372.344271 ms tiled, a descriptive 0.3246% regression rather than a win.
+No new named Metal buffer is introduced; opaque MPS temporaries remain owned
+by the backend.
+
+`pixelumm_decoder_integrated_probe --tiled-gate-up-rows 4096` prepares both graph
+pairs on all 36 plans before the first encode and retains both in all arms.
+The serialized owner selects only while the shared workspace is idle; a real
+in-flight selection attempt is rejected. Release restores the baseline pair.
+The original two gate/up graph calls per block, GPU weight banks, block scratch and
+direct block35-to-head buffer edge remain. Internal continuations increase:
+4,939 roots/request tiled versus 4,579 baseline. Rollback omits the new flag;
+the production inference selector is unchanged.
+
+The prospective CAUTION discriminator was at least 3% lower complete-request
+time in both serial orders, with strict correctness as a prerequisite. Each
+process has two warmups followed by four timed requests. Normal timed order is
+baseline/tiled/tiled/baseline; `--reverse-tiled-gate-up` reverses both warm and
+timed modes. All requests use identical input A and the same resident resources.
+API/continuation observers are off; memory telemetry remains on. The primary
+timer spans encoding through the existing terminal wait, including intervening
+memory telemetry and lifecycle checks, and excludes preparation and post-wait
+comparisons. It is a diagnostic latency measurement, not production throughput.
+
+| Order | Timed baseline requests, seconds | Timed tiled requests, seconds | Median reduction |
+| --- | --- | --- | ---: |
+| Normal | 84.561390, 50.566983 | 64.564609, 50.436531 | +14.8949% |
+| Reverse | 43.932217, 43.750964 | 44.655761, 42.603742 | +0.4832% |
+
+The reverse order fails 3%; the candidate does not qualify. Normal's apparent
+gain is heavily confounded by drift: the same baseline was 44.938757 s during
+warmup, then 84.561390 s and 50.566983 s. Do not pool controls across processes
+or discard the slow baseline to manufacture a stable estimate. These two
+samples per mode/order cannot establish a smaller gain or its absence.
+
+All 12 full-decoder requests pass 516 finite bitwise-equal retained upstream
+comparisons at unchanged atol=rtol=2e-5. Every request retains one terminal
+wait, zero tracked named encode allocations/preterminal activation reads and
+43 existing post-wait diagnostic reads. The oracle is authenticated saved
+Torch 2.6 MPS source-method output, not a fresh connected upstream run or an
+independent backend. Coverage is the 36 attention captures, block34/35 outputs
+and five head stages, not all overwritten intermediates.
+
+The next pre-recorder milestone follows the preceding terminal-wait return by
+50.001163..50.009773 s; the analyzer recomputes these intervals and lateness
+from raw timestamps, including cross-request links. This precedes recorder
+setup, rather than the exact first encode call. These are matched gaps, not
+50 seconds of idle sleep. In this mode `prepare_combined_attention=false`, so
+the reusable CPU comparison pair is absent (`diagnostic_cpu_scratch_bytes=0`).
+Both arms use the legacy per-capture host buffers and post-wait GC. The ready
+milestones occur 37.866824..45.590176 s after the previous wait. This policy is
+outside request timing but can affect the following request's host/device
+state. The old comment claiming pooled comparison arrays also applied here
+was inaccurate; it describes only prepared combined-attention diagnostics.
+The GPU workspace reuse and absence of encode-time activation readbacks are
+unaffected. This experiment does not isolate the cause of the drift.
+
+Normal's baseline warm-to-first-timed GPU-root envelope grows by 39.622502 s,
+and its interval union by 39.621598 s. Whole-request envelope-minus-union gaps
+remain only 2.60..3.54 ms across both orders. Thus the large change appears in
+GPU command intervals as well as host encoding, rather than only a CPU timer
+or terminal-wait transfer. These intervals do not prove active shader cycles,
+kernel identity, thermal throttling, bandwidth use or queue-admission causality.
+
+All 2,445 full-run guard samples pass the unchanged cache-aware 10% reserve,
+27.5 GiB process-group cap, 64 MiB swap-growth stop and 900 s/process deadline.
+Sampled peak footprint is 27.346103 GiB, minimum headroom 14.280060 GiB, positive
+swap growth zero. The unique named inventory remains 24,108,145,128 bytes.
+File-cache reclaimability and sampled bounds do not guarantee opaque transients
+or future fit. Both native processes exited normally; no model remains running.
+
+Executed DoD: release-build both probes, `make spec_pixelumm_decoder_integrated`
+(67 examples), the focused FFN/decoder/tiling specs (24 examples), full-J GPU
+isolation, then normal and reverse guarded full-decoder runs and strict audits.
+Six Python tests cover mode grouping, encode-only false wins, raw-timestamp
+inconsistency and canonical artifact-path binding. Four CLI negatives reject
+before device initialization. A separate CPU adversary check rejects 14
+in-memory report corruptions. Format/diff checks pass. The correlated Mini-Quad
+verdict is ROBUST within these numerical, guard and nonqualification claims;
+stable performance attribution remains VULNERABLE.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-gate-up-rows-20261029`.
+`results/gate-up-rows-analysis.json` SHA256
+`22c9ea1aa1abb21498dad4a6aa94a176317f808ad061bc77fe39712f1eeba181`
+pins the per-order reports, audits, receipts, 199 measured sources and binary.
+`results/root-adversary-cpu.json` SHA256
+`0e5e0edb59e62225f1e6fef37e14acd9b675ed5d370a10b32557e2c5fbbcd934`
+records the targeted CPU challenges. `results/final-cpu-checks.json` SHA256
+`8a90e5913bb23e3c177f8f2f0e45e78e843c71b68b1e833a41b32a513bdcaa44`
+retains commands, exit codes and output for the final 67/24 Crystal examples,
+six Python tests, format/diff checks and four pre-device CLI negatives.
+Measured source snapshots and build remain under the same root. After
+measurement, two full-line comments were corrected
+to describe the per-capture host-buffer policy accurately.
+`results/comment-only-annotation.json` SHA256
+`2e3ced87676ac0d82ad15300707733a735c3be55bc6a49c6bc361449302fdb5d`
+records the exact diff, equality of every noncomment line against both measured
+snapshots, the other 198 unchanged source pins and all unchanged build artifacts.
+The measured release binary remains SHA256
+`1d06a8e8f9fc192e3ccffaad69170e92280803b4064ffc3f8ed9e8cca431fdd0`.
+Runtime evidence refers to those archived sources and binary; this annotation
+is not a new live-source GPU audit. Refresh on scoped executable-source,
+artifact, fixture, weights, geometry/precision, lifetime, schedule,
+backend/device/toolchain or guard
+changes; admit memory afresh before replay. Do not extend a tile-size grid from
+this result. If reopening timing, first falsify diagnostic carryover in a short
+replicated FFN A/A with GPU checks retained and no per-capture CPU allocation/GC
+between measured samples; this is a proposed discriminator, not an acceleration.
+
 ## Matched-pause PixelUMM A/A and delayed roots (2026-10-29)
 
 Status: VERIFIED for bounded matched-spacing A/A, retained saved-output parity,

@@ -3,6 +3,7 @@ require "digest/sha256"
 require "../../src/ml/video/pixelumm_decoder_block_mps"
 require "./pixelumm_memory_probe"
 require "./hy_nomas_probe_instrumentation"
+require "./pixelumm_tiled_gate_up_probe"
 
 module PixelUMMFFNIsolatedProbe
   extend self
@@ -363,13 +364,15 @@ module PixelUMMFFNIsolatedProbe
     required
   end
 
-  def plan_order(reverse_warmups : Bool) : Array(String)
-    reverse_warmups ? PLAN_NAMES.reverse : PLAN_NAMES.dup
+  def plan_order(reverse_warmups : Bool, row_tile : Int32 = 0) : Array(String)
+    names = row_tile > 0 ? ["separate_gate", "separate_up", "tiled_gate", "tiled_up", "down"] : PLAN_NAMES.dup
+    reverse_warmups ? names.reverse : names
   end
 
-  def schedule(reverse_warmups : Bool, reverse_first : Bool) : Array(ScheduleEntry)
-    warmups = reverse_warmups ? ["shared", "separate"] : ["separate", "shared"]
-    measured = reverse_first ? ["shared", "separate", "separate", "shared"] : ["separate", "shared", "shared", "separate"]
+  def schedule(reverse_warmups : Bool, reverse_first : Bool, candidate_mode : String = "shared") : Array(ScheduleEntry)
+    raise ArgumentError.new("unknown isolated FFN candidate") unless {"shared", "tiled"}.includes?(candidate_mode)
+    warmups = reverse_warmups ? [candidate_mode, "separate"] : ["separate", candidate_mode]
+    measured = reverse_first ? [candidate_mode, "separate", "separate", candidate_mode] : ["separate", candidate_mode, candidate_mode, "separate"]
     (warmups.map_with_index { |mode, index| {index: index.to_i32, mode: mode, warmup: true} } +
       measured.map_with_index { |mode, index| {index: (index + 2).to_i32, mode: mode, warmup: false} })
   end
@@ -432,6 +435,11 @@ module PixelUMMFFNIsolatedProbe
         plan : Void*, command : Void*, error : UInt8*, capacity : LibC::SizeT,
       ) : Int32
       fun step_release = gs_pixelumm_ffn_isolated_step_release(plan : Void*) : Void
+      fun tiled_step_create = gs_pixelumm_ffn_isolated_tiled_step_create(
+        device : Void*, norm_input : Void*, product_input : Void*, gate_weight : Void*,
+        up_weight : Void*, down_weight : Void*, gate_output : Void*, up_output : Void*,
+        down_output : Void*, tokens : Int32, kind : Int32, row_tile : Int32, error : UInt8*, capacity : LibC::SizeT,
+      ) : Void*
     end
 
     class Owner
@@ -449,8 +457,9 @@ module PixelUMMFFNIsolatedProbe
       @tokens : Int32
 
       def initialize(@fixture : Fixture, maximum : Int64, reverse_warmups : Bool,
-                     @memory : PixelUMMMemoryProbe::Recorder)
+                     @memory : PixelUMMMemoryProbe::Recorder, @row_tile : Int32 = 0)
         @tokens = @fixture.metadata.tokens
+        PixelUMMTiledGateUpProbe.validate_rows!(@tokens, @row_tile) if @row_tile != 0
         @lifecycle = SubmissionLifecycle.new
         @resources = PixelUMMFFNIsolatedProbe.resource_bytes(@tokens)
         @named_bytes = PixelUMMFFNIsolatedProbe.validate_budget!(@tokens, maximum)
@@ -461,7 +470,7 @@ module PixelUMMFFNIsolatedProbe
           upload_fixture!
           initialize_outputs!
           @memory.emit("postupload", phase_bytes_kind: "owned_named_metal_bytes", phase_bytes: @named_bytes)
-          @plan_order = PixelUMMFFNIsolatedProbe.plan_order(reverse_warmups)
+          @plan_order = PixelUMMFFNIsolatedProbe.plan_order(reverse_warmups, @row_tile)
           @plan_order.each_with_index do |name, index|
             compile_plan!(name)
             @memory.emit("postcompile:#{name}", slot: index, phase_bytes_kind: "owned_named_metal_bytes", phase_bytes: @named_bytes)
@@ -505,6 +514,9 @@ module PixelUMMFFNIsolatedProbe
           encode_plan!(chain, "separate_up")
         when "shared"
           encode_plan!(chain, "shared_gate_up")
+        when "tiled"
+          encode_plan!(chain, "tiled_gate")
+          encode_plan!(chain, "tiled_up")
         else
           raise ArgumentError.new("unknown isolated FFN mode")
         end
@@ -636,24 +648,38 @@ module PixelUMMFFNIsolatedProbe
 
       private def compile_plan!(name : String) : Nil
         kind = case name
-               when "separate_gate"  then 0
-               when "separate_up"    then 1
-               when "shared_gate_up" then 2
-               when "down"           then 3
-               else                       raise ArgumentError.new("unknown isolated FFN graph name")
+               when "separate_gate", "tiled_gate" then 0
+               when "separate_up", "tiled_up"     then 1
+               when "shared_gate_up"              then 2
+               when "down"                        then 3
+               else                                    raise ArgumentError.new("unknown isolated FFN graph name")
                end
         error = Bytes.new(1024, 0_u8)
-        plan = PixelUMMFFNIsolatedFFI.step_create(
-          ML::Metal::Device.instance.device_handle,
-          buffer("input.post_attn_norm").handle,
-          buffer("input.product").handle,
-          buffer("weight.gate").handle,
-          buffer("weight.up").handle,
-          buffer("weight.down").handle,
-          buffer("candidate.gate").handle,
-          buffer("candidate.up").handle,
-          buffer("candidate.down").handle,
-          @tokens, kind, error.to_unsafe, error.size)
+        plan = if name.starts_with?("tiled_")
+                 PixelUMMFFNIsolatedFFI.tiled_step_create(
+                   ML::Metal::Device.instance.device_handle,
+                   buffer("input.post_attn_norm").handle,
+                   buffer("input.product").handle,
+                   buffer("weight.gate").handle,
+                   buffer("weight.up").handle,
+                   buffer("weight.down").handle,
+                   buffer("candidate.gate").handle,
+                   buffer("candidate.up").handle,
+                   buffer("candidate.down").handle,
+                   @tokens, kind, @row_tile, error.to_unsafe, error.size)
+               else
+                 PixelUMMFFNIsolatedFFI.step_create(
+                   ML::Metal::Device.instance.device_handle,
+                   buffer("input.post_attn_norm").handle,
+                   buffer("input.product").handle,
+                   buffer("weight.gate").handle,
+                   buffer("weight.up").handle,
+                   buffer("weight.down").handle,
+                   buffer("candidate.gate").handle,
+                   buffer("candidate.up").handle,
+                   buffer("candidate.down").handle,
+                   @tokens, kind, error.to_unsafe, error.size)
+               end
         raise "isolated FFN graph preparation #{name}: #{String.new(error.to_unsafe)}" if plan.null?
         @plans[name] = plan
       end

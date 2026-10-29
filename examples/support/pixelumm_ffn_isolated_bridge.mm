@@ -16,6 +16,8 @@
 @implementation PixelUMMFFNIsolatedPlan
 @end
 
+extern "C" void gs_pixelumm_ffn_isolated_step_release(void *planHandle);
+
 enum PixelUMMFFNIsolatedKind : int32_t {
   PixelUMMFFNIsolatedSeparateGate = 0,
   PixelUMMFFNIsolatedSeparateUp = 1,
@@ -138,6 +140,63 @@ extern "C" void *gs_pixelumm_ffn_isolated_step_create(
   }
 }
 
+// Isolated gate/up-only row-tiled variant. Reuse the established argument,
+// device, extent, storage, and alias validation, then replace the temporary
+// baseline step before returning the retained plan.
+extern "C" void *gs_pixelumm_ffn_isolated_tiled_step_create(
+    void *deviceHandle, void *normInputHandle, void *productInputHandle,
+    void *gateWeightHandle, void *upWeightHandle, void *downWeightHandle,
+    void *gateOutputHandle, void *upOutputHandle, void *downOutputHandle,
+    int32_t tokens, int32_t kind, int32_t rowTile,
+    char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (rowTile <= 0 || (tokens != 2048 && tokens != 21120) ||
+      rowTile >= tokens ||
+      (kind != PixelUMMFFNIsolatedSeparateGate &&
+       kind != PixelUMMFFNIsolatedSeparateUp)) {
+    pixel_set_error(errorText, errorCapacity,
+        "isolated row-tiled PixelUMM FFN requires gate/up kind and 0 < rowTile < tokens");
+    return nullptr;
+  }
+
+  void *handle = gs_pixelumm_ffn_isolated_step_create(
+      deviceHandle, normInputHandle, productInputHandle, gateWeightHandle,
+      upWeightHandle, downWeightHandle, gateOutputHandle, upOutputHandle,
+      downOutputHandle, tokens, kind, errorText, errorCapacity);
+  if (!handle) return nullptr;
+
+  @autoreleasepool {
+    @try {
+      PixelUMMFFNIsolatedPlan *plan =
+          (__bridge PixelUMMFFNIsolatedPlan *)handle;
+      id<MTLBuffer> input = (__bridge id<MTLBuffer>)normInputHandle;
+      id<MTLBuffer> weight = (__bridge id<MTLBuffer>)(
+          kind == PixelUMMFFNIsolatedSeparateGate
+              ? gateWeightHandle : upWeightHandle);
+      id<MTLBuffer> output = (__bridge id<MTLBuffer>)(
+          kind == PixelUMMFFNIsolatedSeparateGate
+              ? gateOutputHandle : upOutputHandle);
+      NSString *name = kind == PixelUMMFFNIsolatedSeparateGate
+          ? @"tiled_gate_projection" : @"tiled_up_projection";
+      PixelUMMGraphStep *step = pixel_linear_row_tiled_step(
+          plan.device, input, weight, output, uint32_t(tokens), 4096u,
+          12288u, name, errorText, errorCapacity, true, uint32_t(rowTile));
+      if (!step) {
+        gs_pixelumm_ffn_isolated_step_release(handle);
+        return nullptr;
+      }
+      plan.step = step;
+      return handle;
+    } @catch (NSException *exception) {
+      pixel_set_ns_error(errorText, errorCapacity,
+          [NSString stringWithFormat:@"isolated row-tiled PixelUMM FFN preparation exception %@: %@",
+           exception.name, exception.reason]);
+      gs_pixelumm_ffn_isolated_step_release(handle);
+      return nullptr;
+    }
+  }
+}
+
 extern "C" int32_t gs_pixelumm_ffn_isolated_step_encode(
     void *planHandle, void *commandBufferHandle,
     char *errorText, size_t errorCapacity) {
@@ -186,6 +245,14 @@ extern "C" void *gs_pixelumm_ffn_isolated_step_create(
     int32_t, int32_t, char *errorText, size_t errorCapacity) {
   pixel_set_error(errorText, errorCapacity,
                   "isolated PixelUMM FFN graph requires macOS 14 or newer");
+  return nullptr;
+}
+
+extern "C" void *gs_pixelumm_ffn_isolated_tiled_step_create(
+    void *, void *, void *, void *, void *, void *, void *, void *, void *,
+    int32_t, int32_t, int32_t, char *errorText, size_t errorCapacity) {
+  pixel_set_error(errorText, errorCapacity,
+                  "isolated row-tiled PixelUMM FFN graph requires macOS 14 or newer");
   return nullptr;
 }
 extern "C" int32_t gs_pixelumm_ffn_isolated_step_encode(
