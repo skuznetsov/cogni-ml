@@ -39,6 +39,24 @@ module PixelUMMDecoderProbe
     arms
   end
 
+  # Phase localization only: same input, both observer-off warm modes, profiled
+  # crossover, then observer-off tails. Reverse the full mode assignment in a
+  # separate process. Off controls reveal drift but do not calibrate overhead.
+  def combined_attention_profile_schedule(reverse : Bool = false) : Array(RequestArm)
+    modes = [true, false, false, true, true, false, false, true]
+    modes.map_with_index do |mode, index|
+      kind = if index < 2
+               "a_warm_off_#{index}"
+             elsif index < 6
+               "a_profile_#{index - 2}"
+             else
+               "a_late_off_#{index - 6}"
+             end
+      RequestArm.new(kind, false, index < 2, 2 <= index < 6,
+        false, reverse ? !mode : mode)
+    end
+  end
+
   # Run the candidate first, before baseline-correct capture bytes can exist.
   # Both graphs are warmed before the timed ABBA pair. The alternate-input
   # gates are separately poisoned for each mode and excluded from timing claims.

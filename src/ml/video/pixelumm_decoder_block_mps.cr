@@ -476,6 +476,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter scale_softmax_prepared : Bool = false
     getter scale_softmax : Bool = false
     getter profiled_shared_gate_up : Bool = false
+    getter profiled_fused_kv_gather : Bool = false
+    getter profiled_scale_softmax : Bool = false
 
     @cosine : ML::MetalBuffer
     @sine : ML::MetalBuffer
@@ -855,6 +857,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
       validate_encode_mode!(profile: profile, api_profile_enabled: chain.api_profile_enabled?)
       @profiled_encode = false
       @profiled_shared_gate_up = false
+      @profiled_fused_kv_gather = false
+      @profiled_scale_softmax = false
       started = Time.instant
       @workspace.not_nil!.submit_encode!(@slot, chain) do
         chain.encoder
@@ -885,6 +889,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
           @attention_graph_encodes = @local_attention_tile_count * 3
           @profiled_encode = profile
           @profiled_shared_gate_up = profile && @shared_gate_up
+          @profiled_fused_kv_gather = profile && @fused_kv_gather
+          @profiled_scale_softmax = profile && @scale_softmax
           @last_encode_host_seconds = (Time.instant - started).total_seconds
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")

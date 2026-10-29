@@ -2,6 +2,22 @@ require "spec"
 require "../examples/support/pixelumm_decoder_probe"
 
 describe PixelUMMDecoderProbe do
+  it "profiles combined attention in both orders with poisoned off warmups and late off controls" do
+    normal = PixelUMMDecoderProbe.combined_attention_profile_schedule
+    reverse = PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse: true)
+    normal.size.should eq(8)
+    normal.map(&.profile).should eq([false, false, true, true, true, true, false, false])
+    normal.map(&.combined_attention).should eq([true, false, false, true, true, false, false, true])
+    reverse.map(&.combined_attention).should eq(normal.map { |arm| !arm.combined_attention })
+    reverse.map(&.profile).should eq(normal.map(&.profile))
+    normal.map(&.poisoned).should eq([true, true, false, false, false, false, false, false])
+    reverse.map(&.poisoned).should eq(normal.map(&.poisoned))
+    normal.none?(&.alternate).should be_true
+    normal.none?(&.shared_gate_up).should be_true
+    normal.map(&.kind).uniq.size.should eq(8)
+    normal[2, 4].map(&.kind).should eq((0...4).map { |i| "a_profile_#{i}" })
+  end
+
   it "warms both gate/up modes before same-input ABBA and poisoned alternate-input controls" do
     arms = PixelUMMDecoderProbe.shared_gate_up_schedule
     arms.size.should eq(8)

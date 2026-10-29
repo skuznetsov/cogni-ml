@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-ORDER-LOCALIZATION-2026-10-29] Drift appears inside MPS continuations; ordinal order alone does not explain it
+
+- VERIFIED bounded opt-in full-J 36-block plus head localization: two serial
+  same-input eight-request schedules, off warm/tails and profiled ABBA/BAAB.
+  All 16 requests pass 688 finite bitwise-equal retained saved-upstream gates
+  at unchanged 2e-5, with one wait, direct GPU handoff, zero tracked named
+  encode allocations/preterminal reads and 43 existing post-wait diagnostics.
+  Source/binary/objects/fixtures are identical across runs. This is not fresh
+  independent-backend inference, internal probability parity or generation.
+- Normal baseline request2 to request5 grows 42.792485 to 60.195153 s; attention
+  host marker grows 16.723315 s (96.096% of total increase), almost entirely
+  inside nested MPS continuation calls. Earlier-root GPU intervals cover
+  99.98794/99.98795% of raw attention continuation wall in normal/reverse runs;
+  caller CPU totals are only 0.140415/0.121149 s. Join excludes the submitted
+  root and uses the existing 2 us clock bound. This locates waiting, not an
+  exclusive kernel cost, exact device-state cause or our bookkeeping lock.
+- Reverse combined profiles stay 39.862891/40.381760 s; baseline profiles
+  42.345675/42.584312 s. A simple later-is-slower explanation is contradicted.
+  The mode association survives reversal, but one 60.195153 s baseline outlier
+  and run-state interactions leave stable speed/physical attribution
+  VULNERABLE. FFN host spans cannot bound FFN GPU work. Off-timer comparisons
+  take about 36 s and can affect device state; they do not calibrate profiling.
+  Next falsifier: fixed-mode A/A with matched spacing and kernel attribution.
+- All 2,612 guard samples pass the 27.5 GiB cap/10% reserve/64 MiB swap/900 s
+  bounds: peak 26.347140 GiB, min headroom 19.517944 GiB, swap growth0. The old
+  headroom label is wrong; audited arithmetic excludes duplicate speculative
+  pages. These are sampled bounds, not future-fit or opaque-transient bounds.
+  Release, 62 Crystal examples, four Python tests/15 damaged reports, eight
+  integrity negatives, three CLI negatives and format/freshness checks pass.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-order-profile-20261029;
+  results/integrity-final.json SHA 37b3b84cad62fe08540b22e8e0bb138b6e976c2e83fcefb42fdc8cbba8d2bd3c;
+  results/analysis-final.json SHA 13f8bb895f0033e11877b1489540016739bf164091f86bb50cd88c5f59394cce.
+  Return docs/hy-nomas-generation-frontier.md. Defaults remain off; rollback
+  omits profile mode. Refresh on scoped source/artifact, fixture, geometry,
+  precision, schedule/lifetime, clock/backend/device/toolchain or guard change;
+  each new process requires live admission. No full generation was run.
+
 ### [LM-HY-NOMAS-PIXELUMM-COMBINED-FULL-2026-10-29] Full decoder combined attention is numerically exact; timing remains order-sensitive
 
 - VERIFIED bounded opt-in T6/H44/W80/J21,120 36-block PixelUMM plus head:

@@ -36,6 +36,8 @@ module ML::Video
     getter root_profile : MPSCommandPhaseProfile
     getter api_profile : MPSAPIProfile
     getter shared_gate_up : Bool
+    getter fused_kv_gather : Bool
+    getter scale_softmax : Bool
 
     private def initialize(@blocks : Array(PixelUMMDecoderBlockPhaseTiming),
                            @aggregate_phase_wall_seconds : Hash(String, Float64),
@@ -48,7 +50,9 @@ module ML::Video
                            @roots : Array(MPSCommandRootTiming),
                            @root_profile : MPSCommandPhaseProfile,
                            @api_profile : MPSAPIProfile,
-                           @shared_gate_up : Bool)
+                           @shared_gate_up : Bool,
+                           @fused_kv_gather : Bool,
+                           @scale_softmax : Bool)
     end
 
     def self.build(block_markers : Array(Array(PixelUMMBlockPhaseMarker)),
@@ -58,11 +62,16 @@ module ML::Video
                    roots : Array(MPSCommandRootTiming),
                    native_duration_sum_seconds : Float64,
                    api_profile : MPSAPIProfile,
-                   shared_gate_up : Bool = false) : self
+                   shared_gate_up : Bool = false,
+                   fused_kv_gather : Bool = false,
+                   scale_softmax : Bool = false) : self
       unless !block_markers.empty? && block_markers.size == tile_counts.size
         raise ArgumentError.new("PixelUMM decoder profile requires one positive tile count per block")
       end
       raise ArgumentError.new("PixelUMM decoder profile requires command roots") if roots.empty?
+      if fused_kv_gather != scale_softmax
+        raise ArgumentError.new("PixelUMM combined attention profile requires fused K/V gather and scale/softmax together")
+      end
       tile_counts.each do |count|
         raise ArgumentError.new("PixelUMM decoder attention tile counts must be positive") unless count > 0
       end
@@ -134,7 +143,7 @@ module ML::Video
       new(blocks, aggregate_wall, aggregate_cpu, head_start_root_count,
         head_end_root_count, root_candidates, candidate_duration_sums,
         definite_duration_sums, roots, whole_chain, api_profile,
-        shared_gate_up)
+        shared_gate_up, fused_kv_gather, scale_softmax)
     end
 
     private def self.validate_markers!(markers : Array(PixelUMMBlockPhaseMarker),
@@ -180,6 +189,8 @@ module ML::Video
                                            tile_counts : Array(Int32),
                                            root_count : Int32,
                                            shared_gate_up : Bool) : Nil
+      # Both combined-attention selectors change Metal dispatches, not the
+      # three Graph encodes per tile (QK, softmax, PV) counted below.
       expected_graph_calls = {
         0 => 5_u64,
         1 => 9_u64 * block_count.to_u64,
@@ -228,6 +239,8 @@ module ML::Video
         json.field "block_count", @blocks.size
         json.field "ffn_graph_topology",
           @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
+        json.field "fused_kv_gather", @fused_kv_gather
+        json.field "scale_softmax", @scale_softmax
         json.field "blocks" do
           json.array do
             @blocks.each do |block|

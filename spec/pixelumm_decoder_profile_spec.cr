@@ -90,10 +90,14 @@ private def decoder_profile_valid_inputs
 end
 
 private def decoder_profile_build(block_markers, tile_counts, roots, api,
-                                  shared_gate_up : Bool = false)
+                                  shared_gate_up : Bool = false,
+                                  fused_kv_gather : Bool = false,
+                                  scale_softmax : Bool = false)
   ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers, tile_counts,
     9, roots.size, roots, roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }, api,
-    shared_gate_up: shared_gate_up)
+    shared_gate_up: shared_gate_up,
+    fused_kv_gather: fused_kv_gather,
+    scale_softmax: scale_softmax)
 end
 
 describe ML::Video::PixelUMMDecoderPhaseProfile do
@@ -152,6 +156,8 @@ describe ML::Video::PixelUMMDecoderPhaseProfile do
     json["root_profile"]["union_seconds"].as_f.should eq(6.0)
     json["phase_root_duration_sum_semantics"].as_s.should contain("non-additive")
     json["ffn_graph_topology"].as_s.should eq("separate_gate_up")
+    json["fused_kv_gather"].as_bool.should be_false
+    json["scale_softmax"].as_bool.should be_false
     json["api_profile"]["phases"].as_a.size.should eq(6)
     json["api_profile"]["phases"][0]["operations"]["graph_encode"]["count"].as_i.should eq(5)
   end
@@ -258,6 +264,54 @@ describe ML::Video::PixelUMMDecoderPhaseProfile do
     end
     expect_raises(ArgumentError) do
       decoder_profile_build(block_markers, tile_counts, roots, mixed_api)
+    end
+  end
+
+  it "profiles the paired combined attention selectors at integrated geometry" do
+    block_count = 36
+    tiles_per_block = 60
+    tile_counts = Array(Int32).new(block_count, tiles_per_block)
+    block_markers = Array(Array(ML::Video::PixelUMMBlockPhaseMarker)).new(block_count) do |slot|
+      start_cursor = 1 + slot.to_i32 * 10
+      cursors = Array(Int32).new(11) { |index| start_cursor + index.to_i32 }
+      decoder_profile_markers(cursors)
+    end
+    roots = decoder_profile_roots(361)
+    api = decoder_profile_api(block_count, tile_counts, roots.size)
+    duration = roots.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }
+
+    profile = ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers,
+      tile_counts, 361, roots.size, roots, duration, api,
+      fused_kv_gather: true, scale_softmax: true)
+
+    profile.fused_kv_gather.should be_true
+    profile.scale_softmax.should be_true
+    profile.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
+      .operations["graph_encode"].count.should eq(6_480_u64)
+    total_graph_calls = profile.api_profile.phases.sum do |phase|
+      phase.operations["graph_encode"].count
+    end
+    total_graph_calls.should eq(7_025_u64)
+
+    json = JSON.parse(profile.to_json)
+    json["fused_kv_gather"].as_bool.should be_true
+    json["scale_softmax"].as_bool.should be_true
+    json["api_profile"]["phases"].as_a[2]["operations"]["graph_encode"]["count"]
+      .as_i.should eq(6_480)
+
+    wrong_graph_count = decoder_profile_api(block_count, tile_counts,
+      roots.size, graph_attention_override: 6_479_u64)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers, tile_counts,
+        361, roots.size, roots, duration, wrong_graph_count,
+        fused_kv_gather: true, scale_softmax: true)
+    end
+    { {true, false}, {false, true} }.each do |fused, scaled|
+      expect_raises(ArgumentError) do
+        ML::Video::PixelUMMDecoderPhaseProfile.build(block_markers, tile_counts,
+          361, roots.size, roots, duration, api,
+          fused_kv_gather: fused, scale_softmax: scaled)
+      end
     end
   end
 end

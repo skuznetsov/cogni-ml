@@ -1,5 +1,130 @@
 # Hy-Nomas first native video frontier
 
+## Combined-attention order localization (2026-10-29)
+
+Status: VERIFIED for bounded host-phase/API localization, retained saved-output
+parity and sampled memory fit. The physical cause of the timing drift and a
+stable production speedup remain unresolved. Production selectors stay off;
+there was no diffusion or full generation.
+
+`pixelumm_decoder_integrated_probe --profile-combined-attention` adds a separate
+eight-request diagnostic on authenticated input A. Both modes warm with poisoned
+scratch and profiling off; the next four requests use profiled ABBA, followed
+by two unprofiled tails. A second serial process reverses every mode assignment.
+Shared gate/up stays disabled. Completed root intervals are collected after the
+existing terminal wait on all eight requests; phase wall/thread CPU, API and
+continuation records are collected only on the middle four. Exact graph counts
+and all 36 latched per-Plan selectors guard against fusion misattribution.
+The prospective discriminator was whether the difference followed the mode,
+ordinal position, or broad continuation waiting with little caller CPU.
+
+The following seconds are observer-on host measurements, not kernel timings:
+
+| Process/request | Mode | Whole request | Attention marker | Attention continuation API wall | Continuation thread CPU |
+| --- | --- | ---: | ---: | ---: | ---: |
+| normal-1/2 | baseline | 42.792485 | 40.050632 | 39.841887 | 0.035886 |
+| normal-1/3 | combined | 39.870393 | 37.603717 | 37.400612 | 0.035003 |
+| normal-1/4 | combined | 39.832005 | 37.566830 | 37.352387 | 0.037410 |
+| normal-1/5 | baseline | 60.195153 | 56.773947 | 56.536751 | 0.040737 |
+| reverse-1/2 | combined | 40.381760 | 38.068375 | 37.888100 | 0.032238 |
+| reverse-1/3 | baseline | 42.584312 | 39.855497 | 39.661136 | 0.033747 |
+| reverse-1/4 | baseline | 42.345675 | 39.654472 | 39.471536 | 0.032657 |
+| reverse-1/5 | combined | 39.862891 | 37.602929 | 37.427409 | 0.030485 |
+
+The largest same-mode drift is normal baseline request2 to request5:
+whole-request wall grows 17.402668 s, attention marker wall 16.723315 s
+(96.096% of that change), and nested continuation wall 16.694864 s.
+Attention marker CPU grows only 0.033059 s. All 36 block host spans increase;
+this is not a single early/late block. FFN gate/up plus down marker wall changes
+0.973432 to 1.204150 s, and terminal wait 0.921548 to 1.233585 s. The dominant
+change appears while encoding attention, inside the MPS continuation call.
+Attention graph-encode wall after excluding nested continuations is 0.157588 to
+0.208488 s across these requests. Inclusive graph and nested continuation
+spans must not be added together.
+
+The raw Mach trace brackets `[super commitAndContinue]`; our root bookkeeping
+lies outside that span. Joining it to GPU root intervals excludes the root
+being committed and unions intersections with earlier roots. Earlier-root
+intervals cover 99.98794%/99.98795% of attention continuation wall in normal/
+reverse processes under the existing 2 microsecond clock bound. Raw attention
+continuation wall sums are 171.118798/154.436725 s, while caller thread CPU sums
+are 0.140415/0.121149 s. This supports waiting during previously submitted GPU
+work, not CPU instruction cost of encoding or our bookkeeping locks. It does
+not identify the GPU kernel responsible, distinguish bandwidth/compute/thermal
+or other scheduling effects, or prove exclusive GPU busy time. A host attention
+span can wait for preceding FFN work; the small FFN host markers do not bound
+FFN GPU cost. Parent/depth checks are syntactic because not every graph API
+scope is exported; callback observation time is not exact GPU completion time.
+
+All profiled combined arms remain 39.832005 to 40.381760 s at both ends/orders.
+Three baseline controls are 42.345675 to 42.792485 s; the fourth is 60.195153 s.
+Reverse request5 is fast, contradicting a simple monotonically later-is-slower
+explanation. This is a repeatable mode association in these two profile runs,
+not causal separation of the selector from run-state interactions. The normal
+unprofiled tails remain shifted at 49.432697 s baseline and 42.480520 s combined.
+Off warm/tail controls do not calibrate observer overhead. Every request has
+4,579 roots; every profile has 6,480 attention graph encodes and 3,960 attention
+continuations. Whole-chain root unions track the broad wall shift; shared
+phase candidate sums are non-additive and do not attribute individual kernels.
+
+Existing memory-event clocks also expose substantial off-timer observer work:
+after the first request, the 43-capture comparison span is 36.023 to 36.183 s.
+Profile extraction is about 48 to 50 ms when enabled versus 6 to 8 ms off;
+post-diagnostic GC spans are 1.090 to 4.088 ms. These spans include recorder
+overhead and are not instrumented GC stop-time or isolated comparator timings.
+They cannot directly explain 17.4 s inside request timing, but the long gaps
+can change device state and limit extrapolation to uninterrupted production.
+
+Both processes return zero with identical 197 measured source files, release
+binary, objects and fixtures. All 16 requests pass 688 finite bitwise-equal
+retained saved-upstream comparisons at unchanged atol=rtol=2e-5. They preserve
+the direct block35/head GPU handoff, one terminal wait, zero tracked named
+encode allocations/preterminal activation reads and the existing 43 post-wait
+diagnostic reads, using the same 330 MiB host comparison pair. Retained coverage
+is 36 attention outputs, block34/35 outputs and five head stages, not all
+overwritten early outputs or internal F32 probabilities. Saved upstream MPS
+controls are not fresh connected independent-backend inference.
+
+All 2,612 guard samples pass the unchanged 27.5 GiB cap, cache-aware 10% reserve,
+64 MiB positive-swap-growth stop and 900 s per-process deadline. Maximum sampled
+footprint is 26.347140 GiB, minimum headroom 19.517944 GiB, observed swap growth
+zero. The historical headroom formula label remains wrong; pinned code and
+samples use `free_spec - speculative + file_backed`, without double counting
+speculative pages. Sampling does not bound opaque MPS transients or future fit.
+Native processes have ended.
+
+DoD executed: release build; 62 focused Crystal examples; four Python analysis
+tests including 15 corrupted-report controls; eight integrity corruptions;
+three incompatible-CLI rejection controls on the measured binary; format,
+diff and build-freshness checks. `run_integrated.py normal-1` and `reverse-1`
+execute the serial native requests. `audit_integrity.py --label normal-1
+--label reverse-1 --output results/integrity-final.json` authenticates source,
+binary, fixture, receipt, report, lifecycle and guard identities. The checked-in
+`examples/support/analyze_pixelumm_order_profile.py --report
+results/normal-1.json --report results/reverse-1.json --output
+results/analysis-final.json` recomputes phase, API, root-overlap and observer
+gaps; it does not itself authenticate execution receipts or assert bitwise
+parity. Correlated Mini-Quad reviews are not independent backend evidence.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-order-profile-20261029/`.
+Integrity index `results/integrity-final.json` SHA256:
+`37b3b84cad62fe08540b22e8e0bb138b6e976c2e83fcefb42fdc8cbba8d2bd3c`.
+Analysis `results/analysis-final.json` SHA256:
+`13f8bb895f0033e11877b1489540016739bf164091f86bb50cd88c5f59394cce`.
+Analyzer source SHA256:
+`2933ce822cffa30accaa3e5d03a50a60b904f1d19607ffe9f36d57a822f948c4`.
+External integrity auditor source SHA256:
+`84046dfc6aa7d22681bac5af12cb0501f402b69a2ff0c9c1eba0d8009e783a54`.
+Measured release binary SHA256:
+`b5e501416d6b69685a199df8d2414455a8b4c955a33f6710e5533ce690aeffa5`.
+Next discriminator: fixed-mode A/A with matched between-request spacing and
+kernel-level GPU attribution of the delayed roots. Do not optimize host locks
+or promote a stable speed claim from phase wall alone. Rollback omits the new
+profile flag. Refresh on scoped source/artifact, fixture, geometry/precision,
+schedule/lifetime, clock, device/backend/toolchain or guard changes; each new
+process requires live admission. Earlier unprofiled epochs below are not pooled.
+
 ## Combined attention on 36 PixelUMM blocks and head (2026-10-29)
 
 Status: VERIFIED for the bounded opt-in diagnostic, saved-output parity and

@@ -12,6 +12,7 @@ profile_variance = false
 compare_shared_gate_up = false
 profile_shared_gate_up = false
 compare_combined_attention = false
+profile_combined_attention = false
 reverse_combined_attention = false
 correctness_only = false
 OptionParser.parse do |parser|
@@ -33,6 +34,7 @@ OptionParser.parse do |parser|
   parser.on("--compare-shared-gate-up", "Warm both F32 graph modes, unprofiled ABBA and two poisoned-input gates") { compare_shared_gate_up = true }
   parser.on("--profile-shared-gate-up", "Six same-input shared/baseline phase controls; no generation") { profile_shared_gate_up = true }
   parser.on("--compare-combined-attention", "Both inputs/modes upstream gates, then unprofiled combined K/V + scale/softmax ABBA") { compare_combined_attention = true }
+  parser.on("--profile-combined-attention", "Same-input phase crossover with off warm/tail controls; no generation") { profile_combined_attention = true }
   parser.on("--reverse-combined-attention", "Reverse both warm and timed combined-attention orders") { reverse_combined_attention = true }
   parser.on("--correctness-only", "Only the four poisoned combined-attention gates") { correctness_only = true }
 end
@@ -40,9 +42,10 @@ unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
        0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
-       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention) || repeats == 1) &&
-       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention}.count(true) <= 1 &&
-       (!(reverse_combined_attention || correctness_only) || compare_combined_attention)
+       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention) || repeats == 1) &&
+       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention}.count(true) <= 1 &&
+       (!reverse_combined_attention || compare_combined_attention || profile_combined_attention) &&
+       (!correctness_only || compare_combined_attention)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
 raise ArgumentError.new("integrated report must be absolute") unless Path[report].absolute?
@@ -61,7 +64,10 @@ preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
 shared_modes = compare_shared_gate_up || profile_shared_gate_up
-schedule = if compare_combined_attention
+attention_modes = compare_combined_attention || profile_combined_attention
+schedule = if profile_combined_attention
+             PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse_combined_attention)
+           elsif compare_combined_attention
              PixelUMMDecoderProbe.combined_attention_schedule(reverse_combined_attention, correctness_only)
            elsif profile_shared_gate_up
              PixelUMMDecoderProbe.shared_gate_up_profile_schedule
@@ -91,7 +97,7 @@ begin
   session = PixelUMMDecoderProbe::Session.new(fixture, cache,
     max_named_bytes: budget, phase_observer: observer,
     prepare_shared_gate_up: shared_modes,
-    prepare_combined_attention: compare_combined_attention)
+    prepare_combined_attention: attention_modes)
   preparation_seconds = (Time.instant - start).total_seconds
   named_bytes, block_bytes = session.named_bytes, session.block_named_bytes
   head_owned_bytes, head_weight_bytes = session.head_owned_named_bytes, session.head_weight_named_bytes
@@ -105,7 +111,7 @@ begin
   STDERR.puts "Integrated PixelUMM admitted #{named_bytes} unique named bytes, full J=21120"
   current_alternate = false
   head_poison_count = 0
-  segments_by_mode = {} of Bool => Int32
+  segments_by_mode = {} of Tuple(Bool, Bool) => Int32
   schedule.each_with_index do |arm, request|
     poisoned = arm.poisoned
     if arm.alternate != current_alternate
@@ -123,11 +129,11 @@ begin
       observer.emit("after_poisoned_replay_input", request: request)
     end
     session.use_shared_gate_up!(arm.shared_gate_up) if shared_modes
-    session.use_combined_attention!(arm.combined_attention) if compare_combined_attention
+    session.use_combined_attention!(arm.combined_attention) if attention_modes
     unless session.blocks.plans.all? { |plan| plan.shared_gate_up == arm.shared_gate_up }
       raise "integrated gate/up selection must cover every block"
     end
-    if compare_combined_attention && !session.blocks.plans.all? { |plan| plan.fused_kv_gather == arm.combined_attention && plan.scale_softmax == arm.combined_attention && plan.scale_softmax_prepared }
+    if attention_modes && !session.blocks.plans.all? { |plan| plan.fused_kv_gather == arm.combined_attention && plan.scale_softmax == arm.combined_attention && plan.scale_softmax_prepared }
       raise "integrated combined attention selection must cover every block"
     end
     chain = ML::Metal::MPSCommandChain.new
@@ -144,7 +150,7 @@ begin
     early_attention_change_rejected = false
     unsupported_profile_rejected_without_submission = false
     if request == 0
-      if shared_modes
+      if shared_modes || profile_combined_attention
         prior_segments = chain.segment_count
         begin
           session.encode_blocks(chain, profile: true)
@@ -154,7 +160,8 @@ begin
         end
         # This fails if rejection incorrectly latched the empty chain. No
         # terminal wait is allowed between rejection and this idle operation.
-        session.use_shared_gate_up!(arm.shared_gate_up)
+        session.use_shared_gate_up!(arm.shared_gate_up) if shared_modes
+        session.use_combined_attention!(arm.combined_attention) if attention_modes
         unless unsupported_profile_rejected_without_submission && chain.segment_count == prior_segments &&
                chain.wait_count == 0 && ML::MetalBuffer.hy_text_probe_readbacks == reads &&
                ML::MetalBuffer.hy_text_probe_allocations == allocations
@@ -197,7 +204,7 @@ begin
       raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
     if request == 0
-      if compare_combined_attention
+      if attention_modes
         before_modes = session.blocks.plans.map { |plan| {plan.fused_kv_gather, plan.scale_softmax} }
         begin
           session.use_combined_attention!(!arm.combined_attention)
@@ -259,7 +266,7 @@ begin
     root_profile = nil.as(JSON::Any?)
     phase_profile = nil.as(JSON::Any?)
     trace_profile = nil.as(JSON::Any?)
-    if profile_variance || shared_modes
+    if profile_variance || shared_modes || profile_combined_attention
       roots = chain.completed_root_timings
       whole = ML::Video::MPSCommandPhaseProfile.build(roots,
         [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
@@ -277,8 +284,11 @@ begin
         phases = ML::Video::PixelUMMDecoderPhaseProfile.build(markers,
           session.blocks.plans.map(&.local_attention_tile_count),
           markers.last.last.root_count, roots.size.to_i32, roots,
-          chain.gpu_elapsed_seconds, chain.api_profile, shared_gate_up: arm.shared_gate_up)
-        unless session.blocks.plans.all? { |plan| plan.profiled_shared_gate_up == arm.shared_gate_up }
+          chain.gpu_elapsed_seconds, chain.api_profile, shared_gate_up: arm.shared_gate_up,
+          fused_kv_gather: arm.combined_attention, scale_softmax: arm.combined_attention)
+        unless session.blocks.plans.all? { |plan| plan.profiled_shared_gate_up == arm.shared_gate_up &&
+               plan.profiled_fused_kv_gather == arm.combined_attention &&
+               plan.profiled_scale_softmax == arm.combined_attention }
           raise "integrated profile topology differs from encoded request"
         end
         phase_profile = JSON.parse(phases.to_json)
@@ -288,9 +298,10 @@ begin
       if profile_variance
         raise "integrated profile changed segment topology" unless chain.segment_count == 4579
       else
-        segments_by_mode[arm.shared_gate_up] ||= chain.segment_count
-        unless chain.segment_count == segments_by_mode[arm.shared_gate_up]
-          raise "integrated gate/up mode changed segment topology between requests"
+        mode_key = {arm.shared_gate_up, arm.combined_attention}
+        segments_by_mode[mode_key] ||= chain.segment_count
+        unless chain.segment_count == segments_by_mode[mode_key]
+          raise "integrated mode changed segment topology between requests"
         end
       end
       unless chain.wait_count == 1 && ML::MetalBuffer.hy_text_probe_readbacks == reads &&
@@ -298,6 +309,7 @@ begin
         raise "integrated profiling added waits, activation reads or named allocations"
       end
     end
+    observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention
     comparisons = session.compare(request: request)
     observer.emit("request_after_diagnostic_comparisons", request: request)
     unless comparisons.map { |c| c[:stage] } == capture_order &&
@@ -347,7 +359,7 @@ begin
     chain.release
     chain = nil
     observer.emit("after_chain_release", request: request)
-    if compare_combined_attention
+    if attention_modes
       # Collect small diagnostic summaries outside request timing. Large
       # comparison arrays are session-owned and reused across all captures.
       observer.emit("before_post_diagnostic_gc", request: request)
@@ -382,7 +394,7 @@ ensure
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2", generation: false,
+    schema: profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2"), generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -402,9 +414,10 @@ ensure
     profile_variance: profile_variance, expected_request_count: schedule.size,
     compare_shared_gate_up: compare_shared_gate_up, profile_shared_gate_up: profile_shared_gate_up,
     compare_combined_attention: compare_combined_attention,
+    profile_combined_attention: profile_combined_attention,
     reverse_combined_attention: reverse_combined_attention, correctness_only: correctness_only,
     cleanup_quarantined: cleanup_quarantined,
-    combined_attention_schedule: schedule.map { |arm| {kind: arm.kind, combined_attention: arm.combined_attention, alternate: arm.alternate, poisoned: arm.poisoned} },
+    combined_attention_schedule: schedule.map { |arm| {kind: arm.kind, combined_attention: arm.combined_attention, alternate: arm.alternate, poisoned: arm.poisoned, profiling: arm.profile} },
     shared_gate_up_schedule: schedule.map { |arm| {kind: arm.kind, shared_gate_up: arm.shared_gate_up, profiling: arm.profile} },
     timing_scope: "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
     memory_telemetry: {categories_additive: false, guard_timestamp_clock: "mach_absolute_time",
