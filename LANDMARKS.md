@@ -6,6 +6,61 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-PACED-AA-2026-10-29] Matched-spacing A/A narrows observed drift; delayed calls align with the queue boundary
+
+- VERIFIED bounded full-J 36-block plus head A/A: two serial six-request
+  processes hold baseline input/weights/geometry/scratch fixed and reverse
+  only API-observer placement. Ten post-wait-to-pre-recorder milestones are
+  50.003350..50.010330 s; the timestamp precedes recorder/timer setup, not the
+  exact first encode call. Overruns reject before submission. No generation.
+- Twelve requests pass 516 finite bitwise-equal retained saved-upstream
+  comparisons at unchanged 2e-5, one terminal wait, 4,579 roots, direct GPU
+  handoff, zero tracked named encode allocations/preterminal activation reads
+  and 43 existing post-wait diagnostics. Same 197 sources/three objects/binary;
+  five unique fixture payloads (57,168,398,336 B) are hash-verified. These are
+  saved upstream MPS controls, not fresh independent-backend inference.
+- Non-directly-captured requests are 42.121775..43.250136 s; the old 60.195153 s
+  outlier did not recur. Captured reverse request1 (43.559919 s) is excluded
+  from timing aggregates; later capture carryover remains possible. This does
+  not prove fixed gaps caused the narrower range or calibrate observer cost.
+- Across all four profiled arms, top-ten continuation calls start with 63
+  earlier GPU-unfinished roots, excluding the current root about to commit.
+  This aligns with default Metal capacity 64 but does not distinguish queued
+  from running work or prove queue admission/physical GPU bottleneck. A deeper
+  queue is admissible as a speed candidate only if GPU-starvation gaps exist;
+  fewer calls alone can move waiting to the terminal boundary. Prior direct
+  MPS FFN reduced roots yet regressed request time by 7.7081%.
+- The captured reverse request1 joins all 4,579 native roots by label/CB-ID,
+  with GPU start/end residuals below 42 ns. Top-ten 206..218 ms host attention
+  calls align with prior FFN candidates (nine down, one gate/up); grouped GPU
+  intervals cover over 99.9996% of their host spans. This is interval coverage,
+  not active shader cycles or global phase dominance. Waiting-thread stacks
+  were disabled, so admission causality remains open. Next causal falsifier:
+  capture the blocked stack before changing capacity; optimize actual critical
+  GPU service, not the host marker or continuation count.
+- Full captured-request interval union is 43.539713 s over a 43.542493 s
+  envelope (2.780 ms uncovered). Single-candidate FFN gate/up and down unions
+  are 13.3822/7.0684 s versus attention 11.3844 s; 288 mixed roots stay separate.
+  This makes FFN a leading candidate, not an exclusive-utilization or causal
+  speedup claim. No material gap between reported GPU intervals justifies
+  queue enlargement yet; preserve whole-request acceptance and exact math.
+- All 2,239 native guard samples pass 27.5 GiB/10% cache-aware reserve/64 MiB
+  swap-growth/900 s-process bounds: peak 26.453175 GiB, min headroom 19.696732 GiB,
+  swap growth 0. Correct arithmetic excludes duplicate speculative pages;
+  sampled bounds do not guarantee opaque transients/future fit. Native exited.
+  Release, 73 Crystal examples, 12 Python tests, 12 integrity negatives, four
+  valid-fixture CLI negatives and format/diff/freshness checks pass. Correlated
+  Mini-Quad ROBUST applies to scoped artifact/lifecycle evidence, not causality.
+- Evidence root /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-aa-spacing-20261029;
+  results/integrity-aa-final.json SHA 4dd9eeefe4ccc2a33823e6964cf52f06b1695dee95ccd244750e05ef6543791b;
+  results/analysis-final.json SHA 2f142641d1f4fcaff06e7b2520be1b0149d70f9e59b6d5a252d36ce52c149707.
+  results/gpu-reverse-req1-analysis.json SHA 4aaa05201afe595e4e494c998516307b882064da49f42522c465459e19c69a8f.
+  results/gpu-reverse-req1-phase-unions.json SHA 56ed147be6bd39eae5b58f51c58af91fb972912c59302701e1b6d9e066dae92e.
+  Return docs/hy-nomas-generation-frontier.md. Rollback omits AA flags; queue,
+  production selectors and GPU math stay unchanged. Refresh on scoped source/
+  artifact, fixture, geometry/precision, schedule/lifetime, clock/backend/
+  device/toolchain or guard change; every process needs live admission.
+
 ### [LM-HY-NOMAS-PIXELUMM-ORDER-LOCALIZATION-2026-10-29] Drift appears inside MPS continuations; ordinal order alone does not explain it
 
 - VERIFIED bounded opt-in full-J 36-block plus head localization: two serial
@@ -28,7 +83,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   and run-state interactions leave stable speed/physical attribution
   VULNERABLE. FFN host spans cannot bound FFN GPU work. Off-timer comparisons
   take about 36 s and can affect device state; they do not calibrate profiling.
-  Next falsifier: fixed-mode A/A with matched spacing and kernel attribution.
+  Matched-spacing A/A is recorded above. Physical attribution remains open.
 - All 2,612 guard samples pass the 27.5 GiB cap/10% reserve/64 MiB swap/900 s
   bounds: peak 26.347140 GiB, min headroom 19.517944 GiB, swap growth0. The old
   headroom label is wrong; audited arithmetic excludes duplicate speculative

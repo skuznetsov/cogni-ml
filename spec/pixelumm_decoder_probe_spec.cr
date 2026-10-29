@@ -2,6 +2,35 @@ require "spec"
 require "../examples/support/pixelumm_decoder_probe"
 
 describe PixelUMMDecoderProbe do
+  it "holds baseline input and geometry fixed across both A/A observer orders" do
+    normal = PixelUMMDecoderProbe.aa_profile_schedule
+    reverse = PixelUMMDecoderProbe.aa_profile_schedule(reverse: true)
+    normal.map(&.kind).should eq(["a_aa_warm_off", "a_aa_0", "a_aa_1", "a_aa_2", "a_aa_3", "a_aa_late_off"])
+    normal.map(&.profile).should eq([false, false, true, true, false, false])
+    reverse.map(&.profile).should eq([false, true, false, false, true, false])
+    [normal, reverse].each do |arms|
+      arms.none?(&.alternate).should be_true
+      arms.none?(&.combined_attention).should be_true
+      arms.none?(&.shared_gate_up).should be_true
+      arms.map(&.poisoned).should eq([true, false, false, false, false, false])
+    end
+  end
+
+  it "paces from prior terminal return and rejects diagnostic overruns before submission" do
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(nil, 1_i64).should eq(0_i64)
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 36_000_000_001_i64).should eq(14_000_000_000_i64)
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 50_000_000_001_i64).should eq(0_i64)
+    expect_raises(ArgumentError, /deadline/) do
+      PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 50_000_000_002_i64)
+    end
+    expect_raises(ArgumentError, /clock/) do
+      PixelUMMDecoderProbe.aa_pause_remaining_ns(2_i64, 1_i64)
+    end
+    expect_raises(ArgumentError, /clock/) do
+      PixelUMMDecoderProbe.aa_pause_remaining_ns(Int64::MAX - 1, Int64::MAX)
+    end
+  end
+
   it "profiles combined attention in both orders with poisoned off warmups and late off controls" do
     normal = PixelUMMDecoderProbe.combined_attention_profile_schedule
     reverse = PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse: true)

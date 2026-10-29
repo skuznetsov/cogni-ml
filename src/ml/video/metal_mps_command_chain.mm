@@ -177,6 +177,29 @@ static void gs_mps_chain_trace_fail(GsMpsApiProfileData *data) {
   data->failed = true;
 }
 
+static bool gs_mps_chain_label_trace_root(GsMpsApiProfileData *data,
+                                          id<MTLCommandBuffer> root,
+                                          uint64_t sequence) {
+  if (!data || !data->traceEnabled || data->traceStartMachTicks == 0 || !root)
+    return false;
+  bool assigned = false;
+  @try {
+    @autoreleasepool {
+      NSString *label = [NSString
+          stringWithFormat:@"cogni.mps.%llu.root.%llu",
+                           (unsigned long long)data->traceStartMachTicks,
+                           (unsigned long long)sequence];
+      if (label) {
+        root.label = label;
+        assigned = true;
+      }
+    }
+  } @catch (NSException *exception) {
+    (void)exception;
+  }
+  return assigned;
+}
+
 static bool gs_mps_chain_trace_event_valid(
     const GsMpsApiProfileData *data,
     const gs_mps_chain_trace_event *event) {
@@ -985,6 +1008,9 @@ static NSString *gs_mps_chain_safe_log_text(NSString *value,
     if (sequence == NSNotFound || sequence != profile->traceRootCount) {
       gs_mps_chain_trace_fail(profile);
     } else {
+      if (!profile->traceFailed &&
+          !gs_mps_chain_label_trace_root(profile, root, sequence))
+        gs_mps_chain_trace_fail(profile);
       ++profile->traceRootCount;
       profile->traceLastRootSequence = sequence;
     }
@@ -1191,6 +1217,11 @@ extern "C" int32_t gs_mps_chain_api_trace_enable(void *handle) {
   }
   data->traceStartMachTicks = traceStartTicks;
   data->traceEnabled = true;
+  if (!gs_mps_chain_label_trace_root(
+          data, chain.command.rootCommandBuffer, 0)) {
+    gs_mps_chain_trace_fail(data);
+    return -7;
+  }
   return 0;
 }
 

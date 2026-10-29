@@ -23,6 +23,32 @@ module PixelUMMDecoderProbe
   record RequestArm, kind : String, alternate : Bool, poisoned : Bool, profile : Bool,
     shared_gate_up : Bool = false, combined_attention : Bool = false
 
+  AA_PAUSE_NS            = 50_000_000_000_i64
+  AA_ALLOWED_LATENESS_NS =    250_000_000_i64
+
+  # All inference selectors and input A stay fixed. Only the CPU/API observer
+  # changes; reverse its middle OFF/ON/ON/OFF order in a serial second process.
+  def aa_profile_schedule(reverse : Bool = false) : Array(RequestArm)
+    profiles = reverse ? [false, true, false, false, true, false] : [false, false, true, true, false, false]
+    kinds = ["a_aa_warm_off", "a_aa_0", "a_aa_1", "a_aa_2", "a_aa_3", "a_aa_late_off"]
+    profiles.map_with_index do |profile, index|
+      RequestArm.new(kinds[index], false, index == 0, profile)
+    end
+  end
+
+  # Diagnostics and GC consume this same post-wait interval. Never catch up by
+  # shortening a later pause, or submit another request after an overrun.
+  def aa_pause_remaining_ns(previous_terminal_ns : Int64?, now_ns : Int64) : Int64
+    raise ArgumentError.new("invalid A/A monotonic clock") unless now_ns > 0
+    return 0_i64 unless previous = previous_terminal_ns
+    unless 0 < previous <= now_ns && previous <= Int64::MAX - AA_PAUSE_NS
+      raise ArgumentError.new("invalid A/A monotonic clock")
+    end
+    target = previous + AA_PAUSE_NS
+    raise ArgumentError.new("A/A diagnostic work exceeded next-encode deadline") if now_ns > target
+    target - now_ns
+  end
+
   # Both inputs and both modes must pass poisoned upstream gates before timing.
   # Reverse both the gate warm order and the same-input timed ABBA order.
   def combined_attention_schedule(reverse : Bool = false, correctness_only : Bool = false) : Array(RequestArm)

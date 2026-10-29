@@ -14,6 +14,8 @@ profile_shared_gate_up = false
 compare_combined_attention = false
 profile_combined_attention = false
 reverse_combined_attention = false
+profile_aa = false
+reverse_aa_profile = false
 correctness_only = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
@@ -36,15 +38,18 @@ OptionParser.parse do |parser|
   parser.on("--compare-combined-attention", "Both inputs/modes upstream gates, then unprofiled combined K/V + scale/softmax ABBA") { compare_combined_attention = true }
   parser.on("--profile-combined-attention", "Same-input phase crossover with off warm/tail controls; no generation") { profile_combined_attention = true }
   parser.on("--reverse-combined-attention", "Reverse both warm and timed combined-attention orders") { reverse_combined_attention = true }
+  parser.on("--profile-aa", "Fixed baseline/input A, six requests, 50s post-wait gaps and crossed API observers") { profile_aa = true }
+  parser.on("--reverse-aa-profile", "Reverse only the middle A/A observer order") { reverse_aa_profile = true }
   parser.on("--correctness-only", "Only the four poisoned combined-attention gates") { correctness_only = true }
 end
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
        0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
-       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention) || repeats == 1) &&
-       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention}.count(true) <= 1 &&
+       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention || profile_aa) || repeats == 1) &&
+       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention, profile_aa}.count(true) <= 1 &&
        (!reverse_combined_attention || compare_combined_attention || profile_combined_attention) &&
+       (!reverse_aa_profile || profile_aa) &&
        (!correctness_only || compare_combined_attention)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
@@ -57,6 +62,8 @@ session = nil.as(PixelUMMDecoderProbe::Session?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 terminal_wait_attempted = false
 cleanup_quarantined = false
+spacing_abort_before_submission = false
+previous_terminal_ns = nil.as(Int64?)
 requests = [] of JSON::Any
 capture_order = [] of String
 named_bytes, block_bytes, head_owned_bytes, head_weight_bytes = 0_i64, 0_i64, 0_i64, 0_i64
@@ -64,8 +71,10 @@ preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
 shared_modes = compare_shared_gate_up || profile_shared_gate_up
-attention_modes = compare_combined_attention || profile_combined_attention
-schedule = if profile_combined_attention
+attention_modes = compare_combined_attention || profile_combined_attention || profile_aa
+schedule = if profile_aa
+             PixelUMMDecoderProbe.aa_profile_schedule(reverse_aa_profile)
+           elsif profile_combined_attention
              PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse_combined_attention)
            elsif compare_combined_attention
              PixelUMMDecoderProbe.combined_attention_schedule(reverse_combined_attention, correctness_only)
@@ -136,6 +145,16 @@ begin
     if attention_modes && !session.blocks.plans.all? { |plan| plan.fused_kv_gather == arm.combined_attention && plan.scale_softmax == arm.combined_attention && plan.scale_softmax_prepared }
       raise "integrated combined attention selection must cover every block"
     end
+    aa_ready_ns = 0_i64
+    aa_sleep_ns = 0_i64
+    aa_target_ns = nil.as(Int64?)
+    aa_spacing = nil.as(JSON::Any?)
+    if profile_aa
+      aa_ready_ns = PixelUMMMemoryProbe.guard_monotonic_ns.not_nil!
+      aa_sleep_ns = PixelUMMDecoderProbe.aa_pause_remaining_ns(previous_terminal_ns, aa_ready_ns)
+      aa_target_ns = previous_terminal_ns.try { |value| value + PixelUMMDecoderProbe::AA_PAUSE_NS }
+      sleep aa_sleep_ns.nanoseconds if aa_sleep_ns > 0
+    end
     chain = ML::Metal::MPSCommandChain.new
     terminal_wait_attempted = false
     if arm.profile
@@ -150,7 +169,7 @@ begin
     early_attention_change_rejected = false
     unsupported_profile_rejected_without_submission = false
     if request == 0
-      if shared_modes || profile_combined_attention
+      if shared_modes || profile_combined_attention || profile_aa
         prior_segments = chain.segment_count
         begin
           session.encode_blocks(chain, profile: true)
@@ -175,6 +194,25 @@ begin
         head_before_blocks_rejected = true
       end
       raise "integrated head accepted encoding before block35" unless head_before_blocks_rejected
+    end
+    if profile_aa
+      before_ns = PixelUMMMemoryProbe.guard_monotonic_ns.not_nil!
+      lateness_ns = aa_target_ns.try { |value| before_ns - value }
+      if lateness_ns && !(0 <= lateness_ns <= PixelUMMDecoderProbe::AA_ALLOWED_LATENESS_NS)
+        # This chain has no submitted work. Quarantine it until process exit
+        # instead of submitting an empty command buffer during error cleanup.
+        spacing_abort_before_submission = true
+        raise "A/A next-encode deadline missed before GPU submission"
+      end
+      aa_spacing = JSON.parse({
+        clock: "mach_absolute_time_nanoseconds", previous_terminal_end_ns: previous_terminal_ns,
+        diagnostic_ready_ns: aa_ready_ns, target_encode_start_ns: aa_target_ns,
+        before_encode_ns: before_ns, requested_gap_ns: PixelUMMDecoderProbe::AA_PAUSE_NS,
+        requested_sleep_ns: aa_sleep_ns,
+        actual_gap_ns: previous_terminal_ns.try { |value| before_ns - value },
+        lateness_ns: lateness_ns, allowed_lateness_ns: PixelUMMDecoderProbe::AA_ALLOWED_LATENESS_NS,
+      }.to_json)
+      STDERR.puts "AA_ENCODE request=#{request} pid=#{Process.pid} mach_ns=#{before_ns} profiling=#{arm.profile}"
     end
     observer.emit("request_before_encode", request: request)
     execution_start = Time.instant
@@ -260,13 +298,16 @@ begin
     chain.commit_and_wait
     wait_seconds = (Time.instant - start).total_seconds
     execution_seconds = (Time.instant - execution_start).total_seconds
+    terminal_ns = profile_aa ? PixelUMMMemoryProbe.guard_monotonic_ns.not_nil! : nil
+    previous_terminal_ns = terminal_ns if profile_aa
+    STDERR.puts "AA_WAIT request=#{request} pid=#{Process.pid} mach_ns=#{terminal_ns}" if profile_aa
     observer.emit("request_after_terminal_wait", request: request)
     # All metadata extraction is after the existing wait and outside execution
     # timing. It does not read activations, allocate GPU buffers or enqueue work.
     root_profile = nil.as(JSON::Any?)
     phase_profile = nil.as(JSON::Any?)
     trace_profile = nil.as(JSON::Any?)
-    if profile_variance || shared_modes || profile_combined_attention
+    if profile_variance || shared_modes || profile_combined_attention || profile_aa
       roots = chain.completed_root_timings
       whole = ML::Video::MPSCommandPhaseProfile.build(roots,
         [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
@@ -309,7 +350,7 @@ begin
         raise "integrated profiling added waits, activation reads or named allocations"
       end
     end
-    observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention
+    observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention || profile_aa
     comparisons = session.compare(request: request)
     observer.emit("request_after_diagnostic_comparisons", request: request)
     unless comparisons.map { |c| c[:stage] } == capture_order &&
@@ -353,6 +394,7 @@ begin
       unsupported_profile_rejected_without_submission: unsupported_profile_rejected_without_submission,
       missing_api_profile_rejected_without_submission: unsupported_profile_rejected_without_submission,
       per_block_encode_host_seconds: session.blocks.plans.map(&.last_encode_host_seconds),
+      aa_spacing: aa_spacing, terminal_wait_end_mach_ns: terminal_ns,
       root_profile: root_profile, phase_profile: phase_profile, continuation_trace: trace_profile,
     }.to_json)
     STDERR.puts "#{kind}: passed=#{numerical_pass}, encode+wait=#{blocks_encode_seconds + head_encode_seconds + wait_seconds}s"
@@ -374,6 +416,7 @@ rescue error
   STDERR.puts failure
 ensure
   begin
+    raise "unsubmitted A/A chain quarantined after spacing failure" if spacing_abort_before_submission
     if active = chain
       if terminal_wait_attempted && !active.completed?
         cleanup_quarantined = true
@@ -387,14 +430,14 @@ ensure
     end
     session.try(&.release)
   rescue error
-    cleanup_quarantined = true if chain && terminal_wait_attempted && !chain.not_nil!.completed?
+    cleanup_quarantined = true if spacing_abort_before_submission || (chain && terminal_wait_attempted && !chain.not_nil!.completed?)
     passed = false
     failure = "#{failure}; cleanup: #{error.class}: #{error.message}"
   end
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2"), generation: false,
+    schema: profile_aa ? "cogni_ml.pixelumm_native_aa_profile/v1" : (profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2")), generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -416,6 +459,11 @@ ensure
     compare_combined_attention: compare_combined_attention,
     profile_combined_attention: profile_combined_attention,
     reverse_combined_attention: reverse_combined_attention, correctness_only: correctness_only,
+    profile_aa: profile_aa, reverse_aa_profile: reverse_aa_profile,
+    aa_pause_seconds: PixelUMMDecoderProbe::AA_PAUSE_NS / 1e9,
+    aa_allowed_lateness_seconds: PixelUMMDecoderProbe::AA_ALLOWED_LATENESS_NS / 1e9,
+    spacing_abort_before_submission: spacing_abort_before_submission,
+    aa_schedule: profile_aa ? schedule.map { |arm| {kind: arm.kind, combined_attention: arm.combined_attention, alternate: arm.alternate, poisoned: arm.poisoned, profiling: arm.profile} } : nil,
     cleanup_quarantined: cleanup_quarantined,
     combined_attention_schedule: schedule.map { |arm| {kind: arm.kind, combined_attention: arm.combined_attention, alternate: arm.alternate, poisoned: arm.poisoned, profiling: arm.profile} },
     shared_gate_up_schedule: schedule.map { |arm| {kind: arm.kind, shared_gate_up: arm.shared_gate_up, profiling: arm.profile} },

@@ -1,5 +1,205 @@
 # Hy-Nomas first native video frontier
 
+## Matched-pause PixelUMM A/A and delayed roots (2026-10-29)
+
+Status: VERIFIED for bounded matched-spacing A/A, retained saved-output parity,
+source/artifact integrity and sampled memory fit. Queue-admission causality,
+the earlier severe drift and a production speedup remain separate questions.
+Production selectors, queue capacity, GPU math and precision are unchanged;
+there was no diffusion or full generation.
+
+`pixelumm_decoder_integrated_probe --profile-aa` holds baseline inference,
+input A, full J=21,120 geometry, weights and scratch lifetime fixed for six
+36-block-plus-head requests. Only API/continuation observers cross over:
+OFF warmup, OFF/ON/ON/OFF, OFF tail; `--reverse-aa-profile` reverses the middle
+observer order in a second serial process. Only the first request poisons
+scratch. Trace-only labels identify Metal roots without adding GPU commands.
+
+The prospective discriminator was whether matching the long diagnostic gaps
+would narrow same-mode drift. Each next pre-recorder, pre-encode milestone is
+targeted at the preceding terminal-wait return plus 50 seconds, including
+profile extraction, comparisons, chain release and post-diagnostic GC. Actual
+gaps are 50.003350 to 50.010330 s. The memory recorder and CPU timer setup follow
+this milestone; it is not the exact first encode call. Diagnostic overrun
+rejects before chain creation; setup lateness above 250 ms quarantines the
+unsubmitted chain until exit. No pause follows the final request. This is a
+matched idle interval, not production throughput timing.
+
+The following complete-request seconds cover encode and the existing terminal
+wait; the 43 diagnostic comparisons follow outside the timer:
+
+| Request | Normal observer | Normal seconds | Reverse observer | Reverse seconds |
+| --- | --- | ---: | --- | ---: |
+| 0, warm | OFF | 42.121775 | OFF | 42.205562 |
+| 1 | OFF | 42.590244 | ON, Instruments | 43.559919 |
+| 2 | ON | 42.819418 | OFF | 42.282234 |
+| 3 | ON | 42.954380 | OFF | 42.289385 |
+| 4 | OFF | 43.250136 | ON | 42.293956 |
+| 5, tail | OFF | 42.754445 | OFF | 42.282982 |
+
+Reverse request1 is explicitly excluded from timing distributions, continuation
+aggregates and adjacent deltas touching it by `--external-capture reverse:1`.
+The analyzer retains its profile separately and requires a separately audited
+capture receipt; it does not authenticate caller-supplied capture declarations.
+Later reverse arms may retain capture effects. Neither off/on placement nor
+these two runs provide causal profiler calibration. The remaining 11 requests
+range 42.121775 to 43.250136 s; the earlier 60.195153 s outlier did not recur.
+This observation does not prove that fixed spacing caused the narrower range
+or exclude thermal, scheduling and other run-state interactions.
+
+Each of the four observer-on requests records 4,578 continuations. The largest
+calls start with 63 earlier roots whose GPU end lies after call entry; the
+current `before_root_sequence` root is excluded and is about to be committed.
+All four top-ten sets have this boundary, with the earliest unfinished root
+ending about 0.17 to 0.33 ms before the call returns. The default Metal queue
+allows 64 uncompleted command buffers, as documented by the local SDK's
+`MTLDevice.h` and Apple's `makeCommandQueue()` documentation. Thus 63 earlier
+roots plus the current root are consistent with queue admission pressure.
+GPU-unfinished does not distinguish queued from running roots, and GPU end
+does not equal completion-handler observation. This alignment alone does not
+locate the blocked CPU stack or prove that a deeper queue would help.
+
+The reverse-request1 Metal System Trace contains 4,579 native roots joined
+one-to-one through command-buffer labels, application IDs, submission,
+completion and accelerator-ID records for PID11191. Grouped GPU intervals are
+4,543 single-interval roots and 36 three-interval roots; their extrema agree
+with every native GPUStart/GPUEnd within 42 ns, below the existing 2 us bound.
+MPS preserves root0's label and inherits `.root.(n-1)+` for later submitted
+roots; the join handles that observed transform rather than equating a label
+suffix to the native sequence. The ten longest captured continuations are
+206.18 to 218.08 ms; earlier-root GPU intervals cover 99.9996 to 99.9997% of
+each host span. These are command/encoder intervals, not active shader cycles
+or proof of ALU/bandwidth utilization. Host phase markers can wait on prior
+FFN work and cannot rank exclusive GPU attention versus FFN cost.
+
+All ten host locations are `local_attention`, but the earliest GPU-unfinished
+prior root has the single native phase candidate `ffn_down` in nine cases and
+`ffn_gate_up` in one. These identify candidate predecessors, not the global
+critical path or proof that a particular command caused the wait. The time
+profile has `record-waiting-threads=0`: no blocked main-thread samples cover
+these calls, so this capture cannot identify a semaphore/admission stack.
+The current root is still uncommitted at entry; 63 prior roots therefore do
+not prove that 64 buffers are already in flight. Commit could fill slot64 and
+make creation of the continued buffer wait, but that remains a hypothesis.
+
+Across the selected captured request, the union of all reported GPU intervals
+is 43.539713 s within a 43.542493 s root envelope, leaving 2.780 ms uncovered.
+Of 4,579 roots, 4,291 have exactly one native phase candidate; the other 288
+remain separate mixed-candidate buckets and are never divided among phases.
+Single-candidate family interval unions are:
+
+| Native candidate family | Roots | GPU interval union, seconds |
+| --- | ---: | ---: |
+| FFN gate/up | 180 | 13.3822 |
+| FFN down | 72 | 7.0684 |
+| Local attention | 3,924 | 11.3844 |
+| QKV projection | 36 | 2.0639 |
+| Head | 6 | 0.0684 |
+| Input norm | 37 | 0.0430 |
+| Residual/post norm | 36 | 0.0332 |
+
+These intervals are not exclusive shader utilization or a critical-path proof;
+different families can overlap, and mixed roots and internal device stalls
+remain unassigned. Their scale makes
+FFN the leading operation-level optimization candidate, while the almost
+continuous raw interval coverage weakens producer starvation as the current
+lever. A deeper queue can shorten CPU continuation wall without shortening
+GPU service or the whole request. Retain whole-request A/A as the acceptance
+metric for any materially different FFN implementation.
+
+All 12 requests pass 516 finite bitwise-equal retained saved-upstream
+comparisons at unchanged atol=rtol=2e-5. They retain 4,579 roots/request, the
+direct block35/head GPU-buffer handoff, one terminal wait, zero tracked named
+encode allocations/preterminal activation reads and 43 existing post-wait
+diagnostic reads using the reusable 330 MiB host comparison pair. Coverage is
+36 attention outputs, block34/35 outputs and five head stages, not every
+overwritten early output or internal F32 probability. The controls are saved
+upstream PyTorch2.6 MPS captures, not fresh independent-backend inference.
+No new synchronization was introduced on the successful measured request
+path; each request retains exactly its one existing terminal wait.
+
+Both processes return zero with identical 197 measured source pins, three
+object pins, binary, inputs and weights. The full integrity audit hashes five
+unique fixture payloads totaling 57,168,398,336 bytes. All 2,239 native guard
+samples pass the unchanged 27.5 GiB group cap, cache-aware 10% reserve, 64 MiB
+positive swap-growth stop and 900 s/process deadline: peak 26.453175 GiB,
+minimum headroom 19.696732 GiB, zero swap growth. The old formula label remains
+wrong; checked arithmetic is `free_spec - speculative + file_backed`, without
+double-counting speculative pages. These are sampled bounds, not guarantees
+about opaque MPS transients or future fit. Both native processes have ended.
+
+DoD executed: release build; 73 focused Crystal examples; 12 Python analysis
+tests including damaged-report/capture-exclusion controls; 12 integrity
+corruptions; four incompatible-CLI rejection controls using complete valid
+fixture arguments; format, diff and build-freshness checks. Correlated
+Mini-Quad review is ROBUST for the declared integrity/lifecycle scope, not
+independent backend or causal acceleration evidence. The capture receipt's
+`capture_exit_mach_ns` is a wrapper/reap lifetime bound, not exact tracer exit.
+Trace-tree hashing is an audit-time snapshot, not capture-time sealing.
+
+The next causal falsifier is a narrowly scoped capture with waiting-thread
+stacks enabled, joining the blocked site to the current-buffer entry status
+and prior GPU-end/callback. The present near-continuous interval coverage
+provides no material producer-starvation signal during the longest calls.
+Do not increase queue depth on this evidence. Only after admission blocking
+and a material GPU idle gap are demonstrated should a 64 versus 80/96 trial
+keep identical operations, geometry, buffers, one terminal wait and guards,
+requiring at least 3% whole-request improvement in both orders and a confirming
+repeat. Reject a trial that only moves waiting to the terminal boundary. Earlier
+softmax/PV graph grouping gave no material gain, while direct MPS FFN reduced
+root count but regressed request time by 7.7081%; fewer calls/roots alone are
+not the objective. If GPU service stays critical, choose the next operation
+from actual command evidence and preserve prepared graphs/bound resources
+through the terminal wait. Rollback omits the A/A flag; defaults stay unchanged.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-aa-spacing-20261029/`.
+`python3 -B run_integrated.py normal-1` and `reverse-1` execute the guarded
+serial requests.
+`python3 -B audit_integrity.py --label normal-1 --label reverse-1 --output
+results/integrity-aa-final.json` authenticates receipts, sources, binary,
+fixture payloads, reports and sampled guards. The checked-in analyzer runs as
+`python3 -B examples/support/analyze_pixelumm_aa_profile.py --report results/normal-1.json
+--report results/reverse-1.json --external-capture reverse:1 --output
+results/analysis-final.json`; it describes reports without authenticating
+execution or asserting bitwise equality on its own.
+
+Integrity JSON SHA256:
+`4dd9eeefe4ccc2a33823e6964cf52f06b1695dee95ccd244750e05ef6543791b`.
+A/A analysis SHA256:
+`2f142641d1f4fcaff06e7b2520be1b0149d70f9e59b6d5a252d36ce52c149707`.
+Analyzer source SHA256:
+`7b75717b3e22aef7fa86238043e7e90f039899d6e51476e7c713955754dd52f8`.
+External auditor source SHA256:
+`0e684e44adb71ec09f316292d0cc168b74402bce71960dcac07eb4b009d4021e`.
+Measured release binary SHA256:
+`9afec75cfa81b6ec73293fcf4bdf0705f830e1b82760b1aa36abcd729bde544a`.
+The external `analyze_gpu_capture.py` joins the already captured
+`results/reverse-req1-metal.trace` exports to native request1; it performs no
+model work. GPU join JSON `results/gpu-reverse-req1-analysis.json` SHA256:
+`4aaa05201afe595e4e494c998516307b882064da49f42522c465459e19c69a8f`.
+GPU analyzer source SHA256:
+`9eba5ea2eb68f97a2714bf79fa01c9fb2c773ceb134882700ffda60c2394f5c3`.
+Its export manifest `results/gpu-reverse-req1-export.json` SHA256:
+`1a1027280c239bd2f069524b69ae9fd517b0650ae6be0aa26d67d30c774b787d`.
+The selected XML SHA256 is
+`af2693dec945bac314f549f704505c86fbe4d9dc7e7cbf90e11dea458caa3a7a`.
+The all-four-arm native queue discriminator is
+`results/gpu-native-queue-depth.json` SHA256:
+`bf41c12ee933046e2493c3e2ab6377dbf3d5407d6d383c4f93a0c5aff866d9d1`.
+The separate CPU-only `analyze_gpu_phases.py` SHA256 is
+`31df199ce1e57d39471d18150572e0395f09ee8f9785ae15b3f8e69ff7a72a3b`;
+its `results/gpu-reverse-req1-phase-unions.json` SHA256 is
+`56ed147be6bd39eae5b58f51c58af91fb972912c59302701e1b6d9e066dae92e`.
+It also reconciles two trace-tree hashes from the same 578 audited file
+entries: the exporter hashes length-prefixed paths plus raw file digests,
+while the integrity auditor hashes canonical JSON of path/size/digest records.
+Those different digest formats are not a content discrepancy.
+Refresh after scoped source/artifact, fixture, geometry/precision, schedule or
+lifetime, clock/backend/device/toolchain or guard changes. Every new process
+requires live memory admission; this decoder-only probe authorizes no full
+generation or full-pipeline memory claim.
+
 ## Combined-attention order localization (2026-10-29)
 
 Status: VERIFIED for bounded host-phase/API localization, retained saved-output
