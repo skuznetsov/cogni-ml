@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-SCALE-SOFTMAX-2026-10-28] F32 scale/softmax preserves parity with a small bounded paired gain
+
+- VERIFIED opt-in raw F32 QK scale inside rank-4 axis-3 softmax, keeping
+  rank-3 batch32 QK/PV, the baseline Float32 constant and BF16 handoffs.
+  Candidate-first direct checks on J2048/full J21120 avoid the baseline's
+  in-place score mutation. At full J, 2,229,534,720 probabilities and
+  86,507,520 attended F32 values match the native baseline bitwise; all saved
+  upstream block captures pass at unchanged atol=rtol=2e-5. These are distinct
+  oracles, not a fresh upstream internal-F32 capture. NaN and deliberately
+  double-scaled negative controls detect failures as intended.
+- Two serial unprofiled 40-request processes each include 16 balanced AB/BA
+  pairs. Full-request medians: baseline/candidate 1.590239/1.559931 s and
+  2.904161/2.860022 s. Paired median reductions 2.17145% and 2.00291%; combined
+  2.04714%, 28/32 wins, positive in both orders. Absolute drift remains large.
+  Scope is four J5760 whole-block passes per request (two windows, blocks0/1
+  consuming saved inputs), not full-J timing, a connected block chain,
+  decoder/head or generation speed. All compared captures/outputs are bitwise
+  equal. This falls below the prospective 3% promotion screen; keep default off.
+- No new GPU wait or preterminal read: one terminal wait and packed metrics
+  read/request, zero tracked encode-time named allocations. Timed metrics are
+  464 bytes; separate direct correctness uses 176 bytes. Both alternatives
+  coexist; no candidate-specific memory saving or removed DRAM sweep is
+  established. Timing sampled peak 7.625 GiB, headroom at least 26.411 GiB,
+  zero positive swap growth. Full-J correctness sampled peak 9.606 GiB.
+  Cache-aware 10% reserve, 16 GiB cap, 64 MiB swap stop and 600 s timeout hold;
+  sampling does not bound transients and admission expires at each launch.
+- Release builds, 37 focused CPU examples, format/diff checks and eight
+  damaged-artifact rejection controls pass. Correlated Mini-Quad verdict is
+  ROBUST for the narrow numerical/descriptive timing claim. A post-run change
+  fixes only the encode-timer description; raw artifacts and both source
+  identities are preserved. Evidence: `docs/hy-nomas-generation-frontier.md`
+  and `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-scale-softmax-20261028/results/summary.json`
+  SHA256 `48207f1eff554fd0f7b3daadd7da72d870f05fe8485fc487b1fefc29b5213aab`.
+  Rollback selects the unchanged separate-scale path. Next falsifier: a larger
+  exact FFN/attention change must meet the prospective request screen, then
+  pass connected decoder/head validation. Refresh on scoped source/artifact,
+  fixture/weights, geometry/precision/schedule/lifetime, backend/device/OS/
+  toolchain, guard/clock changes or evidence loss. No full generation ran.
+
 ### [LM-HY-NOMAS-PIXELUMM-COGNIGRAPH-2026-10-28] Prepared native islands preserve bounded parity without a demonstrated block gain
 
 - VERIFIED bounded shared CogniGraph dependency compilation and opt-in native

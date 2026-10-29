@@ -1,5 +1,101 @@
 # Hy-Nomas first native video frontier
 
+## F32 score scale inside softmax: bounded paired gain (2026-10-28)
+
+The candidate replaces the standalone in-place F32 score multiply with an F32
+multiply inside the rank-4, axis-3 softmax graph. QK and PV retain rank-3 batch
+32 geometry. The scale uses the same Float32 value as the baseline. Selection
+remains opt-in; rollback is the unchanged separate-scale graph selection.
+
+The principal failure is a changed rounding/reduction boundary hidden by the
+later BF16 cast. Before timing, compare probabilities and attended F32 values
+tile-by-tile from identical raw QK/V, candidate first so the baseline's in-place
+scale cannot corrupt its input. Require finite values and unchanged
+`atol=rtol=2e-5`, followed by the saved upstream BF16 block captures. The existing
+F32 softmax/PV checker consumes already-scaled scores and must not be reused
+unchanged. No persisted upstream fixture currently contains all internal F32
+attention tensors; native same-input checks supplement, rather than replace,
+the authenticated upstream block oracle.
+
+DoD: the correctness-only plan-reuse probe passes the direct F32 checks and
+NaN control; the scale-softmax probe passes the two-window/block-0/1 upstream
+captures and completes balanced ABBA/BAAB unprofiled whole-request pairs.
+Every request keeps one terminal wait, one packed post-wait metrics read, no
+preterminal reads or tracked encode-time named buffer allocations. Use the
+cache-aware 10% reserve, 16 GiB process cap, 64 MiB swap-growth stop and 600 s
+timeout. No full generation. A graph-level multiply alone does not establish
+that lowering removed a panel sweep; promotion requires a measured request win.
+
+The correctness-only release probe passed both J2048 and full J21120 at the
+unchanged tolerances. At full J it compared 2,229,534,720 probability values and
+86,507,520 attended F32 values tile-by-tile: zero failures, differing words or
+nonfinite values. All seven saved upstream block captures also matched bitwise.
+These internal F32 checks are against the native same-input baseline; they are
+not a newly captured independent upstream F32 attention oracle. The NaN control
+failed exactly once as intended. An external mutant applying scale twice was
+rejected: 75,379,622 probability and 8,379,834 attended values exceeded tolerance
+on J2048, and the saved upstream attention gate failed. No tolerance changed.
+
+Two serial unprofiled processes each completed 40 requests: four correctness,
+four ABBA warmups, and 32 timed requests in balanced ABBA/BAAB cycles. Each
+request contains four complete J5760 block passes, two initial noise windows
+times blocks 0/1. Each block consumes its saved upstream input; block 1 does
+not consume the new native block-0 output. This is whole-block diagnostic
+timing, not full-J timing, connected decoder/head or generation qualification.
+
+| Whole-request wall metric | Run 1 | Run 2 |
+| --- | ---: | ---: |
+| Baseline median | 1.590239 s | 2.904161 s |
+| Scale/softmax median | 1.559931 s | 2.860022 s |
+| Paired median time reduction | 2.17145% | 2.00291% |
+| Candidate wins | 14/16 | 14/16 |
+| Baseline-first paired reduction | 1.07183% | 2.03262% |
+| Candidate-first paired reduction | 2.77269% | 2.00291% |
+
+Across all 32 pairs the descriptive median reduction is 2.04714%, with 28
+candidate wins. This is below the pre-existing prospective 3% promotion
+screen; the candidate remains off by default. The much larger absolute drift
+between processes remains
+unexplained. Do not infer generation throughput, a stable host baseline or a
+causal bandwidth limit from these measurements. Both arms retain 125 MPS
+roots/request. The candidate omits one explicit Metal scale dispatch per tile;
+the physical multiply/softmax lowering and DRAM traffic were not profiled.
+
+All 80 requests passed their numerical gates. Correctness requests compare
+six captures per plan, and every request compares all four final outputs;
+all compared values match bitwise. The separate direct-F32 checker is excluded
+from timing. Every request retains one terminal wait and one 464-byte packed
+metrics read, zero tracked encode-time named allocations and preterminal reads.
+The direct checker instead uses its existing single 176-byte metrics read.
+Sampled timing-run peak footprint was 7.625 GiB, minimum cache-aware headroom
+26.411 GiB and positive swap growth zero. Full-J correctness peaked at 9.606
+GiB. These are sampled overlapping memory counters, not bounds on transients
+or evidence of candidate-specific memory savings; both alternatives coexist.
+
+Release builds, 37 focused CPU examples, format/diff checks and the artifact
+validator pass. The validator verifies schedule, stage coverage, positive
+controls, execution/report identity and source stability; eight deliberately
+damaged CPU artifact controls were rejected. A correlated Mini-Quad review
+independently recomputed the raw pairs and returned ROBUST for this bounded
+descriptive claim. It found an incorrect timer-description string: plan body
+encoding excludes comparator encoding, which is reported separately and is
+included in full-request wall. Only this metadata string changed after timing;
+the evidence packet pins both versions and leaves the raw reports intact.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-scale-softmax-20261028/results/summary.json`
+SHA256 `48207f1eff554fd0f7b3daadd7da72d870f05fe8485fc487b1fefc29b5213aab`.
+Reproduce direct qualification with `pixelumm_plan_reuse_probe --scale-softmax
+--check-scale-softmax-f32` and the pinned small/full manifests; use
+`pixelumm_scale_softmax_probe` with the pinned two-window reference and BF16
+weight cache for timing. Exact guarded argv, source copies, fixture hashes,
+binary/object identities and guard logs are indexed by the packet. The 10%
+admission expires at each launch. Refresh on computational source, fixture,
+weights, geometry, precision, scheduling, lifetime, backend/device/OS/compiler,
+clock or guard changes, or artifact loss. Next falsifier: a larger exact
+FFN/attention change must first meet the prospective whole-request screen,
+then pass connected decoder/head validation before default selection. No full
+generation ran; the larger FFN/attention bottlenecks remain open.
+
 ## PixelUMM hotspot profile and packed gate/up refutation (2026-10-28)
 
 The optimization space is not established as exhausted. The admitted profile
@@ -114,9 +210,8 @@ The following are source-derived work counts or hypotheses, not measured gains:
   120 displayed frames; context changes prevent naive cross-window activation
   reuse. Neither timestamp equality nor identical weights proves cache safety.
 
-Next falsifier: first measure the scale/softmax candidate on the same panel and
-block fixtures; reject on any unchanged numerical gate failure. A candidate
-promotion requires repeated unprofiled balanced whole-request improvement in
+The scale/softmax experiment proposed here is reported above. The prospective
+promotion policy requires repeated unprofiled balanced whole-request improvement in
 both orderings, outside the observed A/A variation, with setup/deferred work
 and resource growth included. Use a prospective 3% median improvement screen,
 not a claim that this threshold proves significance. Hardware-limit claims

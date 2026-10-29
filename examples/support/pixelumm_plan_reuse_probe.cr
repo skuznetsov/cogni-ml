@@ -9,16 +9,18 @@ require "./pixelumm_block_probe"
 module PixelUMMPlanReuseProbe
   extend self
 
-  SCHEMA                = "cogni_ml.pixelumm_plan_reuse_probe/v1"
-  SOFTMAX_PV_SCHEMA     = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv/v1"
-  SOFTMAX_PV_F32_SCHEMA = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_f32_check/v1"
-  ATOL                  = PixelUMMConnectedResourceProbe::ATOL
-  RTOL                  = PixelUMMConnectedResourceProbe::RTOL
-  GIB                   = PixelUMMConnectedResourceProbe::GIB
-  MAX_NAMED_BYTES       = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
-  MAX_RESIDENT_PLANS    =  2
-  REQUESTS              =  6
-  MEMORY_FLOOR_PERCENT  = 10
+  SCHEMA                   = "cogni_ml.pixelumm_plan_reuse_probe/v1"
+  SOFTMAX_PV_SCHEMA        = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv/v1"
+  SOFTMAX_PV_F32_SCHEMA    = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_f32_check/v1"
+  SCALE_SOFTMAX_SCHEMA     = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax/v1"
+  SCALE_SOFTMAX_F32_SCHEMA = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax_f32_check/v1"
+  ATOL                     = PixelUMMConnectedResourceProbe::ATOL
+  RTOL                     = PixelUMMConnectedResourceProbe::RTOL
+  GIB                      = PixelUMMConnectedResourceProbe::GIB
+  MAX_NAMED_BYTES          = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
+  MAX_RESIDENT_PLANS       =  2
+  REQUESTS                 =  6
+  MEMORY_FLOOR_PERCENT     = 10
 
   alias Budget = PixelUMMConnectedResourceProbe::Budget
   alias ScheduleEntry = NamedTuple(index: Int32, plan_index: Int32, warmup: Bool)
@@ -51,6 +53,30 @@ module PixelUMMPlanReuseProbe
     end
   end
 
+  def validate_scale_softmax_configuration!(resident_plans : Int32,
+                                            shared_gate_up : Bool,
+                                            prepare_scale_softmax : Bool) : Nil
+    validate_resident_plan_count!(resident_plans)
+    return unless prepare_scale_softmax
+    unless resident_plans == 2
+      raise ArgumentError.new("PixelUMM scale/softmax comparison requires exactly two resident native Plans")
+    end
+    if shared_gate_up
+      raise ArgumentError.new("PixelUMM scale/softmax comparison cannot be combined with shared gate/up")
+    end
+  end
+
+  def validate_attention_mode_configuration!(resident_plans : Int32,
+                                             shared_gate_up : Bool,
+                                             prepare_softmax_pv : Bool,
+                                             prepare_scale_softmax : Bool) : Nil
+    if prepare_softmax_pv && prepare_scale_softmax
+      raise ArgumentError.new("PixelUMM softmax/PV and scale/softmax modes are alternatives and cannot be combined")
+    end
+    validate_softmax_pv_configuration!(resident_plans, shared_gate_up, prepare_softmax_pv)
+    validate_scale_softmax_configuration!(resident_plans, shared_gate_up, prepare_scale_softmax)
+  end
+
   def validate_softmax_pv_f32_configuration!(prepare_softmax_pv : Bool,
                                              check_softmax_pv_f32 : Bool,
                                              resident_plans : Int32,
@@ -62,6 +88,17 @@ module PixelUMMPlanReuseProbe
     validate_softmax_pv_configuration!(resident_plans, shared_gate_up, true)
   end
 
+  def validate_scale_softmax_f32_configuration!(prepare_scale_softmax : Bool,
+                                                check_scale_softmax_f32 : Bool,
+                                                resident_plans : Int32,
+                                                shared_gate_up : Bool) : Nil
+    return unless check_scale_softmax_f32
+    unless prepare_scale_softmax
+      raise ArgumentError.new("direct F32 scale/softmax checking requires --scale-softmax")
+    end
+    validate_scale_softmax_configuration!(resident_plans, shared_gate_up, true)
+  end
+
   def fused_softmax_pv_for_plan!(prepare_softmax_pv : Bool,
                                  resident_plans : Int32,
                                  shared_gate_up : Bool,
@@ -71,6 +108,54 @@ module PixelUMMPlanReuseProbe
       raise ArgumentError.new("PixelUMM attention mode selected an invalid native Plan index")
     end
     prepare_softmax_pv && plan_index == 1
+  end
+
+  def scale_softmax_for_plan!(prepare_scale_softmax : Bool,
+                              resident_plans : Int32,
+                              shared_gate_up : Bool,
+                              plan_index : Int32) : Bool
+    validate_scale_softmax_configuration!(resident_plans, shared_gate_up, prepare_scale_softmax)
+    unless 0 <= plan_index < resident_plans
+      raise ArgumentError.new("PixelUMM scale/softmax mode selected an invalid native Plan index")
+    end
+    prepare_scale_softmax && plan_index == 1
+  end
+
+  def attention_mode_for_plan!(prepare_softmax_pv : Bool,
+                               prepare_scale_softmax : Bool,
+                               resident_plans : Int32,
+                               shared_gate_up : Bool,
+                               plan_index : Int32) : String
+    validate_attention_mode_configuration!(resident_plans, shared_gate_up,
+      prepare_softmax_pv, prepare_scale_softmax)
+    return "scale_softmax" if scale_softmax_for_plan!(prepare_scale_softmax,
+                                resident_plans, shared_gate_up, plan_index)
+    return "fused_softmax_pv" if fused_softmax_pv_for_plan!(prepare_softmax_pv,
+                                   resident_plans, shared_gate_up, plan_index)
+    "separate_softmax_pv"
+  end
+
+  def attention_graph_topology_for_plan!(prepare_softmax_pv : Bool,
+                                         prepare_scale_softmax : Bool,
+                                         resident_plans : Int32,
+                                         shared_gate_up : Bool,
+                                         plan_index : Int32) : String
+    mode = attention_mode_for_plan!(prepare_softmax_pv, prepare_scale_softmax,
+      resident_plans, shared_gate_up, plan_index)
+    case mode
+    when "scale_softmax"
+      "separate_qk_scale_folded_softmax_pv"
+    when "fused_softmax_pv"
+      "separate_qk_fused_softmax_pv"
+    else
+      "separate_qk_separate_softmax_pv"
+    end
+  end
+
+  def scale_softmax_correctness_schedule(resident_plans : Int32,
+                                         shared_gate_up : Bool) : Array(ScheduleEntry)
+    validate_scale_softmax_configuration!(resident_plans, shared_gate_up, true)
+    [{index: 0_i32, plan_index: 1_i32, warmup: false}]
   end
 
   # `maximum` caps named MetalBuffers. Opaque native Plan and MPS allocations
@@ -144,6 +229,10 @@ module PixelUMMPlanReuseProbe
            positive_control[:different_words] == 1_u32 && positive_control[:nonfinite] == 1_u32
       raise ArgumentError.new("PixelUMM direct F32 comparator NaN positive control was not exact")
     end
+  end
+
+  def validate_scale_softmax_f32_metrics!(metrics : Array(Metric), geometry : F32Geometry) : Nil
+    validate_softmax_pv_f32_metrics!(metrics, geometry)
   end
 
   def validate_f32_snapshot_sizes!(geometry : F32Geometry,
@@ -404,7 +493,9 @@ module PixelUMMPlanReuseProbe
       getter resident_plans : Int32
       getter shared_gate_up : Bool
       getter prepare_softmax_pv : Bool
+      getter prepare_scale_softmax : Bool
       getter check_softmax_pv_f32 : Bool
+      getter check_scale_softmax_f32 : Bool
       getter f32_geometry : F32Geometry?
       getter resources : Hash(String, Int64)
       getter binding_bytes : Hash(String, Int64)
@@ -420,6 +511,15 @@ module PixelUMMPlanReuseProbe
       def fused_softmax_pv_for_plan(plan_index : Int32) : Bool
         PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(
           @prepare_softmax_pv, @resident_plans, @shared_gate_up, plan_index)
+      end
+
+      def scale_softmax_for_plan(plan_index : Int32) : Bool
+        PixelUMMPlanReuseProbe.scale_softmax_for_plan!(
+          @prepare_scale_softmax, @resident_plans, @shared_gate_up, plan_index)
+      end
+
+      def direct_f32_check? : Bool
+        @check_softmax_pv_f32 || @check_scale_softmax_f32
       end
 
       CORE_ORDER    = ML::Video::PixelUMMDecoderBlockMPS::Plan::CORE_NAMES.to_a
@@ -459,19 +559,23 @@ module PixelUMMPlanReuseProbe
                      @resident_plans : Int32, @shared_gate_up : Bool = false,
                      @memory : PixelUMMMemoryProbe::Recorder = PixelUMMMemoryProbe::Recorder.system,
                      *, @prepare_softmax_pv : Bool = false,
-                     @check_softmax_pv_f32 : Bool = false)
+                     @check_softmax_pv_f32 : Bool = false,
+                     @prepare_scale_softmax : Bool = false,
+                     @check_scale_softmax_f32 : Bool = false)
         @lifecycle = SubmissionLifecycle.new
         @owner_thread_id = Thread.current.object_id.to_u64
-        PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(
-          @resident_plans, @shared_gate_up, @prepare_softmax_pv)
+        PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(
+          @resident_plans, @shared_gate_up, @prepare_softmax_pv, @prepare_scale_softmax)
         PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(
           @prepare_softmax_pv, @check_softmax_pv_f32, @resident_plans, @shared_gate_up)
+        PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(
+          @prepare_scale_softmax, @check_scale_softmax_f32, @resident_plans, @shared_gate_up)
         @tokens = @fixture.grid.reduce(1) { |product, dim| product * dim }
         PixelUMMPlanReuseProbe.validate_geometry!(@fixture.grid, @tokens)
         PixelUMMConnectedResourceProbe.validate_fixture!(@fixture, @tokens)
         budget = PixelUMMPlanReuseProbe.validate_budget!(@tokens, @resident_plans, maximum,
-          @check_softmax_pv_f32)
-        @f32_geometry = @check_softmax_pv_f32 ? PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(@tokens) : nil
+          direct_f32_check?)
+        @f32_geometry = direct_f32_check? ? PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(@tokens) : nil
         @borrowed_bytes = budget[:borrowed_bytes]
         @expected_bytes = budget[:expected_bytes]
         @metric_bytes = budget[:metric_bytes]
@@ -658,7 +762,7 @@ module PixelUMMPlanReuseProbe
         validate_request_chain!(chain)
         @lifecycle.require_readable!(completed: chain.completed?, wait_count: chain.wait_count)
         raise ArgumentError.new("PixelUMM GPU comparator metrics are unavailable") unless @comparisons_encode_succeeded
-        metric_slots = @check_softmax_pv_f32 ? F32_CHECK_METRIC_SLOTS : PixelUMMConnectedResourceProbe::METRIC_SLOTS
+        metric_slots = direct_f32_check? ? F32_CHECK_METRIC_SLOTS : PixelUMMConnectedResourceProbe::METRIC_SLOTS
         words = Array(UInt32).new(metric_slots * PixelUMMConnectedResourceProbe::METRIC_WORDS, 0_u32)
         metrics_buffer.read_bytes(words.to_unsafe.as(UInt8*), @metric_bytes.to_i32)
         Array.new(metric_slots) do |index|
@@ -685,7 +789,9 @@ module PixelUMMPlanReuseProbe
           chain.completed_root_timings, chain.gpu_elapsed_seconds,
           chain.api_profile, @tile_count, shared_gate_up: @shared_gate_up,
           fused_softmax_pv: fused_softmax_pv_for_plan(plan_index),
-          check_softmax_pv_f32: @check_softmax_pv_f32)
+          check_softmax_pv_f32: @check_softmax_pv_f32,
+          scale_softmax: scale_softmax_for_plan(plan_index),
+          check_scale_softmax_f32: @check_scale_softmax_f32)
       end
 
       def release_after_terminal! : Nil
@@ -814,14 +920,23 @@ module PixelUMMPlanReuseProbe
               raise ArgumentError.new("PixelUMM native softmax/PV preparation failed (#{status}): #{error_message}")
             end
           end
-          if @check_softmax_pv_f32
+          if @prepare_scale_softmax
+            @error_text.fill(0_u8)
+            enabled = scale_softmax_for_plan(plan_index)
+            status = PixelUMMDecoderBlockMPSFFI.plan_prepare_scale_softmax(
+              native, enabled ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+            unless status == 0
+              raise ArgumentError.new("PixelUMM native scale/softmax preparation failed (#{status}): #{error_message}")
+            end
+          end
+          if direct_f32_check?
             @error_text.fill(0_u8)
             status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv_check(
               native, probabilities_snapshot_buffer.handle,
               attended_snapshot_buffer.handle, metrics_buffer.handle,
               @error_text.to_unsafe, @error_text.size)
             unless status == 0
-              raise ArgumentError.new("PixelUMM native direct F32 check preparation failed (#{status}): #{error_message}")
+              raise ArgumentError.new("PixelUMM native direct F32 attention check preparation failed (#{status}): #{error_message}")
             end
           end
           @binding_identity << identity.dup
@@ -876,7 +991,7 @@ module PixelUMMPlanReuseProbe
         end
         @expected_buffers.each { |name, buffer| identity["expected.capture.#{name}"] = buffer.handle.address.to_u64 }
         identity["comparator.metrics"] = metrics_buffer.handle.address.to_u64
-        if @check_softmax_pv_f32
+        if direct_f32_check?
           identity["comparator.local_probabilities_f32_snapshot"] = probabilities_snapshot_buffer.handle.address.to_u64
           identity["comparator.local_attended_f32_snapshot"] = attended_snapshot_buffer.handle.address.to_u64
           PixelUMMPlanReuseProbe.validate_f32_snapshot_identity!(identity)
@@ -900,7 +1015,7 @@ module PixelUMMPlanReuseProbe
           @binding_bytes["expected.capture.#{name}"] = buffer.size
         end
         @binding_bytes["comparator.metrics"] = metrics_buffer.size
-        if @check_softmax_pv_f32
+        if direct_f32_check?
           @binding_bytes["comparator.local_probabilities_f32_snapshot"] = probabilities_snapshot_buffer.size
           @binding_bytes["comparator.local_attended_f32_snapshot"] = attended_snapshot_buffer.size
         end

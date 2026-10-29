@@ -229,6 +229,14 @@ $(BUILD_DIR)/pixelumm_cognigraph_probe: examples/pixelumm_cognigraph_probe.cr ex
 .PHONY: pixelumm_packed_gate_up_probe
 pixelumm_packed_gate_up_probe: $(BUILD_DIR)/pixelumm_packed_gate_up_probe
 
+.PHONY: pixelumm_scale_softmax_probe
+pixelumm_scale_softmax_probe: $(BUILD_DIR)/pixelumm_scale_softmax_probe
+
+# The ordinary diagnostic bridge includes the production block ABI once.
+$(BUILD_DIR)/pixelumm_scale_softmax_probe: examples/pixelumm_scale_softmax_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 # This diagnostic translation unit includes the weight-reuse bridge, which
 # includes the production block ABI. Do not also link either included object.
 $(BUILD_DIR)/pixelumm_packed_gate_up_probe: examples/pixelumm_packed_gate_up_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_PACKED_GATE_UP_OBJ)

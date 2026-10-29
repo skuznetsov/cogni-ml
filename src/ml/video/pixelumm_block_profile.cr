@@ -33,6 +33,8 @@ module ML::Video
     getter shared_gate_up : Bool
     getter fused_softmax_pv : Bool
     getter check_softmax_pv_f32 : Bool
+    getter scale_softmax : Bool
+    getter check_scale_softmax_f32 : Bool
     # Whole-block root totals, interval union, envelope, and overlap remain the
     # additive-safe summary. Individual roots may overlap temporally.
     getter root_profile : MPSCommandPhaseProfile
@@ -50,7 +52,9 @@ module ML::Video
                            @api_profile : MPSAPIProfile,
                            @shared_gate_up : Bool,
                            @fused_softmax_pv : Bool,
-                           @check_softmax_pv_f32 : Bool)
+                           @check_softmax_pv_f32 : Bool,
+                           @scale_softmax : Bool,
+                           @check_scale_softmax_f32 : Bool)
     end
 
     def self.build(markers : Array(PixelUMMBlockPhaseMarker),
@@ -60,7 +64,9 @@ module ML::Video
                    tile_count : Int32,
                    shared_gate_up : Bool = false,
                    fused_softmax_pv : Bool = false,
-                   check_softmax_pv_f32 : Bool = false) : self
+                   check_softmax_pv_f32 : Bool = false,
+                   scale_softmax : Bool = false,
+                   check_scale_softmax_f32 : Bool = false) : self
       unless markers.map(&.name) == MARKER_NAMES.to_a
         raise ArgumentError.new("PixelUMM phase markers must have the complete source order")
       end
@@ -68,6 +74,21 @@ module ML::Video
       raise ArgumentError.new("PixelUMM attention tile count must be positive") unless tile_count > 0
       if check_softmax_pv_f32 && shared_gate_up
         raise ArgumentError.new("PixelUMM direct F32 softmax/PV check cannot use shared gate/up")
+      end
+      if scale_softmax && fused_softmax_pv
+        raise ArgumentError.new("PixelUMM scale/softmax and fused softmax/PV are alternative attention modes")
+      end
+      if scale_softmax && check_softmax_pv_f32
+        raise ArgumentError.new("PixelUMM scale/softmax cannot use the softmax/PV F32 checker")
+      end
+      if check_softmax_pv_f32 && check_scale_softmax_f32
+        raise ArgumentError.new("PixelUMM F32 attention check modes are mutually exclusive")
+      end
+      if check_scale_softmax_f32 && !scale_softmax
+        raise ArgumentError.new("PixelUMM scale/softmax F32 check requires scale/softmax mode")
+      end
+      if check_scale_softmax_f32 && shared_gate_up
+        raise ArgumentError.new("PixelUMM direct F32 scale/softmax check cannot use shared gate/up")
       end
 
       previous_wall = 0.0
@@ -94,7 +115,7 @@ module ML::Video
       end
 
       validate_api_profile!(api_profile, roots.size, tile_count, shared_gate_up,
-        fused_softmax_pv, check_softmax_pv_f32)
+        fused_softmax_pv, check_softmax_pv_f32, check_scale_softmax_f32)
 
       phase_names = MARKER_NAMES.to_a[0...-1]
       wall_seconds = {} of String => Float64
@@ -143,11 +164,13 @@ module ML::Video
       new(markers, wall_seconds, thread_cpu_seconds, root_candidates,
         candidate_duration_sums, definite_duration_sums, roots, tile_count,
         whole_block, api_profile, shared_gate_up, fused_softmax_pv,
-        check_softmax_pv_f32)
+        check_softmax_pv_f32, scale_softmax, check_scale_softmax_f32)
     end
 
     def attention_graph_topology : String
+      return "f32_scale_softmax_candidate_first_dual_path_check" if @check_scale_softmax_f32
       return "f32_softmax_pv_dual_path_check" if @check_softmax_pv_f32
+      return "separate_qk_scale_folded_softmax_pv" if @scale_softmax
       @fused_softmax_pv ? "separate_qk_fused_softmax_pv" : "separate_qk_separate_softmax_pv"
     end
 
@@ -159,7 +182,9 @@ module ML::Video
         json.field "attention_tile_count", @tile_count
         json.field "fused_softmax_pv", @fused_softmax_pv
         json.field "check_softmax_pv_f32", @check_softmax_pv_f32
-        json.field "timing_eligible", !@check_softmax_pv_f32
+        json.field "scale_softmax", @scale_softmax
+        json.field "check_scale_softmax_f32", @check_scale_softmax_f32
+        json.field "timing_eligible", !(@check_softmax_pv_f32 || @check_scale_softmax_f32)
         json.field "attention_graph_topology", attention_graph_topology
         json.field "ffn_graph_topology",
           @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
@@ -288,14 +313,25 @@ module ML::Video
                                            tile_count : Int32,
                                            shared_gate_up : Bool,
                                            fused_softmax_pv : Bool,
-                                           check_softmax_pv_f32 : Bool) : Nil
+                                           check_softmax_pv_f32 : Bool,
+                                           check_scale_softmax_f32 : Bool) : Nil
       # Reuse the existing MPS API phase IDs without applying the Wan-specific
-      # full-block validator: PixelUMM phase 2 is its two-, three-, or
-      # four-per-tile local attention graph, and phase 4 is unused.
+      # full-block validator: PixelUMM phase 2 is its two-, three-, four-, or
+      # five-per-tile local attention graph, and phase 4 is unused. Scale-folded
+      # attention has the same three-Graph count as the separate path.
+      graphs_per_tile = if check_scale_softmax_f32
+                          5_u64
+                        elsif check_softmax_pv_f32
+                          4_u64
+                        elsif fused_softmax_pv
+                          2_u64
+                        else
+                          3_u64
+                        end
       expected_graph_calls = {
         0 => 0_u64,
         1 => 9_u64, # input norm, QKV, Q/K norm statistics and inverse
-        2 => (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64,
+        2 => graphs_per_tile * tile_count.to_u64,
         3 => 3_u64,                            # output projection, post norm and gain
         4 => 0_u64,                            # PixelUMM has no cross-attention phase
         5 => (shared_gate_up ? 2_u64 : 3_u64), # shared/separate gate-up plus down projection
@@ -326,7 +362,7 @@ module ML::Video
       end
 
       expected_total = (shared_gate_up ? 14_u64 : 15_u64) +
-                       (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64
+                       graphs_per_tile * tile_count.to_u64
       unless graph_calls == expected_total
         raise ArgumentError.new("PixelUMM API profile has an unexpected total Graph call count")
       end

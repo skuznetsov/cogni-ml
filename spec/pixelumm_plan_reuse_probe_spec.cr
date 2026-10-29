@@ -2,6 +2,67 @@ require "spec"
 require "../examples/support/pixelumm_plan_reuse_probe"
 
 describe PixelUMMPlanReuseProbe do
+  it "admits scale-folding only as a separate two-Plan unshared experiment" do
+    PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(2, false,
+      false, true).should be_nil
+    PixelUMMPlanReuseProbe.scale_softmax_for_plan!(true, 2, false, 0).should be_false
+    PixelUMMPlanReuseProbe.scale_softmax_for_plan!(true, 2, false, 1).should be_true
+    PixelUMMPlanReuseProbe.scale_softmax_for_plan!(false, 1, false, 0).should be_false
+    PixelUMMPlanReuseProbe.attention_mode_for_plan!(false, true, 2, false, 0).should eq("separate_softmax_pv")
+    PixelUMMPlanReuseProbe.attention_mode_for_plan!(false, true, 2, false, 1).should eq("scale_softmax")
+    PixelUMMPlanReuseProbe.attention_graph_topology_for_plan!(false, true,
+      2, false, 1).should eq("separate_qk_scale_folded_softmax_pv")
+    PixelUMMPlanReuseProbe.scale_softmax_correctness_schedule(2, false).should eq([
+      {index: 0_i32, plan_index: 1_i32, warmup: false},
+    ])
+
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(2, false,
+        true, true)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(1, false,
+        false, true)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(2, true,
+        false, true)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.scale_softmax_for_plan!(true, 2, false, 2)
+    end
+  end
+
+  it "admits the scale-fold F32 checker only with the scale-fold mode" do
+    PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(true, true,
+      2, false).should be_nil
+    PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(false, false,
+      2, false).should be_nil
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(false, true,
+        2, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(true, true,
+        1, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(true, true,
+        2, true)
+    end
+    geometry = PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(2048)
+    metrics = Array.new(PixelUMMPlanReuseProbe::F32_CHECK_METRIC_SLOTS) do
+      {failures: 0_u32, different_words: 0_u32, nonfinite: 0_u32, elements: 0_u32}
+    end
+    metrics[8] = {failures: 0_u32, different_words: 3_u32, nonfinite: 0_u32,
+                  elements: geometry[:probability_elements]}
+    metrics[9] = {failures: 0_u32, different_words: 2_u32, nonfinite: 0_u32,
+                  elements: geometry[:attended_elements]}
+    metrics[10] = {failures: 1_u32, different_words: 1_u32, nonfinite: 1_u32,
+                   elements: 1_u32}
+    PixelUMMPlanReuseProbe.validate_scale_softmax_f32_metrics!(metrics, geometry).should be_nil
+  end
+
   it "admits softmax/PV mode only for the two-Plan unshared comparison before Metal setup" do
     PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(2, false, true).should be_nil
     PixelUMMPlanReuseProbe.validate_softmax_pv_configuration!(1, false, false).should be_nil

@@ -109,6 +109,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic, strong) PixelUMMGraphStep *softmax;
 @property(nonatomic, strong) PixelUMMGraphStep *pv;
 @property(nonatomic, strong) PixelUMMGraphStep *softmaxPV;
+@property(nonatomic, strong) PixelUMMGraphStep *scaleSoftmax;
 @end
 @implementation PixelUMMAttentionGeometry
 @end
@@ -180,6 +181,8 @@ struct PixelUMMNativeIslands {
 @property(nonatomic) BOOL useSharedGateUp;
 @property(nonatomic) BOOL softmaxPVPrepared;
 @property(nonatomic) BOOL useSoftmaxPV;
+@property(nonatomic) BOOL scaleSoftmaxPrepared;
+@property(nonatomic) BOOL useScaleSoftmax;
 @property(nonatomic) BOOL encodingStarted;
 @property(nonatomic) BOOL useNativeIslands;
 @property(nonatomic) uint64_t captureMask;
@@ -740,7 +743,8 @@ static PixelUMMGraphStep *pixel_attention_softmax_step(
     id<MTLDevice> device, id<MTLBuffer> scoresBuffer,
     id<MTLBuffer> probabilitiesBuffer, uint32_t queryCount,
     uint32_t keyCount, NSString *name, char *errorText,
-    size_t errorCapacity) {
+    size_t errorCapacity, bool scaleInput = false,
+    float scaleValue = 1.0f / sqrtf(128.0f)) {
   MPSGraph *graph = [MPSGraph new];
   graph.options = MPSGraphOptionsNone;
   NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
@@ -748,7 +752,17 @@ static PixelUMMGraphStep *pixel_attention_softmax_step(
   NSMutableArray *inputData = [NSMutableArray array];
   NSArray *shape = pixel_shape({1, 32, queryCount, keyCount});
   MPSGraphTensor *scores = pixel_add_feed(graph, feeds, placeholders, inputData,
-      scoresBuffer, shape, MPSDataTypeFloat32, @"local_scaled_scores_f32");
+      scoresBuffer, shape, MPSDataTypeFloat32,
+      scaleInput ? @"local_raw_scores_f32" : @"local_scaled_scores_f32");
+  if (scores && scaleInput) {
+    // Promote the baseline Float32 constant exactly, rather than recomputing
+    // it as double. Keep the multiply in F32 before axis-3 softmax. Numerical
+    // qualification must still check the compiled graph's rounding behavior.
+    MPSGraphTensor *scale = [graph constantWithScalar:double(scaleValue)
+        shape:@[@1] dataType:MPSDataTypeFloat32];
+    scores = [graph multiplicationWithPrimaryTensor:scores secondaryTensor:scale
+        name:@"local_score_scale_f32"];
+  }
   MPSGraphTensor *probabilities = scores
       ? [graph softMaxWithTensor:scores axis:3 name:@"local_softmax_f32"] : nil;
   if (!scores || !probabilities) {
@@ -1270,7 +1284,7 @@ static cogni::NativeGraphOp pixel_native_op(
 static bool pixel_prepare_native_islands(PixelUMMDecoderPlan *plan,
                                          GsCogniGraphCompile compiler) {
   if (!compiler || plan.encodingStarted || plan->nativeIslands ||
-      !plan.tileCount || plan.softmaxPVCompare) return false;
+      !plan.tileCount || plan.softmaxPVCompare || plan.scaleSoftmaxPrepared) return false;
   auto islands = std::make_unique<PixelUMMNativeIslands>();
   islands->captureMask = plan.captureMask;
   auto compile = [&](cogni::PreparedNativeGraph &graph,
@@ -1883,7 +1897,7 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       @synchronized(plan) {
-        if (plan.encodingStarted || plan.softmaxPVPrepared ||
+        if (plan.encodingStarted || plan.softmaxPVPrepared || plan.scaleSoftmaxPrepared ||
             plan.attentionGeometries.count == 0 || plan.scratch.count != kPixelScratchCount) {
           pixel_set_error(errorText, errorCapacity,
               "PixelUMM softmax/PV must be prepared once before the first encode");
@@ -1918,6 +1932,72 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
   return -5;
 }
 
+// Opt-in alternative: raw F32 scores -> F32 scale -> rank-4 softmax.
+// Preparation and selection require the serialized caller to be idle. No
+// synchronization or resource allocation is inserted into block encoding.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_scale_softmax(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity, "invalid PixelUMM scale/softmax preparation");
+    return -1;
+  }
+  if (@available(macOS 14.0, *)) {
+    @autoreleasepool {
+      PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+      @synchronized(plan) {
+        if (plan.encodingStarted || plan.scaleSoftmaxPrepared || plan.softmaxPVPrepared ||
+            plan->nativeIslands || plan.useNativeIslands ||
+            plan.attentionGeometries.count == 0 || plan.scratch.count != kPixelScratchCount) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM scale/softmax requires an idle unprepared baseline attention plan");
+          return -2;
+        }
+        @try {
+          NSMutableArray<PixelUMMGraphStep *> *alternatives = [NSMutableArray array];
+          for (PixelUMMAttentionGeometry *geometry in plan.attentionGeometries) {
+            NSString *name = [NSString stringWithFormat:@"attention_scale_softmax_q%u_k%u",
+                geometry.queryCount, geometry.keyCount];
+            PixelUMMGraphStep *step = pixel_attention_softmax_step(plan.device,
+                plan.scratch[3], plan.scratch[4], geometry.queryCount, geometry.keyCount,
+                name, errorText, errorCapacity, true);
+            if (!step) return -3;
+            [alternatives addObject:step];
+          }
+          for (NSUInteger index = 0; index < alternatives.count; ++index)
+            plan.attentionGeometries[index].scaleSoftmax = alternatives[index];
+          plan.scaleSoftmaxPrepared = YES;
+          plan.useScaleSoftmax = enabled != 0;
+          return 0;
+        } @catch (NSException *exception) {
+          pixel_set_ns_error(errorText, errorCapacity, exception.reason);
+          return -4;
+        }
+      }
+    }
+  }
+  pixel_set_error(errorText, errorCapacity, "PixelUMM MPS path requires macOS 14 or newer");
+  return -5;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_set_scale_softmax(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity, "invalid PixelUMM scale/softmax selection");
+    return -1;
+  }
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+  @synchronized(plan) {
+    if (!plan.scaleSoftmaxPrepared || plan.softmaxPVPrepared || plan.useNativeIslands) {
+      pixel_set_error(errorText, errorCapacity, "PixelUMM scale/softmax was not prepared");
+      return -2;
+    }
+    plan.useScaleSoftmax = enabled != 0;
+  }
+  return 0;
+}
+
 // Correctness-only admission; the caller owns and serializes these three extra
 // buffers under the same lifecycle as the Plan's ordinary scratch bindings.
 extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
@@ -1932,10 +2012,11 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       @synchronized(plan) {
-        if (plan.encodingStarted || !plan.softmaxPVPrepared || plan.softmaxPVCompare ||
+        if (plan.encodingStarted ||
+            (plan.softmaxPVPrepared == plan.scaleSoftmaxPrepared) || plan.softmaxPVCompare ||
             plan.scratch.count != kPixelScratchCount) {
           pixel_set_error(errorText, errorCapacity,
-              "PixelUMM F32 check requires prepared softmax/PV before the first encode");
+              "PixelUMM F32 check requires one prepared attention alternative before encode");
           return -2;
         }
         id<MTLBuffer> probabilities = (__bridge id<MTLBuffer>)probabilitySnapshotHandle;
@@ -2054,6 +2135,41 @@ static bool pixel_check_softmax_pv_tile(MPSCommandBuffer *commandBuffer,
                                   panelCount * 4u, true, errorText, errorCapacity);
 }
 
+static bool pixel_check_scale_softmax_tile(MPSCommandBuffer *commandBuffer,
+    PixelUMMDecoderPlan *plan, PixelUMMAttentionGeometry *geometry,
+    uint64_t scoreCount, uint64_t panelCount, bool selectCandidate, bool positive,
+    char *errorText, size_t errorCapacity) {
+  // The candidate must run first: the baseline scales scratch[3] in place.
+  // Both paths therefore consume exactly the same raw QK and V. Snapshots and
+  // this extra work exist only in an explicitly admitted correctness run.
+  if (!pixel_encode_graph(commandBuffer, geometry.scaleSoftmax, errorText, errorCapacity) ||
+      !pixel_encode_graph(commandBuffer, geometry.pv, errorText, errorCapacity) ||
+      !pixel_softmax_pv_snapshot(commandBuffer, plan, scoreCount * 4u,
+                                panelCount * 4u, false, errorText, errorCapacity)) return false;
+  PixelScaleParams scaleParams{uint32_t(scoreCount), 1.0f / sqrtf(128.0f)};
+  if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scaleScores,
+          @[plan.scratch[3]], &scaleParams, sizeof(scaleParams), scoreCount,
+          false, errorText, errorCapacity) ||
+      !pixel_encode_graph(commandBuffer, geometry.softmax, errorText, errorCapacity) ||
+      !pixel_encode_graph(commandBuffer, geometry.pv, errorText, errorCapacity)) return false;
+  for (uint32_t field = 0; field < 2; ++field) {
+    const uint32_t count = uint32_t(field ? panelCount : scoreCount);
+    PixelF32CompareParams params{count, 8u + field, 2e-5f, 2e-5f, 0u};
+    if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+          @[field ? plan.attendedSnapshot : plan.probabilitySnapshot,
+            plan.scratch[field ? 5 : 4], plan.softmaxPVCheckMetrics],
+          &params, sizeof(params), count, false, errorText, errorCapacity)) return false;
+  }
+  if (positive) {
+    PixelF32CompareParams params{1u, 10u, 2e-5f, 2e-5f, 1u};
+    if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+          @[plan.attendedSnapshot, plan.scratch[5], plan.softmaxPVCheckMetrics],
+          &params, sizeof(params), 1u, false, errorText, errorCapacity)) return false;
+  }
+  return !selectCandidate || pixel_softmax_pv_snapshot(commandBuffer, plan,
+      scoreCount * 4u, panelCount * 4u, true, errorText, errorCapacity);
+}
+
 static int32_t pixel_encode_block(
     void *planHandle, void *commandChainHandle, char *errorText,
     size_t errorCapacity, void *profileChain,
@@ -2069,10 +2185,12 @@ static int32_t pixel_encode_block(
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       BOOL useSharedGateUp = NO;
       BOOL useSoftmaxPV = NO;
+      BOOL useScaleSoftmax = NO;
       BOOL useNativeIslands = NO;
       @synchronized(plan) {
         useSharedGateUp = plan.useSharedGateUp;
         useSoftmaxPV = plan.useSoftmaxPV;
+        useScaleSoftmax = plan.useScaleSoftmax;
         useNativeIslands = plan.useNativeIslands;
         plan.encodingStarted = YES;
       }
@@ -2193,21 +2311,34 @@ static int32_t pixel_encode_block(
                   errorText, errorCapacity)) return -9;
           if (!pixel_encode_graph(commandBuffer, geometry.qk,
                                   errorText, errorCapacity)) return -9;
-          PixelScaleParams scaleParams{(uint32_t)scoreCount, 1.0f / sqrtf(128.0f)};
-          if (!pixel_encode_kernel(commandBuffer, plan.device, plan.scaleScores,
+          if (plan.softmaxPVCompare && plan.scaleSoftmaxPrepared) {
+            if (!pixel_check_scale_softmax_tile(commandBuffer, plan, geometry,
+                    scoreCount, panelCount, useScaleSoftmax, tileIndex == 0,
+                    errorText, errorCapacity)) return -10;
+          } else {
+            PixelScaleParams scaleParams{(uint32_t)scoreCount, 1.0f / sqrtf(128.0f)};
+            if (!useScaleSoftmax &&
+                !pixel_encode_kernel(commandBuffer, plan.device, plan.scaleScores,
                 @[plan.scratch[3]], &scaleParams, sizeof(scaleParams), scoreCount,
                 false, errorText, errorCapacity)) return -10;
-          if (useSoftmaxPV) {
-            if (!plan.softmaxPVPrepared ||
-                !pixel_encode_graph(commandBuffer, geometry.softmaxPV,
-                    errorText, errorCapacity)) return -10;
-          } else if (!pixel_encode_graph(commandBuffer, geometry.softmax,
-                         errorText, errorCapacity) ||
-                     !pixel_encode_graph(commandBuffer, geometry.pv,
-                         errorText, errorCapacity)) return -10;
-          if (plan.softmaxPVCompare &&
-              !pixel_check_softmax_pv_tile(commandBuffer, plan, geometry, scoreCount,
-                  panelCount, useSoftmaxPV, tileIndex == 0, errorText, errorCapacity)) return -10;
+            if (useScaleSoftmax) {
+              if (!plan.scaleSoftmaxPrepared ||
+                  !pixel_encode_graph(commandBuffer, geometry.scaleSoftmax,
+                      errorText, errorCapacity) ||
+                  !pixel_encode_graph(commandBuffer, geometry.pv,
+                      errorText, errorCapacity)) return -10;
+            } else if (useSoftmaxPV) {
+              if (!plan.softmaxPVPrepared ||
+                  !pixel_encode_graph(commandBuffer, geometry.softmaxPV,
+                      errorText, errorCapacity)) return -10;
+            } else if (!pixel_encode_graph(commandBuffer, geometry.softmax,
+                           errorText, errorCapacity) ||
+                       !pixel_encode_graph(commandBuffer, geometry.pv,
+                           errorText, errorCapacity)) return -10;
+            if (plan.softmaxPVCompare &&
+                !pixel_check_softmax_pv_tile(commandBuffer, plan, geometry, scoreCount,
+                    panelCount, useSoftmaxPV, tileIndex == 0, errorText, errorCapacity)) return -10;
+          }
           PixelScatterParams scatterParams{tileIndex, plan.maxQuery, queryCount};
           if ((!useNativeIslands || tileIndex + 1 == plan.tileCount) &&
               !pixel_encode_kernel(commandBuffer, plan.device, plan.scatterAttention,

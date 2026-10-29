@@ -44,12 +44,14 @@ private def pixelumm_api_profile(tile_count : Int32,
                                  continuation_override : UInt64? = nil,
                                  linear_calls : UInt64 = 0_u64,
                                  fused_softmax_pv : Bool = false,
-                                 check_softmax_pv_f32 : Bool = false) : ML::Video::MPSAPIProfile
+                                 check_softmax_pv_f32 : Bool = false,
+                                 scale_softmax : Bool = false,
+                                 check_scale_softmax_f32 : Bool = false) : ML::Video::MPSAPIProfile
   graph_counts = {
     0 => 0_u64,
     1 => 9_u64,
     2 => graph_attention_override ||
-         ((check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64)) * tile_count.to_u64),
+         ((check_scale_softmax_f32 ? 5_u64 : (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64))) * tile_count.to_u64),
     3 => 3_u64,
     4 => 0_u64,
     5 => graph_ffn_override || 3_u64,
@@ -253,6 +255,72 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
         duration, check_api, 1, shared_gate_up: true,
         check_softmax_pv_f32: true)
+    end
+  end
+
+  it "profiles scale-fold candidate and candidate-first correctness paths distinctly" do
+    markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
+    roots = pixelumm_profile_roots(5)
+    duration = pixelumm_root_duration_sum(roots)
+
+    scale_api = pixelumm_api_profile(1, roots.size, scale_softmax: true)
+    scale = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, scale_api, 1, scale_softmax: true)
+    scale.scale_softmax.should be_true
+    scale.check_scale_softmax_f32.should be_false
+    scale.attention_graph_topology.should eq("separate_qk_scale_folded_softmax_pv")
+    scale.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
+      .operations["graph_encode"].count.should eq(3_u64)
+    scale_json = JSON.parse(scale.to_json)
+    scale_json["scale_softmax"].as_bool.should be_true
+    scale_json["timing_eligible"].as_bool.should be_true
+
+    check_api = pixelumm_api_profile(1, roots.size,
+      scale_softmax: true, check_scale_softmax_f32: true)
+    checked = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, check_api, 1, scale_softmax: true,
+      check_scale_softmax_f32: true)
+    checked.scale_softmax.should be_true
+    checked.check_scale_softmax_f32.should be_true
+    checked.attention_graph_topology.should eq("f32_scale_softmax_candidate_first_dual_path_check")
+    checked.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
+      .operations["graph_encode"].count.should eq(5_u64)
+    checked_json = JSON.parse(checked.to_json)
+    checked_json["check_scale_softmax_f32"].as_bool.should be_true
+    checked_json["timing_eligible"].as_bool.should be_false
+    checked_json["attention_graph_topology"].as_s
+      .should eq("f32_scale_softmax_candidate_first_dual_path_check")
+
+    full_api = pixelumm_api_profile(60, roots.size,
+      scale_softmax: true, check_scale_softmax_f32: true)
+    full = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, full_api, 60, scale_softmax: true,
+      check_scale_softmax_f32: true)
+    full.api_profile.phases.sum do |phase|
+      phase.operations["graph_encode"].count
+    end.should eq(315_u64)
+
+    wrong_count = pixelumm_api_profile(1, roots.size,
+      graph_attention_override: 4_u64, scale_softmax: true,
+      check_scale_softmax_f32: true)
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, wrong_count, 1, scale_softmax: true,
+        check_scale_softmax_f32: true)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, scale_api, 1, fused_softmax_pv: true,
+        scale_softmax: true)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, scale_api, 1, check_scale_softmax_f32: true)
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+        duration, check_api, 1, scale_softmax: true,
+        check_softmax_pv_f32: true, check_scale_softmax_f32: true)
     end
   end
 

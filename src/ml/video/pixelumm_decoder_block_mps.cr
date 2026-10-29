@@ -67,6 +67,12 @@ end
     fun plan_prepare_softmax_pv = gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
     ) : Int32
+    fun plan_prepare_scale_softmax = gs_pixelumm_decoder_block_plan_prepare_scale_softmax(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun plan_set_scale_softmax = gs_pixelumm_decoder_block_plan_set_scale_softmax(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
     fun plan_prepare_softmax_pv_check = gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
       plan : Void*, probabilities_snapshot : Void*, attended_snapshot : Void*,
       metrics : Void*, error : UInt8*, error_capacity : LibC::SizeT,
