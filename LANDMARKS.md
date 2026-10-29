@@ -6,6 +6,33 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-NOMINAL-HEADROOM-2026-10-29] Twofold nominal gap is not an upstream speed measurement
+
+- VERIFIED CPU-only recomputation at parent73909256: the 54.013s ideal versus
+  103.315s historical preview compares counted work/nominal13.6TFLOP/s with
+  measured neural time. It is not an attainable floor or native/upstream ratio.
+- Real J21120 isolated gate/up/down rates are11.457/10.803TFLOP/s of counted
+  work per GPU-root interval (84.24/79.43% nominal, not ALU utilization). No
+  transfer to J5760 or36-block latency is admitted. Halving the saved preview's
+  entire decoder/display phase implies1.485659x neural/1.292826x application
+  speedup conditionally; these are not measured gains.
+- Three correlated Quad audits separate unchanged-arithmetic failures from
+  rejected F16/SDPA accuracy paths. Drift44.939->84.561->50.567s remains open.
+  Decision: pause blind tile/fusion grids; next probe is native J5760 FFN A/A
+  with GPU checks, reused buffers, one terminal wait and no per-sample host
+  capture allocation/hash/GC. Its current fixture is initial-noise conditioning,
+  not generated DiT latents; it cannot diagnose the distinct full-J chain's
+  drift, which needs a matched-chain diagnostic-policy replay. Keep2e-5
+  gates/10% reserve; no generation ran.
+- DoD: external verify_headroom.py PASS for five pinned reports/516 records,
+  local links/anchors and git diff --check. Return
+  docs/hy-nomas-performance-introspection.md, current reassessment section;
+  evidence /opt/mldata_ssd/cogni-ml/hy-nomas-deep-quad-20261029/headroom-audit.json
+  SHA cc653be8c7c6af00b634c547281aa81c98fad7675ec08670036a266ecb57e2ae.
+  ROBUST for scoped arithmetic; causal/stable-speed claims remain VULNERABLE.
+  Refresh on source/operands/geometry/precision, backend/device/toolchain,
+  schedule/guard or artifact changes. No executable code or default changed.
+
 ### [LM-HY-NOMAS-PIXELUMM-GATE-UP-ROWS-2026-10-29] Full-K row tiling preserves outputs but does not qualify as acceleration
 
 - VERIFIED bounded qualification of opt-in separate F32 gate/up graphs with

@@ -1,5 +1,174 @@
 # Hy-Nomas performance introspection, 2026-10-26
 
+## Current reassessment: distinguish nominal headroom from measured loss, 2026-10-29
+
+This section supersedes the historical next-action list below. It is a
+read-only executable-source audit at parent `73909256`, with CPU recomputation
+of frozen reports and three fresh-context, correlated Quad reviews. No model,
+GPU probe, Studio, build, profiler or generation ran. Production selectors,
+precision and synchronization are unchanged.
+
+### The missing denominator
+
+The often-quoted twofold gap is **not a measured native-versus-upstream speed
+ratio**. It divides 734.577 TFLOP of modeled preview matrix work by a nominal
+13.6 TFLOP/s and compares the resulting 54.013 s with a historical 103.315 s
+neural execution. That ideal omits elementwise work, conversions, reductions,
+resource preparation and scheduling. The nominal rate is not calibrated
+sustained throughput, hardware utilization or a hard bound for every opaque
+BF16-fed MPS operation. See the
+[operation-count model](hy-nomas-generation-frontier.md#operation-count-roofline-for-the-fixed-bf16-preview-2026-10-29).
+Saved upstream tensors establish the stated numerical checkpoints; they do not
+provide an upstream timing denominator.
+
+Three workloads must remain distinct:
+
+- The saved complete preview is 120 frames at 512x288/24 fps, with eight DiT
+  steps and five overlapping J5760 PixelUMM windows, using saved Qwen state.
+- The latest integrated diagnostic is one J21120 chain of 36 decoder blocks
+  and the head, with no diffusion or generation.
+- The isolated FFN probe uses actual J21120 rows once, one block's saved
+  weights/activations and stage GPU-root intervals. Its timings are not a
+  complete request, exclusive shader cycles or a prediction for J5760.
+
+The original non-CUDA upstream decoder uses eager dense attention rather than
+the bounded local implementation. Do not launch it as an alleged fair MPS
+speed control: it has a different work/memory contract. A projected dense F32
+score tensor at J21120 alone is 53.174 GiB. The existing adapted Torch 2.6 MPS
+oracle remains a numerical control, not a fresh original-upstream speed run.
+
+### The large GEMMs already have much less than twofold nominal headroom
+
+For J21120, D4096 and F12288, one FFN projection costs
+`2*J*D*F = 2,126,008,811,520` FLOPs. The frozen isolated baseline yields:
+
+| Phase | Counted TFLOP | GPU-root interval, ms | Effective TFLOP/s | Fraction of nominal 13.6 |
+| --- | ---: | ---: | ---: | ---: |
+| Gate + up | 4.252018 | 371.140 | 11.457 | 84.24% |
+| Down | 2.126009 | 196.807 | 10.803 | 79.43% |
+
+These graph intervals include their casts and are admitted without overlap
+with other observed roots in the measured samples. They do not measure ALU
+utilization. At the assumed nominal rate, their arithmetic-only times would be
+312.648 and 156.324 ms: conditional reductions of 15.76% and 20.57%, rather
+than 50%. This does not prove the optimum or bound a different arithmetic
+implementation. Do not multiply these intervals by 36 or transfer them to the
+different preview geometry. An overall work/wall ratio near half the nominal
+rate does not imply that each dense GEMM has half its potential throughput.
+
+The large-row workload also differs from token decoding in Qwen/Nomic:
+weights are reused across thousands of rows. The existing one-pass interface
+model gives about 1,002 FLOP/byte for the J5760 F32 gate projection. It is not
+a physical DRAM measurement, but it invalidates an automatic transfer of
+memory-bound single-token compression/lock-removal gains to this GEMM.
+
+### Why the unsuccessful experiments are not equivalent
+
+- Shared/packed gate-up, transposition and M-row tiling keep full-K arithmetic.
+  Fewer graphs or shorter host encoding need not reduce GPU service. In the
+  packed experiment, encoding fell 15.6% while terminal waiting grew 14.3%;
+  whole-request time did not improve. Direct MPS reduced roots from 125 to 97
+  but worsened paired request time by 7.7%.
+- The native F32 kernel passed its saved numerical gate but was about 4.6x
+  slower than the relevant MPS projection. More custom code is not evidence
+  of a better dense implementation.
+- Native F16 and SDPA were rejected by unchanged numerical gates. No speed
+  qualification followed; these are accuracy failures, not measurements
+  proving that faster arithmetic cannot help. Algebraic equivalence does not
+  preserve the reference's reduction and BF16 rounding boundaries.
+- The earlier explicit-F32 FFN graph did reduce a bounded connected block's
+  latency by 25-29%. This is evidence that MPS lowering/algorithm selection can
+  matter; it is not a fresh full-generation gain. See the
+  [FFN qualification](hy-nomas-pixelumm-block-frontier.md#earlier-single-block-f32-ffn-graph-qualification-2026-10-27).
+
+Concatenating the SwiGLU gate/up matrices leaves the two dense products and
+the intervening nonlinear product intact. Unlike an affine recurrent scan,
+the row-parallel FFN has no identified sequential recurrence to expose through
+associative composition. No exact algebraic reduction in its arithmetic has
+been established here. Surrogates, changed attention reductions and fewer
+diffusion steps need their own error/quality contract; they cannot silently
+inherit the unchanged implementation-parity claim.
+
+### Real drift remains unexplained
+
+The same latest baseline takes 44.939 s during warmup, then 84.561 s on its
+first timed request and 50.567 s later. Apparent row-tiling improvements are
+14.895% in normal order and 0.483% in reverse order, failing the prospective
+3% criterion. These samples neither prove equivalence nor a stable slowdown.
+
+Each full request has 43 retained capture records and post-wait diagnostic
+reads; 516 comparisons belong to the twelve-request set, not each request.
+These are not 43 mandatory blits: head captures use resident buffers and some
+block outputs can alias the workspace rather than create copy buffers.
+The 37.9-45.6 s host diagnostic work is outside the request timer and cannot
+directly explain a slow measured GPU envelope. It can change the next
+request's host/device state. The nearly continuous root-interval coverage
+also weakens CPU producer starvation as the leading explanation, while not
+proving active GPU saturation. Clock/power, competing GPU work, backend
+resource pressure and diagnostic carryover remain competing hypotheses.
+GC-off, weight staging and root-count reductions have existing negative
+controls; do not reopen those routes solely from source-level suspicion.
+
+### Decision and next falsifier
+
+Stop treating twofold nominal headroom as a promised optimization target, and
+pause further tile-size/fusion grids that preserve the same arithmetic.
+The next bounded native calibration should use the **J5760 preview geometry**,
+reused buffers/plans and repeated baseline FFN samples. Pin the operand and
+oracle provenance before running: the existing J5760 drift fixture uses saved
+initial-noise conditioning, explicitly not generated DiT latents. It can
+calibrate that fixture/shape, not establish representative preview activation
+throughput or quality. Retain GPU comparisons against the same saved upstream
+values, one existing terminal wait, unchanged `atol=rtol=2e-5` and the
+cache-aware 10% reserve. Do not put per-capture host allocation, hashing or GC
+between the measured samples. A short replicated A/A precedes any new
+candidate; no full generation is required.
+
+The second obligation is separate: attribution of severe drift in the
+J21120 36-block-plus-head chain requires a matched replay of that same chain,
+input, captures, resources and request spacing, changing only the inter-request
+host diagnostic policy. An isolated J5760 result cannot answer that question.
+If drift survives without those diagnostics in the matched chain, they are not
+a necessary cause; if it disappears, reinstating only that policy must
+reproduce it before claiming causality. GPU clock or contention attribution
+requires direct observations, not a timing label.
+Only then choose an attention/reduction or backend-resource probe from the
+remaining measured wall cost. Existing overlapping phase intervals cannot be
+summed into an exclusive cost breakdown. Root tracking/callback overhead is
+also a hypothesis until its CPU cost is observed; it does not justify a new
+queue/runtime rewrite.
+
+Use actual phase time for pipeline predictions. The saved preview has
+35.768158459 s DiT, 67.547219917 s decoder windows/display and 149.110485917 s
+total application time. Even a hypothetical halving of that entire decoder
+phase gives **1.485659x neural** or **1.292826x application** speedup, holding
+everything else fixed. These are Amdahl calculations, not measured gains. A
+twofold whole-pipeline target must also address DiT/setup or reduce work.
+
+Executed CPU DoD:
+
+```sh
+python3 /opt/mldata_ssd/cogni-ml/hy-nomas-deep-quad-20261029/verify_headroom.py
+git diff --check
+```
+
+The verifier reports PASS for five pinned reports, projection rates, both
+orders, 516 records, baseline drift and conditional phase-Amdahl arithmetic.
+It checks all twelve requests retain one wait and zero preterminal reads or
+tracked encode allocations. The report is
+`/opt/mldata_ssd/cogni-ml/hy-nomas-deep-quad-20261029/headroom-audit.json`,
+SHA256 `cc653be8c7c6af00b634c547281aa81c98fad7675ec08670036a266ecb57e2ae`.
+It pins the five source reports. The row-tiling runtime evidence refers to its
+archived measured sources; the later comment-only correction is documented in
+the [generation frontier](hy-nomas-generation-frontier.md#gateup-row-tiling-does-not-qualify-as-acceleration-2026-10-29),
+not a fresh live-source GPU audit. Correlated Adversary verdict: ROBUST for
+the arithmetic and narrower scope; VULNERABLE for any claimed cause of drift,
+attainable optimum or stable upstream speed ratio. Refresh on source,
+operand/geometry/precision, backend/device/toolchain, schedule, guard or
+artifact changes. No new GPU performance or quality result is established.
+
+## Historical audit, 2026-10-26
+
 This is a source and evidence audit at native parent `5b7803f8`, not a new GPU
 benchmark or a generation-quality result. The three fresh-context Quad audits
 are correlated review. No model, Studio, build, profiler or generation was
