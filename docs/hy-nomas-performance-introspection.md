@@ -1,5 +1,150 @@
 # Hy-Nomas performance introspection, 2026-10-26
 
+## J5760 FFN continuation attribution, 2026-10-29
+
+A diagnostic-only continuation trace now localizes the late host-encoding
+increase observed in the baseline below. Four arms ran sequentially on one
+process and owner thread in OFF/ON/ON/OFF order. API profiling stays enabled
+in all arms; only the existing continuation trace changes. Each arm constructs
+a fresh one-shot owner and command chain, reuses its buffers/plans across the
+same two warmups and sixteen measured samples, and releases them after its
+single terminal wait. The fixture/cache are authenticated once before all arms.
+No generation, Studio, production selector, arithmetic, or synchronization
+policy changed.
+
+### Result and interpretation
+
+| Arm | Continuation trace | FFN GPU-root union median | Continuation wall total | Continuation owner-thread CPU total | Graph-exclusive wall total |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 0 | off | 159.260 ms | 1,861.133 ms | 3.466 ms | 14.591 ms |
+| 1 | on | 161.206 ms | 1,847.810 ms | 2.932 ms | 11.854 ms |
+| 2 | on | 166.150 ms | 1,941.864 ms | 3.134 ms | 11.545 ms |
+| 3 | off | 159.701 ms | 1,813.581 ms | 1.807 ms | 11.138 ms |
+
+The late per-sample host encode increase reproduces in every arm: early
+samples need about 0.16-0.58 ms, while late samples need about 104-140 ms.
+Almost all encoding-loop wall time is inside `commitAndContinue`; graph
+exclusive time is only about 11-15 ms over all 54 graph calls. Graph inclusive
+time already contains nested continuations and must not be added to them.
+The sample timer excludes explicit leading/trailing continuation boundaries;
+the serialized API totals and trace include them.
+
+For the two traced arms, the union of **earlier** GPU command-root envelopes
+overlaps 99.9881% and 99.9914% of continuation-call wall time. Root *i*, being
+submitted by event *i*, is excluded: only sequences less than *i* contribute.
+Intervals are merged before summing so overlapping roots cannot double-count
+time. The entire chain has only 1.817 ms and 1.696 ms between root envelopes
+in the traced arms. This is evidence against large gaps from a CPU producer
+failing to submit work at this shape. It is not a measurement of shader
+occupancy or ALU-active cycles within a command-buffer envelope.
+
+The observed increase is therefore localized to low-owner-thread-CPU calls
+while prior GPU work remains in flight. Backend backpressure is consistent
+with this pattern, but timing overlap does not prove why an Apple API blocked
+or descheduled the thread. Removing 1.8-1.9 seconds of reported host waits is
+not a supported latency-saving prediction: that host wall overlaps GPU work.
+These measurements do not justify another lock/GC/command-encoding rewrite
+as the main acceleration lever for this FFN. They also do not explain the
+separate J21120 full-chain drift.
+
+A second discriminator counts earlier roots whose completion callbacks had
+not yet been observed when each continuation began. In both traced arms,
+all 33 calls longer than 10 ms begin with exactly 63 such roots; none begins
+below 63. The oldest pending root is always `current_sequence - 63`. Calls
+return 0.016-0.167 ms after that root's callback observation, or 0.109-1.323 ms
+after its GPU end timestamp. Their median wall times are 51.335 and 53.651 ms.
+This supports admission backpressure at a fixed pending-root window. Callback
+pending is not a count of physically active GPU commands, and the pattern
+does not identify a driver lock or prove a specific Metal/MPS capacity limit.
+Increasing queue capacity alone is not a supported speedup prediction.
+
+The two traced GPU medians are higher than the two API-only medians, with
+variation even between the traced repeats. Four arms do not establish zero
+observer effect or equivalence. This control measures incremental trace cost
+conditional on API profiling; it does not measure the API profiler's own cost.
+No performance candidate is promoted.
+
+### Numerical, lifecycle, and memory checks
+
+All four arms match all 56 normal metric slots against the pinned upstream
+and canonical BF16 words exactly. Each seeded comparator NaN produces exactly
+one failure and one nonfinite count. Tolerances remain `atol=rtol=2e-5`.
+Each arm has 162 completed error-free roots, 54 graph calls and 161
+continuations: 125 graph-nested and 36 explicit sample boundaries. Every
+selected FFN root union has zero overlap with outside roots. Each arm takes
+one terminal wait and one 912-byte metric readback, with zero named
+`MetalBuffer` allocations or readbacks during encoding. Trace setup allocates
+its fixed host event array before sampling, and trace/API snapshots occur
+only after the existing wait. Named counters do not measure opaque MPS or
+ordinary host allocations.
+
+The external guard completes with return code 0 and 43 samples under the
+unchanged cache-aware 10% reserve, 8 GiB process-group footprint cap,
+64 MiB swap-growth stop and 600-second timeout. Sampled peak footprint is
+3,746,681,824 bytes (3.489 GiB); minimum headroom is 40,379,039,744 bytes
+(37.606 GiB), minimum pressure-free percentage 86%, and swap growth zero.
+File-backed/speculative pages are counted once. These sampled limits do not
+exclude shorter spikes or establish that every cached page is reclaimable.
+
+### Evidence, verification, and next discriminator
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-trace-20261029`.
+`source/` pins 172 build/support files from parent `75140810` plus this
+runner/profile patch. The release binary SHA256 is
+`17953d92488002ce3145227c4dcc7ed846c03d833cf2aaa23c3937c831d24027`;
+`build-manifest.json` SHA256 is
+`3347d1999abf25906085e22d81d41ca141015ca1b111b514418b9dc639b34a76`.
+`launch.command` reproduces the guarded `--trace-sweep` using fresh result
+paths. Raw reports are `results/sweep-{0-api,1-trace,2-trace,3-api}.json`;
+`results/sweep.json` is written only after all four pass. Independent
+`verify_trace.py` recomputes numerical counts, unions, outside overlap,
+prior-root overlap, guard accounting and source/binary identities into
+`results/verification.json`. The repository analyzer separately validates
+native trace clocks, event topology, nesting and full API statistics.
+Its `results/trace-analysis-2.json` rechecks all four arms; per-phase raw
+continuation wall/CPU totals must fit their separately sampled API aggregates.
+Hostile cases reject forged-small API totals, shifted sample ranges, and
+boundary/internal nesting swaps even when aggregate counts still agree.
+`analyze_pending_roots.py` independently recomputes the callback-pending
+distribution into `results/pending-roots.json`, pinning both input hashes;
+the main agent separately reproduced the decisive counts. Source inspection
+finds a default `[gs_device newCommandQueue]` on this chain, with no explicit
+64-buffer setting. The observed 63-root window is not a configured-cap claim.
+`analysis-source/` freezes the final offline analyzers and hostile tests;
+`analysis-manifest.json` pins these files and result hashes (SHA256
+`9c9ba55fa31e1e73739f262e5b8435c5f328a97fa359ade47d5670c5396dee9b`).
+
+Executed qualification commands and signals:
+
+```sh
+# Run make from the frozen source/ directory.
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-trace-20261029/build \
+  pixelumm_ffn_aa_probe spec_pixelumm_ffn_aa_probe
+crystal spec -Dcpu_only spec/pixelumm_ffn_aa_contract_spec.cr \
+  spec/wan_mps_api_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr
+python3 -B -m unittest spec/pixelumm_ffn_aa_trace_analysis_test.py \
+  spec/pixelumm_order_analysis_test.py
+```
+
+The frozen-source release build and seven contract examples pass; the three
+CPU-only Crystal suites pass 21 examples. The two analyzer suites pass 15
+tests, including 11 new analyzer tests. The unchanged fixture/guard suites
+pass another 53 Python tests. The native API-clock qualification passes two
+examples; format and diff checks pass. These CPU checks do not replace the
+four-arm guarded native run. Correlated mini-Quad review is ROBUST for the
+bounded measurement and numerical claims; full-chain causal attribution
+remains unverified.
+
+The next discriminating experiment remains a matched J21120 replay with the
+same 36-block/head chain, input, captures, resources and spacing, changing only
+inter-request CPU diagnostic policy. For an actual acceleration candidate,
+use measured GPU work or the algorithmic video budget; this trace gives no
+basis for counting overlapping host waits as removable GPU latency. No full
+generation is required for that replay. Refresh this evidence after any
+source, input, weight, geometry, precision, backend, device, schedule, profiler,
+guard or toolchain change. Rollback removes the optional diagnostic flags and
+offline analyzer; production math is unaffected.
+
 ## Native J5760 connected FFN A/A, 2026-10-29
 
 The bounded calibration proposed below has now run. It establishes one short

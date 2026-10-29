@@ -36132,3 +36132,53 @@ Refresh after source/toolchain/device/model/workload changes.
   Return docs/hy-nomas-performance-introspection.md. Rollback removes diagnostic
   and build targets. Refresh on source/inputs/weights/geometry/precision/runtime/
   backend/device/schedule/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: J5760 FFN late encoding stalls coincide with a pending-root window
+
+- Diagnostic continuation trace/API export only, four fresh-owner arms in one
+  process OFF/ON/ON/OFF. Same saved w0/block0 input, separate F32-compute gate/up/
+  down with BF16 boundaries, two warmups +16 timed samples and fixed comparator
+  cadence/162 roots. No production math/default, new sync, Studio or generation.
+- All56 normal metric slots/arm match pinned upstream/canonical BF16 words
+  exactly at unchanged2e-5; seeded NaN fires once. One terminal wait/912B read,
+  zero encode readbacks/tracked MetalBuffer allocations. All54 graph encodes,
+  161 continuations (125 nested/36 explicit boundaries) are tagged FFN.
+- GPU-root union medians OFF159.260/ON161.206/ON166.150/OFF159.701ms.
+  Continuation wall1.814-1.942s/arm but owner-thread CPU only1.807-3.466ms;
+  graph-exclusive wall11.138-14.591ms total. Never add inclusive graph/children.
+  Earlier GPU-root interval unions cover99.9881%/99.9914% of traced call wall;
+  current submitted root excluded. Root envelopes are not ALU-active intervals.
+- Both traced arms have33 calls >10ms, all starting with63 earlier roots whose
+  completion callback is still pending; oldest=current_sequence-63. Return
+  follows oldest callback by0.016-0.167ms. Independently recomputed from raw
+  events. Strong evidence of pending-window admission backpressure, not proof
+  of a specific Metal/MPS limit/driver lock or physically active command count.
+  Removing these overlapping host waits is not a predicted latency saving.
+- Four arms do not establish trace neutrality; API profiler stays enabled in
+  all arms. No candidate/speedup promotion. Correlated mini-Quad is ROBUST for
+  bounded numerical/descriptive claims; J21120 whole-chain drift remains open.
+  Next main falsifier retains the large chain/input/resources/captures/spacing
+  and changes only inter-request CPU diagnostics. Queue-pacing experiments, if
+  pursued, need a matched control and cannot count moved waits as a speedup.
+- Guard10%cache-aware/8GiBcap/64MiBswap/600s completes rc0,43samples;
+  sampledpeak3,746,681,824B, minheadroom40,379,039,744B, pressure86%, no swap
+  growth. File-backed/speculative counted once; shorter spikes remain untested.
+- Release build,21Crystal CPU examples +2native-clock qualifications,15Python
+  analyzer tests (11new) and53fixture/guard tests pass. Analyzer rejects forged
+  API wall aggregates, nesting swaps and shifted ranges; root unions/earlier
+  overlap/API totals independently recomputed. No CPU tensor path was timed.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-trace-20261029;172-file
+  snapshot, parent75140810, binary SHA
+  17953d92488002ce3145227c4dcc7ed846c03d833cf2aaa23c3937c831d24027.
+  results/sweep.json SHA
+  c5f28dca525f2e9059ea350b78b228eebe55f6eb19dad078c061ebc07ac20b18;
+  results/trace-analysis-2.json SHA
+  1370609594dc464f866f32bfe069bd9e017fd6945d91b773f8fccef6b33a9b73.
+  analysis-manifest.json pins final offline source/tests/results, SHA
+  9c9ba55fa31e1e73739f262e5b8435c5f328a97fa359ade47d5670c5396dee9b.
+  results/pending-roots.json records the queue-window recomputation; default
+  queue source has no explicit64 setting, so configured capacity is unproven.
+  Return docs/hy-nomas-performance-introspection.md. Rollback removes optional
+  diagnostic flags/export and analyzer. Refresh after source/input/weights/
+  geometry/precision/runtime/backend/device/schedule/profiler/guard/toolchain
+  changes or evidence loss; fresh cache-aware admission before every launch.

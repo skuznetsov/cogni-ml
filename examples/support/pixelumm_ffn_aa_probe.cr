@@ -32,6 +32,34 @@ module PixelUMMFFNAaProbe
   end
 
   {% unless flag?(:cpu_only) %}
+    # Serialize only after the existing terminal wait. Keep inclusive graph
+    # time and its nested continuation time distinct for the offline analyzer.
+    def api_profile_json(profile : ML::Video::MPSAPIProfile) : Array(JSON::Any)
+      graph_count = 0_u64
+      commit_count = 0_u64
+      result = profile.phases.map do |phase|
+        operations = {} of String => JSON::Any
+        phase.operations.each do |name, stats|
+          graph_count += stats.count if name == "graph_encode"
+          commit_count += stats.count if name == "commit_and_continue"
+          unless (phase.phase_id == 5 || stats.count == 0) &&
+                 (name != "t5_linear_encode" || stats.count == 0)
+            raise "FFN A/A profile contains unexpected phase/linear work"
+          end
+          operations[name] = JSON.parse({count: stats.count, wall_total_ns: stats.wall_total_ns,
+                                         wall_max_ns: stats.wall_max_ns, thread_cpu_total_ns: stats.thread_cpu_total_ns,
+                                         thread_cpu_max_ns: stats.thread_cpu_max_ns, nested_count: stats.nested_count,
+                                         nested_wall_total_ns: stats.nested_wall_total_ns,
+                                         nested_thread_cpu_total_ns: stats.nested_thread_cpu_total_ns,
+                                         exclusive_wall_total_ns: stats.exclusive_wall_total_ns,
+                                         exclusive_thread_cpu_total_ns: stats.exclusive_thread_cpu_total_ns}.to_json)
+        end
+        JSON.parse({phase_id: phase.phase_id, phase: phase.name, operations: operations}.to_json)
+      end
+      raise "FFN A/A profile changed the fixed command topology" unless graph_count == 54 && commit_count == 161
+      result
+    end
+
     lib FFNAaFFI
       fun create = gs_pixelumm_ffn_aa_create(device : Void*, norm_input : Void*,
                                              gate_weight : Void*, up_weight : Void*, down_weight : Void*, gate_work : Void*,
