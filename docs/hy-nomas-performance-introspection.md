@@ -1,5 +1,121 @@
 # Hy-Nomas performance introspection, 2026-10-26
 
+## Full-J callback-pending window, 2026-10-29
+
+The existing J21120 36-block-plus-head traces reproduce the 63-root pattern
+found in the J5760 FFN probe. This qualification reanalyzes four pinned raw
+reports at parent `60480968`; no model, GPU replay, Studio or generation ran.
+Only the offline analyzer, its tests and documentation change. Runtime math,
+buffers, queue policy, waits and production selectors remain unchanged.
+
+### Observation and limits
+
+| Saved schedule | Traced requests | Continuation events | Calls strictly longer than 10 ms | Earlier callback-pending roots at entry, every long call |
+| --- | ---: | ---: | ---: | ---: |
+| Order, normal | 4 | 18,312 | 1,030 | 63 |
+| Order, reverse | 4 | 18,312 | 992 | 63 |
+| Paced A/A, normal | 2 | 9,156 | 510 | 63 |
+| Paced A/A, reverse, including captured request 1 | 2 | 9,156 | 509 | 63 |
+
+All 3,041 long calls are nested phase-2 `self_attention` continuations. Only
+roots with sequence less than `before_root_sequence` are counted: the root
+being submitted is excluded. In every case the oldest pending root is
+`current_sequence - 63`, and its callback is observed during the API call.
+The call returns 0.012458-0.210292 ms after that callback observation. Every
+root in these reports has a source-1 callback observation; there are no
+source-2 terminal-wait fallback roots. Callback-pending describes observation
+time, not the number of physically running GPU commands.
+
+Excluding the externally captured A/A request from timing totals leaves
+2,780 long calls: caller-thread CPU totals 66.323 ms against 337.096 s of
+call wall time. Within each eligible whole-chain GPU-root envelope, gaps
+outside the interval union sum to 2.603-4.747 ms. This is envelope-minus-union,
+not whole-request time minus the union. These are interval observations,
+not active shader cycles, GPU occupancy, driver-lock identification or proof
+that the host wait can be removed from end-to-end latency. Source inspection
+finds a default `newCommandQueue`, with no explicit 64-buffer setting;
+`maxPendingRoots` records a high-water mark rather than enforcing capacity.
+
+The caller's attention marker does not identify the work being waited for.
+For 840 long calls the oldest root has only a gate/up phase candidate; for
+420 it has only down. Another 420 have mixed FFN candidates. Mixed candidates
+stay grouped, and these counts are not an exclusive GPU cost breakdown or
+proof that FFN caused the wait. They explain why moving or combining host
+markers cannot by itself establish an attention speedup.
+
+In the normal-order profile study, baseline request 2 takes 42.792485 s and request 5 takes
+60.195153 s, despite identical callback-pending entry histograms. Both have
+4,480 calls at 63 pending roots; long-call count rises from 251 to 285 and
+median long-call duration from 107.522 to 161.782 ms. The pending window is
+therefore insufficient to explain the drift. Reverse-order baseline times
+are 42.584312 and 42.345675 s, contradicting a simple later-is-slower rule.
+
+The separate 44.939 -> 84.561 -> 50.567 s row-tiling series has no continuation
+trace. This analysis does not directly trace or resolve that transition.
+The older 43.356/69.456 s pair compares timed input A with a poisoned,
+different-input gate; it is not a same-input drift measurement. Paced A/A
+reverse request 1 was externally captured. Its trace is included above only
+for the descriptive pending-window check; `--external-capture reverse:1`
+continues to exclude it from the A/A timing and continuation aggregates.
+
+### Analyzer contract and evidence
+
+The shared order analyzer now reports callback-pending entry/return counts,
+fallback/unknown-source censoring, signed oldest-root return offsets and
+candidate-phase groups by API phase/depth. Pending predicates and the strict
+10 ms cutoff use integer Mach ticks, avoiding subtraction of large converted
+timestamps at the threshold. Unknown or fallback source markers cannot become
+callback observations. Empty groups cannot satisfy nonempty universal claims.
+The FFN single-event overlap helper remains compatible with minimal legacy
+roots whose observation source is unknown.
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-pending-window-20261029`.
+`verify_pending.py` independently uses a timestamp heap instead of the shared
+analyzer's prior-root scan for callback-pending counts. Candidate phase labels
+and whole-root metrics come from the saved report and are separately validated
+by the repository analyzer. `independent-check.json` pins the four raw reports
+and their two prior integrity receipts, rechecks 1,204 saved finite bitwise-
+equal upstream comparison records across 28 requests at unchanged
+`atol=rtol=2e-5`, and checks one terminal wait, zero named encode allocations,
+zero preterminal activation reads and 43 post-wait diagnostics per request.
+Those are saved adapted-Torch-MPS controls, not fresh upstream execution or
+new artifact-payload authentication. Historical guard receipts retain their
+original 10% cache-aware reserve; no new GPU memory-admission result is claimed.
+
+`order-analysis.json` and `aa-analysis.json` replay the repository validators;
+`cross-check.json` compares their pending summaries with the independent
+recomputation, including an explicitly descriptive check of the captured arm.
+`ffn-analysis.json` exercises the other shared-helper caller on the pinned
+four-arm J5760 reports. `analysis-source/` and `analysis-manifest.json` freeze
+the offline code, tests, inputs and outputs. The qualification commands are:
+
+```sh
+python3 -B -m unittest spec.pixelumm_order_analysis_test \
+  spec.pixelumm_aa_analysis_test spec.pixelumm_ffn_aa_trace_analysis_test
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-pending-window-20261029/verify_pending.py
+git diff --check
+```
+
+The verifier creates a fresh output exclusively; preserve existing results
+when replaying. The three test suites pass 28 tests, all three raw-report
+analyzer CLIs exit 0, and the cross-check matches all 12 traced requests
+(11 timing-eligible plus the separate captured request). `cpu-checks.json`
+and `cli-checks.json` retain the observed command results. Correlated
+mini-Quad review is ROBUST only for the tested
+offline contract and pinned observations. Cause of drift and a speed benefit
+from changing queue capacity remain unverified. Rollback removes the offline
+fields; no runtime rollback is needed. Refresh after input/report, trace
+semantics, clock, source, backend/device, precision, schedule or toolchain
+changes; each future GPU process needs fresh memory admission.
+
+The next causal discriminator remains a matched full-J replay that changes
+only inter-request CPU diagnostic policy while retaining input, resources,
+captures and spacing. For acceleration, measure actual GPU service in the
+remaining FFN/attention work and require a complete-request gain. The present
+evidence does not justify counting overlapping `commitAndContinue` wall time
+as removable overhead or increasing queue capacity as the next speed lever.
+
 ## J5760 FFN continuation attribution, 2026-10-29
 
 A diagnostic-only continuation trace now localizes the late host-encoding

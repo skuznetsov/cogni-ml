@@ -6,6 +6,38 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-PENDING-WINDOW-2026-10-29] Full-J traces reproduce the callback-pending window, not its cause
+
+- VERIFIED CPU-only replay of four pinned order/paced-A/A reports finds all 3,041
+  continuations over 10 ms among 54,936 events at exactly 63 earlier
+  callback-pending roots, excluding the submitted root. All are nested
+  attention calls; the oldest root is current-63 and its callback arrives
+  during the call. Callback-to-return is 0.012458..0.210292 ms. No GPU ran.
+- Oldest-root candidates are pure gate/up 840, down 420, mixed FFN 420; preserve
+  mixed groups. Caller phase does not identify waited work or exclusive GPU
+  service. Excluding captured A/A reverse request 1, 66.323 ms caller CPU
+  versus 337.096 s long-call wall and small envelope-minus-union gaps do not
+  prove removable waits/ALU saturation.
+  No explicit 64-buffer queue setting exists; observed 63 is not a capacity
+  measurement. Identical pending histograms coexist with 42.792->60.195 s.
+- Shared analyzer uses integer ticks for pending/strict 10 ms boundaries,
+  censors fallback/unknown sources, preserves the FFN overlap-only caller,
+  and rejects vacuous empty-group claims. Heap-based independent recomputation
+  checks 1,204 saved exact finite 2e-5 records across 28 requests and lifecycle
+  counters. Old guard receipts retain 10%; no fresh GPU/upstream/payload audit.
+  Captured AA reverse request 1 is descriptive-only, excluded from timings.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-pending-window-20261029;
+  independent-check.json, order-analysis.json, aa-analysis.json,
+  cross-check.json, ffn-analysis.json and analysis-manifest.json.
+  Return docs/hy-nomas-performance-introspection.md, full-J pending section.
+  DoD: three analyzer suites pass 28 tests, three pinned-report CLIs exit 0,
+  cross_check.py matches all 12 traces, and git diff --check passes.
+  Next: matched full-J diagnostic-policy replay; 44.939->84.561->50.567 s has
+  no continuation trace. Old 43.356/69.456 s compares different inputs.
+  ROBUST only for pinned observations/offline contract, not causal speed.
+  No runtime/default/synchronization changes; refresh on scoped source,
+  artifact/clock/input/geometry/backend/device/schedule/toolchain changes.
+
 ### [LM-HY-NOMAS-NOMINAL-HEADROOM-2026-10-29] Twofold nominal gap is not an upstream speed measurement
 
 - VERIFIED CPU-only recomputation at parent73909256: the 54.013s ideal versus
@@ -94,9 +126,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   from timing aggregates; later capture carryover remains possible. This does
   not prove fixed gaps caused the narrower range or calibrate observer cost.
 - Across all four profiled arms, top-ten continuation calls start with 63
-  earlier GPU-unfinished roots, excluding the current root about to commit.
-  This aligns with default Metal capacity 64 but does not distinguish queued
-  from running work or prove queue admission/physical GPU bottleneck. A deeper
+  earlier callback-pending roots, excluding the current root about to commit.
+  No explicit 64-buffer setting is present. Callback observation time does not
+  distinguish queued from running work or prove queue admission. A deeper
   queue is admissible as a speed candidate only if GPU-starvation gaps exist;
   fewer calls alone can move waiting to the terminal boundary. Prior direct
   MPS FFN reduced roots yet regressed request time by 7.7081%.

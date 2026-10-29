@@ -70,6 +70,7 @@ TRACE_ROOT = ("sequence", "tracked_or_observed_mach_ticks", "completion_observed
               "gpu_end_seconds")
 ROOT_CLOCK_BOUND_SECONDS = 2e-6
 AGGREGATE_WALL_ROUNDING_NS_PER_CALL = 2000.0
+PENDING_LONG_CALL_THRESHOLD_NS = 10_000_000
 
 
 def need(ok: bool, message: str) -> None:
@@ -821,18 +822,57 @@ def analyze_report(data_raw: object, report_sha256: str, path: str) -> dict[str,
 def _continuation_summary(profiled_requests: list[dict[str, Any]]) -> dict[str, Any]:
     by_phase: dict[int, list[dict[str, Any]]] = {phase: [] for phase in API_PHASES}
     all_events = []
+    pending_events = []
     for request in profiled_requests:
         trace = request["trace"]
         for event in trace["events"]:
             begin = trace["host_seconds"](event["begin_mach_ticks"])
             end = trace["host_seconds"](event["end_mach_ticks"])
+            # The root at before_root_sequence is the graph being committed by
+            # this API call. Only earlier roots can describe a pending window.
             earlier = trace["roots"][:event["before_root_sequence"]]
             intersections = [(max(begin, root["start_seconds"]), min(end, root["end_seconds"]))
                              for root in earlier if root["start_seconds"] < end and root["end_seconds"] > begin]
             intersections = [(left, right) for left, right in intersections if right > left]
             overlap = interval_union(intersections)
-            completed_during = sum(begin <= trace["host_seconds"](root["completion_observed_mach_ticks"]) <= end
-                                   for root in earlier)
+            def source_code(root: dict[str, Any]) -> int | None:
+                value = root.get("completion_source")
+                return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+            callback_roots = [root for root in earlier if source_code(root) == 1]
+            # Compare integer Mach ticks directly. Source 2 is a terminal-wait
+            # fallback observation and cannot establish callback arrival time.
+            callback_pending_at_begin = [root for root in callback_roots
+                                         if isinstance(root.get("completion_observed_mach_ticks"), int) and
+                                         not isinstance(root.get("completion_observed_mach_ticks"), bool) and
+                                         root["completion_observed_mach_ticks"] > event["begin_mach_ticks"]]
+            callback_pending_at_end = [root for root in callback_roots
+                                       if isinstance(root.get("completion_observed_mach_ticks"), int) and
+                                       not isinstance(root.get("completion_observed_mach_ticks"), bool) and
+                                       root["completion_observed_mach_ticks"] > event["end_mach_ticks"]]
+            completion_observations_during = sum(
+                isinstance(root.get("completion_observed_mach_ticks"), int) and
+                not isinstance(root.get("completion_observed_mach_ticks"), bool) and
+                event["begin_mach_ticks"] <= root["completion_observed_mach_ticks"] <=
+                event["end_mach_ticks"] for root in earlier)
+            callback_observations_during = sum(
+                isinstance(root.get("completion_observed_mach_ticks"), int) and
+                not isinstance(root.get("completion_observed_mach_ticks"), bool) and
+                event["begin_mach_ticks"] <= root["completion_observed_mach_ticks"] <=
+                event["end_mach_ticks"] for root in callback_roots)
+            fallback_censored = [root for root in earlier if source_code(root) == 2]
+            unknown_source = [root for root in earlier if source_code(root) not in (1, 2)]
+            raw_timebase = trace.get("info")
+            timebase = raw_timebase if isinstance(raw_timebase, dict) else {}
+            raw_numer = timebase.get("mach_timebase_numer")
+            raw_denom = timebase.get("mach_timebase_denom")
+            has_timebase = (isinstance(raw_numer, int) and not isinstance(raw_numer, bool) and raw_numer > 0 and
+                            isinstance(raw_denom, int) and not isinstance(raw_denom, bool) and raw_denom > 0)
+            timebase_numer = raw_numer if has_timebase else None
+            timebase_denom = raw_denom if has_timebase else None
+            call_wall_ticks = event["end_mach_ticks"] - event["begin_mach_ticks"]
+            is_long_call = (call_wall_ticks * timebase_numer > PENDING_LONG_CALL_THRESHOLD_NS * timebase_denom
+                            if has_timebase else None)
             row = {"request": request["index"], "mode_combined_attention": request["combined_attention"],
                    "event_serial": event["serial"], "phase_id": event["phase"],
                    "phase": API_PHASES[event["phase"]], "graph_depth": event["graph_depth"],
@@ -840,10 +880,51 @@ def _continuation_summary(profiled_requests: list[dict[str, Any]]) -> dict[str, 
                    "earlier_root_overlap_seconds": overlap,
                    "earlier_root_overlap_fraction_of_call": overlap / (end - begin),
                    "earlier_roots_overlapping": len(intersections),
-                   "earlier_root_completions_observed_during_call": completed_during,
-                   "completion_observation_note": "Completion callback/status observation, not exact GPU completion time."}
+                   "earlier_root_completions_observed_during_call": completion_observations_during,
+                   "earlier_callback_observations_during_call": callback_observations_during,
+                   "completion_observation_note": "All-source observation count is retained separately; only source-1 roots contribute to callback counts. Observations are not exact GPU completion times."}
             by_phase[event["phase"]].append(row)
             all_events.append(row)
+
+            oldest_pending = callback_pending_at_begin[0] if callback_pending_at_begin else None
+            oldest_pending_sequence = (next(index for index, root in enumerate(earlier)
+                                             if root is oldest_pending)
+                                       if oldest_pending is not None else None)
+            phase_data = request.get("phase")
+            phase_roots = phase_data.get("roots") if isinstance(phase_data, dict) else None
+            candidate_phases = None
+            if oldest_pending is not None and isinstance(phase_roots, list) and \
+                    oldest_pending_sequence < len(phase_roots):
+                candidate_phases = phase_roots[oldest_pending_sequence]["candidate_phases"]
+            pending_events.append({
+                "request": request["index"], "mode_combined_attention": request["combined_attention"],
+                "event_serial": event["serial"], "phase_id": event["phase"],
+                "phase": API_PHASES[event["phase"]], "graph_depth": event["graph_depth"],
+                "wall_seconds": end - begin,
+                "call_wall_mach_ticks": call_wall_ticks,
+                "mach_timebase_numer": timebase_numer,
+                "mach_timebase_denom": timebase_denom,
+                "is_long_call": is_long_call,
+                "thread_cpu_seconds": event["thread_cpu_seconds"],
+                "prior_root_count": len(earlier),
+                "definite_callback_pending_at_call_entry": len(callback_pending_at_begin),
+                "definite_callback_pending_at_call_return": len(callback_pending_at_end),
+                "callback_observations_during_call": callback_observations_during,
+                "fallback_censored_prior_root_count": len(fallback_censored),
+                "unknown_completion_source_prior_root_count": len(unknown_source),
+                "oldest_definite_pending_root_sequence": oldest_pending_sequence,
+                "oldest_definite_pending_root_candidate_phases": candidate_phases,
+                # Signed return-minus-observation offsets: positive means the
+                # marker preceded API return; negative means it followed it.
+                "oldest_definite_pending_callback_return_minus_observation_seconds": (
+                    (event["end_mach_ticks"] - oldest_pending["completion_observed_mach_ticks"]) *
+                    timebase_numer / timebase_denom / 1e9
+                    if oldest_pending is not None and has_timebase else None),
+                "oldest_definite_pending_gpu_end_return_minus_gpu_end_seconds": (
+                    end - oldest_pending["end_seconds"]
+                    if oldest_pending is not None and isinstance(oldest_pending.get("end_seconds"), (int, float))
+                    else None),
+            })
     phases = {}
     for phase_id, label in API_PHASES.items():
         rows = by_phase[phase_id]
@@ -857,12 +938,111 @@ def _continuation_summary(profiled_requests: list[dict[str, Any]]) -> dict[str, 
                          "per_call_wall_seconds": distribution([row["wall_seconds"] for row in rows]),
                          "per_call_thread_cpu_seconds": distribution([row["thread_cpu_seconds"] for row in rows]),
                          "per_call_earlier_root_overlap_fraction": distribution([row["earlier_root_overlap_fraction_of_call"] for row in rows]),
-                         "callback_observations_during_calls": sum(row["earlier_root_completions_observed_during_call"] for row in rows)}
+                         "callback_observations_during_calls": sum(row["earlier_callback_observations_during_call"] for row in rows)}
+    pending_windows = _pending_window_summary(pending_events)
     return {"event_count": len(all_events), "by_phase": phases,
             "largest_earlier_root_overlaps": sorted(all_events,
                 key=lambda row: row["earlier_root_overlap_seconds"], reverse=True)[:20],
             "parent_graph_validation_scope": "Syntactic parent/depth/flag checks only. The exported trace does not contain every graph API scope, so this is not a complete parent-forest validation.",
-            "backlog_semantics": "For event before_root_sequence=i, overlap uses only roots with sequence < i; root i being submitted is excluded. GPU timestamps are compared to Mach-host intervals under the trace's existing 2 microsecond clock bound. Callback observations are not exact GPU completion instants."}
+            "backlog_semantics": "For event before_root_sequence=i, overlap and pending-window counts use only roots with sequence < i; root i being submitted is excluded. Definite callback-pending counts use source-1 callback observations and integer Mach ticks. Source-2 terminal-wait fallback roots are reported as censored; missing or other source values are unknown. Neither establishes callback arrival. GPU timestamps are compared to Mach-host intervals under the trace's existing 2 microsecond clock bound. Callback observations are not exact GPU completion instants.",
+            "pending_windows": pending_windows}
+
+
+def _pending_window_group(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    long_calls = [row for row in rows if row["is_long_call"] is True]
+    classified_count = sum(row["is_long_call"] is not None for row in rows)
+    unclassified_count = len(rows) - classified_count
+
+    def values(key: str, source: list[dict[str, Any]] = rows) -> list[float]:
+        return [float(row[key]) for row in source]
+
+    def histogram(source: list[dict[str, Any]]) -> dict[str, int]:
+        counts = Counter(row["definite_callback_pending_at_call_entry"] for row in source)
+        if not source:
+            return {}
+        return {str(value): counts[value] for value in range(max(counts) + 1)}
+
+    candidate_totals: dict[tuple[str, ...] | None, dict[str, Any]] = {}
+    for row in long_calls:
+        raw_candidates = row["oldest_definite_pending_root_candidate_phases"]
+        candidates = tuple(raw_candidates) if isinstance(raw_candidates, list) else None
+        group = candidate_totals.setdefault(candidates, {"event_count": 0, "long_call_wall_seconds": 0.0})
+        group["event_count"] += 1
+        group["long_call_wall_seconds"] += row["wall_seconds"]
+    candidate_groups = [
+        {"oldest_pending_root_candidate_phases": list(candidates) if candidates is not None else None,
+         **candidate_totals[candidates]}
+        for candidates in sorted(candidate_totals, key=lambda value: (value is None, value or ()))
+    ]
+    has_long_calls = bool(long_calls)
+    all_long_have_callback_pending = has_long_calls and all(
+        row["definite_callback_pending_at_call_entry"] > 0 for row in long_calls)
+    all_long_have_oldest_root = has_long_calls and all(
+        row["oldest_definite_pending_root_sequence"] is not None for row in long_calls)
+    return {
+        "event_count": len(rows),
+        "long_call_threshold_seconds_strictly_greater_than": PENDING_LONG_CALL_THRESHOLD_NS / 1e9,
+        "long_call_threshold_nanoseconds_strictly_greater_than": PENDING_LONG_CALL_THRESHOLD_NS,
+        "long_call_threshold_tick_rule": (
+            f"when timebase is available: call_wall_mach_ticks * mach_timebase_numer > {PENDING_LONG_CALL_THRESHOLD_NS} * mach_timebase_denom; otherwise unclassified"),
+        "long_call_timing_classified_event_count": classified_count,
+        "long_call_timing_classification_unavailable_count": unclassified_count,
+        "long_call_count": len(long_calls),
+        "long_call_fraction": len(long_calls) / classified_count if classified_count else None,
+        "long_call_fraction_scope": "Among events with a known Mach timebase; null if none are classifiable.",
+        "all_event_distributions": {
+            "wall_seconds": distribution(values("wall_seconds")),
+            "thread_cpu_seconds": distribution(values("thread_cpu_seconds")),
+            "prior_root_count": distribution(values("prior_root_count")),
+            "definite_callback_pending_at_call_entry": distribution(values("definite_callback_pending_at_call_entry")),
+            "definite_callback_pending_at_call_return": distribution(values("definite_callback_pending_at_call_return")),
+            "callback_observations_during_call": distribution(values("callback_observations_during_call")),
+            "fallback_censored_prior_root_count": distribution(values("fallback_censored_prior_root_count")),
+            "unknown_completion_source_prior_root_count": distribution(values("unknown_completion_source_prior_root_count")),
+        },
+        "definite_callback_pending_at_call_entry_histogram": histogram(rows),
+        "long_call_definite_callback_pending_at_call_entry_histogram": histogram(long_calls),
+        "long_call_distributions": {
+            "definite_callback_pending_at_call_entry": distribution(values("definite_callback_pending_at_call_entry", long_calls)),
+            "definite_callback_pending_at_call_return": distribution(values("definite_callback_pending_at_call_return", long_calls)),
+            "callback_observations_during_call": distribution(values("callback_observations_during_call", long_calls)),
+            "fallback_censored_prior_root_count": distribution(values("fallback_censored_prior_root_count", long_calls)),
+            "unknown_completion_source_prior_root_count": distribution(values("unknown_completion_source_prior_root_count", long_calls)),
+            "oldest_definite_pending_callback_return_minus_observation_seconds": distribution([
+                row["oldest_definite_pending_callback_return_minus_observation_seconds"] for row in long_calls
+                if row["oldest_definite_pending_callback_return_minus_observation_seconds"] is not None]),
+            "oldest_definite_pending_gpu_end_return_minus_gpu_end_seconds": distribution([
+                row["oldest_definite_pending_gpu_end_return_minus_gpu_end_seconds"] for row in long_calls
+                if row["oldest_definite_pending_gpu_end_return_minus_gpu_end_seconds"] is not None]),
+        },
+        "long_calls": long_calls,
+        "long_call_wall_totals_by_oldest_pending_root_candidates_noncausal_nonexclusive": candidate_groups,
+        "claims": {
+            "has_events": bool(rows),
+            "has_long_calls": has_long_calls,
+            # Include the nonempty condition so an empty set never makes an
+            # all(...) claim appear true by vacuity.
+            "all_long_calls_have_definite_callback_pending": bool(all_long_have_callback_pending),
+            "all_long_calls_have_oldest_pending_root": bool(all_long_have_oldest_root),
+        },
+        "interpretation": "Callback-pending is an observation-time window for prior roots only, not an ALU-active or queue-stall measurement. Source-2 roots are terminal-wait fallback-censored; missing or other source values are unknown, and neither counts as callback arrival. Return offsets are signed and use the oldest source-1 root pending at API entry; GPU-end offsets retain the existing cross-clock uncertainty. Candidate-phase wall sums are descriptive, noncausal, and nonexclusive across nested calls.",
+    }
+
+
+def _pending_window_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    by_phase: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_phase_depth: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_phase[row["phase"]].append(row)
+        by_phase_depth[(row["phase"], row["graph_depth"])].append(row)
+    return {
+        "all_events": _pending_window_group(rows),
+        "by_phase": {phase: _pending_window_group(phase_rows)
+                     for phase, phase_rows in sorted(by_phase.items())},
+        "by_phase_and_graph_depth": {
+            f"{phase}/depth_{depth}": _pending_window_group(group_rows)
+            for (phase, depth), group_rows in sorted(by_phase_depth.items())},
+    }
 
 
 def _profile_summary(run: dict[str, Any]) -> dict[str, Any]:

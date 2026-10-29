@@ -8,6 +8,7 @@ import json
 import struct
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -76,6 +77,114 @@ def trace_document() -> dict[str, object]:
             "before_root_status_after_call": 4, "after_root_status": 0, "flags": 15,
         }],
         "roots": roots,
+    }
+
+
+def pending_window_trace_document() -> dict[str, object]:
+    roots_spec = [
+        # Source 1's callback is observed exactly at event 2's return.
+        (999_999_000, 1_030_000_000, 1, 1.000, 1.025),
+        # Source 2 is terminal-wait fallback; its later observation must not
+        # be treated as callback arrival during event 3.
+        (1_005_000_000, 1_060_000_000, 2, 1.010, 1.050),
+        (1_030_000_000, 1_070_000_000, 2, 1.031, 1.060),
+        (1_043_000_000, 1_080_000_000, 2, 1.043, 1.070),
+    ]
+    roots = []
+    intervals = []
+    for index, (tracked, completion, source, start, end) in enumerate(roots_spec):
+        intervals.append((start, end))
+        roots.append({
+            "sequence": index,
+            "tracked_or_observed_mach_ticks": tracked,
+            "completion_observed_mach_ticks": completion,
+            "gpu_start_time_bits": struct.unpack("=Q", struct.pack("=d", start))[0],
+            "gpu_end_time_bits": struct.unpack("=Q", struct.pack("=d", end))[0],
+            "status_at_track_or_enable": 0,
+            "final_status": 4,
+            "has_error": 0,
+            "completion_source": source,
+            "gpu_start_seconds": start,
+            "gpu_end_seconds": end,
+        })
+    events = []
+    event_specs = [
+        (1_000_000_000, 1_005_000_000, 0, 1, 2, 1),
+        (1_010_000_000, 1_030_000_000, 1, 2, 2, 1),
+        (1_031_000_000, 1_043_000_000, 2, 3, 5, 0),
+    ]
+    for index, (begin, end, before, after, phase, depth) in enumerate(event_specs):
+        nested = depth > 0
+        events.append({
+            "serial": index + 1,
+            "begin_mach_ticks": begin,
+            "end_mach_ticks": end,
+            "begin_thread_cpu_ns": 10_000_000 + index * 30_000_000,
+            "end_thread_cpu_ns": 10_000_000 + index * 30_000_000 + end - begin,
+            "api_scope_serial": 3 + index * 2,
+            "parent_graph_serial": 2 + index * 2 if nested else 0,
+            "before_root_sequence": before,
+            "after_root_sequence": after,
+            "phase": phase,
+            "graph_depth": depth,
+            "before_root_status": 0,
+            "before_root_status_after_call": 4,
+            "after_root_status": 0,
+            "flags": 15 if nested else 14,
+        })
+    return {
+        "info": {"owner_thread_id": 73, "mach_timebase_numer": 1,
+                 "mach_timebase_denom": 1, "trace_start_mach_ticks": 900_000_000,
+                 "event_capacity": 8192, "event_count": len(events),
+                 "root_count": len(roots), "failed": 0},
+        "events": events,
+        "roots": roots,
+    }
+
+
+def large_tick_pending_trace_request() -> dict[str, object]:
+    base = 9_000_000_000_000_000
+    durations = (239_999, 240_000, 240_001)  # 125/3 ns per tick: below, exact, above 10 ms.
+    events = []
+    cursor = base
+    for index, duration in enumerate(durations):
+        begin, end = cursor, cursor + duration
+        events.append({
+            "serial": index + 1,
+            "begin_mach_ticks": begin,
+            "end_mach_ticks": end,
+            "thread_cpu_seconds": 0.001,
+            "before_root_sequence": (0, 2, 3)[index],
+            "phase": 5,
+            "graph_depth": 0,
+        })
+        cursor = end + 10
+    roots = [
+        # bool is an int subclass in Python but is not a source code.
+        {"sequence": 0, "completion_source": True,
+         "completion_observed_mach_ticks": base + 1_000_000,
+         "start_seconds": 0.1, "end_seconds": 0.2},
+        # Missing completion_source is also unknown and must not imply callback.
+        {"sequence": 1, "completion_observed_mach_ticks": base + 1_000_000,
+         "start_seconds": 0.1, "end_seconds": 0.2},
+        # Source 2 carries only a terminal fallback observation.
+        {"sequence": 2, "completion_source": 2,
+         "completion_observed_mach_ticks": base + 1_000_000,
+         "start_seconds": 1.1, "end_seconds": 1.2},
+        # The root submitted by the third event is source 1, but must be excluded.
+        {"sequence": 3, "completion_source": 1,
+         "completion_observed_mach_ticks": base + 1_000_000,
+         "start_seconds": 2.1, "end_seconds": 2.2},
+    ]
+    return {
+        "index": 0,
+        "combined_attention": False,
+        "trace": {
+            "info": {"mach_timebase_numer": 125, "mach_timebase_denom": 3},
+            "events": events,
+            "roots": roots,
+            "host_seconds": lambda ticks: ticks * 125 / 3 / 1e9,
+        },
     }
 
 
@@ -340,6 +449,163 @@ class PixelUMMOrderAnalysisTests(unittest.TestCase):
             "api_profile_inclusive_and_exclusive_ns"]["self_prepare"]["graph_encode"]
         self.assertEqual(api["wall_max_ns"], 100_000)
         self.assertEqual(api["wall_total_ns"], 2 * 324 * 100_000)
+
+    def test_pending_windows_exclude_current_root_and_censor_fallback(self) -> None:
+        raw = pending_window_trace_document()
+        intervals = [(root["gpu_start_seconds"], root["gpu_end_seconds"])
+                     for root in raw["roots"]]
+        trace = ANALYZER.validate_trace(raw, 0, intervals)
+        request = {
+            "index": 0,
+            "combined_attention": False,
+            "trace": trace,
+            "phase": {"roots": [
+                {"candidate_phases": ["block_0/ffn", "block_0/attention"]},
+                {"candidate_phases": ["block_0/ffn"]},
+                {"candidate_phases": ["block_1/self_prepare"]},
+                {"candidate_phases": ["head"]},
+            ]},
+        }
+        summary = ANALYZER._continuation_summary([request])
+        pending = summary["pending_windows"]
+        all_events = pending["all_events"]
+        self.assertEqual(all_events["event_count"], 3)
+        self.assertEqual(all_events["long_call_count"], 2)
+        self.assertEqual(all_events["definite_callback_pending_at_call_entry_histogram"],
+                         {"0": 2, "1": 1})
+        self.assertEqual(all_events["long_call_definite_callback_pending_at_call_entry_histogram"],
+                         {"0": 1, "1": 1})
+
+        # Event 2 excludes its own source-2 root (sequence 1), while event 3
+        # includes that root as fallback-censored but never as callback-pending.
+        long_calls = all_events["long_calls"]
+        event2, event3 = long_calls
+        self.assertEqual(event2["event_serial"], 2)
+        self.assertEqual(event2["fallback_censored_prior_root_count"], 0)
+        self.assertEqual(event2["definite_callback_pending_at_call_entry"], 1)
+        self.assertEqual(event2["definite_callback_pending_at_call_return"], 0)
+        self.assertEqual(event2["callback_observations_during_call"], 1)
+        self.assertEqual(event2["oldest_definite_pending_root_sequence"], 0)
+        self.assertEqual(event2["oldest_definite_pending_root_candidate_phases"],
+                         ["block_0/ffn", "block_0/attention"])
+        self.assertAlmostEqual(event2["oldest_definite_pending_callback_return_minus_observation_seconds"], 0.0)
+        self.assertAlmostEqual(event2["oldest_definite_pending_gpu_end_return_minus_gpu_end_seconds"], 0.005)
+        self.assertEqual(event3["event_serial"], 3)
+        self.assertEqual(event3["fallback_censored_prior_root_count"], 1)
+        self.assertEqual(event3["unknown_completion_source_prior_root_count"], 0)
+        self.assertEqual(event3["definite_callback_pending_at_call_entry"], 0)
+        self.assertIsNone(event3["oldest_definite_pending_root_sequence"])
+        self.assertIsNone(event3["oldest_definite_pending_root_candidate_phases"])
+        self.assertEqual(all_events["claims"]["has_long_calls"], True)
+        self.assertEqual(all_events["claims"]["all_long_calls_have_definite_callback_pending"], False)
+
+        phase_depth = pending["by_phase_and_graph_depth"]
+        self.assertEqual(phase_depth["self_attention/depth_1"]["event_count"], 2)
+        self.assertEqual(phase_depth["self_attention/depth_1"]["long_call_count"], 1)
+        self.assertEqual(phase_depth["ffn/depth_0"]["long_call_count"], 1)
+        phase_summary = pending["by_phase"]["self_attention"]
+        self.assertEqual(phase_summary["event_count"], 2)
+        self.assertEqual(summary["by_phase"]["self_attention"]["callback_observations_during_calls"], 1)
+        self.assertEqual(summary["by_phase"]["ffn"]["callback_observations_during_calls"], 0)
+        candidate_groups = all_events["long_call_wall_totals_by_oldest_pending_root_candidates_noncausal_nonexclusive"]
+        self.assertEqual(candidate_groups[0]["oldest_pending_root_candidate_phases"],
+                         ["block_0/ffn", "block_0/attention"])
+        request_without_phase_roots = {key: value for key, value in request.items() if key != "phase"}
+        no_candidates = ANALYZER._continuation_summary([request_without_phase_roots])[
+            "pending_windows"]["all_events"]["long_calls"][0]
+        self.assertIsNone(no_candidates["oldest_definite_pending_root_candidate_phases"])
+
+    def test_pending_window_all_claims_are_false_for_empty_groups(self) -> None:
+        empty = ANALYZER._pending_window_group([])
+        self.assertEqual(empty["claims"], {
+            "has_events": False,
+            "has_long_calls": False,
+            "all_long_calls_have_definite_callback_pending": False,
+            "all_long_calls_have_oldest_pending_root": False,
+        })
+
+    def test_pending_window_threshold_uses_exact_ticks_at_large_timestamp(self) -> None:
+        request = large_tick_pending_trace_request()
+        with mock.patch.object(ANALYZER, "_pending_window_summary",
+                               wraps=ANALYZER._pending_window_summary) as summary_spy:
+            summary = ANALYZER._continuation_summary([request])
+        event_rows = summary_spy.call_args.args[0]
+        self.assertEqual([row["call_wall_mach_ticks"] for row in event_rows],
+                         [239_999, 240_000, 240_001])
+        self.assertEqual([row["is_long_call"] for row in event_rows], [False, False, True])
+        self.assertEqual([(row["mach_timebase_numer"], row["mach_timebase_denom"])
+                          for row in event_rows], [(125, 3)] * 3)
+        all_events = summary["pending_windows"]["all_events"]
+        self.assertEqual(all_events["long_call_count"], 1)
+        self.assertEqual([row["event_serial"] for row in all_events["long_calls"]], [3])
+        self.assertEqual(all_events["long_calls"][0]["unknown_completion_source_prior_root_count"], 2)
+        self.assertEqual(all_events["long_calls"][0]["fallback_censored_prior_root_count"], 1)
+        self.assertEqual(all_events["long_calls"][0]["definite_callback_pending_at_call_entry"], 0)
+        self.assertEqual(all_events["all_event_distributions"]
+                         ["unknown_completion_source_prior_root_count"]["max"], 2)
+        self.assertEqual(all_events["all_event_distributions"]
+                         ["fallback_censored_prior_root_count"]["max"], 1)
+        self.assertEqual(summary["by_phase"]["ffn"]["callback_observations_during_calls"], 0)
+        self.assertEqual(all_events["long_call_threshold_tick_rule"],
+                         "when timebase is available: call_wall_mach_ticks * mach_timebase_numer > 10000000 * mach_timebase_denom; otherwise unclassified")
+
+    def test_pending_window_missing_timebase_remains_unclassified(self) -> None:
+        request = large_tick_pending_trace_request()
+        del request["trace"]["info"]
+        for root in request["trace"]["roots"]:
+            root.pop("sequence", None)
+        summary = ANALYZER._continuation_summary([request])["pending_windows"]["all_events"]
+        self.assertEqual(summary["long_call_timing_classified_event_count"], 0)
+        self.assertEqual(summary["long_call_timing_classification_unavailable_count"], 3)
+        self.assertEqual(summary["long_call_count"], 0)
+        self.assertIsNone(summary["long_call_fraction"])
+
+    def test_callback_return_offsets_use_integer_delta_at_large_timestamp(self) -> None:
+        base = 9_000_000_000_000_000
+        duration = 240_001
+        events = []
+        cursor = base
+        for index in range(3):
+            begin, end = cursor, cursor + duration
+            events.append({
+                "serial": index + 1,
+                "begin_mach_ticks": begin,
+                "end_mach_ticks": end,
+                "thread_cpu_seconds": 0.001,
+                "before_root_sequence": index + 1,
+                "phase": 5,
+                "graph_depth": 0,
+            })
+            cursor = end + 100
+
+        ends = [event["end_mach_ticks"] for event in events]
+        roots = [
+            {"sequence": index,
+             "completion_source": 1,
+             "completion_observed_mach_ticks": observed,
+             "start_seconds": 0.1,
+             "end_seconds": 0.2}
+            for index, observed in enumerate((ends[0] - 120_000, ends[1], ends[2] + 1))
+        ]
+        request = {
+            "index": 0,
+            "combined_attention": False,
+            "trace": {
+                "info": {"mach_timebase_numer": 125, "mach_timebase_denom": 3},
+                "events": events,
+                "roots": roots,
+                "host_seconds": lambda ticks: ticks * 125 / 3 / 1e9,
+            },
+        }
+
+        result = ANALYZER._continuation_summary([request])
+        long_calls = result["pending_windows"]["all_events"]["long_calls"]
+        offsets = [row["oldest_definite_pending_callback_return_minus_observation_seconds"]
+                   for row in long_calls]
+        self.assertEqual(offsets[0], 120_000 * 125 / 3 / 1e9)
+        self.assertEqual(offsets[1], 0.0)
+        self.assertEqual(offsets[2], -125 / 3 / 1e9)
+        self.assertLess(offsets[2], 0.0)
 
     def assert_rejected(self, mutate) -> None:
         raw = copy.deepcopy(report_document(False))
