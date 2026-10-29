@@ -57,9 +57,9 @@ module ML::Video
     # This bound covers timestamp reporting/conversion only. It is unrelated
     # to and does not widen any tensor comparison tolerance.
     CLOCK_ROUNDING_SECONDS = 2.0e-6
-    # Native enable rejects CLOCK_MONOTONIC resolutions above 1 microsecond.
-    # Its independently rounded endpoints cannot support a nanosecond-level
-    # enclosure assertion against mach ticks. This is a clock bound only.
+    # Native enable rejects CLOCK_UPTIME_RAW resolutions above 1 microsecond.
+    # Keep the existing bound for independently converted raw uptime endpoints
+    # and Mach tick intervals. This is a clock bound only.
     AGGREGATE_WALL_ROUNDING_NS_PER_CALL = 2000.0
 
     getter info : MPSContinuationTraceInfo

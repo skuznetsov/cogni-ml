@@ -1,5 +1,159 @@
 # Hy-Nomas first native video frontier
 
+## PixelUMM hotspot profile and packed gate/up refutation (2026-10-28)
+
+The optimization space is not established as exhausted. The admitted profile
+and candidate experiment completed; the candidate demonstrated no acceleration
+and remains diagnostic-only. Production graph selection and GPU arithmetic
+are unchanged. The useful pivot is from graph/encoder counts to measured work
+and intermediate traffic, with whole-request time as the promotion metric.
+
+Scope: J5760, two saved initial-noise windows and blocks 0/1, four Plan passes
+per request, BF16 handoffs and F32 FFN. Block 1 consumes its saved upstream
+input, not the native output of block 0. This is not a connected decoder,
+decoder head or full-generation qualification. The oracle is the existing
+authenticated Torch 2.6.0 MPS upstream-source-method capture, not a newly run
+independent backend. Keep `atol=rtol=2e-5`, attention QK/PV rank-3 batch 32 and
+rank-4 softmax axis 3. No tolerance, synchronization or generation expansion.
+
+The first profile exposed mismatched CPU clock domains: a nested Mach trace
+could exceed its enclosing CLOCK_MONOTONIC API interval. API wall timers and
+trace resolution admission now use CLOCK_UPTIME_RAW, matching Mach raw uptime
+after timebase conversion. The existing 2 us accounting bound is unchanged.
+A CPU-only nested-clock probe qualifies the relation, while preserving the
+old two-output CPU-probe ABI. No Metal object or GPU wait is created by it.
+
+The repeated baseline profile completed 102 requests: two correctness, four
+warmup and 96 balanced ABBA/BAAB timed requests, 48 each with API profiling on
+and off. In the off arm, median request wall time was 1.555039 s, current-thread
+CPU 8.842 ms, body encode wall 723.879 ms and terminal wait 824.499 ms. Encode
+wall includes MPS backpressure; it is not active CPU encoding cost. These CPU
+figures exclude other driver threads. Three collections totalled 1.863 ms over
+the 156.176 s observed loop. GC/host-lock removal is therefore a weak primary
+lever for this workload; this does not establish a general runtime verdict.
+First/last eight off-arm requests drifted from 1.427 to 1.614 s; the older
+4.6 s severe drift was not reproduced or causally explained.
+
+The tested candidate concatenates BF16 gate/up weights inside one MPS graph,
+performs one logical F32 matmul, rounds its combined output to BF16, then
+slices into the original output buffers. Runtime concatenation is included.
+The shared input conversion does not remove gate/up arithmetic. Logical
+matmul count is not a statement about MPS's physical kernel decomposition.
+The bridge is linked only into `pixelumm_packed_gate_up_probe`; it retains and
+restores Plan selector state under a serialized idle-caller precondition.
+
+The unprofiled run completed 40 requests: four correctness, four warmup and
+32 balanced timed requests, 16 per arm. Adjacent-pair comparisons:
+
+| Metric | Baseline median | Packed median | Paired candidate change |
+| --- | ---: | ---: | ---: |
+| Whole request | 1.425029 s | 1.427755 s | +0.1228% |
+| Body encode wall | 675.196 ms | 570.635 ms | -15.5643% |
+| Terminal wait | 749.863 ms | 857.328 ms | +14.2570% |
+| GPU root-duration sum | 1.402999 s | 1.404167 s | +0.0251% |
+
+Packed won only 5/16 whole-request pairs; the paired range was -0.6415% to
++0.5934%. The apparent encode win moved into terminal waiting. Neither an
+acceleration nor equivalence is established. Roots fell from 125 to 117 per
+request, providing another counterexample to root-count-as-performance.
+All compared finite capture/output words matched upstream bitwise, and the
+NaN positive control fired. Each request retained one terminal wait, one
+464-byte packed metrics read, zero preterminal tensor reads and zero tracked
+encode-time named MetalBuffer allocations. These counters do not measure
+opaque MPS/native allocations. Failed sole waits are never retried; an
+undrained owner is retained rather than explicitly freeing in-flight resources.
+
+A fresh Instruments capture covered four correctness requests, two per arm;
+none qualifies for speed comparisons. Exact-PID mapping accounts for all 484
+roots and 862 target Compute rows, with zero unmapped target rows. Root-duration
+error and single-clock-offset spread were both about 42 ns, within the unchanged
+2 us gate. Shader rows are associated by time overlap, not command-buffer
+identity. Their phase/root coverage is non-exclusive, and capture/output-only
+modes expose different labels. Do not add phase totals or infer exclusive
+matrix cost from them. The GPU-counter export exceeded its 90 s limit; partial
+counter XML is excluded. Bandwidth, occupancy, frequency and ALU saturation
+remain unqualified. The trace narrows candidate areas without proving a roofline.
+
+### What still offers a plausible lever
+
+The following are source-derived work counts or hypotheses, not measured gains:
+
+- At J5760/D4096/FFN12288, one FFN projection requires 579.821 GFLOPs; gate,
+  up and down together require about 1.739 TFLOPs per block. Combining calls
+  leaves that arithmetic intact. A faster dense path would matter, but the
+  prior native F32 GEMM and lower-precision reductions failed speed or accuracy
+  gates. Do not reopen them without addressing the recorded failure.
+- Local attention processes 796,262,400 F32 score values per block pass (one
+  window), a cumulative
+  3,185,049,600 bytes of panels, plus the same probability volume. This is not
+  resident memory or measured DRAM traffic: peak scores+probabilities are
+  675 MiB, and caches/lowering affect physical traffic. QK and PV together
+  require about 407.686 GFLOPs. Removing materialization is a potentially large
+  structural lever, but its actual latency contribution remains unmeasured.
+- The smallest exact attention probe is folding the standalone F32 score scale
+  into softmax while preserving the F32 rounding boundary and batch geometry.
+  Verify that lowering actually removes a panel sweep; a shared graph alone
+  is insufficient. Compare scaled scores/probabilities/attended outputs on
+  identical inputs before the existing BF16 block gates. The existing helper
+  expects already-scaled scores and cannot be reused blindly for this test.
+- A streamed QK/softmax/PV path could avoid score/probability storage. It is a
+  higher-risk route because online softmax and tiled accumulation change
+  reductions. It remains a hypothesis until unchanged intermediate/output
+  gates pass; numerical algebra alone is not an equivalence certificate.
+- One-time weight layout preparation or batching FFN rows from two independent
+  windows might improve matrix reuse. MPS may already absorb transposes, and
+  a larger M dimension may select different reductions. Require evidence of
+  repeated conversion/layout work, account for extra live storage and setup,
+  and do not infer a gain from fewer calls. Prior F32 staging alone was neutral
+  or worse.
+- Cold pipeline preparation and decoder overlap deserve separate accounting.
+  The earlier five-second preview spent about 45 s preparing DiT/decoder;
+  those are historical measurements, not this run. Reusing owners may reduce
+  startup latency but retaining every phase's weights needs a fresh memory
+  budget. Five overlapping decoder windows process 200 frame positions for
+  120 displayed frames; context changes prevent naive cross-window activation
+  reuse. Neither timestamp equality nor identical weights proves cache safety.
+
+Next falsifier: first measure the scale/softmax candidate on the same panel and
+block fixtures; reject on any unchanged numerical gate failure. A candidate
+promotion requires repeated unprofiled balanced whole-request improvement in
+both orderings, outside the observed A/A variation, with setup/deferred work
+and resource growth included. Use a prospective 3% median improvement screen,
+not a claim that this threshold proves significance. Hardware-limit claims
+also need qualified counters and stable device state; none is made here.
+
+All three native runs passed the 10% cache-aware reserve, 16 GiB group cap,
+64 MiB swap-growth stop and 600 s timeout. Sampled group peaks were 8,180,976,952 B
+(baseline), 8,989,412,664 B (packed) and 10,329,643,728 B (Instruments), with zero
+positive swap growth. Lowest sampled headroom across them was 28,249,341,952 B.
+Cache headroom is a reclaimability estimate and polling cannot prevent transient
+spikes. The diagnostic's named inventory remains 7,381,500,468 B, including
+unused 576 MiB staging and saved comparison captures; it is not a pipeline budget.
+
+DoD commands: `make pixelumm_packed_gate_up_probe`,
+`make spec_mps_api_profile_clock`, and `crystal spec -Dcpu_only` over the six
+profile/schedule/weight-reuse spec files listed in the execution logs. Release
+build, 44 CPU examples, two native CPU clock examples, eight Python accounting
+tests and format/diff checks passed. The clock spec is excluded from CPU-only
+and non-Darwin runs. Correlated adversary review is ROBUST for these bounded
+numerical, lifecycle and descriptive measurement claims; severe-drift causality,
+full-pipeline throughput and GPU saturation remain unverified. Rollback leaves
+the packed candidate unselected; production defaults are unchanged.
+
+Evidence root: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-hotspot-20261028`.
+`results/hotspot-summary-1.json` SHA256
+`4a9417ef0948d3605394d751e576dd5ac87480274cb6f2efd8c4d59985a523ee`
+pins reports, guard logs, execution receipts, selected analysis and final CPU
+checks. Measured sources were unchanged during each run and archived per run.
+The unprofiled 40-request run predates attribution-only report/attach-gate
+additions and restoration of the old CPU-probe ABI; the four-request trace
+qualifies the current ABI/numerical path, not a new timed comparison. Final
+formatting, the test guard and Makefile test target followed the trace; the final
+release binary built successfully but has no separate GPU performance claim.
+Refresh on source, fixture, weights, runtime, device, geometry, precision,
+schedule, backend or guard changes, or evidence loss. Admit memory afresh
+before every GPU replay. No full generation ran in this experiment.
+
 ## Active experiment: prepared CogniGraph native islands (2026-10-28)
 
 Implemented opt-in, CAUTION: share the existing CogniGraph dependency compiler with

@@ -84,12 +84,12 @@ typedef struct gs_mps_api_profile_stats {
 } gs_mps_api_profile_stats;
 
 // Trace records are available only after the chain's existing terminal wait.
-// Trace enable rejects CLOCK_MONOTONIC resolutions above 1 us; its per-call
-// wall intervals therefore retain at most that clock's timestamp quantization.
-// Host ticks are mach_absolute_time() ticks; convert them to seconds with
-// ticks * mach_timebase_numer / mach_timebase_denom / 1e9. Metal GPU times are
-// already seconds in the corresponding host clock domain. Root sequence 0 is
-// the original root observed under the tracker lock at trace start; later
+// API wall timers use CLOCK_UPTIME_RAW, the same raw uptime clock as
+// mach_absolute_time() after timebase conversion. Trace host ticks are
+// mach_absolute_time() ticks; convert them to seconds with ticks *
+// mach_timebase_numer / mach_timebase_denom / 1e9. Metal GPU times are already
+// seconds in the corresponding host clock domain. Root sequence 0 is the
+// original root observed under the tracker lock at trace start; later
 // sequences record actual tracker insertion times. A continuation event
 // bounds the call to commitAndContinue; it does not claim an exact submission
 // instant.
@@ -165,6 +165,11 @@ void gs_mps_api_profile_scope_end(gs_mps_api_profile_scope *scope)
 // CPU-only native discriminator; it performs no Metal work or waits.
 int32_t gs_mps_api_profile_cpu_probe(uint64_t *wall_ns,
                                      uint64_t *thread_cpu_ns);
+// CPU-only nested-clock qualification probe; it performs no Metal work/waits.
+int32_t gs_mps_api_profile_clock_probe(uint64_t *wall_ns,
+                                       uint64_t *thread_cpu_ns,
+                                       uint64_t *nested_api_wall_ns,
+                                       uint64_t *nested_mach_wall_ns);
 
 #ifdef __cplusplus
 }

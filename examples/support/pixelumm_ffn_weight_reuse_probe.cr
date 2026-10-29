@@ -844,11 +844,20 @@ module PixelUMMFFNWeightReuseProbe
 
       def finish_request!(chain : ML::Metal::MPSCommandChain,
                           entry : ScheduleEntry) : Array(Metric)
+        finish_request!(chain, entry) { |_metrics| }
+      end
+
+      def finish_request!(chain : ML::Metal::MPSCommandChain,
+                          entry : ScheduleEntry,
+                          &block : Array(Metric) -> Nil) : Array(Metric)
         unless chain.completed? && chain.wait_count == 1
           raise ArgumentError.new("FFN request requires one successful terminal wait")
         end
         @lifecycle.finish_request!(chain.completed?, chain.wait_count)
         metrics = read_metrics!
+        # Diagnostic callers may preserve the existing single readback before
+        # a failed validation raises. This hook adds no GPU access or wait.
+        yield metrics
         validate_request_metrics!(metrics, entry)
         chain.release
         @last_chain = nil

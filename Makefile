@@ -38,6 +38,7 @@ PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
 PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
 PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ := $(BUILD_DIR)/pixelumm_connected_resource_bridge.o
 PIXELUMM_FFN_WEIGHT_REUSE_OBJ := $(BUILD_DIR)/pixelumm_ffn_weight_reuse_bridge.o
+PIXELUMM_PACKED_GATE_UP_OBJ := $(BUILD_DIR)/pixelumm_packed_gate_up_bridge.o
 PIXELUMM_GC_OBSERVER_OBJ := $(BUILD_DIR)/pixelumm_gc_observer.o
 COGNIGRAPH_NATIVE_HEADERS := src/ml/metal/cognigraph_native.h src/ml/metal/cognigraph_schedule.h
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
@@ -54,7 +55,7 @@ LINK_FLAGS := -framework Metal -framework Foundation -lc++
 all: spec
 
 # Each of these translation units includes the PixelUMM block bridge.
-$(PIXELUMM_MPS_OBJ) $(PIXELUMM_HEAD_OBJ) $(PIXELUMM_FFN_PROBE_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ) $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): $(COGNIGRAPH_NATIVE_HEADERS)
+$(PIXELUMM_MPS_OBJ) $(PIXELUMM_HEAD_OBJ) $(PIXELUMM_FFN_PROBE_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ) $(PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ) $(PIXELUMM_PACKED_GATE_UP_OBJ): $(COGNIGRAPH_NATIVE_HEADERS)
 
 $(BUILD_SENTINEL):
 	@mkdir -p $(BUILD_DIR)
@@ -176,6 +177,10 @@ $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ): examples/support/pixelumm_ffn_weight_reuse_bri
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM FFN weight-reuse probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
+$(PIXELUMM_PACKED_GATE_UP_OBJ): examples/support/pixelumm_packed_gate_up_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM packed gate/up probe requires macOS"; exit 1)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
 # This diagnostic translation unit includes the production block bridge;
 # linking PIXELUMM_MPS_OBJ would duplicate its C ABI symbols.
 $(BUILD_DIR)/pixelumm_ffn_weight_reuse_probe: examples/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)
@@ -221,6 +226,15 @@ $(BUILD_DIR)/pixelumm_cognigraph_probe: examples/pixelumm_cognigraph_probe.cr ex
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_WEIGHT_REUSE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
+.PHONY: pixelumm_packed_gate_up_probe
+pixelumm_packed_gate_up_probe: $(BUILD_DIR)/pixelumm_packed_gate_up_probe
+
+# This diagnostic translation unit includes the weight-reuse bridge, which
+# includes the production block ABI. Do not also link either included object.
+$(BUILD_DIR)/pixelumm_packed_gate_up_probe: examples/pixelumm_packed_gate_up_probe.cr examples/support/pixelumm_cognigraph_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_weight_reuse_bridge.mm examples/support/pixelumm_block_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/metal_mps_command_chain.cr src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_PACKED_GATE_UP_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_PACKED_GATE_UP_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 # Independent native Plans bind one diagnostic-owned Workspace. The normal
 # production bridge has no per-Graph resource collector in this experiment.
 $(BUILD_DIR)/pixelumm_plan_reuse_probe: examples/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_plan_reuse_probe.cr examples/support/pixelumm_connected_resource_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/pixelumm_ffn_dense.metal src/ml/core/buffer.cr src/ml/video/pixelumm_decoder_block_mps.cr src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/pixelumm_block_profile.cr src/ml/video/mps_api_profile.cr src/ml/video/mps_command_phase_profile.cr src/ml/video/mps_continuation_trace.cr src/ml/video/metal_mps_command_chain.cr $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_MPS_OBJ)
@@ -257,6 +271,12 @@ $(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.c
 
 spec_pixelumm_block_profile:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr
+
+.PHONY: spec_mps_api_profile_clock
+spec_mps_api_profile_clock: $(WAN_MPS_CHAIN_OBJ)
+	@test "$(IS_DARWIN)" = Darwin || (echo "MPS API clock probe requires macOS"; exit 1)
+	$(CRYSTAL) spec spec/video_mps_api_profile_clock_bridge_spec.cr \
+		--link-flags="$(abspath $(WAN_MPS_CHAIN_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
 
 pixelumm_decoder_two_block_probe: $(BUILD_DIR)/pixelumm_decoder_two_block_probe
 

@@ -35697,3 +35697,46 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback removes diagnostic/optional probe hook; no production promotion.
   Refresh after source/input/weights/runtime/device/geometry/precision/schedule/
   guard changes or evidence loss; every launch needs fresh memory admission.
+
+### 2026-10-28: PixelUMM packed gate/up is exact but does not accelerate the request
+
+- Fixed telemetry clock-domain mismatch: API wall timers now use raw uptime
+  like Mach trace ticks, preserving the 2us accounting bound and old two-output
+  CPU-probe ABI. New nested-clock CPU qualification passes; no GPU wait/math
+  change. Guarded repeated baseline:102requests,48timed/arm profile on/off.
+  Off-arm median1.555039s wall vs8.842ms current-thread CPU; encode wall includes
+  MPS backpressure. This does not cover every driver thread or explain the old
+  4.6s severe drift. GC/lock elimination is a weak main lever in this diagnostic.
+- New standalone packed gate/up: one logical F32 matmul after runtime BF16
+  weight concatenation, BF16 rounding before output slices.40requests,32timed,
+  16/arm ABBA/BAAB. Median full request baseline1.425029/packed1.427755s;
+  paired change+0.1228%, packed5/16wins. Encode-15.5643% moves into terminal
+  wait+14.2570%;125->117roots does not establish a gain. Keep default off.
+- All compared finite captures/output words match saved authenticated Torch
+  2.6.0 MPS upstream-source-method oracle bitwise at unchanged2e-5; NaN control
+  fires. Four Plan passes=request: two saved initial-noise windows x blocks0/1;
+  block1 uses saved input, not a native connected edge. One terminal wait and
+  one464B metrics read/request, zero preterminal reads/tracked encode buffers.
+  Opaque native allocations, full decoder/head/generation are outside scope.
+- Fresh Instruments attribution maps484/484roots/862targetCompute rows; max
+  duration/offset spread~42ns. Shader association is temporal/nonexclusive;
+  capture-mode label changes prevent exclusive per-phase cost claims. Counter
+  export timed out; no bandwidth/occupancy/ALU-saturation or maximum-performance
+  claim. Correlated adversary ROBUST for bounded gates/lifecycle/measurement.
+- Next useful falsifier: fold F32 score scale into softmax, prove actual panel
+  work removal and unchanged scaled-score/probability/attended/block gates.
+  Broader streamed attention remains risky under fixed reduction tolerances.
+  Score/probability cumulative panel volumes are3.185GB each/block pass/window, not
+  resident/DRAM bytes; peak pair675MiB. FFN still~1.739TFLOPs/block. No gain is
+  predicted from graph count alone; compare unprofiled full requests both orders.
+- Guard10%cache-aware/16GiBcap/64MiBswap/600s passes all three native runs;
+  largest sampled group10,329,643,728B, minheadroom28,249,341,952B, zero swap
+  growth.44CPU+2nativeCPU examples,8Python tests, release/format/diff pass.
+  Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-hotspot-20261028/results/
+  hotspot-summary-1.json SHA
+  4a9417ef0948d3605394d751e576dd5ac87480274cb6f2efd8c4d59985a523ee.
+  Receipts pin per-run source/binary. Later diagnostic metadata/ABI restoration
+  qualified by4requesttrace; final formatting/test-target changes built but no
+  repeated final-binary timing claim. Return docs/hy-nomas-generation-frontier.md;
+  refresh on source/input/weights/runtime/device/geometry/precision/schedule/
+  backend/guard changes or evidence loss; fresh memory admission each replay.

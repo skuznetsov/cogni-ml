@@ -291,7 +291,7 @@ extern "C" void gs_mps_api_profile_scope_begin(
 
   uint64_t startWall = 0;
   uint64_t startThreadCpu = 0;
-  if (!gs_mps_api_profile_clock_ns(CLOCK_MONOTONIC, &startWall) ||
+  if (!gs_mps_api_profile_clock_ns(CLOCK_UPTIME_RAW, &startWall) ||
       !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
                                    &startThreadCpu)) {
     gs_mps_api_profile_fail(data);
@@ -364,7 +364,7 @@ extern "C" void gs_mps_api_profile_scope_end(
   uint64_t endThreadCpu = 0;
   bool clocksValid =
       scope->clocks_valid &&
-      gs_mps_api_profile_clock_ns(CLOCK_MONOTONIC, &endWall) &&
+      gs_mps_api_profile_clock_ns(CLOCK_UPTIME_RAW, &endWall) &&
       gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID, &endThreadCpu) &&
       endWall >= scope->start_wall_ns &&
       endThreadCpu >= scope->start_thread_cpu_ns;
@@ -453,14 +453,39 @@ static void gs_mps_api_profile_probe_burn(volatile uint64_t *value,
   *value = current;
 }
 
-extern "C" int32_t gs_mps_api_profile_cpu_probe(uint64_t *wallNs,
-                                                 uint64_t *threadCpuNs) {
-  if (!wallNs || !threadCpuNs)
+static bool gs_mps_api_profile_mach_delta_ns(
+    uint64_t beginTicks, uint64_t endTicks,
+    const mach_timebase_info_data_t &timebase, uint64_t *deltaNs) {
+  if (!deltaNs || beginTicks == 0 || endTicks <= beginTicks ||
+      timebase.numer == 0 || timebase.denom == 0)
+    return false;
+  __uint128_t converted =
+      (__uint128_t)(endTicks - beginTicks) * timebase.numer / timebase.denom;
+  if (converted > UINT64_MAX)
+    return false;
+  *deltaNs = (uint64_t)converted;
+  return true;
+}
+
+static int32_t gs_mps_api_profile_run_cpu_probe(
+    uint64_t *wallNs, uint64_t *threadCpuNs, uint64_t *nestedApiWallNs,
+    uint64_t *nestedMachWallNs, bool qualifyMachClock) {
+  if (!wallNs || !threadCpuNs ||
+      (qualifyMachClock && (!nestedApiWallNs || !nestedMachWallNs)))
     return -1;
   *wallNs = 0;
   *threadCpuNs = 0;
+  if (nestedApiWallNs)
+    *nestedApiWallNs = 0;
+  if (nestedMachWallNs)
+    *nestedMachWallNs = 0;
   if (gs_mps_api_profile_current != nullptr)
     return -6;
+  mach_timebase_info_data_t timebase{};
+  if (qualifyMachClock &&
+      (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.numer == 0 ||
+       timebase.denom == 0))
+    return -8;
 
   // The disabled hook must be a state-only no-op and leave the stack empty.
   GsMpsApiProfileData disabled{};
@@ -509,7 +534,15 @@ extern "C" int32_t gs_mps_api_profile_cpu_probe(uint64_t *wallNs,
     gs_mps_api_profile_current = nullptr;
     return -5;
   }
-  gs_mps_api_profile_probe_burn(&burn, 100000);
+  // Model the production nesting: the API span surrounds a narrower Mach
+  // trace interval. Keep this CPU-only so it can qualify the clock relation
+  // without creating a Metal object or waiting on GPU work.
+  const uint64_t traceBeginTicks =
+      qualifyMachClock ? mach_absolute_time() : 0;
+  gs_mps_api_profile_probe_burn(&burn,
+                                qualifyMachClock ? 100000000 : 100000);
+  const uint64_t traceEndTicks =
+      qualifyMachClock ? mach_absolute_time() : 0;
   gs_mps_api_profile_scope_end(&commit);
   gs_mps_api_profile_probe_burn(&burn, 100000);
   gs_mps_api_profile_scope_end(&graph);
@@ -543,7 +576,28 @@ extern "C" int32_t gs_mps_api_profile_cpu_probe(uint64_t *wallNs,
     return -7;
   *wallNs = graphStats.wall_total_ns;
   *threadCpuNs = graphStats.thread_cpu_total_ns;
+  if (qualifyMachClock) {
+    uint64_t machTraceWallNs = 0;
+    if (!gs_mps_api_profile_mach_delta_ns(traceBeginTicks, traceEndTicks,
+                                         timebase, &machTraceWallNs))
+      return -9;
+    *nestedApiWallNs = commitStats.wall_total_ns;
+    *nestedMachWallNs = machTraceWallNs;
+  }
   return 0;
+}
+
+extern "C" int32_t gs_mps_api_profile_cpu_probe(uint64_t *wallNs,
+                                                 uint64_t *threadCpuNs) {
+  return gs_mps_api_profile_run_cpu_probe(wallNs, threadCpuNs, nullptr,
+                                          nullptr, false);
+}
+
+extern "C" int32_t gs_mps_api_profile_clock_probe(
+    uint64_t *wallNs, uint64_t *threadCpuNs, uint64_t *nestedApiWallNs,
+    uint64_t *nestedMachWallNs) {
+  return gs_mps_api_profile_run_cpu_probe(wallNs, threadCpuNs, nestedApiWallNs,
+                                          nestedMachWallNs, true);
 }
 
 extern "C" int32_t gs_mps_chain_api_trace_self_test(
@@ -1030,7 +1084,7 @@ extern "C" int32_t gs_mps_chain_api_profile_enable(void *handle) {
 
   uint64_t wallPreflight = 0;
   uint64_t threadCpuPreflight = 0;
-  if (!gs_mps_api_profile_clock_ns(CLOCK_MONOTONIC, &wallPreflight) ||
+  if (!gs_mps_api_profile_clock_ns(CLOCK_UPTIME_RAW, &wallPreflight) ||
       !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
                                    &threadCpuPreflight)) {
     data->failed = true;
@@ -1095,14 +1149,14 @@ extern "C" int32_t gs_mps_chain_api_trace_enable(void *handle) {
     return -3;
 
   mach_timebase_info_data_t timebase{};
-  timespec monotonicResolution{};
+  timespec rawUptimeResolution{};
   uint64_t ownerThreadId = 0;
   uint64_t threadCpuPreflight = 0;
   if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.numer == 0 ||
       timebase.denom == 0 ||
-      clock_getres(CLOCK_MONOTONIC, &monotonicResolution) != 0 ||
-      monotonicResolution.tv_sec != 0 || monotonicResolution.tv_nsec <= 0 ||
-      monotonicResolution.tv_nsec > 1000 ||
+      clock_getres(CLOCK_UPTIME_RAW, &rawUptimeResolution) != 0 ||
+      rawUptimeResolution.tv_sec != 0 || rawUptimeResolution.tv_nsec <= 0 ||
+      rawUptimeResolution.tv_nsec > 1000 ||
       pthread_threadid_np(pthread_self(), &ownerThreadId) != 0 ||
       ownerThreadId == 0 ||
       !gs_mps_api_profile_clock_ns(CLOCK_THREAD_CPUTIME_ID,
