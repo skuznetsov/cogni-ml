@@ -2,6 +2,74 @@ require "spec"
 require "../examples/support/pixelumm_plan_reuse_probe"
 
 describe PixelUMMPlanReuseProbe do
+  it "admits output-only softmax/PV only as the unshared two-Plan candidate" do
+    PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+      true, true, 2, false).should be_nil
+    PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+      true, false, 2, false).should be_nil
+
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+        false, true, 2, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+        true, true, 1, false)
+    end
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+        true, true, 2, true)
+    end
+
+    PixelUMMPlanReuseProbe.softmax_pv_output_only_for_plan!(
+      true, true, 2, false, 0).should be_false
+    PixelUMMPlanReuseProbe.softmax_pv_output_only_for_plan!(
+      true, true, 2, false, 1).should be_true
+    PixelUMMPlanReuseProbe.attention_mode_for_plan!(true, false, 2, false,
+      1, true).should eq("fused_softmax_pv_output_only")
+    PixelUMMPlanReuseProbe.attention_graph_topology_for_plan!(true, false,
+      2, false, 1, true).should eq("separate_qk_fused_softmax_pv_output_only")
+    PixelUMMPlanReuseProbe.attention_output_binding_for_plan!(true, false,
+      2, false, 1, true).should eq("attended_only")
+    PixelUMMPlanReuseProbe.attention_output_binding_for_plan!(true, false,
+      2, false, 1).should eq("probabilities_and_attended")
+    PixelUMMPlanReuseProbe.softmax_pv_output_only_correctness_schedule(2, false).should eq([
+      {index: 0_i32, plan_index: 1_i32, warmup: false},
+    ])
+  end
+
+  it "validates output-only direct F32 metrics without claiming probability coverage" do
+    geometry = PixelUMMPlanReuseProbe.softmax_pv_f32_geometry(2048)
+    metrics = Array.new(PixelUMMPlanReuseProbe::F32_CHECK_METRIC_SLOTS) do
+      {failures: 0_u32, different_words: 0_u32, nonfinite: 0_u32, elements: 0_u32}
+    end
+    metrics[9] = {failures: 0_u32, different_words: 4_u32, nonfinite: 0_u32,
+                  elements: geometry[:attended_elements]}
+    metrics[10] = {failures: 1_u32, different_words: 1_u32, nonfinite: 1_u32,
+                   elements: 1_u32}
+    PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(metrics,
+      geometry, true).should be_nil
+
+    nonzero_probability_slot = metrics.dup
+    nonzero_probability_slot[8] = nonzero_probability_slot[8].merge({elements: 1_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(
+        nonzero_probability_slot, geometry, true)
+    end
+    nonzero_probability_slot = metrics.dup
+    nonzero_probability_slot[8] = nonzero_probability_slot[8].merge({different_words: 1_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(
+        nonzero_probability_slot, geometry, true)
+    end
+    missing_attended_coverage = metrics.dup
+    missing_attended_coverage[9] = missing_attended_coverage[9].merge({elements: 0_u32})
+    expect_raises(ArgumentError) do
+      PixelUMMPlanReuseProbe.validate_softmax_pv_f32_metrics!(
+        missing_attended_coverage, geometry, true)
+    end
+  end
+
   it "admits scale-folding only as a separate two-Plan unshared experiment" do
     PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(2, false,
       false, true).should be_nil

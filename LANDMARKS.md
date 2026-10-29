@@ -6,6 +6,93 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-REWRITE-REFUTATIONS-2026-10-29] Exact local rewrites do not establish a request gain
+
+- The current MPSGraph control remains selected. Reoriented F32 FFN GEMMs and
+  output-only softmax/PV passed their saved upstream BF16 gates but failed the
+  prospective 3% whole-request screen: paired reductions -0.6382% (4/16 wins)
+  and -0.7061% (6/16). Explicit SDPA and paired query groups failed the first
+  saved BF16 gate; no timing was admitted for those variants. Tolerances stayed
+  atol=rtol=2e-5. Unchanged refuted variants should not be rerun without a new
+  mechanism addressing their recorded failure.
+- Classic F32 MPSMatrixMultiplication for gate/up/down was bitwise equal at
+  every compared slot, including final-source correctness qualification.
+  Sixteen balanced AB/BA pairs gave baseline/candidate medians
+  1.582481/1.708753 s, paired reduction -7.7081%, zero candidate wins. Encoding
+  shortened 26.99% and roots fell 125 to 97, while terminal waits and GPU root
+  intervals widened. This falsifies call-count/host-encoding proxies as a
+  sufficient reason to promote that candidate; root intervals are not exclusive
+  kernel cost. The extra shared F32 weight stage was 192 MiB.
+- Scope is four J5760 whole-block passes: two windows, each with native block0
+  output feeding block1. Earlier descriptions of independent saved block1
+  inputs were wrong; the frozen common driver and runtime bindings confirm the
+  connected scope. No complete decoder/head or generation speed is established.
+  There was one terminal wait, one 464-byte post-wait read and no tracked named
+  encode allocation/preterminal read per request. The 10% cache-aware reserve,
+  16 GiB process cap, 64 MiB swap-growth stop and 600 s deadline held. Final
+  direct-MPS run: sampled peak 7.807 GiB, minimum headroom 26.041 GiB, zero swap
+  growth. Sampling does not bound opaque MPS allocation transients.
+- Strict containment of 1,138 matrix shader intervals gives definite FFN/
+  attention unions 378.341/119.211 ms in one captured baseline request. These
+  timestamp-based subsets support targeting FFN but exclude unresolved work,
+  causal attribution, occupancy and exclusive cost. Details, exact report and
+  binary hashes, release/guard review and damaged-artifact checks are in
+  `docs/hy-nomas-generation-frontier.md`. Raw direct-MPS report SHA256:
+  `d8f497d76d65502621cce994ef2c52a023d8b5d4ae5d67660c610e6e07c3bdd7`.
+  Rollback keeps all diagnostic selectors disabled. Refresh on scoped
+  source/artifact, geometry/precision/schedule/lifetime, backend/device/OS,
+  toolchain, guard/clock changes or evidence loss; admission expires per launch.
+
+### [LM-HY-NOMAS-PIXELUMM-FUSED-KV-2026-10-29] Fused gathers give a small bounded gain below the default screen
+
+- The opt-in dual-output gather replaces 24 K/V dispatches with 12 per J5760
+  block, retaining the original head/token mapping and existing disjoint F32
+  scratch panels. It does not reduce tensor bytes or establish DRAM traffic.
+  Correctness-only and final-source 40-request runs passed: all 200 compared
+  saved-upstream stage/output slots were finite and bitwise equal at unchanged
+  atol=rtol=2e-5. There is no raw K/V panel bitwise comparator.
+- Sixteen balanced pairs gave baseline/candidate medians 1.448511/1.435620 s,
+  paired time reduction 1.2331%, 16/16 wins, positive AB/BA medians. This is
+  below the prospective 3% promotion screen; default stays off. Scope is two
+  connected blocks in each of two J5760 windows, not complete generation.
+  One terminal wait and one 464-byte post-wait read remain, with no tracked
+  encode-time named allocation or preterminal read. Guard peak was 7.618 GiB,
+  minimum cache-aware headroom 24.321 GiB and swap growth zero under the 10%
+  reserve/16 GiB/64 MiB/600 s limits. Twenty-nine CPU examples and the artifact
+  validator passed; four damaged artifacts were rejected.
+- Correlated source review found request defaults, mapping and link isolation
+  robust within the serialized lifecycle. An extra pipeline is created during
+  all plan setups; default execution preservation does not imply zero setup
+  overhead. The selector is the rollback. Evidence and measured-source archive:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-20261029/results/analysis-timing-1.json`;
+  raw report SHA256 `94cac65039df4e67cf9c033d44ed4f130e0f140fc0475a38eccade9c26e27f7c`.
+  Refresh on scoped source/artifact, shape/precision, schedule/lifetime,
+  backend/device/OS/toolchain or guard changes; admission expires per launch.
+
+### [LM-HY-NOMAS-ROOFLINE-2026-10-29] Current preview is roughly halfway to a conditional FP32 arithmetic ceiling
+
+- CPU-only integer operation counts give 734.577 TFLOP of major matrix work
+  for the fixed 120-frame 512x288/24fps first segment: eight 54-block DiT steps
+  and five 36-block PixelUMM windows, with saved Qwen state as input. Count two
+  FLOPs/MAC; elementwise operations, reductions and setup are excluded.
+  647.604 TFLOP has explicit F32 graph operands; 86.973 TFLOP is in opaque
+  BF16-fed PixelUMM Q/K/V/O projections. Do not infer their lowering from feeds.
+- Hardware was read as M2 Max, 38 GPU cores, 64 GiB. Apple advertises 400 GB/s;
+  the primary study cited in the frontier gives nominal FP32 13.6 TFLOP/s.
+  No sustained peak, physical DRAM traffic or ALU utilization was measured.
+  The fresh four-pass block control is 10.521 TFLOP / 1.448511 s = 7.264
+  TFLOP/s counted work per request wall second (53.4% FP32-equivalent peak).
+  The earlier control gives 48.9%; cross-run drift is not a candidate gain.
+- The prior preview receipt was reread, not rerun: neural wall 103.315 s,
+  application total 149.110 s. All counted work at the assumed FP32 peak gives
+  54.013 s; the explicit-F32 subset alone gives 47.618 s. These conditional
+  compute-only models are not physical floors or achievable latency promises.
+  The approximate twofold gap does not imply a 10-100x unchanged-kernel gain,
+  high-resolution/long-video throughput or quality. Reproduce with
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-roofline-20261029/calculate_roofline.py`;
+  report pins the source and measurement artifacts. Refresh on preset,
+  precision/kernel/backend/device, scoped source or measurement changes.
+
 ### [LM-HY-NOMAS-PIXELUMM-SCALE-SOFTMAX-2026-10-28] F32 scale/softmax preserves parity with a small bounded paired gain
 
 - VERIFIED opt-in raw F32 QK scale inside rank-4 axis-3 softmax, keeping
@@ -20,8 +107,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   pairs. Full-request medians: baseline/candidate 1.590239/1.559931 s and
   2.904161/2.860022 s. Paired median reductions 2.17145% and 2.00291%; combined
   2.04714%, 28/32 wins, positive in both orders. Absolute drift remains large.
-  Scope is four J5760 whole-block passes per request (two windows, blocks0/1
-  consuming saved inputs), not full-J timing, a connected block chain,
+  Scope is four J5760 whole-block passes per request (two windows, each with
+  native block0 output feeding block1), not full-J timing, a complete
   decoder/head or generation speed. All compared captures/outputs are bitwise
   equal. This falls below the prospective 3% promotion screen; keep default off.
 - No new GPU wait or preterminal read: one terminal wait and packed metrics
@@ -35754,7 +35841,7 @@ Refresh after source/toolchain/device/model/workload changes.
 - All compared finite captures/output words match saved authenticated Torch
   2.6.0 MPS upstream-source-method oracle bitwise at unchanged2e-5; NaN control
   fires. Four Plan passes=request: two saved initial-noise windows x blocks0/1;
-  block1 uses saved input, not a native connected edge. One terminal wait and
+  native block0 output feeds block1 within each window. One terminal wait and
   one464B metrics read/request, zero preterminal reads/tracked encode buffers.
   Opaque native allocations, full decoder/head/generation are outside scope.
 - Fresh Instruments attribution maps484/484roots/862targetCompute rows; max

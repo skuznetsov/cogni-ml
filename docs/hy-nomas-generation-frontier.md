@@ -1,5 +1,204 @@
 # Hy-Nomas first native video frontier
 
+## Exact FFN/attention rewrites rejected by the request screen (2026-10-29)
+
+The remaining dense FFN projections remain the strongest hotspot candidate by
+arithmetic volume and overlapping matrix-shader intervals; those intervals do
+not establish exclusive FFN GPU cost. A refined timestamp-containment audit
+uniquely assigns all 1,138 matrix-shader intervals to a GPU root. In captured
+output-only requests, the definite FFN/attention matrix timeline unions were
+378.341/119.211 ms (baseline) and 288.138/90.792 ms (packed). These subsets do
+not cover unresolved intervals, active cycles or unprofiled request speed.
+The reproducible strict-containment calculation and input identities are in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-hotspot-20261028/results/matrix-attribution-20261029.json`
+(SHA256 `56d563dcd90858748daee36725b1cccec0de79e7ef72f2045d40cc00ddd43942`).
+Shader rows do not carry command-buffer IDs; the assignments use timestamps.
+Two rows partially intersect a second root while remaining fully contained in
+exactly one. The companion Python script recomputes these checks from the raw
+capture exports; this does not establish causal or exclusive shader costs.
+Reorienting all three F32 GEMMs as
+`transpose(W @ transpose(X))` passed all six saved upstream BF16 stages on
+both J5760 windows and blocks 0/1, but failed the whole-request speed screen:
+-0.6382% median paired improvement, 4/16 wins, negative AB and BA medians.
+Roots increased from 125 to 137. Reject this unchanged route; shorter terminal
+waits did not compensate for longer encoding/MPS call intervals.
+
+Evidence (diagnostic source archived with receipts):
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-orientation-20261028/results/analysis-timing-1.json`.
+No full-J timing, connected decoder, exclusive GPU-cost or generation claim.
+
+The output-only softmax/PV rewrite also passed both J2048 and J21120 raw
+F32 attended-output comparisons and all saved BF16 captures, but failed the
+whole-request speed screen: -0.7061% median paired improvement, 6/16 wins,
+negative AB and BA medians, unchanged 125 roots. Removing an external output
+binding did not establish removal of internal probability storage. Keep it
+explicitly diagnostic and off by default; do not repeat the unchanged route.
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-output-only-pv-20261029/results/analysis-timing-1.json`.
+
+The explicit macOS 15 SDPA candidate failed the first BF16 rejection screen:
+plan 0 post-attention norm had 4,899 tolerance failures / 7,776 differing words,
+followed by downstream FFN/output failures. Baseline passed. No SDPA timing was
+admitted. The diagnostic implementation was archived externally and removed
+from the live core rather than leaving a known-inaccurate alternative there.
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-sdpa-20261029/results/correctness-1.json`.
+
+Pairing adjacent query groups with identical ordered K lists reduced 12 groups
+to 6 but failed the unchanged BF16 gate: plan 0 post-attention norm had 206
+tolerance failures / 329 differing words, followed by larger FFN and successor
+failures. Baseline passed, with no nonfinite values. This is the first captured
+failure, not a localization to QK, softmax or PV. No timing was admitted.
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-query-pair-20261029/results/correctness-1.json`.
+
+Classic `MPSMatrixMultiplication` for gate/up/down also passed the unchanged
+saved upstream stage gate with bitwise equality, including the final-source
+correctness-only repetition. Explicit GPU conversion retains BF16-to-F32
+operands, full-K F32 multiplication and the original BF16 output boundaries.
+All descriptors, kernels and the serialized 192 MiB F32 weight stage are
+prepared before requests. Combined named storage is 7,582,827,060 bytes;
+a 7 GiB negative admission rejects before fixture/Metal initialization.
+
+The final-source unprofiled run completed 40 requests, including 16 balanced
+AB/BA timed pairs. Baseline/candidate request medians were 1.582481/1.708753 s;
+the paired median time reduction was -7.7081%, with zero candidate wins and
+negative medians in both orders. Encoding was 26.99% shorter but the terminal
+wait was 37.71% longer. GPU root-duration sums also worsened by 7.39%; neither
+root durations nor API waits establish exclusive kernel costs. Root count
+fell 125 to 97. Reject the unchanged candidate: fewer roots and shorter host
+encoding are not a request speedup.
+
+All 200 compared slots were finite and bitwise equal. Each request kept one
+terminal wait, one 464-byte post-wait metrics read, no preterminal read and
+zero tracked encode-time named allocations. Guard peak was 7.807 GiB, minimum
+cache-aware headroom 26.041 GiB and positive swap growth zero. The 10% reserve,
+16 GiB process cap, 64 MiB swap-growth stop and 600 s deadline held; sampled
+guard evidence does not bound unsampled MPS allocations. The final-source
+build and artifact validator passed; four damaged CPU artifacts were rejected.
+Static correlated adversary review found the transactional release and
+reciprocal diagnostic-mode guards robust within their serialized lifecycle.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-ffn-direct-mps-20261029/results/analysis-timing-1.json`;
+raw report SHA256 `d8f497d76d65502621cce994ef2c52a023d8b5d4ae5d67660c610e6e07c3bdd7`,
+binary `4d54eb37e6c0c95edfa19a3e4496d896a5d90d58a95650fcedd175f971fe082c`.
+Archived measured-source copies and execution receipts preserve the precise
+source state. Rollback leaves the MPSGraph projections selected. No full
+generation or improvement was established by this candidate.
+
+Scope correction: the frozen common driver and runtime binding verifier used
+in these probes connect each native block-0 output to its block-1 input. Earlier
+text describing independent saved block-1 inputs was incorrect. The driver
+SHA256 is `e83f70829a67652baa0b37226a066c0acaac8bf23277cc8e621133f478ccdf39`;
+its archived copies and execution receipts agree across scale-softmax,
+orientation, output-only, query-pair and packed gate/up runs. This establishes
+two connected blocks per window, not a complete decoder/head or generation.
+
+## Fused K/V gather qualification (2026-10-29)
+
+The next opt-in candidate gathers K and V in a single native dispatch per
+attention tile, retaining the original head/token mapping and two disjoint F32
+destinations. At J5760 this replaces 24 K/V dispatches with 12 per block. It
+does not reduce tensor storage or claim lower physical DRAM traffic. The
+baseline selector remains the rollback; native CogniGraph islands are mutually
+excluded. Plans and the added pipeline are prepared before requests.
+
+The falsifier is the unchanged upstream stage gate on two connected blocks in
+each of two windows, including full captures, output-only checks and the NaN
+control. Require atol=rtol=2e-5, one terminal wait and packed post-wait read,
+zero preterminal reads or tracked encode-time buffer allocations, a 10%
+cache-aware reserve and the existing 16 GiB/64 MiB swap-growth/600 s limits.
+Only after correctness may 16 balanced AB/BA pairs test the prospective 3%
+whole-request improvement screen. No raw K/V panel bitwise comparator or full
+generation is part of this candidate's claim.
+
+The release build, correctness-only qualification and subsequent final-source
+40-request run passed. All 200 compared slots were finite and bitwise equal;
+the NaN and malformed-selector controls rejected as expected. Sixteen balanced
+pairs gave baseline/candidate medians 1.448511/1.435620 s, paired median time
+reduction 1.2331%, 16/16 candidate wins, and positive AB/BA medians
+1.1986/1.6199%. Root count stayed 125. This is a small descriptive gain below
+the prospective 3% default-promotion screen; keep the selector off by default.
+Do not interpret differences from previous runs' control medians as a gain.
+
+Each request retained one terminal wait and one 464-byte post-wait read, zero
+preterminal reads and zero tracked encode-time named buffer allocations.
+Sampled peak footprint was 7.618 GiB, minimum cache-aware headroom 24.321 GiB
+and positive swap growth zero. The unchanged limits held. The artifact
+validator passed and rejected four damaged CPU controls; the focused CPU
+schedule/lifecycle suite passed 29 examples. Correlated source review found
+the default selector, buffer mapping and ABI/link isolation robust in the
+serialized, unprofiled request scope. The added pipeline is created at plan
+setup even with the selector off: preservation applies to default request
+execution, not zero setup overhead or setup failure independence.
+
+Evidence and archived measured source:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-20261029/results/analysis-timing-1.json`;
+raw report SHA256 `94cac65039df4e67cf9c033d44ed4f130e0f140fc0475a38eccade9c26e27f7c`,
+binary `6e22a64d909cd4613ab4601060fb2b79f0beaf88d07365c65193ecb207457e68`.
+Refresh after scoped source, geometry, backend/device, schedule or guard
+changes. No full generation or exclusive GPU-utilization claim is established.
+
+## Operation-count roofline for the fixed BF16 preview (2026-10-29)
+
+This is a CPU-only arithmetic model, not a new model run or measured hardware
+utilization. The local device has 38 M2 Max GPU cores and 64 GiB unified memory.
+[Apple specifies 400 GB/s bandwidth](https://support.apple.com/en-us/111838).
+The nominal 13.6 TFLOP/s FP32 figure comes from the methodology of
+[Benazir and Lin's primary study](https://arxiv.org/html/2508.08531v1), not an
+Apple-published FP32 guarantee or a calibrated sustained MPS rate on this host.
+
+Count two FLOPs per MAC. The fixed first-segment preset has 120 frames at
+512x288/24 fps, 54 DiT blocks over eight steps and 36 PixelUMM blocks over five
+overlapping windows. Saved Qwen state is an input; live Qwen encoding is
+excluded. DiT linears process 4,320 video plus 64 stored text rows; attention
+uses 4,320 plus 23 valid text rows. For D=2,048 and F=8,192, each DiT block
+costs `24D^2 + 8D^2*S + 4D*F*S + 4D*A^2`, with S=4,384 and A=4,343.
+
+PixelUMM uses J=5,760, D=4,096, F=12,288, 32 query heads, eight KV heads and
+head width 128. The 3x4 local-tile layout has eight 640-query and four
+160-query groups; clamped neighborhoods give every group 4,320 keys. One block
+therefore has 1.739462 TFLOP FFN, 0.483184 TFLOP Q/K/V/O and 0.407686 TFLOP
+QK/PV: 2.630332 TFLOP of counted matrix work.
+
+| Counted matrix work | TFLOP |
+| --- | ---: |
+| DiT blocks, 54 x 8 | 257.439 |
+| Text refiner and DiT input/output adapters | 2.222 |
+| PixelUMM blocks, 36 x 5 | 473.460 |
+| PixelUMM stem and head, five windows | 1.457 |
+| Total | 734.577 |
+
+The fresh unchanged-baseline diagnostic is 10.521328 TFLOP across four full
+J5760 block passes, divided by 1.448511 s: 7.264 TFLOP/s of counted work per
+request wall second, or 53.4% of the nominal FP32 rate. The earlier 1.582481 s
+control gives 48.9%; between-run drift is not a candidate speedup. These ratios
+are not ALU utilization. The conditional all-work-at-FP32-peak time is 0.774 s;
+only the explicit-F32 subset gives 0.632 s. BF16-fed Q/K/V/O graph lowering is
+opaque.
+
+The historical BF16 preview receipt was reread, not rerun: 103.315 s neural
+wall, 45.098 s setup and 149.110 s application total. This is 20.663 s neural
+time per video second, or 29.822 s including cold setup. All counted work at
+13.6 TFLOP/s would take 54.013 s; the explicit-F32 subset alone is 647.604 TFLOP
+and takes 47.618 s at that assumed peak. A hypothetical double rate for opaque
+BF16-fed projections gives 50.816 s. These conditional compute-only models
+omit elementwise work, conversions, reductions, resource preparation and
+scheduling; they are not achievable latency predictions or physical floors.
+The conditional gap is about twofold, not evidence for a 10-100x kernel gain.
+It does not extrapolate to higher resolutions, longer videos or quality.
+
+The bandwidth ridge at the cited nominal rates is 34 FLOP/byte. An ideal
+one-pass F32 gate GEMM has about 1,002 FLOP per interface byte. This explains
+why smaller weight storage alone need not accelerate the large-row GEMMs;
+actual tile reloads, conversions and attention traffic still require direct
+measurement. Allocation sizes and logical interface traffic are not physical
+DRAM bytes, and these estimates do not prove the whole pipeline compute-bound.
+
+Reproduction, exact integer counts, source/artifact identities and limitations:
+`python3 /opt/mldata_ssd/cogni-ml/hy-nomas-roofline-20261029/calculate_roofline.py`.
+The report is `results/roofline.json` in that directory. Refresh after changes
+to shapes, steps/windows, precision, kernels/backend, hardware or scoped source
+and measurement identities. No new wait, readback, model or generation ran for
+this calculation.
+
 ## F32 score scale inside softmax: bounded paired gain (2026-10-28)
 
 The candidate replaces the standalone in-place F32 score multiply with an F32
@@ -39,9 +238,9 @@ on J2048, and the saved upstream attention gate failed. No tolerance changed.
 Two serial unprofiled processes each completed 40 requests: four correctness,
 four ABBA warmups, and 32 timed requests in balanced ABBA/BAAB cycles. Each
 request contains four complete J5760 block passes, two initial noise windows
-times blocks 0/1. Each block consumes its saved upstream input; block 1 does
-not consume the new native block-0 output. This is whole-block diagnostic
-timing, not full-J timing, connected decoder/head or generation qualification.
+times blocks 0/1. Each window starts from its saved upstream input; the native
+block-0 output feeds block 1. This is connected two-block diagnostic timing,
+not full-J timing, a complete decoder/head or generation qualification.
 
 | Whole-request wall metric | Run 1 | Run 2 |
 | --- | ---: | ---: |
@@ -105,8 +304,8 @@ are unchanged. The useful pivot is from graph/encoder counts to measured work
 and intermediate traffic, with whole-request time as the promotion metric.
 
 Scope: J5760, two saved initial-noise windows and blocks 0/1, four Plan passes
-per request, BF16 handoffs and F32 FFN. Block 1 consumes its saved upstream
-input, not the native output of block 0. This is not a connected decoder,
+per request, BF16 handoffs and F32 FFN. Within each window, native block 0
+feeds block 1. This is a connected two-block diagnostic, not a complete decoder,
 decoder head or full-generation qualification. The oracle is the existing
 authenticated Torch 2.6.0 MPS upstream-source-method capture, not a newly run
 independent backend. Keep `atol=rtol=2e-5`, attention QK/PV rank-3 batch 32 and

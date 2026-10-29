@@ -9,18 +9,20 @@ require "./pixelumm_block_probe"
 module PixelUMMPlanReuseProbe
   extend self
 
-  SCHEMA                   = "cogni_ml.pixelumm_plan_reuse_probe/v1"
-  SOFTMAX_PV_SCHEMA        = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv/v1"
-  SOFTMAX_PV_F32_SCHEMA    = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_f32_check/v1"
-  SCALE_SOFTMAX_SCHEMA     = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax/v1"
-  SCALE_SOFTMAX_F32_SCHEMA = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax_f32_check/v1"
-  ATOL                     = PixelUMMConnectedResourceProbe::ATOL
-  RTOL                     = PixelUMMConnectedResourceProbe::RTOL
-  GIB                      = PixelUMMConnectedResourceProbe::GIB
-  MAX_NAMED_BYTES          = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
-  MAX_RESIDENT_PLANS       =  2
-  REQUESTS                 =  6
-  MEMORY_FLOOR_PERCENT     = 10
+  SCHEMA                            = "cogni_ml.pixelumm_plan_reuse_probe/v1"
+  SOFTMAX_PV_SCHEMA                 = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv/v1"
+  SOFTMAX_PV_F32_SCHEMA             = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_f32_check/v1"
+  SOFTMAX_PV_OUTPUT_ONLY_SCHEMA     = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_output_only/v1"
+  SOFTMAX_PV_OUTPUT_ONLY_F32_SCHEMA = "cogni_ml.pixelumm_plan_reuse_probe/softmax_pv_output_only_f32_check/v1"
+  SCALE_SOFTMAX_SCHEMA              = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax/v1"
+  SCALE_SOFTMAX_F32_SCHEMA          = "cogni_ml.pixelumm_plan_reuse_probe/scale_softmax_f32_check/v1"
+  ATOL                              = PixelUMMConnectedResourceProbe::ATOL
+  RTOL                              = PixelUMMConnectedResourceProbe::RTOL
+  GIB                               = PixelUMMConnectedResourceProbe::GIB
+  MAX_NAMED_BYTES                   = PixelUMMConnectedResourceProbe::MAX_NAMED_BYTES
+  MAX_RESIDENT_PLANS                =  2
+  REQUESTS                          =  6
+  MEMORY_FLOOR_PERCENT              = 10
 
   alias Budget = PixelUMMConnectedResourceProbe::Budget
   alias ScheduleEntry = NamedTuple(index: Int32, plan_index: Int32, warmup: Bool)
@@ -51,6 +53,18 @@ module PixelUMMPlanReuseProbe
     if shared_gate_up
       raise ArgumentError.new("PixelUMM softmax/PV comparison cannot be combined with shared gate/up")
     end
+  end
+
+  def validate_softmax_pv_output_only_configuration!(prepare_softmax_pv : Bool,
+                                                     output_only : Bool,
+                                                     resident_plans : Int32,
+                                                     shared_gate_up : Bool) : Nil
+    validate_resident_plan_count!(resident_plans)
+    return unless output_only
+    unless prepare_softmax_pv
+      raise ArgumentError.new("output-only softmax/PV requires --softmax-pv")
+    end
+    validate_softmax_pv_configuration!(resident_plans, shared_gate_up, true)
   end
 
   def validate_scale_softmax_configuration!(resident_plans : Int32,
@@ -125,26 +139,47 @@ module PixelUMMPlanReuseProbe
                                prepare_scale_softmax : Bool,
                                resident_plans : Int32,
                                shared_gate_up : Bool,
-                               plan_index : Int32) : String
+                               plan_index : Int32,
+                               output_only : Bool = false) : String
     validate_attention_mode_configuration!(resident_plans, shared_gate_up,
       prepare_softmax_pv, prepare_scale_softmax)
+    validate_softmax_pv_output_only_configuration!(prepare_softmax_pv,
+      output_only, resident_plans, shared_gate_up)
     return "scale_softmax" if scale_softmax_for_plan!(prepare_scale_softmax,
                                 resident_plans, shared_gate_up, plan_index)
+    return "fused_softmax_pv_output_only" if softmax_pv_output_only_for_plan!(
+                                               prepare_softmax_pv, output_only, resident_plans, shared_gate_up, plan_index)
     return "fused_softmax_pv" if fused_softmax_pv_for_plan!(prepare_softmax_pv,
                                    resident_plans, shared_gate_up, plan_index)
     "separate_softmax_pv"
+  end
+
+  def softmax_pv_output_only_for_plan!(prepare_softmax_pv : Bool,
+                                       output_only : Bool,
+                                       resident_plans : Int32,
+                                       shared_gate_up : Bool,
+                                       plan_index : Int32) : Bool
+    validate_softmax_pv_output_only_configuration!(prepare_softmax_pv,
+      output_only, resident_plans, shared_gate_up)
+    unless 0 <= plan_index < resident_plans
+      raise ArgumentError.new("PixelUMM output-only softmax/PV selected an invalid native Plan index")
+    end
+    output_only && plan_index == 1
   end
 
   def attention_graph_topology_for_plan!(prepare_softmax_pv : Bool,
                                          prepare_scale_softmax : Bool,
                                          resident_plans : Int32,
                                          shared_gate_up : Bool,
-                                         plan_index : Int32) : String
+                                         plan_index : Int32,
+                                         output_only : Bool = false) : String
     mode = attention_mode_for_plan!(prepare_softmax_pv, prepare_scale_softmax,
-      resident_plans, shared_gate_up, plan_index)
+      resident_plans, shared_gate_up, plan_index, output_only)
     case mode
     when "scale_softmax"
       "separate_qk_scale_folded_softmax_pv"
+    when "fused_softmax_pv_output_only"
+      "separate_qk_fused_softmax_pv_output_only"
     when "fused_softmax_pv"
       "separate_qk_fused_softmax_pv"
     else
@@ -152,9 +187,27 @@ module PixelUMMPlanReuseProbe
     end
   end
 
+  def attention_output_binding_for_plan!(prepare_softmax_pv : Bool,
+                                         prepare_scale_softmax : Bool,
+                                         resident_plans : Int32,
+                                         shared_gate_up : Bool,
+                                         plan_index : Int32,
+                                         output_only : Bool = false) : String
+    mode = attention_mode_for_plan!(prepare_softmax_pv, prepare_scale_softmax,
+      resident_plans, shared_gate_up, plan_index, output_only)
+    mode == "fused_softmax_pv_output_only" ? "attended_only" : "probabilities_and_attended"
+  end
+
   def scale_softmax_correctness_schedule(resident_plans : Int32,
                                          shared_gate_up : Bool) : Array(ScheduleEntry)
     validate_scale_softmax_configuration!(resident_plans, shared_gate_up, true)
+    [{index: 0_i32, plan_index: 1_i32, warmup: false}]
+  end
+
+  def softmax_pv_output_only_correctness_schedule(resident_plans : Int32,
+                                                  shared_gate_up : Bool) : Array(ScheduleEntry)
+    validate_softmax_pv_output_only_configuration!(true, true,
+      resident_plans, shared_gate_up)
     [{index: 0_i32, plan_index: 1_i32, warmup: false}]
   end
 
@@ -218,11 +271,22 @@ module PixelUMMPlanReuseProbe
      attended_elements: attended_elements, tiles: tiles}
   end
 
-  def validate_softmax_pv_f32_metrics!(metrics : Array(Metric), geometry : F32Geometry) : Nil
+  def validate_softmax_pv_f32_metrics!(metrics : Array(Metric), geometry : F32Geometry,
+                                       output_only : Bool = false) : Nil
     unless metrics.size == F32_CHECK_METRIC_SLOTS
       raise ArgumentError.new("PixelUMM direct F32 comparator requires eleven aggregate metric slots")
     end
-    validate_f32_stage_metric!(metrics[8], geometry[:probability_elements], 8)
+    if output_only
+      probability_metric = metrics[8]
+      unless probability_metric[:failures] == 0_u32 &&
+             probability_metric[:different_words] == 0_u32 &&
+             probability_metric[:nonfinite] == 0_u32 &&
+             probability_metric[:elements] == 0_u32
+        raise ArgumentError.new("PixelUMM output-only F32 comparator must leave probability slot 8 entirely zero")
+      end
+    else
+      validate_f32_stage_metric!(metrics[8], geometry[:probability_elements], 8)
+    end
     validate_f32_stage_metric!(metrics[9], geometry[:attended_elements], 9)
     positive_control = metrics[10]
     unless positive_control[:elements] == 1_u32 && positive_control[:failures] == 1_u32 &&
@@ -493,6 +557,7 @@ module PixelUMMPlanReuseProbe
       getter resident_plans : Int32
       getter shared_gate_up : Bool
       getter prepare_softmax_pv : Bool
+      getter prepare_softmax_pv_output_only : Bool
       getter prepare_scale_softmax : Bool
       getter check_softmax_pv_f32 : Bool
       getter check_scale_softmax_f32 : Bool
@@ -511,6 +576,12 @@ module PixelUMMPlanReuseProbe
       def fused_softmax_pv_for_plan(plan_index : Int32) : Bool
         PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(
           @prepare_softmax_pv, @resident_plans, @shared_gate_up, plan_index)
+      end
+
+      def softmax_pv_output_only_for_plan(plan_index : Int32) : Bool
+        PixelUMMPlanReuseProbe.softmax_pv_output_only_for_plan!(
+          @prepare_softmax_pv, @prepare_softmax_pv_output_only,
+          @resident_plans, @shared_gate_up, plan_index)
       end
 
       def scale_softmax_for_plan(plan_index : Int32) : Bool
@@ -559,6 +630,7 @@ module PixelUMMPlanReuseProbe
                      @resident_plans : Int32, @shared_gate_up : Bool = false,
                      @memory : PixelUMMMemoryProbe::Recorder = PixelUMMMemoryProbe::Recorder.system,
                      *, @prepare_softmax_pv : Bool = false,
+                     @prepare_softmax_pv_output_only : Bool = false,
                      @check_softmax_pv_f32 : Bool = false,
                      @prepare_scale_softmax : Bool = false,
                      @check_scale_softmax_f32 : Bool = false)
@@ -566,6 +638,9 @@ module PixelUMMPlanReuseProbe
         @owner_thread_id = Thread.current.object_id.to_u64
         PixelUMMPlanReuseProbe.validate_attention_mode_configuration!(
           @resident_plans, @shared_gate_up, @prepare_softmax_pv, @prepare_scale_softmax)
+        PixelUMMPlanReuseProbe.validate_softmax_pv_output_only_configuration!(
+          @prepare_softmax_pv, @prepare_softmax_pv_output_only,
+          @resident_plans, @shared_gate_up)
         PixelUMMPlanReuseProbe.validate_softmax_pv_f32_configuration!(
           @prepare_softmax_pv, @check_softmax_pv_f32, @resident_plans, @shared_gate_up)
         PixelUMMPlanReuseProbe.validate_scale_softmax_f32_configuration!(
@@ -914,10 +989,16 @@ module PixelUMMPlanReuseProbe
             @error_text.fill(0_u8)
             fused = PixelUMMPlanReuseProbe.fused_softmax_pv_for_plan!(
               true, @resident_plans, @shared_gate_up, plan_index)
-            status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv(
-              native, fused ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+            if @prepare_softmax_pv_output_only
+              status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv_output_only(
+                native, fused ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+            else
+              status = PixelUMMDecoderBlockMPSFFI.plan_prepare_softmax_pv(
+                native, fused ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+            end
             unless status == 0
-              raise ArgumentError.new("PixelUMM native softmax/PV preparation failed (#{status}): #{error_message}")
+              mode = @prepare_softmax_pv_output_only ? "output-only softmax/PV" : "softmax/PV"
+              raise ArgumentError.new("PixelUMM native #{mode} preparation failed (#{status}): #{error_message}")
             end
           end
           if @prepare_scale_softmax

@@ -12,6 +12,7 @@ tokens = 21120
 resident_plans = 1
 shared_gate_up = false
 softmax_pv = false
+softmax_pv_output_only = false
 check_softmax_pv_f32 = false
 scale_softmax = false
 check_scale_softmax_f32 = false
@@ -28,6 +29,7 @@ OptionParser.parse do |parser|
   parser.on("--report PATH", "Fresh absolute JSON report under /Volumes") { |value| report = value }
   parser.on("--shared", "Use shared gate/up in every resident Plan") { shared_gate_up = true }
   parser.on("--softmax-pv", "Compare separate attention graphs with fused F32 softmax/PV in two Plans") { softmax_pv = true }
+  parser.on("--softmax-pv-output-only", "Prepare the fused softmax/PV candidate with attended output only; requires --softmax-pv") { softmax_pv_output_only = true }
   parser.on("--check-softmax-pv-f32", "Correctness-only direct F32 softmax/PV path comparison; requires --softmax-pv") { check_softmax_pv_f32 = true }
   parser.on("--scale-softmax", "Compare baseline attention with scale folded into softmax in two Plans") { scale_softmax = true }
   parser.on("--check-scale-softmax-f32", "Correctness-only candidate-first F32 scale/softmax comparison; requires --scale-softmax") { check_scale_softmax_f32 = true }
@@ -41,6 +43,8 @@ unless ARGV.empty? && {2048, 21120}.includes?(tokens) && {1, 2}.includes?(reside
 end
 B.validate_attention_mode_configuration!(resident_plans, shared_gate_up,
   softmax_pv, scale_softmax)
+B.validate_softmax_pv_output_only_configuration!(softmax_pv,
+  softmax_pv_output_only, resident_plans, shared_gate_up)
 B.validate_softmax_pv_f32_configuration!(softmax_pv, check_softmax_pv_f32,
   resident_plans, shared_gate_up)
 B.validate_scale_softmax_f32_configuration!(scale_softmax, check_scale_softmax_f32,
@@ -62,6 +66,10 @@ requests = if check_scale_softmax_f32
              # The native correctness checker covers every local tile inside a
              # single candidate request; this mode is never a timing run.
              B.scale_softmax_correctness_schedule(resident_plans, shared_gate_up)
+           elsif check_softmax_pv_f32 && softmax_pv_output_only
+             # Output-only F32 validation checks the candidate's attended output
+             # against the saved fixture and has no probability-output claim.
+             B.softmax_pv_output_only_correctness_schedule(resident_plans, shared_gate_up)
            else
              B.schedule(resident_plans, reverse_warmups: reverse_warmups, reverse_first: reverse_first)
            end
@@ -74,6 +82,7 @@ begin
   setup_started = Time.instant
   active = B::Owner.new(fixture, maximum_named_bytes, resident_plans,
     shared_gate_up, memory, prepare_softmax_pv: softmax_pv,
+    prepare_softmax_pv_output_only: softmax_pv_output_only,
     check_softmax_pv_f32: check_softmax_pv_f32,
     prepare_scale_softmax: scale_softmax,
     check_scale_softmax_f32: check_scale_softmax_f32)
@@ -116,7 +125,9 @@ begin
         # Preserve the same single post-wait read even if a subsequent gate
         # rejects a deliberately corrupted candidate or a numerical regression.
         STDERR.puts({prefix: "PIXELUMM_DIRECT_F32_METRICS", request: index,
-                     scale_softmax: check_scale_softmax_f32, metrics: metrics}.to_json)
+                     scale_softmax: check_scale_softmax_f32,
+                     softmax_pv_output_only: softmax_pv_output_only,
+                     metrics: metrics}.to_json)
       end
       readbacks = ML::MetalBuffer.hy_text_probe_readbacks - readbacks_before
       raise "PixelUMM Plan reuse requires exactly one metrics readback" unless readbacks == 1
@@ -136,7 +147,8 @@ begin
         if check_scale_softmax_f32
           B.validate_scale_softmax_f32_metrics!(metrics, geometry)
         else
-          B.validate_softmax_pv_f32_metrics!(metrics, geometry)
+          B.validate_softmax_pv_f32_metrics!(metrics, geometry,
+            softmax_pv_output_only)
         end
       end
       profile = active.phase_profile(chain.not_nil!)
@@ -156,10 +168,15 @@ begin
         timing_eligible: !direct_f32_check && !request[:warmup],
         selected_plan: request[:plan_index],
         attention_mode: B.attention_mode_for_plan!(softmax_pv, scale_softmax,
-          resident_plans, shared_gate_up, request[:plan_index]),
+          resident_plans, shared_gate_up, request[:plan_index], softmax_pv_output_only),
         attention_graph_topology: profile.attention_graph_topology,
         plan_graph_topology: B.attention_graph_topology_for_plan!(softmax_pv,
-          scale_softmax, resident_plans, shared_gate_up, request[:plan_index]),
+          scale_softmax, resident_plans, shared_gate_up, request[:plan_index],
+          softmax_pv_output_only),
+        output_binding: B.attention_output_binding_for_plan!(softmax_pv,
+          scale_softmax, resident_plans, shared_gate_up, request[:plan_index],
+          softmax_pv_output_only),
+        phase_profile_output_binding_scope: "phase profile reports fused/separate graph family; output binding is declared separately",
         comparator_graph_topology: profile.attention_graph_topology,
         request_wall_seconds: request_wall_seconds,
         block_encode_call_seconds: encode_seconds,
@@ -214,18 +231,47 @@ begin
   native_plan_handles = active.native_plan_handles
   attention_plan_modes = Array.new(resident_plans) do |plan_index|
     scale_folded = active.scale_softmax_for_plan(plan_index.to_i32)
+    output_only = active.softmax_pv_output_only_for_plan(plan_index.to_i32)
     mode = B.attention_mode_for_plan!(softmax_pv, scale_softmax,
-      resident_plans, shared_gate_up, plan_index.to_i32)
+      resident_plans, shared_gate_up, plan_index.to_i32, softmax_pv_output_only)
     {native_plan_index: plan_index, attention_mode: mode,
      attention_graph_topology: B.attention_graph_topology_for_plan!(softmax_pv,
-       scale_softmax, resident_plans, shared_gate_up, plan_index.to_i32),
+       scale_softmax, resident_plans, shared_gate_up, plan_index.to_i32,
+       softmax_pv_output_only),
+     softmax_pv_output_only: output_only,
+     output_binding: B.attention_output_binding_for_plan!(softmax_pv,
+       scale_softmax, resident_plans, shared_gate_up, plan_index.to_i32,
+       softmax_pv_output_only),
      scale_folded_into_softmax: scale_folded}
   end
   f32_geometry = direct_f32_check ? B.softmax_pv_f32_geometry(tokens) : nil
   active.release_after_terminal!
   fixture_document = JSON.parse(File.read(fixture.path))
   result = JSON.parse({
-    schema:   check_scale_softmax_f32 ? B::SCALE_SOFTMAX_F32_SCHEMA : (check_softmax_pv_f32 ? B::SOFTMAX_PV_F32_SCHEMA : (scale_softmax ? B::SCALE_SOFTMAX_SCHEMA : (softmax_pv ? B::SOFTMAX_PV_SCHEMA : B::SCHEMA))),
+    schema: if check_scale_softmax_f32
+      B::SCALE_SOFTMAX_F32_SCHEMA
+    elsif check_softmax_pv_f32 && softmax_pv_output_only
+      B::SOFTMAX_PV_OUTPUT_ONLY_F32_SCHEMA
+    elsif check_softmax_pv_f32
+      B::SOFTMAX_PV_F32_SCHEMA
+    elsif scale_softmax
+      B::SCALE_SOFTMAX_SCHEMA
+    elsif softmax_pv_output_only
+      B::SOFTMAX_PV_OUTPUT_ONLY_SCHEMA
+    elsif softmax_pv
+      B::SOFTMAX_PV_SCHEMA
+    else
+      B::SCHEMA
+    end,
+    mode: if check_scale_softmax_f32
+      "scale_softmax"
+    elsif softmax_pv_output_only
+      "softmax_pv_output_only"
+    elsif softmax_pv
+      "softmax_pv"
+    else
+      "plan_reuse"
+    end,
     scope:    "One connected native block per request; one versus two resident native Plans with identical borrowed and owned bindings; observer-off production bridge; no generation or production promotion",
     geometry: {grid: fixture.grid, tokens: tokens, hidden: 4096, ffn: 12288, token_order: "tile_major", fixture_rows_used_exactly_once: true},
     fixture:  {path: fixture.path, metadata_sha256: fixture.sha256,
@@ -238,26 +284,39 @@ begin
                  numerical_claim: "Per-plan capture parity at the configured tolerances only; no losslessness or broader precision claim."},
     direct_f32_check: direct_f32_check ? {
       enabled: true, correctness_only: true, timing_eligible: false,
-      mode: check_scale_softmax_f32 ? "scale_softmax" : "softmax_pv",
-      comparison: check_scale_softmax_f32 ? "Candidate-first F32 probability and attended-output comparison from raw QK scores: folded scale/softmax/PV versus baseline single scale then softmax/PV, per local tile" : "GPU F32 softmax probabilities and attended outputs from separate and fused softmax/PV paths",
+      mode: check_scale_softmax_f32 ? "scale_softmax" : (softmax_pv_output_only ? "softmax_pv_output_only" : "softmax_pv"),
+      comparison: if check_scale_softmax_f32
+        "Candidate-first F32 probability and attended-output comparison from raw QK scores: folded scale/softmax/PV versus baseline single scale then softmax/PV, per local tile"
+      elsif softmax_pv_output_only
+        "Candidate F32 attended-output comparison only, per local tile; probability snapshot is allocated but unused and not compared"
+      else
+        "GPU F32 softmax probabilities and attended outputs from separate and fused softmax/PV paths"
+      end,
       atol: B::ATOL, rtol: B::RTOL,
       probability_snapshot_bytes: f32_geometry.not_nil![:probabilities_snapshot_bytes],
+      probability_snapshot_usage: softmax_pv_output_only ? "allocated_but_unused_and_not_compared" : "used_for_f32_probability_comparison",
+      probabilities_compared: !softmax_pv_output_only,
       attended_snapshot_bytes: f32_geometry.not_nil![:attended_snapshot_bytes],
-      total_probability_elements: f32_geometry.not_nil![:probability_elements],
+      total_probability_elements: softmax_pv_output_only ? 0_u32 : f32_geometry.not_nil![:probability_elements],
+      probability_geometry_elements_not_compared: softmax_pv_output_only ? f32_geometry.not_nil![:probability_elements] : 0_u32,
       total_attended_elements: f32_geometry.not_nil![:attended_elements],
       tile_count: f32_geometry.not_nil![:tiles].size,
       tile_geometries: f32_geometry.not_nil![:tiles],
-      metrics: {probabilities_slot: 8, probabilities_stage: "local_probabilities_f32",
+      metrics: {probabilities_slot: 8, probabilities_stage: softmax_pv_output_only ? "unused_zero_required" : "local_probabilities_f32",
+                probabilities_compared: !softmax_pv_output_only,
                 attended_slot: 9, attended_stage: "local_attended_f32",
                 positive_control_slot: 10, positive_control_stage: "local_f32_positive_control",
                 metric_slots: B::F32_CHECK_METRIC_SLOTS, readback_bytes: B::F32_CHECK_METRIC_BYTES},
-      comparison_semantics: "No BF16 probability cast; observed F32 parity is limited to the checked inputs and geometries.",
+      comparison_semantics: softmax_pv_output_only ? "Attended output only: no probability output is bound, slot 8 must remain zero, and no probability parity is claimed." : "No BF16 probability cast; observed F32 parity is limited to the checked inputs and geometries.",
     } : nil,
     topology: {resident_native_plans: resident_plans, shared_gate_up: shared_gate_up,
                softmax_pv_experiment: softmax_pv,
+               softmax_pv_output_only_experiment: softmax_pv_output_only,
                scale_softmax_experiment: scale_softmax,
                direct_f32_correctness_check: direct_f32_check,
-               direct_f32_check_mode: check_scale_softmax_f32 ? "scale_softmax" : (check_softmax_pv_f32 ? "softmax_pv" : nil),
+               direct_f32_check_mode: check_scale_softmax_f32 ? "scale_softmax" : (check_softmax_pv_f32 ? (softmax_pv_output_only ? "softmax_pv_output_only" : "softmax_pv") : nil),
+               output_binding_by_plan: attention_plan_modes.map { |plan| {native_plan_index: plan[:native_plan_index], output_binding: plan[:output_binding]} },
+               phase_profile_output_binding_scope: "phase profile reports fused/separate graph family; output binding is reported separately",
                timing_eligible: !direct_f32_check,
                softmax_pv_plan_modes: attention_plan_modes,
                attention_plan_modes: attention_plan_modes,
@@ -278,7 +337,8 @@ begin
                 memory_accounting: "Named MetalBuffers are exact; device allocation, process footprint, RSS and GC counters overlap. Opaque native/MPS ownership is unknown; aggregate counters do not isolate it.",
                 memory_events: memory.events},
     validation: {all_reference_comparisons_passed: true, positive_nonfinite_control_passed_each_request: true,
-                 direct_f32_softmax_pv_comparisons_passed_each_request: check_softmax_pv_f32,
+                 direct_f32_softmax_pv_comparisons_passed_each_request: check_softmax_pv_f32 && !softmax_pv_output_only,
+                 direct_f32_softmax_pv_output_only_attended_comparisons_passed_each_request: check_softmax_pv_f32 && softmax_pv_output_only,
                  direct_f32_scale_softmax_comparisons_passed_each_request: check_scale_softmax_f32,
                  direct_f32_nan_positive_control_passed_each_request: direct_f32_check,
                  no_encode_named_allocations_or_preterminal_readbacks: true, sole_terminal_wait_each_request: true,

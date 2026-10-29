@@ -109,6 +109,7 @@ enum PixelCapture : NSUInteger {
 @property(nonatomic, strong) PixelUMMGraphStep *softmax;
 @property(nonatomic, strong) PixelUMMGraphStep *pv;
 @property(nonatomic, strong) PixelUMMGraphStep *softmaxPV;
+@property(nonatomic, strong) PixelUMMGraphStep *softmaxPVOutputOnly;
 @property(nonatomic, strong) PixelUMMGraphStep *scaleSoftmax;
 @end
 @implementation PixelUMMAttentionGeometry
@@ -154,6 +155,7 @@ struct PixelUMMNativeIslands {
 @property(nonatomic, strong) id<MTLComputePipelineState> qkPrepare;
 @property(nonatomic, strong) id<MTLComputePipelineState> gatherQ;
 @property(nonatomic, strong) id<MTLComputePipelineState> gatherKV;
+@property(nonatomic, strong) id<MTLComputePipelineState> gatherKVPair;
 @property(nonatomic, strong) id<MTLComputePipelineState> scaleScores;
 @property(nonatomic, strong) id<MTLComputePipelineState> scatterAttention;
 @property(nonatomic, strong) id<MTLComputePipelineState> residual;
@@ -181,14 +183,34 @@ struct PixelUMMNativeIslands {
 @property(nonatomic) BOOL useSharedGateUp;
 @property(nonatomic) BOOL softmaxPVPrepared;
 @property(nonatomic) BOOL useSoftmaxPV;
+@property(nonatomic) BOOL softmaxPVOutputOnlyPrepared;
+@property(nonatomic) BOOL useSoftmaxPVOutputOnly;
 @property(nonatomic) BOOL scaleSoftmaxPrepared;
 @property(nonatomic) BOOL useScaleSoftmax;
 @property(nonatomic) BOOL encodingStarted;
 @property(nonatomic) BOOL useNativeIslands;
+@property(nonatomic) BOOL useFusedKVGather;
 @property(nonatomic) uint64_t captureMask;
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+@property(nonatomic) BOOL useDirectMPSFFN;
+#endif
 @end
 @implementation PixelUMMDecoderPlan
 @end
+
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+enum PixelUMMFFNDirectProjection : int32_t {
+  PixelUMMFFNDirectGate = 0,
+  PixelUMMFFNDirectUp = 1,
+  PixelUMMFFNDirectDown = 2
+};
+static bool pixelumm_ffn_direct_mps_encode_projection(
+    PixelUMMDecoderPlan *plan, MPSCommandBuffer *commandBuffer,
+    PixelUMMFFNDirectProjection projection,
+    char *errorText, size_t errorCapacity);
+static bool pixelumm_ffn_direct_mps_conflicts_attention(
+    PixelUMMDecoderPlan *plan);
+#endif
 
 struct PixelQKParams {
   uint32_t tokens;
@@ -815,14 +837,15 @@ static PixelUMMGraphStep *pixel_attention_pv_step(
       attended4, outputBuffer, outputShape4, name, errorText, errorCapacity);
 }
 
-// Diagnostic alternative: retain the F32 probability output as well as PV.
-// The public path keeps the separate graphs until matched whole-block timing
-// and saved-upstream captures qualify a change. No dtype or batch rank changes.
+// Diagnostic alternative: compute axis-3 softmax followed by rank-3 batch-32
+// PV. The probability panel may remain an output for the original experiment
+// or stay internal for the output-only candidate. No dtype or batch rank changes.
 static PixelUMMGraphStep *pixel_attention_softmax_pv_step(
     id<MTLDevice> device, id<MTLBuffer> scoresBuffer,
     id<MTLBuffer> probabilitiesBuffer, id<MTLBuffer> vBuffer,
     id<MTLBuffer> outputBuffer, uint32_t queryCount, uint32_t keyCount,
-    NSString *name, char *errorText, size_t errorCapacity) {
+    NSString *name, char *errorText, size_t errorCapacity,
+    bool retainProbabilityOutput = true) {
   MPSGraph *graph = [MPSGraph new];
   graph.options = MPSGraphOptionsNone;
   NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
@@ -853,6 +876,10 @@ static PixelUMMGraphStep *pixel_attention_softmax_pv_step(
     pixel_set_ns_error(errorText, errorCapacity,
         [NSString stringWithFormat:@"unable to build PixelUMM softmax/PV graph %@", name]);
     return nil;
+  }
+  if (!retainProbabilityOutput) {
+    return pixel_compile_step(device, graph, feeds, placeholders, inputData,
+        attended4, outputBuffer, outputShape4, name, errorText, errorCapacity);
   }
   return pixel_compile_step_outputs(device, graph, feeds, placeholders, inputData,
       @[probabilities4, attended4], @[probabilitiesBuffer, outputBuffer],
@@ -974,6 +1001,28 @@ kernel void pixelumm_gather_kv(
   if (count != p.keyCount || row >= count) return;
   const uint token = uint(keyIndices[tableBase + 1u + row]);
   destination[index] = pixel_bf16_to_float(source[(token * 8u + head / 4u) * 128u + dim]);
+}
+
+kernel void pixelumm_gather_kv_pair(
+    device const ushort *keySource [[buffer(0)]],
+    device const ushort *valueSource [[buffer(1)]],
+    device const int *keyIndices [[buffer(2)]],
+    device float *keyDestination [[buffer(3)]],
+    device float *valueDestination [[buffer(4)]],
+    constant PixelGatherKVParams &p [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
+  const uint total = 32u * p.keyCount * 128u;
+  if (index >= total) return;
+  const uint head = index / (p.keyCount * 128u);
+  const uint row = (index / 128u) % p.keyCount;
+  const uint dim = index % 128u;
+  const uint tableBase = p.tile * (p.maxKey + 1u);
+  const uint count = uint(keyIndices[tableBase]);
+  if (count != p.keyCount || row >= count) return;
+  const uint token = uint(keyIndices[tableBase + 1u + row]);
+  const uint sourceIndex = (token * 8u + head / 4u) * 128u + dim;
+  keyDestination[index] = pixel_bf16_to_float(keySource[sourceIndex]);
+  valueDestination[index] = pixel_bf16_to_float(valueSource[sourceIndex]);
 }
 
 kernel void pixelumm_scale_scores(
@@ -1283,8 +1332,13 @@ static cogni::NativeGraphOp pixel_native_op(
 
 static bool pixel_prepare_native_islands(PixelUMMDecoderPlan *plan,
                                          GsCogniGraphCompile compiler) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+  if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) return false;
+#endif
   if (!compiler || plan.encodingStarted || plan->nativeIslands ||
-      !plan.tileCount || plan.softmaxPVCompare || plan.scaleSoftmaxPrepared) return false;
+      plan.useFusedKVGather ||
+      !plan.tileCount || plan.softmaxPVCompare || plan.softmaxPVPrepared ||
+      plan.softmaxPVOutputOnlyPrepared || plan.scaleSoftmaxPrepared) return false;
   auto islands = std::make_unique<PixelUMMNativeIslands>();
   islands->captureMask = plan.captureMask;
   auto compile = [&](cogni::PreparedNativeGraph &graph,
@@ -1401,11 +1455,39 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_set_native_islands(
   if (!handle || (enabled != 0 && enabled != 1)) return -1;
   PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)handle;
   @synchronized(plan) {
+    if (enabled && plan.useFusedKVGather) {
+      pixel_set_error(error, capacity,
+          "PixelUMM fused K/V gather excludes native-islands selection");
+      return -3;
+    }
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+    if (enabled && pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+      pixel_set_error(error, capacity,
+          "PixelUMM direct MPS FFN association excludes native-islands selection");
+      return -3;
+    }
+#endif
     if (enabled && !plan->nativeIslands) {
       pixel_set_error(error, capacity, "PixelUMM CogniGraph islands were not prepared");
       return -2;
     }
     plan.useNativeIslands = enabled != 0;
+  }
+  return 0;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_set_fused_kv_gather(
+    void *handle, int32_t enabled, char *error, size_t capacity) {
+  if (error && capacity) error[0] = '\0';
+  if (!handle || (enabled != 0 && enabled != 1)) return -1;
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)handle;
+  @synchronized(plan) {
+    if (enabled && (plan->nativeIslands || plan.useNativeIslands)) {
+      pixel_set_error(error, capacity,
+          "PixelUMM fused K/V gather excludes prepared or active native islands");
+      return -2;
+    }
+    plan.useFusedKVGather = enabled != 0;
   }
   return 0;
 }
@@ -1672,6 +1754,7 @@ static void *pixelumm_decoder_block_plan_create(
         PIXEL_PIPELINE(qkPrepare, "pixelumm_qk_prepare");
         PIXEL_PIPELINE(gatherQ, "pixelumm_gather_q");
         PIXEL_PIPELINE(gatherKV, "pixelumm_gather_kv");
+        PIXEL_PIPELINE(gatherKVPair, "pixelumm_gather_kv_pair");
         PIXEL_PIPELINE(scaleScores, "pixelumm_scale_scores");
         PIXEL_PIPELINE(scatterAttention, "pixelumm_scatter_attention");
         PIXEL_PIPELINE(residual, "pixelumm_residual");
@@ -1871,6 +1954,13 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_set_shared_gate_up(
   }
   PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
   @synchronized(plan) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+    if (enabled && pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+      pixel_set_error(errorText, errorCapacity,
+          "PixelUMM direct MPS FFN cannot be combined with shared gate/up");
+      return -3;
+    }
+#endif
     if (enabled && (!plan.ffnF32 || !plan.sharedGateUpPrepared ||
                     !plan.sharedGateUpProjection)) {
       pixel_set_error(errorText, errorCapacity,
@@ -1882,11 +1972,13 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_set_shared_gate_up(
   return 0;
 }
 
-// Preparation only: immutable selection after the first attempted encode.
-// Both alternatives bind the same caller-owned panels. The serialized owner
-// must still drain its sole terminal wait before reusing or releasing them.
-extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
-    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+// Preparation only: graph selection is immutable after the first attempted
+// encode. The output-only alternative keeps probabilities internal to MPSGraph
+// and binds only the attended F32 panel. The serialized owner still drains its
+// sole terminal wait before reusing or releasing caller-owned panels.
+static int32_t pixel_prepare_softmax_pv(
+    void *planHandle, int32_t enabled, bool retainProbabilityOutput,
+    char *errorText, size_t errorCapacity) {
   if (errorText && errorCapacity) errorText[0] = '\0';
   if (!planHandle || (enabled != 0 && enabled != 1)) {
     pixel_set_error(errorText, errorCapacity,
@@ -1897,7 +1989,16 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       @synchronized(plan) {
-        if (plan.encodingStarted || plan.softmaxPVPrepared || plan.scaleSoftmaxPrepared ||
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM direct MPS FFN association excludes softmax/PV preparation");
+          return -6;
+        }
+#endif
+        if (plan.encodingStarted || plan.softmaxPVPrepared ||
+            plan.softmaxPVOutputOnlyPrepared || plan.scaleSoftmaxPrepared ||
+            plan->nativeIslands || plan.useNativeIslands ||
             plan.attentionGeometries.count == 0 || plan.scratch.count != kPixelScratchCount) {
           pixel_set_error(errorText, errorCapacity,
               "PixelUMM softmax/PV must be prepared once before the first encode");
@@ -1906,18 +2007,31 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
         @try {
           NSMutableArray<PixelUMMGraphStep *> *alternatives = [NSMutableArray array];
           for (PixelUMMAttentionGeometry *geometry in plan.attentionGeometries) {
-            NSString *name = [NSString stringWithFormat:@"attention_softmax_pv_q%u_k%u",
+            NSString *name = [NSString stringWithFormat:
+                retainProbabilityOutput
+                    ? @"attention_softmax_pv_q%u_k%u"
+                    : @"attention_softmax_pv_output_only_q%u_k%u",
                 geometry.queryCount, geometry.keyCount];
             PixelUMMGraphStep *step = pixel_attention_softmax_pv_step(plan.device,
                 plan.scratch[3], plan.scratch[4], plan.scratch[2], plan.scratch[5],
-                geometry.queryCount, geometry.keyCount, name, errorText, errorCapacity);
+                geometry.queryCount, geometry.keyCount, name, errorText, errorCapacity,
+                retainProbabilityOutput);
             if (!step) return -3;
             [alternatives addObject:step];
           }
-          for (NSUInteger index = 0; index < alternatives.count; ++index)
-            plan.attentionGeometries[index].softmaxPV = alternatives[index];
-          plan.softmaxPVPrepared = YES;
-          plan.useSoftmaxPV = enabled != 0;
+          for (NSUInteger index = 0; index < alternatives.count; ++index) {
+            if (retainProbabilityOutput)
+              plan.attentionGeometries[index].softmaxPV = alternatives[index];
+            else
+              plan.attentionGeometries[index].softmaxPVOutputOnly = alternatives[index];
+          }
+          if (retainProbabilityOutput) {
+            plan.softmaxPVPrepared = YES;
+            plan.useSoftmaxPV = enabled != 0;
+          } else {
+            plan.softmaxPVOutputOnlyPrepared = YES;
+            plan.useSoftmaxPVOutputOnly = enabled != 0;
+          }
           return 0;
         } @catch (NSException *exception) {
           pixel_set_ns_error(errorText, errorCapacity,
@@ -1930,6 +2044,47 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
   }
   pixel_set_error(errorText, errorCapacity, "PixelUMM MPS path requires macOS 14 or newer");
   return -5;
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  return pixel_prepare_softmax_pv(planHandle, enabled, true, errorText, errorCapacity);
+}
+
+extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv_output_only(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  return pixel_prepare_softmax_pv(planHandle, enabled, false, errorText, errorCapacity);
+}
+
+// The serialized owner switches the prepared softmax/PV implementation only
+// between drained requests. This changes selection only; it allocates no GPU
+// resources and inserts no wait.
+extern "C" int32_t gs_pixelumm_decoder_block_plan_set_softmax_pv(
+    void *planHandle, int32_t enabled, char *errorText, size_t errorCapacity) {
+  if (errorText && errorCapacity) errorText[0] = '\0';
+  if (!planHandle || (enabled != 0 && enabled != 1)) {
+    pixel_set_error(errorText, errorCapacity, "invalid PixelUMM softmax/PV selection");
+    return -1;
+  }
+  PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
+  @synchronized(plan) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+    if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+      pixel_set_error(errorText, errorCapacity,
+          "PixelUMM direct MPS FFN association excludes softmax/PV selection");
+      return -3;
+    }
+#endif
+    if (plan.softmaxPVPrepared == plan.softmaxPVOutputOnlyPrepared ||
+        plan.scaleSoftmaxPrepared || plan->nativeIslands || plan.useNativeIslands) {
+      pixel_set_error(errorText, errorCapacity,
+          "PixelUMM softmax/PV alternative was not prepared exclusively");
+      return -2;
+    }
+    plan.useSoftmaxPV = enabled != 0 && plan.softmaxPVPrepared;
+    plan.useSoftmaxPVOutputOnly = enabled != 0 && plan.softmaxPVOutputOnlyPrepared;
+  }
+  return 0;
 }
 
 // Opt-in alternative: raw F32 scores -> F32 scale -> rank-4 softmax.
@@ -1946,7 +2101,15 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_scale_softmax(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       @synchronized(plan) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM direct MPS FFN association excludes scale/softmax preparation");
+          return -6;
+        }
+#endif
         if (plan.encodingStarted || plan.scaleSoftmaxPrepared || plan.softmaxPVPrepared ||
+            plan.softmaxPVOutputOnlyPrepared ||
             plan->nativeIslands || plan.useNativeIslands ||
             plan.attentionGeometries.count == 0 || plan.scratch.count != kPixelScratchCount) {
           pixel_set_error(errorText, errorCapacity,
@@ -1989,7 +2152,15 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_set_scale_softmax(
   }
   PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
   @synchronized(plan) {
-    if (!plan.scaleSoftmaxPrepared || plan.softmaxPVPrepared || plan.useNativeIslands) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+    if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+      pixel_set_error(errorText, errorCapacity,
+          "PixelUMM direct MPS FFN association excludes scale/softmax selection");
+      return -3;
+    }
+#endif
+    if (!plan.scaleSoftmaxPrepared || plan.softmaxPVPrepared ||
+        plan.softmaxPVOutputOnlyPrepared || plan.useNativeIslands) {
       pixel_set_error(errorText, errorCapacity, "PixelUMM scale/softmax was not prepared");
       return -2;
     }
@@ -2012,8 +2183,19 @@ extern "C" int32_t gs_pixelumm_decoder_block_plan_prepare_softmax_pv_check(
     @autoreleasepool {
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       @synchronized(plan) {
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        if (pixelumm_ffn_direct_mps_conflicts_attention(plan)) {
+          pixel_set_error(errorText, errorCapacity,
+              "PixelUMM direct MPS FFN association excludes attention comparison preparation");
+          return -6;
+        }
+#endif
+        const NSUInteger preparedAlternatives =
+            NSUInteger(plan.softmaxPVPrepared) +
+            NSUInteger(plan.softmaxPVOutputOnlyPrepared) +
+            NSUInteger(plan.scaleSoftmaxPrepared);
         if (plan.encodingStarted ||
-            (plan.softmaxPVPrepared == plan.scaleSoftmaxPrepared) || plan.softmaxPVCompare ||
+            preparedAlternatives != 1u || plan.softmaxPVCompare ||
             plan.scratch.count != kPixelScratchCount) {
           pixel_set_error(errorText, errorCapacity,
               "PixelUMM F32 check requires one prepared attention alternative before encode");
@@ -2135,6 +2317,56 @@ static bool pixel_check_softmax_pv_tile(MPSCommandBuffer *commandBuffer,
                                   panelCount * 4u, true, errorText, errorCapacity);
 }
 
+static bool pixel_attended_panel_snapshot(MPSCommandBuffer *commandBuffer,
+    PixelUMMDecoderPlan *plan, uint64_t attendedBytes, bool restore,
+    char *errorText, size_t errorCapacity) {
+  id<MTLCommandBuffer> root = pixel_current_root(commandBuffer, plan.device,
+                                                errorText, errorCapacity);
+  if (!root) return false;
+  id<MTLBlitCommandEncoder> blit = [root blitCommandEncoder];
+  if (!blit) {
+    pixel_set_error(errorText, errorCapacity,
+        "PixelUMM attended-only F32 snapshot blit unavailable");
+    return false;
+  }
+  [blit copyFromBuffer:restore ? plan.attendedSnapshot : plan.scratch[5]
+         sourceOffset:0 toBuffer:restore ? plan.scratch[5] : plan.attendedSnapshot
+    destinationOffset:0 size:attendedBytes];
+  [blit endEncoding];
+  return true;
+}
+
+static bool pixel_check_softmax_pv_output_only_tile(
+    MPSCommandBuffer *commandBuffer, PixelUMMDecoderPlan *plan,
+    PixelUMMAttentionGeometry *geometry, uint64_t panelCount,
+    bool outputOnlyFirst, bool positive, char *errorText, size_t errorCapacity) {
+  if (!pixel_attended_panel_snapshot(commandBuffer, plan, panelCount * 4u,
+                                     false, errorText, errorCapacity)) return false;
+  if (outputOnlyFirst) {
+    if (!pixel_encode_graph(commandBuffer, geometry.softmax, errorText, errorCapacity) ||
+        !pixel_encode_graph(commandBuffer, geometry.pv, errorText, errorCapacity)) return false;
+  } else if (!pixel_encode_graph(commandBuffer, geometry.softmaxPVOutputOnly,
+                                 errorText, errorCapacity)) return false;
+
+  // Keep the output-only candidate as actual and the baseline as reference,
+  // independent of which implementation was selected for the request.
+  id<MTLBuffer> actual = outputOnlyFirst ? plan.attendedSnapshot : plan.scratch[5];
+  id<MTLBuffer> reference = outputOnlyFirst ? plan.scratch[5] : plan.attendedSnapshot;
+  PixelF32CompareParams params{uint32_t(panelCount), 9u, 2e-5f, 2e-5f, 0u};
+  if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+          @[actual, reference, plan.softmaxPVCheckMetrics], &params, sizeof(params),
+          panelCount, false, errorText, errorCapacity)) return false;
+  if (positive) {
+    PixelF32CompareParams positiveParams{1u, 10u, 2e-5f, 2e-5f, 1u};
+    if (!pixel_encode_kernel(commandBuffer, plan.device, plan.softmaxPVCompare,
+            @[actual, reference, plan.softmaxPVCheckMetrics], &positiveParams,
+            sizeof(positiveParams), 1u, false, errorText, errorCapacity)) return false;
+  }
+  // The snapshot is always the initially selected implementation's panel.
+  return pixel_attended_panel_snapshot(commandBuffer, plan, panelCount * 4u,
+                                       true, errorText, errorCapacity);
+}
+
 static bool pixel_check_scale_softmax_tile(MPSCommandBuffer *commandBuffer,
     PixelUMMDecoderPlan *plan, PixelUMMAttentionGeometry *geometry,
     uint64_t scoreCount, uint64_t panelCount, bool selectCandidate, bool positive,
@@ -2185,13 +2417,23 @@ static int32_t pixel_encode_block(
       PixelUMMDecoderPlan *plan = (__bridge PixelUMMDecoderPlan *)planHandle;
       BOOL useSharedGateUp = NO;
       BOOL useSoftmaxPV = NO;
+      BOOL useSoftmaxPVOutputOnly = NO;
       BOOL useScaleSoftmax = NO;
       BOOL useNativeIslands = NO;
+      BOOL useFusedKVGather = NO;
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+      BOOL useDirectMPSFFN = NO;
+#endif
       @synchronized(plan) {
         useSharedGateUp = plan.useSharedGateUp;
         useSoftmaxPV = plan.useSoftmaxPV;
+        useSoftmaxPVOutputOnly = plan.useSoftmaxPVOutputOnly;
         useScaleSoftmax = plan.useScaleSoftmax;
         useNativeIslands = plan.useNativeIslands;
+        useFusedKVGather = plan.useFusedKVGather;
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        useDirectMPSFFN = plan.useDirectMPSFFN;
+#endif
         plan.encodingStarted = YES;
       }
       MPSCommandBuffer *commandBuffer = (__bridge MPSCommandBuffer *)commandChainHandle;
@@ -2212,6 +2454,18 @@ static int32_t pixel_encode_block(
                         "PixelUMM CogniGraph recipe does not match the active plan");
         return -19;
       }
+      if (useNativeIslands && useFusedKVGather) {
+        pixel_set_error(errorText, errorCapacity,
+            "PixelUMM fused K/V gather cannot encode with native islands");
+        return -19;
+      }
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+      if (useDirectMPSFFN && (useSharedGateUp || useNativeIslands)) {
+        pixel_set_error(errorText, errorCapacity,
+            "PixelUMM direct MPS FFN selection conflicts with another FFN/graph mode");
+        return -19;
+      }
+#endif
       PixelUMMPhaseRecorder profile(profileChain, markers, markerCapacity);
       @try {
         id<MTLBuffer> input = plan.resident[0];
@@ -2298,17 +2552,25 @@ static int32_t pixel_encode_block(
             if (!pixel_encode_native_island(commandBuffer, plan,
                     *plan->nativeIslands->gathers[tileIndex],
                     errorText, errorCapacity)) return -9;
-          } else if (!pixel_encode_kernel(commandBuffer, plan.device, plan.gatherQ,
-                  @[plan.core[1], queryIndices, plan.scratch[0]], &qParams,
-                  sizeof(qParams), panelCount, false, errorText, errorCapacity) ||
-              !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
-                  @[plan.core[2], keyIndices, plan.scratch[1]], &kvParams,
-                  sizeof(kvParams), kvPanelCount, false,
-                  errorText, errorCapacity) ||
-              !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
-                  @[plan.core[3], keyIndices, plan.scratch[2]], &kvParams,
-                  sizeof(kvParams), kvPanelCount, false,
-                  errorText, errorCapacity)) return -9;
+          } else {
+            if (!pixel_encode_kernel(commandBuffer, plan.device, plan.gatherQ,
+                    @[plan.core[1], queryIndices, plan.scratch[0]], &qParams,
+                    sizeof(qParams), panelCount, false, errorText, errorCapacity)) return -9;
+            if (useFusedKVGather) {
+              if (!pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKVPair,
+                      @[plan.core[2], plan.core[3], keyIndices,
+                        plan.scratch[1], plan.scratch[2]], &kvParams,
+                      sizeof(kvParams), kvPanelCount, false,
+                      errorText, errorCapacity)) return -9;
+            } else if (!pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
+                    @[plan.core[2], keyIndices, plan.scratch[1]], &kvParams,
+                    sizeof(kvParams), kvPanelCount, false,
+                    errorText, errorCapacity) ||
+                !pixel_encode_kernel(commandBuffer, plan.device, plan.gatherKV,
+                    @[plan.core[3], keyIndices, plan.scratch[2]], &kvParams,
+                    sizeof(kvParams), kvPanelCount, false,
+                    errorText, errorCapacity)) return -9;
+          }
           if (!pixel_encode_graph(commandBuffer, geometry.qk,
                                   errorText, errorCapacity)) return -9;
           if (plan.softmaxPVCompare && plan.scaleSoftmaxPrepared) {
@@ -2327,6 +2589,10 @@ static int32_t pixel_encode_block(
                       errorText, errorCapacity) ||
                   !pixel_encode_graph(commandBuffer, geometry.pv,
                       errorText, errorCapacity)) return -10;
+            } else if (useSoftmaxPVOutputOnly) {
+              if (!plan.softmaxPVOutputOnlyPrepared ||
+                  !pixel_encode_graph(commandBuffer, geometry.softmaxPVOutputOnly,
+                      errorText, errorCapacity)) return -10;
             } else if (useSoftmaxPV) {
               if (!plan.softmaxPVPrepared ||
                   !pixel_encode_graph(commandBuffer, geometry.softmaxPV,
@@ -2335,9 +2601,16 @@ static int32_t pixel_encode_block(
                            errorText, errorCapacity) ||
                        !pixel_encode_graph(commandBuffer, geometry.pv,
                            errorText, errorCapacity)) return -10;
-            if (plan.softmaxPVCompare &&
-                !pixel_check_softmax_pv_tile(commandBuffer, plan, geometry, scoreCount,
-                    panelCount, useSoftmaxPV, tileIndex == 0, errorText, errorCapacity)) return -10;
+            if (plan.softmaxPVCompare) {
+              const bool checked = plan.softmaxPVOutputOnlyPrepared
+                  ? pixel_check_softmax_pv_output_only_tile(commandBuffer, plan,
+                        geometry, panelCount, useSoftmaxPVOutputOnly, tileIndex == 0,
+                        errorText, errorCapacity)
+                  : pixel_check_softmax_pv_tile(commandBuffer, plan, geometry,
+                        scoreCount, panelCount, useSoftmaxPV, tileIndex == 0,
+                        errorText, errorCapacity);
+              if (!checked) return -10;
+            }
           }
           PixelScatterParams scatterParams{tileIndex, plan.maxQuery, queryCount};
           if ((!useNativeIslands || tileIndex + 1 == plan.tileCount) &&
@@ -2369,6 +2642,17 @@ static int32_t pixel_encode_block(
                   plan.core[6], ffBytes, errorText, errorCapacity) ||
               !pixel_copy_capture(commandBuffer, plan, PixelUpProj,
                   plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        } else if (useDirectMPSFFN) {
+          if (!pixelumm_ffn_direct_mps_encode_projection(plan, commandBuffer,
+                  PixelUMMFFNDirectGate, errorText, errorCapacity) ||
+              !pixel_copy_capture(commandBuffer, plan, PixelGateProj,
+                  plan.core[6], ffBytes, errorText, errorCapacity) ||
+              !pixelumm_ffn_direct_mps_encode_projection(plan, commandBuffer,
+                  PixelUMMFFNDirectUp, errorText, errorCapacity) ||
+              !pixel_copy_capture(commandBuffer, plan, PixelUpProj,
+                  plan.core[7], ffBytes, errorText, errorCapacity)) return -13;
+#endif
         } else if (!pixel_encode_graph(commandBuffer, plan.gateProjection, errorText, errorCapacity) ||
                    !pixel_copy_capture(commandBuffer, plan, PixelGateProj, plan.core[6], ffBytes, errorText, errorCapacity) ||
                    !pixel_encode_graph(commandBuffer, plan.upProjection, errorText, errorCapacity) ||
@@ -2389,6 +2673,14 @@ static int32_t pixel_encode_block(
               false, errorText, errorCapacity)) return -14;
         if (!pixel_copy_capture(commandBuffer, plan, PixelProduct, plan.core[7], ffBytes, errorText, errorCapacity)) return -14;
         if (!profile.mark(8, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;
+#if defined(COGNI_PIXELUMM_FFN_DIRECT_MPS_DIAGNOSTIC)
+        if (useDirectMPSFFN) {
+          if (!pixelumm_ffn_direct_mps_encode_projection(plan, commandBuffer,
+                  PixelUMMFFNDirectDown, errorText, errorCapacity) ||
+              !pixel_copy_capture(commandBuffer, plan, PixelDownProj,
+                  plan.core[4], dBytes, errorText, errorCapacity)) return -14;
+        } else
+#endif
         if (!pixel_encode_graph(commandBuffer, plan.downProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelDownProj, plan.core[4], dBytes, errorText, errorCapacity)) return -14;
         if (!profile.mark(9, GS_MPS_API_PROFILE_PHASE_FFN)) return -18;

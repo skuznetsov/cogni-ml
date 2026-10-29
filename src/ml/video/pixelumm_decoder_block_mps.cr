@@ -61,10 +61,19 @@ end
     fun set_native_islands = gs_pixelumm_decoder_block_plan_set_native_islands(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
     ) : Int32
+    fun set_fused_kv_gather = gs_pixelumm_decoder_block_plan_set_fused_kv_gather(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
     fun native_island_stats = gs_pixelumm_decoder_block_plan_native_island_stats(
       plan : Void*, out : UInt64*, capacity : UInt32,
     ) : Int32
     fun plan_prepare_softmax_pv = gs_pixelumm_decoder_block_plan_prepare_softmax_pv(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun plan_prepare_softmax_pv_output_only = gs_pixelumm_decoder_block_plan_prepare_softmax_pv_output_only(
+      plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
+    ) : Int32
+    fun plan_set_softmax_pv = gs_pixelumm_decoder_block_plan_set_softmax_pv(
       plan : Void*, enabled : Int32, error : UInt8*, error_capacity : LibC::SizeT,
     ) : Int32
     fun plan_prepare_scale_softmax = gs_pixelumm_decoder_block_plan_prepare_scale_softmax(
@@ -463,6 +472,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     getter ffn_f32 : Bool
     getter shared_gate_up_prepared : Bool
     getter shared_gate_up : Bool = false
+    getter fused_kv_gather : Bool = false
     getter profiled_shared_gate_up : Bool = false
 
     @cosine : ML::MetalBuffer
@@ -761,6 +771,28 @@ module ML::Video::PixelUMMDecoderBlockMPS
           status = PixelUMMDecoderBlockMPSFFI.set_native_islands(@native, enabled ? 1 : 0,
             @error_text.to_unsafe, @error_text.size)
           raise ArgumentError.new("PixelUMM CogniGraph selection failed: #{error_message}") unless status == 0
+        {% else %}
+          raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
+        {% end %}
+      end
+    end
+
+    # Selects a precompiled dual-output K/V gather between drained requests.
+    # The shared workspace lock serializes this CPU mutation with encoding.
+    def use_fused_kv_gather!(enabled : Bool) : Nil
+      check_live!
+      if chain = @chain
+        raise ArgumentError.new("PixelUMM command chain is in flight") unless chain.completed?
+      end
+      @workspace.not_nil!.configure_plan!(@slot) do
+        if chain = @chain
+          raise ArgumentError.new("PixelUMM command chain is in flight") unless chain.completed?
+        end
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          status = PixelUMMDecoderBlockMPSFFI.set_fused_kv_gather(@native,
+            enabled ? 1 : 0, @error_text.to_unsafe, @error_text.size)
+          raise ArgumentError.new("PixelUMM fused K/V gather selection failed: #{error_message}") unless status == 0
+          @fused_kv_gather = enabled
         {% else %}
           raise ArgumentError.new("PixelUMM prepared MPS execution requires macOS Metal Performance Shaders")
         {% end %}
