@@ -323,6 +323,7 @@ module PixelUMMDecoderProbe
     def initialize(@fixture : Fixture, cache : WeightCache, *, max_named_bytes : Int64,
                    prepare_shared_gate_up : Bool = false,
                    prepare_combined_attention : Bool = false,
+                   prepare_comparison_scratch : Bool = false,
                    @phase_observer : PixelUMMMemoryProbe::Recorder? = nil)
       # All shape, provenance linkage and aggregate budget decisions happen
       # before constructing the block Session, which is the first GPU uploader.
@@ -334,7 +335,7 @@ module PixelUMMDecoderProbe
       @capture_order = @fixture.capture_order.dup
 
       begin
-        if prepare_combined_attention
+        if prepare_combined_attention || prepare_comparison_scratch
           capacity = (@fixture.blocks.captures.values + @fixture.head.captures.values).max_of(&.nbytes).to_i32
           @comparison_scratch = PixelUMMTwoBlockProbe::ComparisonScratch.new(capacity)
           memory_phase("after_integrated_comparison_scratch", phase_bytes_kind: "reusable_cpu_comparison_scratch_bytes",
@@ -404,6 +405,44 @@ module PixelUMMDecoderProbe
 
     def diagnostic_cpu_scratch_bytes : Int64
       @comparison_scratch.try(&.named_cpu_bytes) || 0_i64
+    end
+
+    def diagnostic_comparison_scratch : PixelUMMTwoBlockProbe::ComparisonScratch
+      @comparison_scratch || raise ArgumentError.new("integrated comparison scratch was not prepared")
+    end
+
+    # Snapshot only already-retained outputs, after the request's existing wait.
+    # No command, allocation or synchronization is added to the GPU path.
+    def read_diagnostic_actual!(stage : String, bytes : Bytes) : Nil
+      check_diagnostic_wait!
+      record = diagnostic_record(stage)
+      buffer = if stage.starts_with?(HEAD_PREFIX)
+                 head_plan.stage(stage[HEAD_PREFIX.size..])
+               else
+                 slot = PixelUMMTwoBlockProbe.capture_slot(stage, BLOCK_COUNT)
+                 name = PixelUMMTwoBlockProbe.capture_stage(stage, BLOCK_COUNT)
+                 blocks.plans[slot].stage(name)
+               end
+      unless record.dtype == "BF16" && bytes.size == record.nbytes && buffer.size == record.nbytes
+        raise ArgumentError.new("integrated diagnostic snapshot extent/type mismatch: #{stage}")
+      end
+      buffer.read_bytes(bytes.to_unsafe, bytes.size)
+    end
+
+    def read_diagnostic_expected!(stage : String, bytes : Bytes) : Nil
+      record = diagnostic_record(stage)
+      unless record.dtype == "BF16" && bytes.size == record.nbytes
+        raise ArgumentError.new("integrated diagnostic expected extent/type mismatch: #{stage}")
+      end
+      if stage.starts_with?(HEAD_PREFIX)
+        @fixture.head.read_into(record, bytes)
+      else
+        @fixture.blocks.read_into(record, bytes)
+      end
+    end
+
+    def diagnostic_capture_bytes(stage : String) : Int64
+      diagnostic_record(stage).nbytes
     end
 
     def use_shared_gate_up!(enabled : Bool) : Nil
@@ -480,10 +519,7 @@ module PixelUMMDecoderProbe
 
     def compare(*, request : Int32? = nil,
                 phase_observer : PixelUMMMemoryProbe::Recorder? = nil) : Array(Comparison)
-      chain = @head_chain || raise ArgumentError.new("integrated PixelUMM decoder was not fully encoded")
-      unless chain.completed? && chain.wait_count == 1 && @blocks_chain.try(&.same?(chain))
-        raise ArgumentError.new("integrated PixelUMM diagnostics require one terminal wait after same-chain block/head encoding")
-      end
+      check_diagnostic_wait!
       results = blocks.compare(comparison_scratch: @comparison_scratch,
         request: request, phase_observer: phase_observer || @phase_observer)
       observer = phase_observer || @phase_observer
@@ -553,6 +589,24 @@ module PixelUMMDecoderProbe
       raise ArgumentError.new("integrated PixelUMM session released") if @released
       if chain = @last_chain
         raise ArgumentError.new("integrated PixelUMM command chain is in flight") unless chain.completed?
+      end
+    end
+
+    private def check_diagnostic_wait! : Nil
+      raise ArgumentError.new("integrated PixelUMM session released") if @released
+      chain = @head_chain || raise ArgumentError.new("integrated PixelUMM decoder was not fully encoded")
+      unless chain.completed? && chain.wait_count == 1 && @blocks_chain.try(&.same?(chain))
+        raise ArgumentError.new("integrated PixelUMM diagnostics require one terminal wait after same-chain block/head encoding")
+      end
+    end
+
+    private def diagnostic_record(stage : String) : Record
+      raise ArgumentError.new("integrated PixelUMM session released") if @released
+      raise ArgumentError.new("unknown integrated diagnostic stage: #{stage}") unless @capture_order.includes?(stage)
+      if stage.starts_with?(HEAD_PREFIX)
+        @fixture.head.captures[stage[HEAD_PREFIX.size..]]
+      else
+        @fixture.blocks.captures[stage]
       end
     end
 

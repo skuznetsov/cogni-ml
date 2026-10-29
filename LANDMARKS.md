@@ -36214,3 +36214,47 @@ Refresh after source/toolchain/device/model/workload changes.
   diagnostic flags/export and analyzer. Refresh after source/input/weights/
   geometry/precision/runtime/backend/device/schedule/profiler/guard/toolchain
   changes or evidence loss; fresh cache-aware admission before every launch.
+
+### 2026-10-29: PixelUMM CPU diagnostic placement qualifies as a bounded policy probe
+
+- Optional `--compare-cpu-diagnostics` runs baseline J21120, 36 blocks + head,
+  input A, persistent GPU plans/buffers and 50s terminal-to-pre-recorder gaps.
+  Six requests/process: warm, eager/deferred condition + following probe, tail;
+  reverse process swaps condition placement. API profiling stays off. Separate
+  CPU scratch preparation does not prepare candidate attention graphs.
+- Both conditions save the same43 post-wait captures before GPU-buffer reuse,
+  to fresh exclusive6.848GiB disk snapshots using the same330MiB CPU scratch.
+  Eager compares saved bytes immediately; deferred remains pending until all
+  six requests terminate and its saved bytes pass. No vacuous empty-vector
+  pass. Snapshot paths/extent/order and one-eager/one-deferred completion gated.
+- Following eager/deferred probes take63.953500/48.236443s normal and
+  48.303293/43.263825s reverse. Deferred-context time is24.5758%/10.4330% lower
+  in these two contrasts; do not pool or claim stable acceleration. Raw4579
+  completed-root unions/request independently recomputed; difference also
+  appears there, not just terminal-wait bookkeeping. Root envelopes are not
+  active shader time and do not identify a specific driver wait.
+- Completed-chain release and post-request GC follow diagnostics, so transient
+  resource lifetime/cache/reclamation timing moves with the policy. Pure CPU
+  causality remains VULNERABLE even though persistent resources/input/pacing
+  match. Next discriminator releases the completed chain after the common
+  snapshot write and aligns GC before comparison; no shader/math promotion.
+- Both rc0 processes preserve one existing wait,43 post-wait reads,zero early
+  reads/tracked encode allocations/request. All516 retained comparisons finite
+  and bitwise equal at unchanged2e-5;43-stage hashes identical across12 requests.
+  Reused authenticated upstream MPS controls, exact block35/head join; no fresh
+  connected upstream neural run, overwritten-intermediate gate or generation.
+- All2574 guard samples pass10%cache-aware/27.5GiBcap/64MiBswap/900s. Sampled
+  peak26.195773GiB,minheadroom16.343918GiB,positive swapgrowth0; no guarantee of
+  unsampled transients or exclusive-host/thermal equivalence. Both AC throughout.
+  Release build,74CPU examples,format/diff,analyzer mutation controls and4
+  pre-observer CLI negatives pass. Correlated Mini-Quad ROBUST for bounded
+  numerical/lifecycle/lineage observations, not stable timing attribution.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-diagnostics-20261029;
+  source parentcfeb368b,202-file frozen snapshots, binary SHA
+  93f9ede7c8134b33093a3ed8217e27ca33cdb27d3d4eda2d48e4202678873454.
+  results/analysis-paired.json SHA
+  8abe90461b91962d767ceabbcfef099dbfa025e1a6d4302645615b16783ac749.
+  Return docs/pixelumm-cpu-diagnostic-placement.md and generation frontier.
+  Rollback omits new flag; ordinary inference unchanged. Refresh on executable
+  source/input/weights/geometry/precision/runtime/backend/device/toolchain/
+  schedule/diagnostic/guard changes or evidence loss; fresh admission each run.

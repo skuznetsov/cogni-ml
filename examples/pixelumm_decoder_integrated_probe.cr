@@ -2,6 +2,7 @@ require "option_parser"
 require "./support/hy_nomas_probe_instrumentation"
 require "./support/pixelumm_decoder_probe"
 require "./support/pixelumm_tiled_gate_up_probe"
+require "./support/pixelumm_cpu_diagnostic_probe"
 require "../src/ml/video/pixelumm_decoder_profile"
 
 reference, reference_sha, alternate, alternate_sha = "", "", "", ""
@@ -20,6 +21,9 @@ reverse_aa_profile = false
 correctness_only = false
 tiled_rows = 0
 reverse_tiled = false
+compare_cpu_diagnostics = false
+reverse_cpu_diagnostics = false
+diagnostic_snapshot_dir = ""
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, one chain; external 10% memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -46,29 +50,40 @@ OptionParser.parse do |parser|
   parser.on("--tiled-gate-up-rows N", "Observer-off row-tiled FFN crossover, six paced requests") { |v| tiled_rows = v.to_i32 }
   parser.on("--reverse-tiled-gate-up", "Reverse both warm and timed row-tiled FFN orders") { reverse_tiled = true }
   parser.on("--correctness-only", "Only the four poisoned combined-attention gates") { correctness_only = true }
+  parser.on("--compare-cpu-diagnostics", "Fixed baseline/input, matched snapshots, eager/deferred CPU comparisons") { compare_cpu_diagnostics = true }
+  parser.on("--reverse-cpu-diagnostics", "Reverse the two CPU-comparison placements") { reverse_cpu_diagnostics = true }
+  parser.on("--diagnostic-snapshot-dir PATH", "Existing directory for two fresh disk snapshots") { |v| diagnostic_snapshot_dir = v }
 end
 PixelUMMTiledGateUpProbe.validate_rows!(21120, tiled_rows) if tiled_rows != 0
 tiled_modes = tiled_rows > 0
-paced_requests = profile_aa || tiled_modes
+paced_requests = profile_aa || tiled_modes || compare_cpu_diagnostics
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        head_reference, head_reference_sha, head_alternate, head_alternate_sha,
                        cache_path, cache_sha, report}.all? { |v| !v.empty? } &&
        0 < budget <= 24_i64 * 1024**3 && 1 <= repeats <= 3 &&
-       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention || profile_aa || tiled_modes) || repeats == 1) &&
-       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention, profile_aa, tiled_modes}.count(true) <= 1 &&
+       (!(profile_variance || compare_shared_gate_up || profile_shared_gate_up || compare_combined_attention || profile_combined_attention || profile_aa || tiled_modes || compare_cpu_diagnostics) || repeats == 1) &&
+       {profile_variance, compare_shared_gate_up, profile_shared_gate_up, compare_combined_attention, profile_combined_attention, profile_aa, tiled_modes, compare_cpu_diagnostics}.count(true) <= 1 &&
        (!reverse_combined_attention || compare_combined_attention || profile_combined_attention) &&
        (!reverse_aa_profile || profile_aa) &&
        (!reverse_tiled || tiled_modes) &&
+       (!reverse_cpu_diagnostics || compare_cpu_diagnostics) &&
+       (compare_cpu_diagnostics == !diagnostic_snapshot_dir.empty?) &&
        (!correctness_only || compare_combined_attention)
   raise ArgumentError.new("expected authenticated paired full-J fixtures, cache, budget and fresh report")
 end
 raise ArgumentError.new("integrated report must be absolute") unless Path[report].absolute?
+if compare_cpu_diagnostics
+  unless Path[diagnostic_snapshot_dir].absolute? && Dir.exists?(diagnostic_snapshot_dir)
+    raise ArgumentError.new("CPU diagnostic snapshots require an existing absolute directory")
+  end
+end
 fd = LibC.open(report, LibC::O_WRONLY | LibC::O_CREAT | LibC::O_EXCL, 0o600)
 raise IO::Error.new("integrated report must be fresh and writable") if fd < 0
 report_io = IO::FileDescriptor.new(fd)
 observer = PixelUMMMemoryProbe::Recorder.system
 session = nil.as(PixelUMMDecoderProbe::Session?)
 tiled_selection = nil.as(PixelUMMTiledGateUpProbe::Selection?)
+diagnostic_store = nil.as(PixelUMMCPUDiagnosticProbe::Store?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 terminal_wait_attempted = false
 cleanup_quarantined = false
@@ -80,9 +95,15 @@ named_bytes, block_bytes, head_owned_bytes, head_weight_bytes = 0_i64, 0_i64, 0_
 preparation_seconds = 0.0
 failure = nil.as(String?)
 passed = true
+diagnostics_completed = !compare_cpu_diagnostics
 shared_modes = compare_shared_gate_up || profile_shared_gate_up
 attention_modes = compare_combined_attention || profile_combined_attention || profile_aa
-schedule = if tiled_modes
+cpu_arms = compare_cpu_diagnostics ? PixelUMMCPUDiagnosticProbe.schedule(reverse_cpu_diagnostics) : [] of PixelUMMCPUDiagnosticProbe::Arm
+schedule = if compare_cpu_diagnostics
+             cpu_arms.map_with_index do |arm, index|
+               PixelUMMDecoderProbe::RequestArm.new(arm.kind, false, index == 0, false)
+             end
+           elsif tiled_modes
              PixelUMMDecoderProbe.tiled_gate_up_schedule(reverse_tiled)
            elsif profile_aa
              PixelUMMDecoderProbe.aa_profile_schedule(reverse_aa_profile)
@@ -118,12 +139,20 @@ begin
   session = PixelUMMDecoderProbe::Session.new(fixture, cache,
     max_named_bytes: budget, phase_observer: observer,
     prepare_shared_gate_up: shared_modes,
-    prepare_combined_attention: attention_modes)
+    prepare_combined_attention: attention_modes,
+    prepare_comparison_scratch: compare_cpu_diagnostics)
   tiled_selection = PixelUMMTiledGateUpProbe::Selection.new(session.blocks.plans, tiled_rows) if tiled_modes
   preparation_seconds = (Time.instant - start).total_seconds
   named_bytes, block_bytes = session.named_bytes, session.block_named_bytes
   head_owned_bytes, head_weight_bytes = session.head_owned_named_bytes, session.head_weight_named_bytes
   capture_order = session.capture_order
+  if compare_cpu_diagnostics
+    captures = capture_order.map do |stage|
+      PixelUMMCPUDiagnosticProbe::Capture.new(stage, session.diagnostic_capture_bytes(stage))
+    end
+    paths = (0...2).map { |slot| File.join(diagnostic_snapshot_dir, "condition-#{slot}.bf16") }
+    diagnostic_store = PixelUMMCPUDiagnosticProbe::Store.new(paths, captures, session.diagnostic_comparison_scratch)
+  end
   unless capture_order.size == 43 && session.head_input_aliases_block35_output? &&
          session.head_plan.input.same?(session.blocks.workspace.output_buffer(35)) &&
          named_bytes == block_bytes + head_owned_bytes + head_weight_bytes
@@ -256,7 +285,17 @@ begin
       raise "integrated profile read admitted before terminal wait" unless early_profile_rejected
     end
     early_tiled_change_rejected = false
+    early_snapshot_rejected = false
     if request == 0
+      if compare_cpu_diagnostics
+        begin
+          session.read_diagnostic_actual!(capture_order.first, Bytes.empty)
+        rescue error : ArgumentError
+          raise error unless (error.message || "").includes?("terminal wait")
+          early_snapshot_rejected = true
+        end
+        raise "integrated snapshot read admitted before terminal wait" unless early_snapshot_rejected
+      end
       if selection = tiled_selection
         before_mode = selection.selected
         begin
@@ -378,15 +417,29 @@ begin
       end
     end
     observer.emit("request_after_profile_extraction", request: request) if profile_combined_attention || paced_requests
-    comparisons = session.compare(request: request)
+    diagnostic_start = Time.instant
+    cpu_arm = compare_cpu_diagnostics ? cpu_arms[request] : nil
+    deferred = cpu_arm.try(&.policy) == "deferred"
+    comparisons = if store = diagnostic_store
+                    if slot = cpu_arm.not_nil!.snapshot_slot
+                      store.snapshot(slot, request, !deferred,
+                        ->(stage : String, bytes : Bytes) { session.not_nil!.read_diagnostic_expected!(stage, bytes) },
+                        ->(stage : String, bytes : Bytes) { session.not_nil!.read_diagnostic_actual!(stage, bytes) })
+                    else
+                      session.compare(request: request)
+                    end
+                  else
+                    session.compare(request: request)
+                  end
+    diagnostic_seconds = (Time.instant - diagnostic_start).total_seconds
     observer.emit("request_after_diagnostic_comparisons", request: request)
-    unless comparisons.map { |c| c[:stage] } == capture_order &&
+    unless (deferred ? comparisons.empty? : comparisons.map { |c| c[:stage] } == capture_order) &&
            ML::MetalBuffer.hy_text_probe_readbacks - reads == 43 && chain.wait_count == 1
       raise "integrated comparisons omitted a retained capture or changed terminal waits"
     end
-    numerical_pass = comparisons.all? { |c| c[:finite] && c[:failures] == 0 }
-    passed &&= numerical_pass
-    unless numerical_pass
+    numerical_pass = deferred ? nil : comparisons.all? { |c| c[:finite] && c[:failures] == 0 }
+    passed &&= numerical_pass != false
+    if numerical_pass == false
       first_bad = comparisons.find { |c| !c[:finite] || c[:failures] != 0 }.not_nil!
       failure = "numerical mismatch at request #{request}, stage #{first_bad[:stage]}"
     end
@@ -404,6 +457,12 @@ begin
       activation_readbacks_before_terminal_wait: early_reads,
       diagnostic_readbacks_after_terminal_wait: ML::MetalBuffer.hy_text_probe_readbacks - reads,
       diagnostic_cpu_scratch_bytes: session.diagnostic_cpu_scratch_bytes,
+      cpu_diagnostic_role: cpu_arm.try(&.role), cpu_diagnostic_policy: cpu_arm.try(&.policy),
+      preceding_cpu_diagnostic_policy: cpu_arm.try(&.preceding_policy),
+      cpu_diagnostic_snapshot_slot: cpu_arm.try(&.snapshot_slot),
+      cpu_diagnostic_snapshot_bytes: cpu_arm.try(&.snapshot_slot).nil? ? 0_i64 : diagnostic_store.not_nil!.per_slot_bytes,
+      cpu_diagnostic_seconds_before_next_request: diagnostic_seconds,
+      cpu_diagnostics_pending: deferred, early_snapshot_rejected: early_snapshot_rejected,
       head_before_blocks_rejected: head_before_blocks_rejected,
       early_release_rejected: early_release_rejected, early_read_rejected: early_read_rejected,
       early_reuse_rejected: early_reuse_rejected, early_poison_rejected: early_poison_rejected,
@@ -428,11 +487,11 @@ begin
       aa_spacing: aa_spacing, terminal_wait_end_mach_ns: terminal_ns,
       root_profile: root_profile, phase_profile: phase_profile, continuation_trace: trace_profile,
     }.to_json)
-    STDERR.puts "#{kind}: passed=#{numerical_pass}, encode+wait=#{blocks_encode_seconds + head_encode_seconds + wait_seconds}s"
+    STDERR.puts "#{kind}: passed=#{deferred ? "pending" : numerical_pass.to_s}, encode+wait=#{blocks_encode_seconds + head_encode_seconds + wait_seconds}s"
     chain.release
     chain = nil
     observer.emit("after_chain_release", request: request)
-    if attention_modes || tiled_modes
+    if attention_modes || tiled_modes || compare_cpu_diagnostics
       # Post-wait GC is outside timing. Prepared attention diagnostics reuse
       # comparison arrays; row-tiling diagnostics retain per-capture host buffers.
       observer.emit("before_post_diagnostic_gc", request: request)
@@ -441,11 +500,35 @@ begin
     end
     break unless passed
   end
+  if passed && requests.size == schedule.size && (store = diagnostic_store)
+    store.finish_requests!(requests.size)
+    cpu_arms.each_with_index do |arm, request|
+      next unless arm.policy == "deferred"
+      observer.emit("before_deferred_diagnostic_comparisons", request: request)
+      start = Time.instant
+      comparisons = store.compare_deferred(arm.snapshot_slot.not_nil!,
+        ->(stage : String, bytes : Bytes) { session.not_nil!.read_diagnostic_expected!(stage, bytes) })
+      unless comparisons.map { |c| c[:stage] } == capture_order
+        raise "deferred integrated comparison omitted a retained capture"
+      end
+      numerical_pass = comparisons.all? { |c| c[:finite] && c[:failures] == 0 }
+      requests[request].as_h["comparisons"] = JSON.parse(comparisons.to_json)
+      requests[request].as_h["passed"] = JSON.parse(numerical_pass.to_json)
+      requests[request].as_h["cpu_diagnostics_pending"] = JSON.parse("false")
+      requests[request].as_h["deferred_comparison_seconds"] = JSON.parse((Time.instant - start).total_seconds.to_json)
+      passed &&= numerical_pass
+      failure = "deferred numerical mismatch at request #{request}" unless numerical_pass
+      observer.emit("after_deferred_diagnostic_comparisons", request: request)
+    end
+    diagnostics_completed = store.completed?
+    raise "CPU diagnostic snapshots were not all compared" unless diagnostics_completed
+  end
 rescue error
   passed = false
   failure = "#{error.class}: #{error.message}"
   STDERR.puts failure
 ensure
+  diagnostic_store.try(&.close)
   begin
     raise "unsubmitted A/A chain quarantined after spacing failure" if spacing_abort_before_submission
     if active = chain
@@ -469,7 +552,7 @@ ensure
   GC.collect
   observer.emit("after_session_release")
   result = {
-    schema: tiled_modes ? "cogni_ml.pixelumm_native_row_tiled_ffn/v1" : profile_aa ? "cogni_ml.pixelumm_native_aa_profile/v1" : (profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2")), generation: false,
+    schema: compare_cpu_diagnostics ? "cogni_ml.pixelumm_cpu_diagnostic_placement/v1" : tiled_modes ? "cogni_ml.pixelumm_native_row_tiled_ffn/v1" : profile_aa ? "cogni_ml.pixelumm_native_aa_profile/v1" : (profile_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_profile/v1" : (compare_combined_attention ? "cogni_ml.pixelumm_native_combined_attention_probe/v1" : "cogni_ml.pixelumm_native_integrated_probe/v2")), generation: false,
     scope: "native_36_blocks_plus_global_head_in_one_gpu_chain",
     reference: reference, reference_sha256: reference_sha,
     alternate_reference: alternate, alternate_reference_sha256: alternate_sha,
@@ -492,6 +575,11 @@ ensure
     profile_combined_attention: profile_combined_attention,
     reverse_combined_attention: reverse_combined_attention, correctness_only: correctness_only,
     profile_aa: profile_aa, reverse_aa_profile: reverse_aa_profile,
+    compare_cpu_diagnostics: compare_cpu_diagnostics, reverse_cpu_diagnostics: reverse_cpu_diagnostics,
+    cpu_diagnostics_completed: diagnostics_completed,
+    diagnostic_snapshot_dir: diagnostic_snapshot_dir,
+    diagnostic_snapshot_total_bytes: diagnostic_store.try(&.total_bytes) || 0_i64,
+    cpu_diagnostic_schedule: cpu_arms.map { |arm| {kind: arm.kind, role: arm.role, policy: arm.policy, snapshot_slot: arm.snapshot_slot, preceding_policy: arm.preceding_policy} },
     tiled_gate_up_rows: tiled_rows, reverse_tiled_gate_up: reverse_tiled,
     tiled_gate_up_schedule: tiled_modes ? schedule.map { |arm| {kind: arm.kind, tiled_gate_up: arm.tiled_gate_up, alternate: arm.alternate, poisoned: arm.poisoned, profiling: arm.profile} } : nil,
     row_ranges: tiled_modes ? PixelUMMTiledGateUpProbe.row_ranges(21120, tiled_rows) : nil,
@@ -505,10 +593,10 @@ ensure
     timing_scope: "encode_seconds sums native API calls; total_seconds includes intervening memory telemetry and first-request lifecycle checks, excludes fixture preparation and post-wait comparisons; not a throughput benchmark",
     memory_telemetry: {categories_additive: false, guard_timestamp_clock: "mach_absolute_time",
                        guard_join_timestamp_field: "guard_monotonic_ns", sampled_peaks_are_bounds: false},
-    memory_phases: observer.events, passed: passed && requests.size == schedule.size, failure: failure,
+    memory_phases: observer.events, passed: passed && diagnostics_completed && requests.size == schedule.size, failure: failure,
   }
   report_io.puts(result.to_pretty_json)
   report_io.close
   puts({report: report, passed: result[:passed], named_bytes: named_bytes, failure: failure}.to_json)
 end
-raise "PixelUMM integrated qualification failed: #{failure}" unless passed && requests.size == schedule.size
+raise "PixelUMM integrated qualification failed: #{failure}" unless passed && diagnostics_completed && requests.size == schedule.size

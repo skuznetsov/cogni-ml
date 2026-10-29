@@ -1,5 +1,26 @@
 # Hy-Nomas first native video frontier
 
+## CPU diagnostic placement changes the following request in both sampled orders (2026-10-29)
+
+The bounded 36-block-plus-head policy experiment is complete at J=21,120.
+After eager/deferred diagnostic placement the following requests take
+63.953500/48.236443 s in normal order and 48.303293/43.263825 s in reverse.
+These are two descriptive contrasts, not a stable production speed estimate.
+GPU graphs, persistent buffers, input A and 50-second pacing targets match.
+Completed-chain release and post-request GC move with the diagnostics, so pure
+CPU-comparison causality remains open. No inference default or math changed.
+
+All 516 retained saved-upstream comparisons are finite and bitwise equal at
+unchanged 2e-5 tolerances. All 12 requests preserve one terminal wait, 43
+post-wait reads and zero early reads/tracked encode allocations. The 10%
+cache-aware guard passes both complete processes with zero swap growth;
+sampled peak footprint is 26.195773 GiB, minimum headroom 16.343918 GiB.
+No diffusion or generation ran. See
+[the diagnostic design, timing table and scoped evidence](pixelumm-cpu-diagnostic-placement.md).
+The next causal discriminator releases the completed chain after the common
+snapshot write and aligns GC before eager/deferred comparison. Do not infer a
+shader acceleration or driver-wait cause from this placement contrast.
+
 ## Gate/up row tiling does not qualify as acceleration (2026-10-29)
 
 Status: VERIFIED for bounded saved-output parity, lifecycle/guard checks and
