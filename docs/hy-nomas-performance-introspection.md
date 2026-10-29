@@ -1,5 +1,139 @@
 # Hy-Nomas performance introspection, 2026-10-26
 
+## Native J5760 connected FFN A/A, 2026-10-29
+
+The bounded calibration proposed below has now run. It establishes one short
+baseline series on the pinned saved input; it does not resolve the separate
+J21120 full-chain drift or establish a production speedup. No generation or
+Studio ran, and no production implementation or selector changed.
+
+The diagnostic reuses the production `pixel_linear_step(..., true)` graphs
+and native pointwise kernels, in order: gate, up, BF16 SiLU, BF16 product,
+down. Each projection converts its BF16 operands to F32 for computation and
+rounds its output to BF16. The native product feeds down directly. One owner
+retains the same plans and GPU buffers for two warmups and sixteen measured
+samples at J5760, D4096, F12288. Only w0/block0 post-attention-normalized input
+is fixed; saved product/down tensors are comparison oracles, not substitute
+inputs to the connected computation.
+
+### Observed result
+
+| Measure | Observed value |
+| --- | ---: |
+| Timed FFN GPU-root union, median | 160.083 ms |
+| Minimum / maximum | 158.050 / 175.393 ms |
+| p90, interpolated | 168.479 ms |
+| Median absolute deviation / median | 0.828% |
+| First-four / last-four median | 166.610 / 160.247 ms |
+| Last-four / first-four ratio | 0.96181 |
+| Eight adjacent later/earlier ratios, range | 0.97320-1.10973 |
+
+This series has no growing early-to-late median; one adjacent pair still
+differs by 10.97%. It does not establish stable latency across long exposure
+or a causal explanation of previous drift. The three matrix products count
+1.739462 TFLOP/sample; dividing by the whole FFN root-union median gives
+10.866 projection-equivalent TFLOP/s. This includes pointwise work, casts and
+any in-root stalls, and is not a GEMM-only rate or ALU utilization.
+
+All eighteen product/down comparisons and both raw gate/up captures match
+the authenticated upstream BF16 words exactly. Every down output also matches
+the first warmup's canonical GPU output bitwise. The unchanged finite
+`atol=rtol=2e-5` checks pass, with expected element counts in all 56 normal
+metric slots. The separate local NaN control produces exactly one failure
+and one nonfinite value; its word-difference count is zero because word
+comparison precedes local float injection.
+
+### Measurement and memory boundary
+
+There are no tensor reads, per-capture host comparisons, hashing, memory
+diagnostic sampling or GC diagnostics inside the sampling loop. Host clocks
+and native root-cursor bookkeeping remain around each sample; the report's
+`cpu_diagnostics_between_samples:false` means no CPU tensor diagnostics,
+not an absence of host timing instrumentation. The external sampled memory
+guard remains active throughout.
+
+Three GPU comparisons follow each FFN. Raw captures occur only in warmup 0,
+and their comparisons and the NaN control follow the loop. An independent
+CPU recomputation of all 162 completed, error-free root timestamps confirms
+each selected FFN interval union and zero overlap with every outside root.
+Comparison roots are excluded from the timed sets. Their fixed cadence may
+still affect subsequent device state. The metric is a union of command-buffer
+GPU intervals, not exclusive shader-active cycles or end-to-end latency.
+
+The successful run has one terminal wait, one packed 912-byte post-wait
+readback, zero preterminal tensor reads and zero tracked `ML::MetalBuffer`
+allocations during encoding. Named buffers total 1,481,638,800 bytes; this does
+not account for opaque framework allocations. Host stage-encoding wall time
+changes from about 0.5 ms in early measured samples to 106-122 ms later, while
+GPU-root unions stay within the range above. Internal MPS backpressure or
+scheduling is not attributed by this probe; no extra explicit wait was added.
+
+The guard completes with exit 0 and 43 samples, under a cache-aware 10%
+reserve, 8 GiB process-group cap, 64 MiB swap-growth stop and 600 s timeout.
+Sampled group footprint peaks at 2,264,811,344 bytes (2.109 GiB); minimum
+headroom is 40,592,424,960 bytes (37.805 GiB), minimum pressure-free reading
+88%, and positive swap growth zero. Headroom is
+`free_speculative - speculative + file_backed`, counting speculative pages
+once. File-backed memory remains a reclaimability estimate, and sampled
+limits do not rule out between-poll spikes.
+
+### Evidence and decision
+
+Measured source parent: `762caf4f5ad1e7afb4d6a2897277a769fd7b5484`, with the
+new diagnostic files preserved alongside 171 pinned source files in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-j5760-20261029/source-2/`.
+The same external directory contains `build-manifest-2.json` and:
+
+- `results/aa-3.json`, SHA256
+  `f4871703cb9f57f3f3fb869d3f9b3f26f35590fe6bcbfed2da7a347cc2686851`;
+- `results/guard-3.json`, SHA256
+  `66759e3c971b358c9ea74c0b1fc67d379625a136221c3b55014dc02830c98d7b`;
+- measured binary SHA256
+  `f9525148dbb63c0107f49e9175b928de4df3f150db70a179891e8c0e2fe9d082`;
+- `verify_aa.py` and its recomputed `results/verification.json`.
+
+The fixture is the authenticated Torch 2.6.0 windows reference, manifest
+SHA256 `e9b1ddce57fac94efb0262bd3e5f0be2963ef9df4255dc74cf254ff4b0217ddc`,
+with the authenticated thirty-six-block BF16 cache. Provenance remains
+`saved_initial_noise_conditioning_upstream_stem`, `model_inference:false`;
+this is not generated-DiT activation throughput or a quality result.
+Only three selected weights are uploaded. Full fixture/cache authentication
+happens before device preparation and timing. Earlier launch attempts 1/2
+produced no measured GPU result: attempt 1 rejected a symlinked input path
+(fixed by canonicalization); attempt 2 stopped during file authentication
+without a final guard event. Its cause remains unassigned. A separate CPU
+launcher control and the complete guarded attempt 3 succeed; failed attempts
+are excluded from timing evidence and retained.
+
+Executed DoD:
+
+```sh
+AA_ROOT=/opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-j5760-20261029
+TMPDIR="$AA_ROOT/tmp" CRYSTAL_CACHE_DIR="$AA_ROOT/crystal-cache" \
+  make BUILD_DIR="$AA_ROOT/build" pixelumm_ffn_aa_probe spec_pixelumm_ffn_aa_probe
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest \
+  spec/hy_nomas_pixelumm_ffn_windows_reference_test.py spec/wan_memory_guard_spec.py
+PYTHONDONTWRITEBYTECODE=1 python3 -B "$AA_ROOT/verify_aa.py"
+crystal tool format --check examples/pixelumm_ffn_aa_probe.cr \
+  examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr \
+  spec/pixelumm_ffn_aa_contract_spec.cr
+git diff --check
+```
+
+Release build, 7 Crystal contract examples and 53 Python fixture/guard tests
+pass. The verifier recomputes all numerical counts, sample unions, outside
+overlap, statistics and guard accounting, and checks source/binary identities.
+Three correlated mini-Quad reviews return ROBUST for this bounded parity and
+measurement claim; attributing or resolving old full-chain drift remains
+VULNERABLE. Rollback removes the standalone diagnostic and its build targets.
+Refresh on source/input/weight/geometry/precision/runtime/backend/device/
+schedule/guard change or artifact loss; every launch requires fresh admission.
+
+The next attribution experiment remains the matched J21120 36-block-plus-head
+replay described below, changing only the inter-request CPU diagnostic policy
+while preserving resources and spacing. A new kernel candidate needs matched
+A/B timing and a full-request check; this A/A does not select or promote one.
+
 ## Current reassessment: distinguish nominal headroom from measured loss, 2026-10-29
 
 This section supersedes the historical next-action list below. It is a

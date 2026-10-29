@@ -36,6 +36,7 @@ PIXELUMM_MPS_OBJ := $(BUILD_DIR)/pixelumm_decoder_block_mps_bridge.o
 PIXELUMM_HEAD_OBJ := $(BUILD_DIR)/pixelumm_decoder_head_mps_bridge.o
 PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
 PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
+PIXELUMM_FFN_AA_OBJ := $(BUILD_DIR)/pixelumm_ffn_aa_bridge.o
 PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ := $(BUILD_DIR)/pixelumm_connected_resource_bridge.o
 PIXELUMM_FFN_WEIGHT_REUSE_OBJ := $(BUILD_DIR)/pixelumm_ffn_weight_reuse_bridge.o
 PIXELUMM_PACKED_GATE_UP_OBJ := $(BUILD_DIR)/pixelumm_packed_gate_up_bridge.o
@@ -331,6 +332,20 @@ $(BUILD_DIR)/pixelumm_ffn_f32_kernel_probe: examples/pixelumm_ffn_f32_kernel_pro
 $(BUILD_DIR)/pixelumm_ffn_isolated_probe: examples/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_tiled_gate_up_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_ISOLATED_PROBE_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: pixelumm_ffn_aa_probe spec_pixelumm_ffn_aa_probe
+pixelumm_ffn_aa_probe: $(BUILD_DIR)/pixelumm_ffn_aa_probe
+
+spec_pixelumm_ffn_aa_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_aa_contract_spec.cr
+
+# Includes the production bridge once; no other PixelUMM bridge object is linked.
+$(PIXELUMM_FFN_AA_OBJ): examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(BUILD_DIR)/pixelumm_ffn_aa_probe: examples/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_AA_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_AA_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_block_profile:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr

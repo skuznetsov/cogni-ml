@@ -36090,3 +36090,45 @@ Refresh after source/toolchain/device/model/workload changes.
   repeated final-binary timing claim. Return docs/hy-nomas-generation-frontier.md;
   refresh on source/input/weights/runtime/device/geometry/precision/schedule/
   backend/guard changes or evidence loss; fresh memory admission each replay.
+
+### 2026-10-29: Native J5760 connected FFN A/A passes its bounded calibration
+
+- Added standalone diagnostic using production F32-compute/BF16-boundary
+  gate/up/down graphs and native BF16 SiLU/product, fixed saved w0/block0
+  normalized input, one reused plan/buffer owner. Two warmups +16 timed samples;
+  native product feeds down. No production selector or math changes, no Studio
+  or generation. Input remains saved initial-noise conditioning/upstream stem,
+  not generated DiT latents or a quality fixture.
+- All56 normal GPU metric slots have exact expected counts and zero failed,
+  nonfinite or different words against pinned upstream/canonical outputs.
+  Seeded NaN control produces exactly1 failure/nonfinite. Unchanged2e-5.
+  One terminal wait, one912B packed readback, zero preterminal reads/tracked
+  encode MetalBuffer allocations. Named storage1,481,638,800B excludes opaque
+  MPS resources. No CPU tensor diagnostics/hashing/GC/memory sampling between
+  samples; host timestamps/root cursors and external memory guard remain.
+- Independent recomputation validates all18 sample unions from162 completed,
+  error-free roots and zero outside-root overlap. GPU comparison roots are
+  excluded but their cadence may perturb future samples. Median160.083ms,
+  range158.050-175.393ms, p90168.479ms, MAD/median0.828%; first/last4 medians
+  166.610/160.247ms. Adjacent ratios0.97320-1.10973; no stable-latency claim.
+  Counted1.739462TF/sample / median =10.866 projection-equivalentTF/s, not
+  GEMM-only throughput, ALU activity or end-to-end latency. Host encoding rises
+  from~0.5ms early to106-122ms later; MPS backpressure cause remains unassigned.
+- Guard10%cache-aware/8GiBcap/64MiBswapstop/600s completes rc0,43samples.
+  Sampledpeak2,264,811,344B; minheadroom40,592,424,960B; minpressure88%; zero
+  swap growth. File-backed/speculative pages counted once, reclaimability only.
+  Failed launches1/2 produced no GPU result;2 has no terminal guard event and
+  unknown cause. Separate CPU launcher control and complete attempt3 pass.
+- Release build,7Crystal contract examples,53Python fixture/guard tests,
+  format/diff and external verify_aa.py pass. Three correlated mini-Quad audits
+  ROBUST only for this bounded A/A; old J21120 36-block+head drift attribution
+  remains VULNERABLE. No speedup/candidate promotion. Next falsifier preserves
+  that same large chain/resources/spacing and changes only CPU diagnostic policy.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-ffn-aa-j5760-20261029; measured
+  source parent762caf4f,171-file snapshot/source-2, build-manifest-2.json.
+  results/aa-3.json SHA
+  f4871703cb9f57f3f3fb869d3f9b3f26f35590fe6bcbfed2da7a347cc2686851;
+  binary SHAf9525148dbb63c0107f49e9175b928de4df3f150db70a179891e8c0e2fe9d082.
+  Return docs/hy-nomas-performance-introspection.md. Rollback removes diagnostic
+  and build targets. Refresh on source/inputs/weights/geometry/precision/runtime/
+  backend/device/schedule/guard changes or evidence loss; fresh admission each run.
