@@ -10,8 +10,9 @@ alias B = PixelUMMFFNWeightReuseProbe
 module PixelUMMFusedKVGatherProbe
   extend self
 
-  SCHEMA      = "cogni_ml.pixelumm_fused_kv_gather_probe/v1"
-  ERROR_BYTES = 1024
+  SCHEMA          = "cogni_ml.pixelumm_fused_kv_gather_probe/v1"
+  COMBINED_SCHEMA = "cogni_ml.pixelumm_fused_kv_scale_softmax_probe/v1"
+  ERROR_BYTES     = 1024
 
   def handle_pointer(handle : UInt64) : Pointer(Void)
     Pointer(Void).new(handle)
@@ -22,6 +23,12 @@ module PixelUMMFusedKVGatherProbe
     String.new(bytes.to_unsafe, length)
   end
 
+  private def validate_handles!(handles : Array(UInt64)) : Nil
+    unless handles.size == 4 && handles.uniq.size == 4 && handles.all? { |handle| handle != 0_u64 }
+      raise ArgumentError.new("Fused attention selection requires four distinct native plans")
+    end
+  end
+
   {% unless flag?(:cpu_only) %}
     def select_status(handle : UInt64, enabled : Int32) : Int32
       error = Bytes.new(ERROR_BYTES, 0_u8)
@@ -29,16 +36,39 @@ module PixelUMMFusedKVGatherProbe
         handle_pointer(handle), enabled, error.to_unsafe, error.size)
     end
 
-    def select_plans!(handles : Array(UInt64), enabled : Bool) : Nil
-      unless handles.size == 4 && handles.uniq.size == 4 && handles.all? { |handle| handle != 0_u64 }
-        raise ArgumentError.new("Fused K/V gather selection requires four distinct native plans")
+    def scale_select_status(handle : UInt64, enabled : Int32) : Int32
+      error = Bytes.new(ERROR_BYTES, 0_u8)
+      PixelUMMDecoderBlockMPSFFI.plan_set_scale_softmax(
+        handle_pointer(handle), enabled, error.to_unsafe, error.size)
+    end
+
+    def prepare_scale_plans!(handles : Array(UInt64)) : Nil
+      validate_handles!(handles)
+      handles.each_with_index do |handle, index|
+        error = Bytes.new(ERROR_BYTES, 0_u8)
+        status = PixelUMMDecoderBlockMPSFFI.plan_prepare_scale_softmax(
+          handle_pointer(handle), 0, error.to_unsafe, error.size)
+        unless status == 0
+          raise ArgumentError.new("Scale/softmax preparation failed for plan #{index} (#{status}): #{error_text(error)}")
+        end
       end
+    end
+
+    def select_plans!(handles : Array(UInt64), enabled : Bool, scale_softmax : Bool = false) : Nil
+      validate_handles!(handles)
       handles.each_with_index do |handle, index|
         error = Bytes.new(ERROR_BYTES, 0_u8)
         status = PixelUMMDecoderBlockMPSFFI.set_fused_kv_gather(
           handle_pointer(handle), enabled ? 1 : 0, error.to_unsafe, error.size)
         unless status == 0
           raise ArgumentError.new("Fused K/V gather selection failed for plan #{index} (#{status}): #{error_text(error)}")
+        end
+        if scale_softmax
+          status = PixelUMMDecoderBlockMPSFFI.plan_set_scale_softmax(
+            handle_pointer(handle), enabled ? 1 : 0, error.to_unsafe, error.size)
+          unless status == 0
+            raise ArgumentError.new("Scale/softmax selection failed for plan #{index} (#{status}): #{error_text(error)}")
+          end
         end
       end
     end
@@ -47,7 +77,15 @@ module PixelUMMFusedKVGatherProbe
       raise ArgumentError.new("Fused K/V gather selection requires macOS Metal")
     end
 
-    def select_plans!(handles : Array(UInt64), enabled : Bool) : Nil
+    def scale_select_status(handle : UInt64, enabled : Int32) : Int32
+      raise ArgumentError.new("Scale/softmax selection requires macOS Metal")
+    end
+
+    def prepare_scale_plans!(handles : Array(UInt64)) : Nil
+      raise ArgumentError.new("Scale/softmax preparation requires macOS Metal")
+    end
+
+    def select_plans!(handles : Array(UInt64), enabled : Bool, scale_softmax : Bool = false) : Nil
       raise ArgumentError.new("Fused K/V gather selection requires macOS Metal")
     end
   {% end %}
@@ -97,6 +135,7 @@ maximum_named_bytes = B::MAX_NAMED_BYTES
 trace_ready = trace_release = ""
 instruments_sample = false
 correctness_only = false
+scale_softmax = false
 
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM fused K/V gather full-block diagnostic. No generation."
@@ -107,6 +146,7 @@ OptionParser.parse do |parser|
   parser.on("--max-named-bytes N", "Named-buffer cap, at most 9 GiB") { |value| maximum_named_bytes = value.to_i64 }
   parser.on("--instruments-sample", "Four correctness requests with phase metadata; excluded from speed claims") { instruments_sample = true }
   parser.on("--correctness-only", "Run only the first four correctness requests without profiling") { correctness_only = true }
+  parser.on("--scale-softmax", "Toggle fused K/V gather and F32 scaling inside softmax together") { scale_softmax = true }
   parser.on("--trace-ready-file PATH", "Fresh CPU-only Instruments attach receipt") { |value| trace_ready = value }
   parser.on("--trace-release-file PATH", "Fresh CPU-only Instruments release gate") { |value| trace_release = value }
 end
@@ -156,6 +196,7 @@ fixture = nil.as(B::Fixture?)
 cache = nil.as(B::WeightCache?)
 owner = nil.as(B::Owner?)
 handles = [] of UInt64
+scale_graphs_prepared = false
 requests = [] of JSON::Any
 setup_seconds = 0.0
 failure = nil.as(String?)
@@ -173,11 +214,13 @@ write_report = ->(success : Bool) do
   cache_value = cache
   active = owner
   report_doc = {
-    schema: PixelUMMFusedKVGatherProbe::SCHEMA, probe_process_id: Process.pid,
+    schema: scale_softmax ? PixelUMMFusedKVGatherProbe::COMBINED_SCHEMA : PixelUMMFusedKVGatherProbe::SCHEMA,
+    probe_process_id: Process.pid,
     probe_completed: success, production_promoted: false,
     full_generation_executed: false,
     instruments_sample: instruments_sample,
     correctness_only: correctness_only,
+    combined_scale_softmax_experiment: scale_softmax,
     run_mode: correctness_only ? "correctness_only" : (instruments_sample ? "instruments_sample" : "full_balanced"),
     failure: failure,
     numerical_comparison: {atol: B::ATOL, rtol: B::RTOL,
@@ -191,22 +234,25 @@ write_report = ->(success : Bool) do
       upstream_revision:            B::UPSTREAM_REVISION,
     } : nil,
     candidate_graph: {
-      operation:                                "fuse K and V tile-panel gathers into one dual-output Metal dispatch; one thread computes the existing KV index/token mapping and writes both outputs",
-      source_buffers:                           ["core[2] K BF16", "core[3] V BF16"],
-      destination_buffers:                      ["scratch[1] K F32", "scratch[2] V F32"],
-      index_geometry:                           "same 32 heads x keyCount x 128 dimensions and identical KV token/head indexing as the two baseline kernels",
-      arithmetic:                               "same BF16-to-F32 conversion on each source element; no MPS arithmetic or model math changes",
-      dispatches_per_12_tile_block:             {baseline_kv_gathers: 24, candidate_kv_gathers: 12},
-      expected_saving:                          "launch/index setup only; same source/destination bytes and no bandwidth claim",
-      original_core_and_scratch_buffers_reused: true,
-      additional_named_metal_buffers:           0,
-      additional_native_buffers:                0,
-      raw_kv_panel_bitwise_comparator:          false,
-      graph_intermediate_memory:                "unchanged opaque MPSGraph allocation; not in named-buffer inventory",
+      operation:                                   scale_softmax ? "fuse K/V tile-panel gathers and apply the baseline F32 score scale inside the rank-4 softmax graph" : "fuse K and V tile-panel gathers into one dual-output Metal dispatch; one thread computes the existing KV index/token mapping and writes both outputs",
+      source_buffers:                              ["core[2] K BF16", "core[3] V BF16"],
+      destination_buffers:                         ["scratch[1] K F32", "scratch[2] V F32"],
+      index_geometry:                              "same 32 heads x keyCount x 128 dimensions and identical KV token/head indexing as the two baseline kernels",
+      arithmetic:                                  scale_softmax ? "same BF16-to-F32 panel conversion, Float32 1/sqrt(128) score scale and rank-4 axis-3 F32 softmax; QK/PV retain rank-3 batch32 geometry" : "same BF16-to-F32 conversion on each source element; no MPS arithmetic or model math changes",
+      dispatches_per_12_tile_block:                {baseline_kv_gathers: 24, candidate_kv_gathers: 12},
+      expected_saving:                             scale_softmax ? "fewer gather dispatches and separate score-scale launches; a request gain must be measured, not added from isolated probes" : "launch/index setup only; same source/destination bytes and no bandwidth claim",
+      scale_softmax_graphs_prepared_for_both_arms: scale_graphs_prepared,
+      original_core_and_scratch_buffers_reused:    true,
+      additional_named_metal_buffers:              0,
+      additional_native_buffers:                   0,
+      raw_kv_panel_bitwise_comparator:             false,
+      graph_intermediate_memory:                   "opaque MPSGraph allocation; not in named-buffer inventory; no intermediate-memory saving is asserted",
     },
     capture_contract: {
       correctness_requests:                           "full capture A/B then output-only A/B",
       output_only_requests_compare_only_final_output: true,
+      direct_f32_attention_comparator:                false,
+      scope:                                          "two windows, each native block0 output feeds block1; four J5760 whole-block passes per request",
       tolerance:                                      {atol: B::ATOL, rtol: B::RTOL},
     },
     schedule: {
@@ -262,6 +308,13 @@ begin
   owner = active
   handles = active.native_plan_handles
 
+  # Both arms retain the same prepared scale graphs. Plans own these graphs;
+  # partial setup failure is cleaned up by the unsubmitted owner's release.
+  if scale_softmax
+    PixelUMMFusedKVGatherProbe.prepare_scale_plans!(handles)
+    scale_graphs_prepared = true
+  end
+
   # Reject malformed selectors before requests and establish the explicit
   # baseline mode. This candidate has no separate prepare/release object.
   invalid_enable_status = PixelUMMFusedKVGatherProbe.select_status(handles.first, 2)
@@ -269,9 +322,16 @@ begin
   unless invalid_enable_status != 0 && null_select_status != 0
     raise ArgumentError.new("Fused K/V gather invalid-selector negative control unexpectedly succeeded")
   end
-  negative_controls = JSON.parse({invalid_enable_status: invalid_enable_status,
-                                  null_select_status:    null_select_status}.to_json)
-  PixelUMMFusedKVGatherProbe.select_plans!(handles, false)
+  invalid_scale_enable_status = scale_softmax ? PixelUMMFusedKVGatherProbe.scale_select_status(handles.first, 2) : nil
+  null_scale_select_status = scale_softmax ? PixelUMMFusedKVGatherProbe.scale_select_status(0_u64, 1) : nil
+  if scale_softmax && (invalid_scale_enable_status == 0 || null_scale_select_status == 0)
+    raise ArgumentError.new("Scale/softmax invalid-selector negative control unexpectedly succeeded")
+  end
+  negative_controls = JSON.parse({invalid_enable_status:       invalid_enable_status,
+                                  null_select_status:          null_select_status,
+                                  invalid_scale_enable_status: invalid_scale_enable_status,
+                                  null_scale_select_status:    null_scale_select_status}.to_json)
+  PixelUMMFusedKVGatherProbe.select_plans!(handles, false, scale_softmax)
   setup_seconds = (Time.instant - setup_started).total_seconds
 
   unless trace_ready.empty?
@@ -314,8 +374,8 @@ begin
       active.begin_request!(entry, active.expected_input_ids)
       owner_started = true
       # B::Owner resets the FFN projections to baseline in begin_request!, so
-      # select the gather path after that reset and before native encode.
-      PixelUMMFusedKVGatherProbe.select_plans!(handles, trial[:enabled])
+      # select both attention flags after that reset and before chain creation.
+      PixelUMMFusedKVGatherProbe.select_plans!(handles, trial[:enabled], scale_softmax)
       chain = ML::Metal::MPSCommandChain.new
       chain.not_nil!.enable_api_profile!(phase_roots: false) if instruments_sample
       active.track_chain!(chain.not_nil!)
@@ -374,6 +434,7 @@ begin
       wall_seconds = (Time.instant - wall_start).total_seconds
       requests << JSON.parse({
         index: trial[:index], kind: trial[:kind], fused_kv_gather_enabled: trial[:enabled],
+        scale_softmax_enabled: scale_softmax && trial[:enabled],
         capture_mode: trial[:capture_mode], positive_nan_control: trial[:positive_nan_control],
         timing_eligible: trial[:timing_eligible], full_request_wall_seconds: wall_seconds,
         host_clock_wall_seconds: (host_end.wall_ns - host_start.wall_ns).to_f64 / 1e9,
@@ -420,6 +481,7 @@ begin
       if raw_metrics
         requests << JSON.parse({
           index: trial[:index], kind: trial[:kind], fused_kv_gather_enabled: trial[:enabled],
+          scale_softmax_enabled: scale_softmax && trial[:enabled],
           capture_mode: trial[:capture_mode], positive_nan_control: trial[:positive_nan_control],
           timing_eligible: trial[:timing_eligible], request_failed: true,
           failure: error.message, raw_metrics_captured_before_validation: true,
@@ -439,6 +501,7 @@ begin
       else
         requests << JSON.parse({index: trial[:index], kind: trial[:kind],
                                 fused_kv_gather_enabled: trial[:enabled], request_failed: true,
+                                scale_softmax_enabled: scale_softmax && trial[:enabled],
                                 failure: error.message,
                                 numerical_metrics: nil,
                                 full_request_wall_seconds: (Time.instant - wall_start).total_seconds,
@@ -488,4 +551,5 @@ unless report_written && completed
   raise "Fused K/V gather probe did not write its report"
 end
 puts({prefix: "PIXELUMM_FUSED_KV_GATHER", report: canonical_report,
+      combined_scale_softmax_experiment: scale_softmax,
       requests: requests.size, named_bytes: budget_preflight[:total_bytes]}.to_json)

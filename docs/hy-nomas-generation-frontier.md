@@ -1,5 +1,90 @@
 # Hy-Nomas first native video frontier
 
+## Combined K/V gather and score-scale/softmax experiment (2026-10-29)
+
+Prospective bounded test: `pixelumm_fused_kv_gather_probe --scale-softmax`
+selects both existing alternatives together, after the owner resets each
+request and before creating its command chain. The same four plans retain
+the prepared scale graphs in both arms. Baseline disables both flags;
+candidate enables both. Production defaults remain off. Rollback leaves both
+native selectors disabled; omitting the flag restores the K/V-only diagnostic.
+
+Hypothesis: the isolated gains may compose, but MPS scheduling and queue
+behavior can make them non-additive. Correctness must first pass all saved
+upstream stage/output comparisons at unchanged atol=rtol=2e-5. Only then admit
+unprofiled balanced AB/BA timing on the same release binary and source bytes.
+The prospective promotion screen remains at least 3% paired whole-request
+improvement and a confirming repeat; fewer dispatches alone are insufficient.
+
+Scope is four J5760 whole-block passes: two windows, each with native block0
+output feeding block1. Full captures qualify both arms, followed by output-only
+requests. No raw K/V panel or combined internal-F32 comparator is asserted.
+Geometry, precision, scratch bindings and GPU-resident handoffs stay fixed.
+Each request must retain one terminal wait, one 464-byte packed post-wait
+metrics read, zero tracked encode-time named allocations and no preterminal
+readbacks. Setup owns the extra softmax graphs; their opaque MPS storage is
+outside the named-buffer inventory. Run under the cache-aware 10% reserve,
+16 GiB process cap, 64 MiB positive-swap-growth stop and 600 s deadline. No full
+generation is admitted. Refresh evidence on scoped source/artifact, fixture,
+geometry, precision, schedule/lifetime, backend/device/toolchain or guard changes.
+
+Two serial unprofiled 40-request runs passed that screen on identical measured
+source bytes and release binary:
+
+| Run | Baseline request median | Combined request median | Median paired time reduction | Candidate wins |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1.636905 s | 1.585109 s | 4.1034% | 16/16 |
+| 2 | 1.500376 s | 1.387504 s | 7.2021% | 16/16 |
+
+Percentages are medians of adjacent pair reductions, not ratios of the two
+arm medians. The pooled paired median is 5.6375%, with 32/32 wins. AB/BA
+medians are 3.9808/4.3595% and 7.2021/7.2864%. The absolute regime and effect
+size vary between runs; these are descriptive bounded results, not a promised
+7% production gain or proof of super-additivity over isolated experiments.
+Whole-request time includes owner setup/selection, comparator encoding, the
+sole terminal wait and metrics read. Body encode excludes comparator encoding;
+root durations are not exclusive GPU busy time. Both arms retain 125 roots.
+
+All 400 compared saved-upstream stage/output slots across timing runs are
+finite and bitwise equal. Every request retained one terminal wait, one packed
+metrics read, zero tracked encode-time named allocation and no preterminal
+readback. Sampled peak footprint was 7.625 GiB, minimum cache-aware headroom
+22.402 GiB and positive swap growth zero under the declared limits. Samples
+do not bound opaque MPS allocation transients. The artifact validator rejects
+14 damaged controls covering schedule, coverage, NaN control, receipt, combined
+flags, tolerance and memory floor. Twenty-one focused CPU examples pass.
+Correlated Mini-Quad source and artifact reviews return ROBUST within this
+successful unprofiled, saved-stage/output scope. Independent pair recomputation
+also distinguishes the 3.1643/7.5230% ratios of arm medians from the stated
+paired estimates; neither estimator establishes a stable production effect.
+
+The combination passes the prospective local request screen. Keep production
+selectors off pending connected 36-block/head validation; no full generation
+was executed. DoD executed: the release `pixelumm_fused_kv_gather_probe` target,
+four-request correctness gate, then two balanced timing runs under
+`examples/support/wan_memory_guard.py`. Numerical failure would block timing.
+The pinned fixture, weight cache, common driver and comparison stages are
+unchanged. Evidence, raw reports, exact measured-source archives, runner and
+validator are under:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-scale-softmax-20261029/`.
+Summary SHA256 `b8ebc68b5c949196791a15b03d04f8f58c569b10609a817e7942fc0a2bf96bd9`;
+timing binary `7282e0b3897be2dcefa2586aad67ef94552248e95c0368fd318375405e35b073`;
+raw reports `660ca83379046c0a5ee69dd2bb2be1eff4d3b6159a173ac181696d2ab141995c`
+and `a0149bb970ece3c07b38ae586d22d7a48957b9a738a963b8a85624ee10e4fd75`.
+
+Source review found that a partial preparation failure could label the graph
+configuration as already prepared. A post-timing setup/report-only fix now
+sets that flag only after all four plans finish preparation; request clocks,
+selection, encode, wait and comparison code are unchanged. The original
+timing binary and source archives remain intact. A separate final release
+build passed the guarded four-request correctness gate; its report SHA256 is
+`0ea67e27250711ea9f030ada36c8d92115885d7dbcbfe939b9bf3d5bec89131a` and
+binary is `280831e14493976b71ea42a367ef0963605582907588ca721294cb54046c62e6`.
+`results/final-qualification.json` authenticates the source delta. Timing
+claims belong to the archived measured binary, not a new final-binary timing.
+The optional Instruments failure-cleanup route was not exercised; the
+successful unprofiled request lifecycle is the admitted scope.
+
 ## Exact FFN/attention rewrites rejected by the request screen (2026-10-29)
 
 The remaining dense FFN projections remain the strongest hotspot candidate by

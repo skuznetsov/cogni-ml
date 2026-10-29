@@ -6,6 +6,39 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-COMBINED-KV-SOFTMAX-2026-10-29] Combined attention rewrites pass the bounded request screen
+
+- Opt-in `pixelumm_fused_kv_gather_probe --scale-softmax` prepares the scale
+  graphs once, then toggles fused K/V gather and score-scale-inside-softmax
+  together after owner reset and before chain creation. Both arms retain the
+  same plans/scratch and QK/PV geometry. Production selectors remain off.
+- Two serial 40-request processes on the same measured binary/source give
+  paired median time reductions 4.1034% and 7.2021%, 16/16 wins each, positive
+  AB and BA medians. Request medians are 1.636905/1.585109 s and
+  1.500376/1.387504 s. The pooled paired median is 5.6375%; effect-size drift
+  remains unexplained. The percentage is not a ratio of arm medians. Scope is
+  four whole J5760 block passes: two windows, native block0 output to block1.
+  This passes the prospective 3% screen and confirming repeat, without a full
+  decoder/head or generation-speed claim. Next gate is connected decoder/head.
+- All 400 compared saved-upstream stage/output slots are finite and bitwise
+  equal at atol=rtol=2e-5; no combined internal-F32 or raw K/V-panel equality
+  is asserted. One terminal wait and one 464-byte post-wait metrics read per
+  request, zero tracked encode-time named allocation/preterminal read. Peak
+  sampled footprint 7.625 GiB, headroom at least 22.402 GiB, zero swap growth
+  under 10% cache-aware reserve, 16 GiB cap, 64 MiB swap stop and 600 s deadline.
+  Sampling does not bound opaque MPS transients. Twenty-one CPU examples and
+  artifact validation pass; 14 damaged artifacts reject. Correlated source and
+  artifact Mini-Quad reviews are ROBUST within the successful diagnostic scope.
+- A post-timing setup/report-only fix tracks complete graph preparation rather
+  than the CLI request. Final release correctness passes separately; measured
+  binary/source archives remain intact. Evidence and both identities are in
+  `docs/hy-nomas-generation-frontier.md` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-fused-kv-scale-softmax-20261029/results/summary.json`
+  (SHA256 `b8ebc68b5c949196791a15b03d04f8f58c569b10609a817e7942fc0a2bf96bd9`).
+  Rollback disables both selectors. Refresh on scoped source/artifact, fixture,
+  geometry/precision, schedule/lifetime, backend/device/OS/toolchain or guard
+  changes; admission expires each launch. No full generation was executed.
+
 ### [LM-HY-NOMAS-PIXELUMM-REWRITE-REFUTATIONS-2026-10-29] Exact local rewrites do not establish a request gain
 
 - The current MPSGraph control remains selected. Reoriented F32 FFN GEMMs and
