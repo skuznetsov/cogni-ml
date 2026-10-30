@@ -36626,3 +36626,42 @@ Refresh after source/toolchain/device/model/workload changes.
   input/weight/geometry/precision/backend/device/toolchain changes; refresh timing
   additionally after host load, pacing, schedule, diagnostics or lifetime changes.
   Evidence loss reopens dependent claims; every rerun requires fresh admission.
+
+### 2026-10-30: Echo motion slows near chunk boundaries; first decoder seam matches
+
+- User reports drifting eyes and uneven motion in the 20-second Echo scene.
+  Streaming ROI flow analysis of saved raw display pixels and MP4 supports
+  gradual slowing around frames 120/240/360 (5/10/15 seconds), sometimes starting
+  before the nominal boundary. A farther-right ROI retains the association but
+  has weak near-static motion. This is one-clip screen-space evidence, not eye
+  tracking, physical camera velocity or causal attribution. MP4 PTS remain regular
+  at 24 fps; the decoder uses one global 23-window schedule without a 5s reset.
+- New opt-in `spec/support/hy_nomas_decoder_boundary.py` authenticates the exact
+  Echo continuation receipt, latent bank, input/noise bundle and pinned decoder
+  source/weights before model work. The guarded seam-120 run decodes only latent
+  windows 25/30, re-bases the upstream blender to starts 0/20, and compares global
+  frames [120,140). All 8,847,360 F32 display values match exactly, with 468 exact
+  GPU BF16 source-weight checks. A separate terminal CPU export check also agrees.
+  Display conversion preserves both BF16 multiply/add rounding boundaries.
+- This uses the existing pinned upstream BF16-equation MPS adapter, including
+  gathered spatial-tile F32 QK/softmax/PV. It does not certify the stock full-video
+  pipeline, pre-display raw stages, earlier/later frames, other two seams or
+  perceptual quality. Same-lineage Adversary: ROBUST for selected display parity;
+  causal explanation and a motion-quality fix remain VULNERABLE.
+- Eighteen CPU decoder tests pass, including wrong identity/hash/extent rejection,
+  NCTHW time slicing and a discriminating staged-BF16 rounding case. The model run
+  finishes 0 under a cache-aware 10% reserve, 28.5 GiB cap, 64 MiB swap-growth stop
+  and 1200s bound. Sampled peak footprint 4.463 GiB, min headroom 22.966 GiB, no
+  swap growth. These are sampled categories, not a bound on between-poll spikes.
+  No production source changes or full generation occurred.
+- Source audit finds an open semantic difference: native experimental shared-scene
+  continuation includes/appends text each fixed 5s chunk; optional upstream
+  one-scene `chunk_ar` caches text once. Next falsifier: real common-prefix chunk
+  two with matched conditioning, epsilon and RoPE; compare denoise/history/cache
+  writer and intermediate outputs before changing cache policy. Do not infer
+  that this difference caused slowing, or that parity proves smooth motion.
+- Evidence: `.landmark/evidence/2026-10-30-hy-nomas-temporal-boundary.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-echo-20261030`, decoder results
+  under `results/sequence-echo-20s/diagnostics-decoder`. Parent 99b342696647.
+  Refresh after source/input/weights/geometry/precision/backend/device/toolchain/
+  blend/display policy changes or evidence loss; fresh memory admission per run.
