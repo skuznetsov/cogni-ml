@@ -38,11 +38,15 @@ module HyNomasEulerGPUProbe
 
   record Fixture,
     sha256 : String,
+    steps : Int32,
     element_count : Int32,
     initial_latent : Array(Float32),
     expected_initial_latent_bf16 : Array(Float32),
     velocity : Array(Float32),
+    expected_sigmas : Array(Float32),
     expected_timesteps : Array(Float32),
+    expected_dts : Array(Float32),
+    expected_step_latents : Array(Float32),
     expected_final_latent : Array(Float32)
 
   def self.valid_sha?(value : String) : Bool
@@ -67,13 +71,15 @@ module HyNomasEulerGPUProbe
     raise ArgumentError.new("Euler fixture trusted identity mismatch") unless digest == expected_sha
 
     document = JSON.parse(raw)
+    v2 = document["schema"].as_s == "cogni_ml.hy_nomas_euler_probe_fixture/v2"
     expected_keys = %w(
       schema upstream_revision oracle steps shift num_train_timesteps target_dtype
       initial_latent_f32 expected_initial_latent_bf16_f32 velocity_f32
       expected_timesteps_f32 expected_final_latent_f32
     )
+    expected_keys.concat(%w(expected_sigmas_f32 expected_dts_f32 expected_step_latents_f32)) if v2
     unless document.as_h.keys.sort == expected_keys.sort &&
-           document["schema"].as_s == "cogni_ml.hy_nomas_euler_probe_fixture/v1" &&
+           (v2 || document["schema"].as_s == "cogni_ml.hy_nomas_euler_probe_fixture/v1") &&
            document["upstream_revision"].as_s == UPSTREAM_REVISION
       raise ArgumentError.new("Euler fixture schema or pinned revision mismatch")
     end
@@ -83,24 +89,32 @@ module HyNomasEulerGPUProbe
            oracle["sha256"].as_s == UPSTREAM_SOLVER_SHA256
       raise ArgumentError.new("Euler fixture does not identify the pinned upstream solver source")
     end
-    unless document["steps"].as_i == 8 && document["shift"].as_f == 5.0 &&
+    steps = document["steps"].as_i
+    unless (1..8).includes?(steps) && (v2 || steps == 8) && document["shift"].as_f == 5.0 &&
            document["num_train_timesteps"].as_i == 1000 &&
            document["target_dtype"].as_s == "bfloat16"
-      raise ArgumentError.new("Euler fixture must describe eight steps, shift 5, 1000 train steps, BF16 target")
+      raise ArgumentError.new("Euler fixture must describe 1..8 steps, shift 5, 1000 train steps, BF16 target; v1 requires eight steps")
     end
 
     latent = float_array(document, "initial_latent_f32")
     initial_bf16 = float_array(document, "expected_initial_latent_bf16_f32")
     velocity = float_array(document, "velocity_f32")
     timesteps = float_array(document, "expected_timesteps_f32")
+    sigmas = v2 ? float_array(document, "expected_sigmas_f32") : [] of Float32
+    dts = v2 ? float_array(document, "expected_dts_f32") : [] of Float32
+    states = v2 ? float_array(document, "expected_step_latents_f32") : [] of Float32
     expected = float_array(document, "expected_final_latent_f32")
     count = latent.size.to_i32
     unless (32..MAX_ELEMENTS).includes?(count) && (count == 32 || count == MAX_ELEMENTS) &&
            initial_bf16.size == count && velocity.size == count &&
-           expected.size == count && timesteps.size == 8
-      raise ArgumentError.new("Euler fixture requires 32 or 256 elements and exactly eight timesteps")
+           expected.size == count && timesteps.size == steps &&
+           (!v2 || (sigmas.size == steps && dts.size == steps && states.size == count * steps))
+      raise ArgumentError.new("Euler fixture requires 32 or 256 elements and matching schedule/state extents")
     end
-    Fixture.new(digest, count, latent, initial_bf16, velocity, timesteps, expected)
+    if v2 && states[-count, count] != expected
+      raise ArgumentError.new("Euler fixture final state differs from its last intermediate state")
+    end
+    Fixture.new(digest, steps, count, latent, initial_bf16, velocity, sigmas, timesteps, dts, states, expected)
   end
 
   def self.close!(label : String, actual : Float32, expected : Float32) : Float32
@@ -114,11 +128,13 @@ module HyNomasEulerGPUProbe
 
   def self.run(fixture : Fixture) : Nil
     count = fixture.element_count
+    steps = fixture.steps
     latent = ML::MetalBuffer.from_array(fixture.initial_latent)
     velocity = ML::MetalBuffer.from_array(fixture.velocity)
     timestep = ML::MetalBuffer.new(sizeof(Float32).to_i64)
-    diagnostics = ML::MetalBuffer.new((8 + 2 * count).to_i64 * sizeof(Float32))
-    plan = ML::Video::HyNomasEulerPlan.new(latent, velocity, timestep, steps: 8, shift: 5.0_f32)
+    diagnostic_count = steps + (steps + 1) * count
+    diagnostics = ML::MetalBuffer.new(diagnostic_count.to_i64 * sizeof(Float32))
+    plan = ML::Video::HyNomasEulerPlan.new(latent, velocity, timestep, steps: steps, shift: 5.0_f32)
     capture_timestep = ML::Metal::ComputePipeline.new(
       "hy_nomas_euler_probe_capture_timestep", CAPTURE_SOURCE)
     capture_latent = ML::Metal::ComputePipeline.new(
@@ -126,14 +142,23 @@ module HyNomasEulerGPUProbe
     chain = ML::Metal::MPSCommandChain.new
     begin
       expected_schedule_max_abs = 0.0_f32
-      8.times do |step|
+      sigma_max_abs = 0.0_f32
+      dt_max_abs = 0.0_f32
+      schedule = plan.schedule
+      steps.times do |step|
         expected_schedule_max_abs = Math.max(expected_schedule_max_abs,
           close!("CPU schedule timestep[#{step}]", plan.timestep_at(step), fixture.expected_timesteps[step]))
+        unless fixture.expected_sigmas.empty?
+          sigma_max_abs = Math.max(sigma_max_abs,
+            close!("CPU schedule sigma[#{step}]", schedule[step].sigma, fixture.expected_sigmas[step]))
+          dt_max_abs = Math.max(dt_max_abs,
+            close!("CPU schedule dt[#{step}]", plan.dt_at(step), fixture.expected_dts[step]))
+        end
       end
 
       reads_before = ML::MetalBuffer.hy_text_probe_readbacks
       plan_timestep = 0
-      8.times do |step|
+      steps.times do |step|
         plan.encode_timestep(chain, step)
         chain.encoder.set_pipeline(capture_timestep)
           .set_buffer(timestep, 0)
@@ -145,33 +170,34 @@ module HyNomasEulerGPUProbe
             .set_buffer(latent, 0)
             .set_buffer(diagnostics, 1, ML::Metal::BufferAccess::Write)
             .set_value(count.to_u32, 2)
-            .set_value(8_u32, 3)
+            .set_value(steps.to_u32, 3)
             .dispatch_1d(count)
         end
         plan.encode_update(chain, step)
+        chain.encoder.set_pipeline(capture_latent)
+          .set_buffer(latent, 0)
+          .set_buffer(diagnostics, 1, ML::Metal::BufferAccess::Write)
+          .set_value(count.to_u32, 2)
+          .set_value((steps + (step + 1) * count).to_u32, 3)
+          .dispatch_1d(count)
         plan_timestep += 1
       end
-      chain.encoder.set_pipeline(capture_latent)
-        .set_buffer(latent, 0)
-        .set_buffer(diagnostics, 1, ML::Metal::BufferAccess::Write)
-        .set_value(count.to_u32, 2)
-        .set_value((8 + count).to_u32, 3)
-        .dispatch_1d(count)
 
       preterminal_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - reads_before
       preterminal_waits = chain.wait_count
-      unless preterminal_readbacks == 0 && preterminal_waits == 0 && plan_timestep == 8
+      unless preterminal_readbacks == 0 && preterminal_waits == 0 && plan_timestep == steps
         raise ArgumentError.new("Euler encode performed a preterminal read/wait or missed a step")
       end
 
       chain.commit_and_wait
       raise ArgumentError.new("Euler probe requires one terminal wait") unless chain.wait_count == 1
-      actual = diagnostics.read(2 * count + 8)
+      actual = diagnostics.read(diagnostic_count)
       terminal_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - reads_before
       raise ArgumentError.new("Euler probe requires one packed terminal readback") unless terminal_readbacks == 1
-      timesteps = actual[0, 8]
-      initial_latent_bf16 = actual[8, count]
-      final_latent = actual[8 + count, count]
+      timesteps = actual[0, steps]
+      initial_latent_bf16 = actual[steps, count]
+      all_step_latents = actual[steps + count, count * steps]
+      final_latent = all_step_latents[-count, count]
       timestep_max_abs = 0.0_f32
       timesteps.each_with_index do |value, step|
         timestep_max_abs = Math.max(timestep_max_abs,
@@ -183,6 +209,12 @@ module HyNomasEulerGPUProbe
           close!("initial BF16 boundary[#{index}]", value, fixture.expected_initial_latent_bf16[index]))
       end
       final_max_abs = 0.0_f32
+      step_max_abs = Array(Float32).new(steps, 0.0_f32)
+      fixture.expected_step_latents.each_with_index do |expected, index|
+        step = index // count
+        step_max_abs[step] = Math.max(step_max_abs[step],
+          close!("step #{step} latent[#{index % count}]", all_step_latents[index], expected))
+      end
       final_latent.each_with_index do |value, index|
         final_max_abs = Math.max(final_max_abs,
           close!("final latent[#{index}]", value, fixture.expected_final_latent[index]))
@@ -191,11 +223,14 @@ module HyNomasEulerGPUProbe
       puts({schema: "cogni_ml.hy_nomas_euler_probe_result/v1",
             fixture_sha256: fixture.sha256, upstream_revision: UPSTREAM_REVISION,
             upstream_solver_sha256: UPSTREAM_SOLVER_SHA256, element_count: count,
-            steps: 8, shift: 5.0, tolerance_atol: ATOL,
+            steps: steps, shift: 5.0, tolerance_atol: ATOL,
             schedule_cpu_max_abs: expected_schedule_max_abs,
+            sigma_cpu_max_abs: sigma_max_abs, dt_cpu_max_abs: dt_max_abs,
             timestep_gpu_max_abs: timestep_max_abs,
             initial_latent_bf16_max_abs: initial_latent_max_abs,
             final_latent_max_abs: final_max_abs,
+            intermediate_latents_checked: !fixture.expected_step_latents.empty?,
+            step_latent_max_abs: step_max_abs,
             preterminal_readbacks: preterminal_readbacks,
             preterminal_waits: preterminal_waits, terminal_readbacks: terminal_readbacks,
             terminal_waits: chain.wait_count,

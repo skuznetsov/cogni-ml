@@ -21,6 +21,30 @@ describe "preview DiT weight selection" do
   end
 end
 
+describe "preview Euler step admission" do
+  it "keeps eight steps as the default and accepts the supported endpoints" do
+    HyNomasGeneration::DEFAULT_STEPS.should eq(8)
+    HyNomasGeneration.validate_steps!(1).should eq(1)
+    HyNomasGeneration.validate_steps!(8).should eq(8)
+  end
+
+  it "rejects step counts outside the scheduler range before allocation" do
+    [0, 9].each do |steps|
+      expect_raises(ArgumentError, /between 1 and 8/) do
+        HyNomasGeneration.validate_steps!(steps)
+      end
+    end
+  end
+
+  it "accounts for two F32 schedule values per requested step" do
+    HyNomasGeneration.euler_schedule_bytes(2).should eq(16_i64)
+    HyNomasGeneration.euler_schedule_bytes(8).should eq(64_i64)
+    expect_raises(ArgumentError, /between 1 and 8/) do
+      HyNomasGeneration.euler_schedule_bytes(9)
+    end
+  end
+end
+
 describe "preview terminal output" do
   it "writes a fresh file and refuses to replace it" do
     path = File.tempname("hy-nomas-terminal-output", ".bin")

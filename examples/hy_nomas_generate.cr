@@ -6,6 +6,7 @@ input_sha = ""
 output_dir = ""
 budget_mib = 22_528_i64
 dit_weights = HyNomasGeneration::DiTWeights::BF16
+steps = HyNomasGeneration::DEFAULT_STEPS
 plan_only = false
 OptionParser.parse do |p|
   p.banner = "Bounded native Hy-Nomas preview: 120 frames, 512x288, 24 fps"
@@ -14,8 +15,10 @@ OptionParser.parse do |p|
   p.on("--output-dir PATH", "Existing empty result directory") { |v| output_dir = v }
   p.on("--budget-mib N", "Aggregate named buffers per phase, including shared latent") { |v| budget_mib = v.to_i64 }
   p.on("--dit-weights MODE", "bf16 (default control) or q4-k (experimental); PixelUMM stays BF16") { |v| dit_weights = HyNomasGeneration.parse_dit_weights(v) }
+  p.on("--steps N", "DiT Euler denoising steps (1..8; default 8)") { |v| steps = v.to_i32 }
   p.on("--plan-only", "CPU-only metadata and memory admission") { plan_only = true }
 end
+steps = HyNomasGeneration.validate_steps!(steps)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
 unless (16_384..24_576).includes?(budget_mib)
   raise ArgumentError.new("named budget must be within 16..24 GiB; use the external 10% memory guard")
@@ -27,10 +30,10 @@ admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGenerati
 q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index.caches.sum(&.payload_bytes)
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget)
 dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
-  HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs)
+  HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs, steps)
 raise ArgumentError.new("DiT named aggregate exceeds budget") if dit_named > budget
 preflight_seconds = (Time.monotonic - request_start).total_seconds
-HyNomasGeneration.emit("memory_plan", dit_weights: HyNomasGeneration.dit_weights_name(dit_weights), dit_named_bytes: dit_named,
+HyNomasGeneration.emit("memory_plan", dit_weights: HyNomasGeneration.dit_weights_name(dit_weights), steps: steps, dit_named_bytes: dit_named,
   decoder_named_bytes: metadata.named_bytes, named_budget_bytes: budget,
   preflight_seconds: preflight_seconds,
   phase_handoff: "one drained chain, latent retained on GPU, weights released before next phase")
@@ -57,7 +60,7 @@ metrics = {} of String => Int64
 start = Time.monotonic
 begin
   setup = Time.monotonic
-  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights, admission: admission)
+  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights, steps: steps, admission: admission)
   raise "DiT preflight and allocation admission disagree" unless dit.named_bytes == dit_named
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -115,7 +118,7 @@ begin
              dit_quantization_experimental: dit_weights == HyNomasGeneration::DiTWeights::Q4K,
              precision: dit_weights == HyNomasGeneration::DiTWeights::BF16 ? "BF16 weights and boundary rounding, F32 native arithmetic/MPS accumulation" : "Q4_K DiT block weights decoded on GPU into one reusable BF16 stage; BF16 DiT globals, PixelUMM and Euler boundary rounding; F32 native arithmetic/MPS accumulation",
              dit_weight_index_sha256: HyNomasGeneration::INDEX_SHA, decoder_weight_cache_sha256: HyNomasGeneration::PIXEL_CACHE_SHA,
-             seed: 42, frames: 120, width: 512, height: 288, fps: 24, steps: 8, shift: 5, cfg: 1,
+             seed: 42, frames: 120, width: 512, height: 288, fps: 24, steps: steps, shift: 5, cfg: 1,
              camera_conditioning: false, action_conditioning: false,
              pixelumm: {steps: 1, window_latents: 10, overlap_latents: 5, starts: [0, 5, 10, 15, 20]},
              handoffs: "GPU latent retained across one explicit drained weight-phase boundary",

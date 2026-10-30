@@ -6,6 +6,41 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-STEPS-2-4-6-8-2026-10-30] Matched BF16 previews expose a poor two-step sample, not the cause of all artifacts
+
+- VERIFIED bounded 512x288/24fps five-second 2/4/6/8 DiT-step generation with
+  identical authenticated inputs, seed42, saved Qwen state26, decoder noise,
+  shift5/CFG1 and one-step PixelUMM. Eight-step pixels and MP4 reproduce the
+  preceding BF16 preview byte-for-byte. Full upstream video parity is open.
+- New --steps defaults8; this measured build admits1..8 before Metal. A
+  fail-before six-step test found direct rational division differs from
+  upstream CPU torch.linspace. The corrected two-ended F32 schedule matches
+  fresh pinned-source MPS sigma/dt/timestep and every BF16 Euler state exactly
+  for all four counts at unchanged2e-5. Legacy v1 fixture still passes.
+- Guarded seconds are150.543/153.912/155.626/156.632 for2/4/6/8, approximately
+  30..31.3s per video second. Order8/2/4/6, one sample/count and decoder
+  drift73.980..89.889s prohibit a causal speedup claim. MP4 export and live
+  text encoding are excluded; no longer-video throughput claim.
+- Six sampled stills/count show severe two-step smearing, clearer four-step
+  detail and sharper six/eight-step output with persistent geometry/people/
+  lettering artifacts. No motion, monotonic-quality or root-cause conclusion.
+  Two is outside upstream's documented distilled4/6/8 quality settings.
+- All guards pass10% reserve/23GiB cap/64MiB swap-growth stop/900s timeout:
+  sampled peak19.874432GiB, minimum cache-aware headroom17.087662GiB, swap0.
+  One terminal wait per phase; tracked encode allocations/readbacks/early
+  waits0. Opaque MPS resources and terminal export remain outside counters.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-step-comparison-20261030;
+  summary.json, build-identity.json, oracles, guards, videos and contact sheets.
+  Parent9c6d4271. DoD: release builds,13 focused CPU examples, four fresh GPU
+  Euler fixtures plus legacy control, negative CLI/oracle cases and four
+  guarded120-frame exports pass. Same-lineage Mini-Quad ROBUST within scope.
+  Return docs/hy-nomas-generation-frontier.md, matched-preview section.
+  Next: user-authorized8/16/24/32 extension; preserve default8 and qualify
+  wider scheduler/loader bounds before generation. Artifact localization
+  requires fixed generated latent/noise through upstream/native raw decoder.
+  Refresh on source/input/artifact/geometry/precision/backend/device/toolchain
+  or guard changes; timings also decay with load, cache and launch order.
+
 ### [LM-HY-NOMAS-PIXELUMM-B2-PHASES-2026-10-29] B2 moves host API waiting without a qualified full-forward speedup
 
 - VERIFIED bounded full-J J21120, 36-block plus global-head diagnostic: two

@@ -42,8 +42,18 @@ module ML::Video
         raise ArgumentError.new("Hy-Nomas Euler shift must be finite and positive")
       end
 
-      sigmas = Array(Float32).new(steps + 1) do |index|
-        timestep_fraction = (steps - index).to_f32 / steps.to_f32
+      # The pinned solver builds torch.linspace(1, 0, steps + 1) on CPU.
+      # Match its F32 step and two-ended indexing before applying the shift;
+      # direct rational division changes six-step timesteps by one ULP.
+      points = steps + 1
+      linspace_step = -1.0_f32 / steps.to_f32
+      halfway = points // 2
+      sigmas = Array(Float32).new(points) do |index|
+        timestep_fraction = if index < halfway
+                              1.0_f32 + linspace_step * index.to_f32
+                            else
+                              0.0_f32 - linspace_step * (points - index - 1).to_f32
+                            end
         if shift == 1.0_f32
           timestep_fraction
         else

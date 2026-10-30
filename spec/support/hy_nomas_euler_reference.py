@@ -67,7 +67,9 @@ def raw_inputs(count: int) -> tuple[list[float], list[float]]:
     return initial, velocity
 
 
-def produce(count: int, solver_path: Path, output: Path) -> dict[str, object]:
+def produce(count: int, solver_path: Path, output: Path, steps: int = 8) -> dict[str, object]:
+    if type(steps) is not int or not 1 <= steps <= 8:
+        raise ValueError("steps must be an integer in 1..8")
     if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
         raise RuntimeError("the independent Euler fixture requires an available PyTorch MPS device")
     if not hasattr(torch, "bfloat16"):
@@ -83,11 +85,12 @@ def produce(count: int, solver_path: Path, output: Path) -> dict[str, object]:
 
     EulerSolver = import_euler_solver(solver_path)
     scheduler = EulerSolver(num_train_timesteps=1000, shift=5.0, reverse=True, solver="euler")
-    scheduler.set_timesteps(8, device=device)
+    scheduler.set_timesteps(steps, device=device)
     timesteps = scheduler.timesteps.float()
-    if len(timesteps) != 8:
+    if len(timesteps) != steps:
         raise RuntimeError("pinned EulerSolver produced an unexpected timestep count")
 
+    step_latents = []
     for timestep in scheduler.timesteps:
         sample = scheduler.step(
             model_output=model_output,
@@ -95,28 +98,37 @@ def produce(count: int, solver_path: Path, output: Path) -> dict[str, object]:
             sample=sample,
             return_dict=False,
         )[0].to(torch.bfloat16)
-    expected_final = sample.float()
+        step_latents.append(sample.float())
 
     # Export the boundary state, schedule and final state in one terminal MPS
     # transfer. All slicing and JSON conversion happens on the host afterward.
-    packed_oracle = torch.cat((initial_boundary.reshape(-1), timesteps.reshape(-1), expected_final.reshape(-1)))
+    sigmas = scheduler.sigmas[:-1].to(device=device, dtype=torch.float32)
+    dts = (scheduler.sigmas[1:] - scheduler.sigmas[:-1]).to(device=device, dtype=torch.float32)
+    packed_oracle = torch.cat((initial_boundary.reshape(-1), sigmas, timesteps, dts,
+                              *(state.reshape(-1) for state in step_latents)))
     packed_host = packed_oracle.detach().cpu().tolist()
     initial_boundary_values = packed_host[:count]
-    timestep_values = packed_host[count:count + 8]
-    expected_final_values = packed_host[count + 8:]
+    sigma_values = packed_host[count:count + steps]
+    timestep_values = packed_host[count + steps:count + 2 * steps]
+    dt_values = packed_host[count + 2 * steps:count + 3 * steps]
+    step_latent_values = packed_host[count + 3 * steps:]
+    expected_final_values = step_latent_values[-count:]
 
     document = {
-        "schema": "cogni_ml.hy_nomas_euler_probe_fixture/v1",
+        "schema": "cogni_ml.hy_nomas_euler_probe_fixture/v2",
         "upstream_revision": UPSTREAM_REVISION,
         "oracle": {"path": SOLVER_RELATIVE_PATH.as_posix(), "sha256": SOLVER_SHA256},
-        "steps": 8,
+        "steps": steps,
         "shift": 5.0,
         "num_train_timesteps": 1000,
         "target_dtype": "bfloat16",
         "initial_latent_f32": raw_initial,
         "expected_initial_latent_bf16_f32": initial_boundary_values,
         "velocity_f32": raw_velocity,
+        "expected_sigmas_f32": sigma_values,
         "expected_timesteps_f32": timestep_values,
+        "expected_dts_f32": dt_values,
+        "expected_step_latents_f32": step_latent_values,
         "expected_final_latent_f32": expected_final_values,
     }
     raw = (json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
@@ -148,7 +160,7 @@ def produce(count: int, solver_path: Path, output: Path) -> dict[str, object]:
         "upstream_solver_sha256": SOLVER_SHA256,
         "device": "mps",
         "element_count": count,
-        "steps": 8,
+        "steps": steps,
         "shift": 5.0,
     }
 
@@ -157,9 +169,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--elements", type=int, choices=(32, 256), default=32)
+    parser.add_argument("--steps", type=int, choices=range(1, 9), default=8)
     args = parser.parse_args()
     solver_path, _ = source_identity()
-    print(json.dumps(produce(args.elements, solver_path, args.output), sort_keys=True))
+    print(json.dumps(produce(args.elements, solver_path, args.output, args.steps), sort_keys=True))
 
 
 if __name__ == "__main__":

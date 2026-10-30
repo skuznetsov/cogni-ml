@@ -12,8 +12,9 @@ require "../../src/ml/video/pixelumm_decoder_head_mps"
 # PixelUMM use separate drained chains so their weights need not coexist.
 module HyNomasGeneration
   extend self
-  GIB    = 1024_i64**3
-  CONFIG = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 4320,
+  GIB           = 1024_i64**3
+  DEFAULT_STEPS = ML::Video::HyNomasEulerPlan::MAX_STEPS
+  CONFIG        = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 4320,
     text_tokens: 1280, dim: 2048, heads: 16, head_dim: 128, ffn_dim: 8192)
   MASK            = Array(Int32).new(1280) { |i| i < 23 ? 1 : 0 }
   INDEX           = "/opt/mldata_ssd/cogni-ml/hy-nomas-q4-dit-20261025/weights/q4-cache-v2/index.json"
@@ -46,6 +47,17 @@ module HyNomasGeneration
 
   def dit_weights_name(mode : DiTWeights) : String
     mode == DiTWeights::BF16 ? "bf16" : "q4-k"
+  end
+
+  def validate_steps!(steps : Int32) : Int32
+    unless (1..ML::Video::HyNomasEulerPlan::MAX_STEPS).includes?(steps)
+      raise ArgumentError.new("Hy-Nomas preview steps must be between 1 and #{ML::Video::HyNomasEulerPlan::MAX_STEPS}")
+    end
+    steps
+  end
+
+  def euler_schedule_bytes(steps : Int32 = DEFAULT_STEPS) : Int64
+    validate_steps!(steps).to_i64 * 2 * sizeof(Float32)
   end
 
   # Both loaders keep the same fixed BF16 block stage. Only the all-block
@@ -172,11 +184,11 @@ module HyNomasGeneration
       (2048 + 2 * v * 2048 + 4096 + 2 * v * 32 + 2_i64 * 2048 * 2048)) * 4
   end
 
-  def dit_reserve_bytes(inputs : Inputs) : Int64
+  def dit_reserve_bytes(inputs : Inputs, steps : Int32 = DEFAULT_STEPS) : Int64
     globals = HyNomasQ4DiTIO::GLOBAL_BINDINGS.sum { |b| b.shape.reduce(1_i64) { |n, d| n * d } * 2 }
     globals + inputs.bytes(%w(input.latent input.qwen_bf16 input.rope_cos input.rope_sin)) +
       boundary_bytes + dit_scratch_bytes +
-      ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total + 8_i64 * 2 * 4
+      ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total + euler_schedule_bytes(steps)
   end
 
   def stem_bindings : Array(ML::Video::WeightBinding)
@@ -235,7 +247,9 @@ module HyNomasGeneration
 
     def initialize(inputs : Inputs, @latent : ML::MetalBuffer, budget : Int64,
                    mode : DiTWeights = DiTWeights::BF16, *,
+                   steps : Int32 = DEFAULT_STEPS,
                    admission : ML::Video::HyNomasQ4StackIndex::Admission? = nil)
+      steps = HyNomasGeneration.validate_steps!(steps)
       # Every authenticated file and the exact aggregate are admitted first.
       index_path = File.realpath(INDEX)
       index = if mode == DiTWeights::BF16
@@ -257,11 +271,11 @@ module HyNomasGeneration
       @loader = if mode == DiTWeights::BF16
                   ML::Video::HyNomasBF16Stack.new(index.as(ML::Video::HyNomasQ4StackIndex::Admission), INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
-                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: 8)
                 else
                   ML::Video::HyNomasQ4Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
-                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs), max_forwards_per_chain: 8)
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: 8)
                 end
       @named_bytes = @loader.admitted_bytes
       @inputs_arena = ML::Video::Arena.new
@@ -285,7 +299,7 @@ module HyNomasGeneration
         attention_heads_per_group: 16, valid_text_tokens: 23, allow_shared_modulation: true,
         full_dit: true, weight_loader: @loader, compact_valid_text: true, compact_text_tokens: 64)
       @final = ML::Video::HyNomasFinalMPSPlan.new(@serial.blocks.last.image_output, @refiner.vec, 4320, @globals)
-      @euler = ML::Video::HyNomasEulerPlan.new(@latent, @final.output, @refiner.checkpoints["timestep"], steps: 8, shift: 5_f32)
+      @euler = ML::Video::HyNomasEulerPlan.new(@latent, @final.output, @refiner.checkpoints["timestep"], steps: steps, shift: 5_f32)
       actual = @loader.cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes +
                @inputs_arena.resident_bytes + @latent.size + @patch.resident_bytes + @refiner.resident_bytes +
                @serial.resident_bytes + @final.resident_bytes + @euler.resident_bytes
@@ -297,7 +311,7 @@ module HyNomasGeneration
       raise ArgumentError.new("DiT request is single-use") if @released || @chain
       @chain = chain
       @prepared.encode(chain.encoder)
-      8.times do |step|
+      @euler.step_count.times do |step|
         @euler.encode_timestep(chain, step)
         @patch.encode(chain)
         @refiner.encode(chain)

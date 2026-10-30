@@ -1,5 +1,72 @@
 # Hy-Nomas first native video frontier
 
+## Matched BF16 2/4/6/8-step previews (2026-10-30)
+
+The four authorized five-second previews completed at 512x288, 24 fps with
+identical authenticated input bytes, seed 42, saved Qwen state-26 conditioning,
+decoder noise, shift 5 and CFG 1. Each starts from the original latent with
+its own complete Euler schedule. Only the DiT step count changes; PixelUMM
+keeps one step and the same five overlapping windows. The eight-step raw
+pixels and MP4 are byte-identical to the previous BF16 preview.
+
+| DiT steps | DiT wall, s | Decoder wall, s | Guarded generator, s | Seconds per video second |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 12.755 | 89.889 | 150.543 | 30.109 |
+| 4 | 25.037 | 81.802 | 153.912 | 30.782 |
+| 6 | 32.121 | 73.980 | 155.626 | 31.125 |
+| 8 | 35.797 | 74.166 | 156.632 | 31.326 |
+
+These are single samples in launch order 8/2/4/6, with uncontrolled file and
+Metal caches and substantial decoder drift. Guarded elapsed includes input
+authentication, weight setup, inference and raw export; MP4 encoding and live
+Qwen text encoding are excluded. This is a quality experiment with descriptive
+timings, not a causal whole-request speed comparison or a longer-video bound.
+
+Both contact sheets were visually inspected at frames 0/24/48/72/96/119. Two
+steps produce strong smearing and repeated edges. Four gives much clearer
+tram/building detail. Six and eight are sharper but retain distorted people,
+invented lettering and irregular geometry. Changing the schedule also changes
+framing and content, so sharpness alone cannot rank fidelity. These sampled
+stills do not establish motion smoothness or monotonic quality improvement.
+Upstream documents distilled 4/6/8; two is an experimental quality setting.
+
+The new `--steps N` defaults to eight and, in this measured build, admits 1..8
+before Metal setup. A failing six-step regression exposed a one-ULP difference
+from upstream CPU `torch.linspace`: direct rational division changed a model
+timestep beyond the unchanged 2e-5 tolerance. Matching its F32 step and
+two-ended indexing fixes this. Fresh pinned-source MPS Euler fixtures for
+2/4/6/8 match CPU sigma/dt/timestep, GPU timestep, initial BF16 boundary and
+every updated latent exactly. This qualifies the solver and tested BF16
+boundaries, not full native-versus-upstream neural-video parity, which remains
+false in each receipt. Legacy eight-step fixtures still pass.
+
+All four guards finish normally: 1,187 samples, 19.874432 GiB sampled peak,
+17.087662 GiB minimum cache-aware headroom and zero sampled swap growth. The
+23 GiB process cap, 10% reserve, 64 MiB swap-growth stop and 900-second timeout
+remain. Every request retains one terminal wait per weight phase and zero
+instrumented encode allocations, readbacks or preterminal waits. These
+counters exclude opaque MPS resources and terminal pixel-file export; sampled
+memory is not a bound on between-poll peaks. All 120 frames per arm are finite
+and nonconstant; that is an integrity check, not a quality score.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-step-comparison-20261030` contains
+`summary.json`, per-arm commands/receipts/guards/MP4s, the synchronized
+`comparison-2-4-6-8.mp4`, two contact sheets, `build-identity.json`, upstream
+Euler fixtures/logs and CLI/oracle negative controls. Parent source is
+`9c6d4271`; the measured source and binary hashes identify this experiment.
+DoD: release builds, 13 focused Crystal examples, four fresh GPU Euler
+fixtures plus the legacy control, early malformed-input rejections, four
+guarded generations and 120-frame MP4 probes pass. Same-lineage Mini-Quad is
+ROBUST for these bounded observations; the cause of remaining artifacts is
+unresolved. Refresh on scoped source, input, artifact, precision, geometry,
+backend, device or toolchain changes; timing also decays with load/cache/order.
+
+The next artifact discriminator is to hold one generated DiT latent and its
+decoder noise fixed and compare native/upstream one-step PixelUMM merged raw
+pixels before display conversion and MP4 export. It does not require another
+DiT run. The user subsequently requested 8/16/24/32; larger schedules require
+fresh admission and upstream checks and do not promote a quality default.
+
 ## Aligned release/GC preserves parity but leaves variable diagnostic-placement effects (2026-10-29)
 
 The opt-in lifecycle follow-up completed both 36-block-plus-head schedules at
@@ -1226,6 +1293,42 @@ remains selected. The historical preview boundary below is not a new generation
 launch request.
 
 ## Preview scope and admitted composition
+
+### Matched denoising-step comparison (2026-10-30)
+
+The user authorized four five-second BF16-rounded previews at 2/4/6/8 DiT
+Euler steps, replacing the previous no-generation boundary for this bounded
+experiment. Reuse the authenticated first-video input manifest (seed 42,
+yellow-tram prompt), initial latent bytes, saved Qwen state-26 conditioning,
+decoder noise, shift 5, CFG 1 and output geometry. Each arm starts from the
+original latent with its own complete N-step schedule; an eight-step trajectory
+prefix is not an N-step sample. PixelUMM remains the same one-step decoder in
+all arms. Upstream documents the distilled DiT for 4/6/8 steps; two steps are
+an experimental extrapolation, not a supported quality setting.
+
+The existing eight-step BF16 preview already has visible artifacts. This
+comparison tests sensitivity to DiT step count, not a presumption that fewer
+steps caused them. Decoder limitations, native/upstream composition differences
+and model quality remain competing explanations. Full upstream neural-video
+parity is still unqualified.
+
+The implementation keeps eight as the default and admits only 1..8 steps
+before model setup. Its strongest failure mode is using a stale hardcoded
+schedule/count or a different starting latent while labeling the result as a
+matched comparison. Guard count-dependent admission, receipt and loop length;
+verify every requested schedule and BF16 Euler boundary against the pinned
+upstream solver before loading weights. In particular, six steps exercise
+non-binary fractions not covered by the prior eight-step oracle.
+
+DoD: bounded CPU admission/schedule regressions; `hy_nomas_euler_probe` against
+fresh pinned-source MPS fixtures for all four counts; four successful serial
+`hy_nomas_generate --dit-weights bf16 --steps N` requests with the same input
+SHA; identical export settings, 120 finite nonconstant frames per arm and a
+synchronized comparison artifact. Keep the 10% cache-aware reserve, 23 GiB
+process cap, 64 MiB swap-growth stop and 900-second per-request timeout. Keep
+the existing DiT and decoder terminal waits without additional encode-time
+readbacks, waits or named-buffer allocations. Rollback is the default
+eight-step invocation; no precision or production tuning policy changes.
 
 The user authorized a real five-second preview before further kernel tuning.
 The first bounded target is one first segment, 120 frames at 24 fps,
