@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-STEPS-64-96-128-2026-10-30] Longer BF16 schedules qualify numerically without a uniform sampled detail gain
+
+- VERIFIED bounded five-second512x288/24fps previews at64/96/128, matching
+  saved32 prompt/seed42/inputs/conditioning/noise/shift5/CFG1 and one-step
+  PixelUMM. Saved32 is authenticated, not rerun. Larger counts exceed the
+  distilled checkpoint's documented4/6/8; default8 and Q4 cap8 remain.
+- BF16 scheduler/shared cursor admit1..128, reject0/129 before Metal or chain
+  append. Fresh96-step qualification found a real first-half CPU linspace
+  contraction mismatch: sigma26/29 one ULP, timestep26 error6.1035156e-5.
+  Math.fma fixes it with an exact fail-before regression; tolerances stay2e-5.
+  Five native GPU Euler controls at8/32/64/96/128 match every intermediate
+  exactly. CPU fmaf family coverage1..128 is a separate candidate check.
+- Guarded seconds425.846/746.990/889.429, or85.169/149.398/177.886 per video
+  second. One fresh process/count, ascending order, uncontrolled caches/load
+  and decoder drift; descriptive only. Saved32 timing is another cohort.
+- Six sampled stills/count show no uniform64/96/128 improvement over32;
+  warped windows/people/lettering persist, with no clear continuous rail pair
+  in visible sampled street portions. Foreground is often occluded. Motion,
+  collision behavior and full upstream neural-video parity remain open.
+- All guards pass10% reserve/23GiB cap/64MiB swap-growth stop/1800s timeout:
+  3,950 samples,20.331006GiB sampled peak,16.498596GiB minimum cache-aware
+  headroom, swap growth0. One terminal wait/phase, tracked encode allocations/
+  reads/early waits0. Root counts are observational metadata, not a work-count
+  invariant; sampled memory does not bound between-poll peaks.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-steps-64-96-128-20261030:
+  summary/final-check, viewing/timing notes, receipts, guards, media and fresh
+  fixtures. Parentcccc3c87;107-file index plus four reused32 references SHA256
+  c844c6430c7d4ae6f01f5c2df04ccaf55742a457806c0e6b22214e5b02cf64f4.
+  Release builds,32 focused CPU examples, nine compiled negative cases, five
+  GPU controls, three guarded exports, final validator and format checks pass.
+  Same-lineage Mini-Quad ROBUST within scope; no independent replication.
+  Return docs/hy-nomas-generation-frontier.md, extended-preview section.
+  Next artifact falsifier: fixed generated latent/noise through upstream/native
+  raw PixelUMM. Per-step BF16 lost updates are a separate unmeasured hypothesis;
+  compact GPU counters read after the existing wait would discriminate it.
+  Refresh on scoped source/input/artifact/geometry/precision/backend/device/
+  toolchain/guard changes; timing also decays with load/cache/order/thermal state.
+
 ### [LM-HY-NOMAS-STEPS-8-16-24-32-2026-10-30] Longer BF16 schedules complete without a clear 32-over-24 quality win
 
 - VERIFIED bounded five-second512x288/24fps previews at8/16/24/32, fixed

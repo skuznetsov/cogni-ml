@@ -4,7 +4,7 @@ require "../src/ml/video/hy_nomas_euler"
 describe ML::Video::HyNomasEulerPlan do
   it "preserves eight as the default while admitting bounded longer schedules" do
     ML::Video::HyNomasEulerPlan.schedule.size.should eq(8)
-    [16, 24, 32].each do |steps|
+    [16, 24, 32, 64, 96, 128].each do |steps|
       schedule = ML::Video::HyNomasEulerPlan.schedule(steps, 5.0_f32)
       schedule.size.should eq(steps)
       schedule.first.sigma.should eq(1.0_f32)
@@ -49,7 +49,7 @@ describe ML::Video::HyNomasEulerPlan do
     ])
   end
 
-  it "matches pinned upstream F32 anchors for sixteen, twenty-four and thirty-two steps" do
+  it "matches pinned upstream F32 anchors for longer experimental schedules" do
     # CPU torch.linspace followed by the pinned solver's shift and differences.
     expected = {
       16 => {
@@ -67,6 +67,21 @@ describe ML::Video::HyNomasEulerPlan do
         [0x447a0000_u32, 0x44505555_u32, 0x430ae38f_u32],
         [0xbbd20d00_u32, 0xbc9467e0_u32, 0xbe0e38e4_u32],
       },
+      64 => {
+        [0x3f800000_u32, 0x3f555555_u32, 0x3d969697_u32],
+        [0x447a0000_u32, 0x44505555_u32, 0x42930f0f_u32],
+        [0xbb4f6400_u32, 0xbc113f80_u32, 0xbd969697_u32],
+      },
+      96 => {
+        [0x3f800000_u32, 0x3f555555_u32, 0x3d4cccce_u32],
+        [0x447a0000_u32, 0x44505555_u32, 0x42480001_u32],
+        [0xbb09ae00_u32, 0xbbc04d00_u32, 0xbd4cccce_u32],
+      },
+      128 => {
+        [0x3f800000_u32, 0x3f555555_u32, 0x3d1b26ca_u32],
+        [0x447a0000_u32, 0x44505555_u32, 0x421783e1_u32],
+        [0xbace1600_u32, 0xbb8fb800_u32, 0xbd1b26ca_u32],
+      },
     }
     expected.each do |steps, bits|
       schedule = ML::Video::HyNomasEulerPlan.schedule(steps, 5.0_f32)
@@ -75,6 +90,20 @@ describe ML::Video::HyNomasEulerPlan do
       anchors.map { |s| s.timestep.unsafe_as(UInt32) }.should eq(bits[1])
       anchors.map { |s| s.dt.unsafe_as(UInt32) }.should eq(bits[2])
     end
+  end
+
+  it "matches pinned 96-step F32 anchors around CPU linspace FMA positions" do
+    schedule = ML::Video::HyNomasEulerPlan.schedule(96, 5.0_f32)
+
+    [26, 29].map { |index| schedule[index].sigma.unsafe_as(UInt32) }.should eq([
+      0x3f6e4c42_u32, 0x3f6b9aba_u32,
+    ])
+    [26, 29].map { |index| schedule[index].timestep.unsafe_as(UInt32) }.should eq([
+      0x4468b678_u32, 0x4466151a_u32,
+    ])
+    [25, 26, 28, 29].map { |index| schedule[index].dt.unsafe_as(UInt32) }.should eq([
+      0xbb5c2900_u32, 0xbb60e700_u32, 0xbb6ad600_u32, 0xbb700f00_u32,
+    ])
   end
 
   it "matches both ends of the upstream F32 linspace for six steps" do
@@ -109,11 +138,11 @@ describe ML::Video::HyNomasEulerPlan do
   end
 
   it "rejects unsupported step counts and invalid shifts before Metal setup" do
-    expect_raises(ArgumentError, /between 1 and 32/) do
+    expect_raises(ArgumentError, /between 1 and 128/) do
       ML::Video::HyNomasEulerPlan.schedule(0, 5.0_f32)
     end
-    expect_raises(ArgumentError, /between 1 and 32/) do
-      ML::Video::HyNomasEulerPlan.schedule(33, 5.0_f32)
+    expect_raises(ArgumentError, /between 1 and 128/) do
+      ML::Video::HyNomasEulerPlan.schedule(129, 5.0_f32)
     end
     expect_raises(ArgumentError, /finite and positive/) do
       ML::Video::HyNomasEulerPlan.schedule(8, 0.0_f32)

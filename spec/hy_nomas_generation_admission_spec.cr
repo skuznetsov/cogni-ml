@@ -25,14 +25,14 @@ describe "preview Euler step admission" do
   it "keeps eight steps as the default and accepts the supported endpoints" do
     HyNomasGeneration::DEFAULT_STEPS.should eq(8)
     HyNomasGeneration.validate_steps!(1).should eq(1)
-    [8, 16, 24, 32].each do |steps|
+    [8, 16, 24, 32, 64, 96, 128].each do |steps|
       HyNomasGeneration.validate_steps!(steps).should eq(steps)
     end
   end
 
   it "rejects step counts outside the scheduler range before allocation" do
-    [0, 33].each do |steps|
-      expect_raises(ArgumentError, /between 1 and 32/) do
+    [0, 129].each do |steps|
+      expect_raises(ArgumentError, /between 1 and 128/) do
         HyNomasGeneration.validate_steps!(steps)
       end
     end
@@ -40,8 +40,10 @@ describe "preview Euler step admission" do
 
   it "keeps the unqualified Q4 path limited to eight steps" do
     HyNomasGeneration.validate_steps!(8, HyNomasGeneration::DiTWeights::Q4K).should eq(8)
-    expect_raises(ArgumentError, /Q4.*eight/) do
-      HyNomasGeneration.validate_steps!(16, HyNomasGeneration::DiTWeights::Q4K)
+    [16, 64, 96, 128].each do |steps|
+      expect_raises(ArgumentError, /Q4.*eight/) do
+        HyNomasGeneration.validate_steps!(steps, HyNomasGeneration::DiTWeights::Q4K)
+      end
     end
   end
 
@@ -49,8 +51,9 @@ describe "preview Euler step admission" do
     HyNomasGeneration.euler_schedule_bytes(2).should eq(16_i64)
     HyNomasGeneration.euler_schedule_bytes(8).should eq(64_i64)
     HyNomasGeneration.euler_schedule_bytes(32).should eq(256_i64)
-    expect_raises(ArgumentError, /between 1 and 32/) do
-      HyNomasGeneration.euler_schedule_bytes(33)
+    HyNomasGeneration.euler_schedule_bytes(128).should eq(1024_i64)
+    expect_raises(ArgumentError, /between 1 and 128/) do
+      HyNomasGeneration.euler_schedule_bytes(129)
     end
   end
 end

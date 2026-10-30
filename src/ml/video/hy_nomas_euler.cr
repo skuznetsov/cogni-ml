@@ -7,8 +7,8 @@ require "./metal_mps_command_chain"
 
 module ML::Video
   class HyNomasEulerPlan
-    DEFAULT_STEPS =  8
-    MAX_STEPS     = 32
+    DEFAULT_STEPS =   8
+    MAX_STEPS     = 128
 
     record Step, sigma : Float32, timestep : Float32, dt : Float32
 
@@ -51,7 +51,8 @@ module ML::Video
       halfway = points // 2
       sigmas = Array(Float32).new(points) do |index|
         timestep_fraction = if index < halfway
-                              1.0_f32 + linspace_step * index.to_f32
+                              # Match the pinned CPU linspace contraction; separate F32 rounding drifts at 96 steps.
+                              Math.fma(linspace_step, index.to_f32, 1.0_f32)
                             else
                               0.0_f32 - linspace_step * (points - index - 1).to_f32
                             end

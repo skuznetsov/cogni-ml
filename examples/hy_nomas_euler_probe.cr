@@ -93,7 +93,7 @@ module HyNomasEulerGPUProbe
     unless (1..ML::Video::HyNomasEulerPlan::MAX_STEPS).includes?(steps) && (v2 || steps == 8) && document["shift"].as_f == 5.0 &&
            document["num_train_timesteps"].as_i == 1000 &&
            document["target_dtype"].as_s == "bfloat16"
-      raise ArgumentError.new("Euler fixture must describe 1..32 steps, shift 5, 1000 train steps, BF16 target; v1 requires eight steps")
+      raise ArgumentError.new("Euler fixture must describe 1..128 steps, shift 5, 1000 train steps, BF16 target; v1 requires eight steps")
     end
 
     latent = float_array(document, "initial_latent_f32")

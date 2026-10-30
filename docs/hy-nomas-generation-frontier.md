@@ -1,5 +1,108 @@
 # Hy-Nomas first native video frontier
 
+## Matched BF16 64/96/128-step previews (2026-10-30)
+
+All three requested five-second previews completed at 512x288, 24 fps with
+the same authenticated prompt, seed42, initial latent, saved Qwen state26,
+decoder noise, BF16 path, shift5, CFG1 and one-step PixelUMM. The saved32
+control is authenticated and reused, not rerun. The user previously reported
+more detail at24/32, an apparent approach to the right-hand building below16
+and weak or absent rails. The prompt was deliberately unchanged and does not
+explicitly request visible rails. Multiples of ten receive no special
+treatment in the generic Euler solver. These larger counts are experimental
+beyond the distilled checkpoint's documented4/6/8 settings.
+
+| DiT steps | DiT wall, s | Decoder wall, s | Guarded generator, s | Seconds per video second |
+| ---: | ---: | ---: | ---: | ---: |
+| 32 (saved control) | 186.651 | 88.432 | 323.692 | 64.738 |
+| 64 | 309.529 | 69.615 | 425.846 | 85.169 |
+| 96 | 621.893 | 75.483 | 746.990 | 149.398 |
+| 128 | 762.612 | 80.512 | 889.429 | 177.886 |
+
+New counts ran serially in ascending order, one fresh process per count,
+without concurrent models or Studio. File/Metal caches, thermal state and
+host load were uncontrolled; guard/metadata inspection continued during the
+runs. Timings include admission, weight setup, inference and raw export,
+excluding MP4 encoding and live text encoding. Saved32 belongs to another
+cohort. Unchanged decoder time also drifts; these are descriptive observations,
+not causal speed ratios, isolated per-step costs or longer-clip estimates.
+An early status-based inference that128 started faster than96 was corrected:
+exact step1-to19 encode intervals are89.979s versus84.752s. Submission markers
+are not per-step GPU completion fences. See timing-analysis.json.
+
+Both contact sheets were inspected at frames0/24/48/72/96/119. Composition,
+tram proportions, signage and window/door shapes change with the schedule.
+Some96/128 edges look sharper than64, but neither consistently preserves all
+details better than saved32. Warped windows, people and invented lettering
+persist. No clear continuous rail pair is established in the sampled visible
+street portions, with much foreground occluded by the tram. This does not
+prove rail absence across all frames, motion quality or collision behavior.
+The synchronized comparison is supplied for full-motion viewing. No default
+promotion or assumption that200 steps will fix geometry follows; keep8.
+
+The BF16 scheduler and shared full-pass cursor now admit1..128. Default8 and
+Q4's separate cap8 remain. Zero/129 are rejected before Metal setup; the
+cursor rejects pass129, ordering violations and reuse without exactly one
+terminal wait on the preceding chain. Schedule storage grows768B from32 to128.
+Full-K math and GPU scratch/handoffs remain. Rollback omits --steps; the
+eight-step default is retained.
+
+Fresh96-step upstream qualification exposed a real F32 schedule discrepancy:
+separate CPU linspace multiplication/addition rounds sigma positions26/29
+one ULP below the pinned source, and timestep26 differs by6.1035156e-5,
+exceeding the existing2e-5 absolute tolerance. Explicit Math.fma in the first
+half of the two-ended linspace reproduces the pinned CPU contraction. The
+new exact regression fails before that change and passes after it. This is
+schedule setup only, with no GPU kernel, arithmetic precision or tolerance
+change. Default8 and saved32 schedules remain exact. A CPU fmaf candidate
+matches the pinned solver at all counts1..128; actual native GPU qualification
+covers8/32/64/96/128, not every count in that interval.
+
+All five fresh MPS Euler controls match sigma, dt, timestep, initial BF16
+rounding and every intermediate updated latent exactly at unchanged2e-5
+absolute tolerance. Generated step events also match upstream timestep/dt
+F32 bits. This qualifies the solver and tested boundaries; full upstream
+neural-video parity remains false in every receipt.
+
+All three guards finish normally and drain their process groups:3,950 samples,
+20.331006GiB sampled peak,16.498596GiB minimum cache-aware headroom and zero
+sampled swap growth. Keep10% reserve,23GiB footprint cap and64MiB swap-growth
+stop. The timeout is1800s per request for this bounded batch, versus900s in
+the preceding experiment. Each request records one terminal wait per weight
+phase and zero instrumented encode allocations/readbacks/early waits. Opaque
+MPS resources and terminal pixel export are outside these counters; sampled
+memory does not bound between-poll peaks. DiT observed roots are65792/98688/
+131584 and decoder roots5601 each, metadata rather than an exact per-step-work
+invariant. All120 frames per arm are finite and nonconstant, integrity checks
+rather than perceptual quality scores.
+
+Evidence root: /opt/mldata_ssd/cogni-ml/hy-nomas-steps-64-96-128-20261030.
+It contains three videos, comparison-32-64-96-128.mp4, two contact sheets,
+viewing-notes.md, summary/final-check.json, build identity, fixtures, receipts,
+guards and retained fail-before evidence. Parentcccc3c87; frozen source/binary
+hashes match after generation. The107-file evidence-index.json plus four
+authenticated saved32 references has SHA256
+c844c6430c7d4ae6f01f5c2df04ccaf55742a457806c0e6b22214e5b02cf64f4.
+DoD passes: release builds,32 focused Crystal examples, nine compiled negative
+cases, five exact GPU Euler controls, three guarded120-frame exports,
+validate_matrix.py and Crystal formatting checks. The one-shot DoD command
+`python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-steps-64-96-128-20261030/validate_matrix.py`
+exited0 and created final-check.json; it refuses to overwrite that evidence.
+Same-lineage Mini-Quad is
+ROBUST for this bounded evidence, not independent replication or a monotonic
+quality claim. Refresh on scoped source/input/artifact, precision, geometry,
+backend, device, toolchain or guard changes; timing also decays with load,
+cache, order and thermal state.
+
+Next artifact falsifier: hold generated DiT latent and decoder noise fixed and
+compare native/upstream one-step PixelUMM merged raw pixels before display
+conversion and MP4. A separate numerical hypothesis is that per-step BF16
+rounding can remove very small updates at large step counts: both native
+Euler and the upstream pipeline round each updated latent. No lost-update
+rate or artifact causality was measured. A test-only compact GPU counter on
+fixed sampled coordinates, read after the existing terminal wait, could
+measure that mechanism without new per-step synchronization.
+
 ## Matched BF16 8/16/24/32-step previews (2026-10-30)
 
 All four requested five-second previews completed at 512x288, 24 fps. They

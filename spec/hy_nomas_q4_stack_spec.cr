@@ -428,6 +428,9 @@ describe ML::Video::HyNomasQ4Stack do
       expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
         fixture.stack(max_forwards_per_chain: 32)
       end
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 8/) do
+        fixture.stack(max_forwards_per_chain: 128)
+      end
       default_stack = fixture.stack
       default_stack.max_forwards_per_chain.should eq(1)
       default_stack.forwards_on_chain.should eq(0)
@@ -472,8 +475,8 @@ describe ML::Video::HyNomasBF16Stack do
     fixture = HyNomasQ4StackSpecFixture.new
     begin
       allocations = ML::MetalBuffer.video_spec_allocations
-      {0, 33}.each do |max_forwards|
-        expect_raises(ArgumentError, /BF16 max_forwards_per_chain must be between 1 and 32/) do
+      {0, 129}.each do |max_forwards|
+        expect_raises(ArgumentError, /BF16 max_forwards_per_chain must be between 1 and 128/) do
           ML::Video::HyNomasBF16Stack.new(
             File.join(fixture.directory, "missing-index.json"),
             fixture.index_sha256, fixture.source_sha256, fixture.config,
@@ -546,11 +549,11 @@ describe ML::Video::HyNomasFullPassCursor do
     cursor.forwards_on_chain.should eq(1)
   end
 
-  it "allows thirty-two complete BF16-style passes on one chain and rejects the thirty-third" do
-    cursor = ML::Video::HyNomasFullPassCursor.new(1,
+  it "allows 128 complete ordered BF16-style passes on one chain and rejects the 129th" do
+    cursor = ML::Video::HyNomasFullPassCursor.new(2,
       ML::Video::HyNomasFullPassCursor::MAX_FORWARDS_PER_CHAIN)
-    32.times { finish_hy_nomas_pass(cursor, 21_u64) }
-    cursor.forwards_on_chain.should eq(32)
+    128.times { finish_hy_nomas_pass(cursor, 21_u64) }
+    cursor.forwards_on_chain.should eq(128)
     expect_raises(ArgumentError, /per-chain forward limit/) do
       cursor.validate_block!(21_u64, 0,
         previous_terminal: false, previous_wait_count: 0)
@@ -560,12 +563,15 @@ describe ML::Video::HyNomasFullPassCursor do
       previous_terminal: true, previous_wait_count: 1)
     cursor.forwards_on_chain.should eq(0)
     cursor.finish_block!(22_u64, 0)
+    cursor.validate_block!(22_u64, 1,
+      previous_terminal: true, previous_wait_count: 1)
+    cursor.finish_block!(22_u64, 1)
     cursor.forwards_on_chain.should eq(1)
   end
 
   it "rejects a cursor forward cap outside the shared range" do
-    {0, 33}.each do |max_forwards|
-      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 32/) do
+    {0, 129}.each do |max_forwards|
+      expect_raises(ArgumentError, /max_forwards_per_chain must be between 1 and 128/) do
         ML::Video::HyNomasFullPassCursor.new(1, max_forwards)
       end
     end

@@ -68,8 +68,8 @@ def raw_inputs(count: int) -> tuple[list[float], list[float]]:
 
 
 def produce(count: int, solver_path: Path, output: Path, steps: int = 8) -> dict[str, object]:
-    if type(steps) is not int or not 1 <= steps <= 32:
-        raise ValueError("steps must be an integer in 1..32")
+    if type(steps) is not int or not 1 <= steps <= 128:
+        raise ValueError("steps must be an integer in 1..128")
     if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
         raise RuntimeError("the independent Euler fixture requires an available PyTorch MPS device")
     if not hasattr(torch, "bfloat16"):
@@ -169,7 +169,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--elements", type=int, choices=(32, 256), default=32)
-    parser.add_argument("--steps", type=int, choices=range(1, 33), default=8)
+    parser.add_argument("--steps", type=int, choices=range(1, 129), default=8)
     args = parser.parse_args()
     solver_path, _ = source_identity()
     print(json.dumps(produce(args.elements, solver_path, args.output, args.steps), sort_keys=True))

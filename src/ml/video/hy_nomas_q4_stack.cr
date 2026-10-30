@@ -271,7 +271,7 @@ module ML::Video
   # Chain state is supplied by the owner so the state machine can be tested
   # without creating a Metal command buffer or submitting GPU work.
   class HyNomasFullPassCursor
-    MAX_FORWARDS_PER_CHAIN = 32
+    MAX_FORWARDS_PER_CHAIN = 128
 
     getter block_count : Int32
     getter max_forwards_per_chain : Int32
