@@ -8,6 +8,39 @@ module PixelUMMWindowBatchProbe
   EXTRA_PANEL_BYTES = 888_i64 * 1024**2
 
   record Pair, first : Int32, second : Int32, queries : Int32, keys : Int32
+  alias PlanGeometry = Tuple(Int32, Int32, Int32, Int32, Int32, Int32,
+                             Int32, Int32, Int32, Float32, Float32, Float32)
+  record PlanContract(T), workspace : T, slot : Int32, geometry : PlanGeometry,
+    workspace_slot_count : Int32, reuse_outputs : Bool,
+    output_bank_count : Int32
+
+  # Shared wrapper storage is valid only for one serial workspace. Keep this
+  # contract CPU-testable so malformed plan sets are rejected before the
+  # native prepare path can allocate or mutate anything.
+  def validate_plan_contracts!(contracts : Array(PlanContract(T))) : Nil forall T
+    unless {1, 36}.includes?(contracts.size)
+      raise ArgumentError.new("window batch requires one or 36 plan contracts")
+    end
+    return if contracts.size == 1
+
+    workspace = contracts.first.workspace
+    unless contracts.all? { |contract| contract.workspace.same?(workspace) }
+      raise ArgumentError.new("36-plan window batch requires the same PixelUMM workspace")
+    end
+    unless contracts.map(&.slot) == (0...36).to_a
+      raise ArgumentError.new("36-plan window batch requires exact serial slot order 0..35")
+    end
+    geometry = contracts.first.geometry
+    unless contracts.all? { |contract| contract.geometry == geometry }
+      raise ArgumentError.new("36-plan window batch requires homogeneous plan geometry")
+    end
+    unless contracts.all? do |contract|
+             contract.workspace_slot_count == 36 && contract.reuse_outputs &&
+             contract.output_bank_count == 2
+           end
+      raise ArgumentError.new("36-plan window batch requires a 36-slot reused-output workspace with two banks")
+    end
+  end
 
   def validate_capture_inventory!(order : Array(String)) : Nil
     unless order == ["attention", "output"]
@@ -85,18 +118,24 @@ module PixelUMMWindowBatchProbe
     end
 
     class Selection
-      getter plans : Array(ML::Video::PixelUMMDecoderBlockMPS::Plan)
       getter selected = false
       getter check_mode = 0
       getter named_bytes = 0_i64
       getter metrics_read_count = 0
+      @plans : Array(ML::Video::PixelUMMDecoderBlockMPS::Plan)
       @wrappers = [] of Pointer(Void)
       @released = false
 
-      def initialize(@plans)
+      def plans : Array(ML::Video::PixelUMMDecoderBlockMPS::Plan)
+        @plans.dup
+      end
+
+      def initialize(plans : Array(ML::Video::PixelUMMDecoderBlockMPS::Plan))
+        @plans = plans.dup
         unless {1, 36}.includes?(@plans.size) && @plans.uniq.size == @plans.size
           raise ArgumentError.new("window batch requires one or 36 distinct serial plans")
         end
+        PixelUMMWindowBatchProbe.validate_plan_contracts!(@plans.map(&.window_batch_contract))
         validate_idle!
         begin
           @plans.each do |plan|
@@ -195,6 +234,17 @@ end
 
 {% unless flag?(:cpu_only) %}
   class ML::Video::PixelUMMDecoderBlockMPS::Plan
+    def window_batch_contract : PixelUMMWindowBatchProbe::PlanContract(ML::Video::PixelUMMDecoderBlockMPS::Workspace)
+      config = @config
+      geometry = {config.temporal, config.height, config.width, config.tile_tokens,
+                  config.model_dim, config.ff_dim, config.query_heads, config.kv_heads,
+                  config.head_dim, config.rms_norm_eps, config.rope_theta_t,
+                  config.rope_theta_hw}
+      workspace = @workspace || raise ArgumentError.new("window batch plan has no workspace")
+      PixelUMMWindowBatchProbe::PlanContract.new(workspace, @slot, geometry,
+        workspace.slot_count, workspace.reuse_outputs, workspace.output_bank_count)
+    end
+
     def with_window_batch_binding(&block : Pointer(Void) -> Nil) : Nil
       validate_shared_gate_up_change!(false)
       @workspace.not_nil!.configure_plan!(@slot) do

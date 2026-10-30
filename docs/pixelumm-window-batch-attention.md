@@ -2,9 +2,34 @@
 
 ## Active frontier
 
-One full-J block passes numerical qualification and two bounded timing cohorts.
-The diagnostic remains opt-in; full36 plus head and production promotion are
-unqualified. No full video generation was run.
+All 36 full-J blocks plus the global head pass both saved-input numerical gates
+in two bounded cohorts, using one shared B2 panel bank and an explicit
+common-Workspace/serial-slot guard. All 516 retained stage comparisons are
+bitwise equal to the saved upstream controls. B2 reduces command count and
+active host-thread CPU time, but neither cohort shows a full-forward speedup.
+The diagnostic remains opt-in; production promotion is unqualified. No full
+video generation is admitted.
+
+The full36 experiment first compares four independently poisoned connected
+requests: both saved inputs in both baseline/B2 modes. It checks all 43 retained
+captures (36 attention outputs, block34/35 outputs and five head stages), with
+the original tolerances and a direct GPU block35-to-head edge. Only passing
+gates admit two warmups followed by same-input ABBA then BAAB timing, without
+CPU tensor diagnostics between timed requests. The last timed output is checked
+before capture reuse. Both orders then run the same untimed candidate tail and
+check its 43 captures, testing reuse after the timed cohort. A reverse process
+flips the preceding mode assignments and warmup order; interpret order-sensitive
+or drifted results separately.
+
+The baseline's unique named storage is 24,108,145,128 bytes. Admission includes
+one shared candidate bank plus 36 per-plan metric buffers: 931,136,064 bytes,
+for an aggregate 25,039,281,192 bytes. This is an explicit allocation inventory,
+not process footprint or a measured incremental RSS delta. The wrapper's live
+named-buffer counter does not include native B2 objects. Opaque MPS resources
+remain covered by the process-tree
+guard: 28.5 GiB cap, 10% cache-aware reserve, 64 MiB swap-growth limit, and a
+bounded timeout. Any numerical/guard/lifetime failure stops timing. Rollback
+omits the new diagnostic executable; inference defaults remain unchanged.
 
 This diagnostic tests whether two independent local attention windows can share
 one MPSGraph batch without changing either window's Q/K extents, ordered key
@@ -42,8 +67,9 @@ different reduction when batch size changes; the following gates decide this.
 5. Only passing connected paths may enter API-profiler-off full-block timing. Use
    ABBA then BAAB in the same resident process, without CPU tensor diagnostics
    between timed requests, and recheck the last candidate's retained captures.
-   Do not infer a speedup from a drifted control. A promising candidate still
-   needs the full36 plus head gate on both saved inputs before promotion.
+   Do not infer a speedup from a drifted control. The full36 plus head gate on
+   both saved inputs is necessary but insufficient for promotion: full-forward
+   timing and memory must also qualify.
 
 All checks use the existing terminal wait once per request. Metrics and saved
 captures are read only after it. No intermediate CPU activation copies, new
@@ -60,8 +86,10 @@ Rollback omits the diagnostic executable; production attention remains intact.
 
 DoD is the CPU geometry/lifetime contract suite, release build, positive-control
 rejection, unchanged raw-QK/PV and connected saved-upstream block gates, then
-guarded paired full-block timing if the numerical gates permit it. A correct diagnostic
-that refutes B2 is a useful result, not permission to widen tolerances.
+guarded paired full-block timing if the numerical gates permit it. Full36 adds
+the common-Workspace/serial-slot negative cases, two-input 43-stage gates,
+connected head, aggregate admission and normal/reverse timing below. A correct
+diagnostic that refutes B2 is a useful result, not permission to widen tolerances.
 
 The oracle is the existing full-J fixture set at upstream revision
 `911cea6458a89c2663513ff7099561ec190dd491`. This is a comparison with saved
@@ -71,7 +99,117 @@ Source, fixture, cache, binary and guard-log digests must accompany any result.
 Changing those inputs or the GPU/backend invalidates the numerical certificate;
 timing additionally decays with host load, pacing and resource-lifetime changes.
 
-## Observed result, 2026-10-29
+## Full36 plus head result, 2026-10-29
+
+Two fresh processes use the same frozen executable, 416-file runtime/build
+source snapshot, BF16 weights, F32 FFN, full-J geometry and saved controls.
+Each completes 15 requests: four independently poisoned both-input/both-mode
+gates, two warmups, eight balanced timed requests and an untimed B2 tail.
+Normal timing is ABBA then BAAB (A=baseline, B=B2); reverse timing is BAAB then
+ABBA, with reversed warmup order. The last timed request and each unpoisoned B2
+tail receive all 43 comparisons. Gates, warmups and tails are excluded from the
+means below; each process contributes four timed samples per path.
+
+| Full 36 blocks + head, encode through terminal wait | Baseline | B2 | B2 time change |
+| --- | ---: | ---: | ---: |
+| Normal process | 68.694039 s | 71.226950 s | +3.687% |
+| Reverse process | 64.175671 s | 64.888191 s | +1.110% |
+
+Command segments fall from 4,579 to 2,779 (-39.310%). Active encode-thread CPU
+time falls from 0.676507 to 0.452379 s normally and 0.482651 to 0.355825 s in
+reverse. This clock measures thread CPU consumption; encode wall time includes
+blocking and scheduling. Mean encode wall time is 67.233813/69.593413 s normally
+and 62.780435/63.496479 s in reverse (baseline/B2). Mean terminal wait is
+1.460220/1.633530 s and 1.395228/1.391706 s respectively. These phases overlap
+GPU work; their partition does not establish the physical cause of waiting.
+
+Timed requests span 49.474 to 87.621 s across the cohorts. The four balanced
+cell contrasts (B2 minus baseline) are +2.523235, +2.542585, +5.780940 and
+-4.355899 s. Thus the pooled means, 66.434855/68.057570 s (+2.443% B2 time),
+are descriptive only. Both process means point against improvement, but the
+drift and sign-changing cell contrasts do not identify a stable causal effect.
+The one-block timing result below does not transfer to this full forward.
+
+All 30 requests pass. Each compared request checks 36 attention outputs,
+block34/35 outputs and five global-head stages: 258 captures per process,
+516 total, finite and bitwise equal (`max_abs=0`, `different_words=0`), at
+unchanged `atol=rtol=2e-5`. The head directly aliases block35's GPU output.
+Every request reports one terminal wait, zero tracked encode allocations,
+zero pre-wait activation reads and zero stage-metric reads. All command roots
+complete without errors. Idle-only selection, poison, comparison and release
+guards reject in-flight use. Full36 does not separately read every raw QK/PV
+intermediate; those isolated controls remain the historical one-block evidence.
+
+Both cache-aware guards finish with status 0, no stop events and zero sampled
+swap growth. Sampled process-group footprint peaks are 27.077502 and
+27.078784 GiB, under the 28.5 GiB cap. Minimum available headroom is 11.363052
+and 10.385696 GiB, above the 6.4 GiB runtime floor (10% of 64 GiB).
+File-backed cache is counted once by the guard. Both paths remain resident;
+these peaks do not measure an isolated incremental B2 footprint. Sampling
+does not exclude between-poll spikes.
+
+Separate phase counters peak at 28,729,363,656 bytes of physical footprint,
+25,372,966,912 bytes RSS and 27,853,766,656 bytes Metal allocation. They overlap
+and must not be summed. Candidate setup increases the overall Metal allocation
+by exactly 888 MiB, matching its shared panels; the 576 bytes of per-plan metrics
+are included in admission but are not independently attributed by the counters.
+After owner release, named live bytes return to zero and physical footprint is
+below 0.56 GiB, while the Metal allocation counter remains higher and differs
+between processes. The cause of that divergence is unresolved; this result
+proves neither a backing-store leak nor complete device deallocation.
+
+Validation passes: release build, 88 CPU examples, four pre-observer binary CLI
+rejections, both guarded GPU cohorts and the offline receipt/source/schedule/
+capture/lifetime analyzer. Correlated Mini-Quad review rates bounded numerical
+correctness and sampled guard containment robust; durable acceleration and an
+isolated incremental B2 footprint remain unqualified. Production defaults are
+unchanged. Rollback omits the diagnostic target.
+
+Observed CPU DoD commands (59 + 29 examples, zero failures):
+
+```sh
+crystal spec -Dcpu_only spec/pixelumm_decoder_probe_spec.cr \
+  spec/pixelumm_two_block_probe_spec.cr spec/pixelumm_memory_probe_spec.cr \
+  spec/pixelumm_head_probe_spec.cr
+crystal spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr \
+  spec/pixelumm_window_batch_probe_spec.cr \
+  spec/pixelumm_decoder_block_admission_spec.cr spec/pixelumm_block_probe_spec.cr
+```
+
+Release target: `make pixelumm_window_batch_full_probe`, with `BUILD_DIR`,
+`TMPDIR` and `CRYSTAL_CACHE_DIR` directed to the external SSD. Each cohort's
+`launch-receipt.json` records the exact authenticated fixture argv and guard
+invocation: 29,184 MiB footprint cap, 64 MiB swap-growth cap, 2,400 s timeout,
+`--memory-accounting file-cache --runtime-floor-pct 10`, and a named-byte budget
+of 25,039,281,192. `completion-receipt.json` pins unchanged source, executable,
+fixtures, report and guard hashes. Replay requires fresh evidence paths and
+fresh memory admission; do not overwrite these cohorts.
+
+Evidence directory:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-full36-20261029`.
+`normal/` and `reverse/` contain the raw reports, guards, receipts, binaries and
+source snapshots. `analyze.py` reproduces `analysis.json` from both cohorts.
+Its parser was corrected for lexical `/opt` paths, the reversed mode schedule
+and 1-based memory-phase sequence; no measured source or raw report changed.
+The measured parent is `6ed52b78837bb97d8393e4179ee21583fde090a5`; numerical
+upstream lineage remains `911cea6458a89c2663513ff7099561ec190dd491`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| 416-file source manifest | `acf3d17968225670ff039f386f0877e383a368377f5919f0f440947da600c029` |
+| Measured executable | `7740281a4bd144150882b7d593554247741b065ac2323970f8b879fbb1e934e6` |
+| Normal report | `ccce65f992080389e89331b00f8fbeaddd43fbcdd0c4a4e5ab34293879200fd0` |
+| Reverse report | `a6993ef7cdeaf6fb1e6470ea5ec6f4b2be9286849c70756aa5d5811a7ca9d96e` |
+| Validated analysis | `f914e3ccb77b08186027ad8735c65410c64252c135bbcfdad58964a27606df80` |
+
+Decision: retain B2 only as a diagnostic. Reducing command count and host CPU
+consumption is insufficient here; use full-forward wall time as the promotion
+gate. Numerical evidence decays on source, input, weight, geometry, precision,
+backend, device or toolchain changes. Timing additionally decays on host load,
+pacing, schedule, diagnostics and resource-lifetime changes. No full video or
+diffusion generation was run or qualified.
+
+## Historical one-block result, 2026-10-29
 
 Two fresh processes retained the same release binary, saved block0 fixture,
 input, weights and graphs. Each completed five qualification requests, two
@@ -118,8 +256,9 @@ the corrected poison path; no synchronization was added.
 
 Validation: release build, 24 CPU examples, production non-diagnostic Objective-C++
 syntax check and three pre-observer CLI rejections. Same-lineage Mini-Quad source
-and evidence reviews support only the bounded qualification above. The 36-plan
-helper additionally needs a common-Workspace identity guard before broader use.
+and evidence reviews support only the bounded one-block qualification. The
+common-Workspace identity guard required at this stage is exercised by the
+full36 experiment above.
 
 Observed CPU DoD command (24 examples, zero failures):
 
@@ -150,8 +289,9 @@ Post-run cleanup removes only two empty EOF lines from the native diagnostic.
 exactly the same SHA as both measured binaries; no numerical replay is needed
 for this byte-identical build.
 
-Decision: keep B2 diagnostic-only. The observed command-count reduction yields
-a small full-block gain and costs additional memory in this A/B layout. Before
+Decision at this stage: keep B2 diagnostic-only. The observed command-count
+reduction yields a small full-block gain and costs additional memory in this
+A/B layout. Before
 production use, require full36 plus head on both saved inputs, a qualified
 workspace/lifetime contract and a bounded aggregate memory/timing result.
 Prioritize GPU execution costs over command-count targets when choosing the

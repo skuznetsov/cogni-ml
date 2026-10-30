@@ -36359,3 +36359,51 @@ Refresh after source/toolchain/device/model/workload changes.
   Parent 1f19bfa0; return docs/pixelumm-window-batch-attention.md. Refresh after
   source/input/weights/geometry/precision/backend/device/toolchain/schedule/
   lifecycle/guard changes or evidence loss; fresh memory admission per run.
+
+### 2026-10-29: PixelUMM B2 passes full36 plus head numerics without a speedup
+
+- New opt-in `pixelumm_window_batch_full_probe` connects all 36 J21120 blocks
+  and the global head, retaining BF16 weights and F32 FFN. Selection admits
+  exactly one plan or 36 ordered slots sharing one Workspace, homogeneous
+  geometry, reused outputs and two output banks; CPU negative cases cover
+  split owners, slot errors, geometry and allocation-policy mismatch.
+- Two frozen normal/reverse processes each complete 15 requests: four poisoned
+  both-input/both-mode gates, two warmups, eight ABBA/BAAB timed requests and
+  one unpoisoned B2 tail. The last timed request and tail are compared. All
+  516 retained comparisons (43 per compared request) are finite and bitwise
+  equal to saved upstream controls at unchanged atol=rtol=2e-5. The direct
+  block35/head GPU alias holds. This is saved-tensor comparison, not a fresh
+  upstream neural forward, all-intermediate claim or full generation.
+- Full-forward wall means baseline/B2: normal 68.694039/71.226950 s (+3.687%),
+  reverse 64.175671/64.888191 s (+1.110%). Four cell deltas are +2.523235,
+  +2.542585, +5.780940 and -4.355899 s; pooled +2.443% is descriptive only.
+  Drift and sign-changing cells leave a stable causal effect unqualified.
+  Segments fall 4579 -> 2779 and active encode-thread CPU falls in both orders;
+  this does not transfer the historical one-block gain to full36.
+- All 30 requests retain one terminal wait, zero tracked encode allocations,
+  early activation reads or stage-metric reads, and completed error-free roots.
+  In-flight mutation/release guards reject. Both guards finish 0 with cache-aware
+  10% reserve, 28.5 GiB process-group cap, 64 MiB swap-growth and 2400s bounds.
+  Shared-resident sampled peaks are 27.077502/27.078784 GiB; minimum headroom
+  11.363052/10.385696 GiB exceeds the 6.4 GiB runtime floor; swap growth is zero.
+- Admission inventory is 24,108,145,128 baseline bytes plus 931,136,064 candidate
+  bytes (888 MiB shared panels + 576 B metrics). Native B2 resources are outside
+  the wrapper named-buffer counter. Process/RSS/Metal/named categories overlap;
+  neither their sum nor a B2-only footprint delta is qualified. Named live bytes
+  return to zero and physical footprint falls below 0.56 GiB after owner release,
+  while Metal allocation remains higher; its cause is unresolved.
+- Release build, 88 CPU examples, four pre-observer CLI rejections and offline
+  source/receipt/schedule/capture/lifetime analysis pass. Correlated Mini-Quad:
+  bounded correctness and sampled containment ROBUST; durable speedup and
+  isolated candidate memory VULNERABLE. Keep diagnostic-only, defaults unchanged.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-full36-20261029:
+  normal/ and reverse/ retain raw reports, guards, receipts and frozen sources.
+  Parent 6ed52b78837bb97d8393e4179ee21583fde090a5, 416-file manifest SHA
+  acf3d17968225670ff039f386f0877e383a368377f5919f0f440947da600c029;
+  binary 7740281a4bd144150882b7d593554247741b065ac2323970f8b879fbb1e934e6;
+  analysis.json f914e3ccb77b08186027ad8735c65410c64252c135bbcfdad58964a27606df80.
+  Sources, executable and fixture pins remain unchanged through both cohorts.
+  Return docs/pixelumm-window-batch-attention.md. Refresh numerics after source,
+  input/weight/geometry/precision/backend/device/toolchain changes; refresh timing
+  additionally after host load, pacing, schedule, diagnostics or lifetime changes.
+  Evidence loss reopens dependent claims; every rerun requires fresh admission.

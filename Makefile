@@ -194,8 +194,9 @@ $(PIXELUMM_QUERY_PAIR_OBJ): examples/support/pixelumm_query_pair_bridge.mm examp
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM query pair probe requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-.PHONY: pixelumm_window_batch_probe spec_pixelumm_window_batch_probe
+.PHONY: pixelumm_window_batch_probe spec_pixelumm_window_batch_probe pixelumm_window_batch_full_probe spec_pixelumm_window_batch_full_probe
 pixelumm_window_batch_probe: $(BUILD_DIR)/pixelumm_window_batch_probe
+pixelumm_window_batch_full_probe: $(BUILD_DIR)/pixelumm_window_batch_full_probe
 
 $(PIXELUMM_WINDOW_BATCH_OBJ): examples/support/pixelumm_window_batch_bridge.mm src/ml/video/pixelumm_decoder_head_mps_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM window batch probe requires macOS"; exit 1)
@@ -208,6 +209,15 @@ $(BUILD_DIR)/pixelumm_window_batch_probe: examples/pixelumm_window_batch_probe.c
 
 spec_pixelumm_window_batch_probe:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_window_batch_probe_spec.cr $(ARGS)
+
+# Full36 B2 diagnostic composes the existing decoder/head session with one
+# shared B2 candidate panel and per-plan metrics; link the combined ABI once.
+$(BUILD_DIR)/pixelumm_window_batch_full_probe: examples/pixelumm_window_batch_full_probe.cr examples/support/pixelumm_window_batch_full_probe.cr examples/support/pixelumm_window_batch_probe.cr examples/support/pixelumm_decoder_probe.cr examples/support/pixelumm_two_block_probe.cr examples/support/pixelumm_head_probe.cr examples/support/pixelumm_block_probe.cr examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_WINDOW_BATCH_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_WINDOW_BATCH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+spec_pixelumm_window_batch_full_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr $(ARGS)
 
 $(PIXELUMM_FFN_DIRECT_MPS_OBJ): examples/support/pixelumm_ffn_direct_mps_bridge.mm examples/support/pixelumm_ffn_weight_reuse_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "PixelUMM direct MPS FFN probe requires macOS"; exit 1)
