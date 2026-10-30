@@ -36308,3 +36308,54 @@ Refresh after source/toolchain/device/model/workload changes.
   Return docs/pixelumm-cpu-diagnostic-placement.md and generation frontier.
   Refresh after source/input/weights/geometry/precision/backend/toolchain/device/
   schedule/lifecycle/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: Independent-window PixelUMM B2 is exact on one full-J block, modest gain
+
+- Opt-in standalone `pixelumm_window_batch_probe` pairs two equal-geometry
+  attention windows on the batch axis, preserving each lane's ordered query/key
+  lists, Q/K extents, full-K reduction and scale. It also packs paired K/V in one
+  gather. Production defaults and FFN graphs are unchanged; rollback omits the
+  diagnostic. Query-row concatenation remains a rejected route.
+- Correct the prior estimated A/B memory cost: retaining baseline panels adds
+  888 MiB of candidate panels plus 16 B metrics, not 444 MiB. One-block aggregate
+  unique named buffers are 4,154,449,396 B. Do not infer a production-only net
+  workspace cost or full36 peak from this standalone allocation inventory.
+- Two fresh processes each pass 15 requests at J21120: comparator fault,
+  raw QK, common-P PV, poisoned candidate/baseline connected gates, two warmups,
+  ABBA then BAAB. Each raw-QK gate covers 2,229,534,720 values and PV 86,507,520:
+  zero finite differences, tolerance failures or nonfinites. Positive control
+  detects exactly one injected fault. Eight attention/output comparisons per
+  process are bitwise equal to authenticated saved upstream controls, including
+  the last timed candidate, at unchanged atol=rtol=2e-5. No fresh upstream neural
+  forward, every-F32-softmax-intermediate claim or full generation.
+- Pooled eight requests per path: full block 1.208287 -> 1.182598 s (-2.126%),
+  CPU encode 357.526 -> 227.216 ms (-36.448%), segments 128 -> 78 (-39.063%).
+  Four ABBA/BAAB cells favor B2 by 1.478..2.763%. Warmup order is fixed baseline
+  then candidate. Terminal wait grows as encode ends earlier; do not add these
+  overlapping intervals or promote command-count reduction to a proportional
+  end-to-end speedup. Root intervals are not active-shader utilization.
+- Every request retains one wait, zero tracked encode allocations/early reads,
+  exact post-wait capture/metric inventory and completed error-free roots.
+  Both guards pass 110 samples at 10 GiB cap, cache-aware 10% reserve, 64 MiB
+  swap-growth/600s bounds. Sampled peak 7.337 GiB, min headroom 36.027 GiB, no
+  swap growth. The first attempt stopped before chain creation on a diagnostic
+  recursive Workspace lock. Retain it separately; corrected poison snapshots
+  buffer membership before reacquiring the guarded lock, exercised by both runs.
+- Release build, 24 CPU examples, production non-diagnostic bridge syntax and
+  three pre-observer CLI rejections pass. Correlated Mini-Quad supports only this
+  bounded numerical/descriptive result. B2 stays diagnostic-only; before use on
+  36 plans enforce common Workspace identity, qualify both full36+head inputs,
+  and measure aggregate memory/timing. More command batching alone is not a
+  supported route to a twofold pipeline speedup.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-window-batch-20261029:
+  results/ is the failed setup; results-v2/ and results-v3/ are completed cohorts.
+  Source manifest pins 414 files, SHA
+  f8515623e4a42ac5d239fdac82d8b54d2baa184e8067c2d9fa58ce534c55ca75;
+  binary 01bf186d7c8900fbd3534d31280b41714e19723fdb08d485bc81db1a28820581.
+  postbuild-receipt.json certifies EOF-only source cleanup and a rebuilt binary
+  byte-identical to both measured executables.
+  results-analysis.json SHA
+  77e2c58abbba2e41a9a06211e916bcfec58f4a1adb9e80cd7fd9d9f60f0fd939.
+  Parent 1f19bfa0; return docs/pixelumm-window-batch-attention.md. Refresh after
+  source/input/weights/geometry/precision/backend/device/toolchain/schedule/
+  lifecycle/guard changes or evidence loss; fresh memory admission per run.

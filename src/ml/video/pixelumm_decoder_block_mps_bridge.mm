@@ -224,6 +224,15 @@ static bool pixelumm_ffn_direct_mps_conflicts_attention(
     PixelUMMDecoderPlan *plan);
 #endif
 
+#if defined(COGNI_PIXELUMM_WINDOW_BATCH_DIAGNOSTIC)
+// Defined by the opt-in window-batch diagnostic translation unit. Return 0
+// to preserve the production tile loop, 1 when candidate attention replaced
+// it, and a negative value on a fail-closed diagnostic error.
+static int32_t pixelumm_window_batch_encode_at_attention(
+    PixelUMMDecoderPlan *plan, MPSCommandBuffer *commandBuffer,
+    char *errorText, size_t errorCapacity);
+#endif
+
 struct PixelQKParams {
   uint32_t tokens;
   uint32_t heads;
@@ -2811,10 +2820,20 @@ static int32_t pixel_encode_block(
         if (!pixel_copy_capture(commandBuffer, plan, PixelQReady, plan.core[1], dBytes, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelKReady, plan.core[2], kvBytes, errorText, errorCapacity)) return -7;
         if (!profile.mark(3, GS_MPS_API_PROFILE_PHASE_SELF_ATTENTION)) return -18;
+#if defined(COGNI_PIXELUMM_WINDOW_BATCH_DIAGNOSTIC)
+        const int32_t windowBatchResult =
+            pixelumm_window_batch_encode_at_attention(
+                plan, commandBuffer, errorText, errorCapacity);
+        if (windowBatchResult < 0) return -8;
+        const bool windowBatchHandled = windowBatchResult == 1;
+#else
+        const bool windowBatchHandled = false;
+#endif
         id<MTLBuffer> queryIndices = plan.scratch[6];
         id<MTLBuffer> keyIndices = plan.scratch[7];
         const int32_t *queryTable = (const int32_t *)queryIndices.contents;
         const int32_t *keyTable = (const int32_t *)keyIndices.contents;
+        if (!windowBatchHandled) {
         for (uint32_t tileIndex = 0; tileIndex < plan.tileCount; ++tileIndex) {
           const uint64_t queryBase = uint64_t(tileIndex) * (uint64_t(plan.maxQuery) + 1u);
           const uint64_t keyBase = uint64_t(tileIndex) * (uint64_t(plan.maxKey) + 1u);
@@ -2909,6 +2928,7 @@ static int32_t pixel_encode_block(
                 @[plan.scratch[5], queryIndices, plan.core[4]],
                 &scatterParams, sizeof(scatterParams), panelCount,
                 false, errorText, errorCapacity)) return -11;
+        }
         }
         if (!pixel_copy_capture(commandBuffer, plan, PixelAttention, plan.core[4], dBytes, errorText, errorCapacity)) return -11;
         if (!profile.mark(4, GS_MPS_API_PROFILE_PHASE_SELF_PROJECTION_RESIDUAL)) return -18;
