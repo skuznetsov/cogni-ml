@@ -31,6 +31,24 @@ describe PixelUMMDecoderProbe do
     end
   end
 
+  it "supports an explicit common 60-second diagnostic interval without admitting lateness" do
+    pause_ns = PixelUMMDecoderProbe::CPU_DIAGNOSTIC_EXTENDED_PAUSE_NS
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(nil, 1_i64, pause_ns).should eq(0_i64)
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 51_800_000_001_i64, pause_ns).should eq(8_200_000_000_i64)
+    PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 60_000_000_001_i64, pause_ns).should eq(0_i64)
+    expect_raises(ArgumentError, /deadline/) do
+      PixelUMMDecoderProbe.aa_pause_remaining_ns(1_i64, 60_000_000_002_i64, pause_ns)
+    end
+    expect_raises(ArgumentError, /clock/) do
+      PixelUMMDecoderProbe.aa_pause_remaining_ns(Int64::MAX - 1, Int64::MAX, pause_ns)
+    end
+    [0_i64, 49_000_000_000_i64, 61_000_000_000_i64, Int64::MAX].each do |unsupported|
+      expect_raises(ArgumentError, /interval/) do
+        PixelUMMDecoderProbe.aa_pause_remaining_ns(nil, 1_i64, unsupported)
+      end
+    end
+  end
+
   it "profiles combined attention in both orders with poisoned off warmups and late off controls" do
     normal = PixelUMMDecoderProbe.combined_attention_profile_schedule
     reverse = PixelUMMDecoderProbe.combined_attention_profile_schedule(reverse: true)

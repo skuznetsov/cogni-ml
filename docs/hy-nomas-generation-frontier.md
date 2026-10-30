@@ -1,5 +1,48 @@
 # Hy-Nomas first native video frontier
 
+## Aligned release/GC preserves parity but leaves variable diagnostic-placement effects (2026-10-29)
+
+The opt-in lifecycle follow-up completed both 36-block-plus-head schedules at
+J=21,120 with the same source/binary/resources and 60-second pacing. Native
+chain metadata and condition snapshots are saved before release; explicit GC
+then precedes eager/standard CPU comparison or deferred return. This leaves
+ordinary inference ordering and all numerical graphs unchanged.
+
+Following-probe totals after eager/deferred diagnostics are 44.535279/43.250263 s
+in normal order and 58.362926/43.399179 s in reverse. Eager-context requests are
+2.9711%/34.4793% longer in these two descriptive contrasts. The reverse tail
+is also slower at 47.391884 s. Common cleanup did not remove the observed
+variation; do not claim a stable speedup, isolated release/GC benefit, pure
+CPU-comparator cause or specific Metal driver wait. Recomputed root-interval
+unions differ too, but they are not active shader cycles. The earlier
+50-second results cannot be pooled with this changed schedule.
+
+All 516 retained comparisons remain finite and bitwise equal to authenticated
+saved upstream controls at unchanged atol=rtol=2e-5. Every request retains one
+wait, 43 post-wait reads, zero early reads/tracked encode allocations and
+4,579 error-free completed roots. Both guards finish normally: 2,667 samples,
+26.201907 GiB sampled peak, 13.673111 GiB minimum cache-aware headroom and no
+sampled swap increase over admission baselines, with the 10% reserve/27.5 GiB
+cap unchanged. No generation ran.
+The first 50-second aligned attempt safely rejected a 51.775842 s diagnostic
+overrun before the following chain was created; it is excluded from inference.
+
+The release build, 77 CPU examples, seven matched early CLI rejections and
+offline mutation/lineage/lifecycle checks pass. Source parent is `af34cece`,
+with all 202 measured source hashes unchanged across both processes. Evidence:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029`;
+paired-analysis SHA256
+`4589940af59d8eb7b179e2de776e6b22488bce79b5c1486d9d468b8d4e4eb0b0`.
+See [the conditional timing table and safeguards](pixelumm-cpu-diagnostic-placement.md).
+
+Next proposed performance falsifier: batch independent attention windows at
+B2 while preserving per-window Q/K geometry and reduction dimensions. First
+check raw QK, PV with baseline P and connected upstream parity, then the full
+block/decoder. Additional named scratch is approximately 444 MiB, with fresh
+memory admission still required. Do not revive rejected query-row concatenation
+or infer a latency saving merely from fewer API calls. This candidate has not
+been implemented or timed.
+
 ## CPU diagnostic placement changes the following request in both sampled orders (2026-10-29)
 
 The bounded 36-block-plus-head policy experiment is complete at J=21,120.
@@ -17,9 +60,9 @@ cache-aware guard passes both complete processes with zero swap growth;
 sampled peak footprint is 26.195773 GiB, minimum headroom 16.343918 GiB.
 No diffusion or generation ran. See
 [the diagnostic design, timing table and scoped evidence](pixelumm-cpu-diagnostic-placement.md).
-The next causal discriminator releases the completed chain after the common
-snapshot write and aligns GC before eager/deferred comparison. Do not infer a
-shader acceleration or driver-wait cause from this placement contrast.
+The aligned follow-up above completes the proposed common release/GC
+discriminator. Do not infer a shader acceleration or driver-wait cause from
+either placement contrast.
 
 ## Gate/up row tiling does not qualify as acceleration (2026-10-29)
 

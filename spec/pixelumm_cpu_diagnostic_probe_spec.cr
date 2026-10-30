@@ -65,8 +65,16 @@ describe PixelUMMCPUDiagnosticProbe do
       store = PixelUMMCPUDiagnosticProbe::Store.new(paths, captures,
         PixelUMMTwoBlockProbe::ComparisonScratch.new(4))
       begin
-        eager = store.snapshot(0, 1, true, expected_reader, actual_reader)
-        store.snapshot(1, 3, false, expected_reader, actual_reader).should be_empty
+        store.save_snapshot(0, 1, true, actual_reader)
+        actual_calls.should eq(2)
+        expected_calls.should eq(0)
+        actual.each_value(&.fill(0_u8))
+        eager = store.compare_eager(0, expected_reader)
+        expected_calls.should eq(2)
+        expected.each do |stage, bytes|
+          bytes.copy_to(actual[stage])
+        end
+        store.save_snapshot(1, 3, false, actual_reader)
         actual_calls.should eq(4)
         expected_calls.should eq(2)
         actual.each_value(&.fill(0_u8))
@@ -211,6 +219,73 @@ describe PixelUMMCPUDiagnosticProbe do
         expect_raises(ArgumentError) { store.compare_deferred(0, expected_reader) }
         File.open(paths[1], "r+") { |io| io.truncate(2_i64) }
         expect_raises(ArgumentError) { store.compare_deferred(1, expected_reader) }
+        expect_raises(ArgumentError) { store.compare_eager(0, expected_reader) }
+      ensure
+        store.release
+      end
+    end
+  end
+
+  it "separates eager saving and comparison with policy, order, duplicate, and premature guards" do
+    with_pixelumm_cpu_diagnostic_dir do |root|
+      paths = [File.join(root, "slot0.bin"), File.join(root, "slot1.bin")]
+      expected = pixelumm_cpu_diagnostic_words
+      actual = pixelumm_cpu_diagnostic_words
+      expected_calls = 0
+      expected_reader = ->(stage : String, dst : Bytes) do
+        expected_calls += 1
+        expected[stage].copy_to(dst)
+      end
+      actual_reader = ->(stage : String, dst : Bytes) { actual[stage].copy_to(dst) }
+      store = PixelUMMCPUDiagnosticProbe::Store.new(paths, pixelumm_cpu_diagnostic_captures,
+        PixelUMMTwoBlockProbe::ComparisonScratch.new(4))
+      begin
+        expect_raises(ArgumentError) { store.compare_eager(0, expected_reader) }
+        expect_raises(ArgumentError) { store.save_snapshot(1, 3, false, actual_reader) }
+        expect_raises(ArgumentError) { store.save_snapshot(1, 1, false, actual_reader) }
+
+        store.save_snapshot(0, 1, false, actual_reader)
+        expect_raises(ArgumentError) { store.compare_eager(0, expected_reader) }
+        expect_raises(ArgumentError) { store.save_snapshot(1, 3, false, actual_reader) }
+        store.save_snapshot(1, 3, true, actual_reader)
+        expect_raises(ArgumentError) { store.compare_deferred(0, expected_reader) }
+        eager = store.compare_eager(1, expected_reader)
+        expected_calls.should eq(2)
+        expect_raises(ArgumentError) { store.compare_eager(1, expected_reader) }
+        expect_raises(ArgumentError) { store.save_snapshot(1, 3, true, actual_reader) }
+
+        store.finish_requests!(6)
+        expect_raises(ArgumentError) { store.compare_eager(0, expected_reader) }
+        expect_raises(ArgumentError) { store.compare_deferred(1, expected_reader) }
+        deferred = store.compare_deferred(0, expected_reader)
+        deferred.should eq(eager)
+        expected_calls.should eq(4)
+        expect_raises(ArgumentError) { store.compare_deferred(0, expected_reader) }
+      ensure
+        store.release
+      end
+    end
+  end
+
+  it "rejects an eager comparison after a later snapshot has advanced the request order" do
+    with_pixelumm_cpu_diagnostic_dir do |root|
+      paths = [File.join(root, "slot0.bin"), File.join(root, "slot1.bin")]
+      expected = pixelumm_cpu_diagnostic_words
+      actual = pixelumm_cpu_diagnostic_words
+      expected_calls = 0
+      expected_reader = ->(stage : String, dst : Bytes) do
+        expected_calls += 1
+        expected[stage].copy_to(dst)
+      end
+      actual_reader = ->(stage : String, dst : Bytes) { actual[stage].copy_to(dst) }
+      store = PixelUMMCPUDiagnosticProbe::Store.new(paths, pixelumm_cpu_diagnostic_captures,
+        PixelUMMTwoBlockProbe::ComparisonScratch.new(4))
+      begin
+        store.save_snapshot(0, 1, true, actual_reader)
+        store.save_snapshot(1, 3, false, actual_reader)
+        expect_raises(ArgumentError) { store.finish_requests!(6) }
+        expect_raises(ArgumentError) { store.compare_eager(0, expected_reader) }
+        expected_calls.should eq(0)
       ensure
         store.release
       end

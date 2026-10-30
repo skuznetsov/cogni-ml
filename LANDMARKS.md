@@ -36258,3 +36258,53 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback omits new flag; ordinary inference unchanged. Refresh on executable
   source/input/weights/geometry/precision/runtime/backend/device/toolchain/
   schedule/diagnostic/guard changes or evidence loss; fresh admission each run.
+
+### 2026-10-29: Aligned PixelUMM chain cleanup does not remove diagnostic-placement variation
+
+- Optional `--align-cpu-diagnostic-lifecycle` saves completed native metadata
+  and condition captures before chain release, then collects GC before either
+  eager comparison or deferred return. Standard requests use the same cleanup
+  point. Session-owned GPU buffers remain live. Ordinary inference ordering,
+  mathematical graphs and tolerances are unchanged; rollback omits the flags.
+- First aligned 50s attempt stops before the following chain is created:
+  condition snapshot/CPU work takes 51.775842s. Both completed requests pass;
+  preserve the failed attempt separately, never pool it into timing contrasts.
+  New opt-in pause accepts only 50/60s in CPU-diagnostic mode, default remains
+  50s; overrun/lateness guards stay intact.
+- Both new 60s normal/reverse schedules complete at J21120, 36 blocks + head,
+  fixed input A, persistent resources, API profiler off. Following eager/deferred
+  probe totals are 44.535279/43.250263s and 58.362926/43.399179s, ratios
+  1.029711/1.344793. Reverse tail is 47.391884s. These are two variable descriptive
+  contrasts conditional on common cleanup, not stable acceleration or isolated
+  release/GC/CPU-comparator causality. No specific driver or active-shader claim.
+- All 516 finite retained comparisons are bitwise equal to saved authenticated
+  upstream MPS controls at unchanged 2e-5. All 12 requests preserve one wait,
+  43 post-wait reads, zero early reads/tracked encode allocations and 4,579
+  completed error-free roots. Deferred checks follow all six cleanups per
+  process. Root unions independently recomputed; no fresh upstream neural run,
+  overwritten-intermediate gate or full generation.
+- All 2,667 guard samples pass 10% cache-aware/27.5 GiB cap/64 MiB swap/900s;
+  sampled peak 26.201907 GiB, minimum headroom 13.673111 GiB, no sampled swap
+  increase over admission baselines. Actual terminal-to-pre-recorder gaps are
+  60.000188..60.008679s, under 250ms lateness.
+  Release 0.020500..0.066542ms and explicit GC 0.809333..1.886042ms are local
+  post-wait intervals, not downstream resource or GPU-cause estimates.
+- Release build, 77 CPU examples, seven matched pre-observer CLI rejections,
+  offline mutation controls and source/receipt/lifecycle checks pass. Snapshot
+  extents and in-run stage hashes are checked, payloads were not hashed at write
+  time or rehashed. A redundant receipt pause key is null; canonical gap, argv
+  and observed pacing agree on 60s.
+  Correlated Mini-Quad is limited to bounded observations; physical cause and
+  stable timing remain open. Next proposed falsifier is independent-window
+  attention B2, preserving Q/K/reduction geometry, about 444 MiB extra shared
+  scratch; raw QK/PV/parity gates precede full-block timing. Not implemented.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029;
+  parent af34cece, 202-file unchanged source snapshots, binary SHA
+  afc72a5d4dab022f40e153a923f816156679b3aa962640d215ac9b76395aa237.
+  results/analysis-paired.json SHA
+  4589940af59d8eb7b179e2de776e6b22488bce79b5c1486d9d468b8d4e4eb0b0;
+  results/final-evidence-index-paired.json SHA
+  d4a5b260969c4ab113c3480963a9fb39ac7596b394d425413973aa778adb8651.
+  Return docs/pixelumm-cpu-diagnostic-placement.md and generation frontier.
+  Refresh after source/input/weights/geometry/precision/backend/toolchain/device/
+  schedule/lifecycle/guard changes or evidence loss; fresh admission each run.

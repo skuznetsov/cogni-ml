@@ -24,8 +24,9 @@ module PixelUMMDecoderProbe
     shared_gate_up : Bool = false, combined_attention : Bool = false,
     tiled_gate_up : Bool = false
 
-  AA_PAUSE_NS            = 50_000_000_000_i64
-  AA_ALLOWED_LATENESS_NS =    250_000_000_i64
+  AA_PAUSE_NS                      = 50_000_000_000_i64
+  CPU_DIAGNOSTIC_EXTENDED_PAUSE_NS = 60_000_000_000_i64
+  AA_ALLOWED_LATENESS_NS           =    250_000_000_i64
 
   # Same paired input and observer-off controls as the paced A/A experiment.
   # Candidate preparation remains live in both arms; only graph selection moves.
@@ -49,13 +50,17 @@ module PixelUMMDecoderProbe
 
   # Diagnostics and GC consume this same post-wait interval. Never catch up by
   # shortening a later pause, or submit another request after an overrun.
-  def aa_pause_remaining_ns(previous_terminal_ns : Int64?, now_ns : Int64) : Int64
+  def aa_pause_remaining_ns(previous_terminal_ns : Int64?, now_ns : Int64,
+                            pause_ns : Int64 = AA_PAUSE_NS) : Int64
+    unless pause_ns == AA_PAUSE_NS || pause_ns == CPU_DIAGNOSTIC_EXTENDED_PAUSE_NS
+      raise ArgumentError.new("unsupported A/A pause interval")
+    end
     raise ArgumentError.new("invalid A/A monotonic clock") unless now_ns > 0
     return 0_i64 unless previous = previous_terminal_ns
-    unless 0 < previous <= now_ns && previous <= Int64::MAX - AA_PAUSE_NS
+    unless 0 < previous <= now_ns && previous <= Int64::MAX - pause_ns
       raise ArgumentError.new("invalid A/A monotonic clock")
     end
-    target = previous + AA_PAUSE_NS
+    target = previous + pause_ns
     raise ArgumentError.new("A/A diagnostic work exceeded next-encode deadline") if now_ns > target
     target - now_ns
   end

@@ -110,7 +110,11 @@ module PixelUMMCPUDiagnosticProbe
       raise ArgumentError.new("CPU diagnostic requires all six GPU requests before deferred comparison") unless completed_requests == REQUEST_COUNT
       unless @states.all? { |state| state == SlotState::Complete } &&
              @compare_now.compact.uniq.size == 2
-        raise ArgumentError.new("CPU diagnostic requires one completed eager and one completed deferred snapshot")
+        raise ArgumentError.new("CPU diagnostic requires one eager and one deferred snapshot")
+      end
+      eager_slot = @compare_now.index(true)
+      if eager_slot.nil? || !@comparison_done[eager_slot]
+        raise ArgumentError.new("CPU diagnostic eager snapshot must be compared before request completion")
       end
       raise ArgumentError.new("CPU diagnostic request completion was already recorded") if @requests_finished
       @requests_finished = true
@@ -119,16 +123,30 @@ module PixelUMMCPUDiagnosticProbe
     def snapshot(slot : Int32, request : Int32, compare_now : Bool,
                  expected_reader : Proc(String, Bytes, Nil),
                  actual_reader : Proc(String, Bytes, Nil)) : Array(Comparison)
+      save_snapshot(slot, request, compare_now, actual_reader)
+      return [] of Comparison unless compare_now
+
+      compare_eager(slot, expected_reader)
+    end
+
+    # Persist only the actual BF16 captures. This lets callers release the
+    # completed Metal chain and run their common post-request cleanup before
+    # requesting either eager or deferred CPU comparison.
+    def save_snapshot(slot : Int32, request : Int32, compare_now : Bool,
+                      actual_reader : Proc(String, Bytes, Nil)) : Nil
       ensure_open!
       validate_slot!(slot)
       expected_request = CAPTURE_REQUESTS[slot]
       unless request == expected_request
         raise ArgumentError.new("CPU diagnostic snapshot slot/request mismatch")
       end
-      raise ArgumentError.new("CPU diagnostic snapshot store has a failed slot") if @states.any? { |state| state == SlotState::Failed }
+      ensure_no_failed_slots!
       raise ArgumentError.new("CPU diagnostic snapshots must follow request order") unless request == next_snapshot_request
       raise ArgumentError.new("CPU diagnostic snapshots are closed after request completion") if @requests_finished
       raise ArgumentError.new("CPU diagnostic snapshot slot cannot be overwritten") unless @states[slot] == SlotState::Pending
+      if @compare_now.compact.any? { |prior_policy| prior_policy == compare_now }
+        raise ArgumentError.new("CPU diagnostic requires one eager and one deferred snapshot")
+      end
       ensure_file_extent!(slot)
 
       @states[slot] = SlotState::Capturing
@@ -147,19 +165,34 @@ module PixelUMMCPUDiagnosticProbe
         file.flush
         ensure_file_extent!(slot)
         @states[slot] = SlotState::Complete
-        return [] of Comparison unless compare_now
-
-        compare_saved(slot, expected_reader)
+        nil
       rescue ex
         @states[slot] = SlotState::Failed
         raise ex
       end
     end
 
+    def compare_eager(slot : Int32,
+                      expected_reader : Proc(String, Bytes, Nil)) : Array(Comparison)
+      ensure_open!
+      validate_slot!(slot)
+      ensure_no_failed_slots!
+      raise ArgumentError.new("CPU diagnostic eager comparison has no completed snapshot") unless @states[slot] == SlotState::Complete
+      raise ArgumentError.new("CPU diagnostic slot is not eager") unless @compare_now[slot] == true
+      raise ArgumentError.new("CPU diagnostic eager comparison is closed after request completion") if @requests_finished
+      if @requests.each_with_index.any? { |request, index| index > slot && !request.nil? }
+        raise ArgumentError.new("CPU diagnostic eager comparison is out of request order")
+      end
+      raise ArgumentError.new("CPU diagnostic slot was already compared") if @comparison_started[slot]
+
+      compare_saved(slot, expected_reader)
+    end
+
     def compare_deferred(slot : Int32,
                          expected_reader : Proc(String, Bytes, Nil)) : Array(Comparison)
       ensure_open!
       validate_slot!(slot)
+      ensure_no_failed_slots!
       raise ArgumentError.new("CPU diagnostic deferred comparison is premature") unless @requests_finished
       raise ArgumentError.new("CPU diagnostic slot has no completed snapshot") unless @states[slot] == SlotState::Complete
       raise ArgumentError.new("CPU diagnostic slot is not deferred") unless @compare_now[slot] == false
@@ -185,11 +218,11 @@ module PixelUMMCPUDiagnosticProbe
                               expected_reader : Proc(String, Bytes, Nil)) : Array(Comparison)
       raise ArgumentError.new("CPU diagnostic slot was already compared") if @comparison_started[slot]
       @comparison_started[slot] = true
-      ensure_file_extent!(slot)
-      file = @files[slot]
-      comparisons = [] of Comparison
-      offset = 0_i64
       begin
+        ensure_file_extent!(slot)
+        file = @files[slot]
+        comparisons = [] of Comparison
+        offset = 0_i64
         @captures.each do |capture|
           expected, actual = @scratch.buffers(capture.nbytes)
           file.seek(offset, IO::Seek::Set)
@@ -206,6 +239,7 @@ module PixelUMMCPUDiagnosticProbe
         @comparison_done[slot] = true
         comparisons
       rescue ex
+        @states[slot] = SlotState::Failed
         raise ex
       end
     end
@@ -218,6 +252,10 @@ module PixelUMMCPUDiagnosticProbe
 
     private def ensure_open! : Nil
       raise ArgumentError.new("CPU diagnostic snapshot store is closed") if @released
+    end
+
+    private def ensure_no_failed_slots! : Nil
+      raise ArgumentError.new("CPU diagnostic snapshot store has a failed slot") if @states.any? { |state| state == SlotState::Failed }
     end
 
     private def validate_slot!(slot : Int32) : Nil

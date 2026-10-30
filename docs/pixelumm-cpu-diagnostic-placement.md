@@ -1,6 +1,6 @@
 # PixelUMM CPU diagnostic placement
 
-## Scope and prospective discriminator
+## Shared scope and original discriminator
 
 This bounded experiment tests whether post-request CPU comparison changes the
 following native PixelUMM request. It does not change inference mathematics,
@@ -69,6 +69,171 @@ controls, not a newly regenerated connected upstream neural run. Coverage is
 36 retained attention captures, block34/35 outputs and five head stages;
 overwritten early intermediates are outside this gate.
 
+## Aligned lifecycle follow-up
+
+The opt-in `--align-cpu-diagnostic-lifecycle` follow-up separates snapshot
+writing from eager comparison. In both policies it copies completed-chain
+metadata after the sole terminal wait, saves condition captures, releases the
+native command chain, and runs explicit GC before comparison or deferred
+return. Standard warm/probe/tail comparisons also follow release and GC.
+Persistent session-owned GPU plans and buffers remain live. The default and
+legacy diagnostic path retain their existing ordering.
+
+The discriminator is whether the following-probe contrast survives this
+common release/GC point in both normal and reverse schedules. Its estimand is
+the residual eager/deferred diagnostic-placement effect conditional on that
+lifecycle; it does not isolate a speedup caused by earlier release or GC.
+Cache, thermal, scheduler and background-load effects remain possible. Reject
+missing or reordered lifecycle receipts, metadata access after native release,
+comparison before GC, capture reuse before saving, any additional wait, changed
+upstream tolerance, pacing failure or memory-guard failure. Keep the same
+guarded six-request schedule, with no generation. Rollback omits the new flag.
+
+DoD: the integrated CPU specs and release build pass; invalid lifecycle CLI
+combinations reject before loading fixtures; both guarded native schedules
+complete with matching capture hashes and unchanged saved-upstream numerical
+gates; the offline auditor verifies lifecycle order, source lineage and guard
+telemetry. Pending measurements must not be reported as acceleration.
+
+The first aligned attempt at the original 50-second interval stopped before
+creating the following probe's chain: common snapshot save plus eager
+comparison took 51.775841792 seconds. Both completed requests passed their
+saved-upstream gates, and cleanup and the memory guard completed. This failed
+attempt remains under the `hy-nomas-pixelumm-cpu-lifecycle-20261029` evidence
+root and is excluded from timing contrasts. Its
+`spacing_abort_before_submission=false` refers only to the later empty-chain
+quarantine path; the deadline rejection happened before chain construction.
+
+The revised comparison explicitly selects
+`--cpu-diagnostic-pause-seconds 60` in both orders. Only 50 or 60 seconds are
+admitted, only in CPU-diagnostic mode; 50 seconds remains the default. The same
+deadline rejection and 250 ms scheduler-lateness check remain. The new
+`hy-nomas-pixelumm-cpu-lifecycle60-20261029` root pins the revised contract,
+source and binary separately. Do not pool the failed 50-second attempt or the
+earlier unaligned experiment with this 60-second conditional contrast.
+
+## Aligned lifecycle result (2026-10-29)
+
+Both 60-second schedules completed with the same measured source, binary,
+resident resources and ordered release/GC lifecycle. All 516 finite retained
+comparisons are bitwise equal to the authenticated saved upstream controls:
+zero different BF16 words and max absolute error zero at unchanged
+`atol=rtol=2e-5`. The final deferred comparisons completed after all six
+request cleanups in each process. This does not extend coverage to overwritten
+intermediates or constitute a fresh upstream neural run.
+
+| Process | Preceding diagnostic | Following request seconds | Encode seconds | Terminal wait seconds | Recomputed root union seconds |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Normal | Eager | 44.535279 | 43.624829 | 0.910224 | 44.521169 |
+| Normal | Deferred | 43.250263 | 42.378163 | 0.871873 | 43.217373 |
+| Reverse | Deferred | 43.399179 | 42.452734 | 0.946249 | 43.384911 |
+| Reverse | Eager | 58.362926 | 57.242693 | 1.118647 | 58.337225 |
+
+The after-eager/after-deferred ratios are 1.029711 and 1.344793: eager-context
+requests are 2.9711% and 34.4793% longer in these two descriptive contrasts.
+Do not pool them into one speed estimate. The reverse tail also takes
+47.391884 s, so the delayed state is not confined to a single point. Aligning
+chain release and GC did not remove observed variation. A stable effect size,
+pure CPU-comparator causality, an isolated early-release/GC benefit, driver
+cause and production acceleration remain unproven. The earlier 50-second
+experiments are separate schedules and cannot establish those causal claims
+by before/after subtraction.
+
+The raw GPU-root interval union changes by 1.303796 s in normal order and
+14.952314 s in reverse. The corresponding terminal-wait differences are only
+0.038350/0.172398 s. Thus these samples are not explained by transferring all
+delay into the terminal wait. Root envelopes still do not identify active
+shader time, a particular lock, frequency or thermal state. Every request has
+4,579 completed error-free roots and one existing terminal wait, with 43
+post-wait capture reads, zero preterminal activation reads and zero tracked
+named allocations during encoding.
+
+Host lifecycle receipts place native release at 0.020500..0.066542 ms and the
+explicit GC interval at 0.809333..1.886042 ms per request. These are local
+post-wait intervals, not estimates of downstream resource-reclamation effects.
+Eager condition diagnostics take 52.273859/45.903829 s; deferred condition
+snapshot/cleanup takes 9.398680/9.291419 s and its comparison is moved to the
+end, taking another 43.723363/44.387793 s. The diagnostic work is not removed.
+Cache, CPU load, shared power/thermal state and background activity can still
+differ despite matched terminal-to-pre-recorder gaps.
+
+All 2,667 guard samples pass: sampled peak process-tree footprint is
+26.201907 GiB against the 27.5 GiB cap, minimum cache-aware headroom is
+13.673111 GiB against the 6.4 GiB reserve, and no sample exceeds its process's
+admission swap baseline.
+Actual pacing gaps are 60.000188416..60.008679000 s, within the unchanged
+250 ms lateness allowance. Sampled accounting does not exclude shorter
+transients or guarantee that all file-backed pages are immediately reclaimable.
+No full generation ran and no inference default or mathematical graph changed.
+
+The release build and 77 integrated CPU examples pass. Seven matched malformed
+CLI controls derive from the passing native argv and reject before report
+creation or the memory observer; each has its own 10% cache-aware guard with
+a 1 GiB cap and 10-second deadline. These establish early rejection of the
+tested combinations, not branch coverage from a shared error string. The
+offline verifier's mutation controls reject old 50-second evidence, missing or
+reordered release/GC events, premature deferred comparison, changed hashes,
+waits, root unions, pacing and guard failures. The Mini-Quad review is
+correlated; its scope is bounded numerical, lifecycle, lineage and descriptive
+timing evidence, not independent physical-cause identification.
+
+Executed commands (the runner rejects reused reports and snapshot directories):
+
+```sh
+make spec_pixelumm_decoder_integrated
+make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/build pixelumm_decoder_integrated_probe
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/run_integrated.py normal-1
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/run_integrated.py reverse-1
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/verify_results.py --self-test
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/verify_results.py
+python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029/check_cli_negatives_matched.py
+```
+
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-cpu-lifecycle60-20261029`.
+Measured source parent is `af34cece`; both processes preserve all 202 measured
+source hashes. Binary SHA256 is
+`afc72a5d4dab022f40e153a923f816156679b3aa962640d215ac9b76395aa237`.
+Paired analysis SHA256 is
+`4589940af59d8eb7b179e2de776e6b22488bce79b5c1486d9d468b8d4e4eb0b0`;
+normal/reverse report SHA256 values are
+`d72807dc1438ca9491f7e78e744084fef51b02a54d47587faf010db1baed7911` /
+`1ce672e4c462d61bf51285c9e22ef7a333bf998136b65809bec9cf7dcb41b1e8`.
+The frozen contract, input manifest, source copies, runner and verifier bind
+the conditional estimand and exclude the aborted 50-second attempt. Snapshot
+extents are checked and in-run comparisons hash every actual stage, but the
+snapshot payloads were not hashed at write time or separately after the run.
+The artifacts therefore do not independently bind bytes at capture time to
+the later comparison. Receipts contain a redundant null
+`cpu_diagnostic_pause_seconds` key; their canonical `aa_pause_seconds`, recorded
+argv and every per-request gap agree on 60 seconds. Refresh
+after source, fixtures, weights, geometry, precision, backend, toolchain,
+device, pacing, lifecycle, guard or evidence changes. Rollback omits the
+alignment/diagnostic flags; ordinary inference retains its existing ordering.
+
+`results/final-evidence-index-paired.json` SHA256
+`d4a5b260969c4ab113c3480963a9fb39ac7596b394d425413973aa778adb8651`
+binds the runner/verifier/contract, both report/receipt/guard sets, binary and
+object hashes, all 202 measured source hashes, stage vectors and both CLI
+control files. Its reconstruction compares JSON-normalized summaries because
+persisted request-index object keys are strings; no numerical or lifecycle
+gate is relaxed. Earlier CPU checks are labeled as interactive observations,
+not invented durable test logs. The index is a curated evidence map, not an
+independent proof of physical causality.
+
+## Next performance falsifier
+
+The next proposed candidate batches independent attention windows along the
+batch axis, first B2, retaining each window's Q length, K context and reduction
+dimensions. It does not concatenate query rows. At the full-J geometry the
+shape classes are 40 windows of Q384/K3456, 10 of Q384/K2880 and 10 of
+Q192/K2880. A B2 bank adds approximately 444 MiB of named F32 scratch, reused
+across blocks; opaque MPS temporaries still need admission measurement.
+The first gate must compare raw QK, then PV with the same baseline P, and then
+the connected output against unchanged upstream tolerances before timing the
+full block/decoder. The earlier same-K query-row concatenation failure remains
+rejected. Fewer graph calls alone are not a speedup certificate.
+
 ## Verification and safeguards
 
 The CPU-only contract tests overwrite the live source after saving it and
@@ -93,7 +258,7 @@ stop and a 900-second deadline per process. File-backed and speculative pages
 are counted once. Sampled telemetry cannot exclude shorter transients. All
 large temporary files and builds remain under `/opt/mldata_ssd/`.
 
-## Result
+## Earlier unaligned 50-second result
 
 VERIFIED for the completed bounded policy comparison, retained numerical
 parity, lifecycle and sampled guard checks. Isolated CPU-comparator causality,
