@@ -6,6 +6,31 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-EXTERNAL-SCRATCH-CLEANUP-2026-10-30] Retired 213.702 GiB of obsolete diagnostic arrays and caches
+
+- User-authorized exact-manifest cleanup removed 15,041 paths / 15,006 unique
+  inodes: 229,461,020,672 allocated bytes. Observed filesystem availability
+  increased by 229,483,700,224 bytes; the scopes differ because other writes
+  and delayed reclamation affect free space. Directory use afterward is
+  336.255 GiB.
+- Retired optional CPU-condition snapshots, old 2/4/8/16-block PixelUMM
+  activation outputs, DRAMA codec stages, derived Wan quantization F32 arrays,
+  superseded q4-cache-v1 payloads and rebuildable compiler/bytecode caches.
+  Keep historical reports as observations; raw-array validators/reinspection
+  now require regeneration. Exact historical bytes are not backed up.
+- All 35,967 protected path metadata checks pass: current quality run, source
+  checkpoints, active q4-cache-v2, original/final media and full42/full43
+  36-block oracles remain. Preservation checks cover inode/size/mtime/links,
+  not a fresh hash of every retained large payload.
+- Exact-target lsof checks passed before unlink; hardlink, changed-target,
+  changed-protected and open-target guard fixtures pass. A postcheck finds one
+  newly recreated Finder `.DS_Store` inode; original target unlinks match the
+  event log. The authenticated 20-second fixture passes CPU-only admission
+  with no Metal/model run. No further GPU execution is implied.
+- Evidence `.landmark/evidence/2026-10-30-scratch-cleanup.json`, external
+  manifest/receipt/checks under `/opt/mldata_ssd/cogni-ml/cleanup-20261030`.
+  Refresh inventory before another cleanup; cache paths can be recreated.
+
 ### [LM-HY-NOMAS-QUALITY-20S-CONTINUATION-2026-10-30] Native 20-second export passes structural checks; motion trajectory remains vulnerable
 
 - VERIFIED within bounded scope: four linked five-second AR segments produce

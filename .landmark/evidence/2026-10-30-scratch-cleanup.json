@@ -1,0 +1,109 @@
+{
+  "schema": "cogni_ml.scratch_cleanup_evidence/v1",
+  "created_at": "2026-10-30T16:53:31.102997+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "User-authorized retirement of the exact manifest-listed obsolete external-SSD diagnostic arrays and rebuildable/superseded caches, with scoped preservation and CPU-only post-cleanup admission checks.",
+    "adversary_verdict": "ROBUST within exact-target and recorded metadata scope; same-lineage review is correlated.",
+    "decay_trigger": "Fresh writes can recreate cache pathnames; refresh inventory before another cleanup. Loss/change of retained inputs, recipes, source or weights may invalidate regeneration."
+  },
+  "authorization": "User explicitly requested removal of unnecessary and temporary files in the external SSD cogni-ml directory.",
+  "root": "/Volumes/Nata's Data/MLData/cogni-ml",
+  "result": {
+    "files_unlinked": 15041,
+    "unique_inodes": 15006,
+    "unique_allocated_bytes_removed": 229461020672,
+    "unique_allocated_gib_removed": 213.70222854614258,
+    "observed_available_bytes_increase": 229483700224,
+    "remaining_directory_gib": 336.25457763671875,
+    "remaining_filesystem_available_gib": 761.084644317627,
+    "groups": {
+      "optional_cpu_condition_snapshots": 58825113600,
+      "historical_pixelumm_2_4_8_16_reference_activation_outputs": 71131410432,
+      "q4_cache_v1_q4k_payload_bins": 4593328128,
+      "q4_cache_v1_bf16_safetensors_payloads": 16623247360,
+      "drama_codec_intermediate_stages": 44873515008,
+      "wan_quantization_decoded_reference_arrays": 32982958080,
+      "rebuildable_compiler_download_bytecode_caches": 431448064
+    }
+  },
+  "preservation": {
+    "protected_path_metadata_unchanged": 35967,
+    "scope": "Current quality experiment, canonical checkpoints, active q4-cache-v2, source/reference environments, original/final media, small reports/recipes, and full42/full43 36-block activation oracles. Exact candidate list has no protected inode overlap.",
+    "byte_hash_limit": "Protected lstat path/inode/size/mtime/link metadata passed; all retained large weight/media bytes were not freshly rehashed."
+  },
+  "retired_evidence": {
+    "raw_arrays": "Optional CPU condition snapshots; old 2/4/8/16-block PixelUMM reference outputs; DRAMA codec intermediate stages; derived Wan F32 quantization weights/projections.",
+    "superseded_weights": "Derived q4-cache-v1 payloads only; full canonical source checkpoint and current v2 retained.",
+    "availability": "Retained summaries describe historical observations. Old raw-array inventory/verifier commands require regeneration before raw reinspection; no backup or exact historical byte recovery is promised.",
+    "payloads_freshly_rehashed_before_removal": false
+  },
+  "verification": {
+    "exact_target_lsof_batches_passed": 95,
+    "deletion_event_sequence_matches_plan": true,
+    "all_exact_targets_absent_at_apply_completion": true,
+    "postcheck_paths_still_absent": 15040,
+    "recreated_cache_metadata": [
+      {
+        "relative_path": "crystal-cache/.DS_Store",
+        "current": {
+          "dev": 16777244,
+          "ino": 19150401,
+          "mode": 33188,
+          "bytes": 8196,
+          "allocated_bytes": 12288,
+          "mtime_ns": 1793379046371197520,
+          "links": 1
+        },
+        "scope": "New Finder metadata file; original selected inode is gone. Left in place."
+      }
+    ],
+    "safety_fixtures": [
+      "two hardlinks with decremented nlink",
+      "changed target rejects before unlink",
+      "changed protected path rejects before unlink",
+      "open target rejects before unlink"
+    ],
+    "cpu_only_admission_exit_code": 0,
+    "cpu_only_admission_input": "Same authenticated four-segment 20-second fixture; formatted binary; no Metal/model run.",
+    "limits": "Per-inode allocated bytes and filesystem free-space delta have different scopes; unrelated writes and delayed reclamation affect the latter. A new reader can race after the lsof precheck."
+  },
+  "evidence": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/cleanup.py",
+      "sha256": "fe8c761d88a4720d99df49d17280005181efdf3bc6e95c23578b72f4ccd741a6"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/cleanup-plan.json",
+      "sha256": "f8078366cb9781ebf27bbf64914b7084bbe9264ae7f9e6fdbbabf31eb29cdad0"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/cleanup-receipt.json",
+      "sha256": "a4df7ac75dcb43ac11b8aa544586474010abce1b2c6b7168751d47918ac9c7c1"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/deletion-events.jsonl",
+      "sha256": "48f9614a346d8f43071363f494522082b135a3bdece142e8202d86cd60a61a0a"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/safety-check.json",
+      "sha256": "1f631ca3b302c36426a8b2df4a049a72248a32513d7cbea0d51ad6189973cdc7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/post-cleanup-check.json",
+      "sha256": "f5539f2cbf984134cbbdca16806862b94dd8e5532b71b8e42cc0a8b7a2a3ac35"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/post-cleanup-plan-command.json",
+      "sha256": "f37e2280b488489fb8b096d2c1f76ec1eaaf358e0d4d1da950cb45c1541c858f"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/post-cleanup-plan.log",
+      "sha256": "6f608a69d342d6b5ac2775b3d78f8b3fa4948fa4eeebdca6402223cbaa86e03e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/cleanup-20261030/after.json",
+      "sha256": "6ec5b1f4a994ea72d76fbb6929d032af25fafb7af6bdc4b102c097b1821925d4"
+    }
+  ]
+}
