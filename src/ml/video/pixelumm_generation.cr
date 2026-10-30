@@ -1,5 +1,5 @@
 # PixelUMM generation input stem and output assembly for the native Hy-Nomas
-# first-preview path. This bridge owns no denoiser, scheduler, or decoder block.
+# path. This bridge owns no denoiser, scheduler, or decoder block.
 require "../core/buffer"
 require "./metal_mps_command_chain"
 require "./metal_ops"
@@ -9,12 +9,13 @@ require "./pixelumm_decoder_block_mps"
 module ML::Video::PixelUMMGeneration
   SOURCE = {{ read_file("#{__DIR__}/kernels/pixelumm_generation.metal") }}
 
-  LATENT_FRAMES               = 30
-  LATENT_HEIGHT               =  9
-  LATENT_WIDTH                = 16
-  LATENT_CHANNELS             = 32
-  WINDOW_LATENTS              = 10
-  WINDOW_OVERLAP_LATENTS      =  5
+  LATENT_FRAMES               =  30
+  MAX_LATENT_FRAMES           = 180
+  LATENT_HEIGHT               =   9
+  LATENT_WIDTH                =  16
+  LATENT_CHANNELS             =  32
+  WINDOW_LATENTS              =  10
+  WINDOW_OVERLAP_LATENTS      =   5
   WINDOW_STARTS               = [0_i32, 5_i32, 10_i32, 15_i32, 20_i32]
   PIXEL_FRAMES                =  120
   PIXEL_HEIGHT                =  288
@@ -47,21 +48,74 @@ module ML::Video::PixelUMMGeneration
     cond_bias : ML::MetalBuffer
 
   struct Config
-    def initialize
+    getter total_latent_frames : Int32
+    @window_starts : Array(Int32)
+
+    def initialize(@total_latent_frames : Int32 = LATENT_FRAMES)
+      validate_timeline_geometry!
+      count = ((@total_latent_frames - WINDOW_LATENTS) // WINDOW_OVERLAP_LATENTS) + 1
+      @window_starts = Array(Int32).new(count) do |index|
+        index * WINDOW_OVERLAP_LATENTS
+      end
       validate!
     end
 
     def validate! : Nil
+      validate_timeline_geometry!
       block_config.validate!
       unless block_config.layout.local_attention? &&
              block_config.layout.tile_count == 12 &&
              output_elements <= Int32::MAX
         raise ArgumentError.new("PixelUMM preview geometry does not use the admitted local decoder layout")
       end
-      unless WINDOW_STARTS.size == 5 &&
-             WINDOW_STARTS.each_with_index.all? { |start, i| start == i * WINDOW_OVERLAP_LATENTS }
-        raise ArgumentError.new("PixelUMM preview window schedule is inconsistent")
+      expected_count = ((@total_latent_frames - WINDOW_LATENTS) // WINDOW_OVERLAP_LATENTS) + 1
+      unless @window_starts.size == expected_count &&
+             @window_starts.each_with_index.all? { |start, i| start == i * WINDOW_OVERLAP_LATENTS } &&
+             @window_starts.first == 0 && @window_starts.last + WINDOW_LATENTS == @total_latent_frames
+        raise ArgumentError.new("PixelUMM global window schedule does not exactly cover the latent timeline")
       end
+    end
+
+    def window_starts : Array(Int32)
+      @window_starts.dup
+    end
+
+    def window_start(index : Int32) : Int32?
+      return nil if index < 0
+      @window_starts[index]?
+    end
+
+    def window_count : Int32
+      @window_starts.size.to_i32
+    end
+
+    def pixel_frames : Int32
+      @total_latent_frames * TUBELET_T
+    end
+
+    def latent_elements : Int64
+      LATENT_CHANNELS.to_i64 * @total_latent_frames * LATENT_HEIGHT * LATENT_WIDTH
+    end
+
+    def latent_shape : Array(Int32)
+      [1_i32, LATENT_CHANNELS, @total_latent_frames, LATENT_HEIGHT, LATENT_WIDTH]
+    end
+
+    def noise_shape : Array(Int32)
+      output_shape
+    end
+
+    # Pure geometry oracle for proving that global merge windows cover every
+    # output frame. It allocates only when explicitly requested by CPU tests or
+    # diagnostics; encode paths use the precomputed window start cursor.
+    def pixel_frame_coverage_counts : Array(Int32)
+      coverage = Array(Int32).new(pixel_frames, 0)
+      @window_starts.each do |latent_start|
+        pixel_start = latent_start * TUBELET_T
+        pixel_end = pixel_start + WINDOW_PIXEL_FRAMES
+        (pixel_start...pixel_end).each { |frame| coverage[frame] += 1 }
+      end
+      coverage
     end
 
     def decoder_config : PixelUMMDecoderBlockMPS::Config
@@ -70,7 +124,7 @@ module ML::Video::PixelUMMGeneration
     end
 
     def output_shape : Array(Int32)
-      [1_i32, PIXEL_CHANNELS, PIXEL_FRAMES, PIXEL_HEIGHT, PIXEL_WIDTH]
+      [1_i32, PIXEL_CHANNELS, pixel_frames, PIXEL_HEIGHT, PIXEL_WIDTH]
     end
 
     def window_output_shape : Array(Int32)
@@ -78,7 +132,7 @@ module ML::Video::PixelUMMGeneration
     end
 
     def output_elements : Int64
-      PIXEL_CHANNELS.to_i64 * PIXEL_FRAMES * PIXEL_HEIGHT * PIXEL_WIDTH
+      PIXEL_CHANNELS.to_i64 * pixel_frames * PIXEL_HEIGHT * PIXEL_WIDTH
     end
 
     def window_output_elements : Int64
@@ -100,8 +154,26 @@ module ML::Video::PixelUMMGeneration
       PixelUMMGeneration.assembly_named_bytes_by_name(self)
     end
 
+    # Caller-owned full-duration latent/noise inputs, reported separately from
+    # the plan-owned stem and assembly allocations.
+    def input_named_bytes_by_name : Hash(String, Int64)
+      PixelUMMGeneration.input_named_bytes_by_name(self)
+    end
+
     private def block_config : PixelUMMDecoderBlockMPS::Config
       decoder_config
+    end
+
+    private def validate_timeline_geometry! : Nil
+      unless @total_latent_frames >= WINDOW_LATENTS &&
+             @total_latent_frames <= MAX_LATENT_FRAMES &&
+             (@total_latent_frames - WINDOW_LATENTS) % WINDOW_OVERLAP_LATENTS == 0
+        raise ArgumentError.new(
+          "total_latent_frames must align to the window stride and stay within #{WINDOW_LATENTS}..#{MAX_LATENT_FRAMES}")
+      end
+      unless WINDOW_OVERLAP_LATENTS * 2 == WINDOW_LATENTS && TUBELET_T == 4
+        raise ArgumentError.new("PixelUMM window or temporal geometry is inconsistent")
+      end
     end
   end
 
@@ -134,6 +206,14 @@ module ML::Video::PixelUMMGeneration
     {
       "output_f32"         => config.output_elements * 4,
       "blend_weights_bf16" => WINDOW_OVERLAP_PIXEL_FRAMES.to_i64 * 2,
+    }
+  end
+
+  def self.input_named_bytes_by_name(config : Config) : Hash(String, Int64)
+    config.validate!
+    {
+      "latent_f32" => config.latent_elements * sizeof(Float32),
+      "noise_f32"  => config.output_elements * sizeof(Float32),
     }
   end
 
@@ -182,15 +262,15 @@ module ML::Video::PixelUMMGeneration
       @output_bf16 = @arena["output_bf16"]
     end
 
-    # Append one stem window to the caller-owned serial chain. The same plan
-    # supports exactly the five overlapping starts for a complete first preview.
+    # Append one stem window to the caller-owned serial chain. Every duration
+    # reuses the same per-window buffers and MPS descriptors.
     def encode(chain : ML::Metal::MPSCommandChain,
                start_latent_frame : Int32) : ML::MetalBuffer
       raise ArgumentError.new("PixelUMM stem plan has been released") if @released
       raise ArgumentError.new("PixelUMM stem plan cannot continue after an encode error") if @failed
-      expected_start = WINDOW_STARTS[@next_window_index]?
+      expected_start = @config.window_start(@next_window_index)
       unless expected_start && start_latent_frame == expected_start
-        raise ArgumentError.new("PixelUMM stem windows must use starts 0, 5, 10, 15, 20 exactly once")
+        raise ArgumentError.new("PixelUMM stem windows must follow the configured global schedule exactly once")
       end
       bind_chain!(chain)
       e = chain.encoder
@@ -240,7 +320,7 @@ module ML::Video::PixelUMMGeneration
 
     private def validate_sources! : Nil
       MetalOps.check_storage(@latent,
-        LATENT_CHANNELS.to_i64 * LATENT_FRAMES * LATENT_HEIGHT * LATENT_WIDTH,
+        @config.latent_elements,
         WeightDType::F32)
       MetalOps.check_storage(@noise, @config.output_elements, WeightDType::F32)
       {
@@ -323,7 +403,8 @@ module ML::Video::PixelUMMGeneration
       e.set_pipeline(PixelUMMGeneration.pipeline("pixelumm_generation_patchify"))
       e.set_buffer(@noise, 0).set_buffer(@arena["patch_f32"], 1, ML::Metal::BufferAccess::Write)
       e.set_value((start_latent_frame * TUBELET_T).to_u32, 2)
-      e.set_value(count.to_u32, 3)
+      e.set_value(@config.pixel_frames.to_u32, 3)
+      e.set_value(count.to_u32, 4)
       e.dispatch_1d(count)
     end
 
@@ -344,7 +425,8 @@ module ML::Video::PixelUMMGeneration
       e.set_buffer(@latent, 0).set_buffer(@arena["condition_f32"], 1,
         ML::Metal::BufferAccess::Write)
       e.set_value(start_latent_frame.to_u32, 2)
-      e.set_value(count.to_u32, 3)
+      e.set_value(@config.total_latent_frames.to_u32, 3)
+      e.set_value(count.to_u32, 4)
       e.dispatch_1d(count)
     end
 
@@ -384,17 +466,18 @@ module ML::Video::PixelUMMGeneration
       @output_f32 = @arena["output_f32"]
     end
 
-    # Merge a head's BF16 [1,3,40,288,512] prediction at one upstream latent
-    # start. Five appends create a BF16-equivalent F32 [1,3,120,288,512] clip.
+    # Merge one fixed BF16 [1,3,40,288,512] prediction at a global latent
+    # start. A terminal-aligned schedule covers the configured output once,
+    # blending only the 20-frame overlap with the preceding window.
     def encode_merge(chain : ML::Metal::MPSCommandChain,
                      *, window_bf16 : ML::MetalBuffer,
                      start_latent_frame : Int32) : ML::MetalBuffer
       raise ArgumentError.new("PixelUMM assembly plan has been released") if @released
       raise ArgumentError.new("PixelUMM assembly plan cannot continue after an encode error") if @failed
       raise ArgumentError.new("PixelUMM assembly was already finalized") if finalized?
-      expected_start = WINDOW_STARTS[@merged_windows]?
+      expected_start = @config.window_start(@merged_windows)
       unless expected_start && start_latent_frame == expected_start
-        raise ArgumentError.new("PixelUMM assembly windows must use starts 0, 5, 10, 15, 20 exactly once")
+        raise ArgumentError.new("PixelUMM assembly windows must follow the configured global schedule exactly once")
       end
       MetalOps.check_storage(window_bf16, @config.window_output_elements, WeightDType::BF16)
       MetalOps.distinct(@output_f32, window_bf16, @arena["blend_weights_bf16"])
@@ -411,7 +494,8 @@ module ML::Video::PixelUMMGeneration
         e.set_buffer(window_bf16, 0).set_buffer(@output_f32, 1, ML::Metal::BufferAccess::ReadWrite)
           .set_buffer(@arena["blend_weights_bf16"], 2)
         e.set_value((start_latent_frame * TUBELET_T).to_u32, 3)
-        e.set_value(@config.window_output_elements.to_u32, 4)
+        e.set_value(@config.pixel_frames.to_u32, 4)
+        e.set_value(@config.window_output_elements.to_u32, 5)
         e.dispatch_1d(@config.window_output_elements.to_i32)
         @merged_windows += 1
         @output_f32
@@ -426,7 +510,7 @@ module ML::Video::PixelUMMGeneration
     def encode_finalize(chain : ML::Metal::MPSCommandChain) : ML::MetalBuffer
       raise ArgumentError.new("PixelUMM assembly plan has been released") if @released
       raise ArgumentError.new("PixelUMM assembly plan cannot continue after an encode error") if @failed
-      raise ArgumentError.new("PixelUMM assembly requires all five windows") unless @merged_windows == WINDOW_STARTS.size
+      raise ArgumentError.new("PixelUMM assembly requires every configured global window") unless @merged_windows == @config.window_count
       raise ArgumentError.new("PixelUMM assembly was already finalized") if finalized?
       bind_chain!(chain)
       e = chain.encoder

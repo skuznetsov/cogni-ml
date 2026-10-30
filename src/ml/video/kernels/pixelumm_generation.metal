@@ -30,7 +30,8 @@ kernel void pixelumm_generation_patchify(
     device const float *noise [[buffer(0)]],
     device float *patches [[buffer(1)]],
     constant uint &window_start [[buffer(2)]],
-    constant uint &count [[buffer(3)]],
+    constant uint &pixel_frames [[buffer(3)]],
+    constant uint &count [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
@@ -38,7 +39,6 @@ kernel void pixelumm_generation_patchify(
   constexpr uint token_dim = 3072;
   constexpr uint grid_h = 18;
   constexpr uint grid_w = 32;
-  constexpr uint pixel_frames = 120;
   constexpr uint pixel_h = 288;
   constexpr uint pixel_w = 512;
   const uint token = index / token_dim;
@@ -62,13 +62,13 @@ kernel void pixelumm_generation_gather_condition(
     device const float *latent [[buffer(0)]],
     device float *condition [[buffer(1)]],
     constant uint &window_start [[buffer(2)]],
-    constant uint &count [[buffer(3)]],
+    constant uint &latent_frames [[buffer(3)]],
+    constant uint &count [[buffer(4)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
 
   constexpr uint latent_channels = 32;
-  constexpr uint latent_frames = 30;
   constexpr uint latent_h = 9;
   constexpr uint latent_w = 16;
   const uint row = index / latent_channels;
@@ -148,18 +148,18 @@ kernel void pixelumm_generation_merge_window(
     device float *result [[buffer(1)]],
     device const ushort *weights [[buffer(2)]],
     constant uint &start_frame [[buffer(3)]],
-    constant uint &count [[buffer(4)]],
+    constant uint &output_frames [[buffer(4)]],
+    constant uint &count [[buffer(5)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
   constexpr uint channels = 3;
-  constexpr uint output_frames = 120;
   constexpr uint window_frames = 40;
   constexpr uint overlap_frames = 20;
   constexpr uint height = 288;
   constexpr uint width = 512;
   constexpr uint frame_pixels = height * width;
-  constexpr uint channel_pixels = output_frames * frame_pixels;
+  const uint channel_pixels = output_frames * frame_pixels;
   const uint local_frame = (index / frame_pixels) % window_frames;
   const uint channel = index / (window_frames * frame_pixels);
   const uint spatial = index % frame_pixels;

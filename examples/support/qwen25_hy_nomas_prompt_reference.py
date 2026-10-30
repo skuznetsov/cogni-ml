@@ -295,6 +295,49 @@ def _encoding_rows(encoding: Any, key: str) -> list[int]:
     return row
 
 
+def validate_untruncated_preflight(
+    untruncated_token_ids: Any,
+    padded_token_ids: Any,
+    attention_mask: Any,
+    crop_start: Any,
+) -> dict[str, Any]:
+    """Prove the upstream padded tokenization did not discard prompt tokens."""
+    if (
+        isinstance(crop_start, bool)
+        or not isinstance(crop_start, int)
+        or not 0 < crop_start <= MAX_CROP_START
+    ):
+        raise ValueError("untruncated preflight crop_start is outside the pinned range")
+    maximum_raw_length = BASE_SEQUENCE_LENGTH + crop_start
+    if not isinstance(untruncated_token_ids, list) or not untruncated_token_ids:
+        raise ValueError("untruncated prompt token IDs must be a nonempty list")
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in untruncated_token_ids):
+        raise ValueError("untruncated prompt token IDs must be integers")
+    if len(untruncated_token_ids) > maximum_raw_length:
+        raise ValueError(
+            "untruncated prompt exceeds the trained 1280-token suffix; truncation is forbidden"
+        )
+    if len(untruncated_token_ids) <= crop_start:
+        raise ValueError("untruncated prompt has no visible token at crop_start")
+    if not isinstance(padded_token_ids, list) or len(padded_token_ids) != maximum_raw_length:
+        raise ValueError("padded prompt token IDs do not match the configured raw width")
+    if not isinstance(attention_mask, list) or len(attention_mask) != maximum_raw_length:
+        raise ValueError("padded prompt attention mask does not match the configured raw width")
+    if padded_token_ids[: len(untruncated_token_ids)] != untruncated_token_ids:
+        raise ValueError("padded and untruncated prompt tokenization differs")
+    if any(value != 1 for value in attention_mask[: len(untruncated_token_ids)]):
+        raise ValueError("untruncated prompt has a masked token")
+    if any(value != 0 for value in attention_mask[len(untruncated_token_ids) :]):
+        raise ValueError("padded prompt mask does not begin after the untruncated prompt")
+    return {
+        "method": "apply_chat_template_without_truncation_or_padding",
+        "raw_length": len(untruncated_token_ids),
+        "maximum_raw_length": maximum_raw_length,
+        "token_ids_sha256": _canonical_json_sha256(untruncated_token_ids),
+        "truncation_required": False,
+    }
+
+
 def build_prompt(
     checkpoint_root: Path,
     checkpoint_receipt: Path,
@@ -366,11 +409,31 @@ def build_prompt(
     if not isinstance(rendered_prompt, str):
         raise ValueError("Qwen tokenizer did not return a rendered chat string")
 
+    # `TextEncoder.text2tokens` uses truncation=True at 1280 + crop_start.
+    # Tokenize the exact chat messages once without truncation or padding first,
+    # then prove the trained-path output contains those same tokens unchanged.
+    preflight_encoding = tokenizer.apply_chat_template(
+        [messages],
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_attention_mask=True,
+        truncation=False,
+        padding=False,
+    )
+    untruncated_token_ids = _encoding_rows(preflight_encoding, "input_ids")
+
     # This call is the exact extracted upstream text2tokens implementation.
     encoding = encoder.text2tokens([prompt], data_type="video", max_length=BASE_SEQUENCE_LENGTH)
     token_ids = _encoding_rows(encoding, "input_ids")
     attention_mask = _encoding_rows(encoding, "attention_mask")
     expected_raw_length = BASE_SEQUENCE_LENGTH + crop_start
+    untruncated_preflight = validate_untruncated_preflight(
+        untruncated_token_ids,
+        token_ids,
+        attention_mask,
+        crop_start,
+    )
     if len(token_ids) != expected_raw_length or len(attention_mask) != expected_raw_length:
         raise ValueError("upstream tokenizer raw width does not equal 1280 plus crop_start")
     if token_ids[marker_start:crop_start] != marker_ids:
@@ -460,6 +523,7 @@ def build_prompt(
         "cropped_token_ids": cropped_ids,
         "raw_token_ids_sha256": _canonical_json_sha256(token_ids),
         "raw_mask_sha256": _canonical_json_sha256(attention_mask),
+        "untruncated_preflight": untruncated_preflight,
         "cropped_token_ids_sha256": _canonical_json_sha256(cropped_ids),
         "cropped_attention_mask_sha256": _canonical_json_sha256(cropped_mask),
         "padding": {
@@ -531,6 +595,18 @@ def validate_prompt_metadata(
         raise ValueError("HyNomas raw attention mask does not match the producer inputs")
     if metadata.get("token_ids") != token_ids or metadata.get("attention_mask") != attention_mask:
         raise ValueError("HyNomas prompt token arrays differ from the producer inputs")
+    preflight = metadata.get("untruncated_preflight")
+    if preflight is not None:
+        if not isinstance(preflight, dict):
+            raise ValueError("HyNomas untruncated preflight metadata is malformed")
+        preflight_length = preflight.get("raw_length")
+        if isinstance(preflight_length, bool) or not isinstance(preflight_length, int) or not 0 < preflight_length <= raw_length:
+            raise ValueError("HyNomas untruncated preflight length is invalid")
+        expected_preflight = validate_untruncated_preflight(
+            token_ids[:preflight_length], token_ids, attention_mask, crop_start
+        )
+        if preflight != expected_preflight:
+            raise ValueError("HyNomas untruncated preflight does not bind the raw prompt tokens")
     if metadata.get("cropped_token_ids") != token_ids[crop_start:]:
         raise ValueError("HyNomas cropped token IDs are not the raw suffix")
     if metadata.get("cropped_attention_mask") != attention_mask[crop_start:]:

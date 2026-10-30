@@ -172,6 +172,16 @@ module ML::Video
       @scratch_bytes + @mps_workspace_bytes
     end
 
+    # Freeze a continuation provider after block construction and before the
+    # first command. All existing intermediate banks remain shared and fixed.
+    def attach_history_provider!(provider : HyNomasMPSHistoryProvider) : Nil
+      if @released || @last_chain
+        raise ArgumentError.new("Hy-Nomas history provider must precede serial encode")
+      end
+      workspace.attach_history_provider!(provider)
+      @mps_workspace_bytes = workspace.resident_bytes
+    end
+
     # Return a detached registry view so callers can inspect order without
     # reordering the owner's execution schedule. This CPU-side copy is never
     # created from the encode path.

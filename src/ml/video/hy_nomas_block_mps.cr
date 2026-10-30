@@ -11,6 +11,19 @@ require "./hy_nomas_mps_activation"
 require "./hy_nomas_mps_rms"
 
 module ML::Video
+  # Setup-bound continuation extension. The serial owner transfers its lifetime
+  # to the workspace, and each encode selects a registered layer without
+  # rebinding graph resources or changing the current block's arithmetic.
+  abstract class HyNomasMPSHistoryProvider
+    abstract def resident_bytes : Int64
+    abstract def validate_bindings!(tokens : Int32, heads : Int32, head_dim : Int32,
+                                    query : ML::MetalBuffer, key : ML::MetalBuffer,
+                                    value : ML::MetalBuffer, output : ML::MetalBuffer) : Nil
+    abstract def validate_chain!(chain : ML::Metal::MPSCommandChain) : Nil
+    abstract def encode(chain : ML::Metal::MPSCommandChain, block_index : Int32) : Nil
+    abstract def release : Nil
+  end
+
   # Fixed-buffer MPS plans for every linear operation plus one canonical or
   # opt-in compact SDPA plan. The caller owns this workspace and its input,
   # weight, and block scratch Arenas; the weight expansion and attention stages are
@@ -53,6 +66,8 @@ module ML::Video
     @scratch_buffers : Array(ML::MetalBuffer)
     @weight_buffers : Array(ML::MetalBuffer)
     @attention_plan : (HyNomasAttentionMPSPlan | HyNomasCompactAttentionMPSPlan)? = nil
+    @history_provider : HyNomasMPSHistoryProvider? = nil
+    @active_block_index = 0_i32
     @norm_plan : HyNomasMPSLayerNorm::Plan
     @allow_shared_modulation : Bool
     @attention_clear_pipeline : ML::Metal::ComputePipeline? = nil
@@ -219,7 +234,22 @@ module ML::Video
     end
 
     def resident_bytes : Int64
-      @arena.resident_bytes + (@attention_plan.try(&.resident_bytes) || 0_i64) + @rms_plans.values.sum(&.resident_bytes)
+      @arena.resident_bytes + (@attention_plan.try(&.resident_bytes) || 0_i64) +
+        (@history_provider.try(&.resident_bytes) || 0_i64) + @rms_plans.values.sum(&.resident_bytes)
+    end
+
+    # This setup-only transition validates the complete shared Q/K/V inventory
+    # before replacing the square attention plan. Ownership transfers only on
+    # success; the provider must retain its cache and prepared plans until the
+    # workspace's normal terminal-drained release.
+    def attach_history_provider!(provider : HyNomasMPSHistoryProvider) : Nil
+      if @released || @last_chain || @history_provider || @serial_bindings.empty?
+        raise ArgumentError.new("Hy-Nomas history provider requires an unused registered serial workspace")
+      end
+      @serial_bindings.each { |binding| validate_history_bindings!(provider, binding.block) }
+      @attention_plan.try(&.release)
+      @attention_plan = nil
+      @history_provider = provider
     end
 
     # Setup-only admission for a bounded serial owner. All graph-bound
@@ -359,6 +389,7 @@ module ML::Video
       validate_workspace_allocations!
       validate_linear_plans!(serial.try(&.linear) || @operations)
       validate_attention_plan!(block)
+      @history_provider.try(&.validate_chain!(chain))
 
       # Validate the chain before any native linear work is appended. The
       # attention plan cannot move between in-flight chains.
@@ -366,6 +397,9 @@ module ML::Video
       if binding = serial
         @operations = binding.linear
         @rms_operations = binding.rms
+        if @history_provider
+          @active_block_index = @serial_bindings.index(binding).not_nil!.to_i32
+        end
       end
       @last_chain = chain
     end
@@ -385,7 +419,6 @@ module ML::Video
              output.same?(@block.checkpoints["joint.attention"])
         raise ArgumentError.new("Hy-Nomas MPS attention binding changed")
       end
-      plan = @attention_plan || raise ArgumentError.new("Hy-Nomas MPS attention plan is unavailable")
       if @attention_tokens < @config.joint_tokens
         count = HyNomasDualStreamBlock.checked_count(@config.batches,
           @config.joint_tokens, @config.dim)
@@ -395,7 +428,12 @@ module ML::Video
           .set_value(count.to_u32, 1)
           .dispatch_1d(count)
       end
-      plan.encode(chain)
+      if provider = @history_provider
+        provider.encode(chain, @active_block_index)
+      else
+        plan = @attention_plan || raise ArgumentError.new("Hy-Nomas MPS attention plan is unavailable")
+        plan.encode(chain)
+      end
     end
 
     # Backend hook: derive the encoder from the chain registered by block
@@ -640,6 +678,10 @@ module ML::Video
     end
 
     private def validate_attention_plan!(block : HyNomasDualStreamBlock) : Nil
+      if provider = @history_provider
+        validate_history_bindings!(provider, block)
+        return
+      end
       plan = @attention_plan || raise ArgumentError.new("Hy-Nomas MPS attention plan is unavailable")
       checkpoints = block.checkpoints
       q = checkpoints["joint.query"]
@@ -653,6 +695,14 @@ module ML::Video
       plan.validate_bindings!(q, k, v, output)
     end
 
+    private def validate_history_bindings!(provider : HyNomasMPSHistoryProvider,
+                                           block : HyNomasDualStreamBlock) : Nil
+      checkpoints = block.checkpoints
+      provider.validate_bindings!(@attention_tokens, @config.heads, @config.head_dim,
+        checkpoints["joint.query"], checkpoints["joint.key"],
+        checkpoints["joint.value"], checkpoints["joint.attention"])
+    end
+
     private def release_prepared_plans : Nil
       @activation_plans.each_value(&.release)
       @activation_plans.clear
@@ -660,6 +710,8 @@ module ML::Video
       @rms_plans.clear
       @attention_plan.try(&.release)
       @attention_plan = nil
+      @history_provider.try(&.release)
+      @history_provider = nil
       @plans.each_value(&.release)
       @plans.clear
     end

@@ -25,10 +25,10 @@ module HyNomasGeneration
   STEM_SHA        = "7eb73ebf42f6681e21870dc2d2d4b592846ba15ed5bf5f9a6c7a83d39c2d8d04"
   HEAD_FILE       = "/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-head-20261027/source/head-f32.safetensors"
   HEAD_SHA        = "d0e985e45b6b5fcebde381dd4b61f3b77394bd288323cd8afe2a7604584e6e9f"
-  # This entry point is one fixed, producer-authenticated first-segment pilot.
-  # Pinning its whole manifest also binds the prompt, saved Qwen crop, source
-  # identities, seeds and geometry; a caller-selected digest cannot change it.
-  INPUTS_SHA = "5b162b8bf4b28c6cfacd8a3d8c14a7758b699034b2a46e84c224522eb0a75a7b"
+  # The legacy fixture remains immutable. Conditioned v2 inputs require an
+  # explicit opt-in and additionally authenticate their upstream Qwen crop.
+  INPUTS_SHA          = "5b162b8bf4b28c6cfacd8a3d8c14a7758b699034b2a46e84c224522eb0a75a7b"
+  PROMPT_TEMPLATE_SHA = "3e7b69bdf2a057bf2d6a8322dfb8ad619e686e4e8240b65f29e94492bee0c4a6"
   alias TensorFile = PixelUMMTwoBlockProbe::TensorFile
   alias Record = PixelUMMBlockProbe::Record
 
@@ -100,15 +100,27 @@ module HyNomasGeneration
     getter file : TensorFile
     getter records : Hash(String, Record)
     getter prompt : String
+    getter mask : Array(Int32)
+    getter valid_text_tokens : Int32
+    getter compact_text_tokens : Int32
 
-    def initialize(path : String, sha : String)
-      HyNomasGeneration.validate_input_identity!(sha)
+    def initialize(path : String, sha : String, *, conditioned : Bool = false)
+      HyNomasGeneration.validate_input_identity!(sha) unless conditioned
       @file = TensorFile.new(File.realpath(path), sha)
       doc = @file.document
-      unless doc["schema"].as_s == "cogni_ml.hy_nomas_generation_inputs/v1" &&
-             doc["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION
+      unless doc["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION
         raise ArgumentError.new("generation input provenance mismatch")
       end
+      if conditioned
+        @mask = HyNomasGeneration.conditioned_mask!(doc)
+      else
+        unless doc["schema"].as_s == "cogni_ml.hy_nomas_generation_inputs/v1"
+          raise ArgumentError.new("generation input schema mismatch")
+        end
+        @mask = MASK.dup
+      end
+      @valid_text_tokens = @mask.sum
+      @compact_text_tokens = ((@valid_text_tokens + 63) // 64) * 64
       @prompt = doc["prompt"].as_s
       raise ArgumentError.new("generation prompt is empty") if @prompt.empty?
       @records = @file.records("tensors")
@@ -119,6 +131,7 @@ module HyNomasGeneration
         raise ArgumentError.new("generation input shape/dtype mismatch: #{name}") unless r.dtype == dtype && r.shape == shape
       end
       @file.validate_ranges!(@records.values, contiguous: true)
+      authenticate_conditioning! if conditioned
     end
 
     def upload!(name : String, arena : ML::Video::Arena) : ML::MetalBuffer
@@ -132,6 +145,104 @@ module HyNomasGeneration
     def bytes(names : Array(String)) : Int64
       names.sum { |name| @records[name].nbytes }
     end
+
+    # Setup-only file authentication. This performs no neural computation or
+    # GPU synchronization, and binds the uploaded crop to the actual oracle
+    # sidecar rather than trusting a caller-authored provenance description.
+    private def authenticate_conditioning! : Nil
+      source = @file.document["qwen_source"]
+      path = source["reference_path"].as_s
+      sidecar = source["sidecar_path"].as_s
+      {path, sidecar}.each do |name|
+        unless Path[name].absolute? && File.file?(name) && !File.symlink?(name)
+          raise ArgumentError.new("conditioned Qwen sources must be regular absolute files")
+        end
+      end
+      unless PixelUMMBlockProbe.sha_file(path) == source["reference_sha256"].as_s &&
+             PixelUMMBlockProbe.sha_file(sidecar) == source["sidecar_sha256"].as_s &&
+             File.size(sidecar) == source["sidecar_bytes"].as_i64
+        raise ArgumentError.new("conditioned Qwen source identity mismatch")
+      end
+      reference = JSON.parse(File.read(path))
+      descriptor = reference["sidecars"]["bf16"]
+      unless reference["schema"].as_s == "cogni_ml.qwen25_vl_pretrained_decoder_prefix_reference" &&
+             reference["schema_version"].as_i == 1 &&
+             reference["hy_nomas_prompt"] == source["prompt_contract"] &&
+             descriptor["sha256"] == source["sidecar_sha256"] &&
+             descriptor["nbytes"] == source["sidecar_bytes"] &&
+             descriptor["encoding"].as_s == "bfloat16-le" &&
+             File.realpath(File.join(File.dirname(path), descriptor["path"].as_s)) == File.realpath(sidecar)
+        raise ArgumentError.new("conditioned Qwen reference/crop binding mismatch")
+      end
+      @file.verify_payload!
+      record = @records["input.qwen_bf16"]
+      crop = source["crop"].as_a.map(&.as_i64)
+      offset = (26_i64 * crop[1] + crop[0]) * 3584 * 2
+      unless HyNomasGeneration.sha_range(sidecar, offset, record.nbytes) == record.sha256 &&
+             HyNomasGeneration.sha_range(@file.payload, record.offset, record.nbytes) == record.sha256
+        raise ArgumentError.new("conditioned Qwen tensor differs from its authenticated state26 crop")
+      end
+    end
+  end
+
+  def sha_range(path : String, offset : Int64, bytes : Int64) : String
+    raise ArgumentError.new("invalid authenticated source range") unless offset >= 0 && bytes > 0 && offset <= File.size(path) - bytes
+    digest = Digest::SHA256.new
+    buffer = Bytes.new(Math.min(bytes, 1024_i64 * 1024).to_i32)
+    File.open(path) do |io|
+      io.seek(offset)
+      remaining = bytes
+      while remaining > 0
+        chunk = buffer[0, Math.min(remaining, buffer.size.to_i64).to_i32]
+        io.read_fully(chunk)
+        digest.update(chunk)
+        remaining -= chunk.size
+      end
+    end
+    digest.hexfinal
+  end
+
+  # Pure metadata gate, also exercised without Metal or model weights. The
+  # producer separately validates exact pinned tokenization with no truncation.
+  def conditioned_mask!(doc : JSON::Any) : Array(Int32)
+    source = doc["qwen_source"]
+    contract = source["prompt_contract"]
+    unless doc["schema"].as_s == "cogni_ml.hy_nomas_generation_inputs/v2" &&
+           doc["schema_version"].as_i == 2 &&
+           doc["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&
+           source["upstream_revision"] == doc["upstream_revision"] &&
+           contract["upstream_revision"] == doc["upstream_revision"] &&
+           source["template_name"].as_s == "li-dit-encode-video-json" &&
+           contract["template_name"] == source["template_name"] &&
+           source["template_sha256"].as_s == PROMPT_TEMPLATE_SHA &&
+           contract["template_sha256"] == source["template_sha256"]
+      raise ArgumentError.new("conditioned prompt schema/template provenance mismatch")
+    end
+    prompt = doc["prompt"].as_s
+    unless !prompt.strip.empty? && contract["prompt"].as_s == prompt &&
+           source["prompt_sha256"].as_s == Digest::SHA256.hexdigest(prompt) &&
+           contract["prompt_sha256"] == source["prompt_sha256"] &&
+           !contract["untruncated_preflight"]["truncation_required"].as_bool
+      raise ArgumentError.new("conditioned prompt identity or truncation mismatch")
+    end
+    crop = source["crop"].as_a.map(&.as_i)
+    unless source["state_index"].as_i == 26 && source["hidden_size"].as_i == 3584 &&
+           source["crop_tokens"].as_i == 1280 && crop.size == 2 && (1..256).includes?(crop[0]) &&
+           crop[1] == crop[0] + 1280 && contract["crop_start"].as_i == crop[0] &&
+           contract["raw_length"].as_i == crop[1] &&
+           source["raw_sequence_length"].as_i == crop[1] &&
+           source["sidecar_bytes"].as_i64 == 27_i64 * crop[1] * 3584 * 2
+      raise ArgumentError.new("conditioned state26 crop geometry mismatch")
+    end
+    mask = source["cropped_attention_mask"].as_a.map(&.as_i)
+    valid = mask.sum
+    unless mask.size == 1280 && (1..1000).includes?(valid) &&
+           mask.each_with_index.all? { |value, i| value == (i < valid ? 1 : 0) } &&
+           source["valid_tokens"].as_i == valid && doc["geometry"]["qwen_valid_tokens"].as_i == valid &&
+           contract["cropped_attention_mask"] == source["cropped_attention_mask"]
+      raise ArgumentError.new("conditioned mask must be a bounded visible text prefix")
+    end
+    mask
   end
 
   def validate_input_identity!(sha : String) : Nil
@@ -171,14 +282,14 @@ module HyNomasGeneration
     end
   end
 
-  def dit_scratch_bytes : Int64
-    c = CONFIG.compact_valid_text_prefix(23, 64)
+  def dit_scratch_bytes(valid : Int32 = 23, storage : Int32 = 64) : Int64
+    c = CONFIG.compact_valid_text_prefix(valid, storage)
     scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(c).sum { |_, n| n.to_i64 * 4 }
     scratch += 53_i64 * c.joint_rows * c.dim * 4
-    attention = ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(1, 4343, 16, 128, 256, 16)
+    attention = ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(1, 4320 + valid, 16, 128, 256, 16)
     scratch + ML::Video::HyNomasMPSWorkspace.required_weight_stage_count(c).to_i64 * 4 +
       attention.resident_bytes + 2_i64 * CONFIG.joint_rows * (c.dim + c.heads) * 4 +
-      ML::Video::HyNomasMPSSerialWorkspace.compaction_resident_bytes(CONFIG, 23, 64)
+      ML::Video::HyNomasMPSSerialWorkspace.compaction_resident_bytes(CONFIG, valid, storage)
   end
 
   def boundary_bytes : Int64
@@ -190,8 +301,8 @@ module HyNomasGeneration
   def dit_reserve_bytes(inputs : Inputs, steps : Int32 = DEFAULT_STEPS) : Int64
     globals = HyNomasQ4DiTIO::GLOBAL_BINDINGS.sum { |b| b.shape.reduce(1_i64) { |n, d| n * d } * 2 }
     globals + inputs.bytes(%w(input.latent input.qwen_bf16 input.rope_cos input.rope_sin)) +
-      boundary_bytes + dit_scratch_bytes +
-      ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total + euler_schedule_bytes(steps)
+      boundary_bytes + dit_scratch_bytes(inputs.valid_text_tokens, inputs.compact_text_tokens) +
+      ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(inputs.mask, retain_padding: true).total + euler_schedule_bytes(steps)
   end
 
   def stem_bindings : Array(ML::Video::WeightBinding)
@@ -294,13 +405,13 @@ module HyNomasGeneration
       cos = inputs.upload!("input.rope_cos", @inputs_arena)
       sin = inputs.upload!("input.rope_sin", @inputs_arena)
       @patch = ML::Video::HyNomasPatchMPSPlan.new(@latent, 4320, @globals)
-      @refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, MASK, 1000_f32, @globals,
-        ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(MASK, retain_padding: true).total, retain_padding: true)
+      @refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, inputs.mask, 1000_f32, @globals,
+        ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(inputs.mask, retain_padding: true).total, retain_padding: true)
       @serial = ML::Video::HyNomasMPSSerialWorkspace.new(CONFIG,
         Array(ML::Video::Arena).new(54) { @stage }, @patch.output, @refiner.text_output,
         @refiner.vec, @refiner.vec_txt, cos, sin, attention_query_chunk: 256,
-        attention_heads_per_group: 16, valid_text_tokens: 23, allow_shared_modulation: true,
-        full_dit: true, weight_loader: @loader, compact_valid_text: true, compact_text_tokens: 64)
+        attention_heads_per_group: 16, valid_text_tokens: inputs.valid_text_tokens, allow_shared_modulation: true,
+        full_dit: true, weight_loader: @loader, compact_valid_text: true, compact_text_tokens: inputs.compact_text_tokens)
       @final = ML::Video::HyNomasFinalMPSPlan.new(@serial.blocks.last.image_output, @refiner.vec, 4320, @globals)
       @euler = ML::Video::HyNomasEulerPlan.new(@latent, @final.output, @refiner.checkpoints["timestep"], steps: steps, shift: 5_f32)
       actual = @loader.cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes +
@@ -354,12 +465,15 @@ module HyNomasGeneration
     getter head_file : ML::Video::CheckpointFile
     getter stem_plan : ML::Video::WeightPlan
     getter head_plan : ML::Video::WeightPlan
-    getter config = ML::Video::PixelUMMGeneration::Config.new
+    getter config : ML::Video::PixelUMMGeneration::Config
     getter captures = Array(Array(String)).new(36) { [] of String }
     getter workspace_bytes : Int64
     getter named_bytes : Int64
+    getter capture_raw : Bool
 
-    def initialize(inputs : Inputs, budget : Int64)
+    def initialize(inputs : Inputs, budget : Int64, *, @capture_raw : Bool = false,
+                   total_latent_frames : Int32 = ML::Video::PixelUMMGeneration::LATENT_FRAMES)
+      @config = ML::Video::PixelUMMGeneration::Config.new(total_latent_frames)
       @cache = TensorFile.new(File.realpath(PIXEL_CACHE), PIXEL_CACHE_SHA, 16_i64 * GIB)
       doc = @cache.document
       unless doc["schema"].as_s == "cogni_ml.pixelumm_bf16_weight_cache/v1" &&
@@ -382,9 +496,11 @@ module HyNomasGeneration
         @captures, reuse_outputs: true)
       hc = ML::Video::PixelUMMDecoderHeadMPS::Config.new(temporal: 10, height: 18, width: 32)
       @named_bytes = @cache.payload_bytes + @stem_plan.peak_bytes + @head_plan.peak_bytes +
-                     inputs.bytes(%w(input.latent decoder.noise decoder.rope_cos decoder.rope_sin)) +
+                     (@config.latent_elements + @config.output_elements) * sizeof(Float32) +
+                     inputs.bytes(%w(decoder.rope_cos decoder.rope_sin)) +
                      @workspace_bytes + ML::Video::PixelUMMDecoderHeadMPS::Plan.owned_bytes(hc) +
-                     @config.stem_named_bytes_by_name.values.sum + @config.assembly_named_bytes_by_name.values.sum
+                     @config.stem_named_bytes_by_name.values.sum + @config.assembly_named_bytes_by_name.values.sum +
+                     (@capture_raw ? @config.output_elements * sizeof(Float32) : 0_i64)
       raise ArgumentError.new("decoder aggregate named buffers exceed the budget") unless @named_bytes <= budget
     end
 
@@ -409,18 +525,34 @@ module HyNomasGeneration
     @head : ML::Video::PixelUMMDecoderHeadMPS::Plan
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
+    @raw_capture : ML::MetalBuffer? = nil
+    @window_starts : Array(Int32)
 
-    def initialize(inputs : Inputs, latent : ML::MetalBuffer, metadata : DecoderMetadata)
+    def initialize(inputs : Inputs, latent : ML::MetalBuffer, metadata : DecoderMetadata,
+                   *, timeline_noise : ML::MetalBuffer? = nil)
       @named_bytes = metadata.named_bytes
+      @window_starts = metadata.config.window_starts
+      unless latent.size == metadata.config.latent_elements * sizeof(Float32)
+        raise ArgumentError.new("decoder latent extent does not match admitted timeline")
+      end
+      if supplied = timeline_noise
+        unless supplied.size == metadata.config.output_elements * sizeof(Float32) && supplied.storage_mode.shared?
+          raise ArgumentError.new("decoder noise extent does not match admitted timeline")
+        end
+        ML::Video::MetalOps.distinct(latent, supplied)
+      elsif metadata.config.total_latent_frames != ML::Video::PixelUMMGeneration::LATENT_FRAMES
+        raise ArgumentError.new("a long decoder timeline requires its authenticated full-duration noise")
+      end
       # Streaming hashes finish before any decoder Metal allocation.
       metadata.cache.verify_payload!
       @input_arena = ML::Video::Arena.new
+      @raw_capture = @input_arena.alloc("raw_capture", metadata.config.output_elements.to_i32) if metadata.capture_raw
       @weight_arena = ML::Video::Arena.new
       @stem_arena = ML::Video::Arena.new
       @head_arena = ML::Video::Arena.new
       @stem_prepared = ML::Video::PreparedWeights.new(metadata.stem_plan, @stem_arena)
       @head_prepared = ML::Video::PreparedWeights.new(metadata.head_plan, @head_arena)
-      noise = inputs.upload!("decoder.noise", @input_arena)
+      noise = timeline_noise || inputs.upload!("decoder.noise", @input_arena)
       cos = inputs.upload!("decoder.rope_cos", @input_arena)
       sin = inputs.upload!("decoder.rope_sin", @input_arena)
       @stem = ML::Video::PixelUMMGeneration::StemPlan.new(metadata.config, latent: latent, noise: noise,
@@ -431,7 +563,7 @@ module HyNomasGeneration
       config = metadata.config.decoder_config
       @workspace = ML::Video::PixelUMMDecoderBlockMPS::Workspace.new(config,
         captures_by_slot: metadata.captures, max_owned_bytes: metadata.workspace_bytes,
-        reuse_outputs: true, max_passes_per_chain: 5)
+        reuse_outputs: true, max_passes_per_chain: metadata.config.window_count)
       input = @stem.output_bf16
       36.times do |slot|
         HyNomasGeneration.emit("decoder_load_block", block: slot)
@@ -452,8 +584,8 @@ module HyNomasGeneration
       hc = ML::Video::PixelUMMDecoderHeadMPS::Config.new(temporal: 10, height: 18, width: 32)
       @head = ML::Video::PixelUMMDecoderHeadMPS::Plan.new(hc, input: input,
         weights: @head_arena.buffers.dup, max_named_bytes: ML::Video::PixelUMMDecoderHeadMPS::Plan.owned_bytes(hc),
-        max_passes_per_chain: 5)
-      actual = @input_arena.resident_bytes + latent.size + @weight_arena.resident_bytes +
+        max_passes_per_chain: metadata.config.window_count)
+      actual = @input_arena.resident_bytes + latent.size + (timeline_noise.try(&.size) || 0_i64) + @weight_arena.resident_bytes +
                @stem_arena.resident_bytes + metadata.stem_plan.staging_bytes +
                @head_arena.resident_bytes + metadata.head_plan.staging_bytes +
                @workspace.named_bytes + @head.named_bytes +
@@ -466,17 +598,25 @@ module HyNomasGeneration
       @assembly.output_f32
     end
 
+    def raw_output : ML::MetalBuffer
+      @raw_capture || raise ArgumentError.new("raw decoder capture was not admitted")
+    end
+
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
       raise ArgumentError.new("decoder request is single-use") if @released || @chain
       @chain = chain
       @stem_prepared.encode(chain.encoder)
       @head_prepared.encode(chain.encoder)
-      ML::Video::PixelUMMGeneration::WINDOW_STARTS.each_with_index do |start, index|
+      @window_starts.each_with_index do |start, index|
         @stem.encode(chain, start)
         @blocks.each(&.encode(chain))
         @head.encode(chain)
         @assembly.encode_merge(chain, window_bf16: @head.output, start_latent_frame: start)
         HyNomasGeneration.emit("decoder_window_encoded", window: index + 1, start_latent_frame: start)
+      end
+      if raw = @raw_capture
+        ML::Video::MetalOps.copy(chain.encoder, @assembly.output_f32, raw,
+          (raw.size // sizeof(Float32)).to_i32)
       end
       @assembly.encode_finalize(chain)
     end

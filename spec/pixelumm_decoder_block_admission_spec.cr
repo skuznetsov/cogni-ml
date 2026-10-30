@@ -731,17 +731,17 @@ describe ML::Video::PixelUMMDecoderBlockMPS::Workspace do
 end
 
 describe ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor do
-  it "supports the five-window 36-plan ceiling and rejects wider caps" do
-    expect_raises(ArgumentError, /between 1 and 5/) do
+  it "supports the thirty-second 36-plan ceiling and rejects wider caps" do
+    expect_raises(ArgumentError, /between 1 and 35/) do
       ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 0)
     end
-    expect_raises(ArgumentError, /between 1 and 5/) do
-      ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 6)
+    expect_raises(ArgumentError, /between 1 and 35/) do
+      ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 36)
     end
 
-    cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 5)
-    5.times { pixelumm_finish_pass(cursor, 36_u64) }
-    cursor.passes_on_chain.should eq(5)
+    cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(36, 35)
+    35.times { pixelumm_finish_pass(cursor, 36_u64) }
+    cursor.passes_on_chain.should eq(35)
     expect_raises(ArgumentError, /per-chain pass limit/) do
       cursor.validate_slot!(36_u64, 0,
         previous_terminal: false, previous_wait_count: 0)

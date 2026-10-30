@@ -112,6 +112,9 @@ def _metadata_fixture(crop_start: int = 3) -> tuple[dict, dict]:
         "forbidden_multimodal_token_ids": dict(prompt_reference.REQUIRED_VIDEO_MARKER_IDS),
         "text_only": True,
     }
+    metadata["untruncated_preflight"] = prompt_reference.validate_untruncated_preflight(
+        token_ids[:visible], token_ids, attention_mask, crop_start
+    )
     positions = [list(range(raw_length)) for _ in range(3)]
     positions_f32 = [[float(value) for value in axis] for axis in positions]
     return metadata, {
@@ -125,6 +128,42 @@ def _metadata_fixture(crop_start: int = 3) -> tuple[dict, dict]:
 
 
 class HyNomasPromptReferenceSpec(unittest.TestCase):
+    def test_untruncated_preflight_rejects_content_beyond_the_trained_suffix(self):
+        crop_start = 108
+        limit = prompt_reference.BASE_SEQUENCE_LENGTH + crop_start
+        exact = list(range(limit))
+        padded_ids = exact + []
+        padded_mask = [1] * limit
+        record = prompt_reference.validate_untruncated_preflight(
+            exact, padded_ids, padded_mask, crop_start
+        )
+        self.assertEqual(record["raw_length"], limit)
+        self.assertEqual(record["maximum_raw_length"], limit)
+        self.assertFalse(record["truncation_required"])
+
+        too_long = list(range(limit + 1))
+        with self.assertRaisesRegex(ValueError, "truncation is forbidden"):
+            prompt_reference.validate_untruncated_preflight(
+                too_long, too_long[:limit], [1] * limit, crop_start
+            )
+
+    def test_untruncated_preflight_binds_padded_tokenization(self):
+        crop_start = 3
+        limit = prompt_reference.BASE_SEQUENCE_LENGTH + crop_start
+        full_ids = [11, 12, 13, 14]
+        padded_ids = full_ids + [0] * (limit - len(full_ids))
+        padded_mask = [1] * len(full_ids) + [0] * (limit - len(full_ids))
+        prompt_reference.validate_untruncated_preflight(
+            full_ids, padded_ids, padded_mask, crop_start
+        )
+
+        mutated = list(padded_ids)
+        mutated[2] = 99
+        with self.assertRaisesRegex(ValueError, "tokenization differs"):
+            prompt_reference.validate_untruncated_preflight(
+                full_ids, mutated, padded_mask, crop_start
+            )
+
     def test_accepts_maximum_authenticated_raw_width_and_suffix_crop(self):
         metadata, values = _metadata_fixture(prompt_reference.MAX_CROP_START)
         self.assertEqual(
@@ -176,6 +215,13 @@ class HyNomasPromptReferenceSpec(unittest.TestCase):
         malformed["token_ids"] = malformed_values["token_ids"]
         malformed["raw_token_ids_sha256"] = prompt_reference._canonical_json_sha256(
             malformed_values["token_ids"]
+        )
+        visible = sum(malformed_values["attention_mask"])
+        malformed["untruncated_preflight"] = prompt_reference.validate_untruncated_preflight(
+            malformed_values["token_ids"][:visible],
+            malformed_values["token_ids"],
+            malformed_values["attention_mask"],
+            malformed["crop_start"],
         )
 
         with self.assertRaisesRegex(ValueError, "first exact occurrence"):

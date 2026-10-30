@@ -1,5 +1,85 @@
 # Hy-Nomas first native video frontier
 
+## Active quality and duration experiment (2026-10-30)
+
+Structural export: VERIFIED within the bounded native execution and file
+integrity scope. Semantic motion quality: VULNERABLE. Full upstream video and
+continuation parity are not established; the default remains unchanged.
+
+Native PixelUMM and the pinned upstream BF16 equations produce bit-identical
+merged raw pixels on the same generated latent and authenticated decoder
+noise against upstream revision
+`911cea6458a89c2663513ff7099561ec190dd491`: maximum pixel error zero, finite
+outputs, and 468 source-weight checks.
+The comparison uses the gathered spatial-tile F32 QK/softmax/PV adapter on
+MPS; it does not establish unmodified CUDA/FlexAttention parity. Tolerances
+remain `atol=rtol=2e-5`.
+
+The matched four-step BF16 prompt A/B uses identical initial noise, seed,
+geometry, decoder and solver, changing only simple versus structured text
+conditioning. The simple arm reproduces its saved control exactly. Selected
+structured-prompt stills show clearer rails and street/building clearance;
+this is not a full-motion quality verdict. Both 120-frame MP4s and a
+synchronized comparison are saved. Conditioning authenticates the pinned
+source/template/mask and saved upstream Qwen state26; this does not measure
+native live text encoding.
+
+A preceding guarded two-segment DiT qualification showed the first thirty
+latent frames bit-identical to the frozen five-second control, a changed next
+segment, and an unchanged unused bank suffix. It qualified prefix preservation
+for that fixture, not upstream continuation or the new scene's visual quality.
+
+The 20-second run contains four linked five-second AR segments and 480 frames
+at 24 fps. It completed in 742.0248 seconds, or 37.1012 seconds per video
+second. The global decoder emitted 23 windows, starting at latent frames
+0,5,...,110. All frames were finite and nonconstant; each segment changed
+from its initial noise and the unused latent-bank suffix stayed unchanged.
+The guard sampled a 33.676 GiB peak, 11.782 GiB minimum cache-aware headroom,
+and 9.31 MiB swap growth. Limits were a 10% reserve, 35 GiB footprint,
+64 MiB swap growth, and 1200 seconds. The run passed. These are sampled
+resource observations; they do not bound between-sample spikes or prove
+perceptual quality. Instrumented DiT and decoder encode paths recorded zero
+allocations, readbacks, or preterminal waits, and one terminal wait per phase.
+Timing includes preflight, setup, inference and raw export; it excludes saved
+conditioning preparation and MP4 encoding.
+
+The shared prompt is one authenticated scene description with
+`contained_actions: []`, 342 valid text tokens, and continuous motion in
+`visual_description_long`. Pinned upstream's no-action branch has no action
+offsets or tail masks; this supplies shared scene conditioning without
+per-segment directorial control or a guarantee that described events occur at
+specified times. Selected frames showed the tram near the camera around
+7.5–12.5 seconds and far away around 17.5–19.958 seconds. The user's full-motion
+review identifies the same tram exiting beyond the frame, then returning
+backward along its previous track/path to the scene middle, not as another tram
+on the nearer opposite-direction tracks. The requested trajectory is
+VULNERABLE; the reversal's cause is unresolved among model, prompt, and native
+continuation. This is a human full-motion observation, not framewise tracking
+or a perceptual metric.
+
+The continuation keeps layer-specific F32 K/V, valid prior video/text rows,
+global temporal RoPE, and the pinned separate noisy cache-writer forward after
+four read-only denoise forwards (`sigma=0.206897`, `t=206.897`). Upstream
+history is BF16, while native history is F32. The initial, cache-noise, and
+pixel-noise banks are authenticated MPS-generated inputs, not stock upstream
+CPU-seed RNG values. Therefore the run is not a full upstream continuation
+reproduction. The next discriminator is a source-faithful upstream segment-2
+run with the same shared prefix, comparing cache state, intermediates, and raw
+output before attributing visual differences to the model.
+
+The frozen run identity is parent HEAD `0757d5682be0c521927b035de3fb6cbcc07ea17e`,
+binary SHA256 `72d429dbafbe21cf7055b880d4e2f75a6eceeba987fe53ba3608b01e88e96a37`,
+and 45 authenticated modified-source files. The post-run mechanical format
+pass changed five files; `formatting-lineage.json` verifies that each equals
+`crystal tool format` applied to its frozen source, with the other forty files
+unchanged. A separate release rebuild, 71 Crystal examples, 32 Python tests
+(one skipped), and the format check pass. This does not imply a model rerun.
+Evidence root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty`
+(`validation.json`, `identity.json`, and `correlated-adversary.json`). The
+evidence packet is saved at
+`.landmark/evidence/2026-10-30-hy-nomas-quality-continuation.json`.
+
 ## Matched BF16 64/96/128-step previews (2026-10-30)
 
 All three requested five-second previews completed at 512x288, 24 fps with

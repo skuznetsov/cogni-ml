@@ -188,8 +188,8 @@ module ML::Video::PixelUMMDecoderHeadMPS
                    max_named_bytes : Int64,
                    captures : Array(String) = [] of String,
                    @max_passes_per_chain : Int32 = 1)
-      unless (1..5).includes?(@max_passes_per_chain)
-        raise ArgumentError.new("PixelUMM head max_passes_per_chain must be between 1 and 5")
+      unless (1..ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor::MAX_PASSES).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM head max_passes_per_chain exceeds the bounded decoder timeline")
       end
       @pass_cursor = ML::Video::PixelUMMDecoderBlockMPS::SerialPassCursor.new(
         1, @max_passes_per_chain)

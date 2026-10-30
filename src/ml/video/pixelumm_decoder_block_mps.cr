@@ -102,6 +102,9 @@ module ML::Video::PixelUMMDecoderBlockMPS
   # workspace. It counts only complete ordered passes and quarantines a
   # command chain after any native submission failure until terminal wait.
   class SerialPassCursor
+    # A thirty-second timeline uses 35 overlapping ten-latent windows. This
+    # bounds reuse on one caller chain; it does not add completion boundaries.
+    MAX_PASSES = 35
     getter slot_count : Int32
     getter max_passes_per_chain : Int32
     getter passes_on_chain : Int32
@@ -111,8 +114,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
 
     def initialize(@slot_count : Int32, @max_passes_per_chain : Int32 = 1)
       raise ArgumentError.new("PixelUMM serial pass cursor needs at least one slot") unless @slot_count > 0
-      unless (1..5).includes?(@max_passes_per_chain)
-        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and 5")
+      unless (1..MAX_PASSES).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and #{MAX_PASSES}")
       end
       @passes_on_chain = 0
       @next_slot = 0
@@ -1109,8 +1112,8 @@ module ML::Video::PixelUMMDecoderBlockMPS
     def initialize(@config : Config, *, captures_by_slot : Array(Array(String)),
                    max_owned_bytes : Int64, @reuse_outputs : Bool = false,
                    @max_passes_per_chain : Int32 = 1)
-      unless (1..5).includes?(@max_passes_per_chain)
-        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and 5")
+      unless (1..SerialPassCursor::MAX_PASSES).includes?(@max_passes_per_chain)
+        raise ArgumentError.new("PixelUMM max_passes_per_chain must be between 1 and #{SerialPassCursor::MAX_PASSES}")
       end
       @config.validate!
       if @config.tiles_h <= 3 && @config.tiles_w <= 3 &&

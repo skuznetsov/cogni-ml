@@ -8,6 +8,8 @@ budget_mib = 22_528_i64
 dit_weights = HyNomasGeneration::DiTWeights::BF16
 steps = HyNomasGeneration::DEFAULT_STEPS
 plan_only = false
+capture_decoder = false
+conditioned_inputs = false
 OptionParser.parse do |p|
   p.banner = "Bounded native Hy-Nomas preview: 120 frames, 512x288, 24 fps"
   p.on("--inputs PATH", "Authenticated fixed preview inputs") { |v| input_path = v }
@@ -17,6 +19,8 @@ OptionParser.parse do |p|
   p.on("--dit-weights MODE", "bf16 (default control) or q4-k (experimental); PixelUMM stays BF16") { |v| dit_weights = HyNomasGeneration.parse_dit_weights(v) }
   p.on("--steps N", "DiT Euler steps (BF16: 1..128; Q4: 1..8; default 8)") { |v| steps = v.to_i32 }
   p.on("--plan-only", "CPU-only metadata and memory admission") { plan_only = true }
+  p.on("--capture-decoder", "Export completed DiT latent and raw decoder values for upstream comparison") { capture_decoder = true }
+  p.on("--conditioned-inputs", "Admit a v2 bundle bound to an authenticated upstream Qwen prompt crop") { conditioned_inputs = true }
 end
 steps = HyNomasGeneration.validate_steps!(steps, dit_weights)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
@@ -25,10 +29,10 @@ unless (16_384..24_576).includes?(budget_mib)
 end
 budget = budget_mib * 1024 * 1024
 request_start = Time.monotonic
-inputs = HyNomasGeneration::Inputs.new(input_path, input_sha)
+inputs = HyNomasGeneration::Inputs.new(input_path, input_sha, conditioned: conditioned_inputs)
 admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index : nil
 q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index.caches.sum(&.payload_bytes)
-metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget)
+metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget, capture_raw: capture_decoder)
 dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
   HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs, steps)
 raise ArgumentError.new("DiT named aggregate exceeds budget") if dit_named > budget
@@ -55,6 +59,7 @@ dit = nil.as(HyNomasGeneration::DiT?)
 decoder = nil.as(HyNomasGeneration::Decoder?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 timings = {} of String => Float64
+diagnostics = {} of String => String
 timings["preflight_seconds"] = preflight_seconds
 metrics = {} of String => Int64
 start = Time.monotonic
@@ -78,6 +83,12 @@ begin
   metrics["dit_segments"] = chain.segment_count.to_i64
   metrics["dit_waits"] = chain.wait_count.to_i64
   HyNomasGeneration.emit("dit_completed", wall_seconds: timings["dit_wall_seconds"], gpu_seconds: chain.gpu_elapsed_seconds)
+  if capture_decoder
+    path = File.join(output_dir, "latent.f32le")
+    HyNomasGeneration.write_fresh_output(path) { |f| f.write(Bytes.new(latent.contents.as(UInt8*), latent.size.to_i32)) }
+    diagnostics["latent"] = path
+    diagnostics["latent_sha256"] = PixelUMMBlockProbe.sha_file(path)
+  end
   dit.release
   dit = nil
   chain.release
@@ -104,6 +115,14 @@ begin
   metrics["decoder_segments"] = chain.segment_count.to_i64
   metrics["decoder_waits"] = chain.wait_count.to_i64
   HyNomasGeneration.emit("decoder_completed", wall_seconds: timings["decoder_wall_seconds"], gpu_seconds: chain.gpu_elapsed_seconds)
+  if capture_decoder
+    raw = decoder.raw_output
+    path = File.join(output_dir, "decoder-raw.f32le")
+    HyNomasGeneration.write_fresh_output(path) { |f| f.write(Bytes.new(raw.contents.as(UInt8*), raw.size.to_i32)) }
+    diagnostics["raw_pixels"] = path
+    diagnostics["raw_pixels_sha256"] = PixelUMMBlockProbe.sha_file(path)
+    diagnostics["scope"] = "opt-in completed-buffer exports after the existing phase waits; raw capture is a GPU copy before display conversion"
+  end
   pixels = decoder.output
   path = File.join(output_dir, "pixels.f32le")
   HyNomasGeneration.write_fresh_output(path) { |f| f.write(Bytes.new(pixels.contents.as(UInt8*), pixels.size.to_i32)) }
@@ -113,6 +132,7 @@ begin
   timings["request_seconds"] = (Time.monotonic - request_start).total_seconds
   receipt = {schema: "cogni_ml.hy_nomas_native_preview/v1", upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION,
              prompt: inputs.prompt, inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
+             qwen_valid_tokens: inputs.valid_text_tokens, compact_text_tokens: inputs.compact_text_tokens,
              qwen_input: "authenticated saved upstream state26 crop; native live text encoding excluded",
              dit_weights: HyNomasGeneration.dit_weights_name(dit_weights),
              dit_quantization_experimental: dit_weights == HyNomasGeneration::DiTWeights::Q4K,
@@ -125,7 +145,7 @@ begin
              output: path, output_bytes: pixels.size, output_sha256: PixelUMMBlockProbe.sha_file(path),
              dit_named_bytes: dit_named, decoder_named_bytes: metadata.named_bytes,
              metric_scope: "allocation/readback counters cover instrumented MetalBuffer methods; opaque MPS resources and direct terminal pixel-file export are excluded",
-             timings: timings, metrics: metrics, full_upstream_video_parity: false}
+             timings: timings, metrics: metrics, diagnostics: diagnostics, full_upstream_video_parity: false}
   HyNomasGeneration.write_fresh_output(File.join(output_dir, "receipt.json")) { |f| f.puts(receipt.to_pretty_json) }
   HyNomasGeneration.emit("preview_pixels_saved", output: path, total_seconds: timings["total_seconds"])
 ensure

@@ -6,6 +6,53 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QUALITY-20S-CONTINUATION-2026-10-30] Native 20-second export passes structural checks; motion trajectory remains vulnerable
+
+- VERIFIED within bounded scope: four linked five-second AR segments produce
+  480 finite, nonconstant 512x288 frames at 24 fps. Four segments changed from
+  initial noise; the unused latent-bank suffix stayed unchanged. Decoder
+  coverage is 23 global windows at latent starts 0, 5, ..., 110. Instrumented DiT
+  and decoder encodes show zero allocations/readbacks/preterminal waits and one
+  terminal wait per phase. These checks establish execution/file integrity,
+  not perceptual quality.
+- Guard passed: 742.0248s total (37.1012s/video-second), 33.676 GiB sampled peak,
+  11.782 GiB minimum cache-aware headroom and 9.31 MiB swap growth under a 10%
+  reserve, 35 GiB cap, 64 MiB swap-growth cap and 1200s timeout. Sampling does not
+  bound inter-sample spikes; timing is one uncontrolled run.
+- Native PixelUMM matches pinned upstream BF16 raw merged pixels on the same
+  latent and decoder noise against revision
+  `911cea6458a89c2663513ff7099561ec190dd491`, with maximum error 0; 468
+  source-weight checks pass at unchanged 2e-5 tolerances. Scope is the gathered
+  spatial-tile F32 QK/softmax/PV MPS adapter, not unmodified CUDA/FlexAttention
+  parity.
+- Matched four-step simple/structured prompt A/B changes only text conditioning;
+  the simple arm reproduces its saved control. Twenty-second prompt uses one
+  shared no-action scene description with 342 valid Qwen tokens, without
+  per-segment directorial control. User full-motion review identifies the same
+  tram exiting beyond frame, then returning backward along its previous
+  track/path to the scene middle, not as another tram on the nearer
+  opposite-direction tracks. The requested trajectory is VULNERABLE; cause
+  remains unresolved among model, prompt and native continuation. This
+  corrects the selected-frame inference; do not infer disappearance, identity
+  loss, or a rail switch.
+- Full upstream continuation parity is not established. Native history is F32 vs
+  pinned upstream BF16, and authenticated MPS-generated noise banks do not
+  reproduce stock upstream CPU-seed RNG values. Do not promote the path as the
+  default. Next discriminator: source-faithful upstream segment2 using the same
+  shared prefix, comparing cache state, intermediates and raw output.
+- Run identity: parent HEAD0757d5682be0c521927b035de3fb6cbcc07ea17e; binary
+  SHA256 `72d429dbafbe21cf7055b880d4e2f75a6eceeba987fe53ba3608b01e88e96a37`;
+  run validation matched all 45 frozen/current source files before formatting.
+  `formatting-lineage.json` verifies five files equal mechanical formatting of
+  their frozen source and forty remain unchanged. A separate release rebuild,
+  71 Crystal examples, 32 Python tests (one skipped), and format checks pass.
+  No model rerun is inferred from this formatting or rebuild.
+- Evidence `/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/sequence-twenty`
+  (`validation.json`, `identity.json`, `correlated-adversary.json`). Saved
+  packet `.landmark/evidence/2026-10-30-hy-nomas-quality-continuation.json`.
+  Refresh on source/binary/input/precision/geometry/backend/device/guard change;
+  timing also decays with load, cache state and thermal conditions.
+
 ### [LM-HY-NOMAS-STEPS-64-96-128-2026-10-30] Longer BF16 schedules qualify numerically without a uniform sampled detail gain
 
 - VERIFIED bounded five-second512x288/24fps previews at64/96/128, matching

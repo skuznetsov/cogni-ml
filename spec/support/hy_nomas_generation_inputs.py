@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -31,6 +32,8 @@ if str(SPEC_SUPPORT) not in sys.path:
 
 SCHEMA = "cogni_ml.hy_nomas_generation_inputs/v1"
 SCHEMA_VERSION = 1
+DYNAMIC_SCHEMA = "cogni_ml.hy_nomas_generation_inputs/v2"
+DYNAMIC_SCHEMA_VERSION = 2
 PINNED_REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
 DEFAULT_UPSTREAM = Path(
     "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024"
@@ -44,6 +47,12 @@ QWEN_REFERENCE_SHA256 = "eb64e5c31bc2178436b2b7dd411af45dea7fa43a8e3ff37a146bc41
 QWEN_SIDECAR_SHA256 = "e7ebc9a784124afc20503435d84d42e0110d7c02054d3fc63fd586ec69ed4995"
 QWEN_SIDECAR_BYTES = 268_627_968
 QWEN_PROMPT_SHA256 = "91246a3eaf20efb68e83f9c6fe1e91afaedd8013a77971ebd74546fe2ed1e5a9"
+QWEN_REFERENCE_SCHEMA = "cogni_ml.qwen25_vl_pretrained_decoder_prefix_reference"
+QWEN_REFERENCE_SCHEMA_VERSION = 1
+QWEN_PREFIX_STATE_INDEX = 26
+QWEN_BASE_SEQUENCE_LENGTH = 1280
+QWEN_HIDDEN_SIZE = 3584
+MAX_DYNAMIC_VALID_TOKENS = 1000
 PROMPT = (
     "A yellow tram turns through a wet downtown intersection at dusk as pedestrians "
     "wait under umbrellas."
@@ -131,6 +140,17 @@ _JSON_KEYS = {
     "upstream_revision", "upstream_sources", "producer",
 }
 _HEX_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_DYNAMIC_QWEN_SOURCE_KEYS = {
+    "reference_schema", "reference_schema_version", "reference_path", "reference_sha256",
+    "sidecar_path", "sidecar_sha256", "sidecar_bytes", "sidecar_encoding",
+    "state_index", "crop", "crop_tokens", "raw_sequence_length", "hidden_size",
+    "valid_tokens", "cropped_attention_mask", "prompt_sha256", "prompt_contract",
+    "upstream_revision", "template_name", "template_sha256", "source_code_hashes",
+}
+_DYNAMIC_SOURCE_CODE_HASH_KEYS = {
+    "oracle_producer", "prompt_helper", "upstream_encoder", "upstream_constants",
+}
+_PROMPT_REFERENCE_HELPER: Any = None
 
 
 class InputsError(RuntimeError):
@@ -164,6 +184,141 @@ def _valid_digest(value: Any) -> bool:
     return isinstance(value, str) and _HEX_DIGEST.fullmatch(value) is not None
 
 
+def _prompt_reference_helper() -> Any:
+    global _PROMPT_REFERENCE_HELPER
+    if _PROMPT_REFERENCE_HELPER is None:
+        helper_path = ROOT / "examples" / "support" / "qwen25_hy_nomas_prompt_reference.py"
+        spec = importlib.util.spec_from_file_location(
+            "qwen25_hy_nomas_prompt_reference_for_generation_inputs", helper_path
+        )
+        if spec is None or spec.loader is None:
+            raise InputsError("cannot load the pinned Qwen prompt contract validator")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _PROMPT_REFERENCE_HELPER = module
+    return _PROMPT_REFERENCE_HELPER
+
+
+def _validate_dynamic_qwen_source(source: Any, prompt: Any) -> int:
+    if type(source) is not dict or set(source) != _DYNAMIC_QWEN_SOURCE_KEYS:
+        raise InputsError("dynamic Qwen source record fields are malformed")
+    helper = _prompt_reference_helper()
+    if (source.get("reference_schema") != QWEN_REFERENCE_SCHEMA
+            or type(source.get("reference_schema_version")) is not int
+            or source["reference_schema_version"] != QWEN_REFERENCE_SCHEMA_VERSION):
+        raise InputsError("dynamic Qwen reference schema mismatch")
+    for key in ("reference_path", "sidecar_path"):
+        value = source.get(key)
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            raise InputsError(f"dynamic Qwen {key} must be an absolute path")
+    for key in ("reference_sha256", "sidecar_sha256", "prompt_sha256"):
+        if not _valid_digest(source.get(key)):
+            raise InputsError(f"dynamic Qwen {key} is malformed")
+    if source.get("sidecar_encoding") != "bfloat16-le":
+        raise InputsError("dynamic Qwen sidecar encoding mismatch")
+    sidecar_bytes = source.get("sidecar_bytes")
+    if (type(sidecar_bytes) is not int or sidecar_bytes <= 0
+            or sidecar_bytes > 512 * 1024 * 1024 or sidecar_bytes % 2):
+        raise InputsError("dynamic Qwen sidecar byte count is invalid")
+    contract = source.get("prompt_contract")
+    if type(contract) is not dict or contract.get("prompt") != prompt or type(prompt) is not str:
+        raise InputsError("dynamic Qwen prompt contract does not bind the bundle prompt")
+    expected_prompt_sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    if (source["prompt_sha256"] != expected_prompt_sha
+            or contract.get("prompt_sha256") != expected_prompt_sha):
+        raise InputsError("dynamic Qwen prompt digest does not match the bundle prompt")
+    if (contract.get("schema") != helper.PROMPT_SCHEMA
+            or type(contract.get("schema_version")) is not int
+            or contract["schema_version"] != helper.PROMPT_SCHEMA_VERSION):
+        raise InputsError("dynamic Qwen prompt contract schema mismatch")
+    if (source.get("upstream_revision") != helper.UPSTREAM_REVISION
+            or contract.get("upstream_revision") != helper.UPSTREAM_REVISION):
+        raise InputsError("dynamic Qwen upstream revision mismatch")
+    if (source.get("template_name") != helper.TEMPLATE_NAME
+            or contract.get("template_name") != helper.TEMPLATE_NAME
+            or source.get("template_sha256") != helper.VIDEO_JSON_TEMPLATE_SHA256
+            or contract.get("template_sha256") != helper.VIDEO_JSON_TEMPLATE_SHA256):
+        raise InputsError("dynamic Qwen template identity mismatch")
+    if source.get("state_index") != QWEN_PREFIX_STATE_INDEX:
+        raise InputsError("dynamic Qwen state index mismatch")
+    if source.get("crop_tokens") != QWEN_BASE_SEQUENCE_LENGTH:
+        raise InputsError("dynamic Qwen crop width mismatch")
+    if source.get("hidden_size") != QWEN_HIDDEN_SIZE:
+        raise InputsError("dynamic Qwen hidden size mismatch")
+
+    crop_start = contract.get("crop_start")
+    raw_length = contract.get("raw_length")
+    if (type(crop_start) is not int or not 0 < crop_start <= helper.MAX_CROP_START
+            or type(raw_length) is not int
+            or raw_length != crop_start + QWEN_BASE_SEQUENCE_LENGTH
+            or source.get("raw_sequence_length") != raw_length
+            or source.get("crop") != [crop_start, raw_length]):
+        raise InputsError("dynamic Qwen crop geometry does not match its prompt contract")
+    if sidecar_bytes != (QWEN_PREFIX_STATE_INDEX + 1) * raw_length * QWEN_HIDDEN_SIZE * 2:
+        raise InputsError("dynamic Qwen sidecar size does not match its hidden-state geometry")
+
+    mask = source.get("cropped_attention_mask")
+    if (not isinstance(mask, list) or len(mask) != QWEN_BASE_SEQUENCE_LENGTH
+            or any(type(value) is not int or value not in (0, 1) for value in mask)):
+        raise InputsError("dynamic Qwen cropped mask must contain 1280 integer values")
+    first_padding = next((index for index, value in enumerate(mask) if value == 0), len(mask))
+    if mask[0] != 1 or any(mask[first_padding:]):
+        raise InputsError("dynamic Qwen cropped mask must be a visible prefix followed by padding")
+    valid_tokens = sum(mask)
+    if (not 1 <= valid_tokens <= MAX_DYNAMIC_VALID_TOKENS
+            or source.get("valid_tokens") != valid_tokens):
+        raise InputsError("dynamic Qwen valid-token count is outside the admitted range")
+    if contract.get("cropped_attention_mask") != mask:
+        raise InputsError("dynamic Qwen mask differs from its prompt contract")
+    if "untruncated_preflight" not in contract:
+        raise InputsError("dynamic Qwen prompt has no untruncated tokenization preflight")
+    token_ids = contract.get("token_ids")
+    attention_mask = contract.get("attention_mask")
+    if not isinstance(token_ids, list) or not isinstance(attention_mask, list):
+        raise InputsError("dynamic Qwen prompt token arrays are missing")
+    positions = [list(range(raw_length)) for _ in range(3)]
+    positions_f32 = [[float(value) for value in axis] for axis in positions]
+    try:
+        helper.validate_prompt_metadata(
+            contract,
+            token_ids,
+            attention_mask,
+            positions_f32,
+            positions,
+            [3, 1, raw_length],
+            0,
+        )
+    except Exception as error:
+        raise InputsError(f"dynamic Qwen prompt contract rejected: {error}") from error
+
+    code_hashes = source.get("source_code_hashes")
+    upstream = contract.get("upstream_source")
+    if (type(code_hashes) is not dict or set(code_hashes) != _DYNAMIC_SOURCE_CODE_HASH_KEYS
+            or type(upstream) is not dict):
+        raise InputsError("dynamic Qwen source-code hash inventory is malformed")
+    expected_hashes = {
+        "oracle_producer": _hash_file(
+            ROOT / "examples" / "support" / "qwen25_pretrained_reference.py"
+        ),
+        "prompt_helper": contract.get("producer_source_sha256"),
+        "upstream_encoder": upstream.get("encoder_source", {}).get("sha256")
+        if type(upstream.get("encoder_source")) is dict else None,
+        "upstream_constants": upstream.get("constants_source", {}).get("sha256")
+        if type(upstream.get("constants_source")) is dict else None,
+    }
+    for key, value in expected_hashes.items():
+        if not _valid_digest(value) or code_hashes.get(key) != value:
+            raise InputsError(f"dynamic Qwen source-code hash binding mismatch: {key}")
+    if code_hashes["prompt_helper"] != _hash_file(
+        ROOT / "examples" / "support" / "qwen25_hy_nomas_prompt_reference.py"
+    ):
+        raise InputsError("dynamic Qwen prompt-helper digest differs from the admitted implementation")
+    if (code_hashes["upstream_encoder"] != helper.UPSTREAM_ENCODER_SHA256
+            or code_hashes["upstream_constants"] != helper.UPSTREAM_CONSTANTS_SHA256):
+        raise InputsError("dynamic Qwen upstream source digests differ from pinned sources")
+    return valid_tokens
+
+
 def _validate_basename(value: Any, suffix: str) -> bool:
     return (isinstance(value, str) and value not in ("", ".", "..")
             and Path(value).name == value and value.endswith(suffix))
@@ -173,18 +328,34 @@ def validate_document(document: Mapping[str, Any], *, payload_bytes: int | None 
     """Validate fixed geometry and exact contiguous tensor inventory without torch."""
     if type(document) is not dict or set(document) != _JSON_KEYS:
         raise InputsError("generation-input document keys are malformed")
-    if document.get("schema") != SCHEMA or type(document.get("schema_version")) is not int or document["schema_version"] != SCHEMA_VERSION:
+    schema = document.get("schema")
+    version = document.get("schema_version")
+    legacy = schema == SCHEMA and type(version) is int and version == SCHEMA_VERSION
+    dynamic = schema == DYNAMIC_SCHEMA and type(version) is int and version == DYNAMIC_SCHEMA_VERSION
+    if not legacy and not dynamic:
         raise InputsError("generation-input schema mismatch")
     if not _validate_basename(document.get("payload"), ".tensors.bin"):
         raise InputsError("payload must be a sibling .tensors.bin basename")
     if not _valid_digest(document.get("payload_sha256")):
         raise InputsError("payload SHA-256 is malformed")
-    if not _same_json_types(GEOMETRY, document.get("geometry")):
-        raise InputsError("fixed generation-input geometry mismatch")
-    if document.get("prompt") != PROMPT or type(document.get("prompt")) is not str:
-        raise InputsError("fixed preview prompt mismatch")
-    if not _same_json_types(QWEN_SOURCE_RECORD, document.get("qwen_source")):
-        raise InputsError("authenticated Qwen source record mismatch")
+    if legacy:
+        if not _same_json_types(GEOMETRY, document.get("geometry")):
+            raise InputsError("fixed generation-input geometry mismatch")
+        if document.get("prompt") != PROMPT or type(document.get("prompt")) is not str:
+            raise InputsError("fixed preview prompt mismatch")
+        if not _same_json_types(QWEN_SOURCE_RECORD, document.get("qwen_source")):
+            raise InputsError("authenticated Qwen source record mismatch")
+    else:
+        if type(document.get("prompt")) is not str:
+            raise InputsError("dynamic preview prompt must be text")
+        valid_tokens = _validate_dynamic_qwen_source(
+            document.get("qwen_source"), document["prompt"]
+        )
+        expected_geometry = dict(GEOMETRY)
+        expected_geometry["qwen_valid_tokens"] = valid_tokens
+        expected_geometry["qwen_crop"] = document["qwen_source"]["crop"]
+        if not _same_json_types(expected_geometry, document.get("geometry")):
+            raise InputsError("dynamic generation-input geometry does not match the Qwen mask")
     if not _same_json_types(NOISE_SEEDS, document.get("noise_seeds")):
         raise InputsError("fixed noise seed inventory mismatch")
     if document.get("upstream_revision") != PINNED_REVISION:
@@ -267,6 +438,18 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _load_qwen_prefix_reference() -> Any:
+    helper_path = ROOT / "examples" / "support" / "qwen25_pretrained_reference.py"
+    spec = importlib.util.spec_from_file_location(
+        "qwen25_pretrained_reference_for_generation_inputs", helper_path
+    )
+    if spec is None or spec.loader is None:
+        raise InputsError("cannot load the authenticated Qwen prefix verifier")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _qwen_source(q4_reference: Any, text_reference: Any) -> tuple[dict[str, Any], Path, tuple]:
     try:
         document, sidecar, reference_sha, sidecar_sha, reference_identity, sidecar_identity = (
@@ -293,6 +476,126 @@ def _qwen_source(q4_reference: Any, text_reference: Any) -> tuple[dict[str, Any]
             or sidecar.stat().st_size != QWEN_SIDECAR_BYTES):
         raise InputsError("Qwen source identity changed after authentication")
     return document, sidecar, (reference_identity, sidecar_identity)
+
+
+def _qwen_source_from_reference(
+    q4_reference: Any,
+    reference_arg: Path | str,
+    prompt_file: Path | str,
+) -> tuple[dict[str, Any], Path, tuple, dict[str, Any]]:
+    reference_path = Path(reference_arg).expanduser()
+    try:
+        reference_path = q4_reference._regular_file(reference_path, "Qwen reference manifest")
+        reference_identity = q4_reference._identity(reference_path)
+        if reference_identity[2] <= 0 or reference_identity[2] > q4_reference.JSON_LIMIT:
+            raise InputsError("Qwen reference manifest exceeds its size bound")
+        reference_bytes = reference_path.read_bytes()
+        if q4_reference._identity(reference_path) != reference_identity:
+            raise InputsError("Qwen reference changed while reading its manifest")
+        reference_digest = hashlib.sha256(reference_bytes).hexdigest()
+        document = json.loads(reference_bytes.decode("utf-8"))
+        qwen_reference = _load_qwen_prefix_reference()
+        qwen_reference._validate_manifest(document)
+        descriptor = document["sidecars"]["bf16"]
+        sidecar, verified_sidecar = qwen_reference._verify_fixture_sidecar(
+            descriptor, reference_path
+        )
+        sidecar_identity = q4_reference._identity(sidecar)
+        prompt_helper = _prompt_reference_helper()
+        supplied_prompt, supplied_prompt_bytes = prompt_helper._read_prompt_file(
+            Path(prompt_file)
+        )
+    except InputsError:
+        raise
+    except Exception as error:
+        raise InputsError(f"authenticated Qwen reference rejected: {error}") from error
+
+    contract = document.get("hy_nomas_prompt")
+    if type(contract) is not dict:
+        raise InputsError("Qwen reference does not contain a natural-prompt contract")
+    if contract.get("prompt") != supplied_prompt:
+        raise InputsError("prompt file differs from the authenticated Qwen reference")
+    prompt_digest = hashlib.sha256(supplied_prompt_bytes).hexdigest()
+    if contract.get("prompt_sha256") != prompt_digest:
+        raise InputsError("Qwen reference prompt digest does not match the prompt file")
+    if "untruncated_preflight" not in contract:
+        raise InputsError("Qwen reference was produced without an untruncated prompt preflight")
+
+    try:
+        input_data = document["inputs"]
+        prompt_helper.validate_prompt_metadata(
+            contract,
+            input_data["token_ids"],
+            input_data["attention_mask"],
+            input_data["position_ids_f32"],
+            input_data["position_ids_for_official_model"],
+            input_data["multimodal_position_shape"],
+            input_data["position_offset"],
+        )
+    except Exception as error:
+        raise InputsError(f"Qwen prompt contract rejected: {error}") from error
+
+    mask = contract.get("cropped_attention_mask")
+    if not isinstance(mask, list) or len(mask) != QWEN_BASE_SEQUENCE_LENGTH:
+        raise InputsError("Qwen reference crop mask must have exactly 1280 positions")
+    valid_tokens = sum(value for value in mask if type(value) is int and value in (0, 1))
+    if not 1 <= valid_tokens <= MAX_DYNAMIC_VALID_TOKENS or any(
+        type(value) is not int or value not in (0, 1) for value in mask
+    ):
+        raise InputsError("Qwen prompt valid-token count must be between 1 and 1000")
+
+    capture = document.get("capture")
+    hidden_states = capture.get("hidden_states") if type(capture) is dict else None
+    shape = hidden_states.get("shape") if type(hidden_states) is dict else None
+    raw_length = contract.get("raw_length")
+    crop_start = contract.get("crop_start")
+    if (not isinstance(shape, list) or len(shape) != 4
+            or shape != [QWEN_PREFIX_STATE_INDEX + 1, 1, raw_length, QWEN_HIDDEN_SIZE]
+            or type(crop_start) is not int or shape[2] != crop_start + QWEN_BASE_SEQUENCE_LENGTH):
+        raise InputsError("Qwen reference hidden-state geometry does not match its prompt crop")
+
+    provenance = document.get("provenance")
+    upstream = contract.get("upstream_source")
+    try:
+        source_code_hashes = {
+            "oracle_producer": provenance["producer_source_sha256"],
+            "prompt_helper": contract["producer_source_sha256"],
+            "upstream_encoder": upstream["encoder_source"]["sha256"],
+            "upstream_constants": upstream["constants_source"]["sha256"],
+        }
+    except (TypeError, KeyError):
+        raise InputsError("Qwen reference source-code hashes are incomplete") from None
+    if any(not _valid_digest(value) for value in source_code_hashes.values()):
+        raise InputsError("Qwen reference source-code hash is malformed")
+
+    source_record = {
+        "reference_schema": document.get("schema"),
+        "reference_schema_version": document.get("schema_version"),
+        "reference_path": str(reference_path),
+        "reference_sha256": reference_digest,
+        "sidecar_path": str(sidecar.resolve(strict=True)),
+        "sidecar_sha256": verified_sidecar["sha256"],
+        "sidecar_bytes": verified_sidecar["nbytes"],
+        "sidecar_encoding": "bfloat16-le",
+        "state_index": QWEN_PREFIX_STATE_INDEX,
+        "crop": [crop_start, crop_start + QWEN_BASE_SEQUENCE_LENGTH],
+        "crop_tokens": QWEN_BASE_SEQUENCE_LENGTH,
+        "raw_sequence_length": raw_length,
+        "hidden_size": QWEN_HIDDEN_SIZE,
+        "valid_tokens": valid_tokens,
+        "cropped_attention_mask": list(mask),
+        "prompt_sha256": prompt_digest,
+        "prompt_contract": contract,
+        "upstream_revision": contract.get("upstream_revision"),
+        "template_name": contract.get("template_name"),
+        "template_sha256": contract.get("template_sha256"),
+        "source_code_hashes": source_code_hashes,
+    }
+    _validate_dynamic_qwen_source(source_record, supplied_prompt)
+    if (q4_reference._identity(reference_path) != reference_identity
+            or q4_reference._identity(sidecar) != sidecar_identity):
+        raise InputsError("Qwen sidecar changed while the reference was admitted")
+    return document, sidecar, (reference_identity, sidecar_identity), source_record
 
 
 def _verify_autoencoder_source(upstream: Path, pixel_reference: Any) -> tuple[Any, dict[str, str]]:
@@ -336,17 +639,34 @@ def _verify_autoencoder_source(upstream: Path, pixel_reference: Any) -> tuple[An
         raise InputsError(f"pinned PixelUMM input helpers rejected: {error}") from error
 
 
-def _read_qwen_crop_on_mps(torch: Any, np: Any, sidecar: Path, device: Any) -> Any:
+def _read_qwen_crop_on_mps(
+    torch: Any,
+    np: Any,
+    sidecar: Path,
+    device: Any,
+    *,
+    raw_sequence_length: int = 1388,
+    crop_start: int = 108,
+) -> Any:
+    if (type(raw_sequence_length) is not int or type(crop_start) is not int
+            or not 108 <= crop_start <= 256
+            or raw_sequence_length != crop_start + QWEN_BASE_SEQUENCE_LENGTH):
+        raise InputsError("Qwen source crop does not match the pinned 1280-token suffix")
     # Host use is limited to authenticated source-byte transport. State selection
     # and the requested crop itself are performed after moving state 26 to MPS.
-    mapping = np.memmap(sidecar, mode="r", dtype="<u2", shape=(27, 1, 1388, 3584))
+    mapping = np.memmap(
+        sidecar,
+        mode="r",
+        dtype="<u2",
+        shape=(QWEN_PREFIX_STATE_INDEX + 1, 1, raw_sequence_length, QWEN_HIDDEN_SIZE),
+    )
     state26_raw = np.array(mapping[26], copy=True)
     del mapping
     state26_cpu = torch.from_numpy(state26_raw).view(torch.bfloat16)
     del state26_raw
     state26 = state26_cpu.to(device=device, dtype=torch.bfloat16)
     del state26_cpu
-    crop = state26[:, 108:1388, :].contiguous()
+    crop = state26[:, crop_start:raw_sequence_length, :].contiguous()
     del state26
     if crop.device.type != "mps" or crop.dtype is not torch.bfloat16 or tuple(crop.shape) != QWEN_SHAPE:
         raise InputsError("Qwen crop did not preserve MPS BF16 source layout")
@@ -445,18 +765,24 @@ def _records_from_payload(payload: bytes) -> dict[str, dict[str, Any]]:
 
 
 def _build_document(payload: bytes, payload_name: str, source_hashes: Mapping[str, str],
-                    torch: Any) -> dict[str, Any]:
+                    torch: Any, *, dynamic_qwen_source: Mapping[str, Any] | None = None) -> dict[str, Any]:
     records = _records_from_payload(payload)
+    dynamic = dynamic_qwen_source is not None
+    geometry = dict(GEOMETRY)
+    if dynamic:
+        crop = dynamic_qwen_source["crop"]
+        geometry["qwen_valid_tokens"] = dynamic_qwen_source["valid_tokens"]
+        geometry["qwen_crop"] = crop
     document = {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
+        "schema": DYNAMIC_SCHEMA if dynamic else SCHEMA,
+        "schema_version": DYNAMIC_SCHEMA_VERSION if dynamic else SCHEMA_VERSION,
         "payload": payload_name,
         "payload_bytes": len(payload),
         "payload_sha256": hashlib.sha256(payload).hexdigest(),
         "tensors": records,
-        "geometry": GEOMETRY,
-        "prompt": PROMPT,
-        "qwen_source": QWEN_SOURCE_RECORD,
+        "geometry": geometry,
+        "prompt": dynamic_qwen_source["prompt_contract"]["prompt"] if dynamic else PROMPT,
+        "qwen_source": dict(dynamic_qwen_source) if dynamic else QWEN_SOURCE_RECORD,
         "noise_seeds": NOISE_SEEDS,
         "upstream_revision": PINNED_REVISION,
         "upstream_sources": dict(source_hashes),
@@ -511,6 +837,16 @@ def _parser() -> argparse.ArgumentParser:
                         help="new manifest path beneath /opt/mldata_ssd")
     parser.add_argument("--upstream", type=Path, default=DEFAULT_UPSTREAM,
                         help=f"pinned source checkout at {PINNED_REVISION}")
+    parser.add_argument(
+        "--qwen-reference",
+        type=Path,
+        help="authenticated dynamic Qwen prefix manifest (requires --prompt-file)",
+    )
+    parser.add_argument(
+        "--prompt-file",
+        type=Path,
+        help="the exact UTF-8 prompt used to produce --qwen-reference",
+    )
     return parser
 
 
@@ -531,7 +867,21 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
     except Exception as error:
         raise InputsError(f"cannot import authenticated input helpers: {error}") from error
 
-    qwen_document, qwen_sidecar, identities = _qwen_source(q4_reference, text_reference)
+    reference_arg = getattr(args, "qwen_reference", None)
+    prompt_file = getattr(args, "prompt_file", None)
+    if (reference_arg is None) != (prompt_file is None):
+        raise InputsError("--qwen-reference and --prompt-file must be supplied together")
+    dynamic_qwen_source = None
+    if reference_arg is None:
+        qwen_document, qwen_sidecar, identities = _qwen_source(q4_reference, text_reference)
+        raw_sequence_length = 1388
+        crop_start = 108
+    else:
+        qwen_document, qwen_sidecar, identities, dynamic_qwen_source = (
+            _qwen_source_from_reference(q4_reference, reference_arg, prompt_file)
+        )
+        raw_sequence_length = dynamic_qwen_source["raw_sequence_length"]
+        crop_start = dynamic_qwen_source["crop"][0]
     upstream = Path(args.upstream).expanduser().resolve(strict=True)
     try:
         source_hashes = dit_reference._verify_upstream(upstream)
@@ -554,16 +904,29 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
         raise InputsError("MPS is required; CPU tensor fallback is forbidden")
     device = torch.device("mps")
 
-    qwen = _read_qwen_crop_on_mps(torch, np, qwen_sidecar, device)
+    qwen = _read_qwen_crop_on_mps(
+        torch, np, qwen_sidecar, device,
+        raw_sequence_length=raw_sequence_length,
+        crop_start=crop_start,
+    )
     if q4_reference._identity(qwen_sidecar) != identities[1]:
         raise InputsError("authenticated Qwen BF16 sidecar changed during MPS transfer")
     tensors = _generate_tensors(torch, helpers, pixel_modules, device)
     tensors["input.qwen_bf16"] = qwen
     ordered_tensors = {name: tensors[name] for name, _, _ in TENSOR_SPECS}
     payload = _pack_mps_tensors(torch, ordered_tensors)
-    if q4_reference._identity(QWEN_REFERENCE) != identities[0]:
+    reference_path = QWEN_REFERENCE if dynamic_qwen_source is None else Path(
+        dynamic_qwen_source["reference_path"]
+    )
+    if q4_reference._identity(reference_path) != identities[0]:
         raise InputsError("authenticated Qwen reference changed during input preparation")
-    document = _build_document(payload, payload_path.name, source_hashes, torch)
+    document = _build_document(
+        payload,
+        payload_path.name,
+        source_hashes,
+        torch,
+        dynamic_qwen_source=dynamic_qwen_source,
+    )
     _publish_bundle(output, payload_path, document, payload)
     return {
         "manifest": str(output),

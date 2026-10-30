@@ -83,6 +83,73 @@ describe "bounded first-video input identity" do
   end
 end
 
+private def conditioned_document(valid : Int32 = 67) : JSON::Any
+  prompt = "A tram follows the rails through the intersection."
+  mask = Array.new(1280) { |i| i < valid ? 1 : 0 }
+  contract = {prompt: prompt, prompt_sha256: Digest::SHA256.hexdigest(prompt),
+              upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION,
+              template_name: "li-dit-encode-video-json", template_sha256: HyNomasGeneration::PROMPT_TEMPLATE_SHA,
+              crop_start: 108, raw_length: 1388, cropped_attention_mask: mask,
+              untruncated_preflight: {truncation_required: false}}
+  JSON.parse({schema: "cogni_ml.hy_nomas_generation_inputs/v2", schema_version: 2,
+              upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION, prompt: prompt,
+              geometry: {qwen_valid_tokens: valid},
+              qwen_source: {prompt_contract: contract, prompt_sha256: Digest::SHA256.hexdigest(prompt),
+                            upstream_revision: PixelUMMBlockProbe::UPSTREAM_REVISION,
+                            template_name: "li-dit-encode-video-json", template_sha256: HyNomasGeneration::PROMPT_TEMPLATE_SHA,
+                            state_index: 26, hidden_size: 3584, crop_tokens: 1280, crop: [108, 1388],
+                            raw_sequence_length: 1388, sidecar_bytes: 27_i64 * 1388 * 3584 * 2,
+                            cropped_attention_mask: mask, valid_tokens: valid}}.to_json)
+end
+
+describe "conditioned first-segment input admission" do
+  it "uses the actual visible prefix instead of the legacy 23-token mask" do
+    mask = HyNomasGeneration.conditioned_mask!(conditioned_document)
+    mask.size.should eq(1280)
+    mask.sum.should eq(67)
+    mask[66].should eq(1)
+    mask[67].should eq(0)
+    HyNomasGeneration.dit_scratch_bytes(67, 128).should be > HyNomasGeneration.dit_scratch_bytes
+  end
+
+  it "rejects a non-prefix mask even when its population is unchanged" do
+    doc = conditioned_document
+    mask = doc["qwen_source"]["cropped_attention_mask"].as_a
+    mask[2] = JSON::Any.new(0_i64)
+    mask[100] = JSON::Any.new(1_i64)
+    expect_raises(ArgumentError, /visible text prefix/) { HyNomasGeneration.conditioned_mask!(doc) }
+  end
+
+  it "rejects lost prompt text, changed templates and silent truncation" do
+    doc = conditioned_document
+    doc.as_h["prompt"] = JSON::Any.new("A different scene")
+    expect_raises(ArgumentError, /identity or truncation/) { HyNomasGeneration.conditioned_mask!(doc) }
+    doc = conditioned_document
+    doc["qwen_source"].as_h["template_sha256"] = JSON::Any.new("a" * 64)
+    expect_raises(ArgumentError, /schema\/template/) { HyNomasGeneration.conditioned_mask!(doc) }
+    doc = conditioned_document
+    doc["qwen_source"]["prompt_contract"]["untruncated_preflight"].as_h["truncation_required"] = JSON::Any.new(true)
+    expect_raises(ArgumentError, /identity or truncation/) { HyNomasGeneration.conditioned_mask!(doc) }
+  end
+
+  it "rejects unsupported token extents before constructing GPU owners" do
+    [0, 1001, 1280].each do |valid|
+      expect_raises(ArgumentError, /visible text prefix/) { HyNomasGeneration.conditioned_mask!(conditioned_document(valid)) }
+    end
+  end
+
+  it "hashes exactly the authenticated byte range" do
+    path = File.tempname("hy-nomas-crop", ".bin")
+    begin
+      File.write(path, "abcdef")
+      HyNomasGeneration.sha_range(path, 2_i64, 3_i64).should eq(Digest::SHA256.hexdigest("cde"))
+      expect_raises(ArgumentError, /invalid authenticated/) { HyNomasGeneration.sha_range(path, 4_i64, 3_i64) }
+    ensure
+      File.delete?(path)
+    end
+  end
+end
+
 describe "bounded preview weight-cache geometry" do
   it "authenticates the original cache geometry with identical runtime parameters" do
     cache = HyNomasGeneration.weight_cache_config
