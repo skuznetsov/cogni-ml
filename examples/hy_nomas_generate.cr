@@ -15,10 +15,10 @@ OptionParser.parse do |p|
   p.on("--output-dir PATH", "Existing empty result directory") { |v| output_dir = v }
   p.on("--budget-mib N", "Aggregate named buffers per phase, including shared latent") { |v| budget_mib = v.to_i64 }
   p.on("--dit-weights MODE", "bf16 (default control) or q4-k (experimental); PixelUMM stays BF16") { |v| dit_weights = HyNomasGeneration.parse_dit_weights(v) }
-  p.on("--steps N", "DiT Euler denoising steps (1..8; default 8)") { |v| steps = v.to_i32 }
+  p.on("--steps N", "DiT Euler steps (BF16: 1..32; Q4: 1..8; default 8)") { |v| steps = v.to_i32 }
   p.on("--plan-only", "CPU-only metadata and memory admission") { plan_only = true }
 end
-steps = HyNomasGeneration.validate_steps!(steps)
+steps = HyNomasGeneration.validate_steps!(steps, dit_weights)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
 unless (16_384..24_576).includes?(budget_mib)
   raise ArgumentError.new("named budget must be within 16..24 GiB; use the external 10% memory guard")

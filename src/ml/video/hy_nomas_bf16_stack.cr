@@ -64,8 +64,8 @@ module ML::Video
     end
 
     private def validate_options! : Nil
-      unless (1..8).includes?(@max_forwards_per_chain)
-        raise ArgumentError.new("Hy-Nomas BF16 max_forwards_per_chain must be between 1 and 8")
+      unless (1..HyNomasFullPassCursor::MAX_FORWARDS_PER_CHAIN).includes?(@max_forwards_per_chain)
+        raise ArgumentError.new("Hy-Nomas BF16 max_forwards_per_chain must be between 1 and #{HyNomasFullPassCursor::MAX_FORWARDS_PER_CHAIN}")
       end
       unless @budget_bytes > 0 && @stage_bytes > 0 && @reserve_bytes >= 0
         raise ArgumentError.new("Hy-Nomas BF16 stack memory budget is invalid")

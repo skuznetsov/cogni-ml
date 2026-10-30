@@ -1,5 +1,88 @@
 # Hy-Nomas first native video frontier
 
+## Matched BF16 8/16/24/32-step previews (2026-10-30)
+
+All four requested five-second previews completed at 512x288, 24 fps. They
+share the preceding experiment's authenticated prompt, seed42, initial latent,
+saved Qwen state26 conditioning, decoder noise, shift5 and CFG1. PixelUMM
+keeps one step and five overlapping J5760 windows. The new eight-step raw
+pixels and MP4 reproduce the previous eight-step arm byte-for-byte. Only the
+DiT schedule length changes. The generic upstream Euler solver supports these
+lengths, but the distilled checkpoint documents4/6/8, not16/24/32; the50-step
+SFT configuration uses another checkpoint. Larger counts remain experimental.
+
+| DiT steps | DiT wall, s | Decoder wall, s | Guarded generator, s | Seconds per video second |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 35.078 | 65.468 | 144.123 | 28.825 |
+| 16 | 72.899 | 75.074 | 198.684 | 39.737 |
+| 24 | 128.538 | 78.841 | 255.249 | 51.050 |
+| 32 | 186.651 | 88.432 | 323.692 | 64.738 |
+
+These are one fresh process per count in ascending order, with uncontrolled
+file/Metal caches and load. Decoder time also drifts despite its unchanged
+settings. Guarded elapsed includes admission, weight setup, inference and raw
+export; MP4 encoding and live text encoding are excluded. The timings are
+descriptive, not an isolated per-step cost, causal speed ratio or bound for
+longer clips.
+
+Both contact sheets were visually inspected at frames0/24/48/72/96/119.
+Twenty-four and thirty-two look broadly similar, sometimes with clearer tram
+edges or window detail than eight. Neither consistently wins; distorted
+people, irregular windows and invented lettering remain. Framing and content
+also change with the schedule. The sampled stills do not establish motion
+quality, monotonic improvement or the cause of the artifacts. Keep default8;
+there is no supported quality promotion from this one prompt/seed.
+
+The BF16 scheduler and loader now admit1..32 before Metal setup; the default
+stays8 independently of the cap. Q4 retains its own eight-step limit. The
+full-pass cursor rejects pass33, ordering violations and a new chain without
+exactly one terminal wait on the preceding chain. The schedule grows192B
+from8 to32; opaque MPS resources are outside this named-byte calculation.
+Optional API/root tracing stays off, with its8192-event cap insufficient here.
+Rollback omits --steps; default precision, arithmetic and step policy remain.
+
+Fresh pinned-source MPS Euler fixtures for all four counts match sigma, dt,
+timestep, initial BF16 rounding and every intermediate updated latent exactly
+at unchanged2e-5 tolerances. Every generated step event also matches its
+upstream F32 timestep/dt. This qualifies the solver and tested boundaries,
+not full upstream neural-video parity, which remains false in each receipt.
+
+All four guards finish normally and drain their process groups:1,772 samples,
+19.966656GiB sampled peak,14.811356GiB minimum cache-aware headroom and zero
+sampled swap growth. The10% reserve,23GiB process cap,64MiB swap-growth stop
+and900s timeout remain. Each request has one terminal wait per weight phase,
+with zero instrumented encode allocations, readbacks or early waits. Opaque
+MPS resources and terminal pixel export are outside these counters; sampled
+memory does not bound between-poll peaks. All120 frames/count are finite and
+nonconstant, an integrity check rather than a perceptual quality score.
+
+Observed DiT root counts are8224/16448/24672/32895. The last is one below the
+empirical1028*steps extrapolation. Source inspection shows this tracker counts
+observed rootCommandBuffer identities around opaque MPS calls, with NSUInteger
+storage and an Int32 boundary, not a fixed number of model operations. All32
+ordered step events and both completed phases are present. The extrapolation
+is rejected as an acceptance invariant; no runtime or tolerance was changed.
+The exact segmentation difference or a missed tracker observation remains
+unresolved. See root-segmentation-audit.json; this is not proof of full neural
+parity or of a particular MPS cause.
+
+Evidence: /opt/mldata_ssd/cogni-ml/hy-nomas-steps-8-16-24-32-20261030 contains
+the four videos, synchronized comparison-8-16-24-32.mp4, contact sheets,
+summary.json, fixed-input receipts, guards, build-identity.json, fresh Euler
+fixtures, final-check.json and the retained failed root-count extrapolation.
+Parent617c81c9; measured source/binary hashes remain unchanged. The70-file
+evidence-index.json SHA256 is
+6932a7bcbc61843c5478da6ee23c289342771cdf800908b6ca4fe78139101ed2.
+DoD passes: release builds,31 focused Crystal examples, eight compiled
+negative cases, four fresh GPU Euler controls, four guarded120-frame exports
+and offline source/input/media/hash/guard checks. Same-lineage Mini-Quad is
+ROBUST for those bounded observations and VULNERABLE for monotonic quality
+or32-over24 superiority claims. Refresh on scoped source/input/artifact,
+precision, geometry, backend, device or toolchain changes; timing also decays
+with load, cache and order. Next artifact falsifier: hold a generated DiT
+latent and decoder noise fixed and compare native/upstream one-step PixelUMM
+merged raw pixels before display conversion and MP4 export.
+
 ## Matched BF16 2/4/6/8-step previews (2026-10-30)
 
 The four authorized five-second previews completed at 512x288, 24 fps with

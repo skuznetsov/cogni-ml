@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-STEPS-8-16-24-32-2026-10-30] Longer BF16 schedules complete without a clear 32-over-24 quality win
+
+- VERIFIED bounded five-second512x288/24fps previews at8/16/24/32, fixed
+  authenticated inputs/seed42/conditioning/noise/shift5/CFG1 and one-step
+  PixelUMM. The eight-step pixels and MP4 reproduce the previous experiment.
+  Larger counts are experimental beyond the distilled checkpoint's4/6/8.
+- BF16 admits1..32; default8 and Q4's cap8 remain. Cursor rejects pass33,
+  wrong block order and new-chain reuse without exactly one preceding wait.
+  Fresh pinned-source MPS Euler controls match all intermediate latents and
+  schedules exactly at unchanged2e-5. Full upstream neural-video parity open.
+- Guarded seconds144.123/198.684/255.249/323.692, or28.825/39.737/51.050/
+  64.738 per video second. One sample/count, ascending order and decoder/cache
+  drift: descriptive only, excluding MP4 export and live text encoding.
+- Six sampled stills/count show similar24/32 detail with persistent people,
+  window and lettering artifacts. No clear32-over24 win, motion-quality,
+  monotonic-quality or artifact-cause claim. Keep default8.
+- All four guards pass10% reserve/23GiB cap/64MiB swap-growth stop/900s:
+  1,772 samples,19.966656GiB sampled peak,14.811356GiB minimum cache-aware
+  headroom, swap growth0. One terminal wait/phase, tracked encode allocations/
+  reads/early waits0. Sampled footprint excludes between-poll guarantees.
+- N32 has32895 observed roots, one below empirical1028*N. Tracker counts
+  root identities, not model operations; all32 ordered step events complete.
+  Reject the extrapolation as an invariant; exact MPS/tracker cause unresolved.
+  No counter/runtime/numerical tolerance changed to accept this observation.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-steps-8-16-24-32-20261030;
+  summary/final-check/root-segmentation-audit, receipts, guards, media, Euler
+  fixtures and70-file evidence index SHA256
+  6932a7bcbc61843c5478da6ee23c289342771cdf800908b6ca4fe78139101ed2.
+  Parent617c81c9. Release builds,31 focused CPU examples, eight negative cases,
+  four GPU Euler controls and four guarded exports pass. Same-lineage Mini-Quad
+  ROBUST within scope; quality ordering remains VULNERABLE.
+  Return docs/hy-nomas-generation-frontier.md, extended-preview section.
+  Next: fixed generated latent/noise through upstream/native raw PixelUMM.
+  Refresh on scoped source/input/artifact/geometry/precision/backend/device/
+  toolchain or guard changes; timing also decays with load/cache/order.
+
 ### [LM-HY-NOMAS-STEPS-2-4-6-8-2026-10-30] Matched BF16 previews expose a poor two-step sample, not the cause of all artifacts
 
 - VERIFIED bounded 512x288/24fps five-second 2/4/6/8 DiT-step generation with

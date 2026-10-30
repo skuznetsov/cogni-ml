@@ -271,6 +271,8 @@ module ML::Video
   # Chain state is supplied by the owner so the state machine can be tested
   # without creating a Metal command buffer or submitting GPU work.
   class HyNomasFullPassCursor
+    MAX_FORWARDS_PER_CHAIN = 32
+
     getter block_count : Int32
     getter max_forwards_per_chain : Int32
     getter forwards_on_chain : Int32
@@ -282,8 +284,8 @@ module ML::Video
       unless @block_count > 0
         raise ArgumentError.new("Hy-Nomas full-pass block count must be positive")
       end
-      unless (1..8).includes?(@max_forwards_per_chain)
-        raise ArgumentError.new("Hy-Nomas max_forwards_per_chain must be between 1 and 8")
+      unless (1..MAX_FORWARDS_PER_CHAIN).includes?(@max_forwards_per_chain)
+        raise ArgumentError.new("Hy-Nomas max_forwards_per_chain must be between 1 and #{MAX_FORWARDS_PER_CHAIN}")
       end
       @forwards_on_chain = 0
       @next_block = 0

@@ -13,7 +13,7 @@ require "../../src/ml/video/pixelumm_decoder_head_mps"
 module HyNomasGeneration
   extend self
   GIB           = 1024_i64**3
-  DEFAULT_STEPS = ML::Video::HyNomasEulerPlan::MAX_STEPS
+  DEFAULT_STEPS = ML::Video::HyNomasEulerPlan::DEFAULT_STEPS
   CONFIG        = ML::Video::HyNomasConfig.new(batches: 1, video_tokens: 4320,
     text_tokens: 1280, dim: 2048, heads: 16, head_dim: 128, ffn_dim: 8192)
   MASK            = Array(Int32).new(1280) { |i| i < 23 ? 1 : 0 }
@@ -49,9 +49,12 @@ module HyNomasGeneration
     mode == DiTWeights::BF16 ? "bf16" : "q4-k"
   end
 
-  def validate_steps!(steps : Int32) : Int32
+  def validate_steps!(steps : Int32, mode : DiTWeights = DiTWeights::BF16) : Int32
     unless (1..ML::Video::HyNomasEulerPlan::MAX_STEPS).includes?(steps)
       raise ArgumentError.new("Hy-Nomas preview steps must be between 1 and #{ML::Video::HyNomasEulerPlan::MAX_STEPS}")
+    end
+    if mode == DiTWeights::Q4K && steps > 8
+      raise ArgumentError.new("Hy-Nomas Q4 previews remain limited to eight steps")
     end
     steps
   end
@@ -249,7 +252,7 @@ module HyNomasGeneration
                    mode : DiTWeights = DiTWeights::BF16, *,
                    steps : Int32 = DEFAULT_STEPS,
                    admission : ML::Video::HyNomasQ4StackIndex::Admission? = nil)
-      steps = HyNomasGeneration.validate_steps!(steps)
+      steps = HyNomasGeneration.validate_steps!(steps, mode)
       # Every authenticated file and the exact aggregate are admitted first.
       index_path = File.realpath(INDEX)
       index = if mode == DiTWeights::BF16
@@ -271,11 +274,11 @@ module HyNomasGeneration
       @loader = if mode == DiTWeights::BF16
                   ML::Video::HyNomasBF16Stack.new(index.as(ML::Video::HyNomasQ4StackIndex::Admission), INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
-                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: 8)
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: steps)
                 else
                   ML::Video::HyNomasQ4Stack.new(index_path, INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config, budget, stage_bytes: HyNomasGeneration.stage_bytes,
-                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: 8)
+                    reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps), max_forwards_per_chain: steps)
                 end
       @named_bytes = @loader.admitted_bytes
       @inputs_arena = ML::Video::Arena.new

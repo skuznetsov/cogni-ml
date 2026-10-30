@@ -7,7 +7,8 @@ require "./metal_mps_command_chain"
 
 module ML::Video
   class HyNomasEulerPlan
-    MAX_STEPS = 8
+    DEFAULT_STEPS =  8
+    MAX_STEPS     = 32
 
     record Step, sigma : Float32, timestep : Float32, dt : Float32
 
@@ -34,7 +35,7 @@ module ML::Video
     getter step_count : Int32
     getter element_count : Int32
 
-    def self.schedule(steps : Int32 = MAX_STEPS, shift : Float32 = 5.0_f32) : Array(Step)
+    def self.schedule(steps : Int32 = DEFAULT_STEPS, shift : Float32 = 5.0_f32) : Array(Step)
       unless (1..MAX_STEPS).includes?(steps)
         raise ArgumentError.new("Hy-Nomas Euler steps must be between 1 and #{MAX_STEPS}")
       end
@@ -71,7 +72,7 @@ module ML::Video
 
     def initialize(@latent : ML::MetalBuffer, @velocity : ML::MetalBuffer,
                    @timestep_buffer : ML::MetalBuffer, *,
-                   steps : Int32 = MAX_STEPS, shift : Float32 = 5.0_f32)
+                   steps : Int32 = DEFAULT_STEPS, shift : Float32 = 5.0_f32)
       @steps = self.class.schedule(steps, shift)
       @step_count = @steps.size.to_i32
       unless @latent.valid? && @velocity.valid? && @timestep_buffer.valid? &&
