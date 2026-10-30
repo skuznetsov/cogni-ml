@@ -2,13 +2,47 @@
 
 ## Active frontier
 
-All 36 full-J blocks plus the global head pass both saved-input numerical gates
-in two bounded cohorts, using one shared B2 panel bank and an explicit
-common-Workspace/serial-slot guard. All 516 retained stage comparisons are
-bitwise equal to the saved upstream controls. B2 reduces command count and
-active host-thread CPU time, but neither cohort shows a full-forward speedup.
-The diagnostic remains opt-in; production promotion is unqualified. No full
-video generation is admitted.
+All 36 full-J blocks plus the global head pass both saved-input numerical gates,
+using one shared B2 panel bank and an explicit common-Workspace/serial-slot guard.
+The phase/continuation diagnostic below also passes 516 retained comparisons
+bitwise against the saved upstream controls. B2 reduces command count and active
+host-thread CPU time, but its full-forward contrast changes sign with order.
+Much of the apparent host attention saving moves into later API waits; GPU
+intervals belonging to the unchanged FFN remain substantial. Keep B2 opt-in:
+neither a stable speedup nor the physical cause of the drift is qualified.
+No full video generation is admitted.
+
+The opt-in bounded diagnostic localizes the missing full-forward benefit without
+changing the attention math. `--profile-phases --timed` enables the existing
+block phase markers, API timing and continuation trace on four poisoned gates,
+the middle ABBA requests and the candidate tail. Four observer-off requests
+bracket that ABBA (baseline/B2 before it, B2/baseline after it); two observer-off
+warmups precede both. `--reverse` flips the mode order, not observer placement.
+The fifteen-request schedule retains the existing 43-stage saved-upstream gates,
+one terminal wait and zero encode-time activation reads/allocations. Profile
+metadata is extracted after the wait, outside request timing. Its CPU work can
+affect the next request, so profiled phase contrasts are diagnostic and the
+observer-off arms do not by themselves establish an unperturbed speedup.
+
+The competing explanations are a more expensive paired attention phase,
+non-attention drift, or altered Metal/MPS blocking. The discriminator is the
+per-block phase wall/thread-CPU split, exclusive Graph versus continuation API
+time, and root intervals associated with each phase. Roots crossing a boundary
+keep all candidate phases; their duration sums are not active shader time or
+additive phase costs. A root count reduction alone cannot qualify acceleration.
+
+This diagnostic-only instrumentation is a CAUTION change. The main failure mode
+is accepting the baseline Graph-call contract for B2, or attributing overlapping
+API/root spans twice. An explicit paired-window topology must require positive
+even tile counts and validate 3,240 attention / 3,785 total Graph calls for full36
+B2, versus 6,480 / 7,025 baseline; continuations must match roots minus one.
+CPU negative tests must reject mismatched counts and odd tiles. DoD is those
+tests, the full36 schedule/CLI tests, release build and guarded normal/reverse
+cohorts with unchanged numerical gates and a phase/trace consistency analysis.
+The existing 28.5 GiB process cap, 10% cache-aware reserve, 64 MiB swap-growth cap
+and bounded timeout apply. Missing trace events, changed topology, early reads,
+additional waits or any guard failure stop the diagnostic. Rollback omits the
+new flag; all existing execution defaults remain unchanged.
 
 The full36 experiment first compares four independently poisoned connected
 requests: both saved inputs in both baseline/B2 modes. It checks all 43 retained
@@ -99,7 +133,154 @@ Source, fixture, cache, binary and guard-log digests must accompany any result.
 Changing those inputs or the GPU/backend invalidates the numerical certificate;
 timing additionally decays with host load, pacing and resource-lifetime changes.
 
-## Full36 plus head result, 2026-10-29
+## Full36 phase and continuation diagnosis, 2026-10-29
+
+Two fresh processes complete the fifteen-request phase schedule above. Each
+profiles four poisoned gates, the middle four measured requests and the final
+B2 tail. Four observer-off measured requests bracket that middle ABBA; reversing
+the process flips modes while preserving observer placement. Each timing cell
+below has only two samples per path. Post-wait profile processing can affect
+the following request, so these are diagnostic contrasts, not an unperturbed
+production benchmark.
+
+| Observer-off full36 + head, encode through terminal wait | Baseline | B2 | B2 time change |
+| --- | ---: | ---: | ---: |
+| Normal process | 54.506625 s | 55.870329 s | +2.502% |
+| Reverse process | 62.911368 s | 58.049763 s | -7.728% |
+
+Segments remain 4,579/2,779 and total Graph calls are 7,025/3,785
+(baseline/B2). Observer-off active encode-thread CPU is only
+0.352493/0.255823 s normally and 0.495779/0.355494 s in reverse. The saved
+0.097/0.140 s is small compared with the 55 to 63 s request means. The profiled
+request means are 56.849202/59.235752 s normally and 83.452031/71.558872 s
+in reverse. Neither those contrasts nor a pooled mean establish a stable effect.
+
+Host phase markers show a repeated relocation of waiting: attention is
+53.564675/45.049650 s normally, while projection plus residual is
+0.351656/9.206310 s. Reverse gives 79.128385/54.575204 s for attention and
+0.434962/11.180452 s for projection plus residual. These host intervals include
+blocking inside Metal/MPS and are not GPU phase execution time.
+
+The API trace localizes that relocation to `commitAndContinue`. Mean exclusive
+continuation wall time per profiled request is:
+
+| API phase | Normal baseline | Normal B2 | Reverse baseline | Reverse B2 |
+| --- | ---: | ---: | ---: | ---: |
+| Local attention | 53.314359 s | 44.870862 s | 78.702951 s | 54.292348 s |
+| Projection/residual | 0.345937 s | 9.191624 s | 0.426300 s | 11.159442 s |
+| FFN | 1.146201 s | 2.471207 s | 1.474651 s | 2.812014 s |
+| All phases | 55.391520 s | 57.683215 s | 81.333127 s | 69.544837 s |
+
+The corresponding all-phase continuation thread CPU totals are only
+0.059865/0.059071 s and 0.089929/0.073455 s. Exclusive Graph wall time,
+which excludes nested continuations, is 0.251993/0.214322 s and
+0.430529/0.338592 s. Adding inclusive Graph time to continuation time would
+double-count the principal waiting span.
+
+Across the eight profiled measured requests, all 2,690 continuation calls over
+10 ms intersect intervals of earlier submitted GPU roots. Their aggregate wall
+is 414.105985 s, thread CPU 0.119216 s, and prior-root interval overlap union
+414.086355 s. Each intersection excludes the current submission; the existing
+cross-clock bound is 2 microseconds. Because the GPU-root envelope is almost
+continuously covered, this observation alone cannot identify a blocking root,
+semaphore, queue capacity or driver mechanism.
+
+GPU timestamps tell a different story from the host attention markers. The
+following duration sums include only roots assigned unambiguously to the named
+phase. Shared boundary roots are excluded; intervals can overlap. These are
+command-buffer interval measurements, not active shader time or additive phase
+costs.
+
+| Unambiguous GPU-root interval duration sum | Normal baseline | Normal B2 | Reverse baseline | Reverse B2 |
+| --- | ---: | ---: | ---: | ---: |
+| Attention | 13.317544 s | 12.483761 s | 17.093919 s | 14.128867 s |
+| FFN gate/up | 18.129663 s | 19.470187 s | 27.556886 s | 23.800254 s |
+| FFN down | 9.477239 s | 10.199575 s | 15.278755 s | 13.062383 s |
+
+Attention's candidate-root sums, including ambiguous boundary roots, are
+19.066814/18.746846 s and 25.504964/21.676393 s. They cannot be added to
+other candidate-phase sums. Whole-chain root interval unions are
+56.842806/59.230821 s and 83.435886/71.550872 s, within 4 ms of their
+envelopes. This rules out large uncovered command-buffer gaps in these traces;
+it does not measure shader occupancy or identify the cause of a slow interval.
+The unchanged FFN intervals also drift substantially between processes. Fewer
+attention submissions do not remove those GPU operations, and the host saving
+must not be confused with equivalent removed GPU work.
+
+All 30 requests retain one terminal wait, zero tracked encode allocations,
+zero pre-wait activation reads and zero stage-metric reads. All 516 retained
+captures are finite and bitwise equal to authenticated saved upstream tensors
+at unchanged `atol=rtol=2e-5`; no fresh upstream forward was run. Both guards
+finish with exit 0: shared-resident sampled peaks 27.142947/27.148151 GiB,
+minimum cache-aware headroom 11.801331/11.698792 GiB above the 6.4 GiB floor,
+and zero swap growth. Polling does not bound between-sample spikes or isolate
+B2's incremental footprint. Named live buffers return to zero after release;
+the higher residual Metal allocation counter remains unexplained.
+
+Release build, 49 focused CPU examples, eight offline analyzer falsifiers and
+the pre-observer CLI rejection pass. The first offline analysis exposed a field
+name mismatch between two summary helpers; a composed-path regression test
+covers the repair. It changed only offline analysis after both cohorts. Frozen
+runtime sources, binary, fixtures and raw reports remain the measured lineage.
+The post-analysis receipt verifies that the only changed member of the measured
+417-file manifest is the offline analyzer, and snapshots its repaired version
+and the regression test separately. It does not assert whole-checkout invariance.
+
+Observed CPU DoD commands (49 Crystal examples and eight Python tests, no failures):
+
+```sh
+crystal spec -Dcpu_only spec/pixelumm_window_batch_full_probe_spec.cr \
+  spec/pixelumm_decoder_profile_spec.cr spec/pixelumm_block_profile_spec.cr \
+  spec/wan_mps_api_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr \
+  spec/wan_mps_command_phase_profile_spec.cr \
+  spec/video_mps_api_profile_clock_bridge_spec.cr
+python3 -B spec/pixelumm_b2_phases_analysis_test.py
+```
+
+The release target is `make pixelumm_window_batch_full_probe`, with build,
+temporary and Crystal cache paths directed to the external SSD. Each cohort's
+launch receipt records the complete authenticated fixture argv, the existing
+memory limits and `--timed --profile-phases`; reverse also adds `--reverse`.
+The binary negative check rejects `--profile-phases` without `--timed` before
+creating a report or observer. Each GPU cohort exits 0 after all 15 requests.
+
+Evidence directory:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-phases-20261029`.
+`normal/` and `reverse/` retain frozen source snapshots, binaries, launch and
+completion receipts, raw reports and guard logs. `provenance-analysis.json`
+validates the original measured lineage and sampled memory guards;
+`phase-analysis.json` validates and localizes the saved reports with the repaired
+offline analyzer. `post-analysis-receipt.json` binds that repair to these inputs.
+The measured parent is `fb3101dbcf54ea1a62b196cc01a451614a78d0b7`; saved upstream
+lineage remains `911cea6458a89c2663513ff7099561ec190dd491`.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Measured 417-file source manifest | `0410d01f90f81048b187dedd991db924fba1c2aa9ae3bcebfe65517e8aa5a699` |
+| Measured executable | `2fa171511244126ddc9147112a16a4187878ab044a80b3be9c5c36aae29d3e31` |
+| Normal report | `94d4ff3942c8a67e2f697f062206e905150f665eb7c67f188390a2aa2d148759` |
+| Reverse report | `bb6be0ce6345239805a911d9ca36da24da798efe83adab14f1805a77950d7142` |
+| Provenance and sampled-guard analysis | `c75654dba8306db5ea29449393b56eede51093cfba21c797fef57912800b90a0` |
+| Phase/continuation analysis | `7cf5cee581b0fdc4c590bc9272eaeecafee8a947cc39ae21c04fb3c3c925aad4` |
+| Post-analysis lineage receipt | `0b77416790ece9b030ba11699d9854857e673f08e6e4cc53f839c9d158ceedd3` |
+
+Correlated Mini-Quad verdict: ROBUST for the command reduction, captured-output
+parity, bounded sampled memory and lack of a qualified stable speedup.
+The stronger claim that B2 cannot accelerate this forward is VULNERABLE:
+both reverse observer-off adjacent pairs favor B2, so a modest benefit remains
+plausible. Keep B2 opt-in and separate host API waiting from GPU execution.
+
+The next speed discriminator is a longer observer-off, quiet, order-balanced
+full36 crossover with matched pacing. The next mechanism discriminator is a
+bounded Metal System Trace or per-encoder GPU timing that can separate active
+attention/FFN execution from queued command-buffer intervals. Retain the one
+terminal wait and all numerical/memory gates. Repeating command-count changes
+or blind FFN tiling cannot resolve the physical cause of this drift. Refresh
+this evidence on scoped source, fixture, precision, geometry, backend/device,
+toolchain, guard, schedule, diagnostic policy or resource-lifetime changes;
+timings also decay with host load and pacing. No full generation ran.
+
+## Full36 plus head result before phase profiling, 2026-10-29
 
 Two fresh processes use the same frozen executable, 416-file runtime/build
 source snapshot, BF16 weights, F32 FFN, full-J geometry and saved controls.

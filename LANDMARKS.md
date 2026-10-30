@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PIXELUMM-B2-PHASES-2026-10-29] B2 moves host API waiting without a qualified full-forward speedup
+
+- VERIFIED bounded full-J J21120, 36-block plus global-head diagnostic: two
+  fresh 15-request normal/reverse processes retain BF16 weights, F32 FFN,
+  GPU-resident handoff, one terminal wait and zero tracked encode allocations,
+  pre-wait activation reads or stage-metric reads. No full generation ran.
+- Graph calls fall 7025->3785 and roots 4579->2779. Observer-off mean request
+  times are 54.506625/55.870329 s normal and 62.911368/58.049763 s reverse
+  (baseline/B2; two samples per path/order). CPU encode saves 0.097/0.140 s.
+  The sign-changing contrasts and post-profile carryover do not qualify speed.
+- Profiled attention continuation wall shrinks 53.314359->44.870862 s normal,
+  while projection/residual grows 0.345937->9.191624 s; reverse repeats the
+  relocation. All 2690 measured calls over 10 ms intersect prior GPU-root
+  intervals, excluding the current root. This is not active shader timing or
+  a physical driver/queue-cause proof. Unchanged FFN root intervals also drift.
+- All 516 retained finite stage captures match saved upstream BF16 words
+  exactly at unchanged atol=rtol=2e-5, revision
+  911cea6458a89c2663513ff7099561ec190dd491; no fresh upstream forward.
+  Sampled peak 27.148151 GiB, minimum cache-aware headroom 11.698792 GiB,
+  zero swap growth; 28.5 GiB cap and 10% reserve pass. Not an isolated B2
+  memory delta or between-poll bound; residual Metal allocation is unresolved.
+- DoD: release build, 49 focused Crystal examples, eight Python falsifiers,
+  pre-observer CLI rejection and both guarded GPU cohorts pass. An offline
+  summary-field repair follows measurement, with its own source snapshot and
+  receipt; measured runtime sources/binary/fixtures remain unchanged.
+- Evidence /opt/mldata_ssd/cogni-ml/hy-nomas-pixelumm-b2-phases-20261029;
+  phase-analysis.json SHA
+  7cf5cee581b0fdc4c590bc9272eaeecafee8a947cc39ae21c04fb3c3c925aad4,
+  post-analysis-receipt.json SHA
+  0b77416790ece9b030ba11699d9854857e673f08e6e4cc53f839c9d158ceedd3.
+  Return docs/pixelumm-window-batch-attention.md, phase diagnosis section.
+  Same-lineage Mini-Quad: ROBUST bounded observations/nonqualification;
+  VULNERABLE for "B2 cannot accelerate" or causal driver claims. Keep opt-in.
+  Next: quiet observer-off balanced repetitions for speed, bounded Metal System
+  Trace/per-encoder timing for the mechanism, without extra waits. Refresh on
+  scoped source/artifact/geometry/precision/backend/device/toolchain/guard or
+  schedule/lifetime changes; timing also decays with load and pacing.
+
 ### [LM-HY-NOMAS-PIXELUMM-PENDING-WINDOW-2026-10-29] Full-J traces reproduce the callback-pending window, not its cause
 
 - VERIFIED CPU-only replay of four pinned order/paced-A/A reports finds all 3,041

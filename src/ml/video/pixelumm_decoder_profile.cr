@@ -38,6 +38,7 @@ module ML::Video
     getter shared_gate_up : Bool
     getter fused_kv_gather : Bool
     getter scale_softmax : Bool
+    getter paired_window_attention : Bool
 
     private def initialize(@blocks : Array(PixelUMMDecoderBlockPhaseTiming),
                            @aggregate_phase_wall_seconds : Hash(String, Float64),
@@ -52,7 +53,8 @@ module ML::Video
                            @api_profile : MPSAPIProfile,
                            @shared_gate_up : Bool,
                            @fused_kv_gather : Bool,
-                           @scale_softmax : Bool)
+                           @scale_softmax : Bool,
+                           @paired_window_attention : Bool)
     end
 
     def self.build(block_markers : Array(Array(PixelUMMBlockPhaseMarker)),
@@ -64,7 +66,8 @@ module ML::Video
                    api_profile : MPSAPIProfile,
                    shared_gate_up : Bool = false,
                    fused_kv_gather : Bool = false,
-                   scale_softmax : Bool = false) : self
+                   scale_softmax : Bool = false,
+                   paired_window_attention : Bool = false) : self
       unless !block_markers.empty? && block_markers.size == tile_counts.size
         raise ArgumentError.new("PixelUMM decoder profile requires one positive tile count per block")
       end
@@ -74,6 +77,9 @@ module ML::Video
       end
       tile_counts.each do |count|
         raise ArgumentError.new("PixelUMM decoder attention tile counts must be positive") unless count > 0
+        if paired_window_attention && !count.even?
+          raise ArgumentError.new("PixelUMM paired-window attention requires an even tile count per block")
+        end
       end
 
       blocks = Array(PixelUMMDecoderBlockPhaseTiming).new(block_markers.size)
@@ -109,7 +115,7 @@ module ML::Video
       end
       labels << "head"
       validate_api_profile!(api_profile, blocks.size, tile_counts, roots.size,
-        shared_gate_up)
+        shared_gate_up, paired_window_attention)
 
       root_candidates = Array(Array(String)).new(roots.size) { [] of String }
       blocks.each do |block|
@@ -143,7 +149,8 @@ module ML::Video
       new(blocks, aggregate_wall, aggregate_cpu, head_start_root_count,
         head_end_root_count, root_candidates, candidate_duration_sums,
         definite_duration_sums, roots, whole_chain, api_profile,
-        shared_gate_up, fused_kv_gather, scale_softmax)
+        shared_gate_up, fused_kv_gather, scale_softmax,
+        paired_window_attention)
     end
 
     private def self.validate_markers!(markers : Array(PixelUMMBlockPhaseMarker),
@@ -188,13 +195,20 @@ module ML::Video
                                            block_count : Int32,
                                            tile_counts : Array(Int32),
                                            root_count : Int32,
-                                           shared_gate_up : Bool) : Nil
-      # Both combined-attention selectors change Metal dispatches, not the
-      # three Graph encodes per tile (QK, softmax, PV) counted below.
+                                           shared_gate_up : Bool,
+                                           paired_window_attention : Bool) : Nil
+      # Combined-attention selectors change Metal dispatches, not Graph count.
+      # B2 instead batches two independent tiles into each QK/softmax/PV set.
+      attention_work_items = if paired_window_attention
+                               tile_counts.sum { |count| count.to_u64 // 2_u64 }
+                             else
+                               tile_counts.sum(&.to_u64)
+                             end
+      expected_attention_graph_calls = 3_u64 * attention_work_items
       expected_graph_calls = {
         0 => 5_u64,
         1 => 9_u64 * block_count.to_u64,
-        2 => 3_u64 * tile_counts.sum(&.to_u64),
+        2 => expected_attention_graph_calls,
         3 => 3_u64 * block_count.to_u64,
         4 => 0_u64,
         5 => (shared_gate_up ? 2_u64 : 3_u64) * block_count.to_u64,
@@ -226,17 +240,24 @@ module ML::Video
 
       graphs_per_block = shared_gate_up ? 14_u64 : 15_u64
       expected_total = 5_u64 + graphs_per_block * block_count.to_u64 +
-                       3_u64 * tile_counts.sum(&.to_u64)
+                       expected_attention_graph_calls
       unless graph_calls == expected_total && linear_calls == 0_u64 &&
              continuation_calls == (root_count - 1).to_u64
         raise ArgumentError.new("PixelUMM decoder API totals do not match the integrated geometry")
       end
     end
 
+    def attention_graph_topology : String
+      @paired_window_attention ? "paired_windows_b2" : "independent_windows"
+    end
+
     def to_json(json : JSON::Builder) : Nil
       json.object do
         json.field "schema", "cogni_ml.pixelumm_decoder_phase_profile/v1"
         json.field "block_count", @blocks.size
+        if @paired_window_attention
+          json.field "attention_graph_topology", attention_graph_topology
+        end
         json.field "ffn_graph_topology",
           @shared_gate_up ? "shared_f32_gate_up" : "separate_gate_up"
         json.field "fused_kv_gather", @fused_kv_gather

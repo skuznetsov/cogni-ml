@@ -49,6 +49,14 @@ describe PixelUMMWindowBatchFullProbe do
     end
     PixelUMMWindowBatchFullProbe.validate_cli!("/tmp/report.json",
       PixelUMMWindowBatchFullProbe::MAX_NAMED_BYTES, timed: true, reverse: true)
+    expect_raises(ArgumentError, /--profile-phases requires --timed/) do
+      PixelUMMWindowBatchFullProbe.validate_cli!("/tmp/report.json",
+        PixelUMMWindowBatchFullProbe::MAX_NAMED_BYTES,
+        timed: false, reverse: false, profile_phases: true)
+    end
+    PixelUMMWindowBatchFullProbe.validate_cli!("/tmp/report.json",
+      PixelUMMWindowBatchFullProbe::MAX_NAMED_BYTES,
+      timed: true, reverse: false, profile_phases: true)
   end
 
   it "runs four poisoned gates before the optional warm and ABBA/BAAB timed cohort" do
@@ -72,6 +80,7 @@ describe PixelUMMWindowBatchFullProbe do
     timed[4, 2].none?(&.compare).should be_true
     timed[6, 8].map(&.selected).should eq([false, true, true, false, true, false, false, true])
     timed[6, 8].all?(&.timing_eligible).should be_true
+    timed.all?(&.profile).should be_false
     timed[6, 7].none?(&.compare).should be_true
     timed[13].compare.should be_true
     timed[13].timing_eligible.should be_true
@@ -101,5 +110,62 @@ describe PixelUMMWindowBatchFullProbe do
     expect_raises(ArgumentError, /requires timed mode/) do
       PixelUMMWindowBatchFullProbe.schedule(timed: false, reverse: true)
     end
+    expect_raises(ArgumentError, /profile phases require timed mode/) do
+      PixelUMMWindowBatchFullProbe.schedule(timed: false, profile_phases: true)
+    end
+  end
+
+  it "keeps profile phases opt-in and separates measured observer-on and observer-off cohorts" do
+    normal = PixelUMMWindowBatchFullProbe.schedule(timed: true, profile_phases: true)
+    normal.size.should eq(15)
+    normal[0, 4].all?(&.poison).should be_true
+    normal[0, 4].all?(&.compare).should be_true
+    normal[0, 4].all?(&.profile).should be_true
+    normal[0, 4].map(&.cohort).should eq(Array.new(4, "poisoned_gate"))
+
+    normal[4, 2].map(&.profile).should eq([false, false])
+    normal[4, 2].map(&.cohort).should eq(["warmup", "warmup"])
+    normal[6, 8].map(&.selected).should eq([false, true, false, true, true, false, true, false])
+    normal[6, 8].map(&.profile).should eq([false, false, true, true, true, true, false, false])
+    normal[6, 8].map(&.measured).should eq(Array.new(8, true))
+    normal[6, 8].map(&.timing_eligible).should eq([true, true, false, false, false, false, true, true])
+    normal[6, 8].map(&.cohort).should eq([
+      "observer_off_measured", "observer_off_measured",
+      "profiled_measured", "profiled_measured", "profiled_measured", "profiled_measured",
+      "observer_off_measured", "observer_off_measured",
+    ])
+    normal[6, 8].select(&.timing_eligible).map(&.profile).should eq([false, false, false, false])
+    normal[6, 8].reject(&.timing_eligible).map(&.profile).should eq([true, true, true, true])
+    normal[6, 8].select(&.timing_eligible).map(&.selected).should eq([false, true, true, false])
+    normal[6, 8].reject(&.timing_eligible).map(&.selected).should eq([false, true, true, false])
+
+    tail = normal.last
+    tail.kind.should eq("final_candidate_tail")
+    tail.selected.should be_true
+    tail.profile.should be_true
+    tail.cohort.should eq("candidate_tail")
+    tail.compare.should be_true
+    tail.timing_eligible.should be_false
+    tail.measured.should be_false
+  end
+
+  it "reverses only profile-mode selection assignments while preserving observer placement" do
+    normal = PixelUMMWindowBatchFullProbe.schedule(timed: true, profile_phases: true)
+    reverse = PixelUMMWindowBatchFullProbe.schedule(timed: true, reverse: true, profile_phases: true)
+    reverse.map(&.selected).should eq(normal.map { |arm| !arm.selected }.tap do |modes|
+      modes[-1] = true
+    end)
+    reverse.map(&.alternate).should eq(normal.map(&.alternate))
+    reverse.map(&.poison).should eq(normal.map(&.poison))
+    reverse.map(&.compare).should eq(normal.map(&.compare))
+    reverse.map(&.profile).should eq(normal.map(&.profile))
+    reverse.map(&.measured).should eq(normal.map(&.measured))
+    reverse.map(&.timing_eligible).should eq(normal.map(&.timing_eligible))
+    reverse.map(&.cohort).should eq(normal.map(&.cohort))
+    reverse[6, 8].map(&.selected).should eq([true, false, true, false, false, true, false, true])
+    reverse[6, 8].map(&.profile).should eq([false, false, true, true, true, true, false, false])
+    reverse[6, 8].select(&.timing_eligible).map(&.selected).should eq([true, false, false, true])
+    reverse[6, 8].reject(&.timing_eligible).map(&.selected).should eq([true, false, false, true])
+    reverse.last.selected.should be_true
   end
 end

@@ -19,7 +19,8 @@ module PixelUMMWindowBatchFullProbe
   EXPECTED_TOTAL_NAMED_BYTES    = EXPECTED_BASELINE_NAMED_BYTES + CANDIDATE_NAMED_BYTES
 
   record Arm, kind : String, alternate : Bool, selected : Bool, poison : Bool,
-    compare : Bool, timing_eligible : Bool
+    compare : Bool, timing_eligible : Bool, measured : Bool, cohort : String,
+    profile : Bool = false
 
   record Budget, baseline_named_bytes : Int64, candidate_named_bytes : Int64,
     total_named_bytes : Int64, max_named_bytes : Int64
@@ -35,13 +36,17 @@ module PixelUMMWindowBatchFullProbe
   end
 
   def validate_cli!(report : String, max_named_bytes : Int64, *,
-                    timed : Bool, reverse : Bool) : Nil
+                    timed : Bool, reverse : Bool,
+                    profile_phases : Bool = false) : Nil
     raise ArgumentError.new("full36 report path must be absolute") unless Path[report].absolute?
     unless 0 < max_named_bytes <= MAX_NAMED_BYTES
       raise ArgumentError.new("full36 named budget must be positive and at most 24 GiB")
     end
     if reverse && !timed
       raise ArgumentError.new("--reverse requires --timed")
+    end
+    if profile_phases && !timed
+      raise ArgumentError.new("--profile-phases requires --timed")
     end
   end
 
@@ -76,9 +81,13 @@ module PixelUMMWindowBatchFullProbe
     Budget.new(baseline_named_bytes, candidate, total, max_named_bytes)
   end
 
-  def schedule(*, timed : Bool, reverse : Bool = false) : Array(Arm)
+  def schedule(*, timed : Bool, reverse : Bool = false,
+               profile_phases : Bool = false) : Array(Arm)
     if reverse && !timed
       raise ArgumentError.new("reverse schedule requires timed mode")
+    end
+    if profile_phases && !timed
+      raise ArgumentError.new("profile phases require timed mode")
     end
 
     gate_modes = [true, false, false, true]
@@ -86,7 +95,8 @@ module PixelUMMWindowBatchFullProbe
     gate_names = ["gate_a_first", "gate_a_second", "gate_b_first", "gate_b_second"]
     arms = gate_modes.map_with_index do |candidate, index|
       selected = reverse ? !candidate : candidate
-      Arm.new(gate_names[index], gate_inputs[index], selected, true, true, false)
+      Arm.new(gate_names[index], gate_inputs[index], selected, true, true, false,
+        false, "poisoned_gate", profile_phases)
     end
 
     return arms unless timed
@@ -94,15 +104,26 @@ module PixelUMMWindowBatchFullProbe
     [false, true].each do |candidate|
       selected = reverse ? !candidate : candidate
       mode = selected ? "candidate" : "baseline"
-      arms << Arm.new("warm_a_#{mode}", false, selected, false, false, false)
+      arms << Arm.new("warm_a_#{mode}", false, selected, false, false, false,
+        false, "warmup")
     end
 
-    timed_modes = [false, true, true, false, true, false, false, true]
+    timed_modes = profile_phases ? [false, true, false, true, true, false, true, false] : [false, true, true, false, true, false, false, true]
+    profiled_modes = [false, false, true, true, true, true, false, false]
     timed_modes.each_with_index do |candidate, index|
       selected = reverse ? !candidate : candidate
-      arms << Arm.new("timed_#{index}", false, selected, false, index == 7, true)
+      profile = profile_phases && profiled_modes[index]
+      timing_eligible = profile_phases ? !profile : true
+      cohort = if profile_phases
+                 profile ? "profiled_measured" : "observer_off_measured"
+               else
+                 "measured"
+               end
+      arms << Arm.new("timed_#{index}", false, selected, false, index == 7,
+        timing_eligible, true, cohort, profile)
     end
-    arms << Arm.new("final_candidate_tail", false, true, false, true, false)
+    arms << Arm.new("final_candidate_tail", false, true, false, true, false,
+      false, "candidate_tail", profile_phases)
     arms
   end
 end

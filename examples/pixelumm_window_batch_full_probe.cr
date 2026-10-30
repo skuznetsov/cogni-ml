@@ -3,6 +3,7 @@ require "./support/hy_nomas_probe_instrumentation"
 require "./support/pixelumm_decoder_probe"
 require "./support/pixelumm_window_batch_probe"
 require "./support/pixelumm_window_batch_full_probe"
+require "../src/ml/video/pixelumm_decoder_profile"
 
 reference, reference_sha, alternate, alternate_sha = "", "", "", ""
 head_reference, head_reference_sha, head_alternate, head_alternate_sha = "", "", "", ""
@@ -10,6 +11,7 @@ cache_path, cache_sha, report = "", "", ""
 budget = 0_i64
 timed = false
 reverse = false
+profile_phases = false
 OptionParser.parse do |parser|
   parser.banner = "PixelUMM 36 blocks plus global head, full J, B2 window batch; external 10% cache-aware memory guard required."
   parser.on("--reference PATH", "Authenticated full36 block fixture") { |v| reference = v }
@@ -26,6 +28,7 @@ OptionParser.parse do |parser|
   parser.on("--max-named-bytes N", "Aggregate unique named budget, at most 24 GiB") { |v| budget = v.to_i64 }
   parser.on("--timed", "Run warm and ABBA/BAAB timing after all poisoned numerical gates pass") { timed = true }
   parser.on("--reverse", "Flip candidate/baseline assignment across gates, warmups and timed requests; requires --timed") { reverse = true }
+  parser.on("--profile-phases", "Profile full36 block phases, MPS API calls and continuations; requires --timed") { profile_phases = true }
 end
 
 unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
@@ -33,8 +36,10 @@ unless ARGV.empty? && {reference, reference_sha, alternate, alternate_sha,
                        cache_path, cache_sha, report}.all? { |value| !value.empty? }
   raise ArgumentError.new("expected paired authenticated full36/head fixtures, BF16 cache and report")
 end
-PixelUMMWindowBatchFullProbe.validate_cli!(report, budget, timed: timed, reverse: reverse)
-schedule = PixelUMMWindowBatchFullProbe.schedule(timed: timed, reverse: reverse)
+PixelUMMWindowBatchFullProbe.validate_cli!(report, budget, timed: timed, reverse: reverse,
+  profile_phases: profile_phases)
+schedule = PixelUMMWindowBatchFullProbe.schedule(timed: timed, reverse: reverse,
+  profile_phases: profile_phases)
 
 # Create the exclusive report before the memory recorder samples the process.
 fd = LibC.open(report, LibC::O_WRONLY | LibC::O_CREAT | LibC::O_EXCL, 0o600)
@@ -137,6 +142,10 @@ begin
     observer.emit("request_before_encode", request: request)
     chain = ML::Metal::MPSCommandChain.new
     terminal_wait_attempted = false
+    if arm.profile
+      chain.enable_api_profile!(phase_roots: false)
+      chain.enable_continuation_trace!
+    end
     allocations = ML::MetalBuffer.hy_text_probe_allocations
     reads = ML::MetalBuffer.hy_text_probe_readbacks
     metrics_reads = selection.metrics_read_count
@@ -145,7 +154,14 @@ begin
     encode_start = Time.instant
     request_cpu_start_ns = PixelUMMWindowBatchFullProbe.host_thread_cpu_ns
     encode_cpu_start_ns = request_cpu_start_ns
-    session.encode(chain)
+    if arm.profile
+      session.encode_blocks(chain, profile: true)
+      session.encode_head(chain)
+    else
+      # Keep the existing default call path unchanged when phase profiling is
+      # disabled, including observer-off arms in the opt-in cohort.
+      session.encode(chain)
+    end
     encode_seconds = (Time.instant - encode_start).total_seconds
     encode_cpu_end_ns = PixelUMMWindowBatchFullProbe.host_thread_cpu_ns
     encode_end_mach_ns = PixelUMMMemoryProbe.guard_monotonic_ns.not_nil!
@@ -154,6 +170,21 @@ begin
     unless encode_allocations == 0 && early_reads == 0 && chain.wait_count == 0 &&
            session.head_input_aliases_block35_output?
       raise "full36/head encode allocated a named buffer, read an activation, waited, or copied block35 output"
+    end
+
+    early_profile_read_rejected = false
+    if profile_phases && request == 0
+      begin
+        session.blocks.plans.first.phase_markers(chain)
+      rescue error : ArgumentError
+        raise error unless (error.message || "").includes?("terminal wait")
+        early_profile_read_rejected = true
+      end
+      unless early_profile_read_rejected && chain.wait_count == 0 &&
+             ML::MetalBuffer.hy_text_probe_allocations == allocations &&
+             ML::MetalBuffer.hy_text_probe_readbacks == reads
+        raise "full36 phase-marker access must reject before the terminal wait without reads or allocations"
+      end
     end
 
     if request == 0
@@ -243,6 +274,50 @@ begin
     metrics_read_delta = selection.metrics_read_count - metrics_reads
     raise "B2 stage metrics were read despite check_mode=0" unless metrics_read_delta == 0
 
+    root_profile_json = nil.as(JSON::Any?)
+    phase_profile_json = nil.as(JSON::Any?)
+    continuation_trace_json = nil.as(JSON::Any?)
+    if arm.profile
+      tile_counts = session.blocks.plans.map(&.local_attention_tile_count)
+      unless tile_counts.size == 36 && tile_counts.all? { |count| count == 60 }
+        raise "full36 profiled attention tile inventory must remain 60 per block"
+      end
+      expected_segments = arm.selected ? 2_779 : 4_579
+      unless segments == expected_segments
+        raise "full36 profiled command topology mismatch: expected #{expected_segments} roots, got #{segments}"
+      end
+      markers = session.blocks.plans.map(&.phase_markers(chain))
+      phases = ML::Video::PixelUMMDecoderPhaseProfile.build(markers, tile_counts,
+        markers.last.last.root_count, roots.size.to_i32, roots, gpu_seconds,
+        chain.api_profile, paired_window_attention: arm.selected)
+      expected_topology = arm.selected ? "paired_windows_b2" : "independent_windows"
+      unless phases.paired_window_attention == arm.selected &&
+             phases.attention_graph_topology == expected_topology
+        raise "full36 phase profile attention topology differs from the selected path"
+      end
+      phase_profile_json = JSON.parse(phases.to_json)
+      whole = ML::Video::MPSCommandPhaseProfile.build(roots,
+        [ML::Video::MPSCommandPhaseRange.new("whole_decoder", 0, roots.size.to_i32)],
+        gpu_seconds)
+      root_profile_json = JSON.parse({
+        root_count: whole.root_count, root_duration_seconds: whole.root_duration_seconds,
+        envelope_seconds: whole.envelope_seconds, union_seconds: whole.union_seconds,
+        overlap_seconds: whole.overlap_seconds,
+        roots: roots.map { |root| {sequence: root.sequence, completed: root.completed,
+                                   has_error: root.has_error, gpu_start_seconds: root.gpu_start_seconds,
+                                   gpu_end_seconds: root.gpu_end_seconds} },
+      }.to_json)
+      trace = chain.continuation_trace
+      continuation_trace_json = JSON.parse({info: trace.info, events: trace.events,
+                                            roots: trace.roots}.to_json)
+      unless chain.wait_count == 1 && chain.completed? &&
+             ML::MetalBuffer.hy_text_probe_allocations == allocations &&
+             ML::MetalBuffer.hy_text_probe_readbacks == reads &&
+             selection.metrics_read_count == metrics_reads
+        raise "full36 post-wait profile extraction changed waits, tensor reads, named allocations, or metrics reads"
+      end
+    end
+
     # Tensor comparisons only occur for the four poisoned gates, the final
     # timed request, and the untimed candidate tail. Intermediate timed
     # requests retain the same metadata path without any tensor readback.
@@ -257,7 +332,7 @@ begin
                           comparisons.all? { |comparison| comparison[:finite] && comparison[:failures] == 0 })
     request_passed = comparisons_passed
     request_input_sha = session.blocks.fixture.inputs["x"].sha256
-    requests << JSON.parse({
+    request_json = JSON.parse({
       request: request, kind: arm.kind, alternate_input: arm.alternate,
       input_sha256: request_input_sha, candidate: arm.selected,
       check_mode: selection.check_mode, passed: request_passed,
@@ -289,6 +364,18 @@ begin
         read_rejected:              read_rejected,
       } : nil,
     }.to_json)
+    if profile_phases
+      request_fields = request_json.as_h
+      request_fields["profiled"] = JSON::Any.new(arm.profile)
+      request_fields["measured"] = JSON::Any.new(arm.measured)
+      request_fields["cohort"] = JSON::Any.new(arm.cohort)
+      request_fields["early_profile_read_rejected"] =
+        request == 0 ? JSON::Any.new(early_profile_read_rejected) : JSON::Any.new(nil)
+      request_fields["root_profile"] = root_profile_json || JSON::Any.new(nil)
+      request_fields["phase_profile"] = phase_profile_json || JSON::Any.new(nil)
+      request_fields["continuation_trace"] = continuation_trace_json || JSON::Any.new(nil)
+    end
+    requests << request_json
     STDERR.puts "#{arm.kind}: candidate=#{arm.selected} passed=#{request_passed} total=#{total_seconds}s encode=#{encode_seconds}s wait=#{wait_seconds}s"
 
     chain.release
@@ -395,7 +482,46 @@ ensure
     memory_phases: observer.events,
     timing_contract: "Four poisoned A/B baseline/candidate gates; optional A baseline/candidate warmups; eight same-input ABBA/BAAB timed requests; final timed capture plus untimed candidate capture tail. One existing terminal wait per request; no CPU tensor diagnostics between timed requests.",
   }
-  report_io.puts report_result.to_pretty_json
+  if profile_phases
+    profile_report = JSON.parse(report_result.to_json)
+    profile_fields = profile_report.as_h
+    profile_fields["schema"] = JSON::Any.new("cogni_ml.pixelumm_window_batch_full_probe/v2")
+    profile_fields["profile_phases"] = JSON::Any.new(true)
+    profile_fields["observer_schedule"] = JSON.parse({
+      poisoned_gate_requests: [0, 1, 2, 3], poisoned_gates_profiled: true,
+      warmup_requests: [4, 5], warmups_profiled: false,
+      measured_requests: (6..13).to_a,
+      measured_candidate_modes: schedule[6, 8].map(&.selected),
+      measured_profiled: schedule[6, 8].map(&.profile),
+      measured_timing_eligible: schedule[6, 8].map(&.timing_eligible),
+      tail_request: 14, tail_candidate: true, tail_profiled: true,
+      reverse_flips_modes_only: true,
+    }.to_json)
+    profile_fields["profiling_contract"] = JSON.parse({
+      phase_profile_extraction:                         "post_terminal_wait",
+      root_profile_extraction:                          "post_terminal_wait",
+      continuation_trace_extraction:                    "post_terminal_wait",
+      early_phase_read_rejected_on_first_profiled_gate: true,
+      cpu_tensor_diagnostics_between_timed_requests:    false,
+      only_last_measured_request_has_capture_readback:  true,
+      one_existing_terminal_wait_per_request:           true,
+      named_buffer_allocations_during_encode:           0,
+      activation_readbacks_before_terminal_wait:        0,
+      stage_metric_readbacks:                           0,
+      full36_tiles_per_block:                           60,
+      baseline_attention_graph_calls:                   6_480,
+      candidate_attention_graph_calls:                  3_240,
+      baseline_total_graph_calls:                       7_025,
+      candidate_total_graph_calls:                      3_785,
+      baseline_command_segments:                        4_579,
+      candidate_command_segments:                       2_779,
+    }.to_json)
+    profile_fields["timing_contract"] = JSON::Any.new(
+      "Four poisoned A/B baseline/candidate gates with phase/API/continuation profiling; two observer-off warmups; eight same-input ABBA/BAAB measured requests with observer-off ABBA/BAAB and profiled ABBA/BAAB subsequences. Primary timing eligibility includes only observer-off measured requests. Final measured capture and profiled untimed candidate tail follow; profile metadata is extracted after the single terminal wait per request. No CPU tensor diagnostics run between timed requests.")
+    report_io.puts profile_report.to_pretty_json
+  else
+    report_io.puts report_result.to_pretty_json
+  end
   report_io.close
   puts({report: report, passed: passed && !cleanup_quarantined, failure: failure}.to_json)
 end
