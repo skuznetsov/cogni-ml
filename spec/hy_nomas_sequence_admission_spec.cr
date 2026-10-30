@@ -1,6 +1,12 @@
 require "spec"
 require "../examples/support/hy_nomas_sequence"
 
+describe "shared scene text policy" do
+  it "uses one cached text block per admitted JSON scene" do
+    HyNomasSequence::HISTORY_TEXT_POLICY.once_per_scene?.should be_true
+  end
+end
+
 describe HyNomasSequence do
   it "admits one scene with no action tails" do
     ["{}", %({"contained_actions":null}), %({"contained_actions":[]})].each do |scene|

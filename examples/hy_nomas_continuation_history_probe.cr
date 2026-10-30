@@ -1,4 +1,6 @@
 require "json"
+require "option_parser"
+require "digest/sha256"
 require "../src/ml/video/hy_nomas_continuation_history"
 require "./support/hy_nomas_probe_instrumentation"
 
@@ -8,7 +10,7 @@ require "./support/hy_nomas_probe_instrumentation"
 
 module HyNomasContinuationHistoryProbe
   LAYERS              = 54_i32
-  SEGMENTS            =  2_i32
+  SEGMENTS            =  3_i32
   VIDEO_TOKENS        =  2_i32
   VALID_TEXT_TOKENS   =  1_i32
   STORAGE_TEXT_TOKENS =  2_i32
@@ -16,7 +18,7 @@ module HyNomasContinuationHistoryProbe
   STORAGE_ROWS        = VIDEO_TOKENS + STORAGE_TEXT_TOKENS
   HEADS               =      2_i32
   HEAD_DIM            =      2_i32
-  FORWARD_COUNT       =      9_i32
+  FORWARD_COUNT       =     14_i32
   ATOL                =     2.0e-5
   SENTINEL            = -19.25_f32
   COPY_KERNEL         = "hn_continuation_probe_copy_f32"
@@ -73,6 +75,10 @@ module HyNomasContinuationHistoryProbe
   end
 
   def self.cache_snapshot_elements : Int32
+    LAYERS * ((SEGMENTS - 1) * VIDEO_TOKENS + VALID_TEXT_TOKENS) * HEADS * HEAD_DIM
+  end
+
+  def self.forward_elements : Int32
     LAYERS * query_elements
   end
 
@@ -148,53 +154,61 @@ module HyNomasContinuationHistoryProbe
     end
   end
 
-  # Independent CPU reference for BQHD causal-free attention over either the
-  # current segment alone or an explicit segment-major history prefix.
+  # Independent F64 reference over an explicitly ordered row list. Current
+  # text is excluded only on later denoise calls; every writer attends it.
   def self.expected_output(banks : InputBanks, layer : Int32,
-                           query_forward : Int32, history_forward : Int32?) : Array(Float32)
+                           query_forward : Int32, segment : Int32, writer : Bool) : Array(Float32)
+    sources = [] of Tuple(Int32, Int32)
+    segment.times do |previous|
+      rows = previous == 0 ? QUERY_ROWS : VIDEO_TOKENS
+      rows.times { |row| sources << {previous * 5 + 4, row} }
+    end
+    current_rows = segment == 0 || writer ? QUERY_ROWS : VIDEO_TOKENS
+    current_rows.times { |row| sources << {query_forward, row} }
     result = Array(Float32).new(query_elements, 0.0_f32)
-    key_rows = history_forward ? QUERY_ROWS * 2 : QUERY_ROWS
     scale = 1.0 / Math.sqrt(HEAD_DIM.to_f64)
     QUERY_ROWS.times do |query_row|
       HEADS.times do |head|
-        scores = Array(Float64).new(key_rows, 0.0_f64)
-        key_rows.times do |key_row|
-          source_forward, source_row = if history_forward && key_row < QUERY_ROWS
-                                         {history_forward.not_nil!, key_row}
-                                       elsif history_forward
-                                         {query_forward, key_row - QUERY_ROWS}
-                                       else
-                                         {query_forward, key_row}
-                                       end
+        scores = sources.map do |source|
+          source_forward, source_row = source
           dot = 0.0_f64
           HEAD_DIM.times do |feature|
-            q_index = index(query_forward, layer, query_row, head, feature)
-            k_index = index(source_forward, layer, source_row, head, feature)
-            dot += banks.query_values[q_index].to_f64 * banks.key_values[k_index].to_f64
+            dot += banks.query_values[index(query_forward, layer, query_row, head, feature)].to_f64 *
+                   banks.key_values[index(source_forward, layer, source_row, head, feature)].to_f64
           end
-          scores[key_row] = dot * scale
+          dot * scale
         end
         maximum = scores.max
         weights = scores.map { |score| Math.exp(score - maximum) }
         denominator = weights.sum
         HEAD_DIM.times do |feature|
           total = 0.0_f64
-          key_rows.times do |key_row|
-            source_forward, source_row = if history_forward && key_row < QUERY_ROWS
-                                           {history_forward.not_nil!, key_row}
-                                         elsif history_forward
-                                           {query_forward, key_row - QUERY_ROWS}
-                                         else
-                                           {query_forward, key_row}
-                                         end
-            v_index = index(source_forward, layer, source_row, head, feature)
-            total += (weights[key_row] / denominator) * banks.value_values[v_index].to_f64
+          sources.each_with_index do |source, i|
+            total += (weights[i] / denominator) *
+                     banks.value_values[index(source[0], layer, source[1], head, feature)].to_f64
           end
           result[(query_row * HEADS + head) * HEAD_DIM + feature] = total.to_f32
         end
       end
     end
     result
+  end
+
+  def self.write_fresh_output(path : String, & : IO::FileDescriptor ->) : Nil
+    fd = LibC.open(path, LibC::O_WRONLY | LibC::O_CREAT | LibC::O_EXCL, 0o600)
+    raise IO::Error.new("probe output must be fresh and writable: #{path}") if fd < 0
+    io = IO::FileDescriptor.new(fd)
+    begin
+      yield io
+    ensure
+      io.close
+    end
+  end
+
+  def self.write_artifact(directory : String, name : String, values : Array(Float32), shape : Array(Int32))
+    path = File.join(directory, name + ".f32le")
+    write_fresh_output(path) { |io| io.write(Bytes.new(values.to_unsafe.as(UInt8*), values.size * sizeof(Float32))) }
+    {path: File.basename(path), sha256: Digest::SHA256.hexdigest(File.read(path)), shape: shape}
   end
 
   def self.max_abs_error(actual : Array(Float32), expected : Array(Float32)) : Float64
@@ -211,6 +225,16 @@ end
 
 alias H = HyNomasContinuationHistoryProbe
 
+output_dir = ""
+OptionParser.parse do |options|
+  options.on("--output-dir PATH", "Existing empty external directory for the upstream replay banks") { |v| output_dir = v }
+end
+unless output_dir.empty?
+  unless Path[output_dir].absolute? && File.directory?(output_dir) && Dir.empty?(output_dir) &&
+         File.realpath(output_dir).starts_with?(File.realpath("/opt/mldata_ssd") + "/")
+    raise ArgumentError.new("probe output directory must be empty and inside /opt/mldata_ssd")
+  end
+end
 query = ML::MetalBuffer.new(H.storage_elements.to_i64 * sizeof(Float32))
 key = ML::MetalBuffer.new(H.storage_elements.to_i64 * sizeof(Float32))
 value = ML::MetalBuffer.new(H.storage_elements.to_i64 * sizeof(Float32))
@@ -219,6 +243,7 @@ provider = ML::Video::HyNomasContinuationHistory.new(
   segment_count: H::SEGMENTS, video_tokens: H::VIDEO_TOKENS,
   valid_text_tokens: H::VALID_TEXT_TOKENS, storage_text_tokens: H::STORAGE_TEXT_TOKENS,
   layers: H::LAYERS, heads: H::HEADS, head_dim: H::HEAD_DIM,
+  text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
   query: query, key: key, value: value, output: output)
 banks = H.build_input_banks
 copy_plan = H::CopyPlan.new
@@ -226,7 +251,9 @@ pre_key_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof
 pre_value_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof(Float32))
 post_key_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof(Float32))
 post_value_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof(Float32))
-output_capture = ML::MetalBuffer.new((2 * H.cache_snapshot_elements).to_i64 * sizeof(Float32))
+final_key_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof(Float32))
+final_value_snapshot = ML::MetalBuffer.new(H.cache_snapshot_elements.to_i64 * sizeof(Float32))
+output_capture = ML::MetalBuffer.new((H::FORWARD_COUNT * H.forward_elements).to_i64 * sizeof(Float32))
 chain = ML::Metal::MPSCommandChain.new
 allocation_start = ML::MetalBuffer.hy_text_probe_allocations
 readback_start = ML::MetalBuffer.hy_text_probe_readbacks
@@ -234,36 +261,35 @@ readback_start = ML::MetalBuffer.hy_text_probe_readbacks
 begin
   provider.validate_bindings!(H::QUERY_ROWS, H::HEADS, H::HEAD_DIM, query, key, value, output)
   provider.encode_probe_fill_cache!(chain, H::SENTINEL)
-
-  4.times do |pass|
-    provider.select_segment!(0, writer: false)
-    capture = pass == 3 ? output_capture : nil
-    H.run_forward!(provider, copy_plan, chain, banks, pass, query, key, value,
-      output, capture, 0)
+  forward = 0
+  H::SEGMENTS.times do |segment|
+    4.times do
+      provider.select_segment!(segment, writer: false)
+      H.run_forward!(provider, copy_plan, chain, banks, forward, query, key, value,
+        output, output_capture, forward * H.forward_elements)
+      forward += 1
+    end
+    if segment == 0
+      provider.encode_probe_snapshot_cache!(chain, pre_key_snapshot, pre_value_snapshot, :before_writer)
+    end
+    if segment < H::SEGMENTS - 1
+      provider.select_segment!(segment, writer: true)
+      H.run_forward!(provider, copy_plan, chain, banks, forward, query, key, value,
+        output, output_capture, forward * H.forward_elements)
+      forward += 1
+      if segment == 0
+        provider.encode_probe_snapshot_cache!(chain, post_key_snapshot, post_value_snapshot, :after_writer)
+      end
+    end
   end
-
-  provider.encode_probe_snapshot_cache!(chain, pre_key_snapshot,
-    pre_value_snapshot, :before_writer)
-  provider.select_segment!(0, writer: true)
-  H.run_forward!(provider, copy_plan, chain, banks, 4, query, key, value, output)
-  provider.encode_probe_snapshot_cache!(chain, post_key_snapshot,
-    post_value_snapshot, :after_writer)
-
-  4.times do |pass|
-    provider.select_segment!(1, writer: false)
-    capture_offset = H.cache_snapshot_elements
-    capture = pass == 3 ? output_capture : nil
-    H.run_forward!(provider, copy_plan, chain, banks, pass + 5, query, key,
-      value, output, capture, capture_offset)
-  end
-
+  provider.encode_probe_snapshot_cache!(chain, final_key_snapshot, final_value_snapshot, :complete)
+  raise "wrong forward count" unless forward == H::FORWARD_COUNT
   encode_allocations = ML::MetalBuffer.hy_text_probe_allocations - allocation_start
   encode_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - readback_start
   preterminal_waits = chain.wait_count
   unless encode_allocations == 0 && encode_readbacks == 0 && preterminal_waits == 0
     raise "continuation provider encode allocated, read back, or waited before terminal"
   end
-
   chain.commit_and_wait
   unless chain.completed? && chain.wait_count == 1
     raise "continuation provider probe requires one terminal wait"
@@ -273,70 +299,73 @@ begin
   pre_values = pre_value_snapshot.read(H.cache_snapshot_elements)
   post_keys = post_key_snapshot.read(H.cache_snapshot_elements)
   post_values = post_value_snapshot.read(H.cache_snapshot_elements)
-  actual_outputs = output_capture.read(2 * H.cache_snapshot_elements)
-  expected_sentinel = H::SENTINEL
-  pre_keys.each { |actual| raise "denoise pass appended K before writer" unless actual == expected_sentinel }
-  pre_values.each { |actual| raise "denoise pass appended V before writer" unless actual == expected_sentinel }
-
+  final_keys = final_key_snapshot.read(H.cache_snapshot_elements)
+  final_values = final_value_snapshot.read(H.cache_snapshot_elements)
+  actual_outputs = output_capture.read(H::FORWARD_COUNT * H.forward_elements)
+  pre_keys.each { |actual| raise "denoise appended K before writer" unless actual == H::SENTINEL }
+  pre_values.each { |actual| raise "denoise appended V before writer" unless actual == H::SENTINEL }
+  cache_rows = provider.shape.max_history_rows
   H::LAYERS.times do |layer|
-    H::QUERY_ROWS.times do |row|
+    cache_rows.times do |row|
       H::HEADS.times do |head|
         H::HEAD_DIM.times do |feature|
-          offset = layer * H.query_elements + (row * H::HEADS + head) * H::HEAD_DIM + feature
-          writer_offset = H.index(4, layer, row, head, feature)
-          unless post_keys[offset] == banks.key_values[writer_offset] &&
-                 post_values[offset] == banks.value_values[writer_offset]
+          offset = ((layer * cache_rows + row) * H::HEADS + head) * H::HEAD_DIM + feature
+          first = row < H::QUERY_ROWS
+          source_forward = first ? 4 : 9
+          source_row = first ? row : row - H::QUERY_ROWS
+          source_offset = H.index(source_forward, layer, source_row, head, feature)
+          expected_post_key = first ? banks.key_values[source_offset] : H::SENTINEL
+          expected_post_value = first ? banks.value_values[source_offset] : H::SENTINEL
+          unless post_keys[offset] == expected_post_key && post_values[offset] == expected_post_value &&
+                 final_keys[offset] == banks.key_values[source_offset] &&
+                 final_values[offset] == banks.value_values[source_offset]
             raise "writer cache append mismatch at layer #{layer}, row #{row}, head #{head}, feature #{feature}"
           end
         end
       end
     end
   end
-
-  p0_error = 0.0_f64
-  history_error = 0.0_f64
-  H::LAYERS.times do |layer|
-    p0_actual = actual_outputs[(layer * H.query_elements), H.query_elements]
-    history_offset = H.cache_snapshot_elements + layer * H.query_elements
-    history_actual = actual_outputs[history_offset, H.query_elements]
-    p0_error = Math.max(p0_error, H.max_abs_error(p0_actual,
-      H.expected_output(banks, layer, 3, nil)))
-    history_error = Math.max(history_error, H.max_abs_error(history_actual,
-      H.expected_output(banks, layer, 8, 4)))
-  end
-  raise "P=0 provider output exceeded #{H::ATOL}: #{p0_error}" if p0_error > H::ATOL
-  raise "P>0 provider output exceeded #{H::ATOL}: #{history_error}" if history_error > H::ATOL
-  diagnostic_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - readback_start
-  raise "unexpected continuation probe readback count" unless diagnostic_readbacks == 5
-
-  report = JSON.build do |json|
-    json.object do
-      json.field "schema", "cogni_ml.hy_nomas_continuation_history_probe"
-      json.field "schema_version", 1
-      json.field "scope", "synthetic F32 provider append/read qualification; no model inference"
-      json.field "segments", H::SEGMENTS
-      json.field "layers", H::LAYERS
-      json.field "denoise_forwards_per_segment", 4
-      json.field "writer_forwards", 1
-      json.field "active_query_rows", H::QUERY_ROWS
-      json.field "storage_rows", H::STORAGE_ROWS
-      json.field "heads", H::HEADS
-      json.field "head_dim", H::HEAD_DIM
-      json.field "cache_named_bytes", provider.shape.cache_bytes
-      json.field "workspace_named_bytes", provider.shape.workspace_bytes
-      json.field "named_bytes", provider.shape.named_bytes
-      json.field "p0_max_abs_error", p0_error
-      json.field "history_max_abs_error", history_error
-      json.field "tolerance_atol", H::ATOL
-      json.field "denoise_append_rejected_by_sentinel", true
-      json.field "writer_append_exact_f32", true
-      json.field "encode_buffer_allocations", encode_allocations
-      json.field "encode_readbacks", encode_readbacks
-      json.field "preterminal_waits", preterminal_waits
-      json.field "terminal_wait_count", chain.wait_count
-      json.field "postterminal_readbacks", diagnostic_readbacks
-      json.field "passed", true
+  errors = Array(Float64).new(H::FORWARD_COUNT, 0.0_f64)
+  H::FORWARD_COUNT.times do |f|
+    segment = f // 5
+    writer = f % 5 == 4
+    H::LAYERS.times do |layer|
+      actual = actual_outputs[f * H.forward_elements + layer * H.query_elements, H.query_elements]
+      errors[f] = Math.max(errors[f], H.max_abs_error(actual, H.expected_output(banks, layer, f, segment, writer)))
     end
+  end
+  raise "provider output exceeded #{H::ATOL}: #{errors}" if errors.any? { |e| e > H::ATOL }
+  diagnostic_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - readback_start
+  raise "unexpected continuation probe readback count" unless diagnostic_readbacks == 7
+  artifacts = {} of String => NamedTuple(path: String, sha256: String, shape: Array(Int32))
+  unless output_dir.empty?
+    bank_shape = [H::FORWARD_COUNT, H::LAYERS, H::STORAGE_ROWS, H::HEADS, H::HEAD_DIM]
+    artifacts["query"] = H.write_artifact(output_dir, "query", banks.query_values, bank_shape)
+    artifacts["key"] = H.write_artifact(output_dir, "key", banks.key_values, bank_shape)
+    artifacts["value"] = H.write_artifact(output_dir, "value", banks.value_values, bank_shape)
+    artifacts["output"] = H.write_artifact(output_dir, "output", actual_outputs,
+      [H::FORWARD_COUNT, H::LAYERS, H::QUERY_ROWS, H::HEADS, H::HEAD_DIM])
+    cache_shape = [H::LAYERS, cache_rows, H::HEADS, H::HEAD_DIM]
+    artifacts["cache_key"] = H.write_artifact(output_dir, "cache_key", final_keys, cache_shape)
+    artifacts["cache_value"] = H.write_artifact(output_dir, "cache_value", final_values, cache_shape)
+  end
+  report = {
+    schema: "cogni_ml.hy_nomas_continuation_history_probe", schema_version: 2,
+    scope: "synthetic F32 three-chunk same-scene provider qualification; no model inference",
+    text_cache_policy: "once_per_scene", segments: H::SEGMENTS, layers: H::LAYERS,
+    denoise_forwards_per_segment: 4, writer_forwards: 2, forward_count: H::FORWARD_COUNT,
+    video_tokens: H::VIDEO_TOKENS, valid_text_tokens: H::VALID_TEXT_TOKENS,
+    active_query_rows: H::QUERY_ROWS, storage_rows: H::STORAGE_ROWS,
+    heads: H::HEADS, head_dim: H::HEAD_DIM, final_cache_rows: cache_rows,
+    cache_named_bytes: provider.shape.cache_bytes, workspace_named_bytes: provider.shape.workspace_bytes,
+    named_bytes: provider.shape.named_bytes, forward_max_abs_errors: errors, tolerance_atol: H::ATOL,
+    denoise_append_rejected_by_sentinel: true, writer_append_exact_f32: true,
+    encode_buffer_allocations: encode_allocations, encode_readbacks: encode_readbacks,
+    preterminal_waits: preterminal_waits, terminal_wait_count: chain.wait_count,
+    postterminal_readbacks: diagnostic_readbacks, artifacts: artifacts, passed: true,
+  }.to_pretty_json
+  unless output_dir.empty?
+    H.write_fresh_output(File.join(output_dir, "native.json")) { |f| f.puts(report) }
   end
   puts report
 ensure
@@ -350,7 +379,7 @@ ensure
     provider.release
     chain.release
     {query, key, value, output, banks.query_buffer, banks.key_buffer,
-     banks.value_buffer, pre_key_snapshot, pre_value_snapshot,
-     post_key_snapshot, post_value_snapshot, output_capture}.each(&.release)
+     banks.value_buffer, pre_key_snapshot, pre_value_snapshot, post_key_snapshot,
+     post_value_snapshot, final_key_snapshot, final_value_snapshot, output_capture}.each(&.release)
   end
 end

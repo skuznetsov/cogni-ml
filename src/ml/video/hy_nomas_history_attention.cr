@@ -9,6 +9,7 @@ require "./metal_mps_command_chain"
   lib HyNomasHistoryAttentionMPSFFI
     fun workspace_create = gs_hy_nomas_history_attention_workspace_create(
       device : Pointer(Void), history_rows : Int32, query_rows : Int32,
+      current_rows : Int32,
       heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
       query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
       output_stage : Pointer(Void),
@@ -37,10 +38,12 @@ module ML::Video
   class HyNomasHistoryAttentionWorkspace
     MAX_QUERY_CHUNK = 256
 
-    record Geometry, history_rows : Int32, query_rows : Int32, key_rows : Int32,
+    record Geometry, history_rows : Int32, query_rows : Int32,
+      current_rows : Int32, key_rows : Int32,
       heads : Int32, head_dim : Int32, query_chunk : Int32,
       graph_calls : Int32,
-      query_elements : Int32, history_elements : Int32, key_elements : Int32,
+      query_elements : Int32, current_elements : Int32,
+      history_elements : Int32, key_elements : Int32,
       max_score_elements : Int64, max_score_bytes : Int64,
       workspace_bytes : Int64, active_history_pair_bytes : Int64,
       current_io_bytes : Int64, no_history_control : Bool
@@ -72,11 +75,13 @@ module ML::Video
     # Pure admission calculation: score memory is bounded by one 256-row query
     # tile, while K/V staging holds exactly the valid history plus current rows.
     def self.geometry(history_rows : Int32, query_rows : Int32,
-                      heads : Int32, head_dim : Int32) : Geometry
-      unless history_rows >= 0 && query_rows > 0 && heads > 0 && head_dim > 0
+                      heads : Int32, head_dim : Int32,
+                      current_rows : Int32 = query_rows) : Geometry
+      unless history_rows >= 0 && query_rows > 0 && current_rows > 0 &&
+             current_rows <= query_rows && heads > 0 && head_dim > 0
         raise ArgumentError.new("Invalid Hy-Nomas history attention geometry")
       end
-      key_rows_64 = history_rows.to_i64 + query_rows
+      key_rows_64 = history_rows.to_i64 + current_rows
       if key_rows_64 > Int32::MAX
         raise ArgumentError.new("Hy-Nomas history attention key rows exceed the native limit")
       end
@@ -84,6 +89,7 @@ module ML::Video
       query_chunk = Math.min(query_rows, MAX_QUERY_CHUNK).to_i32
       graph_calls = ((query_rows.to_i64 + query_chunk - 1) // query_chunk).to_i32
       query_elements = HyNomasDualStreamBlock.checked_count(1, query_rows, heads, head_dim)
+      current_elements = HyNomasDualStreamBlock.checked_count(1, current_rows, heads, head_dim)
       history_elements = if history_rows == 0
                            0
                          else
@@ -95,18 +101,18 @@ module ML::Video
       max_score_bytes = max_score_elements * sizeof(Float32)
       workspace_elements = 2_i64 * tile_elements + 2_i64 * key_elements
       active_history_elements = 2_i64 * history_elements
-      current_elements = 4_i64 * query_elements
       if workspace_elements > Int64::MAX // sizeof(Float32) ||
          active_history_elements > Int64::MAX // sizeof(Float32) ||
-         current_elements > Int64::MAX // sizeof(Float32)
+         (2_i64 * query_elements + 2_i64 * current_elements) > Int64::MAX // sizeof(Float32)
         raise ArgumentError.new("Hy-Nomas history attention byte count overflow")
       end
-      Geometry.new(history_rows, query_rows, key_rows, heads, head_dim,
-        query_chunk, graph_calls, query_elements, history_elements, key_elements,
+      Geometry.new(history_rows, query_rows, current_rows, key_rows, heads, head_dim,
+        query_chunk, graph_calls, query_elements, current_elements, history_elements, key_elements,
         max_score_elements, max_score_bytes,
         workspace_elements * sizeof(Float32),
-        active_history_elements * sizeof(Float32), current_elements * sizeof(Float32),
-        history_rows == 0 && key_rows == query_rows)
+        active_history_elements * sizeof(Float32),
+        (2_i64 * query_elements + 2_i64 * current_elements) * sizeof(Float32),
+        history_rows == 0 && current_rows == query_rows)
     end
 
     def self.retained_workspace_count : Int32
@@ -114,8 +120,9 @@ module ML::Video
     end
 
     def initialize(history_rows : Int32, query_rows : Int32,
-                   heads : Int32, head_dim : Int32)
-      @shape = self.class.geometry(history_rows, query_rows, heads, head_dim)
+                   heads : Int32, head_dim : Int32,
+                   current_rows : Int32 = query_rows)
+      @shape = self.class.geometry(history_rows, query_rows, heads, head_dim, current_rows)
       @arena = Arena.new
       begin
         @arena.alloc(Q_STAGE_KEY, tile_elements)
@@ -129,7 +136,7 @@ module ML::Video
         {% if flag?(:darwin) && !flag?(:cpu_only) %}
           @handle = HyNomasHistoryAttentionMPSFFI.workspace_create(
             ML::Metal::Device.instance.device_handle,
-            @shape.history_rows, @shape.query_rows, @shape.heads,
+            @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
             @shape.head_dim, @shape.query_chunk,
             1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
             q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
@@ -452,8 +459,8 @@ module ML::Video
       shape = @workspace.shape
       bindings = [] of Tuple(ML::MetalBuffer, Int32)
       bindings << {@query, shape.query_elements}
-      bindings << {@current_key, shape.query_elements}
-      bindings << {@current_value, shape.query_elements}
+      bindings << {@current_key, shape.current_elements}
+      bindings << {@current_value, shape.current_elements}
       bindings << {@output, shape.query_elements}
       buffers = [] of ML::MetalBuffer
       bindings.each do |buffer, elements|

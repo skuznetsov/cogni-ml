@@ -40,6 +40,7 @@
 @property(nonatomic, strong) NSMutableArray<id<MTLBuffer>> *historyValues;
 @property(nonatomic) uint32_t historyRows;
 @property(nonatomic) uint32_t queryRows;
+@property(nonatomic) uint32_t currentRows;
 @property(nonatomic) uint32_t keyRows;
 @property(nonatomic) uint32_t heads;
 @property(nonatomic) uint32_t headDim;
@@ -389,17 +390,19 @@ static bool hy_nomas_history_encode_query(
 }
 
 extern "C" void *gs_hy_nomas_history_attention_workspace_create(
-    void *deviceHandle, int32_t historyRows, int32_t queryRows, int32_t heads,
-    int32_t headDim, int32_t queryChunk, float scale,
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
     void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
     void *outputStageHandle) {
   if (!deviceHandle || !queryStageHandle || !keyStageHandle ||
       !valueStageHandle || !outputStageHandle || historyRows < 0 ||
-      queryRows <= 0 || heads <= 0 || headDim <= 0 || queryChunk <= 0 ||
+      queryRows <= 0 || currentRows <= 0 || currentRows > queryRows ||
+      heads <= 0 || headDim <= 0 || queryChunk <= 0 ||
       queryChunk != std::min(queryRows, 256) || !std::isfinite(scale) ||
       scale <= 0.0f || scale > 1.0f)
     return nullptr;
-  const int64_t keyRows64 = (int64_t)historyRows + (int64_t)queryRows;
+  const int64_t keyRows64 = (int64_t)historyRows + (int64_t)currentRows;
   if (keyRows64 <= 0 || keyRows64 > INT32_MAX)
     return nullptr;
   const uint32_t keyRows = (uint32_t)keyRows64;
@@ -488,6 +491,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
         workspace.historyValues = [NSMutableArray new];
         workspace.historyRows = (uint32_t)historyRows;
         workspace.queryRows = (uint32_t)queryRows;
+        workspace.currentRows = (uint32_t)currentRows;
         workspace.keyRows = keyRows;
         workspace.heads = (uint32_t)heads;
         workspace.headDim = (uint32_t)headDim;
@@ -569,19 +573,27 @@ extern "C" void *gs_hy_nomas_history_attention_plan_create(
     return nullptr;
   const uint64_t queryShape[] = {1, workspace.queryRows, workspace.heads,
                                  workspace.headDim};
-  uint64_t queryElements = 0;
+  const uint64_t currentShape[] = {1, workspace.currentRows, workspace.heads,
+                                   workspace.headDim};
+  uint64_t queryElements = 0, currentElements = 0;
   if (!hy_nomas_history_product(queryShape, 4, &queryElements) ||
-      queryElements > UINT64_MAX / sizeof(float))
+      !hy_nomas_history_product(currentShape, 4, &currentElements) ||
+      queryElements > UINT64_MAX / sizeof(float) ||
+      currentElements > UINT64_MAX / sizeof(float))
     return nullptr;
   const uint64_t queryBytes = queryElements * sizeof(float);
+  const uint64_t currentBytes = currentElements * sizeof(float);
   id<MTLBuffer> query = (__bridge id<MTLBuffer>)queryHandle;
   id<MTLBuffer> currentKey = (__bridge id<MTLBuffer>)currentKeyHandle;
   id<MTLBuffer> currentValue = (__bridge id<MTLBuffer>)currentValueHandle;
   id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandle;
   NSArray<id<MTLBuffer>> *buffers = @[ query, currentKey, currentValue, output ];
+  const uint64_t requiredBytes[] = {queryBytes, currentBytes,
+                                    currentBytes, queryBytes};
   for (NSUInteger index = 0; index < buffers.count; ++index) {
     id<MTLBuffer> buffer = buffers[index];
-    if (!hy_nomas_history_valid_buffer(workspace.device, buffer, queryBytes))
+    if (!hy_nomas_history_valid_buffer(workspace.device, buffer,
+                                       requiredBytes[index]))
       return nullptr;
     for (NSUInteger other = index + 1; other < buffers.count; ++other) {
       if (!hy_nomas_history_disjoint(buffer, buffers[other]))
@@ -639,7 +651,7 @@ extern "C" int32_t gs_hy_nomas_history_attention_encode(
                                        : plan.currentValue;
       GsHyNomasHistoryAttentionParams params = {
           workspace.historyRows, workspace.queryRows, workspace.keyRows,
-          workspace.heads, workspace.headDim, workspace.queryChunk, 0};
+          workspace.heads, workspace.headDim, workspace.currentRows, 0};
       const uint64_t keyWork = (uint64_t)workspace.keyRows * workspace.heads *
                                workspace.headDim;
       if (!hy_nomas_history_encode_compute(root, workspace.joinPipeline,

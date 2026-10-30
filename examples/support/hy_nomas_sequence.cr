@@ -7,7 +7,8 @@ require "../../src/ml/video/hy_nomas_timeline_ops"
 module HyNomasSequence
   extend self
 
-  STEPS = 4
+  STEPS               = 4
+  HISTORY_TEXT_POLICY = ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene
 
   # Keep command-chain owners strongly reachable when a failed terminal wait
   # cannot prove that their GPU work has drained.
@@ -71,10 +72,12 @@ module HyNomasSequence
     raise ArgumentError.new("shared continuation requires a JSON scene prompt")
   end
 
-  def history_bytes(inputs : HyNomasGeneration::Inputs, segments : Int32) : Int64
+  def history_bytes(inputs : HyNomasGeneration::Inputs, segments : Int32,
+                    text_cache_policy = HISTORY_TEXT_POLICY) : Int64
     ML::Video::HyNomasContinuationHistory.named_bytes(segment_count: validate_segments!(segments),
       video_tokens: 4320, valid_text_tokens: inputs.valid_text_tokens,
-      storage_text_tokens: inputs.compact_text_tokens, layers: 54, heads: 16, head_dim: 128)
+      storage_text_tokens: inputs.compact_text_tokens, layers: 54, heads: 16, head_dim: 128,
+      text_cache_policy: text_cache_policy)
   end
 
   def additional_inputs_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32) : Int64
@@ -92,11 +95,12 @@ module HyNomasSequence
 
   # Include the temporarily coexisting original attention plan while the
   # prepared provider is attached. Steady residency subtracts that old plan.
-  def peak_named_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32) : Int64
+  def peak_named_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
+                       text_cache_policy = HISTORY_TEXT_POLICY) : Int64
     HyNomasGeneration.dit_resident_weight_bytes(HyNomasGeneration::DiTWeights::BF16,
       HyNomasGeneration.stage_bytes, HyNomasGeneration.stage_bytes * 54) +
       HyNomasGeneration.dit_reserve_bytes(inputs.base, STEPS) +
-      history_bytes(inputs.base, segments) + additional_inputs_bytes(inputs, segments)
+      history_bytes(inputs.base, segments, text_cache_policy) + additional_inputs_bytes(inputs, segments)
   end
 
   class DiT
@@ -125,10 +129,11 @@ module HyNomasSequence
 
     def initialize(inputs : HyNomasGeneration::TimelineInputs, @timeline : ML::MetalBuffer,
                    @latent : ML::MetalBuffer, budget : Int64, @segment_count : Int32,
-                   admission : ML::Video::HyNomasQ4StackIndex::Admission)
+                   admission : ML::Video::HyNomasQ4StackIndex::Admission,
+                   text_cache_policy = HISTORY_TEXT_POLICY)
       HyNomasSequence.validate_segments!(@segment_count)
       base = inputs.base
-      @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count)
+      @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
       admission.validate!(HyNomasGeneration::INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
@@ -211,6 +216,7 @@ module HyNomasSequence
         @history = ML::Video::HyNomasContinuationHistory.new(segment_count: @segment_count,
           video_tokens: 4320, valid_text_tokens: base.valid_text_tokens,
           storage_text_tokens: base.compact_text_tokens, layers: 54, heads: 16, head_dim: 128,
+          text_cache_policy: text_cache_policy,
           query: joint["joint.query"], key: joint["joint.key"],
           value: joint["joint.value"], output: joint["joint.attention"])
         plan_cleanup << -> { @history.release }

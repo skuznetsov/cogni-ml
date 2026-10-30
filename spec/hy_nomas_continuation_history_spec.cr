@@ -3,6 +3,35 @@ require "./support/video_allocation_counter"
 require "../src/ml/video/hy_nomas_continuation_history"
 
 describe ML::Video::HyNomasContinuationHistory do
+  it "keeps one text block for later chunks of the same scene" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    geometry = ML::Video::HyNomasContinuationHistory.geometry(
+      4, 4320, 557, 576, 54, 16, 128,
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene)
+
+    geometry.workspace_geometries.map(&.history_rows).should eq([0, 4877, 9197, 13517])
+    geometry.workspace_geometries.map(&.key_rows).should eq([4877, 9197, 13517, 17837])
+    geometry.workspace_geometries.map(&.current_rows).should eq([4877, 4320, 4320, 4320])
+    geometry.writer_workspace_geometries.map(&.key_rows).should eq([4877, 9754, 14074])
+    geometry.writer_workspace_geometries.map(&.current_rows).should eq([4877, 4877, 4877])
+    geometry.max_history_rows.should eq(13517)
+    geometry.cache_bytes.should eq(13517_i64 * 16 * 128 * 4 * 2 * 54)
+    geometry.append_elements(0).should eq(4877 * 16 * 128)
+    geometry.append_elements(1).should eq(4320 * 16 * 128)
+    geometry.append_offset(2).should eq(9197 * 16 * 128)
+    [-1, 3, 4].each do |invalid|
+      expect_raises(ArgumentError) { geometry.append_elements(invalid) }
+      expect_raises(ArgumentError) { geometry.append_offset(invalid) }
+    end
+    # The first writer shares the square denoise plan; later writers need
+    # transient current-text keys even though only video keys are persisted.
+    expected_workspace = geometry.workspace_geometries.sum(&.workspace_bytes) +
+                         geometry.writer_workspace_geometries.skip(1).sum(&.workspace_bytes)
+    geometry.workspace_bytes.should eq(expected_workspace)
+    geometry.named_bytes.should eq(geometry.cache_bytes + expected_workspace)
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
   it "admits compact active rows separately from padded storage rows" do
     allocations = ML::MetalBuffer.video_spec_allocations
     geometry = ML::Video::HyNomasContinuationHistory.geometry(
@@ -45,6 +74,19 @@ describe ML::Video::HyNomasContinuationHistory do
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)
   end
 
+  it "shares the first writer workspace for a two-chunk shared scene" do
+    allocations = ML::MetalBuffer.video_spec_allocations
+    geometry = ML::Video::HyNomasContinuationHistory.geometry(
+      2, 4320, 557, 576, 54, 16, 128,
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene)
+    geometry.workspace_geometries.map(&.history_rows).should eq([0, 4877])
+    geometry.workspace_geometries.map(&.key_rows).should eq([4877, 9197])
+    geometry.writer_workspace_geometries.should eq([geometry.workspace_geometries.first])
+    geometry.workspace_bytes.should eq(geometry.workspace_geometries.sum(&.workspace_bytes))
+    geometry.max_history_rows.should eq(4877)
+    ML::MetalBuffer.video_spec_allocations.should eq(allocations)
+  end
+
   it "rejects invalid and overflowing geometry before any allocation" do
     allocations = ML::MetalBuffer.video_spec_allocations
     [
@@ -57,8 +99,10 @@ describe ML::Video::HyNomasContinuationHistory do
       {6, 1, 1, Int32::MAX, 54, 16, 128},
       {6, 2, 2, 2, 54, Int32::MAX, Int32::MAX},
     ].each do |invalid|
-      expect_raises(ArgumentError) do
-        ML::Video::HyNomasContinuationHistory.geometry(*invalid)
+      ML::Video::HyNomasContinuationHistory::TextCachePolicy.each do |policy|
+        expect_raises(ArgumentError) do
+          ML::Video::HyNomasContinuationHistory.geometry(*invalid, text_cache_policy: policy)
+        end
       end
     end
     ML::MetalBuffer.video_spec_allocations.should eq(allocations)

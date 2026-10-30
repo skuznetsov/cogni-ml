@@ -8,6 +8,7 @@ budget_mib = 33_792_i64
 segments = 4
 plan_only = false
 dit_only = false
+text_cache_policy = HyNomasSequence::HISTORY_TEXT_POLICY
 OptionParser.parse do |p|
   p.banner = "Experimental GPU Hy-Nomas continuation: two through six linked 5-second segments, 512x288 at 24 fps"
   p.on("--inputs PATH", "Authenticated continuation input bundle") { |v| input_path = v }
@@ -16,6 +17,9 @@ OptionParser.parse do |p|
   p.on("--budget-mib N", "Named buffers at the larger weight phase; external 10% guard is mandatory") { |v| budget_mib = v.to_i64 }
   p.on("--segments N", "Two through six linked segments; default four (20 seconds)") { |v| segments = v.to_i32 }
   p.on("--dit-only", "Qualification: export the latent bank after the DiT terminal wait") { dit_only = true }
+  p.on("--legacy-text-per-chunk", "Control only: repeat scene text in every 5-second chunk") do
+    text_cache_policy = ML::Video::HyNomasContinuationHistory::TextCachePolicy::PerChunk
+  end
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
 HyNomasSequence.validate_segments!(segments)
@@ -30,7 +34,7 @@ inputs.verify_payload!
 inputs.base.file.verify_payload!
 HyNomasSequence.validate_shared_scene_prompt!(inputs.base.prompt)
 admission = HyNomasGeneration.authenticate_bf16_index
-dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments)
+dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, text_cache_policy)
 dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base)
 raise ArgumentError.new("sequence peak named buffers exceed budget") unless dit_peak <= budget
 latent_frames = segments * 30
@@ -46,10 +50,11 @@ raise ArgumentError.new("decoder source banks and prefix buffers exceed budget")
 preflight_seconds = (Time.monotonic - request_start).total_seconds
 HyNomasGeneration.emit("sequence_memory_plan", segments: segments, steps_per_segment: 4,
   dit_peak_named_bytes: dit_peak, dit_steady_named_bytes: dit_steady,
-  history_named_bytes: HyNomasSequence.history_bytes(inputs.base, segments),
+  history_named_bytes: HyNomasSequence.history_bytes(inputs.base, segments, text_cache_policy),
   decoder_named_bytes: metadata.try(&.named_bytes), decoder_peak_named_bytes: decoder_peak,
   frames: pixel_frames, named_budget_bytes: budget,
   cache_precision: "F32 native post-RoPE K/V; no additional BF16 rounding",
+  text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
   cache_writer: "separate noisy forward after four denoise forwards; sigma 0.206897, t 206.897",
   full_upstream_video_parity: false)
 if plan_only
@@ -79,7 +84,7 @@ begin
   timeline = inputs.upload!("input.latent_bank", timeline_arena)
   latent = current_arena.alloc("input.latent", 32 * 30 * 9 * 16)
   setup = Time.monotonic
-  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission)
+  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission, text_cache_policy)
   raise "sequence preflight/allocation admission disagree" unless dit.named_bytes == dit_steady
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -167,8 +172,9 @@ begin
              latent_bank_shape: [1, 32, 180, 9, 16], width: 512, height: 288, fps: 24,
              steps_per_segment: 4, shift: 5, cfg: 1,
              cache_precision: "F32 exact native K/V boundary; upstream cache is BF16",
+             text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
              cache_writer: {sigma: 0.206897, timestep: 206.897, separate_noisy_forward: true},
-             history: "all valid prior segment video/text rows, layer-specific, no truncation",
+             history: text_cache_policy.once_per_scene? ? "all prior chunk video rows plus the first chunk's scene text, layer-specific, no truncation" : "all prior chunk video/text rows, layer-specific, no truncation",
              noise_scope: "authenticated MPS-generated fixed banks; stock upstream CPU RNG value parity is false",
              pixelumm: {steps: 1, window_latents: 10, overlap_latents: 5,
                         global_windows: metadata.try(&.config.window_count)},

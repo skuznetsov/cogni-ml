@@ -189,6 +189,14 @@ module ML::Video
     MAX_SEGMENTS =  6
     MAX_LAYERS   = 54
 
+    # PerChunk preserves the original experimental provider contract. A caller
+    # that reuses one semantic scene must opt into OncePerScene, matching
+    # upstream chunk_ar's cache_txt flag. Text queries remain active in both.
+    enum TextCachePolicy
+      PerChunk
+      OncePerScene
+    end
+
     record Geometry,
       segment_count : Int32,
       video_tokens : Int32,
@@ -206,8 +214,21 @@ module ML::Video
       cache_elements_per_buffer : Int32,
       cache_bytes : Int64,
       workspace_geometries : Array(HyNomasHistoryAttentionWorkspace::Geometry),
+      writer_workspace_geometries : Array(HyNomasHistoryAttentionWorkspace::Geometry),
+      text_cache_policy : TextCachePolicy,
       workspace_bytes : Int64,
-      named_bytes : Int64
+      named_bytes : Int64 do
+      def append_elements(segment : Int32) : Int32
+        raise ArgumentError.new("Final or invalid chunk cannot append history") unless 0 <= segment < segment_count - 1
+        rows = text_cache_policy.once_per_scene? && segment > 0 ? video_tokens : query_rows
+        (rows.to_i64 * heads * head_dim).to_i32
+      end
+
+      def append_offset(segment : Int32) : Int32
+        raise ArgumentError.new("Final or invalid chunk cannot append history") unless 0 <= segment < segment_count - 1
+        (workspace_geometries[segment].history_rows.to_i64 * heads * head_dim).to_i32
+      end
+    end
 
     getter shape : Geometry
     @query : ML::MetalBuffer
@@ -219,12 +240,14 @@ module ML::Video
     @cache_pairs = [] of Tuple(ML::MetalBuffer, ML::MetalBuffer)
     @history_workspaces = [] of HyNomasHistoryAttentionWorkspace
     @history_plans = [] of HyNomasHistoryAttentionMPSPlan
+    @writer_plans = [] of HyNomasHistoryAttentionMPSPlan
     @append_plan : HyNomasContinuationHistoryKernels::AppendPlan? = nil
     {% if flag?(:hy_nomas_history_probe) %}
       @fill_plan : HyNomasContinuationHistoryKernels::FillPlan? = nil
       @probe_cache_filled = false
       @probe_pre_writer_snapshot = false
       @probe_post_writer_snapshot = false
+      @probe_final_snapshot = false
     {% end %}
     @selected_segment : Int32? = nil
     @selected_writer = false
@@ -235,7 +258,8 @@ module ML::Video
     def self.geometry(segment_count : Int32, video_tokens : Int32,
                       valid_text_tokens : Int32, storage_text_tokens : Int32,
                       layers : Int32, heads : Int32, head_dim : Int32,
-                      denoise_steps : Int32 = 4) : Geometry
+                      denoise_steps : Int32 = 4, *,
+                      text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Geometry
       unless (2..MAX_SEGMENTS).includes?(segment_count) &&
              video_tokens > 0 && valid_text_tokens > 0 &&
              storage_text_tokens >= valid_text_tokens &&
@@ -245,7 +269,11 @@ module ML::Video
 
       query_rows_64 = video_tokens.to_i64 + valid_text_tokens
       storage_rows_64 = video_tokens.to_i64 + storage_text_tokens
-      max_history_rows_64 = (segment_count - 1).to_i64 * query_rows_64
+      max_history_rows_64 = if text_cache_policy.once_per_scene?
+                              (segment_count - 1).to_i64 * video_tokens + valid_text_tokens
+                            else
+                              (segment_count - 1).to_i64 * query_rows_64
+                            end
       unless query_rows_64 <= Int32::MAX && storage_rows_64 <= Int32::MAX &&
              max_history_rows_64 <= Int32::MAX
         raise ArgumentError.new("Hy-Nomas continuation history rows exceed the native limit")
@@ -273,17 +301,34 @@ module ML::Video
       cache_bytes = checked_product(pair_bytes, layers.to_i64,
         "Hy-Nomas continuation cache inventory bytes")
       workspace_geometries = Array(HyNomasHistoryAttentionWorkspace::Geometry).new(segment_count)
+      writer_workspace_geometries = Array(HyNomasHistoryAttentionWorkspace::Geometry).new(segment_count - 1)
       workspace_bytes = 0_i64
       segment_count.times do |segment|
-        history_rows = segment.to_i64 * query_rows_64
+        history_rows = if text_cache_policy.once_per_scene? && segment > 0
+                         segment.to_i64 * video_tokens + valid_text_tokens
+                       else
+                         segment.to_i64 * query_rows_64
+                       end
         unless history_rows <= Int32::MAX
           raise ArgumentError.new("Hy-Nomas continuation segment history exceeds the native limit")
         end
+        current_rows = text_cache_policy.once_per_scene? && segment > 0 ? video_tokens : query_rows
         workspace = HyNomasHistoryAttentionWorkspace.geometry(
-          history_rows.to_i32, query_rows, heads, head_dim)
+          history_rows.to_i32, query_rows, heads, head_dim, current_rows: current_rows)
         workspace_geometries << workspace
         workspace_bytes = checked_sum(workspace_bytes, workspace.workspace_bytes,
           "Hy-Nomas continuation workspace bytes")
+        if segment < segment_count - 1
+          # A cache writer still attends its current text transiently, even
+          # when that text is already persistent and only image rows append.
+          writer_workspace = current_rows == query_rows ? workspace : HyNomasHistoryAttentionWorkspace.geometry(
+            history_rows.to_i32, query_rows, heads, head_dim)
+          writer_workspace_geometries << writer_workspace
+          if current_rows != query_rows
+            workspace_bytes = checked_sum(workspace_bytes, writer_workspace.workspace_bytes,
+              "Hy-Nomas continuation writer workspace bytes")
+          end
+        end
       end
       named_bytes = checked_sum(cache_bytes, workspace_bytes,
         "Hy-Nomas continuation named bytes")
@@ -292,34 +337,38 @@ module ML::Video
         storage_text_tokens, denoise_steps, layers, heads, head_dim, query_rows, storage_rows,
         query_elements_64.to_i32, storage_elements_64.to_i32,
         max_history_rows, cache_elements_64.to_i32, cache_bytes,
-        workspace_geometries, workspace_bytes, named_bytes)
+        workspace_geometries, writer_workspace_geometries, text_cache_policy,
+        workspace_bytes, named_bytes)
     end
 
     def self.named_bytes(segment_count : Int32, video_tokens : Int32,
                          valid_text_tokens : Int32, storage_text_tokens : Int32,
                          layers : Int32, heads : Int32, head_dim : Int32,
-                         denoise_steps : Int32 = 4) : Int64
+                         denoise_steps : Int32 = 4, *,
+                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
-        layers, heads, head_dim, denoise_steps).named_bytes
+        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy).named_bytes
     end
 
     def self.named_bytes(*, segment_count : Int32, video_tokens : Int32,
                          valid_text_tokens : Int32, storage_text_tokens : Int32,
                          layers : Int32, heads : Int32, head_dim : Int32,
-                         denoise_steps : Int32 = 4) : Int64
+                         denoise_steps : Int32 = 4,
+                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
-        layers, heads, head_dim, denoise_steps).named_bytes
+        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy).named_bytes
     end
 
     def initialize(*, segment_count : Int32, video_tokens : Int32,
                    valid_text_tokens : Int32, storage_text_tokens : Int32,
                    layers : Int32, heads : Int32, head_dim : Int32,
                    denoise_steps : Int32 = 4,
+                   text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
                    query : ML::MetalBuffer, key : ML::MetalBuffer,
                    value : ML::MetalBuffer, output : ML::MetalBuffer)
       @shape = self.class.geometry(segment_count, video_tokens,
         valid_text_tokens, storage_text_tokens, layers, heads, head_dim,
-        denoise_steps)
+        denoise_steps, text_cache_policy: text_cache_policy)
       @schedule = HyNomasContinuationHistorySchedule.new(segment_count, layers,
         denoise_steps)
       @query = query
@@ -332,17 +381,10 @@ module ML::Video
       begin
         allocate_layer_caches!
         @shape.workspace_geometries.each_with_index do |geometry, segment|
-          workspace = HyNomasHistoryAttentionWorkspace.new(
-            geometry.history_rows, @shape.query_rows, @shape.heads, @shape.head_dim)
-          @history_workspaces << workspace
-          if geometry.history_rows > 0
-            @cache_pairs.each do |cache_key, cache_value|
-              workspace.register_history_pair!(cache_key, cache_value)
-            end
+          @history_plans << prepare_attention_plan!(geometry)
+          if writer_geometry = @shape.writer_workspace_geometries[segment]?
+            @writer_plans << (writer_geometry == geometry ? @history_plans.last : prepare_attention_plan!(writer_geometry))
           end
-          workspace.freeze_history_inventory!
-          @history_plans << HyNomasHistoryAttentionMPSPlan.new(
-            workspace, @query, @key, @value, @output)
         end
         @append_plan = HyNomasContinuationHistoryKernels::AppendPlan.new
         {% if flag?(:hy_nomas_history_probe) %}
@@ -443,10 +485,14 @@ module ML::Video
             raise ArgumentError.new("Pre-writer cache snapshot must follow all denoise forwards")
           end
         when :after_writer
-          unless @shape.segment_count == 2 && @probe_pre_writer_snapshot &&
+          unless @probe_pre_writer_snapshot &&
                  @schedule.next_segment == 1 && @schedule.denoise_passes == 0 &&
                  !@probe_post_writer_snapshot
             raise ArgumentError.new("Post-writer cache snapshot must follow the first noisy-cache forward")
+          end
+        when :complete
+          unless @schedule.complete? && @probe_post_writer_snapshot && !@probe_final_snapshot
+            raise ArgumentError.new("Final cache snapshot must follow every continuation forward")
           end
         else
           raise ArgumentError.new("Unknown Hy-Nomas diagnostic cache snapshot phase")
@@ -478,6 +524,7 @@ module ML::Video
         end
         @probe_pre_writer_snapshot = true if phase == :before_writer
         @probe_post_writer_snapshot = true if phase == :after_writer
+        @probe_final_snapshot = true if phase == :complete
       rescue ex
         @poisoned = true
         raise ex
@@ -494,7 +541,7 @@ module ML::Video
       validate_chain!(chain)
       @last_chain = chain
       begin
-        plan = @history_plans[segment]
+        plan = @schedule.selected_writer? ? @writer_plans[segment] : @history_plans[segment]
         history_slot = if plan.workspace.shape.history_rows == 0
                          -1_i32
                        else
@@ -503,15 +550,13 @@ module ML::Video
         plan.encode(chain, history_slot)
         if @schedule.selected_writer?
           cache_key, cache_value = @cache_pairs[block_index]
-          destination_offset = segment.to_i64 * @shape.query_elements
-          unless destination_offset <= Int32::MAX
-            raise ArgumentError.new("Hy-Nomas continuation cache offset exceeds the native limit")
-          end
+          destination_offset = @shape.append_offset(segment)
+          count = @shape.append_elements(segment)
           encoder = chain.encoder
           append_plan.encode(encoder, @key, cache_key,
-            @shape.query_elements, destination_offset.to_i32)
+            count, destination_offset)
           append_plan.encode(encoder, @value, cache_value,
-            @shape.query_elements, destination_offset.to_i32)
+            count, destination_offset)
         end
 
         @schedule.finish_layer!(block_index)
@@ -542,6 +587,20 @@ module ML::Video
         validate_cache_pair!(key, value)
         @cache_pairs << {key, value}
       end
+    end
+
+    private def prepare_attention_plan!(geometry : HyNomasHistoryAttentionWorkspace::Geometry) : HyNomasHistoryAttentionMPSPlan
+      workspace = HyNomasHistoryAttentionWorkspace.new(
+        geometry.history_rows, @shape.query_rows, @shape.heads, @shape.head_dim,
+        current_rows: geometry.current_rows)
+      @history_workspaces << workspace
+      if geometry.history_rows > 0
+        @cache_pairs.each do |cache_key, cache_value|
+          workspace.register_history_pair!(cache_key, cache_value)
+        end
+      end
+      workspace.freeze_history_inventory!
+      HyNomasHistoryAttentionMPSPlan.new(workspace, @query, @key, @value, @output)
     end
 
     private def validate_cache_pair!(key : ML::MetalBuffer,
@@ -603,6 +662,8 @@ module ML::Video
     {% end %}
 
     private def release_prepared! : Nil
+      @writer_plans.each(&.release)
+      @writer_plans.clear
       @history_plans.each(&.release)
       @history_plans.clear
       @history_workspaces.each(&.release)

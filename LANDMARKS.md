@@ -36665,3 +36665,49 @@ Refresh after source/toolchain/device/model/workload changes.
   under `results/sequence-echo-20s/diagnostics-decoder`. Parent 99b342696647.
   Refresh after source/input/weights/geometry/precision/backend/device/toolchain/
   blend/display policy changes or evidence loss; fresh memory admission per run.
+
+### 2026-10-30: Shared-scene text K/V persists once; motion symptom remains open
+
+- Fixed a source-confirmed semantic difference in experimental Hy-Nomas
+  continuation: fixed 5s chunks of one JSON scene must reuse the first writer's
+  text K/V. Later denoise calls expose current video K/V only; later writers
+  attend current text transiently and append video only. All valid text queries
+  remain active; padding stays excluded. Echo denoise key counts are now
+  4,877 / 9,197 / 13,517 / 17,837, rather than repeating 557 extra text keys
+  per chunk. The shared-scene CLI opts into `OncePerScene`; the generic provider
+  keeps `PerChunk`. `--legacy-text-per-chunk` is the controlled rollback path.
+- Current K/V prefixes are independent of full query/output rows. Distinct
+  writer workspaces are prepared, counted by admission and released with the
+  provider; the first writer reuses its denoise workspace. No precision or
+  tolerance changes and no added encode readbacks or synchronization.
+- Three synthetic chunks exercise 14 forwards across all 54 layer caches on
+  distinct F32 inputs with poisoned padding. All 9,072 attention output and
+  2,160 final cache values match the pinned upstream attention function and its
+  actual dense-cache helper exactly. Native F64-reference error <=7.451e-9;
+  zero tracked encode allocations/readbacks/preterminal waits, one terminal
+  wait. Eighteen Crystal examples and four CPU oracle tests pass. This certifies
+  the exercised F32 cache contract, not stock BF16/Flash/Magi or full DiT parity.
+- A bounded 10s same-prompt/noise BF16 preview preserves the first 30 latent
+  frames exactly against the saved 20s Echo control, changes chunk 2, leaves
+  unused latent frames 60:180 untouched and preserves the first 100 display
+  frames. All 240 frames are finite/nonconstant. It takes 376.07s including
+  setup/raw export, with sampled 24.792 GiB peak, 17.875 GiB minimum cache-aware
+  headroom and no swap growth; guard 10%, 28.5 GiB, 64 MiB, 1200s.
+  No matched speedup claim.
+- The motion symptom survives this correction: top-ROI pixel-flow after/before
+  frame 120 is 0.472 old vs 0.486 fixed; far-right ROI also slows. This is not a
+  physical velocity, perceptual quality score or eye verdict. Same-lineage
+  Adversary: ROBUST for cache semantics/common-prefix preservation; VULNERABLE
+  for a temporal-quality fix. Next falsifier: source-faithful upstream chunk 2
+  on the same real prefix, conditioning, noise and RoPE, including the native
+  F32 vs upstream BF16 history boundary. Do not attribute the symptom to the
+  model until that neural comparison passes.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-scene-text-cache.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030`.
+  Parent b1e3db75919b; frozen 429-source manifest SHA
+  cc4c535f10a64189441f879591ef02cbc27847fc1c5567373fe95f460b771094;
+  probe binary e28f64c4e74d3f6b9572f1cc5f3caf6db025d66e9e0e9c42a3f42e9d77fa20e7.
+  Fresh native/reference launches retain matching source and executable pins
+  before/after. The 10s preview has its own 355-source and binary launch pins.
+  Refresh after source/input/weights/scene/schedule/geometry/precision/backend/
+  device/toolchain changes or evidence loss; fresh memory admission per run.

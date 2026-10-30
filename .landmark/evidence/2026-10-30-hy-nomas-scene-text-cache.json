@@ -1,0 +1,401 @@
+{
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualify_frozen.py",
+      "sha256": "5a25aa843ffee2a821d4d61bcb22848c407f15d454dbd276d7cd19f421507527"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/analyze_preview.py",
+      "sha256": "43398feca9fd78183dd9c08599d56676123f55513f9851fcb8f55e578e4e925d"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/launch.json",
+      "sha256": "01bb730adbf0336b70c0c3a6f603404cea983864ae34801407dce8ad04d59e5a"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/source-sha256.json",
+      "sha256": "cc4c535f10a64189441f879591ef02cbc27847fc1c5567373fe95f460b771094"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/completion.json",
+      "sha256": "18a5697635068df395c657da425a3f55a954a366d92062afc48aa979b4003f1d"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/guard.jsonl",
+      "sha256": "94a17f51f91a6ec31a19faf83b451bed511d78ae99a85ad4c982ac39d657ecc6"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/run.log",
+      "sha256": "a2d76a8dc39567d61b0294a2ccc8903c27abdc5134642673fafde0a990cd2134"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/launch.json",
+      "sha256": "110d9fe9901d44f5a58d2fdb441b0d13ee8b945e371bb0ad361f1b59cc53630c"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/source-sha256.json",
+      "sha256": "cc4c535f10a64189441f879591ef02cbc27847fc1c5567373fe95f460b771094"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/completion.json",
+      "sha256": "fed1a2c9ecb754f0d1904878f9e9cf964db39173d210ac8fbba30872a462046d"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/guard.jsonl",
+      "sha256": "d47e6c87077c9cace678725190faad2a9ed4e471479203b0d193ee26c390e9ac"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/run.log",
+      "sha256": "2fadd06debf8712821365bec8666f15d92314e21beee9e337d91ea4ad5658873"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/launch.json",
+      "sha256": "5af9e0c46f472795b007a21294819cb27bc93fe57abf711472f4bf3ffb18efd3"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/source-sha256.json",
+      "sha256": "e64496fd0f83418a4f1d8a25fc8aca08a3116e2c6a6a0f853f1a08a9df976a77"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/completion.json",
+      "sha256": "16a10344d8b3e8fda6bb9774ba4bd2b23a0a456e253bcf9a7215e715327c392e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/guard.jsonl",
+      "sha256": "3902ce887d63f9d2bde58ba889aa9ae09d731a9925d8e5f507e8ece95db2f334"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/run.log",
+      "sha256": "c5d460108269907f9c2e340e3b9c001aa8fce721a1a3fbae975992178cbc615b"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/native.json",
+      "sha256": "96864780161b264ed05ba32fd3659b89ece95f8cf2b9f6e94a601f5ea4515903"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/upstream/reference.json",
+      "sha256": "813f682ed2becf6e5cbad78f8d29c898dd0bc2360074e1ef6db9ae4581196065"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/native/receipt.json",
+      "sha256": "16cd52cf89e4a370f0b0112e14e8eefba08db76fcb2da6789e98f888ab6f24a4"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/validation.json",
+      "sha256": "ca4f8a3388786757d27d30dbed81dfe1726993805635bfd9af11bf148d8be539"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/flow.json",
+      "sha256": "b5e87d5c77802bd96781716eb2e7860cf75db3e5b7752030dcf61c5bc0e34bc3"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/seam-contact-sheet.jpg",
+      "sha256": "8d0f91eddec0663098e426a69d17cd679d7be528cbf20ef3fc3ffb6bc3cf4977"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/echo-fixed-10s.mp4",
+      "sha256": "0d1d4bdf46f748d9ac3a07943b000613be6b4c2fd918a14cd039623a87c94556"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/echo-before-after-10s.mp4",
+      "sha256": "45bfb1644b91f32de2c4e1ec835b8332a031760dfa4fb46c4bfa86fb98e483ea"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/cache_key.f32le",
+      "sha256": "ce6ba8c9d2fb7c0ffeb294061cf80ba6e94b942787251d692bb99b86c6437f8e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/query.f32le",
+      "sha256": "4da7cb7c28b57f9b38d2e2043ce11778c8f43ea5aee01ae0692397e4295d1b07"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/output.f32le",
+      "sha256": "4c6122f4932f2d30844cb1a83527a7c7516ac06dfe71d360a370d1f65d3ff1c7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/cache_value.f32le",
+      "sha256": "4d2c8108c8a8be897b75f3c0825b6e64ccaf1d0e711592702ec46a61afe9e6b5"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/key.f32le",
+      "sha256": "250845552da7909d6a8763c8a8629df8b80c706ce221007e552c2bc53d3697e0"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/native/value.f32le",
+      "sha256": "6397bfee3ead27ce5e010cf4575c33bc22d05ed492f1468a119bffece753a504"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/upstream/reference-cache-value.f32le",
+      "sha256": "4d2c8108c8a8be897b75f3c0825b6e64ccaf1d0e711592702ec46a61afe9e6b5"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/upstream/reference-output.f32le",
+      "sha256": "4c6122f4932f2d30844cb1a83527a7c7516ac06dfe71d360a370d1f65d3ff1c7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/upstream/reference-cache-key.f32le",
+      "sha256": "ce6ba8c9d2fb7c0ffeb294061cf80ba6e94b942787251d692bb99b86c6437f8e"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/correlated-adversary.json",
+      "sha256": "e71001f6ba587a61528209954f00f21e3efe207277272f7f0c270d480598e958"
+    }
+  ],
+  "base_revision": "b1e3db75919bccd2bec8d95cdb47828ddd99f3d1",
+  "claim": {
+    "adversary_verdict": "ROBUST for the exercised F32 cache contract and first-chunk preservation; VULNERABLE for full BF16/Flash/Magi neural parity or a temporal-quality fix.",
+    "assumptions": [
+      "The experimental sequence entry point admits one semantic JSON scene, no action tails, and one reused encoded prompt.",
+      "The provider caller opting into OncePerScene must preserve scene conditioning.",
+      "F32 post-RoPE native history remains a separate precision difference from upstream BF16 history."
+    ],
+    "correlation": "Same-lineage source/artifact review. The pinned upstream function is a separate source implementation, but no stock full-model CUDA run or independent perceptual review was performed.",
+    "decay_trigger": "Refresh after source, inputs, weights, scene identity, schedule, geometry, precision, backend, device or toolchain changes, or evidence loss. Every model run requires fresh cache-aware memory admission.",
+    "failure_policy": "Reopen the affected claim on a changed pin, failed parity or changed scene identity. Use PerChunk or --legacy-text-per-chunk only as the saved control, not as upstream-equivalent behavior.",
+    "level": "VERIFIED",
+    "scope": "Source-confirmed same-scene text-cache contract correction. Three synthetic chunks, 14 forwards across 54 layer caches match the pinned upstream function and actual cache helper on the same F32 inputs. The 10s real-model preview preserves the first chunk exactly. Uneven motion and drifting eyes are not fixed or certified."
+  },
+  "created_at": "2026-10-30T21:52:59.311027+00:00",
+  "implementation": {
+    "entrypoint_default": "OncePerScene for the explicitly shared-scene sequence",
+    "generic_provider_default": "PerChunk, retained for caller compatibility",
+    "new_production_synchronizations": false,
+    "precision_or_tolerances_changed": false,
+    "prepared_resources": "Separate writer plans/workspaces only where transient text changes the key shape; first writer reuses its denoise plan. Admission counts distinct workspaces and release drains before freeing.",
+    "rollback": "Run the experimental sequence with --legacy-text-per-chunk for a controlled old-policy comparison, or revert this atomic change. Existing videos and input banks remain intact."
+  },
+  "next_falsifier": "For the remaining motion symptom, compare real chunk2 on the same first-chunk latent/cache prefix, conditioning, epsilon and RoPE against the source-faithful upstream BF16 path; localize the first writer/hidden/output difference. If neural parity holds, treat chunk pacing as a model/schedule behavior and evaluate overlap/conditioning changes separately. Do not loosen tolerances or claim eye quality from ROI flow.",
+  "preview": {
+    "all_240_frames_finite_nonconstant_in_range": true,
+    "binary_sha256": "a43e1449dd33a0ad9e60fac0d1b15204599519a1ca760ed4141bca1d3635c3b1",
+    "decoder_lookahead": "Window25 sees latent25:35; later changed latents can affect final display frames100 onward even though the first30 latent frames match.",
+    "encode_metrics": {
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 12321,
+      "decoder_waits": 1,
+      "dit_encode_allocations": 0,
+      "dit_encode_readbacks": 0,
+      "dit_preterminal_waits": 0,
+      "dit_segments": 14325,
+      "dit_waits": 1
+    },
+    "first_30_latent_frames_bit_exact": true,
+    "first_equal_display_frames": 100,
+    "fixed_receipt_sha256": "16cd52cf89e4a370f0b0112e14e8eefba08db76fcb2da6789e98f888ab6f24a4",
+    "fps": 24,
+    "height": 288,
+    "inputs_sha256": "2807e11814f07975c807f367b0a4f15e3c6bdde1eb62ce9bda851814d09a6e47",
+    "launch_source_count": 355,
+    "motion": {
+      "eyes": "No eye-tracking or perceptual eye-quality verdict.",
+      "fixed_speed_after_before_ratio": 0.4859807876144814,
+      "limitation": "Single-clip screen-space ROI flow. Not physical camera velocity, an eye-tracking result, causal attribution, or a perceptual quality score.",
+      "observation": "Top background ROI still slows around frame120 in both clips. The cache fix alone does not eliminate the reported motion symptom.",
+      "old_speed_after_before_ratio": 0.4716732878636793,
+      "roi": "x[0,512), y[0,72); Farneback flow on rounded RGB8 from authenticated display F32; median pixel speed, 20 pair endpoints before and after frame120."
+    },
+    "old_receipt_sha256": "8fe840cb2bacccc07cf231dea3cf181111a3a1f6e4180d7eebb45b5a1579d5e7",
+    "performance_scope": "One bounded request, including preflight/setup/inference/raw export, excluding saved conditioning and MP4 encoding. The older 20s control was not rerun or order-matched; no speedup conclusion.",
+    "scope": "Same input/noise BF16 native first 10s against the saved 20s native control; not full upstream neural parity or an isolated timing benchmark.",
+    "second_chunk_changed": true,
+    "seconds": 10,
+    "source_manifest_sha256": "e64496fd0f83418a4f1d8a25fc8aca08a3116e2c6a6a0f853f1a08a9df976a77",
+    "sources_and_binary_unchanged_after_run": {
+      "binary_unchanged": true,
+      "returncode": 0,
+      "scope": "Post-run source and binary check; launch identity was recorded before the run.",
+      "source_count": 355,
+      "sources_unchanged": true
+    },
+    "steps_per_chunk": 4,
+    "timings": {
+      "decoder_gpu_seconds": 250.35409691696987,
+      "decoder_setup_seconds": 24.203664333,
+      "decoder_wall_seconds": 250.421111917,
+      "dit_gpu_seconds": 62.86685783282155,
+      "dit_setup_seconds": 29.174862417,
+      "dit_wall_seconds": 63.750571583,
+      "preflight_seconds": 7.090470291,
+      "request_seconds": 376.073925583
+    },
+    "unused_latent_suffix_60_180_bit_exact": true,
+    "weights": "original BF16",
+    "width": 512
+  },
+  "qualification": {
+    "backend": "Pinned upstream causal_attention_with_cache_mp function body, F32 Q/K/V and dense F32 cache, PyTorch SDPA on MPS; this does not establish BF16/Flash/Magi-kernel numerical parity.",
+    "comparison": {
+      "cache_key": {
+        "atol": 2e-05,
+        "failed_value_count": 0,
+        "max_absolute_error": 0.0,
+        "max_relative_error": 0.0,
+        "passed": true,
+        "rtol": 2e-05,
+        "shape": [
+          54,
+          5,
+          2,
+          2
+        ],
+        "value_count": 1080
+      },
+      "cache_value": {
+        "atol": 2e-05,
+        "failed_value_count": 0,
+        "max_absolute_error": 0.0,
+        "max_relative_error": 0.0,
+        "passed": true,
+        "rtol": 2e-05,
+        "shape": [
+          54,
+          5,
+          2,
+          2
+        ],
+        "value_count": 1080
+      },
+      "output": {
+        "atol": 2e-05,
+        "failed_value_count": 0,
+        "max_absolute_error": 0.0,
+        "max_relative_error": 0.0,
+        "passed": true,
+        "rtol": 2e-05,
+        "shape": [
+          14,
+          54,
+          3,
+          2,
+          2
+        ],
+        "value_count": 9072
+      }
+    },
+    "denoise_append_rejected_by_sentinel": true,
+    "encode_metrics": {
+      "encode_buffer_allocations": 0,
+      "encode_readbacks": 0,
+      "postterminal_readbacks": 7,
+      "preterminal_waits": 0,
+      "terminal_wait_count": 1
+    },
+    "f64_reference_max_abs_error": 7.450580596923828e-09,
+    "geometry": {
+      "active_query_rows": 3,
+      "denoise_forwards_per_segment": 4,
+      "final_cache_rows": 5,
+      "forward_count": 14,
+      "head_dim": 2,
+      "heads": 2,
+      "layers": 54,
+      "segments": 3,
+      "storage_rows": 4,
+      "valid_text_tokens": 1,
+      "video_tokens": 2,
+      "writer_forwards": 2
+    },
+    "launch_source_count": 429,
+    "launch_sources_and_executables_unchanged_after_runs": true,
+    "metric_scope": "Tracked MetalBuffer operations, not a claim about opaque MPS internal allocations or waits. Reference synchronizes once at its terminal comparison boundary.",
+    "native_binary_sha256": "e28f64c4e74d3f6b9572f1cc5f3caf6db025d66e9e0e9c42a3f42e9d77fa20e7",
+    "source_manifest_sha256": "cc4c535f10a64189441f879591ef02cbc27847fc1c5567373fe95f460b771094",
+    "upstream": {
+      "attention_mode": "torch",
+      "attention_source": "/Volumes/Nata's Data/MLData/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024/hymm/models/dit/nomas_cpt.py",
+      "cache_dtype": "float32",
+      "cache_storage_sha256": "53fdb67aaa967b9195f17c1d829feb12cd1e17dfa21a4e5bc0a8492790f8f0c3",
+      "cache_storage_source": "/Volumes/Nata's Data/MLData/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024/hymm/models/dit/modules/kv_cache_storage.py",
+      "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+      "seg_ar_attention_backend": "magi",
+      "source_sha256": "acf827bb7feb84c9046618737146544843a3f50c3500a3b16925dadeb6c5bdee"
+    },
+    "writer_append_exact_f32": true
+  },
+  "resource_guards": {
+    "limitation": "Sampled guard does not bound between-poll spikes; tiny qualification samples do not estimate actual peak allocation. File-backed reclaimability is an estimate.",
+    "max_swap_growth_mib": 64,
+    "memory_accounting": "file-cache; printed free + file-backed, including speculative once",
+    "preview": {
+      "max_footprint_gib": 28.5,
+      "returncode": 0,
+      "sample_count": 723,
+      "sampled_min_headroom_gib": 17.87493896484375,
+      "sampled_peak_footprint_gib": 24.79238574951887,
+      "sampled_swap_growth_bytes": 0,
+      "timeout_seconds": 1200
+    },
+    "qualified_native": {
+      "max_footprint_gib": 2,
+      "returncode": 0,
+      "sample_count": 3,
+      "sampled_min_headroom_gib": 43.721466064453125,
+      "sampled_peak_footprint_gib": 0.004776515066623688,
+      "sampled_swap_growth_bytes": 0,
+      "timeout_seconds": 180
+    },
+    "qualified_upstream": {
+      "max_footprint_gib": 4,
+      "returncode": 0,
+      "sample_count": 6,
+      "sampled_min_headroom_gib": 43.3201904296875,
+      "sampled_peak_footprint_gib": 0.19023268669843674,
+      "sampled_swap_growth_bytes": 0,
+      "timeout_seconds": 180
+    },
+    "runtime_floor_pct": 10
+  },
+  "root_cause": {
+    "corrected_denoise_key_rows": [
+      4877,
+      9197,
+      13517,
+      17837
+    ],
+    "echo_valid_text_tokens": 557,
+    "echo_video_tokens": 4320,
+    "old_behavior": "The shared-scene continuation included and persisted every chunk's current text K/V as if each fixed 5s chunk were a new semantic scene.",
+    "old_denoise_key_rows": [
+      4877,
+      9754,
+      14631,
+      19508
+    ],
+    "semantic_difference_is_confirmed": true,
+    "temporal_slowdown_causality_is_confirmed": false,
+    "upstream_contract": "First writer persists video plus text. Later denoise attends cached scene text plus current video K/V only. Later writers attend current text transiently and persist current video only. All valid text queries remain active; padding is excluded."
+  },
+  "schema": "cogni_ml.hy_nomas_scene_text_cache_evidence/v1",
+  "verification": {
+    "full_upstream_neural_parity": false,
+    "no_full_upstream_generation": true,
+    "observed_commands": [
+      {
+        "command": "crystal spec spec/hy_nomas_history_attention_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr --link-flags='/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/build/bridge.o /Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/build/metal_mps_command_chain.o /Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/build/hy_nomas_history_attention.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph -lc++ -fuse-ld=/usr/bin/ld'",
+        "signal": "18 examples, 0 failures, 0 errors; geometry, writer/denoise resource accounting, overflow and admission."
+      },
+      {
+        "command": "python3 -B -m unittest discover -s spec -p hy_nomas_continuation_reference_test.py -v",
+        "signal": "4 CPU tests passed; poisoned rows distinguish duplicate, missing or persistent later text and padding; malformed identity/geometry/artifact paths/hashes rejected."
+      },
+      {
+        "command": "make BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/build hy_nomas_continuation_history_probe hy_nomas_sequence_generate",
+        "signal": "Both binaries and required bridges built. Existing deprecation warnings remain."
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-native/launch.json",
+        "signal": "0 exit, exact append snapshots; all forward outputs within2e-5 of F64 reference."
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/qualified-upstream/launch.json",
+        "signal": "0 exit; all9072 outputs and2160 final cache values bit-exact to pinned upstream F32 function/helper."
+      },
+      {
+        "command_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/launch.json",
+        "signal": "0 exit, prefix preservation, unchanged unused suffix, finite240 frames and no tracked encode allocation/readback/preterminal wait."
+      }
+    ]
+  }
+}

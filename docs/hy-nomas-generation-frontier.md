@@ -1,7 +1,61 @@
 # Hy-Nomas first native video frontier
 
+## Same-scene continuation text cache (2026-10-30)
+
+The experimental shared-scene sequence entry point now uses upstream's
+`cache_txt` contract for chunks of one semantic scene. Its first writer stores
+video and text; later denoise forwards use the cached scene text and only the
+current video K/V. Later writers attend current text transiently but append
+only current video rows. All current text queries remain active. For the Echo
+fixture (4,320 video and 557 valid text tokens), four-chunk denoise key counts
+are 4,877 / 9,197 / 13,517 / 17,837 rather than repeating another 557 text keys
+per chunk. Padded text rows remain excluded.
+
+The lower-level provider keeps its legacy `PerChunk` default. `OncePerScene`
+requires the caller to preserve one scene's conditioning; the sequence entry
+point enforces one JSON scene with no action tails and reuses one encoded
+prompt. `--legacy-text-per-chunk` restores the old experimental sequence rule
+for a controlled comparison. No weights, precision, solver or tolerances change.
+Both denoise and writer plans are prepared before encode; admission includes
+the distinct writer workspaces, which are released with the provider.
+
+A three-chunk GPU probe exercises four denoise forwards per chunk and two
+writers across all 54 layer caches, with distinct forward inputs and poisoned
+padding. All 9,072 attention output values and 2,160 final cache values match
+the pinned upstream function body and actual dense-cache helper exactly.
+The reference uses F32 Torch SDPA on MPS; it does not establish stock
+BF16/Flash/Magi or full DiT parity. The native probe has zero tracked encode
+allocations, readbacks or preterminal waits, and one terminal wait. The
+separate post-terminal F64 formula differs by at most 7.451e-9. Eighteen
+Crystal geometry/admission examples and four CPU oracle tests pass at unchanged
+`atol=rtol=2e-5`.
+
+This corrects a source-confirmed cache semantic difference. It does not by
+itself prove that the reported uneven motion or drifting eyes are fixed.
+The matched 10-second BF16 preview preserves all first 30 latent frames exactly,
+changes the second chunk, and leaves the unused latent-bank suffix untouched.
+The first 100 display frames also match the saved control exactly; decoder
+lookahead then includes changed later latents. All 240 frames are finite and
+nonconstant. The request takes 376.07 seconds, including setup and raw export;
+this is one bounded run, not a matched performance comparison. The sampled
+peak is 24.792 GiB with 17.875 GiB minimum cache-aware headroom and no swap
+growth under a 28.5 GiB process cap and 10% reserve.
+
+The motion symptom remains open: top-background median pixel flow after/before
+the first seam is 0.472 in the saved control and 0.486 after the correction;
+the farther-right ROI also retains slowing. These are single-clip screen-space
+diagnostics, not a quality score, physical camera speed or eye tracking.
+The side-by-side preview is saved at
+`/opt/mldata_ssd/cogni-ml/hy-nomas-cache-fix-20261030/preview-10s/echo-before-after-10s.mp4`.
+The next discriminator is real chunk-two neural parity on the same prefix,
+including the separate native-F32/upstream-BF16 history precision boundary.
+The prior decoder seam result also remains limited to its selected display
+frames. Evidence and refresh boundaries are recorded in
+`.landmark/evidence/2026-10-30-hy-nomas-scene-text-cache.json`.
+
 ## Active quality and duration experiment (2026-10-30)
 
+Historical experiment snapshot, before the same-scene cache correction above.
 Structural export: VERIFIED within the bounded native execution and file
 integrity scope. Semantic motion quality: VULNERABLE. Full upstream video and
 continuation parity are not established; the default remains unchanged.
