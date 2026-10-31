@@ -38,6 +38,31 @@ The same-scene text-cache correction below did not remove the reported drifting
 eyes and uneven motion. The quality defect remains open. No production
 precision default changes as a result of the following diagnostics.
 
+The complete pinned source cache body now reproduces both native five-second
+segments exactly: all 276,480 final latent values match, and segment 0 also
+matches the prior single-segment control. This uses nine forwards through all
+54 blocks, including the cache writer, with identical BF16 weights and native
+F32/BF16 storage boundaries. The source adapter removes only the 19 false
+text-padding K/V rows before chunked MPS SDPA. Keeping those masked rows
+physically present changed the MPS reduction and already diverged in segment 0;
+it was not evidence of a native continuation error. The diagnostic defaults to
+the padded layout and exposes compact mode explicitly.
+
+The guarded compact run used 23.715 GiB at peak, retained at least 19.816 GiB
+cache-aware headroom, and caused no swap growth. It performs no activation
+readback before its single terminal export. Separately, the new opt-in
+60-latent standalone decoder replay reproduces all 106,168,320 saved native
+display values exactly using the authenticated continuation noise prefix.
+The default standalone decode remains 30 latents.
+
+These checks qualify native/source-MPS final-latent agreement and native
+decoder replay, not CUDA/Magi parity or a visual fix. The user sees only a
+small improvement from source BF16; the principal eye defect persists.
+Background-flow measurements correlate the slowdown with five-second
+boundaries, without establishing its cause. Evidence, controls, commands and
+refresh conditions are in
+`.landmark/evidence/2026-10-30-hy-nomas-two-segment-control.json`.
+
 An authenticated Echo first-step capture now records patch, the complete
 1,280-row text refiner, and dual-stream block 0 on one native command chain.
 It uses original resident BF16 weights with the existing F32 activation path,

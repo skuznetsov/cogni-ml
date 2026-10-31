@@ -1,0 +1,197 @@
+{
+  "schema": "cogni_ml.hy_nomas_two_segment_arithmetic_evidence/v1",
+  "date": "2026-10-30",
+  "base_revision": "9752c829eacb9234653da002e1a12e8347c94cc7",
+  "scope": "Pinned source cache body and full 54-block trajectory on two real Echo segments versus native, using compact chunked MPS attention and BF16 checkpoint weights expanded to F32. Independent 60-latent native decoder replay. This is not Magi/CUDA parity or a perceptual fix.",
+  "reason": "The reported eye and motion defects survive the text-cache correction and change little in source-BF16 arithmetic. Distinguish a native continuation error from a model/conditioning or decoder issue.",
+  "refuted_route": {
+    "hypothesis": "Padded source-MPS arithmetic mismatch localizes a native five-second continuation bug.",
+    "falsifier": "Segment 0 already differs before any cache history, while native segment 0 equals its previous single-segment source control. Removing only 19 false K/V padding rows restores all60 values exactly.",
+    "padded_result": {
+      "values": 276480,
+      "all_finite": true,
+      "bit_differences": 210190,
+      "outside_tolerance": 210190,
+      "max_abs": 0.6796875,
+      "mean_abs": 0.013467606060482838,
+      "rms": 0.023789469838897213
+    },
+    "pivot": "Match allowed-key reduction geometry before attributing trajectory differences to native cache composition."
+  },
+  "result": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "all60": {
+      "values": 276480,
+      "all_finite": true,
+      "bit_differences": 0,
+      "outside_tolerance": 0,
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rms": 0.0
+    },
+    "segment0": {
+      "values": 138240,
+      "all_finite": true,
+      "bit_differences": 0,
+      "outside_tolerance": 0,
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rms": 0.0
+    },
+    "segment1": {
+      "values": 138240,
+      "all_finite": true,
+      "bit_differences": 0,
+      "outside_tolerance": 0,
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rms": 0.0
+    },
+    "source_segment0_vs_previous_single_f32_control": {
+      "values": 138240,
+      "all_finite": true,
+      "bit_differences": 0,
+      "outside_tolerance": 0,
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "rms": 0.0
+    },
+    "attention_row_inventory": [
+      {
+        "calls": 270,
+        "physical_key_rows": 4896,
+        "sdpa_key_rows": 4877
+      },
+      {
+        "calls": 216,
+        "physical_key_rows": 9216,
+        "sdpa_key_rows": 9197
+      }
+    ],
+    "model_forwards": 9,
+    "block_invocations": 486,
+    "activation_readbacks_before_terminal_export": 0,
+    "terminal_export_count": 1,
+    "payload_sha256": "772937635fd78f6945829457cf21db670a83079202fba32407c4f427eaa47b9f",
+    "guard": {
+      "peak_footprint_gib": 23.71510511636734,
+      "min_headroom_gib": 19.81561279296875,
+      "swap_growth_bytes": 0
+    }
+  },
+  "native_decoder_replay": {
+    "latent_frames": 60,
+    "display_values": 106168320,
+    "bit_differences": 0,
+    "pixels_sha256": "6df90602fd08cdb66c478bdf9d41a4597d6c8564b2a16c137bb0c9444ad762c1",
+    "scope": "The new opt-in standalone decoder path equals the saved native ten-second display output. It does not add upstream quality evidence."
+  },
+  "verification": {
+    "cpu_command": "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python -B -m unittest spec.hy_nomas_two_segment_quality_control_test",
+    "cpu_signal": "17 tests pass: pinned no-cache, writer and reader bodies in both layouts; masked/compact numerical negative control; default remains padded.",
+    "runtime_command": "Frozen exact argv in launch.json, externally guarded and run serially.",
+    "runtime_signal": "Both segments and prior segment-0 control are bitexact; guard and source pins unchanged."
+  },
+  "limitations": [
+    "The adapter preserves source cache construction and masking but replaces CUDA Magi dispatch with chunked MPS SDPA.",
+    "Matching native/source final latents does not prove visual quality, nor equivalence of every intermediate operation.",
+    "The compact layout is diagnostic and opt-in; the production generator and precision defaults are unchanged.",
+    "Compact K/V concatenation creates temporary GPU buffers; its planned cap is metadata and requires the external process/OS guard.",
+    "The user reports source BF16 eyes are only slightly better, with the same main defect.",
+    "Background optical-flow slowdown is correlated with five-second boundaries; no causal fix has been demonstrated."
+  ],
+  "refresh": {
+    "triggers": [
+      "source or adapter changes",
+      "checkpoint/dtype changes",
+      "prompt/noise/cache/schedule changes",
+      "backend or device changes",
+      "artifact loss"
+    ],
+    "operation": "Authenticate inputs and current pins, rerun both layouts plus prior segment0 control under fresh memory admission, then reassess visual quality separately.",
+    "failure_policy": "Reopen the scoped continuation claim; retain the known production path."
+  },
+  "artifacts": {
+    "compact_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/manifest.json",
+      "bytes": 25529,
+      "sha256": "b3d4420096f064b43534524b99ccacc3f100a422ce154affb33c42e4191f9bbb"
+    },
+    "compact_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/comparison-v2.json",
+      "sha256": "3b0e29a80d533ebbac2913524256fac8de75fee8965de4bc226eeebc158b8628",
+      "bytes": 2875
+    },
+    "compact_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/launch.json",
+      "bytes": 2585,
+      "sha256": "2a3e8aa2673271c4c100552401a6df591a5f6a91d38a7a763a2c4e1bc8fdc2cc"
+    },
+    "compact_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/execution-completion.json",
+      "bytes": 1370,
+      "sha256": "14049c578c4204294ed071a7f41385e859e67578aba253ec84624741b1f5a009"
+    },
+    "compact_preflight_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/preflight-launch.json",
+      "bytes": 2040,
+      "sha256": "4d721265c407f31c916245e7a8c2d3558f44dfb7ac4486aeb0e50d745c5be724"
+    },
+    "compact_preflight_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/preflight-completion.json",
+      "bytes": 1371,
+      "sha256": "2a46e40fe626967b191772c05115e699bbb01039fc1b82030f6f48e4672db1b9"
+    },
+    "compact_guard": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v4-compact/guard.jsonl",
+      "bytes": 45484,
+      "sha256": "b960ade8bc1484e6ddb954d562916fd8b21c873159232513df165fba336e27ef"
+    },
+    "padded_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v3/manifest.json",
+      "bytes": 25241,
+      "sha256": "880ab3032aed4038ee8830ee30ee5b341f5093d4dc829c7fed6bbc3bb5d5e93d"
+    },
+    "padded_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-f32-v3/comparison.json",
+      "bytes": 2096,
+      "sha256": "ab206935961914f18fb7f095b47d66d1aaf67c13cf9c39973da745447a283f76"
+    },
+    "native_extraction": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/two-segment-native-latent-v1/extraction.json",
+      "bytes": 549,
+      "sha256": "0217e4d34e339df056a65bfb0082ede27e479dbbef4c98953b89e1300684cb65"
+    },
+    "prior_single_segment": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-f32-control-v1/control.json",
+      "bytes": 20220,
+      "sha256": "11771b15eb7fff35db2246d2632153555701c0826c730a26d883220d4bb9a6e6"
+    },
+    "native_decode_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-two-segment-decode-v1/launch.json",
+      "bytes": 1558,
+      "sha256": "d7e3be16b36d2d8b039ee97e314caeb53a0c284a661c5ad658dd64f2d72e40a9"
+    },
+    "native_decode_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-two-segment-decode-v1/completion.json",
+      "bytes": 86,
+      "sha256": "23e8031c4938617b774c9ab21d30b172725fe7fb6eb5d41f284369c9b45394cc"
+    },
+    "native_decode_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-two-segment-decode-v1/comparison.json",
+      "bytes": 489,
+      "sha256": "d4463fa61b210ae4f2281d89f8283b4fce4d606f8623f3154ee876eb52626d95"
+    },
+    "native_decode_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/native-two-segment-decode-v1/output/receipt.json",
+      "bytes": 3062,
+      "sha256": "abf4c769025183aa846fca0521bebf20e943da638bc93bee1f2bb8f6e8eff617"
+    }
+  },
+  "adversary": {
+    "lineage": "same-lineage review, correlated; separate artifact rehash and byte comparison",
+    "verdict": "ROBUST for bounded native/source-MPS final-latent agreement and native standalone decode replay; VULNERABLE for CUDA/Magi or visual-quality claims",
+    "checks": "Rehashed source/input bindings and compared actual payload bytes, prior segment0, NCTHW extraction, row counts, and sampled guard limits. comparison-v2 adds explicit baseline artifact bindings and row inventory omitted from the initial report."
+  }
+}

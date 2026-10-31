@@ -36794,3 +36794,19 @@ Refresh after source/toolchain/device/model/workload changes.
   media/control root `/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030`.
   See `docs/hy-nomas-generation-frontier.md`. Refresh on input/source/weight/
   precision/geometry/backend/device changes or artifact loss; re-admit memory.
+
+### Hy-Nomas two-segment source control (2026-10-30)
+
+- All 276,480 final latent values from two native segments equal the pinned
+  source cache-body replay with compact MPS attention; segment 0 also equals
+  the prior single-segment control. Nine forwards include the writer and all
+  54 blocks. The earlier padded replay already differed before history;
+  removing only 19 false K/V rows restores exact reduction geometry.
+- A separate authenticated 60-latent standalone decode equals all
+  106,168,320 saved native display values. The default remains 30 latents.
+  The compact source run peaks at 23.715 GiB, retains 19.816 GiB minimum
+  cache-aware headroom, and adds no swap or preterminal activation readback.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-two-segment-control.json`.
+  This closes the tested source-MPS final-latent discrepancy, not CUDA/Magi
+  parity or the visible eye/motion defects. Refresh after source, adapter,
+  weights, input, schedule, device/backend changes or artifact loss.
