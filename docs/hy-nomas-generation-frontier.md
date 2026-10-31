@@ -1,5 +1,110 @@
 # Hy-Nomas first native video frontier
 
+## Echo quality: real-input arithmetic diagnostics (2026-10-30)
+
+The same-scene text-cache correction below did not remove the reported drifting
+eyes and uneven motion. The quality defect remains open. No production
+precision default changes as a result of the following diagnostics.
+
+An authenticated Echo first-step capture now records patch, the complete
+1,280-row text refiner, and dual-stream block 0 on one native command chain.
+It uses original resident BF16 weights with the existing F32 activation path,
+557 valid text rows, and one terminal wait, with no tracked encode allocations
+or activation readbacks. The pinned original Python module bodies run as an
+external Torch-MPS reference; their chunked SDPA adapter is not stock
+CUDA/Magi attention parity.
+
+The F32 reference reproduces all 54 patch/refiner checkpoints bit for bit.
+The first block's text attention projection has 17 values outside the unchanged
+`atol=rtol=2e-5`, but its final image and text outputs pass that tolerance.
+Attention replay from identical captured Q/K/V has zero failures over
+10,027,008 elements. These results qualify this first-step arithmetic control,
+not later-layer, diffusion, continuation, or perceptual parity.
+
+The original BF16 activation reference differs from the native F32 path:
+the patch output has maximum absolute difference 0.001952708, and the final
+text-refiner output has RMS difference 0.05182612. This is a precision-mode
+difference, not evidence that it causes the visible defect. The separate block
+BF16 comparison uses rounded native prelude inputs; it is not a complete
+BF16-prelude-to-block replay.
+
+A one-row, 2,048-to-12,288 modulation-linear falsifier exposed an issue in the
+initial diagnostic: casts to BF16 and back within one graph did not establish
+physical rounding. A caller-owned BF16 graph output followed by a GPU
+expansion produces 12,288 outputs bit-identical to Torch-MPS, with all expanded
+F32 low 16 bits zero. Both the BF16 graph and explicit F32-accumulation variants
+pass on this case. Its input is already BF16-aligned, so arbitrary F32 input
+casts remain unqualified. This helper is diagnostic-only.
+
+The refreshed reference report is
+`/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030/final-controls-v2/full-oracle/report.json`
+(SHA256 `a8f1f5ba58b73ff998fbe1c9a65aecac24bd1c2572792e8514ee87166e9eb9f7`).
+Physical-store linear controls are the adjacent `bf16-graph-physical-store` and
+`f32-accum-physical-store` directories. Their bounded runs retain the 10%
+cache-aware reserve, finite process limits, and 64 MiB swap-growth stop.
+Source, dtype, input, shape, or backend changes require refreshing these
+claims.
+
+The native physical-BF16 patch output now matches the original Torch-MPS
+PatchEmbed on all 8,847,360 values, bit for bit, for both linear variants.
+Its input is the authenticated, already BF16-aligned first Echo latent;
+this is not a qualification of arbitrary F32 input conversion or full DiT.
+The patch comparison evidence is under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030/bf16-patch-remap-v3`.
+
+For the authenticated writer0/reader1 block0 inputs, native F32/MPS Q/K/V
+match the pinned upstream block exactly. Saved writer history K/V and direct
+reader history-attention output also match the chunked Torch-MPS adapter
+exactly. This tests the separate history-attention plan on real QKV/history;
+the oracle stops at attention dispatch. It does not compare a history-attached
+block output, later layers, BF16 operation boundaries, or video quality.
+One native chain retains zero tracked encode allocations/readbacks and one
+terminal wait. The boundary report is
+`/opt/mldata_ssd/cogni-ml/hy-nomas-real-boundary-20261030/oracle/report.json`
+(SHA256 `0bb84bfeb8c40c91c124d9cc15697a0b20effd5e7c3dcdbab5eda37fcc4ea52c`).
+The same-lineage adversary verdict is ROBUST for this narrow arithmetic claim,
+VULNERABLE for complete block/boundary parity or a quality fix.
+
+A complete first-segment F32 model-body replay now matches the saved native
+final latent bit for bit: all 138,240 values after 54 blocks and four Euler
+steps. The reference uses exact BF16 checkpoint values expanded to F32 and
+reproduces the native initial-latent, velocity and per-step BF16 rounding
+boundaries. One reusable F32 block receives device-to-device casts from the
+54 resident BF16 source blocks. This qualifies the final latent for this
+input, not every intermediate value or a continuation boundary. The sampled
+peak is 18.566 GiB, with 22.583 GiB minimum cache-aware headroom and no swap
+growth. The external 26 GiB cap, 10% reserve and 64 MiB swap-growth stop remain
+in force.
+
+The matched original-BF16 model-body control also completed. Repeating it
+after adding the F32 mode reproduces its terminal payload exactly. Its latent
+differs from the native F32 path by RMS 0.500732 and maximum 4.385742; this is
+not a tolerance pass or a quality score. Both latents were decoded with the
+same native PixelUMM, noise and five overlapping windows. The standalone
+native control reproduces the saved first 100 display frames exactly;
+later frames of this five-second decode lack the ten-second control's future
+lookahead and are not used for that equality claim. Both decode runs retain
+zero tracked encode allocations, readbacks and preterminal waits, with one
+terminal wait. Selected matched frames show unstable pupils in both precision
+arms. No eye-quality fix is established.
+
+The synchronized comparison is
+`/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030/comparison-v1/native-f32-vs-source-bf16-5s.mp4`.
+The full F32 arithmetic comparison is the adjacent
+`native-f32-control-v1/native-latent-comparison.json`; the BF16 repeat is
+`source-bf16-repeat-v1/completion.json`. The frozen control script SHA256 is
+`e711f50dcde9e037b04334938eb9d0a1ad899381f2dd74069bc88d858379356d`.
+These controls use original pinned source bodies with the disclosed MPS SDPA
+adapter, not unmodified CUDA/Magi execution. No production precision default
+is changed.
+
+The next eye-quality discriminator is an opt-in higher-resolution preview.
+The current 512x288 output has a 9x16 latent grid, compared with the published
+1280x704 recipe's 22x40 grid; this is a recipe difference, not proof that the
+current shape is outside the training distribution. A separate source-faithful
+second-segment control is still needed for the motion symptom. The first
+segment's bitwise equality does not close that boundary.
+
 ## Same-scene continuation text cache (2026-10-30)
 
 The experimental shared-scene sequence entry point now uses upstream's

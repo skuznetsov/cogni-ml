@@ -36711,3 +36711,66 @@ Refresh after source/toolchain/device/model/workload changes.
   before/after. The 10s preview has its own 355-source and binary launch pins.
   Refresh after source/input/weights/scene/schedule/geometry/precision/backend/
   device/toolchain changes or evidence loss; fresh memory admission per run.
+
+
+### 2026-10-30: Echo real-input precision and boundary falsifiers narrow the quality search
+
+- The same-scene text-cache fix does not visibly cure drifting eyes or uneven
+  motion. Do not promote numerical parity to a perceptual-quality claim.
+- Native resident BF16 weights with F32 activations reproduce all 54 first-step
+  patch/refiner checkpoints in the pinned original-module F32 MPS control
+  bitwise. Block0's first text projection has 17 values outside unchanged
+  atol=rtol=2e-5, while its final image/text outputs pass. Identical-QKV attention
+  has zero failures over 10,027,008 values. This is one block on real Echo
+  first-step inputs, not later-layer/full-DiT or BF16 boundary parity.
+- Original BF16 activation boundaries differ materially in the prelude: patch
+  max difference 0.001952708 and text-refiner output RMS 0.05182612. Causality
+  for eyes/motion remains a hypothesis. A physical BF16 linear output plus GPU
+  F32 expansion fixes the diagnostic's initially ineffective round-trip cast;
+  both physical-store variants match 12,288 modulation outputs bitwise. On the
+  real, already BF16-aligned latent, native physical BF16 PatchEmbed now matches
+  all 8,847,360 original Torch-MPS outputs bitwise. Arbitrary F32 input casts and
+  complete native physical-BF16 DiT remain unqualified; production precision is unchanged.
+- At the real writer0/reader1 boundary, native F32/MPS Q/K/V match the pinned
+  upstream block exactly on captured block0 inputs. Saved writer history K/V
+  and direct reader history-attention also match the chunked Torch-MPS adapter
+  exactly. The oracle stops at attention dispatch: this excludes history-attached
+  residual/MLP outputs, later blocks, BF16 boundaries, Magi/CUDA and video quality.
+  Same-lineage adversary ROBUST for this narrow claim, VULNERABLE if widened.
+- Native boundary capture uses one chain/terminal wait, zero tracked encode
+  allocations/readbacks. Guard: 8 GiB process cap, 10% cache-aware reserve,
+  64 MiB swap-growth stop, 600 s. Observed native peak 4.359 GiB, oracle peak
+  2.407 GiB, no positive swap growth. These are sampled observations. Crystal
+  release compilation needed raw descriptor IO in this diagnostic to avoid an
+  IO::FileDescriptor compiler downcast ICE; production IO remains unchanged.
+- Evidence roots: `/opt/mldata_ssd/cogni-ml/hy-nomas-real-attention-20261030`
+  (`final-controls-v2/full-oracle/report.json` SHA
+  a8f1f5ba58b73ff998fbe1c9a65aecac24bd1c2572792e8514ee87166e9eb9f7;
+  physical patch under `bf16-patch-remap-v3`) and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-real-boundary-20261030`
+  (`oracle/report.json` SHA
+  0bb84bfeb8c40c91c124d9cc15697a0b20effd5e7c3dcdbab5eda37fcc4ea52c).
+  Return `docs/hy-nomas-generation-frontier.md`. Refresh on source/input/weight/
+  geometry/precision/backend/device changes or artifact loss; admit memory afresh.
+- The complete initial-segment F32 source-body control (54 blocks, four steps,
+  exact BF16 checkpoint values expanded to F32, native BF16 Euler boundaries)
+  reproduces all 138,240 final native latent values bitwise. Payload SHA
+  93da45a3fc9c0b64df0285527522b8950f091a6a231e4a8cefc9e24eaa6b8828.
+  One reusable F32 block is fed from 54 resident BF16 blocks by MPS copy casts;
+  no intermediate CPU export, one terminal export. Peak 18.566 GiB, minimum
+  cache-aware headroom 22.583 GiB, no swap growth under 26 GiB/10%/64 MiB guards.
+  This is final-latent parity on the first segment, not every intermediate or
+  original Magi/CUDA execution and not the second-segment boundary.
+- The source-BF16 control and its repeat are terminal-bit-exact to each other
+  (SHA 75488dafd836485afa93d99b2cdfb1aec5fb15a5e6d584eba9b7ff97247cf07c).
+  Its final latent differs from native F32 by RMS 0.500732. Decoding both with
+  identical PixelUMM/noise gives the saved five-second synchronized comparison;
+  selected frames retain unstable pupils in both. Thus changing model precision
+  alone has not established an eye-quality fix. The standalone baseline's first
+  100 display frames reproduce the saved ten-second preview exactly; later
+  frames lack that longer decode's future lookahead.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-precision-and-boundary.json`;
+  media/control root `/opt/mldata_ssd/cogni-ml/hy-nomas-bf16-quality-20261030`.
+  Next falsifiers: an opt-in higher-resolution eye-quality preview after exact
+  memory/geometry admission, and a source-faithful full second-segment replay
+  for motion. Quality remains open; the production defaults are unchanged.
