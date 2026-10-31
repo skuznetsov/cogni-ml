@@ -25,6 +25,7 @@ kernel void pgen_probe_compare_bf16(device const ushort *actual [[buffer(0)]],
 kernel void pgen_probe_compare_f32(device const float *actual [[buffer(0)]],
   device const float *expected [[buffer(1)]], device atomic_uint *status [[buffer(2)]],
   constant uint &count [[buffer(3)]], device atomic_uint *frames [[buffer(4)]],
+  constant uint &frame_pixels [[buffer(5)]], constant uint &frame_count [[buffer(6)]],
   uint i [[thread_position_in_grid]]) {
   if (i >= count) return;
   float a = actual[i], b = expected[i];
@@ -34,7 +35,7 @@ kernel void pgen_probe_compare_f32(device const float *actual [[buffer(0)]],
   if (!finite || error > 2e-5f + 2e-5f * abs(b)) {
     atomic_fetch_add_explicit(status, 1u, memory_order_relaxed);
     if (count > 1u) {
-      uint frame = (i / (288u * 512u)) % 120u;
+      uint frame = (i / frame_pixels) % frame_count;
       atomic_fetch_add_explicit(frames + frame * 4u, 1u, memory_order_relaxed);
       atomic_fetch_min_explicit(frames + frame * 4u + 1u, i, memory_order_relaxed);
     }
@@ -43,8 +44,9 @@ kernel void pgen_probe_compare_f32(device const float *actual [[buffer(0)]],
 }
 kernel void pgen_probe_sample_frames(device const float *actual [[buffer(0)]],
   device const float *expected [[buffer(1)]], device uint *frames [[buffer(2)]],
+  constant uint &frame_count [[buffer(3)]],
   uint frame [[thread_position_in_grid]]) {
-  if (frame >= 120u || frames[frame * 4u] == 0u) return;
+  if (frame >= frame_count || frames[frame * 4u] == 0u) return;
   uint i = frames[frame * 4u + 1u];
   frames[frame * 4u + 2u] = as_type<uint>(actual[i]);
   frames[frame * 4u + 3u] = as_type<uint>(expected[i]);

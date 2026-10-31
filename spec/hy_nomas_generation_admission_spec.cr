@@ -21,6 +21,83 @@ describe "preview DiT weight selection" do
   end
 end
 
+describe "opt-in Hy-Nomas spatial geometry" do
+  it "shares the patch/final finite token gate with CPU preflight" do
+    [1, 4320, 5280, 9360].each do |tokens|
+      ML::Video::HyNomasDiTBoundaryMPSPlan.validate_token_count!(tokens).should be_nil
+    end
+    [0, 9361, Int32::MAX].each do |tokens|
+      expect_raises(ArgumentError, /1\.\.9360/) do
+        ML::Video::HyNomasDiTBoundaryMPSPlan.validate_token_count!(tokens)
+      end
+    end
+
+    candidate = HyNomasGeneration::SpatialGeometry::CANDIDATE_768.dit_config
+    HyNomasGeneration.validate_dit_config!(candidate).should eq(candidate)
+    expect_raises(ArgumentError, /1\.\.9360/) do
+      HyNomasGeneration.validate_dit_config!(candidate.copy_with(video_tokens: 9361))
+    end
+  end
+
+  it "keeps the default shape and admits only the pinned 768x416 candidate" do
+    default = HyNomasGeneration::SpatialGeometry.parse("512x288")
+    default.video_tokens.should eq(4320)
+    default.pixelumm_config.decoder_config.tokens.should eq(5760)
+    HyNomasGeneration.input_shapes(default)["input.latent"][1].should eq([1, 32, 30, 9, 16])
+
+    candidate = HyNomasGeneration::SpatialGeometry.parse("768x416")
+    candidate.high_resolution?.should be_true
+    candidate.pixelumm_config.latent_shape.should eq([1, 32, 30, 13, 24])
+    candidate.video_tokens.should eq(9360)
+    candidate.pixelumm_config.decoder_config.tokens.should eq(12_480)
+    candidate.pixelumm_config.decoder_config.layout.tile_count.should eq(24)
+    HyNomasGeneration.input_shapes(candidate)["input.rope_cos"][1].should eq([9360, 128])
+    runtime = candidate.dit_config
+    runtime.video_tokens.should eq(9360)
+    cache = HyNomasGeneration.weight_cache_config(runtime)
+    ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(cache).should eq(
+      ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(HyNomasGeneration::CONFIG))
+
+    expect_raises(ArgumentError, /resolution must be/) do
+      HyNomasGeneration::SpatialGeometry.parse("1024x576")
+    end
+  end
+
+  it "requires the v3 conditioned manifest to declare every candidate extent" do
+    valid = 67
+    crop = [108, 1388]
+    geometry = {
+      pixel_width:                         768,
+      pixel_height:                        416,
+      dit_latent_shape:                    [1, 32, 30, 13, 24],
+      dit_rope_grid:                       [30, 13, 24],
+      decoder_latent_grid:                 [30, 13, 24],
+      decoder_noise_shape:                 [1, 3, 120, 416, 768],
+      decoder_rope_grid:                   [10, 26, 48],
+      decoder_rope_shape:                  [1, 12_480, 1, 128],
+      decoder_local_attention_tile_tokens: 8,
+      decoder_local_attention_tile_pixels: 128,
+      qwen_valid_tokens:                   valid,
+      qwen_crop:                           crop,
+    }
+    doc = conditioned_document(valid)
+    doc.as_h["schema"] = JSON::Any.new("cogni_ml.hy_nomas_generation_inputs/v3")
+    doc.as_h["schema_version"] = JSON::Any.new(3_i64)
+    doc.as_h["geometry"] = JSON.parse(geometry.to_json)
+
+    mask = HyNomasGeneration.conditioned_mask!(doc,
+      geometry: HyNomasGeneration::SpatialGeometry.parse("768x416"))
+    mask.sum.should eq(valid)
+
+    mutated = JSON.parse(doc.to_json)
+    mutated["geometry"].as_h["decoder_rope_grid"] = JSON.parse([10, 18, 48].to_json)
+    expect_raises(ArgumentError, /geometry mismatch/) do
+      HyNomasGeneration.conditioned_mask!(mutated,
+        geometry: HyNomasGeneration::SpatialGeometry.parse("768x416"))
+    end
+  end
+end
+
 describe "preview Euler step admission" do
   it "keeps eight steps as the default and accepts the supported endpoints" do
     HyNomasGeneration::DEFAULT_STEPS.should eq(8)

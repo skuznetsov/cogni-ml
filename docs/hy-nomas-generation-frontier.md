@@ -1,5 +1,37 @@
 # Hy-Nomas first native video frontier
 
+## Opt-in spatial quality candidate (2026-10-30)
+
+`hy_nomas_generate` now admits an explicit `--resolution 768x416` candidate
+with conditioned v3 inputs. The default remains 512x288. Geometry is derived
+consistently for the 30x13x24 DiT grid, 10x26x48 PixelUMM grid, local-attention
+tiles, memory admission, patch/condition indexing and output assembly. The
+patch/final token limit is shared with CPU preflight, so an unsupported extent
+is rejected before constructing Metal owners. Weight-cache architecture and
+payload identities remain separate from the runtime token extent.
+
+The high-resolution stem matches pinned upstream BF16 output exactly on all
+51,118,080 values. The separate five-window synthetic merge/display control
+matches all 115,015,680 F32 values exactly. Its injected-NaN negative control is
+detected. This qualifies these boundaries, not all high-resolution DiT/decoder
+intermediates. The native probe uses one terminal wait and no tracked encode
+allocations, readbacks or preterminal waits.
+
+The bounded four-step, five-second preview completed in 369.414 seconds per
+request (371.021 seconds including the guarded launcher). Its sampled process
+peak was 24.069 GiB, minimum cache-aware headroom 11.088 GiB, with no swap
+growth under a 26 GiB cap and 10% physical reserve. DiT and decoder retain their
+existing terminal waits and zero tracked encode allocations/readbacks. Opaque
+MPS allocations are covered by sampled process telemetry, not those counters.
+
+Selected frames look more detailed, but this is not a resolution-caused eye
+fix: equal seeds with different noise tensor shapes produce different sampled
+realizations and compositions. Temporal quality and full high-resolution
+model parity remain open. The v3 bundle is explicit and cannot be accepted as
+a default-size v1/v2 bundle. Evidence, frozen commands, media and refresh rules
+are indexed in
+`.landmark/evidence/2026-10-30-hy-nomas-spatial-geometry.json`.
+
 ## Echo quality: real-input arithmetic diagnostics (2026-10-30)
 
 The same-scene text-cache correction below did not remove the reported drifting

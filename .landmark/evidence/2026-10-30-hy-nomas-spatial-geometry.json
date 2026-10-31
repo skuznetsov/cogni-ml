@@ -1,0 +1,202 @@
+{
+  "schema": "cogni_ml.hy_nomas_spatial_geometry_evidence/v1",
+  "date": "2026-10-30",
+  "base_revision": "9752c829eacb9234653da002e1a12e8347c94cc7",
+  "scope": "Opt-in 768x416 five-second quality candidate; default geometry remains 512x288. Numerical qualification covers input/stem and synthetic merge/display geometry, not full high-resolution DiT or decoder parity.",
+  "reason": "Drifting eyes persist in both native-F32 and original-BF16 arithmetic previews. A larger spatial grid is a testable quality candidate; success is perceptual and cannot be inferred from arithmetic parity.",
+  "geometry": {
+    "resolution": [
+      768,
+      416
+    ],
+    "fps": 24,
+    "frames": 120,
+    "latent_shape": [
+      1,
+      32,
+      30,
+      13,
+      24
+    ],
+    "dit_video_tokens": 9360,
+    "pixelumm_token_grid": [
+      10,
+      26,
+      48
+    ],
+    "pixelumm_tokens": 12480,
+    "local_tiles": 24,
+    "default_unchanged": true
+  },
+  "numerical_result": {
+    "schema": "cogni_ml.pixelumm_generation_comparison/v1",
+    "inputs_sha256": "dcbe51749742701a2ee1a6d09a10e2f20e663f3ff54f646d801c743e17c7a104",
+    "reference_sha256": "6b77518354b4c2f59e9bede52a0bc1df082305cc05a10fba68e4481e04d58fc8",
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "stem_failures": 0,
+    "stem_max_abs": 0.0,
+    "assembly_failures": 0,
+    "assembly_max_abs": 0.0,
+    "nonfinite_negative_failures": 1,
+    "encode_allocations": 0,
+    "encode_readbacks": 0,
+    "preterminal_waits": 0,
+    "waits": 1,
+    "gpu_seconds": 0.059613624995108694,
+    "failed_frames": [],
+    "passed": true
+  },
+  "negative_control": "nonfinite_negative_failures=1 is the expected detection of an injected NaN after the real comparison, not a numerical comparison failure.",
+  "preview": {
+    "peak_footprint_gib": 24.06914959847927,
+    "min_headroom_gib": 11.088272094726562,
+    "swap_growth_bytes": 0,
+    "timings": {
+      "preflight_seconds": 2.463966792,
+      "dit_setup_seconds": 9.976580625,
+      "dit_wall_seconds": 86.767638375,
+      "dit_gpu_seconds": 85.55351516586961,
+      "decoder_setup_seconds": 23.324225417,
+      "decoder_wall_seconds": 245.225075459,
+      "decoder_gpu_seconds": 245.17771104560234,
+      "total_seconds": 366.911903958,
+      "request_seconds": 369.413901625
+    },
+    "metrics": {
+      "dit_encode_allocations": 0,
+      "dit_encode_readbacks": 0,
+      "dit_preterminal_waits": 0,
+      "dit_segments": 17285,
+      "dit_waits": 1,
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 10471,
+      "decoder_waits": 1
+    },
+    "resolution": [
+      768,
+      416
+    ],
+    "fps": 24,
+    "frames": 120,
+    "pixels_sha256": "18f9e7b6faad4029cfd4f2f63a6423526d198deae891a3d0cbdb1352073e58ba"
+  },
+  "guard": {
+    "physical_reserve_pct": 10,
+    "accounting": "file-cache",
+    "swap_growth_stop_mib": 64,
+    "preview_process_cap_gib": 26,
+    "boundary_process_cap_gib": 8,
+    "preview_deadline_seconds": 1200,
+    "boundary_deadline_seconds": 300
+  },
+  "verification": {
+    "python_command": "python3 -B -m unittest spec/hy_nomas_generation_inputs_test.py spec/pixelumm_generation_reference_test.py",
+    "python_signal": "19 tests passed",
+    "crystal_command": "crystal spec -Dcpu_only spec/hy_nomas_generation_admission_spec.cr spec/pixelumm_generation_spec.cr",
+    "crystal_signal": "26 examples, 0 failures, 0 errors, 0 pending",
+    "gpu_commands": "Frozen launch/completion records in the artifact index; all runs serial and externally guarded."
+  },
+  "adversary": {
+    "lineage": "same-lineage review, correlated",
+    "verdict": "ROBUST for the bounded geometry/stem/merge claim; VULNERABLE for resolution-caused perceptual improvement or full high-resolution model parity",
+    "reason": "Same prompt and seed do not pair different-shaped noise tensors. New clip changes the sampled realization and composition. Sparse frame inspection is not temporal quality verification."
+  },
+  "limitations": [
+    "Stem result uses the real first saved input; merge control uses five synthetic BF16 windows.",
+    "The full preview completed but is not an all-intermediate upstream comparison.",
+    "Opaque MPS allocations are outside instrumented MetalBuffer counters; external guard samples process/OS memory.",
+    "No production precision default or video timing changes; no visual fix is established.",
+    "The memory planner rejects unsupported extents before GPU owners, but memory must be re-admitted for each run."
+  ],
+  "refresh": {
+    "triggers": [
+      "source/input/prompt/noise changes",
+      "weights/dtype changes",
+      "geometry/schedule changes",
+      "backend/device/toolchain changes",
+      "artifact loss"
+    ],
+    "operation": "Re-authenticate source and inputs, rerun scoped numerical control and bounded preview, inspect motion/eyes; admit memory from fresh telemetry.",
+    "failure_policy": "Reopen dependent claims and retain the default path."
+  },
+  "artifacts": {
+    "input_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/input-prep-v2/inputs.json",
+      "sha256": "dcbe51749742701a2ee1a6d09a10e2f20e663f3ff54f646d801c743e17c7a104",
+      "bytes": 44879
+    },
+    "input_preparation_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/input-prep-v2/completion.json",
+      "sha256": "9ccb57cd401af589aa3761c70af8399b1bd57eb310e0d95db439dfbafa9df9a1",
+      "bytes": 85
+    },
+    "source_geometry_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/source.json",
+      "sha256": "6b77518354b4c2f59e9bede52a0bc1df082305cc05a10fba68e4481e04d58fc8",
+      "bytes": 2884
+    },
+    "source_geometry_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/source-launch.json",
+      "sha256": "f66d4b336fa125ee9ce704372a4215fcf60a7ac8573bcb3d5381eb0d8eab8f39",
+      "bytes": 1955
+    },
+    "source_geometry_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/source-completion.json",
+      "sha256": "ddee6c36a97d88e7b939cefd334404eb4781207aec4e9742f9781396d87e1d4d",
+      "bytes": 85
+    },
+    "native_geometry_report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/report.json",
+      "sha256": "11de6430f02c8cc80012bbdcc0694feee1495ca5a983e45a8e9cd65235cf9ab1",
+      "bytes": 580
+    },
+    "native_geometry_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/native-launch.json",
+      "sha256": "14949fe70af4cafad9adee4932680a30205cbb6134d75305a5f8f73bd59e7b63",
+      "bytes": 2212
+    },
+    "native_geometry_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/pixelumm-boundary-v2/native-completion.json",
+      "sha256": "f8cb22b400fbb26d278896074e0a0ee0046f3785d9568241db6aa4adeb1e3c2f",
+      "bytes": 86
+    },
+    "preview_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/launch.json",
+      "sha256": "acac5a2db80b99a8831823b78b4c58de55f0fc8831b5922512d92ca90506dab7",
+      "bytes": 2092
+    },
+    "preview_completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/completion.json",
+      "sha256": "621ee44eecd6ba1077a1211ab932f7d473125b7c5fe960bc5fa728bb8bf4d437",
+      "bytes": 84
+    },
+    "preview_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/native/receipt.json",
+      "sha256": "8dec5e799ecac48a0e140b26538653402432a6e84e76092602f2375c184a3a61",
+      "bytes": 5628
+    },
+    "preview_summary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/summary.json",
+      "sha256": "886e865b4c486a310cf18ac1a0b90fe78c41cef3d94cb6b9a27d94982db15c7a",
+      "bytes": 978
+    },
+    "preview_video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/echo-768x416-5s.mp4",
+      "sha256": "7f7d9947e14080e09f7d4fb5a00266acbd85aea5c760c8c223963294df3bc88d",
+      "bytes": 871686
+    },
+    "visual_sampling": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/visual-review-v1/inputs.json",
+      "sha256": "45ba0d0438471638b3d005fdf1bfee4dd6e4086bb8b46fff89e05488146b4545",
+      "bytes": 344
+    },
+    "preview_export_reproduction": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030/preview-5s-v2/verification-export-v1/conversion.json",
+      "sha256": "9e0296b362b3f7a74804c399e2aa4283f8f7b5d49a617b90aa1f5baa77e03112",
+      "bytes": 1646
+    }
+  }
+}

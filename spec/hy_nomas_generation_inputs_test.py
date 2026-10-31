@@ -108,6 +108,33 @@ def valid_dynamic_document() -> dict:
     return document
 
 
+def valid_high_resolution_document() -> dict:
+    document = valid_dynamic_document()
+    document["schema"] = inputs.HIGH_RESOLUTION_SCHEMA
+    document["schema_version"] = inputs.HIGH_RESOLUTION_SCHEMA_VERSION
+    document["geometry"] = inputs._geometry_for_resolution(
+        inputs.HIGH_RESOLUTION,
+        valid_tokens=document["qwen_source"]["valid_tokens"],
+        crop=document["qwen_source"]["crop"],
+    )
+    cursor = 0
+    records = {}
+    specs = inputs.tensor_specs_for_resolution(inputs.HIGH_RESOLUTION)
+    for name, dtype, shape in specs:
+        nbytes = inputs.tensor_nbytes(dtype, shape)
+        records[name] = {
+            "dtype": dtype,
+            "shape": list(shape),
+            "offset": cursor,
+            "nbytes": nbytes,
+            "sha256": "a" * 64,
+        }
+        cursor += nbytes
+    document["tensors"] = records
+    document["payload_bytes"] = cursor
+    return document
+
+
 class HyNomasGenerationInputsTests(unittest.TestCase):
     def test_canonical_inventory_has_expected_payload_budget(self):
         self.assertEqual(
@@ -146,6 +173,46 @@ class HyNomasGenerationInputsTests(unittest.TestCase):
         inputs.validate_document(document)
         self.assertEqual(document["qwen_source"]["valid_tokens"], 7)
         self.assertEqual(document["geometry"]["qwen_crop"], [3, 1283])
+
+    def test_opt_in_768x416_v3_has_derived_dit_decoder_and_payload_extents(self):
+        document = valid_high_resolution_document()
+        specs = inputs.tensor_specs_for_resolution(inputs.HIGH_RESOLUTION)
+        shapes = {name: list(shape) for name, _, shape in specs}
+        self.assertEqual(shapes["input.latent"], [1, 32, 30, 13, 24])
+        self.assertEqual(shapes["input.rope_cos"], [9360, 128])
+        self.assertEqual(shapes["decoder.noise"], [1, 3, 120, 416, 768])
+        self.assertEqual(shapes["decoder.rope_cos"], [1, 12480, 1, 128])
+        self.assertEqual(document["geometry"]["pixel_width"], 768)
+        self.assertEqual(document["geometry"]["pixel_height"], 416)
+        self.assertEqual(
+            document["payload_bytes"], inputs.expected_payload_bytes(specs)
+        )
+        self.assertEqual(document["payload_bytes"], 492_800_000)
+        inputs.validate_document(document)
+
+    def test_opt_in_v3_rejects_geometry_and_tensor_extent_drift(self):
+        cases = (
+            (
+                "decoder RoPE grid",
+                lambda doc: doc["geometry"].__setitem__("decoder_rope_grid", [10, 18, 48]),
+            ),
+            (
+                "pixel width",
+                lambda doc: doc["geometry"].__setitem__("pixel_width", 512),
+            ),
+            (
+                "latent tensor shape",
+                lambda doc: doc["tensors"]["input.latent"].__setitem__(
+                    "shape", [1, 32, 30, 9, 16]
+                ),
+            ),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                document = valid_high_resolution_document()
+                mutate(document)
+                with self.assertRaises(inputs.InputsError):
+                    inputs.validate_document(document)
 
     def test_dynamic_prompt_bundle_rejects_mask_crop_and_source_drift(self):
         cases = (

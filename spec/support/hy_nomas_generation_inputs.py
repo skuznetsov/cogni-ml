@@ -34,6 +34,10 @@ SCHEMA = "cogni_ml.hy_nomas_generation_inputs/v1"
 SCHEMA_VERSION = 1
 DYNAMIC_SCHEMA = "cogni_ml.hy_nomas_generation_inputs/v2"
 DYNAMIC_SCHEMA_VERSION = 2
+HIGH_RESOLUTION_SCHEMA = "cogni_ml.hy_nomas_generation_inputs/v3"
+HIGH_RESOLUTION_SCHEMA_VERSION = 3
+DEFAULT_RESOLUTION = "512x288"
+HIGH_RESOLUTION = "768x416"
 PINNED_REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
 DEFAULT_UPSTREAM = Path(
     "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024"
@@ -166,8 +170,64 @@ def tensor_nbytes(dtype: str, shape: tuple[int, ...] | list[int]) -> int:
     return math.prod(shape) * _TENSOR_WIDTH[dtype]
 
 
-def expected_payload_bytes() -> int:
-    return sum(tensor_nbytes(dtype, shape) for _, dtype, shape in TENSOR_SPECS)
+def _resolution_geometry(resolution: str) -> tuple[int, int, int, int]:
+    if resolution == DEFAULT_RESOLUTION:
+        return 512, 288, 9, 16
+    if resolution == HIGH_RESOLUTION:
+        return 768, 416, 13, 24
+    raise InputsError("resolution must be 512x288 or opt-in 768x416")
+
+
+def tensor_specs_for_resolution(resolution: str = DEFAULT_RESOLUTION) -> tuple:
+    pixel_width, pixel_height, latent_height, latent_width = _resolution_geometry(resolution)
+    dit_tokens = 30 * latent_height * latent_width
+    decoder_height = 2 * latent_height
+    decoder_width = 2 * latent_width
+    decoder_tokens = 10 * decoder_height * decoder_width
+    return (
+        ("input.latent", "F32", (1, 32, 30, latent_height, latent_width)),
+        ("input.qwen_bf16", "BF16", QWEN_SHAPE),
+        ("input.rope_cos", "F32", (dit_tokens, 128)),
+        ("input.rope_sin", "F32", (dit_tokens, 128)),
+        ("decoder.noise", "F32", (1, 3, 120, pixel_height, pixel_width)),
+        ("decoder.rope_cos", "F32", (1, decoder_tokens, 1, 128)),
+        ("decoder.rope_sin", "F32", (1, decoder_tokens, 1, 128)),
+    )
+
+
+def _geometry_for_resolution(resolution: str, *, valid_tokens: int | None = None,
+                             crop: list[int] | None = None) -> dict[str, Any]:
+    geometry = dict(GEOMETRY)
+    if resolution == HIGH_RESOLUTION:
+        pixel_width, pixel_height, latent_height, latent_width = _resolution_geometry(resolution)
+        decoder_height = 2 * latent_height
+        decoder_width = 2 * latent_width
+        decoder_tokens = 10 * decoder_height * decoder_width
+        geometry.update({
+            "pixel_width": pixel_width,
+            "pixel_height": pixel_height,
+            "dit_latent_shape": [1, 32, 30, latent_height, latent_width],
+            "dit_rope_grid": [30, latent_height, latent_width],
+            "decoder_latent_grid": [30, latent_height, latent_width],
+            "decoder_noise_shape": [1, 3, 120, pixel_height, pixel_width],
+            "decoder_rope_grid": [10, decoder_height, decoder_width],
+            "decoder_rope_shape": [1, decoder_tokens, 1, 128],
+        })
+    if valid_tokens is not None:
+        geometry["qwen_valid_tokens"] = valid_tokens
+    if crop is not None:
+        geometry["qwen_crop"] = crop
+    return geometry
+
+
+def _resolution_for_schema(document: Mapping[str, Any]) -> str:
+    if document.get("schema") == HIGH_RESOLUTION_SCHEMA:
+        return HIGH_RESOLUTION
+    return DEFAULT_RESOLUTION
+
+
+def expected_payload_bytes(specs: tuple = TENSOR_SPECS) -> int:
+    return sum(tensor_nbytes(dtype, shape) for _, dtype, shape in specs)
 
 
 def _same_json_types(expected: Any, actual: Any) -> bool:
@@ -332,7 +392,9 @@ def validate_document(document: Mapping[str, Any], *, payload_bytes: int | None 
     version = document.get("schema_version")
     legacy = schema == SCHEMA and type(version) is int and version == SCHEMA_VERSION
     dynamic = schema == DYNAMIC_SCHEMA and type(version) is int and version == DYNAMIC_SCHEMA_VERSION
-    if not legacy and not dynamic:
+    high_resolution = (schema == HIGH_RESOLUTION_SCHEMA and type(version) is int
+                       and version == HIGH_RESOLUTION_SCHEMA_VERSION)
+    if not legacy and not dynamic and not high_resolution:
         raise InputsError("generation-input schema mismatch")
     if not _validate_basename(document.get("payload"), ".tensors.bin"):
         raise InputsError("payload must be a sibling .tensors.bin basename")
@@ -351,9 +413,11 @@ def validate_document(document: Mapping[str, Any], *, payload_bytes: int | None 
         valid_tokens = _validate_dynamic_qwen_source(
             document.get("qwen_source"), document["prompt"]
         )
-        expected_geometry = dict(GEOMETRY)
-        expected_geometry["qwen_valid_tokens"] = valid_tokens
-        expected_geometry["qwen_crop"] = document["qwen_source"]["crop"]
+        resolution = HIGH_RESOLUTION if high_resolution else DEFAULT_RESOLUTION
+        expected_geometry = _geometry_for_resolution(
+            resolution, valid_tokens=valid_tokens,
+            crop=document["qwen_source"]["crop"],
+        )
         if not _same_json_types(expected_geometry, document.get("geometry")):
             raise InputsError("dynamic generation-input geometry does not match the Qwen mask")
     if not _same_json_types(NOISE_SEEDS, document.get("noise_seeds")):
@@ -372,13 +436,14 @@ def validate_document(document: Mapping[str, Any], *, payload_bytes: int | None 
         raise InputsError("input producer scope/runtime record mismatch")
 
     records = document.get("tensors")
-    expected_names = [name for name, _, _ in TENSOR_SPECS]
+    specs = tensor_specs_for_resolution(_resolution_for_schema(document))
+    expected_names = [name for name, _, _ in specs]
     # JSON object order is not the packed tensor order (publication sorts keys).
     # The source-order offset checks below establish the exact binary layout.
     if type(records) is not dict or set(records) != set(expected_names):
         raise InputsError("tensor inventory is incomplete")
     cursor = 0
-    for name, dtype, shape in TENSOR_SPECS:
+    for name, dtype, shape in specs:
         record = records[name]
         expected_nbytes = tensor_nbytes(dtype, shape)
         if (type(record) is not dict or set(record) != {"dtype", "shape", "offset", "nbytes", "sha256"}
@@ -401,7 +466,8 @@ def validate_payload(document: Mapping[str, Any], payload: bytes | bytearray | m
     view = memoryview(payload)
     if hashlib.sha256(view).hexdigest() != document["payload_sha256"]:
         raise InputsError("aggregate payload digest mismatch")
-    for name, _, _ in TENSOR_SPECS:
+    specs = tensor_specs_for_resolution(_resolution_for_schema(document))
+    for name, _, _ in specs:
         record = document["tensors"][name]
         start = record["offset"]
         stop = start + record["nbytes"]
@@ -673,31 +739,37 @@ def _read_qwen_crop_on_mps(
     return crop
 
 
-def _generate_tensors(torch: Any, helpers: tuple, pixel_modules: tuple, device: Any) -> dict[str, Any]:
+def _generate_tensors(torch: Any, helpers: tuple, pixel_modules: tuple, device: Any,
+                      *, resolution: str = DEFAULT_RESOLUTION) -> dict[str, Any]:
     posemb_layers = helpers[-1]
     source_model, autoencoder = pixel_modules
+    _, _, latent_height, latent_width = _resolution_geometry(resolution)
+    latent_shape = (1, 32, 30, latent_height, latent_width)
+    dit_rope_grid = (30, latent_height, latent_width)
+    pixel_rope_grid = (10, 2 * latent_height, 2 * latent_width)
+    specs = tensor_specs_for_resolution(resolution)
     with torch.inference_mode():
         latent_generator = torch.Generator(device=device)
         latent_generator.manual_seed(LATENT_SEED)
         latent = torch.randn(
-            LATENT_SHAPE, generator=latent_generator, device=device, dtype=torch.float32
+            latent_shape, generator=latent_generator, device=device, dtype=torch.float32
         )
         rope_cos, rope_sin = posemb_layers.get_nd_rotary_pos_embed(
-            [16, 56, 56], DIT_ROPE_GRID, theta=256.0, use_real=True,
+            [16, 56, 56], dit_rope_grid, theta=256.0, use_real=True,
             theta_rescale_factor=1, device=device,
         )
 
         # Call the exact pinned upstream method without constructing a decoder,
         # checkpoint, or model. _make_noise reads only self.seed and latent shape.
         pixel_noise = autoencoder.PixelUMMDCAELatentDecoder._make_noise(
-            SimpleNamespace(seed=LATENT_SEED), latent, 0, LATENT_SHAPE[2]
+            SimpleNamespace(seed=LATENT_SEED), latent, 0, latent_shape[2]
         )
 
         pixel_cos, pixel_sin = source_model.mrope_tables(
-            source_model.QWEN3_8B_GEN, PIXEL_ROPE_GRID, device
+            source_model.QWEN3_8B_GEN, pixel_rope_grid, device
         )
         layout = source_model.local_attention_layout(
-            PIXEL_ROPE_GRID, 8, device
+            pixel_rope_grid, 8, device
         )
         if layout is None:
             raise InputsError("pinned local_attention_layout returned no tile permutation")
@@ -714,7 +786,7 @@ def _generate_tensors(torch: Any, helpers: tuple, pixel_modules: tuple, device: 
         "decoder.rope_cos": pixel_cos,
         "decoder.rope_sin": pixel_sin,
     }
-    expected = {name: (dtype, shape) for name, dtype, shape in TENSOR_SPECS}
+    expected = {name: (dtype, shape) for name, dtype, shape in specs}
     for name, tensor in tensors.items():
         dtype, shape = expected[name]
         wanted_dtype = torch.float32 if dtype == "F32" else torch.bfloat16
@@ -724,12 +796,13 @@ def _generate_tensors(torch: Any, helpers: tuple, pixel_modules: tuple, device: 
     return tensors
 
 
-def _pack_mps_tensors(torch: Any, tensors: Mapping[str, Any]) -> bytes:
-    expected_names = [name for name, _, _ in TENSOR_SPECS]
+def _pack_mps_tensors(torch: Any, tensors: Mapping[str, Any], *,
+                      specs: tuple = TENSOR_SPECS) -> bytes:
+    expected_names = [name for name, _, _ in specs]
     if list(tensors) != expected_names:
         raise InputsError("MPS tensor mapping must match canonical inventory order")
     byte_views = []
-    for name, dtype, shape in TENSOR_SPECS:
+    for name, dtype, shape in specs:
         tensor = tensors[name]
         expected_dtype = torch.float32 if dtype == "F32" else torch.bfloat16
         if (tensor.device.type != "mps" or tensor.dtype is not expected_dtype
@@ -745,13 +818,13 @@ def _pack_mps_tensors(torch: Any, tensors: Mapping[str, Any]) -> bytes:
     return packed_cpu.numpy().tobytes()
 
 
-def _records_from_payload(payload: bytes) -> dict[str, dict[str, Any]]:
-    if len(payload) != expected_payload_bytes():
+def _records_from_payload(payload: bytes, *, specs: tuple = TENSOR_SPECS) -> dict[str, dict[str, Any]]:
+    if len(payload) != expected_payload_bytes(specs):
         raise InputsError("packed payload extent differs from canonical inventory")
     view = memoryview(payload)
     records: dict[str, dict[str, Any]] = {}
     cursor = 0
-    for name, dtype, shape in TENSOR_SPECS:
+    for name, dtype, shape in specs:
         nbytes = tensor_nbytes(dtype, shape)
         records[name] = {
             "dtype": dtype,
@@ -765,17 +838,24 @@ def _records_from_payload(payload: bytes) -> dict[str, dict[str, Any]]:
 
 
 def _build_document(payload: bytes, payload_name: str, source_hashes: Mapping[str, str],
-                    torch: Any, *, dynamic_qwen_source: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    records = _records_from_payload(payload)
+                    torch: Any, *, dynamic_qwen_source: Mapping[str, Any] | None = None,
+                    resolution: str = DEFAULT_RESOLUTION) -> dict[str, Any]:
+    _resolution_geometry(resolution)
+    if resolution == HIGH_RESOLUTION and dynamic_qwen_source is None:
+        raise InputsError("768x416 requires an authenticated dynamic Qwen crop")
+    specs = tensor_specs_for_resolution(resolution)
+    records = _records_from_payload(payload, specs=specs)
     dynamic = dynamic_qwen_source is not None
-    geometry = dict(GEOMETRY)
+    geometry = _geometry_for_resolution(resolution)
     if dynamic:
         crop = dynamic_qwen_source["crop"]
         geometry["qwen_valid_tokens"] = dynamic_qwen_source["valid_tokens"]
         geometry["qwen_crop"] = crop
     document = {
-        "schema": DYNAMIC_SCHEMA if dynamic else SCHEMA,
-        "schema_version": DYNAMIC_SCHEMA_VERSION if dynamic else SCHEMA_VERSION,
+        "schema": (HIGH_RESOLUTION_SCHEMA if resolution == HIGH_RESOLUTION
+                   else DYNAMIC_SCHEMA if dynamic else SCHEMA),
+        "schema_version": (HIGH_RESOLUTION_SCHEMA_VERSION if resolution == HIGH_RESOLUTION
+                           else DYNAMIC_SCHEMA_VERSION if dynamic else SCHEMA_VERSION),
         "payload": payload_name,
         "payload_bytes": len(payload),
         "payload_sha256": hashlib.sha256(payload).hexdigest(),
@@ -847,6 +927,9 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="the exact UTF-8 prompt used to produce --qwen-reference",
     )
+    parser.add_argument("--resolution", choices=(DEFAULT_RESOLUTION, HIGH_RESOLUTION),
+                        default=DEFAULT_RESOLUTION,
+                        help="768x416 emits the opt-in authenticated v3 input schema")
     return parser
 
 
@@ -855,6 +938,8 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
         raise InputsError("PYTORCH_ENABLE_MPS_FALLBACK must be unset or 0")
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
     output, payload_path = validate_output_paths(args.output)
+    resolution = getattr(args, "resolution", DEFAULT_RESOLUTION)
+    _resolution_geometry(resolution)
 
     import numpy as np
     import torch
@@ -869,6 +954,8 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
 
     reference_arg = getattr(args, "qwen_reference", None)
     prompt_file = getattr(args, "prompt_file", None)
+    if resolution == HIGH_RESOLUTION and reference_arg is None:
+        raise InputsError("768x416 requires --qwen-reference and --prompt-file")
     if (reference_arg is None) != (prompt_file is None):
         raise InputsError("--qwen-reference and --prompt-file must be supplied together")
     dynamic_qwen_source = None
@@ -911,10 +998,11 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
     )
     if q4_reference._identity(qwen_sidecar) != identities[1]:
         raise InputsError("authenticated Qwen BF16 sidecar changed during MPS transfer")
-    tensors = _generate_tensors(torch, helpers, pixel_modules, device)
+    tensors = _generate_tensors(torch, helpers, pixel_modules, device, resolution=resolution)
     tensors["input.qwen_bf16"] = qwen
-    ordered_tensors = {name: tensors[name] for name, _, _ in TENSOR_SPECS}
-    payload = _pack_mps_tensors(torch, ordered_tensors)
+    specs = tensor_specs_for_resolution(resolution)
+    ordered_tensors = {name: tensors[name] for name, _, _ in specs}
+    payload = _pack_mps_tensors(torch, ordered_tensors, specs=specs)
     reference_path = QWEN_REFERENCE if dynamic_qwen_source is None else Path(
         dynamic_qwen_source["reference_path"]
     )
@@ -926,6 +1014,7 @@ def produce_inputs(args: argparse.Namespace) -> dict[str, Any]:
         source_hashes,
         torch,
         dynamic_qwen_source=dynamic_qwen_source,
+        resolution=resolution,
     )
     _publish_bundle(output, payload_path, document, payload)
     return {

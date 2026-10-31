@@ -32,15 +32,15 @@ kernel void pixelumm_generation_patchify(
     constant uint &window_start [[buffer(2)]],
     constant uint &pixel_frames [[buffer(3)]],
     constant uint &count [[buffer(4)]],
+    constant uint &grid_h [[buffer(5)]],
+    constant uint &grid_w [[buffer(6)]],
+    constant uint &pixel_h [[buffer(7)]],
+    constant uint &pixel_w [[buffer(8)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
 
   constexpr uint token_dim = 3072;
-  constexpr uint grid_h = 18;
-  constexpr uint grid_w = 32;
-  constexpr uint pixel_h = 288;
-  constexpr uint pixel_w = 512;
   const uint token = index / token_dim;
   const uint feature = index % token_dim;
   const uint token_w = token % grid_w;
@@ -64,13 +64,13 @@ kernel void pixelumm_generation_gather_condition(
     constant uint &window_start [[buffer(2)]],
     constant uint &latent_frames [[buffer(3)]],
     constant uint &count [[buffer(4)]],
+    constant uint &latent_h [[buffer(5)]],
+    constant uint &latent_w [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
 
   constexpr uint latent_channels = 32;
-  constexpr uint latent_h = 9;
-  constexpr uint latent_w = 16;
   const uint row = index / latent_channels;
   const uint channel = index % latent_channels;
   const uint token_w = row % latent_w;
@@ -105,20 +105,22 @@ kernel void pixelumm_generation_add_condition(
     device const int *permutation [[buffer(1)]],
     device ushort *tokens [[buffer(2)]],
     constant uint &count [[buffer(3)]],
+    constant uint &token_h [[buffer(4)]],
+    constant uint &token_w [[buffer(5)]],
+    constant uint &latent_h [[buffer(6)]],
+    constant uint &latent_w [[buffer(7)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
   constexpr uint dim = 4096;
   constexpr uint hidden_per_latent = 4u * dim;
-  constexpr uint token_h = 18;
-  constexpr uint token_w = 32;
   const uint tile_row = index / dim;
   const uint column = index % dim;
   const uint source_row = uint(permutation[tile_row]);
   const uint w = source_row % token_w;
   const uint h = (source_row / token_w) % token_h;
   const uint t = source_row / (token_h * token_w);
-  const uint latent_row = (t * 9u + h / 2u) * 16u + w / 2u;
+  const uint latent_row = (t * latent_h + h / 2u) * latent_w + w / 2u;
   const uint subtoken = (h % 2u) * 2u + (w % 2u);
   const uint condition_index = latent_row * hidden_per_latent + subtoken * dim + column;
   const float embed = pixelumm_bf16_to_f32(tokens[index]);
@@ -150,15 +152,15 @@ kernel void pixelumm_generation_merge_window(
     constant uint &start_frame [[buffer(3)]],
     constant uint &output_frames [[buffer(4)]],
     constant uint &count [[buffer(5)]],
+    constant uint &height [[buffer(6)]],
+    constant uint &width [[buffer(7)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count)
     return;
   constexpr uint channels = 3;
   constexpr uint window_frames = 40;
   constexpr uint overlap_frames = 20;
-  constexpr uint height = 288;
-  constexpr uint width = 512;
-  constexpr uint frame_pixels = height * width;
+  const uint frame_pixels = height * width;
   const uint channel_pixels = output_frames * frame_pixels;
   const uint local_frame = (index / frame_pixels) % window_frames;
   const uint channel = index / (window_frames * frame_pixels);

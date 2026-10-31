@@ -9,6 +9,7 @@ does not load decoder blocks or the output head.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import importlib
 import json
@@ -31,6 +32,10 @@ import hy_nomas_generation_inputs as generation_inputs  # noqa: E402
 
 SCHEMA = "cogni_ml.pixelumm_generation_reference/v1"
 SCHEMA_VERSION = 1
+HIGH_RESOLUTION_SCHEMA = "cogni_ml.pixelumm_generation_reference/v2"
+HIGH_RESOLUTION_SCHEMA_VERSION = 2
+DEFAULT_RESOLUTION = "512x288"
+HIGH_RESOLUTION = "768x416"
 PINNED_REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
 DEFAULT_UPSTREAM = generation_inputs.DEFAULT_UPSTREAM
 DEFAULT_STEM = Path(
@@ -57,6 +62,7 @@ STEM_WEIGHTS = {
 }
 STEM_WINDOW_START = 0
 WINDOW_STARTS = (0, 5, 10, 15, 20)
+LATENT_FRAMES = 30
 WINDOW_FRAMES = 40
 PIXEL_FRAMES = 120
 PIXEL_HEIGHT = 288
@@ -64,6 +70,77 @@ PIXEL_WIDTH = 512
 ATOL = RTOL = 2e-5
 OUTPUT_ROOT = Path("/opt/mldata_ssd")
 _DTYPE_WIDTH = {"BF16": 2, "F32": 4}
+
+
+@dataclass(frozen=True)
+class ReferenceGeometry:
+    resolution: str
+    inputs_schema: str
+    schema: str
+    schema_version: int
+    pixel_width: int
+    pixel_height: int
+    latent_width: int
+    latent_height: int
+
+    @property
+    def latent_grid(self) -> tuple[int, int, int]:
+        return (LATENT_FRAMES, self.latent_height, self.latent_width)
+
+    @property
+    def token_grid(self) -> tuple[int, int, int]:
+        return (10, 2 * self.latent_height, 2 * self.latent_width)
+
+    @property
+    def stem_shape(self) -> tuple[int, int, int]:
+        return (1, _product(self.token_grid), 4096)
+
+    @property
+    def assembly_shape(self) -> tuple[int, int, int, int, int]:
+        return (1, 3, PIXEL_FRAMES, self.pixel_height, self.pixel_width)
+
+    @property
+    def window_shape(self) -> tuple[int, int, int, int, int]:
+        return (1, 3, WINDOW_FRAMES, self.pixel_height, self.pixel_width)
+
+    @property
+    def window_period_repeats(self) -> int:
+        count = 3 * WINDOW_FRAMES * self.pixel_height * self.pixel_width
+        if count % 8192 != 0:
+            raise ReferenceError("synthetic window geometry must contain whole 8192-value periods")
+        return count // 8192
+
+    @property
+    def tensors(self) -> tuple:
+        return (
+            ("stem.output_bf16", "BF16", self.stem_shape),
+            ("assembly.output_f32", "F32", self.assembly_shape),
+        )
+
+
+def resolve_geometry(input_schema: str, requested_resolution: str | None = None) -> ReferenceGeometry:
+    """Admit only the original default v1 bundle or the authenticated high-res v3 bundle."""
+    if input_schema == generation_inputs.SCHEMA:
+        geometry = ReferenceGeometry(
+            DEFAULT_RESOLUTION, generation_inputs.SCHEMA, SCHEMA, SCHEMA_VERSION,
+            PIXEL_WIDTH, PIXEL_HEIGHT, 16, 9,
+        )
+    elif input_schema == generation_inputs.HIGH_RESOLUTION_SCHEMA:
+        if requested_resolution is None:
+            raise ReferenceError("high-resolution v3 inputs require --resolution 768x416")
+        geometry = ReferenceGeometry(
+            HIGH_RESOLUTION, generation_inputs.HIGH_RESOLUTION_SCHEMA,
+            HIGH_RESOLUTION_SCHEMA, HIGH_RESOLUTION_SCHEMA_VERSION,
+            768, 416, 24, 13,
+        )
+    else:
+        raise ReferenceError("unsupported generation input schema for this PixelUMM reference")
+
+    if requested_resolution is not None and requested_resolution != geometry.resolution:
+        raise ReferenceError(
+            f"requested resolution {requested_resolution} does not match authenticated input geometry {geometry.resolution}"
+        )
+    return geometry
 
 
 class ReferenceError(RuntimeError):
@@ -86,16 +163,18 @@ def synthetic_value(index: int, window_index: int) -> float:
     return (((index * 37 + window_index * 911) % 8192) - 4096) / 1024.0
 
 
-def synthetic_window(torch: Any, window_index: int, device: Any):
-    count = 3 * WINDOW_FRAMES * PIXEL_HEIGHT * PIXEL_WIDTH
+def synthetic_window(torch: Any, window_index: int, device: Any,
+                     geometry: ReferenceGeometry | None = None):
+    geometry = geometry or resolve_geometry(generation_inputs.SCHEMA)
+    count = 3 * WINDOW_FRAMES * geometry.pixel_height * geometry.pixel_width
     # The period is exactly 8192. Keep MPS integer operations on this small
     # range; applying int64 remainder after multiplying the full flattened
     # index loses low bits on MPS for indices above 2**24.
     period = torch.arange(8192, device=device, dtype=torch.int64)
     values = torch.remainder(period * 37 + window_index * 911, 8192) - 4096
     values = (values.to(torch.float32) / 1024.0).to(torch.bfloat16)
-    values = values.repeat(count // 8192)
-    return values.reshape(1, 3, WINDOW_FRAMES, PIXEL_HEIGHT, PIXEL_WIDTH)
+    values = values.repeat(geometry.window_period_repeats)
+    return values.reshape(geometry.window_shape)
 
 
 def postprocess_bf16(torch: Any, video: Any):
@@ -246,7 +325,7 @@ def _load_stem_weights(torch: Any, stem_path: Path, expected_sha256: str, device
 
 
 def _reference_stem(torch: Any, source: Any, plan: Any, latent: Any,
-                    noise: Any, weights: Mapping[str, Any]):
+                    noise: Any, weights: Mapping[str, Any], geometry: ReferenceGeometry):
     import torch.nn.functional as functional
 
     device = latent.device
@@ -265,25 +344,29 @@ def _reference_stem(torch: Any, source: Any, plan: Any, latent: Any,
             weights["decoder.cond_proj.weight"],
             weights["decoder.cond_proj.bias"],
         )
-        condition = condition.view(1, 10, 9, 16, 2, 2, 4096)
-        condition = condition.permute(0, 1, 2, 4, 3, 5, 6).reshape(1, 5760, 4096)
+        condition = condition.view(
+            1, 10, geometry.latent_height, geometry.latent_width, 2, 2, 4096
+        )
+        condition = condition.permute(0, 1, 2, 4, 3, 5, 6).reshape(geometry.stem_shape)
         tokens = (embedded + condition).index_select(1, permutation).contiguous()
-    if tokens.device.type != "mps" or tokens.dtype is not torch.bfloat16 or tuple(tokens.shape) != TENSORS[0][2]:
+    if (tokens.device.type != "mps" or tokens.dtype is not torch.bfloat16
+            or tuple(tokens.shape) != geometry.stem_shape):
         raise ReferenceError("source stem returned an unexpected device, dtype, or shape")
     return tokens
 
 
-def _reference_assembly(torch: Any, streaming: Any, device: Any):
+def _reference_assembly(torch: Any, streaming: Any, device: Any,
+                        geometry: ReferenceGeometry):
     merged = None
     for window_index, start_latent in enumerate(WINDOW_STARTS):
-        part = synthetic_window(torch, window_index, device)
+        part = synthetic_window(torch, window_index, device, geometry)
         if merged is None:
             merged = part
         else:
             merged = streaming._merge_overlapping(
                 [merged, part], [0, start_latent * 4], dim=2
             )
-    if merged is None or tuple(merged.shape) != TENSORS[1][2] or merged.dtype is not torch.bfloat16:
+    if merged is None or tuple(merged.shape) != geometry.assembly_shape or merged.dtype is not torch.bfloat16:
         raise ReferenceError("pinned temporal merger returned an unexpected shape or dtype")
     # Exact pinned BF16 `_postprocess_vae_video` expression from
     # hymm/pipeline/base.py; expand only after both rounded operations.
@@ -365,6 +448,7 @@ def produce(args: argparse.Namespace) -> dict:
         raise ReferenceError("oracle payload encoding requires a little-endian host")
     manifest_path, payload_path = _validate_output(args.output)
     document, input_payload = _validate_input_bundle(args.inputs, args.inputs_sha256)
+    geometry = resolve_geometry(document["schema"], args.resolution)
     if args.stem_sha256 != STEM_SHA256:
         raise ReferenceError("only the pinned stem checkpoint SHA-256 is admitted")
 
@@ -381,12 +465,18 @@ def produce(args: argparse.Namespace) -> dict:
     generation_input_records = document["tensors"]
     latent = _load_input_tensor(torch, input_payload, generation_input_records["input.latent"], device)
     noise = _load_input_tensor(torch, input_payload, generation_input_records["decoder.noise"], device)
-    if tuple(latent.shape) != generation_inputs.LATENT_SHAPE or tuple(noise.shape) != generation_inputs.PIXEL_NOISE_SHAPE:
+    expected_input_shapes = {
+        name: list(shape) for name, _, shape in generation_inputs.tensor_specs_for_resolution(
+            geometry.resolution
+        )
+    }
+    if (tuple(latent.shape) != tuple(expected_input_shapes["input.latent"])
+            or tuple(noise.shape) != tuple(expected_input_shapes["decoder.noise"])):
         raise ReferenceError("generation input device tensors do not match the pinned geometry")
-    plan, _, _ = pixelumm_reference.make_attention_plan(source, (10, 18, 32), 8)
+    plan, _, _ = pixelumm_reference.make_attention_plan(source, geometry.token_grid, 8)
     weights = _load_stem_weights(torch, args.stem, args.stem_sha256, device)
-    stem = _reference_stem(torch, source, plan, latent, noise, weights)
-    pixels = _reference_assembly(torch, streaming, device)
+    stem = _reference_stem(torch, source, plan, latent, noise, weights, geometry)
+    pixels = _reference_assembly(torch, streaming, device, geometry)
     torch.mps.synchronize()
 
     aggregate = hashlib.sha256()
@@ -394,23 +484,23 @@ def produce(args: argparse.Namespace) -> dict:
     payload_bytes = 0
     try:
         with payload_path.open("xb") as stream:
-            records[TENSORS[0][0]] = _tensor_bytes(stem, torch, stream, aggregate, payload_bytes)
-            payload_bytes += records[TENSORS[0][0]]["nbytes"]
-            records[TENSORS[1][0]] = _tensor_bytes(pixels, torch, stream, aggregate, payload_bytes)
-            payload_bytes += records[TENSORS[1][0]]["nbytes"]
+            records[geometry.tensors[0][0]] = _tensor_bytes(stem, torch, stream, aggregate, payload_bytes)
+            payload_bytes += records[geometry.tensors[0][0]]["nbytes"]
+            records[geometry.tensors[1][0]] = _tensor_bytes(pixels, torch, stream, aggregate, payload_bytes)
+            payload_bytes += records[geometry.tensors[1][0]]["nbytes"]
             stream.flush()
             os.fsync(stream.fileno())
     except Exception:
         payload_path.unlink(missing_ok=True)
         raise
 
-    expected_bytes = sum(tensor_nbytes(dtype, shape) for _, dtype, shape in TENSORS)
+    expected_bytes = sum(tensor_nbytes(dtype, shape) for _, dtype, shape in geometry.tensors)
     if payload_bytes != expected_bytes:
         payload_path.unlink(missing_ok=True)
         raise ReferenceError("oracle payload size differs from the fixed tensor inventory")
     output_document = {
-        "schema": SCHEMA,
-        "schema_version": SCHEMA_VERSION,
+        "schema": geometry.schema,
+        "schema_version": geometry.schema_version,
         "payload": payload_path.name,
         "payload_bytes": payload_bytes,
         "payload_sha256": aggregate.hexdigest(),
@@ -425,10 +515,16 @@ def produce(args: argparse.Namespace) -> dict:
         "stem_runtime_dtype": "BF16",
         "assembly_window_starts_latent": list(WINDOW_STARTS),
         "synthetic_window_formula": {
-            "index_space": "flattened local CTHW in each [1,3,40,288,512] tensor",
+            "index_space": (
+                "flattened local CTHW in each "
+                f"[1,3,{WINDOW_FRAMES},{geometry.pixel_height},{geometry.pixel_width}] tensor"
+            ),
             "window_index": "zero-based in output order 0..4",
             "f32_before_bf16": "(((index*37 + window_index*911) % 8192) - 4096) / 1024",
-            "mps_construction": "compute one exact 8192-value period, then repeat 2160 times; avoid int64 modulo on full flattened indices",
+            "mps_construction": (
+                f"compute one exact 8192-value period, then repeat {geometry.window_period_repeats} times; "
+                "avoid int64 modulo on full flattened indices"
+            ),
             "cast": "PyTorch MPS RNE BF16 before source temporal merge",
         },
         "display_conversion": "BF16 round after multiply by 0.5, BF16 round after add 0.5, clamp to [0,1], then expand to F32",
@@ -442,6 +538,15 @@ def produce(args: argparse.Namespace) -> dict:
             "python_version": platform.python_version(),
         },
     }
+    if geometry.resolution != DEFAULT_RESOLUTION:
+        output_document["resolution"] = geometry.resolution
+        output_document["inputs_schema"] = geometry.inputs_schema
+        output_document["geometry"] = {
+            "latent_grid": list(geometry.latent_grid),
+            "stem_token_grid": list(geometry.token_grid),
+            "stem_shape": list(geometry.stem_shape),
+            "pixel_shape": list(geometry.assembly_shape),
+        }
     try:
         _publish_manifest(manifest_path, output_document)
     except Exception:
@@ -453,7 +558,7 @@ def produce(args: argparse.Namespace) -> dict:
         "manifest_sha256": _sha_file(manifest_path),
         "payload_sha256": aggregate.hexdigest(),
         "payload_bytes": payload_bytes,
-        "schema": SCHEMA,
+        "schema": geometry.schema,
     }
 
 
@@ -467,6 +572,8 @@ def parser() -> argparse.ArgumentParser:
                         help="pinned F32 stem subset")
     result.add_argument("--stem-sha256", default=STEM_SHA256,
                         help="trusted SHA-256 of the pinned stem subset")
+    result.add_argument("--resolution", choices=(DEFAULT_RESOLUTION, HIGH_RESOLUTION),
+                        help="required for authenticated v3 768x416 inputs; default v1 remains implicit")
     result.add_argument("--upstream", type=Path, default=DEFAULT_UPSTREAM,
                         help=f"pinned upstream checkout at {PINNED_REVISION}")
     result.add_argument("--output", required=True, type=Path,

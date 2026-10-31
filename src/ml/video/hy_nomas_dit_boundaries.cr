@@ -5,6 +5,12 @@ module ML::Video
   # Every neural operation is appended to the existing chain. Host access is
   # confined to checkpoint setup and diagnostics after its terminal wait.
   abstract class HyNomasDiTBoundaryMPSPlan
+    # The bounded preview admits the default 4320-token grid, the checkpoint's
+    # 5280-token reference grid, and the opt-in 768x416 grid (30*13*24).
+    # Keep this finite extent in the shared CPU guard used by preflight and
+    # both boundary plans.
+    MAX_SUPPORTED_TOKENS = 9_360
+
     SOURCE = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_dit_boundaries.metal") }}
     private record Linear, input : ML::MetalBuffer, output : ML::MetalBuffer,
       weight : ML::MetalBuffer, bias : ML::MetalBuffer,
@@ -23,6 +29,12 @@ module ML::Video
     @owned = [] of Tuple(String, ML::MetalBuffer, Int64)
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
+
+    def self.validate_token_count!(tokens : Int32) : Nil
+      unless tokens > 0 && tokens <= MAX_SUPPORTED_TOKENS
+        raise ArgumentError.new("DiT boundary token count must be in 1..#{MAX_SUPPORTED_TOKENS}")
+      end
+    end
 
     protected def initialize(@weights : Arena)
       @arena = Arena.new
@@ -156,7 +168,7 @@ module ML::Video
     end
 
     def initialize(@input : ML::MetalBuffer, @tokens : Int32, weights : Arena)
-      raise ArgumentError.new("DiT patch token count must be in 1..5280") unless 0 < @tokens <= 5280
+      HyNomasDiTBoundaryMPSPlan.validate_token_count!(@tokens)
       @transpose = pipeline("hy_nomas_dit_channels_to_tokens_f32")
       super(weights)
       begin
@@ -208,7 +220,7 @@ module ML::Video
 
     def initialize(@input : ML::MetalBuffer, @vec : ML::MetalBuffer,
                    @tokens : Int32, weights : Arena)
-      raise ArgumentError.new("DiT final token count must be in 1..5280") unless 0 < @tokens <= 5280
+      HyNomasDiTBoundaryMPSPlan.validate_token_count!(@tokens)
       @norm = HyNomasMPSLayerNorm::Plan.new(DIM)
       @modulate = pipeline("hy_nomas_dit_final_modulate_f32")
       @unpatch = pipeline("hy_nomas_dit_tokens_to_channels_f32")

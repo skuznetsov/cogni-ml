@@ -10,8 +10,9 @@ steps = HyNomasGeneration::DEFAULT_STEPS
 plan_only = false
 capture_decoder = false
 conditioned_inputs = false
+resolution = "512x288"
 OptionParser.parse do |p|
-  p.banner = "Bounded native Hy-Nomas preview: 120 frames, 512x288, 24 fps"
+  p.banner = "Bounded native Hy-Nomas preview: 5 seconds at 24 fps"
   p.on("--inputs PATH", "Authenticated fixed preview inputs") { |v| input_path = v }
   p.on("--inputs-sha SHA", "Trusted input metadata identity") { |v| input_sha = v }
   p.on("--output-dir PATH", "Existing empty result directory") { |v| output_dir = v }
@@ -20,8 +21,10 @@ OptionParser.parse do |p|
   p.on("--steps N", "DiT Euler steps (BF16: 1..128; Q4: 1..8; default 8)") { |v| steps = v.to_i32 }
   p.on("--plan-only", "CPU-only metadata and memory admission") { plan_only = true }
   p.on("--capture-decoder", "Export completed DiT latent and raw decoder values for upstream comparison") { capture_decoder = true }
-  p.on("--conditioned-inputs", "Admit a v2 bundle bound to an authenticated upstream Qwen prompt crop") { conditioned_inputs = true }
+  p.on("--conditioned-inputs", "Admit a v2 default-size or opt-in v3 high-resolution bundle with an authenticated Qwen crop") { conditioned_inputs = true }
+  p.on("--resolution SIZE", "512x288 (default) or opt-in 768x416; high resolution requires conditioned v3 inputs") { |v| resolution = v }
 end
+geometry = HyNomasGeneration::SpatialGeometry.parse(resolution)
 steps = HyNomasGeneration.validate_steps!(steps, dit_weights)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
 unless (16_384..24_576).includes?(budget_mib)
@@ -29,16 +32,21 @@ unless (16_384..24_576).includes?(budget_mib)
 end
 budget = budget_mib * 1024 * 1024
 request_start = Time.monotonic
-inputs = HyNomasGeneration::Inputs.new(input_path, input_sha, conditioned: conditioned_inputs)
-admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index : nil
-q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index.caches.sum(&.payload_bytes)
+inputs = HyNomasGeneration::Inputs.new(input_path, input_sha,
+  conditioned: conditioned_inputs, geometry: geometry)
+runtime_config = geometry.dit_config
+admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index(runtime_config) : nil
+q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index(runtime_config).caches.sum(&.payload_bytes)
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget, capture_raw: capture_decoder)
 dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
-  HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs, steps)
+  HyNomasGeneration.stage_bytes, q4_payload_bytes) + HyNomasGeneration.dit_reserve_bytes(inputs, steps, runtime_config)
 raise ArgumentError.new("DiT named aggregate exceeds budget") if dit_named > budget
 preflight_seconds = (Time.monotonic - request_start).total_seconds
 HyNomasGeneration.emit("memory_plan", dit_weights: HyNomasGeneration.dit_weights_name(dit_weights), steps: steps, dit_named_bytes: dit_named,
   decoder_named_bytes: metadata.named_bytes, named_budget_bytes: budget,
+  resolution: "#{geometry.pixel_width}x#{geometry.pixel_height}", latent_shape: metadata.config.latent_shape,
+  dit_video_tokens: runtime_config.video_tokens,
+  pixelumm_tokens: metadata.config.decoder_config.tokens, pixelumm_windows: metadata.config.window_count,
   preflight_seconds: preflight_seconds,
   phase_handoff: "one drained chain, latent retained on GPU, weights released before next phase")
 if plan_only
@@ -138,7 +146,8 @@ begin
              dit_quantization_experimental: dit_weights == HyNomasGeneration::DiTWeights::Q4K,
              precision: dit_weights == HyNomasGeneration::DiTWeights::BF16 ? "BF16 weights and boundary rounding, F32 native arithmetic/MPS accumulation" : "Q4_K DiT block weights decoded on GPU into one reusable BF16 stage; BF16 DiT globals, PixelUMM and Euler boundary rounding; F32 native arithmetic/MPS accumulation",
              dit_weight_index_sha256: HyNomasGeneration::INDEX_SHA, decoder_weight_cache_sha256: HyNomasGeneration::PIXEL_CACHE_SHA,
-             seed: 42, frames: 120, width: 512, height: 288, fps: 24, steps: steps, shift: 5, cfg: 1,
+             seed: 42, frames: metadata.config.pixel_frames, width: geometry.pixel_width,
+             height: geometry.pixel_height, fps: 24, steps: steps, shift: 5, cfg: 1,
              camera_conditioning: false, action_conditioning: false,
              pixelumm: {steps: 1, window_latents: 10, overlap_latents: 5, starts: [0, 5, 10, 15, 20]},
              handoffs: "GPU latent retained across one explicit drained weight-phase boundary",

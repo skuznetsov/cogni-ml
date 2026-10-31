@@ -13,6 +13,7 @@ module ML::Video::PixelUMMGeneration
   MAX_LATENT_FRAMES           = 180
   LATENT_HEIGHT               =   9
   LATENT_WIDTH                =  16
+  LATENT_TOKEN_GRID           =   2
   LATENT_CHANNELS             =  32
   WINDOW_LATENTS              =  10
   WINDOW_OVERLAP_LATENTS      =   5
@@ -49,9 +50,13 @@ module ML::Video::PixelUMMGeneration
 
   struct Config
     getter total_latent_frames : Int32
+    getter latent_height : Int32
+    getter latent_width : Int32
     @window_starts : Array(Int32)
 
-    def initialize(@total_latent_frames : Int32 = LATENT_FRAMES)
+    def initialize(@total_latent_frames : Int32 = LATENT_FRAMES,
+                   @latent_height : Int32 = LATENT_HEIGHT,
+                   @latent_width : Int32 = LATENT_WIDTH)
       validate_timeline_geometry!
       count = ((@total_latent_frames - WINDOW_LATENTS) // WINDOW_OVERLAP_LATENTS) + 1
       @window_starts = Array(Int32).new(count) do |index|
@@ -63,9 +68,13 @@ module ML::Video::PixelUMMGeneration
     def validate! : Nil
       validate_timeline_geometry!
       block_config.validate!
-      unless block_config.layout.local_attention? &&
-             block_config.layout.tile_count == 12 &&
-             output_elements <= Int32::MAX
+      dispatch_counts = {
+        token_count.to_i64 * EMBED_INPUT_DIM,
+        latent_token_count.to_i64 * LATENT_CHANNELS,
+        token_count.to_i64 * HIDDEN,
+        output_elements,
+      }
+      unless block_config.layout.local_attention? && dispatch_counts.all? { |count| count <= Int32::MAX }
         raise ArgumentError.new("PixelUMM preview geometry does not use the admitted local decoder layout")
       end
       expected_count = ((@total_latent_frames - WINDOW_LATENTS) // WINDOW_OVERLAP_LATENTS) + 1
@@ -94,11 +103,11 @@ module ML::Video::PixelUMMGeneration
     end
 
     def latent_elements : Int64
-      LATENT_CHANNELS.to_i64 * @total_latent_frames * LATENT_HEIGHT * LATENT_WIDTH
+      LATENT_CHANNELS.to_i64 * @total_latent_frames * @latent_height * @latent_width
     end
 
     def latent_shape : Array(Int32)
-      [1_i32, LATENT_CHANNELS, @total_latent_frames, LATENT_HEIGHT, LATENT_WIDTH]
+      [1_i32, LATENT_CHANNELS, @total_latent_frames, @latent_height, @latent_width]
     end
 
     def noise_shape : Array(Int32)
@@ -120,27 +129,104 @@ module ML::Video::PixelUMMGeneration
 
     def decoder_config : PixelUMMDecoderBlockMPS::Config
       PixelUMMDecoderBlockMPS::Config.new(
-        temporal: WINDOW_LATENTS, height: TOKEN_HEIGHT, width: TOKEN_WIDTH)
+        temporal: WINDOW_LATENTS, height: token_height, width: token_width)
+    end
+
+    def latent_token_count : Int32
+      checked_extent(WINDOW_LATENTS.to_i64 * @latent_height * @latent_width, "latent token count")
+    end
+
+    def token_height : Int32
+      checked_extent(@latent_height.to_i64 * LATENT_TOKEN_GRID, "decoder token height")
+    end
+
+    def token_width : Int32
+      checked_extent(@latent_width.to_i64 * LATENT_TOKEN_GRID, "decoder token width")
+    end
+
+    def token_count : Int32
+      checked_extent(WINDOW_LATENTS.to_i64 * token_height * token_width, "decoder token count")
+    end
+
+    def pixel_height : Int32
+      checked_extent(@latent_height.to_i64 * 32, "pixel height")
+    end
+
+    def pixel_width : Int32
+      checked_extent(@latent_width.to_i64 * 32, "pixel width")
     end
 
     def output_shape : Array(Int32)
-      [1_i32, PIXEL_CHANNELS, pixel_frames, PIXEL_HEIGHT, PIXEL_WIDTH]
+      [1_i32, PIXEL_CHANNELS, pixel_frames, pixel_height, pixel_width]
     end
 
     def window_output_shape : Array(Int32)
-      [1_i32, PIXEL_CHANNELS, WINDOW_PIXEL_FRAMES, PIXEL_HEIGHT, PIXEL_WIDTH]
+      [1_i32, PIXEL_CHANNELS, WINDOW_PIXEL_FRAMES, pixel_height, pixel_width]
     end
 
     def output_elements : Int64
-      PIXEL_CHANNELS.to_i64 * pixel_frames * PIXEL_HEIGHT * PIXEL_WIDTH
+      PIXEL_CHANNELS.to_i64 * pixel_frames * pixel_height * pixel_width
     end
 
     def window_output_elements : Int64
-      PIXEL_CHANNELS.to_i64 * WINDOW_PIXEL_FRAMES * PIXEL_HEIGHT * PIXEL_WIDTH
+      PIXEL_CHANNELS.to_i64 * WINDOW_PIXEL_FRAMES * pixel_height * pixel_width
     end
 
     def block_input_bytes : Int64
-      TOKEN_COUNT.to_i64 * HIDDEN * 2
+      token_count.to_i64 * HIDDEN * 2
+    end
+
+    # CPU oracle for the Metal patchify kernel's flattened output-to-NCTHW
+    # mapping. Keeping this helper next to the derived geometry makes the
+    # first/last index checks independent of a GPU launch.
+    def patch_source_index(start_latent_frame : Int32, output_index : Int32) : Int64
+      validate_window_start!(start_latent_frame)
+      count = token_count * EMBED_INPUT_DIM
+      raise ArgumentError.new("PixelUMM patch output index is out of range") unless (0...count).includes?(output_index)
+
+      token = output_index // EMBED_INPUT_DIM
+      feature = output_index % EMBED_INPUT_DIM
+      token_w = token % token_width
+      token_h = (token // token_width) % token_height
+      token_t = token // (token_height * token_width)
+      channel = feature % PIXEL_CHANNELS
+      patch_w = (feature // PIXEL_CHANNELS) % TUBELET_W
+      patch_h = (feature // (PIXEL_CHANNELS * TUBELET_W)) % TUBELET_H
+      patch_t = feature // (PIXEL_CHANNELS * TUBELET_W * TUBELET_H)
+      frame = start_latent_frame * TUBELET_T + token_t * TUBELET_T + patch_t
+      y = token_h * TUBELET_H + patch_h
+      x = token_w * TUBELET_W + patch_w
+      ((channel.to_i64 * pixel_frames + frame) * pixel_height + y) * pixel_width + x
+    end
+
+    # CPU oracle for the Metal 2x2 latent-condition gather's flattened
+    # output-to-NCTHW source mapping.
+    def condition_source_index(start_latent_frame : Int32, output_index : Int32) : Int64
+      validate_window_start!(start_latent_frame)
+      count = latent_token_count * LATENT_CHANNELS
+      raise ArgumentError.new("PixelUMM condition output index is out of range") unless (0...count).includes?(output_index)
+
+      row = output_index // LATENT_CHANNELS
+      channel = output_index % LATENT_CHANNELS
+      token_w = row % @latent_width
+      token_h = (row // @latent_width) % @latent_height
+      token_t = row // (@latent_height * @latent_width)
+      frame = start_latent_frame + token_t
+      ((channel.to_i64 * @total_latent_frames + frame) * @latent_height + token_h) * @latent_width + token_w
+    end
+
+    # CPU oracle for the add-condition kernel after applying the block's
+    # tile-major-to-original THW permutation.
+    def condition_projection_index(source_token_row : Int32, hidden_column : Int32) : Int64
+      unless (0...token_count).includes?(source_token_row) && (0...HIDDEN).includes?(hidden_column)
+        raise ArgumentError.new("PixelUMM condition projection coordinate is out of range")
+      end
+      w = source_token_row % token_width
+      h = (source_token_row // token_width) % token_height
+      t = source_token_row // (token_height * token_width)
+      latent_row = (t * @latent_height + h // LATENT_TOKEN_GRID) * @latent_width + w // LATENT_TOKEN_GRID
+      subtoken = (h % LATENT_TOKEN_GRID) * LATENT_TOKEN_GRID + (w % LATENT_TOKEN_GRID)
+      latent_row.to_i64 * CONDITION_OUTPUT_DIM + subtoken * HIDDEN + hidden_column
     end
 
     # Pure CPU admission inventory for explicit StemPlan-owned allocations.
@@ -165,6 +251,11 @@ module ML::Video::PixelUMMGeneration
     end
 
     private def validate_timeline_geometry! : Nil
+      unless @latent_height > 0 && @latent_width > 0 &&
+             @latent_height.to_i64 <= Int32::MAX // 32 &&
+             @latent_width.to_i64 <= Int32::MAX // 32
+        raise ArgumentError.new("PixelUMM latent height and width must be positive and fit pixel geometry")
+      end
       unless @total_latent_frames >= WINDOW_LATENTS &&
              @total_latent_frames <= MAX_LATENT_FRAMES &&
              (@total_latent_frames - WINDOW_LATENTS) % WINDOW_OVERLAP_LATENTS == 0
@@ -175,20 +266,35 @@ module ML::Video::PixelUMMGeneration
         raise ArgumentError.new("PixelUMM window or temporal geometry is inconsistent")
       end
     end
+
+    private def checked_extent(value : Int64, label : String) : Int32
+      unless value > 0 && value <= Int32::MAX
+        raise ArgumentError.new("PixelUMM #{label} exceeds native limits")
+      end
+      value.to_i32
+    end
+
+    private def validate_window_start!(start_latent_frame : Int32) : Nil
+      unless @window_starts.includes?(start_latent_frame)
+        raise ArgumentError.new("PixelUMM geometry oracle requires a configured window start")
+      end
+    end
   end
 
   # Pure preflight helpers. Call before creating Metal buffers or MPS plans.
   def self.stem_named_bytes_by_name(config : Config) : Hash(String, Int64)
     config.validate!
+    token_count = config.token_count
+    latent_token_count = config.latent_token_count
     weight_stage = EMBED_INPUT_DIM.to_i64 * HIDDEN
     condition_weight = LATENT_CHANNELS.to_i64 * CONDITION_OUTPUT_DIM
     weight_stage = Math.max(weight_stage, condition_weight)
     {
-      "patch_f32"              => TOKEN_COUNT.to_i64 * EMBED_INPUT_DIM * 4,
-      "condition_f32"          => LATENT_TOKEN_COUNT.to_i64 * LATENT_CHANNELS * 4,
-      "projection_f32"         => TOKEN_COUNT.to_i64 * HIDDEN * 4,
-      "output_bf16"            => TOKEN_COUNT.to_i64 * HIDDEN * 2,
-      "tile_major_to_original" => TOKEN_COUNT.to_i64 * sizeof(Int32),
+      "patch_f32"              => token_count.to_i64 * EMBED_INPUT_DIM * 4,
+      "condition_f32"          => latent_token_count.to_i64 * LATENT_CHANNELS * 4,
+      "projection_f32"         => token_count.to_i64 * HIDDEN * 4,
+      "output_bf16"            => token_count.to_i64 * HIDDEN * 2,
+      "tile_major_to_original" => token_count.to_i64 * sizeof(Int32),
       "mps_weight_stage_f32"   => weight_stage * 4,
       "embed_weight_bf16"      => HIDDEN.to_i64 * EMBED_INPUT_DIM * 2,
       "embed_bias_bf16"        => HIDDEN.to_i64 * 2,
@@ -279,14 +385,14 @@ module ML::Video::PixelUMMGeneration
         encode_patchify(e, start_latent_frame)
         embed_plan = @embed_plan || raise ArgumentError.new("PixelUMM embed MPS plan is unavailable")
         MetalLinearMPS.project(e, @arena["patch_f32"], @arena["embed_weight_bf16"],
-          @arena["embed_bias_bf16"], @arena["projection_f32"], TOKEN_COUNT,
+          @arena["embed_bias_bf16"], @arena["projection_f32"], @config.token_count,
           EMBED_INPUT_DIM, HIDDEN, WeightDType::BF16, WeightDType::BF16,
           embed_plan, @arena["mps_weight_stage_f32"])
         encode_store_embed(e)
         encode_gather_condition(e, start_latent_frame)
         condition_plan = @condition_plan || raise ArgumentError.new("PixelUMM condition MPS plan is unavailable")
         MetalLinearMPS.project(e, @arena["condition_f32"], @arena["cond_weight_bf16"],
-          @arena["cond_bias_bf16"], @arena["projection_f32"], LATENT_TOKEN_COUNT,
+          @arena["cond_bias_bf16"], @arena["projection_f32"], @config.latent_token_count,
           LATENT_CHANNELS, CONDITION_OUTPUT_DIM, WeightDType::BF16, WeightDType::BF16,
           condition_plan, @arena["mps_weight_stage_f32"])
         encode_add_condition(e)
@@ -339,13 +445,13 @@ module ML::Video::PixelUMMGeneration
     end
 
     private def allocate_buffers! : Nil
-      @arena.alloc("patch_f32", TOKEN_COUNT * EMBED_INPUT_DIM)
-      @arena.alloc("condition_f32", LATENT_TOKEN_COUNT * LATENT_CHANNELS)
-      @arena.alloc("projection_f32", TOKEN_COUNT * HIDDEN)
-      @arena.alloc_weight("output_bf16", TOKEN_COUNT * HIDDEN, WeightDType::BF16)
+      @arena.alloc("patch_f32", @config.token_count * EMBED_INPUT_DIM)
+      @arena.alloc("condition_f32", @config.latent_token_count * LATENT_CHANNELS)
+      @arena.alloc("projection_f32", @config.token_count * HIDDEN)
+      @arena.alloc_weight("output_bf16", @config.token_count * HIDDEN, WeightDType::BF16)
       permutation = @config.decoder_config.layout.permutation
-      raise ArgumentError.new("PixelUMM preview tile permutation extent mismatch") unless permutation.size == TOKEN_COUNT
-      permutation_buffer = @arena.alloc("tile_major_to_original", TOKEN_COUNT)
+      raise ArgumentError.new("PixelUMM preview tile permutation extent mismatch") unless permutation.size == @config.token_count
+      permutation_buffer = @arena.alloc("tile_major_to_original", @config.token_count)
       permutation_buffer.write_bytes(permutation.to_unsafe.as(Pointer(UInt8)),
         permutation.size * sizeof(Int32))
       max_weight = Math.max(EMBED_INPUT_DIM.to_i64 * HIDDEN,
@@ -361,9 +467,9 @@ module ML::Video::PixelUMMGeneration
       MetalLinearMPS.prepare!
       stage = @arena["mps_weight_stage_f32"]
       projection = @arena["projection_f32"]
-      embed_config = WanT5Config.new(dim: HIDDEN, ffn_dim: HIDDEN, tokens: TOKEN_COUNT)
+      embed_config = WanT5Config.new(dim: HIDDEN, ffn_dim: HIDDEN, tokens: @config.token_count)
       condition_config = WanT5Config.new(dim: HIDDEN, ffn_dim: CONDITION_OUTPUT_DIM,
-        tokens: LATENT_TOKEN_COUNT)
+        tokens: @config.latent_token_count)
       @embed_plan = WanT5MPSLinearPlan.new(embed_config, EMBED_INPUT_DIM, HIDDEN,
         @arena["patch_f32"], stage, projection)
       @condition_plan = WanT5MPSLinearPlan.new(condition_config, LATENT_CHANNELS,
@@ -399,17 +505,21 @@ module ML::Video::PixelUMMGeneration
 
     private def encode_patchify(e : ML::Metal::ComputeEncoder,
                                 start_latent_frame : Int32) : Nil
-      count = TOKEN_COUNT * EMBED_INPUT_DIM
+      count = @config.token_count * EMBED_INPUT_DIM
       e.set_pipeline(PixelUMMGeneration.pipeline("pixelumm_generation_patchify"))
       e.set_buffer(@noise, 0).set_buffer(@arena["patch_f32"], 1, ML::Metal::BufferAccess::Write)
       e.set_value((start_latent_frame * TUBELET_T).to_u32, 2)
       e.set_value(@config.pixel_frames.to_u32, 3)
       e.set_value(count.to_u32, 4)
+      e.set_value(@config.token_height.to_u32, 5)
+      e.set_value(@config.token_width.to_u32, 6)
+      e.set_value(@config.pixel_height.to_u32, 7)
+      e.set_value(@config.pixel_width.to_u32, 8)
       e.dispatch_1d(count)
     end
 
     private def encode_store_embed(e : ML::Metal::ComputeEncoder) : Nil
-      count = TOKEN_COUNT * HIDDEN
+      count = @config.token_count * HIDDEN
       e.set_pipeline(PixelUMMGeneration.pipeline("pixelumm_generation_store_embed"))
       e.set_buffer(@arena["projection_f32"], 0)
         .set_buffer(@arena["tile_major_to_original"], 1)
@@ -420,23 +530,29 @@ module ML::Video::PixelUMMGeneration
 
     private def encode_gather_condition(e : ML::Metal::ComputeEncoder,
                                         start_latent_frame : Int32) : Nil
-      count = LATENT_TOKEN_COUNT * LATENT_CHANNELS
+      count = @config.latent_token_count * LATENT_CHANNELS
       e.set_pipeline(PixelUMMGeneration.pipeline("pixelumm_generation_gather_condition"))
       e.set_buffer(@latent, 0).set_buffer(@arena["condition_f32"], 1,
         ML::Metal::BufferAccess::Write)
       e.set_value(start_latent_frame.to_u32, 2)
       e.set_value(@config.total_latent_frames.to_u32, 3)
       e.set_value(count.to_u32, 4)
+      e.set_value(@config.latent_height.to_u32, 5)
+      e.set_value(@config.latent_width.to_u32, 6)
       e.dispatch_1d(count)
     end
 
     private def encode_add_condition(e : ML::Metal::ComputeEncoder) : Nil
-      count = TOKEN_COUNT * HIDDEN
+      count = @config.token_count * HIDDEN
       e.set_pipeline(PixelUMMGeneration.pipeline("pixelumm_generation_add_condition"))
       e.set_buffer(@arena["projection_f32"], 0)
         .set_buffer(@arena["tile_major_to_original"], 1)
         .set_buffer(@output_bf16, 2, ML::Metal::BufferAccess::ReadWrite)
       e.set_value(count.to_u32, 3)
+      e.set_value(@config.token_height.to_u32, 4)
+      e.set_value(@config.token_width.to_u32, 5)
+      e.set_value(@config.latent_height.to_u32, 6)
+      e.set_value(@config.latent_width.to_u32, 7)
       e.dispatch_1d(count)
     end
   end
@@ -466,9 +582,9 @@ module ML::Video::PixelUMMGeneration
       @output_f32 = @arena["output_f32"]
     end
 
-    # Merge one fixed BF16 [1,3,40,288,512] prediction at a global latent
-    # start. A terminal-aligned schedule covers the configured output once,
-    # blending only the 20-frame overlap with the preceding window.
+    # Merge one full BF16 [1,3,40,H,W] prediction at a global latent start.
+    # A terminal-aligned schedule covers the configured output once, blending
+    # only the 20-frame overlap with the preceding window.
     def encode_merge(chain : ML::Metal::MPSCommandChain,
                      *, window_bf16 : ML::MetalBuffer,
                      start_latent_frame : Int32) : ML::MetalBuffer
@@ -496,6 +612,8 @@ module ML::Video::PixelUMMGeneration
         e.set_value((start_latent_frame * TUBELET_T).to_u32, 3)
         e.set_value(@config.pixel_frames.to_u32, 4)
         e.set_value(@config.window_output_elements.to_u32, 5)
+        e.set_value(@config.pixel_height.to_u32, 6)
+        e.set_value(@config.pixel_width.to_u32, 7)
         e.dispatch_1d(@config.window_output_elements.to_i32)
         @merged_windows += 1
         @output_f32

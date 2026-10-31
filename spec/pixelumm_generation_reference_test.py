@@ -32,6 +32,46 @@ class PixelUMMGenerationReferenceTests(unittest.TestCase):
         )
         self.assertEqual(reference.SCHEMA, "cogni_ml.pixelumm_generation_reference/v1")
 
+    def test_authenticated_default_and_high_resolution_geometry_contracts(self):
+        default = reference.resolve_geometry("cogni_ml.hy_nomas_generation_inputs/v1")
+        self.assertEqual(default.resolution, "512x288")
+        self.assertEqual(default.schema, "cogni_ml.pixelumm_generation_reference/v1")
+        self.assertEqual(default.inputs_schema, "cogni_ml.hy_nomas_generation_inputs/v1")
+        self.assertEqual(default.tensors, reference.TENSORS)
+        self.assertEqual(default.token_grid, (10, 18, 32))
+        self.assertEqual(default.window_period_repeats, 2160)
+
+        high = reference.resolve_geometry(
+            "cogni_ml.hy_nomas_generation_inputs/v3", "768x416"
+        )
+        self.assertEqual(high.resolution, "768x416")
+        self.assertEqual(high.schema, "cogni_ml.pixelumm_generation_reference/v2")
+        self.assertEqual(high.inputs_schema, "cogni_ml.hy_nomas_generation_inputs/v3")
+        self.assertEqual(high.latent_grid, (30, 13, 24))
+        self.assertEqual(high.token_grid, (10, 26, 48))
+        self.assertEqual(
+            high.tensors,
+            (
+                ("stem.output_bf16", "BF16", (1, 12_480, 4096)),
+                ("assembly.output_f32", "F32", (1, 3, 120, 416, 768)),
+            ),
+        )
+        self.assertEqual(
+            [reference.tensor_nbytes(dtype, shape) for _, dtype, shape in high.tensors],
+            [102_236_160, 460_062_720],
+        )
+        self.assertEqual(high.window_period_repeats, 4680)
+
+    def test_reference_geometry_requires_the_explicit_matching_input_contract(self):
+        with self.assertRaisesRegex(reference.ReferenceError, "require --resolution"):
+            reference.resolve_geometry("cogni_ml.hy_nomas_generation_inputs/v3")
+        with self.assertRaisesRegex(reference.ReferenceError, "does not match"):
+            reference.resolve_geometry(
+                "cogni_ml.hy_nomas_generation_inputs/v3", "512x288"
+            )
+        with self.assertRaisesRegex(reference.ReferenceError, "unsupported generation input schema"):
+            reference.resolve_geometry("cogni_ml.hy_nomas_generation_inputs/v2")
+
     def test_synthetic_window_formula_has_fixed_zero_based_window_index(self):
         self.assertEqual(
             tuple(reference.synthetic_value(index, 0) for index in range(4)),

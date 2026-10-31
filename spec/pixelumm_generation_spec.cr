@@ -14,6 +14,60 @@ describe ML::Video::PixelUMMGeneration::Config do
     config.block_input_bytes.should eq(47_185_920_i64)
   end
 
+  it "derives the opt-in 768x416 five-second decoder geometry from latent cells" do
+    config = ML::Video::PixelUMMGeneration::Config.new(
+      total_latent_frames: 30, latent_height: 13, latent_width: 24)
+
+    config.latent_shape.should eq([1, 32, 30, 13, 24])
+    config.noise_shape.should eq([1, 3, 120, 416, 768])
+    config.output_shape.should eq(config.noise_shape)
+    config.window_output_shape.should eq([1, 3, 40, 416, 768])
+    config.decoder_config.height.should eq(26)
+    config.decoder_config.width.should eq(48)
+    config.decoder_config.tokens.should eq(12_480)
+    config.decoder_config.layout.local_attention?.should be_true
+    config.decoder_config.layout.tile_count.should eq(24)
+    config.block_input_bytes.should eq(102_236_160_i64)
+    config.window_starts.should eq([0, 5, 10, 15, 20])
+  end
+
+  it "preserves default and candidate first/last flattened stem mappings" do
+    {
+      ML::Video::PixelUMMGeneration::Config.new,
+      ML::Video::PixelUMMGeneration::Config.new(
+        total_latent_frames: 30, latent_height: 13, latent_width: 24),
+    }.each do |config|
+      patch_last = config.token_count * ML::Video::PixelUMMGeneration::EMBED_INPUT_DIM - 1
+      condition_last = config.latent_token_count * ML::Video::PixelUMMGeneration::LATENT_CHANNELS - 1
+      projection_last_row = config.token_count - 1
+
+      config.patch_source_index(0, 0).should eq(0_i64)
+      config.patch_source_index(20, patch_last).should eq(config.output_elements - 1)
+      config.condition_source_index(0, 0).should eq(0_i64)
+      config.condition_source_index(20, condition_last).should eq(config.latent_elements - 1)
+      config.condition_projection_index(projection_last_row,
+        ML::Video::PixelUMMGeneration::HIDDEN - 1).should eq(
+        config.latent_token_count.to_i64 * ML::Video::PixelUMMGeneration::CONDITION_OUTPUT_DIM - 1)
+
+      expect_raises(ArgumentError, /configured window start/) do
+        config.patch_source_index(1, 0)
+      end
+      expect_raises(ArgumentError, /out of range/) do
+        config.patch_source_index(20, patch_last + 1)
+      end
+      expect_raises(ArgumentError, /coordinate is out of range/) do
+        config.condition_projection_index(projection_last_row, ML::Video::PixelUMMGeneration::HIDDEN)
+      end
+    end
+  end
+
+  it "rejects nonpositive latent spatial dimensions before building a plan" do
+    expect_raises(ArgumentError, /latent height and width must be positive/) do
+      ML::Video::PixelUMMGeneration::Config.new(
+        total_latent_frames: 30, latent_height: 0, latent_width: 24)
+    end
+  end
+
   it "accounts the exact owned stem and assembly buffers without constructing Metal plans" do
     config = ML::Video::PixelUMMGeneration::Config.new
     stem = config.stem_named_bytes_by_name

@@ -36774,3 +36774,23 @@ Refresh after source/toolchain/device/model/workload changes.
   Next falsifiers: an opt-in higher-resolution eye-quality preview after exact
   memory/geometry admission, and a source-faithful full second-segment replay
   for motion. Quality remains open; the production defaults are unchanged.
+
+### Hy-Nomas opt-in spatial quality candidate (2026-10-30)
+
+- Added authenticated v3 768x416 five-second inputs and runtime geometry;
+  default 512x288 remains unchanged. Shared patch/final token admission now
+  covers 9360 tokens and is also checked before GPU allocation. PixelUMM uses
+  10x26x48 tokens, 24 local tiles, and geometry-derived patch/merge indices.
+- GPU geometry probe is bit-exact against the pinned source for the real
+  BF16 stem (51,118,080 values) and a separate synthetic five-window display
+  assembly (115,015,680 values). Injected NaN is rejected. One terminal wait,
+  zero tracked encode allocation/readback/preterminal wait. This does not
+  qualify all high-resolution DiT or decoder intermediates.
+- Four-step preview: 369.414 s request, 24.069 GiB sampled peak, 11.088 GiB
+  minimum cache-aware headroom, no swap growth; guard 26 GiB/10%/64 MiB/1200 s.
+  The larger sample has different noise shapes/composition, so better-looking
+  selected frames do not establish that resolution fixes the eyes or motion.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-spatial-geometry.json`;
+  media/control root `/opt/mldata_ssd/cogni-ml/hy-nomas-geometry-20261030`.
+  See `docs/hy-nomas-generation-frontier.md`. Refresh on input/source/weight/
+  precision/geometry/backend/device changes or artifact loss; re-admit memory.
