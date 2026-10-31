@@ -6,6 +6,30 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-PIXELUMM-RECOVERY-AA-2026-10-31] Short-idle decodes are slower at lower observed GPU frequency
+
+- Two fresh decoder-only processes, short-long and long-short order, use one
+  warmup and two same-owner requests each. Short-idle walls are 155.390/161.184 s;
+  long-idle walls are 145.518/145.703 s. Interior mean active frequencies are
+  1253.8/1200.8 MHz versus 1355.7/1352.0 MHz, with 100% observed GPU residency.
+  This is descriptive evidence for frequency-associated drift, not causal
+  thermal attribution or an explanation of the earlier twofold slowdown.
+- Fresh hashes of all six full displays equal the saved source-MPS oracle.
+  Every pass retains 11,731 segments, 42 stable owners, zero tracked encode
+  allocations/readbacks/preterminal waits and one terminal wait. Sampled peak
+  process footprint 21.154 GiB, minimum cache-aware headroom 25.800 GiB, swap
+  growth zero; 26 GiB cap and 10% reserve remain unchanged.
+- Strict RAW4 deadline/receipt checks admit actual 1.004--1.011 s and
+  120.010--120.011 s gaps. The 2-second observer has 714/714 valid samples;
+  short-idle interiors are unresolved. Owned sampler group absence is checked
+  before raw finalization. No model or observer remains running.
+- Recovery sleep worsens total throughput. Next: reduce GPU FFN/attention work
+  under matched frequency/warmup, preserving parity and queue policy. Changed
+  source/weights/inputs/oracle invalidates parity; changed host, binary, MPS or
+  scheduling conditions requires new timing. See
+  `.landmark/evidence/2026-10-31-pixelumm-recovery-aa.json` and
+  `docs/hy-nomas-generation-frontier.md` for checks, artifacts and limitations.
+
 ### [LM-EXTERNAL-SCRATCH-CLEANUP-2026-10-30] Retired 213.702 GiB of obsolete diagnostic arrays and caches
 
 - User-authorized exact-manifest cleanup removed 15,041 paths / 15,006 unique

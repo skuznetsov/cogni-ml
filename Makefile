@@ -47,6 +47,7 @@ PIXELUMM_QUERY_PAIR_OBJ := $(BUILD_DIR)/pixelumm_query_pair_bridge.o
 PIXELUMM_WINDOW_BATCH_OBJ := $(BUILD_DIR)/pixelumm_window_batch_bridge.o
 PIXELUMM_FFN_DIRECT_MPS_OBJ := $(BUILD_DIR)/pixelumm_ffn_direct_mps_bridge.o
 PIXELUMM_GC_OBSERVER_OBJ := $(BUILD_DIR)/pixelumm_gc_observer.o
+PIXELUMM_RECOVERY_HOST_OBJ := $(BUILD_DIR)/pixelumm_recovery_host.o
 COGNIGRAPH_NATIVE_HEADERS := src/ml/metal/cognigraph_native.h src/ml/metal/cognigraph_schedule.h
 PIXELUMM_FFN_ISOLATED_SOURCES := $(wildcard src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr)
 QWEN25_PREFIX_SOURCES := $(wildcard src/ml/gguf/*.cr src/ml/core/*.cr src/ml/metal/*.cr src/ml/video/*.cr src/ml/video/kernels/*.metal)
@@ -552,6 +553,16 @@ pixelumm_after_dit_probe: $(BUILD_DIR)/pixelumm_after_dit_probe
 $(BUILD_DIR)/pixelumm_after_dit_probe: examples/pixelumm_after_dit_probe.cr examples/support/pixelumm_decoder_replay.metal $(wildcard examples/support/hy_nomas*.cr examples/support/pixelumm*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+.PHONY: pixelumm_recovery_probe
+pixelumm_recovery_probe: $(BUILD_DIR)/pixelumm_recovery_probe
+
+$(PIXELUMM_RECOVERY_HOST_OBJ): examples/support/pixelumm_recovery_host.mm | $(BUILD_SENTINEL)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(BUILD_DIR)/pixelumm_recovery_probe: examples/pixelumm_recovery_probe.cr examples/support/pixelumm_recovery_host.mm examples/support/pixelumm_decoder_replay.metal $(wildcard examples/support/hy_nomas*.cr examples/support/pixelumm*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(PIXELUMM_RECOVERY_HOST_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(PIXELUMM_RECOVERY_HOST_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 spec_hy_nomas_decoder_replay: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) spec spec/hy_nomas_decoder_replay_spec.cr \

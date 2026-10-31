@@ -1,5 +1,102 @@
 # Hy-Nomas first native video frontier
 
+## PixelUMM recovery A/A experiment (2026-10-31)
+
+The matched after-DiT matrix did not isolate a causal prelude penalty because
+time/order drift exceeded its mean contrast. The next bounded diagnostic uses
+two fresh standalone PixelUMM processes, each with one identical warmup and
+two complete decodes on the same GPU owners. The measured idle intervals are
+1 and 120 seconds, in short-long and long-short order. Each process receives
+120 seconds of recovery before launch. Every pass restores the same saved
+latent, poisons the output and snapshots the full display on GPU; all exports
+and hashes are deferred until its three requests have completed. No DiT,
+video export or full generation is admitted.
+
+Prediction: if a recoverable hardware state dominates the slowdown, longer
+idle intervals should restore GPU frequency/power behavior and reduce request
+latency in both orders. Continued drift after frequency recovery falsifies
+that simple explanation; advisory nominal thermal pressure alone is not a
+falsifier. The external observer records real powermetrics GPU telemetry,
+without adding Metal synchronization. Background GPU use, opaque MPS state,
+and observer overhead remain possible confounds.
+
+The guarded `matrix-v2` completed both orders at source parent `fec31155` with
+the same release binary and immutable source manifest. Observed wall times and
+mean active GPU frequencies from the interior telemetry windows are:
+
+| Order | Pass | Wall | Mean active GPU frequency |
+|---|---|---:|---:|
+| short-long | warmup | 145.102 s | 1356.3 MHz |
+| short-long | short | 155.390 s | 1253.8 MHz |
+| short-long | long | 145.518 s | 1355.7 MHz |
+| long-short | warmup | 145.466 s | 1352.0 MHz |
+| long-short | long | 145.703 s | 1352.0 MHz |
+| long-short | short | 161.184 s | 1200.8 MHz |
+
+Long-idle requests take 6.35% and 9.60% less request wall time than short-idle
+requests in their respective cells. The short/long latency ratios are 1.06784
+and 1.10625. All eligible request samples report 100% GPU active residency;
+the short requests have lower frequency and power and more `Heavy` thermal
+pressure. The exploratory product of request wall time and interior mean MHz
+varies by less than 2% across all six passes. This supports frequency state as
+an explanation for this matrix's modest drift; that product is not calibrated
+GPU work, and the experiment does not establish a causal thermal root cause or
+explain the earlier roughly twofold slowdown. There is only one pair per order,
+with background load, opaque MPS state and observer overhead still possible
+confounds. `powermetrics` thermal pressure and `NSProcessInfo.thermalState` are
+different advisory APIs, not interchangeable categories.
+
+Long-idle times agree within 0.13%; the two warmups agree within 0.26%. Summed
+per-root command-buffer GPU durations are within 0.029--0.057 s of request wall time;
+the existing terminal waits are 0.765--0.844 s. These spans include in-buffer
+stalls, so they are not active compute time. Together with observed residency,
+the results do not support CPU starvation as the dominant delay in this run.
+The long pause is diagnostic: adding roughly 119 s of idle saves only 10--15 s
+of request time and would worsen request throughput. The next falsifier is a GPU
+FFN/attention cost reduction measured at matched observed frequency and warmup,
+with the same output parity and queue policy.
+
+A fresh analyzer invocation rehashed all six 460,062,720-byte display files;
+each equals the authenticated source-MPS oracle SHA `5ed0974d...`. Every pass
+has 11,731 segments, one terminal wait, zero tracked encode allocations,
+readbacks or preterminal waits, and 42 stable decoder owners within its
+process. This is stricter than unchanged `atol=rtol=2e-5`; it qualifies final
+display values for this saved latent/noise only, not new intermediate or full
+DiT trajectory parity. The sampled maximum process footprint was 21.154 GiB,
+minimum cache-aware headroom 25.800 GiB, and maximum swap growth zero. Limits
+remained 26 GiB process cap, 10% physical reserve with file-cache accounting,
+64 MiB swap-growth stop and 1,200 seconds per process. Named buffers including
+all three GPU snapshots total 18.654 GiB, below the 24 GiB named budget.
+
+Actual short gaps are 1.004212 and 1.010257 s; long gaps are 120.010220 and
+120.010411 s. The deadline loop and receipts use `CLOCK_MONOTONIC_RAW(4)`, the
+installed Crystal `Time.instant` clock; clock 6 and UTC are advisory gap
+diagnostics. Minimum deadlines and original 5/125-second upper bounds remain
+strict. Earlier `matrix-v1` was excluded after an interval-bound rejection
+before its long pass; its exact failed interval was not recorded, so its cause
+remains unresolved. Fake-clock tests cover early wakeups, and a host-only
+qualification measured 1.003024 and 120.003146 s with the final helper.
+
+The external observer captured 714/714 valid two-second samples, then stopped
+early deliberately after the matrix; its full 3,600-second cap was not needed.
+Request and long-idle summaries exclude samples within one interval of either
+boundary because headers have one-second UTC precision. The one-second idle
+conditions have zero eligible interior samples and are not assigned frequency
+or power estimates. Cleanup verifies the entire owned process group absent
+before finalizing raw data; child-exited/group-present and permission-error
+falsifiers pass. No observer/model processes remained after completion.
+
+DoD executed: release build and plan-only admission; 4 replay lifecycle, 4
+deadline, 20 matrix and 14 observer CPU checks; both guarded recovery orders;
+and a fresh `pixelumm_recovery_matrix.py --analyze-only --output-root <matrix>`
+run that reproduced the saved analysis exactly. All added code is diagnostic;
+production generation is unchanged. Rollback is an atomic revert. Evidence:
+`.landmark/evidence/2026-10-31-pixelumm-recovery-aa.json`; raw runs and alignment
+script are under `/opt/mldata_ssd/cogni-ml/pixelumm-recovery-20261031`, telemetry
+under `/opt/mldata_ssd/pixelumm-power-observer-20261031-matrix-02`. Changed
+inputs, weights/source/oracle invalidate parity; changed hardware/OS/MPS,
+source/binary, queue/recovery policy or host conditions require fresh timing.
+
 ## Matched PixelUMM lifecycle probe (2026-10-31)
 
 The old 154.806-second decoder-only observation and 295.519-second post-DiT
