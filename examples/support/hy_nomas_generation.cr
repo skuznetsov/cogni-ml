@@ -2,6 +2,7 @@ require "json"
 require "digest/sha256"
 require "./hy_nomas_probe_instrumentation"
 require "./hy_nomas_q4_dit_io"
+require "./hy_nomas_cinematic"
 require "./pixelumm_two_block_probe"
 require "../../src/ml/video/hy_nomas_bf16_stack"
 require "../../src/ml/video/hy_nomas_euler"
@@ -367,8 +368,9 @@ module HyNomasGeneration
       HyNomasQ4DiTIO::SOURCE_SHA, weight_cache_config(runtime))
   end
 
-  def authenticate_bf16_index(runtime : ML::Video::HyNomasConfig = CONFIG)
-    ML::Video::HyNomasQ4StackIndex::Admission.new(File.realpath(INDEX), INDEX_SHA,
+  def authenticate_bf16_index(runtime : ML::Video::HyNomasConfig = CONFIG, *,
+                              cinematic : HyNomasCinematic::IndexIdentity? = nil)
+    ML::Video::HyNomasQ4StackIndex::Admission.new(File.realpath(cinematic.try(&.path) || INDEX), cinematic.try(&.sha256) || INDEX_SHA,
       HyNomasQ4DiTIO::SOURCE_SHA, weight_cache_config(runtime))
   end
 
@@ -462,15 +464,18 @@ module HyNomasGeneration
     def initialize(inputs : Inputs, @latent : ML::MetalBuffer, budget : Int64,
                    mode : DiTWeights = DiTWeights::BF16, *,
                    steps : Int32 = DEFAULT_STEPS,
-                   admission : ML::Video::HyNomasQ4StackIndex::Admission? = nil)
+                   admission : ML::Video::HyNomasQ4StackIndex::Admission? = nil,
+                   cinematic : HyNomasCinematic::IndexIdentity? = nil)
       steps = HyNomasGeneration.validate_steps!(steps, mode)
       runtime_config = inputs.geometry.dit_config
       HyNomasGeneration.validate_dit_config!(runtime_config)
       # Every authenticated file and the exact aggregate are admitted first.
-      index_path = File.realpath(INDEX)
+      raise ArgumentError.new("cinematic cache requires BF16 DiT") if cinematic && mode != DiTWeights::BF16
+      index_path = File.realpath(cinematic.try(&.path) || INDEX)
+      index_sha = cinematic.try(&.sha256) || INDEX_SHA
       index = if mode == DiTWeights::BF16
-                admitted = admission || HyNomasGeneration.authenticate_bf16_index(runtime_config)
-                admitted.validate!(INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                admitted = admission || HyNomasGeneration.authenticate_bf16_index(runtime_config, cinematic: cinematic)
+                admitted.validate!(index_sha, HyNomasQ4DiTIO::SOURCE_SHA,
                   HyNomasGeneration.weight_cache_config(runtime_config))
                 admitted
               else
@@ -485,7 +490,7 @@ module HyNomasGeneration
         resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
       raise ArgumentError.new("DiT globals must be exact BF16") unless plan.staging_bytes == 0 && plan.entries.size == 48
       @loader = if mode == DiTWeights::BF16
-                  ML::Video::HyNomasBF16Stack.new(index.as(ML::Video::HyNomasQ4StackIndex::Admission), INDEX_SHA, HyNomasQ4DiTIO::SOURCE_SHA,
+                  ML::Video::HyNomasBF16Stack.new(index.as(ML::Video::HyNomasQ4StackIndex::Admission), index_sha, HyNomasQ4DiTIO::SOURCE_SHA,
                     HyNomasGeneration.weight_cache_config(runtime_config), budget, stage_bytes: HyNomasGeneration.stage_bytes,
                     reserve_bytes: HyNomasGeneration.dit_reserve_bytes(inputs, steps, runtime_config), max_forwards_per_chain: steps)
                 else

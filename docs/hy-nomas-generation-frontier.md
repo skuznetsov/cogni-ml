@@ -1,5 +1,75 @@
 # Hy-Nomas first native video frontier
 
+## Cinematic LoRA quality probe (2026-10-31)
+
+Two five-second 768x416 visual pairs separate decoder arithmetic from adapter
+appearance. The first replays old and Q/K-corrected PixelUMM on identical saved
+latent/noise. The second compares original BF16 DiT with the official Cinematic
+adapter using the same input payload, seed, four DiT steps, one decoder step
+and corrected decoder weights. The original BF16 default remains unchanged;
+Cinematic is an explicit opt-in. Both clips and their source identities are
+indexed in `.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json`.
+
+The offline cache binds the original index/source, official adapter revision,
+config/payload, and actual derived BF16 index by hash. The original Q4 index's
+source field denotes base ancestry, not a merged checkpoint. Only the 756
+active double-block targets are merged; 162 action-module targets are excluded
+because camera/action conditioning is disabled for this admitted request.
+Packing uses original F32 base + F32 `(B @ A) * 2`, followed by one BF16 cast.
+The 54 derived BF16 files contain 16,314,338,848 bytes; unchanged Q4/global
+siblings are hardlinks. Merge completion fences and cache serialization occur
+offline, never during inference encode.
+
+All 54 blocks have been compared with the pinned upstream `merge()` on MPS:
+8,157,072,384 BF16 words match exactly, including unchanged block tensors;
+109 shared Q4/global assets are byte-identical. This qualifies cached weight
+words, not a complete candidate DiT trajectory. The current verifier also
+checks authenticated file identities around consumption and report publication;
+four CPU mutation/symlink falsifiers cover that guard. The merge runtime is
+Torch 2.8.0/MPS with CPU fallback disabled.
+
+The candidate native request completed in 406.881 seconds, with a 63.859-second
+DiT and 295.519-second decoder. This is an unpaired observation with saved Qwen
+conditioning, excluding live text encoding and MP4 export; it proves no
+speedup. The guarded subprocess took 408.615 seconds. Sampled process peak was
+24.069 GiB, minimum cache-aware headroom 12.468 GiB, and swap growth was zero
+under a 26 GiB process cap, 10% physical reserve, 64 MiB swap-growth stop and
+1,200-second deadline. Both encode phases report zero tracked allocations,
+activation readbacks and preterminal waits, with the existing one terminal
+wait per phase. Counters cover instrumented MetalBuffer operations; opaque MPS
+resources remain covered only by sampled process telemetry. Diagnostic exports
+occur after the existing waits and do not feed the GPU latent handoff.
+
+The candidate latent's complete decoder replay also matches exactly: raw and
+display outputs each contain 115,015,680 finite F32 values, with zero error;
+all 468 source/cache weight checks pass. The unchanged tolerance is
+`atol=rtol=2e-5`. This oracle is the pinned Torch 2.6 gathered spatial-tile MPS
+adapter, not stock CUDA/FlexAttention. It qualifies the decoder on this
+candidate latent/noise, not the candidate DiT trajectory or video quality.
+
+Sparse paired frames show small local changes from the decoder correction,
+without a convincing eye fix. Cinematic changes composition and lighting much
+more strongly; apparent fabric, vehicle and facial detail increase in the
+inspected frames. The faces remain stylized. Full-motion eye naturalness,
+spatial fidelity across prompts/seeds and multi-segment continuity are open;
+no new user acceptance has been recorded. More diffusion steps, exact cache
+weights or decoder parity do not establish perceptual improvement.
+
+Opt in by adding both `--cinematic-cache /absolute/path/cinematic-lineage.json`
+and `--cinematic-cache-sha <trusted-lineage-sha256>` to the existing BF16 preview
+command. Omitting both preserves the original checkpoint. Admission rejects
+incomplete identity pairs, wrong lineage, Q4/adapter combinations, enabled
+camera/action conditioning, and cache inventory/precision mismatches before
+Metal allocation. The focused Crystal admission suite has 22 passing examples;
+the offline packer has 10 passing CPU tests. The release binary passed original
+plan-only admission and the guarded candidate request above.
+
+Risk remains CAUTION: an early BF16 cast, wrong target mapping or an unlabelled
+partial adapter invalidates the comparison. Rollback is the unchanged default
+index and an atomic revert of the opt-in integration. Refresh qualification on
+source, weights, adapter, runtime/backend/device, geometry or input changes,
+and on artifact loss. Before any later run, re-admit memory with the same guard.
+
 ## Opt-in spatial quality candidate (2026-10-30)
 
 `hy_nomas_generate` now admits an explicit `--resolution 768x416` candidate

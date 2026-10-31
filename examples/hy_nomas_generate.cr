@@ -11,6 +11,8 @@ plan_only = false
 capture_decoder = false
 conditioned_inputs = false
 resolution = "512x288"
+cinematic_path = ""
+cinematic_sha = ""
 OptionParser.parse do |p|
   p.banner = "Bounded native Hy-Nomas preview: 5 seconds at 24 fps"
   p.on("--inputs PATH", "Authenticated fixed preview inputs") { |v| input_path = v }
@@ -23,7 +25,12 @@ OptionParser.parse do |p|
   p.on("--capture-decoder", "Export completed DiT latent and raw decoder values for upstream comparison") { capture_decoder = true }
   p.on("--conditioned-inputs", "Admit a v2 default-size or opt-in v3 high-resolution bundle with an authenticated Qwen crop") { conditioned_inputs = true }
   p.on("--resolution SIZE", "512x288 (default) or opt-in 768x416; high resolution requires conditioned v3 inputs") { |v| resolution = v }
+  p.on("--cinematic-cache PATH", "Opt-in authenticated Cinematic BF16 cache lineage; camera/action off") { |v| cinematic_path = v }
+  p.on("--cinematic-cache-sha SHA", "Trusted Cinematic lineage SHA-256") { |v| cinematic_sha = v }
 end
+cinematic = HyNomasCinematic.load!(cinematic_path, cinematic_sha,
+  bf16: dit_weights == HyNomasGeneration::DiTWeights::BF16,
+  camera_conditioning: false, action_conditioning: false)
 geometry = HyNomasGeneration::SpatialGeometry.parse(resolution)
 steps = HyNomasGeneration.validate_steps!(steps, dit_weights)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
@@ -35,7 +42,7 @@ request_start = Time.monotonic
 inputs = HyNomasGeneration::Inputs.new(input_path, input_sha,
   conditioned: conditioned_inputs, geometry: geometry)
 runtime_config = geometry.dit_config
-admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index(runtime_config) : nil
+admission = dit_weights == HyNomasGeneration::DiTWeights::BF16 ? HyNomasGeneration.authenticate_bf16_index(runtime_config, cinematic: cinematic) : nil
 q4_payload_bytes = admission ? admission.payload_bytes : HyNomasGeneration.authenticate_weight_index(runtime_config).caches.sum(&.payload_bytes)
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget, capture_raw: capture_decoder)
 dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
@@ -43,6 +50,7 @@ dit_named = HyNomasGeneration.dit_resident_weight_bytes(dit_weights,
 raise ArgumentError.new("DiT named aggregate exceeds budget") if dit_named > budget
 preflight_seconds = (Time.monotonic - request_start).total_seconds
 HyNomasGeneration.emit("memory_plan", dit_weights: HyNomasGeneration.dit_weights_name(dit_weights), steps: steps, dit_named_bytes: dit_named,
+  dit_variant: cinematic ? "cinematic-active-blocks" : "original", dit_weight_index_sha256: cinematic.try(&.sha256) || HyNomasGeneration::INDEX_SHA,
   decoder_named_bytes: metadata.named_bytes, named_budget_bytes: budget,
   resolution: "#{geometry.pixel_width}x#{geometry.pixel_height}", latent_shape: metadata.config.latent_shape,
   dit_video_tokens: runtime_config.video_tokens,
@@ -73,7 +81,7 @@ metrics = {} of String => Int64
 start = Time.monotonic
 begin
   setup = Time.monotonic
-  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights, steps: steps, admission: admission)
+  dit = HyNomasGeneration::DiT.new(inputs, latent, budget, dit_weights, steps: steps, admission: admission, cinematic: cinematic)
   raise "DiT preflight and allocation admission disagree" unless dit.named_bytes == dit_named
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -145,7 +153,9 @@ begin
              dit_weights: HyNomasGeneration.dit_weights_name(dit_weights),
              dit_quantization_experimental: dit_weights == HyNomasGeneration::DiTWeights::Q4K,
              precision: dit_weights == HyNomasGeneration::DiTWeights::BF16 ? "BF16 weights and boundary rounding, F32 native arithmetic/MPS accumulation" : "Q4_K DiT block weights decoded on GPU into one reusable BF16 stage; BF16 DiT globals, PixelUMM and Euler boundary rounding; F32 native arithmetic/MPS accumulation",
-             dit_weight_index_sha256: HyNomasGeneration::INDEX_SHA, decoder_weight_cache_sha256: HyNomasGeneration::PIXEL_CACHE_SHA,
+             dit_weight_index_sha256: cinematic.try(&.sha256) || HyNomasGeneration::INDEX_SHA, decoder_weight_cache_sha256: HyNomasGeneration::PIXEL_CACHE_SHA,
+             dit_variant: cinematic ? "cinematic-active-blocks" : "original",
+             cinematic_lineage: cinematic.try(&.lineage_path), cinematic_lineage_sha256: cinematic.try(&.lineage_sha256),
              seed: 42, frames: metadata.config.pixel_frames, width: geometry.pixel_width,
              height: geometry.pixel_height, fps: 24, steps: steps, shift: 5, cfg: 1,
              camera_conditioning: false, action_conditioning: false,

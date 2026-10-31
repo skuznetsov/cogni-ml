@@ -36919,3 +36919,48 @@ Refresh after source/toolchain/device/model/workload changes.
   discriminator: perceptual review of corrected decoding on identical
   latent/noise, with real-conditioned default-size replay and motion treated
   separately.
+
+
+### Hy-Nomas opt-in Cinematic quality probe (2026-10-31)
+
+- Original BF16/default cache is unchanged. `hy_nomas_generate` accepts explicit
+  `--cinematic-cache` lineage + `--cinematic-cache-sha` only for the admitted
+  camera/action-off BF16 route. Existing Admission authenticates the actual
+  derived index, payload inventory and residents before Metal allocation;
+  lineage metadata does not itself establish correct merge math.
+- The offline producer merges 756 active double-block targets from original
+  F32 base and official F32 adapter as `base + (B @ A) * 2`, then casts once to
+  BF16. The 162 action-module targets are explicitly excluded. Its 54 BF16
+  files use 16,314,338,848 bytes; unchanged Q4/global siblings are hardlinks.
+  No merge math, offline fences or serialization enters inference encode.
+- Hardened source-MPS weight reference v2 qualifies all 54 blocks: 8,157,072,384
+  BF16 words, zero mismatches, 972 unchanged block tensors and 109 byte-equal
+  shared assets. Torch 2.8.0/MPS, fallback disabled; 334 authenticated file
+  identities are captured/rechecked through publication. Report SHA
+  `068a0d6c476b4e1164fa44b8462c069d294ba753c36b5cfbd19e4d96a721a3b3`.
+  CPU checks: 22 Crystal examples, 10 packer tests, four identity falsifiers.
+- The four-step, five-second 768x416 candidate uses identical saved input
+  payload/seed/noise and corrected decoder weights. Native request 406.881 s
+  (saved conditioning; excludes live Qwen and MP4 export), sampled peak
+  24.069 GiB, minimum cache-aware headroom 12.468 GiB, zero swap growth under
+  26 GiB/10%/64 MiB/1,200 s guards. Both phases retain zero instrumented encode
+  allocations/readbacks/preterminal waits and their existing terminal wait.
+  Opaque MPS resources are outside those counters; timings are unpaired.
+- Candidate same-latent decoder replay matches raw/display outputs exactly:
+  115,015,680 finite F32 values each; all 468 source/cache weight checks pass.
+  Report SHA `a91ad030b8cd682f4ca6c00ebfad41c4a3ea56a9bcff41155318f6fb12d2ea7e`.
+  This is the pinned Torch 2.6 gathered local-tile MPS oracle, not stock
+  CUDA/FlexAttention or full candidate DiT trajectory equivalence.
+- Two visual pairs are preserved: old/corrected decoder on identical latent,
+  then original BF16/Cinematic with the corrected decoder and four steps.
+  Sparse frames show small decoder changes and stronger Cinematic composition,
+  light and apparent detail changes. Natural eyes, motion, general quality and
+  longer continuation remain open; no new user acceptance is recorded.
+- Evidence `.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json`;
+  return `docs/hy-nomas-generation-frontier.md`. Correlated completed-run/code
+  adversary is ROBUST only for cache admission, tested merge/counter scope and
+  same-latent source-MPS replay. Keep Cinematic opt-in. Requalify after source,
+  weights/adapter/cache, input/noise/geometry/dtype, runtime/backend/device
+  changes or artifact loss; re-admit memory before another run. Next signal:
+  full-motion review, then another seed/prompt and multi-segment continuation
+  before considering a quality default.
