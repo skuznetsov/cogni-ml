@@ -36813,6 +36813,8 @@ Refresh after source/toolchain/device/model/workload changes.
 
 ### Hy-Nomas terminal-latent high-resolution decoder mismatch (2026-10-30)
 
+- Historical failing baseline; the Q/K statistics entry below supersedes its
+  open numerical frontier without closing perceptual quality.
 - The full same-latent oracle now admits authenticated 768x416 geometry,
   compares raw and display pixels, and rejects incompatible runtime/output
   paths before heavy checkpoint authentication. Twenty-two CPU tests pass.
@@ -36831,6 +36833,8 @@ Refresh after source/toolchain/device/model/workload changes.
 
 ### Hy-Nomas terminal stem, block 0 and gaze controls (2026-10-30)
 
+- Historical localization and prompt experiment; see the Q/K statistics entry
+  below for the completed numerical decoder replay and latest user assessment.
 - The actual terminal-latent stem now has zero numerical error against pinned
   Torch 2.6 MPS on 51,118,080 BF16 values. All eight first-window block 0
   captures are bitwise equal to the earlier instrumented reference in the
@@ -36864,3 +36868,54 @@ Refresh after source/toolchain/device/model/workload changes.
   PixelUMM for both arms; the new same-latent decoder pair is a separate test.
   Refresh after input/noise, source, weights, dtype/geometry, runtime/backend/
   device changes or artifact loss; re-admit memory with the 10% reserve.
+
+### Hy-Nomas source-shaped Q/K statistics (2026-10-30)
+
+- The first high-resolution decoder divergence is a shape-sensitive MPS K
+  statistics reduction: 1,085 F32 words differ by one ULP, only in the final
+  192-token chunk. Rounding creates three differing prepared-K BF16 words and
+  two tolerance failures. Replacing only that tail's statistics makes all
+  seven retained K/output stages bitwise equal; inverse/gain/RoPE are unchanged.
+- Native Q/K statistics now match the pinned source's 16 MiB F32 input cap
+  (Q 1,024 tokens, K 4,096). Full chunks share executables; retained immutable
+  packed offset views bind existing GPU buffers before encode. Chunked plans
+  require macOS 15 aliases and reject older runtimes before graph construction;
+  single-chunk plans retain macOS 14 support. No new explicit sync, activation
+  staging buffer or per-encode view/buffer allocation is introduced.
+- Source SHA `d0b1d9e1b870052019dcdf5473026f919f1de2b604f6768030dfc8e7daf044db`:
+  block2's seven stages and prefix4's eight attention/output stages match
+  bitwise in gate + repeat with production F32 FFN graph tensors. All 27 CPU
+  reference tests pass. The complete saved-latent 768x416 decoder also matches
+  raw and finalized display output bitwise: 115,015,680 F32 values each, five
+  windows, all 36 blocks + head, actual two-bank output reuse and shared scratch.
+- A fresh source-chunked default-size J=5,760 synthetic block0 reference also
+  matches all 26 captures bitwise in gate + repeat. Regenerated inputs and all
+  13 weights equal the old authenticated fixture; old captures are excluded.
+  Native sampled peak 4,870,704,152 bytes under 8 GiB/10%/64 MiB guards, no
+  swap growth, one wait and zero tracked encode allocations/preterminal reads.
+  This is single-block synthetic coverage, not default-size real-video parity.
+- Full replay: one terminal wait, zero tracked encode allocations/readbacks/
+  preterminal waits; sampled peak 20.214 GiB, minimum cache-aware headroom
+  17.255 GiB, no swap growth under 26 GiB/10%/64 MiB/1,200 s guards. Opaque MPS
+  allocations are covered by sampled telemetry, not encode counters. The
+  154.806 s decoder time is unpaired and proves no speedup.
+- Final comparison SHA
+  `e54db5e16fb2641d2ad9199497c1019e357ec59ff47504bf1dc44613df61472b`,
+  native receipt SHA
+  `c6aab1a6db092cbf491d455bce7a34332a459b9328e33688ccbd7e2a0a4f4baa`.
+  Evidence `.landmark/evidence/2026-10-30-hy-nomas-qk-chunk-statistics.json`;
+  return `docs/hy-nomas-generation-frontier.md`. Same-lineage static and
+  completed-run adversaries are ROBUST only within the saved-latent adapted
+  source-MPS scope; they are correlated reviews, not independent validation.
+- The latest ten-second gaze pair is native versus native, both four DiT
+  steps per five-second segment and one PixelUMM step. The user reports that
+  eyes look noticeably more natural on the right. The prompt jointly changes
+  gaze, head motion and affect; it does not isolate gaze. Both arms predate
+  this numerical fix, and motion/eye quality remain open.
+- The oracle is pinned Torch 2.6 gathered local-tile MPS, not CUDA/FlexAttention.
+  Full output equality does not qualify every intermediate, input, geometry
+  or device. Refresh on source/adapter, weights, latent/noise, dtype, geometry,
+  runtime/backend/device changes or artifact loss; admit memory afresh. Next
+  discriminator: perceptual review of corrected decoding on identical
+  latent/noise, with real-conditioned default-size replay and motion treated
+  separately.

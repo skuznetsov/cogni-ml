@@ -140,8 +140,8 @@ struct PixelUMMNativeIslands {
 @property(nonatomic, strong) PixelUMMGraphStep *qProjection;
 @property(nonatomic, strong) PixelUMMGraphStep *kProjection;
 @property(nonatomic, strong) PixelUMMGraphStep *vProjection;
-@property(nonatomic, strong) PixelUMMGraphStep *qNormStatistics;
-@property(nonatomic, strong) PixelUMMGraphStep *kNormStatistics;
+@property(nonatomic, copy) NSArray<PixelUMMGraphStep *> *qNormStatisticsSteps;
+@property(nonatomic, copy) NSArray<PixelUMMGraphStep *> *kNormStatisticsSteps;
 @property(nonatomic, strong) PixelUMMGraphStep *qNormInverse;
 @property(nonatomic, strong) PixelUMMGraphStep *kNormInverse;
 @property(nonatomic, strong) PixelUMMGraphStep *oProjection;
@@ -493,7 +493,7 @@ static PixelUMMGraphStep *pixel_qk_statistics_step(
     id<MTLDevice> device, id<MTLBuffer> inputBuffer,
     id<MTLBuffer> exponentBuffer, id<MTLBuffer> statisticsBuffer,
     uint32_t tokens, uint32_t heads, float epsilon, NSString *name,
-    char *errorText, size_t errorCapacity) {
+    char *errorText, size_t errorCapacity, NSUInteger *inputBindingIndex) {
   MPSGraph *graph = [MPSGraph new];
   graph.options = MPSGraphOptionsNone;
   NSMutableDictionary *feeds = [NSMutableDictionary dictionary];
@@ -555,9 +555,124 @@ static PixelUMMGraphStep *pixel_qk_statistics_step(
         [NSString stringWithFormat:@"unable to build PixelUMM QK statistics graph %@", name]);
     return nil;
   }
-  return pixel_compile_step(device, graph, feeds, placeholders, inputData,
+  PixelUMMGraphStep *step = pixel_compile_step(device, graph, feeds, placeholders, inputData,
       statistics, statisticsBuffer, statisticsShape, name,
       errorText, errorCapacity);
+  if (!step) return nil;
+  const NSUInteger index = [step.executable.feedTensors indexOfObjectIdenticalTo:input];
+  if (!inputBindingIndex || index == NSNotFound || index >= step.inputs.count) {
+    pixel_set_error(errorText, errorCapacity, "missing PixelUMM QK statistics input binding");
+    return nil;
+  }
+  *inputBindingIndex = index;
+  return step;
+}
+
+static MPSGraphTensorData *pixel_qk_buffer_view(
+    id<MTLBuffer> buffer, uint64_t offset, NSArray<NSNumber *> *shape,
+    MPSDataType type, char *errorText, size_t errorCapacity) {
+  uint64_t bytes = type == MPSDataTypeBFloat16 ? 2u
+      : (type == MPSDataTypeFloat32 ? 4u : 0u);
+  if (!buffer || !shape || shape.count == 0 || bytes == 0) {
+    pixel_set_error(errorText, errorCapacity, "invalid PixelUMM QK buffer view");
+    return nil;
+  }
+  if (offset % bytes != 0) {
+    pixel_set_error(errorText, errorCapacity, "misaligned PixelUMM QK buffer view");
+    return nil;
+  }
+  for (NSNumber *extent : shape) {
+    const uint64_t count = extent.unsignedLongLongValue;
+    if (extent.longLongValue <= 0 || bytes > UINT64_MAX / count) {
+      pixel_set_error(errorText, errorCapacity, "invalid PixelUMM QK buffer view extent");
+      return nil;
+    }
+    bytes *= count;
+  }
+  if (offset > buffer.length || bytes > buffer.length - offset) {
+    pixel_set_error(errorText, errorCapacity, "PixelUMM QK buffer view exceeds its buffer");
+    return nil;
+  }
+  if (@available(macOS 15.0, *)) {
+    MPSNDArrayDescriptor *descriptor =
+        [MPSNDArrayDescriptor descriptorWithDataType:type shape:shape];
+    if (!descriptor) {
+      pixel_set_error(errorText, errorCapacity, "unable to describe PixelUMM QK buffer view");
+      return nil;
+    }
+    // The statistics' two F32 values occupy eight bytes per row. The default
+    // NDArray row padding would change their layout in the shared buffer.
+    descriptor.preferPackedRows = YES;
+    MPSNDArray *view = [[MPSNDArray alloc] initWithBuffer:buffer
+        offset:(NSUInteger)offset descriptor:descriptor];
+    if (view && view.userBuffer == buffer) {
+      MPSGraphTensorData *data = [[MPSGraphTensorData alloc] initWithMPSNDArray:view];
+      if (data) return data;
+    }
+    pixel_set_error(errorText, errorCapacity, "unable to alias PixelUMM QK buffer view");
+    return nil;
+  }
+  pixel_set_error(errorText, errorCapacity,
+      "chunked PixelUMM QK statistics require macOS 15 buffer views");
+  return nil;
+}
+
+static NSArray<PixelUMMGraphStep *> *pixel_qk_statistics_steps(
+    id<MTLDevice> device, id<MTLBuffer> inputBuffer,
+    id<MTLBuffer> exponentBuffer, id<MTLBuffer> statisticsBuffer,
+    uint32_t tokens, uint32_t heads, float epsilon, NSString *name,
+    char *errorText, size_t errorCapacity) {
+  // Match the pinned source _prepare_qk's 16 MiB F32 input chunks. A different
+  // row count can select a different MPS reduction and change BF16 rounding.
+  const uint64_t bytesPerToken = uint64_t(heads) * kPixelHeadDim * sizeof(float);
+  if (tokens == 0 || bytesPerToken == 0) {
+    pixel_set_error(errorText, errorCapacity, "invalid PixelUMM QK chunk geometry");
+    return nil;
+  }
+  const uint32_t chunk = (uint32_t)std::max<uint64_t>(1, (16u * 1024u * 1024u) / bytesPerToken);
+  NSMutableArray<PixelUMMGraphStep *> *steps = [NSMutableArray array];
+  PixelUMMGraphStep *fullStep = nil;
+  NSUInteger fullInputIndex = NSNotFound;
+  for (uint64_t first = 0; first < tokens; first += chunk) {
+    const uint32_t count = (uint32_t)std::min<uint64_t>(chunk, tokens - first);
+    NSUInteger inputIndex = fullInputIndex;
+    PixelUMMGraphStep *base = fullStep;
+    if (!base || count != chunk) {
+      base = pixel_qk_statistics_step(device, inputBuffer, exponentBuffer,
+          statisticsBuffer, count, heads, epsilon, name,
+          errorText, errorCapacity, &inputIndex);
+      if (!base) return nil;
+      if (count == chunk) {
+        fullStep = base;
+        fullInputIndex = inputIndex;
+      }
+    }
+    if (first == 0) {
+      [steps addObject:base];
+      continue;
+    }
+    MPSGraphTensorData *inputView = pixel_qk_buffer_view(inputBuffer,
+        first * heads * kPixelHeadDim * 2u, pixel_shape({1, count, heads, kPixelHeadDim}),
+        MPSDataTypeBFloat16, errorText, errorCapacity);
+    MPSGraphTensorData *outputView = pixel_qk_buffer_view(statisticsBuffer,
+        first * heads * 2u * sizeof(float), pixel_shape({1, count, heads, 2}),
+        MPSDataTypeFloat32, errorText, errorCapacity);
+    if (!inputView || !outputView || inputIndex >= base.inputs.count) return nil;
+    NSMutableArray<MPSGraphTensorData *> *inputs = [base.inputs mutableCopy];
+    inputs[inputIndex] = inputView;
+    PixelUMMGraphStep *bound = [PixelUMMGraphStep new];
+    bound.graph = base.graph;
+    bound.executable = base.executable;
+    bound.execution = base.execution;
+    bound.inputs = inputs;
+    bound.outputs = @[outputView];
+    bound.name = [NSString stringWithFormat:@"%@_%llu_%u", name,
+        (unsigned long long)first, count];
+    // These immutable bindings retain their offset views through chain drain;
+    // full chunks share an executable, and encode creates no views or buffers.
+    [steps addObject:bound];
+  }
+  return [steps copy];
 }
 
 static PixelUMMGraphStep *pixel_qk_inverse_step(
@@ -1307,6 +1422,18 @@ static bool pixel_encode_graph(MPSCommandBuffer *commandBuffer,
 #endif
 }
 
+static bool pixel_encode_graph_steps(MPSCommandBuffer *commandBuffer,
+    NSArray<PixelUMMGraphStep *> *steps, char *errorText, size_t errorCapacity) {
+  if (!steps || steps.count == 0) {
+    pixel_set_error(errorText, errorCapacity, "missing PixelUMM QK statistics steps");
+    return false;
+  }
+  for (NSUInteger index = 0; index < steps.count; ++index) {
+    if (!pixel_encode_graph(commandBuffer, steps[index], errorText, errorCapacity)) return false;
+  }
+  return true;
+}
+
 static id<MTLCommandBuffer> pixel_current_root(MPSCommandBuffer *commandBuffer,
                                               id<MTLDevice> device,
                                               char *errorText,
@@ -1667,6 +1794,18 @@ static void *pixelumm_decoder_block_plan_create(
           return nullptr;
         }
         uint32_t tokens = (uint32_t)tokens64;
+        // Chunked Q statistics need packed offset aliases. Reject an older
+        // runtime before compiling graphs rather than silently changing the
+        // source reduction shape. Single-chunk plans still admit macOS 14.
+        if (tokens64 * uint64_t(heads) * uint64_t(headDim) * sizeof(float) >
+            16u * 1024u * 1024u) {
+          if (@available(macOS 15.0, *)) {
+          } else {
+            pixel_set_error(errorText, errorCapacity,
+                "chunked PixelUMM QK statistics require macOS 15 buffer views");
+            return nullptr;
+          }
+        }
         if (tileCount == 1 && tokens > 2048u) {
           pixel_set_error(errorText, errorCapacity,
                           "PixelUMM full-attention fallback exceeds 2048 tokens");
@@ -1936,10 +2075,10 @@ static void *pixelumm_decoder_block_plan_create(
             tokens, (uint32_t)dim, (uint32_t)(kvHeads * headDim), @"k_projection", errorText, errorCapacity);
         plan.vProjection = pixel_append_linear(plan, core[0], weights[3], core[3],
             tokens, (uint32_t)dim, (uint32_t)(kvHeads * headDim), @"v_projection", errorText, errorCapacity);
-        plan.qNormStatistics = pixel_qk_statistics_step(device, core[1], scratch[8],
+        plan.qNormStatisticsSteps = pixel_qk_statistics_steps(device, core[1], scratch[8],
             scratch[10], tokens, (uint32_t)heads, epsilon, @"q_norm_statistics",
             errorText, errorCapacity);
-        plan.kNormStatistics = pixel_qk_statistics_step(device, core[2], scratch[8],
+        plan.kNormStatisticsSteps = pixel_qk_statistics_steps(device, core[2], scratch[8],
             scratch[11], tokens, (uint32_t)kvHeads, epsilon, @"k_norm_statistics",
             errorText, errorCapacity);
         plan.qNormInverse = pixel_qk_inverse_step(device, scratch[10], scratch[12],
@@ -1947,7 +2086,7 @@ static void *pixelumm_decoder_block_plan_create(
         plan.kNormInverse = pixel_qk_inverse_step(device, scratch[11], scratch[13],
             tokens, (uint32_t)kvHeads, @"k_norm_inverse", errorText, errorCapacity);
         if (!plan.qProjection || !plan.kProjection || !plan.vProjection ||
-            !plan.qNormStatistics || !plan.kNormStatistics ||
+            !plan.qNormStatisticsSteps || !plan.kNormStatisticsSteps ||
             !plan.qNormInverse || !plan.kNormInverse) return nullptr;
         plan.oProjection = pixel_append_linear(plan, core[4], weights[4], core[1],
             tokens, (uint32_t)dim, (uint32_t)dim, @"o_projection", errorText, errorCapacity);
@@ -1978,8 +2117,9 @@ static void *pixelumm_decoder_block_plan_create(
         if (!plan.oProjection || !plan.postNorm || !plan.postNormGain || !plan.gateProjection ||
             !plan.upProjection || !plan.downProjection) return nullptr;
         if (plan.sharedGateUpPrepared && !plan.sharedGateUpProjection) return nullptr;
-        [steps addObjectsFromArray:@[plan.qNormStatistics, plan.kNormStatistics,
-            plan.qNormInverse, plan.kNormInverse,
+        [steps addObjectsFromArray:plan.qNormStatisticsSteps];
+        [steps addObjectsFromArray:plan.kNormStatisticsSteps];
+        [steps addObjectsFromArray:@[plan.qNormInverse, plan.kNormInverse,
             plan.oProjection, plan.postNorm, plan.postNormGain,
             plan.gateProjection, plan.upProjection, plan.downProjection]];
         if (plan.sharedGateUpProjection)
@@ -2790,10 +2930,10 @@ static int32_t pixel_encode_block(
         if (!pixel_encode_graph(commandBuffer, plan.vProjection, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelVProj, plan.core[3], kvBytes, errorText, errorCapacity)) return -6;
         if (!profile.mark(2, GS_MPS_API_PROFILE_PHASE_SELF_PREPARE)) return -18;
-        if (!pixel_encode_graph(commandBuffer, plan.qNormStatistics, errorText, errorCapacity) ||
+        if (!pixel_encode_graph_steps(commandBuffer, plan.qNormStatisticsSteps, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelQNormStatistics,
                 plan.scratch[10], qStatisticsBytes, errorText, errorCapacity) ||
-            !pixel_encode_graph(commandBuffer, plan.kNormStatistics, errorText, errorCapacity) ||
+            !pixel_encode_graph_steps(commandBuffer, plan.kNormStatisticsSteps, errorText, errorCapacity) ||
             !pixel_copy_capture(commandBuffer, plan, PixelKNormStatistics,
                 plan.scratch[11], kStatisticsBytes, errorText, errorCapacity)) return -7;
         if (!pixel_encode_graph(commandBuffer, plan.qNormInverse, errorText, errorCapacity) ||
