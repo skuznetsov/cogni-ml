@@ -1,0 +1,670 @@
+{
+  "schema": "cogni_ml.hy_nomas_terminal_boundaries_and_gaze_evidence/v1",
+  "date": "2026-10-30",
+  "base_revision": "a73da4f48ac89335e210b8904e3f2ecf7c25cc7d",
+  "scope": "Diagnostic controls for the open Echo eye/motion defect. No production arithmetic, tolerance, synchronization, or camera default change.",
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05
+  },
+  "terminal_stem": {
+    "grid": [
+      10,
+      26,
+      48
+    ],
+    "shape": [
+      1,
+      12480,
+      4096
+    ],
+    "elements": 51118080,
+    "saved_terminal_latent_sha256": "efe91c7a1b85c5bd4f8d605880f59ca467c598f2bc09fc59e9ec7f9db6e2a9d4",
+    "decoder_noise_sha256": "166ea19d2812c0b4dedfedefd4f101b2abe8b4ec48364fb63705f781e1828547",
+    "source_runtime": "Torch 2.6.0 MPS, no CPU fallback",
+    "max_abs": 0.0,
+    "failures": 0,
+    "separate_synthetic_assembly_is_not_decoder_parity": true,
+    "report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/native-comparison.json",
+      "bytes": 579,
+      "sha256": "de1b679cb152e82ebd00734c949015f7a706bb4bd4ee720403d6f5f0deede672"
+    },
+    "derivation": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/provenance.json",
+      "bytes": 2521,
+      "sha256": "01c18a3a8ed3c6af98d6a360454ca0374abc53d5366aeb52b75e559592c5a2cf"
+    },
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/source.json",
+      "bytes": 2884,
+      "sha256": "2aa4bb28693c82e974bf02225a8b6f8f21e1a84daf24b4526092f4abf42dd054"
+    },
+    "launch_plan": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/launch-plan.json",
+      "bytes": 6345,
+      "sha256": "04daf7007da512551183a8850b3b18d821f0dfd1a6bdbeb98d2277a84bfeab21"
+    }
+  },
+  "block0": {
+    "input_scope": "First source window, same terminal stem BF16 tensor and local RoPE",
+    "ffn_f32_graph_tensors": true,
+    "precision": "BF16 weights and handoffs; F32 normalization/RoPE/attention intermediates; gate/up/down operands cast to F32 graph tensors, with BF16 output casts; graph types do not certify backend physical arithmetic",
+    "capture_order": [
+      "input_norm",
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "q_ready",
+      "k_ready",
+      "attention",
+      "output"
+    ],
+    "requests": 2,
+    "all_captures_bitwise_equal": true,
+    "output_sha256": "f915a64377272605a792786ad21c4e35c6278a20553c9a2c17d64d22f38b2e0b",
+    "metrics_per_request": {
+      "command_segments": 59,
+      "terminal_waits": 1,
+      "tracked_encode_allocations": 0,
+      "preterminal_activation_readbacks": 0,
+      "post_terminal_diagnostic_readbacks": 8
+    },
+    "named_bytes": 3324331460,
+    "guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_gib": 8,
+      "max_swap_growth_mib": 64,
+      "timeout_sec": 300,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 5920213512,
+      "minimum_headroom_bytes": 40668528640,
+      "swap_growth_bytes": 0,
+      "drained": true
+    },
+    "native_binary_sha256": "0313c00ef4d5b81ffa3c85e3be1af5479729d9d1e7d4fc7dba4e14ebe9a49bfc",
+    "reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block0/block0-reference.json",
+      "bytes": 10032,
+      "sha256": "9f7a274eeda0ddb2d3e6ff2d5df0cb940961cd5eb64fb22f7835c7f9de8efe8c"
+    },
+    "report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block0/block0-native-ffn-f32-report.json",
+      "bytes": 10833,
+      "sha256": "0b755fd9ce98fda42693891196f033215d1ec14fded6cf0a9ec04c62efc03ac0"
+    },
+    "guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block0/block0-native-ffn-f32-guard.jsonl",
+      "bytes": 6621,
+      "sha256": "eb50d7f2d1495c60bd086542d31e159dcb096b71927ebd04fb151f2bf05a01f3"
+    },
+    "launch_plan": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block0/launch-plan.json",
+      "bytes": 3328,
+      "sha256": "bae827b944993402595d360d6a9072489ecb95927383e44adb009c10d3894758"
+    },
+    "replay_change_to_launch_plan": "Add --ffn-f32, resolve the generated reference SHA to 9f7a274eeda0ddb2d3e6ff2d5df0cb940961cd5eb64fb22f7835c7f9de8efe8c, use a fresh report path; unchanged warmups0/repeats1 and original guard.",
+    "capture_scope": "Eight captures match the earlier instrumented source helper; boundary-only prefix4 independently qualifies actual source block0 attention/output. Earlier ready captures were produced by the now-corrected diagnostic branch."
+  },
+  "gaze_control": {
+    "geometry": [
+      512,
+      288
+    ],
+    "seconds": 10,
+    "fps": 24,
+    "frames": 240,
+    "changed_conditioning": "Fixed forward gaze, minimal head movement, no mutual glance or smile requested together; not a pure eye ablation.",
+    "unchanged_non_qwen_tensors": 7,
+    "baseline_repeat_matches_saved_latents_and_pixels": true,
+    "camera_and_vehicle_text_unchanged": true,
+    "guard_swap_growth_bytes_both_arms": 0,
+    "comparison_left": "baseline repeat",
+    "comparison_right": "fixed-gaze treatment",
+    "manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/exports/comparison-manifest.json",
+      "bytes": 6581,
+      "sha256": "ccfc41420ac560aa2aca7da8e1e6122105f56f428d8f0f7a2fb212bdf260d343"
+    },
+    "video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/exports/comparison-side-by-side-10s.mp4",
+      "bytes": 2186824,
+      "sha256": "296657c28c799dd919e7f5b9eaa654a00161d9a41a1b1700d8e32589e7af2116"
+    },
+    "visual_scope": "Sampled frames suggest steadier forward-facing posture; inconsistent pupils and smiles remain. No visual fix established. User motion assessment pending.",
+    "performance_scope": "Not a matched GPU timing experiment; baseline overlapped external CPU media work.",
+    "visual_review": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-gaze-probe-20261030/launch-prep-v1/exports/visual-review.json",
+      "bytes": 3041,
+      "sha256": "fa573cf2305f93e5dbfdfe89b789eb3b1596304917e6999976b3373ce9d86e85"
+    },
+    "prompt_consistency_limitation": "Unchanged subject descriptions still request a friendly/mischievous or unhurried smile, conflicting with the new no-smile action sentence. Retained smiles do not prove model noncompliance."
+  },
+  "verification": {
+    "observed_signal": "The capture-feed substitution is fixed and CPU regression passes. Faithful isolated source block2 reproduces sequential endpoints bitwise. Native input_norm,Q/K/V projections and q_ready are bitwise exact; first exposed difference is k_ready (3 BF16 words/2 tolerance failures), followed by the same 17 attention and 530 output failures seen in prefix4.",
+    "adversary_verdict": "ROBUST for the narrow diagnostic substitution fix, source endpoint reproduction and observed K-ready failure boundary. VULNERABLE for the precise K arithmetic cause, full decoder, production output reuse and visual-fix claims.",
+    "adversary_lineage": "Correlated same-lineage agents plus parent inspection of actual reports, raw hashes, code path, and guard records.",
+    "counterexample_retained": "The full 36-block+head high-resolution oracle still fails unchanged tolerance, including the first20 unblended frames.",
+    "next_falsifier": "On authenticated raw k_proj compare full-token and actual final-192-token source statistics/inverse/gain/RoPE. Require reconstructed BF16 K-ready to reproduce the faithful capture before attributing cause.",
+    "dod_command": [
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/verify_boundary_evidence.py",
+      "--evidence",
+      "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/.landmark/evidence/2026-10-30-hy-nomas-terminal-boundaries-and-gaze.json"
+    ],
+    "dod_expected_signal": "Indexed artifact hashes/extents authenticate; terminal stem and scoped block0/prefix4 observations match their reports. Faithful isolated source endpoints reproduce prefix4; native report confirms first failure at k_ready and unchanged counters/guards. The sentinel regression rejects old feed substitution.",
+    "checker": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/verify_boundary_evidence.py",
+      "sha256": "76d7e4acc6b4a4f929d1903c52c72c74a121b99cb926106967d0fc345334040e",
+      "bytes": 8782
+    },
+    "fallback_check": "Inspect raw source/native captures and sampled process-guard logs; retain the failing full-decoder oracle and perceptual user assessment as separate evidence."
+  },
+  "limitations": [
+    "The earlier native versus source-BF16 visual pair changed DiT arithmetic only; both sides used the native decoder.",
+    "The new same-latent source-decoder visual pair uses gathered local-tile MPS attention, not stock CUDA/FlexAttention.",
+    "No numerical trajectory currently controls the scene camera; direction is text conditioned.",
+    "Exact block0 does not qualify four, 36, or repeated-window production blocks, head, blending, or perceptual quality."
+  ],
+  "refresh": {
+    "triggers": [
+      "input or noise changes",
+      "source, adapter, weight, dtype, geometry, runtime/backend/device changes",
+      "artifact loss"
+    ],
+    "operation": "Authenticate artifact hashes and source pins, re-admit guard memory, replay the narrow boundary probe on a fresh output path.",
+    "failure_policy": "Reopen the affected parity claim; retain original BF16 weights, unchanged tolerances, and 10% reserve."
+  },
+  "same_latent_decoder_visual_control": {
+    "geometry_each_arm": [
+      768,
+      416
+    ],
+    "seconds": 5,
+    "frames": 120,
+    "fps": 24,
+    "left": "Native PixelUMM with F32-FFN graph tensors",
+    "right": "Pinned source PixelUMM BF16 with gathered local-tile MPS attention",
+    "same_dit_terminal_latent_and_decoder_noise": true,
+    "scope": "Vary decoder only; selected frames show the eye defect in both arms. Motion assessment pending. Full numerical mismatch is retained separately.",
+    "receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/decoder-native-vs-source-visual-v1/receipt.json",
+      "bytes": 2478,
+      "sha256": "70f4a6013a62c1ccd23a821608a94a62a2833648c16bc09361cbc2331f7c62bc"
+    },
+    "video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/decoder-native-vs-source-visual-v1/same-latents-native-vs-source-decoder-unlabelled.mp4",
+      "bytes": 1997303,
+      "sha256": "cee5eb480777d9a0cce5e10db51de4de084de67e56c4befa783b83944700ebfc"
+    }
+  },
+  "prefix4": {
+    "passed": false,
+    "input_scope": "Same first-window terminal stem as block0, blocks0..3 in one GPU command chain with shared transient workspace and four retained output banks; no two-bank/repeated-window production qualification.",
+    "mode": {
+      "ffn_f32_graph_tensors": true,
+      "ffn_f32_by_slot": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "reuse_output_banks": false,
+      "warmups": 0,
+      "repeats_requested": 1,
+      "executed_requests": 1
+    },
+    "named_bytes": 4712041412,
+    "comparison_summary": [
+      {
+        "stage": "block0.attention",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "5b9bcce299100dfc255b745def83efb9fbb0676e50e71c497739b068cee6071f"
+      },
+      {
+        "stage": "block0.output",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "f915a64377272605a792786ad21c4e35c6278a20553c9a2c17d64d22f38b2e0b"
+      },
+      {
+        "stage": "block1.attention",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "bcbecde5785044ec2d3461c958f2498077c6f58cb586fa3dbfcb14cef46af8a2"
+      },
+      {
+        "stage": "block1.output",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "117a9680bc0aa5cdd03af7d0744f64d779ef3f342799b87530aa3ed00e93f77e"
+      },
+      {
+        "stage": "block2.attention",
+        "elements": 51118080,
+        "failures": 17,
+        "different_words": 104,
+        "max_abs": 0.000244140625,
+        "finite": true,
+        "actual_sha256": "4cbf618b6126d355f88bd68ef3acaf1a8367cd75a692c3c2dc3878e602731489"
+      },
+      {
+        "stage": "block2.output",
+        "elements": 51118080,
+        "failures": 530,
+        "different_words": 530,
+        "max_abs": 0.03125,
+        "finite": true,
+        "actual_sha256": "48253ee202ce0fd817ae1d5f347bc994ce9a51d8db4ddf76d22cdb1608d6046e"
+      },
+      {
+        "stage": "block3.attention",
+        "elements": 51118080,
+        "failures": 14329,
+        "different_words": 36846,
+        "max_abs": 0.001953125,
+        "finite": true,
+        "actual_sha256": "e91678ce9e9c4486a3acc56675c585d41e13f39aabea46d98a0f0f1f37566208"
+      },
+      {
+        "stage": "block3.output",
+        "elements": 51118080,
+        "failures": 531082,
+        "different_words": 531119,
+        "max_abs": 1.0,
+        "finite": true,
+        "actual_sha256": "3cf8d9b3b858d4bf5f74777edb3786cce57fe9baf781b5622dfba86a713dcb78"
+      }
+    ],
+    "execution_counters": {
+      "command_segments": 233,
+      "terminal_wait_count": 1,
+      "named_allocations_during_encode": 0,
+      "activation_readbacks_before_terminal_wait": 0,
+      "diagnostic_readbacks_after_terminal_wait": 8
+    },
+    "source_guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_bytes": 8589934592,
+      "max_swap_growth_bytes": 67108864,
+      "timeout_sec": 600,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 6810765040,
+      "minimum_headroom_bytes": 35843325952,
+      "swap_growth_bytes": 0,
+      "returncode": 0
+    },
+    "native_guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_bytes": 8589934592,
+      "max_swap_growth_bytes": 67108864,
+      "timeout_sec": 300,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 6702041752,
+      "minimum_headroom_bytes": 39684767744,
+      "swap_growth_bytes": 0,
+      "returncode": 1
+    },
+    "source_guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-v1/results/source-guard-v2.jsonl",
+      "bytes": 12455,
+      "sha256": "fbd9259e58fb673308341f490fa4640e45feff51f7b2164537be435739746f2e"
+    },
+    "native_guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-native-v1/native-guard-v2.jsonl",
+      "bytes": 7541,
+      "sha256": "8729ce7a8ef0c36b2d0df26fc0e4916978cb39038d970049893cdb9e757a5488"
+    },
+    "source_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-v1/results/prefix4-reference-v2.json",
+      "bytes": 23641,
+      "sha256": "0808b058711e8820e648cffd9ab16f82e68babeebe3990254e3200c7a055e647"
+    },
+    "native_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-native-v1/launch-native-v2.json",
+      "bytes": 3662,
+      "sha256": "d20e8fd974585d1aae3cb6fbbe301638246699c6ef218b199eca9ee80f61611f"
+    },
+    "source_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-v1/results/launch-source-v3.json",
+      "bytes": 3502,
+      "sha256": "928000a113292922eec06a3a14e13c54b8698d32288550c2cc7feea7a86df7ba"
+    },
+    "native_build_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-native-v1/build-receipt.json",
+      "bytes": 1193,
+      "sha256": "54f3b9e3691e9c8b7f1cc88e97f11a813f62e43fd7ed17d45d07f882ff176214"
+    },
+    "report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/prefix4-native-v1/prefix4-native-ffn-f32-report-v2.json",
+      "bytes": 6612,
+      "sha256": "c2a314763c40526cc020de1e9e1db48d674993b38d03b11dd319d40ecbddd392"
+    },
+    "first_observed_divergence": "block2.attention; blocks0/1 attention and output are bitwise equal. This is the earliest of the retained captures, not yet the first internal operation.",
+    "next_falsifier": "On authenticated raw k_proj compare full-token and actual final-192-token source statistics/inverse/gain/RoPE. Require reconstructed BF16 K-ready to reproduce the faithful capture before attributing cause."
+  },
+  "isolated_block2_uncorrected": {
+    "scope": "Instrument-confounded source reference retained as negative evidence; no native run against this fixture. Eight captures change Q/K feed relative to boundary-only prefix4.",
+    "reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/results/block2-reference-v1.json",
+      "bytes": 11464,
+      "sha256": "16e835636746fa1545aa8112d85914d1f51c81dfed30c82f69dc6bc73610de4c"
+    },
+    "payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/results/block2-reference-v1.bin",
+      "bytes": 1088766464,
+      "sha256": "82732179f015bcf24c2eaaccebf23a87435ec8ba2746aef8d732121953c9b2fc"
+    },
+    "driver": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/python/prepare_block2_reference.py",
+      "bytes": 29156,
+      "sha256": "c5e48d945923881723d3fc52d6d345196e87f15f60662bef0f50da6dc8257ec9"
+    },
+    "preflight": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/results/block2-preflight-v3.json",
+      "bytes": 6119,
+      "sha256": "ae609637cc3c7f7b5ef2a8d11547b00898baee385b83950d64a97025d074f030"
+    },
+    "source_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/results/block2-source-launch-plan-v1.json",
+      "bytes": 3833,
+      "sha256": "cffa43a31bf6202c01b9efb61a6dd1a0c603230835a468422e7689693145a553"
+    },
+    "source_guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-v1/results/block2-source-guard-v1.jsonl",
+      "bytes": 7237,
+      "sha256": "f32f2a9c4af5f3cf913264fa217476ea9cf5fbac3642ea126bed5c92d1396d3e"
+    },
+    "source_guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_bytes": 8589934592,
+      "max_swap_growth_bytes": 67108864,
+      "timeout_sec": 300,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 5789304680,
+      "minimum_headroom_bytes": 40244445184,
+      "swap_growth_bytes": 0,
+      "returncode": 0
+    },
+    "input_sha256": "117a9680bc0aa5cdd03af7d0744f64d779ef3f342799b87530aa3ed00e93f77e",
+    "loaded_bf16_weight_words": {
+      "all_equal": true,
+      "method": "loaded_mps_bf16_int16_word_equality",
+      "selected_block_index": 2,
+      "tensor_count": 13
+    },
+    "source_vs_prefix4": {
+      "attention": {
+        "bitwise_equal": false,
+        "expected_prefix4_capture_sha256": "48c589f2fb21d7e27dcae80118b4778502e63f50b9615728dc31fe6179d81533",
+        "isolated_block_capture_sha256": "4cbf618b6126d355f88bd68ef3acaf1a8367cd75a692c3c2dc3878e602731489"
+      },
+      "output": {
+        "bitwise_equal": false,
+        "expected_prefix4_capture_sha256": "1bb3dc77092c7191688a3d4f01f58ea559e30a3c284caef98ae7593d5f96f070",
+        "isolated_block_capture_sha256": "48253ee202ce0fd817ae1d5f347bc994ce9a51d8db4ddf76d22cdb1608d6046e"
+      }
+    },
+    "endpoints_equal_native_prefix4": true,
+    "native_launched": false,
+    "cause_scope": "Code inspection confirms capture_qk_steps substitutes full-token _prepare_qk_with_stages into the attention feed; pinned inference-mode _prepare_qk uses Q1024/K4096 token chunks. Shape-dependent arithmetic is plausible, not established by the endpoint hashes alone.",
+    "native_consumer_metadata_issue": "The uncorrected fixture lacks single-block top-level checkpoint_subset_sha256; no native allocation or execution was attempted."
+  },
+  "high_resolution_user_assessment": {
+    "geometry": [
+      768,
+      416
+    ],
+    "seconds": 5,
+    "eye_defect": "Some improvement, still very unnatural",
+    "motion_defect": "Sideways driving remains strange",
+    "source": "Direct user assessment in this conversation; not a decoder-arm preference"
+  },
+  "capture_policy_fix": {
+    "root_cause": "Requesting q_ready/k_ready previously substituted a whole-token diagnostic Q/K recomputation for pinned chunked _prepare_qk returns in the attention feed.",
+    "behavior": "All capture policies feed actual pinned _prepare_qk Q/K returns; ready captures are those tensors. Norm/RoPE captures remain independent diagnostics, never fed.",
+    "helper": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_reference.py",
+      "bytes": 104013,
+      "sha256": "d69eb774cc6edcfd16d8259218683a7b27c119ebb3d189e7ccd51929e4fe4fb1"
+    },
+    "regression": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_pixelumm_reference_test.py",
+      "bytes": 43727,
+      "sha256": "fc42bed0a9965aec979b0d0bdc10937bdacbead3b5e5f1f3869cdabc72b7b20f"
+    },
+    "red_signal": "Before the fix the shape-sensitive ready-capture sentinel observed zero _prepare_qk calls instead of two.",
+    "cpu_command": [
+      "python3",
+      "-B",
+      "spec/hy_nomas_pixelumm_reference_test.py"
+    ],
+    "cpu_observed": "27 tests passed; old substitution rejected; none/boundary/ready/all policies produce bitwise equal reduced CPU outputs.",
+    "scope": "CPU sentinel is below the chunk thresholds; full-size source replay below exercises actual source chunked forward, not a separate proof of every recomputed diagnostic stage."
+  },
+  "isolated_block2_faithful": {
+    "scope": "One source and one native block2 on identical source block1.output, actual pinned chunked Q/K feed. No full decoder or visual-fix qualification.",
+    "passed": false,
+    "source_endpoints_reproduce_prefix4": {
+      "attention": {
+        "bitwise_equal": true,
+        "expected_prefix4_capture_sha256": "48c589f2fb21d7e27dcae80118b4778502e63f50b9615728dc31fe6179d81533",
+        "isolated_block_capture_sha256": "48c589f2fb21d7e27dcae80118b4778502e63f50b9615728dc31fe6179d81533"
+      },
+      "output": {
+        "bitwise_equal": true,
+        "expected_prefix4_capture_sha256": "1bb3dc77092c7191688a3d4f01f58ea559e30a3c284caef98ae7593d5f96f070",
+        "isolated_block_capture_sha256": "1bb3dc77092c7191688a3d4f01f58ea559e30a3c284caef98ae7593d5f96f070"
+      }
+    },
+    "source_reference": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/results/block2-faithful-reference-v2.json",
+      "bytes": 11902,
+      "sha256": "ddfcb5165972231179be930963ddd94c65ee546fca55c817f20bd00abfbe8e1a"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/results/block2-faithful-reference-v2.bin",
+      "bytes": 1088766464,
+      "sha256": "cdf80ff308df0b55fa2d2764bd9fe0474ae8f48dc51f2ebe1c9bbebeceda1829"
+    },
+    "source_driver": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/python/prepare_block2_reference.py",
+      "bytes": 29545,
+      "sha256": "7f98a0ec964d379ea3721f3f5e1eb1d09f3b99cd5cb23f2db4b3ea1ced1afdff"
+    },
+    "source_preflight": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/results/block2-faithful-preflight-v2.json",
+      "bytes": 6119,
+      "sha256": "066a8da9a0c7aade8b899d77095a0160fff405480825fe25e84b16c9b00f2b52"
+    },
+    "source_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/results/block2-faithful-source-launch-plan-v2.json",
+      "bytes": 5069,
+      "sha256": "d42107684b3ec00dea8b3f45a511535d9447b76ab230a57d1245e41668aea2a6"
+    },
+    "source_guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-faithful-v1/results/block2-faithful-source-guard-v2.jsonl",
+      "bytes": 7232,
+      "sha256": "b6a9f3b53f3e2c340d277a7df5d5832638b81ac80e166d34528d3e67364cf426"
+    },
+    "source_guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_bytes": 8589934592,
+      "max_swap_growth_bytes": 67108864,
+      "timeout_sec": 300,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 5943396176,
+      "minimum_headroom_bytes": 40191426560,
+      "swap_growth_bytes": 0,
+      "returncode": 0
+    },
+    "native_report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-native-v1/block2-native-ffn-f32-report-v1.json",
+      "bytes": 6968,
+      "sha256": "8452b1c6abd2b73295a84f45c533e9b8ba141b1fd9961da93acaed6c2c3342e8"
+    },
+    "native_launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-native-v1/launch-native-v1.json",
+      "bytes": 3185,
+      "sha256": "e6d91413e430459c17217e50f2d9808c7badaf7b44defe0d168ed681f6c4e3f6"
+    },
+    "native_runtime_launcher": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-native-v1/launch_guarded.py",
+      "bytes": 5084,
+      "sha256": "ac1e17d096a9afd0ac0db8ff147e38cc9263001f16c3ae30ff81ca0e25fe2e74"
+    },
+    "native_build_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-native-v1/build-receipt.json",
+      "bytes": 498,
+      "sha256": "5f577fb2038d648ab0b8f999d070561bd9399d2b6236be93de52dd5e9fd7803d"
+    },
+    "native_guard_artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-terminal-stem-20261030/block2-native-v1/native-guard-v1.jsonl",
+      "bytes": 4147,
+      "sha256": "ce910c7299ad8c9c32431485b8559be9d81c647fdc1905cec77ea0d7504ec65a"
+    },
+    "native_guard": {
+      "physical_reserve_pct": 10,
+      "process_cap_bytes": 8589934592,
+      "max_swap_growth_bytes": 67108864,
+      "timeout_sec": 300,
+      "memory_accounting": "file-cache",
+      "peak_footprint_bytes": 5329536848,
+      "minimum_headroom_bytes": 40707850240,
+      "swap_growth_bytes": 0,
+      "returncode": 1
+    },
+    "comparison_summary": [
+      {
+        "stage": "input_norm",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "1d9def9d5b773b30c8bfe334c68ec3465c9767dc0cf86d4fb48ed2f01472da60",
+        "first_failure_index": null,
+        "first_expected": null,
+        "first_actual": null
+      },
+      {
+        "stage": "q_proj",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "af6fc12f56914a042224ebeea77ef85a8a30c90696cd8370102e764356baf41a",
+        "first_failure_index": null,
+        "first_expected": null,
+        "first_actual": null
+      },
+      {
+        "stage": "k_proj",
+        "elements": 12779520,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "f9b179ef7e0dab17336151a75c4058f77f43141f400f982d03d212bafb51671f",
+        "first_failure_index": null,
+        "first_expected": null,
+        "first_actual": null
+      },
+      {
+        "stage": "v_proj",
+        "elements": 12779520,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "60ba96af0a8ecdbaa3bbbeec3afc2a81cbf7578755374cb5ade410367c10f4f2",
+        "first_failure_index": null,
+        "first_expected": null,
+        "first_actual": null
+      },
+      {
+        "stage": "q_ready",
+        "elements": 51118080,
+        "failures": 0,
+        "different_words": 0,
+        "max_abs": 0.0,
+        "finite": true,
+        "actual_sha256": "835bcb8dd5aa6d5d595ecd0bad0f75172746bb70608edd63d9bfc602d810fbfb",
+        "first_failure_index": null,
+        "first_expected": null,
+        "first_actual": null
+      },
+      {
+        "stage": "k_ready",
+        "elements": 12779520,
+        "failures": 2,
+        "different_words": 3,
+        "max_abs": 0.00390625,
+        "finite": true,
+        "actual_sha256": "d56acb7c4fb3d9fe354c83831d282acbf3536cd2138340bc603a56739536b867",
+        "first_failure_index": 12649277,
+        "first_expected": "0.8828125",
+        "first_actual": "0.87890625"
+      },
+      {
+        "stage": "attention",
+        "elements": 51118080,
+        "failures": 17,
+        "different_words": 104,
+        "max_abs": 0.000244140625,
+        "finite": true,
+        "actual_sha256": "4cbf618b6126d355f88bd68ef3acaf1a8367cd75a692c3c2dc3878e602731489",
+        "first_failure_index": 41999620,
+        "first_expected": "-0.0267333984375",
+        "first_actual": "-0.026611328125"
+      },
+      {
+        "stage": "output",
+        "elements": 51118080,
+        "failures": 530,
+        "different_words": 530,
+        "max_abs": 0.03125,
+        "finite": true,
+        "actual_sha256": "48253ee202ce0fd817ae1d5f347bc994ce9a51d8db4ddf76d22cdb1608d6046e",
+        "first_failure_index": 41996461,
+        "first_expected": "-1.2578125",
+        "first_actual": "-1.265625"
+      }
+    ],
+    "named_bytes": 3324331460,
+    "execution_counters": {
+      "command_segments": 59,
+      "terminal_wait_count": 1,
+      "named_allocations_during_encode": 0,
+      "activation_readbacks_before_terminal_wait": 0,
+      "diagnostic_readbacks_after_terminal_wait": 8
+    },
+    "first_exposed_difference": "k_ready: 3 differing BF16 words, 2 tolerance failures, max_abs 0.00390625; input_norm,Q/K/V projections and q_ready are bitwise exact.",
+    "first_failure_location": {
+      "flat_index": 12649277,
+      "token": 12352,
+      "head": 6,
+      "lane": 61,
+      "source_k_chunk_tokens": 4096,
+      "final_chunk_first_token": 12288,
+      "final_chunk_tokens": 192
+    },
+    "next_falsifier": "On authenticated raw k_proj compare full-token and actual final-192-token source statistics/inverse/gain/RoPE. Require reconstructed BF16 K-ready to reproduce the faithful capture before attributing cause."
+  }
+}

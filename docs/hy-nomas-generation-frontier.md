@@ -42,15 +42,67 @@ the 768x416 candidate unqualified for full decoder parity; it does not
 establish the cause of the eye defect at either resolution.
 
 The earlier successful stem probe used initial input latents and Torch 2.8;
-the full decoder oracle uses terminal DiT latents and pinned Torch 2.6. They
-are different controls. The next discriminator is stem-only replay of the
-terminal latent, then block 0 on identical BF16 activations if the stem passes.
-The oracle uses gathered local-tile MPS attention, not stock CUDA/FlexAttention.
-Its guarded run completed in 322.668 seconds, with an 8.489 GiB sampled peak,
+the full decoder oracle uses terminal DiT latents and pinned Torch 2.6. A new
+terminal-latent stem replay now has zero numerical error on all 51,118,080
+BF16 values. On that exact first-window stem output, block 0 also matches
+the earlier instrumented source helper bit for bit in all eight captures,
+in both the numerical gate and one repeat. The boundary-only prefix below
+independently qualifies the actual source block 0 attention/output. This includes the actual production `ffn_f32: true` graph mode; the
+earlier standalone gate used the default BF16 FFN graph mode instead.
+
+The F32-FFN block gate uses one terminal wait, zero tracked encode allocations
+or preterminal activation readbacks, and eight diagnostic reads after the
+wait. It peaks at 5,920,213,512 bytes under the 8 GiB process cap, with no swap
+growth and the unchanged 10% physical reserve. These results qualify this
+first-window stem and block only. A four-block shared-workspace replay now
+matches attention and output bit for bit through block 1. The first retained
+divergence is block 2 attention: 17 tolerance failures, 104 differing BF16
+words, and maximum absolute error 0.000244141. Block 2 output has 530 failures;
+block 3 output has 531,082 failures and maximum error 1.0. This is an exposed
+boundary, not yet the first internal operation or the cause of the eye defect.
+An isolated block 2 replay exposed a reference bug: asking for prepared
+Q/K captures replaced the pinned chunked source method with a whole-token
+diagnostic recomputation. Captures now retain the actual source Q/K returns
+and never replace them in the attention feed. A shape-sensitive CPU sentinel
+rejects the old path; all 27 reference tests pass. The corrected full-size
+source replay reproduces both sequential endpoints bit for bit.
+
+Against that faithful replay, native input normalization, Q/K/V projections
+and prepared Q are exact. Prepared K is the first exposed internal divergence:
+three BF16 words differ, two fail the unchanged tolerance, maximum error
+0.00390625. The first failure is token 12,352, KV head 6, channel 61, within
+the final 192-token source K chunk. Attention/output reproduce the original
+native prefix failure. Both isolated runs drain under 8 GiB caps with no swap
+growth and the 10% reserve; native retains one terminal wait and zero encode
+allocations or preterminal reads. Next discriminator: source chunk-shaped
+K statistics/inverse versus gain/RoPE on the identical raw projection. This
+does not yet establish the cause of the eye defect. The four-block probe retains independent output banks; later
+blocks, head, and repeated-window production reuse remain open. Evidence and authenticated
+external artifacts are indexed in
+`.landmark/evidence/2026-10-30-hy-nomas-terminal-boundaries-and-gaze.json`.
+
+The full decoder oracle uses gathered local-tile MPS attention, not stock
+CUDA/FlexAttention. Its guarded run completed in 322.668 seconds, with an 8.489 GiB sampled peak,
 23.126 GiB minimum cache-aware headroom and no swap growth. The nonzero exit
 status records a numerical mismatch, not a successful parity qualification.
 Evidence is in
 `.landmark/evidence/2026-10-30-hy-nomas-decoder-high-resolution-mismatch.json`.
+
+The subsequent ten-second gaze control keeps 512x288 geometry and all seven
+non-Qwen tensor identities unchanged. Its baseline repeat reproduces the
+saved latent and pixel banks exactly. The treatment jointly requests fixed
+forward gaze, minimal head motion, and no mutual glance or smile; it does not
+isolate eye rendering. Sampled treatment frames have steadier forward-facing
+posture, but inconsistent pupils and smiles remain. The unchanged subject
+descriptions still mention smiles, so retained smiles do not establish model
+noncompliance with a consistent no-smile instruction. Camera/vehicle text is
+unchanged, and numerical camera conditioning is inactive. This is not a
+sideways-motion correction or a demonstrated visual fix. Both guarded arms
+drain with zero swap growth and unchanged encode/readback counters. Media
+identities and the pending motion-assessment scope are in the boundary/gaze
+evidence above. The earlier native/source-BF16 visual pair changed DiT only
+and used the native decoder on both sides; a separate same-latent comparison
+now varies the decoder itself.
 
 ## Echo quality: real-input arithmetic diagnostics (2026-10-30)
 

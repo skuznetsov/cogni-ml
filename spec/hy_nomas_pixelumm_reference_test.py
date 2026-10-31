@@ -1,8 +1,9 @@
 """CPU semantic checks for the bounded PixelUMM local-attention adapter."""
 from __future__ import annotations
 
-import os
 import hashlib
+import math
+import os
 from io import BytesIO
 from contextlib import redirect_stdout
 from io import StringIO
@@ -246,6 +247,92 @@ class PixelUMMReferenceTest(unittest.TestCase):
             atol=0.0, rtol=0.0,
         )
         torch.testing.assert_close(observed, baseline, atol=0.0, rtol=0.0)
+
+    def test_qk_capture_policies_keep_source_prepare_qk_values_in_attention(self):
+        grid = (1, 16, 32)
+        plan, _, _ = reference.make_attention_plan(self.source, grid)
+        arch = self.source.GenExpertArch(
+            hidden_size=16, intermediate_size=32, num_layers=1,
+            num_heads=4, num_kv_heads=2, head_dim=8,
+        )
+        layer = self.source.GenLayer(arch).eval().to(dtype=torch.bfloat16)
+
+        class ShapeSensitiveAttention(torch.nn.Module):
+            """Test-local sentinel standing in for the pinned _prepare_qk."""
+
+            def __init__(self, delegate):
+                super().__init__()
+                self.delegate = delegate
+                self.returned = []
+
+            def __getattr__(self, name):
+                try:
+                    return super().__getattr__(name)
+                except AttributeError:
+                    delegate = super().__getattr__("delegate")
+                    return getattr(delegate, name)
+
+            def _prepare_qk(self, raw, cos, sin, norm_t, norm_hw, dtype):
+                # The shape-dependent marker makes this sentinel's result
+                # observably different from an eager diagnostic recomputation.
+                marker = raw.shape[1] * 0.001 + raw.shape[2] * 0.01
+                ordinal = torch.arange(
+                    raw.numel(), device=raw.device, dtype=torch.float32
+                ).reshape(raw.shape)
+                result = (((ordinal % 11) - 5) * 0.03125 + marker).to(dtype)
+                self.returned.append(result)
+                return result
+
+        attention = ShapeSensitiveAttention(layer.attn)
+        layer.attn = attention
+
+        generator = torch.Generator().manual_seed(20261030)
+        count = math.prod(grid)
+        permutation = torch.tensor(plan.permutation, dtype=torch.long)
+        x = torch.randn((1, count, arch.hidden_size), generator=generator)
+        x = x.to(torch.bfloat16).index_select(1, permutation)
+        cos_original, sin_original = self.source.mrope_tables(arch, grid, "cpu")
+        cos = cos_original.index_select(1, permutation)
+        sin = sin_original.index_select(1, permutation)
+
+        policies = {
+            "none": (),
+            "boundary": ("attention", "output"),
+            "ready": ("q_ready", "k_ready"),
+            "all": reference.ALL_STAGES,
+        }
+        outputs = {}
+        ready_captures = {}
+        with torch.inference_mode(), torch.autocast(
+            device_type="cpu", dtype=torch.bfloat16
+        ):
+            for name, stages in policies.items():
+                attention.returned.clear()
+                outputs[name], captures = reference.run_layer_reference(
+                    layer, x, cos, sin, plan, capture_stages=stages
+                )
+
+                self.assertEqual(
+                    len(attention.returned), 2,
+                    f"{name} capture policy bypassed source _prepare_qk",
+                )
+                if name in {"ready", "all"}:
+                    ready_captures[name] = captures
+                    self.assertIs(captures["q_ready"], attention.returned[0])
+                    self.assertIs(captures["k_ready"], attention.returned[1])
+
+        for name, observed in outputs.items():
+            torch.testing.assert_close(
+                observed, outputs["none"], atol=0.0, rtol=0.0,
+                msg=f"{name} capture policy changed the source attention feed",
+            )
+        for captures in ready_captures.values():
+            torch.testing.assert_close(
+                captures["q_ready"], attention.returned[0], atol=0.0, rtol=0.0
+            )
+            torch.testing.assert_close(
+                captures["k_ready"], attention.returned[1], atol=0.0, rtol=0.0
+            )
 
     def test_whole_reduced_layer_matches_upstream_flex(self):
         # J=2048 mirrors the small semantic qualifier; reduced widths keep its

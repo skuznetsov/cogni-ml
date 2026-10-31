@@ -36828,3 +36828,39 @@ Refresh after source/toolchain/device/model/workload changes.
   Scope is gathered local-tile source-MPS arithmetic, not stock CUDA/Flex.
   Refresh after input, source, precision, geometry, runtime/backend changes or
   artifact loss; keep the 10% reserve and finite process/swap limits.
+
+### Hy-Nomas terminal stem, block 0 and gaze controls (2026-10-30)
+
+- The actual terminal-latent stem now has zero numerical error against pinned
+  Torch 2.6 MPS on 51,118,080 BF16 values. All eight first-window block 0
+  captures are bitwise equal to the earlier instrumented reference in the
+  production F32-FFN graph mode in both requests. Boundary-only prefix4
+  independently qualifies actual source block0 attention/output. The earlier standalone gate used BF16 FFN graph tensors.
+  Peak footprint is 5,920,213,512 bytes under an 8 GiB cap; no swap growth,
+  one terminal wait per request, zero tracked encode allocations and
+  preterminal activation readbacks.
+- A four-block first-window shared-workspace replay is bitwise exact through
+  block 1. The first retained divergence is block 2 attention: 17 tolerance
+  failures, 104 differing BF16 words, max error 0.000244141. Block 2 output
+  has 530 failures; block 3 output has 531,082 failures, max error 1.0.
+  Both guarded runs drain without swap growth under 8 GiB caps and the 10%
+  reserve. Isolated replay revealed a reference bug: prepared-Q/K captures
+  substituted a whole-token recomputation for the source chunked Q/K feed.
+  The helper now feeds actual source returns; a shape-sensitive regression
+  rejects the old behavior and all 27 CPU tests pass. Corrected source block2
+  reproduces sequential endpoints exactly. Native input norm/QKV/prepared Q
+  are exact; prepared K has three differing words and two tolerance failures.
+  First failure: token12352/head6/channel61, in the final192-token K chunk.
+  Next discriminator: chunk-shaped K statistics/inverse versus gain/RoPE.
+  The full high-resolution decoder mismatch remains open. Independent
+  retained banks do not qualify production two-bank/repeated-window reuse.
+- A ten-second 512x288 fixed-gaze/head/affect treatment retains all seven
+  non-Qwen tensor identities. The baseline repeat reproduces saved latent
+  and pixel banks exactly; both arms drain without swap growth. Sampled
+  posture is steadier, but this combined prompt change does not establish an
+  eye fix or correct sideways motion. Camera trajectory is still text only.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-terminal-boundaries-and-gaze.json`.
+  The older native/source-BF16 visual pair changed only DiT and used native
+  PixelUMM for both arms; the new same-latent decoder pair is a separate test.
+  Refresh after input/noise, source, weights, dtype/geometry, runtime/backend/
+  device changes or artifact loss; re-admit memory with the 10% reserve.

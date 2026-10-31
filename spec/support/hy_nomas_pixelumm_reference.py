@@ -674,10 +674,46 @@ def gathered_local_attention(
     return output
 
 
-def _prepare_qk_with_stages(attention, raw, cos, sin, norm_t, norm_hw, dtype):
-    normalized = attention._split_norm(raw.float(), norm_t, norm_hw)
-    rotated = attention_source_apply_mrope(attention, normalized, cos, sin)
-    return rotated.to(dtype), normalized, rotated
+def _capture_qk_diagnostics(attention, raw, cos, sin, norm_t, norm_hw):
+    """Recompute diagnostic norm/RoPE captures without changing the forward.
+
+    Mirror the pinned source's inference chunk boundaries for per-call shapes.
+    These recomputed tensors are diagnostics only and are never fed to attention.
+    """
+    source = sys.modules.get("hymm.models.vae.pixelumm_decoder.model")
+    chunk_bytes = getattr(source, "_QK_CHUNK_INPUT_BYTES", None)
+    if type(chunk_bytes) is not int or chunk_bytes <= 0:
+        raise ReferenceError("pinned upstream QK chunk limit is unavailable")
+
+    batch, tokens, heads, head_dim = raw.shape
+    bytes_per_token = batch * heads * head_dim * (torch.finfo(torch.float32).bits // 8)
+    chunk = max(1, chunk_bytes // bytes_per_token)
+    if torch.is_grad_enabled() or tokens <= chunk:
+        boundaries = ((0, tokens),)
+    else:
+        boundaries = tuple(
+            (first, min(first + chunk, tokens))
+            for first in range(0, tokens, chunk)
+        )
+
+    normalized_parts = []
+    rotated_parts = []
+    for first, last in boundaries:
+        normalized_part = attention._split_norm(
+            raw[:, first:last].float(), norm_t, norm_hw
+        )
+        rotated_part = attention_source_apply_mrope(
+            attention, normalized_part, cos[:, first:last], sin[:, first:last]
+        )
+        normalized_parts.append(normalized_part)
+        rotated_parts.append(rotated_part)
+    normalized = normalized_parts[0] if len(normalized_parts) == 1 else torch.cat(
+        normalized_parts, dim=1
+    )
+    rotated = rotated_parts[0] if len(rotated_parts) == 1 else torch.cat(
+        rotated_parts, dim=1
+    )
+    return normalized, rotated
 
 
 def _qk_norm_diagnostics(raw: torch.Tensor, norm_t, norm_hw):
@@ -775,35 +811,35 @@ def run_layer_reference(
         if "k_norm_inverse" in requested:
             captures["k_norm_inverse"] = k_inverse
 
-    capture_qk_steps = bool(requested & {
-        "q_norm", "k_norm", "q_rope", "k_rope", "q_ready", "k_ready",
-    })
-    if capture_qk_steps:
-        q, q_norm, q_rope = _prepare_qk_with_stages(
-            attention, q_raw, cos, sin, attention.q_norm_t, attention.q_norm_hw, v.dtype
-        )
-        k, k_norm, k_rope = _prepare_qk_with_stages(
-            attention, k_raw, cos, sin, attention.k_norm_t, attention.k_norm_hw, v.dtype
+    # The pinned method's returns are the only Q/K tensors fed to attention.
+    # Intermediate norm/RoPE captures below are independent, chunk-shape-
+    # preserving diagnostics and never replace those forward values.
+    q = attention._prepare_qk(
+        q_raw, cos, sin, attention.q_norm_t, attention.q_norm_hw, v.dtype
+    )
+    k = attention._prepare_qk(
+        k_raw, cos, sin, attention.k_norm_t, attention.k_norm_hw, v.dtype
+    )
+    if requested & {"q_norm", "q_rope"}:
+        q_norm, q_rope = _capture_qk_diagnostics(
+            attention, q_raw, cos, sin, attention.q_norm_t, attention.q_norm_hw
         )
         if "q_norm" in requested:
             captures["q_norm"] = q_norm
-        if "k_norm" in requested:
-            captures["k_norm"] = k_norm
         if "q_rope" in requested:
             captures["q_rope"] = q_rope
+    if requested & {"k_norm", "k_rope"}:
+        k_norm, k_rope = _capture_qk_diagnostics(
+            attention, k_raw, cos, sin, attention.k_norm_t, attention.k_norm_hw
+        )
+        if "k_norm" in requested:
+            captures["k_norm"] = k_norm
         if "k_rope" in requested:
             captures["k_rope"] = k_rope
-        if "q_ready" in requested:
-            captures["q_ready"] = q
-        if "k_ready" in requested:
-            captures["k_ready"] = k
-    else:
-        q = attention._prepare_qk(
-            q_raw, cos, sin, attention.q_norm_t, attention.q_norm_hw, v.dtype
-        )
-        k = attention._prepare_qk(
-            k_raw, cos, sin, attention.k_norm_t, attention.k_norm_hw, v.dtype
-        )
+    if "q_ready" in requested:
+        captures["q_ready"] = q
+    if "k_ready" in requested:
+        captures["k_ready"] = k
 
     attended = gathered_local_attention(q, k, v, plan)
     if "attention" in requested:
