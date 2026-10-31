@@ -1,5 +1,89 @@
 # Hy-Nomas first native video frontier
 
+## Matched PixelUMM lifecycle probe (2026-10-31)
+
+The old 154.806-second decoder-only observation and 295.519-second post-DiT
+observation used different terminal latents. They cannot establish a DiT
+lifecycle penalty. `pixelumm_after_dit_probe` admits only the saved Cinematic
+latent `ea79dc68...` and its authenticated 768x416 input/noise bundle. The
+standalone arm and four-step BF16 Cinematic DiT-then-release arm restore those
+same latent values with the same GPU copy before decoding.
+
+Each fresh process constructs PixelUMM once and performs a cold request followed
+by a warm request on the same plans, weights and scratch. A diagnostic-only
+restart resets completed stem/assembly cursors after exactly one terminal wait;
+it is not loaded by the production generator. Partial, failed, released,
+unfinalized and undrained requests cannot restart. Both requests poison the
+display buffer on GPU before rewriting it. Cold display values are copied to
+a preallocated GPU snapshot; both display exports/hashes occur after the warm
+request, with no CPU tensor diagnostics between requests. The cold timing
+includes its snapshot copy; the warm timing does not. No raw capture is enabled.
+
+DoD: release-build the probe; pass `spec_hy_nomas_decoder_replay` and the matrix
+launcher's CPU falsifiers; complete guarded ABBA cells with zero tracked
+encode allocations/readbacks/preterminal waits, one terminal wait per request,
+stable decoder owner identities, and both full display outputs byte-identical
+to the authenticated same-latent source-MPS oracle. This is stricter than the
+unchanged `atol=rtol=2e-5`. Run under a 26 GiB sampled process cap, 10% physical
+reserve including file-cache accounting, 64 MiB swap-growth stop and finite
+deadline. Rollback is removal of the opt-in probe/helper and Makefile targets;
+the production execution path is unchanged.
+
+ABBA balances execution order but does not control thermal/frequency state.
+Any effect is scoped to the operational DiT-prepare/compute/release prelude;
+an allocation-only control would be needed to attribute it specifically to
+DiT computation. Co-residency of both models is not admitted by this budget.
+Full generation and new video export are excluded.
+
+The guarded `matrix-v2` ABBA run completed with this release binary at source
+parent `b57e8d79`; the binary/source manifest was checked around every cell.
+Every cell used one cold pass as the same-owner warmup for its repeat, one
+second between passes and 30 seconds between fresh processes. Observed times:
+
+| Cell | Mode | Decoder setup | Cold wall / GPU span | Repeat wall / GPU span |
+|---|---|---:|---:|---:|
+| A1 | standalone | 22.555 s | 162.645 / 162.573 s | 209.900 / 209.879 s |
+| B2 | DiT then release | 23.202 s | 184.269 / 184.217 s | 224.447 / 224.427 s |
+| B3 | DiT then release | 23.035 s | 214.301 / 214.250 s | 287.647 / 287.625 s |
+| A4 | standalone | 21.758 s | 224.316 / 224.258 s | 281.089 / 281.068 s |
+
+The operational after-DiT/standalone mean ratios are 1.0300 cold and 1.0430
+repeat. Cold adjacent pairs change sign (1.1330 and 0.9554); repeat pairs are
+1.0693 and 1.0233. Standalone end/start ratios are 1.3792 cold and 1.3392 repeat.
+Thus the earlier roughly twofold contrast was not reproduced on these matched
+inputs. The 3--4% mean difference is descriptive, not a causal DiT penalty:
+request/time/order drift is larger, thermal readings were unavailable, and
+runtime-cache/frequency/other-load explanations remain open. Cold-versus-repeat
+ratios also include the asymmetric snapshot copy and weight-conversion cache.
+
+All eight full display outputs (115,015,680 F32 values each) have the pinned
+source-MPS SHA `5ed0974d...`. A fresh CPU analyzer run rehashed the files and
+reproduced the report exactly. All passes have 11,731 segments, zero tracked
+encode allocations/readbacks/preterminal waits, exactly one terminal wait and
+42 stable decoder owners within each cell. Terminal waits span 0.911--1.467 s;
+the remaining wall interval is encode/submit, which includes Metal/MPS
+backpressure. The GPU metric sums command-buffer start/end elapsed spans;
+stalls inside a buffer are included, so this is not active compute time.
+No new per-operation synchronization
+or CPU tensor diagnostics were inserted into the measured path. B has its
+separate existing terminal wait for the DiT prelude.
+
+The sampled maximum process footprint was 24.0716 GiB, minimum cache-aware
+headroom 8.8459 GiB and maximum swap growth zero; all four guards passed the
+10% floor and 26 GiB cap. An earlier `matrix-v1` attempt was rejected before
+model/GPU launch when startup headroom dipped below the same 32.4 GiB admission
+requirement. No limits were weakened for the successful retry. Release build,
+four replay-guard specs, five CPU analyzer falsifiers, format and diff checks
+passed. Mini-Quad verdict: ROBUST for identity, display parity, diagnostic
+replay lifecycle and sampled guard; causal timing attribution remains open.
+
+Evidence index: `.landmark/evidence/2026-10-31-pixelumm-after-dit.json`.
+Raw run: `/opt/mldata_ssd/cogni-ml/pixelumm-after-dit-20261031/matrix-v2`.
+Next discriminator: fixed-input PixelUMM A/A with controlled recovery intervals
+and observable frequency/thermal state, followed by an allocation-only DiT
+prelude control if a residual prelude effect survives. This experiment neither
+changes production defaults nor qualifies a speedup or full DiT trajectory.
+
 ## Cinematic LoRA quality probe (2026-10-31)
 
 Two five-second 768x416 visual pairs separate decoder arithmetic from adapter

@@ -546,6 +546,17 @@ hy_nomas_q4_dit_probe: $(BUILD_DIR)/hy_nomas_q4_dit_probe
 .PHONY: hy_nomas_generate
 hy_nomas_generate: $(BUILD_DIR)/hy_nomas_generate
 
+.PHONY: pixelumm_after_dit_probe spec_hy_nomas_decoder_replay
+pixelumm_after_dit_probe: $(BUILD_DIR)/pixelumm_after_dit_probe
+
+$(BUILD_DIR)/pixelumm_after_dit_probe: examples/pixelumm_after_dit_probe.cr examples/support/pixelumm_decoder_replay.metal $(wildcard examples/support/hy_nomas*.cr examples/support/pixelumm*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+spec_hy_nomas_decoder_replay: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) spec spec/hy_nomas_decoder_replay_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
+
 .PHONY: pixelumm_generation_probe
 pixelumm_generation_probe: $(BUILD_DIR)/pixelumm_generation_probe
 
