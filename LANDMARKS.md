@@ -36810,3 +36810,21 @@ Refresh after source/toolchain/device/model/workload changes.
   This closes the tested source-MPS final-latent discrepancy, not CUDA/Magi
   parity or the visible eye/motion defects. Refresh after source, adapter,
   weights, input, schedule, device/backend changes or artifact loss.
+
+### Hy-Nomas terminal-latent high-resolution decoder mismatch (2026-10-30)
+
+- The full same-latent oracle now admits authenticated 768x416 geometry,
+  compares raw and display pixels, and rejects incompatible runtime/output
+  paths before heavy checkpoint authentication. Twenty-two CPU tests pass.
+- The real five-window stem + 36 blocks + head comparison fails unchanged
+  `atol=rtol=2e-5`: raw max 0.182129, mean 0.00180326. First 20 unblended
+  frames also fail, while all 468 source/cache weight checks pass. The 768x416
+  candidate remains unqualified for full decoder parity or an eye-quality fix.
+- Earlier stem parity used the initial input latent with Torch 2.8, while this
+  oracle uses the terminal latent with Torch 2.6. Next discriminator: compare
+  the terminal-latent stem, then block 0 on identical BF16 inputs. Do not infer
+  a partial-tile or blending bug from final pixels alone.
+- Evidence `.landmark/evidence/2026-10-30-hy-nomas-decoder-high-resolution-mismatch.json`.
+  Scope is gathered local-tile source-MPS arithmetic, not stock CUDA/Flex.
+  Refresh after input, source, precision, geometry, runtime/backend changes or
+  artifact loss; keep the 10% reserve and finite process/swap limits.

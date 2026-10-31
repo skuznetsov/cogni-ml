@@ -10,6 +10,7 @@ FlexAttention comparison.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -32,6 +33,7 @@ import hy_nomas_pixelumm_head_checkpoint as head_checkpoint
 import hy_nomas_pixelumm_head_reference as head_reference
 import hy_nomas_pixelumm_real_input as real_input
 import hy_nomas_pixelumm_reference as block_reference
+import pixelumm_generation_reference as pixelumm_reference
 
 
 SCHEMA = "cogni_ml.hy_nomas_decoder_same_latent/v1"
@@ -41,15 +43,67 @@ UPSTREAM = Path(
     "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024"
 )
 SCRATCH_ROOT = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030")
-GRID = (10, 18, 32)
-LATENT_SHAPE = (1, 32, 30, 9, 16)
-NOISE_SHAPE = (1, 3, 120, 288, 512)
-RAW_SHAPE = NOISE_SHAPE
-FIRST_WINDOW_SHAPE = (1, 3, 40, 288, 512)
-FIRST_PREFIX_ELEMENTS = 20 * 3 * 288 * 512
-LATENT_BYTES = math.prod(LATENT_SHAPE) * 4
-NOISE_BYTES = math.prod(NOISE_SHAPE) * 4
-RAW_BYTES = math.prod(RAW_SHAPE) * 4
+DEFAULT_RESOLUTION = "512x288"
+HIGH_RESOLUTION = "768x416"
+
+
+@dataclass(frozen=True)
+class DecoderGeometry:
+    resolution: str
+    width: int
+    height: int
+    latent_height: int
+    latent_width: int
+
+    @property
+    def token_grid(self) -> tuple[int, int, int]:
+        return (10, 2 * self.latent_height, 2 * self.latent_width)
+
+    @property
+    def latent_shape(self) -> tuple[int, ...]:
+        return (1, 32, 30, self.latent_height, self.latent_width)
+
+    @property
+    def noise_shape(self) -> tuple[int, ...]:
+        return (1, 3, 120, self.height, self.width)
+
+    @property
+    def raw_shape(self) -> tuple[int, ...]:
+        return self.noise_shape
+
+    @property
+    def first_window_shape(self) -> tuple[int, ...]:
+        return (1, 3, 40, self.height, self.width)
+
+    @property
+    def first_prefix_elements(self) -> int:
+        return 20 * 3 * self.height * self.width
+
+    @property
+    def latent_bytes(self) -> int:
+        return math.prod(self.latent_shape) * 4
+
+    @property
+    def noise_bytes(self) -> int:
+        return math.prod(self.noise_shape) * 4
+
+    @property
+    def raw_bytes(self) -> int:
+        return math.prod(self.raw_shape) * 4
+
+
+DEFAULT_GEOMETRY = DecoderGeometry(DEFAULT_RESOLUTION, 512, 288, 9, 16)
+HIGH_RESOLUTION_GEOMETRY = DecoderGeometry(HIGH_RESOLUTION, 768, 416, 13, 24)
+# Keep the original module constants as the v1/default compatibility surface.
+GRID = DEFAULT_GEOMETRY.token_grid
+LATENT_SHAPE = DEFAULT_GEOMETRY.latent_shape
+NOISE_SHAPE = DEFAULT_GEOMETRY.noise_shape
+RAW_SHAPE = DEFAULT_GEOMETRY.raw_shape
+FIRST_WINDOW_SHAPE = DEFAULT_GEOMETRY.first_window_shape
+FIRST_PREFIX_ELEMENTS = DEFAULT_GEOMETRY.first_prefix_elements
+LATENT_BYTES = DEFAULT_GEOMETRY.latent_bytes
+NOISE_BYTES = DEFAULT_GEOMETRY.noise_bytes
+RAW_BYTES = DEFAULT_GEOMETRY.raw_bytes
 ATOL = RTOL = 2e-5
 GIB = 1024**3
 EXTRA_GPU_RESERVE_BYTES = 1536 * 1024**2
@@ -62,6 +116,14 @@ STEM_WEIGHTS_SHA256 = "7257a5d07644a9fddd38918a127eec94abaeb954b0527f2c33777a61c
 
 class SameLatentError(ValueError):
     """The supplied capture, pinned inputs, or MPS run failed admission."""
+
+
+def _geometry_for_resolution(resolution: str) -> DecoderGeometry:
+    if resolution == DEFAULT_RESOLUTION:
+        return DEFAULT_GEOMETRY
+    if resolution == HIGH_RESOLUTION:
+        return HIGH_RESOLUTION_GEOMETRY
+    raise SameLatentError("only 512x288 default and authenticated 768x416 inputs are admitted")
 
 
 def _digest(value: object) -> bool:
@@ -127,11 +189,19 @@ def validate_native_receipt_document(
         raise SameLatentError("native receipt precision is unknown")
     if document.get("dit_weights") != "bf16" or document.get("dit_quantization_experimental") is not False:
         raise SameLatentError("native DiT precision contract is unsupported")
-    for field, expected in (("seed", 42), ("frames", 120), ("width", 512),
-                            ("height", 288), ("fps", 24), ("steps", 4),
+    for field, expected in (("seed", 42), ("frames", 120),
+                            ("fps", 24), ("steps", 4),
                             ("shift", 5), ("cfg", 1)):
         if type(document.get(field)) is not int or document[field] != expected:
             raise SameLatentError(f"native receipt {field} does not match the admitted preview")
+    dimensions = (document.get("width"), document.get("height"))
+    if any(type(value) is not int for value in dimensions):
+        raise SameLatentError("native receipt display dimensions are malformed")
+    resolution_by_dimensions = {(512, 288): DEFAULT_RESOLUTION,
+                                (768, 416): HIGH_RESOLUTION}
+    if dimensions not in resolution_by_dimensions:
+        raise SameLatentError("native receipt resolution is not admitted")
+    geometry = _geometry_for_resolution(resolution_by_dimensions[dimensions])
     if document.get("camera_conditioning") is not False or document.get("action_conditioning") is not False:
         raise SameLatentError("native capture has unsupported camera/action conditioning")
     if type(document.get("prompt")) is not str or not document["prompt"]:
@@ -157,7 +227,24 @@ def validate_native_receipt_document(
             raise SameLatentError(f"native receipt diagnostics.{path_key} path is malformed")
         if not _digest(diagnostics.get(hash_key)):
             raise SameLatentError(f"native receipt diagnostics.{hash_key} is malformed")
-    return dict(diagnostics)
+    display_path = document.get("output")
+    if not isinstance(display_path, str) or not Path(display_path).is_absolute():
+        raise SameLatentError("native receipt top-level display output path is malformed")
+    if (type(document.get("output_bytes")) is not int
+            or document["output_bytes"] != geometry.raw_bytes):
+        raise SameLatentError("native receipt top-level display output byte extent is invalid")
+    if not _digest(document.get("output_sha256")):
+        raise SameLatentError("native receipt top-level display output SHA-256 is malformed")
+    result = dict(diagnostics)
+    result.update({
+        "width": geometry.width,
+        "height": geometry.height,
+        "resolution": geometry.resolution,
+        "display_pixels": display_path,
+        "display_pixels_bytes": geometry.raw_bytes,
+        "display_pixels_sha256": document["output_sha256"],
+    })
+    return result
 
 
 def _regular_artifact(path_value: str, what: str, expected_sha256: str,
@@ -233,29 +320,87 @@ def _validate_inputs(path: Path, expected_sha256: str, receipt: Mapping) -> tupl
     return manifest, payload_path, noise_record
 
 
-def _validate_decoder_noise_geometry(manifest: Mapping) -> dict:
-    """Admit the exact decoder noise shape and token/tile geometry used by this oracle."""
-    geometry = manifest.get("geometry", {})
+def _geometry_for_input_manifest(manifest: Mapping) -> DecoderGeometry:
+    """Resolve only the legacy/default bundles or the explicit high-resolution v3 bundle."""
+    schema = manifest.get("schema")
+    if not isinstance(schema, str):
+        raise SameLatentError("generation-input schema is malformed")
+    if schema in (generation_inputs.SCHEMA, generation_inputs.DYNAMIC_SCHEMA):
+        geometry = DEFAULT_GEOMETRY
+    elif schema == generation_inputs.HIGH_RESOLUTION_SCHEMA:
+        geometry = HIGH_RESOLUTION_GEOMETRY
+    else:
+        raise SameLatentError("generation-input schema does not select an admitted resolution")
+
+    specs = {
+        name: (dtype, list(shape))
+        for name, dtype, shape in generation_inputs.tensor_specs_for_resolution(
+            geometry.resolution
+        )
+    }
+    tensors = manifest.get("tensors")
+    if type(tensors) is not dict:
+        raise SameLatentError("generation-input tensor inventory is missing")
+    for name in ("input.latent", "decoder.noise", "decoder.rope_cos", "decoder.rope_sin"):
+        record = tensors.get(name)
+        if (type(record) is not dict
+                or (record.get("dtype"), record.get("shape")) != specs[name]
+                or record.get("nbytes") != generation_inputs.tensor_nbytes(*specs[name])):
+            raise SameLatentError(f"generation-input {name} shape/dtype differs from its resolution")
+
+    return geometry
+
+
+def _validate_decoder_noise_geometry(
+    manifest: Mapping, geometry: DecoderGeometry | None = None,
+) -> dict:
+    """Admit the exact decoder noise shape, RoPE extent and partial-tile grid."""
+    geometry = geometry or _geometry_for_input_manifest(manifest)
+    token_grid = geometry.token_grid
+    decoder_token_count = math.prod(token_grid)
+    manifest_geometry = manifest.get("geometry", {})
     required_geometry = {
-        "dit_latent_shape": list(LATENT_SHAPE),
-        "decoder_noise_shape": list(NOISE_SHAPE),
-        "decoder_rope_grid": list(GRID),
+        "dit_latent_shape": list(geometry.latent_shape),
+        "decoder_latent_grid": [30, geometry.latent_height, geometry.latent_width],
+        "decoder_noise_shape": list(geometry.noise_shape),
+        "decoder_rope_grid": list(token_grid),
+        "decoder_rope_shape": [1, decoder_token_count, 1, 128],
         "decoder_local_attention_tile_pixels": 128,
         "decoder_local_attention_tile_tokens": 8,
         "decoder_noise_piece_frames": 4,
         "decoder_noise_piece_latents": 1,
     }
-    if any(geometry.get(key) != value for key, value in required_geometry.items()):
-        raise SameLatentError("generation-input decoder geometry differs from the capture")
-    noise_record = manifest.get("tensors", {}).get("decoder.noise")
+    if (type(manifest_geometry) is not dict
+            or any(manifest_geometry.get(key) != value for key, value in required_geometry.items())):
+        raise SameLatentError("generation-input decoder geometry differs from the admitted resolution")
+    tensors = manifest.get("tensors")
+    if type(tensors) is not dict:
+        raise SameLatentError("generation-input tensor inventory is missing")
+    noise_record = tensors.get("decoder.noise")
     if (type(noise_record) is not dict or noise_record.get("dtype") != "F32"
-            or noise_record.get("shape") != list(NOISE_SHAPE)
-            or noise_record.get("nbytes") != NOISE_BYTES):
+            or noise_record.get("shape") != list(geometry.noise_shape)
+            or noise_record.get("nbytes") != geometry.noise_bytes):
         raise SameLatentError("generation-input decoder noise tensor shape/dtype mismatch")
     return noise_record
 
 
-def _output_paths(path_arg: Path) -> tuple[Path, Path, Path]:
+def _resolve_geometry(receipt_contract: Mapping, input_manifest: Mapping) -> DecoderGeometry:
+    geometry = _geometry_for_input_manifest(input_manifest)
+    if (receipt_contract.get("resolution") != geometry.resolution
+            or receipt_contract.get("width") != geometry.width
+            or receipt_contract.get("height") != geometry.height):
+        raise SameLatentError("native receipt resolution differs from authenticated input geometry")
+    _validate_decoder_noise_geometry(input_manifest, geometry)
+    schema = input_manifest.get("schema")
+    if schema in {generation_inputs.SCHEMA, generation_inputs.HIGH_RESOLUTION_SCHEMA}:
+        try:
+            pixelumm_reference.resolve_geometry(schema, geometry.resolution)
+        except pixelumm_reference.ReferenceError as error:
+            raise SameLatentError(f"PixelUMM reference geometry rejected: {error}") from error
+    return geometry
+
+
+def _output_paths(path_arg: Path) -> tuple[Path, Path, Path, Path]:
     path = path_arg.expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
@@ -271,9 +416,10 @@ def _output_paths(path_arg: Path) -> tuple[Path, Path, Path]:
     manifest = parent / path.name
     raw = manifest.with_suffix(".f32le")
     first_window_raw = manifest.with_name(manifest.stem + "-first-window.f32le")
-    if any(os.path.lexists(candidate) for candidate in (manifest, raw, first_window_raw)):
+    display = manifest.with_name(manifest.stem + "-display.f32le")
+    if any(os.path.lexists(candidate) for candidate in (manifest, raw, first_window_raw, display)):
         raise SameLatentError("refusing to replace an existing oracle result")
-    return manifest, raw, first_window_raw
+    return manifest, raw, first_window_raw, display
 
 
 def _mapped_f32(path: Path, *, offset: int, nbytes: int,
@@ -292,12 +438,14 @@ def _mapped_f32(path: Path, *, offset: int, nbytes: int,
 def _memory_budget(
     *, physical_bytes: int, driver_allocated_bytes: int,
     reference_peak_bytes: int, cache_resident_allowance_bytes: int,
+    comparison_buffer_bytes: int = 0,
 ) -> dict[str, int]:
     values = (physical_bytes, driver_allocated_bytes, reference_peak_bytes,
-              cache_resident_allowance_bytes)
+              cache_resident_allowance_bytes, comparison_buffer_bytes)
     if any(type(value) is not int or value < 0 for value in values) or physical_bytes == 0:
         raise SameLatentError("MPS memory preflight received invalid byte counts")
-    estimated = reference_peak_bytes + EXTRA_GPU_RESERVE_BYTES + cache_resident_allowance_bytes
+    estimated = (reference_peak_bytes + comparison_buffer_bytes
+                 + EXTRA_GPU_RESERVE_BYTES + cache_resident_allowance_bytes)
     reserve_floor = physical_bytes // 10
     if physical_bytes - driver_allocated_bytes - estimated < reserve_floor:
         raise SameLatentError(
@@ -307,6 +455,7 @@ def _memory_budget(
         "physical_bytes": physical_bytes,
         "driver_allocated_bytes": driver_allocated_bytes,
         "reference_peak_estimate_bytes": reference_peak_bytes,
+        "raw_display_comparison_buffer_bound_bytes": comparison_buffer_bytes,
         "capture_io_and_allocator_margin_bytes": EXTRA_GPU_RESERVE_BYTES,
         "mapped_full36_cache_resident_allowance_bytes": cache_resident_allowance_bytes,
         "estimated_peak_bytes": estimated,
@@ -314,7 +463,36 @@ def _memory_budget(
     }
 
 
-def _mps_preflight(arch, *, cache_resident_allowance_bytes: int) -> dict[str, int | str]:
+def _validate_execution_runtime(geometry: DecoderGeometry) -> None:
+    """Reject an incompatible MPS runtime before hashing decoder/checkpoint assets."""
+    try:
+        block_reference.validate_preview_oracle_runtime(geometry.token_grid, "mps")
+    except block_reference.ReferenceError as error:
+        raise SameLatentError(str(error)) from error
+    if torch.__version__ != block_reference.MPS_ORACLE_TORCH_VERSION:
+        raise SameLatentError(
+            f"same-latent MPS oracle requires torch {block_reference.MPS_ORACLE_TORCH_VERSION}; "
+            f"got {torch.__version__} from {sys.executable}"
+        )
+    if not torch.backends.mps.is_available():
+        raise SameLatentError("PyTorch MPS is unavailable; CPU model fallback is prohibited")
+    if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        raise SameLatentError("PYTORCH_ENABLE_MPS_FALLBACK must be disabled")
+
+
+def _comparison_buffer_bound_bytes(geometry: DecoderGeometry) -> int:
+    # Native raw/display are two full F32 buffers. Six full-buffer units also
+    # cover the upstream BF16 raw output, display intermediates/output, and
+    # bounded reduction scratch without relying on the neural estimate's base.
+    return 6 * geometry.raw_bytes
+
+
+def _mps_preflight(
+    arch, *, cache_resident_allowance_bytes: int,
+    geometry: DecoderGeometry = DEFAULT_GEOMETRY,
+) -> dict[str, int | str]:
     if not torch.backends.mps.is_available():
         raise SameLatentError("PyTorch MPS is unavailable; CPU model fallback is prohibited")
     if torch.__version__ != block_reference.MPS_ORACLE_TORCH_VERSION:
@@ -327,7 +505,7 @@ def _mps_preflight(arch, *, cache_resident_allowance_bytes: int) -> dict[str, in
     device = torch.device("mps")
     layers = 36
     base = block_reference._estimated_peak_bytes(
-        GRID, arch, layers=layers, resident_layers=1,
+        geometry.token_grid, arch, layers=layers, resident_layers=1,
         capture_stages=block_reference.FULL_TARGET_STAGES,
         full36_capture_policy=block_reference.THIRTY_SIX_CAPTURE_POLICY,
     )
@@ -338,6 +516,7 @@ def _mps_preflight(arch, *, cache_resident_allowance_bytes: int) -> dict[str, in
         driver_allocated_bytes=allocated,
         reference_peak_bytes=base,
         cache_resident_allowance_bytes=cache_resident_allowance_bytes,
+        comparison_buffer_bytes=_comparison_buffer_bound_bytes(geometry),
     )
     return {
         "device": str(device), "torch_version": torch.__version__,
@@ -477,15 +656,19 @@ def _authenticate_full36_cache() -> tuple[dict, Path, Path, str, str]:
 
 def _preflight_artifacts(
     *, receipt: Mapping, diagnostics: Mapping, input_document: Mapping,
-    input_payload_path: Path,
+    input_payload_path: Path, geometry: DecoderGeometry = DEFAULT_GEOMETRY,
 ) -> dict[str, object]:
     """Finish CPU-only source and input admission before importing/loading models."""
     sources = _validate_upstream_source_metadata()
     latent_path = _regular_artifact(
-        diagnostics["latent"], "native latent", diagnostics["latent_sha256"], LATENT_BYTES
+        diagnostics["latent"], "native latent", diagnostics["latent_sha256"], geometry.latent_bytes
     )
     native_raw_path = _regular_artifact(
-        diagnostics["raw_pixels"], "native raw pixels", diagnostics["raw_pixels_sha256"], RAW_BYTES
+        diagnostics["raw_pixels"], "native raw pixels", diagnostics["raw_pixels_sha256"], geometry.raw_bytes
+    )
+    native_display_path = _regular_artifact(
+        diagnostics["display_pixels"], "native display pixels",
+        diagnostics["display_pixels_sha256"], geometry.raw_bytes,
     )
     raw_header, stem_path, stem_receipt_path = _authenticate_stem()
     head = _authenticate_head(raw_header)
@@ -496,6 +679,8 @@ def _preflight_artifacts(
         "source_metadata": sources,
         "latent_path": latent_path,
         "native_raw_path": native_raw_path,
+        "native_display_path": native_display_path,
+        "geometry": geometry,
         "raw_header": raw_header,
         "stem_path": stem_path,
         "stem_receipt_path": stem_receipt_path,
@@ -527,6 +712,8 @@ def _admission_summary(admission: Mapping) -> dict[str, object]:
         "decoder_cache_payload_sha256": admission["cache_payload_sha256"],
         "latent": str(admission["latent_path"]),
         "native_raw_pixels": str(admission["native_raw_path"]),
+        "native_display_pixels": str(admission["native_display_path"]),
+        "resolution": admission["geometry"].resolution,
     }
 
 
@@ -553,15 +740,17 @@ def _load_full36_cache(
 def _comparison_element_count(
     actual_shape: tuple[int, ...], expected_shape: tuple[int, ...],
     element_count: int | None = None,
+    *, geometry: DecoderGeometry = DEFAULT_GEOMETRY,
 ) -> int:
     """Validate either the whole raw clip or first-window/first-prefix comparison."""
-    if expected_shape != RAW_SHAPE:
+    if expected_shape != geometry.raw_shape:
         raise SameLatentError("native raw-pixel comparison geometry is not the captured clip")
     if element_count is None:
-        if actual_shape != RAW_SHAPE:
+        if actual_shape != geometry.raw_shape:
             raise SameLatentError("full raw-pixel comparison requires the complete clip")
-        return RAW_BYTES // 4
-    if actual_shape != FIRST_WINDOW_SHAPE or element_count != FIRST_PREFIX_ELEMENTS:
+        return geometry.raw_bytes // 4
+    if (actual_shape != geometry.first_window_shape
+            or element_count != geometry.first_prefix_elements):
         raise SameLatentError("first-window comparison geometry does not match its 20-frame prefix")
     return element_count
 
@@ -582,12 +771,14 @@ def _first_prefix_tensors(
 
 def _queue_pixel_comparison(
     actual: torch.Tensor, expected_native: torch.Tensor, *, element_count: int | None = None,
+    geometry: DecoderGeometry = DEFAULT_GEOMETRY,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Queue bounded GPU reductions; callers perform the single terminal wait."""
     element_count = _comparison_element_count(
-        tuple(actual.shape), tuple(expected_native.shape), element_count
+        tuple(actual.shape), tuple(expected_native.shape), element_count,
+        geometry=geometry,
     )
-    if element_count == FIRST_PREFIX_ELEMENTS:
+    if element_count == geometry.first_prefix_elements:
         actual, expected_native = _first_prefix_tensors(
             actual, expected_native, frames=20
         )
@@ -621,8 +812,9 @@ def run_oracle(
     input_document: Mapping, input_payload_path: Path, noise_record: Mapping,
     artifact_admission: Mapping[str, object],
     output_json: Path, output_raw: Path, output_first_window: Path,
+    output_display: Path, geometry: DecoderGeometry = DEFAULT_GEOMETRY,
 ) -> dict:
-    """Run all five upstream decoder windows on MPS and compare raw merged pixels."""
+    """Run the pinned windows on MPS; compare raw and display output to the capture."""
     device = torch.device("mps")
     source, model_sha = block_reference.load_upstream(UPSTREAM)
     if model_sha != real_input.UPSTREAM_MODEL_SHA256:
@@ -634,13 +826,19 @@ def run_oracle(
         raise SameLatentError("pinned upstream DCAE source digest changed")
     if _sha256_file(Path(autoencoder_source.__file__)) != real_input.PIXELUMM_NOISE_SHA256:
         raise SameLatentError("pinned upstream PixelUMM decoder/blender source digest changed")
-    block_reference.validate_preview_oracle_runtime(GRID, "mps")
+    block_reference.validate_preview_oracle_runtime(geometry.token_grid, "mps")
+    if torch.__version__ != block_reference.MPS_ORACLE_TORCH_VERSION:
+        raise SameLatentError(
+            f"same-latent MPS oracle requires torch {block_reference.MPS_ORACLE_TORCH_VERSION}; "
+            f"got {torch.__version__}"
+        )
     arch = source.QWEN3_8B_GEN
 
     # Main calls _preflight_artifacts before this source import. Reuse those
     # canonical paths and CPU-validated receipts before constructing MPS weights.
     latent_path = artifact_admission["latent_path"]
     native_raw_path = artifact_admission["native_raw_path"]
+    native_display_path = artifact_admission["native_display_path"]
     raw_header = artifact_admission["raw_header"]
     stem_path = artifact_admission["stem_path"]
     stem_receipt_path = artifact_admission["stem_receipt_path"]
@@ -649,16 +847,19 @@ def run_oracle(
         _load_full36_cache(artifact_admission)
     )
     memory = _mps_preflight(
-        arch, cache_resident_allowance_bytes=cache_payload_path.stat().st_size
+        arch, cache_resident_allowance_bytes=cache_payload_path.stat().st_size,
+        geometry=geometry,
     )
     header_path = _canonical_file(
         checkpoint_inventory.ROOT / "source" / "pixelumm-header.json",
         "pinned PixelUMM checkpoint header",
     )
-    plan, inverse_cpu, _ = block_reference.make_attention_plan(source, GRID, tile=8)
+    plan, inverse_cpu, _ = block_reference.make_attention_plan(
+        source, geometry.token_grid, tile=8
+    )
     permutation = torch.tensor(plan.permutation, dtype=torch.long, device=device)
     inverse = inverse_cpu.to(device=device)
-    cos, sin = source.mrope_tables(arch, GRID, device)
+    cos, sin = source.mrope_tables(arch, geometry.token_grid, device)
     cos = cos.index_select(1, permutation)
     sin = sin.index_select(1, permutation)
 
@@ -672,22 +873,31 @@ def run_oracle(
     )
     del head_runtime_weights
 
-    latent_cpu = _mapped_f32(latent_path, offset=0, nbytes=LATENT_BYTES, shape=LATENT_SHAPE)
+    latent_cpu = _mapped_f32(
+        latent_path, offset=0, nbytes=geometry.latent_bytes, shape=geometry.latent_shape
+    )
     latent = latent_cpu.to(device=device)
     del latent_cpu
-    native_cpu = _mapped_f32(native_raw_path, offset=0, nbytes=RAW_BYTES, shape=RAW_SHAPE)
+    native_cpu = _mapped_f32(
+        native_raw_path, offset=0, nbytes=geometry.raw_bytes, shape=geometry.raw_shape
+    )
     native_raw = native_cpu.to(device=device)
     del native_cpu
+    native_display_cpu = _mapped_f32(
+        native_display_path, offset=0, nbytes=geometry.raw_bytes, shape=geometry.raw_shape
+    )
+    native_display = native_display_cpu.to(device=device)
+    del native_display_cpu
     payload_cpu = torch.from_file(
         str(input_payload_path), shared=False,
         size=input_payload_path.stat().st_size // 4, dtype=torch.float32,
     )
     noise = payload_cpu.narrow(
         0, noise_record["offset"] // 4, noise_record["nbytes"] // 4
-    ).view(NOISE_SHAPE).to(device=device)
+    ).view(geometry.noise_shape).to(device=device)
     del payload_cpu
 
-    blender = autoencoder_source._TemporalBlender(total_frames=120)
+    blender = autoencoder_source._TemporalBlender(total_frames=geometry.noise_shape[2])
     condition = type("_ConditionProjection", (), {})()
     condition.cond_proj = stem.cond_proj
     condition.arch = arch
@@ -753,40 +963,51 @@ def run_oracle(
                 decoder_tokens = decoder_tokens.index_select(1, inverse)
             # Pinned DCAEVPixelUMMDecoder.forward exits autocast before PixelHead.
             prediction_tokens = head(decoder_tokens)
-            prediction = source.unpatchify(prediction_tokens, GRID)
+            prediction = source.unpatchify(prediction_tokens, geometry.token_grid)
             blender.add(prediction, latent_start * 4)
             if window_index == 0:
                 first_window_raw = prediction
             del decoder_tokens, prediction_tokens, prediction
 
     upstream_raw = blender.result()
-    max_abs, mean_abs, any_mismatch, all_finite = _queue_pixel_comparison(
-        upstream_raw, native_raw
+    raw_max, raw_mean, raw_mismatch, raw_finite = _queue_pixel_comparison(
+        upstream_raw, native_raw, geometry=geometry
     )
     if first_window_raw is None:
         raise SameLatentError("upstream decoder did not retain its first window prediction")
     first_max, first_mean, first_mismatch, first_finite = _queue_pixel_comparison(
-        first_window_raw, native_raw, element_count=FIRST_PREFIX_ELEMENTS
+        first_window_raw, native_raw,
+        element_count=geometry.first_prefix_elements, geometry=geometry,
+    )
+    upstream_display = pixelumm_reference.postprocess_bf16(torch, upstream_raw)
+    display_max, display_mean, display_mismatch, display_finite = _queue_pixel_comparison(
+        upstream_display, native_display, geometry=geometry
     )
     checks_pass = torch.stack(layer_checks).all()
     metric_vector = torch.stack((
-        max_abs, mean_abs, any_mismatch.to(torch.float32),
-        all_finite.logical_not().to(torch.float32), checks_pass.logical_not().to(torch.float32),
+        raw_max, raw_mean, raw_mismatch.to(torch.float32),
+        raw_finite.logical_not().to(torch.float32),
+        display_max, display_mean, display_mismatch.to(torch.float32),
+        display_finite.logical_not().to(torch.float32),
+        checks_pass.logical_not().to(torch.float32),
         first_max, first_mean, first_mismatch.to(torch.float32),
         first_finite.logical_not().to(torch.float32),
     ))
     # One terminal MPS boundary; all neural outputs/checks remain on GPU until here.
     torch.mps.synchronize()
-    (max_value, mean_value, mismatch_bit, nonfinite_bit, bad_cache_bit,
-     first_max_value, first_mean_value, first_mismatch_bit, first_nonfinite_bit) = metric_vector.cpu().tolist()
+    (raw_max_value, raw_mean_value, raw_mismatch_bit, raw_nonfinite_bit,
+     display_max_value, display_mean_value, display_mismatch_bit, display_nonfinite_bit,
+     bad_cache_bit, first_max_value, first_mean_value, first_mismatch_bit,
+     first_nonfinite_bit) = metric_vector.cpu().tolist()
     upstream_cpu = upstream_raw.to(dtype=torch.float32).contiguous().cpu()
+    upstream_display_cpu = upstream_display.contiguous().cpu()
     first_window_cpu = None
-    if mismatch_bit or first_mismatch_bit:
+    if raw_mismatch_bit or display_mismatch_bit or first_mismatch_bit:
         first_window_cpu = first_window_raw.to(dtype=torch.float32).contiguous().cpu()
-    del metric_vector, cache_words, latent, noise, native_raw
+    del metric_vector, cache_words, latent, noise, native_raw, native_display
 
-    if nonfinite_bit or first_nonfinite_bit:
-        raise SameLatentError("native/upstream raw pixels contain non-finite values")
+    if raw_nonfinite_bit or display_nonfinite_bit or first_nonfinite_bit:
+        raise SameLatentError("native/upstream raw or display pixels contain non-finite values")
     if bad_cache_bit:
         raise SameLatentError("one or more upstream source block weights differ from the BF16 cache")
     try:
@@ -797,6 +1018,14 @@ def run_oracle(
     except OSError as error:
         raise SameLatentError(f"cannot write upstream raw-pixel boundary artifact: {error}") from error
     output_raw_sha = _sha256_file(output_raw)
+    try:
+        with output_display.open("xb") as stream:
+            upstream_display_cpu.numpy().astype("<f4", copy=False).tofile(stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except OSError as error:
+        raise SameLatentError(f"cannot write upstream display-pixel boundary artifact: {error}") from error
+    output_display_sha = _sha256_file(output_display)
     first_window_sha = None
     if first_window_cpu is not None:
         with output_first_window.open("xb") as stream:
@@ -809,6 +1038,8 @@ def run_oracle(
         "upstream_revision": block_reference.UPSTREAM_REVISION,
         "upstream_model_sha256": model_sha,
         "native_receipt_sha256": native_receipt_sha256,
+        "native_raw_pixels_sha256": diagnostics["raw_pixels_sha256"],
+        "native_display_pixels_sha256": diagnostics["display_pixels_sha256"],
         "native_precision": receipt["precision"],
         "input_manifest_sha256": receipt["inputs_sha256"],
         "input_payload_sha256": input_document["payload_sha256"],
@@ -826,13 +1057,21 @@ def run_oracle(
         },
         "comparison_scope": {
             "raw_pixels_before_display_normalization": True,
+            "display_pixels_after_pinned_bf16_postprocess": True,
             "attention_adapter": ATTENTION_SCOPE,
             "unmodified_eager_flex_attention_parity": False,
             "runtime_dtype": "BF16",
             "atol": ATOL,
             "rtol": RTOL,
         },
-        "geometry": {"latent": list(LATENT_SHAPE), "raw_pixels": list(RAW_SHAPE), "token_grid": list(GRID)},
+        "geometry": {
+            "resolution": geometry.resolution,
+            "latent": list(geometry.latent_shape),
+            "raw_pixels": list(geometry.raw_shape),
+            "display_pixels": list(geometry.raw_shape),
+            "first_window_raw_pixels": list(geometry.first_window_shape),
+            "token_grid": list(geometry.token_grid),
+        },
         "memory_preflight": memory,
         "decoder_cache_manifest_sha256": cache_manifest_sha,
         "decoder_cache_payload_sha256": cache_payload_sha,
@@ -846,10 +1085,22 @@ def run_oracle(
         "head_receipt_sha256": head_source["receipt_sha256"],
         "weight_word_checks": len(layer_checks),
         "metrics": {
-            "max_abs_error": max_value,
-            "mean_abs_error": mean_value,
-            "any_value_outside_tolerance": bool(mismatch_bit),
-            "all_values_finite": not bool(nonfinite_bit),
+            "max_abs_error": raw_max_value,
+            "mean_abs_error": raw_mean_value,
+            "any_value_outside_tolerance": bool(raw_mismatch_bit or display_mismatch_bit),
+            "all_values_finite": not bool(raw_nonfinite_bit or display_nonfinite_bit),
+            "raw_pixels": {
+                "max_abs_error": raw_max_value,
+                "mean_abs_error": raw_mean_value,
+                "any_value_outside_tolerance": bool(raw_mismatch_bit),
+                "all_values_finite": not bool(raw_nonfinite_bit),
+            },
+            "display_pixels": {
+                "max_abs_error": display_max_value,
+                "mean_abs_error": display_mean_value,
+                "any_value_outside_tolerance": bool(display_mismatch_bit),
+                "all_values_finite": not bool(display_nonfinite_bit),
+            },
             "all_source_weights_match_bf16_cache": not bool(bad_cache_bit),
             "first_unblended_20_frames": {
                 "max_abs_error": first_max_value,
@@ -857,13 +1108,16 @@ def run_oracle(
                 "any_value_outside_tolerance": bool(first_mismatch_bit),
                 "all_values_finite": not bool(first_nonfinite_bit),
             },
-            "result": "match" if not mismatch_bit else "mismatch",
+            "result": "match" if not (raw_mismatch_bit or display_mismatch_bit) else "mismatch",
         },
         "upstream_raw_pixels": str(output_raw),
-        "upstream_raw_pixels_bytes": RAW_BYTES,
+        "upstream_raw_pixels_bytes": geometry.raw_bytes,
         "upstream_raw_pixels_sha256": output_raw_sha,
+        "upstream_display_pixels": str(output_display),
+        "upstream_display_pixels_bytes": geometry.raw_bytes,
+        "upstream_display_pixels_sha256": output_display_sha,
         "first_window_raw_pixels": str(output_first_window) if first_window_sha else None,
-        "first_window_raw_pixels_shape": [1, 3, 40, 288, 512] if first_window_sha else None,
+        "first_window_raw_pixels_shape": list(geometry.first_window_shape) if first_window_sha else None,
         "first_window_raw_pixels_sha256": first_window_sha,
     }
     with output_json.open("x", encoding="utf-8") as stream:
@@ -902,18 +1156,26 @@ def main(argv: list[str] | None = None) -> int:
         input_manifest, input_payload_path, noise_record = _validate_inputs(
             args.inputs.expanduser(), args.inputs_sha256, receipt
         )
+        geometry = _resolve_geometry(diagnostics, input_manifest)
+        output_paths = None
+        if not args.admission_only:
+            if args.output is None:
+                raise SameLatentError("--output is required unless --admission-only is selected")
+            output_paths = _output_paths(args.output)
+            _validate_execution_runtime(geometry)
         artifact_admission = _preflight_artifacts(
             receipt=receipt,
             diagnostics=diagnostics,
             input_document=input_manifest,
             input_payload_path=input_payload_path,
+            geometry=geometry,
         )
         if args.admission_only:
             print(json.dumps(_admission_summary(artifact_admission), indent=2))
             return 0
-        if args.output is None:
-            raise SameLatentError("--output is required unless --admission-only is selected")
-        output_json, output_raw, output_first_window = _output_paths(args.output)
+        if output_paths is None:
+            raise SameLatentError("non-admission execution did not validate its output paths")
+        output_json, output_raw, output_first_window, output_display = output_paths
         result = run_oracle(
             receipt=receipt,
             native_receipt_sha256=actual_receipt_sha,
@@ -925,6 +1187,8 @@ def main(argv: list[str] | None = None) -> int:
             output_json=output_json,
             output_raw=output_raw,
             output_first_window=output_first_window,
+            output_display=output_display,
+            geometry=geometry,
         )
     except (SameLatentError, block_reference.ReferenceError,
             head_reference.HeadReferenceError, real_input.RealInputError,

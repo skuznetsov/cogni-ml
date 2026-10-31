@@ -10,8 +10,9 @@ patch/final token limit is shared with CPU preflight, so an unsupported extent
 is rejected before constructing Metal owners. Weight-cache architecture and
 payload identities remain separate from the runtime token extent.
 
-The high-resolution stem matches pinned upstream BF16 output exactly on all
-51,118,080 values. The separate five-window synthetic merge/display control
+The high-resolution stem on the initial input latent matches pinned upstream
+BF16 output exactly on all 51,118,080 values. The separate five-window
+synthetic merge/display control
 matches all 115,015,680 F32 values exactly. Its injected-NaN negative control is
 detected. This qualifies these boundaries, not all high-resolution DiT/decoder
 intermediates. The native probe uses one terminal wait and no tracked encode
@@ -31,6 +32,25 @@ model parity remain open. The v3 bundle is explicit and cannot be accepted as
 a default-size v1/v2 bundle. Evidence, frozen commands, media and refresh rules
 are indexed in
 `.landmark/evidence/2026-10-30-hy-nomas-spatial-geometry.json`.
+
+The subsequent full decoder comparison on the saved terminal latent fails the
+unchanged `atol=rtol=2e-5`: raw maximum/mean error is 0.182129/0.00180326,
+and display error is 0.0898438/0.000901566. The first 20 unblended frames also
+fail (maximum 0.182129), so overlap blending alone cannot explain this
+numerical discrepancy. All 468 source/cache weight checks pass. This keeps
+the 768x416 candidate unqualified for full decoder parity; it does not
+establish the cause of the eye defect at either resolution.
+
+The earlier successful stem probe used initial input latents and Torch 2.8;
+the full decoder oracle uses terminal DiT latents and pinned Torch 2.6. They
+are different controls. The next discriminator is stem-only replay of the
+terminal latent, then block 0 on identical BF16 activations if the stem passes.
+The oracle uses gathered local-tile MPS attention, not stock CUDA/FlexAttention.
+Its guarded run completed in 322.668 seconds, with an 8.489 GiB sampled peak,
+23.126 GiB minimum cache-aware headroom and no swap growth. The nonzero exit
+status records a numerical mismatch, not a successful parity qualification.
+Evidence is in
+`.landmark/evidence/2026-10-30-hy-nomas-decoder-high-resolution-mismatch.json`.
 
 ## Echo quality: real-input arithmetic diagnostics (2026-10-30)
 
@@ -155,12 +175,13 @@ These controls use original pinned source bodies with the disclosed MPS SDPA
 adapter, not unmodified CUDA/Magi execution. No production precision default
 is changed.
 
-The next eye-quality discriminator is an opt-in higher-resolution preview.
-The current 512x288 output has a 9x16 latent grid, compared with the published
+The 512x288 output has a 9x16 latent grid, compared with the published
 1280x704 recipe's 22x40 grid; this is a recipe difference, not proof that the
-current shape is outside the training distribution. A separate source-faithful
-second-segment control is still needed for the motion symptom. The first
-segment's bitwise equality does not close that boundary.
+current shape is outside the training distribution. The two-segment arithmetic
+control above now closes the tested native/source-MPS final-latent boundary.
+Eye-quality work continues with a matched conditioning intervention that
+reduces gaze, head and smile movement, while the higher-resolution decoder
+mismatch is localized separately.
 
 ## Same-scene continuation text cache (2026-10-30)
 

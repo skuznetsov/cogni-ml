@@ -1,0 +1,132 @@
+{
+  "schema": "cogni_ml.hy_nomas_decoder_high_resolution_mismatch_evidence/v1",
+  "date": "2026-10-30",
+  "base_revision": "5e3c1c4f769558a613f494394d323d9ac02e9036",
+  "scope": "Same saved terminal latent and authenticated decoder noise at768x416, pinned source BF16 stem +36blocks+head with gathered local-tile MPS attention versus native raw/display output. Diagnostic implementation only; no production precision or synchronization change.",
+  "result": {
+    "max_abs_error": 0.18212890625,
+    "mean_abs_error": 0.0018032563384622335,
+    "any_value_outside_tolerance": true,
+    "all_values_finite": true,
+    "raw_pixels": {
+      "max_abs_error": 0.18212890625,
+      "mean_abs_error": 0.0018032563384622335,
+      "any_value_outside_tolerance": true,
+      "all_values_finite": true
+    },
+    "display_pixels": {
+      "max_abs_error": 0.08984375,
+      "mean_abs_error": 0.0009015662944875658,
+      "any_value_outside_tolerance": true,
+      "all_values_finite": true
+    },
+    "all_source_weights_match_bf16_cache": true,
+    "first_unblended_20_frames": {
+      "max_abs_error": 0.18212890625,
+      "mean_abs_error": 0.001982657006010413,
+      "any_value_outside_tolerance": true,
+      "all_values_finite": true
+    },
+    "result": "mismatch"
+  },
+  "values": 115015680,
+  "weight_word_checks": 468,
+  "atol": 2e-05,
+  "rtol": 2e-05,
+  "returncode": 1,
+  "wall_seconds": 322.6678551249788,
+  "source_pins_unchanged": true,
+  "source_pins": {
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_decoder_same_latent.py": "218ad78585620b477438b4fabcce56815ce531756fdd315282ef0fb706a3a433",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_generation_inputs.py": "e01287a39fdab033435ce9fe30c4cf46a2d65581230e4b23eafead5512adf349",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_bf16_cache.py": "3b0dbdba4a76a76e4075d5655c4e959d54b00ae48472f617c6ed301de07bb845",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_checkpoint.py": "ad47a9318175b0af23fb0d86d270f9747313415ee9b87a64457f7697a3202d26",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_head_checkpoint.py": "548658290616462271abe113b4de489c95dc767bf02a2798124acdbfc5955c3f",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_head_reference.py": "97fbec0bc917249ba162aeda045e6600ca17c2f113f56dd977ea37fe006dd42c",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_real_input.py": "96094831ba9444e761893d5e2d6c20f2398e65e483907d1bbb22ebb458a5dcf4",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_pixelumm_reference.py": "000495df85227b0a85c8429a06db20b7649de23103479e975e0a82ddd62dcf81",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/pixelumm_generation_reference.py": "d36883f2be05cc326b875cdecf9d675419f5547147d8371f3cedbeb50b70fc6e",
+    "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_decoder_same_latent_test.py": "c2ba4c76fd1fb72e7c48308bed7d11081a6da13d5f58b90270e9ed253b176cf7"
+  },
+  "guard": {
+    "process_cap_gib": 26,
+    "physical_reserve_pct": 10,
+    "memory_accounting": "file-cache",
+    "max_swap_growth_mib": 64,
+    "timeout_sec": 1200,
+    "peak_footprint_gib": 8.488665267825127,
+    "min_headroom_gib": 23.125991821289062,
+    "swap_growth_bytes": 0
+  },
+  "verification": {
+    "cpu_command": "python3 -B -m unittest spec/hy_nomas_decoder_same_latent_test.py",
+    "observed_cpu_signal": "22 tests pass, including legacy/default512, explicit768 geometry, first20 channel-aware slicing, runtime/output preflight, display extent, and memory bounds.",
+    "runtime_command": "Exact argv in the authenticated launch artifact.",
+    "observed_runtime_signal": "Report is written, all468 weight checks pass, finite values exceed unchanged tolerance; intentional rc1.",
+    "adversary_verdict": "ROBUST for detecting the disclosed source-MPS/native mismatch; VULNERABLE for a production defect or visual-cause claim.",
+    "adversary_lineage": "Same-lineage read-only review; parent inspected code, reran CPU tests and rehashed actual runtime artifacts.",
+    "checks": "First20 slices time before flattening and is independently covered by whole raw. Pinned blender only changes frames20 onward. Script/test hashes equal actual launch and completion. Output and runtime validation precede heavy artifact reads."
+  },
+  "refuted_route": {
+    "formulation": "Prior high-resolution initial-latent stem and synthetic assembly parity imply full terminal-latent decoder parity.",
+    "falsifier": "First20 unblended actual terminal-latent frames and full raw/display fail; earlier stem had initial latent and Torch2.8, whereas this run uses terminal latent and Torch2.6.",
+    "pivot": "Compare terminal-latent source/native stem, then block0 on identical BF16 inputs, without another DiT or full36 run."
+  },
+  "limitations": [
+    "Gathered local-tile attention replaces original CUDA/Flex dispatch; backend reduction remains an open cause.",
+    "No partial-tile or blending defect is established by final pixels.",
+    "This finding does not establish the cause of unstable eyes at512x288 or768x416.",
+    "Multi-file exports are individually exclusive/fsynced but not transactional; late output failure requires a fresh run directory."
+  ],
+  "refresh": {
+    "triggers": [
+      "input/source/weight/dtype/geometry changes",
+      "Torch/MPS/device change",
+      "artifact loss"
+    ],
+    "operation": "Authenticate current pins, rerun narrow source/native boundary controls under fresh guard admission, then full comparison only if necessary.",
+    "failure_policy": "Keep highres unqualified; retain512 defaults and unchanged tolerance."
+  },
+  "artifacts": {
+    "launch": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/launch.json",
+      "bytes": 3466,
+      "sha256": "8097962dd164774e854c3a55cfbecf227bd17d9cc5c4c661e6a70bdd806d5de3"
+    },
+    "completion": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/completion.json",
+      "bytes": 1901,
+      "sha256": "83e3eb006a4f8d77e4c158cae99e29dc028b1ced5019dd0f9e84b44fd4c88317"
+    },
+    "report": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/report.json",
+      "bytes": 7428,
+      "sha256": "7b5f98ab7874cbf2f03004de07b61a9e336a63a08d99bcc0358415e3b53585a9"
+    },
+    "guard": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/guard.jsonl",
+      "bytes": 190677,
+      "sha256": "64742407cff047b16aa40f6f6c6906f6f1887c4e282cae66aef5474de30e3aab"
+    },
+    "spatial_error": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/first20-spatial-error.json",
+      "bytes": 2127,
+      "sha256": "315e58f910b2fd1a368079c8dad4aedec24c5d2492bd731650b5be1bf469ad3e"
+    },
+    "upstream_raw": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/report.f32le",
+      "bytes": 460062720,
+      "sha256": "2ac353513b9edf96400b1faea5c78315dfa6e280e21675eaa3a29f1cf7df5f36"
+    },
+    "upstream_display": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/report-display.f32le",
+      "bytes": 460062720,
+      "sha256": "62eb29fdcca215d69d29bb143d46b78223000ede35363336e1b8b98cca7a061f"
+    },
+    "upstream_first_window": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-quality-20261030/results/decoder-768x416-v3/report-first-window.f32le",
+      "bytes": 153354240,
+      "sha256": "dcde61493ceefab8fa2ac7504edfab44d0af2036c1fcf188b71c69a206eb72fb"
+    }
+  }
+}
