@@ -37029,3 +37029,37 @@ Refresh after source/toolchain/device/model/workload changes.
   tolerance, 10% cache-aware reserve, no full generation. Refresh parity on
   source/weights/fixture/geometry/runtime changes, and timing on device, queue
   policy or host-state changes; missing evidence invalidates its consumption.
+
+### Hy-Nomas performance paradigm audit (2026-10-31)
+
+- Return: `docs/hy-nomas-performance-paradigm-audit.md`; CPU reproduction:
+  `python3 examples/hy_nomas_work_budget.py`. No GPU/model run or production
+  change. Baseline is `987cae68`; original BF16 weights/stage boundaries and
+  current F32-FFN mode remain the active target.
+- J21120 T6/H44/W80 one-pass diagnostic and five J12480 T10/H26/W48 windows
+  contain 335.016 and 1060.015 TFLOP of blocks+head work, respectively; these
+  omit stem. Native CPU-only AttentionLayout queries/keys independently
+  reproduce the helper's geometry sums (69,672,960 and 64,972,800/window).
+  The ratio is not a speedup or a matched backend regression.
+- For the fixed saved-Qwen 512x288/120-frame preset, PixelUMM is 474.917 of
+  604.747 TFLOP at four DiT steps (78.53% of counted major matrix work).
+  Refiner/adapters also scale with steps. Counts are not latency/utilization;
+  logical score/KV panel bytes are not measured DRAM or saved-time bounds.
+- Next strict hypothesis: compact eight-head KV sharing across 32 Q heads,
+  preserving per-query math; first compare one real J12480 block's QK,
+  probabilities, attended F32 and downstream BF16 at unchanged 2e-5, then
+  isolated paired timing before full five-window replay. Online softmax is a
+  separate, harder reduction-order experiment. Exact routes are not exhausted.
+- Cheap-decoder falsifier: official DCAE-V accepts the same latent space,
+  but its conventional dense-convolution budget is 602.487 TFLOP for the
+  same 120x288x512 output, including 542.060 TFLOP of residual convolutions.
+  This is 1.269x PixelUMM's counted matrix work, not a latency bound. Demote
+  the presumed arithmetic advantage; native convolution utilization remains
+  unmeasured and upstream reports repetitive complex textures. Reopen a port
+  only with speed/memory and full-motion quality evidence. A learned smaller
+  PixelUMM student is a separate model project, not a qualified optimization.
+- Audited upstream Hy-Nomas `effb8a49` and MLX `33927952` are primary references,
+  not replacements for the pinned local source-MPS oracle. Correlated reviews
+  qualify count/claim scope, not candidate speed/quality. Refresh after model,
+  layout/windows/token policy, runtime/backend or device/host-state changes;
+  re-admit the unchanged 10% memory guard before any later GPU experiment.

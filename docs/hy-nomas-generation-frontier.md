@@ -1,5 +1,9 @@
 # Hy-Nomas first native video frontier
 
+The [performance paradigm audit](hy-nomas-performance-paradigm-audit.md) separates
+current execution evidence, workload counts and proposed architecture changes.
+Its CPU-only work-budget helper does not qualify a new kernel or decoder.
+
 ## FFN/attention frequency qualification (2026-10-31)
 
 The diagnostic ran the existing full J21120, 36-block-plus-head fixture
