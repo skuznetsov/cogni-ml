@@ -918,7 +918,7 @@ module ML::Video::PixelUMMDecoderBlockMPS
     def phase_profile(chain : ML::Metal::MPSCommandChain) : ML::Video::PixelUMMBlockPhaseProfile
       ML::Video::PixelUMMBlockPhaseProfile.build(phase_markers(chain), chain.completed_root_timings,
         chain.gpu_elapsed_seconds, chain.api_profile, @local_attention_tile_count,
-        shared_gate_up: @profiled_shared_gate_up)
+        shared_gate_up: @profiled_shared_gate_up, token_count: @config.tokens)
     end
 
     def release : Nil

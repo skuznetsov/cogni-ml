@@ -1,5 +1,162 @@
 # Hy-Nomas first native video frontier
 
+## FFN/attention frequency qualification (2026-10-31)
+
+The diagnostic ran the existing full J21120, 36-block-plus-head fixture
+with `--profile-aa` and an external power observer. It is not the J12480
+saved-latent recovery workload or full generation. Six requests reuse the
+same weights, input, scratch and selectors; two requests enable existing
+phase/API/continuation metadata. The sole terminal wait remains unchanged.
+The observed mean active GPU frequency must differ by no more than 2% for a
+profile/control comparison, with at least five valid interior power samples
+and mean sampled active residency of at least 99%. Frequency mismatch rejects
+timing attribution; multiplying wall time by MHz is not a substitute.
+
+GPU root intervals are partitioned into disjoint family-membership buckets.
+Mixed boundary roots and cross-family overlap stay unassigned rather than
+being divided or counted twice. These are command-buffer interval bounds,
+including stalls, not exclusive shader service or occupancy measurements.
+Existing Graph API wall time and nested continuation time remain separate.
+
+The leading measured candidate is dense FFN cost. A diagnostic-only
+falsifier is a single connected FFN MPSGraph, preserving every BF16 boundary
+between gate/up, F32 SiLU, F32 product and down. This differs from the refuted
+shared gate/up graph, which left activation and down in separate encodes.
+The first gate compares all five FFN intermediates on the same saved input
+against the existing upstream controls and baseline, at unchanged
+`atol=rtol=2e-5`, with a nonfinite positive control. An altered SiLU or folded
+rounding boundary rejects the candidate before timing. Only a passing
+candidate may proceed to reused-buffer, paired full-block timing at matched
+frequency. A lower command count alone is insufficient for promotion.
+
+This is a CAUTION performance experiment: production selectors remain
+unchanged and removing the diagnostic files is the rollback. The process
+guard retains cache-aware accounting, a 10% physical reserve, a 64 MiB
+swap-growth stop, a bounded deadline and a declared footprint cap. DoD is a
+guarded numerical report plus frequency-qualified paired timing and focused
+CPU checks; an unsuccessful candidate is retained only as a scoped refutation.
+
+The six-request J21120 run completed with all saved intermediate and head
+comparisons passing. Request encode-plus-wait times were 43.662, 43.592,
+42.322, 42.273, 42.273 and 42.280 seconds. The two profiled requests averaged
+1393.11 and 1393.16 MHz, with 100% sampled active residency. Their preceding
+off control averaged 1346.11 MHz: the 3.49% difference fails the declared 2%
+two-sided frequency gate, although the following off control matches. These
+results do not establish frequency-matched observer overhead or a speedup.
+
+Both profiled requests have stable descriptive accounting. In request 2,
+disjoint root-interval buckets belonging only to gate/up occupy 12.890 seconds,
+only down 6.734 seconds and only attention 11.334 seconds, out of a 42.311-second
+root union. Mixed boundaries and overlapping families remain separate. The
+same-family unions overlap and must not be summed. Host continuation time is
+38.309 seconds in attention and 0.963 seconds in FFN; this attributes where the
+CPU waits, not which queued GPU operation causes the wait. FFN is the leading
+candidate from the unambiguous GPU buckets, rather than from API wait location.
+
+Peak sampled process footprint was 26.386 GiB; minimum cache-aware physical
+headroom was 19.854 GiB and swap growth was zero. The guard kept its 28.5 GiB
+process cap, 10% reserve and 64 MiB swap-growth stop. The observer stopped its
+owned sampler successfully and finalized all 291 valid samples. The analyzer
+checks clock anchors, sample and raw-file digests, stop receipts, root-union
+conservation and both bracketing controls; telemetry does not silently qualify
+an out-of-frequency comparison.
+
+The first profile attempt exposed a stale diagnostic count, rather than a GPU
+failure: Q/K statistics now chunk F32 work at 16 MiB. Their self-prepare Graph
+count is `7 + ceil(J/1024) + ceil(J/4096)`, which is 34 at J21120. The complete
+36-block-plus-head count is 7925, not the old 7025. Native profile builders and
+strict Python analyzers now derive this count from token geometry; legacy
+reports without the new token-count field keep their legacy contract.
+
+The connected FFN correctness falsifier has already rejected two forms at
+J5760 on saved window 0, block 0. In the full graph, captured gate/up, SiLU and
+product are bitwise equal to the baseline and upstream, while both down outputs
+fail 6,585,038 elements at the unchanged tolerance. A separate down graph reading
+a materialized BF16 product makes the captured path entirely bitwise exact,
+but its independently compiled output-only front still fails 7,398,981 down
+elements. Thus captured-stage parity does not qualify an output-only executable.
+Neither rejected form was timed or promoted. A repeat with an output-only
+product comparator localizes the second form's first observed mismatch before
+down: 8,219,268 product elements fail. Compiler fusion or cast elimination is
+an explanation to investigate, not an established root cause.
+
+Making all four BF16 front outputs mandatory in the actual executable, followed
+by the separate production down graph, passes every active intermediate
+comparison bitwise against both saved upstream and the native baseline.
+The independent captured executable also passes; neither executable may
+substitute for the other's gate. This exact candidate was frozen for an
+isolated J5760 timing falsifier. No production mode has changed.
+
+The timing probe allocates one baseline and one candidate owner before encoding,
+reuses the same input and weights, and encodes one chain with one terminal wait.
+It runs 128 identical FFNs in each of ten samples ordered
+`A_warm,B_warm,A,B,B,A,B,A,A,B`. Product/down checks follow each sample on GPU;
+all 57 comparator slots are read once after the terminal wait. Four measured
+AB/BA pairs require the same 2%/five-interior-samples/99%-active frequency gate.
+Advancing to a full-block trial additionally requires at least 3% median
+root-union improvement and a positive contrast in every pair. Warmups are
+excluded. This is an admission rule for another experiment, not a production
+speedup claim. The isolated guard is 8 GiB, 10%, 64 MiB swap growth and 600 s.
+The candidate's named GPU buffers total 2,047,869,840 bytes, below 2 GiB.
+
+The isolated batch completed with every active product/down comparison bitwise
+equal to the saved upstream values. Gate/up controls and the injected-NaN
+positive control also pass. Each sample has 128 FFNs; these are command-root
+unions divided by 128, not exclusive kernel timings:
+
+| Pair/order | Baseline ms/FFN | Candidate ms/FFN | Observed gain | Mean frequency difference |
+|---|---:|---:|---:|---:|
+| 1 / AB | 172.031 | 171.280 | +0.437% | 0.271% |
+| 2 / BA | 174.455 | 170.573 | +2.225% | 1.337% |
+| 3 / BA | 183.607 | 178.085 | +3.008% | 2.537% (rejected) |
+| 4 / AB | 187.078 | 189.155 | -1.110% | 1.848% |
+
+All samples have 7--9 valid interior observations and 100% mean sampled active
+residency. The third pair fails the unchanged 2% frequency gate; the fourth
+regresses. The raw four-pair median is 1.331%, below the 3% trial threshold,
+and there is no qualified four-pair median. The front graph reduces explicit
+Graph calls from three to two per FFN, but measured roots increase from 897 to
+1153 per sample (+28.54%). Of 10,266 continuations, 10,246 are nested inside
+Graph encoding and 20 are the asynchronous sample boundaries. This establishes
+internal continuation activity at aggregate level; it does not identify the
+particular executable responsible for each extra continuation. Fewer API calls
+did not establish less GPU work. Do not advance this candidate to a full-block
+trial or change production defaults.
+
+There is one terminal wait, one packed post-wait comparator readback, zero
+tracked encoding allocations and zero preterminal readbacks. Sampled peak
+footprint is 2.6375 GiB, minimum cache-aware headroom 43.8500 GiB and swap
+growth zero. The guard and owned observer both finish successfully. Sampled
+limits do not rule out between-poll spikes or count opaque MPS allocations.
+
+The CLI binds native report, launch, guard and binary digests, the actual
+passing parity report and its source/fixture pins. It normalizes the correctness
+probe's mixed relative/absolute source keys without accepting duplicate aliases
+or paths outside the checkout. API accounting follows `mps_api_profile.h`:
+Graph exclusive time subtracts child continuations; a continuation's nested
+time is a subset of its own calls, not another child span to subtract.
+The historical completion receipt does not bind the three observer files.
+Their internal hashes/clock coverage are checked, but frequency labels remain
+descriptive: a coherently replaced observer bundle is not excluded. The new
+CLI therefore also refuses full-block admission without completion-time hashes
+for `power/summary.json`, `power/samples.jsonl` and `power/powermetrics.txt`.
+Partial or mismatched observer hash inventories are rejected. No receipt was
+retroactively rewritten and no affirmative timing claim uses this gap.
+
+The scoped outcome is exact isolated parity and rejection of this speed
+candidate, not an acceleration or proof that all FFN optimization is exhausted.
+Previously tested shared/packed gate/up, row tiling, graph orientation, classic
+MPS and SiLU/product coalescing remain unpromoted; repeating their unchanged
+forms adds no discriminating evidence. Sharing eight GQA K/V heads instead of
+materializing 32 remains an untested attention hypothesis, but its byte-volume
+estimate alone does not support a large full-request gain. The next useful
+signal must identify avoidable GEMM, materialization or kernel work at unchanged
+BF16 boundaries, before another candidate is encoded and timed. Full generation
+remains outside this experiment. Evidence and exact replay commands are indexed
+in `.landmark/evidence/2026-10-31-pixelumm-frequency-ffn.json`; refresh parity
+after source/weights/fixture/geometry/runtime changes and timing after device,
+queue policy or host-state changes.
+
 ## PixelUMM recovery A/A experiment (2026-10-31)
 
 The matched after-DiT matrix did not isolate a causal prelude penalty because

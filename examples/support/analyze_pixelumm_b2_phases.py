@@ -138,12 +138,13 @@ def _validate_api(profile: dict[str, Any], trace: dict[str, Any], request_index:
 
     need(set(indexed) == set(API_PHASES), f"request {request_index}: API phase matrix is incomplete")
     attention_graphs = 3 * (TILES_PER_BLOCK // 2 if candidate else TILES_PER_BLOCK) * BLOCKS
-    expected_graphs = {0: 5, 1: 9 * BLOCKS, 2: attention_graphs,
+    prepare_graphs = common._self_prepare_graphs(profile)
+    expected_graphs = {0: 5, 1: prepare_graphs * BLOCKS, 2: attention_graphs,
                        3: 3 * BLOCKS, 4: 0, 5: 3 * BLOCKS}
     need({phase_id: indexed[phase_id]["graph_encode"]["count"] for phase_id in API_PHASES} == expected_graphs,
          f"request {request_index}: Graph phase counts do not match independent/B2 full36 geometry")
-    expected_total = 5 + 15 * BLOCKS + attention_graphs
-    need(sum(expected_graphs.values()) == expected_total == (3785 if candidate else 7025) and
+    expected_total = 5 + (prepare_graphs + 6) * BLOCKS + attention_graphs
+    need(sum(expected_graphs.values()) == expected_total and
          all(indexed[phase_id]["t5_linear_encode"]["count"] == 0 for phase_id in API_PHASES),
          f"request {request_index}: Graph total or T5 linear count differs from full36 topology")
 
@@ -173,6 +174,8 @@ def _validate_phase_profile(raw: object, request_index: int, candidate: bool,
             "root_profile", "roots", "api_profile"}
     if candidate:
         keys.add("attention_graph_topology")
+    if "token_count" in profile:
+        keys.add("token_count")
     exact_keys(profile, keys, f"request {request_index} phase_profile")
     need(profile["schema"] == PROFILE and uint(profile["block_count"], "profile.block_count") == BLOCKS and
          profile["ffn_graph_topology"] == "separate_gate_up" and

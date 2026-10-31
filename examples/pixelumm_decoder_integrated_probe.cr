@@ -399,7 +399,8 @@ begin
           session.blocks.plans.map(&.local_attention_tile_count),
           markers.last.last.root_count, roots.size.to_i32, roots,
           chain.gpu_elapsed_seconds, chain.api_profile, shared_gate_up: arm.shared_gate_up,
-          fused_kv_gather: arm.combined_attention, scale_softmax: arm.combined_attention)
+          fused_kv_gather: arm.combined_attention, scale_softmax: arm.combined_attention,
+          token_count: session.blocks.plans.first.config.tokens)
         unless session.blocks.plans.all? { |plan| plan.profiled_shared_gate_up == arm.shared_gate_up &&
                plan.profiled_fused_kv_gather == arm.combined_attention &&
                plan.profiled_scale_softmax == arm.combined_attention }

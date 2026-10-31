@@ -866,7 +866,7 @@ module PixelUMMPlanReuseProbe
           fused_softmax_pv: fused_softmax_pv_for_plan(plan_index),
           check_softmax_pv_f32: @check_softmax_pv_f32,
           scale_softmax: scale_softmax_for_plan(plan_index),
-          check_scale_softmax_f32: @check_scale_softmax_f32)
+          check_scale_softmax_f32: @check_scale_softmax_f32, token_count: @tokens)
       end
 
       def release_after_terminal! : Nil

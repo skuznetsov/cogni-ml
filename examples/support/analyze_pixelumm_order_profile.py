@@ -352,6 +352,16 @@ def _validate_api_operation_stats(stats: dict[str, int], operation: str, request
              f"request {request_index}: unexpected linear API nesting")
 
 
+def _self_prepare_graphs(profile: dict[str, Any]) -> int:
+    # Historical v1 reports predate native 16 MiB F32 Q/K statistics chunks.
+    # A present token_count declares the current inventory, never a free count override.
+    if "token_count" not in profile:
+        return 9
+    tokens = uint(profile["token_count"], "profile token_count", minimum=1)
+    need(tokens == math.prod(GRID), "profile token_count differs from full-J geometry")
+    return 7 + (tokens + 1023) // 1024 + (tokens + 4095) // 4096
+
+
 def _validate_api(profile: dict[str, Any], trace: dict[str, Any], request_index: int) -> dict[int, dict[str, dict[str, int]]]:
     api = obj(profile.get("api_profile"), f"request {request_index}: missing API profile")
     exact_keys(api, ("source_schema", "phases"), "API profile")
@@ -382,11 +392,12 @@ def _validate_api(profile: dict[str, Any], trace: dict[str, Any], request_index:
         indexed[phase_id] = parsed_ops
 
     need(set(indexed) == set(API_PHASES), f"request {request_index}: API phase matrix is incomplete")
-    expected_graphs = {0: 5, 1: 9 * BLOCKS, 2: 3 * TILES_PER_BLOCK * BLOCKS,
+    prepare_graphs = _self_prepare_graphs(profile)
+    expected_graphs = {0: 5, 1: prepare_graphs * BLOCKS, 2: 3 * TILES_PER_BLOCK * BLOCKS,
                        3: 3 * BLOCKS, 4: 0, 5: 3 * BLOCKS}
     need({phase_id: indexed[phase_id]["graph_encode"]["count"] for phase_id in API_PHASES} == expected_graphs,
          f"request {request_index}: Graph call counts do not match 36x60 separate-gate/up geometry")
-    need(sum(expected_graphs.values()) == 7025 and
+    need(sum(expected_graphs.values()) == 5 + (prepare_graphs + 6 + 3 * TILES_PER_BLOCK) * BLOCKS and
          all(indexed[phase_id]["t5_linear_encode"]["count"] == 0 for phase_id in API_PHASES),
          f"request {request_index}: unexpected Graph total or T5 linear operation")
     for phase_id in API_PHASES:
@@ -410,7 +421,8 @@ def _validate_phase_profile(raw: object, request_index: int, enabled: bool,
                          "blocks", "aggregate_phase_wall_seconds", "aggregate_phase_thread_cpu_seconds",
                          "head_root_range", "root_candidates", "phase_candidate_root_duration_sum_seconds",
                          "phase_definite_root_duration_sum_seconds", "phase_root_duration_sum_semantics",
-                         "root_profile", "roots", "api_profile"), f"request {request_index} phase_profile")
+                         "root_profile", "roots", "api_profile") +
+               (("token_count",) if "token_count" in profile else ()), f"request {request_index} phase_profile")
     need(profile["schema"] == PROFILE and uint(profile["block_count"], "profile block_count") == BLOCKS and
          profile["ffn_graph_topology"] == "separate_gate_up" and
          boolean(profile["fused_kv_gather"], "fused_kv_gather") is enabled and

@@ -36988,3 +36988,44 @@ Refresh after source/toolchain/device/model/workload changes.
   changes or artifact loss; re-admit memory before another run. Next signal:
   full-motion review, then another seed/prompt and multi-segment continuation
   before considering a quality default.
+
+### PixelUMM frequency profile and exact FFN fusion rejection (2026-10-31)
+
+- Six reused-resource J21120, 36-block-plus-head requests pass the existing
+  saved-stage/head gate. The two profiled requests are stable near 1393 MHz,
+  but their preceding off control differs by 3.49%; no two-sided qualified
+  observer-overhead or speedup claim follows. Disjoint request2 root buckets:
+  gate/up 12.890 s, down 6.734 s, attention 11.334 s, union 42.311 s. Mixed
+  roots stay separate. API wait location is not the queued GPU cause.
+- Q/K statistics now require geometry-derived profile counts: self-prepare
+  is `7 + ceil(J/1024) + ceil(J/4096)`, 34 at J21120. Full36+head is 7925 Graph
+  calls. Native profiles declare token count; analyzers retain strict legacy
+  handling only for older reports without that field.
+- Whole-FFN and output-only split-front graphs fail unchanged 2e-5 tolerance.
+  Making gate/up/SiLU/product mandatory BF16 outputs and keeping a separate
+  down graph passes all active J5760 w0/block0 comparisons bitwise. Captured
+  parity alone does not qualify an independently compiled output-only graph.
+- Ten reused-buffer samples of 128 FFNs keep one terminal wait, one packed
+  post-wait readback and zero tracked encode allocations/preterminal reads.
+  Three pairs meet the observed 2% frequency-distance rule: +0.437%, +2.225%,
+  -1.110% union contrasts; the +3.008% pair differs by 2.537% in frequency and
+  is excluded. No qualified four-pair median; raw median 1.331% fails 3%.
+  Candidate roots grow 897 to 1153 per sample despite fewer Graph calls.
+- The historical completion omits observer-bundle hashes. CLI now marks those
+  frequency labels descriptive-only and refuses trial admission; partial or
+  mismatched observer digest inventories fail. Do not retrofit that receipt
+  or quote pair labels as affirmative receipt-bound performance evidence.
+  No full-block candidate trial, production promotion or generation occurred.
+- Isolated sampled peak 2.6375 GiB, minimum cache-aware headroom 43.8500 GiB,
+  swap growth zero under 8 GiB/10%/64 MiB/600 s guards. Full profile peak
+  26.386 GiB, headroom 19.854 GiB, zero swap. Opaque MPS allocations and
+  between-sample spikes remain outside instrumented counters/sample guarantees.
+- Evidence `.landmark/evidence/2026-10-31-pixelumm-frequency-ffn.json`; return
+  `docs/hy-nomas-generation-frontier.md`. Correlated mini-Quad review is ROBUST
+  only for tested parity and rejection of this speed candidate. Acceleration
+  remains open. Next signal: measured avoidable GEMM/materialization/kernel
+  work; do not repeat refuted shared/packed gate-up or coalescing unchanged.
+  Standing scope: GPU-only bounded probes, no new explicit waits, unchanged
+  tolerance, 10% cache-aware reserve, no full generation. Refresh parity on
+  source/weights/fixture/geometry/runtime changes, and timing on device, queue
+  policy or host-state changes; missing evidence invalidates its consumption.

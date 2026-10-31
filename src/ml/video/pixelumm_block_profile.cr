@@ -35,6 +35,7 @@ module ML::Video
     getter check_softmax_pv_f32 : Bool
     getter scale_softmax : Bool
     getter check_scale_softmax_f32 : Bool
+    getter token_count : Int32
     # Whole-block root totals, interval union, envelope, and overlap remain the
     # additive-safe summary. Individual roots may overlap temporally.
     getter root_profile : MPSCommandPhaseProfile
@@ -54,7 +55,19 @@ module ML::Video
                            @fused_softmax_pv : Bool,
                            @check_softmax_pv_f32 : Bool,
                            @scale_softmax : Bool,
-                           @check_scale_softmax_f32 : Bool)
+                           @check_scale_softmax_f32 : Bool,
+                           @token_count : Int32)
+    end
+
+    # Keep this inventory aligned with pixel_qk_statistics_steps in the native
+    # bridge: its source-compatible reduction uses 16 MiB F32 input chunks.
+    # PixelUMM fixes Q/K geometry at 32/8 heads of dimension 128.
+    def self.self_prepare_graph_count(token_count : Int32) : UInt64
+      raise ArgumentError.new("PixelUMM profile token count must be positive") unless token_count > 0
+      tokens = token_count.to_u64
+      q_chunks = (tokens + 1023_u64) // 1024_u64
+      k_chunks = (tokens + 4095_u64) // 4096_u64
+      7_u64 + q_chunks + k_chunks
     end
 
     def self.build(markers : Array(PixelUMMBlockPhaseMarker),
@@ -66,7 +79,8 @@ module ML::Video
                    fused_softmax_pv : Bool = false,
                    check_softmax_pv_f32 : Bool = false,
                    scale_softmax : Bool = false,
-                   check_scale_softmax_f32 : Bool = false) : self
+                   check_scale_softmax_f32 : Bool = false,
+                   *, token_count : Int32) : self
       unless markers.map(&.name) == MARKER_NAMES.to_a
         raise ArgumentError.new("PixelUMM phase markers must have the complete source order")
       end
@@ -115,7 +129,7 @@ module ML::Video
       end
 
       validate_api_profile!(api_profile, roots.size, tile_count, shared_gate_up,
-        fused_softmax_pv, check_softmax_pv_f32, check_scale_softmax_f32)
+        fused_softmax_pv, check_softmax_pv_f32, check_scale_softmax_f32, token_count)
 
       phase_names = MARKER_NAMES.to_a[0...-1]
       wall_seconds = {} of String => Float64
@@ -164,7 +178,7 @@ module ML::Video
       new(markers, wall_seconds, thread_cpu_seconds, root_candidates,
         candidate_duration_sums, definite_duration_sums, roots, tile_count,
         whole_block, api_profile, shared_gate_up, fused_softmax_pv,
-        check_softmax_pv_f32, scale_softmax, check_scale_softmax_f32)
+        check_softmax_pv_f32, scale_softmax, check_scale_softmax_f32, token_count)
     end
 
     def attention_graph_topology : String
@@ -178,6 +192,7 @@ module ML::Video
     # labeling their PixelUMM interpretation explicitly in each serialized row.
     def to_json(json : JSON::Builder) : Nil
       json.object do
+        json.field "token_count", @token_count
         json.field "schema", "cogni_ml.pixelumm_block_phase_profile/v1"
         json.field "attention_tile_count", @tile_count
         json.field "fused_softmax_pv", @fused_softmax_pv
@@ -314,7 +329,8 @@ module ML::Video
                                            shared_gate_up : Bool,
                                            fused_softmax_pv : Bool,
                                            check_softmax_pv_f32 : Bool,
-                                           check_scale_softmax_f32 : Bool) : Nil
+                                           check_scale_softmax_f32 : Bool,
+                                           token_count : Int32) : Nil
       # Reuse the existing MPS API phase IDs without applying the Wan-specific
       # full-block validator: PixelUMM phase 2 is its two-, three-, four-, or
       # five-per-tile local attention graph, and phase 4 is unused. Scale-folded
@@ -328,9 +344,10 @@ module ML::Video
                         else
                           3_u64
                         end
+      prepare_graphs = self_prepare_graph_count(token_count)
       expected_graph_calls = {
         0 => 0_u64,
-        1 => 9_u64, # input norm, QKV, Q/K norm statistics and inverse
+        1 => prepare_graphs, # input norm, QKV, chunked Q/K statistics and inverse
         2 => graphs_per_tile * tile_count.to_u64,
         3 => 3_u64,                            # output projection, post norm and gain
         4 => 0_u64,                            # PixelUMM has no cross-attention phase
@@ -346,7 +363,7 @@ module ML::Video
         graph = phase.operations["graph_encode"]?
         raise ArgumentError.new("PixelUMM API profile is missing Graph timing") unless graph
         unless graph.count == expected_count
-          raise ArgumentError.new("PixelUMM API Graph counts do not match the block phase inventory")
+          raise ArgumentError.new("PixelUMM API phase #{phase_id} expected #{expected_count} Graph calls, got #{graph.count}")
         end
         graph_calls += graph.count
       end
@@ -361,7 +378,7 @@ module ML::Video
         linear_calls += linear.count
       end
 
-      expected_total = (shared_gate_up ? 14_u64 : 15_u64) +
+      expected_total = prepare_graphs + 3_u64 + (shared_gate_up ? 2_u64 : 3_u64) +
                        graphs_per_tile * tile_count.to_u64
       unless graph_calls == expected_total
         raise ArgumentError.new("PixelUMM API profile has an unexpected total Graph call count")

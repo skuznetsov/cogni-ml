@@ -200,6 +200,21 @@ def _contract_fixture() -> dict[str, Any]:
 
 
 class B2PhaseAnalyzerTests(unittest.TestCase):
+    def test_current_chunk_inventory_is_geometry_checked_in_both_attention_modes(self) -> None:
+        for selected, original in ((False, self.baseline), (True, self.candidate)):
+            profile = copy.deepcopy(original)
+            profile["token_count"] = 21120
+            with self.assertRaisesRegex(ValueError, "Graph phase counts"):
+                analyzer._validate_phase_profile(profile, 0, selected, self.intervals, self.trace)
+            graph = profile["api_profile"]["phases"][1]["operations"]["graph_encode"]
+            graph.update(count=1224, wall_total_ns=1224 * 2000,
+                         thread_cpu_total_ns=1224 * 1000,
+                         exclusive_wall_total_ns=1224 * 2000,
+                         exclusive_thread_cpu_total_ns=1224 * 1000)
+            parsed = analyzer._validate_phase_profile(profile, 0, selected, self.intervals, self.trace)
+            self.assertEqual(sum(row["graph_encode"]["count"] for row in parsed["api"].values()),
+                             4685 if selected else 7925)
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.intervals = _root_intervals(361)

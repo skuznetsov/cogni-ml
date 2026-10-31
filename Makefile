@@ -39,6 +39,7 @@ PIXELUMM_HEAD_OBJ := $(BUILD_DIR)/pixelumm_decoder_head_mps_bridge.o
 PIXELUMM_FFN_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_projection_bridge.o
 PIXELUMM_FFN_ISOLATED_PROBE_OBJ := $(BUILD_DIR)/pixelumm_ffn_isolated_bridge.o
 PIXELUMM_FFN_AA_OBJ := $(BUILD_DIR)/pixelumm_ffn_aa_bridge.o
+PIXELUMM_FFN_GRAPH_OBJ := $(BUILD_DIR)/pixelumm_ffn_graph_bridge.o
 PIXELUMM_CONNECTED_RESOURCE_PROBE_OBJ := $(BUILD_DIR)/pixelumm_connected_resource_bridge.o
 PIXELUMM_FFN_WEIGHT_REUSE_OBJ := $(BUILD_DIR)/pixelumm_ffn_weight_reuse_bridge.o
 PIXELUMM_PACKED_GATE_UP_OBJ := $(BUILD_DIR)/pixelumm_packed_gate_up_bridge.o
@@ -382,6 +383,31 @@ $(PIXELUMM_FFN_AA_OBJ): examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/
 $(BUILD_DIR)/pixelumm_ffn_aa_probe: examples/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_AA_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_AA_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: pixelumm_ffn_graph_probe spec_pixelumm_ffn_graph_probe
+pixelumm_ffn_graph_probe: $(BUILD_DIR)/pixelumm_ffn_graph_probe
+
+spec_pixelumm_ffn_graph_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_graph_contract_spec.cr
+
+# The whole-FFN diagnostic includes the AA and production bridges in one TU.
+# Linking their separate objects would duplicate the production C ABI symbols.
+$(PIXELUMM_FFN_GRAPH_OBJ): examples/support/pixelumm_ffn_graph_bridge.mm examples/support/pixelumm_ffn_aa_bridge.mm src/ml/video/pixelumm_decoder_block_mps_bridge.mm src/ml/video/mps_api_profile.h $(COGNIGRAPH_NATIVE_HEADERS) | $(BUILD_SENTINEL)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(BUILD_DIR)/pixelumm_ffn_graph_probe: examples/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_GRAPH_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_GRAPH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+.PHONY: pixelumm_ffn_stage_timing_probe spec_pixelumm_ffn_stage_timing_probe
+pixelumm_ffn_stage_timing_probe: $(BUILD_DIR)/pixelumm_ffn_stage_timing_probe
+
+spec_pixelumm_ffn_stage_timing_probe:
+	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_ffn_stage_timing_contract_spec.cr
+
+$(BUILD_DIR)/pixelumm_ffn_stage_timing_probe: examples/pixelumm_ffn_stage_timing_probe.cr examples/support/pixelumm_ffn_stage_timing_contract.cr examples/support/pixelumm_ffn_graph_probe.cr examples/support/pixelumm_ffn_aa_probe.cr examples/support/pixelumm_ffn_aa_contract.cr examples/support/pixelumm_ffn_isolated_probe.cr examples/support/pixelumm_ffn_weight_reuse_probe.cr examples/support/pixelumm_ffn_dense.metal examples/support/pixelumm_memory_probe.cr examples/support/hy_nomas_probe_instrumentation.cr $(PIXELUMM_FFN_ISOLATED_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(PIXELUMM_FFN_GRAPH_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(PIXELUMM_FFN_GRAPH_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_pixelumm_block_profile:
 	$(CRYSTAL) spec -Dcpu_only spec/pixelumm_block_profile_spec.cr spec/wan_mps_api_profile_spec.cr spec/wan_mps_command_phase_profile_spec.cr spec/wan_mps_continuation_trace_spec.cr

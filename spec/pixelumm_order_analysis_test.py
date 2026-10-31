@@ -414,6 +414,22 @@ def report_document(reverse: bool) -> dict[str, object]:
 
 
 class PixelUMMOrderAnalysisTests(unittest.TestCase):
+    def test_current_chunk_inventory_requires_full_j_and_rejects_old_counts(self) -> None:
+        profile = profile_document(False)
+        profile["token_count"] = 21120
+        intervals = [(float(row["gpu_start_seconds"]), float(row["gpu_end_seconds"]))
+                     for row in root_rows()]
+        trace = ANALYZER.validate_trace(trace_document(), 2, intervals)
+        with self.assertRaisesRegex(ValueError, "Graph call counts"):
+            ANALYZER._validate_api(profile, trace, 2)
+        profile["api_profile"]["phases"][1]["operations"]["graph_encode"] = op_stats(1224)
+        parsed = ANALYZER._validate_api(profile, trace, 2)
+        self.assertEqual(sum(row["graph_encode"]["count"] for row in parsed.values()), 7925)
+        for invalid in (0, -1, True, 1024, 2**63):
+            profile["token_count"] = invalid
+            with self.assertRaises(ValueError):
+                ANALYZER._validate_api(profile, trace, 2)
+
     def test_graph_aggregate_allows_multiple_children_per_call(self) -> None:
         stats = op_stats(1, nested_count=2, nested_wall=2, nested_cpu=2,
                          wall_each=100, cpu_each=100)

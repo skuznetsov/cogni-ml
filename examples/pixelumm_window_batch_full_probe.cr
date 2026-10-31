@@ -289,7 +289,8 @@ begin
       markers = session.blocks.plans.map(&.phase_markers(chain))
       phases = ML::Video::PixelUMMDecoderPhaseProfile.build(markers, tile_counts,
         markers.last.last.root_count, roots.size.to_i32, roots, gpu_seconds,
-        chain.api_profile, paired_window_attention: arm.selected)
+        chain.api_profile, paired_window_attention: arm.selected,
+        token_count: session.blocks.plans.first.config.tokens)
       expected_topology = arm.selected ? "paired_windows_b2" : "independent_windows"
       unless phases.paired_window_attention == arm.selected &&
              phases.attention_graph_topology == expected_topology

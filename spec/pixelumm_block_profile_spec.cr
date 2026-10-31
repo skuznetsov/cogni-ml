@@ -46,10 +46,11 @@ private def pixelumm_api_profile(tile_count : Int32,
                                  fused_softmax_pv : Bool = false,
                                  check_softmax_pv_f32 : Bool = false,
                                  scale_softmax : Bool = false,
-                                 check_scale_softmax_f32 : Bool = false) : ML::Video::MPSAPIProfile
+                                 check_scale_softmax_f32 : Bool = false,
+                                 graph_prepare_override : UInt64? = nil) : ML::Video::MPSAPIProfile
   graph_counts = {
     0 => 0_u64,
-    1 => 9_u64,
+    1 => graph_prepare_override || 9_u64,
     2 => graph_attention_override ||
          ((check_scale_softmax_f32 ? 5_u64 : (check_softmax_pv_f32 ? 4_u64 : (fused_softmax_pv ? 2_u64 : 3_u64))) * tile_count.to_u64),
     3 => 3_u64,
@@ -86,13 +87,37 @@ private def pixelumm_root_duration_sum(roots : Array(ML::Video::MPSCommandRootTi
 end
 
 describe ML::Video::PixelUMMBlockPhaseProfile do
+  it "requires the full-J chunk inventory in the single-block builder" do
+    markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
+    roots = pixelumm_profile_roots(5)
+    duration = pixelumm_root_duration_sum(roots)
+    api = pixelumm_api_profile(1, roots.size, graph_prepare_override: 34_u64)
+    profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
+      duration, api, 1, token_count: 21_120)
+    profile.token_count.should eq(21_120)
+    expect_raises(ArgumentError, "phase 1 expected 34 Graph calls, got 9") do
+      ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots, duration,
+        pixelumm_api_profile(1, roots.size), 1, token_count: 21_120)
+    end
+  end
+
+  it "counts the pinned 16 MiB Q/K statistics chunks at both boundaries" do
+    {1 => 9_u64, 1024 => 9_u64, 1025 => 10_u64,
+     4096 => 12_u64, 4097 => 14_u64, 5760 => 15_u64,
+     21_120 => 34_u64}.each do |tokens, count|
+      ML::Video::PixelUMMBlockPhaseProfile.self_prepare_graph_count(tokens).should eq(count)
+    end
+    expect_raises(ArgumentError) { ML::Video::PixelUMMBlockPhaseProfile.self_prepare_graph_count(0) }
+    expect_raises(ArgumentError) { ML::Video::PixelUMMBlockPhaseProfile.self_prepare_graph_count(-1) }
+  end
+
   it "interprets ordered CPU markers and preserves inclusive shared-root candidates" do
     markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
     roots = pixelumm_profile_roots(5)
     api = pixelumm_api_profile(1, roots.size)
 
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      pixelumm_root_duration_sum(roots), api, 1)
+      pixelumm_root_duration_sum(roots), api, 1, token_count: 1)
 
     profile.markers.map(&.name).should eq(ML::Video::PixelUMMBlockPhaseProfile::MARKER_NAMES.to_a)
     profile.phase_wall_seconds.size.should eq(10)
@@ -134,7 +159,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     markers = pixelumm_profile_markers(Array(Int32).new(11, 1))
     roots = pixelumm_profile_roots(1)
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      pixelumm_root_duration_sum(roots), pixelumm_api_profile(1, 1), 1)
+      pixelumm_root_duration_sum(roots), pixelumm_api_profile(1, 1), 1, token_count: 1)
 
     profile.root_candidates.should eq([
       ML::Video::PixelUMMBlockPhaseProfile::MARKER_NAMES.to_a[0...-1],
@@ -147,7 +172,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     markers = pixelumm_profile_markers([1, 2, 2, 3, 4, 4, 5, 5, 5, 5, 5])
     roots = pixelumm_profile_roots(5)
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      pixelumm_root_duration_sum(roots), pixelumm_api_profile(1, roots.size), 1)
+      pixelumm_root_duration_sum(roots), pixelumm_api_profile(1, roots.size), 1, token_count: 1)
 
     json = JSON.parse(profile.to_json)
     json["api_profile"]["source_schema"].as_s.should eq("MPSAPIProfile WAN phase IDs")
@@ -176,7 +201,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     fused_api = pixelumm_api_profile(1, roots.size, fused_softmax_pv: true)
 
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      duration, fused_api, 1, fused_softmax_pv: true)
+      duration, fused_api, 1, fused_softmax_pv: true, token_count: 1)
     profile.fused_softmax_pv.should be_true
     profile.attention_graph_topology.should eq("separate_qk_fused_softmax_pv")
     profile.api_profile.phases.find { |phase| phase.phase_id == 2 }.not_nil!
@@ -187,7 +212,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     full_api = pixelumm_api_profile(60, roots.size, fused_softmax_pv: true)
     full_profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      duration, full_api, 60, fused_softmax_pv: true)
+      duration, full_api, 60, fused_softmax_pv: true, token_count: 1)
     full_graph_calls = full_profile.api_profile.phases.sum do |phase|
       phase.operations["graph_encode"].count
     end
@@ -196,23 +221,23 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     separate_api = pixelumm_api_profile(1, roots.size)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, separate_api, 1, fused_softmax_pv: true)
+        duration, separate_api, 1, fused_softmax_pv: true, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, fused_api, 1)
+        duration, fused_api, 1, token_count: 1)
     end
     wrong_fused_count = pixelumm_api_profile(1, roots.size,
       graph_attention_override: 3_u64, fused_softmax_pv: true)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, wrong_fused_count, 1, fused_softmax_pv: true)
+        duration, wrong_fused_count, 1, fused_softmax_pv: true, token_count: 1)
     end
     wrong_separate_count = pixelumm_api_profile(1, roots.size,
       graph_attention_override: 2_u64)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, wrong_separate_count, 1)
+        duration, wrong_separate_count, 1, token_count: 1)
     end
   end
 
@@ -225,7 +250,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
       duration, check_api, 1, fused_softmax_pv: true,
-      check_softmax_pv_f32: true)
+      check_softmax_pv_f32: true, token_count: 1)
     profile.fused_softmax_pv.should be_true
     profile.check_softmax_pv_f32.should be_true
     profile.attention_graph_topology.should eq("f32_softmax_pv_dual_path_check")
@@ -239,7 +264,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     full_api = pixelumm_api_profile(60, roots.size,
       check_softmax_pv_f32: true)
     full_profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      duration, full_api, 60, check_softmax_pv_f32: true)
+      duration, full_api, 60, check_softmax_pv_f32: true, token_count: 1)
     full_graph_calls = full_profile.api_profile.phases.sum do |phase|
       phase.operations["graph_encode"].count
     end
@@ -249,12 +274,12 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
       graph_attention_override: 3_u64, check_softmax_pv_f32: true)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, wrong_count, 1, check_softmax_pv_f32: true)
+        duration, wrong_count, 1, check_softmax_pv_f32: true, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
         duration, check_api, 1, shared_gate_up: true,
-        check_softmax_pv_f32: true)
+        check_softmax_pv_f32: true, token_count: 1)
     end
   end
 
@@ -265,7 +290,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     scale_api = pixelumm_api_profile(1, roots.size, scale_softmax: true)
     scale = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      duration, scale_api, 1, scale_softmax: true)
+      duration, scale_api, 1, scale_softmax: true, token_count: 1)
     scale.scale_softmax.should be_true
     scale.check_scale_softmax_f32.should be_false
     scale.attention_graph_topology.should eq("separate_qk_scale_folded_softmax_pv")
@@ -279,7 +304,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
       scale_softmax: true, check_scale_softmax_f32: true)
     checked = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
       duration, check_api, 1, scale_softmax: true,
-      check_scale_softmax_f32: true)
+      check_scale_softmax_f32: true, token_count: 1)
     checked.scale_softmax.should be_true
     checked.check_scale_softmax_f32.should be_true
     checked.attention_graph_topology.should eq("f32_scale_softmax_candidate_first_dual_path_check")
@@ -295,7 +320,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
       scale_softmax: true, check_scale_softmax_f32: true)
     full = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
       duration, full_api, 60, scale_softmax: true,
-      check_scale_softmax_f32: true)
+      check_scale_softmax_f32: true, token_count: 1)
     full.api_profile.phases.sum do |phase|
       phase.operations["graph_encode"].count
     end.should eq(315_u64)
@@ -306,21 +331,21 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
         duration, wrong_count, 1, scale_softmax: true,
-        check_scale_softmax_f32: true)
+        check_scale_softmax_f32: true, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
         duration, scale_api, 1, fused_softmax_pv: true,
-        scale_softmax: true)
+        scale_softmax: true, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, scale_api, 1, check_scale_softmax_f32: true)
+        duration, scale_api, 1, check_scale_softmax_f32: true, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
         duration, check_api, 1, scale_softmax: true,
-        check_softmax_pv_f32: true, check_scale_softmax_f32: true)
+        check_softmax_pv_f32: true, check_scale_softmax_f32: true, token_count: 1)
     end
   end
 
@@ -332,7 +357,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     separate_api = pixelumm_api_profile(1, roots.size)
 
     profile = ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-      duration, shared_api, 1, shared_gate_up: true)
+      duration, shared_api, 1, shared_gate_up: true, token_count: 1)
     profile.shared_gate_up.should be_true
     profile.api_profile.phases.find { |phase| phase.phase_id == 5 }.not_nil!
       .operations["graph_encode"].count.should eq(2_u64)
@@ -341,11 +366,11 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, shared_api, 1)
+        duration, shared_api, 1, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        duration, separate_api, 1, shared_gate_up: true)
+        duration, separate_api, 1, shared_gate_up: true, token_count: 1)
     end
   end
 
@@ -356,7 +381,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(valid[0...-1], roots,
-        pixelumm_root_duration_sum(roots), api, 1)
+        pixelumm_root_duration_sum(roots), api, 1, token_count: 1)
     end
 
     reordered = valid.dup
@@ -365,7 +390,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
       reordered[1].root_count)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(reordered, roots,
-        pixelumm_root_duration_sum(roots), api, 1)
+        pixelumm_root_duration_sum(roots), api, 1, token_count: 1)
     end
 
     invalid_markers = [
@@ -377,7 +402,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     invalid_markers.each do |markers|
       expect_raises(ArgumentError) do
         ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-          pixelumm_root_duration_sum(roots), api, 1)
+          pixelumm_root_duration_sum(roots), api, 1, token_count: 1)
       end
     end
 
@@ -397,7 +422,7 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     invalid_times.each do |markers|
       expect_raises(ArgumentError) do
         ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-          pixelumm_root_duration_sum(roots), api, 1)
+          pixelumm_root_duration_sum(roots), api, 1, token_count: 1)
       end
     end
   end
@@ -413,13 +438,13 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
     ]
     invalid_profiles.each do |api|
       expect_raises(ArgumentError) do
-        ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots, duration, api, 1)
+        ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots, duration, api, 1, token_count: 1)
       end
     end
 
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots, duration,
-        pixelumm_api_profile(1, roots.size), 0)
+        pixelumm_api_profile(1, roots.size), 0, token_count: 1)
     end
   end
 
@@ -430,18 +455,18 @@ describe ML::Video::PixelUMMBlockPhaseProfile do
 
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        pixelumm_root_duration_sum(roots) + 0.5, api, 1)
+        pixelumm_root_duration_sum(roots) + 0.5, api, 1, token_count: 1)
     end
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, roots,
-        pixelumm_root_duration_sum(roots), api, -1)
+        pixelumm_root_duration_sum(roots), api, -1, token_count: 1)
     end
 
     bad_roots = roots.dup
     bad_roots[2] = ML::Video::MPSCommandRootTiming.new(2, false, false, 1.0, 2.0)
     expect_raises(ArgumentError) do
       ML::Video::PixelUMMBlockPhaseProfile.build(markers, bad_roots,
-        pixelumm_root_duration_sum(bad_roots), api, 1)
+        pixelumm_root_duration_sum(bad_roots), api, 1, token_count: 1)
     end
   end
 end

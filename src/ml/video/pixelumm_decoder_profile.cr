@@ -39,6 +39,7 @@ module ML::Video
     getter fused_kv_gather : Bool
     getter scale_softmax : Bool
     getter paired_window_attention : Bool
+    getter token_count : Int32
 
     private def initialize(@blocks : Array(PixelUMMDecoderBlockPhaseTiming),
                            @aggregate_phase_wall_seconds : Hash(String, Float64),
@@ -54,7 +55,8 @@ module ML::Video
                            @shared_gate_up : Bool,
                            @fused_kv_gather : Bool,
                            @scale_softmax : Bool,
-                           @paired_window_attention : Bool)
+                           @paired_window_attention : Bool,
+                           @token_count : Int32)
     end
 
     def self.build(block_markers : Array(Array(PixelUMMBlockPhaseMarker)),
@@ -67,7 +69,8 @@ module ML::Video
                    shared_gate_up : Bool = false,
                    fused_kv_gather : Bool = false,
                    scale_softmax : Bool = false,
-                   paired_window_attention : Bool = false) : self
+                   paired_window_attention : Bool = false,
+                   *, token_count : Int32) : self
       unless !block_markers.empty? && block_markers.size == tile_counts.size
         raise ArgumentError.new("PixelUMM decoder profile requires one positive tile count per block")
       end
@@ -115,7 +118,7 @@ module ML::Video
       end
       labels << "head"
       validate_api_profile!(api_profile, blocks.size, tile_counts, roots.size,
-        shared_gate_up, paired_window_attention)
+        shared_gate_up, paired_window_attention, token_count)
 
       root_candidates = Array(Array(String)).new(roots.size) { [] of String }
       blocks.each do |block|
@@ -150,7 +153,7 @@ module ML::Video
         head_end_root_count, root_candidates, candidate_duration_sums,
         definite_duration_sums, roots, whole_chain, api_profile,
         shared_gate_up, fused_kv_gather, scale_softmax,
-        paired_window_attention)
+        paired_window_attention, token_count)
     end
 
     private def self.validate_markers!(markers : Array(PixelUMMBlockPhaseMarker),
@@ -196,7 +199,8 @@ module ML::Video
                                            tile_counts : Array(Int32),
                                            root_count : Int32,
                                            shared_gate_up : Bool,
-                                           paired_window_attention : Bool) : Nil
+                                           paired_window_attention : Bool,
+                                           token_count : Int32) : Nil
       # Combined-attention selectors change Metal dispatches, not Graph count.
       # B2 instead batches two independent tiles into each QK/softmax/PV set.
       attention_work_items = if paired_window_attention
@@ -205,9 +209,10 @@ module ML::Video
                                tile_counts.sum(&.to_u64)
                              end
       expected_attention_graph_calls = 3_u64 * attention_work_items
+      prepare_graphs = PixelUMMBlockPhaseProfile.self_prepare_graph_count(token_count)
       expected_graph_calls = {
         0 => 5_u64,
-        1 => 9_u64 * block_count.to_u64,
+        1 => prepare_graphs * block_count.to_u64,
         2 => expected_attention_graph_calls,
         3 => 3_u64 * block_count.to_u64,
         4 => 0_u64,
@@ -223,7 +228,7 @@ module ML::Video
         graph = phase.operations["graph_encode"]?
         raise ArgumentError.new("PixelUMM decoder API profile is missing Graph timing") unless graph
         unless graph.count == expected_count
-          raise ArgumentError.new("PixelUMM decoder API Graph counts do not match blocks and head")
+          raise ArgumentError.new("PixelUMM decoder API phase #{phase_id} expected #{expected_count} Graph calls, got #{graph.count}")
         end
         graph_calls += graph.count
       end
@@ -238,7 +243,7 @@ module ML::Video
         linear_calls += linear.count
       end
 
-      graphs_per_block = shared_gate_up ? 14_u64 : 15_u64
+      graphs_per_block = prepare_graphs + 3_u64 + (shared_gate_up ? 2_u64 : 3_u64)
       expected_total = 5_u64 + graphs_per_block * block_count.to_u64 +
                        expected_attention_graph_calls
       unless graph_calls == expected_total && linear_calls == 0_u64 &&
@@ -255,6 +260,7 @@ module ML::Video
       json.object do
         json.field "schema", "cogni_ml.pixelumm_decoder_phase_profile/v1"
         json.field "block_count", @blocks.size
+        json.field "token_count", @token_count
         if @paired_window_attention
           json.field "attention_graph_topology", attention_graph_topology
         end
