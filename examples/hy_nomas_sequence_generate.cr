@@ -9,6 +9,8 @@ segments = 4
 plan_only = false
 dit_only = false
 text_cache_policy = HyNomasSequence::HISTORY_TEXT_POLICY
+cinematic_path = ""
+cinematic_sha = ""
 OptionParser.parse do |p|
   p.banner = "Experimental GPU Hy-Nomas continuation: two through six linked 5-second segments, 512x288 at 24 fps"
   p.on("--inputs PATH", "Authenticated continuation input bundle") { |v| input_path = v }
@@ -20,6 +22,8 @@ OptionParser.parse do |p|
   p.on("--legacy-text-per-chunk", "Control only: repeat scene text in every 5-second chunk") do
     text_cache_policy = ML::Video::HyNomasContinuationHistory::TextCachePolicy::PerChunk
   end
+  p.on("--cinematic-cache PATH", "Opt-in authenticated Cinematic BF16 cache lineage") { |v| cinematic_path = v }
+  p.on("--cinematic-cache-sha SHA", "Trusted Cinematic lineage SHA-256") { |v| cinematic_sha = v }
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
 HyNomasSequence.validate_segments!(segments)
@@ -33,7 +37,10 @@ inputs = HyNomasGeneration::TimelineInputs.new(File.realpath(input_path), input_
 inputs.verify_payload!
 inputs.base.file.verify_payload!
 HyNomasSequence.validate_shared_scene_prompt!(inputs.base.prompt)
-admission = HyNomasGeneration.authenticate_bf16_index
+cinematic = HyNomasCinematic.load!(cinematic_path, cinematic_sha,
+  bf16: true, camera_conditioning: false, action_conditioning: false)
+weight_identity = HyNomasSequence.weight_identity(cinematic)
+admission = HyNomasGeneration.authenticate_bf16_index(cinematic: cinematic)
 dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, text_cache_policy)
 dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base)
 raise ArgumentError.new("sequence peak named buffers exceed budget") unless dit_peak <= budget
@@ -54,6 +61,10 @@ HyNomasGeneration.emit("sequence_memory_plan", segments: segments, steps_per_seg
   decoder_named_bytes: metadata.try(&.named_bytes), decoder_peak_named_bytes: decoder_peak,
   frames: pixel_frames, named_budget_bytes: budget,
   cache_precision: "F32 native post-RoPE K/V; no additional BF16 rounding",
+  dit_variant: weight_identity[:dit_variant],
+  dit_weight_index_sha256: weight_identity[:dit_weight_index_sha256],
+  cinematic_lineage: weight_identity[:cinematic_lineage],
+  cinematic_lineage_sha256: weight_identity[:cinematic_lineage_sha256],
   text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
   cache_writer: "separate noisy forward after four denoise forwards; sigma 0.206897, t 206.897",
   full_upstream_video_parity: false)
@@ -84,7 +95,8 @@ begin
   timeline = inputs.upload!("input.latent_bank", timeline_arena)
   latent = current_arena.alloc("input.latent", 32 * 30 * 9 * 16)
   setup = Time.monotonic
-  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission, text_cache_policy)
+  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission,
+    text_cache_policy, cinematic: cinematic)
   raise "sequence preflight/allocation admission disagree" unless dit.named_bytes == dit_steady
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -171,6 +183,10 @@ begin
              segments: segments, frames: dit_only ? 0 : pixel_frames, clean_latent_frames: latent_frames,
              latent_bank_shape: [1, 32, 180, 9, 16], width: 512, height: 288, fps: 24,
              steps_per_segment: 4, shift: 5, cfg: 1,
+             dit_variant: weight_identity[:dit_variant],
+             dit_weight_index_sha256: weight_identity[:dit_weight_index_sha256],
+             cinematic_lineage: weight_identity[:cinematic_lineage],
+             cinematic_lineage_sha256: weight_identity[:cinematic_lineage_sha256],
              cache_precision: "F32 exact native K/V boundary; upstream cache is BF16",
              text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
              cache_writer: {sigma: 0.206897, timestep: 206.897, separate_noisy_forward: true},

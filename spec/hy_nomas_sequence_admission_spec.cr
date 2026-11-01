@@ -8,6 +8,44 @@ describe "shared scene text policy" do
 end
 
 describe HyNomasSequence do
+  it "binds selected BF16 weight index and lineage into one sequence identity" do
+    cinematic = HyNomasCinematic::IndexIdentity.new(
+      "/opt/mldata_ssd/cinematic/index.json", "c" * 64,
+      "/opt/mldata_ssd/cinematic/cinematic-cache.json", "d" * 64)
+
+    HyNomasSequence.weight_identity(cinematic).should eq({
+      dit_variant:              "cinematic-active-blocks",
+      dit_weight_index_sha256:  "c" * 64,
+      cinematic_lineage:        "/opt/mldata_ssd/cinematic/cinematic-cache.json",
+      cinematic_lineage_sha256: "d" * 64,
+    })
+    HyNomasSequence.weight_identity(nil).should eq({
+      dit_variant:              "original",
+      dit_weight_index_sha256:  HyNomasGeneration::INDEX_SHA,
+      cinematic_lineage:        nil,
+      cinematic_lineage_sha256: nil,
+    })
+  end
+
+  it "keeps Cinematic outside the base-indexed checkpoint contract" do
+    cinematic = HyNomasCinematic::IndexIdentity.new(
+      "/opt/mldata_ssd/cinematic/index.json", "c" * 64,
+      "/opt/mldata_ssd/cinematic/cinematic-cache.json", "d" * 64)
+
+    expect_raises(ArgumentError, /base-only/) do
+      HyNomasSequence.validate_checkpoint_variant!(cinematic, prepare_capture: true)
+    end
+    expect_raises(ArgumentError, /base-only/) do
+      HyNomasSequence.validate_checkpoint_variant!(cinematic, checkpoint: true)
+    end
+    expect_raises(ArgumentError, /base-only/) do
+      HyNomasSequence.validate_checkpoint_variant!(cinematic, restore: true)
+    end
+    HyNomasSequence.validate_checkpoint_variant!(nil, prepare_capture: true)
+    HyNomasSequence.validate_checkpoint_variant!(nil, checkpoint: true)
+    HyNomasSequence.validate_checkpoint_variant!(nil, restore: true)
+  end
+
   it "admits one scene with no action tails" do
     ["{}", %({"contained_actions":null}), %({"contained_actions":[]})].each do |scene|
       HyNomasSequence.validate_shared_scene_prompt!(%({"segments":[#{scene}]}))

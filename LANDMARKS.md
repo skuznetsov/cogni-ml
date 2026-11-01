@@ -37341,3 +37341,54 @@ Refresh after source/toolchain/device/model/workload changes.
   qualify count/claim scope, not candidate speed/quality. Refresh after model,
   layout/windows/token policy, runtime/backend or device/host-state changes;
   re-admit the unchanged 10% memory guard before any later GPU experiment.
+
+### Hy-Nomas Cinematic drafter comparison (2026-11-01)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json`.
+  The drafter and sequence CLI accept authenticated `--cinematic-cache` and
+  `--cinematic-cache-sha`; original BF16 stays the default. Four model identity
+  fields bind the plan, loader, receipt and gallery. Cinematic sequence
+  checkpoint/capture/restore explicitly rejects base-only contracts.
+- `--reuse-inputs-from` authenticates a completed frozen suite and reuses its
+  exact native prompts, conditioning and three noise banks without Qwen or
+  RNG. Selected payloads and metadata are rechecked before each scene, and
+  native admission authenticates them again. This is incremental execution;
+  mutation of a future scene fails that scene, not earlier valid outputs.
+- All six Cinematic 10-second first takes completed at 512x288/24 fps, two
+  segments and four steps, with unchanged BF16/F32 arithmetic and history.
+  Fresh original portrait pixels and latent bank are byte-exact against the
+  retained base. The other five base clips remain historical, with no explicit
+  model identity in their old receipts; no fresh paired speed claim follows.
+- Maximum sampled process-group peak 24.3214 GiB, minimum cache-aware headroom
+  22.7736 GiB, zero observed stage swap growth, 18 successful guarded stages
+  and no final sampled live children. Keep 10% floor / 30 GiB native cap /
+  64 MiB swap stop. Every inference phase reports zero tracked encode
+  allocations/readbacks/preterminal waits and one existing terminal drain.
+  Opaque MPS resources and between-sample spikes are not bounded by counters.
+- Fresh selected official source-MPS merge qualification: blocks 0/1,
+  302,113,792 BF16 values, zero mismatches. Prior all-block weight and
+  same-latent PixelUMM evidence remains separately authenticated. No fresh
+  complete Cinematic DiT trajectory or ten-second intermediate gate; no
+  unmodified CUDA/FlexAttention claim. Tolerances remain atol=rtol=2e-5.
+- 60 Python tests, 11 CPU-only Crystal examples, formatting and fresh Metal
+  build passed. Mini-Quad verdict ROBUST for tested identity/admission and
+  paired artifact integrity; same-lineage review is correlated. Offline pair
+  builder rejected an incomplete suite and passed eight geometry/publication
+  attacks. Six validated pairs and a 1,440-frame reel are retained under
+  `/opt/mldata_ssd/cogni-ml/cinematic-drafter-20261101.CSoblFK7/pairs/`, base
+  left / Cinematic right. Median observed scene time 28.071 s/output second
+  excludes already-retained conditioning and is descriptive only.
+- Stills at 0/3/6/9 seconds show more surface texture/contrast, changed
+  composition and fewer visible walkers in the doughnut scene, but changing
+  balloon count and left-facing dogs remain. These do not qualify motion,
+  physics or general quality. Keep Cinematic opt-in pending user playback,
+  including the five-second boundary, then other seeds/prompts.
+- VACE remains a proposed separate Wan renderer consuming draft pixels or
+  prepared depth/pose/masks/reference images. Its trained controls and latent
+  space cannot be attached directly to Hy-Nomas as this LoRA; no VACE port or
+  weights were added. Bad draft trajectories need correction before reuse.
+- Refresh identity/parity after source, binary, weights/cache, inputs/noise,
+  geometry/history or runtime changes; repeat timing after host/device-state
+  changes. Missing/mutated local evidence invalidates its use. Roll back by
+  omitting both Cinematic flags; no remote publication was authorized.

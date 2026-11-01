@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUPPORT = ROOT / "examples" / "support"
 sys.path.insert(0, str(SUPPORT))
 import hy_nomas_draft_results as results
+import hy_nomas_draft_inputs as draft_inputs
 
 DEFAULT_PYTHON = Path("/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python")
 DEFAULT_UPSTREAM = Path("/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024")
@@ -34,9 +35,11 @@ FLOOR_PCT = "10"
 SOURCE_PATHS = (
     "examples/hy_nomas_draft.py",
     "examples/support/hy_nomas_draft_results.py",
+    "examples/support/hy_nomas_draft_inputs.py",
     "examples/hy_nomas_sequence_generate.cr",
     "examples/support/hy_nomas_sequence.cr",
     "examples/support/hy_nomas_generation.cr",
+    "examples/support/hy_nomas_cinematic.cr",
     "examples/support/qwen25_pretrained_reference.py",
     "examples/support/qwen25_hy_nomas_prompt_reference.py",
     "spec/support/hy_nomas_generation_inputs.py",
@@ -121,6 +124,13 @@ class Runner:
             raise DraftError("the initial bounded suite supports at most six scenes")
         # Validate every prompt before creating a run or starting a model.
         self.prompts = {scene["id"]: native_prompt(scene) for scene in self.scenes}
+        self.model = draft_inputs.model_identity(args.cinematic_cache, args.cinematic_cache_sha)
+        self.cinematic_args = (["--cinematic-cache", self.model["cinematic_lineage"],
+                                "--cinematic-cache-sha", self.model["cinematic_lineage_sha256"]]
+                               if self.model["cinematic_lineage"] else [])
+        self.reuse = (draft_inputs.FrozenInputs(args.reuse_inputs_from, self.suite_bytes,
+                                               self.scenes, self.prompts)
+                      if args.reuse_inputs_from else None)
         self.generator = args.generator.resolve(strict=True)
         self.binary_sha = results.sha256_file(self.generator)
         self.python = args.reference_python.expanduser().absolute()
@@ -153,6 +163,8 @@ class Runner:
             "selected_source_sha256": self.source_shas,
             "source_scope": "Selected orchestration/producer snapshots and observed executable hash; automatic build correspondence is not proven.",
             "conditioning_scope": "Pinned upstream Qwen MPS state-26 capture; native DiT and PixelUMM.",
+            "model": self.model,
+            "input_reuse": self.reuse.source if self.reuse else None,
             "guard_policy": {"memory_accounting": "file-cache", "runtime_floor_pct": 10,
                              "native_cap_mib": NATIVE_CAP_MIB, "max_swap_growth_mib": 64},
             "scenes": [{"id": scene["id"], "status": "pending"} for scene in self.scenes],
@@ -172,6 +184,11 @@ class Runner:
         for name, expected in self.source_shas.items():
             if results.sha256_file(ROOT / name) != expected:
                 raise DraftError(f"producer source changed during the suite: {name}")
+        if self.model["cinematic_lineage"] and draft_inputs.model_identity(
+                Path(self.model["cinematic_lineage"]), self.model["cinematic_lineage_sha256"]) != self.model:
+            raise DraftError("selected model changed during the suite")
+        if self.reuse:
+            self.reuse.check()
 
     def command(self, name: str, argv: list[str], cap_mib: int,
                 timeout_sec: int) -> dict[str, Any]:
@@ -203,14 +220,10 @@ class Runner:
                           "peak_gib": record["peak_footprint_gib"]}), flush=True)
         return record
 
-    def render(self, scene: dict[str, Any], row: dict[str, Any]) -> None:
-        scene_id = scene["id"]
-        row.update(status="running", native_prompt=self.prompts[scene_id],
-                   prompt_sha256=sha_bytes(self.prompts[scene_id].encode("utf-8")))
-        self.refresh()
-        started = time.monotonic()
-        prompt = self.run / "prompts" / f"{scene_id}.json"
-        prompt.write_text(self.prompts[scene_id], encoding="utf-8")
+    def prepare_inputs(self, scene_id: str, prompt: Path) -> tuple[Path, Path, Path, list[dict[str, Any]]]:
+        if self.reuse:
+            saved = self.reuse.scene(scene_id)
+            return saved["qwen"], saved["inputs"], saved["continuation"], []
         condition = self.run / "conditioning"
         qwen = condition / f"{scene_id}-qwen.json"
         inputs = condition / f"{scene_id}-inputs.json"
@@ -232,6 +245,19 @@ class Runner:
             "--output", str(continuation), "--qwen-inputs", str(inputs),
             "--qwen-inputs-sha256", results.sha256_file(inputs),
             "--upstream", str(self.upstream)], 15_360, 600))
+        return qwen, inputs, continuation, stages
+
+    def render(self, scene: dict[str, Any], row: dict[str, Any]) -> None:
+        scene_id = scene["id"]
+        row.update(status="running", native_prompt=self.prompts[scene_id],
+                   prompt_sha256=sha_bytes(self.prompts[scene_id].encode("utf-8")))
+        self.refresh()
+        started = time.monotonic()
+        prompt = self.run / "prompts" / f"{scene_id}.json"
+        prompt.write_text(self.prompts[scene_id], encoding="utf-8")
+        qwen, inputs, continuation, stages = self.prepare_inputs(scene_id, prompt)
+        conditioning_seconds = sum(stage["seconds"] for stage in stages)
+        py = [str(self.python), "-B"]
         prepared = json.loads(continuation.read_text())
         if prepared.get("prompt") != row["native_prompt"]:
             raise DraftError("prepared continuation is conditioned on another prompt")
@@ -249,9 +275,14 @@ class Runner:
         row.update(noise_sha256=noise, qwen_tensor_sha256=qwen_tensor_sha)
         input_sha = results.sha256_file(continuation)
         row.update(inputs_sha256=input_sha, qwen_sha256=results.sha256_file(qwen))
+        if self.reuse:
+            expected = self.reuse.scene(scene_id)
+            for key in ("inputs_sha256", "qwen_sha256", "qwen_tensor_sha256", "noise_sha256"):
+                if row[key] != expected[key]:
+                    raise DraftError(f"reused {key} changed before native preflight")
         native = [str(self.generator), "--inputs", str(continuation),
                   "--inputs-sha", input_sha, "--budget-mib", str(NAMED_BUDGET_MIB),
-                  "--segments", "2"]
+                  "--segments", "2", *self.cinematic_args]
         self.command(f"{scene_id}-plan", [*native, "--plan-only"], 4096, 180)
         plans = []
         for line in (self.run / "logs" / f"{scene_id}-plan.out").read_text().splitlines():
@@ -269,6 +300,8 @@ class Runner:
         if (plans[0].get("full_upstream_video_parity") is not False
                 or plans[0].get("text_cache_policy") != "once_per_scene"):
             raise DraftError("native plan changed the admitted cache/parity policy")
+        results.validate_model_identity({key: plans[0][key] for key in results.MODEL_IDENTITY_FIELDS
+                                         if key in plans[0]}, self.model)
         for key in ("dit_peak_named_bytes", "decoder_peak_named_bytes"):
             value = plans[0].get(key)
             if type(value) is not int or not 0 < value <= NAMED_BUDGET_MIB * 1024**2:
@@ -282,7 +315,8 @@ class Runner:
         stages.append(native_record)
         receipt_path = output / "receipt.json"
         receipt = json.loads(receipt_path.read_text())
-        metadata = results.validate_metadata(receipt, row["native_prompt"], input_sha)
+        metadata = results.validate_metadata(receipt, row["native_prompt"], input_sha,
+                                             expected_model=self.model)
         raw = results.validate_rawpixels(Path(metadata["pixels"]), metadata["pixels_sha256"])
         video = output / "draft.mp4"
         stages.append(self.command(f"{scene_id}-export", [*py,
@@ -296,7 +330,7 @@ class Runner:
                    video=f"results/{scene_id}/draft.mp4", pixels_sha256=raw["sha256"],
                    video_sha256=results.sha256_file(video),
                    timings={**receipt["timings"], "total_scene_seconds": time.monotonic() - started,
-                            "conditioning_seconds": sum(stage["seconds"] for stage in stages[:3])},
+                            "conditioning_seconds": conditioning_seconds},
                    memory_peak_gib=max(stage["peak_footprint_gib"] for stage in stages),
                    min_headroom_gib=min(stage["min_headroom_gib"] for stage in stages))
         self.refresh()
@@ -336,6 +370,10 @@ def main() -> int:
     parser.add_argument("--reference-python", type=Path, default=DEFAULT_PYTHON)
     parser.add_argument("--upstream", type=Path, default=DEFAULT_UPSTREAM)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    parser.add_argument("--cinematic-cache", type=Path, help="Opt-in authenticated Cinematic lineage JSON")
+    parser.add_argument("--cinematic-cache-sha", help="Trusted SHA-256 of Cinematic lineage JSON")
+    parser.add_argument("--reuse-inputs-from", type=Path,
+                        help="Completed results.json: reuse its exact conditioning and noise without running producers")
     args = parser.parse_args()
     try:
         runner = Runner(args)

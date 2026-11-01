@@ -1,5 +1,159 @@
 # Hy-Nomas local draft suite
 
+## Design-sealed Cinematic comparison (2026-11-01)
+
+The active request adds an explicit Cinematic BF16 opt-in to the two-segment
+drafter and compares the retained six scenes with their original first takes.
+Keep the exact frozen suite, authenticated conditioning/timeline manifests,
+noise banks, four steps, geometry, decoder and history policy. Reuse validated
+baseline input bundles instead of re-encoding prompts or generating new noise.
+Base remains the default. The existing offline merged cache must pass its
+lineage/index admission; no online LoRA merge or new GPU operation is admitted.
+
+This is CAUTION for model selection and artifact provenance. The strongest
+failure is a visually plausible comparison made with a different input or a
+mislabelled weight index. Bind the requested variant and cache identity through
+preflight, loader and final receipt, and reject a mismatched selected pair
+before rendering that scene. Keep the existing 10% file-cache-aware floor,
+30 GiB process cap, swap-growth stop and one model-owning process at a time.
+The sequence checkpoint/resume path remains base-only unless its contracts
+are separately extended; a Cinematic instance must not emit base-labelled
+checkpoints. Roll back by omitting the new flags; retained base media are
+read-only and must never be overwritten.
+
+DoD: failing-before-fix variant/input identity checks, focused Python and
+Crystal admission tests, a fresh guarded native build, CPU-only memory plans,
+and six completed Cinematic clips paired with authenticated base clips.
+Require unchanged input/noise digests, variant-specific index/lineage digests,
+240 frames at 24 fps, zero instrumented encode allocations/readbacks or
+preterminal waits, and one existing terminal drain per GPU phase. Refresh the
+selected upstream merge check and authenticate the prior intermediate evidence
+without widening 2e-5 absolute or relative tolerances. Inspect paired media and
+report quality observations separately from numerical parity; full upstream
+video parity is not admitted.
+
+VACE is an explanatory branch only: no new VACE weights, renderer, training or
+model launch is included in this implementation.
+
+### Opt-in usage and controls
+
+`examples/hy_nomas_draft.py` accepts `--cinematic-cache` (the existing offline
+BF16 cache's `cinematic-lineage.json`) together with `--cinematic-cache-sha`.
+The native sequence CLI accepts the same pair. Omit both to use original BF16
+weights. The selected variant, index digest and lineage are bound to the CPU
+memory plan and final native receipt; the gallery displays the effective
+variant instead of relabelling Cinematic as original.
+
+For controlled comparisons, pass `--reuse-inputs-from /absolute/results.json`
+with the exact original suite bytes. Admission requires a completed run with
+the same ordered scenes, prompts, Qwen conditioning and fixed noise. It checks
+the original raw pixels, MP4s and payloads, then reuses those input paths.
+Scene metadata and selected payloads are checked again before native preflight;
+native preflight and execution independently authenticate the payloads.
+Neither Qwen encoding nor RNG/input production is rerun. Reuse does not turn
+archived runtime measurements into a fresh paired speed benchmark.
+Admission initially authenticates all scene payloads; subsequent selected-scene
+checks reject a changed payload before that scene's preflight or execution.
+This is an incremental suite, not an atomic transaction over concurrently
+mutable future inputs. A later failure preserves earlier completed scenes and
+leaves the overall report incomplete.
+
+For example, use a new output directory and a separately trusted lineage
+digest rather than deriving that trust from an unverified cache at launch:
+
+```sh
+python3 -B examples/hy_nomas_draft.py \
+  --suite /absolute/frozen-suite.json \
+  --generator /absolute/build/hy_nomas_sequence_generate \
+  --run-dir /absolute/new-cinematic-run \
+  --reuse-inputs-from /absolute/base-run/results.json \
+  --cinematic-cache /absolute/cinematic-cache/cinematic-lineage.json \
+  --cinematic-cache-sha "$CINEMATIC_LINEAGE_SHA"
+```
+
+### Observed six-scene comparison (2026-11-01)
+
+All six Cinematic first takes completed with the exact retained native prompts,
+conditioning manifests/tensors and three noise banks. Each clip contains two
+five-second segments, four steps per segment, 240 frames at 512x288/24 fps,
+original-precision BF16 merged weights and the existing F32 live history. No
+conditioning producer or RNG was rerun. Base remains the default.
+
+| Scene | Total scene seconds | Sampled process-group peak GiB |
+| --- | ---: | ---: |
+| portrait | 283.053 | 24.221 |
+| pouring-water | 308.829 | 24.305 |
+| running-dog | 307.578 | 24.221 |
+| balloon-car | 278.368 | 24.321 |
+| coast-flight | 266.863 | 24.217 |
+| desert-donut | 266.600 | 24.320 |
+
+The median observed total was 28.071 seconds per output video second, excluding
+the already-retained conditioning preparation. This is descriptive timing,
+not a fresh paired speed benchmark: five of the six base clips are historical.
+A fresh original portrait on the new binary reproduced the retained raw pixels
+and latent bank byte-for-byte. The historical receipts lack explicit variant
+identity; the fresh control anchors that unchanged base path for one scene.
+
+All 18 guarded stages finished successfully and left no live child process in
+their sampled groups. Maximum sampled peak was 24.3214 GiB, minimum estimated
+cache-aware headroom was 22.7736 GiB, and observed stage swap growth was zero.
+The 10% floor, 30 GiB native cap and 64 MiB swap-growth stop were unchanged.
+Both inference phases in every receipt report zero tracked encode allocations,
+readbacks and preterminal waits, with one existing terminal drain per phase.
+These counters exclude opaque MPS resources; sampling cannot bound short spikes.
+
+Focused verification passed: 60 Python tests, 11 CPU-only Crystal examples,
+Crystal formatting and a fresh guarded Metal build. The fresh upstream merge
+check compared 302,113,792 BF16 values in blocks 0 and 1 with zero mismatches.
+The prior authenticated all-block merge and same-latent PixelUMM evidence is
+indexed by `.landmark/evidence/2026-10-31-hy-nomas-cinematic-quality.json`.
+No new complete Cinematic DiT trajectory or ten-second intermediate-output
+gate was executed. The source-MPS oracle is not unmodified CUDA/FlexAttention.
+The existing 2e-5 absolute and relative tolerances were not widened.
+
+Retained artifacts are under
+`/opt/mldata_ssd/cogni-ml/cinematic-drafter-20261101.CSoblFK7/`:
+`experiment-summary.json` binds the source, executable, input, model and guard
+identities; `pairs/comparison.json` binds the six authenticated comparisons;
+`pairs/reel-60s.mp4` and `pairs/index.html` provide playback. Each pair has the
+base on the left and Cinematic on the right. The pair builder rejected an
+incomplete suite, passed eight hostile geometry/publication checks, and then
+published the completed directory atomically. The final reel decodes to 1,440
+frames at 1024x320/24 fps; each pair decodes to 240 frames.
+
+Inspection of paired stills at 0, 3, 6 and 9 seconds found stronger surface
+texture and contrast with Cinematic, changed composition, and one visible
+walker rather than multiple walkers in the doughnut scene. Balloon count still
+changes, and both dog variants face left despite the requested left-to-right
+motion. These are sampled visual observations, not full-motion, physics or
+general quality qualifications. Preserve all first takes for user review.
+
+The curated evidence packet is
+`.landmark/evidence/2026-11-01-hy-nomas-cinematic-drafter.json`. Requalify after
+producer/validator source, binary, model/cache, inputs/noise, geometry/history
+or runtime changes; repeat timing after host/device-state changes. Missing or
+changed local artifacts invalidate their use as evidence. Cinematic sequence
+checkpoint/capture/restore remains explicitly unsupported.
+
+### VACE integration boundary
+
+The official [VACE README](https://github.com/ali-vilab/VACE/blob/main/README.md)
+supports text, source video, masks and reference images; its Wan renderer
+loads a separate VACE model/control path. A practical CineStudio branch is
+Hy-Nomas draft pixels → prepared depth/pose/layout or editing masks → Wan VACE
+render. An editable 3D draft could provide corrected motion/depth directly.
+This is a proposed separate renderer, not an implemented Hy-Nomas feature.
+
+VACE cannot be attached as this Cinematic LoRA: direct Hy-Nomas conditioning
+would require a compatible trained control branch and representation. Pixel
+input is the existing interchange boundary; native continuation latent bundles
+are not interchangeable. VACE is not a physics solver, and transferring a bad
+draft trajectory can preserve its error. The official
+[user guide](https://github.com/ali-vilab/VACE/blob/main/UserGuide.md) recommends
+roughly five-second clips and sequential extension for long work; seams and
+temporal preservation would need separate testing on our ten-second scenes.
+
 ## Design-sealed first-take frontier (2026-11-01)
 
 The requested output is six independent photorealistic ten-second clips, with

@@ -102,6 +102,22 @@ def make_result(scene, native_prompt, receipt_rel="results/portrait/receipt.json
     }
 
 
+def make_model(variant="original"):
+    if variant == "original":
+        return {
+            "dit_variant": "original",
+            "dit_weight_index_sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0",
+            "cinematic_lineage": None,
+            "cinematic_lineage_sha256": None,
+        }
+    return {
+        "dit_variant": "cinematic-active-blocks",
+        "dit_weight_index_sha256": "c" * 64,
+        "cinematic_lineage": "/opt/mldata_ssd/cogni-ml/cinematic/cache.json",
+        "cinematic_lineage_sha256": "d" * 64,
+    }
+
+
 def valid_probe():
     return {
         "streams": [{
@@ -129,6 +145,50 @@ class NativeReceiptTests(unittest.TestCase):
         result = drafts.validate_metadata(self.receipt, self.prompt, "a" * 64)
         self.assertEqual(result["inputs_sha256"], "a" * 64)
         self.assertEqual(result["pixels_sha256"], "b" * 64)
+
+    def test_model_identity_is_exact_structural_and_variant_aware(self):
+        original = make_model()
+        cinematic = make_model("cinematic")
+        self.assertEqual(drafts.validate_model_identity(original, original), original)
+        self.assertEqual(drafts.validate_model_identity(cinematic, cinematic), cinematic)
+        with self.assertRaisesRegex(drafts.DraftResultsError, "model identity mismatch"):
+            drafts.validate_model_identity(original, cinematic)
+
+        invalid_models = []
+        wrong_base_index = dict(original, dit_weight_index_sha256="e" * 64)
+        invalid_models.append(wrong_base_index)
+        missing_base_lineage = dict(original, cinematic_lineage_sha256="f" * 64)
+        invalid_models.append(missing_base_lineage)
+        relative_lineage = dict(cinematic, cinematic_lineage="cache.json")
+        invalid_models.append(relative_lineage)
+        bad_lineage_sha = dict(cinematic, cinematic_lineage_sha256="invalid")
+        invalid_models.append(bad_lineage_sha)
+        extra_field = dict(original, extra="not part of identity")
+        invalid_models.append(extra_field)
+        for model in invalid_models:
+            with self.subTest(model=model):
+                with self.assertRaises(drafts.DraftResultsError):
+                    drafts.validate_model_identity(model, model)
+
+    def test_expected_model_requires_matching_receipt_identity_but_legacy_call_is_unchanged(self):
+        model = make_model("cinematic")
+        self.assertEqual(
+            drafts.validate_metadata(self.receipt, self.prompt, "a" * 64)["pixels_sha256"],
+            "b" * 64)
+
+        with self.assertRaisesRegex(drafts.DraftResultsError, "model identity"):
+            drafts.validate_metadata(self.receipt, self.prompt, "a" * 64,
+                                     expected_model=model)
+
+        self.receipt.update(model)
+        self.assertEqual(
+            drafts.validate_metadata(self.receipt, self.prompt, "a" * 64,
+                                     expected_model=model)["pixels_sha256"],
+            "b" * 64)
+        wrong_receipt = dict(self.receipt, dit_weight_index_sha256="e" * 64)
+        with self.assertRaisesRegex(drafts.DraftResultsError, "model identity"):
+            drafts.validate_metadata(wrong_receipt, self.prompt, "a" * 64,
+                                     expected_model=model)
 
     def test_wrong_native_prompt_and_wrong_input_sha_are_rejected(self):
         wrong_prompt = self.prompt.replace("afternoon", "midnight")
@@ -279,6 +339,7 @@ class GalleryTests(unittest.TestCase):
                                           suite_sha256=suite_sha)
             page = output.read_text(encoding="utf-8")
             self.assertEqual(report["scenes"][0]["status"], "completed")
+            self.assertNotIn("model", report)
             self.assertIn('src="results/portrait/draft.mp4"', page)
             self.assertIn("fixed same-noise banks", page)
             self.assertIn("does not claim upstream end-to-end video parity", page)
@@ -287,6 +348,47 @@ class GalleryTests(unittest.TestCase):
             self.assertIn("&lt;script&gt;", page)
             self.assertNotIn("<script>alert", page)
             self.assertNotIn("https://", page)
+
+    def test_gallery_binds_declared_model_and_shows_effective_cinematic_variant(self):
+        suite = load_suite()
+        scene = suite["scenes"][0]
+        native_prompt = make_native_prompt(scene)
+        suite_sha = hashlib.sha256(SUITE_PATH.read_bytes()).hexdigest()
+        model = make_model("cinematic")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result_dir = root / "results" / scene["id"]
+            result_dir.mkdir(parents=True)
+            (result_dir / "draft.mp4").write_bytes(b"synthetic mp4 bytes")
+            receipt = make_receipt(scene, native_prompt)
+            receipt.update(model)
+            (result_dir / "receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+            result = make_result(scene, native_prompt)
+            result["receipt"] = f"results/{scene['id']}/receipt.json"
+            document = {"schema": drafts.RESULTS_SCHEMA,
+                        "suite_sha256": suite_sha, "model": model,
+                        "scenes": [result]}
+
+            output = root / "index.html"
+            report = drafts.render_gallery(suite, document, output, root,
+                                           suite_sha256=suite_sha)
+            page = output.read_text(encoding="utf-8")
+            self.assertEqual(report["scenes"][0]["status"], "completed")
+            self.assertEqual(report["model"], model)
+            self.assertIn("Cinematic active blocks BF16", page)
+            self.assertNotIn("Weights: original BF16", page)
+
+            receipt["cinematic_lineage_sha256"] = "e" * 64
+            (result_dir / "receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+            with self.assertRaisesRegex(drafts.DraftResultsError, "model identity"):
+                drafts.render_gallery(suite, document, output, root,
+                                      suite_sha256=suite_sha)
+
+            malformed_document = dict(document, scenes=[])
+            malformed_document["model"] = dict(model, extra="not an identity field")
+            with self.assertRaisesRegex(drafts.DraftResultsError, "exactly the four"):
+                drafts.render_gallery(suite, malformed_document, output, root,
+                                      suite_sha256=suite_sha)
 
     def test_rejects_suite_digest_mismatch_and_unsafe_video_paths(self):
         suite = load_suite()

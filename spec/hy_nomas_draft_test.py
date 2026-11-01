@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "examples" / "support"))
 
 import hy_nomas_draft as draft
 import hy_nomas_draft_results as results
+import hy_nomas_draft_inputs as draft_inputs
 
 
 SUITE_PATH = ROOT / "examples" / "data" / "hy_nomas_photorealistic_drafts.json"
@@ -148,6 +149,18 @@ class GuardReceiptTests(unittest.TestCase):
 
 
 class PromptAndPreflightTests(unittest.TestCase):
+    def test_reuse_skips_every_conditioning_and_noise_producer(self):
+        runner = object.__new__(draft.Runner)
+        runner.reuse = mock.Mock()
+        bundle = {"qwen": Path("/frozen/qwen.json"), "inputs": Path("/frozen/inputs.json"),
+                  "continuation": Path("/frozen/timeline.json")}
+        runner.reuse.scene.return_value = bundle
+        runner.command = mock.Mock(side_effect=AssertionError("input producer was rerun"))
+        qwen, base, timeline, stages = runner.prepare_inputs("portrait", Path("/unused/prompt"))
+        self.assertEqual((qwen, base, timeline, stages),
+                         (bundle["qwen"], bundle["inputs"], bundle["continuation"], []))
+        runner.command.assert_not_called()
+
     def test_prompt_wrapper_hash_is_the_exact_suite_conditioning_text(self):
         scene = load_suite()["scenes"][0]
         prompt = draft.native_prompt(scene)
@@ -173,6 +186,9 @@ class PromptAndPreflightTests(unittest.TestCase):
             runner.generator = Path("/tmp/native-generator")
             runner.upstream = Path("/tmp/upstream")
             runner.checkpoint = Path("/tmp/checkpoint")
+            runner.reuse = None
+            runner.model = draft_inputs.model_identity(None, None)
+            runner.cinematic_args = []
             runner.env = {}
             runner.document = {"scenes": [{"id": scene["id"]}]}
             runner.refresh = lambda: None
@@ -259,9 +275,11 @@ class PromptAndPreflightTests(unittest.TestCase):
             runner = object.__new__(draft.Runner)
             runner.generator = executable
             runner.binary_sha = results.sha256_file(executable)
+            runner.model = draft_inputs.model_identity(None, None)
             runner.source_shas = {
                 "examples/hy_nomas_draft.py": results.sha256_file(ROOT / "examples/hy_nomas_draft.py")
             }
+            runner.reuse = None
             runner.check_sources()
             executable.write_bytes(b"native-binary-v2")
             with self.assertRaisesRegex(draft.DraftError, "executable changed"):

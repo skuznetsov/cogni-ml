@@ -34,6 +34,13 @@ STEPS_PER_SEGMENT = 4
 DECODER_WINDOWS = 11
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SCENE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+BASE_DIT_INDEX_SHA256 = "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0"
+MODEL_IDENTITY_FIELDS = (
+    "dit_variant",
+    "dit_weight_index_sha256",
+    "cinematic_lineage",
+    "cinematic_lineage_sha256",
+)
 
 
 class DraftResultsError(ValueError):
@@ -49,6 +56,42 @@ def _sha256_string(value: Any, where: str) -> str:
     _need(isinstance(value, str) and SHA256_RE.fullmatch(value) is not None,
           f"{where} must be a lowercase SHA-256")
     return value
+
+
+def _validated_model_identity(model: Any, where: str) -> dict[str, Any]:
+    _need(isinstance(model, Mapping), f"{where} must be an object")
+    _need(set(model) == set(MODEL_IDENTITY_FIELDS),
+          f"{where} must contain exactly the four model identity fields")
+    variant = model["dit_variant"]
+    _need(variant in ("original", "cinematic-active-blocks"),
+          f"{where}.dit_variant is unsupported")
+    index_sha = _sha256_string(model["dit_weight_index_sha256"],
+                               f"{where}.dit_weight_index_sha256")
+    lineage_path = model["cinematic_lineage"]
+    lineage_sha = model["cinematic_lineage_sha256"]
+    if variant == "original":
+        _need(index_sha == BASE_DIT_INDEX_SHA256,
+              f"{where} original model must use the base DiT index SHA-256")
+        _need(lineage_path is None and lineage_sha is None,
+              f"{where} original model must not declare Cinematic lineage")
+    else:
+        _need(isinstance(lineage_path, str) and lineage_path.strip()
+              and Path(lineage_path).is_absolute(),
+              f"{where}.cinematic_lineage must be an absolute path")
+        _sha256_string(lineage_sha, f"{where}.cinematic_lineage_sha256")
+    return {field: model[field] for field in MODEL_IDENTITY_FIELDS}
+
+
+def validate_model_identity(actual: Any, expected: Any) -> dict[str, Any]:
+    """Validate and compare the exact model identity written in results and receipts."""
+    actual_identity = _validated_model_identity(actual, "actual model identity")
+    expected_identity = _validated_model_identity(expected, "expected model identity")
+    _need(actual_identity == expected_identity, "receipt model identity mismatch")
+    return actual_identity
+
+
+def _receipt_model_identity(receipt: Mapping[str, Any]) -> dict[str, Any]:
+    return {field: receipt[field] for field in MODEL_IDENTITY_FIELDS if field in receipt}
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -143,7 +186,8 @@ def validate_suite(suite: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def validate_receipt_metadata(receipt: Mapping[str, Any], prompt: str,
-                              inputs_sha256: str) -> dict[str, Any]:
+                              inputs_sha256: str, *,
+                              expected_model: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Validate the native two-segment sequence receipt without reading media."""
     _need(isinstance(receipt, Mapping) and receipt.get("schema") == RECEIPT_SCHEMA,
           "native sequence receipt schema mismatch")
@@ -155,6 +199,8 @@ def validate_receipt_metadata(receipt: Mapping[str, Any], prompt: str,
           "native receipt inputs_sha256 differs from result provenance")
     _need(receipt.get("full_upstream_video_parity") is False,
           "receipt must explicitly disclaim full upstream video parity")
+    if expected_model is not None:
+        validate_model_identity(_receipt_model_identity(receipt), expected_model)
 
     for field, expected in (("segments", 2), ("frames", FRAME_COUNT),
                             ("clean_latent_frames", LATENT_FRAMES),
@@ -231,9 +277,11 @@ def validate_native_prompt(native_prompt: str, suite_prompt: str) -> None:
 
 
 def validate_metadata(receipt: Mapping[str, Any], native_prompt: str,
-                      inputs_sha256: str) -> dict[str, Any]:
+                      inputs_sha256: str, *,
+                      expected_model: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Short API used by the runner for cheap per-scene receipt checks."""
-    return validate_receipt_metadata(receipt, native_prompt, inputs_sha256)
+    return validate_receipt_metadata(receipt, native_prompt, inputs_sha256,
+                                      expected_model=expected_model)
 
 
 def _path_under(root: Path, relative: Any, where: str) -> Path:
@@ -351,6 +399,7 @@ def _validate_timings_and_memory(result: Mapping[str, Any]) -> None:
 
 def validate_completed_result(scene: Mapping[str, Any], result: Mapping[str, Any],
                               artifact_root: Path, *, full_media_validation: bool = False,
+                              expected_model: Mapping[str, Any] | None = None,
                               ffprobe: str = "ffprobe",
                               probe_function: Callable[[Path], Mapping[str, Any]] | None = None
                               ) -> dict[str, Any]:
@@ -369,7 +418,8 @@ def validate_completed_result(scene: Mapping[str, Any], result: Mapping[str, Any
 
     receipt_path = _path_under(artifact_root, result.get("receipt"), "result.receipt")
     receipt = _receipt_file(receipt_path)
-    metadata = validate_receipt_metadata(receipt, native_prompt, inputs_sha)
+    metadata = validate_receipt_metadata(receipt, native_prompt, inputs_sha,
+                                         expected_model=expected_model)
     pixels_sha = _sha256_string(result.get("pixels_sha256"), "result.pixels_sha256")
     _need(pixels_sha == metadata["pixels_sha256"],
           "result pixels_sha256 differs from receipt diagnostics")
@@ -440,6 +490,10 @@ def render_gallery(suite: Mapping[str, Any], results_document: Any,
                    ) -> dict[str, Any]:
     scenes = validate_suite(suite)
     result_rows = _results_list(results_document, suite_sha256)
+    declared_model = None
+    if "model" in results_document:
+        declared_model = validate_model_identity(results_document["model"],
+                                                 results_document["model"])
     by_id: dict[str, dict[str, Any]] = {}
     for row in result_rows:
         scene_id = row.get("id")
@@ -470,6 +524,7 @@ def render_gallery(suite: Mapping[str, Any], results_document: Any,
             checked = validate_completed_result(
                 scene, result, artifact_root,
                 full_media_validation=full_media_validation,
+                expected_model=declared_model,
                 ffprobe=ffprobe, probe_function=probe_function)
             timings = result["timings"]
             time_items = "".join(
@@ -521,11 +576,18 @@ def render_gallery(suite: Mapping[str, Any], results_document: Any,
 
     suite_title = html.escape(str(suite.get("title", "Hy-Nomas draft gallery")))
     settings = suite["settings"]
+    effective_weights = (settings["weights"] if declared_model is None else
+                         "original BF16" if declared_model["dit_variant"] == "original" else
+                         "Cinematic active blocks BF16")
     settings_html = " · ".join(
-        f"{html.escape(str(label))}: {html.escape(_display_value(settings[key]))}"
-        for key, label in (("weights", "Weights"), ("history", "History"),
-                           ("noise", "Noise"), ("selection", "Selection")))
-    notice = ("BF16 weights · fixed same-noise banks · perceptual review only. "
+        f"{html.escape(str(label))}: {html.escape(_display_value(value))}"
+        for key, label, value in (("weights", "Weights", effective_weights),
+                                  ("history", "History", settings["history"]),
+                                  ("noise", "Noise", settings["noise"]),
+                                  ("selection", "Selection", settings["selection"])))
+    notice_weights = (f"{effective_weights} weights" if declared_model is not None
+                      else "BF16 weights")
+    notice = (f"{notice_weights} · fixed same-noise banks · perceptual review only. "
               "This gallery does not claim upstream end-to-end video parity.")
     document = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -556,11 +618,14 @@ details{{margin-top:10px;color:var(--muted)}}pre{{white-space:pre-wrap;overflow-
     gallery_path.write_text(document, encoding="utf-8")
     complete_count = sum(row["status"] == "completed" for row in summary)
     final_passed = (complete_count == len(scenes)) if full_media_validation else None
-    return {"schema": "cogni_ml.hy_nomas_draft_gallery_report/v1",
-            "gallery": str(gallery_path),
-            "full_media_validation": full_media_validation,
-            "passed": final_passed,
-            "scenes": summary}
+    report = {"schema": "cogni_ml.hy_nomas_draft_gallery_report/v1",
+              "gallery": str(gallery_path),
+              "full_media_validation": full_media_validation,
+              "passed": final_passed,
+              "scenes": summary}
+    if declared_model is not None:
+        report["model"] = declared_model
+    return report
 
 
 def write_gallery(suite: Mapping[str, Any], results_document: Any,
