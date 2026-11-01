@@ -6,6 +6,36 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SEGMENT-EDIT-VIDEO-2026-11-01] Matched original/edited B/C videos preserve the unaffected prefix
+
+- Two serial native decoder-only runs consume the authenticated original
+  `[1,3]` and edited restart `[2,3]` terminal banks. One 90-latent/360-pixel
+  schedule uses 17 windows with matching executable bytes, BF16 block/head
+  weights, F32 stem, conditioning, noise and settings. Pinned upstream window
+  geometry agrees; full upstream neural/video parity remains open.
+- All 44,236,800 raw F32 values in pixel frames `[0,100)` match bitwise.
+  Overlap `[100,120)` and both B/C regions change nonvacuously. B/C RMSEs
+  0.105157857/0.135158929 describe an intended new take, not numerical parity
+  or quality. A's latent prefix remains exact; overlap can change its final
+  20 decoded frames. The fresh original full raw output also matches the
+  prior exact 15-second native control bitwise.
+- Finite 637,009,920-byte outputs, both 512x288/24 fps/15-second originals,
+  synchronized comparison and lossless raw previews pass authentication and
+  export checks. Left is original, right is edited B/C. Selected stills keep
+  the scene/characters; user motion review remains the next quality gate.
+- Fresh release build and 48 Python tests pass. Both runs record zero
+  instrumented encode allocations/readbacks/preterminal waits and one drain.
+  Sampled peak 18.8106 GiB, minimum cache-aware headroom 29.0074 GiB, zero swap
+  growth under 26 GiB / 10% / 64 MiB / 1200 s guards. Sampling and opaque MPS
+  limitations persist; this ordered pair supports no speedup conclusion.
+- Same-lineage correlated adversary: ROBUST for bounded pair integrity.
+  Evidence: `.landmark/evidence/2026-11-01-hy-nomas-segment-edit-video.json`
+  and `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/qualification-summary.json`.
+  Native/checker/export pins bind their respective executions; local-only
+  hashes cannot recover artifacts. Refresh on code/binary/input/noise/weights/
+  codec/geometry/backend/device changes or artifact loss. Commands and open
+  prompt-edit/QBit boundaries: `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-HY-NOMAS-SEGMENT-EDIT-2026-11-01] A retained prefix supports a new B/C take with exact restart lineage
 
 - Five fresh BF16 DiT processes share one authenticated six-segment input bank
@@ -33,7 +63,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - This is a noise take with one shared prompt, one edit and an unused donor,
   not prompt editing. At most five active segments fit the six-segment bank.
   A's last 20 decoded pixel frames may change because decoder windows overlap.
-  Next gate: matched continuous-bank decoding and visual review. Evidence:
+  Matched continuous-bank decoding is qualified in the video landmark above;
+  user motion review remains open. Evidence:
   `.landmark/evidence/2026-11-01-hy-nomas-segment-edit.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/qualification-summary.json`.
   Refresh on code/binary/input/noise/weights/codec/geometry/backend/device

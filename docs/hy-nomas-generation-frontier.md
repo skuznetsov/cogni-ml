@@ -1,5 +1,85 @@
 # Hy-Nomas first native video frontier
 
+## Matched segment new-take videos (2026-11-01)
+
+Status: decoder-pair integrity and bounded execution pass. The original B/C
+continuation and edited restart C terminal banks produce matched 15-second
+512x288/24 fps videos. Visual quality awaits user motion review. This step
+decodes saved banks only; it runs no new DiT generation. Both branches use
+exact checkpoints from the native matrix below.
+
+The new comparator freshly authenticates that matrix and selects original
+`[1,3]` and edited restart `[2,3]` terminals. It binds each full 180-frame bank
+to the decoder receipt, actual executable bytes, original conditioning/noise,
+upstream revision, weights and settings. Both native runs gather the first
+90 latent frames and 360 decoder-noise frames per channel on the GPU, then
+decode one global schedule of 17 windows at latent starts `[0,5,...,80]`.
+Executing the pinned upstream pure `_window_starts` helper reproduces that
+schedule. This establishes geometry only, not full upstream neural/video
+parity. Native arithmetic and `atol=rtol=2e-5` remain unchanged.
+
+The streamed raw planar RGB comparison proves all 44,236,800 F32 values in
+pixel frames `[0,100)` bitwise equal. The overlap tail `[100,120)` changes in
+5,106,470 values; B and C change in 51,622,966 and 51,852,014 of 53,084,160
+values each. Their raw RMSEs are 0.105157857 and 0.135158929. These are
+branch-difference diagnostics for an intended new take, not decoder parity,
+quantization-error or quality measures. The numerical gate is unchanged. A's latent
+prefix is still immutable, but the first changed decoder window begins at
+4.167 seconds and includes B. Freezing all 120 A pixel frames would require
+a separate boundary policy. The fresh original raw output additionally
+matches the previous exact 15-second native control bitwise.
+
+Both raw outputs contain exactly 637,009,920 finite F32 bytes. Terminal MP4
+exports and the synchronized original-left/edited-right comparison pass
+hash, frame-count, 15-second duration, geometry and codec checks. Lossless PNG
+previews sample both seams and late frames directly from the validated raw
+pixels. H264 is re-encoded; the raw files remain the fine-detail reference.
+Selected stills retain the scene and characters while expression/background
+details differ; this observation does not assess motion quality.
+
+Both native processes pass the 26 GiB footprint cap, 10% cache-aware reserve,
+64 MiB swap-growth stop and 1200 s deadline. Sampled peak is 18.8106 GiB,
+minimum headroom 29.0074 GiB and swap growth zero. Instrumented encode
+allocations/readbacks/preterminal waits are zero, with one terminal drain
+per run. Opaque MPS allocations and between-sample spikes remain outside
+those counter/sample guarantees. Request times are 230.2643 and 239.7489 s;
+this single ordered pair supports no speedup conclusion.
+
+A fresh release decoder build and 48 Python tests pass, including ten new
+video-comparator tests with malformed source/noise/settings/counter/pixel
+mutations and per-channel prefix checks. Same-lineage correlated adversary
+review is ROBUST for pair integrity and bounded execution. Quality, full
+upstream video parity, prompt editing and edited QBit execution stay open.
+
+Artifact root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm`.
+`qualification-summary.json` links the fresh matrix comparison, source pins,
+decoder/guard receipts, finite raw comparisons, prior default regression,
+exports and previews. Native sources/objects/executable/runner were pinned
+before GPU runs; checker and export sources were pinned before their runs.
+Local-only hashes detect change and cannot recover lost files. Refresh on
+code/binary/input/noise/weights/codec/geometry/backend/device changes or
+artifact loss. Rollback reuses the untouched original branch.
+
+DoD refresh commands (fresh report output; no model execution):
+
+```sh
+python3 -B -m unittest spec/hy_nomas_segment_edit_video_compare_test.py \
+  spec/hy_nomas_segment_edit_resume_reference_test.py \
+  spec/hy_nomas_segment_edit_reference_test.py \
+  spec/hy_nomas_cache_qbit_video_compare_test.py
+python3 -B spec/support/hy_nomas_segment_edit_video_compare.py \
+  --edit-index /opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/matrix-index.json \
+  --original-decoder-dir /opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/decode/original \
+  --edited-decoder-dir /opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-video-20261101.0oq19ejm/decode/edited \
+  --output "$RUN_ROOT/fresh-edit-video-report.json"
+```
+
+Expected signals: 48 tests, `pair_integrity_passed=true`, exact first 100
+pixel frames and finite full raw outputs. The saved external
+`run_decode_pair.py` and `postprocess.py` record the guarded producer/export
+commands. The next gate is user motion review of the two takes.
+
 ## Segment new-take frontier (2026-11-01)
 
 Status: bounded native new-take implementation and exact-checkpoint restart
@@ -71,7 +151,8 @@ Rejection tests challenge donor/target selection, edited checkpoint identity,
 lineage, retained A/future suffix, vacuous C regeneration, drift and counters.
 Tolerances remain `atol=rtol=2e-5`. Exact post-A and edited post-B bundles are
 4,319,223,820 and 8,141,283,340 bytes; this slice does not reduce live K/V
-residency. The new branch has not been decoded or visually reviewed.
+residency. The matched decoder follow-up is recorded above; visual quality
+remains open.
 
 Artifact root:
 `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73`.
@@ -107,9 +188,9 @@ state and binds every descendant to this identity. To resume C, use the newly
 written post-B state and the same options, never the old branch's post-B state.
 Decoder invalidation is global latent frames `[30,90)` and pixel frames
 `[100,360)` for this case; the overlap reaches A's final 20 pixel frames.
-The next gate is matched continuous-bank decoding of the original and edited
-branches, followed by visual review. Prompt edits and CineStudio integration
-need a separate conditioning/cache invalidation design.
+Matched continuous-bank decoding is now qualified above; the next gate is
+user motion review. Prompt edits and CineStudio integration need a separate
+conditioning/cache invalidation design.
 
 ## Matched 15-second compact-checkpoint video review (2026-11-01)
 
