@@ -1,0 +1,55 @@
+{
+  "schema": "cogni_ml.hy_nomas_draft_suite/v1",
+  "id": "photorealistic-first-takes-v1",
+  "title": "Hy-Nomas photorealistic first takes",
+  "settings": {
+    "segments": 2,
+    "seconds": 10,
+    "width": 512,
+    "height": 288,
+    "fps": 24,
+    "steps_per_segment": 4,
+    "weights": "original BF16",
+    "history": "F32 once-per-scene text cache",
+    "noise": "The same authenticated seed-42 noise banks for every scene; prompt-only variation.",
+    "selection": "One first take per scene, including visible failures."
+  },
+  "scenes": [
+    {
+      "id": "portrait",
+      "title": "Portrait in window light",
+      "prompt": "A photorealistic continuous live-action medium close-up of an adult woman standing beside a large cafe window in soft afternoon light. She looks out of the window, gently turns her head toward the camera, blinks naturally and gives a small warm smile. Her facial features remain consistent, with natural skin texture and realistic eyes. The camera stays still, the background is softly out of focus, and the motion is unhurried and continuous. The shot continues without a cut.",
+      "checks": ["Stable eyes and facial identity", "Natural head turn and blinking", "Continuous motion across five seconds"]
+    },
+    {
+      "id": "pouring-water",
+      "title": "Hands, glass and water",
+      "prompt": "A photorealistic continuous live-action close shot of an adult man at a wooden kitchen table in daylight. Both hands and a clear empty drinking glass are visible. He slowly pours water from a transparent glass jug into the glass, stops before it is full, sets the jug down beside it, and leaves the filled glass on the table. The water stream, rising water level, reflections and contact with the table obey realistic physics. The camera is locked off and the shot continues without a cut.",
+      "checks": ["Hands keep their shape", "Water enters the glass and its level rises", "Objects persist after contact"]
+    },
+    {
+      "id": "running-dog",
+      "title": "Dog running on a beach",
+      "prompt": "A photorealistic continuous live-action low tracking shot of a golden retriever running from left to right along a wide sandy beach at sunrise. The dog keeps a steady forward direction and a believable four-legged running gait. Its paws touch the damp sand and leave small splashes near the waterline. The camera tracks smoothly alongside the dog, keeping its full body in view. Warm sunlight catches the moving fur, with the ocean in the background. The shot continues without a cut.",
+      "checks": ["Four-leg gait and ground contact", "Coherent forward travel", "Stable body and fur"]
+    },
+    {
+      "id": "balloon-car",
+      "title": "Orange car with balloons",
+      "prompt": "A photorealistic continuous live-action tracking shot of an orange vintage car driving forward on a quiet tree-lined road in warm late-afternoon sunlight. A small bunch of red, blue, green and yellow helium balloons is tied securely to the passenger-side window with thin strings. The balloons bob gently in the airflow and remain attached to the moving car. The camera follows smoothly beside the car from a rear three-quarter angle. Realistic painted metal, glass reflections, rotating wheels and moving shadows are visible. The shot continues without a cut.",
+      "checks": ["Balloons remain attached", "Consistent vehicle shape and wheel motion", "Smooth tracking and shadows"]
+    },
+    {
+      "id": "coast-flight",
+      "title": "Flight along a rocky coast",
+      "prompt": "A photorealistic continuous aerial camera shot flying slowly forward along a rugged rocky coastline in clear morning light. Turquoise waves roll onto small sandy coves below, with pale cliffs and sparse green vegetation along the shore. The camera moves steadily forward at a constant height with a level horizon and gentle parallax. Rocks, cliffs and vegetation keep their shapes as the viewpoint changes. Natural ocean foam and reflections move continuously. The shot continues without a cut.",
+      "checks": ["Stable geography during camera travel", "Natural waves and foam", "Level horizon and smooth parallax"]
+    },
+    {
+      "id": "desert-donut",
+      "title": "An impossible object photographed as real",
+      "prompt": "A photorealistic continuous live-action wide shot in a sunlit desert with softly rolling sand dunes. A gigantic upright ring-shaped doughnut rests firmly on the sand like a large practical movie prop. Its rough baked surface, sugar grains, contact shadow and scale are physically convincing. An adult person in a blue shirt walks slowly through the opening from left to right, giving a clear sense of scale. The doughnut remains stationary. A locked-off cinema camera records the scene with natural light and realistic shadows. The shot continues without a cut.",
+      "checks": ["Convincing materials and scale", "Person passes through the opening", "Stable object and contact shadow"]
+    }
+  ]
+}
