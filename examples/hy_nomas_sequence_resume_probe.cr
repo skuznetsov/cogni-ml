@@ -1,7 +1,9 @@
 require "option_parser"
 require "./support/hy_nomas_sequence"
+require "./support/hy_nomas_cache_qbit"
 
-# Bounded, DiT-only cross-process qualification. No decoder or video export.
+# Bounded, DiT-only qualification. The opt-in cache roundtrip isolates lossy
+# representation error; exact F32 remains the default and the restart control.
 mode = ""
 input_path = ""
 input_sha = ""
@@ -10,6 +12,7 @@ state_path = ""
 state_sha = ""
 budget_mib = 30_720_i64
 plan_only = false
+cache_roundtrip = "exact"
 OptionParser.parse do |p|
   p.banner = "Hy-Nomas BF16 A/save/restart/B qualification; two segments, four steps each"
   p.on("--mode MODE", "control, save, or resume") { |v| mode = v }
@@ -20,11 +23,15 @@ OptionParser.parse do |p|
   p.on("--state-sha SHA", "Trusted complete state SHA-256; required by resume") { |v| state_sha = v }
   p.on("--budget-mib N", "Named GPU buffer cap; external 10% memory guard is mandatory") { |v| budget_mib = v.to_i64 }
   p.on("--plan-only", "Authenticate and report budget without Metal allocation") { plan_only = true }
+  p.on("--cache-roundtrip MODE", "exact (default), or qbit diagnostic before resumed B") { |v| cache_roundtrip = v }
 end
 unless %w(control save resume).includes?(mode)
   raise ArgumentError.new("--mode must be control, save, or resume")
 end
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
+unless %w(exact qbit).includes?(cache_roundtrip) && (cache_roundtrip == "exact" || mode == "resume")
+  raise ArgumentError.new("QBit roundtrip is admitted only for authenticated resume")
+end
 unless (24_576..49_152).includes?(budget_mib)
   raise ArgumentError.new("resume probe named budget must be within 24..48 GiB")
 end
@@ -44,10 +51,13 @@ contract = HyNomasSequence.checkpoint_contract(inputs, 2, 1)
 inventory = HyNomasSequence.checkpoint_inventory(inputs, 2, 1)
 capture_bytes = mode == "save" ? 0_i64 : 4_i64 * 32 * 30 * 9 * 16 * sizeof(Float32)
 dit_peak = HyNomasSequence.peak_named_bytes(inputs, 2)
-peak = dit_peak + capture_bytes
+cache_sizes = inventory.reject { |name, _| name == "timeline" }.values
+codec_bytes = cache_roundtrip == "qbit" ? HyNomasCacheQBit::Plan.named_bytes(
+  (cache_sizes.max // sizeof(Float32)).to_i32, cache_sizes.size) : 0_i64
+peak = dit_peak + capture_bytes + codec_bytes
 raise ArgumentError.new("resume probe peak named buffers exceed budget") if peak > budget
 HyNomasGeneration.emit("resume_memory_plan", mode: mode, segments: 2,
-  dit_peak_named_bytes: dit_peak, capture_bytes: capture_bytes, peak_named_bytes: peak,
+  dit_peak_named_bytes: dit_peak, capture_bytes: capture_bytes, codec_bytes: codec_bytes, peak_named_bytes: peak,
   checkpoint_payload_bytes: inventory.values.sum, named_budget_bytes: budget,
   reserve_pct: 10, full_upstream_video_parity: false, decoder: false)
 exit if plan_only
@@ -66,6 +76,8 @@ timeline_arena = ML::Video::Arena.new
 current_arena = ML::Video::Arena.new
 capture_arena = ML::Video::Arena.new
 dit = nil.as(HyNomasSequence::DiT?)
+codec = nil.as(HyNomasCacheQBit::Plan?)
+codec_report = nil.as(JSON::Any?)
 chain = nil.as(ML::Metal::MPSCommandChain?)
 timings = {"preflight_seconds" => (Time.monotonic - request_start).total_seconds}
 metrics = {} of String => Int64
@@ -80,20 +92,34 @@ begin
     4.times { |step| captures << capture_arena.alloc("step#{step}", 32 * 30 * 9 * 16) }
   end
   setup = Time.monotonic
-  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget - capture_bytes, 2,
+  dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget - capture_bytes - codec_bytes, 2,
     admission, prepare_capture: mode != "save")
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   if saved = reader
     restore = Time.monotonic
-    dit.restore_boundary!(saved, 1)
+    bindings = [] of HyNomasCacheQBit::Binding
+    visitor = if cache_roundtrip == "qbit"
+                ->(name : String, buffer : ML::MetalBuffer, count : Int32) do
+                  bindings << HyNomasCacheQBit::Binding.new(name, buffer, count)
+                  nil
+                end
+              else
+                nil
+              end
+    dit.restore_boundary!(saved, 1, visit_cache: visitor)
     timings["restore_seconds"] = (Time.monotonic - restore).total_seconds
     saved.close
     reader = nil
+    if cache_roundtrip == "qbit"
+      codec = HyNomasCacheQBit::Plan.new(bindings)
+      raise "QBit scratch admission mismatch" unless codec.resident_bytes == codec_bytes
+    end
   end
   chain = ML::Metal::MPSCommandChain.new
   allocations = ML::MetalBuffer.hy_text_probe_allocations
   readbacks = ML::MetalBuffer.hy_text_probe_readbacks
   run = Time.monotonic
+  codec.try(&.encode(chain))
   if mode == "save"
     dit.encode(chain, stop_after_segments: 1)
   else
@@ -109,6 +135,12 @@ begin
   metrics["command_segments"] = chain.segment_count.to_i64
   metrics["terminal_waits"] = chain.wait_count.to_i64
   raise "resume probe must have one terminal wait" unless chain.wait_count == 1
+  if active_codec = codec
+    report = active_codec.report_after_drain(chain)
+    codec_report = report
+    HyNomasGeneration.emit("qbit_cache_report", report: report)
+    raise "QBit cache contains nonfinite rows" unless report["invalid_rows"].as_i64 == 0
+  end
   export = Time.monotonic
   {"timeline" => timeline}.merge(captures.map_with_index { |b, i| {"b-step#{i + 1}", b} }.to_h).each do |name, buffer|
     path = File.join(output_dir, "#{name}.f32le")
@@ -130,8 +162,10 @@ begin
              contract_sha256: Digest::SHA256.hexdigest(contract), state_input_sha256: state_sha,
              upstream_revision: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
              segments: 2, resume_next_segment: 1, steps_per_segment: 4,
+             valid_text_tokens: inputs.base.valid_text_tokens,
              dit_peak_named_bytes: dit_peak, capture_bytes: capture_bytes,
              peak_named_bytes: peak, checkpoint_payload_bytes: inventory.values.sum,
+             cache_roundtrip: cache_roundtrip, codec_bytes: codec_bytes, codec: codec_report,
              timeline_shape: [1, 32, 180, 9, 16], step_shape: [1, 32, 30, 9, 16],
              timings: timings, metrics: metrics, diagnostics: diagnostics,
              noise_scope: "unchanged authenticated latent/epsilon banks; no reseeding",
@@ -160,6 +194,7 @@ ensure
       HyNomasSequence.retain_in_flight do
         inputs.object_id
         dit.try(&.object_id)
+        codec.try(&.object_id)
         active_chain.object_id
         capture_arena.object_id
         current_arena.object_id
@@ -170,6 +205,7 @@ ensure
   end
   actions = [] of Proc(Nil)
   if may_release
+    codec.try { |owner| actions << -> { owner.release_after_drain(chain) } }
     dit.try { |owner| actions << -> { owner.release } }
     chain.try { |owner| actions << -> { owner.release } }
     actions << -> { capture_arena.release }

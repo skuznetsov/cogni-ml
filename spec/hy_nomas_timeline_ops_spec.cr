@@ -60,6 +60,20 @@ describe ML::Video::HyNomasTimelineOps::Geometry do
 end
 
 describe ML::Video::HyNomasTimelineOps::PrefixGeometry do
+  it "admits the first two-segment latent and matching pixel-noise prefixes" do
+    latent = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
+      channels: 32, total_frames: 180, prefix_frames: 60, height: 9, width: 16)
+    pixel_noise = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
+      channels: 3, total_frames: 720, prefix_frames: 240, height: 288, width: 512)
+
+    latent.source_elements.should eq(829_440)
+    latent.prefix_elements.should eq(276_480)
+    latent.source_bytes.should eq(3_317_760_i64)
+    latent.prefix_bytes.should eq(1_105_920_i64)
+    pixel_noise.source_bytes.should eq(1_274_019_840_i64)
+    pixel_noise.prefix_bytes.should eq(424_673_280_i64)
+  end
+
   it "admits the 180-to-120 latent and 720-to-480 pixel-noise prefixes" do
     latent = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
       channels: 32, total_frames: 180, prefix_frames: 120, height: 9, width: 16)

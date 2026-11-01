@@ -381,7 +381,11 @@ module HyNomasSequence
       end
     end
 
-    def restore_boundary!(reader : ML::Video::HyNomasResumeBundle::Reader, next_segment : Int32) : Nil
+    # The optional setup visitor lets a diagnostic prepare GPU bindings without
+    # exposing history storage during an active request. No visitor can bypass
+    # authentication, partial-restore poisoning, or the fresh-owner boundary.
+    def restore_boundary!(reader : ML::Video::HyNomasResumeBundle::Reader, next_segment : Int32, *,
+                          visit_cache : Proc(String, ML::MetalBuffer, Int32, Nil)? = nil) : Nil
       unless !@released && !@resume_failed && @chain.nil? && @next_segment == 0
         raise ArgumentError.new("sequence restore requires a fresh live request")
       end
@@ -392,6 +396,7 @@ module HyNomasSequence
         reader.copy_to!("timeline", Bytes.new(@timeline.contents.as(UInt8*), @timeline.size.to_i32))
         @history.restore_boundary!(next_segment) do |name, buffer, count|
           reader.copy_to!(name, Bytes.new(buffer.contents.as(UInt8*), count * sizeof(Float32)))
+          visit_cache.try(&.call(name, buffer, count))
         end
         @timeline_ops.restore_boundary!(next_segment)
         @next_segment = next_segment

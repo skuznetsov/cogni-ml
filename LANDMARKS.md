@@ -6,6 +6,28 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QBIT-CONTINUATION-2026-10-31] Bounded adaptive-cache comparison integrity passes; visual quality pending
+
+- The exact control/save/restart reproduces all four B updates and the full
+  timeline bitwise. The QBit arm preserves A and untouched future noise, but B
+  differs (RMSE 0.0885057, relative L2 0.0758877, max absolute error 2.25195)
+  and fails the unchanged `2e-5` tolerance. This is lossy continuation, not
+  exact-equivalent output.
+- Exact and QBit timelines passed same-decoder/noise/settings provenance,
+  finite raw-pixel, and video-export integrity checks for 10 seconds at
+  512x288/24 fps. User visual review is pending; no quality promotion or
+  full-upstream CUDA/PixelUMM parity claim follows.
+- Logical K/V bytes fall from 4,314,857,472 to 2,001,104,400 (2.156x including
+  headers), with 41,207,936 extra resident bytes. F32 caches and the
+  4,319,223,820-byte exact restart bundle remain; no live-memory or compact
+  restart win is established. No speedup claim is made.
+- Exact-path refresh matches the stored pinned source-body compact-MPS oracle
+  for all 276,480 selected latents and matches prior native-decoder pixels by
+  SHA-256. These stored references do not establish a new full-upstream run.
+  Defaults remain exact F32. Refresh on code/binary/codec/input/weights/backend/
+  device change. Evidence: `.landmark/evidence/2026-10-31-hy-nomas-cache-qbit.json`;
+  scope and commands: `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-HY-NOMAS-SEGMENT-RESTART-2026-10-31] Post-A state reproduces B after a fresh-process restart
 
 - A bounded real BF16 54-layer DiT matrix compares uninterrupted A-to-B,

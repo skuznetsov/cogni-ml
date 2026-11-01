@@ -14,6 +14,16 @@ describe ML::Video::PixelUMMGeneration::Config do
     config.block_input_bytes.should eq(47_185_920_i64)
   end
 
+  it "keeps the default 30-latent inputs and output byte accounting unchanged" do
+    config = ML::Video::PixelUMMGeneration::Config.new
+
+    config.input_named_bytes_by_name.should eq({
+      "latent_f32" => 552_960_i64,
+      "noise_f32"  => 212_336_640_i64,
+    })
+    config.assembly_named_bytes_by_name["output_f32"].should eq(212_336_640_i64)
+  end
+
   it "derives the opt-in 768x416 five-second decoder geometry from latent cells" do
     config = ML::Video::PixelUMMGeneration::Config.new(
       total_latent_frames: 30, latent_height: 13, latent_width: 24)

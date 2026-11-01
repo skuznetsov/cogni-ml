@@ -1,5 +1,115 @@
 # Hy-Nomas first native video frontier
 
+## Adaptive continuation-cache quality experiment (2026-10-31)
+
+Status: bounded exact-versus-lossy comparison integrity passed; user visual
+review and the quality decision remain pending. The four-step BF16 DiT exact
+control/save/restart gate passed: all four B updates and the full timeline are
+bitwise equal, with A and the untouched future noise unchanged. The QBit arm
+restores the same authenticated post-writer boundary, uses the same B
+conditioning/noise and four Euler updates, then both timelines use one frozen
+decoder executable, identical BF16 decoder weights/settings and decoder noise.
+The comparison covers two five-second segments (10 seconds total), 240 frames
+at 512x288 and 24 fps. Decoder settings are one step, a 10-latent window, five
+latent overlap, and starts 0, 5, ..., 50; the same first-240-frame noise prefix
+is used for both. The existing exact F32 path remains the default.
+
+For B, QBit K/V roundtrip has RMSE 0.08850569793, relative L2 0.07588765 and
+maximum absolute error 2.251953125; it is not bitwise equal and fails the
+unchanged `atol=rtol=2e-5` latent tolerance. This is the expected falsifier for
+exactness of a lossy cache representation, not a video-quality verdict. The
+decoder pair's provenance and output integrity checks passed, and two finite
+240-frame videos were exported with matching decoder/noise/settings receipts.
+Full-upstream video parity is not established. The exact arm's refreshed
+timeline matches the stored pinned source-body compact-MPS final-latent oracle
+for all 276,480 selected values, and its 106,168,320 output pixel-channel
+values match the previous native decode by full SHA-256. These are
+stored-oracle/native-decode comparisons, not a new full-upstream CUDA DiT or
+upstream PixelUMM decoder run. Visual review is required before making any
+quality claim.
+
+The first experiment retains the final F32 attention buffers. A reusable GPU
+scratch packs and restores one cache record at a time, so it isolates lossy
+representation error without changing attention arithmetic. It does not yet
+reduce live cache residency or write a compact restart bundle. Report logical
+compact bytes including all row headers separately from scratch capacity and
+the exact restart file size. Do not infer GPU-memory savings from this probe.
+
+Each 128-value head row has F32 mean/sigma, payload offset and tier (16 header
+bytes). Gaussian conditional centroids reconstruct progressive p4/p5 prefixes;
+p8 uses the existing Gaussian codec's full-code reconstruction. Select the
+lowest tier satisfying both normalized maximum and RMS residual bounds:
+p4 (0.50, 0.12), p5 (0.25, 0.06), p8 (0.10, 0.02); otherwise retain exact F32.
+These are candidate selection heuristics, not changes to numerical tolerances
+or a quality certificate. Nonfinite data invalidates the run. Preserve exact
+F32 escapes and constant rows, and keep selection entirely on the GPU.
+
+Falsifiers exercised in this run: small GPU pack/restore matches the existing
+Gaussian decoder on identical stored moments/codes at unchanged
+`atol=rtol=2e-5`; corrupted payload and nonfinite controls are detected. The
+exact restart gate remained separate from lossy continuation. In the paired
+run, A and untouched future noise remain bitwise equal, while the measured B
+output differs as reported above. Both finite pixel outputs used identical
+settings and were exported for user review. Exact-path upstream qualification
+retains its preceding scope; lossy continuation is not called upstream-
+equivalent.
+
+The logical compact K/V representation is 2,001,104,400 bytes versus
+4,314,857,472 F32 bytes (2.156x including row headers). The codec adds
+41,207,936 resident bytes for this comparison. F32 attention caches remain
+resident and the exact restart bundle remains 4,319,223,820 bytes: this run
+shows neither live GPU-memory savings nor a compact on-disk restart format.
+No speedup is claimed; the compared runs were fresh processes without a matched
+timing design.
+
+The small GPU codec probe passed its tier, Gaussian CPU-parity, mutation and
+nonfinite checks. Four DiT and two decoder runs each recorded zero instrumented
+encode allocations/readbacks/preterminal waits and one terminal wait. Sampled
+peaks were 24.7916 GiB for DiT and 18.4178 GiB for decode; minimum measured
+headroom across phases was 15.4279 GiB and swap growth was zero. Guards used
+30 GiB DiT and 26 GiB decoder caps, a 10% system-memory reserve and a 64 MiB
+swap-growth stop. Sampling does not bound between-sample peaks. The focused
+suite passed 38 Crystal examples and 36 Python tests.
+
+Reproduction used external scratch/build state and the guarded runners below;
+their exact argv and receipts are under `$ROOT/logs/` in the evidence root.
+`run_job.py` sets `TMPDIR` and `CRYSTAL_CACHE_DIR` to that root and invokes the
+memory guard with file-cache accounting, the 10% reserve and 64 MiB swap stop.
+
+```sh
+ROOT=/opt/mldata_ssd/cogni-ml/hy-nomas-cache-qbit-20261031.vnlq7utw
+export TMPDIR="$ROOT/tmp" CRYSTAL_CACHE_DIR="$ROOT/crystal-cache"
+BUILD_DIR="$ROOT/build"
+
+python3 -B "$ROOT/run_job.py" --cap 4096 --timeout 600 integrated-build -- \
+  make BUILD_DIR="$BUILD_DIR" hy_nomas_sequence_resume_probe hy_nomas_decode_latent
+python3 -B "$ROOT/run_job.py" --cap 4096 --timeout 600 final-crystal-spec -- \
+  make BUILD_DIR="$BUILD_DIR" spec_hy_nomas_resume ARGS=spec/pixelumm_generation_spec.cr
+python3 -B "$ROOT/run_job.py" --cap 4096 --timeout 300 final-python-spec-v2 -- \
+  python3 -B "$ROOT/run_cpu_checks.py"
+python3 -B "$ROOT/run_real_matrix.py"
+python3 -B "$ROOT/run_decode_pair.py"
+python3 -B "$ROOT/run_export_pair.py"
+```
+
+The real-matrix runner invokes
+`spec/support/hy_nomas_sequence_resume_reference.py` on control/save/exact and
+`spec/support/hy_nomas_cache_qbit_compare.py` on exact/QBit outputs. The decoder
+runner invokes `hy_nomas_decode_latent` twice with `--latent-frames 60
+--latent-bank-frames 180`, then
+`spec/support/hy_nomas_cache_qbit_video_compare.py` binds both decoder receipts
+to their full timeline-bank SHA-256 and validates the raw pixels before export.
+The export runner uses `examples/hy_nomas_export.py` for 240 frames at
+512x288/24 fps and validates the MP4 files with `ffprobe`. The reports and exact
+guarded command records are indexed by
+`.landmark/evidence/2026-10-31-hy-nomas-cache-qbit.json`.
+
+DoD for comparison integrity passed; visual quality is unresolved. The main
+failure mode remains amplification of local K/V errors by continuation.
+Removing opt-in codec selection and diagnostic files is rollback; defaults stay
+exact F32. Refresh on codec/selector, binary, input, weights, backend or device
+changes.
+
 ## Segment-boundary save/restart frontier (2026-10-31)
 
 Status: qualified for the bounded native save/restart path. A real BF16
