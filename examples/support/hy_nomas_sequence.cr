@@ -2,6 +2,7 @@ require "./hy_nomas_timeline_inputs"
 require "../../src/ml/video/hy_nomas_continuation_history"
 require "../../src/ml/video/hy_nomas_timeline_ops"
 require "../../src/ml/video/hy_nomas_resume_bundle"
+require "../../src/ml/video/hy_nomas_segment_edit"
 require "./hy_nomas_cache_qbit_checkpoint"
 
 # Opt-in finite continuation. The first-segment entry point remains separate;
@@ -122,25 +123,33 @@ module HyNomasSequence
   # Compile-time source bytes bind restart to the native implementation as well
   # as the authenticated model/conditioning/noise inventory. No reseeding occurs.
   def checkpoint_contract(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
-                          next_segment : Int32) : String
+                          next_segment : Int32, noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil) : String
     checkpoint_inventory(inputs, segments, next_segment)
+    validate_noise_edit!(noise_edit, segments)
     source_hash = Digest::SHA256.new
-    {% for path in ["hy_nomas_sequence.cr", "../../src/ml/video/hy_nomas_continuation_history.cr", "../../src/ml/video/hy_nomas_timeline_ops.cr", "../../src/ml/video/kernels/hy_nomas_timeline_ops.metal", "../../src/ml/video/hy_nomas_euler.cr", "../../src/ml/video/kernels/hy_nomas_euler.metal", "../../src/ml/video/hy_nomas_block_mps.cr", "../../src/ml/video/hy_nomas_serial_mps.cr", "../../src/ml/video/hy_nomas_history_attention.cr", "../../src/ml/video/hy_nomas_history_attention_bridge.mm", "../../src/ml/video/hy_nomas_mps_bf16_linear_bridge.mm", "../../src/ml/video/hy_nomas_bf16_stack.cr"] %}
+    {% for path in ["hy_nomas_sequence.cr", "../../src/ml/video/hy_nomas_segment_edit.cr", "../../src/ml/video/hy_nomas_continuation_history.cr", "../../src/ml/video/hy_nomas_timeline_ops.cr", "../../src/ml/video/kernels/hy_nomas_timeline_ops.metal", "../../src/ml/video/hy_nomas_euler.cr", "../../src/ml/video/kernels/hy_nomas_euler.metal", "../../src/ml/video/hy_nomas_block_mps.cr", "../../src/ml/video/hy_nomas_serial_mps.cr", "../../src/ml/video/hy_nomas_history_attention.cr", "../../src/ml/video/hy_nomas_history_attention_bridge.mm", "../../src/ml/video/hy_nomas_mps_bf16_linear_bridge.mm", "../../src/ml/video/hy_nomas_bf16_stack.cr"] %}
       source_hash.update({{ read_file(__DIR__ + "/" + path) }})
     {% end %}
-    {schema: "cogni_ml.hy_nomas_sequence_boundary/v1", boundary: "after_noisy_writer",
-     upstream: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
-     implementation_sha256: source_hash.hexfinal,
-     executable_sha256: PixelUMMBlockProbe.sha_file(Process.executable_path || raise ArgumentError.new("checkpoint requires an identifiable executable")),
-     crystal: Crystal::VERSION,
-     model_index_sha256: HyNomasGeneration::INDEX_SHA,
-     input_manifest_sha256: inputs.file.sha256, input_payload_sha256: inputs.file.document["payload_sha256"].as_s,
-     conditioning_manifest_sha256: inputs.base.file.sha256,
-     segments: segments, next_segment: next_segment, steps: STEPS, shift: 5,
-     text_cache_policy: "once_per_scene", history_dtype: "F32",
-     valid_text_tokens: inputs.base.valid_text_tokens, storage_text_tokens: inputs.base.compact_text_tokens,
-     video_tokens: 4320, layers: 54, heads: 16, head_dim: 128,
-     timeline_shape: [1, 32, 180, 9, 16], cache_sigma: 0.206897_f32}.to_json
+    base = {schema: "cogni_ml.hy_nomas_sequence_boundary/v1", boundary: "after_noisy_writer",
+            upstream: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
+            implementation_sha256: source_hash.hexfinal,
+            executable_sha256: PixelUMMBlockProbe.sha_file(Process.executable_path || raise ArgumentError.new("checkpoint requires an identifiable executable")),
+            crystal: Crystal::VERSION,
+            model_index_sha256: HyNomasGeneration::INDEX_SHA,
+            input_manifest_sha256: inputs.file.sha256, input_payload_sha256: inputs.file.document["payload_sha256"].as_s,
+            conditioning_manifest_sha256: inputs.base.file.sha256,
+            segments: segments, next_segment: next_segment, steps: STEPS, shift: 5,
+            text_cache_policy: "once_per_scene", history_dtype: "F32",
+            valid_text_tokens: inputs.base.valid_text_tokens, storage_text_tokens: inputs.base.compact_text_tokens,
+            video_tokens: 4320, layers: 54, heads: 16, head_dim: 128,
+            timeline_shape: [1, 32, 180, 9, 16], cache_sigma: 0.206897_f32}.to_json
+    noise_edit.try(&.bind_contract(base, next_segment)) || base
+  end
+
+  def validate_noise_edit!(edit : ML::Video::HyNomasSegmentNoiseEdit?, segments : Int32) : Nil
+    if edit && (edit.run_segments != segments || edit.resident_segments != 6)
+      raise ArgumentError.new("Noise edit geometry does not match the admitted sequence")
+    end
   end
 
   class DiT
@@ -176,11 +185,16 @@ module HyNomasSequence
     def initialize(inputs : HyNomasGeneration::TimelineInputs, @timeline : ML::MetalBuffer,
                    @latent : ML::MetalBuffer, budget : Int64, @segment_count : Int32,
                    admission : ML::Video::HyNomasQ4StackIndex::Admission,
-                   text_cache_policy = HISTORY_TEXT_POLICY, *, prepare_capture : Bool = false)
+                   text_cache_policy = HISTORY_TEXT_POLICY, *, prepare_capture : Bool = false,
+                   @noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil)
       HyNomasSequence.validate_segments!(@segment_count)
+      HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
+      if @noise_edit && !text_cache_policy.once_per_scene?
+        raise ArgumentError.new("Noise edits require the admitted once-per-scene policy")
+      end
       if text_cache_policy.once_per_scene?
         (1...@segment_count).each do |next_segment|
-          @checkpoint_contracts[next_segment] = HyNomasSequence.checkpoint_contract(inputs, @segment_count, next_segment)
+          @checkpoint_contracts[next_segment] = HyNomasSequence.checkpoint_contract(inputs, @segment_count, next_segment, @noise_edit)
           @checkpoint_inventories[next_segment] = HyNomasSequence.checkpoint_inventory(inputs, @segment_count, next_segment)
         end
       end
@@ -351,7 +365,8 @@ module HyNomasSequence
       @prepared.encode(chain.encoder)
       (@next_segment...stop_after_segments).each do |segment|
         selected_captures = capture_steps.try(&.[segment]?)
-        @timeline_ops.prepare_segment!(chain, segment)
+        noise_source = @noise_edit.try(&.source_for(segment)) || segment
+        @timeline_ops.prepare_segment!(chain, segment, noise_source_segment: noise_source)
         @eulers[segment].step_count.times do |step|
           @eulers[segment].encode_timestep(chain, step)
           @patch.encode(chain)

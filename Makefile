@@ -681,6 +681,14 @@ $(BUILD_DIR)/hy_nomas_timeline_ops_probe: examples/hy_nomas_timeline_ops_probe.c
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
+$(BUILD_DIR)/hy_nomas_segment_edit_probe: examples/hy_nomas_segment_edit_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+spec_hy_nomas_segment_edit: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) spec spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_sequence_admission_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
+
 $(BUILD_DIR)/hy_nomas_continuation_history_probe: examples/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.metal src/ml/video/kernels/hy_nomas_continuation_history_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
 	$(CRYSTAL) build $< --release -Dhy_nomas_history_probe -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"

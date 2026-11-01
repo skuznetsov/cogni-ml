@@ -6,6 +6,39 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SEGMENT-EDIT-2026-11-01] A retained prefix supports a new B/C take with exact restart lineage
+
+- Five fresh BF16 DiT processes share one authenticated six-segment input bank
+  and scene prompt. Reuse post-A state, substitute unused F initial noise for
+  B on the GPU, and regenerate B/C. Continuous and split/restarted edited runs
+  match bitwise at all eight Euler updates and all 829,440 timeline values.
+  Both B and C change from the original control; A and future noise stay exact.
+- Applied edit identity binds every descendant checkpoint. The actual edited
+  post-B state is rejected by the base branch and another donor branch before
+  model setup. Exact/QBit contract gates pass specs; the real edit matrix is
+  exact only. The unedited full timeline matches the prior native control
+  bitwise. Exact checkpoints and shared conditioning remain defaults.
+- The existing gather offset is the only added GPU choice: original and edited
+  B/C both encode 19,457 command segments. All five runs have zero instrumented
+  encode allocations/readbacks/preterminal waits and one terminal drain each.
+  Sampled peak is 29.2121 GiB, minimum cache-aware headroom 19.4075 GiB, swap
+  growth zero under 30 GiB / 10% / 64 MiB / 900 s guards. Opaque MPS allocations
+  and between-sample spikes remain outside those counter/sample guarantees.
+- Release builds, 48 Crystal examples and 47 Python tests pass. Pinned upstream
+  gather/scatter expressions match the tiny native GPU fixture with error 0;
+  RoPE evidence is source-level global-offset selection only. Tolerances stay
+  `atol=rtol=2e-5`. Same-lineage correlated adversary verdict is ROBUST within
+  this slice; full upstream neural parity, edited video quality and new edited
+  QBit execution are open.
+- This is a noise take with one shared prompt, one edit and an unused donor,
+  not prompt editing. At most five active segments fit the six-segment bank.
+  A's last 20 decoded pixel frames may change because decoder windows overlap.
+  Next gate: matched continuous-bank decoding and visual review. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-segment-edit.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/qualification-summary.json`.
+  Refresh on code/binary/input/noise/weights/codec/geometry/backend/device
+  change or artifact loss. Commands: `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-HY-NOMAS-COMPACT-VIDEO-2026-11-01] Matched 15-second checkpoint videos pass integrity; user sees practically no visual difference
 
 - Two serial native decoder runs consume the authenticated terminal exact and

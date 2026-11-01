@@ -1,5 +1,116 @@
 # Hy-Nomas first native video frontier
 
+## Segment new-take frontier (2026-11-01)
+
+Status: bounded native new-take implementation and exact-checkpoint restart
+qualification pass. Preserve A's latent prefix and post-writer state, replace
+B's initial noise with unused F noise from the authenticated input bank, and
+regenerate B/C using the unchanged shared scene conditioning. All eight B/C
+Euler updates and the full 829,440-value timeline are bitwise equal between
+continuous and split/restarted edited runs. B and C both differ from the
+unedited control; A and the unused future suffix remain bitwise unchanged.
+This slice changes the noise take; per-segment prompt editing remains open.
+
+Design laws and falsifiers:
+
+- Only an active noninitial segment may change. Its donor must lie outside
+  the entire active run, so generated latents can never become initial noise.
+  Noise is gathered on the GPU; RoPE, cache epsilon and decoder noise retain
+  the target's global offsets. Existing arithmetic and tolerances stay fixed.
+- Post-A remains reusable in the same executable. Every checkpoint after an
+  applied edit binds that edit's identity as well as its original full
+  contract. A stale post-B state or another take must fail before model/GPU
+  allocation. Setup authentication and terminal file I/O remain on the CPU.
+- Exact checkpoints remain the default; compact restore/pack must obey the
+  same branch identity. Original files are immutable and outputs are fresh.
+- The checkpoint's trusted digest comes from the native producer/launcher.
+  It authenticates bytes and contract; it does not certify the semantics of
+  arbitrary forged states. Qualification also compares the unused donor and
+  future suffix against the authenticated source bank before/after the fork.
+- The decoder overlaps segment boundaries: changing B may change the last
+  20 pixel frames of A even when every A latent is bitwise unchanged. Export
+  must decode the continuous bank; whole-A pixel immutability is not claimed.
+
+Rejected surface: prompt edits, arbitrary new seeds, multiple edits per
+branch, cross-build checkpoint migration and Studio integration. The initial
+input bank has six segments, so this donor-based slice admits runs with at
+most five active segments. Rollback is to omit the opt-in edit and use the
+original branch; no original checkpoint is rewritten.
+
+Qualification uses five fresh native processes with BF16 weights, three active
+five-second segments and four Euler updates per segment: produce/save A;
+continue original B/C from A; continue edited B/C from the same A; produce/save
+edited B; restart C from that new B. The actual edited post-B bundle is rejected
+by both the unedited branch and a different-donor branch before model setup.
+Exact and QBit stale-contract gates also pass focused specs; the real edited
+matrix tests exact checkpoints only. QBit branch execution is not qualified
+by this matrix. The unedited full timeline additionally matches the previously
+qualified native exact control bitwise; this is a default-path regression
+check, not new upstream neural parity.
+
+The tiny GPU probe checks donor gather, target-only scatter, retained prefix,
+target RoPE selection and C's unchanged noise/position. Executed temporal
+gather/scatter expressions from pinned upstream revision
+`911cea6458a89c2663513ff7099561ec190dd491` match the terminal native GPU fixture
+with maximum error zero. The upstream RoPE check establishes its source-level
+global-offset contract only, not full rotary or neural numerical parity.
+No full BF16/CUDA/Magi or decoded-video quality qualification is claimed.
+
+All five native intervals record zero instrumented encode allocations,
+readbacks and preterminal waits, with one terminal drain each. The original
+and edited B/C runs both encode 19,457 command segments: the substitution only
+changes the existing noise-gather offset. Sampled peak process footprint is
+29.2121 GiB, minimum cache-aware headroom 19.4075 GiB and swap growth zero.
+All pass the 30 GiB process cap, 10% reserve, 64 MiB swap-growth stop and 900 s
+deadline. Opaque MPS allocations are outside the allocation counters; polling
+cannot bound between-sample spikes. Cache-aware headroom estimates reclaimable
+file-backed memory. Ordered run timings are not a speedup experiment.
+
+Release builds, 48 Crystal examples, 47 Python tests and formatting pass.
+Rejection tests challenge donor/target selection, edited checkpoint identity,
+lineage, retained A/future suffix, vacuous C regeneration, drift and counters.
+Tolerances remain `atol=rtol=2e-5`. Exact post-A and edited post-B bundles are
+4,319,223,820 and 8,141,283,340 bytes; this slice does not reduce live K/V
+residency. The new branch has not been decoded or visually reviewed.
+
+Artifact root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73`.
+`qualification-summary.json` authenticates native/checker pins, command and
+guard receipts, the real matrix, default regression and branch rejection
+results. Native sources/executable/runner were pinned before full-size runs;
+auxiliary finalization hashes are not original-execution attestations. The
+same-lineage correlated adversary verdict is ROBUST for this bounded native
+continuation. Local-only digests detect changes and cannot
+recover lost artifacts. Refresh on source/binary/input/noise/weights/codec/
+geometry/backend/device change or artifact loss.
+
+DoD refresh commands (use a fresh external build/output directory):
+
+```sh
+make BUILD_DIR="$RUN_ROOT/build" spec_hy_nomas_segment_edit spec_hy_nomas_compact_resume
+make BUILD_DIR="$RUN_ROOT/build" \
+  "$RUN_ROOT/build/hy_nomas_segment_edit_probe" \
+  "$RUN_ROOT/build/hy_nomas_compact_sequence_probe"
+python3 -B -m unittest discover -s spec -p 'hy_nomas*resume_reference_test.py' -v
+python3 -B spec/hy_nomas_segment_edit_reference_test.py -v
+python3 -B spec/support/hy_nomas_segment_edit_resume_reference.py \
+  --index /opt/mldata_ssd/cogni-ml/hy-nomas-segment-edit-20261101.qehg8u73/real/matrix-index.json \
+  --output "$RUN_ROOT/fresh-matrix-report.json"
+```
+
+Expected signals: 48 Crystal examples, 47 Python tests, `passed=true`,
+`edited_restart.all_steps_bitwise_equal=true` and full-timeline bitwise equality.
+The saved external `run_edit_matrix.py` records the bounded five-process
+commands and enforces pins. New-take options are paired, zero-based
+`--noise-edit-segment 1 --noise-source-segment 5`; the runtime reuses post-A
+state and binds every descendant to this identity. To resume C, use the newly
+written post-B state and the same options, never the old branch's post-B state.
+Decoder invalidation is global latent frames `[30,90)` and pixel frames
+`[100,360)` for this case; the overlap reaches A's final 20 pixel frames.
+The next gate is matched continuous-bank decoding of the original and edited
+branches, followed by visual review. Prompt edits and CineStudio integration
+need a separate conditioning/cache invalidation design.
+
 ## Matched 15-second compact-checkpoint video review (2026-11-01)
 
 Status: the saved exact and compact three-segment restart chains have been
@@ -75,9 +186,9 @@ Refresh on code/binary/input/noise/weights/codec/geometry/backend/device change
 or artifact loss. The user visual-review gate for this pair is satisfied;
 existing raw qualification/export receipts retain their original pending
 status as execution-time records. No requantization-policy change follows
-from this observation. The next proposed capability is segment edit
-invalidation: preserve A, edit B, and regenerate B/C with explicit state
-lineage. CineStudio integration remains later work.
+from this observation. The bounded noise-take fork described above now
+qualifies segment invalidation and restart lineage. Its decoded visual review
+and CineStudio integration remain later work.
 
 The integrity command is below; choose a fresh output path:
 

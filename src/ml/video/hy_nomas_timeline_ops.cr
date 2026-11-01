@@ -77,6 +77,16 @@ module ML::Video::HyNomasTimelineOps
       (segment_index.to_i64 * @segment_latent_frames).to_i32
     end
 
+    # An alternate source must remain initial noise throughout the entire
+    # active run. It must never point at a generated or yet-to-generate active
+    # segment. Validate before binding a chain or changing the schedule.
+    def validate_noise_source!(target : Int32, source : Int32, run_segments : Int32) : Nil
+      unless 2 <= run_segments <= segment_count && 0 <= target < run_segments &&
+             (source == target || run_segments <= source < segment_count)
+        raise ArgumentError.new("Timeline noise source must be the target or an unused future segment")
+      end
+    end
+
     def rope_offset(segment_index : Int32) : Int32
       checked_segment_index(segment_index)
       (segment_index.to_i64 * rope_elements_per_segment).to_i32
@@ -554,9 +564,12 @@ module ML::Video::HyNomasTimelineOps
       @schedule.restore_boundary!(next_segment)
     end
 
-    # Gather the current segment's channel-first latent and copy its global
-    # RoPE cosine/sine tables into fixed 30-frame buffers on the same chain.
-    def prepare_segment!(chain : ML::Metal::MPSCommandChain, segment_index : Int32) : Nil
+    # Gather channel-first noise and copy the target's global RoPE tables.
+    # An optional unused noise donor changes only the gather offset; it adds
+    # no dispatch, buffer, readback or synchronization to the normal path.
+    def prepare_segment!(chain : ML::Metal::MPSCommandChain, segment_index : Int32, *,
+                         noise_source_segment : Int32 = segment_index) : Nil
+      @geometry.validate_noise_source!(segment_index, noise_source_segment, @run_segments)
       @schedule.expect_prepare!(segment_index)
       bind_live_chain!(chain)
       buffers = live_buffers!
@@ -566,7 +579,7 @@ module ML::Video::HyNomasTimelineOps
         e.set_pipeline(@gather_pipeline)
           .set_buffer(buffers.timeline, 0)
           .set_buffer(buffers.segment_latent, 1, ML::Metal::BufferAccess::Write)
-          .set_value(@geometry.segment_start(segment_index).to_u32, 2)
+          .set_value(@geometry.segment_start(noise_source_segment).to_u32, 2)
           .set_value(@geometry.total_latent_frames.to_u32, 3)
           .set_value(@geometry.segment_latent_frames.to_u32, 4)
           .set_value(@geometry.latent_height.to_u32, 5)

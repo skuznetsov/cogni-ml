@@ -15,6 +15,8 @@ state_format = "exact"
 cache_roundtrip = "exact"
 budget_mib = 30_720_i64
 plan_only = false
+noise_edit_segment : Int32? = nil
+noise_source_segment : Int32? = nil
 OptionParser.parse do |p|
   p.banner = "Hy-Nomas bounded multi-process compact continuation qualification"
   p.on("--inputs PATH", "Authenticated continuation input manifest") { |v| input_path = v }
@@ -29,8 +31,16 @@ OptionParser.parse do |p|
   p.on("--state-sha SHA", "Trusted complete checkpoint SHA-256") { |v| state_sha = v }
   p.on("--budget-mib N", "Named GPU buffer cap; external 10% guard required") { |v| budget_mib = v.to_i64 }
   p.on("--plan-only", "Authenticate inputs and report budget without Metal") { plan_only = true }
+  p.on("--noise-edit-segment N", "New take for one active noninitial segment; shared scene prompt is unchanged") { |v| noise_edit_segment = v.to_i }
+  p.on("--noise-source-segment N", "Unused noise donor in the same six-segment bank; paired with noise-edit-segment") { |v| noise_source_segment = v.to_i }
 end
 HyNomasSequence.validate_segments!(segments)
+unless noise_edit_segment.nil? == noise_source_segment.nil?
+  raise ArgumentError.new("noise-edit-segment and noise-source-segment must be supplied together")
+end
+noise_edit = if target = noise_edit_segment
+               ML::Video::HyNomasSegmentNoiseEdit.new(segments, target, noise_source_segment.not_nil!)
+             end
 unless 0 <= start_segment < stop_after_segments <= segments
   raise ArgumentError.new("interval must satisfy 0 <= start < stop <= segments")
 end
@@ -58,7 +68,7 @@ admission = HyNomasGeneration.authenticate_bf16_index
 contracts = {} of Int32 => String
 inventories = {} of Int32 => Hash(String, Int64)
 (1...segments).each do |boundary|
-  contracts[boundary] = HyNomasSequence.checkpoint_contract(inputs, segments, boundary)
+  contracts[boundary] = HyNomasSequence.checkpoint_contract(inputs, segments, boundary, noise_edit)
   inventories[boundary] = HyNomasSequence.checkpoint_inventory(inputs, segments, boundary)
 end
 counts = inventories.transform_values do |inventory|
@@ -82,7 +92,8 @@ HyNomasGeneration.emit("compact_resume_memory_plan", mode: mode, segments: segme
   start_segment: start_segment, stop_after_segments: stop_after_segments, state_format: state_format,
   cache_roundtrip: cache_roundtrip, dit_peak_named_bytes: dit_peak, capture_bytes: capture_bytes,
   codec_bytes: codec_bytes, peak_named_bytes: peak, named_budget_bytes: budget,
-  resident_f32_kv_bytes: resident_f32_kv_bytes, reserve_pct: 10, decoder: false, full_generation: false)
+  resident_f32_kv_bytes: resident_f32_kv_bytes, noise_edit: noise_edit.try(&.identity),
+  reserve_pct: 10, decoder: false, full_generation: false)
 exit if plan_only
 unless Path[output_dir].absolute? && File.directory?(output_dir) && Dir.empty?(output_dir)
   raise ArgumentError.new("output must be an existing empty absolute directory")
@@ -129,7 +140,7 @@ begin
   end
   setup = Time.monotonic
   dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget - capture_bytes - codec_bytes,
-    segments, admission, prepare_capture: true)
+    segments, admission, prepare_capture: true, noise_edit: noise_edit)
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   prepared_bindings = {} of Int32 => Hash(String, Tuple(ML::MetalBuffer, Int32))
   if cache_roundtrip == "qbit"
@@ -226,7 +237,7 @@ begin
   end
   timings["terminal_export_seconds"] = (Time.monotonic - export).total_seconds
   timings["request_seconds"] = (Time.monotonic - request_start).total_seconds
-  receipt = {schema: "cogni_ml.hy_nomas_compact_sequence_probe/v1", mode: mode,
+  receipt = {schema: noise_edit ? "cogni_ml.hy_nomas_segment_edit_probe/v1" : "cogni_ml.hy_nomas_compact_sequence_probe/v1", mode: mode,
              pid: Process.pid, executable_sha256: PixelUMMBlockProbe.sha_file(Process.executable_path.not_nil!),
              inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              payload_sha256: inputs.file.document["payload_sha256"].as_s,
@@ -246,7 +257,12 @@ begin
              checkpoint_payload_bytes: stop_after_segments < segments ? inventories[stop_after_segments].values.sum : 0_i64,
              timeline_shape: [1, 32, 180, 9, 16], step_shape: [1, 32, 30, 9, 16],
              timings: timings, metrics: metrics, diagnostics: diagnostics,
-             noise_scope: "unchanged authenticated latent/epsilon banks; no reseeding",
+             noise_edit: noise_edit.try(&.identity),
+             invalidation: noise_edit.try { |edit| {latent_frames: [edit.target_segment * 30, segments * 30],
+                                                    decoder_pixel_frames: [edit.target_segment * 120 - 20, segments * 120],
+                                                    prior_segment_overlap_pixel_frames: [edit.target_segment * 120 - 20, edit.target_segment * 120],
+                                                    units: "half-open global frame ranges; regenerate every descendant"} },
+             noise_scope: noise_edit ? "one initial-noise gather from an unused donor in the authenticated state; target RoPE/cache epsilon and shared conditioning unchanged" : "unchanged authenticated latent/epsilon banks; no reseeding",
              io_scope: "setup/terminal shared-buffer file I/O; GPU codec math",
              metric_scope: "instrumented MetalBuffer methods; opaque MPS resources and terminal I/O excluded",
              upstream_scope: "pinned small cache-contract F32/MPS oracle; real DiT native restart parity",
