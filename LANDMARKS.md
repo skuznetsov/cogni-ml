@@ -6,6 +6,38 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-COMPACT-VIDEO-2026-11-01] Matched 15-second checkpoint videos pass integrity; motion quality is pending
+
+- Two serial native decoder runs consume the authenticated terminal exact and
+  compact `[2,3]` restart timelines. One 90-latent/360-pixel-frame global
+  schedule uses 17 windows; both arms share the executable, BF16 block/head
+  weights, F32 stem and original noise. No new DiT generation ran. The pinned
+  upstream pure window helper agrees with the schedule; this is geometry-only
+  evidence, not full upstream numerical video parity.
+- All 100 unaffected opening pixel frames match exact/QBit bitwise. Each arm's
+  first 220 frames matches its prior 10-second raw control bitwise. Windows at
+  latent starts 25/55 cross A/B and B/C; future segments can change the previous
+  segment's last 20 pixel frames despite immutable DiT latent prefixes.
+- Raw pixel RMSE versus exact is A 0.000922836, B 0.016688471, C 0.047378404.
+  Selected lossless frames show small contour/background differences without
+  obvious gross scene destruction; motion/perceptual judgment awaits the user.
+  Exact mode stays default and the `2e-5` tolerance is unchanged.
+- Both 15-second 512x288/24 fps originals and synchronized comparison pass
+  frame-count/duration/hash checks. The re-encoded comparison is exact-left,
+  QBit-right. Raw F32 files and lossless previews remain for fine detail.
+- Sampled peak is 18.8096 GiB, minimum cache-aware headroom 25.1403 GiB, swap
+  growth zero under a 26 GiB cap, 10% reserve, 64 MiB swap-growth stop and 1200 s
+  deadline. Instrumented encode allocations/readbacks/preterminal waits are
+  zero; terminal waits are one per process. Opaque MPS allocations and sample
+  gaps remain limitations. No speedup is claimed from this single ordered pair.
+- Release build, 39 Crystal examples, 19 Python tests and formatting pass;
+  correlated adversary review is ROBUST for pair authentication. Local-only
+  evidence: `.landmark/evidence/2026-11-01-hy-nomas-compact-video.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/qualification-summary.json`.
+  Refresh on source/binary/codec/input/noise/weights/geometry/backend/device
+  change or artifact loss. Scope, commands and next gate:
+  `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-HY-NOMAS-COMPACT-RESUME-2026-11-01] Compact GPU QBit checkpoints reproduce the roundtrip control through two restarts
 
 - Eight fresh BF16 DiT processes cover A/B/C (3 x 5 seconds, four Euler steps

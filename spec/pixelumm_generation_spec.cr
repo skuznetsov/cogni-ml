@@ -129,6 +129,27 @@ describe ML::Video::PixelUMMGeneration::Config do
     config.stem_named_bytes_by_name.values.sum.should eq(289_131_008_i64)
   end
 
+  it "decodes three segments with global windows crossing both continuation seams" do
+    config = ML::Video::PixelUMMGeneration::Config.new(total_latent_frames: 90)
+
+    config.output_shape.should eq([1, 3, 360, 288, 512])
+    config.window_starts.should eq((0..80).step(5).to_a)
+    config.window_count.should eq(17)
+    [25, 55].each do |start|
+      config.window_starts.includes?(start).should be_true
+    end
+    coverage = config.pixel_frame_coverage_counts
+    coverage.size.should eq(360)
+    coverage.all? { |count| count == 1 || count == 2 }.should be_true
+    coverage.count(1).should eq(40)
+    coverage.count(2).should eq(320)
+    config.input_named_bytes_by_name.should eq({
+      "latent_f32" => 1_658_880_i64,
+      "noise_f32"  => 637_009_920_i64,
+    })
+    config.assembly_named_bytes_by_name["output_f32"].should eq(637_009_920_i64)
+  end
+
   it "covers all 720 output frames with the 35 global windows" do
     config = ML::Video::PixelUMMGeneration::Config.new(total_latent_frames: 180)
 

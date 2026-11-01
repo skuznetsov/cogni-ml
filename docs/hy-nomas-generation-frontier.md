@@ -1,5 +1,94 @@
 # Hy-Nomas first native video frontier
 
+## Matched 15-second compact-checkpoint video review (2026-11-01)
+
+Status: the saved exact and compact three-segment restart chains have been
+decoded and exported successfully. This is a decoder-only follow-up to the
+matrix below, with no new DiT generation. Perceptual quality after two compact
+boundaries remains pending user review; exact checkpoints remain the default.
+
+The native imported-latent example now admits an opt-in 90-frame prefix from
+the authenticated 180-frame NCTHW bank. Both arms use the same frozen native
+decoder executable, BF16 block/head weights, F32 stem, original noise record
+and settings. GPU prefix gathers select the first 90 latent frames and 360
+noise frames **per channel**. One global schedule uses 17 overlapping windows
+at latent starts `[0,5,...,80]`; it does not concatenate independently decoded
+segments. The pinned upstream `_window_starts` source helper returns the same
+schedule, and the native config test checks full coverage (40 single-covered
+and 320 double-covered output frames). This is an upstream geometry check,
+not a new full upstream decoder numerical qualification.
+
+The video comparator freshly authenticates the compact matrix, selects the
+terminal `[2,3]` runs from `exact_restart_chain` and `compact_restart_chain`,
+binds each decoder's full-bank path and digest, and checks identical decoder,
+weights, noise and settings. Both raw outputs have 637,009,920 finite F32 bytes.
+Each original MP4 has 360 frames at 512x288/24 fps (15 seconds). A synchronized
+1024x288 comparison places exact on the left and compact QBit on the right.
+That comparison is H264 re-encoded; separate MP4s, raw F32 files and lossless
+PNG previews remain available for detail review.
+
+The unchanged-prefix falsifiers pass bitwise:
+
+- Exact versus QBit matches for output frames `[0,100)`.
+- Each new arm matches its prior 10-second raw-pixel control for `[0,220)`.
+
+An overlapping decoder window at latent start 25 sees A and B, so B can affect
+the last 20 pixel frames of A. Start 55 likewise crosses B/C and affects pixels
+from frame 220. Entire A/B pixel segments are therefore not immutable when
+future latents change, even though their DiT latent prefixes are immutable.
+Display-range pixel differences versus exact are diagnostics, not quality
+acceptance thresholds:
+
+| Pixel segment | MAE | RMSE | Maximum absolute error |
+| --- | ---: | ---: | ---: |
+| A, frames 0-119 | 0.000144225 | 0.000922836 | 0.1328125 |
+| B, frames 120-239 | 0.006521547 | 0.016688471 | 0.5703125 |
+| C, frames 240-359 | 0.018942099 | 0.047378404 | 0.984375 |
+
+Sampled peak process footprint is 18.8096 GiB, minimum cache-aware headroom is
+25.1403 GiB and swap growth is zero. Both serial runs pass the 26 GiB process
+cap, 10% reserve, 64 MiB swap-growth stop and 1200 s deadline. Instrumented
+decoder encode allocations/readbacks/preterminal waits remain zero, with one
+terminal wait per process. Opaque MPS allocations and between-sample spikes
+remain outside those guarantees; terminal file analysis/export uses the CPU
+after the existing drain. Decoder wall times are 220.95 s and 237.18 s;
+this single ordered pair is not a speedup experiment.
+
+Release build, 39 Crystal config/assembly examples, 19 Python comparator tests
+and Crystal formatting pass. New rejection cases cover unadmitted duration,
+wrong bank/noise, missing window, wrong output geometry, wrong terminal matrix
+arm and ambiguous CLI modes. Tolerances remain `atol=rtol=2e-5`; lossy QBit
+versus exact is not promoted to exact equivalence. Review is correlated
+same-lineage review. Full upstream BF16/CUDA video parity remains unproven.
+
+Artifact root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j`.
+`qualification-summary.json` indexes source/executable pins, command receipts,
+guard samples, raw checks and exports. `videos/f32-vs-adaptive-qbit.mp4` is the
+comparison; originals are `videos/f32-control.mp4` and
+`videos/adaptive-qbit.mp4`. All large artifacts stay outside the repository.
+Digests detect changes and do not guarantee recovery of local-only artifacts.
+Refresh on code/binary/input/noise/weights/codec/geometry/backend/device change
+or artifact loss. The quality decision is the next gate: review 10-15 seconds
+and both seams before changing how unchanged K/V rows are requantized. Segment
+edit invalidation and CineStudio integration remain later work.
+
+The integrity command is below; choose a fresh output path:
+
+```sh
+python3 -B spec/support/hy_nomas_cache_qbit_video_compare.py \
+  --compact-index /opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo/real/matrix-index.json \
+  --exact-decoder-dir /opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/decode/exact \
+  --qbit-decoder-dir /opt/mldata_ssd/cogni-ml/hy-nomas-compact-video-20261101.8cfa0q7j/decode/qbit \
+  --output /a/fresh/external/path/pair-validation.json
+```
+
+Expected signal: `pair_integrity_passed=true`, authenticated 90-frame prefix /
+360-frame pixels, `quality_verdict` pending and
+`full_upstream_video_parity=false`. The external `postprocess.py` and
+`run_decode_pair.py` record exact guarded commands and enforce source pins;
+their output paths are intentionally fresh-only.
+
 ## Compact QBit checkpoints and repeated continuation (2026-11-01)
 
 Status: bounded native compact save/restart qualification passed. Eight fresh

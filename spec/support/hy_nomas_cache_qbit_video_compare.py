@@ -21,24 +21,31 @@ import sys
 from typing import Any
 
 import hy_nomas_cache_qbit_compare as dit_comparison
+import hy_nomas_compact_resume_reference as compact_comparison
 import hy_nomas_sequence_resume_reference as exact
 
 
 DECODER_RECEIPT_SCHEMA = "cogni_ml.hy_nomas_decode_latent/v1"
 REPORT_SCHEMA = "cogni_ml.hy_nomas_cache_qbit_video_comparison/v1"
 LATENT_BANK_SHAPE = (1, 32, 180, 9, 16)
-LATENT_SHAPE = (1, 32, 60, 9, 16)
-PIXEL_SHAPE = (1, 3, 240, 288, 512)
+DEFAULT_LATENT_FRAMES = 60
+COMPACT_LATENT_FRAMES = 90
+PIXEL_FRAMES_PER_LATENT = 4
+LATENT_SHAPE = (1, 32, DEFAULT_LATENT_FRAMES, 9, 16)
+PIXEL_SHAPE = (1, 3, DEFAULT_LATENT_FRAMES * PIXEL_FRAMES_PER_LATENT, 288, 512)
 PIXEL_BYTES = math.prod(PIXEL_SHAPE) * 4
 PIXEL_NOISE_SHAPE = PIXEL_SHAPE
 PIXEL_CHUNK_BYTES = 1024 * 1024
 BASE_INPUTS_SHA256 = "f5001fcbc786401488de1eb652061899ae4fdda88febb67ebd8bd6a22e569bcb"
 CONTINUATION_INPUTS_SHA256 = "2807e11814f07975c807f367b0a4f15e3c6bdde1eb62ce9bda851814d09a6e47"
+PIXELUMM_WINDOW_LATENTS = 10
+PIXELUMM_OVERLAP_LATENTS = 5
 PIXELUMM_SETTINGS = {
     "steps": 1,
-    "window_latents": 10,
-    "overlap_latents": 5,
-    "starts": list(range(0, 51, 5)),
+    "window_latents": PIXELUMM_WINDOW_LATENTS,
+    "overlap_latents": PIXELUMM_OVERLAP_LATENTS,
+    "starts": list(range(0, DEFAULT_LATENT_FRAMES - PIXELUMM_WINDOW_LATENTS + 1,
+                          PIXELUMM_OVERLAP_LATENTS)),
 }
 LATENT_SELECTION = (
     "first 60 global frames from each NCTHW channel using "
@@ -89,9 +96,45 @@ def _expect_string(receipt: dict[str, Any], key: str, expected: str, label: str)
         raise exact.ResumeReferenceError(f"{label} {key} must be {expected!r}")
 
 
+def _admitted_geometry(latent_frames: int) -> dict[str, Any]:
+    if type(latent_frames) is not int or latent_frames not in (60, 90):
+        raise exact.ResumeReferenceError("latent_frames must be one of the admitted 60 or 90 frames")
+    pixel_frames = latent_frames * PIXEL_FRAMES_PER_LATENT
+    latent_shape = (1, 32, latent_frames, 9, 16)
+    pixel_shape = (1, 3, pixel_frames, 288, 512)
+    settings = {
+        "steps": 1,
+        "window_latents": PIXELUMM_WINDOW_LATENTS,
+        "overlap_latents": PIXELUMM_OVERLAP_LATENTS,
+        "starts": list(range(
+            0,
+            latent_frames - PIXELUMM_WINDOW_LATENTS + 1,
+            PIXELUMM_OVERLAP_LATENTS,
+        )),
+    }
+    return {
+        "latent_frames": latent_frames,
+        "pixel_frames": pixel_frames,
+        "latent_shape": latent_shape,
+        "selected_prefix_bytes": _f32_extent(latent_shape),
+        "pixel_shape": pixel_shape,
+        "pixel_bytes": _f32_extent(pixel_shape),
+        "settings": settings,
+        "latent_selection": (
+            f"first {latent_frames} global frames from each NCTHW channel using "
+            "HyNomasTimelineOps::PrefixPlan"
+        ),
+        "noise_selection": (
+            f"first {pixel_frames} global frames from each NCTHW channel using "
+            "HyNomasTimelineOps::PrefixPlan"
+        ),
+    }
+
+
 def _validate_decoder_receipt(
-    receipt: dict[str, Any], label: str, timeline_sha256: str
+    receipt: dict[str, Any], label: str, timeline_sha256: str, *, latent_frames: int = DEFAULT_LATENT_FRAMES
 ) -> dict[str, Any]:
+    geometry = _admitted_geometry(latent_frames)
     if receipt.get("schema") != DECODER_RECEIPT_SCHEMA:
         raise exact.ResumeReferenceError(f"{label} decoder receipt schema is unsupported")
     if receipt.get("full_upstream_video_parity") is not False:
@@ -113,21 +156,21 @@ def _validate_decoder_receipt(
         )
 
     source_bank_shape = _expect_shape(receipt, "latent_bank_shape", LATENT_BANK_SHAPE, label)
-    selected_prefix_shape = _expect_shape(receipt, "latent_shape", LATENT_SHAPE, label)
+    selected_prefix_shape = _expect_shape(receipt, "latent_shape", geometry["latent_shape"], label)
     source_bank_bytes = _f32_extent(source_bank_shape)
     selected_prefix_bytes = _f32_extent(selected_prefix_shape)
-    _expect_shape(receipt, "pixel_noise_shape", PIXEL_NOISE_SHAPE, label)
-    _expect_shape(receipt, "output_shape", PIXEL_SHAPE, label)
+    _expect_shape(receipt, "pixel_noise_shape", geometry["pixel_shape"], label)
+    _expect_shape(receipt, "output_shape", geometry["pixel_shape"], label)
     for key, expected in (
         ("latent_bank_frames", 180),
-        ("latent_frames", 60),
-        ("latent_selected_frames", 60),
-        ("pixel_noise_frames", 240),
-        ("frames", 240),
+        ("latent_frames", geometry["latent_frames"]),
+        ("latent_selected_frames", geometry["latent_frames"]),
+        ("pixel_noise_frames", geometry["pixel_frames"]),
+        ("frames", geometry["pixel_frames"]),
         ("width", 512),
         ("height", 288),
         ("fps", 24),
-        ("output_bytes", PIXEL_BYTES),
+        ("output_bytes", geometry["pixel_bytes"]),
     ):
         _expect_int(receipt, key, expected, label)
     # The older generic fields describe the uploaded source bank, not the
@@ -141,19 +184,20 @@ def _validate_decoder_receipt(
             f"{label} latent_bank_bytes must equal source-bank extent from latent_bank_shape"
         )
     _expect_string(receipt, "latent_dtype", "F32 little-endian", label)
-    _expect_string(receipt, "latent_selection", LATENT_SELECTION, label)
-    _expect_string(receipt, "pixel_noise_selection", NOISE_SELECTION, label)
+    _expect_string(receipt, "latent_selection", geometry["latent_selection"], label)
+    _expect_string(receipt, "pixel_noise_selection", geometry["noise_selection"], label)
     _expect_string(receipt, "output_dtype", "F32 little-endian planar RGB", label)
 
     settings = receipt.get("pixelumm")
-    if type(settings) is not dict or set(settings) != set(PIXELUMM_SETTINGS):
-        raise exact.ResumeReferenceError(f"{label} PixelUMM settings differ from the admitted 60-frame decode")
+    expected_settings = geometry["settings"]
+    if type(settings) is not dict or set(settings) != set(expected_settings):
+        raise exact.ResumeReferenceError(f"{label} PixelUMM settings differ from the admitted decode")
     for key in ("steps", "window_latents", "overlap_latents"):
-        if type(settings.get(key)) is not int or settings[key] != PIXELUMM_SETTINGS[key]:
+        if type(settings.get(key)) is not int or settings[key] != expected_settings[key]:
             raise exact.ResumeReferenceError(f"{label} PixelUMM setting {key} is invalid")
     starts = settings.get("starts")
     if (type(starts) is not list or any(type(start) is not int for start in starts)
-            or starts != PIXELUMM_SETTINGS["starts"]):
+            or starts != expected_settings["starts"]):
         raise exact.ResumeReferenceError(f"{label} PixelUMM window starts are invalid")
 
     metrics = receipt.get("metrics")
@@ -187,8 +231,11 @@ def validate_decoder_receipts(
     qbit_timeline_sha256: str,
     exact_dit_inputs_sha256: str,
     qbit_dit_inputs_sha256: str,
+    *,
+    latent_frames: int = DEFAULT_LATENT_FRAMES,
 ) -> dict[str, Any]:
     """Validate the per-arm DIT→decoder links and matched decoder identities."""
+    geometry = _admitted_geometry(latent_frames)
     if (type(exact_dit_inputs_sha256) is not str
             or exact.SHA256_RE.fullmatch(exact_dit_inputs_sha256) is None
             or type(qbit_dit_inputs_sha256) is not str
@@ -201,8 +248,12 @@ def validate_decoder_receipts(
     if exact_timeline_sha256 == qbit_timeline_sha256:
         raise exact.ResumeReferenceError("QBit DiT timeline treatment is inactive")
 
-    exact_artifacts = _validate_decoder_receipt(exact_receipt, "exact", exact_timeline_sha256)
-    qbit_artifacts = _validate_decoder_receipt(qbit_receipt, "qbit", qbit_timeline_sha256)
+    exact_artifacts = _validate_decoder_receipt(
+        exact_receipt, "exact", exact_timeline_sha256, latent_frames=latent_frames
+    )
+    qbit_artifacts = _validate_decoder_receipt(
+        qbit_receipt, "qbit", qbit_timeline_sha256, latent_frames=latent_frames
+    )
     exact_output_sha = exact_artifacts["output_sha256"]
     qbit_output_sha = qbit_artifacts["output_sha256"]
 
@@ -248,7 +299,7 @@ def validate_decoder_receipts(
         "pixel_noise": {
             "manifest_sha256": exact_receipt["pixel_noise_manifest_sha256"],
             "record_sha256": exact_receipt["pixel_noise_record_sha256"],
-            "shape": list(PIXEL_NOISE_SHAPE),
+            "shape": list(geometry["pixel_shape"]),
         },
         "settings": exact_receipt["pixelumm"],
         "timeline_sha256": {"exact": exact_timeline_sha256, "qbit": qbit_timeline_sha256},
@@ -267,13 +318,13 @@ def validate_decoder_receipts(
                 },
             },
             "selected_decoder_prefix": {
-                "shape": list(LATENT_SHAPE),
-                "frames": 60,
+                "shape": list(geometry["latent_shape"]),
+                "frames": geometry["latent_frames"],
                 "f32_bytes": {
                     "exact": exact_artifacts["selected_prefix_bytes"],
                     "qbit": qbit_artifacts["selected_prefix_bytes"],
                 },
-                "selection": LATENT_SELECTION,
+                "selection": geometry["latent_selection"],
             },
         },
         "output_sha256": {"exact": exact_output_sha, "qbit": qbit_output_sha},
@@ -398,6 +449,168 @@ def authenticate_pixels(
     }
 
 
+_COMPACT_MATRIX_INTERVALS = {
+    "exact_control": [[0, 3]],
+    "exact_restart_chain": [[0, 1], [1, 2], [2, 3]],
+    "qbit_control": [[0, 3]],
+    "compact_restart_chain": [[0, 1], [1, 2], [2, 3]],
+}
+
+
+def _compact_matrix_timeline(matrix_report: dict[str, Any], arm: str) -> dict[str, Any]:
+    """Re-check the selected terminal timeline link from an authenticated matrix report."""
+    if type(matrix_report) is not dict or matrix_report.get("passed") is not True:
+        raise exact.ResumeReferenceError("compact DiT matrix did not pass its integrity comparator")
+
+    source_bank = matrix_report.get("source_bank")
+    if type(source_bank) is not dict:
+        raise exact.ResumeReferenceError("compact DiT matrix source bank metadata is missing")
+    _expect_shape({"shape": source_bank.get("shape")}, "shape", LATENT_BANK_SHAPE, "compact DiT matrix")
+    source_bank_bytes = _f32_extent(LATENT_BANK_SHAPE)
+    if type(source_bank.get("record_bytes")) is not int or source_bank["record_bytes"] != source_bank_bytes:
+        raise exact.ResumeReferenceError("compact DiT matrix source bank extent is invalid")
+
+    intervals = matrix_report.get("intervals")
+    if type(intervals) is not dict or any(
+        intervals.get(name) != expected for name, expected in _COMPACT_MATRIX_INTERVALS.items()
+    ):
+        raise exact.ResumeReferenceError("compact DiT matrix must be the admitted three-segment interval set")
+    identity = matrix_report.get("identity")
+    if type(identity) is not dict:
+        raise exact.ResumeReferenceError("compact DiT matrix identity metadata is missing")
+    dit_inputs_sha256 = exact._required_sha(identity, "inputs_sha256", "compact DiT matrix")
+
+    artifacts = matrix_report.get("artifacts")
+    arm_runs = artifacts.get(arm) if type(artifacts) is dict else None
+    if type(arm_runs) is not list or len(arm_runs) != 3:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} artifact chain is incomplete")
+    selected = arm_runs[-1]
+    if type(selected) is not dict or selected.get("interval") != [2, 3]:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} must select terminal interval [2, 3]")
+
+    receipt_value = selected.get("receipt_path")
+    if type(receipt_value) is not str or not receipt_value:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} terminal receipt path is missing")
+    receipt_path = Path(receipt_value)
+    if not receipt_path.is_absolute() or receipt_path.name != "receipt.json" or receipt_path.is_symlink():
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} terminal receipt path is invalid")
+    directory = exact._directory(receipt_path.parent, f"compact DiT matrix {arm} terminal run")
+    receipt = exact._read_json(receipt_path, label=f"compact DiT matrix {arm} terminal receipt")
+    _expect_shape(receipt, "timeline_shape", LATENT_BANK_SHAPE, f"compact DiT matrix {arm}")
+
+    timeline_meta = selected.get("timeline")
+    if type(timeline_meta) is not dict:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} timeline metadata is missing")
+    timeline_path_value = timeline_meta.get("path")
+    if type(timeline_path_value) is not str or not timeline_path_value:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} timeline path is missing")
+    timeline_path = Path(timeline_path_value)
+    if not timeline_path.is_absolute() or timeline_path.name != "timeline.f32le" or timeline_path.is_symlink():
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} timeline path is invalid")
+    expected_timeline_sha256 = exact._required_sha(
+        timeline_meta, "sha256", f"compact DiT matrix {arm} timeline metadata"
+    )
+    if type(timeline_meta.get("bytes")) is not int or timeline_meta["bytes"] != source_bank_bytes:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} timeline byte extent is invalid")
+
+    diagnostics = receipt.get("diagnostics")
+    if type(diagnostics) is not dict:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} terminal diagnostics are missing")
+    if (diagnostics.get("timeline") != timeline_path_value
+            or diagnostics.get("timeline_sha256") != expected_timeline_sha256):
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} terminal timeline differs from its report")
+    _, authenticated_timeline = exact._read_artifact(
+        directory,
+        diagnostics,
+        "timeline",
+        "timeline.f32le",
+        source_bank_bytes,
+        f"compact DiT matrix {arm} terminal",
+        retain_payload=False,
+    )
+    if authenticated_timeline != timeline_meta:
+        raise exact.ResumeReferenceError(f"compact DiT matrix {arm} terminal timeline changed after authentication")
+    return {
+        "receipt_path": str(receipt_path),
+        "timeline_path": str(timeline_path),
+        "timeline_sha256": expected_timeline_sha256,
+        "timeline_bytes": source_bank_bytes,
+        "dit_inputs_sha256": dit_inputs_sha256,
+    }
+
+
+def _validate_compact_latent_path(
+    decoder_receipt: dict[str, Any], matrix_timeline: dict[str, Any], label: str
+) -> None:
+    latent_value = decoder_receipt.get("latent")
+    if type(latent_value) is not str or not latent_value:
+        raise exact.ResumeReferenceError(f"{label} decoder latent path is missing")
+    latent_path = Path(latent_value)
+    matrix_path = Path(matrix_timeline["timeline_path"])
+    if (not latent_path.is_absolute() or latent_path.name != "timeline.f32le"
+            or latent_path.is_symlink() or matrix_path.is_symlink()):
+        raise exact.ResumeReferenceError(f"{label} decoder latent path must name its authenticated matrix timeline")
+    try:
+        if latent_path.resolve(strict=True) != matrix_path.resolve(strict=True):
+            raise exact.ResumeReferenceError(
+                f"{label} decoder did not consume its selected compact-matrix timeline"
+            )
+    except (OSError, RuntimeError) as error:
+        raise exact.ResumeReferenceError(f"cannot resolve {label} compact decoder latent path") from error
+
+
+def compare_compact_runs(
+    index_path: str,
+    exact_decoder_dir: str,
+    qbit_decoder_dir: str,
+) -> dict[str, Any]:
+    """Authenticate the three-segment compact restart timelines and 90-frame decodes."""
+    matrix_report = compact_comparison.compare_index(index_path)
+    matrix_timelines = {
+        "exact": _compact_matrix_timeline(matrix_report, "exact_restart_chain"),
+        "qbit": _compact_matrix_timeline(matrix_report, "compact_restart_chain"),
+    }
+    decoder_directories = {
+        "exact": exact._directory(exact_decoder_dir, "exact decoder"),
+        "qbit": exact._directory(qbit_decoder_dir, "qbit decoder"),
+    }
+    decoder_receipts = {
+        name: exact._read_json(directory / "receipt.json", label=f"{name} decoder")
+        for name, directory in decoder_directories.items()
+    }
+    for name in ("exact", "qbit"):
+        _validate_compact_latent_path(decoder_receipts[name], matrix_timelines[name], name)
+
+    decoder_report = validate_decoder_receipts(
+        decoder_receipts["exact"],
+        decoder_receipts["qbit"],
+        matrix_timelines["exact"]["timeline_sha256"],
+        matrix_timelines["qbit"]["timeline_sha256"],
+        matrix_timelines["exact"]["dit_inputs_sha256"],
+        matrix_timelines["qbit"]["dit_inputs_sha256"],
+        latent_frames=COMPACT_LATENT_FRAMES,
+    )
+    geometry = _admitted_geometry(COMPACT_LATENT_FRAMES)
+    pixel_artifacts = {
+        name: authenticate_pixels(
+            decoder_directories[name], decoder_receipts[name], name,
+            expected_bytes=geometry["pixel_bytes"],
+        )
+        for name in ("exact", "qbit")
+    }
+    return {
+        "schema": REPORT_SCHEMA,
+        "pair_integrity_passed": True,
+        "dit_pair_integrity_passed": matrix_report["passed"],
+        "decoder": decoder_report,
+        "dit": matrix_report,
+        "pixels": pixel_artifacts,
+        "pixel_error": None,
+        "quality_verdict": "not assessed; visual review is pending",
+        "full_upstream_video_parity": False,
+    }
+
+
 def compare_runs(
     exact_dit_dir: str,
     qbit_dit_dir: str,
@@ -472,17 +685,28 @@ def compare_runs(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--exact-dit-dir", required=True)
-    parser.add_argument("--qbit-dit-dir", required=True)
+    parser.add_argument("--exact-dit-dir")
+    parser.add_argument("--qbit-dit-dir")
+    parser.add_argument("--compact-index", help="Authenticated three-segment compact resume matrix JSON")
     parser.add_argument("--exact-decoder-dir", required=True)
     parser.add_argument("--qbit-decoder-dir", required=True)
     parser.add_argument("--output", required=True, help="Fresh JSON receipt path")
     args = parser.parse_args(argv)
+    if args.compact_index is not None:
+        if args.exact_dit_dir is not None or args.qbit_dit_dir is not None:
+            parser.error("--compact-index cannot be combined with --exact-dit-dir or --qbit-dit-dir")
+    elif args.exact_dit_dir is None or args.qbit_dit_dir is None:
+        parser.error("provide --compact-index or both --exact-dit-dir and --qbit-dit-dir")
     try:
-        report = compare_runs(
-            args.exact_dit_dir, args.qbit_dit_dir,
-            args.exact_decoder_dir, args.qbit_decoder_dir,
-        )
+        if args.compact_index is not None:
+            report = compare_compact_runs(
+                args.compact_index, args.exact_decoder_dir, args.qbit_decoder_dir
+            )
+        else:
+            report = compare_runs(
+                args.exact_dit_dir, args.qbit_dit_dir,
+                args.exact_decoder_dir, args.qbit_decoder_dir,
+            )
         output = Path(args.output).absolute()
         exact._write_fresh_json(output, report)
     except (OSError, exact.ResumeReferenceError) as error:

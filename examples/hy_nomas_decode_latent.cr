@@ -14,6 +14,7 @@ module HyNomasLatentDecode
   CONTINUATION_INPUTS_SHA  = "2807e11814f07975c807f367b0a4f15e3c6bdde1eb62ce9bda851814d09a6e47"
   DEFAULT_LATENT_FRAMES    =  30
   LONG_LATENT_FRAMES       =  60
+  REPEATED_LATENT_FRAMES   =  90
   LATENT_BANK_FRAMES       = 180
   LATENT_CHANNELS          =  32
   LATENT_HEIGHT            =   9
@@ -44,17 +45,17 @@ module HyNomasLatentDecode
   end
 
   def validate_latent_frames!(frames : Int32) : Nil
-    unless {DEFAULT_LATENT_FRAMES, LONG_LATENT_FRAMES}.includes?(frames)
-      raise ArgumentError.new("diagnostic latent frames must be 30 or the opt-in 60")
+    unless {DEFAULT_LATENT_FRAMES, LONG_LATENT_FRAMES, REPEATED_LATENT_FRAMES}.includes?(frames)
+      raise ArgumentError.new("diagnostic latent frames must be 30 or the opt-in 60/90")
     end
   end
 
   def validate_latent_bank_frames!(latent_frames : Int32, bank_frames : Int32) : Nil
     return if bank_frames == latent_frames
-    if latent_frames == LONG_LATENT_FRAMES && bank_frames == LATENT_BANK_FRAMES
+    if {LONG_LATENT_FRAMES, REPEATED_LATENT_FRAMES}.includes?(latent_frames) && bank_frames == LATENT_BANK_FRAMES
       return
     end
-    raise ArgumentError.new("latent bank frames must equal --latent-frames, or be 180 for a 60-frame decode")
+    raise ArgumentError.new("latent bank frames must equal --latent-frames, or be 180 for a 60/90-frame decode")
   end
 
   # The continuation payload digest authenticates this exact range; scan it
@@ -177,8 +178,8 @@ OptionParser.parse do |p|
   p.on("--inputs-sha SHA", "Trusted input metadata identity") { |v| input_sha = v }
   p.on("--latent PATH", "Imported terminal F32 NCTHW latent or latent bank") { |v| latent_path = v }
   p.on("--latent-sha SHA", "Trusted latent artifact SHA-256") { |v| latent_sha = v }
-  p.on("--latent-frames N", "Latent frames: 30 by default, or authenticated 60-frame opt-in") { |v| latent_frames = v.to_i32 }
-  p.on("--latent-bank-frames N", "Authenticated input bank frames; defaults to --latent-frames, or 180 for a 60-frame GPU prefix") { |v| latent_bank_frames_option = v.to_i32 }
+  p.on("--latent-frames N", "Latent frames: 30 by default, or authenticated 60/90-frame opt-in") { |v| latent_frames = v.to_i32 }
+  p.on("--latent-bank-frames N", "Authenticated input bank frames; defaults to --latent-frames, or 180 for a 60/90-frame GPU prefix") { |v| latent_bank_frames_option = v.to_i32 }
   p.on("--output-dir PATH", "Existing empty result directory on external scratch storage") { |v| output_dir = v }
   p.on("--budget-mib N", "Aggregate named buffers, 16..24 GiB") { |v| budget_mib = v.to_i64 }
   p.on("--plan-only", "CPU-only authentication and memory admission") { plan_only = true }
@@ -215,7 +216,7 @@ source_latent_bank_bytes = if latent_bank_frames > latent_frames
                            end
 timeline_inputs = nil.as(HyNomasGeneration::TimelineInputs?)
 source_noise_bytes = 0_i64
-if latent_frames == HyNomasLatentDecode::LONG_LATENT_FRAMES
+if latent_frames != HyNomasLatentDecode::DEFAULT_LATENT_FRAMES
   continuation_path = File.realpath(HyNomasLatentDecode::CONTINUATION_INPUTS_PATH)
   continuation = HyNomasGeneration::TimelineInputs.new(continuation_path,
     HyNomasLatentDecode::CONTINUATION_INPUTS_SHA)
