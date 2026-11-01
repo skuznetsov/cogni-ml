@@ -1,8 +1,95 @@
 # Hy-Nomas local draft suite
 
+## Reference-image frontier (2026-11-01)
+
+Status: source-audited design; the native image-input path is not implemented.
+The rejected text-only RoleWright take does not qualify character or style
+preservation. Do not generate another text-only take as a substitute for this
+capability.
+
+Current upstream added reference-image initialization in
+[`a31c0fe0`](https://github.com/Tencent-Hunyuan/Hy-Nomas/commit/a31c0fe0bcc493be188fd37ddba4ce2f674becb4).
+The local numerical reference remains the older October 24 snapshot; its lack
+of an image-input demo must not be attributed to current upstream. The new
+[demo contract](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/README.md#start-with-a-reference-image)
+and [encoder entry point](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/hymm/pipeline/reference_image.py)
+were inspected at that immutable revision. This is source evidence, not a
+locally executed image-conditioned generation or a quality qualification.
+
+### Admitted upstream representation
+
+The image initializes a new persistent session as a fixed five-second segment.
+Fit the image to the target frame with preserved aspect ratio and centered
+black padding, normalize pixels to [-1,1], repeat it in pixel space for 120
+frames at 24 fps, and encode that complete segment through DCAE-V. Preserve
+the encoder's temporal feature-cache semantics; encoding one frame and
+duplicating its latent is not equivalent. Use `latent_dist.mode()` with no
+extra latent scaling. The result has shape `[1,32,30,H/32,W/32]`; at the native
+512x288 geometry it is `[1,32,30,9,16]`.
+
+Skip denoising of the fixed reference segment. A single DiT cache-writer
+forward uses `(1-sigma)*z + sigma*noise`, with sigma 0.206897 and timestep
+206.897, to fill image/text K/V history. Decode the clean reference latent
+through PixelUMM and preserve the streaming timeline for the next generated
+segment. Upstream retains the full reference segment in history while its UI
+shows only the last 12 decoded frames as T0. The subsequent instruction drives
+T1. These are separate clean-latent, noisy-cache and display contracts.
+
+This route uses the released DiT without additional training. It admits one
+complete scene image at session initialization, not arbitrary mid-session
+replacement, independent character/style reference lists, or guaranteed
+identity preservation. The demo caption contract selects one primary subject;
+the quality of a two-character RoleWright scene remains an open probe.
+
+### Native gap and first implementation slice
+
+The native generator accepts prebuilt latents, not RGB images. Implement a
+DCAE-V encoder with its exact checkpoint topology, chunk-causal convolutions,
+temporal cache, normalization, downsampling and pixel-unshuffle semantics.
+Existing generic Metal convolution, normalization and elementwise operations
+may be reused after parity checks. Wan VAE latents are incompatible; PixelUMM
+is a decoder, and Qwen-VL image recognition is not this DiT conditioning path.
+
+Reuse the cache-noise arithmetic kernel and compatible timeline/history
+buffers. The current schedules admit a cache writer only after denoising and
+scatter; add a distinct reference-initialization transition that skips those
+phases, admits exactly one writer and seeds T0 history. Do not bypass the
+existing generated-segment guards. Bind the image digest, fit geometry,
+encoder checkpoint, clean
+latent, caption, noise and cache policy in input provenance. Do not relabel an
+existing noise bank or a restored text-only checkpoint as an image reference.
+
+Plan encoder weights and scratch as a separate residency phase before DiT;
+retain the encoded latent and release encoder resources at the safe phase
+handoff. Use reusable GPU buffers and GPU tensor computation, without new
+readbacks or waits inside command chains. Establish a cache-aware memory plan
+before any model run, retaining the 10% floor, process/swap guards and one
+model-owning process. Source inspection alone does not establish the encoder
+peak, supported memory limit, or runtime.
+
+The acceptance order is: (1) compare native DCAE outputs on identical pixels
+against upstream encoder revision `a31c0fe0`; (2) compare clean-latent
+PixelUMM reconstruction; (3) compare noisy-cache inputs and per-layer K/V;
+(4) compare a short image-conditioned continuation on the same caption and
+noise. Keep existing 2e-5 absolute/relative tolerances; localize a mismatch
+rather than widening them. Diagnostic captures belong outside the measured
+path. Numeric parity and visual character/style preservation are separate
+gates; neither substitutes for the other. No model launch or full generation
+is part of this source-audit update.
+
+For RoleWright, first prepare an approved single scene containing Alex and the
+living resume in the supplied style. Character turnarounds and expression
+sheets are preparation references, not frames of the generated world. Test
+one simple action before the complete ad. Reference conditioning does not
+itself implement timed actions, eye-line control or exact interface text.
+
+Rollback is the unchanged text-only runtime. Refresh this design after an
+upstream/checkpoint, geometry, temporal-cache or timeline-contract change;
+require new runtime evidence before admitting native image-input support.
+
 ## Design-sealed Cinematic comparison (2026-11-01)
 
-The active request adds an explicit Cinematic BF16 opt-in to the two-segment
+The Cinematic comparison adds an explicit BF16 opt-in to the two-segment
 drafter and compares the retained six scenes with their original first takes.
 Keep the exact frozen suite, authenticated conditioning/timeline manifests,
 noise banks, four steps, geometry, decoder and history policy. Reuse validated
