@@ -3,6 +3,34 @@ require "./support/video_allocation_counter"
 require "../src/ml/video/hy_nomas_continuation_history"
 
 describe ML::Video::HyNomasContinuationHistory do
+  it "restores only a fresh schedule at an extendable post-writer boundary" do
+    schedule = ML::Video::HyNomasContinuationHistorySchedule.new(3, 2)
+    [-1, 0, 3, 4].each do |invalid|
+      expect_raises(ArgumentError) { schedule.restore_boundary!(invalid) }
+    end
+    schedule.next_segment.should eq(0)
+    schedule.restore_boundary!(1)
+    schedule.next_segment.should eq(1)
+    schedule.denoise_passes.should eq(0)
+    expect_raises(ArgumentError) { schedule.restore_boundary!(2) }
+    expect_raises(ArgumentError) { schedule.select_segment!(0, false) }
+    4.times do
+      schedule.select_segment!(1, false)
+      2.times { |layer| schedule.finish_layer!(layer) }
+    end
+    schedule.select_segment!(1, true)
+    2.times { |layer| schedule.finish_layer!(layer) }
+    schedule.next_segment.should eq(2)
+  end
+
+  it "rejects restoring a partially encoded history schedule" do
+    schedule = ML::Video::HyNomasContinuationHistorySchedule.new(2, 2)
+    schedule.select_segment!(0, false)
+    expect_raises(ArgumentError) { schedule.restore_boundary!(1) }
+    2.times { |layer| schedule.finish_layer!(layer) }
+    expect_raises(ArgumentError) { schedule.restore_boundary!(1) }
+  end
+
   it "keeps one text block for later chunks of the same scene" do
     allocations = ML::MetalBuffer.video_spec_allocations
     geometry = ML::Video::HyNomasContinuationHistory.geometry(

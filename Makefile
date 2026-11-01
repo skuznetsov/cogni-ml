@@ -608,12 +608,14 @@ $(BUILD_DIR)/pixelumm_generation_probe: examples/pixelumm_generation_probe.cr ex
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-.PHONY: pixelumm_global_assembly_probe hy_nomas_history_attention_probe hy_nomas_sequence_generate hy_nomas_timeline_ops_probe hy_nomas_continuation_history_probe hy_nomas_bf16_linear_probe hy_nomas_bf16_patch_probe hy_nomas_boundary_attention_probe hy_nomas_real_attention_probe hy_nomas_decode_latent
+.PHONY: pixelumm_global_assembly_probe hy_nomas_history_attention_probe hy_nomas_sequence_generate hy_nomas_timeline_ops_probe hy_nomas_continuation_history_probe hy_nomas_resume_probe hy_nomas_sequence_resume_probe spec_hy_nomas_resume hy_nomas_bf16_linear_probe hy_nomas_bf16_patch_probe hy_nomas_boundary_attention_probe hy_nomas_real_attention_probe hy_nomas_decode_latent
 pixelumm_global_assembly_probe: $(BUILD_DIR)/pixelumm_global_assembly_probe
 hy_nomas_history_attention_probe: $(BUILD_DIR)/hy_nomas_history_attention_probe
 hy_nomas_sequence_generate: $(BUILD_DIR)/hy_nomas_sequence_generate
 hy_nomas_timeline_ops_probe: $(BUILD_DIR)/hy_nomas_timeline_ops_probe
 hy_nomas_continuation_history_probe: $(BUILD_DIR)/hy_nomas_continuation_history_probe
+hy_nomas_resume_probe: $(BUILD_DIR)/hy_nomas_resume_probe
+hy_nomas_sequence_resume_probe: $(BUILD_DIR)/hy_nomas_sequence_resume_probe
 
 $(BUILD_DIR)/pixelumm_global_assembly_probe: examples/pixelumm_global_assembly_probe.cr examples/support/pixelumm_global_assembly_probe.cr examples/support/pixelumm_global_assembly_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
@@ -658,13 +660,28 @@ $(BUILD_DIR)/hy_nomas_sequence_generate: examples/hy_nomas_sequence_generate.cr 
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
+$(BUILD_DIR)/hy_nomas_sequence_resume_probe: examples/hy_nomas_sequence_resume_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 $(BUILD_DIR)/hy_nomas_timeline_ops_probe: examples/hy_nomas_timeline_ops_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_continuation_history_probe: examples/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.metal src/ml/video/kernels/hy_nomas_continuation_history_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+$(BUILD_DIR)/hy_nomas_continuation_history_probe: examples/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.metal src/ml/video/kernels/hy_nomas_continuation_history_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
 	$(CRYSTAL) build $< --release -Dhy_nomas_history_probe -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+# The resume probe reuses the extracted synthetic history helper from the old
+# probe. Keep the old target as a prerequisite so its extraction/build boundary
+# remains explicit when this source is compiled independently.
+$(BUILD_DIR)/hy_nomas_resume_probe: examples/hy_nomas_resume_probe.cr examples/support/hy_nomas_continuation_history_probe.cr examples/support/hy_nomas_continuation_history_probe.metal $(BUILD_DIR)/hy_nomas_continuation_history_probe $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -Dhy_nomas_history_probe -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+spec_hy_nomas_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 .PHONY: hy_nomas_q4_reduction_probe
 hy_nomas_q4_reduction_probe: $(BUILD_DIR)/hy_nomas_q4_reduction_probe

@@ -1,5 +1,76 @@
 # Hy-Nomas first native video frontier
 
+## Segment-boundary save/restart frontier (2026-10-31)
+
+Status: qualified for the bounded native save/restart path. A real BF16
+54-layer DiT stopped after segment A's separate noisy cache-writer forward,
+saved its state and exited. A fresh process restored that state and reproduced
+segment B with the same authenticated noise and conditioning. All four B Euler
+updates (138,240 F32 values each) and the entire latent timeline (829,440 values)
+are bitwise equal to uninterrupted A-to-B; A's prefix is unchanged. Pixel
+decoding and complete video generation were not run.
+
+The saved boundary must contain the clean/generated latent timeline with the
+untouched future noise, the valid F32 K/V prefix of every layer, the next
+segment cursor, and an exact identity for weights, conditioning, noise banks,
+geometry, solver, text-cache policy and implementation. A last-frame latent
+alone is rejected. Mid-denoise, pre-writer and final/non-extendable boundaries
+are rejected. Restore is admitted only into fresh owners after the entire
+bundle identity, inventory and payload have authenticated.
+
+File I/O occurs after the producer's existing terminal drain and before the
+consumer encodes GPU work. Shared Metal storage is streamed directly to/from
+disk without intermediate CPU tensor arrays or duplicate GPU cache banks.
+Each native process retains one terminal wait; instrumented encode allocations,
+readbacks and preterminal waits are zero. These counters do not include opaque
+MPS resource allocations. Restart changes the process boundary, not the
+numerical path. `atol=rtol=2e-5` and the 10% system-memory reserve are unchanged.
+Checkpoint storage does not bound growing continuation history.
+
+Falsifiers: corrupted/truncated payload, wrong identity/geometry/policy,
+partial or repeated restore, changed future noise, wrong temporal offset,
+and a continuation without A's K/V must fail or change the measured output.
+The synthetic 54-layer probe also reproduces B and C bitwise after restart.
+Its continuous control matches the pinned upstream history-attention oracle
+at revision `911cea6458a89c2663513ff7099561ec190dd491`: all 9,072 attention-output
+and 2,160 final-cache values are bitwise equal. This is the F32 MPS adapter of
+the extracted upstream cache-attention function; it does not establish full
+real-DiT or stock BF16/CUDA continuation parity. Zeroed/changed K/V and changed
+future Q/K/V inputs are detected. CPU checks reject corrupted/truncated files,
+identity or inventory mismatch, repeated restore and unsafe boundaries.
+
+The real checkpoint is 4,319,223,820 bytes (about 4.02 GiB), including the
+bounded header. It holds 109 records: the timeline and 54 K/V pairs. The real
+matrix kept a 30 GiB sampled process cap, 10% reserve, 64 MiB swap-growth stop
+and 900-second deadline per process. Sampled maximum footprint was 24.792 GiB,
+minimum cache-aware headroom 18.571 GiB, and swap growth zero. Sampling cannot
+exclude between-sample peaks. Saving/export took 11.197 seconds; fresh-process
+state authentication is part of the 8.860-second preflight, and direct restore
+took 2.434 seconds. These are one-run observations, not a speedup claim.
+
+Qualification requires the same unchanged executable on the same host for
+producer, control and consumer. The contract hashes the executable pathname;
+hot replacement while a process is alive is unsupported because that pathname
+need not identify its loaded image. Cross-build/device migration, crash or
+power-loss recovery, and a Studio resume API remain unqualified. Full-file and
+per-record digests authenticate exact bytes, not untrusted-code provenance.
+
+DoD passed: the small GPU/upstream matrix, the three-process real BF16 comparison,
+28 Crystal examples and 15 Python tests. Build with `make hy_nomas_resume_probe
+hy_nomas_sequence_resume_probe`; CPU checks use `make spec_hy_nomas_resume`,
+`python3 -B spec/hy_nomas_sequence_resume_reference_test.py` and the existing
+`spec/hy_nomas_continuation_reference_test.py` in the reference environment.
+Use an external `BUILD_DIR`, `TMPDIR` and `CRYSTAL_CACHE_DIR`. The real comparator
+is `spec/support/hy_nomas_sequence_resume_reference.py`; it hashes the checkpoint
+in bounded chunks without retaining a CPU copy. Exact guarded commands, binary
+identity and reports are indexed by
+`.landmark/evidence/2026-10-31-hy-nomas-segment-restart.json`.
+
+Rollback: remove the opt-in resume entry points; keep the uninterrupted control.
+Refresh on implementation, executable, weights, inputs, cache policy, geometry,
+backend or device change. Next: qualify edited A and invalidation of its dependent
+continuation; restart parity alone does not qualify selective regeneration.
+
 The [performance paradigm audit](hy-nomas-performance-paradigm-audit.md) separates
 current execution evidence, workload counts and proposed architecture changes.
 Its CPU-only work-budget helper does not qualify a new kernel or decoder.

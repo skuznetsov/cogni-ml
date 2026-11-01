@@ -130,6 +130,20 @@ module ML::Video
       @next_layer = 0_i32
     end
 
+    # Restoring a committed post-writer boundary skips no in-flight work.
+    # Cache bytes must be authenticated and installed by the owner first.
+    def validate_restore_boundary!(next_segment : Int32) : Nil
+      unless 1 <= next_segment < @segment_count && idle? &&
+             @next_segment == 0 && @denoise_passes == 0 && !@complete
+        raise ArgumentError.new("Continuation restore requires a fresh schedule and an extendable boundary")
+      end
+    end
+
+    def restore_boundary!(next_segment : Int32) : Nil
+      validate_restore_boundary!(next_segment)
+      @next_segment = next_segment
+    end
+
     def selected_segment : Int32
       @selected_segment || raise ArgumentError.new("Select a continuation segment before encoding")
     end
@@ -227,6 +241,13 @@ module ML::Video
       def append_offset(segment : Int32) : Int32
         raise ArgumentError.new("Final or invalid chunk cannot append history") unless 0 <= segment < segment_count - 1
         (workspace_geometries[segment].history_rows.to_i64 * heads * head_dim).to_i32
+      end
+
+      def boundary_cache_elements(next_segment : Int32) : Int32
+        unless 1 <= next_segment < segment_count
+          raise ArgumentError.new("Continuation checkpoint requires an extendable post-writer boundary")
+        end
+        (workspace_geometries[next_segment].history_rows.to_i64 * heads * head_dim).to_i32
       end
     end
 
@@ -413,6 +434,54 @@ module ML::Video
       raise ArgumentError.new("Hy-Nomas continuation history has been released") if @released
       raise ArgumentError.new("Hy-Nomas continuation history is unusable after an encode failure") if @poisoned
       @schedule.select_segment!(index, writer)
+    end
+
+    def checkpoint_inventory(next_segment : Int32) : Hash(String, Int64)
+      bytes = @shape.boundary_cache_elements(next_segment).to_i64 * sizeof(Float32)
+      inventory = {} of String => Int64
+      @shape.layers.times do |layer|
+        inventory["history.layer#{layer}.key"] = bytes
+        inventory["history.layer#{layer}.value"] = bytes
+      end
+      inventory
+    end
+
+    # Terminal file I/O only. Expose valid prefixes, never uninitialized cache
+    # capacity. No duplicate GPU bank or CPU tensor array is needed.
+    def each_checkpoint_cache(next_segment : Int32,
+                              & : String, ML::MetalBuffer, Int32 ->) : Nil
+      count = @shape.boundary_cache_elements(next_segment)
+      chain = @last_chain
+      unless !@released && !@poisoned && chain && chain.completed? &&
+             @schedule.idle? && @schedule.next_segment == next_segment &&
+             @schedule.denoise_passes == 0
+        raise ArgumentError.new("Drain the post-writer boundary before exporting continuation state")
+      end
+      @cache_pairs.each_with_index do |pair, layer|
+        yield "history.layer#{layer}.key", pair[0], count
+        yield "history.layer#{layer}.value", pair[1], count
+      end
+    end
+
+    # Setup file I/O streams directly into final shared Metal storage. An I/O
+    # failure poisons the owner; a partially restored cache cannot be encoded.
+    def restore_boundary!(next_segment : Int32,
+                          & : String, ML::MetalBuffer, Int32 ->) : Nil
+      count = @shape.boundary_cache_elements(next_segment)
+      unless !@released && !@poisoned && @last_chain.nil?
+        raise ArgumentError.new("Continuation state can only be restored into a fresh live provider")
+      end
+      @schedule.validate_restore_boundary!(next_segment)
+      begin
+        @cache_pairs.each_with_index do |pair, layer|
+          yield "history.layer#{layer}.key", pair[0], count
+          yield "history.layer#{layer}.value", pair[1], count
+        end
+        @schedule.restore_boundary!(next_segment)
+      rescue ex
+        @poisoned = true
+        raise ex
+      end
     end
 
     def validate_bindings!(tokens : Int32, heads : Int32, head_dim : Int32,

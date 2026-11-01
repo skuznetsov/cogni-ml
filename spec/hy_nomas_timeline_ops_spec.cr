@@ -2,6 +2,21 @@ require "spec"
 require "../src/ml/video/hy_nomas_timeline_ops"
 
 describe ML::Video::HyNomasTimelineOps::Geometry do
+  it "restores the global segment cursor only into a fresh timeline schedule" do
+    geometry = ML::Video::HyNomasTimelineOps::Geometry.new
+    schedule = ML::Video::HyNomasTimelineOps::Schedule.new(geometry, run_segments: 3)
+    [-1, 0, 3, 6].each do |invalid|
+      expect_raises(ArgumentError) { schedule.restore_boundary!(invalid) }
+    end
+    schedule.restore_boundary!(1)
+    schedule.next_segment.should eq(1)
+    schedule.phase.ready?.should be_true
+    expect_raises(ArgumentError) { schedule.restore_boundary!(2) }
+    expect_raises(ArgumentError) { schedule.begin_prepare!(0) }
+    schedule.begin_prepare!(1)
+    expect_raises(ArgumentError) { schedule.restore_boundary!(1) }
+  end
+
   it "accounts for six global latent and RoPE segments with exact offsets" do
     geometry = ML::Video::HyNomasTimelineOps::Geometry.new
 

@@ -1,6 +1,7 @@
 require "./hy_nomas_timeline_inputs"
 require "../../src/ml/video/hy_nomas_continuation_history"
 require "../../src/ml/video/hy_nomas_timeline_ops"
+require "../../src/ml/video/hy_nomas_resume_bundle"
 
 # Opt-in finite continuation. The first-segment entry point remains separate;
 # cache precision is F32 throughout this control, including persistent history.
@@ -103,6 +104,44 @@ module HyNomasSequence
       history_bytes(inputs.base, segments, text_cache_policy) + additional_inputs_bytes(inputs, segments)
   end
 
+  def checkpoint_inventory(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
+                           next_segment : Int32) : Hash(String, Int64)
+    shape = ML::Video::HyNomasContinuationHistory.geometry(validate_segments!(segments),
+      4320, inputs.base.valid_text_tokens, inputs.base.compact_text_tokens, 54, 16, 128,
+      text_cache_policy: HISTORY_TEXT_POLICY)
+    bytes = shape.boundary_cache_elements(next_segment).to_i64 * sizeof(Float32)
+    inventory = {"timeline" => inputs.records["input.latent_bank"].nbytes}
+    54.times do |layer|
+      inventory["history.layer#{layer}.key"] = bytes
+      inventory["history.layer#{layer}.value"] = bytes
+    end
+    inventory
+  end
+
+  # Compile-time source bytes bind restart to the native implementation as well
+  # as the authenticated model/conditioning/noise inventory. No reseeding occurs.
+  def checkpoint_contract(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
+                          next_segment : Int32) : String
+    checkpoint_inventory(inputs, segments, next_segment)
+    source_hash = Digest::SHA256.new
+    {% for path in ["hy_nomas_sequence.cr", "../../src/ml/video/hy_nomas_continuation_history.cr", "../../src/ml/video/hy_nomas_timeline_ops.cr", "../../src/ml/video/kernels/hy_nomas_timeline_ops.metal", "../../src/ml/video/hy_nomas_euler.cr", "../../src/ml/video/kernels/hy_nomas_euler.metal", "../../src/ml/video/hy_nomas_block_mps.cr", "../../src/ml/video/hy_nomas_serial_mps.cr", "../../src/ml/video/hy_nomas_history_attention.cr", "../../src/ml/video/hy_nomas_history_attention_bridge.mm", "../../src/ml/video/hy_nomas_mps_bf16_linear_bridge.mm", "../../src/ml/video/hy_nomas_bf16_stack.cr"] %}
+      source_hash.update({{ read_file(__DIR__ + "/" + path) }})
+    {% end %}
+    {schema: "cogni_ml.hy_nomas_sequence_boundary/v1", boundary: "after_noisy_writer",
+     upstream: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
+     implementation_sha256: source_hash.hexfinal,
+     executable_sha256: PixelUMMBlockProbe.sha_file(Process.executable_path || raise ArgumentError.new("checkpoint requires an identifiable executable")),
+     crystal: Crystal::VERSION,
+     model_index_sha256: HyNomasGeneration::INDEX_SHA,
+     input_manifest_sha256: inputs.file.sha256, input_payload_sha256: inputs.file.document["payload_sha256"].as_s,
+     conditioning_manifest_sha256: inputs.base.file.sha256,
+     segments: segments, next_segment: next_segment, steps: STEPS, shift: 5,
+     text_cache_policy: "once_per_scene", history_dtype: "F32",
+     valid_text_tokens: inputs.base.valid_text_tokens, storage_text_tokens: inputs.base.compact_text_tokens,
+     video_tokens: 4320, layers: 54, heads: 16, head_dim: 128,
+     timeline_shape: [1, 32, 180, 9, 16], cache_sigma: 0.206897_f32}.to_json
+  end
+
   class DiT
     getter named_bytes : Int64
     getter peak_named_bytes : Int64
@@ -126,12 +165,23 @@ module HyNomasSequence
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
     @timeline_released = false
+    @next_segment = 0
+    @resume_failed = false
+    @capture_copy : ML::Video::HyNomasContinuationHistoryKernels::AppendPlan? = nil
+    @checkpoint_contracts = {} of Int32 => String
+    @checkpoint_inventories = {} of Int32 => Hash(String, Int64)
 
     def initialize(inputs : HyNomasGeneration::TimelineInputs, @timeline : ML::MetalBuffer,
                    @latent : ML::MetalBuffer, budget : Int64, @segment_count : Int32,
                    admission : ML::Video::HyNomasQ4StackIndex::Admission,
-                   text_cache_policy = HISTORY_TEXT_POLICY)
+                   text_cache_policy = HISTORY_TEXT_POLICY, *, prepare_capture : Bool = false)
       HyNomasSequence.validate_segments!(@segment_count)
+      if text_cache_policy.once_per_scene?
+        (1...@segment_count).each do |next_segment|
+          @checkpoint_contracts[next_segment] = HyNomasSequence.checkpoint_contract(inputs, @segment_count, next_segment)
+          @checkpoint_inventories[next_segment] = HyNomasSequence.checkpoint_inventory(inputs, @segment_count, next_segment)
+        end
+      end
       base = inputs.base
       @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base)
@@ -231,6 +281,7 @@ module HyNomasSequence
           timeline: @timeline, segment_latent: @latent, cosine_bank: cos_bank, sine_bank: sin_bank,
           cosine: cos, sine: sin, cache_eps_bf16: eps,
           cache_timestep: @refiner.checkpoints["timestep"], run_segments: @segment_count)
+        @capture_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new if prepare_capture
         actual = @loader.cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes +
                  @inputs_arena.resident_bytes + @bank_arena.resident_bytes + @latent.size + @timeline.size + @patch.resident_bytes +
                  @refiner.resident_bytes + @serial.resident_bytes + @final.resident_bytes +
@@ -255,11 +306,28 @@ module HyNomasSequence
       end
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
-      raise ArgumentError.new("sequence request is single-use") if @released || @chain
+    def encode(chain : ML::Metal::MPSCommandChain, *, stop_after_segments : Int32 = @segment_count,
+               capture_segment : Int32? = nil, captures : Array(ML::MetalBuffer)? = nil) : Nil
+      raise ArgumentError.new("sequence request is single-use or has failed restore") if @released || @chain || @resume_failed
+      unless @next_segment < stop_after_segments <= @segment_count
+        raise ArgumentError.new("sequence stop must follow the next segment within the admitted run")
+      end
+      if capture_segment || captures
+        unless capture_segment && captures && @capture_copy &&
+               @next_segment <= capture_segment < stop_after_segments && captures.size == STEPS
+          raise ArgumentError.new("sequence stage capture must be prepared with one buffer per denoise step")
+        end
+        captures.each_with_index do |buffer, index|
+          unless buffer.valid? && buffer.size == @latent.size && buffer.storage_mode.shared? &&
+                 !ML::Video::MetalOps.overlap?(buffer, @latent) && !ML::Video::MetalOps.overlap?(buffer, @timeline) &&
+                 captures.first(index).none? { |other| ML::Video::MetalOps.overlap?(buffer, other) }
+            raise ArgumentError.new("sequence stage capture requires distinct exact latent buffers")
+          end
+        end
+      end
       @chain = chain
       @prepared.encode(chain.encoder)
-      @segment_count.times do |segment|
+      (@next_segment...stop_after_segments).each do |segment|
         @timeline_ops.prepare_segment!(chain, segment)
         @eulers[segment].step_count.times do |step|
           @eulers[segment].encode_timestep(chain, step)
@@ -269,6 +337,10 @@ module HyNomasSequence
           @serial.encode(chain)
           @final.encode(chain)
           @eulers[segment].encode_update(chain, step)
+          if capture_segment == segment && captures
+            @capture_copy.not_nil!.encode(chain.encoder, @latent, captures[step],
+              (@latent.size // sizeof(Float32)).to_i32, 0)
+          end
           HyNomasGeneration.emit("sequence_step_encoded", segment: segment + 1, step: step + 1)
         end
         @timeline_ops.mark_denoise_complete!(chain, segment)
@@ -282,8 +354,50 @@ module HyNomasSequence
           @timeline_ops.record_cache_forward_enqueued!(chain, segment)
         end
         @timeline_ops.advance_segment!(chain, segment)
+        @next_segment = segment + 1
         HyNomasGeneration.emit("sequence_segment_encoded", segment: segment + 1,
           clean_global_latent_stop: (segment + 1) * 30, cache_writer: segment + 1 < @segment_count)
+      end
+    end
+
+    def save_boundary!(path : String) : String
+      chain = @chain
+      unless !@released && !@resume_failed && chain && chain.completed? &&
+             @timeline_ops.schedule.phase.ready? && @timeline_ops.schedule.next_segment == @next_segment
+        raise ArgumentError.new("sequence checkpoint requires a drained extendable boundary")
+      end
+      contract = @checkpoint_contracts[@next_segment]? || raise ArgumentError.new("checkpoint requires the once-per-scene cache policy")
+      buffers = {"timeline" => {@timeline, (@timeline.size // sizeof(Float32)).to_i32}}
+      @history.each_checkpoint_cache(@next_segment) do |name, buffer, count|
+        buffers[name] = {buffer, count}
+      end
+      inventory = buffers.transform_values { |entry| entry[1].to_i64 * sizeof(Float32) }
+      unless inventory == @checkpoint_inventories[@next_segment]
+        raise ArgumentError.new("sequence checkpoint inventory changed after setup")
+      end
+      ML::Video::HyNomasResumeBundle.write(path, contract, inventory) do |name, io|
+        buffer, count = buffers[name]
+        io.write(Bytes.new(buffer.contents.as(UInt8*), count * sizeof(Float32)))
+      end
+    end
+
+    def restore_boundary!(reader : ML::Video::HyNomasResumeBundle::Reader, next_segment : Int32) : Nil
+      unless !@released && !@resume_failed && @chain.nil? && @next_segment == 0
+        raise ArgumentError.new("sequence restore requires a fresh live request")
+      end
+      contract = @checkpoint_contracts[next_segment]? || raise ArgumentError.new("restore requires an extendable once-per-scene boundary")
+      inventory = @checkpoint_inventories[next_segment]
+      reader.validate_contract!(contract, inventory)
+      begin
+        reader.copy_to!("timeline", Bytes.new(@timeline.contents.as(UInt8*), @timeline.size.to_i32))
+        @history.restore_boundary!(next_segment) do |name, buffer, count|
+          reader.copy_to!(name, Bytes.new(buffer.contents.as(UInt8*), count * sizeof(Float32)))
+        end
+        @timeline_ops.restore_boundary!(next_segment)
+        @next_segment = next_segment
+      rescue ex
+        @resume_failed = true
+        raise ex
       end
     end
 

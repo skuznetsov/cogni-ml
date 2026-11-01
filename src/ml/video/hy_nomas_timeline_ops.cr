@@ -371,6 +371,13 @@ module ML::Video::HyNomasTimelineOps
       segment_index < @run_segments - 1
     end
 
+    def restore_boundary!(next_segment : Int32) : Nil
+      unless 1 <= next_segment < @run_segments && @next_segment == 0 && @phase.ready?
+        raise ArgumentError.new("Timeline restore requires a fresh schedule and an extendable boundary")
+      end
+      @next_segment = next_segment
+    end
+
     def expect_prepare!(segment_index : Int32) : Nil
       check_not_failed_or_finished!
       unless @phase.ready? && segment_index == @next_segment && segment_index < @run_segments
@@ -535,6 +542,16 @@ module ML::Video::HyNomasTimelineOps
     # Plan-owned resident buffer bytes; all tensor buffers belong to the caller.
     def plan_buffer_bytes : Int64
       0_i64
+    end
+
+    # Called during setup after the saved timeline has been authenticated and
+    # loaded. prepare_segment! will use this global index for both noise/RoPE.
+    def restore_boundary!(next_segment : Int32) : Nil
+      unless !@released && @chain_object_id.nil?
+        raise ArgumentError.new("Timeline state can only be restored before its first encode")
+      end
+      live_buffers!
+      @schedule.restore_boundary!(next_segment)
     end
 
     # Gather the current segment's channel-first latent and copy its global

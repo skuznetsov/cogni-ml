@@ -6,6 +6,37 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SEGMENT-RESTART-2026-10-31] Post-A state reproduces B after a fresh-process restart
+
+- A bounded real BF16 54-layer DiT matrix compares uninterrupted A-to-B,
+  A/save/exit, and fresh restore/B with identical authenticated inputs. All
+  four B Euler updates and the complete latent timeline are bitwise equal;
+  A's 138,240-value prefix is unchanged. Tolerances remain `atol=rtol=2e-5`.
+  No decoder, Studio or complete video generation ran.
+- The 4,319,223,820-byte bundle streams the full timeline and the valid F32 K/V
+  prefixes of all 54 layers directly from/to shared Metal storage. Whole-file
+  and per-record hashes, exact identity/inventory, fresh-owner restore and
+  post-writer cursor gates reject partial or incompatible state. Import errors
+  poison the owner. A last-frame latent alone cannot reproduce continuation.
+- Instrumented encode allocations/readbacks/preterminal waits are zero, with
+  one terminal wait per native process. The real matrix passes the 30 GiB cap,
+  10% reserve, 64 MiB swap-growth stop and 900 s deadline: sampled peak
+  24.792 GiB, minimum cache-aware headroom 18.571 GiB, swap growth zero.
+  Counters exclude opaque MPS allocations; sampling cannot bound every spike.
+- The synthetic 54-layer restart also matches B+C bitwise. Its full continuous
+  output and final K/V match the pinned upstream F32 MPS cache-attention
+  adapter bitwise; changed/zero K/V and changed future inputs are detected.
+  This does not establish full real-DiT BF16/CUDA upstream continuation parity.
+  Focused CPU checks pass: 28 Crystal examples and 15 Python tests.
+- ROBUST within same-host, unchanged-executable qualification; the executable
+  pathname hash does not qualify hot replacement of a loaded binary. Cross-build
+  migration, crash/power-loss recovery and Studio integration remain open.
+  Next falsifier: edit A, invalidate dependent B state, and compare regeneration
+  from the earliest valid boundary. Refresh on code/binary/input/weights/policy/
+  geometry/backend/device change. Evidence and exact commands are indexed in
+  `.landmark/evidence/2026-10-31-hy-nomas-segment-restart.json` and
+  `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-PIXELUMM-RECOVERY-AA-2026-10-31] Short-idle decodes are slower at lower observed GPU frequency
 
 - Two fresh decoder-only processes, short-long and long-short order, use one
