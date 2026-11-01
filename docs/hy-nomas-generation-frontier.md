@@ -1,5 +1,134 @@
 # Hy-Nomas first native video frontier
 
+## Prompt edit with compact checkpoints (2026-11-01)
+
+The native three-segment qualification combines the admitted single B prompt
+edit with opt-in QBit checkpoints after A and edited B. It reuses the authenticated prior
+exact matrix, conditioning/noise and BF16 weights. A new common executable
+permits a compact restore plus interior roundtrips only for a final interval;
+its identity remains distinct from the prior exact reference. No production
+kernel, codec policy, codebook, precision or default changes.
+The compact A state must retain all A latent bytes; post-B state must bind the
+new prompt and its actual text/KV extents. C returns to the original prompt as
+a new text turn and regenerates using the edited history.
+
+CAUTION: representation and process boundaries can hide extra quantization,
+stale branch reuse or incorrect variable-text extents. Restore the same compact
+post-A state into a continuous B/C QBit-roundtrip control and a split B/C
+compact chain. The control rounds after B; the split packs B and restores C.
+Both must match at unchanged `atol=rtol=2e-5`, with exact A and unused noise.
+Measure lossy differences against the earlier exact edited control separately;
+do not convert them into a relaxed numerical or perceptual gate.
+
+DoD: authenticate both compact checkpoint inventories/contracts/payloads,
+all eight B/C updates, segment slices and full banks; reject stale original-B
+or wrong-prompt state before model setup. Refresh the small codec/history
+checks against the pinned upstream boundary. Require zero instrumented encode
+allocations/readbacks/preterminal waits, one terminal drain per process, a
+10% file-cache-aware reserve, process caps and swap/deadline stops. Only one
+model-owning process runs at a time. Terminal file I/O is outside GPU math.
+
+Exact checkpoints remain default. This slice admits no UI, multiple/combined
+edits, full upstream DiT/decoder parity, perceptual-equivalence or speedup
+claim. Roll back qualification code/docs to `8159dd5b`; original artifacts are
+immutable. New artifacts stay on the external SSD at
+`/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa`.
+
+The completed matrix restores the same compact A into continuous B/C and
+split B-then-C runs. All eight Euler captures, both segment slices and the
+entire 829,440-value timeline match bitwise. The 552,960 A latent bytes match
+the authenticated prior exact parent. Every run also preserves its unused
+post-stop noise suffix. The edited text schedule is `[557,585,557]`, with a
+new cached text turn for B and original-prompt C. Actual after-B inventory
+uses 9,782 history tokens, including both 557- and 585-token text turns.
+
+Complete files, including headers, manifests and the exact latent bank, occupy
+2,005,497,939 bytes after A and 4,007,409,948 after edited B. Their corresponding
+exact files occupy 4,319,223,820 and 8,658,853,900 bytes: 53.57% and 53.72%
+less storage. Live GPU history remains F32; this is a checkpoint-storage
+saving, not a claim of lower live GPU memory or faster generation.
+
+QBit vs the prior exact edited control is lossy: the full-bank maximum
+absolute latent difference is 3.53125 and fails the unchanged `2e-5` gate.
+That comparison is reported diagnostically, independently of the bitwise
+QBit control/restart gate. Neither numeric error nor media integrity implies
+perceptual equivalence. B/C also differ from the prior exact original
+control, but no same-QBit unedited arm isolates prompt causality here.
+
+Four real native preflights reject an edited state used without the edit,
+another authenticated prompt, the wrong boundary and an old original compact
+state before Metal/model setup. The last case also has another executable
+identity. Hostile checker tests reject altered contracts, source/binary pins,
+codec identity, inventories, row headers, digests, prompt geometry and stale
+lineage. A corrected future-suffix test accepts generated B/C while protecting
+A and each run's untouched post-stop suffix.
+
+Fresh tiny codec save/restore reproduces its in-memory GPU reconstruction
+bitwise. A fresh variable-text GPU history fixture matches pinned upstream
+attention/cache at `atol=rtol=2e-5` (maximum error `7.45058e-9`, cached K/V
+exact). The prior real Qwen prefix and B585/C557 refiner checks are reused
+after source/input/payload reauthentication; they were not rerun. Full
+upstream DiT/decoder neural and video parity remain open.
+
+All four model intervals retain zero instrumented encode allocations,
+readbacks and preterminal waits, with one terminal drain each. Maximum sampled
+footprint is 30.1257 GiB, minimum cache-aware headroom 15.7548 GiB and swap
+growth zero under 32 GiB / 10% / 64 MiB / 900 s guards. Opaque MPS resources
+and between-sample spikes remain outside the counter/sample guarantees.
+
+Matched raw decoding compares the same edited B prompt with exact F32 states
+on the left and compact A/B QBit states on the right. The prior exact edited
+decode is reused only after whole-bank authentication; the QBit bank receives
+a fresh decode with identical decoder/noise/weights/settings. All first 100
+pixel frames match bitwise. A's final 20 pixel frames overlap B and can change
+despite exact A latents. B/C raw RMSEs are 0.0146474/0.0415079, diagnostic only.
+Both outputs contain 637,009,920 finite F32 bytes. The fresh decoder records
+zero instrumented encode allocations/readbacks/preterminal waits and one
+terminal drain; sampled peak is 18.8089 GiB, minimum cache-aware headroom
+25.3907 GiB and swap growth zero under 26 GiB / 10% / 64 MiB / 1200 s guards.
+The synchronized 1024x288 comparison and both 512x288 exports contain 360
+frames at 24 fps and last 15 seconds. Selected compressed preview frames keep
+similar faces/composition with small detail differences. Full-motion quality
+and perceptual equivalence remain unqualified.
+
+Nineteen new hostile Python cases, 95 total Python regression tests and 44
+focused Crystal examples pass. The compact state checker authenticates the
+entire HNRS envelope, every record digest, QBit manifests, tier/row/payload
+extents, exact escape finiteness, contracts, current source pins and lineage.
+It does not CPU-decode approximate payloads or prove arbitrary forged KV
+semantics. Its CPU admission/metadata checks are outside native GPU math.
+
+Refresh the real matrix report under a 4 GiB / 10% / 64 MiB / 600 s guard:
+
+```sh
+python3 -B spec/support/hy_nomas_prompt_edit_qbit_reference.py \
+  /opt/mldata_ssd/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa/real/matrix-index.json \
+  --output "$FRESH_REPORT_PATH"
+```
+
+The canonical compact qualification index is
+[the QBit prompt-edit packet](../.landmark/evidence/2026-11-01-hy-nomas-prompt-edit-qbit.json).
+`qualification-summary-02.json` recomputes the real matrix and raw pixel predicate
+before binding media hashes. Local hashes detect modifications; they provide
+neither independent provenance nor artifact recovery.
+Same-lineage correlated adversary review is ROBUST for the tested state,
+restart and produced-pair integrity, with the A pixel-overlap boundary above.
+All 54 collected artifact entries and all 15 final checker/runner/collector
+source pins were rehashed successfully. This provides no quality or full
+upstream neural-parity verdict.
+The final EOF-only checker formatting cleanup preserves an identical Python
+AST; its earlier source snapshot and digest remain in the artifact root.
+The final collector reruns the checker and raw predicates at refreshed pins.
+
+For compact prompt editing, use the exact-mode command below with
+`--state-format qbit --cache-roundtrip exact`, restoring the matching compact
+post-A or edited post-B state. The qualification's continuous control uses
+`--cache-roundtrip qbit` on final interval `[1,3)` so its interior after-B
+roundtrip matches the split chain. A compact restore plus roundtrip is admitted
+only for a restored final interval; initial and nonterminal combinations stay
+rejected. Output directories must be fresh and empty, and all launches retain
+the same memory, swap and deadline guards.
+
 ## Segment prompt edit frontier (2026-11-01)
 
 Design-sealed scope: replace one noninitial five-second segment's authenticated
@@ -93,8 +222,9 @@ adapter's pair-report boolean. The canonical scoped evidence index is
 [the prompt-edit packet](../.landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json).
 The original branch/default remains intact. This slice admits one prompt edit,
 exact checkpoints, existing geometry and no action-tail/camera controls. UI
-integration, arbitrary prompt timelines, combined edits, new edited QBit
-execution and full upstream neural/video parity remain open. Refresh on source,
+integration, arbitrary prompt timelines, combined edits and full upstream
+neural/video parity remain open. Edited QBit execution is qualified separately
+above. Refresh on source,
 binary, prompt/input/noise, weights, backend/device or geometry change, or
 modification/loss of the local artifacts.
 

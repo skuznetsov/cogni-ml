@@ -60,8 +60,10 @@ end
 unless %w(exact qbit).includes?(state_format) && %w(exact qbit).includes?(cache_roundtrip)
   raise ArgumentError.new("checkpoint and roundtrip modes must be exact or qbit")
 end
-if state_format == "qbit" && cache_roundtrip != "exact"
-  raise ArgumentError.new("compact checkpoint intervals cannot also roundtrip their boundaries")
+# A restored final interval can exercise the same interior QBit boundaries as
+# a split compact restart without writing another checkpoint at its endpoint.
+if state_format == "qbit" && cache_roundtrip != "exact" && (start_segment == 0 || stop_after_segments < segments)
+  raise ArgumentError.new("compact checkpoint roundtrips require a restored final interval")
 end
 if start_segment > 0
   raise ArgumentError.new("nonzero start requires an authenticated state") if state_path.empty? || state_sha.empty?

@@ -6,6 +6,55 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PROMPT-EDIT-QBIT-2026-11-01] Compact edited B state reproduces regenerated C after restart
+
+- Four fresh native DiT intervals qualify the single authenticated B prompt
+  edit with QBit states after A and edited B. Continuous QBit roundtrips and
+  the split compact restart match bitwise at eight Euler captures, both B/C
+  slices and all 829,440 timeline values. The 552,960 A latent bytes and each
+  interval's unused post-stop noise remain exact. Post-B binds the prompt,
+  `[557,585,557]` text-turn schedule and actual 9,782-token history extent.
+- Complete compact A/B states occupy 2,005,497,939 / 4,007,409,948 bytes,
+  53.57% / 53.72% less than their exact controls. Live history remains F32.
+  QBit vs exact edited output fails unchanged `atol=rtol=2e-5` (full-bank max
+  absolute difference 3.53125); that lossy diagnostic is separate from exact
+  QBit control/restart parity and establishes no perceptual equivalence.
+- A narrow CLI admission permits compact restore plus interior QBit rounds
+  only on a restored final interval; initial/nonterminal combinations still
+  reject. Four real wrong-prompt/branch/boundary/old-state preflights reject
+  before Metal/model setup. Nineteen hostile checker cases, 95 total Python
+  tests, 44 Crystal examples, fresh release builds and native matrix pass.
+  Header/payload authentication is local consistency, not proof of arbitrary
+  forged KV semantics or signed provenance.
+- Fresh GPU codec restore matches its in-memory reconstruction bitwise;
+  fresh variable-text GPU history matches pinned upstream attention/cache
+  at unchanged tolerance (max error `7.45058e-9`, K/V exact). Prior real
+  Qwen/refiner results are reused after source/input/payload authentication.
+  These do not establish full upstream DiT/decoder/video parity.
+- Every DiT interval records zero instrumented encode allocations/readbacks/
+  preterminal waits and one terminal drain. Sampled peak 30.1257 GiB, minimum
+  cache-aware headroom 15.7548 GiB, swap growth zero under 32 GiB / 10% /
+  64 MiB / 900 s guards. Opaque MPS allocations and between-sample spikes
+  remain outside those guarantees; setup and terminal file I/O use CPU.
+- Matched 15-second exact-edited-left/QBit-edited-right media binds both
+  consumed banks, decoder weights/noise/settings and finite raw pixels.
+  First 100 pixel frames match bitwise; final20 A frames overlap B. B/C raw
+  RMSEs 0.0146474/0.0415079 are diagnostic only. Fresh decoder sampled peak
+  18.8089 GiB and zero swap under 26 GiB / 10% / 64 MiB / 1200 s guards;
+  encoder counters remain 0/0/0 with one terminal drain. Both originals and
+  the synchronized comparison have 360 frames at 24 fps; visual motion
+  quality remains open.
+- Return: `docs/hy-nomas-generation-frontier.md`. Artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-qbit-20261101.svbm62pa`.
+  Correlated adversary is ROBUST for tested state/restart and media integrity
+  with the declared pixel-overlap boundary. All 54 collected artifacts and
+  15 final source pins rehash correctly. Canonical evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-prompt-edit-qbit.json`.
+  Exact checkpoints remain default. UI, multiple/combined edits, isolated
+  QBit prompt causality, speedup and perceptual quality remain open. Refresh
+  on source/binary/prompt/input/noise/weights/codec/geometry/backend/device
+  changes or local artifact loss. Local hashes cannot recover artifacts.
+
 ### [LM-HY-NOMAS-PROMPT-EDIT-2026-11-01] One changed B prompt preserves A and regenerates C with exact restart
 
 - Five fresh native BF16 DiT processes qualify an authenticated B prompt
@@ -41,8 +90,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   refiner and produced-pair integrity. Evidence:
   `.landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json` and
   `/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json`.
-  Exact checkpoints remain default; UI, multiple/combined edits and edited
-  QBit execution remain open. Refresh on code/binary/input/noise/weights/
+  Exact checkpoints remain default; UI and multiple/combined edits remain
+  open. Edited QBit execution is qualified in the later landmark above.
+  Refresh on code/binary/input/noise/weights/
   codec/geometry/backend/device change or local artifact loss. Local hashes
   cannot recover artifacts. Commands: `docs/hy-nomas-generation-frontier.md`.
 
