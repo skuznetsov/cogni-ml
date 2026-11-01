@@ -4,8 +4,11 @@
 
 Status: the saved exact and compact three-segment restart chains have been
 decoded and exported successfully. This is a decoder-only follow-up to the
-matrix below, with no new DiT generation. Perceptual quality after two compact
-boundaries remains pending user review; exact checkpoints remain the default.
+matrix below, with no new DiT generation. On 2026-11-01 the user reported that
+QBit works with practically no visual differences in this 15-second pair after
+two compact save/restart boundaries. This is a visual observation for one
+scene and configuration, not general perceptual equivalence. Exact checkpoints
+remain the default.
 
 The native imported-latent example now admits an opt-in 90-frame prefix from
 the authenticated 180-frame NCTHW bank. Both arms use the same frozen native
@@ -69,9 +72,12 @@ comparison; originals are `videos/f32-control.mp4` and
 `videos/adaptive-qbit.mp4`. All large artifacts stay outside the repository.
 Digests detect changes and do not guarantee recovery of local-only artifacts.
 Refresh on code/binary/input/noise/weights/codec/geometry/backend/device change
-or artifact loss. The quality decision is the next gate: review 10-15 seconds
-and both seams before changing how unchanged K/V rows are requantized. Segment
-edit invalidation and CineStudio integration remain later work.
+or artifact loss. The user visual-review gate for this pair is satisfied;
+existing raw qualification/export receipts retain their original pending
+status as execution-time records. No requantization-policy change follows
+from this observation. The next proposed capability is segment edit
+invalidation: preserve A, edit B, and regenerate B/C with explicit state
+lineage. CineStudio integration remains later work.
 
 The integrity command is below; choose a fresh output path:
 
@@ -83,8 +89,8 @@ python3 -B spec/support/hy_nomas_cache_qbit_video_compare.py \
   --output /a/fresh/external/path/pair-validation.json
 ```
 
-Expected signal: `pair_integrity_passed=true`, authenticated 90-frame prefix /
-360-frame pixels, `quality_verdict` pending and
+Expected integrity signal: `pair_integrity_passed=true`, authenticated 90-frame
+prefix / 360-frame pixels, execution-time `quality_verdict` pending and
 `full_upstream_video_parity=false`. The external `postprocess.py` and
 `run_decode_pair.py` record exact guarded commands and enforce source pins;
 their output paths are intentionally fresh-only.

@@ -78,7 +78,7 @@
   "claim": {
     "decay_trigger": "Code/binary/input/noise/weights/codec/geometry/backend/device changes or modification/loss of referenced local artifacts.",
     "level": "VERIFIED",
-    "scope": "Pair integrity, prefix regression checks and bounded native decoder execution only; user motion quality is pending.",
+    "scope": "Pair integrity, prefix regression checks and bounded native decoder execution. The later user visual assessment is recorded separately and limited to this tested pair.",
     "text": "The exact and compact three-segment saved timelines produce authenticated matched 15-second native-decoder video exports."
   },
   "created_at": "2026-11-01T13:35:28.926883+00:00",
@@ -134,7 +134,7 @@
   ],
   "links": {
     "frontier_sdd": "docs/hy-nomas-generation-frontier.md",
-    "landmark": "LANDMARKS.md#lm-hy-nomas-compact-video-2026-11-01-matched-15-second-checkpoint-videos-pass-integrity-motion-quality-is-pending",
+    "landmark": "LANDMARKS.md#lm-hy-nomas-compact-video-2026-11-01-matched-15-second-checkpoint-videos-pass-integrity-user-sees-practically-no-visual-difference",
     "related_packets": [
       ".landmark/evidence/2026-11-01-hy-nomas-compact-resume.json"
     ]
@@ -186,7 +186,14 @@
     ],
     "pixel_frames": 360,
     "preterminal_waits": 0,
-    "quality_verdict": "User motion review pending",
+    "quality_verdict": "User reports practically no visual differences in the tested 15-second pair after two compact boundaries.",
+    "user_visual_review": {
+      "assessment_english_translation": "It looks good; QBit works with practically no visual differences.",
+      "comparison_video_sha256": "96012adfb51874f0ceb79ccb1f81346fc86db2a1ea406907d6dacc8740bd4d06",
+      "date": "2026-11-01",
+      "scope": "One 15-second scene, three segments and two compact save/restart boundaries; not a blind study or general perceptual-equivalence claim.",
+      "source": "User message in this chat after the exact-left / QBit-right comparison was presented. Original execution-time receipts are unchanged."
+    },
     "raw_prefix_checks": {
       "exact_vs_prior_first_220_frames_bitwise_equal": true,
       "exact_vs_qbit_first_100_frames_bitwise_equal": true,
@@ -214,7 +221,7 @@
     "task": "Matched visual-review artifacts after two compact checkpoint boundaries"
   },
   "verification": {
-    "adversary_scope": "Correlated same-lineage static and saved-artifact review; inspected lossless stills. Motion/perceptual equality is not assessed.",
+    "adversary_scope": "Correlated same-lineage static and saved-artifact review; inspected lossless stills. This review did not establish perceptual equality; later user feedback is recorded separately.",
     "adversary_verdict": "ROBUST",
     "dod_commands": [
       "make BUILD_DIR=\"$RUN_ROOT/build\" hy_nomas_decode_latent",

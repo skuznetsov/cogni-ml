@@ -6,7 +6,7 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
-### [LM-HY-NOMAS-COMPACT-VIDEO-2026-11-01] Matched 15-second checkpoint videos pass integrity; motion quality is pending
+### [LM-HY-NOMAS-COMPACT-VIDEO-2026-11-01] Matched 15-second checkpoint videos pass integrity; user sees practically no visual difference
 
 - Two serial native decoder runs consume the authenticated terminal exact and
   compact `[2,3]` restart timelines. One 90-latent/360-pixel-frame global
@@ -20,8 +20,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   segment's last 20 pixel frames despite immutable DiT latent prefixes.
 - Raw pixel RMSE versus exact is A 0.000922836, B 0.016688471, C 0.047378404.
   Selected lossless frames show small contour/background differences without
-  obvious gross scene destruction; motion/perceptual judgment awaits the user.
-  Exact mode stays default and the `2e-5` tolerance is unchanged.
+  obvious gross scene destruction. On 2026-11-01 the user reported practically
+  no visual differences in the 15-second pair after two compact boundaries.
+  This observation is limited to this scene/configuration; exact mode stays
+  default and the `2e-5` tolerance is unchanged.
 - Both 15-second 512x288/24 fps originals and synchronized comparison pass
   frame-count/duration/hash checks. The re-encoded comparison is exact-left,
   QBit-right. Raw F32 files and lossless previews remain for fine detail.
@@ -53,7 +55,8 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Loss relative to the exact-cache control grows: B RMSE 0.0885057 / relative
   L2 0.0758877; C RMSE 0.230108 / relative L2 0.188021. Both fail the unchanged
   2e-5 tolerance. Serialization introduces no additional loss to this QBit
-  treatment; perceptual quality after repeated compression is unassessed.
+  treatment. This matrix did not assess perceptual quality; the later matched
+  15-second user review is recorded in LM-HY-NOMAS-COMPACT-VIDEO above.
 - All eight native intervals record zero instrumented encode allocations,
   readbacks and preterminal waits, with one terminal wait. Sampled peak is
   29.567 GiB, minimum cache-aware headroom 14.548 GiB, swap growth zero, under
