@@ -1,6 +1,7 @@
 require "digest/sha256"
 require "json"
 require "../../src/ml/gguf/qwen_qbit_gaussian_codec"
+require "../../src/ml/core/buffer"
 require "../../src/ml/metal/dispatch"
 require "../../src/ml/metal/device"
 require "../../src/ml/video/metal_ops"
@@ -54,6 +55,31 @@ module HyNomasCacheQBit
     ML::Metal::PipelineCache.get(name) do
       ML::Metal::ComputePipeline.new(name, SOURCE, name)
     end
+  end
+
+  # Setup-only source for both the roundtrip and checkpoint plans. Keeping the
+  # compact-checkpoint identity and decoder table derived from this one source
+  # prevents a second Gaussian codebook from drifting away from the reference.
+  def self.codebook_values_for_setup : Array(Float32)
+    values = Array(Float32).new(CODEBOOK_FLOATS, 0.0_f32)
+    positive_levels = ML::GGUF::QwenQBitGaussianCodec.positive_levels_for_setup
+    raise "Gaussian raw codebook size changed" unless positive_levels.size == RAW_LEVEL_COUNT
+    positive_levels.each_with_index { |value, i| values[i] = value }
+
+    {4, 5, 8}.each_with_index do |precision, tier_index|
+      offset = RAW_LEVEL_COUNT + tier_index * 256
+      256.times do |raw|
+        values[offset + raw] = ML::GGUF::QwenQBitGaussianCodec.reconstruct_raw_code(raw.to_u8, precision)
+      end
+    end
+    values
+  end
+
+  def self.codebook_sha256_for_setup : String
+    values = codebook_values_for_setup
+    Digest::SHA256.hexdigest(
+      Bytes.new(values.to_unsafe.as(Pointer(UInt8)), CODEBOOK_BYTES)
+    )
   end
 
   # A single in-place GPU roundtrip plan for a sequence of independent cache
@@ -364,18 +390,7 @@ module HyNomasCacheQBit
     end
 
     private def build_codebook : Array(Float32)
-      values = Array(Float32).new(CODEBOOK_FLOATS, 0.0_f32)
-      positive_levels = ML::GGUF::QwenQBitGaussianCodec.positive_levels_for_setup
-      raise "Gaussian raw codebook size changed" unless positive_levels.size == HyNomasCacheQBit::RAW_LEVEL_COUNT
-      positive_levels.each_with_index { |value, i| values[i] = value }
-
-      {4, 5, 8}.each_with_index do |precision, tier_index|
-        offset = HyNomasCacheQBit::RAW_LEVEL_COUNT + tier_index * 256
-        256.times do |raw|
-          values[offset + raw] = ML::GGUF::QwenQBitGaussianCodec.reconstruct_raw_code(raw.to_u8, precision)
-        end
-      end
-      values
+      HyNomasCacheQBit.codebook_values_for_setup
     end
 
     private def encode_internal(chain : ML::Metal::MPSCommandChain,

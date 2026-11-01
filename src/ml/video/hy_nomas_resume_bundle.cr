@@ -15,6 +15,7 @@ module ML::Video
     PREFIX_BYTES     = MAGIC.bytesize + sizeof(UInt32)
     PAYLOAD_OFFSET   = PREFIX_BYTES + MAX_HEADER_BYTES
     IO_CHUNK_BYTES   = 64 * 1024
+    RANGE_MAX_BYTES  = 4 * 1024 * 1024
 
     record Entry, name : String, nbytes : Int64, offset : Int64,
       sha256 : String
@@ -97,6 +98,15 @@ module ML::Video
     def self.open(path : String, expected_sha256 : String, contract : String,
                   expected_inventory : Hash(String, Int64)) : Reader
       Reader.new(path, expected_sha256, contract, expected_inventory)
+    end
+
+    # Opt-in variable-size reader. The caller supplies an exact set of record
+    # names and a maximum byte bound for each record; the authenticated file
+    # may contain any size at or below each bound. The exact `open` API above
+    # retains its original equality semantics.
+    def self.open_bounded(path : String, expected_sha256 : String, contract : String,
+                          maximum_inventory : Hash(String, Int64)) : Reader
+      Reader.new(path, expected_sha256, contract, maximum_inventory, true)
     end
 
     def self.validate_output_path!(path : String) : Nil
@@ -284,11 +294,14 @@ module ML::Video
       @records : Hash(String, Entry) = {} of String => Entry
       @contract = ""
       @inventory = {} of String => Int64
+      @inventory_bounds = {} of String => Int64
+      @bounded_inventory = false
       @closed = false
       @copying = false
 
       def initialize(@path : String, expected_sha256 : String, expected_contract : String,
-                     expected_inventory : Hash(String, Int64))
+                     expected_inventory : Hash(String, Int64),
+                     @bounded_inventory : Bool = false)
         HyNomasResumeBundle.validate_sha256!(expected_sha256, "expected full-file")
         HyNomasResumeBundle.validate_contract!(expected_contract)
         expected_entries, _ = HyNomasResumeBundle.validate_inventory!(expected_inventory)
@@ -314,7 +327,16 @@ module ML::Video
           end
           expected_map = expected_entries.to_h { |entry| {entry.name, entry.nbytes} }
           actual_map = records.to_h { |entry| {entry.name, entry.nbytes} }
-          unless actual_map == expected_map
+          if @bounded_inventory
+            unless actual_map.keys.to_set == expected_map.keys.to_set
+              raise ArgumentError.new("Hy-Nomas resume bundle inventory mismatch")
+            end
+            actual_map.each do |name, nbytes|
+              unless nbytes <= expected_map[name]
+                raise ArgumentError.new("Hy-Nomas resume bundle record exceeds maximum size for #{name}")
+              end
+            end
+          elsif actual_map != expected_map
             raise ArgumentError.new("Hy-Nomas resume bundle inventory mismatch")
           end
           expected_size = HyNomasResumeBundle.checked_add!(PAYLOAD_OFFSET.to_i64,
@@ -324,6 +346,7 @@ module ML::Video
           end
           @contract = contract
           @inventory = actual_map
+          @inventory_bounds = expected_map
           @records = records.to_h { |entry| {entry.name, entry} }
           unchanged!
         rescue ex
@@ -343,6 +366,13 @@ module ML::Video
         close
       end
 
+      # Actual admitted record sizes, separate from caller-provided bounds.
+      # Return a copy so callers cannot mutate reader admission state.
+      def inventory : Hash(String, Int64)
+        check_open!
+        @inventory.dup
+      end
+
       # Rechecks the caller's setup-pinned identity against the identity that
       # was authenticated when this reader was admitted, and confirms the file
       # still has its admitted snapshot before any further record copies.
@@ -355,10 +385,104 @@ module ML::Video
         HyNomasResumeBundle.validate_contract!(expected_contract)
         expected_entries, _ = HyNomasResumeBundle.validate_inventory!(expected_inventory)
         expected_map = expected_entries.to_h { |entry| {entry.name, entry.nbytes} }
-        unless expected_contract == @contract && expected_map == @inventory
+        inventory_matches = if @bounded_inventory
+                              expected_map == @inventory_bounds
+                            else
+                              expected_map == @inventory
+                            end
+        unless expected_contract == @contract && inventory_matches
           raise ArgumentError.new("Hy-Nomas resume bundle contract or inventory mismatch")
         end
         unchanged!
+      end
+
+      # Copies one bounded range from an admitted record. Full-file SHA-256 is
+      # checked during open; the open file/path snapshot is rechecked around
+      # each range read. A complete record read through `each_chunk` also
+      # checks the per-record digest.
+      def read_range!(name : String, offset : Int64, destination : Bytes) : Nil
+        check_open!
+        if @copying
+          raise ArgumentError.new("Hy-Nomas resume bundle reader does not allow concurrent copies")
+        end
+        if destination.size > RANGE_MAX_BYTES
+          raise ArgumentError.new("Hy-Nomas resume bundle range exceeds the bounded range size")
+        end
+        validate_contract!(@contract, @inventory_bounds)
+        entry = @records[name]?
+        raise ArgumentError.new("Hy-Nomas resume bundle unknown record #{name}") unless entry
+        unless offset >= 0 && offset <= entry.nbytes && destination.size.to_i64 <= entry.nbytes - offset
+          raise ArgumentError.new("Hy-Nomas resume bundle range is outside record #{name}")
+        end
+
+        unchanged!
+        @copying = true
+        begin
+          @file.seek(HyNomasResumeBundle::PAYLOAD_OFFSET.to_i64 + entry.offset + offset)
+          @file.read_fully(destination) unless destination.empty?
+          unchanged!
+        rescue IO::EOFError
+          raise ArgumentError.new("Truncated Hy-Nomas resume bundle record #{name}")
+        ensure
+          @copying = false
+        end
+      end
+
+      # Confirms a digest computed over the exact bytes consumed by a caller
+      # that must transform a record without staging the full record in RAM.
+      # This is intentionally separate from `each_chunk`: callers may stream
+      # the on-disk record in multiple layout-aware passes, provided the digest
+      # covers the canonical record byte order before those bytes are used.
+      def verify_record_digest!(name : String, consumed_sha256 : String) : Nil
+        check_open!
+        if @copying
+          raise ArgumentError.new("Hy-Nomas resume bundle reader cannot verify during a copy")
+        end
+        validate_contract!(@contract, @inventory_bounds)
+        entry = @records[name]?
+        raise ArgumentError.new("Hy-Nomas resume bundle unknown record #{name}") unless entry
+        unchanged!
+        unless consumed_sha256 == entry.sha256
+          raise ArgumentError.new("Hy-Nomas resume bundle record SHA-256 mismatch for #{name}")
+        end
+      end
+
+      # Streams a complete record through one reusable bounded slice and
+      # verifies its record digest before returning.
+      def each_chunk(name : String, &block : Bytes ->) : Nil
+        check_open!
+        if @copying
+          raise ArgumentError.new("Hy-Nomas resume bundle reader does not allow concurrent copies")
+        end
+        validate_contract!(@contract, @inventory_bounds)
+        entry = @records[name]?
+        raise ArgumentError.new("Hy-Nomas resume bundle unknown record #{name}") unless entry
+
+        unchanged!
+        @copying = true
+        begin
+          @file.seek(HyNomasResumeBundle::PAYLOAD_OFFSET.to_i64 + entry.offset)
+          digest = Digest::SHA256.new
+          chunk = Bytes.new(IO_CHUNK_BYTES)
+          remaining = entry.nbytes
+          while remaining > 0
+            wanted = Math.min(chunk.size.to_i64, remaining).to_i
+            count = @file.read(chunk[0, wanted])
+            if count == 0
+              raise ArgumentError.new("Truncated Hy-Nomas resume bundle record #{name}")
+            end
+            part = chunk[0, count]
+            digest.update(part)
+            yield part
+            remaining -= count
+          end
+          unchanged!
+          unless digest.hexfinal == entry.sha256
+            raise ArgumentError.new("Hy-Nomas resume bundle record SHA-256 mismatch for #{name}")
+          end
+        ensure
+          @copying = false
+        end
       end
 
       # Copies one authenticated record directly into caller-owned, exact-size
@@ -369,7 +493,7 @@ module ML::Video
         if @copying
           raise ArgumentError.new("Hy-Nomas resume bundle reader does not allow concurrent copies")
         end
-        validate_contract!(@contract, @inventory)
+        validate_contract!(@contract, @inventory_bounds)
         entry = @records[name]?
         raise ArgumentError.new("Hy-Nomas resume bundle unknown record #{name}") unless entry
         unless destination.size.to_i64 == entry.nbytes

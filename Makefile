@@ -669,6 +669,14 @@ $(BUILD_DIR)/hy_nomas_cache_qbit_probe: examples/hy_nomas_cache_qbit_probe.cr ex
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
+$(BUILD_DIR)/hy_nomas_compact_sequence_probe: examples/hy_nomas_compact_sequence_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr examples/support/hy_nomas*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+$(BUILD_DIR)/hy_nomas_cache_qbit_checkpoint_probe: examples/hy_nomas_cache_qbit_checkpoint_probe.cr $(wildcard examples/support/hy_nomas_cache_qbit*.cr examples/support/hy_nomas_cache_qbit*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 $(BUILD_DIR)/hy_nomas_timeline_ops_probe: examples/hy_nomas_timeline_ops_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
@@ -686,6 +694,10 @@ $(BUILD_DIR)/hy_nomas_resume_probe: examples/hy_nomas_resume_probe.cr examples/s
 
 spec_hy_nomas_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
 	$(CRYSTAL) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
+
+spec_hy_nomas_compact_resume: $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) spec spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_resume_bundle_spec.cr spec/hy_nomas_cache_qbit_checkpoint_spec.cr \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc" $(ARGS)
 
 .PHONY: hy_nomas_q4_reduction_probe

@@ -6,7 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
-### [LM-HY-NOMAS-QBIT-CONTINUATION-2026-10-31] Bounded adaptive-cache comparison integrity passes; visual quality pending
+### [LM-HY-NOMAS-COMPACT-RESUME-2026-11-01] Compact GPU QBit checkpoints reproduce the roundtrip control through two restarts
+
+- Eight fresh BF16 DiT processes cover A/B/C (3 x 5 seconds, four Euler steps
+  each). Exact restart matches its continuous control bitwise; compact restart
+  matches continuous QBit roundtrips bitwise across all 12 updates and the full
+  829,440-value timeline. A and untouched future noise are preserved. No new
+  decoder or complete-video run occurred.
+- Actual checkpoint bytes fall from 4,319,223,820 to 2,005,497,939 after A and
+  from 8,141,283,340 to 3,755,273,865 after B (2.154x / 2.168x). Packing happens
+  in each existing F32 row slot; only row headers/codebook/stats are additional
+  GPU storage. The exact latent/noise bank is retained. Live attention K/V
+  remains F32; no live-residency or speedup claim is made.
+- Loss relative to the exact-cache control grows: B RMSE 0.0885057 / relative
+  L2 0.0758877; C RMSE 0.230108 / relative L2 0.188021. Both fail the unchanged
+  2e-5 tolerance. Serialization introduces no additional loss to this QBit
+  treatment; perceptual quality after repeated compression is unassessed.
+- All eight native intervals record zero instrumented encode allocations,
+  readbacks and preterminal waits, with one terminal wait. Sampled peak is
+  29.567 GiB, minimum cache-aware headroom 14.548 GiB, swap growth zero, under
+  the unchanged 30 GiB cap / 10% reserve / 64 MiB swap-growth / 900 s guards.
+  Opaque MPS resources are outside allocation counters; samples miss spikes.
+- Focused checks pass 37 Crystal examples and 17 Python tests; both legacy
+  callers build. The small GPU codec matches 768 values and timeline bitwise.
+  Pinned source-body F32/MPS cache-attention outputs/K/V have maximum error 0;
+  full real-DiT BF16/CUDA/Magi or PixelUMM upstream parity is not established.
+- ROBUST within bounded same-host/frozen-executable qualification, with
+  same-lineage correlated review and rehashed F32 artifacts. Native/checker
+  pins and per-arm binary hashes are verified; external runner digests are
+  finalization-time records, not original-execution attestations. Exact mode
+  stays default. Refresh on code/codec/input/weights/geometry/backend/device
+  changes or artifact loss. Cross-build migration, crash recovery and Studio
+  integration remain open. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-compact-resume.json`; commands and
+  next quality boundary: `docs/hy-nomas-generation-frontier.md`.
+
+### [LM-HY-NOMAS-QBIT-CONTINUATION-2026-10-31] Bounded adaptive-cache comparison integrity passes; user finds the pair visually indistinguishable
 
 - The exact control/save/restart reproduces all four B updates and the full
   timeline bitwise. The QBit arm preserves A and untouched future noise, but B
@@ -15,8 +50,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   exact-equivalent output.
 - Exact and QBit timelines passed same-decoder/noise/settings provenance,
   finite raw-pixel, and video-export integrity checks for 10 seconds at
-  512x288/24 fps. User visual review is pending; no quality promotion or
-  full-upstream CUDA/PixelUMM parity claim follows.
+  512x288/24 fps. On 2026-11-01 the user reported no visible difference in this
+  pair. This does not establish general quality or full-upstream CUDA/PixelUMM
+  parity.
 - Logical K/V bytes fall from 4,314,857,472 to 2,001,104,400 (2.156x including
   headers), with 41,207,936 extra resident bytes. F32 caches and the
   4,319,223,820-byte exact restart bundle remain; no live-memory or compact

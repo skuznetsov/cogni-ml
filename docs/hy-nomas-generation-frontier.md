@@ -1,9 +1,133 @@
 # Hy-Nomas first native video frontier
 
+## Compact QBit checkpoints and repeated continuation (2026-11-01)
+
+Status: bounded native compact save/restart qualification passed. Eight fresh
+native processes cover three five-second segments (A/B/C), four Euler updates
+each, with BF16 DiT weights unchanged. Exact restart is bitwise equal to its
+continuous control; compact restart is bitwise equal to the old in-memory
+QBit roundtrip control across all 12 updates and the entire latent/noise bank.
+The user reported no visible difference in the previous matched 10-second
+F32/QBit video pair. That observation does not qualify the new three-segment
+continuation's perceptual quality; this run did not decode video.
+
+Admit an opt-in compact boundary format: preserve the complete latent/noise bank
+exactly and store every active K/V record as authenticated row headers plus its
+used Gaussian p4/p5/p8/F32 payload. Bind codec policy/codebook, exact checkpoint
+contract, next-segment cursor and payload inventory. Keep the existing exact
+bundle and exact F32 default unchanged. File I/O and integrity checks occur only
+in setup or after the producer's existing terminal drain; quantization and
+reconstruction run on GPU. Pack each row into its own existing 512-byte F32
+slot, after retaining all source values/codes needed for that row; restore must
+stage compressed codes before overwriting the same slot. Only row headers,
+codebook and stats are allocated before encode. Terminal serialization streams
+the occupied prefixes and rebases disk offsets; it does no CPU quantization.
+Packing is destructive and admitted only at the producer's final extendable
+boundary. This reduces checkpoint storage; live attention
+still consumes F32 buffers and no residency or speedup is assumed.
+
+Qualification compares a continuous exact control, a continuous control
+with the same QBit roundtrips at both boundaries, and separate exact and compact
+fresh-process chains through A/B/C. Compact restart must be bitwise equal to
+the matching roundtrip control, while lossy-versus-exact errors are reported
+separately per segment. Preserve
+`atol=rtol=2e-5`, the 10% cache-aware memory reserve, sampled process caps and
+swap-growth/deadline stops. Only one model-owning process runs at a time.
+
+Reject malformed/truncated/modified files, codec or base-contract mismatch,
+wrong inventory/cursor, invalid tier/row moments/payload offsets, nonfinite
+rows, partial/repeated restore, and save before the noisy writer drains.
+Do not add an encode-time readback, allocation or wait. The relevant guard is
+zero instrumented encode allocations/readbacks/preterminal waits and one
+terminal wait per process; opaque MPS resources remain outside those counters.
+Full stock upstream BF16/CUDA parity and quality of long continuations remain
+unproven; refresh the pinned cache-contract upstream oracle and codec checks.
+
+Actual files include the exact 3,317,760-byte latent/noise bank, row headers,
+codec metadata, record digests and the bundle envelope:
+
+| Boundary | Exact checkpoint bytes | Compact checkpoint bytes | Exact / compact |
+| --- | ---: | ---: | ---: |
+| After A | 4,319,223,820 | 2,005,497,939 | 2.154x |
+| After B | 8,141,283,340 | 3,755,273,865 | 2.168x |
+
+Active logical F32 K/V bytes are 4,314,857,472 after A and 8,136,916,992 after B;
+their packed representations, including row headers, are 2,001,104,400 and
+3,750,880,016 bytes. The resident history capacity is 8,136,916,992 bytes for
+this three-segment run even in the A producer; do not confuse capacity with
+the active prefix. No second packed-payload GPU bank is allocated. Codec-only
+named budget is 134,846,336 bytes in the A producer and 389,132,032 bytes
+for the B restore/save process. Restore-plan capacity is checked against that
+conservative budget before encode.
+
+Loss versus the exact F32-cache control is real and grows across boundaries. Final-segment
+latent RMSE / relative L2 / maximum absolute error are:
+
+| Segment | RMSE | Relative L2 | Maximum absolute error |
+| --- | ---: | ---: | ---: |
+| A | 0 | 0 | 0 |
+| B | 0.08850569793 | 0.07588765 | 2.251953125 |
+| C | 0.23010752454 | 0.18802071 | 3.2216796875 |
+
+B and C fail the unchanged exact tolerance. Compact disk serialization adds
+no error to the matched QBit treatment, but repeated lossy continuation is not
+promoted to an exact or generally perceptually equivalent mode. Full timeline
+prefixes and untouched future noise remain bitwise unchanged at each interval.
+
+All eight native model processes recorded zero instrumented encode allocations,
+readbacks and preterminal waits, with one terminal wait each. Sampled peak
+footprint is 29.5670 GiB, minimum cache-aware headroom 14.5482 GiB and swap
+growth zero, under a 30 GiB process cap, 10% reserve, 64 MiB swap-growth stop
+and 900 s per-process deadline. Samples do not bound between-sample spikes;
+file-backed memory is a reclaimability estimate. No timing speedup is claimed.
+
+The small fresh-process GPU codec probe matches all 768 F32 cache values and
+the timeline bitwise against the existing in-memory codec, including p4/p5/p8,
+exact escapes, constants and signed zero. Focused checks pass 37 Crystal
+examples and 17 Python comparator tests. Both legacy sequence callers build
+in release mode. Corruption, bounded-copy, timestamp-preserving mutation,
+inventory/contract, lifecycle and stale-treatment falsifiers are covered.
+The refreshed pinned upstream source-body F32/MPS cache-attention adapter
+matches all 9,072 output, 1,080 K and 1,080 V values with maximum error zero.
+Its synthetic 54-layer/14-forward fixture does not qualify full real BF16 DiT,
+CUDA/Magi or PixelUMM equivalence.
+
+Reproduction uses the external artifact root below. `run_job.py` exports its
+`TMPDIR` and `CRYSTAL_CACHE_DIR`, and applies the cache-aware guard. The matrix
+runner fixes one executable and runs each of its eight intervals serially.
+Exact command arrays, native/checker source pins, binary pins and per-run guard summaries are
+indexed by the evidence packet and external `qualification-summary.json`.
+The external orchestration scripts are hashed at finalization; their original
+execution bytes have no separate attestation. Authenticated outputs, linked
+state hashes and per-arm sidecars are the numerical evidence.
+
+```sh
+ROOT=/opt/mldata_ssd/cogni-ml/hy-nomas-compact-checkpoint-20261101.3efczbmo
+python3 -B "$ROOT/run_job.py" --cap 4096 --timeout 600 specs-compact-resume -- \
+  make BUILD_DIR="$ROOT/build" spec_hy_nomas_compact_resume
+python3 -B "$ROOT/run_job.py" --cap 4096 --timeout 300 specs-compact-comparator-final -- \
+  python3 -B spec/hy_nomas_compact_resume_reference_test.py
+python3 -B "$ROOT/run_real_matrix.py"
+python3 -B "$ROOT/run_job.py" --cap 1024 --timeout 300 real-matrix-compare -- \
+  python3 -B spec/support/hy_nomas_compact_resume_reference.py \
+  --index "$ROOT/real/matrix-index.json" --output "$ROOT/real/matrix-report.json"
+```
+
+These commands require fresh log/output paths; use a new artifact root when
+refreshing. DoD for compact native restart passed at unchanged tolerances;
+visual quality of C remains open. CAUTION rollback is the unchanged default
+`--state-format exact --cache-roundtrip exact`, or reverting the opt-in helper
+and probe. Cross-build migration, crash/power-loss recovery and Studio
+integration are not qualified. Refresh on source/binary/codec/input/weights/
+geometry/backend/device changes. Evidence:
+`.landmark/evidence/2026-11-01-hy-nomas-compact-resume.json`.
+
 ## Adaptive continuation-cache quality experiment (2026-10-31)
 
-Status: bounded exact-versus-lossy comparison integrity passed; user visual
-review and the quality decision remain pending. The four-step BF16 DiT exact
+Status: bounded exact-versus-lossy comparison integrity passed. On 2026-11-01,
+the user reviewed the matched pair and reported no visible difference. This
+single-pair visual observation does not establish numerical or general quality
+parity. The four-step BF16 DiT exact
 control/save/restart gate passed: all four B updates and the full timeline are
 bitwise equal, with A and the untouched future noise unchanged. The QBit arm
 restores the same authenticated post-writer boundary, uses the same B
@@ -25,8 +149,8 @@ timeline matches the stored pinned source-body compact-MPS final-latent oracle
 for all 276,480 selected values, and its 106,168,320 output pixel-channel
 values match the previous native decode by full SHA-256. These are
 stored-oracle/native-decode comparisons, not a new full-upstream CUDA DiT or
-upstream PixelUMM decoder run. Visual review is required before making any
-quality claim.
+upstream PixelUMM decoder run. The user's later visual observation is scoped
+to this pair; broader quality promotion remains unproven.
 
 The first experiment retains the final F32 attention buffers. A reusable GPU
 scratch packs and restores one cache record at a time, so it isolates lossy
@@ -104,8 +228,9 @@ The export runner uses `examples/hy_nomas_export.py` for 240 frames at
 guarded command records are indexed by
 `.landmark/evidence/2026-10-31-hy-nomas-cache-qbit.json`.
 
-DoD for comparison integrity passed; visual quality is unresolved. The main
-failure mode remains amplification of local K/V errors by continuation.
+DoD for comparison integrity passed; the user's visual acceptance is limited
+to this pair. The main failure mode remains amplification of local K/V errors
+by continuation.
 Removing opt-in codec selection and diagnostic files is rollback; defaults stay
 exact F32. Refresh on codec/selector, binary, input, weights, backend or device
 changes.

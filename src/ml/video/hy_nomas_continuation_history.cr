@@ -446,6 +446,21 @@ module ML::Video
       inventory
     end
 
+    # Setup-only bindings let callers prepare boundary kernels before encode.
+    # Counts describe the future valid prefix, never the allocated tail.
+    def prepare_checkpoint_bindings(next_segment : Int32,
+                                    & : String, ML::MetalBuffer, Int32 ->) : Nil
+      unless !@released && !@poisoned && @last_chain.nil?
+        raise ArgumentError.new("Prepare continuation bindings before encoding")
+      end
+      @schedule.validate_restore_boundary!(next_segment)
+      count = @shape.boundary_cache_elements(next_segment)
+      @cache_pairs.each_with_index do |pair, layer|
+        yield "history.layer#{layer}.key", pair[0], count
+        yield "history.layer#{layer}.value", pair[1], count
+      end
+    end
+
     # Terminal file I/O only. Expose valid prefixes, never uninitialized cache
     # capacity. No duplicate GPU bank or CPU tensor array is needed.
     def each_checkpoint_cache(next_segment : Int32,
