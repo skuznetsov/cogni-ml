@@ -17,6 +17,9 @@ budget_mib = 30_720_i64
 plan_only = false
 noise_edit_segment : Int32? = nil
 noise_source_segment : Int32? = nil
+prompt_edit_segment : Int32? = nil
+prompt_input_path = ""
+prompt_input_sha = ""
 OptionParser.parse do |p|
   p.banner = "Hy-Nomas bounded multi-process compact continuation qualification"
   p.on("--inputs PATH", "Authenticated continuation input manifest") { |v| input_path = v }
@@ -33,6 +36,9 @@ OptionParser.parse do |p|
   p.on("--plan-only", "Authenticate inputs and report budget without Metal") { plan_only = true }
   p.on("--noise-edit-segment N", "New take for one active noninitial segment; shared scene prompt is unchanged") { |v| noise_edit_segment = v.to_i }
   p.on("--noise-source-segment N", "Unused noise donor in the same six-segment bank; paired with noise-edit-segment") { |v| noise_source_segment = v.to_i }
+  p.on("--prompt-edit-segment N", "Replace one noninitial segment prompt and regenerate descendants") { |v| prompt_edit_segment = v.to_i }
+  p.on("--prompt-inputs PATH", "Separate authenticated v2 conditioning for the edited segment") { |v| prompt_input_path = v }
+  p.on("--prompt-inputs-sha SHA", "Trusted edited conditioning manifest SHA-256") { |v| prompt_input_sha = v }
 end
 HyNomasSequence.validate_segments!(segments)
 unless noise_edit_segment.nil? == noise_source_segment.nil?
@@ -41,6 +47,13 @@ end
 noise_edit = if target = noise_edit_segment
                ML::Video::HyNomasSegmentNoiseEdit.new(segments, target, noise_source_segment.not_nil!)
              end
+if prompt_edit_segment
+  raise ArgumentError.new("prompt edits cannot be combined with noise edits") if noise_edit
+  raise ArgumentError.new("prompt edit requires prompt-inputs and prompt-inputs-sha") if prompt_input_path.empty? || prompt_input_sha.empty?
+  raise ArgumentError.new("prompt edits must restore the preserved prefix") if start_segment < prompt_edit_segment.not_nil!
+elsif !prompt_input_path.empty? || !prompt_input_sha.empty?
+  raise ArgumentError.new("prompt conditioning requires prompt-edit-segment")
+end
 unless 0 <= start_segment < stop_after_segments <= segments
   raise ArgumentError.new("interval must satisfy 0 <= start < stop <= segments")
 end
@@ -64,18 +77,28 @@ inputs = HyNomasGeneration::TimelineInputs.new(File.realpath(input_path), input_
 inputs.verify_payload!
 inputs.base.file.verify_payload!
 HyNomasSequence.validate_shared_scene_prompt!(inputs.base.prompt)
+prompt_inputs = if prompt_edit_segment
+                  HyNomasGeneration::Inputs.new(File.realpath(prompt_input_path), prompt_input_sha, conditioned: true)
+                end
+prompt_inputs.try(&.file.verify_payload!)
+prompt_edit = if edited = prompt_inputs
+                ML::Video::HyNomasSegmentPromptEdit.new(segments, prompt_edit_segment.not_nil!,
+                  edited.file.sha256, edited.file.document["payload_sha256"].as_s,
+                  Digest::SHA256.hexdigest(edited.prompt), edited.valid_text_tokens)
+              end
+HyNomasSequence.validate_prompt_edit!(prompt_edit, prompt_inputs, segments)
 admission = HyNomasGeneration.authenticate_bf16_index
 contracts = {} of Int32 => String
 inventories = {} of Int32 => Hash(String, Int64)
 (1...segments).each do |boundary|
-  contracts[boundary] = HyNomasSequence.checkpoint_contract(inputs, segments, boundary, noise_edit)
-  inventories[boundary] = HyNomasSequence.checkpoint_inventory(inputs, segments, boundary)
+  contracts[boundary] = HyNomasSequence.checkpoint_contract(inputs, segments, boundary, noise_edit, prompt_edit)
+  inventories[boundary] = HyNomasSequence.checkpoint_inventory(inputs, segments, boundary, prompt_edit)
 end
 counts = inventories.transform_values do |inventory|
   inventory.reject { |name, _| name == "timeline" }.values.map { |n| (n // sizeof(Float32)).to_i32 }
 end
 capture_bytes = (stop_after_segments - start_segment).to_i64 * 4 * 32 * 30 * 9 * 16 * sizeof(Float32)
-dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments)
+dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, prompt_edit: prompt_edit)
 roundtrip_bytes = 0_i64
 if cache_roundtrip == "qbit"
   ((start_segment + 1)...stop_after_segments).each do |boundary|
@@ -93,6 +116,9 @@ HyNomasGeneration.emit("compact_resume_memory_plan", mode: mode, segments: segme
   cache_roundtrip: cache_roundtrip, dit_peak_named_bytes: dit_peak, capture_bytes: capture_bytes,
   codec_bytes: codec_bytes, peak_named_bytes: peak, named_budget_bytes: budget,
   resident_f32_kv_bytes: resident_f32_kv_bytes, noise_edit: noise_edit.try(&.identity),
+  prompt_edit: prompt_edit.try(&.identity),
+  segment_text_tokens: HyNomasSequence.text_tokens(inputs.base, segments, prompt_edit),
+  segment_cache_text: HyNomasSequence.cache_text(segments, prompt_edit),
   reserve_pct: 10, decoder: false, full_generation: false)
 exit if plan_only
 unless Path[output_dir].absolute? && File.directory?(output_dir) && Dir.empty?(output_dir)
@@ -140,7 +166,8 @@ begin
   end
   setup = Time.monotonic
   dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget - capture_bytes - codec_bytes,
-    segments, admission, prepare_capture: true, noise_edit: noise_edit)
+    segments, admission, prepare_capture: true, noise_edit: noise_edit,
+    prompt_edit: prompt_edit, prompt_inputs: prompt_inputs)
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   prepared_bindings = {} of Int32 => Hash(String, Tuple(ML::MetalBuffer, Int32))
   if cache_roundtrip == "qbit"
@@ -237,7 +264,8 @@ begin
   end
   timings["terminal_export_seconds"] = (Time.monotonic - export).total_seconds
   timings["request_seconds"] = (Time.monotonic - request_start).total_seconds
-  receipt = {schema: noise_edit ? "cogni_ml.hy_nomas_segment_edit_probe/v1" : "cogni_ml.hy_nomas_compact_sequence_probe/v1", mode: mode,
+  invalidation_edit = prompt_edit || noise_edit
+  receipt = {schema: prompt_edit ? "cogni_ml.hy_nomas_segment_prompt_edit_probe/v1" : noise_edit ? "cogni_ml.hy_nomas_segment_edit_probe/v1" : "cogni_ml.hy_nomas_compact_sequence_probe/v1", mode: mode,
              pid: Process.pid, executable_sha256: PixelUMMBlockProbe.sha_file(Process.executable_path.not_nil!),
              inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              payload_sha256: inputs.file.document["payload_sha256"].as_s,
@@ -258,7 +286,12 @@ begin
              timeline_shape: [1, 32, 180, 9, 16], step_shape: [1, 32, 30, 9, 16],
              timings: timings, metrics: metrics, diagnostics: diagnostics,
              noise_edit: noise_edit.try(&.identity),
-             invalidation: noise_edit.try { |edit| {latent_frames: [edit.target_segment * 30, segments * 30],
+             prompt_edit: prompt_edit.try(&.identity),
+             prompt_inputs: prompt_inputs.try(&.file.path) || "",
+             prompt_inputs_sha256: prompt_inputs.try(&.file.sha256) || "",
+             segment_text_tokens: HyNomasSequence.text_tokens(inputs.base, segments, prompt_edit),
+             segment_cache_text: HyNomasSequence.cache_text(segments, prompt_edit),
+             invalidation: invalidation_edit.try { |edit| {latent_frames: [edit.target_segment * 30, segments * 30],
                                                     decoder_pixel_frames: [edit.target_segment * 120 - 20, segments * 120],
                                                     prior_segment_overlap_pixel_frames: [edit.target_segment * 120 - 20, edit.target_segment * 120],
                                                     units: "half-open global frame ranges; regenerate every descendant"} },

@@ -211,6 +211,35 @@ module ML::Video
       OncePerScene
     end
 
+    # Immutable view of the prompt row counts and cache-text policy admitted
+    # for one segment sequence. Inputs and returned arrays are copied so a
+    # caller cannot change append geometry after workspace admission.
+    class SegmentTextProfile
+      @text_tokens : Array(Int32)
+      @cache_text : Array(Bool)
+
+      def initialize(text_tokens : Array(Int32), cache_text : Array(Bool))
+        @text_tokens = text_tokens.dup
+        @cache_text = cache_text.dup
+      end
+
+      def text_tokens : Array(Int32)
+        @text_tokens.dup
+      end
+
+      def cache_text : Array(Bool)
+        @cache_text.dup
+      end
+
+      def text_tokens_at(segment : Int32) : Int32
+        @text_tokens[segment]
+      end
+
+      def cache_text_at?(segment : Int32) : Bool
+        @cache_text[segment]
+      end
+    end
+
     record Geometry,
       segment_count : Int32,
       video_tokens : Int32,
@@ -230,11 +259,24 @@ module ML::Video
       workspace_geometries : Array(HyNomasHistoryAttentionWorkspace::Geometry),
       writer_workspace_geometries : Array(HyNomasHistoryAttentionWorkspace::Geometry),
       text_cache_policy : TextCachePolicy,
+      segment_text_profile : SegmentTextProfile,
       workspace_bytes : Int64,
       named_bytes : Int64 do
+      def segment_text_tokens : Array(Int32)
+        segment_text_profile.text_tokens
+      end
+
+      def segment_cache_text : Array(Bool)
+        segment_text_profile.cache_text
+      end
+
       def append_elements(segment : Int32) : Int32
         raise ArgumentError.new("Final or invalid chunk cannot append history") unless 0 <= segment < segment_count - 1
-        rows = text_cache_policy.once_per_scene? && segment > 0 ? video_tokens : query_rows
+        rows = video_tokens.to_i64 + if segment_text_profile.cache_text_at?(segment)
+                                       segment_text_profile.text_tokens_at(segment)
+                                     else
+                                       0_i64
+                                     end
         (rows.to_i64 * heads * head_dim).to_i32
       end
 
@@ -280,7 +322,9 @@ module ML::Video
                       valid_text_tokens : Int32, storage_text_tokens : Int32,
                       layers : Int32, heads : Int32, head_dim : Int32,
                       denoise_steps : Int32 = 4, *,
-                      text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Geometry
+                      text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
+                      segment_text_tokens : Array(Int32)? = nil,
+                      segment_cache_text : Array(Bool)? = nil) : Geometry
       unless (2..MAX_SEGMENTS).includes?(segment_count) &&
              video_tokens > 0 && valid_text_tokens > 0 &&
              storage_text_tokens >= valid_text_tokens &&
@@ -288,13 +332,33 @@ module ML::Video
         raise ArgumentError.new("Invalid Hy-Nomas continuation history geometry")
       end
 
+      profile = validated_segment_text_profile(segment_count, valid_text_tokens,
+        text_cache_policy, segment_text_tokens, segment_cache_text)
+
       query_rows_64 = video_tokens.to_i64 + valid_text_tokens
       storage_rows_64 = video_tokens.to_i64 + storage_text_tokens
-      max_history_rows_64 = if text_cache_policy.once_per_scene?
-                              (segment_count - 1).to_i64 * video_tokens + valid_text_tokens
-                            else
-                              (segment_count - 1).to_i64 * query_rows_64
-                            end
+      append_rows = Array(Int32).new(segment_count) do |segment|
+        rows = video_tokens.to_i64 + if profile.cache_text_at?(segment)
+                                       profile.text_tokens_at(segment)
+                                     else
+                                       0_i64
+                                     end
+        unless rows <= Int32::MAX
+          raise ArgumentError.new("Hy-Nomas continuation append rows exceed the native limit")
+        end
+        rows.to_i32
+      end
+      prefix_rows = Array(Int32).new(segment_count, 0_i32)
+      prefix = 0_i64
+      segment_count.times do |segment|
+        unless prefix <= Int32::MAX
+          raise ArgumentError.new("Hy-Nomas continuation history rows exceed the native limit")
+        end
+        prefix_rows[segment] = prefix.to_i32
+        prefix = checked_sum(prefix, append_rows[segment].to_i64,
+          "Hy-Nomas continuation history rows")
+      end
+      max_history_rows_64 = prefix_rows[segment_count - 1].to_i64
       unless query_rows_64 <= Int32::MAX && storage_rows_64 <= Int32::MAX &&
              max_history_rows_64 <= Int32::MAX
         raise ArgumentError.new("Hy-Nomas continuation history rows exceed the native limit")
@@ -325,27 +389,32 @@ module ML::Video
       writer_workspace_geometries = Array(HyNomasHistoryAttentionWorkspace::Geometry).new(segment_count - 1)
       workspace_bytes = 0_i64
       segment_count.times do |segment|
-        history_rows = if text_cache_policy.once_per_scene? && segment > 0
-                         segment.to_i64 * video_tokens + valid_text_tokens
-                       else
-                         segment.to_i64 * query_rows_64
-                       end
+        history_rows = prefix_rows[segment].to_i64
         unless history_rows <= Int32::MAX
           raise ArgumentError.new("Hy-Nomas continuation segment history exceeds the native limit")
         end
-        current_rows = text_cache_policy.once_per_scene? && segment > 0 ? video_tokens : query_rows
+        current_rows = append_rows[segment]
         workspace = HyNomasHistoryAttentionWorkspace.geometry(
           history_rows.to_i32, query_rows, heads, head_dim, current_rows: current_rows)
         workspace_geometries << workspace
         workspace_bytes = checked_sum(workspace_bytes, workspace.workspace_bytes,
           "Hy-Nomas continuation workspace bytes")
         if segment < segment_count - 1
-          # A cache writer still attends its current text transiently, even
-          # when that text is already persistent and only image rows append.
-          writer_workspace = current_rows == query_rows ? workspace : HyNomasHistoryAttentionWorkspace.geometry(
-            history_rows.to_i32, query_rows, heads, head_dim)
+          # The upstream cache writer attends the current prompt transiently
+          # even when persistent history already contains the same text.
+          writer_current_rows = video_tokens.to_i64 + profile.text_tokens_at(segment)
+          unless writer_current_rows <= Int32::MAX
+            raise ArgumentError.new("Hy-Nomas continuation writer rows exceed the native limit")
+          end
+          writer_workspace = if writer_current_rows == current_rows
+                               workspace
+                             else
+                               HyNomasHistoryAttentionWorkspace.geometry(
+                                 history_rows.to_i32, query_rows, heads, head_dim,
+                                 current_rows: writer_current_rows.to_i32)
+                             end
           writer_workspace_geometries << writer_workspace
-          if current_rows != query_rows
+          unless writer_workspace == workspace
             workspace_bytes = checked_sum(workspace_bytes, writer_workspace.workspace_bytes,
               "Hy-Nomas continuation writer workspace bytes")
           end
@@ -358,26 +427,66 @@ module ML::Video
         storage_text_tokens, denoise_steps, layers, heads, head_dim, query_rows, storage_rows,
         query_elements_64.to_i32, storage_elements_64.to_i32,
         max_history_rows, cache_elements_64.to_i32, cache_bytes,
-        workspace_geometries, writer_workspace_geometries, text_cache_policy,
+        workspace_geometries, writer_workspace_geometries, text_cache_policy, profile,
         workspace_bytes, named_bytes)
+    end
+
+    private def self.validated_segment_text_profile(segment_count : Int32,
+                                                    valid_text_tokens : Int32,
+                                                    text_cache_policy : TextCachePolicy,
+                                                    segment_text_tokens : Array(Int32)?,
+                                                    segment_cache_text : Array(Bool)?) : SegmentTextProfile
+      if segment_text_tokens.nil? != segment_cache_text.nil?
+        raise ArgumentError.new("Per-segment prompt rows and cache flags must be supplied together")
+      end
+      tokens = segment_text_tokens || Array(Int32).new(segment_count, valid_text_tokens)
+      cache_text = segment_cache_text || Array(Bool).new(segment_count) do |segment|
+        !text_cache_policy.once_per_scene? || segment == 0
+      end
+      unless tokens.size == segment_count && cache_text.size == segment_count &&
+             tokens.all? { |count| count > 0 && count <= valid_text_tokens } &&
+             tokens.max? == valid_text_tokens
+        raise ArgumentError.new("Invalid Hy-Nomas per-segment prompt token counts")
+      end
+      unless cache_text.first
+        raise ArgumentError.new("The first Hy-Nomas segment must cache its prompt text")
+      end
+
+      last_cached_text_tokens = tokens.first
+      (1...segment_count).each do |segment|
+        if cache_text[segment]
+          last_cached_text_tokens = tokens[segment]
+        elsif tokens[segment] != last_cached_text_tokens
+          raise ArgumentError.new("Uncached Hy-Nomas prompt rows must match the last cached prompt")
+        end
+      end
+      SegmentTextProfile.new(tokens, cache_text)
     end
 
     def self.named_bytes(segment_count : Int32, video_tokens : Int32,
                          valid_text_tokens : Int32, storage_text_tokens : Int32,
                          layers : Int32, heads : Int32, head_dim : Int32,
                          denoise_steps : Int32 = 4, *,
-                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Int64
+                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
+                         segment_text_tokens : Array(Int32)? = nil,
+                         segment_cache_text : Array(Bool)? = nil) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
-        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy).named_bytes
+        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
+        segment_text_tokens: segment_text_tokens,
+        segment_cache_text: segment_cache_text).named_bytes
     end
 
     def self.named_bytes(*, segment_count : Int32, video_tokens : Int32,
                          valid_text_tokens : Int32, storage_text_tokens : Int32,
                          layers : Int32, heads : Int32, head_dim : Int32,
                          denoise_steps : Int32 = 4,
-                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk) : Int64
+                         text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
+                         segment_text_tokens : Array(Int32)? = nil,
+                         segment_cache_text : Array(Bool)? = nil) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
-        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy).named_bytes
+        layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
+        segment_text_tokens: segment_text_tokens,
+        segment_cache_text: segment_cache_text).named_bytes
     end
 
     def initialize(*, segment_count : Int32, video_tokens : Int32,
@@ -385,11 +494,15 @@ module ML::Video
                    layers : Int32, heads : Int32, head_dim : Int32,
                    denoise_steps : Int32 = 4,
                    text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
+                   segment_text_tokens : Array(Int32)? = nil,
+                   segment_cache_text : Array(Bool)? = nil,
                    query : ML::MetalBuffer, key : ML::MetalBuffer,
                    value : ML::MetalBuffer, output : ML::MetalBuffer)
       @shape = self.class.geometry(segment_count, video_tokens,
         valid_text_tokens, storage_text_tokens, layers, heads, head_dim,
-        denoise_steps, text_cache_policy: text_cache_policy)
+        denoise_steps, text_cache_policy: text_cache_policy,
+        segment_text_tokens: segment_text_tokens,
+        segment_cache_text: segment_cache_text)
       @schedule = HyNomasContinuationHistorySchedule.new(segment_count, layers,
         denoise_steps)
       @query = query

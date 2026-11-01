@@ -626,6 +626,20 @@ $(BUILD_DIR)/hy_nomas_history_attention_probe: examples/hy_nomas_history_attenti
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
+.PHONY: hy_nomas_prompt_history_probe
+hy_nomas_prompt_history_probe: $(BUILD_DIR)/hy_nomas_prompt_history_probe
+
+$(BUILD_DIR)/hy_nomas_prompt_history_probe: examples/hy_nomas_prompt_history_probe.cr examples/support/hy_nomas_prompt_history_probe.cr examples/support/hy_nomas_continuation_history_probe.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -Dhy_nomas_history_probe -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+.PHONY: hy_nomas_prompt_refiner_probe
+hy_nomas_prompt_refiner_probe: $(BUILD_DIR)/hy_nomas_prompt_refiner_probe
+
+$(BUILD_DIR)/hy_nomas_prompt_refiner_probe: examples/hy_nomas_prompt_refiner_probe.cr examples/support/hy_nomas_prompt_refiner_probe.cr examples/support/hy_nomas_generation.cr examples/support/hy_nomas_probe_instrumentation.cr examples/support/qwen25_prefix_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
 hy_nomas_bf16_linear_probe: $(BUILD_DIR)/hy_nomas_bf16_linear_probe
 hy_nomas_bf16_patch_probe: $(BUILD_DIR)/hy_nomas_bf16_patch_probe
 hy_nomas_boundary_attention_probe: $(BUILD_DIR)/hy_nomas_boundary_attention_probe

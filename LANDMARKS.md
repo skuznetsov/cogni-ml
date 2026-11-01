@@ -6,6 +6,46 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-PROMPT-EDIT-2026-11-01] One changed B prompt preserves A and regenerates C with exact restart
+
+- Five fresh native BF16 DiT processes qualify an authenticated B prompt
+  replacement, with visible text lengths `[557,585,557]` and a new cached text
+  turn for B and original-prompt C. Restore post-A; invalidate all original
+  B/C history. All 552,960 A latent bytes and unused future noise remain exact.
+  Continuous and split/restarted B/C match bitwise at all eight Euler updates,
+  both segment slices and the full 829,440-value timeline. B and C both change
+  from the original control; the unedited full bank matches its prior control.
+- The prompt identity binds authenticated conditioning bytes, valid text rows
+  and following-turn policy to every post-B checkpoint. Post-A remains reusable.
+  Five real rejection cases fail before model setup; hostile tests reject a
+  coordinated forged after-B contract and descendant link. Release builds,
+  36 focused Crystal examples and 59 Python regression tests pass.
+- Native Qwen matches all 27 upstream BF16 states and its 1,280-token crop
+  bitwise. Real B585/C557 refiner text/vec outputs match pinned upstream MPS
+  bitwise at timesteps 1000/206.897. A tiny changing-text attention/history
+  fixture matches upstream at unchanged `atol=rtol=2e-5` (max error
+  `7.45058e-9`, cached K/V exact). These are scoped boundary checks, not full
+  upstream DiT/decoder or video parity.
+- All five DiT runs record zero instrumented encode allocations, readbacks
+  and preterminal waits, with one terminal drain each. Sampled peak 29.9163
+  GiB, minimum cache-aware headroom 17.0209 GiB, swap growth at most 0.82 MiB
+  under 32 GiB / 10% / 64 MiB / 900 s guards. Opaque MPS allocations and
+  between-sample spikes remain outside these counter/sample guarantees.
+- Matched 15-second original-left/edited-right videos use authenticated banks;
+  the prior original decode is reused only after full-bank bitwise equality.
+  First 100 pixel frames match exactly; A's final 20 pixel frames can change
+  through decoder overlap despite immutable A latents. Finite raw outputs,
+  360-frame/24 fps exports and current media hashes pass fresh revalidation.
+  User motion/instruction-following review remains open.
+- Same-lineage correlated adversary: ROBUST for the bounded native edit,
+  refiner and produced-pair integrity. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json` and
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/qualification-summary.json`.
+  Exact checkpoints remain default; UI, multiple/combined edits and edited
+  QBit execution remain open. Refresh on code/binary/input/noise/weights/
+  codec/geometry/backend/device change or local artifact loss. Local hashes
+  cannot recover artifacts. Commands: `docs/hy-nomas-generation-frontier.md`.
+
 ### [LM-HY-NOMAS-SEGMENT-EDIT-VIDEO-2026-11-01] Matched original/edited B/C videos preserve the unaffected prefix
 
 - Two serial native decoder-only runs consume the authenticated original

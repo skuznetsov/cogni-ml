@@ -1,5 +1,140 @@
 # Hy-Nomas first native video frontier
 
+## Segment prompt edit frontier (2026-11-01)
+
+Design-sealed scope: replace one noninitial five-second segment's authenticated
+Qwen conditioning, preserve the parent's exact latent/KV boundary, and regenerate
+all descendants. The following segment returns to its original prompt as a new
+upstream text turn. Initial noise, target RoPE, cache epsilon, BF16 model weights,
+F32 arithmetic and `atol=rtol=2e-5` are unchanged. Noise and prompt edits are
+separate interventions. Camera controls and action-tail masks remain rejected.
+
+The pinned upstream selects conditioning by prompt index and caches each new
+turn's text once. All B video/text KV is invalid after editing B; restore after
+A instead of retaining original B. Different visible text lengths must be
+admitted before allocation, with correct per-turn KV extents and one shared
+serial workspace. GPU source/output copies precede consumers on the existing
+chain. No encode-time buffer allocation, readback or additional wait is allowed.
+
+CAUTION: checkpoint/conditioning contracts change. A future edit must preserve
+the post-A contract but bind every post-B descendant to the actual conditioning
+bytes and text-turn schedule. Old executable-bound checkpoints remain rejected.
+Rollback is the untouched original branch/default path at `2f2091c4`.
+
+DoD: focused Crystal contract/history specs and Python hostile receipt tests;
+tiny same-input upstream attention/cache checks at the standing tolerances;
+guarded native original/B-edited controls and split restart B/C, with exact A
+prefix and exact continuous-versus-restarted steps/timeline. Use a fresh common
+post-A state from the new binary. Preserve the 10% cache-aware memory reserve,
+process cap, swap/deadline stops and one terminal drain per process. Reject stale
+post-B checkpoints, edited prompt metadata without its Qwen crop, wrong masks,
+noise/RoPE changes, nonfinite tensors and vacuous B/C comparisons. Full upstream
+video parity and visual quality require their own evidence.
+
+The real three-segment qualification passes with original/edited visible text
+lengths 557/585. The edited schedule is `[557,585,557]` with a new text cache
+turn for each segment; the original schedule remains `[557,557,557]` with only
+the initial text cached. Restore after A, replace only B's conditioning, then
+regenerate B and C with the original initial noise. All eight B/C Euler updates,
+both segment slices and the full 829,440-value timeline match bitwise between
+continuous and split/restarted edited runs. Every A latent byte (552,960 bytes)
+and the unused future suffix remain unchanged. Both B and C differ from their
+original controls. The fresh original full bank also matches the previously
+qualified original bank bitwise.
+
+The prompt identity authenticates the conditioned manifest/payload, prompt
+digest, actual valid text length and following-turn policy. Post-A remains
+reusable; post-B binds that identity and its base boundary. Five real negative
+checks reject stale original/edited branches, another authenticated prompt,
+old executable state, combined noise/prompt edits and prefix regeneration
+before Metal/model setup. The CPU comparator reconstructs the base after-B
+contract from authenticated after-A state; a coordinated forged after-B digest
+and descendant link is rejected by a hostile test. Eleven new Python tests,
+59 total Python regression tests and 36 focused Crystal examples pass.
+
+The new prompt's native Qwen prefix matches all 27 upstream BF16 states and
+the 1,280-token conditioning crop bitwise (4,587,520 crop values). A tiny
+native GPU fixture with changing text lengths and poisoned padding also matches
+the pinned upstream causal attention/cache implementation at the unchanged
+`2e-5` tolerances; maximum error is `7.45058e-9`, and cached K/V match exactly.
+The real refiner additionally matches pinned upstream MPS bitwise for both
+585-token B and 557-token original C, at timesteps 1000 and 206.897. All valid
+`projected_text` rows and `vec` match with zero differing F32 bits. Native
+storage retains 1,280 slots; padding-query outputs are not consumed or claimed
+equal. Upstream full/compact valid-prefix controls also match bitwise. Each of
+the four native refiner processes records zero encode allocations/readbacks
+and one terminal wait. These establish scoped Qwen/refiner/history checks,
+not full upstream DiT/decoder neural or video parity.
+
+All five DiT intervals record zero instrumented encode allocations, readbacks
+and preterminal waits, with one terminal drain each. The maximum sampled
+footprint is 29.9163 GiB, minimum cache-aware headroom 17.0209 GiB and maximum
+sampled swap growth about 0.82 MiB. Guards retain a 32 GiB process cap, 10%
+reserve, 64 MiB swap-growth stop and 900 s deadline. Setup authentication and
+terminal checkpoint/media I/O remain on the CPU; opaque MPS allocations and
+between-sample spikes remain outside the counter/sample guarantees. The
+ordered functional runs support no speedup conclusion.
+
+Matched 15-second decoding uses the edited restart C bank and a previous
+original raw decode only after proving its entire consumed latent bank equals
+the fresh original bitwise. The first 100 pixel frames match bitwise. The
+overlapping final 20 A pixel frames can change despite exact A latents; B and
+C differ nonvacuously. Raw outputs contain 637,009,920 finite F32 bytes each.
+Both 512x288/24 fps originals and the synchronized 1024x288 comparison contain
+360 frames and last 15 seconds. Left is original; right is changed B plus
+regenerated C. Lossless previews are sampled from the authenticated raw files.
+This does not yet establish perceptual quality or instruction-following.
+
+Artifact root:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x`.
+`qualification-summary.json` freshly revalidates the native matrix, consumed
+decoder banks, raw prefix and media hashes instead of trusting the export
+adapter's pair-report boolean. The canonical scoped evidence index is
+[the prompt-edit packet](../.landmark/evidence/2026-11-01-hy-nomas-prompt-edit.json).
+The original branch/default remains intact. This slice admits one prompt edit,
+exact checkpoints, existing geometry and no action-tail/camera controls. UI
+integration, arbitrary prompt timelines, combined edits, new edited QBit
+execution and full upstream neural/video parity remain open. Refresh on source,
+binary, prompt/input/noise, weights, backend/device or geometry change, or
+modification/loss of the local artifacts.
+
+Native usage: prepare a separate authenticated generation-v2 conditioning
+bundle for B, then restore the exact post-A state. Keep the original sequence
+manifest/noise and pass all three prompt flags:
+
+```sh
+"$BINARY" --inputs "$SEQUENCE_INPUTS" --inputs-sha "$SEQUENCE_SHA" \
+  --output-dir "$FRESH_EMPTY_SSD_DIR" --segments 3 \
+  --start-segment 1 --stop-after-segments 2 \
+  --state "$POST_A_STATE" --state-sha "$POST_A_SHA" \
+  --prompt-edit-segment 1 --prompt-inputs "$B_INPUTS" \
+  --prompt-inputs-sha "$B_INPUTS_SHA" \
+  --state-format exact --cache-roundtrip exact --budget-mib 32768
+```
+
+Run this command under `examples/support/wan_memory_guard.py` with file-cache
+accounting, 10% runtime floor, 32768 MiB footprint cap, 64 MiB swap-growth
+stop and 900 s deadline. This is not an unguarded launch recipe. For C, keep
+the same prompt flags, use interval `[2,3)` and restore the new edited post-B
+state. C's original conditioning is selected automatically as a new text turn.
+For a single continuous B/C process use `[1,3)`. All output directories must
+already exist and be empty on the external SSD. `real/matrix-index.json` and
+the linked command receipts record the exact executed qualification commands.
+
+Focused refresh commands (use a fresh report path):
+
+```sh
+crystal spec spec/hy_nomas_segment_prompt_edit_spec.cr \
+  spec/hy_nomas_segment_edit_spec.cr spec/hy_nomas_prompt_history_spec.cr \
+  spec/hy_nomas_continuation_history_spec.cr \
+  spec/hy_nomas_resume_bundle_spec.cr \
+  spec/hy_nomas_sequence_admission_spec.cr -Dcpu_only
+python3 -B -m unittest spec.hy_nomas_prompt_edit_resume_reference_test -v
+python3 -B spec/support/hy_nomas_prompt_edit_resume_reference.py \
+  --index /opt/mldata_ssd/cogni-ml/hy-nomas-prompt-edit-20261101.svygsr2x/real/matrix-index.json \
+  --output "$RUN_ROOT/fresh-prompt-edit-report.json"
+```
+
 ## Matched segment new-take videos (2026-11-01)
 
 Status: decoder-pair integrity and bounded execution pass. The original B/C
