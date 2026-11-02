@@ -3,9 +3,11 @@
 ## Reference-image frontier (2026-11-01)
 
 Status: the native DCAE-V encoder is numerically qualified at the fixed
-512x288x120 reference geometry. Image-conditioned continuation is implemented
-behind an explicit experimental opt-in; its cache/decoder/video parity and
-character/style quality are not yet qualified. It is not enabled by default.
+512x288x120 reference geometry. The saved clean latent also decodes exactly
+against the adapted source MPS control described below. Image-conditioned
+continuation is implemented behind an explicit experimental opt-in; BF16 DiT
+cache parity and character/style quality are not yet qualified. It is not
+enabled by default.
 The rejected text-only RoleWright take does not qualify character or style
 preservation. Do not generate another text-only take as a substitute for this
 capability.
@@ -160,12 +162,117 @@ Local weights, fixtures, build products and logs remain under
 The annotated supplied image is a numerical fixture, not an approved final
 RoleWright scene. No full video was generated in this slice.
 
-Remaining gates are clean-reference PixelUMM reconstruction, noisy-cache
-inputs plus layer-specific K/V against upstream, then a short controlled
-continuation from an approved single scene. Partial final tiles after a full
+The clean-reference PixelUMM gate is now qualified within the adapted source
+MPS scope below. Remaining gates are noisy-cache inputs plus layer-specific
+K/V against upstream, then a short controlled continuation from a single
+scene. Partial final tiles after a full
 tile and other production geometries are not qualified. Refresh encoder
 evidence on source, binary, weights, input, geometry, cache policy, backend,
 compiler/runtime or device change; local hashes cannot recover lost artifacts.
+
+### Reference handoff qualification slice
+
+This diagnostic slice reuses the authenticated, byte-identical saved encoder
+latent for diagnostics. It must not synthesize a denoising receipt or represent
+that saved fixture as an independently executed live encoder-to-DiT handoff.
+First decode the clean `[1,32,30,9,16]` BF16 tensor through the native PixelUMM
+and the source MPS control on identical decoder noise. Then inspect the noisy
+T0 writer at the actual DiT projection/RoPE/cache boundaries before admitting
+a two-segment run (fixed T0 plus five generated seconds in T1).
+
+CAUTION: the existing native history stores F32 K/V, whereas the upstream
+cache boundary is BF16. A native F32 continuation cannot establish upstream
+cache parity merely because the encoder is exact. Any cache precision change
+must be opt-in for reference initialization and must preserve the default
+text-only/checkpoint path. The strongest failure is a numerically plausible
+T0 reconstruction followed by a different T1 because of cache rounding or
+incorrect writer scheduling. The guard is a same-input per-layer comparison,
+plus negative schedule tests and unchanged 2e-5 absolute/relative tolerances.
+
+Diagnostic DoD: authenticated saved-latent admission and rejection tests; a clean-latent
+native/source-MPS decoder comparison including raw and display outputs;
+same-input T0 cache-writer input and block-0 boundary captures that report
+numerical failure without treating the F32 control as BF16 parity; zero instrumented
+allocations/readbacks/preterminal waits inside the admitted native chains;
+guard logs meeting the file-cache-aware 10% floor, process cap and swap-growth
+limit. This diagnostic DoD is distinct from the continuation acceptance gate.
+Only after the BF16 numerical gates pass may a short controlled scene probe
+test motion and style. Numeric parity does not establish character identity,
+script adherence or the quality of the complete RoleWright advertisement.
+Rollback remains omission of the experimental reference flags. All diagnostic
+artifacts and builds stay on the external scratch volume.
+
+Observed clean-latent result: native and pinned source-MPS raw pixels and
+display pixels are byte-identical, with zero error over 53,084,160 values in
+each `[1,3,120,288,512]` output. The first 20 frames before overlap blending
+are exact as well. This control uses the existing gathered-spatial-tile
+QK/softmax/PV adapter with F32 accumulation; it does not qualify unmodified
+eager flex-attention. No DiT, solver, or fresh DCAE encode ran in this decoder
+comparison. Native time was 63.515 s wall / 63.466 s GPU, with zero tracked
+encode allocations/readbacks/preterminal waits and one terminal drain.
+Sampled process-tree peaks were 17.029 GiB native and 5.678 GiB source; minimum
+file-cache-aware headroom was 24.260 / 23.024 GiB and swap growth was zero.
+
+The native T0 input exporter preserves the actual 529-token valid prefix in
+the 1280-row text-storage geometry. It captured timeline/noise/patch/refiner
+outputs after one terminal drain with zero tracked encode allocations,
+readbacks or preterminal waits. On the exact exported BF16 latent and epsilon,
+the upstream cache-noise formula also produced byte-identical widened F32
+values for all 138,240 latent elements. This isolates noise arithmetic; it
+does not establish stock RNG-stream parity or patch/refiner parity. A separate
+source block-0 probe retains BF16 parameters and autocast boundaries and stops
+at K/V append, before attention. A widened F32 source run is a localization
+control, not a substitute for the BF16 gate.
+
+On identical exported preblock inputs, all 14 native projection/QK-normalization/
+RoPE/prospective-cache captures and all eight pre-QKV captures match the widened
+F32 source control exactly. For the F32 cache diagnostic, comparison is against
+the unrounded source constituents before its BF16 store. The native probe
+captures prospective joint K/V; it does not execute a history append. This
+does not qualify the complete upstream T0 patch/refiner path or actual cache
+storage.
+
+The original BF16 source comparison fails at unchanged `atol=rtol=2e-5`.
+All 14 main boundaries and all eight pre-QKV boundaries fail. The first captured
+difference is image modulation SiLU: 777 of 2,048 values exceed tolerance,
+maximum absolute error 0.0003126636. Source modulation SiLU/linear outputs are
+BF16, but its LayerNorm and modulated QKV inputs are F32 under MPS autocast.
+The native `BF16BoundaryControl` only rounds selected later boundaries and
+does not reproduce this mixed precision path. The largest main-capture error
+is 0.5 at prospective V; that is a failed gate, not an accepted tolerance.
+
+A separate small MPS probe isolates the earliest difference on the same
+2,048-element vector. F32 SiLU matches native exactly. Rounding only its output
+to BF16 still leaves 410 values outside tolerance. Rounding both the input
+and output to BF16 matches the source BF16 SiLU exactly. Thus the first
+discrepancy is explained by the missing dtype boundaries on this fixture,
+not by a different SiLU formula. This is localization, not a production fix
+or proof of the remaining modulation/projection/reduction boundaries.
+
+The next falsifier is an opt-in native reference control reproducing those
+input/output SiLU boundaries, followed by modulation linear, LayerNorm input,
+QKV, QK RMS, RoPE and the BF16 cache store on identical inputs. Do not blanket
+cast the block to BF16: the observed source path is mixed. Keep the text-only
+default unchanged and retain the experimental reference gate until the
+BF16 comparison passes. No generated T1 or full video ran in this slice.
+
+Focused CPU checks passed: `make spec_hy_nomas_reference_handoff` (53 Crystal
+examples) and `python3 -B -m unittest spec.hy_nomas_reference_decode_test
+spec.hy_nomas_reference_cache_test spec.hy_nomas_reference_block0_compare_test`
+(43 Python tests). The comparison tools reject wrong parent artifacts, source
+or dtype dependency maps, mismatched shape/dtype/accounting, symlink leaves
+and a companion artifact differing from the explicit CLI argument. Correlated
+mini-Quadrumvirate review is ROBUST for that bounded diagnostic scope; it is
+not independent execution evidence or BF16 continuation qualification.
+
+Canonical evidence: `.landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json`.
+Commands, guarded logs, binaries, captures and the SiLU discriminator remain
+under `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1`.
+The native receipt's reference/implementation revision fields describe the
+upstream semantic contract; the evidence packet separately binds the actual
+local parent revision, source fingerprints and executed binaries. Refresh on
+source, input, checkpoint, geometry, precision/backend/runtime/device changes
+or artifact loss. Digests do not restore lost files.
 
 ### Preparing and admitting an image
 

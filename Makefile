@@ -624,6 +624,26 @@ $(BUILD_DIR)/pixelumm_generation_probe: examples/pixelumm_generation_probe.cr ex
 dcae_v_encoder_probe: $(BUILD_DIR)/dcae_v_encoder_probe
 hy_nomas_reference_timeline_probe: $(BUILD_DIR)/hy_nomas_reference_timeline_probe
 
+.PHONY: hy_nomas_reference_decode_probe hy_nomas_reference_cache_probe hy_nomas_reference_block0_probe spec_hy_nomas_reference_handoff
+hy_nomas_reference_decode_probe: $(BUILD_DIR)/hy_nomas_reference_decode_probe
+hy_nomas_reference_cache_probe: $(BUILD_DIR)/hy_nomas_reference_cache_probe
+hy_nomas_reference_block0_probe: $(BUILD_DIR)/hy_nomas_reference_block0_probe
+
+$(BUILD_DIR)/hy_nomas_reference_decode_probe: examples/hy_nomas_reference_decode_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+$(BUILD_DIR)/hy_nomas_reference_cache_probe: examples/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+$(BUILD_DIR)/hy_nomas_reference_block0_probe: examples/hy_nomas_reference_block0_probe.cr examples/support/hy_nomas_reference_block0_probe.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(WAN_T5_MPS_OBJ)) $(abspath $(WAN_T5_RMS_MPS_OBJ)) $(abspath $(HY_NOMAS_MPS_OBJ)) $(abspath $(HY_NOMAS_COMPACT_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+spec_hy_nomas_reference_handoff:
+	$(CRYSTAL) spec -D cpu_only spec/hy_nomas_reference_latent_spec.cr spec/hy_nomas_reference_cache_probe_spec.cr spec/hy_nomas_reference_block0_probe_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr $(ARGS)
+
 $(BUILD_DIR)/dcae_v_encoder_probe: examples/dcae_v_encoder_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/dcae_v_encoder.cr src/ml/video/kernels/dcae_v_encoder.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(DCAE_V_MPS_OBJ) $(DCAE_V_NORM_MPS_OBJ)
 	$(CRYSTAL) build examples/dcae_v_encoder_probe.cr -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"

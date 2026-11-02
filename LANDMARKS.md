@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01] Exact saved-latent decoder; first BF16 block-0 divergence localized
+
+- Native PixelUMM and the pinned source MPS control decode the authenticated
+  DCAE latent to byte-identical raw and display pixels: 53,084,160 values
+  each, including the unblended first 20 frames. The source uses the existing
+  gathered-tile QK/softmax/PV F32 adapter, not unmodified eager flex-attention.
+  Native wall/GPU time 63.515/63.466 s; sampled peak 17.029 GiB. This is a
+  saved-latent diagnostic, not a fresh encoder handoff or video speed claim.
+- Exported T0 noise arithmetic matches upstream exactly on the same epsilon
+  (138,240 values). All 14 block-0 main and eight pre-QKV boundaries are exact
+  against widened F32 source controls. F32 cache comparisons use pre-store
+  constituents; native K/V are prospective, with no history append. This does
+  not qualify stock RNG or complete T0 patch/refiner preprocessing.
+- The actual BF16 comparison fails all 14+8 boundaries at unchanged 2e-5
+  tolerances. Earliest capture: modulation SiLU, 777/2048 outside tolerance,
+  max 0.0003126636. On the tested 2,048-element vector, a same-input GPU
+  discriminator shows both input and output BF16 rounding are needed for an
+  exact SiLU match; output-only
+  rounding still fails. No production arithmetic was changed. Source norms
+  and QKV inputs are F32 under autocast, so blanket BF16 is not justified.
+- Fresh guarded native/source runs retain the file-cache-aware 10% floor,
+  process caps and zero swap growth. Native chains report zero tracked
+  allocations/readbacks/preterminal waits and one terminal drain. Opaque MPS
+  resources and between-sample peaks remain outside named counters. Focused
+  checks pass: 53 Crystal examples, 43 Python tests, fresh native builds and
+  strict comparison admission. Correlated diagnostic Adversary: ROBUST.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json`; artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1`.
+  Next falsifier: opt-in BF16 SiLU input/output boundaries, then modulation,
+  normalization, QKV, QK RMS, RoPE and actual cache store against source.
+  Keep `--allow-unqualified-reference`; no T1/full video or RoleWright
+  character/style claim. Prepared clean scene remains unencoded. Refresh on
+  source/binary/input/weights/geometry/precision/cache/backend/runtime/device
+  changes or artifact loss; hashes cannot recover local-only evidence.
+
 ### [LM-HY-NOMAS-REFERENCE-ENCODER-2026-11-01] Native image initialization with qualified DCAE-V boundaries
 
 - Downloaded the pinned 4,277,389,995-byte original DCAE-V checkpoint and
@@ -36,8 +72,9 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
   `.landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json`; local
   artifacts: `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo`.
-  Keep `--allow-unqualified-reference` required. Next falsifiers: clean T0
-  PixelUMM reconstruction, actual per-layer DiT cache parity, then a short
+  Keep `--allow-unqualified-reference` required. Follow
+  `LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01` for the now-qualified saved-latent
+  decoder scope and failed BF16 cache gate, then a short
   controlled continuation from an approved single scene. Do not substitute
   another text-only RoleWright take. Character/style quality, display-only
   T0 trim, full+partial tiles, other geometries and combined edit/Cinematic
