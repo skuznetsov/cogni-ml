@@ -16,6 +16,8 @@ reference_image_inputs_path = ""
 reference_image_inputs_sha = ""
 reference_encoder_path = ""
 reference_encoder_sha = ""
+reference_action_inputs_path = ""
+reference_action_inputs_sha = ""
 allow_unqualified_reference = false
 OptionParser.parse do |p|
   p.banner = "Experimental GPU Hy-Nomas continuation: two through six linked 5-second segments, 512x288 at 24 fps"
@@ -34,6 +36,8 @@ OptionParser.parse do |p|
   p.on("--reference-image-inputs-sha SHA", "Trusted reference image manifest SHA-256") { |v| reference_image_inputs_sha = v }
   p.on("--reference-encoder PATH", "Experimental native BF16 DCAE encoder safetensors") { |v| reference_encoder_path = v }
   p.on("--reference-encoder-sha SHA", "Trusted native DCAE encoder SHA-256") { |v| reference_encoder_sha = v }
+  p.on("--reference-action-inputs PATH", "Separate authenticated T1 action conditioning; requires two-segment reference initialization") { |v| reference_action_inputs_path = v }
+  p.on("--reference-action-inputs-sha SHA", "Trusted T1 action conditioning manifest SHA-256") { |v| reference_action_inputs_sha = v }
   p.on("--allow-unqualified-reference", "Explicitly opt in to experimental image-conditioned continuation") { allow_unqualified_reference = true }
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
@@ -50,6 +54,13 @@ reference_requested = HyNomasReferenceEncoder.validate_cli!(
   allow_unqualified: allow_unqualified_reference, plan_only: plan_only,
   cinematic_requested: !cinematic_path.empty? || !cinematic_sha.empty?,
   legacy_text: !text_cache_policy.once_per_scene?)
+unless reference_action_inputs_path.empty? == reference_action_inputs_sha.empty?
+  raise ArgumentError.new("reference action requires both --reference-action-inputs and --reference-action-inputs-sha")
+end
+reference_action_requested = !reference_action_inputs_path.empty?
+if reference_action_requested && (!reference_requested || segments != 2)
+  raise ArgumentError.new("reference action requires exactly two segments and reference image initialization")
+end
 reference_history_plan = reference_requested ? HyNomasReferenceEncoder::ReferenceHistoryPlan.for(segments) : nil
 reference_inputs = nil.as(ML::Video::HyNomasReferenceImage::Inputs?)
 reference_session = nil.as(HyNomasReferenceEncoder::Session?)
@@ -62,14 +73,30 @@ inputs = HyNomasGeneration::TimelineInputs.new(File.realpath(input_path), input_
 inputs.verify_payload!
 inputs.base.file.verify_payload!
 HyNomasSequence.validate_shared_scene_prompt!(inputs.base.prompt)
+reference_action_inputs = nil.as(HyNomasGeneration::Inputs?)
+reference_action = nil.as(ML::Video::HyNomasReferenceAction?)
+if reference_action_requested
+  action_inputs = HyNomasGeneration::Inputs.new(File.realpath(reference_action_inputs_path), reference_action_inputs_sha,
+    conditioned: true)
+  action_inputs.file.verify_payload!
+  reference_action_inputs = action_inputs
+  reference_action = ML::Video::HyNomasReferenceAction.new(run_segments: segments,
+    conditioning_manifest_sha256: action_inputs.file.sha256,
+    conditioning_payload_sha256: action_inputs.file.document["payload_sha256"].as_s,
+    prompt_sha256: Digest::SHA256.hexdigest(action_inputs.prompt),
+    valid_text_tokens: action_inputs.valid_text_tokens)
+end
 cinematic = HyNomasCinematic.load!(cinematic_path, cinematic_sha,
   bf16: true, camera_conditioning: false, action_conditioning: false)
 weight_identity = HyNomasSequence.weight_identity(cinematic)
 admission = HyNomasGeneration.authenticate_bf16_index(cinematic: cinematic)
 reference_latent_bytes = reference_requested ? HyNomasSequence::REFERENCE_LATENT_BYTES : 0_i64
+HyNomasSequence.validate_reference_action!(reference_action, reference_action_inputs,
+  segments: segments, reference_latent_bytes: reference_latent_bytes,
+  text_cache_policy: text_cache_policy, cinematic: cinematic)
 dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, text_cache_policy,
-  reference_latent_bytes: reference_latent_bytes)
-dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base)
+  reference_latent_bytes: reference_latent_bytes, reference_action: reference_action)
+dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base, reference_action: reference_action)
 raise ArgumentError.new("sequence peak named buffers exceed budget") unless dit_peak <= budget
 latent_frames = segments * 30
 pixel_frames = latent_frames * 4
@@ -86,7 +113,8 @@ reference_encoder_peak_named_bytes = reference_requested ? HyNomasReferenceEncod
 emit_memory_plan = -> do
   HyNomasGeneration.emit("sequence_memory_plan", segments: segments, steps_per_segment: 4,
     dit_peak_named_bytes: dit_peak, dit_steady_named_bytes: dit_steady,
-    history_named_bytes: HyNomasSequence.history_bytes(inputs.base, segments, text_cache_policy),
+    history_named_bytes: HyNomasSequence.history_bytes(inputs.base, segments, text_cache_policy,
+      reference_action: reference_action),
     decoder_named_bytes: metadata.try(&.named_bytes), decoder_peak_named_bytes: decoder_peak,
     frames: pixel_frames, named_budget_bytes: budget,
     cache_precision: "F32 native post-RoPE K/V; no additional BF16 rounding",
@@ -95,6 +123,10 @@ emit_memory_plan = -> do
     cinematic_lineage: weight_identity[:cinematic_lineage],
     cinematic_lineage_sha256: weight_identity[:cinematic_lineage_sha256],
     text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
+    text_conditioning_mode: reference_action ? "reference_caption_then_action" : "shared_scene",
+    reference_action: reference_action.try(&.identity),
+    segment_text_tokens: reference_action.try(&.text_tokens(inputs.base.valid_text_tokens)),
+    segment_cache_text: reference_action.try(&.cache_text),
     reference_initialization: reference_requested,
     reference_manifest: reference_inputs.try(&.manifest_path),
     reference_manifest_sha256: reference_inputs.try(&.manifest_sha256),
@@ -178,7 +210,8 @@ begin
   setup = Time.monotonic
   reference_latent = reference_session.try(&.latent_for_dit)
   dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission,
-    text_cache_policy, cinematic: cinematic, reference_latent: reference_latent)
+    text_cache_policy, cinematic: cinematic, reference_latent: reference_latent,
+    reference_action: reference_action, reference_action_inputs: reference_action_inputs)
   raise "sequence preflight/allocation admission disagree" unless dit.named_bytes == dit_steady
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -263,7 +296,11 @@ begin
              inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              prompt: inputs.base.prompt, qwen_valid_tokens: inputs.base.valid_text_tokens,
              qwen_input: "authenticated saved upstream state26 crop; native live text encoding excluded",
-             conditioning: "one shared scene-level prompt; tagged action tails and per-segment prompts rejected",
+             conditioning: reference_action ? "caption-only reference T0 then separately authenticated T1 action text; tagged action tails rejected" : "one shared scene-level prompt; tagged action tails and per-segment prompts rejected",
+             text_conditioning_mode: reference_action ? "reference_caption_then_action" : "shared_scene",
+             reference_action: reference_action.try(&.identity),
+             segment_text_tokens: reference_action.try(&.text_tokens(inputs.base.valid_text_tokens)),
+             segment_cache_text: reference_action.try(&.cache_text),
              segments: segments, frames: dit_only ? 0 : pixel_frames, clean_latent_frames: latent_frames,
              reference_initialization: reference_requested,
              reference_history: reference_requested ? "T0 is a technical DCAE image-reference initialization with one cache writer and no denoising; generated segments start at T1" : nil,
@@ -308,7 +345,7 @@ begin
                             separate_noisy_forward: true,
                             denoise_forwards: reference_requested ? 0 : 4,
                             writer_forwards: 1},
-             history: text_cache_policy.once_per_scene? ? "all prior chunk video rows plus the first chunk's scene text, layer-specific, no truncation" : "all prior chunk video/text rows, layer-specific, no truncation",
+             history: reference_action ? "T0 video and caption text history plus fresh T1 action text; layer-specific, no truncation" : (text_cache_policy.once_per_scene? ? "all prior chunk video rows plus the first chunk's scene text, layer-specific, no truncation" : "all prior chunk video/text rows, layer-specific, no truncation"),
              noise_scope: "authenticated MPS-generated fixed banks; stock upstream CPU RNG value parity is false",
              pixelumm: {steps: 1, window_latents: 10, overlap_latents: 5,
                         global_windows: metadata.try(&.config.window_count)},

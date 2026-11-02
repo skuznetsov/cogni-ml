@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-ACTION-2026-11-02] Separate caption and action conditioning; animation remains incomplete
+
+- User playback and root inspection of 25 ordered frames reject the first
+  reference-conditioned RoleWright output as effectively static. Nonzero
+  pixel/latent differences are not evidence of the requested acting.
+- Upstream `a31c0fe0` initializes T0 with the image caption, then supplies a
+  separate action turn. The new opt-in two-segment native path authenticates
+  both conditions, retains T0 history and includes fresh T1 text K/V. It
+  prepares the second refiner and GPU buffers before encoding. CPU checks:
+  87 focused Crystal examples, 22 edit/checkpoint regressions, six Python
+  admission tests and four compiled CLI negatives pass; build/plan pass.
+  Correlated scoped Adversary: ROBUST for the fixed contract and admission,
+  not full animation or numerical parity.
+- The guarded native take preserves the old action state, seven non-Qwen
+  tensors and clean T0. It adds only a late Resume gesture; Alex stays almost
+  still. Request 517.88 s, sampled peak 25.463 GiB, minimum cache-aware headroom
+  20.625 GiB, zero swap growth. Tracked encode allocations/readbacks and
+  preterminal waits remain zero, with one terminal drain per model phase.
+- A same-input full source BF16 DiT MPS adaptation at `911cea64` / Torch 2.8.0
+  completes five forwards. T0 is exact; T1 fails unchanged `atol=rtol=2e-5`
+  (121,423/138,240 mismatches, max 1.31640625, RMS 0.03925890). Native full
+  DiT intermediates/history are F32. Earlier Torch 2.6 block probes do not
+  qualify this runtime. Decoding source latents through the common native
+  PixelUMM/noise/RoPE also leaves Alex almost still. This does not isolate
+  the remaining cause or qualify stock Flash3/CUDA upstream.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-reference-action.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-reference-action-20261102.pruxm9c2`.
+  Next: identical-input T0 writer/history and first-T1 layer comparisons at
+  BF16 boundaries. Keep `--allow-unqualified-reference`; omit the new action
+  arguments for the old shared-text control. No complete acting/speed/parity
+  claim. Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss. Guards remain a
+  cache-aware 10% floor, 25.5 GiB process cap and 64 MiB swap-growth limit;
+  samples do not bound between-poll peaks or opaque MPS storage.
+
 ### [LM-HY-NOMAS-REFERENCE-ATTENTION-2026-11-02] Physical BF16 history attention matches captured upstream branch
 
 - The opt-in `reference-bf16-attention` block-0 probe consumes physical

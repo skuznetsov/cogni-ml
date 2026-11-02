@@ -4,6 +4,7 @@ require "../../src/ml/video/hy_nomas_continuation_history"
 require "../../src/ml/video/hy_nomas_timeline_ops"
 require "../../src/ml/video/hy_nomas_resume_bundle"
 require "../../src/ml/video/hy_nomas_segment_edit"
+require "../../src/ml/video/hy_nomas_reference_action"
 require "./hy_nomas_cache_qbit_checkpoint"
 
 # Opt-in finite continuation. The first-segment entry point remains separate;
@@ -99,17 +100,58 @@ module HyNomasSequence
   end
 
   def text_tokens(inputs : HyNomasGeneration::Inputs, segments : Int32,
-                  prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Array(Int32)
-    prompt_edit.try(&.text_tokens(inputs.valid_text_tokens)) || Array.new(validate_segments!(segments), inputs.valid_text_tokens)
+                  prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil, *,
+                  reference_action : ML::Video::HyNomasReferenceAction? = nil) : Array(Int32)
+    validate_text_condition_pair!(prompt_edit, reference_action)
+    if action = reference_action
+      validate_reference_action_segments!(action, segments)
+      action.text_tokens(inputs.valid_text_tokens)
+    else
+      prompt_edit.try(&.text_tokens(inputs.valid_text_tokens)) || Array.new(validate_segments!(segments), inputs.valid_text_tokens)
+    end
   end
 
-  def cache_text(segments : Int32, prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Array(Bool)
-    prompt_edit.try(&.cache_text) || Array.new(validate_segments!(segments)) { |segment| segment == 0 }
+  def cache_text(segments : Int32, prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil, *,
+                 reference_action : ML::Video::HyNomasReferenceAction? = nil) : Array(Bool)
+    validate_text_condition_pair!(prompt_edit, reference_action)
+    if action = reference_action
+      validate_reference_action_segments!(action, segments)
+      action.cache_text
+    else
+      prompt_edit.try(&.cache_text) || Array.new(validate_segments!(segments)) { |segment| segment == 0 }
+    end
   end
 
   def query_text_tokens(inputs : HyNomasGeneration::Inputs,
-                        prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Int32
-    Math.max(inputs.valid_text_tokens, prompt_edit.try(&.valid_text_tokens) || inputs.valid_text_tokens)
+                        prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil, *,
+                        reference_action : ML::Video::HyNomasReferenceAction? = nil) : Int32
+    validate_text_condition_pair!(prompt_edit, reference_action)
+    if action = reference_action
+      action.query_text_tokens(inputs.valid_text_tokens)
+    else
+      Math.max(inputs.valid_text_tokens, prompt_edit.try(&.valid_text_tokens) || inputs.valid_text_tokens)
+    end
+  end
+
+  private def validate_text_condition_pair!(prompt_edit : ML::Video::HyNomasSegmentPromptEdit?,
+                                            reference_action : ML::Video::HyNomasReferenceAction?) : Nil
+    if prompt_edit && reference_action
+      raise ArgumentError.new("Reference actions cannot be combined with segment prompt edits")
+    end
+  end
+
+  private def validate_reference_action_segments!(action : ML::Video::HyNomasReferenceAction,
+                                                  segments : Int32) : Nil
+    unless segments == 2 && action.run_segments == segments
+      raise ArgumentError.new("Reference action requires exactly two segments")
+    end
+  end
+
+  def reference_action_bytes(action : ML::Video::HyNomasReferenceAction?) : Int64
+    return 0_i64 unless action
+    mask = Array.new(1280) { |i| i < action.valid_text_tokens ? 1 : 0 }
+    qwen_bytes = 1280_i64 * 3584 * sizeof(UInt16)
+    qwen_bytes + ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(mask, retain_padding: true).total
   end
 
   def prompt_edit_bytes(edit : ML::Video::HyNomasSegmentPromptEdit?) : Int64
@@ -121,14 +163,20 @@ module HyNomasSequence
 
   def history_bytes(inputs : HyNomasGeneration::Inputs, segments : Int32,
                     text_cache_policy = HISTORY_TEXT_POLICY, *,
-                    prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Int64
-    valid = query_text_tokens(inputs, prompt_edit)
+                    prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                    reference_action : ML::Video::HyNomasReferenceAction? = nil) : Int64
+    valid = query_text_tokens(inputs, prompt_edit, reference_action: reference_action)
+    has_profile = !prompt_edit.nil? || !reference_action.nil?
     ML::Video::HyNomasContinuationHistory.named_bytes(segment_count: validate_segments!(segments),
       video_tokens: 4320, valid_text_tokens: valid,
       storage_text_tokens: ((valid + 63) // 64) * 64, layers: 54, heads: 16, head_dim: 128,
       text_cache_policy: text_cache_policy,
-      segment_text_tokens: prompt_edit ? text_tokens(inputs, segments, prompt_edit) : nil,
-      segment_cache_text: prompt_edit.try(&.cache_text))
+      segment_text_tokens: has_profile ? text_tokens(inputs, segments, prompt_edit, reference_action: reference_action) : nil,
+      segment_cache_text: if has_profile
+        cache_text(segments, prompt_edit, reference_action: reference_action)
+      else
+        nil
+      end)
   end
 
   def additional_inputs_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32) : Int64
@@ -140,9 +188,10 @@ module HyNomasSequence
   end
 
   def old_attention_bytes(inputs : HyNomasGeneration::Inputs,
-                          prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Int64
+                          prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil, *,
+                          reference_action : ML::Video::HyNomasReferenceAction? = nil) : Int64
     ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(1,
-      4320 + query_text_tokens(inputs, prompt_edit), 16, 128, 256, 16).resident_bytes
+      4320 + query_text_tokens(inputs, prompt_edit, reference_action: reference_action), 16, 128, 256, 16).resident_bytes
   end
 
   # Include the temporarily coexisting original attention plan while the
@@ -150,18 +199,20 @@ module HyNomasSequence
   def peak_named_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
                        text_cache_policy = HISTORY_TEXT_POLICY, *,
                        prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                       reference_action : ML::Video::HyNomasReferenceAction? = nil,
                        reference_latent_bytes : Int64 = 0_i64) : Int64
     unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
       raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
     end
-    valid = query_text_tokens(inputs.base, prompt_edit)
+    valid = query_text_tokens(inputs.base, prompt_edit, reference_action: reference_action)
     scratch_growth = HyNomasGeneration.dit_scratch_bytes(valid, ((valid + 63) // 64) * 64) -
                      HyNomasGeneration.dit_scratch_bytes(inputs.base.valid_text_tokens, inputs.base.compact_text_tokens)
     HyNomasGeneration.dit_resident_weight_bytes(HyNomasGeneration::DiTWeights::BF16,
       HyNomasGeneration.stage_bytes, HyNomasGeneration.stage_bytes * 54) +
       HyNomasGeneration.dit_reserve_bytes(inputs.base, STEPS) +
-      scratch_growth + prompt_edit_bytes(prompt_edit) +
-      history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit) +
+      scratch_growth + prompt_edit_bytes(prompt_edit) + reference_action_bytes(reference_action) +
+      history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit,
+        reference_action: reference_action) +
       additional_inputs_bytes(inputs, segments) + reference_latent_bytes
   end
 
@@ -234,6 +285,81 @@ module HyNomasSequence
     end
   end
 
+  # Pure mode gate shared by CLI preflight and the GPU owner. It deliberately
+  # does not inspect or change SegmentPromptEdit's checkpoint contract.
+  def validate_reference_action_admission!(action : ML::Video::HyNomasReferenceAction, *,
+                                           segments : Int32,
+                                           reference_latent_bytes : Int64,
+                                           text_cache_policy = HISTORY_TEXT_POLICY,
+                                           cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                                           prepare_capture : Bool = false,
+                                           noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
+                                           prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Nil
+    unless segments == 2 && action.run_segments == segments
+      raise ArgumentError.new("Reference action requires exactly two segments")
+    end
+    unless reference_latent_bytes == REFERENCE_LATENT_BYTES
+      raise ArgumentError.new("Reference action requires the exact real T0 reference latent")
+    end
+    unless text_cache_policy.once_per_scene?
+      raise ArgumentError.new("Reference action requires the OncePerScene text-cache policy")
+    end
+    if cinematic || prepare_capture || noise_edit || prompt_edit
+      raise ArgumentError.new("Reference action does not support Cinematic, capture, noise edits, or prompt edits")
+    end
+  end
+
+  # Scalar metadata validator so command-line admission can reject incompatible
+  # conditioning before creating Metal resources. The Inputs adapter below
+  # supplies these fields from its already authenticated manifest.
+  def validate_reference_action_identity!(action : ML::Video::HyNomasReferenceAction, *,
+                                          conditioning_manifest_sha256 : String,
+                                          conditioning_payload_sha256 : String,
+                                          conditioning_prompt : String,
+                                          conditioning_valid_text_tokens : Int32,
+                                          conditioning_geometry : HyNomasGeneration::SpatialGeometry,
+                                          conditioning_schema : String,
+                                          conditioning_schema_version : Int32) : Nil
+    validate_shared_scene_prompt!(conditioning_prompt)
+    unless conditioning_geometry == HyNomasGeneration::SpatialGeometry::DEFAULT &&
+           conditioning_schema == "cogni_ml.hy_nomas_generation_inputs/v2" &&
+           conditioning_schema_version == 2 &&
+           action.conditioning_manifest_sha256 == conditioning_manifest_sha256 &&
+           action.conditioning_payload_sha256 == conditioning_payload_sha256 &&
+           action.prompt_sha256 == Digest::SHA256.hexdigest(conditioning_prompt) &&
+           action.valid_text_tokens == conditioning_valid_text_tokens
+      raise ArgumentError.new("Reference action identity does not match its authenticated v2 default-geometry conditioning")
+    end
+  end
+
+  def validate_reference_action!(action : ML::Video::HyNomasReferenceAction?,
+                                 action_inputs : HyNomasGeneration::Inputs?, *,
+                                 segments : Int32,
+                                 reference_latent_bytes : Int64,
+                                 text_cache_policy = HISTORY_TEXT_POLICY,
+                                 cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                                 prepare_capture : Bool = false,
+                                 noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
+                                 prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Nil
+    unless action.nil? == action_inputs.nil?
+      raise ArgumentError.new("Reference actions require separate authenticated conditioning")
+    end
+    return unless action && action_inputs
+    validate_reference_action_admission!(action, segments: segments,
+      reference_latent_bytes: reference_latent_bytes, text_cache_policy: text_cache_policy,
+      cinematic: cinematic, prepare_capture: prepare_capture,
+      noise_edit: noise_edit, prompt_edit: prompt_edit)
+    doc = action_inputs.file.document
+    validate_reference_action_identity!(action,
+      conditioning_manifest_sha256: action_inputs.file.sha256,
+      conditioning_payload_sha256: doc["payload_sha256"].as_s,
+      conditioning_prompt: action_inputs.prompt,
+      conditioning_valid_text_tokens: action_inputs.valid_text_tokens,
+      conditioning_geometry: action_inputs.geometry,
+      conditioning_schema: doc["schema"].as_s,
+      conditioning_schema_version: doc["schema_version"].as_i.to_i32)
+  end
+
   class DiT
     getter named_bytes : Int64
     getter peak_named_bytes : Int64
@@ -278,6 +404,8 @@ module HyNomasSequence
                    @noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
                    @prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
                    prompt_inputs : HyNomasGeneration::Inputs? = nil,
+                   @reference_action : ML::Video::HyNomasReferenceAction? = nil,
+                   @reference_action_inputs : HyNomasGeneration::Inputs? = nil,
                    reference_latent : ML::MetalBuffer? = nil)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
@@ -293,6 +421,13 @@ module HyNomasSequence
       HyNomasSequence.validate_checkpoint_variant!(cinematic, prepare_capture: prepare_capture)
       HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
       HyNomasSequence.validate_prompt_edit!(@prompt_edit, prompt_inputs, @segment_count)
+      HyNomasSequence.validate_reference_action!(@reference_action, @reference_action_inputs,
+        segments: @segment_count, reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
+        text_cache_policy: text_cache_policy, cinematic: cinematic,
+        prepare_capture: prepare_capture, noise_edit: @noise_edit, prompt_edit: @prompt_edit)
+      if @reference_action && prompt_inputs
+        raise ArgumentError.new("Reference actions cannot use segment prompt-edit conditioning")
+      end
       raise ArgumentError.new("Prompt edits cannot be combined with noise edits") if @prompt_edit && @noise_edit
       if (@noise_edit || @prompt_edit) && !text_cache_policy.once_per_scene?
         raise ArgumentError.new("Segment edits require the admitted once-per-scene policy")
@@ -304,11 +439,13 @@ module HyNomasSequence
         end
       end
       base = inputs.base
-      valid = HyNomasSequence.query_text_tokens(base, @prompt_edit)
+      valid = HyNomasSequence.query_text_tokens(base, @prompt_edit, reference_action: @reference_action)
       storage = ((valid + 63) // 64) * 64
       @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy,
-        prompt_edit: @prompt_edit, reference_latent_bytes: reference_latent.try(&.size) || 0_i64)
-      @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit)
+        prompt_edit: @prompt_edit, reference_action: @reference_action,
+        reference_latent_bytes: reference_latent.try(&.size) || 0_i64)
+      @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit,
+        reference_action: @reference_action)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
       index_sha = HyNomasSequence.weight_index_sha(cinematic)
       admission.validate!(index_sha, HyNomasQ4DiTIO::SOURCE_SHA,
@@ -390,6 +527,17 @@ module HyNomasSequence
           @prompt_refiner = refiner
           plan_cleanup << -> { refiner.release }
           @prompt_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new
+        elsif action_inputs = @reference_action_inputs
+          arena = ML::Video::Arena.new
+          @prompt_arena = arena
+          arena_cleanup << -> { arena.release }
+          action_qwen = action_inputs.upload!("input.qwen_bf16", arena)
+          refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(action_qwen, action_inputs.mask, 1000_f32, @globals,
+            ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(action_inputs.mask, retain_padding: true).total,
+            retain_padding: true)
+          @prompt_refiner = refiner
+          plan_cleanup << -> { refiner.release }
+          @prompt_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new
         end
         @serial = ML::Video::HyNomasMPSSerialWorkspace.new(HyNomasGeneration::CONFIG,
           Array(ML::Video::Arena).new(54) { @stage }, @patch.output, @refiner.text_output,
@@ -405,8 +553,18 @@ module HyNomasSequence
           storage_text_tokens: storage, layers: 54, heads: 16, head_dim: 128,
           text_cache_policy: text_cache_policy,
           reference_initialization: !@reference_latent.nil?,
-          segment_text_tokens: @prompt_edit ? HyNomasSequence.text_tokens(base, @segment_count, @prompt_edit) : nil,
-          segment_cache_text: @prompt_edit.try(&.cache_text),
+          segment_text_tokens: if @prompt_edit || @reference_action
+            HyNomasSequence.text_tokens(base, @segment_count, @prompt_edit,
+              reference_action: @reference_action)
+          else
+            nil
+          end,
+          segment_cache_text: if @prompt_edit || @reference_action
+            HyNomasSequence.cache_text(@segment_count, @prompt_edit,
+              reference_action: @reference_action)
+          else
+            nil
+          end,
           query: joint["joint.query"], key: joint["joint.key"],
           value: joint["joint.value"], output: joint["joint.attention"])
         plan_cleanup << -> { @history.release }
@@ -563,7 +721,18 @@ module HyNomasSequence
     # but transfers its results directly into the common GPU-owned input slots.
     # No host observation or command-chain boundary is required to change text.
     private def encode_refiner(chain : ML::Metal::MPSCommandChain, segment : Int32) : Nil
-      if @prompt_edit.try(&.edited_segment?(segment))
+      if @reference_action && segment == 1
+        refiner = @prompt_refiner.not_nil!
+        copy = @prompt_copy.not_nil!
+        copy.encode(chain.encoder, @refiner.checkpoints["timestep"], refiner.checkpoints["timestep"], 1, 0)
+        refiner.encode(chain)
+        copy.encode(chain.encoder, refiner.text_output, @refiner.text_output,
+          (refiner.text_output.size // sizeof(Float32)).to_i32, 0)
+        # vec_txt is the same stable buffer as vec; copying it once updates both
+        # serial inputs without changing their setup-time bindings.
+        copy.encode(chain.encoder, refiner.vec, @refiner.vec,
+          (refiner.vec.size // sizeof(Float32)).to_i32, 0)
+      elsif @prompt_edit.try(&.edited_segment?(segment))
         refiner = @prompt_refiner.not_nil!
         copy = @prompt_copy.not_nil!
         copy.encode(chain.encoder, @refiner.checkpoints["timestep"], refiner.checkpoints["timestep"], 1, 0)

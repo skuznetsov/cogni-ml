@@ -3,6 +3,7 @@ require "digest/sha256"
 require "json"
 require "./support/hy_nomas_generation"
 require "./support/hy_nomas_timeline_inputs"
+require "./support/hy_nomas_decode_latent_admission"
 require "../src/ml/video/hy_nomas_timeline_ops"
 
 module HyNomasLatentDecode
@@ -165,6 +166,8 @@ end
 
 input_path = ""
 input_sha = ""
+continuation_path_option = ""
+continuation_sha_option = ""
 latent_path = ""
 latent_sha = ""
 output_dir = ""
@@ -174,8 +177,10 @@ budget_mib = 22_528_i64
 plan_only = false
 OptionParser.parse do |p|
   p.banner = "Diagnostic PixelUMM decode of an authenticated terminal F32 latent bank"
-  p.on("--inputs PATH", "Pinned Echo conditioned input bundle") { |v| input_path = v }
+  p.on("--inputs PATH", "Authenticated conditioned v2 input bundle (Echo default identity retained)") { |v| input_path = v }
   p.on("--inputs-sha SHA", "Trusted input metadata identity") { |v| input_sha = v }
+  p.on("--continuation PATH", "Authenticated long decoder noise bundle; required for non-Echo inputs") { |v| continuation_path_option = v }
+  p.on("--continuation-sha SHA", "Trusted continuation metadata identity") { |v| continuation_sha_option = v }
   p.on("--latent PATH", "Imported terminal F32 NCTHW latent or latent bank") { |v| latent_path = v }
   p.on("--latent-sha SHA", "Trusted latent artifact SHA-256") { |v| latent_sha = v }
   p.on("--latent-frames N", "Latent frames: 30 by default, or authenticated 60/90-frame opt-in") { |v| latent_frames = v.to_i32 }
@@ -196,15 +201,24 @@ unless (16_384..24_576).includes?(budget_mib)
   raise ArgumentError.new("named budget must be within 16..24 GiB")
 end
 
-unless Path[input_path].absolute? && File.file?(input_path) && !File.symlink?(input_path) &&
-       File.realpath(input_path) == File.realpath(HyNomasLatentDecode::BASE_INPUTS_PATH) &&
-       input_sha == HyNomasLatentDecode::BASE_INPUTS_SHA
-  raise ArgumentError.new("inputs must be the pinned Echo conditioned bundle and SHA-256")
+unless Path[input_path].absolute? && File.file?(input_path) && !File.symlink?(input_path)
+  raise ArgumentError.new("inputs must be an absolute regular conditioned input manifest without a symlink leaf")
 end
 input_path = File.realpath(input_path)
+default_inputs_path = if File.file?(HyNomasLatentDecode::BASE_INPUTS_PATH)
+                        File.realpath(HyNomasLatentDecode::BASE_INPUTS_PATH)
+                      else
+                        HyNomasLatentDecode::BASE_INPUTS_PATH
+                      end
+default_base = input_path == default_inputs_path && input_sha == HyNomasLatentDecode::BASE_INPUTS_SHA
+continuation_identity = HyNomasLatentDecodeAdmission.resolve_continuation!(latent_frames, default_base,
+  continuation_path_option, continuation_sha_option,
+  HyNomasLatentDecode::CONTINUATION_INPUTS_PATH, HyNomasLatentDecode::CONTINUATION_INPUTS_SHA)
 
 request_start = Time.instant
 inputs = HyNomasGeneration::Inputs.new(input_path, input_sha, conditioned: true)
+HyNomasLatentDecodeAdmission.validate_default_geometry!(inputs.file.document["geometry"],
+  inputs.file.document["qwen_source"], inputs.valid_text_tokens)
 executable_path = Process.executable_path || raise ArgumentError.new("decoder receipt requires an identifiable executable")
 executable_sha256 = PixelUMMBlockProbe.sha_file(executable_path)
 latent_raw = HyNomasLatentDecode.load_latent!(latent_path, latent_sha, latent_bank_frames)
@@ -216,13 +230,20 @@ source_latent_bank_bytes = if latent_bank_frames > latent_frames
                            end
 timeline_inputs = nil.as(HyNomasGeneration::TimelineInputs?)
 source_noise_bytes = 0_i64
-if latent_frames != HyNomasLatentDecode::DEFAULT_LATENT_FRAMES
-  continuation_path = File.realpath(HyNomasLatentDecode::CONTINUATION_INPUTS_PATH)
-  continuation = HyNomasGeneration::TimelineInputs.new(continuation_path,
-    HyNomasLatentDecode::CONTINUATION_INPUTS_SHA)
-  unless continuation.base.file.path == inputs.file.path &&
-         continuation.base.file.sha256 == inputs.file.sha256
-    raise ArgumentError.new("long decoder noise bundle does not bind the supplied base input bundle")
+if identity = continuation_identity
+  continuation_path, continuation_sha = identity
+  unless Path[continuation_path].absolute? && File.file?(continuation_path) && !File.symlink?(continuation_path)
+    raise ArgumentError.new("continuation must be an absolute regular manifest without a symlink leaf")
+  end
+  continuation = HyNomasGeneration::TimelineInputs.new(File.realpath(continuation_path), continuation_sha)
+  HyNomasLatentDecodeAdmission.validate_base_binding!(continuation.base.file.path,
+    continuation.base.file.sha256, inputs.file.path, inputs.file.sha256)
+  %w(decoder.rope_cos decoder.rope_sin).each do |name|
+    base_record = inputs.records[name]
+    continuation_record = continuation.records[name]
+    HyNomasLatentDecodeAdmission.validate_matching_rope_records!(name,
+      {base_record.dtype, base_record.shape, base_record.nbytes, base_record.sha256},
+      {continuation_record.dtype, continuation_record.shape, continuation_record.nbytes, continuation_record.sha256})
   end
   continuation.verify_payload!
   HyNomasLatentDecode.validate_pixel_noise_prefix_finite!(continuation, latent_frames)
@@ -349,45 +370,55 @@ begin
   noise_manifest_sha = timeline_inputs.try(&.file.sha256) || inputs.file.sha256
   noise_record_sha = timeline_inputs.try(&.records["decoder.noise"].sha256) || inputs.records["decoder.noise"].sha256
   noise_selection = if timeline_inputs
-                      "first #{HyNomasLatentDecode.pixel_noise_frames(latent_frames)} global frames from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
+                      "global pixel-noise frames [0, #{HyNomasLatentDecode.pixel_noise_frames(latent_frames)}) from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
                     else
                       "authenticated decoder.noise record consumed directly"
                     end
   latent_selection = if latent_prefix_plan
-                       "first #{latent_frames} global frames from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
+                       "global latent frames [0, #{latent_frames}) from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
                      else
-                       "authenticated latent bank consumed directly"
+                       "authenticated latent bank global frames [0, #{latent_frames}) consumed directly"
                      end
   receipt = {
-    schema:                      "cogni_ml.hy_nomas_decode_latent/v1",
-    upstream_revision:           PixelUMMBlockProbe::UPSTREAM_REVISION,
-    executable:                  executable_path,
-    executable_sha256:           executable_sha256,
-    inputs:                      inputs.file.path,
-    inputs_sha256:               inputs.file.sha256,
-    latent:                      latent_path,
-    latent_sha256:               latent_sha,
-    latent_bank_sha256:          latent_sha,
-    latent_bytes:                latent_raw.bytesize,
-    latent_bank_bytes:           latent_raw.bytesize,
-    latent_dtype:                "F32 little-endian",
-    latent_shape:                HyNomasLatentDecode.latent_shape(latent_frames),
-    latent_frames:               latent_frames,
-    latent_selected_frames:      latent_frames,
-    latent_bank_shape:           HyNomasLatentDecode.latent_shape(latent_bank_frames),
-    latent_bank_frames:          latent_bank_frames,
-    latent_selection:            latent_selection,
-    latent_boundary:             "caller-supplied terminal diagnostic latent bank; any shorter decode prefix is gathered on GPU; not produced by this request's DiT or solver",
-    decoder_weight_cache_sha256: HyNomasGeneration::PIXEL_CACHE_SHA,
-    stem_weights_sha256:         HyNomasGeneration::STEM_SHA,
-    head_weights_sha256:         HyNomasGeneration::HEAD_SHA,
-    pixel_noise_source:          noise_source_path,
-    pixel_noise_manifest_sha256: noise_manifest_sha,
-    pixel_noise_record_sha256:   noise_record_sha,
-    pixel_noise_shape:           HyNomasLatentDecode.pixel_noise_shape(latent_frames),
-    pixel_noise_frames:          HyNomasLatentDecode.pixel_noise_frames(latent_frames),
-    pixel_noise_selection:       noise_selection,
-    pixelumm:                    {steps: 1, window_latents: 10, overlap_latents: 5,
+    schema:                              "cogni_ml.hy_nomas_decode_latent/v1",
+    upstream_revision:                   PixelUMMBlockProbe::UPSTREAM_REVISION,
+    executable:                          executable_path,
+    executable_sha256:                   executable_sha256,
+    inputs:                              inputs.file.path,
+    inputs_sha256:                       inputs.file.sha256,
+    latent:                              latent_path,
+    latent_sha256:                       latent_sha,
+    latent_bank_sha256:                  latent_sha,
+    latent_bytes:                        latent_raw.bytesize,
+    latent_bank_bytes:                   latent_raw.bytesize,
+    latent_dtype:                        "F32 little-endian",
+    latent_shape:                        HyNomasLatentDecode.latent_shape(latent_frames),
+    latent_frames:                       latent_frames,
+    latent_selected_frames:              latent_frames,
+    latent_prefix_start_frame:           0,
+    latent_bank_shape:                   HyNomasLatentDecode.latent_shape(latent_bank_frames),
+    latent_bank_frames:                  latent_bank_frames,
+    latent_selection:                    latent_selection,
+    latent_boundary:                     "caller-supplied terminal diagnostic latent bank; any shorter decode prefix is gathered on GPU; not produced by this request's DiT or solver",
+    decoder_weight_cache_sha256:         HyNomasGeneration::PIXEL_CACHE_SHA,
+    stem_weights_sha256:                 HyNomasGeneration::STEM_SHA,
+    head_weights_sha256:                 HyNomasGeneration::HEAD_SHA,
+    continuation_source:                 timeline_inputs.try(&.file.path),
+    continuation_manifest_sha256:        timeline_inputs.try(&.file.sha256),
+    decoder_rope_source:                 inputs.file.path,
+    decoder_rope_manifest_sha256:        inputs.file.sha256,
+    decoder_rope_cos_record_sha256:      inputs.records["decoder.rope_cos"].sha256,
+    decoder_rope_sin_record_sha256:      inputs.records["decoder.rope_sin"].sha256,
+    continuation_rope_cos_record_sha256: timeline_inputs.try(&.records["decoder.rope_cos"].sha256),
+    continuation_rope_sin_record_sha256: timeline_inputs.try(&.records["decoder.rope_sin"].sha256),
+    pixel_noise_source:                  noise_source_path,
+    pixel_noise_manifest_sha256:         noise_manifest_sha,
+    pixel_noise_record_sha256:           noise_record_sha,
+    pixel_noise_shape:                   HyNomasLatentDecode.pixel_noise_shape(latent_frames),
+    pixel_noise_frames:                  HyNomasLatentDecode.pixel_noise_frames(latent_frames),
+    pixel_noise_prefix_start_frame:      0,
+    pixel_noise_selection:               noise_selection,
+    pixelumm:                            {steps: 1, window_latents: 10, overlap_latents: 5,
                starts: metadata.config.window_starts},
     precision:                        "BF16 decoder block/head weights; F32 stem weights and native activation/MPS arithmetic; original fixed noise and PixelUMM path",
     frames:                           metadata.config.pixel_frames,

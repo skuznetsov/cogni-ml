@@ -1,5 +1,99 @@
 # Hy-Nomas local draft suite
 
+## Reference continuation correction (2026-11-02)
+
+Status: partial motion after the caption/action correction; the requested
+acting script is not fulfilled. The first reference-conditioned RoleWright
+take is effectively a still illustration according to user playback and a
+25-frame contact sheet. Nonzero frame or latent differences do not establish
+visible acting. Its export selects the generated T1 frames correctly; no
+literal T0-buffer alias was found. The output does not qualify the requested
+image-to-video capability.
+
+The audited upstream `a31c0fe0` UI initializes T0 with the image caption, then
+submits the continuation instruction as a separate text turn. The native take
+used one shared action-bearing prompt at T0 and T1, with text K/V cached only
+at T0. This is a demonstrated conditioning-contract mismatch, not proof that
+it alone caused the static result. Upstream anchors are
+[`WorldStudio.tsx:1567-1583`](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/frontend/src/components/WorldStudio.tsx#L1567-L1583)
+and [`seg_ar_gateway.py:1836-1917`](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/seg_ar_gateway.py#L1836-L1917).
+
+Design-sealed correction: exactly two segments, a technical reference T0 with
+caption conditioning, and a generated T1 with separately authenticated action
+conditioning. Preserve the reference image, encoder, action Qwen state, initial
+noise, cache epsilon, RoPE, decoder noise, steps and tolerances. T0 text history
+survives and T1 uses fresh text. Prepare the second text refiner and all copies
+before encoding; include their buffers and both text extents in admission.
+No in-chain allocation, activation readback or additional wait is admitted.
+Arbitrary prompt edits, reference checkpoint restore/capture, Cinematic,
+legacy per-chunk text and longer reference-action timelines remain rejected.
+The old shared-text reference path remains an explicitly experimental control.
+
+Risk: CAUTION, conditioning/history behavior. Rollback is omission of the new
+reference-action arguments. DoD: focused CPU contract/negative tests, native
+build and plan-only admission, then one 10%-floor guarded short run and visual
+review of the generated T1. A same-input upstream reference control must retain
+the distinct T0/T1 text and cached history; a no-history or one-block test is
+insufficient. Stop on budget/floor breach, fallback, extra readback/wait or
+nonfinite output. Visible animation and full all-layer upstream parity remain
+separate results until actually measured.
+
+The paired corrected take preserves all seven non-Qwen input tensors and the
+T1 action Qwen state byte-for-byte; its clean T0 also remains byte-identical.
+Root review of 25 ordered generated-T1 frames shows a late hand-to-self gesture
+and facial changes from Resume. Alex remains almost stationary. This rejects
+the claim that the requested two-character acting is fixed, while showing a
+partial improvement over the static control. It does not establish that this
+contract mismatch was the only cause.
+
+The guarded native request completed in 517.88 s (encoder 289.33 s, DiT
+31.41 s, decoder 155.54 s). Sampled peak process footprint was 25.463 GiB,
+minimum cache-aware headroom 20.625 GiB and swap growth zero under the 25.5 GiB
+process cap and 10% floor. Each phase reported zero tracked encode allocations,
+readbacks and preterminal waits, with one terminal drain. Opaque MPS resources
+are outside named accounting; samples do not bound between-poll peaks. These
+figures do not establish a speedup.
+
+Checks: 87 focused CPU Crystal examples, 22 edit/checkpoint regressions, six
+Python control admission tests and four compiled CLI negative checks pass;
+native build, plan-only accounting and the guarded short run pass. The full
+reference continuation still uses F32 native DiT intermediates/history. The
+BF16 source control is a separate, pinned MPS adaptation, not Flash3/CUDA or
+stock upstream video parity. Evidence is retained locally under
+`/opt/mldata_ssd/cogni-ml/rolewright-reference-action-20261102.pruxm9c2`.
+
+The source continuation control completed five forwards / 270 block calls on
+Torch 2.8.0 MPS with BF16 weights, activations and history. It uses the supplied
+clean T0, one caption-conditioned cache writer and four fresh-action T1 steps.
+The terminal T0 is byte-exact. T1 fails the unchanged `atol=rtol=2e-5` gate:
+121,423 / 138,240 values differ, maximum error 1.31640625, RMS 0.03925890.
+This terminal comparison does not localize the first error or establish its
+visual effect. Prior block-0 captures on another Torch build cannot qualify
+this full runtime.
+
+The source T0+T1 was then decoded through the same native PixelUMM, using the
+same decoder weights, global noise prefix `[0,240)`, RoPE and overlapping
+windows. Both videos select generated frames `[120,240)`, excluding technical
+T0. Root inspection of 25 ordered source frames shows the same broad failure:
+a late hand-to-self gesture from Resume, almost no acting from Alex. This
+rejects the hypothesis that this native DiT difference alone explains all
+missing acting in this paired probe. It does not qualify the source MPS
+adaptation as stock upstream or exclude the common decoder, conditioning,
+precision and prompt/model behavior as contributors.
+
+The decode-only diagnostic now requires an explicit authenticated continuation
+bundle for non-Echo long inputs. It binds the base manifest and both decoder
+RoPE records before Metal allocation, selects latent/noise prefixes on GPU,
+and reports their identities and offsets. Source decode completed in 173.02 s
+(decoder 155.06 s), with zero tracked encode allocations/readbacks/preterminal
+waits and one terminal drain. See the paired provenance and visual review in
+`paired-decode-review.json` under the local evidence directory above.
+
+Next falsifier: compare T0 writer outputs/history and the first T1 forward at
+identical inputs and BF16 boundaries, localizing the earliest divergent layer
+before changing quality settings. Keep the reference continuation experimental;
+neither full numerical parity nor the requested acting script has passed.
+
 ## Reference-image frontier (2026-11-02)
 
 Status: the native DCAE-V encoder is numerically qualified at the fixed
