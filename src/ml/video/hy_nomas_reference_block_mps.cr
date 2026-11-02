@@ -4,11 +4,12 @@ require "./hy_nomas_block_mps"
 require "./hy_nomas_mps_bf16_linear"
 require "./hy_nomas_reference_bf16"
 require "./hy_nomas_reference_kv_cache"
+require "./hy_nomas_reference_attention"
 
 module ML::Video
   # Fixed bindings for source BF16 boundaries up to prospective joint K/V.
-  # An optional first-T0 BF16 cache admits store/read only. Attention, history
-  # append, residual and FFN are intentionally not admitted.
+  # An optional first-T0 BF16 cache and attention consumer stop before residual
+  # and FFN. History append and complete block execution remain unqualified.
   class HyNomasReferenceMPSWorkspace < HyNomasMPSWorkspace
     @reference_arena : Arena? = nil
     @reference_source_inputs = [] of ML::MetalBuffer
@@ -18,6 +19,7 @@ module ML::Video
     @reference_activation_operations = {} of String => HyNomasDualStreamBlock::MPSActivationOperation
     @reference_pointwise : HyNomasReferenceBF16::Plan? = nil
     @reference_history_cache : HyNomasReferenceKVCache::Plan? = nil
+    @reference_attention_plan : HyNomasReferenceAttention::Plan? = nil
     @reference_history_attempted = false
     @reference_released = false
 
@@ -60,6 +62,7 @@ module ML::Video
                    valid_text_tokens : Int32? = nil,
                    text_rms_tokens : Int32? = nil,
                    reference_history : Bool = false,
+                   reference_attention : Bool = false,
                    reference_linear_variant : HyNomasMPSBF16Linear::Variant = HyNomasMPSBF16Linear::Variant::BF16GraphOps)
       self.class.validate_reference_config!(block.config)
       unless {HyNomasMPSBF16Linear::Variant::BF16GraphOps,
@@ -68,6 +71,9 @@ module ML::Video
       end
       if reference_history && reference_linear_variant != HyNomasMPSBF16Linear::Variant::BF16GraphOps
         raise ArgumentError.new("Reference BF16 history requires the BF16 graph linear variant")
+      end
+      if reference_attention && !reference_history
+        raise ArgumentError.new("Reference BF16 attention requires physical history storage")
       end
       operations = block.mps_linear_operations.select { |operation| reference_linear?(operation.name) }
       unless operations.size == 8 && operations.all? { |operation| operation.weights.weight_dtype.bf16? && operation.weights.bias_dtype.bf16? }
@@ -108,6 +114,11 @@ module ML::Video
             block.checkpoints["joint.key"], block.checkpoints["joint.value"],
             storage_rows: config.joint_tokens, active_rows: attention_tokens,
             heads: config.heads, head_dim: config.head_dim)
+          if reference_attention
+            @reference_attention_plan = HyNomasReferenceAttention::Plan.new(
+              block.checkpoints["joint.query"], @reference_history_cache.not_nil!,
+              block.checkpoints["joint.attention"])
+          end
         end
       rescue ex
         release
@@ -117,7 +128,8 @@ module ML::Video
 
     def resident_bytes : Int64
       super + (@reference_arena.try(&.resident_bytes) || 0_i64) +
-        (@reference_history_cache.try(&.resident_bytes) || 0_i64)
+        (@reference_history_cache.try(&.resident_bytes) || 0_i64) +
+        (@reference_attention_plan.try(&.resident_bytes) || 0_i64)
     end
 
     def reference_history_cache : HyNomasReferenceKVCache::Plan
@@ -127,6 +139,15 @@ module ML::Video
 
     def reference_history_prepared? : Bool
       !@reference_history_cache.nil?
+    end
+
+    def reference_attention_plan : HyNomasReferenceAttention::Plan
+      raise ArgumentError.new("Reference BF16 workspace has been released") if @reference_released
+      @reference_attention_plan || raise ArgumentError.new("Reference BF16 attention was not prepared")
+    end
+
+    def encode_reference_attention(chain : ML::Metal::MPSCommandChain) : ML::MetalBuffer
+      reference_attention_plan.encode(chain)
     end
 
     # A partial projection failure already leaves queued work on the chain.
@@ -196,6 +217,12 @@ module ML::Video
       if chain = @last_chain
         raise ArgumentError.new("Complete reference BF16 chain before releasing workspace") unless chain.completed?
       end
+      # Preflight every nested lease before freeing any resource: cache reads
+      # or attention can have a newer chain than the preattention workspace.
+      @reference_history_cache.try(&.validate_release!)
+      @reference_attention_plan.try(&.validate_release!)
+      @reference_attention_plan.try(&.release)
+      @reference_attention_plan = nil
       @reference_history_cache.try(&.release)
       @reference_history_cache = nil
       @reference_activations.each_value(&.release)
@@ -220,6 +247,21 @@ module ML::Video
   end
 
   class HyNomasDualStreamBlock
+    # Bounded first-T0 consumer: preserve the single-store preflight/latch,
+    # then attend directly to the physical BF16 cache on the same GPU chain.
+    # Returning context does not admit the rest of the dual-stream block.
+    def encode_mps_reference_attention(chain : ML::Metal::MPSCommandChain,
+                                       img : ML::MetalBuffer, txt : ML::MetalBuffer,
+                                       vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
+                                       video_rope_cos : ML::MetalBuffer,
+                                       video_rope_sin : ML::MetalBuffer,
+                                       workspace : HyNomasReferenceMPSWorkspace) : ML::MetalBuffer
+      workspace.reference_attention_plan # Reject an unprepared consumer before projection.
+      encode_mps_reference_history(chain, img, txt, vec, vec_txt,
+        video_rope_cos, video_rope_sin, workspace)
+      workspace.encode_reference_attention(chain)
+    end
+
     # First-T0 qualification only: project current inputs, persist the active
     # joint K/V prefix as BF16, and read that physical cache into F32 stages.
     # Preflight the single-write lease before appending any projection work.

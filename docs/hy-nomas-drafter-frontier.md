@@ -1,6 +1,6 @@
 # Hy-Nomas local draft suite
 
-## Reference-image frontier (2026-11-01)
+## Reference-image frontier (2026-11-02)
 
 Status: the native DCAE-V encoder is numerically qualified at the fixed
 512x288x120 reference geometry. The saved clean latent also decodes exactly
@@ -11,8 +11,10 @@ enabled by default.
 The opt-in standalone block-0 pre-attention path now reproduces all 22
 captured BF16 boundaries exactly on identical exported inputs. Its separate
 first-T0 history probe also matches physical BF16 K/V storage and F32 reads
-exactly against the pinned upstream cache function. Attention, remaining
-block operations and all-layer history remain separate gates.
+exactly against the pinned upstream cache function. Its attention consumer
+now matches an isolated invocation of the pinned Torch branch on the same
+4,849 active rows exactly. Padded Torch/Flash3, remaining block operations
+and all-layer history remain separate gates.
 The rejected text-only RoleWright take does not qualify character or style
 preservation. Do not generate another text-only take as a substitute for this
 capability.
@@ -411,6 +413,57 @@ layer-specific histories before T0/T1 continuation. Keep
 all-layer cache, generated T1 or RoleWright identity/style quality is yet
 qualified. Refresh on source, binary, inputs, weights, geometry, precision,
 cache policy, backend, compiler/runtime/device change or artifact loss.
+
+### BF16 stored-history attention — qualified active-prefix fixture
+
+The opt-in `reference-bf16-attention` block-0 diagnostic consumes physical
+first-T0 BF16 K/V through a prepared native MPSGraph plan. All 9,930,752
+BF16 output values are byte-identical to an isolated invocation of the
+pinned upstream `attn_mode == 'torch'` branch body on MPS, with byte-identical
+Q and stored K/V. Maximum/RMS error and mismatch count are zero at unchanged
+`atol=rtol=2e-5`. The fixture has 4,320 image + 529 valid text rows, 16 heads
+and head dimension 128. It does not establish parity with the padded
+5,600-row Torch path, Flash3, or the full upstream T0 handoff. The earlier
+source Q/K/V capture remains an explicitly trusted fixture, not an
+independently attested full-model execution.
+
+The initial fused MPSGraph SDPA node failed 997,904 output values, with
+maximum error 0.5 despite exact Q/K/V. The installed source control is Torch
+2.6.0 (`2236df1770800ffea5697b11b0bb0d910b2e59e1`); its
+[MPS implementation](https://github.com/pytorch/pytorch/blob/2236df1770800ffea5697b11b0bb0d910b2e59e1/aten/src/ATen/native/mps/operations/Attention.mm)
+uses BF16 QK, F32 scaling, a BF16 scaled-logit boundary, BF16 softmax and
+BF16 PV. Reproducing that explicit graph eliminated the mismatch. This
+rejects the fused node for this fixture; it does not characterize its
+unobserved internal arithmetic or establish parity with another Torch version.
+
+The plan binds physical cache storage, compiles and allocates before
+encoding, and widens its BF16 context into the existing F32 destination on
+GPU. A Metal discriminator poisons prospective sources after store, assigns
+distinct per-token/head/channel values to physical V, and checks exact
+means with zero Q/K. Tail canaries, alias/extent checks and latest-chain
+release leases pass. Hash-repaired output corruption produces one numerical
+mismatch; hash-repaired Q corruption is rejected before comparison.
+
+The new Q/output buffers add 39,723,008 named bytes, for 2,441,745,920
+diagnostic bytes including the previous history/read stages; opaque MPSGraph
+resources are excluded. Native counters remain zero tracked encode
+allocations/readbacks/preterminal waits and one terminal drain. Guarded
+source/native runs retain the file-cache-aware 10% floor, 6 GiB process cap
+and 64 MiB swap-growth stop, with zero sampled swap growth. Sampling does
+not bound between-poll peaks; this is not a speed or production-memory claim.
+
+DoD passed: 73 CPU Crystal, 49 Python and nine Metal examples; fresh final
+attention/history captures; strict comparisons; all 22 BF16 and 22 F32
+pre-attention regression tensors remain exact. Evidence:
+`.landmark/evidence/2026-11-02-hy-nomas-reference-attention.json`; local run:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm`.
+Rollback is omission of this diagnostic mode. Next falsifier: output
+projection/residual and FFN on identical context and modulation inputs,
+then a complete block and layer-specific history. Keep
+`--allow-unqualified-reference`: no cache append, all-layer parity,
+generated T1, full video or RoleWright identity/style quality is qualified.
+Refresh on source/binary/input/weights/geometry/precision/cache/backend/
+compiler/runtime/device changes or local artifact loss.
 
 ### Preparing and admitting an image
 

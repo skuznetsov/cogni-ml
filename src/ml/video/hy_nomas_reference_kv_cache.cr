@@ -1,6 +1,7 @@
 # Physical BF16 K/V storage for the bounded Hy-Nomas reference roundtrip.
 # This is a one-write cache with repeatable F32 staging reads; it does not
-# admit history attention, appends, or multiple logical cache slots.
+# admit appends or multiple logical cache slots. A separate BF16 attention
+# consumer may borrow the stored pair through a guarded command-chain lease.
 require "../core/buffer"
 require "../metal/dispatch"
 require "./metal_ops"
@@ -199,13 +200,7 @@ module ML::Video::HyNomasReferenceKVCache
     # may repeat on the same live chain, or resume on another chain after the
     # previous chain has terminally drained.
     def read(chain : ML::Metal::MPSCommandChain) : Nil
-      validate_live!
-      raise ArgumentError.new("Hy-Nomas reference K/V cache must be stored before read") unless @stored
-      raise ArgumentError.new("Hy-Nomas reference K/V plan is poisoned after an encode failure") if @poisoned
-      validate_chain!(chain)
-      validate_bindings!
-      validate_chain_successor!(chain)
-
+      validate_read!(chain)
       @last_chain = chain
       @poisoned = true
       begin
@@ -218,13 +213,27 @@ module ML::Video::HyNomasReferenceKVCache
       end
     end
 
+    def validate_read!(chain : ML::Metal::MPSCommandChain) : Nil
+      validate_live!
+      raise ArgumentError.new("Hy-Nomas reference K/V cache must be stored before read") unless @stored
+      raise ArgumentError.new("Hy-Nomas reference K/V plan is poisoned after an encode failure") if @poisoned
+      validate_chain!(chain)
+      validate_bindings!
+      validate_chain_successor!(chain)
+    end
+
+    # The consumer reads physical BF16 storage directly. Advancing this lease
+    # prevents release of the owned cache while a later attention chain runs.
+    def bind_consumer!(chain : ML::Metal::MPSCommandChain) : Nil
+      validate_read!(chain)
+      @last_chain = chain
+    end
+
     # This plan owns all four output buffers. The caller (normally its
     # workspace) must keep the plan rooted until the final chain drains.
     def release : Nil
       return if @released
-      if chain = @last_chain
-        raise ArgumentError.new("Drain Hy-Nomas reference K/V command chain before release") unless chain.completed?
-      end
+      validate_release!
       @key_storage.try(&.release)
       @value_storage.try(&.release)
       @key_read.try(&.release)
@@ -235,6 +244,12 @@ module ML::Video::HyNomasReferenceKVCache
       @value_read = nil
       @last_chain = nil
       @released = true
+    end
+
+    def validate_release! : Nil
+      if chain = @last_chain
+        raise ArgumentError.new("Drain Hy-Nomas reference K/V command chain before release") unless chain.completed?
+      end
     end
 
     private def encode_store!(e : ML::Metal::ComputeEncoder,

@@ -6,6 +6,7 @@ require "../src/ml/video/hy_nomas_block_mps"
 require "../src/ml/video/hy_nomas_reference_block_mps"
 require "./support/hy_nomas_reference_block0_probe"
 require "./support/hy_nomas_reference_history_probe"
+require "./support/hy_nomas_reference_attention_probe"
 require "./support/hy_nomas_reference_cache_probe"
 require "./support/hy_nomas_probe_instrumentation"
 
@@ -72,7 +73,8 @@ module HyNomasReferenceBlock0ProbeCLI
                            weight_plan : ML::Video::WeightPlan,
                            config : ML::Video::HyNomasConfig,
                            reference_preattention_bf16 : Bool = false,
-                           reference_history_bf16 : Bool = false) : Hash(String, Int64)
+                           reference_history_bf16 : Bool = false,
+                           reference_attention_bf16 : Bool = false) : Hash(String, Int64)
     scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(config).sum(0_i64) do |(_name, count)|
       count.to_i64 * sizeof(Float32)
     end
@@ -98,6 +100,10 @@ module HyNomasReferenceBlock0ProbeCLI
       parts["reference_history_buffers"] = HyNomasReferenceHistoryProbe.named_bytes(
         HyNomasReferenceHistoryProbe::STORAGE_ROWS, active_rows,
         HyNomasReferenceHistoryProbe::HEADS, HyNomasReferenceHistoryProbe::HEAD_DIM)
+    end
+    if reference_attention_bf16
+      parts["reference_attention_buffers"] = ML::Video::HyNomasReferenceAttention.named_bytes(
+        config.joint_tokens, attention_tokens, HEADS, HEAD_DIM)
     end
     total = parts.values.sum
     parts["total_named_bytes"] = total
@@ -195,6 +201,39 @@ module HyNomasReferenceBlock0ProbeCLI
     raise ArgumentError.new("reference block artifact and receipt paths must differ") if artifact == receipt
     ensure_fresh_outputs!(artifact, receipt)
     {artifact, receipt}
+  end
+
+  def write_attention_safetensors!(artifact_path : String,
+                                   plan : ML::Video::HyNomasReferenceAttention::Plan,
+                                   fixtures : Hash(String, String)) : Tuple(String, Array(String), Int64)
+    buffers = [plan.query_bf16, plan.cache.key_storage, plan.cache.value_storage, plan.output_bf16]
+    unless buffers.all? { |buffer| buffer.valid? && buffer.storage_mode.shared? && buffer.size == HyNomasReferenceAttentionProbe::TENSOR_BYTES }
+      raise ArgumentError.new("reference attention capture requires four exact-sized physical BF16 buffers")
+    end
+    header = HyNomasReferenceAttentionProbe.header(fixtures)
+    length = Bytes.new(sizeof(UInt64))
+    IO::ByteFormat::LittleEndian.encode(header.bytesize.to_u64, length)
+    digest = Digest::SHA256.new
+    hashes = [] of String
+    payload_io = open_fresh_output!(artifact_path)
+    begin
+      payload_io.write(length)
+      payload_io.write(header.to_slice)
+      digest.update(length)
+      digest.update(header.to_slice)
+      buffers.each do |buffer|
+        bytes = Bytes.new(HyNomasReferenceAttentionProbe::TENSOR_BYTES)
+        buffer.read_bytes(bytes.to_unsafe, bytes.size)
+        hashes << Digest::SHA256.hexdigest(bytes)
+        digest.update(bytes)
+        payload_io.write(bytes)
+      end
+      payload_io.flush
+      payload_io.fsync
+    ensure
+      payload_io.close
+    end
+    {digest.hexfinal, hashes, File.size(artifact_path)}
   end
 
   def output_paths_with_preqkv!(artifact_path : String, receipt_path : String,
@@ -586,6 +625,8 @@ receipt_path = ""
 preqkv_artifact_path = ""
 preqkv_receipt_path = ""
 precision_name = ""
+attention_source_path = ""
+attention_source_sha256 = ""
 bf16_linear_variant_name = "bf16-graph"
 bf16_linear_variant_supplied = false
 max_named_bytes = 4_i64 * 1024 * 1024 * 1024
@@ -602,7 +643,9 @@ OptionParser.parse do |parser|
   parser.on("--capture-preqkv", "Also capture native pre-QKV intermediates into a bound companion artifact") { capture_preqkv = true }
   parser.on("--preqkv-output-safetensors PATH", "Fresh pre-QKV companion tensor artifact") { |value| preqkv_artifact_path = value }
   parser.on("--preqkv-output-receipt PATH", "Fresh pre-QKV companion JSON receipt") { |value| preqkv_receipt_path = value }
-  parser.on("--precision MODE", "Explicit f32-control, bf16-boundary-control, reference-bf16-preattention, or reference-bf16-history diagnostic") { |value| precision_name = value }
+  parser.on("--attention-source-receipt PATH", "Pinned source attention receipt for the BF16 attention diagnostic") { |value| attention_source_path = value }
+  parser.on("--attention-source-sha256 SHA", "Trusted source attention receipt SHA-256") { |value| attention_source_sha256 = value }
+  parser.on("--precision MODE", "Explicit f32-control, bf16-boundary-control, reference-bf16-preattention, reference-bf16-history, or reference-bf16-attention diagnostic") { |value| precision_name = value }
   parser.on("--bf16-linear-variant MODE", "BF16 reference linear mode: bf16-graph (default) or f32-accum; history mode requires bf16-graph") do |value|
     bf16_linear_variant_name = value
     bf16_linear_variant_supplied = true
@@ -618,7 +661,12 @@ unless ARGV.empty? && !inputs_path.empty? && !inputs_sha256.empty? &&
 end
 HyNomasReferenceBlock0Probe.validate_precision_options!(precision_name,
   bf16_linear_variant_name, bf16_linear_variant_supplied)
-reference_history_bf16 = precision_name == HyNomasReferenceHistoryProbe::PRECISION
+reference_attention_bf16 = precision_name == HyNomasReferenceAttentionProbe::PRECISION
+reference_history_bf16 = precision_name == HyNomasReferenceHistoryProbe::PRECISION || reference_attention_bf16
+HyNomasReferenceAttentionProbe.validate_options!(precision_name, attention_source_path,
+  attention_source_sha256, capture_preqkv, preqkv_artifact_path, preqkv_receipt_path)
+attention_fixtures = reference_attention_bf16 ? HyNomasReferenceAttentionProbe.source_fixtures!(
+  attention_source_path, attention_source_sha256) : {} of String => String
 HyNomasReferenceHistoryProbe.validate_options!(precision_name, bf16_linear_variant_name,
   capture_preqkv, preqkv_artifact_path, preqkv_receipt_path)
 HyNomasReferenceBlock0Probe.validate_preqkv_options!(capture_preqkv, execute,
@@ -643,6 +691,9 @@ begin
   precision = precision_name == "bf16-boundary-control" || reference_preattention_bf16 ? ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl : ML::Video::HyNomasAttentionPrecision::F32Control
   bf16_linear_variant = ML::Video::HyNomasMPSBF16Linear::Variant.parse(bf16_linear_variant_name)
   config = HyNomasReferenceBlock0ProbeCLI.config(precision)
+  if reference_attention_bf16 && input_bundle.info.valid_text_tokens != 529
+    raise ArgumentError.new("reference BF16 attention fixture requires 529 valid text tokens")
+  end
   weight_plan = ML::Video::HyNomasDualStreamBlock.weight_plan([weight_file.not_nil!], config,
     max_named_bytes, resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
   unless weight_plan.not_nil!.staging_bytes == 0 &&
@@ -651,7 +702,7 @@ begin
   end
 
   named_bytes = HyNomasReferenceBlock0ProbeCLI.expected_named_bytes(input_bundle.info,
-    weight_plan.not_nil!, config, reference_preattention_bf16, reference_history_bf16)
+    weight_plan.not_nil!, config, reference_preattention_bf16, reference_history_bf16, reference_attention_bf16)
   total_named_bytes = named_bytes["total_named_bytes"]
   unless total_named_bytes <= max_named_bytes
     raise ArgumentError.new("reference block named Metal-buffer plan exceeds its ceiling")
@@ -666,7 +717,16 @@ begin
     end
   end
 
-  plan_document = if reference_history_bf16
+  plan_document = if reference_attention_bf16
+                    {schema: HyNomasReferenceAttentionProbe::SCHEMA, scope: HyNomasReferenceAttentionProbe::SCOPE,
+                     inputs_manifest_sha256: input_bundle.info.manifest_sha256, weights_sha256: weights_sha256,
+                     precision_control: precision_name, bf16_linear_variant: bf16_linear_variant_name,
+                     input_fixtures: attention_fixtures, source_attention_receipt_sha256: attention_source_sha256,
+                     named_buffer_accounting: named_bytes, max_named_bytes: max_named_bytes,
+                     opaque_mpsgraph_private_bytes: "not measured; requires external memory guard",
+                     execute: execute, attention_executed: false, cache_append_executed: false,
+                     full_upstream_t0_preprocessing_parity: false}
+                  elsif reference_history_bf16
                     {
                       schema:                                HyNomasReferenceHistoryProbe::SCHEMA,
                       scope:                                 HyNomasReferenceHistoryProbe::SCOPE,
@@ -751,7 +811,8 @@ begin
                     valid_text_tokens: input_bundle.info.valid_text_tokens,
                     text_rms_tokens: HyNomasReferenceBlock0ProbeCLI::TEXT_TOKENS,
                     reference_linear_variant: bf16_linear_variant,
-                    reference_history: reference_history_bf16)
+                    reference_history: reference_history_bf16,
+                    reference_attention: reference_attention_bf16)
                   reference_workspace.not_nil!
                 else
                   ML::Video::HyNomasMPSWorkspace.new(block.not_nil!, img, txt, vec, vec_txt,
@@ -770,7 +831,13 @@ begin
     chain = ML::Metal::MPSCommandChain.new
     allocations_before = ML::MetalBuffer.hy_text_probe_allocations
     readbacks_before = ML::MetalBuffer.hy_text_probe_readbacks
-    if reference_history_bf16
+    if reference_attention_bf16
+      context = block.not_nil!.encode_mps_reference_attention(chain.not_nil!, img, txt,
+        vec, vec_txt, cosine, sine, reference_workspace.not_nil!)
+      unless context.same?(block.not_nil!.checkpoints["joint.attention"])
+        raise "reference attention returned a buffer outside its prepared context binding"
+      end
+    elsif reference_history_bf16
       history_read = block.not_nil!.encode_mps_reference_history(chain.not_nil!, img, txt,
         vec, vec_txt, cosine, sine, reference_workspace.not_nil!)
       history_plan = reference_workspace.not_nil!.reference_history_cache
@@ -798,7 +865,28 @@ begin
       raise "block-0 capture requires exactly one completed terminal drain"
     end
 
-    if reference_history_bf16
+    if reference_attention_bf16
+      attention_plan = reference_workspace.not_nil!.reference_attention_plan
+      artifact_sha256, hashes, artifact_bytes = HyNomasReferenceBlock0ProbeCLI.write_attention_safetensors!(
+        artifact_path, attention_plan, attention_fixtures)
+      receipt_json = HyNomasReferenceAttentionProbe.receipt_json(File.basename(artifact_path), artifact_sha256,
+        artifact_bytes, hashes, attention_fixtures, attention_source_sha256, named_bytes,
+        encode_allocations, encode_readbacks, preterminal_waits, chain.not_nil!.wait_count)
+      receipt_io = HyNomasReferenceBlock0ProbeCLI.open_fresh_output!(receipt_path)
+      begin
+        receipt_io.puts(receipt_json)
+        receipt_io.flush
+        receipt_io.fsync
+      ensure
+        receipt_io.close
+      end
+      puts plan_document.to_pretty_json
+      puts({schema: HyNomasReferenceAttentionProbe::SCHEMA, artifact_sha256: artifact_sha256,
+            artifact_bytes: artifact_bytes, encode_allocations: encode_allocations,
+            encode_readbacks: encode_readbacks, preterminal_waits: preterminal_waits,
+            terminal_waits: chain.not_nil!.wait_count, attention_executed: true,
+            execution_completed: true}.to_pretty_json)
+    elsif reference_history_bf16
       history_plan = reference_workspace.not_nil!.reference_history_cache
       key_read, value_read = history_read.not_nil!
       history_sources = HyNomasReferenceBlock0ProbeCLI.capture_history_sources(history_plan,

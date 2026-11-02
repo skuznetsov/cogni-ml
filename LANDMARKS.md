@@ -6,6 +6,43 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-ATTENTION-2026-11-02] Physical BF16 history attention matches captured upstream branch
+
+- The opt-in `reference-bf16-attention` block-0 probe consumes physical
+  first-T0 BF16 K/V with byte-identical Q on 4,849 active rows (4,320 image
+  + 529 text, 16 heads, Dh128). All 9,930,752 output values are byte-exact
+  against an isolated invocation of the pinned upstream Torch branch on MPS;
+  maximum/RMS error and mismatches are zero at unchanged `atol=rtol=2e-5`.
+  The prior source Q/K/V capture is a trusted fixture, not independent proof
+  of full-model execution. Padded 5,600-row Torch and Flash3 are not qualified.
+- A fused SDPA node failed 997,904 values (max 0.5) with exact Q/K/V.
+  The installed Torch 2.6.0 MPS source uses BF16 QK, F32 scaling, BF16 logits,
+  BF16 softmax/PV. Reproducing those graph boundaries eliminated the error.
+  Pinned backend sources and a same-run runtime-identity observation are in
+  the evidence; the source receipt itself does not embed the runtime build.
+  Do not generalize this captured-run result to arbitrary Torch versions.
+- Distinct per-token/head/channel physical V values, poisoned prospective
+  sources, tail canaries and latest-chain release guards pass. Hash-repaired
+  output corruption produces one mismatch; changed Q is rejected. Checks:
+  73 CPU Crystal, 49 Python, nine Metal; 22 BF16 + 22 F32 regression captures
+  and four physical history/read tensors remain exact. Correlated scoped
+  Adversary: ROBUST; root executed the GPU checks.
+- Prepared Q/output add 39,723,008 named bytes; diagnostic total
+  2,441,745,920 excludes opaque MPS resources. Native counters are zero
+  tracked encode allocations/readbacks/preterminal waits and one terminal
+  drain. Source/native guards retain 6 GiB / cache-aware 10% / 64 MiB limits
+  with zero sampled swap growth; sampling does not bound between-poll peaks
+  or establish speed or production memory use.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-reference-attention.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-attention-20261102.i888t5gm`.
+  Next falsifier: output projection/residual and FFN on identical inputs,
+  then complete block and per-layer histories. No append, full T0 handoff,
+  other layers, generated T1, full video or RoleWright quality claim. Keep
+  `--allow-unqualified-reference`; rollback omits the diagnostic mode.
+  Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss.
+
 ### [LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01] Physical block-0 BF16 K/V store/read matches upstream
 
 - The opt-in `reference-bf16-history` diagnostic stores 4,849 active rows
