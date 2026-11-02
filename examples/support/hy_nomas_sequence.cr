@@ -79,8 +79,8 @@ module HyNomasSequence
   end
 
   # The initial continuation entry point reuses one scene-level Qwen state.
-  # Tagged actions require upstream's per-segment action-tail masks, which this
-  # entry point does not yet implement. Reject them before Metal allocation.
+  # Tagged actions are admitted only by the separately authenticated reference
+  # action profile; the shared scene path continues to reject them.
   def validate_shared_scene_prompt!(prompt : String) : Nil
     document = JSON.parse(prompt)
     object = document.as_h?
@@ -97,6 +97,23 @@ module HyNomasSequence
     end
   rescue ex : JSON::ParseException
     raise ArgumentError.new("shared continuation requires a JSON scene prompt")
+  end
+
+  # The bounded reference test maps Subject1 to Alex in the global T0 roster.
+  # Subject tags are literal prompt text, so a valid T1 profile alone cannot
+  # establish which character its action is meant to address.
+  def validate_reference_subject_roster!(caption_prompt : String) : Nil
+    validate_shared_scene_prompt!(caption_prompt)
+    document = JSON.parse(caption_prompt)
+    subjects = document.as_h["subject_list"].as_a
+    subject = subjects.size == 1 ? subjects.first.as_h : nil
+    unless subject && subject["subject_id"].as_s == "<|Subject1|>" &&
+           subject["display_name"].as_s == "Alex" &&
+           !subject["subject_attribute"].as_s.strip.empty?
+      raise ArgumentError.new("Structured reference action requires the single T0 Subject1 roster entry for Alex")
+    end
+  rescue ex : JSON::ParseException | KeyError | TypeCastError
+    raise ArgumentError.new("Structured reference action requires the single T0 Subject1 roster entry for Alex")
   end
 
   def text_tokens(inputs : HyNomasGeneration::Inputs, segments : Int32,
@@ -176,7 +193,22 @@ module HyNomasSequence
         cache_text(segments, prompt_edit, reference_action: reference_action)
       else
         nil
-      end)
+      end,
+      segment_attention_labels: reference_attention_labels(inputs.valid_text_tokens, reference_action))
+  end
+
+  # The current action path is deliberately bounded to caption-only T0 and one
+  # final T1. Earlier action tails would need upstream's head-only history mask.
+  def reference_attention_labels(caption_valid_text_tokens : Int32,
+                                 action : ML::Video::HyNomasReferenceAction?) : Array(ML::Video::HyNomasContinuationHistory::AttentionLabels)?
+    return nil unless action && (profile = action.action_conditioning)
+    query_text = action.query_text_tokens(caption_valid_text_tokens)
+    caption_query = Array(Int32).new(4320 + query_text) { |i| i < 4320 + caption_valid_text_tokens ? 0_i32 : -1_i32 }
+    caption_key = Array(Int32).new(4320 + caption_valid_text_tokens, 0_i32)
+    labels = profile.labels(video_tokens: 4320, query_text_tokens: query_text,
+      history_rows: 4320 + caption_valid_text_tokens, current_text_tokens: action.valid_text_tokens)
+    [ML::Video::HyNomasContinuationHistory::AttentionLabels.new(caption_query, caption_key),
+     ML::Video::HyNomasContinuationHistory::AttentionLabels.new(labels.query_labels, labels.key_labels)]
   end
 
   def additional_inputs_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32) : Int64
@@ -320,7 +352,13 @@ module HyNomasSequence
                                           conditioning_geometry : HyNomasGeneration::SpatialGeometry,
                                           conditioning_schema : String,
                                           conditioning_schema_version : Int32) : Nil
-    validate_shared_scene_prompt!(conditioning_prompt)
+    if profile = action.action_conditioning
+      profile.validate_binding!(conditioning_manifest_sha256: conditioning_manifest_sha256,
+        conditioning_payload_sha256: conditioning_payload_sha256,
+        prompt: conditioning_prompt, valid_text_tokens: conditioning_valid_text_tokens)
+    else
+      validate_shared_scene_prompt!(conditioning_prompt)
+    end
     unless conditioning_geometry == HyNomasGeneration::SpatialGeometry::DEFAULT &&
            conditioning_schema == "cogni_ml.hy_nomas_generation_inputs/v2" &&
            conditioning_schema_version == 2 &&
@@ -336,6 +374,7 @@ module HyNomasSequence
                                  action_inputs : HyNomasGeneration::Inputs?, *,
                                  segments : Int32,
                                  reference_latent_bytes : Int64,
+                                 caption_prompt : String? = nil,
                                  text_cache_policy = HISTORY_TEXT_POLICY,
                                  cinematic : HyNomasCinematic::IndexIdentity? = nil,
                                  prepare_capture : Bool = false,
@@ -345,6 +384,10 @@ module HyNomasSequence
       raise ArgumentError.new("Reference actions require separate authenticated conditioning")
     end
     return unless action && action_inputs
+    if action.action_conditioning
+      raise ArgumentError.new("Structured reference action requires an authenticated T0 caption") unless caption_prompt
+      validate_reference_subject_roster!(caption_prompt)
+    end
     validate_reference_action_admission!(action, segments: segments,
       reference_latent_bytes: reference_latent_bytes, text_cache_policy: text_cache_policy,
       cinematic: cinematic, prepare_capture: prepare_capture,
@@ -422,6 +465,7 @@ module HyNomasSequence
       HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
       HyNomasSequence.validate_prompt_edit!(@prompt_edit, prompt_inputs, @segment_count)
       HyNomasSequence.validate_reference_action!(@reference_action, @reference_action_inputs,
+        caption_prompt: inputs.base.prompt,
         segments: @segment_count, reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
         text_cache_policy: text_cache_policy, cinematic: cinematic,
         prepare_capture: prepare_capture, noise_edit: @noise_edit, prompt_edit: @prompt_edit)
@@ -565,6 +609,7 @@ module HyNomasSequence
           else
             nil
           end,
+          segment_attention_labels: HyNomasSequence.reference_attention_labels(base.valid_text_tokens, @reference_action),
           query: joint["joint.query"], key: joint["joint.key"],
           value: joint["joint.value"], output: joint["joint.attention"])
         plan_cleanup << -> { @history.release }

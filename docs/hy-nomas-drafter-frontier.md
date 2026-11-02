@@ -1,5 +1,109 @@
 # Hy-Nomas local draft suite
 
+## Structured reference actions (2026-11-02)
+
+Status: the opt-in native structured-action mask is implemented and passes the
+scoped source-range attention oracle. The requested Alex head turn is not
+observed in either five-second take through the common native PixelUMM.
+Full source BF16 parity still fails;
+mask correctness, visible acting and full-model equivalence remain separate.
+
+The admitted layout is one caption-only reference T0 with a single
+`<|Subject1|>` Alex roster entry, followed by one generated T1 with
+`<Action1><|Subject1|>... </Action1>.` in `contained_actions`. The exporter runs
+the pinned `a31c0fe0` prompt shaper, tokenizer offset methods and video-window
+builder, binds their source digests to saved Qwen conditioning, and normalizes
+global follow-up times to segment-local action times. These wrappers are
+literal text, not newly invented special-token IDs. The tested T1 action spans
+0.5-4.5 s: latent windows `[0,3)` and `[27,30)` are global gaps; `[3,27)` sees
+Action1 text. Raw text offsets `[57,260]` become `[57,152]` through the pinned
+caller's `min(offset, valid)` rule. Do not silently subtract the Qwen crop or
+reinterpret these source semantics.
+
+The prepared continuation keeps compact K/V in
+`[visible history | current video | valid current text]` order. All video keys
+remain globally visible; timed video queries and action-text queries see
+global keys plus their own action-text keys. Global queries cannot see action
+tails. Padded queries produce exact zeros. Text-refiner self-attention and its
+pooled conditioning retain the source's ordinary valid-text visibility: the
+mask is not proof of hard temporal or spatial isolation of an action.
+Historical action tails, multiple subjects/actions in this reference runner,
+longer timelines, checkpoint edits and the complete advertisement remain
+outside this slice and are rejected before Metal setup.
+
+Immutable I32 labels, one reusable F32 query-tile mask and graph bindings are
+prepared before encoding. Metal generates each mask tile on GPU, masks scores
+before the existing softmax and restores padded outputs. Activations, cached
+K/V and the shared scratch stay on GPU. The unlabelled path is retained as the
+rollback control: omit `--reference-action-mask` and its SHA argument for the
+previous separately conditioned untimed path. The mask flags require paired
+path/SHA arguments and separately authenticated action conditioning.
+
+Checks: `make spec_hy_nomas_reference_handoff` passes 101 CPU Crystal examples;
+the action-profile, structured-source-control and attention-oracle Python
+suites pass 15 tests. Three compiled CLI negative checks reject incomplete
+mask arguments or a mask without separate action conditioning before Metal.
+The tiny native GPU probe covers two action labels,
+global gaps, cached history, hidden padding and a 259-row query crossing the
+256-row tile boundary. Masked and legacy branches both pass the pinned source
+F32 oracle at maximum absolute error `7.62939453125e-6`, with zero failures
+under an absolute-only `2e-5` gate. Masked-versus-unmasked output differs by
+25.323884, so the fixture distinguishes an ignored mask. Release guards pass;
+tracked encode allocations/readbacks and preterminal waits are zero, with one
+terminal drain for the chain. These are small synthetic Q/K/V checks, not a
+full-model numerical certificate. Native builds and final plan-only admission
+pass; the final mask probe also passes after formatting.
+
+The guarded native reference take completed in 533.26 s: encoder 293.43 s,
+DiT 34.68 s and decoder 155.68 s. Sampled peak footprint was 25.362 GiB,
+minimum cache-aware headroom 15.273 GiB and swap growth zero, under the
+25.5 GiB process cap, 10% floor and 64 MiB swap-growth stop. Each phase reports
+zero tracked encode allocations/readbacks/preterminal waits and one terminal
+drain. The output contains technical T0 plus generated T1; the review clip
+selects only frames `[120,240)`. Root inspection of 25 ordered generated
+frames does not show a substantial head turn. No acting fix or speedup is
+claimed. Sampling does not bound between-poll peaks or opaque MPS storage.
+
+The same-input pinned source BF16 MPS control completes five forwards, with
+54 unmasked T0 and 216 source-range-masked T1 attention calls. It uses the exact
+source range builder once and preserves caption history, current action text,
+RoPE, initial noise and cache epsilon. Terminal T0 is byte-exact; T1 fails the
+unchanged `atol=rtol=2e-5` gate: 121,206 / 138,240 mismatches, maximum error
+0.51953125 and RMS 0.0224052633. Native full DiT intermediates/history remain
+F32; this control uses BF16. This comparison does not locate the first error
+or qualify stock CUDA/Magi/Flash execution. Two failed diagnostic admissions
+are retained: an inconsistent endpoint-note literal and recursive factory
+rebinding; both are corrected, with a captured-factory regression check.
+
+The source latent bank is decoded by the same native PixelUMM class with the
+same decoder weights, global noise frames `[0,240)`, RoPE and window starts.
+Executed pairing assertions bind caption/action conditioning and profile,
+DiT weights, imported latent, decoder executable and noise/geometry. Root
+inspection of 25 ordered source T1 frames also shows no substantial head
+turn. The source decode completes with zero tracked encode allocations,
+readbacks or preterminal waits and one terminal drain. A first decode attempt
+was rejected before execution because the required empty output directory
+did not exist; the retained retry uses an explicit new directory.
+
+The paired result rejects the claim that this action-mask change is sufficient
+to produce the requested movement. It does not exclude the common decoder,
+source MPS adaptation, reference-history initialization or prompt/model behavior
+as contributors. Next falsifier: compare T0 cache writer/history and the first
+T1 forward on identical inputs at source BF16 boundaries to locate the first
+numerical divergence, then isolate the common decoder if the action remains
+absent under exact source inputs. Do not infer motion from nonzero pixel deltas.
+
+Risk remains CAUTION for text/cache/attention semantics. The strongest failure
+mode is a successful run with wrong token/time visibility. The executed DoD
+is the source oracle, admission negatives, native build/plan, bounded reference
+take and ordered visual review; global BF16 equivalence and visible acting
+remain open. Correlated mini-Quad review is ROBUST for the bounded mask and
+admission contract; the tested head-turn outcome is BROKEN. Evidence index:
+`.landmark/evidence/2026-11-02-hy-nomas-action-masks.json`. Local artifacts:
+`/opt/mldata_ssd/cogni-ml/rolewright-action-masks-20261102.2hpyx7c6`.
+Refresh on source, binary, input, mask, tokenizer, weights, geometry, precision,
+cache, backend, compiler, runtime or device change, or local artifact loss.
+
 ## Reference continuation correction (2026-11-02)
 
 Status: partial motion after the caption/action correction; the requested

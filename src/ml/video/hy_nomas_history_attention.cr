@@ -14,6 +14,14 @@ require "./metal_mps_command_chain"
       query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
       output_stage : Pointer(Void),
     ) : Pointer(Void)
+    fun workspace_create_masked = gs_hy_nomas_history_attention_workspace_create_masked(
+      device : Pointer(Void), history_rows : Int32, query_rows : Int32,
+      current_rows : Int32,
+      heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
+      query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
+      output_stage : Pointer(Void), query_labels : Pointer(Void), key_labels : Pointer(Void),
+      mask_stage : Pointer(Void),
+    ) : Pointer(Void)
     fun workspace_release = gs_hy_nomas_history_attention_workspace_release(
       workspace : Pointer(Void),
     ) : Void
@@ -46,12 +54,16 @@ module ML::Video
       history_elements : Int32, key_elements : Int32,
       max_score_elements : Int64, max_score_bytes : Int64,
       workspace_bytes : Int64, active_history_pair_bytes : Int64,
-      current_io_bytes : Int64, no_history_control : Bool
+      current_io_bytes : Int64, no_history_control : Bool,
+      masked : Bool, mask_elements : Int32,
+      query_label_bytes : Int64, key_label_bytes : Int64,
+      action_mask_bytes : Int64
 
     Q_STAGE_KEY      = "hy_nomas_history_attention.q"
     K_STAGE_KEY      = "hy_nomas_history_attention.k"
     V_STAGE_KEY      = "hy_nomas_history_attention.v"
     OUTPUT_STAGE_KEY = "hy_nomas_history_attention.output"
+    MASK_STAGE_KEY   = "hy_nomas_history_attention.mask"
 
     @@lifetime_mutex = Mutex.new
     @@live_workspaces = [] of HyNomasHistoryAttentionWorkspace
@@ -62,6 +74,8 @@ module ML::Video
     getter history_inventory_bytes : Int64 = 0_i64
     getter active_history_inventory_bytes : Int64 = 0_i64
     @arena : Arena
+    @query_label_buffer : ML::MetalBuffer? = nil
+    @key_label_buffer : ML::MetalBuffer? = nil
     @handle = Pointer(Void).null
     @chain : ML::Metal::MPSCommandChain? = nil
     @plans = 0_i32
@@ -72,11 +86,17 @@ module ML::Video
       @released
     end
 
+    def masked? : Bool
+      @shape.masked
+    end
+
     # Pure admission calculation: score memory is bounded by one 256-row query
     # tile, while K/V staging holds exactly the valid history plus current rows.
     def self.geometry(history_rows : Int32, query_rows : Int32,
                       heads : Int32, head_dim : Int32,
-                      current_rows : Int32 = query_rows) : Geometry
+                      current_rows : Int32 = query_rows,
+                      query_labels : Array(Int32)? = nil,
+                      key_labels : Array(Int32)? = nil) : Geometry
       unless history_rows >= 0 && query_rows > 0 && current_rows > 0 &&
              current_rows <= query_rows && heads > 0 && head_dim > 0
         raise ArgumentError.new("Invalid Hy-Nomas history attention geometry")
@@ -86,6 +106,8 @@ module ML::Video
         raise ArgumentError.new("Hy-Nomas history attention key rows exceed the native limit")
       end
       key_rows = key_rows_64.to_i32
+      validate_action_labels!(query_rows, key_rows, query_labels, key_labels)
+      masked = !query_labels.nil?
       query_chunk = Math.min(query_rows, MAX_QUERY_CHUNK).to_i32
       graph_calls = ((query_rows.to_i64 + query_chunk - 1) // query_chunk).to_i32
       query_elements = HyNomasDualStreamBlock.checked_count(1, query_rows, heads, head_dim)
@@ -97,11 +119,21 @@ module ML::Video
                          end
       key_elements = HyNomasDualStreamBlock.checked_count(1, key_rows, heads, head_dim)
       tile_elements = HyNomasDualStreamBlock.checked_count(1, query_chunk, heads, head_dim)
+      mask_elements = if masked
+                        HyNomasDualStreamBlock.checked_count(1, query_chunk, key_rows)
+                      else
+                        0
+                      end
       max_score_elements = HyNomasDualStreamBlock.checked_count(1, heads, query_chunk, key_rows).to_i64
       max_score_bytes = max_score_elements * sizeof(Float32)
-      workspace_elements = 2_i64 * tile_elements + 2_i64 * key_elements
+      query_label_bytes = masked ? query_rows.to_i64 * sizeof(Int32) : 0_i64
+      key_label_bytes = masked ? key_rows.to_i64 * sizeof(Int32) : 0_i64
+      action_mask_bytes = mask_elements.to_i64 * sizeof(Float32) + query_label_bytes + key_label_bytes
+      workspace_elements = 2_i64 * tile_elements + 2_i64 * key_elements + mask_elements
+      workspace_elements += (query_label_bytes + key_label_bytes) // sizeof(Float32)
       active_history_elements = 2_i64 * history_elements
-      if workspace_elements > Int64::MAX // sizeof(Float32) ||
+      if action_mask_bytes < 0 || workspace_elements < 0 ||
+         workspace_elements > Int64::MAX // sizeof(Float32) ||
          active_history_elements > Int64::MAX // sizeof(Float32) ||
          (2_i64 * query_elements + 2_i64 * current_elements) > Int64::MAX // sizeof(Float32)
         raise ArgumentError.new("Hy-Nomas history attention byte count overflow")
@@ -112,7 +144,43 @@ module ML::Video
         workspace_elements * sizeof(Float32),
         active_history_elements * sizeof(Float32),
         (2_i64 * query_elements + 2_i64 * current_elements) * sizeof(Float32),
-        history_rows == 0 && current_rows == query_rows)
+        history_rows == 0 && current_rows == query_rows,
+        masked, mask_elements, query_label_bytes, key_label_bytes, action_mask_bytes)
+    end
+
+    private def self.validate_action_labels!(query_rows : Int32, key_rows : Int32,
+                                             query_labels : Array(Int32)?,
+                                             key_labels : Array(Int32)?) : Nil
+      if query_labels.nil? != key_labels.nil?
+        raise ArgumentError.new("Hy-Nomas action masks require both query and key labels")
+      end
+      return unless labels = query_labels
+      keys = key_labels.not_nil!
+      unless labels.size == query_rows && keys.size == key_rows
+        raise ArgumentError.new("Hy-Nomas action mask label counts do not match attention geometry")
+      end
+      {labels, keys}.each do |values|
+        values.each do |label|
+          unless label == -1 || label >= 0
+            raise ArgumentError.new("Hy-Nomas action labels must be -1 or non-negative")
+          end
+        end
+      end
+      global_key = false
+      action_keys = Hash(Int32, Bool).new
+      keys.each do |key_label|
+        if key_label == 0
+          global_key = true
+        elsif key_label > 0
+          action_keys[key_label] = true
+        end
+      end
+      labels.each do |query_label|
+        next if query_label == -1
+        unless global_key || action_keys.has_key?(query_label)
+          raise ArgumentError.new("Active Hy-Nomas query has no visible action-mask key")
+        end
+      end
     end
 
     def self.retained_workspace_count : Int32
@@ -121,25 +189,49 @@ module ML::Video
 
     def initialize(history_rows : Int32, query_rows : Int32,
                    heads : Int32, head_dim : Int32,
-                   current_rows : Int32 = query_rows)
-      @shape = self.class.geometry(history_rows, query_rows, heads, head_dim, current_rows)
+                   current_rows : Int32 = query_rows,
+                   query_labels : Array(Int32)? = nil,
+                   key_labels : Array(Int32)? = nil)
+      query_label_snapshot = query_labels.try(&.dup)
+      key_label_snapshot = key_labels.try(&.dup)
+      @shape = self.class.geometry(history_rows, query_rows, heads, head_dim,
+        current_rows, query_label_snapshot, key_label_snapshot)
       @arena = Arena.new
       begin
         @arena.alloc(Q_STAGE_KEY, tile_elements)
         @arena.alloc(K_STAGE_KEY, @shape.key_elements)
         @arena.alloc(V_STAGE_KEY, @shape.key_elements)
         @arena.alloc(OUTPUT_STAGE_KEY, tile_elements)
+        if @shape.masked
+          @arena.alloc(MASK_STAGE_KEY, @shape.mask_elements)
+          @query_label_buffer = ML::MetalBuffer.new(@shape.query_label_bytes)
+          @key_label_buffer = ML::MetalBuffer.new(@shape.key_label_bytes)
+          @query_label_buffer.not_nil!.write_bytes(
+            query_label_snapshot.not_nil!.to_unsafe.as(Pointer(UInt8)), @shape.query_label_bytes.to_i)
+          @key_label_buffer.not_nil!.write_bytes(
+            key_label_snapshot.not_nil!.to_unsafe.as(Pointer(UInt8)), @shape.key_label_bytes.to_i)
+        end
         validate_stages!
-        unless @arena.resident_bytes == @shape.workspace_bytes
+        unless resident_bytes == @shape.workspace_bytes
           raise ArgumentError.new("Hy-Nomas history attention workspace byte count changed")
         end
         {% if flag?(:darwin) && !flag?(:cpu_only) %}
-          @handle = HyNomasHistoryAttentionMPSFFI.workspace_create(
-            ML::Metal::Device.instance.device_handle,
-            @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
-            @shape.head_dim, @shape.query_chunk,
-            1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
-            q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
+          if @shape.masked
+            @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked(
+              ML::Metal::Device.instance.device_handle,
+              @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+              @shape.head_dim, @shape.query_chunk,
+              1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+              q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
+              query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+          else
+            @handle = HyNomasHistoryAttentionMPSFFI.workspace_create(
+              ML::Metal::Device.instance.device_handle,
+              @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+              @shape.head_dim, @shape.query_chunk,
+              1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+              q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
+          end
           raise "Failed to prepare Hy-Nomas history attention workspace" if @handle.null?
         {% else %}
           raise ArgumentError.new("Hy-Nomas history MPS attention requires macOS Metal Performance Shaders")
@@ -147,6 +239,7 @@ module ML::Video
         @@lifetime_mutex.synchronize { @@live_workspaces << self }
       rescue ex
         release_native_workspace
+        release_action_metadata
         @arena.release
         @released = true
         raise ex
@@ -156,7 +249,8 @@ module ML::Video
     # Exact named Metal allocations owned by this workspace. MPSGraph's opaque
     # internal temporaries are not measurable from this API.
     def resident_bytes : Int64
-      @arena.resident_bytes
+      return 0_i64 if @released
+      @arena.resident_bytes + @shape.query_label_bytes + @shape.key_label_bytes
     end
 
     def q_stage : ML::MetalBuffer
@@ -173,6 +267,19 @@ module ML::Video
 
     def output_stage : ML::MetalBuffer
       @arena[OUTPUT_STAGE_KEY]
+    end
+
+    private def mask_stage : ML::MetalBuffer
+      raise ArgumentError.new("Unmasked Hy-Nomas history workspace has no action mask stage") unless @shape.masked
+      @arena[MASK_STAGE_KEY]
+    end
+
+    private def query_label_buffer : ML::MetalBuffer
+      @query_label_buffer || raise ArgumentError.new("Unmasked Hy-Nomas history workspace has no query labels")
+    end
+
+    private def key_label_buffer : ML::MetalBuffer
+      @key_label_buffer || raise ArgumentError.new("Unmasked Hy-Nomas history workspace has no key labels")
     end
 
     def native_handle : Pointer(Void)
@@ -192,7 +299,7 @@ module ML::Video
         unless buffer.storage_mode.shared?
           raise ArgumentError.new("Hy-Nomas history cache requires shared F32 buffers")
         end
-        {q_stage, k_stage, v_stage, output_stage}.each do |stage|
+        workspace_buffers.each do |stage|
           if MetalOps.overlap?(buffer, stage)
             raise ArgumentError.new("Hy-Nomas history cache must not alias workspace")
           end
@@ -283,6 +390,7 @@ module ML::Video
         end
       end
       release_native_workspace
+      release_action_metadata
       @arena.release
       @history_pairs.clear
       @history_slot_count = 0
@@ -303,6 +411,7 @@ module ML::Video
         V_STAGE_KEY      => @shape.key_elements,
         OUTPUT_STAGE_KEY => tile_elements,
       }
+      expected[MASK_STAGE_KEY] = @shape.mask_elements if @shape.masked
       expected.each do |name, elements|
         buffer = @arena[name]
         MetalOps.check(buffer, elements.to_i64)
@@ -310,7 +419,7 @@ module ML::Video
           raise ArgumentError.new("Hy-Nomas history attention workspace requires shared F32 buffers")
         end
       end
-      buffers = {q_stage, k_stage, v_stage, output_stage}
+      buffers = workspace_buffers
       buffers.each_with_index do |left, i|
         buffers.each_with_index do |right, j|
           next if j <= i
@@ -318,6 +427,37 @@ module ML::Video
             raise ArgumentError.new("Hy-Nomas history attention workspace buffers must not alias")
           end
         end
+      end
+    end
+
+    private def workspace_buffers : Array(ML::MetalBuffer)
+      buffers = [q_stage, k_stage, v_stage, output_stage]
+      buffers << mask_stage if @shape.masked
+      buffers << query_label_buffer if @shape.masked
+      buffers << key_label_buffer if @shape.masked
+      buffers
+    end
+
+    def overlaps_workspace_buffer?(buffer : ML::MetalBuffer) : Bool
+      {q_stage, k_stage, v_stage, output_stage}.each do |stage|
+        return true if MetalOps.overlap?(buffer, stage)
+      end
+      if @shape.masked
+        {mask_stage, query_label_buffer, key_label_buffer}.each do |stage|
+          return true if MetalOps.overlap?(buffer, stage)
+        end
+      end
+      false
+    end
+
+    private def release_action_metadata : Nil
+      if buffer = @query_label_buffer
+        buffer.release
+        @query_label_buffer = nil
+      end
+      if buffer = @key_label_buffer
+        buffer.release
+        @key_label_buffer = nil
       end
     end
 
@@ -478,13 +618,9 @@ module ML::Video
           end
         end
       end
-      stages = {@workspace.q_stage, @workspace.k_stage,
-                @workspace.v_stage, @workspace.output_stage}
       buffers.each do |buffer|
-        stages.each do |stage|
-          if MetalOps.overlap?(buffer, stage)
-            raise ArgumentError.new("Hy-Nomas history attention inputs must not alias shared workspace")
-          end
+        if @workspace.overlaps_workspace_buffer?(buffer)
+          raise ArgumentError.new("Hy-Nomas history attention inputs must not alias shared workspace")
         end
       end
     end

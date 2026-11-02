@@ -11,6 +11,7 @@
 #include <cmath>
 #include <stdint.h>
 #include <limits.h>
+#include <unordered_set>
 
 @interface HyNomasHistoryAttentionVariant : NSObject
 @property(nonatomic, strong) MPSGraph *graph;
@@ -30,12 +31,17 @@
 @property(nonatomic, strong) id<MTLComputePipelineState> joinPipeline;
 @property(nonatomic, strong) id<MTLComputePipelineState> gatherPipeline;
 @property(nonatomic, strong) id<MTLComputePipelineState> scatterPipeline;
+@property(nonatomic, strong) id<MTLComputePipelineState> actionMaskPipeline;
+@property(nonatomic, strong) id<MTLComputePipelineState> maskedScatterPipeline;
 @property(nonatomic, strong) HyNomasHistoryAttentionVariant *fullVariant;
 @property(nonatomic, strong) HyNomasHistoryAttentionVariant *tailVariant;
 @property(nonatomic, strong) id<MTLBuffer> queryStage;
 @property(nonatomic, strong) id<MTLBuffer> keyStage;
 @property(nonatomic, strong) id<MTLBuffer> valueStage;
 @property(nonatomic, strong) id<MTLBuffer> outputStage;
+@property(nonatomic, strong) id<MTLBuffer> queryLabels;
+@property(nonatomic, strong) id<MTLBuffer> keyLabels;
+@property(nonatomic, strong) id<MTLBuffer> maskStage;
 @property(nonatomic, strong) NSMutableArray<id<MTLBuffer>> *historyKeys;
 @property(nonatomic, strong) NSMutableArray<id<MTLBuffer>> *historyValues;
 @property(nonatomic) uint32_t historyRows;
@@ -47,6 +53,7 @@
 @property(nonatomic) uint32_t queryChunk;
 @property(nonatomic) float scale;
 @property(nonatomic) BOOL historyFrozen;
+@property(nonatomic) BOOL masked;
 @end
 
 @implementation HyNomasHistoryAttentionWorkspaceNative
@@ -78,6 +85,9 @@ static id<MTLDevice> hy_nomas_history_cached_device = nil;
 static id<MTLComputePipelineState> hy_nomas_history_join_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_gather_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_scatter_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_action_mask_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_masked_scatter_pipeline = nil;
+static id<MTLDevice> hy_nomas_history_action_cached_device = nil;
 
 static bool hy_nomas_history_product(const uint64_t *values, size_t count,
                                      uint64_t *result) {
@@ -224,6 +234,98 @@ static bool hy_nomas_history_pipelines(
   }
 }
 
+static bool hy_nomas_history_action_pipelines(
+    id<MTLDevice> device, id<MTLComputePipelineState> *maskPipeline,
+    id<MTLComputePipelineState> *scatterPipeline) {
+  if (!device || !maskPipeline || !scatterPipeline)
+    return false;
+  @synchronized([HyNomasHistoryAttentionWorkspaceNative class]) {
+    if (hy_nomas_history_action_cached_device == device &&
+        hy_nomas_history_action_mask_pipeline &&
+        hy_nomas_history_masked_scatter_pipeline) {
+      *maskPipeline = hy_nomas_history_action_mask_pipeline;
+      *scatterPipeline = hy_nomas_history_masked_scatter_pipeline;
+      return true;
+    }
+
+    NSString *source = [NSString stringWithUTF8String:R"metal(
+      #include <metal_stdlib>
+      using namespace metal;
+      struct GsHyNomasHistoryAttentionParams {
+        uint historyRows;
+        uint queryRows;
+        uint keyRows;
+        uint heads;
+        uint headDim;
+        uint currentRows;
+        uint rowStart;
+      };
+      kernel void gs_hy_nomas_history_build_action_mask(
+          device const int *queryLabels [[buffer(0)]],
+          device const int *keyLabels [[buffer(1)]],
+          device float *mask [[buffer(2)]],
+          constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
+          uint index [[thread_position_in_grid]]) {
+        const uint total = p.currentRows * p.keyRows;
+        if (index >= total) return;
+        const uint row = index / p.keyRows;
+        const uint key = index % p.keyRows;
+        const int queryLabel = queryLabels[p.rowStart + row];
+        const int keyLabel = keyLabels[key];
+        // Padded queries retain one finite softmax input; masked scatter zeros
+        // their output row, so this internal value is never observable.
+        const bool allowed = queryLabel < 0
+                                 ? key == 0
+                                 : (keyLabel == 0 ||
+                                    (keyLabel > 0 && keyLabel == queryLabel));
+        mask[index] = allowed ? 0.0f : 1.0f;
+      }
+      kernel void gs_hy_nomas_history_scatter_masked_context_bhqd_to_bqhd(
+          device const float *source [[buffer(0)]],
+          device const int *queryLabels [[buffer(1)]],
+          device float *destination [[buffer(2)]],
+          constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
+          uint index [[thread_position_in_grid]]) {
+        const uint total = p.currentRows * p.heads * p.headDim;
+        if (index >= total) return;
+        const uint width = index % p.headDim;
+        const uint row = (index / p.headDim) % p.currentRows;
+        const uint head = index / (p.headDim * p.currentRows);
+        const uint destinationIndex = ((p.rowStart + row) * p.heads + head) * p.headDim + width;
+        destination[destinationIndex] = queryLabels[p.rowStart + row] < 0
+                                           ? 0.0f
+                                           : source[index];
+      }
+    )metal"];
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source
+                                                   options:nil
+                                                     error:&error];
+    if (!library || error)
+      return false;
+    id<MTLFunction> maskFunction =
+        [library newFunctionWithName:@"gs_hy_nomas_history_build_action_mask"];
+    id<MTLFunction> scatterFunction =
+        [library newFunctionWithName:@"gs_hy_nomas_history_scatter_masked_context_bhqd_to_bqhd"];
+    if (!maskFunction || !scatterFunction)
+      return false;
+    id<MTLComputePipelineState> mask =
+        [device newComputePipelineStateWithFunction:maskFunction error:&error];
+    if (!mask || error)
+      return false;
+    id<MTLComputePipelineState> scatter =
+        [device newComputePipelineStateWithFunction:scatterFunction error:&error];
+    if (!scatter || error)
+      return false;
+    hy_nomas_history_action_cached_device = device;
+    hy_nomas_history_action_mask_pipeline = mask;
+    hy_nomas_history_masked_scatter_pipeline = scatter;
+    *maskPipeline = mask;
+    *scatterPipeline = scatter;
+    return true;
+  }
+}
+
 static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
     id<MTLDevice> device, id<MTLBuffer> queryStage, id<MTLBuffer> keyStage,
     id<MTLBuffer> valueStage, id<MTLBuffer> outputStage, uint32_t heads,
@@ -342,6 +444,152 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
   }
 }
 
+static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
+    id<MTLDevice> device, id<MTLBuffer> queryStage, id<MTLBuffer> keyStage,
+    id<MTLBuffer> valueStage, id<MTLBuffer> maskStage,
+    id<MTLBuffer> outputStage, uint32_t heads, uint32_t rows,
+    uint32_t keyRows, uint32_t headDim, float scale) {
+  @try {
+    NSArray<NSNumber *> *queryShape =
+        @[ @1, @(heads), @(rows), @(headDim) ];
+    NSArray<NSNumber *> *keyShape =
+        @[ @1, @(heads), @(keyRows), @(headDim) ];
+    NSArray<NSNumber *> *maskShape =
+        @[ @1, @1, @(rows), @(keyRows) ];
+    MPSGraph *graph = [MPSGraph new];
+    graph.options = MPSGraphOptionsNone;
+    MPSGraphTensor *query = [graph placeholderWithShape:queryShape
+                                               dataType:MPSDataTypeFloat32
+                                                   name:@"hy_history_query_bhqd"];
+    MPSGraphTensor *key = [graph placeholderWithShape:keyShape
+                                             dataType:MPSDataTypeFloat32
+                                                 name:@"hy_history_key_bhkd"];
+    MPSGraphTensor *value = [graph placeholderWithShape:keyShape
+                                               dataType:MPSDataTypeFloat32
+                                                   name:@"hy_history_value_bhkd"];
+    MPSGraphTensor *mask = [graph placeholderWithShape:maskShape
+                                              dataType:MPSDataTypeFloat32
+                                                  name:@"hy_history_action_mask_qk"];
+    MPSGraphTensor *keyTranspose = [graph transposeTensor:key
+                                                dimension:2
+                                            withDimension:3
+                                                     name:@"hy_history_key_bhdk"];
+    MPSGraphTensor *logits =
+        [graph matrixMultiplicationWithPrimaryTensor:query
+                                    secondaryTensor:keyTranspose
+                                               name:@"hy_history_logits_bhqk"];
+    MPSGraphTensor *zero = [graph constantWithScalar:0.0
+                                                shape:@[ @1 ]
+                                             dataType:MPSDataTypeFloat32];
+    MPSGraphTensor *blocked =
+        [graph greaterThanWithPrimaryTensor:mask
+                            secondaryTensor:zero
+                                       name:@"hy_history_action_mask_blocked"];
+    MPSGraphTensor *negativeInfinityTensor =
+        [graph constantWithScalar:-INFINITY
+                            shape:@[ @1 ]
+                         dataType:MPSDataTypeFloat32];
+    MPSGraphTensor *maskedLogits =
+        [graph selectWithPredicateTensor:blocked
+                     truePredicateTensor:negativeInfinityTensor
+                    falsePredicateTensor:logits
+                                   name:@"hy_history_logits_masked"];
+    // Keep the pinned unmasked F32 equation and operation order for visible
+    // pairs: epsilon, scale, softmax over K, then multiply V.
+    MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
+                                                   shape:@[ @1 ]
+                                                dataType:MPSDataTypeFloat32];
+    MPSGraphTensor *epsilonLogits =
+        [graph additionWithPrimaryTensor:maskedLogits
+                         secondaryTensor:epsilon
+                                    name:@"hy_history_logits_plus_epsilon"];
+    MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
+                                                       shape:@[ @1 ]
+                                                    dataType:MPSDataTypeFloat32];
+    MPSGraphTensor *scaledLogits =
+        [graph multiplicationWithPrimaryTensor:epsilonLogits
+                               secondaryTensor:scaleTensor
+                                          name:@"hy_history_scaled_logits"];
+    MPSGraphTensor *probabilities =
+        [graph softMaxWithTensor:scaledLogits
+                            axis:3
+                            name:@"hy_history_probabilities"];
+    MPSGraphTensor *context =
+        [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                    secondaryTensor:value
+                                               name:@"hy_history_context_bhqd"];
+    if (!graph || !query || !key || !value || !mask || !keyTranspose || !logits ||
+        !blocked || !negativeInfinityTensor || !maskedLogits || !epsilonLogits ||
+        !scaledLogits || !probabilities || !context)
+      return nil;
+
+    NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds =
+        [NSMutableDictionary new];
+    NSArray<MPSGraphTensor *> *placeholders = @[ query, key, value, mask ];
+    NSArray<MPSGraphTensorData *> *inputData = @[
+      [[MPSGraphTensorData alloc] initWithMTLBuffer:queryStage
+                                             shape:queryShape
+                                          dataType:MPSDataTypeFloat32],
+      [[MPSGraphTensorData alloc] initWithMTLBuffer:keyStage
+                                             shape:keyShape
+                                          dataType:MPSDataTypeFloat32],
+      [[MPSGraphTensorData alloc] initWithMTLBuffer:valueStage
+                                             shape:keyShape
+                                          dataType:MPSDataTypeFloat32],
+      [[MPSGraphTensorData alloc] initWithMTLBuffer:maskStage
+                                             shape:maskShape
+                                          dataType:MPSDataTypeFloat32],
+    ];
+    feeds[query] = [[MPSGraphShapedType alloc] initWithShape:queryShape
+                                                    dataType:MPSDataTypeFloat32];
+    feeds[key] = [[MPSGraphShapedType alloc] initWithShape:keyShape
+                                                  dataType:MPSDataTypeFloat32];
+    feeds[value] = [[MPSGraphShapedType alloc] initWithShape:keyShape
+                                                    dataType:MPSDataTypeFloat32];
+    feeds[mask] = [[MPSGraphShapedType alloc] initWithShape:maskShape
+                                                   dataType:MPSDataTypeFloat32];
+    MPSGraphExecutable *executable =
+        [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
+                            feeds:feeds
+                    targetTensors:@[ context ]
+                 targetOperations:nil
+            compilationDescriptor:nil];
+    if (!executable)
+      return nil;
+    executable.options = MPSGraphOptionsNone;
+    MPSGraphTensorData *outputData = [[MPSGraphTensorData alloc]
+        initWithMTLBuffer:outputStage
+                    shape:queryShape
+                 dataType:MPSDataTypeFloat32];
+    if (!outputData)
+      return nil;
+    NSMutableArray<MPSGraphTensorData *> *orderedInputs = [NSMutableArray new];
+    for (MPSGraphTensor *feedTensor in executable.feedTensors) {
+      NSUInteger index = [placeholders indexOfObjectIdenticalTo:feedTensor];
+      if (index == NSNotFound || index >= inputData.count)
+        return nil;
+      [orderedInputs addObject:inputData[index]];
+    }
+    if (orderedInputs.count != placeholders.count)
+      return nil;
+    MPSGraphExecutableExecutionDescriptor *execution =
+        [MPSGraphExecutableExecutionDescriptor new];
+    execution.waitUntilCompleted = NO;
+    HyNomasHistoryAttentionVariant *variant =
+        [HyNomasHistoryAttentionVariant new];
+    variant.graph = graph;
+    variant.executable = executable;
+    variant.execution = execution;
+    variant.inputArray = [orderedInputs copy];
+    variant.outputArray = @[ outputData ];
+    variant.rows = rows;
+    return variant;
+  } @catch (NSException *exception) {
+    (void)exception;
+    return nil;
+  }
+}
+
 static bool hy_nomas_history_encode_compute(
     id<MTLCommandBuffer> root, id<MTLComputePipelineState> pipeline,
     id<MTLBuffer> sourceA, id<MTLBuffer> sourceB, id<MTLBuffer> destination,
@@ -389,18 +637,21 @@ static bool hy_nomas_history_encode_query(
   return true;
 }
 
-extern "C" void *gs_hy_nomas_history_attention_workspace_create(
+static void *hy_nomas_history_attention_workspace_create_internal(
     void *deviceHandle, int32_t historyRows, int32_t queryRows,
     int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
     float scale,
     void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
-    void *outputStageHandle) {
+    void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
+    void *maskStageHandle) {
+  const bool masked = queryLabelsHandle || keyLabelsHandle || maskStageHandle;
   if (!deviceHandle || !queryStageHandle || !keyStageHandle ||
       !valueStageHandle || !outputStageHandle || historyRows < 0 ||
       queryRows <= 0 || currentRows <= 0 || currentRows > queryRows ||
       heads <= 0 || headDim <= 0 || queryChunk <= 0 ||
       queryChunk != std::min(queryRows, 256) || !std::isfinite(scale) ||
-      scale <= 0.0f || scale > 1.0f)
+      scale <= 0.0f || scale > 1.0f ||
+      (masked && (!queryLabelsHandle || !keyLabelsHandle || !maskStageHandle)))
     return nullptr;
   const int64_t keyRows64 = (int64_t)historyRows + (int64_t)currentRows;
   if (keyRows64 <= 0 || keyRows64 > INT32_MAX)
@@ -432,6 +683,15 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
   id<MTLBuffer> keyStage = (__bridge id<MTLBuffer>)keyStageHandle;
   id<MTLBuffer> valueStage = (__bridge id<MTLBuffer>)valueStageHandle;
   id<MTLBuffer> outputStage = (__bridge id<MTLBuffer>)outputStageHandle;
+  id<MTLBuffer> queryLabels = masked
+                                  ? (__bridge id<MTLBuffer>)queryLabelsHandle
+                                  : nil;
+  id<MTLBuffer> keyLabels = masked
+                                ? (__bridge id<MTLBuffer>)keyLabelsHandle
+                                : nil;
+  id<MTLBuffer> maskStage = masked
+                                ? (__bridge id<MTLBuffer>)maskStageHandle
+                                : nil;
   NSArray<id<MTLBuffer>> *buffers =
       @[ queryStage, keyStage, valueStage, outputStage ];
   const uint64_t requiredBytes[] = {tileElements * sizeof(float),
@@ -448,36 +708,106 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
     }
   }
 
+  NSArray<id<MTLBuffer>> *residentBuffers = buffers;
+  if (masked) {
+    NSMutableArray<id<MTLBuffer>> *maskedResidentBuffers =
+        [NSMutableArray arrayWithArray:buffers];
+    if ((uint64_t)queryRows > UINT64_MAX / sizeof(int32_t) ||
+        (uint64_t)keyRows > UINT64_MAX / sizeof(int32_t) ||
+        (uint64_t)queryChunk > UINT64_MAX / keyRows)
+      return nullptr;
+    const uint64_t queryLabelBytes = (uint64_t)queryRows * sizeof(int32_t);
+    const uint64_t keyLabelBytes = (uint64_t)keyRows * sizeof(int32_t);
+    const uint64_t maskBytes =
+        (uint64_t)queryChunk * keyRows * sizeof(float);
+    if (!hy_nomas_history_valid_buffer(device, queryLabels, queryLabelBytes) ||
+        !hy_nomas_history_valid_buffer(device, keyLabels, keyLabelBytes) ||
+        !hy_nomas_history_valid_buffer(device, maskStage, maskBytes))
+      return nullptr;
+    for (id<MTLBuffer> stage : buffers) {
+      if (!hy_nomas_history_disjoint(queryLabels, stage) ||
+          !hy_nomas_history_disjoint(keyLabels, stage) ||
+          !hy_nomas_history_disjoint(maskStage, stage))
+        return nullptr;
+    }
+    if (!hy_nomas_history_disjoint(queryLabels, keyLabels) ||
+        !hy_nomas_history_disjoint(queryLabels, maskStage) ||
+        !hy_nomas_history_disjoint(keyLabels, maskStage))
+      return nullptr;
+    const int32_t *queryLabelData = (const int32_t *)queryLabels.contents;
+    const int32_t *keyLabelData = (const int32_t *)keyLabels.contents;
+    bool hasGlobalKey = false;
+    std::unordered_set<int32_t> visibleActionKeys;
+    for (uint32_t key = 0; key < keyRows; ++key) {
+      const int32_t label = keyLabelData[key];
+      if (label < -1)
+        return nullptr;
+      if (label == 0)
+        hasGlobalKey = true;
+      else if (label > 0)
+        visibleActionKeys.insert(label);
+    }
+    for (uint32_t row = 0; row < (uint32_t)queryRows; ++row) {
+      const int32_t label = queryLabelData[row];
+      if (label < -1)
+        return nullptr;
+      if (label < 0)
+        continue;
+      if (!hasGlobalKey && visibleActionKeys.find(label) == visibleActionKeys.end())
+        return nullptr;
+    }
+    [maskedResidentBuffers addObject:queryLabels];
+    [maskedResidentBuffers addObject:keyLabels];
+    [maskedResidentBuffers addObject:maskStage];
+    residentBuffers = [maskedResidentBuffers copy];
+  }
+
   if (@available(macOS 15.0, *)) {
     @autoreleasepool {
       @try {
         id<MTLComputePipelineState> joinPipeline = nil;
         id<MTLComputePipelineState> gatherPipeline = nil;
         id<MTLComputePipelineState> scatterPipeline = nil;
+        id<MTLComputePipelineState> actionMaskPipeline = nil;
+        id<MTLComputePipelineState> maskedScatterPipeline = nil;
         if (!hy_nomas_history_pipelines(device, &joinPipeline,
                                         &gatherPipeline, &scatterPipeline))
           return nullptr;
+        if (masked &&
+            !hy_nomas_history_action_pipelines(device, &actionMaskPipeline,
+                                                &maskedScatterPipeline))
+          return nullptr;
         uint32_t tailRows = (uint32_t)queryRows % (uint32_t)queryChunk;
         HyNomasHistoryAttentionVariant *full =
-            hy_nomas_history_compile_variant(device, queryStage, keyStage,
-                                              valueStage, outputStage,
-                                              (uint32_t)heads,
-                                              (uint32_t)queryChunk, keyRows,
-                                              (uint32_t)headDim, scale);
+            masked
+                ? hy_nomas_history_compile_masked_variant(
+                      device, queryStage, keyStage, valueStage, maskStage,
+                      outputStage, (uint32_t)heads, (uint32_t)queryChunk,
+                      keyRows, (uint32_t)headDim, scale)
+                : hy_nomas_history_compile_variant(
+                      device, queryStage, keyStage, valueStage, outputStage,
+                      (uint32_t)heads, (uint32_t)queryChunk, keyRows,
+                      (uint32_t)headDim, scale);
         if (!full)
           return nullptr;
         HyNomasHistoryAttentionVariant *tail = nil;
         if (tailRows > 0) {
-          tail = hy_nomas_history_compile_variant(
-              device, queryStage, keyStage, valueStage, outputStage,
-              (uint32_t)heads, tailRows, keyRows, (uint32_t)headDim, scale);
+          tail = masked
+                     ? hy_nomas_history_compile_masked_variant(
+                           device, queryStage, keyStage, valueStage, maskStage,
+                           outputStage, (uint32_t)heads, tailRows, keyRows,
+                           (uint32_t)headDim, scale)
+                     : hy_nomas_history_compile_variant(
+                           device, queryStage, keyStage, valueStage, outputStage,
+                           (uint32_t)heads, tailRows, keyRows,
+                           (uint32_t)headDim, scale);
           if (!tail)
             return nullptr;
         }
         HyNomasHistoryAttentionWorkspaceNative *workspace =
             [HyNomasHistoryAttentionWorkspaceNative new];
         workspace.device = device;
-        workspace.residentBuffers = buffers;
+        workspace.residentBuffers = residentBuffers;
         workspace.joinPipeline = joinPipeline;
         workspace.gatherPipeline = gatherPipeline;
         workspace.scatterPipeline = scatterPipeline;
@@ -487,6 +817,11 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
         workspace.keyStage = keyStage;
         workspace.valueStage = valueStage;
         workspace.outputStage = outputStage;
+        workspace.queryLabels = queryLabels;
+        workspace.keyLabels = keyLabels;
+        workspace.maskStage = maskStage;
+        workspace.actionMaskPipeline = actionMaskPipeline;
+        workspace.maskedScatterPipeline = maskedScatterPipeline;
         workspace.historyKeys = [NSMutableArray new];
         workspace.historyValues = [NSMutableArray new];
         workspace.historyRows = (uint32_t)historyRows;
@@ -497,6 +832,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
         workspace.headDim = (uint32_t)headDim;
         workspace.queryChunk = (uint32_t)queryChunk;
         workspace.scale = scale;
+        workspace.masked = masked;
         return (__bridge_retained void *)workspace;
       } @catch (NSException *exception) {
         (void)exception;
@@ -505,6 +841,31 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
     }
   }
   return nullptr;
+}
+
+extern "C" void *gs_hy_nomas_history_attention_workspace_create(
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
+    void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
+    void *outputStageHandle) {
+  return hy_nomas_history_attention_workspace_create_internal(
+      deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
+      queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
+      outputStageHandle, nullptr, nullptr, nullptr);
+}
+
+extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked(
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
+    void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
+    void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
+    void *maskStageHandle) {
+  return hy_nomas_history_attention_workspace_create_internal(
+      deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
+      queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
+      outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle);
 }
 
 extern "C" int32_t gs_hy_nomas_history_attention_workspace_register_history(
@@ -676,6 +1037,14 @@ extern "C" int32_t gs_hy_nomas_history_attention_encode(
                                             plan.query, workspace.queryStage,
                                             params, queryWork))
           return -6;
+        if (workspace.masked) {
+          const uint64_t maskWork = (uint64_t)rows * workspace.keyRows;
+          root = commandBuffer.rootCommandBuffer;
+          if (!hy_nomas_history_encode_compute(
+                  root, workspace.actionMaskPipeline, workspace.queryLabels,
+                  workspace.keyLabels, workspace.maskStage, params, maskWork))
+            return -12;
+        }
         HyNomasHistoryAttentionVariant *variant =
             rows == workspace.queryChunk ? workspace.fullVariant
                                          : workspace.tailVariant;
@@ -693,10 +1062,17 @@ extern "C" int32_t gs_hy_nomas_history_attention_encode(
         if (!root || root.commandQueue.device != workspace.device ||
             root.status >= MTLCommandBufferStatusCommitted)
           return -9;
-        if (!hy_nomas_history_encode_query(root, workspace.scatterPipeline,
-                                            workspace.outputStage, plan.output,
-                                            params, queryWork))
+        if (workspace.masked) {
+          if (!hy_nomas_history_encode_compute(
+                  root, workspace.maskedScatterPipeline,
+                  workspace.outputStage, workspace.queryLabels, plan.output,
+                  params, queryWork))
+            return -13;
+        } else if (!hy_nomas_history_encode_query(root, workspace.scatterPipeline,
+                                                   workspace.outputStage, plan.output,
+                                                   params, queryWork)) {
           return -10;
+        }
       }
       return 0;
     }

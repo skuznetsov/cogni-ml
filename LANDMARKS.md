@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-ACTION-MASKS-2026-11-02] Structured reference mask matches source; Alex head turn remains absent
+
+- Opt-in caption T0 / single Subject1 Alex Action1 T1 now authenticates pinned
+  `a31c0fe0` prompt shaping, tokenizer offsets and temporal windows. Raw
+  offsets `[57,260]` clamp to `[57,152]` exactly as source; video windows are
+  `[0,3)` gap, `[3,27)` action and `[27,30)` gap. Compact history/video/text
+  ordering and GPU tile masks preserve global/action visibility and padding.
+- CPU checks: 101 Crystal, 15 Python, 18 edit/checkpoint regressions and three
+  compiled CLI negatives pass; native build/plan pass. The 259-query GPU
+  probe crosses the 256-row tile boundary and passes the pinned source F32
+  oracle at maximum absolute error `7.62939453125e-6`, zero failures under
+  absolute-only `2e-5`. Masked/unmasked sentinel outputs differ. Tracked
+  encode allocations/readbacks/preterminal waits are zero; one terminal drain.
+  Correlated mini-Quad: ROBUST within this bounded mask/admission scope.
+- Native request completes in 533.26 s, sampled peak 25.362 GiB, minimum
+  cache-aware headroom 15.273 GiB, zero swap growth under the 10% floor and
+  25.5 GiB process cap. Source BF16 MPS control completes 54 T0 and 216 masked
+  T1 block calls. T0 is exact; T1 fails unchanged `atol=rtol=2e-5`: max
+  0.51953125, RMS 0.0224052633, 121,206/138,240 mismatches. The first error
+  is not localized; native full DiT intermediates/history remain F32.
+- Root inspection of 25 ordered T1 frames from each take finds no substantial
+  Alex head turn. Both use the same native PixelUMM/noise/RoPE after executed
+  pairing assertions. Tested acting outcome: BROKEN. This neither qualifies
+  full upstream video parity nor excludes the common decoder/source adapter
+  or reference initialization. No speedup or complete animation claim.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-action-masks.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-action-masks-20261102.2hpyx7c6`.
+  Next: compare T0 writer/history and first T1 BF16 boundaries on identical
+  inputs. Keep `--allow-unqualified-reference`; omission of the paired mask
+  arguments restores the previous untimed action control. Historical action
+  tails, multi-subject/action scripts and longer masked timelines are rejected.
+  Refresh on source/binary/input/weight/geometry/precision/cache/backend/
+  compiler/runtime/device change or local artifact loss. Samples do not bound
+  between-poll memory peaks or opaque MPS storage.
+
 ### [LM-HY-NOMAS-REFERENCE-ACTION-2026-11-02] Separate caption and action conditioning; animation remains incomplete
 
 - User playback and root inspection of 25 ordered frames reject the first

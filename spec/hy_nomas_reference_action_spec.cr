@@ -225,3 +225,27 @@ describe "Hy-Nomas reference-action scalar admission" do
     end
   end
 end
+
+describe "Hy-Nomas structured reference subject binding" do
+  it "requires Subject1 to identify Alex in the caption roster" do
+    prompt = %({"subject_list":[{"subject_id":"<|Subject1|>","display_name":"Alex","subject_attribute":"Teal shirt, seated left"}],"segments":[{}]})
+    HyNomasSequence.validate_reference_subject_roster!(prompt)
+    expect_raises(ArgumentError, /action tails/) do
+      HyNomasSequence.validate_reference_subject_roster!(prompt.sub(%("segments":[{}]), %("segments":[{"contained_actions":[{}]}])))
+    end
+    expect_raises(ArgumentError, /exactly one/) do
+      HyNomasSequence.validate_reference_subject_roster!(prompt.sub(%("segments":[{}]), %("segments":[{},{}])))
+    end
+    ["Resume", "<|Subject2|>"].each do |replacement|
+      wrong = replacement == "Resume" ? prompt.sub("Alex", replacement) : prompt.sub("<|Subject1|>", replacement)
+      expect_raises(ArgumentError, /T0 Subject1/) do
+        HyNomasSequence.validate_reference_subject_roster!(wrong)
+      end
+    end
+    [%({"segments":[{}]}), %({"subject_list":["Alex"],"segments":[{}]}), %({"subject_list":[],"segments":[{}]})].each do |wrong|
+      expect_raises(ArgumentError, /T0 Subject1/) do
+        HyNomasSequence.validate_reference_subject_roster!(wrong)
+      end
+    end
+  end
+end

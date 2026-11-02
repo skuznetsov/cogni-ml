@@ -3,6 +3,47 @@ require "./support/video_allocation_counter"
 require "../src/ml/video/hy_nomas_continuation_history"
 
 describe ML::Video::HyNomasContinuationHistory do
+  it "admits immutable per-segment labels with the writer sharing the caption plan" do
+    q0 = [0, 0, 0, 0, 0, -1]
+    k0 = [0, 0, 0, 0, 0]
+    q1 = [0, 1, 1, 0, 0, 1]
+    k1 = Array(Int32).new(5, 0) + [0, 0, 0, 0, 0, 1]
+    labels = [ML::Video::HyNomasContinuationHistory::AttentionLabels.new(q0, k0),
+              ML::Video::HyNomasContinuationHistory::AttentionLabels.new(q1, k1)]
+    plain = ML::Video::HyNomasContinuationHistory.geometry(2, 4, 2, 2, 54, 1, 2,
+      segment_text_tokens: [1, 2], segment_cache_text: [true, true])
+    masked = ML::Video::HyNomasContinuationHistory.geometry(2, 4, 2, 2, 54, 1, 2,
+      segment_text_tokens: [1, 2], segment_cache_text: [true, true],
+      segment_attention_labels: labels)
+    masked.workspace_geometries.all?(&.masked).should be_true
+    masked.writer_workspace_geometries.first.should eq(masked.workspace_geometries.first)
+    masked.named_bytes.should eq(plain.named_bytes + masked.workspace_geometries.sum(&.action_mask_bytes))
+    q0[0] = 99
+    k1[0] = -1
+    labels.clear
+    stored = masked.segment_attention_labels.not_nil!
+    stored.size.should eq(2)
+    stored[0].query[0].should eq(0)
+    stored[1].key[0].should eq(0)
+    copy = stored[0].query
+    copy[0] = -1
+    stored[0].query[0].should eq(0)
+  end
+
+  it "rejects label profiles requiring an unimplemented distinct masked writer" do
+    label = ML::Video::HyNomasContinuationHistory::AttentionLabels.new(
+      Array(Int32).new(6, 0), Array(Int32).new(6, 0))
+    expect_raises(ArgumentError, /one profile/) do
+      ML::Video::HyNomasContinuationHistory.geometry(2, 4, 2, 2, 54, 1, 2,
+        segment_attention_labels: [label])
+    end
+    expect_raises(ArgumentError, /cached current text/) do
+      ML::Video::HyNomasContinuationHistory.geometry(2, 4, 2, 2, 54, 1, 2,
+        segment_text_tokens: [2, 2], segment_cache_text: [true, false],
+        segment_attention_labels: [label, label])
+    end
+  end
+
   it "restores only a fresh schedule at an extendable post-writer boundary" do
     schedule = ML::Video::HyNomasContinuationHistorySchedule.new(3, 2)
     [-1, 0, 3, 4].each do |invalid|

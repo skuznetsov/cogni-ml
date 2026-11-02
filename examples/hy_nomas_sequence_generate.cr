@@ -18,6 +18,8 @@ reference_encoder_path = ""
 reference_encoder_sha = ""
 reference_action_inputs_path = ""
 reference_action_inputs_sha = ""
+reference_action_mask_path = ""
+reference_action_mask_sha = ""
 allow_unqualified_reference = false
 OptionParser.parse do |p|
   p.banner = "Experimental GPU Hy-Nomas continuation: two through six linked 5-second segments, 512x288 at 24 fps"
@@ -38,6 +40,8 @@ OptionParser.parse do |p|
   p.on("--reference-encoder-sha SHA", "Trusted native DCAE encoder SHA-256") { |v| reference_encoder_sha = v }
   p.on("--reference-action-inputs PATH", "Separate authenticated T1 action conditioning; requires two-segment reference initialization") { |v| reference_action_inputs_path = v }
   p.on("--reference-action-inputs-sha SHA", "Trusted T1 action conditioning manifest SHA-256") { |v| reference_action_inputs_sha = v }
+  p.on("--reference-action-mask PATH", "Authenticated upstream action offsets and video windows") { |v| reference_action_mask_path = v }
+  p.on("--reference-action-mask-sha SHA", "Trusted action-mask profile SHA-256") { |v| reference_action_mask_sha = v }
   p.on("--allow-unqualified-reference", "Explicitly opt in to experimental image-conditioned continuation") { allow_unqualified_reference = true }
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
@@ -58,6 +62,12 @@ unless reference_action_inputs_path.empty? == reference_action_inputs_sha.empty?
   raise ArgumentError.new("reference action requires both --reference-action-inputs and --reference-action-inputs-sha")
 end
 reference_action_requested = !reference_action_inputs_path.empty?
+unless reference_action_mask_path.empty? == reference_action_mask_sha.empty?
+  raise ArgumentError.new("reference action masks require both --reference-action-mask and --reference-action-mask-sha")
+end
+if !reference_action_mask_path.empty? && !reference_action_requested
+  raise ArgumentError.new("reference action masks require separate action conditioning")
+end
 if reference_action_requested && (!reference_requested || segments != 2)
   raise ArgumentError.new("reference action requires exactly two segments and reference image initialization")
 end
@@ -80,11 +90,20 @@ if reference_action_requested
     conditioned: true)
   action_inputs.file.verify_payload!
   reference_action_inputs = action_inputs
+  action_profile = if reference_action_mask_path.empty?
+                     nil
+                   else
+                     ML::Video::HyNomasActionConditioning::Profile.from_file(
+                       File.realpath(reference_action_mask_path), reference_action_mask_sha,
+                       conditioning_manifest_sha256: action_inputs.file.sha256,
+                       conditioning_payload_sha256: action_inputs.file.document["payload_sha256"].as_s,
+                       prompt: action_inputs.prompt, valid_text_tokens: action_inputs.valid_text_tokens)
+                   end
   reference_action = ML::Video::HyNomasReferenceAction.new(run_segments: segments,
     conditioning_manifest_sha256: action_inputs.file.sha256,
     conditioning_payload_sha256: action_inputs.file.document["payload_sha256"].as_s,
     prompt_sha256: Digest::SHA256.hexdigest(action_inputs.prompt),
-    valid_text_tokens: action_inputs.valid_text_tokens)
+    valid_text_tokens: action_inputs.valid_text_tokens, action_conditioning: action_profile)
 end
 cinematic = HyNomasCinematic.load!(cinematic_path, cinematic_sha,
   bf16: true, camera_conditioning: false, action_conditioning: false)
@@ -92,6 +111,7 @@ weight_identity = HyNomasSequence.weight_identity(cinematic)
 admission = HyNomasGeneration.authenticate_bf16_index(cinematic: cinematic)
 reference_latent_bytes = reference_requested ? HyNomasSequence::REFERENCE_LATENT_BYTES : 0_i64
 HyNomasSequence.validate_reference_action!(reference_action, reference_action_inputs,
+  caption_prompt: inputs.base.prompt,
   segments: segments, reference_latent_bytes: reference_latent_bytes,
   text_cache_policy: text_cache_policy, cinematic: cinematic)
 dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, text_cache_policy,
@@ -123,7 +143,7 @@ emit_memory_plan = -> do
     cinematic_lineage: weight_identity[:cinematic_lineage],
     cinematic_lineage_sha256: weight_identity[:cinematic_lineage_sha256],
     text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
-    text_conditioning_mode: reference_action ? "reference_caption_then_action" : "shared_scene",
+    text_conditioning_mode: reference_action.try(&.action_conditioning) ? "reference_caption_then_masked_action" : (reference_action ? "reference_caption_then_action" : "shared_scene"),
     reference_action: reference_action.try(&.identity),
     segment_text_tokens: reference_action.try(&.text_tokens(inputs.base.valid_text_tokens)),
     segment_cache_text: reference_action.try(&.cache_text),
@@ -296,8 +316,8 @@ begin
              inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              prompt: inputs.base.prompt, qwen_valid_tokens: inputs.base.valid_text_tokens,
              qwen_input: "authenticated saved upstream state26 crop; native live text encoding excluded",
-             conditioning: reference_action ? "caption-only reference T0 then separately authenticated T1 action text; tagged action tails rejected" : "one shared scene-level prompt; tagged action tails and per-segment prompts rejected",
-             text_conditioning_mode: reference_action ? "reference_caption_then_action" : "shared_scene",
+             conditioning: reference_action.try(&.action_conditioning) ? "caption-only T0 with Subject1 Alex; authenticated T1 Action1 offsets and temporal attention mask" : (reference_action ? "caption-only reference T0 then separately authenticated T1 action text; tagged action tails rejected" : "one shared scene-level prompt; tagged action tails and per-segment prompts rejected"),
+             text_conditioning_mode: reference_action.try(&.action_conditioning) ? "reference_caption_then_masked_action" : (reference_action ? "reference_caption_then_action" : "shared_scene"),
              reference_action: reference_action.try(&.identity),
              segment_text_tokens: reference_action.try(&.text_tokens(inputs.base.valid_text_tokens)),
              segment_cache_text: reference_action.try(&.cache_text),
