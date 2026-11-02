@@ -6,6 +6,37 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-BF16-PREATTENTION-2026-11-01] Source mixed-precision block-0 boundaries match exactly
+
+- The opt-in `reference-bf16-preattention` workspace reproduces source BF16
+  SiLU, modulation/projection, QK RMS and RoPE boundaries on the authenticated
+  native-exported T0 preblock inputs: 4,320 image tokens, 529 valid text
+  tokens, 1,280 text-storage rows, original BF16 block-0 weights. All eight
+  pre-QKV and 14 main captures are exact at unchanged `atol=rtol=2e-5`.
+  The ordinary F32 control is also exact on all 22 captures. Replaying the
+  old BF16 captures still fails all 22; no comparator tolerance was widened.
+- Fixed GPU rounding/linear buffers add 114,753,536 named bytes, for a
+  diagnostic total of 2,282,853,888 bytes excluding opaque MPSGraph storage.
+  Both final probes report zero tracked encode allocations/readbacks/
+  preterminal waits and one terminal drain under the cache-aware 10% floor,
+  6 GiB process-tree cap and 64 MiB swap-growth limit. No speed claim follows.
+- The workspace rejects full-forward, serial/history attachment, attention
+  and residual execution. Source-BF16 RMS rejects unwritten padded rows.
+  Fixed an observed per-subclass lifetime-root registry split and restored
+  the encoder with `ensure` after an injected MPS RMS failure. Checks pass:
+  61 CPU Crystal examples, 44 Python tests, nine Metal-linked workspace and
+  default-path examples. Correlated scoped Adversary: ROBUST.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json`;
+  local artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-bf16-20261101.3450pdjh`.
+  Next falsifier: actual reference-history K/V store/read, then remaining
+  block attention/residual/FFN and per-layer cache parity. Prospective K/V
+  do not qualify append, full T0 preprocessing/RNG, T1 or character/style
+  preservation. Keep `--allow-unqualified-reference`; `f32-accum` remains
+  unqualified. Refresh on source/binary/input/weights/geometry/precision/
+  cache/backend/compiler/runtime/device changes or local artifact loss.
+
 ### [LM-HY-NOMAS-REFERENCE-HANDOFF-2026-11-01] Exact saved-latent decoder; first BF16 block-0 divergence localized
 
 - Native PixelUMM and the pinned source MPS control decode the authenticated
@@ -19,7 +50,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   against widened F32 source controls. F32 cache comparisons use pre-store
   constituents; native K/V are prospective, with no history append. This does
   not qualify stock RNG or complete T0 patch/refiner preprocessing.
-- The actual BF16 comparison fails all 14+8 boundaries at unchanged 2e-5
+- The original native BF16 comparison fails all 14+8 boundaries at unchanged 2e-5
   tolerances. Earliest capture: modulation SiLU, 777/2048 outside tolerance,
   max 0.0003126636. On the tested 2,048-element vector, a same-input GPU
   discriminator shows both input and output BF16 rounding are needed for an
@@ -35,8 +66,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
   `.landmark/evidence/2026-11-01-hy-nomas-reference-handoff.json`; artifacts:
   `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-handoff-20261101.pDnd7TV1`.
-  Next falsifier: opt-in BF16 SiLU input/output boundaries, then modulation,
+  That slice's next falsifier was opt-in BF16 SiLU input/output boundaries, then modulation,
   normalization, QKV, QK RMS, RoPE and actual cache store against source.
+  Follow `LM-HY-NOMAS-REFERENCE-BF16-PREATTENTION-2026-11-01` for the
+  now-qualified prospective-K/V scope; actual cache storage remains open.
   Keep `--allow-unqualified-reference`; no T1/full video or RoleWright
   character/style claim. Prepared clean scene remains unencoded. Refresh on
   source/binary/input/weights/geometry/precision/cache/backend/runtime/device

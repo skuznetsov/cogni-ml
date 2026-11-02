@@ -84,6 +84,16 @@ module ML::Video
     getter config : HyNomasConfig
     getter attention_tokens : Int32
 
+    # An opt-in subclass stops at prospective K/V. Ordinary workspaces keep
+    # the existing full-block arithmetic and require no BF16 linear bridge.
+    def reference_preattention_bf16 : Bool
+      false
+    end
+
+    protected def source_bf16_rms? : Bool
+      false
+    end
+
     # Resolve the supported contiguous text-prefix attention geometry without
     # allocating native resources. Full-sequence behavior remains the default.
     def self.attention_tokens_for(config : HyNomasConfig,
@@ -169,7 +179,7 @@ module ML::Video
           @rms_plans[operation.name] = HyNomasMPSRMS::Plan.new(@config,
             operation.input, operation.weight.weight, operation.output,
             operation.weight.dtype, operation.tokens,
-            reduction_tokens: reduction_tokens)
+            reduction_tokens: reduction_tokens, source_bf16: source_bf16_rms?)
         end
         if @attention_tokens < @config.joint_tokens
           @attention_clear_pipeline = ML::Metal::PipelineCache.get(ATTENTION_CLEAR_KERNEL) do
@@ -201,8 +211,29 @@ module ML::Video
     # Deterministic lifecycle introspection for callers/tests that verify the
     # explicit-release contract without relying on garbage-collection timing.
     def self.retained_workspace_count : Int32
+      HyNomasMPSWorkspace.lifetime_root_count
+    end
+
+    # Crystal inherits class-variable initializers into each subclass. Always
+    # address these helpers through the base class so opt-in workspaces share
+    # the same strong roots and lifecycle introspection.
+    protected def self.lifetime_root_count : Int32
       @@lifetime_mutex.synchronize do
         @@live_workspaces.size.to_i32
+      end
+    end
+
+    protected def self.register_lifetime_root!(workspace : HyNomasMPSWorkspace) : Nil
+      @@lifetime_mutex.synchronize do
+        unless @@live_workspaces.any? { |current| current.same?(workspace) }
+          @@live_workspaces << workspace
+        end
+      end
+    end
+
+    protected def self.unregister_lifetime_root!(workspace : HyNomasMPSWorkspace) : Nil
+      @@lifetime_mutex.synchronize do
+        @@live_workspaces.reject! { |current| current.same?(workspace) }
       end
     end
 
@@ -210,19 +241,13 @@ module ML::Video
     # finalizers may otherwise release resources before the caller's terminal
     # wait. Registration occurs once at setup, never in the encode path.
     private def retain_lifetime_root! : Nil
-      @@lifetime_mutex.synchronize do
-        unless @@live_workspaces.any? { |current| current.same?(self) }
-          @@live_workspaces << self
-        end
-      end
+      HyNomasMPSWorkspace.register_lifetime_root!(self)
     end
 
     # Explicit release is permitted only after the last chain completed; drop
     # the strong root only after every owned plan and buffer was released.
     private def release_lifetime_root! : Nil
-      @@lifetime_mutex.synchronize do
-        @@live_workspaces.reject! { |current| current.same?(self) }
-      end
+      HyNomasMPSWorkspace.unregister_lifetime_root!(self)
     end
 
     def linear_plan_count : Int32
@@ -243,6 +268,7 @@ module ML::Video
     # success; the provider must retain its cache and prepared plans until the
     # workspace's normal terminal-drained release.
     def attach_history_provider!(provider : HyNomasMPSHistoryProvider) : Nil
+      raise ArgumentError.new("Reference BF16 preattention does not admit history attachment") if reference_preattention_bf16
       if @released || @last_chain || @history_provider || @serial_bindings.empty?
         raise ArgumentError.new("Hy-Nomas history provider requires an unused registered serial workspace")
       end
@@ -258,6 +284,7 @@ module ML::Video
     def register_serial_blocks!(blocks : Array(HyNomasDualStreamBlock),
                                 inputs : Array(Tuple(ML::MetalBuffer, ML::MetalBuffer)),
                                 *, full_dit : Bool = false) : Nil
+      raise ArgumentError.new("Reference BF16 preattention does not admit serial blocks") if reference_preattention_bf16
       raise ArgumentError.new("Hy-Nomas serial registration must precede encode") if @released || @last_chain || !@serial_bindings.empty?
       count_valid = full_dit ? blocks.size == 54 : (2..8).includes?(blocks.size)
       unless count_valid && inputs.size == blocks.size && blocks[0].same?(@block)
@@ -411,6 +438,7 @@ module ML::Video
                          query : ML::MetalBuffer, key : ML::MetalBuffer,
                          value : ML::MetalBuffer, output : ML::MetalBuffer,
                          config : HyNomasConfig) : Nil
+      raise ArgumentError.new("Reference BF16 preattention does not admit attention") if reference_preattention_bf16
       raise ArgumentError.new("Hy-Nomas MPS workspace has been released") if @released
       unless config == @config &&
              query.same?(@block.checkpoints["joint.query"]) &&
@@ -444,11 +472,26 @@ module ML::Video
                 weights : HyNomasDualStreamBlock::LinearWeights,
                 output : ML::MetalBuffer, rows : Int32,
                 input_dim : Int32, output_dim : Int32) : Nil
+      validate_projection!(chain, name, input, weights, output, rows, input_dim, output_dim)
+      plan = @plans[name]
+      MetalLinearMPS.project(chain.encoder, input, weights.weight, weights.bias, output,
+        rows, input_dim, output_dim, weights.weight_dtype, weights.bias_dtype,
+        plan, weight_stage, apply_bias: true)
+    end
+
+    # Shared preflight for the separately required reference-BF16 subclass.
+    # Validation alone neither dispatches the ordinary F32 projection nor
+    # changes fixed resource bindings.
+    protected def validate_projection!(chain : ML::Metal::MPSCommandChain, name : String,
+                                       input : ML::MetalBuffer,
+                                       weights : HyNomasDualStreamBlock::LinearWeights,
+                                       output : ML::MetalBuffer, rows : Int32,
+                                       input_dim : Int32, output_dim : Int32) : Nil
       raise ArgumentError.new("Hy-Nomas MPS workspace has been released") if @released
       unless @last_chain && @last_chain.not_nil!.same?(chain)
         raise ArgumentError.new("Hy-Nomas MPS projection requires block preflight on this chain")
       end
-      e = chain.encoder
+      chain.encoder
       operation = @operations[name]?
       raise ArgumentError.new("Unknown Hy-Nomas MPS linear operation #{name}") unless operation
       plan = @plans[name]?
@@ -461,9 +504,6 @@ module ML::Video
         raise ArgumentError.new("Hy-Nomas MPS linear binding changed for #{name}")
       end
       plan.validate_buffers!(input, weight_stage, output)
-      MetalLinearMPS.project(e, input, weights.weight, weights.bias, output,
-        rows, input_dim, output_dim, weights.weight_dtype, weights.bias_dtype,
-        plan, weight_stage, apply_bias: true)
     end
 
     def layer_norm(e : ML::Metal::ComputeEncoder,
@@ -525,6 +565,7 @@ module ML::Video
                        input : ML::MetalBuffer, delta : ML::MetalBuffer,
                        gate : ML::MetalBuffer, output : ML::MetalBuffer,
                        rows : Int32, dim : Int32) : Nil
+      raise ArgumentError.new("Reference BF16 preattention does not admit residuals") if reference_preattention_bf16
       validate_pointwise_geometry!(rows, dim)
       validate_pointwise_bindings!(input, delta, gate, output)
       plan = @pointwise_plan || raise ArgumentError.new("Hy-Nomas MPS pointwise plan is unavailable")
@@ -741,8 +782,9 @@ module ML::Video
                input : ML::MetalBuffer,
                weights : HyNomasDualStreamBlock::LinearWeights,
                output : ML::MetalBuffer, rows : Int32,
-               input_dim : Int32, output_dim : Int32) : Nil
+               input_dim : Int32, output_dim : Int32) : ML::Metal::ComputeEncoder
       @workspace.project(@chain, name, input, weights, output, rows, input_dim, output_dim)
+      @chain.encoder
     end
 
     def attention(e : ML::Metal::ComputeEncoder,
@@ -806,6 +848,9 @@ module ML::Video
                    video_rope_sin : ML::MetalBuffer,
                    workspace : HyNomasMPSWorkspace,
                    *, phase_observer : Proc(String, Nil)? = nil) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+      if workspace.reference_preattention_bf16
+        raise ArgumentError.new("Reference BF16 workspace requires encode_mps_preattention")
+      end
       backend = HyNomasMPSBackend.new(chain, workspace, phase_observer)
       encode_with_backend(chain.encoder, img, txt, vec, vec_txt,
         video_rope_cos, video_rope_sin, backend)

@@ -8,6 +8,10 @@ against the adapted source MPS control described below. Image-conditioned
 continuation is implemented behind an explicit experimental opt-in; BF16 DiT
 cache parity and character/style quality are not yet qualified. It is not
 enabled by default.
+The opt-in standalone block-0 pre-attention path now reproduces all 22
+captured BF16 boundaries exactly on identical exported inputs. This ends at
+prospective K/V; actual history storage and the rest of the block remain
+separate gates.
 The rejected text-only RoleWright take does not qualify character or style
 preservation. Do not generate another text-only take as a substitute for this
 capability.
@@ -249,12 +253,28 @@ discrepancy is explained by the missing dtype boundaries on this fixture,
 not by a different SiLU formula. This is localization, not a production fix
 or proof of the remaining modulation/projection/reduction boundaries.
 
-The next falsifier is an opt-in native reference control reproducing those
+The next falsifier from that diagnostic was an opt-in native reference control reproducing those
 input/output SiLU boundaries, followed by modulation linear, LayerNorm input,
-QKV, QK RMS, RoPE and the BF16 cache store on identical inputs. Do not blanket
-cast the block to BF16: the observed source path is mixed. Keep the text-only
+QKV, QK RMS and RoPE on identical inputs. Its admitted scope ends at prospective
+joint K/V, before attention, residuals and FFN. It must reject the ordinary
+full-block entry point, serial reuse and history-provider attachment rather
+than accidentally execute those unqualified stages. The BF16 cache store is
+a subsequent gate, not part of a prospective-K/V pass. Do not blanket cast
+the block to BF16: the observed source path is mixed. Keep the text-only
 default unchanged and retain the experimental reference gate until the
 BF16 comparison passes. No generated T1 or full video ran in this slice.
+
+This CAUTION change reuses fixed-buffer BF16 linear plans and adds setup-owned
+rounding buffers. Its rollback is omission of the reference-preattention flag.
+The principal failure is an incorrect BF16 boundary silently reaching a full
+forward; explicit entry-point rejection and unchanged same-input F32/BF16
+comparisons guard it. DoD is the reference handoff CPU suite plus all 22
+pre-attention captures against the pinned source at `atol=rtol=2e-5`, with zero
+instrumented encode allocations/readbacks/preterminal waits and one terminal
+drain under the 10% file-cache-aware guard. If a later boundary fails, retain
+the first mismatch and narrow the claim; do not admit continuation. BF16 graph
+and explicit F32 accumulation variants are candidate linear formulations, not
+assumed source equivalence.
 
 Focused CPU checks passed: `make spec_hy_nomas_reference_handoff` (53 Crystal
 examples) and `python3 -B -m unittest spec.hy_nomas_reference_decode_test
@@ -273,6 +293,65 @@ upstream semantic contract; the evidence packet separately binds the actual
 local parent revision, source fingerprints and executed binaries. Refresh on
 source, input, checkpoint, geometry, precision/backend/runtime/device changes
 or artifact loss. Digests do not restore lost files.
+
+### BF16 pre-attention qualification
+
+The opt-in `reference-bf16-preattention` probe now implements the observed
+mixed-precision boundaries with fixed GPU buffers: BF16-rounded SiLU inputs
+and outputs, BF16 projection operands/results, F32 LayerNorm/modulation,
+BF16 rounding of `1 + scale`, source-ordered QK RMS casts and BF16 RoPE
+outputs. It uses the prepared `bf16-graph` linear variant. The separate
+`f32-accum` candidate is not qualified by this result.
+
+On the same authenticated preblock inputs, original BF16 weights and pinned
+source captures above, all eight pre-QKV and 14 main tensors match exactly:
+zero maximum/RMS error and zero mismatches, with unchanged `atol=rtol=2e-5`.
+The image stream has 4,320 tokens and the valid text prefix has 529 tokens
+in 1,280 rows of storage. The ordinary F32 control also matches all 22
+captured tensors exactly. The previous native BF16 control still fails all
+22 comparisons under the current comparator; the gate was not relaxed.
+These are same-input block-0 results, not complete upstream T0 preprocessing
+or RNG parity.
+
+Both final native probes report zero tracked GPU-buffer allocations,
+readbacks or preterminal waits, and one terminal drain. The BF16 path adds
+114,753,536 named bytes for rounding/linear outputs, making its diagnostic
+named-buffer total 2,282,853,888 bytes; unused ordinary block plans remain
+prepared. Opaque MPSGraph resources are excluded. Serialized guarded runs
+retain the file-cache-aware 10% floor, 6 GiB process-tree cap and 64 MiB
+swap-growth limit. This is numerical qualification, not a speed benchmark.
+
+The workspace rejects the ordinary full-block entry point, serial blocks,
+history attachment, attention and residual execution. Source-BF16 RMS
+rejects padded reduction rows before allocating its scratch, because those
+rows would read unwritten squared inputs. An observed subclass lifetime-root
+test failure was fixed by explicitly sharing the base-class registry. Roots
+hold the complete dynamic workspace until terminal-drained release. A
+failure injected after RMS pauses the encoder confirms that `ensure`
+restores encoding without an extra allocation or wait; premature release
+remains rejected.
+
+Focused checks pass: 61 CPU Crystal examples, 44 Python tests, and nine
+Metal-linked workspace/default serial/prefix/modulation examples. The last
+group exercises constructor cleanup, exact extra-buffer accounting, shared
+root counts, scope rejection and terminal-drained release. Source review
+plus the executed comparisons and failure-path tests give a correlated
+mini-Quadrumvirate verdict of ROBUST within this fixture-only scope.
+
+Evidence: `.landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json`.
+Builds, commands, captures and guard logs remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-bf16-20261101.3450pdjh`.
+Rollback is omission of the reference-preattention flag; the text-only
+arithmetic is unchanged. Refresh on source, binary, input, weights,
+geometry, precision, cache policy, backend, compiler/runtime/device changes
+or local artifact loss.
+
+The next falsifier is an actual reference-history K/V store/read comparison
+on the same tensors, followed by the remaining attention/residual/FFN and
+layer-specific cache boundaries. Only then admit a controlled clean-scene
+T0/T1 continuation. Keep `--allow-unqualified-reference`: no actual history
+append, generated T1, full video, or RoleWright character/style quality was
+qualified by the standalone pre-attention result.
 
 ### Preparing and admitting an image
 

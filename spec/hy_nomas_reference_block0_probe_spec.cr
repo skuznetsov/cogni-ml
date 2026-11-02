@@ -228,6 +228,46 @@ describe HyNomasReferenceBlock0Probe do
     end
   end
 
+  it "admits the reference BF16 pre-attention mode only with a supported linear variant" do
+    HyNomasReferenceBlock0Probe.validate_precision_options!(
+      "reference-bf16-preattention", "bf16-graph", false)
+    HyNomasReferenceBlock0Probe.validate_precision_options!(
+      "reference-bf16-preattention", "f32-accum", true)
+    HyNomasReferenceBlock0Probe.validate_precision_options!("bf16-boundary-control", "bf16-graph", false)
+    HyNomasReferenceBlock0Probe.validate_precision_options!("f32-control", "bf16-graph", false)
+
+    expect_raises(ArgumentError) do
+      HyNomasReferenceBlock0Probe.validate_precision_options!(
+        "reference-bf16-preattention", "unknown", true)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasReferenceBlock0Probe.validate_precision_options!("bf16-boundary-control", "f32-accum", true)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasReferenceBlock0Probe.validate_precision_options!("unknown", "bf16-graph", false)
+    end
+  end
+
+  it "binds pre-QKV metadata to the reference BF16 variant without widening legacy metadata" do
+    legacy = HyNomasReferenceBlock0Probe.preqkv_metadata_fields(
+      "bf16-boundary-control", "a" * 64, "b" * 64)
+    legacy.has_key?("bf16_linear_variant").should be_false
+
+    metadata = HyNomasReferenceBlock0Probe.preqkv_metadata_fields(
+      "reference-bf16-preattention", "a" * 64, "b" * 64, "bf16-graph")
+    metadata["precision_control"].should eq("reference-bf16-preattention")
+    metadata["bf16_linear_variant"].should eq("bf16-graph")
+
+    expect_raises(ArgumentError) do
+      HyNomasReferenceBlock0Probe.preqkv_metadata_fields(
+        "reference-bf16-preattention", "a" * 64, "b" * 64)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasReferenceBlock0Probe.preqkv_metadata_fields(
+        "reference-bf16-preattention", "a" * 64, "b" * 64, "unknown")
+    end
+  end
+
   it "rejects capture shapes outside the exact block-0 comparison inventory" do
     expect_raises(ArgumentError) do
       HyNomasReferenceBlock0Probe.capture_shape("cache.attention", 529)

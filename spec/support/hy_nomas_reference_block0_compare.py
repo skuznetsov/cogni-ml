@@ -28,6 +28,12 @@ NATIVE_SCOPE = (
     "one standalone native block-0 forward using native-exported T0 preblock inputs; "
     "not a complete upstream T0 handoff"
 )
+NATIVE_PREATTENTION_SCOPE = (
+    "one standalone native block-0 pre-attention forward using native-exported T0 preblock inputs; "
+    "not a complete upstream T0 handoff"
+)
+REFERENCE_BF16_PRECISION = "reference-bf16-preattention"
+REFERENCE_BF16_VARIANTS = {"bf16-graph", "f32-accum"}
 NATIVE_CACHE_SEMANTICS = "prospective concatenated K/V before any continuation-history append"
 IMAGE_TOKENS = 4320
 HEADS = 16
@@ -430,6 +436,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-safetensors", type=Path, required=True)
     parser.add_argument("--native-receipt", type=Path, required=True)
     parser.add_argument("--precision", choices=("BF16BoundaryControl", "F32Control"), required=True)
+    parser.add_argument(
+        "--native-precision", choices=(REFERENCE_BF16_PRECISION,), default=None,
+        help="explicitly admit the reference-bf16-preattention native path",
+    )
     parser.add_argument("--valid-text-tokens", type=int, required=True)
     parser.add_argument("--input-manifest-sha256", required=True)
     parser.add_argument("--input-payload-sha256", required=True)
@@ -448,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
         source_receipt, native_receipt,
         source_path=args.source_safetensors, native_path=args.native_safetensors,
         precision=args.precision, valid_text_tokens=args.valid_text_tokens,
+        native_precision=args.native_precision,
         input_manifest_sha256=args.input_manifest_sha256,
         input_payload_sha256=args.input_payload_sha256,
         latent_artifact_sha256=args.latent_artifact_sha256,
@@ -472,6 +483,7 @@ def main(argv: list[str] | None = None) -> int:
         chunk_elements=args.chunk_elements,
     )
     result.update({
+        "native_precision": args.native_precision or args.precision,
         "source_artifact_sha256": source.sha256,
         "native_artifact_sha256": candidate.sha256,
         "input_manifest_sha256": args.input_manifest_sha256,
@@ -487,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
 def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
                           source_path: str | Path, native_path: str | Path,
                           precision: str, valid_text_tokens: int,
+                          native_precision: str | None = None,
                           input_manifest_sha256: str, input_payload_sha256: str,
                           latent_artifact_sha256: str, timeline_manifest_sha256: str,
                           weights_sha256: str) -> None:
@@ -501,6 +514,10 @@ def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
             raise CompareError(f"{label} SHA-256 is malformed")
     if weights_sha256 != BLOCK_WEIGHTS_SHA256:
         raise CompareError("comparison must use the pinned indexed BF16 block-0 weights")
+    if native_precision not in (None, REFERENCE_BF16_PRECISION):
+        raise CompareError("unsupported native precision admission")
+    if native_precision == REFERENCE_BF16_PRECISION and precision != "BF16BoundaryControl":
+        raise CompareError("reference-bf16-preattention requires BF16 source precision")
     expected_source_keys = {
         "schema", "operation", "upstream_revision", "upstream_source_root",
         "upstream_source_file_sha256", "upstream_dependency_sha256",
@@ -584,6 +601,8 @@ def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
         "precision_control", "tensor_artifact", "named_buffer_accounting",
         "execution_counters",
     }
+    if native_precision == REFERENCE_BF16_PRECISION:
+        expected_native_keys |= {"preattention_only", "bf16_linear_variant"}
     if set(native) != expected_native_keys:
         raise CompareError("native receipt fields differ from the probe schema")
     if native.get("schema") != NATIVE_SCHEMA:
@@ -593,15 +612,30 @@ def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
     if (native.get("native_revision") != UPSTREAM_REVISION
             or native.get("source_revision") != NATIVE_IMPLEMENTATION_REVISION):
         raise CompareError("native receipt revision identity mismatch")
-    if (native.get("scope") != NATIVE_SCOPE
+    expected_native_scope = (
+        NATIVE_PREATTENTION_SCOPE
+        if native_precision == REFERENCE_BF16_PRECISION else NATIVE_SCOPE
+    )
+    if (native.get("scope") != expected_native_scope
             or native.get("full_upstream_t0_preprocessing_parity") is not False):
         raise CompareError("native receipt overstates the upstream preprocessing scope")
-    native_precision = {
-        "BF16BoundaryControl": "bf16-boundary-control",
-        "F32Control": "f32-control",
-    }[precision]
-    if native.get("precision_control") != native_precision:
+    expected_precision_control = (
+        REFERENCE_BF16_PRECISION
+        if native_precision == REFERENCE_BF16_PRECISION else {
+            "BF16BoundaryControl": "bf16-boundary-control",
+            "F32Control": "f32-control",
+        }[precision]
+    )
+    if native.get("precision_control") != expected_precision_control:
         raise CompareError("native receipt precision control mismatch")
+    if native_precision == REFERENCE_BF16_PRECISION:
+        if native.get("preattention_only") is not True:
+            raise CompareError("native reference BF16 receipt is not explicitly preattention-only")
+        if (type(native.get("bf16_linear_variant")) is not str
+                or native["bf16_linear_variant"] not in REFERENCE_BF16_VARIANTS):
+            raise CompareError("native reference BF16 linear variant is invalid")
+    elif "preattention_only" in native or "bf16_linear_variant" in native:
+        raise CompareError("legacy native receipt contains reference preattention fields")
     if native.get("history_cache_write_executed") is not False:
         raise CompareError("native receipt does not identify prospective cache values only")
     if native.get("cache_tensor_semantics") != NATIVE_CACHE_SEMANTICS:
@@ -625,9 +659,12 @@ def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
             or native["text_padding_value"] != 0):
         raise CompareError("native receipt text padding contract mismatch")
     accounting = native.get("named_buffer_accounting")
-    if type(accounting) is not dict or set(accounting) != NATIVE_ACCOUNTING_KEYS:
+    accounting_keys = NATIVE_ACCOUNTING_KEYS
+    if native_precision == REFERENCE_BF16_PRECISION:
+        accounting_keys = accounting_keys | {"reference_bf16_buffers"}
+    if type(accounting) is not dict or set(accounting) != accounting_keys:
         raise CompareError("native receipt named buffer accounting fields are malformed")
-    accounting_fields = NATIVE_ACCOUNTING_KEYS - {"opaque_mpsgraph_private_bytes"}
+    accounting_fields = accounting_keys - {"opaque_mpsgraph_private_bytes"}
     if (any(type(accounting.get(name)) is not int or accounting[name] < 0
             for name in accounting_fields)
             or accounting["total_named_bytes"] != sum(
@@ -636,6 +673,9 @@ def validate_receipt_pair(source: dict[str, Any], native: dict[str, Any], *,
             or accounting.get("opaque_mpsgraph_private_bytes")
             != "not measured; excluded from named Metal-buffer total"):
         raise CompareError("native receipt named buffer totals are inconsistent")
+    if (native_precision == REFERENCE_BF16_PRECISION
+            and accounting["reference_bf16_buffers"] <= 0):
+        raise CompareError("native reference BF16 buffers must have a positive named extent")
     counters = native.get("execution_counters")
     if type(counters) is not dict or set(counters) != NATIVE_EXECUTION_COUNTERS:
         raise CompareError("native receipt execution counter fields are malformed")

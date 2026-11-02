@@ -23,6 +23,10 @@ NATIVE_SCOPE = (
     "diagnostic pre-QKV boundaries from one standalone native block-0 forward "
     "using authenticated native preblock inputs; not a complete upstream T0 handoff"
 )
+NATIVE_PREATTENTION_SCOPE = (
+    "diagnostic pre-QKV boundaries from one standalone native block-0 pre-attention forward "
+    "using authenticated native preblock inputs; not a complete upstream T0 handoff"
+)
 UPSTREAM_REVISION = main_compare.UPSTREAM_REVISION
 NATIVE_SOURCE_REVISION = main_compare.NATIVE_IMPLEMENTATION_REVISION
 NAMES = source_oracle.PREQKV_NAMES
@@ -40,6 +44,7 @@ NATIVE_KEYS = {
     "valid_text_tokens", "weights_sha256", "parent_native_receipt_sha256",
     "parent_native_artifact_sha256", "tensor_artifact",
 }
+NATIVE_PREATTENTION_KEYS = NATIVE_KEYS | {"bf16_linear_variant"}
 _ARTIFACT_KEYS = {"basename", "sha256", "bytes", "dtype", "tensors"}
 _SHA_FIELDS = (
     "input_bundle_manifest_sha256", "input_bundle_payload_sha256",
@@ -69,7 +74,13 @@ def _expected_source_boundary_dtypes(precision: str) -> dict[str, str]:
     return {name: uniform_dtype for name in NAMES}
 
 
-def _expected_native_precision(precision: str) -> str:
+def _expected_native_precision(precision: str, native_precision: str | None = None) -> str:
+    if native_precision == main_compare.REFERENCE_BF16_PRECISION:
+        if precision != "BF16BoundaryControl":
+            raise PreQKVCompareError("reference-bf16-preattention requires BF16 source precision")
+        return main_compare.REFERENCE_BF16_PRECISION
+    if native_precision is not None:
+        raise PreQKVCompareError("unsupported native precision admission")
     return {
         "BF16BoundaryControl": "BF16BoundaryControl",
         "F32Control": "F32Control",
@@ -94,22 +105,39 @@ def _validate_companion_receipt(
     receipt: dict[str, Any], *, native: bool, tensor_path: str | Path,
     parent_receipt_path: str | Path, parent_artifact_path: str | Path,
     precision: str, valid_text_tokens: int, identities: dict[str, str],
+    native_precision: str | None = None, native_variant: str | None = None,
 ) -> main_compare.TensorArtifact:
     shapes = _tensor_shapes(valid_text_tokens)
     expected_precision, source_dtype = _expected_source_precision(precision)
-    expected_keys = NATIVE_KEYS if native else SOURCE_KEYS
+    expected_keys = (
+        (NATIVE_PREATTENTION_KEYS
+         if native_precision == main_compare.REFERENCE_BF16_PRECISION else NATIVE_KEYS)
+        if native else SOURCE_KEYS
+    )
     if set(receipt) != expected_keys:
         raise PreQKVCompareError("pre-QKV receipt fields differ from its pinned schema")
     if type(receipt.get("schema_version")) is not int or receipt["schema_version"] != 1:
         raise PreQKVCompareError("pre-QKV receipt schema version mismatch")
-    if receipt.get("scope") != (NATIVE_SCOPE if native else SOURCE_SCOPE):
+    expected_scope = (
+        (NATIVE_PREATTENTION_SCOPE
+         if native_precision == main_compare.REFERENCE_BF16_PRECISION else NATIVE_SCOPE)
+        if native else SOURCE_SCOPE
+    )
+    if receipt.get("scope") != expected_scope:
         raise PreQKVCompareError("pre-QKV receipt scope mismatch")
     if native:
         if (receipt.get("schema") != NATIVE_SCHEMA
                 or receipt.get("native_revision") != UPSTREAM_REVISION
                 or receipt.get("source_revision") != NATIVE_SOURCE_REVISION
-                or receipt.get("precision_control") != _expected_native_precision(precision)):
+                or receipt.get("precision_control") != _expected_native_precision(precision, native_precision)):
             raise PreQKVCompareError("native pre-QKV receipt schema, revision, or precision mismatch")
+        if native_precision == main_compare.REFERENCE_BF16_PRECISION:
+            if (type(receipt.get("bf16_linear_variant")) is not str
+                    or receipt["bf16_linear_variant"] not in main_compare.REFERENCE_BF16_VARIANTS
+                    or receipt.get("bf16_linear_variant") != native_variant):
+                raise PreQKVCompareError("native pre-QKV linear variant differs from its parent receipt")
+        elif native_variant is not None:
+            raise PreQKVCompareError("legacy native pre-QKV receipt has an unexpected linear variant")
         parent_receipt_field = "parent_native_receipt_sha256"
         parent_artifact_field = "parent_native_artifact_sha256"
         expected_artifact_dtype = "F32"
@@ -190,6 +218,9 @@ def _validate_companion_receipt(
             "parent_native_receipt_sha256": parent_receipt_sha,
             "parent_native_artifact_sha256": parent_artifact_sha,
         }
+        if native_precision == main_compare.REFERENCE_BF16_PRECISION:
+            expected_metadata["precision_control"] = main_compare.REFERENCE_BF16_PRECISION
+            expected_metadata["bf16_linear_variant"] = native_variant or ""
     else:
         expected_metadata = {
             "format": SOURCE_SCHEMA,
@@ -261,6 +292,7 @@ def compare_companions(
     source_parent_safetensors: str | Path, source_parent_receipt_path: str | Path,
     native_parent_safetensors: str | Path, native_parent_receipt_path: str | Path,
     precision: str, valid_text_tokens: int, input_manifest_sha256: str,
+    native_precision: str | None = None,
     input_payload_sha256: str, latent_artifact_sha256: str,
     timeline_manifest_sha256: str, weights_sha256: str = main_compare.BLOCK_WEIGHTS_SHA256,
     atol: float = 2e-5, rtol: float = 2e-5,
@@ -268,6 +300,7 @@ def compare_companions(
 ) -> dict[str, Any]:
     """Validate both companion lineage chains and compare all eight boundaries."""
     _expected_source_precision(precision)
+    _expected_native_precision(precision, native_precision)
     identities = {
         "input_bundle_manifest_sha256": input_manifest_sha256,
         "input_bundle_payload_sha256": input_payload_sha256,
@@ -285,6 +318,7 @@ def compare_companions(
             source_path=source_parent_safetensors,
             native_path=native_parent_safetensors,
             precision=precision,
+            native_precision=native_precision,
             valid_text_tokens=valid_text_tokens,
             input_manifest_sha256=input_manifest_sha256,
             input_payload_sha256=input_payload_sha256,
@@ -315,17 +349,23 @@ def compare_companions(
 
     source_receipt = _read_receipt(source_receipt_path)
     native_receipt = _read_receipt(native_receipt_path)
+    native_variant = (
+        native_parent.get("bf16_linear_variant")
+        if native_precision == main_compare.REFERENCE_BF16_PRECISION else None
+    )
     source = _validate_companion_receipt(
         source_receipt, native=False, tensor_path=source_safetensors,
         parent_receipt_path=source_parent_receipt_path,
         parent_artifact_path=source_parent_safetensors,
         precision=precision, valid_text_tokens=valid_text_tokens, identities=identities,
+        native_precision=native_precision,
     )
     native = _validate_companion_receipt(
         native_receipt, native=True, tensor_path=native_safetensors,
         parent_receipt_path=native_parent_receipt_path,
         parent_artifact_path=native_parent_safetensors,
         precision=precision, valid_text_tokens=valid_text_tokens, identities=identities,
+        native_precision=native_precision, native_variant=native_variant,
     )
 
     numeric = compare_named_tensors(
@@ -334,11 +374,13 @@ def compare_companions(
     return {
         "schema": "cogni_ml.hy_nomas_reference_block0_preqkv_comparison/v1",
         "precision_control": precision,
+        "native_precision": native_precision or precision,
         **numeric,
         "source_artifact_sha256": source.sha256,
         "native_artifact_sha256": native.sha256,
         "source_parent_receipt_sha256": main_compare._hash_file(Path(source_parent_receipt_path)),
         "native_parent_receipt_sha256": main_compare._hash_file(Path(native_parent_receipt_path)),
+        **({"bf16_linear_variant": native_variant} if native_variant is not None else {}),
         "identities": identities,
     }
 
@@ -354,6 +396,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--native-parent-safetensors", type=Path, required=True)
     parser.add_argument("--native-parent-receipt", type=Path, required=True)
     parser.add_argument("--precision", choices=("BF16BoundaryControl", "F32Control"), required=True)
+    parser.add_argument(
+        "--native-precision", choices=(main_compare.REFERENCE_BF16_PRECISION,), default=None,
+        help="explicitly admit the reference-bf16-preattention native path",
+    )
     parser.add_argument("--valid-text-tokens", type=int, required=True)
     parser.add_argument("--input-manifest-sha256", required=True)
     parser.add_argument("--input-payload-sha256", required=True)
@@ -374,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         native_parent_safetensors=args.native_parent_safetensors,
         native_parent_receipt_path=args.native_parent_receipt,
         precision=args.precision,
+        native_precision=args.native_precision,
         valid_text_tokens=args.valid_text_tokens,
         input_manifest_sha256=args.input_manifest_sha256,
         input_payload_sha256=args.input_payload_sha256,

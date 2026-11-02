@@ -8,14 +8,18 @@ require "./hy_nomas_reference_cache_probe"
 module HyNomasReferenceBlock0Probe
   extend self
 
-  SCHEMA               = "cogni_ml.hy_nomas_reference_block0_probe/v1"
-  PREQKV_SCHEMA        = "cogni_ml.hy_nomas_reference_block0_preqkv_probe/v1"
-  PREQKV_SCOPE         = "diagnostic pre-QKV boundaries from one standalone native block-0 forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
-  NATIVE_REVISION      = "a31c0fe0bcc493be188fd37ddba4ce2f674becb4"
-  SOURCE_REVISION      = "911cea6458a89c2663513ff7099561ec190dd491"
-  BLOCK0_WEIGHT_SHA256 = "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b"
-  INPUT_PREFIX_TENSORS = ["block.img_f32", "block.txt_valid_f32", "block.vec_f32",
-                          "block.vec_txt_f32", "block.rope_cos_f32", "block.rope_sin_f32"]
+  SCHEMA                    = "cogni_ml.hy_nomas_reference_block0_probe/v1"
+  PREQKV_SCHEMA             = "cogni_ml.hy_nomas_reference_block0_preqkv_probe/v1"
+  PREQKV_SCOPE              = "diagnostic pre-QKV boundaries from one standalone native block-0 forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
+  PREATTENTION_SCOPE        = "one standalone native block-0 pre-attention forward using native-exported T0 preblock inputs; not a complete upstream T0 handoff"
+  PREQKV_PREATTENTION_SCOPE = "diagnostic pre-QKV boundaries from one standalone native block-0 pre-attention forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
+  REFERENCE_BF16_PRECISION  = "reference-bf16-preattention"
+  REFERENCE_BF16_VARIANTS   = ["bf16-graph", "f32-accum"]
+  NATIVE_REVISION           = "a31c0fe0bcc493be188fd37ddba4ce2f674becb4"
+  SOURCE_REVISION           = "911cea6458a89c2663513ff7099561ec190dd491"
+  BLOCK0_WEIGHT_SHA256      = "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b"
+  INPUT_PREFIX_TENSORS      = ["block.img_f32", "block.txt_valid_f32", "block.vec_f32",
+                               "block.vec_txt_f32", "block.rope_cos_f32", "block.rope_sin_f32"]
   SOURCE_CAPTURE_NAMES = [
     "img.q_projection", "img.k_projection", "img.v_projection",
     "img.q_qknorm", "img.k_qknorm", "img.q_rope", "img.k_rope",
@@ -65,6 +69,21 @@ module HyNomasReferenceBlock0Probe
       end
     elsif has_artifact || has_receipt
       raise ArgumentError.new("pre-QKV output paths require explicit --capture-preqkv")
+    end
+  end
+
+  def validate_precision_options!(precision_name : String,
+                                  bf16_linear_variant_name : String,
+                                  bf16_linear_variant_supplied : Bool) : Nil
+    unless {"f32-control", "bf16-boundary-control", REFERENCE_BF16_PRECISION}.includes?(precision_name)
+      raise ArgumentError.new("invalid reference block precision")
+    end
+    if precision_name == REFERENCE_BF16_PRECISION
+      unless REFERENCE_BF16_VARIANTS.includes?(bf16_linear_variant_name)
+        raise ArgumentError.new("BF16 linear variant must be bf16-graph or f32-accum")
+      end
+    elsif bf16_linear_variant_supplied
+      raise ArgumentError.new("--bf16-linear-variant is only valid with --precision #{REFERENCE_BF16_PRECISION}")
     end
   end
 
@@ -136,8 +155,9 @@ module HyNomasReferenceBlock0Probe
 
   def preqkv_precision_label(precision_name : String) : String
     case precision_name
-    when "f32-control"           then "F32Control"
-    when "bf16-boundary-control" then "BF16BoundaryControl"
+    when "f32-control"            then "F32Control"
+    when "bf16-boundary-control"  then "BF16BoundaryControl"
+    when REFERENCE_BF16_PRECISION then REFERENCE_BF16_PRECISION
     else
       raise ArgumentError.new("invalid reference pre-QKV precision control")
     end
@@ -145,11 +165,21 @@ module HyNomasReferenceBlock0Probe
 
   def preqkv_metadata_fields(precision_name : String,
                              parent_native_receipt_sha256 : String,
-                             parent_native_artifact_sha256 : String) : Hash(String, String)
+                             parent_native_artifact_sha256 : String,
+                             bf16_linear_variant : String? = nil) : Hash(String, String)
     unless valid_sha256?(parent_native_receipt_sha256) && valid_sha256?(parent_native_artifact_sha256)
       raise ArgumentError.new("pre-QKV parent identities must be lowercase SHA-256")
     end
-    {
+    reference_mode = precision_name == REFERENCE_BF16_PRECISION
+    if reference_mode != !bf16_linear_variant.nil?
+      raise ArgumentError.new("reference BF16 pre-QKV metadata requires its linear variant")
+    end
+    if variant = bf16_linear_variant
+      unless REFERENCE_BF16_VARIANTS.includes?(variant)
+        raise ArgumentError.new("invalid reference BF16 linear variant")
+      end
+    end
+    metadata = {
       "format"                        => PREQKV_SCHEMA,
       "native_revision"               => NATIVE_REVISION,
       "source_revision"               => SOURCE_REVISION,
@@ -157,6 +187,10 @@ module HyNomasReferenceBlock0Probe
       "parent_native_receipt_sha256"  => parent_native_receipt_sha256,
       "parent_native_artifact_sha256" => parent_native_artifact_sha256,
     }
+    if variant = bf16_linear_variant
+      metadata["bf16_linear_variant"] = variant
+    end
+    metadata
   end
 
   def capture_header(entries : Array(CaptureHeaderEntry),

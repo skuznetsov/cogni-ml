@@ -320,6 +320,64 @@ class Block0CompareTests(unittest.TestCase):
                     weights_sha256=compare.BLOCK_WEIGHTS_SHA256,
                 )
 
+    def test_reference_bf16_preattention_requires_explicit_native_admission(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, native, source_path, native_path = self._receipt_pair(Path(temporary))
+            native["scope"] = compare.NATIVE_PREATTENTION_SCOPE
+            native["precision_control"] = compare.REFERENCE_BF16_PRECISION
+            native["preattention_only"] = True
+            native["bf16_linear_variant"] = "bf16-graph"
+            accounting = native["named_buffer_accounting"]
+            accounting["reference_bf16_buffers"] = 256
+            accounting["total_named_bytes"] += 256
+            args = {
+                "source_path": source_path,
+                "native_path": native_path,
+                "precision": "BF16BoundaryControl",
+                "valid_text_tokens": 529,
+                "input_manifest_sha256": "b" * 64,
+                "input_payload_sha256": "c" * 64,
+                "latent_artifact_sha256": "d" * 64,
+                "timeline_manifest_sha256": "e" * 64,
+                "weights_sha256": compare.BLOCK_WEIGHTS_SHA256,
+            }
+            with self.assertRaisesRegex(compare.CompareError, "fields differ"):
+                compare.validate_receipt_pair(source, native, **args)
+            compare.validate_receipt_pair(
+                source, native, native_precision=compare.REFERENCE_BF16_PRECISION, **args
+            )
+
+            for field, value, message in (
+                ("preattention_only", False, "preattention-only"),
+                ("bf16_linear_variant", [], "linear variant"),
+                ("scope", compare.NATIVE_SCOPE, "scope"),
+                ("text_storage_tokens", 1279, "input identity mismatch"),
+            ):
+                candidate = json.loads(json.dumps(native))
+                candidate[field] = value
+                with self.subTest(field=field), self.assertRaisesRegex(compare.CompareError, message):
+                    compare.validate_receipt_pair(
+                        source, candidate, native_precision=compare.REFERENCE_BF16_PRECISION, **args
+                    )
+
+            bad_accounting = json.loads(json.dumps(native))
+            del bad_accounting["named_buffer_accounting"]["reference_bf16_buffers"]
+            with self.assertRaisesRegex(compare.CompareError, "accounting fields"):
+                compare.validate_receipt_pair(
+                    source, bad_accounting,
+                    native_precision=compare.REFERENCE_BF16_PRECISION, **args
+                )
+
+            non_bf16_source = json.loads(json.dumps(source))
+            non_bf16_source["precision"] = {"mode": "f32-control"}
+            non_bf16_source["weight_source"]["parameter_dtype"] = "F32"
+            with self.assertRaisesRegex(compare.CompareError, "requires BF16 source"):
+                compare.validate_receipt_pair(
+                    non_bf16_source, native,
+                    **{**args, "precision": "F32Control"},
+                    native_precision=compare.REFERENCE_BF16_PRECISION,
+                )
+
 
 class PreQKVComparatorTests(unittest.TestCase):
     @staticmethod
@@ -424,11 +482,17 @@ class PreQKVComparatorTests(unittest.TestCase):
                 artifact_path.write_bytes(f"{prefix} parent artifact\n".encode())
                 return receipt_path, artifact_path
 
-            def make_companion(*, native: bool, prefix: str):
+            def make_companion(*, native: bool, prefix: str,
+                               native_preattention: bool = False,
+                               linear_variant: str = "bf16-graph"):
                 parent_receipt, parent_artifact = make_parent(prefix)
                 parent_receipt_sha = hashlib.sha256(parent_receipt.read_bytes()).hexdigest()
                 parent_artifact_sha = hashlib.sha256(parent_artifact.read_bytes()).hexdigest()
                 precision = "BF16BoundaryControl"
+                native_precision = (
+                    compare.REFERENCE_BF16_PRECISION
+                    if native and native_preattention else precision
+                )
                 source_tensor_dtypes = preqkv_compare._expected_source_boundary_dtypes(precision)
                 tensor_dtypes = (
                     {name: "F32" for name in preqkv_compare.NAMES}
@@ -444,10 +508,12 @@ class PreQKVComparatorTests(unittest.TestCase):
                         "format": preqkv_compare.NATIVE_SCHEMA,
                         "native_revision": preqkv_compare.UPSTREAM_REVISION,
                         "source_revision": preqkv_compare.NATIVE_SOURCE_REVISION,
-                        "precision_control": "BF16BoundaryControl",
+                        "precision_control": native_precision,
                         "parent_native_receipt_sha256": parent_receipt_sha,
                         "parent_native_artifact_sha256": parent_artifact_sha,
                     }
+                    if native_preattention:
+                        metadata["bf16_linear_variant"] = linear_variant
                 else:
                     metadata = {
                         "format": preqkv_compare.SOURCE_SCHEMA,
@@ -473,8 +539,12 @@ class PreQKVComparatorTests(unittest.TestCase):
                 receipt = {
                     "schema": preqkv_compare.NATIVE_SCHEMA if native else preqkv_compare.SOURCE_SCHEMA,
                     "schema_version": 1,
-                    "scope": preqkv_compare.NATIVE_SCOPE if native else preqkv_compare.SOURCE_SCOPE,
-                    "precision_control": precision,
+                    "scope": (
+                        preqkv_compare.NATIVE_PREATTENTION_SCOPE
+                        if native and native_preattention else
+                        preqkv_compare.NATIVE_SCOPE if native else preqkv_compare.SOURCE_SCOPE
+                    ),
+                    "precision_control": native_precision if native else precision,
                     **identities,
                     "valid_text_tokens": 1,
                     "weights_sha256": identities["weights_sha256"],
@@ -502,6 +572,8 @@ class PreQKVComparatorTests(unittest.TestCase):
                         "parent_native_receipt_sha256": parent_receipt_sha,
                         "parent_native_artifact_sha256": parent_artifact_sha,
                     })
+                    if native_preattention:
+                        receipt["bf16_linear_variant"] = linear_variant
                 else:
                     receipt.update({
                         "upstream_revision": preqkv_compare.UPSTREAM_REVISION,
@@ -529,6 +601,59 @@ class PreQKVComparatorTests(unittest.TestCase):
                 self.assertEqual(source_artifact.tensors["img.norm1"]["dtype"], "F32")
                 self.assertEqual(source_artifact.tensors["txt.qkv_input"]["dtype"], "F32")
                 self.assertEqual(native_artifact.tensors[preqkv_compare.NAMES[0]]["dtype"], "F32")
+
+                preattention = make_companion(
+                    native=True, prefix="native-preattention", native_preattention=True,
+                    linear_variant="f32-accum",
+                )
+                admitted_artifact = preqkv_compare._validate_companion_receipt(
+                    preattention[0], native=True, tensor_path=preattention[1],
+                    parent_receipt_path=preattention[3], parent_artifact_path=preattention[4],
+                    precision="BF16BoundaryControl", valid_text_tokens=1, identities=identities,
+                    native_precision=compare.REFERENCE_BF16_PRECISION,
+                    native_variant="f32-accum",
+                )
+                self.assertEqual(admitted_artifact.tensors[preqkv_compare.NAMES[0]]["dtype"], "F32")
+                with self.assertRaisesRegex(preqkv_compare.PreQKVCompareError, "pinned schema"):
+                    preqkv_compare._validate_companion_receipt(
+                        preattention[0], native=True, tensor_path=preattention[1],
+                        parent_receipt_path=preattention[3], parent_artifact_path=preattention[4],
+                        precision="BF16BoundaryControl", valid_text_tokens=1, identities=identities,
+                    )
+                wrong_variant = json.loads(json.dumps(preattention[0]))
+                wrong_variant["bf16_linear_variant"] = "bf16-graph"
+                with self.assertRaisesRegex(preqkv_compare.PreQKVCompareError, "variant differs"):
+                    preqkv_compare._validate_companion_receipt(
+                        wrong_variant, native=True, tensor_path=preattention[1],
+                        parent_receipt_path=preattention[3], parent_artifact_path=preattention[4],
+                        precision="BF16BoundaryControl", valid_text_tokens=1, identities=identities,
+                        native_precision=compare.REFERENCE_BF16_PRECISION,
+                        native_variant="f32-accum",
+                    )
+                wrong_variant_type = json.loads(json.dumps(preattention[0]))
+                wrong_variant_type["bf16_linear_variant"] = []
+                with self.assertRaisesRegex(preqkv_compare.PreQKVCompareError, "variant differs"):
+                    preqkv_compare._validate_companion_receipt(
+                        wrong_variant_type, native=True, tensor_path=preattention[1],
+                        parent_receipt_path=preattention[3], parent_artifact_path=preattention[4],
+                        precision="BF16BoundaryControl", valid_text_tokens=1, identities=identities,
+                        native_precision=compare.REFERENCE_BF16_PRECISION,
+                        native_variant="f32-accum",
+                    )
+                wrong_scope = json.loads(json.dumps(preattention[0]))
+                wrong_scope["scope"] = preqkv_compare.NATIVE_SCOPE
+                with self.assertRaisesRegex(preqkv_compare.PreQKVCompareError, "scope"):
+                    preqkv_compare._validate_companion_receipt(
+                        wrong_scope, native=True, tensor_path=preattention[1],
+                        parent_receipt_path=preattention[3], parent_artifact_path=preattention[4],
+                        precision="BF16BoundaryControl", valid_text_tokens=1, identities=identities,
+                        native_precision=compare.REFERENCE_BF16_PRECISION,
+                        native_variant="f32-accum",
+                    )
+                with self.assertRaisesRegex(preqkv_compare.PreQKVCompareError, "requires BF16 source"):
+                    preqkv_compare._expected_native_precision(
+                        "F32Control", compare.REFERENCE_BF16_PRECISION,
+                    )
 
                 for prefix, is_native, fixture in (
                     ("source", False, source),

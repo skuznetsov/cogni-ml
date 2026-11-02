@@ -188,7 +188,7 @@ module ML::Video
       abstract def linear(e : ML::Metal::ComputeEncoder, name : String,
                           input : ML::MetalBuffer, weights : LinearWeights,
                           output : ML::MetalBuffer, rows : Int32,
-                          input_dim : Int32, output_dim : Int32) : Nil
+                          input_dim : Int32, output_dim : Int32) : ML::Metal::ComputeEncoder
 
       abstract def layer_norm(e : ML::Metal::ComputeEncoder,
                               input : ML::MetalBuffer, output : ML::MetalBuffer,
@@ -534,7 +534,8 @@ module ML::Video
                                     vec : ML::MetalBuffer, vec_txt : ML::MetalBuffer,
                                     video_rope_cos : ML::MetalBuffer,
                                     video_rope_sin : ML::MetalBuffer,
-                                    backend : EncodeBackend?) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
+                                    backend : EncodeBackend?,
+                                    *, stop_before_attention : Bool = false) : Tuple(ML::MetalBuffer, ML::MetalBuffer)
       backend.try(&.phase_marker("validate"))
       validate_inputs!(img, txt, vec, vec_txt, video_rope_cos, video_rope_sin)
       backend.try do |execution|
@@ -560,6 +561,9 @@ module ML::Video
       concat(e, @image_buffers.attn_q_rope.not_nil!, @text_buffers.attn_q_norm, @joint_query, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_k_rope.not_nil!, @text_buffers.attn_k_norm, @joint_key, c.video_tokens, c.text_tokens)
       concat(e, @image_buffers.attn_v, @text_buffers.attn_v, @joint_value, c.video_tokens, c.text_tokens)
+      # Only the separately admitted MPS reference diagnostic requests this
+      # stop. It returns prospective K/V, not a history append or block output.
+      return {@joint_key, @joint_value} if stop_before_attention
       backend.try(&.phase_marker("attention"))
       if execution = backend
         e = execution.attention(e, @joint_query, @joint_key, @joint_value, @joint_attention, c)
@@ -570,8 +574,8 @@ module ML::Video
       backend.try(&.phase_marker("attention_projection_residual"))
       split(e, @joint_attention, @image_buffers.attn_raw, @text_buffers.attn_raw, c.video_tokens, c.text_tokens)
 
-      encode_attention_residual(e, "img", img, @image_buffers, @image_weights, img_rows, backend)
-      encode_attention_residual(e, "txt", txt, @text_buffers, @text_weights, txt_rows, backend)
+      e = encode_attention_residual(e, "img", img, @image_buffers, @image_weights, img_rows, backend)
+      e = encode_attention_residual(e, "txt", txt, @text_buffers, @text_weights, txt_rows, backend)
       backend.try(&.phase_marker("image_ffn"))
       e = encode_feed_forward(e, "img", @image_buffers, @image_weights, img_rows, backend)
       backend.try(&.phase_marker("text_ffn"))
@@ -872,7 +876,7 @@ module ML::Video
         e.set_value((mod_rows * c.dim).to_u32, 2)
         e.dispatch_1d(mod_rows * c.dim)
       end
-      linear(e, "#{stream}.modulation", buffers.vec_silu, weights.modulation, buffers.modulation,
+      e = linear(e, "#{stream}.modulation", buffers.vec_silu, weights.modulation, buffers.modulation,
         mod_rows, c.dim, 6 * c.dim, backend)
       unpack_modulation(e, buffers.modulation, buffers, mod_rows, rows, tokens)
       e
@@ -889,11 +893,11 @@ module ML::Video
       encode_non_affine_norm(e, input, buffers.attn_norm, rows, backend)
       encode_pointwise_modulation(e, buffers.attn_norm, buffers.attn_shift,
         buffers.attn_scale, buffers.attn_modulated, rows, c.dim, backend)
-      linear(e, "#{stream}.attn.q", buffers.attn_modulated, weights.query, buffers.attn_q,
+      e = linear(e, "#{stream}.attn.q", buffers.attn_modulated, weights.query, buffers.attn_q,
         rows, c.dim, c.dim, backend)
-      linear(e, "#{stream}.attn.k", buffers.attn_modulated, weights.key, buffers.attn_k,
+      e = linear(e, "#{stream}.attn.k", buffers.attn_modulated, weights.key, buffers.attn_k,
         rows, c.dim, c.dim, backend)
-      linear(e, "#{stream}.attn.v", buffers.attn_modulated, weights.value, buffers.attn_v,
+      e = linear(e, "#{stream}.attn.v", buffers.attn_modulated, weights.value, buffers.attn_v,
         rows, c.dim, c.dim, backend)
       if execution = backend
         e = execution.rms_norm(e, "#{stream}.q", buffers.attn_q, weights.query_norm, buffers.attn_q_norm)
@@ -985,12 +989,13 @@ module ML::Video
                                           input : ML::MetalBuffer,
                                           buffers : StreamBuffers, weights : StreamWeights,
                                           rows : Int32,
-                                          backend : EncodeBackend?) : Nil
+                                          backend : EncodeBackend?) : ML::Metal::ComputeEncoder
       c = @config
-      linear(e, "#{stream}.attn.proj", buffers.attn_raw, weights.projection,
+      e = linear(e, "#{stream}.attn.proj", buffers.attn_raw, weights.projection,
         buffers.attn_projected, rows, c.dim, c.dim, backend)
       encode_pointwise_gated_residual(e, input, buffers.attn_projected,
         buffers.attn_gate, buffers.after_attention, rows, c.dim, backend)
+      e
     end
 
     private def encode_feed_forward(e : ML::Metal::ComputeEncoder, stream : String,
@@ -1001,14 +1006,14 @@ module ML::Video
       encode_non_affine_norm(e, buffers.after_attention, buffers.ff_norm, rows, backend)
       encode_pointwise_modulation(e, buffers.ff_norm, buffers.ff_shift,
         buffers.ff_scale, buffers.ff_modulated, rows, c.dim, backend)
-      linear(e, "#{stream}.ff.fc1", buffers.ff_modulated, weights.mlp_fc1,
+      e = linear(e, "#{stream}.ff.fc1", buffers.ff_modulated, weights.mlp_fc1,
         buffers.ff_hidden, rows, c.dim, c.ffn_dim, backend)
       if execution = backend
         e = execution.activation(e, "#{stream}.gelu", buffers.ff_hidden, buffers.ff_activated)
       else
         MetalOps.gelu(e, buffers.ff_hidden, buffers.ff_activated, rows * c.ffn_dim, approximate: true)
       end
-      linear(e, "#{stream}.ff.fc2", buffers.ff_activated, weights.mlp_fc2,
+      e = linear(e, "#{stream}.ff.fc2", buffers.ff_activated, weights.mlp_fc2,
         buffers.ff_projected, rows, c.ffn_dim, c.dim, backend)
       encode_pointwise_gated_residual(e, buffers.after_attention,
         buffers.ff_projected, buffers.ff_gate, buffers.output, rows, c.dim, backend)
@@ -1060,12 +1065,13 @@ module ML::Video
                        input : ML::MetalBuffer,
                        weights : LinearWeights, output : ML::MetalBuffer,
                        rows : Int32, in_dim : Int32, out_dim : Int32,
-                       backend : EncodeBackend?) : Nil
+                       backend : EncodeBackend?) : ML::Metal::ComputeEncoder
       if execution = backend
         execution.linear(e, name, input, weights, output, rows, in_dim, out_dim)
       else
         MetalOps.linear(e, input, weights.weight, weights.bias, output, rows, in_dim, out_dim,
           weights.weight_dtype, weights.bias_dtype)
+        e
       end
     end
   end
