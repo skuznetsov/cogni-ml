@@ -9,6 +9,25 @@ class ML::Video::HyNomasMPSRMS::Plan
   end
 end
 
+class ML::Video::HyNomasReferenceMPSWorkspace
+  def reference_spec_release_img_q_mean! : Nil
+    @rms_plans["img.q"].reference_spec_release_mean!
+  end
+end
+
+HY_NOMAS_REFERENCE_WORKSPACE_CACHE_MUTATION = <<-METAL
+#include <metal_stdlib>
+using namespace metal;
+kernel void hy_nomas_reference_workspace_cache_mutation(
+    device ushort *key [[buffer(0)]], device ushort *value [[buffer(1)]],
+    constant uint &count [[buffer(2)]], uint id [[thread_position_in_grid]]) {
+  if (id < count) {
+    key[id] = 0x3f80; // BF16 1.0
+    value[id] = 0xc000; // BF16 -2.0
+  }
+}
+METAL
+
 class HyNomasReferenceSpecHistoryProvider < ML::Video::HyNomasMPSHistoryProvider
   def resident_bytes : Int64
     0_i64
@@ -72,6 +91,149 @@ private def hy_nomas_reference_workspace_inputs(
 end
 
 describe ML::Video::HyNomasReferenceMPSWorkspace do
+  it "owns an opt-in physical history cache and preflights its single-write lease" do
+    config = hy_nomas_reference_workspace_config(text_tokens: 2)
+    roots_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
+    arenas = [] of ML::Video::Arena
+    workspace = nil.as(ML::Video::HyNomasReferenceMPSWorkspace?)
+    chain = nil.as(ML::Metal::MPSCommandChain?)
+    begin
+      weights = hy_nomas_reference_workspace_weights(config)
+      arenas << weights
+      scratch = ML::Video::Arena.new
+      arenas << scratch
+      ML::Video::HyNomasDualStreamBlock.scratch_plan(config).each do |name, count|
+        scratch.alloc(name, count)
+      end
+      block = ML::Video::HyNomasDualStreamBlock.new(config, weights, scratch)
+      inputs = ML::Video::Arena.new
+      arenas << inputs
+      hy_nomas_reference_workspace_inputs(inputs, config)
+      mutation = ML::Metal::ComputePipeline.new(
+        "hy_nomas_reference_workspace_cache_mutation",
+        HY_NOMAS_REFERENCE_WORKSPACE_CACHE_MUTATION)
+      workspace = ML::Video::HyNomasReferenceMPSWorkspace.new(block,
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+        inputs["rope_cos"], inputs["rope_sin"], valid_text_tokens: 1,
+        reference_history: true)
+      cache = workspace.not_nil!.reference_history_cache
+      cache.shape.should eq({2, 2, 32})
+      cache.resident_bytes.should eq(1536_i64)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(roots_before + 1)
+      chain = ML::Metal::MPSCommandChain.new
+      allocations_before = ML::MetalBuffer.video_spec_allocations
+      key, value = block.encode_mps_reference_history(chain.not_nil!,
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+        inputs["rope_cos"], inputs["rope_sin"], workspace.not_nil!)
+      key.same?(cache.key_read).should be_true
+      value.same?(cache.value_read).should be_true
+      key.same?(block.checkpoints["joint.key"]).should be_false
+      expect_raises(ArgumentError, /single-write/) do
+        block.encode_mps_reference_history(chain.not_nil!,
+          inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+          inputs["rope_cos"], inputs["rope_sin"], workspace.not_nil!)
+      end
+      # A subsequent read must consume physical BF16 bytes, even when those
+      # differ from the current block's all-zero prospective K/V.
+      chain.not_nil!.encoder.set_pipeline(mutation)
+        .set_buffer(cache.key_storage, 0, ML::Metal::BufferAccess::Write)
+        .set_buffer(cache.value_storage, 1, ML::Metal::BufferAccess::Write)
+        .set_value(cache.geometry.cache_elements.to_u32, 2)
+        .dispatch_1d(cache.geometry.cache_elements)
+      cache.read(chain.not_nil!)
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before)
+      chain.not_nil!.wait_count.should eq(0)
+      expect_raises(ArgumentError, /Complete reference BF16 chain/) { workspace.not_nil!.release }
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+      key.read(cache.geometry.cache_elements).should eq(Array.new(cache.geometry.cache_elements, 1.0_f32))
+      value.read(cache.geometry.cache_elements).should eq(Array.new(cache.geometry.cache_elements, -2.0_f32))
+      block.checkpoints["joint.key"].read(config.joint_tokens * config.dim).should eq(Array.new(config.joint_tokens * config.dim, 0.0_f32))
+      chain.not_nil!.release
+      chain = ML::Metal::MPSCommandChain.new
+      cache.read(chain.not_nil!)
+      # The workspace's original chain has drained, but the owned cache has a
+      # newer read lease. Its release guard must prevent partial teardown.
+      expect_raises(ArgumentError, /Drain.*before release/) { workspace.not_nil!.release }
+      cache.key_read.valid?.should be_true
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(roots_before + 1)
+      chain.not_nil!.commit_and_wait
+      workspace.not_nil!.release
+      workspace = nil
+      cache.resident_bytes.should eq(0_i64)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(roots_before)
+    ensure
+      if pending = chain
+        pending.commit_and_wait unless pending.completed?
+      end
+      workspace.try(&.release)
+      chain.try(&.release)
+      arenas.reverse_each(&.release)
+    end
+  end
+
+  it "consumes the history attempt after partial preattention failure but preserves preflight rejection" do
+    config = hy_nomas_reference_workspace_config
+    roots_before = ML::Video::HyNomasMPSWorkspace.retained_workspace_count
+    arenas = [] of ML::Video::Arena
+    workspace = nil.as(ML::Video::HyNomasReferenceMPSWorkspace?)
+    chain = nil.as(ML::Metal::MPSCommandChain?)
+    begin
+      weights = hy_nomas_reference_workspace_weights(config)
+      arenas << weights
+      scratch = ML::Video::Arena.new
+      arenas << scratch
+      ML::Video::HyNomasDualStreamBlock.scratch_plan(config).each do |name, count|
+        scratch.alloc(name, count)
+      end
+      block = ML::Video::HyNomasDualStreamBlock.new(config, weights, scratch)
+      inputs = ML::Video::Arena.new
+      arenas << inputs
+      hy_nomas_reference_workspace_inputs(inputs, config)
+      wrong_img = inputs.upload("wrong_img", Array.new(config.image_rows * config.dim, 0.125_f32))
+      workspace = ML::Video::HyNomasReferenceMPSWorkspace.new(block,
+        inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
+        inputs["rope_cos"], inputs["rope_sin"], reference_history: true)
+      workspace.not_nil!.reference_spec_release_img_q_mean!
+      chain = ML::Metal::MPSCommandChain.new
+      allocations_before = ML::MetalBuffer.video_spec_allocations
+      expect_raises(ArgumentError, /input identity changed/) do
+        block.encode_mps_reference_history(chain.not_nil!, wrong_img,
+          inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["rope_cos"],
+          inputs["rope_sin"], workspace.not_nil!)
+      end
+      expect_raises(Exception, /RMS mean plan has been released/) do
+        block.encode_mps_reference_history(chain.not_nil!, inputs["img"],
+          inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["rope_cos"],
+          inputs["rope_sin"], workspace.not_nil!)
+      end
+      expect_raises(ArgumentError, /history attempt already started/) do
+        block.encode_mps_reference_history(chain.not_nil!, inputs["img"],
+          inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["rope_cos"],
+          inputs["rope_sin"], workspace.not_nil!)
+      end
+      expect_raises(ArgumentError, /requires encode_mps_reference_history/) do
+        block.encode_mps_preattention(chain.not_nil!, inputs["img"],
+          inputs["txt"], inputs["vec"], inputs["vec_txt"], inputs["rope_cos"],
+          inputs["rope_sin"], workspace.not_nil!)
+      end
+      chain.not_nil!.encoder
+      ML::MetalBuffer.video_spec_allocations.should eq(allocations_before)
+      chain.not_nil!.wait_count.should eq(0)
+      expect_raises(ArgumentError, /Complete reference BF16 chain/) { workspace.not_nil!.release }
+      chain.not_nil!.commit_and_wait
+      chain.not_nil!.wait_count.should eq(1)
+    ensure
+      if pending = chain
+        pending.commit_and_wait unless pending.completed?
+      end
+      workspace.try(&.release)
+      chain.try(&.release)
+      arenas.reverse_each(&.release)
+      ML::Video::HyNomasMPSWorkspace.retained_workspace_count.should eq(roots_before)
+    end
+  end
+
   it "restores the encoder after a source-BF16 RMS graph failure" do
     config = hy_nomas_reference_workspace_config
     arena = ML::Video::Arena.new
@@ -175,6 +337,9 @@ describe ML::Video::HyNomasReferenceMPSWorkspace do
         inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],
         inputs["rope_cos"], inputs["rope_sin"])
       workspace.reference_preattention_bf16.should be_true
+      expect_raises(ArgumentError, /history cache was not prepared/) do
+        workspace.reference_history_cache
+      end
       expected_extra = ML::Video::HyNomasReferenceMPSWorkspace.reference_extra_bytes(config)
       base_workspace = ML::Video::HyNomasMPSWorkspace.new(block,
         inputs["img"], inputs["txt"], inputs["vec"], inputs["vec_txt"],

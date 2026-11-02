@@ -1,0 +1,173 @@
+{
+  "artifact_kind": "landmark_evidence_packet",
+  "canonical_status": "canonical_summary",
+  "created_at": "2026-11-02T03:59:46.362786+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "text": "An opt-in native block-0 first-T0 history cache stores physical BF16 K/V and reads F32 values exactly matching the pinned upstream cache function on the fixed preblock fixture.",
+    "scope": "4320 image + 529 valid text tokens in 1280 text-storage rows; original BF16 block-0 weights, bf16-graph projection variant; one store and repeatable cache reads only.",
+    "decay_trigger": "Source, binary, input, weights, geometry, precision, cache policy, backend, compiler/runtime/device change or local artifact modification/loss."
+  },
+  "capability_status": {
+    "image_conditioned_continuation": "IN_PROGRESS",
+    "block0_bf16_preattention": "VERIFIED on fixture",
+    "block0_physical_bf16_history_store_read": "VERIFIED on fixture",
+    "attention_residual_ffn": "NOT_QUALIFIED",
+    "all_layer_history_or_multisegment_append": "NOT_QUALIFIED",
+    "experimental_opt_in_still_required": true,
+    "generated_t1_or_full_video": false
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-history.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_history_probe.cr",
+      "spec/hy_nomas_reference_history_probe_spec.cr",
+      "spec/hy_nomas_reference_history_test.py",
+      "spec/hy_nomas_reference_kv_cache_metal_spec.cr",
+      "spec/hy_nomas_reference_kv_cache_spec.cr",
+      "spec/hy_nomas_reference_workspace_spec.cr",
+      "spec/support/hy_nomas_reference_history.py",
+      "src/ml/video/hy_nomas_reference_block_mps.cr",
+      "src/ml/video/hy_nomas_reference_kv_cache.cr",
+      "src/ml/video/kernels/hy_nomas_reference_kv_cache.metal"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/2026-11-01-hy-nomas-reference-history.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/hy-nomas-drafter-frontier.md",
+      "examples/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_block0_probe.cr",
+      "examples/support/hy_nomas_reference_history_probe.cr",
+      "spec/hy_nomas_reference_history_probe_spec.cr",
+      "spec/hy_nomas_reference_history_test.py",
+      "spec/hy_nomas_reference_kv_cache_metal_spec.cr",
+      "spec/hy_nomas_reference_kv_cache_spec.cr",
+      "spec/hy_nomas_reference_workspace_spec.cr",
+      "spec/support/hy_nomas_reference_history.py",
+      "src/ml/video/hy_nomas_reference_block_mps.cr",
+      "src/ml/video/hy_nomas_reference_kv_cache.cr",
+      "src/ml/video/kernels/hy_nomas_reference_kv_cache.metal"
+    ],
+    "default_policy": "Preserve unrelated Python caches and user work; no generated data or binaries in Git.",
+    "out_of_scope": [
+      "Attention math, rest of block, all-layer cache and multi-segment append",
+      "Full upstream T0 preprocessing/RNG equivalence",
+      "Generated T1, RoleWright identity/style quality or speedup claims"
+    ],
+    "raw_artifacts": [
+      {
+        "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs",
+        "availability": "local_only",
+        "note": "Local fixtures, binaries, logs and receipts are external to Git; hashes cannot recover missing bytes."
+      }
+    ]
+  },
+  "definition_of_done": {
+    "commands": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-commands.json",
+    "expected": "71 CPU Crystal, 43 Python and 8 Metal examples pass; physical BF16 storage byte-exact and F32 reads pass unchanged 2e-5; 22 BF16 and 22 F32 preattention regressions exact; value mutations rejected; no tracked native in-chain allocations/readbacks/waits and one terminal drain under 10% memory guards.",
+    "observed": "All declared positive checks pass. Four history tensors exact; 22+22 regression tensors exact. Hash-repaired BF16 corruption is rejected (exit 1), F32-only corruption produces one mismatch (exit 2). Sixteen guarded commands meet their declared expected exits and sampled memory limits; the old-CLI negative is CPU-only and unguarded."
+  },
+  "evidence": [
+    {
+      "kind": "actual_upstream_cache_function",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/oracle/source-history-v2.json",
+      "result": "passed",
+      "signal": "Pinned causal_attention_with_cache_mp invoked for one T0 store and one poisoned read-only call; two consumer interceptions; no attention math. Stored prefix survives in-place zeroing of current Q/K/V."
+    },
+    {
+      "kind": "physical_store_and_read_comparison",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/oracle/native-history-comparison.json",
+      "result": "passed",
+      "signal": "BF16 K/V byte-exact; both 9,930,752-value F32 reads have zero maximum/RMS error and mismatches at atol=rtol=2e-5."
+    },
+    {
+      "kind": "native_preattention_regressions",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-summary.json",
+      "result": "passed",
+      "signal": "Current binary retains exact 14 main + 8 pre-QKV BF16 captures and exact 14+8 F32 controls on identical inputs."
+    },
+    {
+      "kind": "lifecycle_and_failure_guards",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/logs/metal-specs-v2.stdout",
+      "result": "passed",
+      "signal": "Eight Metal examples distinguish physical cache from overwritten source and mutated cache, enforce lease after partial preattention failure, and retain workspace through a later cache-read chain drain."
+    },
+    {
+      "kind": "strict_negative_controls",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/logs/negative-values.stderr",
+      "companion": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/oracle/negative-read-comparison.json",
+      "result": "expected_rejection",
+      "signal": "Repaired artifact/tensor hashes do not hide changed BF16 storage or one changed F32 read value. CPU tamper tests also reject underreported cache bytes with a repaired accounting total."
+    },
+    {
+      "kind": "sampled_memory_and_counters",
+      "ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-summary.json",
+      "result": "passed",
+      "signal": "Native history counters 0/0/0/1. Named diagnostic buffers 2,402,022,912 bytes including 119,169,024 cache/read bytes; opaque MPSGraph storage excluded. 6 GiB native process cap, cache-aware 10% floor and 64 MiB swap-growth limit; sampled native peak 1.559 GiB, minimum headroom 38.876 GiB, swap growth zero."
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-summary.json",
+      "bytes": 91610,
+      "sha256": "2fd907a070e8cc22e47a3a1d1d0837b9d5dfc1e2f94144d172e3f20c7912dac5"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-commands.json",
+      "bytes": 22057,
+      "sha256": "0eaae747ec89cceb8211194084a3489fdf050016181056de4c708eab5c4fedd7"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/collect_history_evidence.py",
+      "bytes": 13202,
+      "sha256": "d1b69c97077588000f47739a5f03098f80168c471543ac9dc5d0218a122a3f4b"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/adversary-review.json",
+      "bytes": 1905,
+      "sha256": "0b0470c99383888999433b27c59c8cb04b0a64ca02172594d4d6a68e471fb79f"
+    },
+    {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/final-format-checks.json",
+      "bytes": 963,
+      "sha256": "8b430908d163ee63a8b9b1af77034e2df09ff7556094c6255d9ba769de7d1d01"
+    }
+  ],
+  "source_state": {
+    "parent_revision": "51fd840fe30d7ba61ecb39d342d69966ab806733",
+    "actual_checkout_branch": "codex/hy-nomas-native",
+    "upstream_reference_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "upstream_implementation_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "pins_ref": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/qualification-summary.json",
+    "note": "Current native binary was built after the lease/lifetime fixes and reused for guarded history and both old-mode regressions. Runtime sources predate that binary and are fingerprinted separately from upstream semantic revision fields. Source oracle v2 was rerun after its scope wording changed. The prior source Q/K/V capture is an explicitly trusted fixture whose original execution is not independently attested by hashes."
+  },
+  "verification": {
+    "adversary_verdict": "ROBUST within the declared fixture-only scope",
+    "review_provenance": "Correlated same-lineage source reviews plus root guarded execution, GPU mutation/failure tests, numeric negative controls and substantive collector assertions; not independent model evidence."
+  },
+  "validation": {
+    "collector": "/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs/collect_history_evidence.py",
+    "observed_artifacts": 175,
+    "observed_guarded_commands": 16,
+    "repository_graph_validator": "No scripts/validate-landmark-graph.sh exists in this checkout. The external collector asserts digests, numeric predicates, expected negative exits, counters and sampled guards. Packet structure alone is not proof."
+  },
+  "next_falsifier": "Compare the attention consumer on identical Q and stored K/V, then residual/FFN and per-layer histories before T0/T1 continuation.",
+  "residual_risk": [
+    "One block-0 fixture and one projection variant; no all-layer or full video qualification.",
+    "Prior source Q/K/V production is a trusted local lineage assumption, not an independently attested run.",
+    "No attention math, history append, complete T0 preprocessing/RNG or visual identity/style claim.",
+    "Named counters exclude opaque MPSGraph storage and untracked host objects; sampled guards do not bound between-poll spikes.",
+    "Raw artifacts are local-only; integrity digests do not provide execution attestation or recovery."
+  ],
+  "links": {
+    "frontier_sdd": "docs/hy-nomas-drafter-frontier.md",
+    "landmark": "LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01",
+    "previous_slice": ".landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json"
+  }
+}

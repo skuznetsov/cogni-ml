@@ -8,18 +8,19 @@ require "./hy_nomas_reference_cache_probe"
 module HyNomasReferenceBlock0Probe
   extend self
 
-  SCHEMA                    = "cogni_ml.hy_nomas_reference_block0_probe/v1"
-  PREQKV_SCHEMA             = "cogni_ml.hy_nomas_reference_block0_preqkv_probe/v1"
-  PREQKV_SCOPE              = "diagnostic pre-QKV boundaries from one standalone native block-0 forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
-  PREATTENTION_SCOPE        = "one standalone native block-0 pre-attention forward using native-exported T0 preblock inputs; not a complete upstream T0 handoff"
-  PREQKV_PREATTENTION_SCOPE = "diagnostic pre-QKV boundaries from one standalone native block-0 pre-attention forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
-  REFERENCE_BF16_PRECISION  = "reference-bf16-preattention"
-  REFERENCE_BF16_VARIANTS   = ["bf16-graph", "f32-accum"]
-  NATIVE_REVISION           = "a31c0fe0bcc493be188fd37ddba4ce2f674becb4"
-  SOURCE_REVISION           = "911cea6458a89c2663513ff7099561ec190dd491"
-  BLOCK0_WEIGHT_SHA256      = "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b"
-  INPUT_PREFIX_TENSORS      = ["block.img_f32", "block.txt_valid_f32", "block.vec_f32",
-                               "block.vec_txt_f32", "block.rope_cos_f32", "block.rope_sin_f32"]
+  SCHEMA                      = "cogni_ml.hy_nomas_reference_block0_probe/v1"
+  PREQKV_SCHEMA               = "cogni_ml.hy_nomas_reference_block0_preqkv_probe/v1"
+  REFERENCE_HISTORY_PRECISION = "reference-bf16-history"
+  PREQKV_SCOPE                = "diagnostic pre-QKV boundaries from one standalone native block-0 forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
+  PREATTENTION_SCOPE          = "one standalone native block-0 pre-attention forward using native-exported T0 preblock inputs; not a complete upstream T0 handoff"
+  PREQKV_PREATTENTION_SCOPE   = "diagnostic pre-QKV boundaries from one standalone native block-0 pre-attention forward using authenticated native preblock inputs; not a complete upstream T0 handoff"
+  REFERENCE_BF16_PRECISION    = "reference-bf16-preattention"
+  REFERENCE_BF16_VARIANTS     = ["bf16-graph", "f32-accum"]
+  NATIVE_REVISION             = "a31c0fe0bcc493be188fd37ddba4ce2f674becb4"
+  SOURCE_REVISION             = "911cea6458a89c2663513ff7099561ec190dd491"
+  BLOCK0_WEIGHT_SHA256        = "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b"
+  INPUT_PREFIX_TENSORS        = ["block.img_f32", "block.txt_valid_f32", "block.vec_f32",
+                                 "block.vec_txt_f32", "block.rope_cos_f32", "block.rope_sin_f32"]
   SOURCE_CAPTURE_NAMES = [
     "img.q_projection", "img.k_projection", "img.v_projection",
     "img.q_qknorm", "img.k_qknorm", "img.q_rope", "img.k_rope",
@@ -75,10 +76,15 @@ module HyNomasReferenceBlock0Probe
   def validate_precision_options!(precision_name : String,
                                   bf16_linear_variant_name : String,
                                   bf16_linear_variant_supplied : Bool) : Nil
-    unless {"f32-control", "bf16-boundary-control", REFERENCE_BF16_PRECISION}.includes?(precision_name)
+    unless {"f32-control", "bf16-boundary-control", REFERENCE_BF16_PRECISION,
+            REFERENCE_HISTORY_PRECISION}.includes?(precision_name)
       raise ArgumentError.new("invalid reference block precision")
     end
-    if precision_name == REFERENCE_BF16_PRECISION
+    if precision_name == REFERENCE_HISTORY_PRECISION
+      unless bf16_linear_variant_name == "bf16-graph"
+        raise ArgumentError.new("reference-bf16-history requires the bf16-graph linear variant")
+      end
+    elsif precision_name == REFERENCE_BF16_PRECISION
       unless REFERENCE_BF16_VARIANTS.includes?(bf16_linear_variant_name)
         raise ArgumentError.new("BF16 linear variant must be bf16-graph or f32-accum")
       end

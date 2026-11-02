@@ -5,6 +5,7 @@ require "../src/ml/video/bf16_weight_cache"
 require "../src/ml/video/hy_nomas_block_mps"
 require "../src/ml/video/hy_nomas_reference_block_mps"
 require "./support/hy_nomas_reference_block0_probe"
+require "./support/hy_nomas_reference_history_probe"
 require "./support/hy_nomas_reference_cache_probe"
 require "./support/hy_nomas_probe_instrumentation"
 
@@ -22,6 +23,8 @@ module HyNomasReferenceBlock0ProbeCLI
   record CaptureRecord, name : String, shape : Array(Int32), nbytes : Int32,
     sha256 : String
   record PreQKVCaptureRecord, name : String, dtype : String, shape : Array(Int32),
+    nbytes : Int32, sha256 : String
+  record HistoryCaptureRecord, name : String, dtype : String, shape : Array(Int32),
     nbytes : Int32, sha256 : String
 
   def config(precision : ML::Video::HyNomasAttentionPrecision) : ML::Video::HyNomasConfig
@@ -68,7 +71,8 @@ module HyNomasReferenceBlock0ProbeCLI
   def expected_named_bytes(info : HyNomasReferenceBlock0Probe::ManifestInfo,
                            weight_plan : ML::Video::WeightPlan,
                            config : ML::Video::HyNomasConfig,
-                           reference_preattention_bf16 : Bool = false) : Hash(String, Int64)
+                           reference_preattention_bf16 : Bool = false,
+                           reference_history_bf16 : Bool = false) : Hash(String, Int64)
     scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(config).sum(0_i64) do |(_name, count)|
       count.to_i64 * sizeof(Float32)
     end
@@ -86,8 +90,14 @@ module HyNomasReferenceBlock0ProbeCLI
       "compact_attention_buffers"      => attention,
       "qk_rms_square_and_mean_buffers" => rms,
     }
-    if reference_preattention_bf16
+    if reference_preattention_bf16 || reference_history_bf16
       parts["reference_bf16_buffers"] = ML::Video::HyNomasReferenceMPSWorkspace.reference_extra_bytes(config)
+    end
+    if reference_history_bf16
+      active_rows = HyNomasReferenceHistoryProbe.active_rows(info.valid_text_tokens)
+      parts["reference_history_buffers"] = HyNomasReferenceHistoryProbe.named_bytes(
+        HyNomasReferenceHistoryProbe::STORAGE_ROWS, active_rows,
+        HyNomasReferenceHistoryProbe::HEADS, HyNomasReferenceHistoryProbe::HEAD_DIM)
     end
     total = parts.values.sum
     parts["total_named_bytes"] = total
@@ -155,6 +165,23 @@ module HyNomasReferenceBlock0ProbeCLI
       HyNomasReferenceBlock0Probe::CaptureTensor.new(name,
         preqkv_buffer(block, name, activation_buffers), shape, byte_count,
         "native_pre_qkv_boundary")
+    end
+  end
+
+  def capture_history_sources(cache_plan : ML::Video::HyNomasReferenceKVCache::Plan,
+                              key_read : ML::MetalBuffer, value_read : ML::MetalBuffer,
+                              valid_text_tokens : Int32) : Array(HyNomasReferenceBlock0Probe::CaptureTensor)
+    entries = HyNomasReferenceHistoryProbe.header_entries(valid_text_tokens)
+    buffers = {
+      "history.k_bf16"     => cache_plan.key_storage,
+      "history.v_bf16"     => cache_plan.value_storage,
+      "history.k_read_f32" => key_read,
+      "history.v_read_f32" => value_read,
+    }
+    entries.map do |entry|
+      buffer = buffers[entry.name]
+      HyNomasReferenceBlock0Probe::CaptureTensor.new(entry.name, buffer,
+        entry.shape, entry.byte_count, "first_t0_history_#{entry.dtype.downcase}")
     end
   end
 
@@ -324,6 +351,61 @@ module HyNomasReferenceBlock0ProbeCLI
     {total_digest.hexfinal, records, actual_file_bytes}
   end
 
+  def write_history_safetensors!(artifact_path : String,
+                                 sources : Array(HyNomasReferenceBlock0Probe::CaptureTensor),
+                                 valid_text_tokens : Int32) : Tuple(String, Array(HistoryCaptureRecord), Int64)
+    entries = HyNomasReferenceHistoryProbe.header_entries(valid_text_tokens)
+    unless sources.map(&.name) == HyNomasReferenceHistoryProbe::TENSOR_NAMES
+      raise ArgumentError.new("reference history capture inventory/order mismatch")
+    end
+    total_bytes = sources.zip(entries).sum(0_i64) do |source, entry|
+      unless source.name == entry.name && source.shape == entry.shape && source.byte_count == entry.byte_count
+        raise ArgumentError.new("reference history capture shape/extent mismatch: #{source.name}")
+      end
+      unless source.buffer.valid? && source.buffer.storage_mode.shared? &&
+             source.buffer.size == entry.byte_count
+        raise ArgumentError.new("reference history capture must use an exact-size shared buffer: #{source.name}")
+      end
+      entry.byte_count.to_i64
+    end
+    header = HyNomasReferenceHistoryProbe.safetensors_header(entries)
+    header_length = Bytes.new(sizeof(UInt64))
+    IO::ByteFormat::LittleEndian.encode(header.bytesize.to_u64, header_length)
+    total_digest = Digest::SHA256.new
+    total_digest.update(header_length)
+    total_digest.update(header.to_slice)
+    records = [] of HistoryCaptureRecord
+    offset = 0_i64
+    payload_io = open_fresh_output!(artifact_path)
+    begin
+      payload_io.write(header_length)
+      payload_io.write(header.to_slice)
+      sources.zip(entries).each do |source, entry|
+        view = Bytes.new(entry.byte_count)
+        source.buffer.read_bytes(view.to_unsafe, view.size)
+        digest = Digest::SHA256.hexdigest(view)
+        total_digest.update(view)
+        payload_io.write(view)
+        records << HistoryCaptureRecord.new(entry.name, entry.dtype, entry.shape,
+          entry.byte_count, digest)
+        offset += entry.byte_count
+      end
+      payload_io.flush
+      payload_io.fsync
+    ensure
+      payload_io.close
+    end
+    unless offset == total_bytes
+      raise "reference history payload size mismatch: wrote #{offset}, expected #{total_bytes}"
+    end
+    expected_file_bytes = HyNomasReferenceHistoryProbe.safetensors_file_bytes(header, total_bytes)
+    actual_file_bytes = File.size(artifact_path)
+    unless actual_file_bytes == expected_file_bytes
+      raise "reference history safetensors file size mismatch: #{actual_file_bytes} != #{expected_file_bytes}"
+    end
+    {total_digest.hexfinal, records, actual_file_bytes}
+  end
+
   def write_receipt!(path : String, *, artifact_basename : String,
                      artifact_sha256 : String, artifact_bytes : Int64,
                      records : Array(CaptureRecord), input : HyNomasReferenceBlock0Probe::InputBundle,
@@ -402,6 +484,36 @@ module HyNomasReferenceBlock0ProbeCLI
       io.close
     end
     Digest::SHA256.hexdigest(receipt_bytes)
+  end
+
+  def write_history_receipt!(path : String, *, artifact_basename : String,
+                             artifact_sha256 : String, artifact_bytes : Int64,
+                             records : Array(HistoryCaptureRecord),
+                             input : HyNomasReferenceBlock0Probe::InputBundle,
+                             weights_sha256 : String, valid_text_tokens : Int32,
+                             named_bytes : Hash(String, Int64),
+                             encode_allocations : Int64, encode_readbacks : Int64,
+                             preterminal_waits : Int32, terminal_waits : Int32) : Nil
+    artifact_records = records.map do |record|
+      HyNomasReferenceHistoryProbe::TensorArtifact.new(record.name, record.dtype,
+        record.shape, record.nbytes, record.sha256)
+    end
+    receipt = HyNomasReferenceHistoryProbe.receipt_json(
+      HyNomasReferenceBlock0Probe::NATIVE_REVISION,
+      HyNomasReferenceBlock0Probe::SOURCE_REVISION,
+      input.info.manifest_sha256, input.info.payload_sha256,
+      input.info.reference_latent_artifact_sha256, input.info.timeline_manifest_sha256,
+      valid_text_tokens, weights_sha256, artifact_basename, artifact_sha256,
+      artifact_bytes, artifact_records, named_bytes, encode_allocations,
+      encode_readbacks, preterminal_waits, terminal_waits)
+    io = open_fresh_output!(path)
+    begin
+      io.puts(receipt)
+      io.flush
+      io.fsync
+    ensure
+      io.close
+    end
   end
 
   def write_preqkv_receipt!(path : String, *, artifact_basename : String,
@@ -485,13 +597,13 @@ OptionParser.parse do |parser|
   parser.on("--inputs-sha256 SHA", "Externally trusted input-manifest SHA-256") { |value| inputs_sha256 = value }
   parser.on("--weights PATH", "Pinned BF16 block-0 checkpoint") { |value| weights_path = value }
   parser.on("--weights-sha256 SHA", "Trusted block-0 checkpoint SHA-256") { |value| weights_sha256 = value }
-  parser.on("--output-safetensors PATH", "Fresh F32 tensor artifact; required with --execute") { |value| artifact_path = value }
+  parser.on("--output-safetensors PATH", "Fresh tensor artifact; required with --execute") { |value| artifact_path = value }
   parser.on("--output-receipt PATH", "Fresh JSON receipt; required with --execute") { |value| receipt_path = value }
   parser.on("--capture-preqkv", "Also capture native pre-QKV intermediates into a bound companion artifact") { capture_preqkv = true }
   parser.on("--preqkv-output-safetensors PATH", "Fresh pre-QKV companion tensor artifact") { |value| preqkv_artifact_path = value }
   parser.on("--preqkv-output-receipt PATH", "Fresh pre-QKV companion JSON receipt") { |value| preqkv_receipt_path = value }
-  parser.on("--precision MODE", "Explicit f32-control, bf16-boundary-control, or reference-bf16-preattention diagnostic") { |value| precision_name = value }
-  parser.on("--bf16-linear-variant MODE", "reference-bf16-preattention linear mode: bf16-graph (default) or f32-accum") do |value|
+  parser.on("--precision MODE", "Explicit f32-control, bf16-boundary-control, reference-bf16-preattention, or reference-bf16-history diagnostic") { |value| precision_name = value }
+  parser.on("--bf16-linear-variant MODE", "BF16 reference linear mode: bf16-graph (default) or f32-accum; history mode requires bf16-graph") do |value|
     bf16_linear_variant_name = value
     bf16_linear_variant_supplied = true
   end
@@ -506,6 +618,9 @@ unless ARGV.empty? && !inputs_path.empty? && !inputs_sha256.empty? &&
 end
 HyNomasReferenceBlock0Probe.validate_precision_options!(precision_name,
   bf16_linear_variant_name, bf16_linear_variant_supplied)
+reference_history_bf16 = precision_name == HyNomasReferenceHistoryProbe::PRECISION
+HyNomasReferenceHistoryProbe.validate_options!(precision_name, bf16_linear_variant_name,
+  capture_preqkv, preqkv_artifact_path, preqkv_receipt_path)
 HyNomasReferenceBlock0Probe.validate_preqkv_options!(capture_preqkv, execute,
   preqkv_artifact_path, preqkv_receipt_path)
 unless HyNomasReferenceBlock0Probe.valid_sha256?(weights_sha256) &&
@@ -524,7 +639,7 @@ begin
     raise ArgumentError.new("block-0 checkpoint path must be absolute")
   end
   weight_file = ML::Video::BF16WeightCache.authenticate(weights_path, weights_sha256)
-  reference_preattention_bf16 = precision_name == HyNomasReferenceBlock0Probe::REFERENCE_BF16_PRECISION
+  reference_preattention_bf16 = precision_name == HyNomasReferenceBlock0Probe::REFERENCE_BF16_PRECISION || reference_history_bf16
   precision = precision_name == "bf16-boundary-control" || reference_preattention_bf16 ? ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl : ML::Video::HyNomasAttentionPrecision::F32Control
   bf16_linear_variant = ML::Video::HyNomasMPSBF16Linear::Variant.parse(bf16_linear_variant_name)
   config = HyNomasReferenceBlock0ProbeCLI.config(precision)
@@ -536,7 +651,7 @@ begin
   end
 
   named_bytes = HyNomasReferenceBlock0ProbeCLI.expected_named_bytes(input_bundle.info,
-    weight_plan.not_nil!, config, reference_preattention_bf16)
+    weight_plan.not_nil!, config, reference_preattention_bf16, reference_history_bf16)
   total_named_bytes = named_bytes["total_named_bytes"]
   unless total_named_bytes <= max_named_bytes
     raise ArgumentError.new("reference block named Metal-buffer plan exceeds its ceiling")
@@ -551,25 +666,53 @@ begin
     end
   end
 
-  plan_document = {
-    schema:                                HyNomasReferenceBlock0Probe::SCHEMA,
-    scope:                                 reference_preattention_bf16 ? HyNomasReferenceBlock0Probe::PREATTENTION_SCOPE : "one standalone native block-0 forward; not a complete upstream T0 handoff",
-    inputs_manifest_sha256:                input_bundle.info.manifest_sha256,
-    inputs_payload_sha256:                 input_bundle.info.payload_sha256,
-    reference_latent_artifact_sha256:      input_bundle.info.reference_latent_artifact_sha256,
-    timeline_manifest_sha256:              input_bundle.info.timeline_manifest_sha256,
-    valid_text_tokens:                     input_bundle.info.valid_text_tokens,
-    text_storage_tokens:                   HyNomasReferenceBlock0ProbeCLI::TEXT_TOKENS,
-    weights_sha256:                        weights_sha256,
-    precision_control:                     precision_name,
-    named_buffer_accounting:               named_bytes,
-    max_named_bytes:                       max_named_bytes,
-    opaque_mpsgraph_private_bytes:         "not measured; requires external memory guard",
-    execute:                               execute,
-    capture_preqkv:                        capture_preqkv,
-    full_upstream_t0_preprocessing_parity: false,
-    history_cache_write_executed:          false,
-  }
+  plan_document = if reference_history_bf16
+                    {
+                      schema:                                HyNomasReferenceHistoryProbe::SCHEMA,
+                      scope:                                 HyNomasReferenceHistoryProbe::SCOPE,
+                      inputs_manifest_sha256:                input_bundle.info.manifest_sha256,
+                      inputs_payload_sha256:                 input_bundle.info.payload_sha256,
+                      reference_latent_artifact_sha256:      input_bundle.info.reference_latent_artifact_sha256,
+                      timeline_manifest_sha256:              input_bundle.info.timeline_manifest_sha256,
+                      valid_text_tokens:                     input_bundle.info.valid_text_tokens,
+                      text_storage_tokens:                   HyNomasReferenceHistoryProbe::TEXT_STORAGE_TOKENS,
+                      weights_sha256:                        weights_sha256,
+                      precision_control:                     precision_name,
+                      bf16_linear_variant:                   HyNomasReferenceHistoryProbe::LINEAR_VARIANT,
+                      named_buffer_accounting:               named_bytes,
+                      max_named_bytes:                       max_named_bytes,
+                      opaque_mpsgraph_private_bytes:         "not measured; requires external memory guard",
+                      execute:                               execute,
+                      full_upstream_t0_preprocessing_parity: false,
+                      history_cache_write_executed:          false,
+                      history_cache_read_executed:           false,
+                      attention_executed:                    false,
+                      history:                               {
+                        storage_rows: HyNomasReferenceHistoryProbe::STORAGE_ROWS,
+                        active_rows:  HyNomasReferenceHistoryProbe.active_rows(input_bundle.info.valid_text_tokens),
+                      },
+                    }
+                  else
+                    {
+                      schema:                                HyNomasReferenceBlock0Probe::SCHEMA,
+                      scope:                                 reference_preattention_bf16 ? HyNomasReferenceBlock0Probe::PREATTENTION_SCOPE : "one standalone native block-0 forward; not a complete upstream T0 handoff",
+                      inputs_manifest_sha256:                input_bundle.info.manifest_sha256,
+                      inputs_payload_sha256:                 input_bundle.info.payload_sha256,
+                      reference_latent_artifact_sha256:      input_bundle.info.reference_latent_artifact_sha256,
+                      timeline_manifest_sha256:              input_bundle.info.timeline_manifest_sha256,
+                      valid_text_tokens:                     input_bundle.info.valid_text_tokens,
+                      text_storage_tokens:                   HyNomasReferenceBlock0ProbeCLI::TEXT_TOKENS,
+                      weights_sha256:                        weights_sha256,
+                      precision_control:                     precision_name,
+                      named_buffer_accounting:               named_bytes,
+                      max_named_bytes:                       max_named_bytes,
+                      opaque_mpsgraph_private_bytes:         "not measured; requires external memory guard",
+                      execute:                               execute,
+                      capture_preqkv:                        capture_preqkv,
+                      full_upstream_t0_preprocessing_parity: false,
+                      history_cache_write_executed:          false,
+                    }
+                  end
   unless execute
     puts plan_document.to_pretty_json
     exit 0
@@ -581,7 +724,9 @@ begin
   prepared = nil.as(ML::Video::PreparedWeights?)
   block = nil.as(ML::Video::HyNomasDualStreamBlock?)
   workspace = nil.as(ML::Video::HyNomasMPSWorkspace?)
+  reference_workspace = nil.as(ML::Video::HyNomasReferenceMPSWorkspace?)
   chain = nil.as(ML::Metal::MPSCommandChain?)
+  history_read = nil.as(Tuple(ML::MetalBuffer, ML::MetalBuffer)?)
   wait_attempted = false
 
   begin
@@ -599,12 +744,15 @@ begin
     prepared = ML::Video::PreparedWeights.new(weight_plan.not_nil!, weight_arena.not_nil!)
     block = ML::Video::HyNomasDualStreamBlock.new(config, weight_arena.not_nil!, scratch_arena.not_nil!)
     workspace = if reference_preattention_bf16
-                  ML::Video::HyNomasReferenceMPSWorkspace.new(block.not_nil!, img, txt, vec, vec_txt,
+                  reference_workspace = ML::Video::HyNomasReferenceMPSWorkspace.new(
+                    block.not_nil!, img, txt, vec, vec_txt,
                     cosine, sine, attention_query_chunk: 256,
                     attention_heads_per_group: HyNomasReferenceBlock0ProbeCLI::HEADS,
                     valid_text_tokens: input_bundle.info.valid_text_tokens,
                     text_rms_tokens: HyNomasReferenceBlock0ProbeCLI::TEXT_TOKENS,
-                    reference_linear_variant: bf16_linear_variant)
+                    reference_linear_variant: bf16_linear_variant,
+                    reference_history: reference_history_bf16)
+                  reference_workspace.not_nil!
                 else
                   ML::Video::HyNomasMPSWorkspace.new(block.not_nil!, img, txt, vec, vec_txt,
                     cosine, sine, attention_query_chunk: 256,
@@ -622,7 +770,15 @@ begin
     chain = ML::Metal::MPSCommandChain.new
     allocations_before = ML::MetalBuffer.hy_text_probe_allocations
     readbacks_before = ML::MetalBuffer.hy_text_probe_readbacks
-    if reference_preattention_bf16
+    if reference_history_bf16
+      history_read = block.not_nil!.encode_mps_reference_history(chain.not_nil!, img, txt,
+        vec, vec_txt, cosine, sine, reference_workspace.not_nil!)
+      history_plan = reference_workspace.not_nil!.reference_history_cache
+      unless history_read.not_nil![0].same?(history_plan.key_read) &&
+             history_read.not_nil![1].same?(history_plan.value_read)
+        raise "reference history encoder returned buffers outside its prepared cache plan"
+      end
+    elsif reference_preattention_bf16
       block.not_nil!.encode_mps_preattention(chain.not_nil!, img, txt, vec, vec_txt,
         cosine, sine, workspace.not_nil!)
     else
@@ -642,49 +798,73 @@ begin
       raise "block-0 capture requires exactly one completed terminal drain"
     end
 
-    sources = HyNomasReferenceBlock0ProbeCLI.capture_sources(block.not_nil!,
-      input_bundle.info.valid_text_tokens)
-    artifact_sha256, records, artifact_bytes = HyNomasReferenceBlock0ProbeCLI.write_safetensors!(
-      artifact_path, sources, input_bundle.info.valid_text_tokens)
-    main_receipt_sha256 = HyNomasReferenceBlock0ProbeCLI.write_receipt!(receipt_path,
-      artifact_basename: File.basename(artifact_path), artifact_sha256: artifact_sha256,
-      artifact_bytes: artifact_bytes, records: records, input: input_bundle,
-      weights_sha256: weights_sha256, precision: precision_name,
-      bf16_linear_variant: reference_preattention_bf16 ? bf16_linear_variant_name : nil,
-      valid_text_tokens: input_bundle.info.valid_text_tokens, named_bytes: named_bytes,
-      encode_allocations: encode_allocations, encode_readbacks: encode_readbacks,
-      preterminal_waits: preterminal_waits, terminal_waits: chain.not_nil!.wait_count)
-    if capture_preqkv
-      preqkv_sources = HyNomasReferenceBlock0ProbeCLI.capture_preqkv_sources(block.not_nil!,
-        vec, vec_txt, input_bundle.info.valid_text_tokens)
-      preqkv_sha256, preqkv_records, preqkv_bytes =
-        HyNomasReferenceBlock0ProbeCLI.write_preqkv_safetensors!(preqkv_artifact_path,
-          preqkv_sources, input_bundle.info.valid_text_tokens, precision_name,
-          main_receipt_sha256, artifact_sha256,
-          reference_preattention_bf16 ? bf16_linear_variant_name : nil)
-      HyNomasReferenceBlock0ProbeCLI.write_preqkv_receipt!(preqkv_receipt_path,
-        artifact_basename: File.basename(preqkv_artifact_path),
-        artifact_sha256: preqkv_sha256, artifact_bytes: preqkv_bytes,
-        records: preqkv_records, input: input_bundle,
+    if reference_history_bf16
+      history_plan = reference_workspace.not_nil!.reference_history_cache
+      key_read, value_read = history_read.not_nil!
+      history_sources = HyNomasReferenceBlock0ProbeCLI.capture_history_sources(history_plan,
+        key_read, value_read, input_bundle.info.valid_text_tokens)
+      artifact_sha256, records, artifact_bytes = HyNomasReferenceBlock0ProbeCLI.write_history_safetensors!(
+        artifact_path, history_sources, input_bundle.info.valid_text_tokens)
+      HyNomasReferenceBlock0ProbeCLI.write_history_receipt!(receipt_path,
+        artifact_basename: File.basename(artifact_path), artifact_sha256: artifact_sha256,
+        artifact_bytes: artifact_bytes, records: records, input: input_bundle,
+        weights_sha256: weights_sha256, valid_text_tokens: input_bundle.info.valid_text_tokens,
+        named_bytes: named_bytes, encode_allocations: encode_allocations,
+        encode_readbacks: encode_readbacks, preterminal_waits: preterminal_waits,
+        terminal_waits: chain.not_nil!.wait_count)
+      puts plan_document.to_pretty_json
+      puts({schema: HyNomasReferenceHistoryProbe::SCHEMA, artifact: File.basename(artifact_path),
+            receipt: File.basename(receipt_path), artifact_sha256: artifact_sha256,
+            artifact_bytes: artifact_bytes, encode_allocations: encode_allocations,
+            encode_readbacks: encode_readbacks, preterminal_waits: preterminal_waits,
+            terminal_waits: chain.not_nil!.wait_count, history_cache_write_executed: true,
+            history_cache_read_executed: true, attention_executed: false,
+            passed: true}.to_pretty_json)
+    else
+      sources = HyNomasReferenceBlock0ProbeCLI.capture_sources(block.not_nil!,
+        input_bundle.info.valid_text_tokens)
+      artifact_sha256, records, artifact_bytes = HyNomasReferenceBlock0ProbeCLI.write_safetensors!(
+        artifact_path, sources, input_bundle.info.valid_text_tokens)
+      main_receipt_sha256 = HyNomasReferenceBlock0ProbeCLI.write_receipt!(receipt_path,
+        artifact_basename: File.basename(artifact_path), artifact_sha256: artifact_sha256,
+        artifact_bytes: artifact_bytes, records: records, input: input_bundle,
         weights_sha256: weights_sha256, precision: precision_name,
         bf16_linear_variant: reference_preattention_bf16 ? bf16_linear_variant_name : nil,
-        parent_native_receipt_sha256: main_receipt_sha256,
-        parent_native_artifact_sha256: artifact_sha256)
-      puts({schema: HyNomasReferenceBlock0Probe::PREQKV_SCHEMA,
-            artifact: File.basename(preqkv_artifact_path),
-            receipt: File.basename(preqkv_receipt_path),
-            artifact_sha256: preqkv_sha256, artifact_bytes: preqkv_bytes,
-            parent_native_receipt_sha256: main_receipt_sha256,
-            parent_native_artifact_sha256: artifact_sha256,
-            passed: true}.to_pretty_json)
+        valid_text_tokens: input_bundle.info.valid_text_tokens, named_bytes: named_bytes,
+        encode_allocations: encode_allocations, encode_readbacks: encode_readbacks,
+        preterminal_waits: preterminal_waits, terminal_waits: chain.not_nil!.wait_count)
+      if capture_preqkv
+        preqkv_sources = HyNomasReferenceBlock0ProbeCLI.capture_preqkv_sources(block.not_nil!,
+          vec, vec_txt, input_bundle.info.valid_text_tokens)
+        preqkv_sha256, preqkv_records, preqkv_bytes =
+          HyNomasReferenceBlock0ProbeCLI.write_preqkv_safetensors!(preqkv_artifact_path,
+            preqkv_sources, input_bundle.info.valid_text_tokens, precision_name,
+            main_receipt_sha256, artifact_sha256,
+            reference_preattention_bf16 ? bf16_linear_variant_name : nil)
+        HyNomasReferenceBlock0ProbeCLI.write_preqkv_receipt!(preqkv_receipt_path,
+          artifact_basename: File.basename(preqkv_artifact_path),
+          artifact_sha256: preqkv_sha256, artifact_bytes: preqkv_bytes,
+          records: preqkv_records, input: input_bundle,
+          weights_sha256: weights_sha256, precision: precision_name,
+          bf16_linear_variant: reference_preattention_bf16 ? bf16_linear_variant_name : nil,
+          parent_native_receipt_sha256: main_receipt_sha256,
+          parent_native_artifact_sha256: artifact_sha256)
+        puts({schema: HyNomasReferenceBlock0Probe::PREQKV_SCHEMA,
+              artifact: File.basename(preqkv_artifact_path),
+              receipt: File.basename(preqkv_receipt_path),
+              artifact_sha256: preqkv_sha256, artifact_bytes: preqkv_bytes,
+              parent_native_receipt_sha256: main_receipt_sha256,
+              parent_native_artifact_sha256: artifact_sha256,
+              passed: true}.to_pretty_json)
+      end
+      puts plan_document.to_pretty_json
+      puts({schema: HyNomasReferenceBlock0Probe::SCHEMA, artifact: File.basename(artifact_path),
+            receipt: File.basename(receipt_path), artifact_sha256: artifact_sha256,
+            artifact_bytes: artifact_bytes, encode_allocations: encode_allocations,
+            encode_readbacks: encode_readbacks, preterminal_waits: preterminal_waits,
+            terminal_waits: chain.not_nil!.wait_count,
+            history_cache_write_executed: false, passed: true}.to_pretty_json)
     end
-    puts plan_document.to_pretty_json
-    puts({schema: HyNomasReferenceBlock0Probe::SCHEMA, artifact: File.basename(artifact_path),
-          receipt: File.basename(receipt_path), artifact_sha256: artifact_sha256,
-          artifact_bytes: artifact_bytes, encode_allocations: encode_allocations,
-          encode_readbacks: encode_readbacks, preterminal_waits: preterminal_waits,
-          terminal_waits: chain.not_nil!.wait_count,
-          history_cache_write_executed: false, passed: true}.to_pretty_json)
   ensure
     if active_chain = chain
       unless wait_attempted || active_chain.drained?

@@ -9,9 +9,10 @@ continuation is implemented behind an explicit experimental opt-in; BF16 DiT
 cache parity and character/style quality are not yet qualified. It is not
 enabled by default.
 The opt-in standalone block-0 pre-attention path now reproduces all 22
-captured BF16 boundaries exactly on identical exported inputs. This ends at
-prospective K/V; actual history storage and the rest of the block remain
-separate gates.
+captured BF16 boundaries exactly on identical exported inputs. Its separate
+first-T0 history probe also matches physical BF16 K/V storage and F32 reads
+exactly against the pinned upstream cache function. Attention, remaining
+block operations and all-layer history remain separate gates.
 The rejected text-only RoleWright take does not qualify character or style
 preservation. Do not generate another text-only take as a substitute for this
 capability.
@@ -352,6 +353,64 @@ layer-specific cache boundaries. Only then admit a controlled clean-scene
 T0/T1 continuation. Keep `--allow-unqualified-reference`: no actual history
 append, generated T1, full video, or RoleWright character/style quality was
 qualified by the standalone pre-attention result.
+
+### BF16 history store/read — qualified block-0 fixture
+
+The separate opt-in `--precision reference-bf16-history` probe now stores
+the active joint K/V prefix in physical BF16 buffers and loads that pair
+into prepared F32 reader buffers on the same command chain. Its 4,849 rows
+contain 4,320 image tokens followed by 529 valid text tokens; the remaining
+751 text-storage rows are excluded. Only `bf16-graph` is admitted here.
+
+Both physical BF16 tensors are byte-identical to upstream. Both F32 reads
+are also exact (9,930,752 values each, maximum/RMS error and mismatch count
+zero) at unchanged `atol=rtol=2e-5`. Fresh regressions retain all 22 exact
+BF16 pre-attention captures and all 22 exact F32 controls. A negative control
+with repaired receipt hashes rejects changed BF16 bytes; a separate F32
+mutation produces exactly one mismatch and a failed comparison.
+
+The source probe executes the pinned `causal_attention_with_cache_mp`
+function twice, intercepting only its attention consumer. After T0 store,
+it zeros the same current Q/K/V in place and invokes the read-only branch:
+the saved prefix remains unchanged and the current suffix is zero. Its
+input Q/K/V comes from the preceding source capture, treated explicitly as
+a trusted fixture. Hashes bind those bytes but do not independently attest
+how that earlier capture was produced. No attention math is qualified by
+this interception.
+
+The strongest false positive was reading prospective K/V instead of the
+cache. Metal tests overwrite the original source after store, then read;
+another changes the physical stored values and observes them in the reader.
+Geometry, aliasing, single-write, read-before-write, cross-chain and drained
+release guards pass. A failure during pre-attention consumes the history
+attempt before any retry; history-prepared workspaces reject the standalone
+pre-attention entry point. Cache-owned buffers remain rooted until their
+latest read chain drains, including a read on a later chain.
+
+The cache pair costs 39,723,008 bytes and its two diagnostic F32 read stages
+79,446,016 bytes: 119,169,024 extra named bytes, bringing this standalone
+diagnostic to 2,402,022,912 bytes. Opaque MPSGraph resources are excluded.
+The native history probe records zero tracked encode allocations/readbacks/
+preterminal waits and one terminal drain. Its sampled peak is 1.559 GiB,
+minimum cache-aware headroom 38.876 GiB, with zero swap growth under a 6 GiB
+process cap, 10% floor and 64 MiB swap-growth stop. Sampling does not bound
+between-poll peaks; these are diagnostic measurements, not a speed claim.
+
+DoD passed: 71 CPU Crystal examples, 43 Python tests, eight Metal-linked
+cache/workspace examples, fresh native/source captures and strict numerical
+comparisons. Correlated source reviews plus root execution returned ROBUST
+within this fixture-only scope. Evidence:
+`.landmark/evidence/2026-11-01-hy-nomas-reference-history.json`; local run:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs`.
+
+Rollback is omission of the explicit diagnostic mode. The existing F32
+continuation provider remains separate. Next falsifier: compare the
+attention consumer on identical Q and stored K/V, then residual/FFN and
+layer-specific histories before T0/T1 continuation. Keep
+`--allow-unqualified-reference`: no full block, multi-segment append,
+all-layer cache, generated T1 or RoleWright identity/style quality is yet
+qualified. Refresh on source, binary, inputs, weights, geometry, precision,
+cache policy, backend, compiler/runtime/device change or artifact loss.
 
 ### Preparing and admitting an image
 

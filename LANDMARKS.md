@@ -6,6 +6,41 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01] Physical block-0 BF16 K/V store/read matches upstream
+
+- The opt-in `reference-bf16-history` diagnostic stores 4,849 active rows
+  (4,320 image + 529 valid text, excluding padded rows) in physical BF16
+  K/V and reads them into fixed F32 stages. Both BF16 tensors are byte-exact
+  against the pinned upstream cache function; both 9,930,752-value F32 reads
+  have zero error/mismatches at unchanged `atol=rtol=2e-5`. Fresh controls
+  retain all 22 exact BF16 and 22 exact F32 pre-attention captures.
+- The source invokes the actual pinned cache function for T0 store and a
+  read-only call after zeroing current Q/K/V in place. Stored history stays
+  unchanged; the consumer sees it followed by the zero current suffix.
+  This uses the prior source Q/K/V capture as a trusted fixture, not an
+  independently attested execution. Attention math is intercepted.
+- Metal tests distinguish source buffers from physical cache storage and
+  cover partial-projection failure, single-write, alias/extent and lifetime
+  guards. A consumed history attempt cannot be retried; a later cache-read
+  chain must drain before workspace release. Hash-repaired BF16/F32 value
+  mutations are rejected by actual comparisons. Checks: 71 CPU Crystal,
+  43 Python and eight Metal examples. Correlated scoped Adversary: ROBUST.
+- Named history storage/read buffers add 119,169,024 bytes; diagnostic total
+  2,402,022,912 excludes opaque MPSGraph resources. Native counters are
+  zero tracked encode allocations/readbacks/preterminal waits, one terminal
+  drain. Sampled native peak 1.559 GiB, minimum cache-aware headroom
+  38.876 GiB, zero swap growth under 6 GiB / 10% / 64 MiB guards. These
+  measurements do not bound between-poll peaks or establish a speedup.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-history.json`; artifacts:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-history-20261101.291siufs`.
+  Next falsifier: attention on identical Q and stored K/V, then residual/FFN
+  and per-layer history. No multi-segment append, all-layer parity, full T0
+  preprocessing/RNG, generated T1 or character/style claim. Keep
+  `--allow-unqualified-reference`. Refresh on source/binary/input/weights/
+  geometry/precision/cache/backend/compiler/runtime/device changes or local
+  artifact loss; hashes cannot recover local-only evidence.
+
 ### [LM-HY-NOMAS-REFERENCE-BF16-PREATTENTION-2026-11-01] Source mixed-precision block-0 boundaries match exactly
 
 - The opt-in `reference-bf16-preattention` workspace reproduces source BF16
@@ -30,8 +65,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   `.landmark/evidence/2026-11-01-hy-nomas-reference-bf16-preattention.json`;
   local artifacts:
   `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-bf16-20261101.3450pdjh`.
-  Next falsifier: actual reference-history K/V store/read, then remaining
-  block attention/residual/FFN and per-layer cache parity. Prospective K/V
+  Its next store/read falsifier is now covered by
+  `LM-HY-NOMAS-REFERENCE-HISTORY-2026-11-01`; remaining block
+  attention/residual/FFN and per-layer cache parity stay open. Prospective K/V
   do not qualify append, full T0 preprocessing/RNG, T1 or character/style
   preservation. Keep `--allow-unqualified-reference`; `f32-accum` remains
   unqualified. Refresh on source/binary/input/weights/geometry/precision/
