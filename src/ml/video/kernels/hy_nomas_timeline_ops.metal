@@ -59,6 +59,28 @@ kernel void hy_nomas_timeline_scatter_f32(
   timeline[destination] = segment[index];
 }
 
+// Admit the clean BF16 DCAE reference segment directly into F32 timeline T0.
+// The source is contiguous [C,segment-T,H,W]; the destination is [C,T,H,W].
+kernel void hy_nomas_timeline_reference_scatter_bf16_f32(
+    device const ushort *segment_bf16 [[buffer(0)]],
+    device float *timeline [[buffer(1)]],
+    constant uint &total_frames [[buffer(2)]],
+    constant uint &segment_frames [[buffer(3)]],
+    constant uint &height [[buffer(4)]],
+    constant uint &width [[buffer(5)]],
+    constant uint &count [[buffer(6)]],
+    uint index [[thread_position_in_grid]]) {
+  if (index >= count)
+    return;
+  const uint spatial = height * width;
+  const uint frame_area = segment_frames * spatial;
+  const uint channel = index / frame_area;
+  const uint local_frame = (index / spatial) % segment_frames;
+  const uint spatial_index = index % spatial;
+  const uint destination = (channel * total_frames + local_frame) * spatial + spatial_index;
+  timeline[destination] = hy_nomas_bf16_to_f32(segment_bf16[index]);
+}
+
 // Copy a segment-relative global RoPE slice into fixed [4320,128] workspace.
 kernel void hy_nomas_timeline_copy_f32(
     device const float *bank [[buffer(0)]],

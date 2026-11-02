@@ -11,8 +11,9 @@ require "./hy_nomas_cache_qbit_checkpoint"
 module HyNomasSequence
   extend self
 
-  STEPS               = 4
-  HISTORY_TEXT_POLICY = ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene
+  STEPS                  = 4
+  HISTORY_TEXT_POLICY    = ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene
+  REFERENCE_LATENT_BYTES = 1_i64 * 32 * 30 * 9 * 16 * sizeof(UInt16)
 
   # Keep command-chain owners strongly reachable when a failed terminal wait
   # cannot prove that their GPU work has drained.
@@ -148,7 +149,11 @@ module HyNomasSequence
   # prepared provider is attached. Steady residency subtracts that old plan.
   def peak_named_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
                        text_cache_policy = HISTORY_TEXT_POLICY, *,
-                       prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil) : Int64
+                       prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                       reference_latent_bytes : Int64 = 0_i64) : Int64
+    unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
+      raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
+    end
     valid = query_text_tokens(inputs.base, prompt_edit)
     scratch_growth = HyNomasGeneration.dit_scratch_bytes(valid, ((valid + 63) // 64) * 64) -
                      HyNomasGeneration.dit_scratch_bytes(inputs.base.valid_text_tokens, inputs.base.compact_text_tokens)
@@ -156,7 +161,8 @@ module HyNomasSequence
       HyNomasGeneration.stage_bytes, HyNomasGeneration.stage_bytes * 54) +
       HyNomasGeneration.dit_reserve_bytes(inputs.base, STEPS) +
       scratch_growth + prompt_edit_bytes(prompt_edit) +
-      history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit) + additional_inputs_bytes(inputs, segments)
+      history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit) +
+      additional_inputs_bytes(inputs, segments) + reference_latent_bytes
   end
 
   def checkpoint_inventory(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
@@ -246,6 +252,7 @@ module HyNomasSequence
     @eulers = [] of ML::Video::HyNomasEulerPlan
     @history : ML::Video::HyNomasContinuationHistory
     @timeline_ops : ML::Video::HyNomasTimelineOps::Plan
+    @reference_latent : ML::MetalBuffer?
     @latent : ML::MetalBuffer
     @timeline : ML::MetalBuffer
     @chain : ML::Metal::MPSCommandChain? = nil
@@ -270,9 +277,19 @@ module HyNomasSequence
                    prepare_capture : Bool = false,
                    @noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
                    @prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
-                   prompt_inputs : HyNomasGeneration::Inputs? = nil)
+                   prompt_inputs : HyNomasGeneration::Inputs? = nil,
+                   reference_latent : ML::MetalBuffer? = nil)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
+      @reference_latent = reference_latent
+      if reference = reference_latent
+        unless reference.valid? && reference.size == HyNomasSequence::REFERENCE_LATENT_BYTES
+          raise ArgumentError.new("reference initialization requires an exact-size caller-owned BF16 DCAE latent")
+        end
+        if cinematic || prepare_capture || @noise_edit || @prompt_edit || !text_cache_policy.once_per_scene?
+          raise ArgumentError.new("reference initialization does not support Cinematic, captures, edits, or legacy text caching")
+        end
+      end
       HyNomasSequence.validate_checkpoint_variant!(cinematic, prepare_capture: prepare_capture)
       HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
       HyNomasSequence.validate_prompt_edit!(@prompt_edit, prompt_inputs, @segment_count)
@@ -280,7 +297,7 @@ module HyNomasSequence
       if (@noise_edit || @prompt_edit) && !text_cache_policy.once_per_scene?
         raise ArgumentError.new("Segment edits require the admitted once-per-scene policy")
       end
-      if text_cache_policy.once_per_scene? && !cinematic
+      if text_cache_policy.once_per_scene? && !cinematic && !@reference_latent
         (1...@segment_count).each do |next_segment|
           @checkpoint_contracts[next_segment] = HyNomasSequence.checkpoint_contract(inputs, @segment_count, next_segment, @noise_edit, @prompt_edit)
           @checkpoint_inventories[next_segment] = HyNomasSequence.checkpoint_inventory(inputs, @segment_count, next_segment, @prompt_edit)
@@ -289,7 +306,8 @@ module HyNomasSequence
       base = inputs.base
       valid = HyNomasSequence.query_text_tokens(base, @prompt_edit)
       storage = ((valid + 63) // 64) * 64
-      @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy, prompt_edit: @prompt_edit)
+      @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy,
+        prompt_edit: @prompt_edit, reference_latent_bytes: reference_latent.try(&.size) || 0_i64)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
       index_sha = HyNomasSequence.weight_index_sha(cinematic)
@@ -386,6 +404,7 @@ module HyNomasSequence
           video_tokens: 4320, valid_text_tokens: valid,
           storage_text_tokens: storage, layers: 54, heads: 16, head_dim: 128,
           text_cache_policy: text_cache_policy,
+          reference_initialization: !@reference_latent.nil?,
           segment_text_tokens: @prompt_edit ? HyNomasSequence.text_tokens(base, @segment_count, @prompt_edit) : nil,
           segment_cache_text: @prompt_edit.try(&.cache_text),
           query: joint["joint.query"], key: joint["joint.key"],
@@ -401,10 +420,12 @@ module HyNomasSequence
         @timeline_ops = ML::Video::HyNomasTimelineOps::Plan.new(ML::Video::HyNomasTimelineOps::Geometry.new,
           timeline: @timeline, segment_latent: @latent, cosine_bank: cos_bank, sine_bank: sin_bank,
           cosine: cos, sine: sin, cache_eps_bf16: eps,
-          cache_timestep: @refiner.checkpoints["timestep"], run_segments: @segment_count)
+          cache_timestep: @refiner.checkpoints["timestep"], run_segments: @segment_count,
+          reference_initialization: !@reference_latent.nil?)
         @capture_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new if prepare_capture
         actual = @loader.cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes +
                  @inputs_arena.resident_bytes + @bank_arena.resident_bytes + @latent.size + @timeline.size + @patch.resident_bytes +
+                 (@reference_latent.try(&.size) || 0_i64) +
                  @refiner.resident_bytes + @serial.resident_bytes + @final.resident_bytes +
                  @eulers.sum(&.resident_bytes) + (@prompt_arena.try(&.resident_bytes) || 0_i64) +
                  (@prompt_refiner.try(&.resident_bytes) || 0_i64)
@@ -435,6 +456,12 @@ module HyNomasSequence
       raise ArgumentError.new("sequence request is single-use or has failed restore") if @released || @chain || @resume_failed
       unless @next_segment < stop_after_segments <= @segment_count
         raise ArgumentError.new("sequence stop must follow the next segment within the admitted run")
+      end
+      if @reference_latent
+        if stop_after_segments <= 1 || !capture_segment.nil? || !captures.nil? ||
+           !capture_steps.nil? || !after_boundary.nil?
+          raise ArgumentError.new("reference initialization requires generated T1 and does not support captures or boundary callbacks")
+        end
       end
       if edit = @prompt_edit
         if @next_segment < edit.target_segment
@@ -474,6 +501,22 @@ module HyNomasSequence
       @chain = chain
       @compact_restore.try(&.encode_restore(chain))
       @prepared.encode(chain.encoder)
+      if reference = @reference_latent
+        @timeline_ops.admit_reference_latent!(chain, reference)
+        @timeline_ops.prepare_reference_segment!(chain, 0)
+        @timeline_ops.write_cache_noise!(chain, 0)
+        @history.select_reference_init!(0)
+        @patch.encode(chain)
+        encode_refiner(chain, 0)
+        @serial.encode(chain)
+        @timeline_ops.record_cache_forward_enqueued!(chain, 0)
+        @timeline_ops.advance_segment!(chain, 0)
+        @next_segment = 1
+        HyNomasGeneration.emit("sequence_reference_initialized",
+          technical_reference_segment_index: 0, technical_reference_label: "T0",
+          next_generated_segment_index: 1, next_generated_label: "T1",
+          clean_global_latent_stop: 30, technical_reference_cache_writer: true)
+      end
       (@next_segment...stop_after_segments).each do |segment|
         selected_captures = capture_steps.try(&.[segment]?)
         noise_source = @noise_edit.try(&.source_for(segment)) || segment
@@ -535,6 +578,7 @@ module HyNomasSequence
     end
 
     def prepare_checkpoint_bindings!(next_segment : Int32) : Hash(String, Tuple(ML::MetalBuffer, Int32))
+      reject_reference_checkpoint!
       HyNomasSequence.validate_checkpoint_variant!(@cinematic, checkpoint: true)
       unless !@released && !@resume_failed && @chain.nil? && @next_segment == 0 &&
              @checkpoint_inventories.has_key?(next_segment)
@@ -554,6 +598,7 @@ module HyNomasSequence
     # restored only after every setup copy succeeds, and always prepend GPU
     # reconstruction inside encode so no caller can omit it before attention.
     def restore_compact_boundary!(reader : HyNomasCacheQBitCheckpoint::Preflight, next_segment : Int32) : Nil
+      reject_reference_checkpoint!
       HyNomasSequence.validate_checkpoint_variant!(@cinematic, restore: true)
       bindings = prepare_checkpoint_bindings!(next_segment)
       contract = @checkpoint_contracts[next_segment]
@@ -578,6 +623,7 @@ module HyNomasSequence
     end
 
     def save_boundary!(path : String) : String
+      reject_reference_checkpoint!
       HyNomasSequence.validate_checkpoint_variant!(@cinematic, checkpoint: true)
       chain = @chain
       unless !@released && !@resume_failed && chain && chain.completed? &&
@@ -604,6 +650,7 @@ module HyNomasSequence
     # authentication, partial-restore poisoning, or the fresh-owner boundary.
     def restore_boundary!(reader : ML::Video::HyNomasResumeBundle::Reader, next_segment : Int32, *,
                           visit_cache : Proc(String, ML::MetalBuffer, Int32, Nil)? = nil) : Nil
+      reject_reference_checkpoint!
       HyNomasSequence.validate_checkpoint_variant!(@cinematic, restore: true)
       unless !@released && !@resume_failed && @chain.nil? && @next_segment == 0
         raise ArgumentError.new("sequence restore requires a fresh live request")
@@ -622,6 +669,12 @@ module HyNomasSequence
       rescue ex
         @resume_failed = true
         raise ex
+      end
+    end
+
+    private def reject_reference_checkpoint! : Nil
+      if @reference_latent
+        raise ArgumentError.new("Reference-initialized sequences do not support checkpoint or restore")
       end
     end
 
@@ -664,6 +717,7 @@ module HyNomasSequence
       unless failures.empty?
         raise ArgumentError.new("sequence cleanup failed: #{failures.join("; ")}")
       end
+      @reference_latent = nil
       @released = true
     end
   end

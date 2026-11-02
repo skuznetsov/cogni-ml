@@ -30,7 +30,10 @@ module ML::Video::BF16WeightCache
       raise ArgumentError.new("BF16 cache SHA-256 mismatch")
     end
 
-    checkpoint = CheckpointFile.new(path)
+    # Bind the opened descriptor, not only the path after parsing, to the
+    # snapshot that was hashed. A replace/open/restore race must not admit a
+    # different inode even when the path points back to the original file.
+    checkpoint = CheckpointFile.new(path, expected_info: before)
     begin
       checkpoint.unchanged!
       after_parse = regular_file_info!(path)

@@ -93,20 +93,27 @@ module ML::Video
     getter next_segment : Int32 = 0_i32
     getter denoise_passes : Int32 = 0_i32
     getter? complete : Bool = false
+    getter? reference_init_required : Bool = false
 
     @selected_segment : Int32? = nil
     @selected_writer = false
+    @selected_reference_init = false
     @next_layer = 0_i32
 
     def initialize(@segment_count : Int32, @layers : Int32,
-                   @denoise_steps : Int32 = 4)
+                   @denoise_steps : Int32 = 4,
+                   reference_initialization : Bool = false)
       unless (2..HyNomasContinuationHistory::MAX_SEGMENTS).includes?(@segment_count) &&
              @layers > 0 && @denoise_steps > 0
         raise ArgumentError.new("Invalid Hy-Nomas continuation forward schedule")
       end
+      @reference_init_required = reference_initialization
     end
 
     def select_segment!(index : Int32, writer : Bool) : Nil
+      if @reference_init_required && index == 0
+        raise ArgumentError.new("Fixed reference T0 must use the reference-initialization writer")
+      end
       if selected = @selected_segment
         if selected == index && @selected_writer == writer && @next_layer == 0
           return
@@ -127,13 +134,32 @@ module ML::Video
 
       @selected_segment = index
       @selected_writer = writer
+      @selected_reference_init = false
+      @next_layer = 0_i32
+    end
+
+    # The fixed image latent is a new-session T0. It fills K/V exactly once
+    # without denoise forwards, then ordinary continuation begins at T1.
+    # This transition is available only when the caller explicitly opted in.
+    def select_reference_init!(index : Int32) : Nil
+      if @selected_segment
+        raise ArgumentError.new("Finish the selected Hy-Nomas continuation forward first")
+      end
+      unless @reference_init_required && !@complete && index == 0 &&
+             @next_segment == 0 && @denoise_passes == 0 && @next_layer == 0
+        raise ArgumentError.new("Fixed reference initialization requires the fresh opted-in T0 boundary")
+      end
+
+      @selected_segment = index
+      @selected_writer = true
+      @selected_reference_init = true
       @next_layer = 0_i32
     end
 
     # Restoring a committed post-writer boundary skips no in-flight work.
     # Cache bytes must be authenticated and installed by the owner first.
     def validate_restore_boundary!(next_segment : Int32) : Nil
-      unless 1 <= next_segment < @segment_count && idle? &&
+      unless !@reference_init_required && 1 <= next_segment < @segment_count && idle? &&
              @next_segment == 0 && @denoise_passes == 0 && !@complete
         raise ArgumentError.new("Continuation restore requires a fresh schedule and an extendable boundary")
       end
@@ -142,6 +168,7 @@ module ML::Video
     def restore_boundary!(next_segment : Int32) : Nil
       validate_restore_boundary!(next_segment)
       @next_segment = next_segment
+      @reference_init_required = false
     end
 
     def selected_segment : Int32
@@ -168,13 +195,16 @@ module ML::Video
 
       segment = @selected_segment.not_nil!
       writer = @selected_writer
+      reference_init = @selected_reference_init
       @selected_segment = nil
       @selected_writer = false
+      @selected_reference_init = false
       @next_layer = 0_i32
 
       if writer
         @next_segment += 1
         @denoise_passes = 0_i32
+        @reference_init_required = false if reference_init
       else
         @denoise_passes += 1
         if segment == @segment_count - 1 && @denoise_passes == @denoise_steps
@@ -273,10 +303,10 @@ module ML::Video
       def append_elements(segment : Int32) : Int32
         raise ArgumentError.new("Final or invalid chunk cannot append history") unless 0 <= segment < segment_count - 1
         rows = video_tokens.to_i64 + if segment_text_profile.cache_text_at?(segment)
-                                       segment_text_profile.text_tokens_at(segment)
-                                     else
-                                       0_i64
-                                     end
+          segment_text_profile.text_tokens_at(segment)
+        else
+          0_i64
+        end
         (rows.to_i64 * heads * head_dim).to_i32
       end
 
@@ -339,10 +369,10 @@ module ML::Video
       storage_rows_64 = video_tokens.to_i64 + storage_text_tokens
       append_rows = Array(Int32).new(segment_count) do |segment|
         rows = video_tokens.to_i64 + if profile.cache_text_at?(segment)
-                                       profile.text_tokens_at(segment)
-                                     else
-                                       0_i64
-                                     end
+          profile.text_tokens_at(segment)
+        else
+          0_i64
+        end
         unless rows <= Int32::MAX
           raise ArgumentError.new("Hy-Nomas continuation append rows exceed the native limit")
         end
@@ -493,6 +523,7 @@ module ML::Video
                    valid_text_tokens : Int32, storage_text_tokens : Int32,
                    layers : Int32, heads : Int32, head_dim : Int32,
                    denoise_steps : Int32 = 4,
+                   reference_initialization : Bool = false,
                    text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
                    segment_text_tokens : Array(Int32)? = nil,
                    segment_cache_text : Array(Bool)? = nil,
@@ -504,7 +535,7 @@ module ML::Video
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text)
       @schedule = HyNomasContinuationHistorySchedule.new(segment_count, layers,
-        denoise_steps)
+        denoise_steps, reference_initialization)
       @query = query
       @key = key
       @value = value
@@ -547,6 +578,15 @@ module ML::Video
       raise ArgumentError.new("Hy-Nomas continuation history has been released") if @released
       raise ArgumentError.new("Hy-Nomas continuation history is unusable after an encode failure") if @poisoned
       @schedule.select_segment!(index, writer)
+    end
+
+    # Fill T0 K/V once from an admitted fixed reference latent, skipping the
+    # normal denoise schedule. Requires `reference_initialization: true` at
+    # provider construction; the writer still encodes all layers in order.
+    def select_reference_init!(index : Int32) : Nil
+      raise ArgumentError.new("Hy-Nomas continuation history has been released") if @released
+      raise ArgumentError.new("Hy-Nomas continuation history is unusable after an encode failure") if @poisoned
+      @schedule.select_reference_init!(index)
     end
 
     def checkpoint_inventory(next_segment : Int32) : Hash(String, Int64)

@@ -171,6 +171,67 @@ describe ML::Video::HyNomasContinuationHistory do
     expect_raises(ArgumentError) { schedule.select_segment!(2, false) }
   end
 
+  it "admits one opt-in fixed-reference T0 writer without denoising" do
+    schedule = ML::Video::HyNomasContinuationHistorySchedule.new(3, 2,
+      reference_initialization: true)
+
+    expect_raises(ArgumentError) { schedule.select_segment!(0, false) }
+    expect_raises(ArgumentError) { schedule.select_reference_init!(1) }
+    schedule.select_reference_init!(0)
+    expect_raises(ArgumentError) { schedule.select_reference_init!(0) }
+    expect_raises(ArgumentError) { schedule.select_segment!(1, false) }
+    expect_raises(ArgumentError) { schedule.finish_layer!(1) }
+    schedule.finish_layer!(0)
+    expect_raises(ArgumentError) { schedule.select_segment!(1, false) }
+    schedule.finish_layer!(1)
+
+    schedule.next_segment.should eq(1)
+    schedule.denoise_passes.should eq(0)
+    schedule.awaiting_writer?.should be_false
+    schedule.reference_init_required?.should be_false
+    expect_raises(ArgumentError) { schedule.select_reference_init!(0) }
+
+    4.times do
+      schedule.select_segment!(1, false)
+      schedule.finish_layer!(0)
+      schedule.finish_layer!(1)
+    end
+    schedule.awaiting_writer?.should be_true
+    schedule.select_segment!(1, writer: true)
+    schedule.finish_layer!(0)
+    schedule.finish_layer!(1)
+    schedule.next_segment.should eq(2)
+    schedule.denoise_passes.should eq(0)
+  end
+
+  it "keeps a reference writer incomplete until every layer finishes" do
+    schedule = ML::Video::HyNomasContinuationHistorySchedule.new(2, 2,
+      reference_initialization: true)
+    schedule.select_reference_init!(0)
+    schedule.finish_layer!(0)
+
+    expect_raises(ArgumentError) { schedule.select_segment!(1, writer: false) }
+    expect_raises(ArgumentError) { schedule.select_reference_init!(0) }
+
+    schedule.finish_layer!(1)
+    schedule.next_segment.should eq(1)
+    schedule.select_segment!(1, writer: false)
+  end
+
+  it "rejects reference restore and keeps ordinary generation separate" do
+    ordinary = ML::Video::HyNomasContinuationHistorySchedule.new(2, 1)
+    expect_raises(ArgumentError) { ordinary.select_reference_init!(0) }
+
+    reference = ML::Video::HyNomasContinuationHistorySchedule.new(2, 1,
+      reference_initialization: true)
+    expect_raises(ArgumentError) { reference.restore_boundary!(1) }
+    reference.reference_init_required?.should be_true
+    expect_raises(ArgumentError) { reference.select_segment!(1, writer: false) }
+
+    ordinary.restore_boundary!(1)
+    ordinary.select_segment!(1, writer: false)
+  end
+
   it "holds a 54-layer segment open for every denoise pass before its writer" do
     schedule = ML::Video::HyNomasContinuationHistorySchedule.new(2, 54)
     4.times do

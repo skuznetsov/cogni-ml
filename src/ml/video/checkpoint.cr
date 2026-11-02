@@ -27,10 +27,16 @@ module ML::Video
     @initial_info : File::Info
     @closed = false
 
-    def initialize(@path : String)
+    def initialize(@path : String, *, expected_info : File::Info? = nil)
       @io = File.open(path, "rb")
       @initial_info = @io.info
       begin
+        if expected = expected_info
+          unless @initial_info.same_file?(expected) && @initial_info.size == expected.size &&
+                 @initial_info.modification_time == expected.modification_time
+            raise ArgumentError.new("Checkpoint opened descriptor differs from authenticated snapshot")
+          end
+        end
         parse!
       rescue ex
         close

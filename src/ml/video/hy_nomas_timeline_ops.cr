@@ -4,11 +4,12 @@ require "./metal_ops"
 require "./metal_mps_command_chain"
 
 module ML::Video::HyNomasTimelineOps
-  GATHER_KERNEL      = "hy_nomas_timeline_gather_f32"
-  SCATTER_KERNEL     = "hy_nomas_timeline_scatter_f32"
-  COPY_KERNEL        = "hy_nomas_timeline_copy_f32"
-  CACHE_NOISE_KERNEL = "hy_nomas_timeline_cache_noise_bf16_f32"
-  SOURCE             = {{ read_file("#{__DIR__}/kernels/hy_nomas_timeline_ops.metal") }}
+  GATHER_KERNEL            = "hy_nomas_timeline_gather_f32"
+  SCATTER_KERNEL           = "hy_nomas_timeline_scatter_f32"
+  COPY_KERNEL              = "hy_nomas_timeline_copy_f32"
+  CACHE_NOISE_KERNEL       = "hy_nomas_timeline_cache_noise_bf16_f32"
+  REFERENCE_SCATTER_KERNEL = "hy_nomas_timeline_reference_scatter_bf16_f32"
+  SOURCE                   = {{ read_file("#{__DIR__}/kernels/hy_nomas_timeline_ops.metal") }}
 
   # Full resident banks describe [1,32,180,9,16], six 30-latent segments,
   # and six global-offset [4320,128] RoPE tables. A run may process a prefix
@@ -353,6 +354,10 @@ module ML::Video::HyNomasTimelineOps
     Ready
     Preparing
     Prepared
+    ReferenceLatentWriting
+    ReferenceLatentWritten
+    ReferencePreparing
+    ReferencePrepared
     Denoised
     Scattered
     CacheNoiseWritten
@@ -369,11 +374,14 @@ module ML::Video::HyNomasTimelineOps
     getter phase : SchedulePhase = SchedulePhase::Ready
     getter run_segments : Int32
     getter geometry : Geometry
+    getter? reference_init_required : Bool = false
 
-    def initialize(@geometry : Geometry, *, @run_segments : Int32 = @geometry.segment_count)
+    def initialize(@geometry : Geometry, *, @run_segments : Int32 = @geometry.segment_count,
+                   reference_initialization : Bool = false)
       unless 2 <= @run_segments <= @geometry.segment_count
         raise ArgumentError.new("Hy-Nomas run segment count must be between two and the resident segment count")
       end
+      @reference_init_required = reference_initialization
     end
 
     def cache_write_required?(segment_index : Int32) : Bool
@@ -382,14 +390,19 @@ module ML::Video::HyNomasTimelineOps
     end
 
     def restore_boundary!(next_segment : Int32) : Nil
-      unless 1 <= next_segment < @run_segments && @next_segment == 0 && @phase.ready?
+      unless !@reference_init_required && 1 <= next_segment < @run_segments &&
+             @next_segment == 0 && @phase.ready?
         raise ArgumentError.new("Timeline restore requires a fresh schedule and an extendable boundary")
       end
       @next_segment = next_segment
+      @reference_init_required = false
     end
 
     def expect_prepare!(segment_index : Int32) : Nil
       check_not_failed_or_finished!
+      if @reference_init_required && segment_index == 0
+        raise ArgumentError.new("Fixed reference T0 must use reference preparation")
+      end
       unless @phase.ready? && segment_index == @next_segment && segment_index < @run_segments
         raise ArgumentError.new("Hy-Nomas prepare must target the next active segment in Ready phase")
       end
@@ -398,6 +411,42 @@ module ML::Video::HyNomasTimelineOps
     def begin_prepare!(segment_index : Int32) : Nil
       expect_prepare!(segment_index)
       @phase = SchedulePhase::Preparing
+    end
+
+    def expect_reference_prepare!(segment_index : Int32) : Nil
+      check_not_failed_or_finished!
+      unless @reference_init_required && @phase.reference_latent_written? && segment_index == 0 &&
+             segment_index == @next_segment && segment_index < @run_segments
+        raise ArgumentError.new("Fixed reference preparation requires the admitted fresh opted-in T0 latent")
+      end
+    end
+
+    def expect_reference_latent_admission!(segment_index : Int32) : Nil
+      check_not_failed_or_finished!
+      unless @reference_init_required && @phase.ready? && segment_index == 0 &&
+             segment_index == @next_segment && segment_index < @run_segments
+        raise ArgumentError.new("Fixed reference latent admission requires the fresh opted-in T0 boundary")
+      end
+    end
+
+    def begin_reference_latent_admission!(segment_index : Int32) : Nil
+      expect_reference_latent_admission!(segment_index)
+      @phase = SchedulePhase::ReferenceLatentWriting
+    end
+
+    def record_reference_latent_admitted!(segment_index : Int32) : Nil
+      expect_phase!(segment_index, SchedulePhase::ReferenceLatentWriting)
+      @phase = SchedulePhase::ReferenceLatentWritten
+    end
+
+    def begin_reference_prepare!(segment_index : Int32) : Nil
+      expect_reference_prepare!(segment_index)
+      @phase = SchedulePhase::ReferencePreparing
+    end
+
+    def record_reference_prepared!(segment_index : Int32) : Nil
+      expect_phase!(segment_index, SchedulePhase::ReferencePreparing)
+      @phase = SchedulePhase::ReferencePrepared
     end
 
     def record_prepared!(segment_index : Int32) : Nil
@@ -423,7 +472,15 @@ module ML::Video::HyNomasTimelineOps
       unless cache_write_required?(segment_index)
         raise ArgumentError.new("Final active segment skips the cache-noise write")
       end
-      expect_phase!(segment_index, SchedulePhase::Scattered)
+      if @reference_init_required && segment_index == 0 &&
+         @phase.reference_prepared?
+        check_not_failed_or_finished!
+        unless segment_index == @next_segment && segment_index < @run_segments
+          raise ArgumentError.new("Hy-Nomas reference cache write must target the active T0 segment")
+        end
+      else
+        expect_phase!(segment_index, SchedulePhase::Scattered)
+      end
     end
 
     def record_cache_noise_written!(segment_index : Int32) : Nil
@@ -457,6 +514,7 @@ module ML::Video::HyNomasTimelineOps
       end
 
       @next_segment += 1
+      @reference_init_required = false if segment_index == 0 && @reference_init_required
       @phase = @next_segment == @run_segments ? SchedulePhase::Finished : SchedulePhase::Ready
     end
 
@@ -519,6 +577,8 @@ module ML::Video::HyNomasTimelineOps
     @scatter_pipeline : ML::Metal::ComputePipeline
     @copy_pipeline : ML::Metal::ComputePipeline
     @cache_noise_pipeline : ML::Metal::ComputePipeline
+    @reference_scatter_pipeline : ML::Metal::ComputePipeline?
+    @reference_latent : ML::MetalBuffer?
 
     getter geometry : Geometry
     getter schedule : Schedule
@@ -530,8 +590,10 @@ module ML::Video::HyNomasTimelineOps
                    cosine : ML::MetalBuffer, sine : ML::MetalBuffer,
                    cache_eps_bf16 : ML::MetalBuffer,
                    cache_timestep : ML::MetalBuffer,
-                   @run_segments : Int32 = @geometry.segment_count)
-      @schedule = Schedule.new(@geometry, run_segments: @run_segments)
+                   @run_segments : Int32 = @geometry.segment_count,
+                   reference_initialization : Bool = false)
+      @schedule = Schedule.new(@geometry, run_segments: @run_segments,
+        reference_initialization: reference_initialization)
       @buffers = BufferSet.new(timeline, segment_latent, cosine_bank, sine_bank,
         cosine, sine, cache_eps_bf16, cache_timestep)
       validate_buffers!
@@ -546,6 +608,11 @@ module ML::Video::HyNomasTimelineOps
       end
       @cache_noise_pipeline = ML::Metal::PipelineCache.get(CACHE_NOISE_KERNEL) do
         ML::Metal::ComputePipeline.new(CACHE_NOISE_KERNEL, SOURCE)
+      end
+      if reference_initialization
+        @reference_scatter_pipeline = ML::Metal::PipelineCache.get(REFERENCE_SCATTER_KERNEL) do
+          ML::Metal::ComputePipeline.new(REFERENCE_SCATTER_KERNEL, SOURCE)
+        end
       end
     end
 
@@ -593,6 +660,75 @@ module ML::Video::HyNomasTimelineOps
         raise ex
       end
       @schedule.record_prepared!(segment_index)
+    end
+
+    # Gather the authenticated clean reference latent already resident at T0
+    # and bind the global-offset RoPE slice. This prepares exactly one fixed
+    # image segment; it intentionally performs no denoise forward.
+    def prepare_reference_segment!(chain : ML::Metal::MPSCommandChain,
+                                   segment_index : Int32) : Nil
+      @schedule.expect_reference_prepare!(segment_index)
+      bind_live_chain!(chain)
+      buffers = live_buffers!
+      e = chain.encoder
+      @schedule.begin_reference_prepare!(segment_index)
+      begin
+        e.set_pipeline(@gather_pipeline)
+          .set_buffer(buffers.timeline, 0)
+          .set_buffer(buffers.segment_latent, 1, ML::Metal::BufferAccess::Write)
+          .set_value(@geometry.segment_start(segment_index).to_u32, 2)
+          .set_value(@geometry.total_latent_frames.to_u32, 3)
+          .set_value(@geometry.segment_latent_frames.to_u32, 4)
+          .set_value(@geometry.latent_height.to_u32, 5)
+          .set_value(@geometry.latent_width.to_u32, 6)
+          .set_value(@geometry.segment_elements.to_u32, 7)
+          .dispatch_1d(@geometry.segment_elements)
+        encode_rope_slice(e, buffers.cosine_bank, buffers.cosine, segment_index)
+        encode_rope_slice(e, buffers.sine_bank, buffers.sine, segment_index)
+      rescue ex
+        @schedule.fail!
+        raise ex
+      end
+      @schedule.record_reference_prepared!(segment_index)
+    end
+
+    # Convert the DCAE caller-owned BF16 [1,C,segment-T,H,W] latent directly
+    # into clean F32 timeline T0. The buffer remains strongly held until the
+    # caller's single terminal chain drain; this path performs no CPU roundtrip.
+    def admit_reference_latent!(chain : ML::Metal::MPSCommandChain,
+                                reference_latent : ML::MetalBuffer) : Nil
+      @schedule.expect_reference_latent_admission!(0)
+      unless reference_latent.valid? &&
+             reference_latent.size == @geometry.segment_elements.to_i64 * sizeof(UInt16)
+        raise ArgumentError.new("Hy-Nomas reference latent must be exact-size BF16 segment storage")
+      end
+      buffers = live_buffers!
+      if [buffers.timeline, buffers.segment_latent, buffers.cosine_bank, buffers.sine_bank,
+          buffers.cosine, buffers.sine, buffers.cache_eps_bf16, buffers.cache_timestep].any? { |buffer|
+           MetalOps.overlap?(buffer, reference_latent)
+         }
+        raise ArgumentError.new("Hy-Nomas reference latent must not alias timeline plan buffers")
+      end
+
+      bind_live_chain!(chain)
+      @schedule.begin_reference_latent_admission!(0)
+      @reference_latent = reference_latent
+      e = chain.encoder
+      begin
+        e.set_pipeline(@reference_scatter_pipeline || raise ArgumentError.new("Reference latent admission is not enabled"))
+          .set_buffer(reference_latent, 0)
+          .set_buffer(buffers.timeline, 1, ML::Metal::BufferAccess::ReadWrite)
+          .set_value(@geometry.total_latent_frames.to_u32, 2)
+          .set_value(@geometry.segment_latent_frames.to_u32, 3)
+          .set_value(@geometry.latent_height.to_u32, 4)
+          .set_value(@geometry.latent_width.to_u32, 5)
+          .set_value(@geometry.segment_elements.to_u32, 6)
+          .dispatch_1d(@geometry.segment_elements)
+      rescue ex
+        @schedule.fail!
+        raise ex
+      end
+      @schedule.record_reference_latent_admitted!(0)
     end
 
     # The parent queues this only after the denoise steps for the active
@@ -676,6 +812,7 @@ module ML::Video::HyNomasTimelineOps
         raise ArgumentError.new("Hy-Nomas plan release requires exactly one terminal chain wait")
       end
       @buffers = nil
+      @reference_latent = nil
       @released = true
     end
 

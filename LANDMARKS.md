@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFERENCE-ENCODER-2026-11-01] Native image initialization with qualified DCAE-V boundaries
+
+- Downloaded the pinned 4,277,389,995-byte original DCAE-V checkpoint and
+  verified its 169-tensor encoder-only BF16 derivative (1,833,331,160 file
+  bytes). Native prepared MPS/Metal encoding matches pinned upstream
+  `a31c0fe0` / PyTorch 2.8 MPS byte-for-byte at input, post-stage-5 tiles
+  and latent for T4/32x32, T80/32x32 and T120/512x288. The full reference
+  includes both temporal-cache carry transitions. Tolerances remain 2e-5.
+- The full native encode records 306.621 s wall / 306.584 s GPU, zero
+  tracked encode allocations/readbacks/preterminal waits, and one terminal
+  drain. Named diagnostic buffers total 4,663,709,504 bytes; the production
+  Session plan is 4,654,862,144 bytes. Sampled peak 8.8276 GiB, minimum
+  cache-aware headroom 32.7720 GiB and zero swap growth under 12 GiB / 10% /
+  64 MiB / 900 s guards. Opaque MPS resources and between-poll spikes are
+  outside those guarantees. This is initialization cost, not video speed.
+- The opted-in native CLI accepts an authenticated RGB8 image manifest and
+  encoder; normalization/repetition, clean BF16-to-F32 T0 scatter, cache
+  noise and exactly one writer stay on GPU. T0 skips denoising; T1 onward
+  retains generated-segment guards. Encoder owners release after its drain,
+  retaining only a 276,480-byte latent through the DiT drain. Failed waits
+  retain in-flight owners. No full video was generated in this slice.
+- Full-J synthetic timeline arithmetic, 52 CPU Crystal examples, 29
+  Metal-linked checkpoint/cache examples, 14 Python tests, fresh builds and
+  authenticated CPU-only integrated planning pass. Fixed missing conv1/
+  downsample bias, compiled MPS feed reordering, and cross-phase counter
+  validation. Correlated source adversary: ROBUST for the tested encoder,
+  CLI schedule and owner lifetimes; not independent or full video evidence.
+- Return: `docs/hy-nomas-drafter-frontier.md`. Evidence:
+  `.landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json`; local
+  artifacts: `/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo`.
+  Keep `--allow-unqualified-reference` required. Next falsifiers: clean T0
+  PixelUMM reconstruction, actual per-layer DiT cache parity, then a short
+  controlled continuation from an approved single scene. Do not substitute
+  another text-only RoleWright take. Character/style quality, display-only
+  T0 trim, full+partial tiles, other geometries and combined edit/Cinematic
+  modes remain open. Preserve the 10% floor and one GPU model process.
+  Refresh on source/binary/input/weights/geometry/cache/backend/runtime/
+  device changes or local artifact loss; hashes do not recover lost files.
+
 ### [LM-HY-NOMAS-PROMPT-EDIT-QBIT-2026-11-01] Compact edited B state reproduces regenerated C after restart
 
 - Four fresh native DiT intervals qualify the single authenticated B prompt

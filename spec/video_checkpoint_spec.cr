@@ -32,6 +32,22 @@ private class FailingVideoCheckpoint < ML::Video::CheckpointFile
 end
 
 describe ML::Video::CheckpointFile do
+  it "binds an opened descriptor to the authenticated file snapshot" do
+    with_video_checkpoint(checkpoint_header, Bytes.new(8)) do |path|
+      admitted = File.info(path)
+      file = ML::Video::CheckpointFile.new(path, expected_info: admitted)
+      file.close
+      with_video_checkpoint(checkpoint_header, Bytes.new(8)) do |replacement|
+        # Byte-identical, same-length files still have different descriptor
+        # identities. Supplying the hashed snapshot must reject the other one.
+        File.info(replacement).size.should eq(admitted.size)
+        expect_raises(ArgumentError, /opened descriptor/) do
+          ML::Video::CheckpointFile.new(replacement, expected_info: admitted)
+        end
+      end
+    end
+  end
+
   it "admits a scalar and preserves the original descriptor without CPU decoding" do
     with_video_checkpoint(checkpoint_header(shape: "[]", offsets: "[0,4]"), Bytes[0, 0, 128, 63]) do |path|
       file = ML::Video::CheckpointFile.new(path)

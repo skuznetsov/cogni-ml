@@ -116,6 +116,61 @@ describe ML::Video::HyNomasTimelineOps::PrefixGeometry do
 end
 
 describe ML::Video::HyNomasTimelineOps::Schedule do
+  it "admits one fixed-reference T0 writer without denoise or generated scatter" do
+    geometry = ML::Video::HyNomasTimelineOps::Geometry.new
+    schedule = ML::Video::HyNomasTimelineOps::Schedule.new(geometry,
+      run_segments: 3, reference_initialization: true)
+
+    expect_raises(ArgumentError) { schedule.expect_prepare!(0) }
+    expect_raises(ArgumentError) { schedule.expect_reference_latent_admission!(1) }
+    expect_raises(ArgumentError) { schedule.expect_reference_prepare!(1) }
+    expect_raises(ArgumentError) { schedule.expect_reference_prepare!(0) }
+    expect_raises(ArgumentError) { schedule.expect_cache_noise_write!(0) }
+
+    schedule.begin_reference_latent_admission!(0)
+    expect_raises(ArgumentError) { schedule.begin_reference_latent_admission!(0) }
+    expect_raises(ArgumentError) { schedule.expect_reference_prepare!(0) }
+    schedule.record_reference_latent_admitted!(0)
+    expect_raises(ArgumentError) { schedule.begin_reference_latent_admission!(0) }
+    schedule.begin_reference_prepare!(0)
+    schedule.record_reference_prepared!(0)
+    expect_raises(ArgumentError) { schedule.record_denoise_complete!(0) }
+    expect_raises(ArgumentError) { schedule.advance_segment!(0) }
+    expect_raises(ArgumentError) { schedule.record_cache_forward_enqueued!(0) }
+    schedule.expect_cache_noise_write!(0)
+    schedule.record_cache_noise_written!(0)
+    expect_raises(ArgumentError) { schedule.advance_segment!(0) }
+    schedule.record_cache_forward_enqueued!(0)
+    schedule.advance_segment!(0)
+
+    schedule.next_segment.should eq(1)
+    schedule.phase.should eq(ML::Video::HyNomasTimelineOps::SchedulePhase::Ready)
+    expect_raises(ArgumentError) { schedule.begin_reference_latent_admission!(0) }
+    expect_raises(ArgumentError) { schedule.begin_reference_latent_admission!(1) }
+    expect_raises(ArgumentError) { schedule.begin_reference_prepare!(0) }
+    expect_raises(ArgumentError) { schedule.begin_reference_prepare!(1) }
+
+    schedule.expect_prepare!(1)
+    schedule.begin_prepare!(1)
+  end
+
+  it "rejects restoring a reference run while preserving ordinary restore" do
+    geometry = ML::Video::HyNomasTimelineOps::Geometry.new
+    ordinary = ML::Video::HyNomasTimelineOps::Schedule.new(geometry,
+      run_segments: 3)
+    expect_raises(ArgumentError) { ordinary.begin_reference_latent_admission!(0) }
+    expect_raises(ArgumentError) { ordinary.begin_reference_prepare!(0) }
+
+    reference = ML::Video::HyNomasTimelineOps::Schedule.new(geometry,
+      run_segments: 3, reference_initialization: true)
+    expect_raises(ArgumentError) { reference.restore_boundary!(1) }
+    reference.reference_init_required?.should be_true
+    expect_raises(ArgumentError) { reference.expect_prepare!(1) }
+
+    ordinary.restore_boundary!(1)
+    ordinary.expect_prepare!(1)
+  end
+
   it "requires denoise, scatter, noisy cache write, and cache forward before advancing" do
     geometry = ML::Video::HyNomasTimelineOps::Geometry.new
     schedule = ML::Video::HyNomasTimelineOps::Schedule.new(geometry, run_segments: 2)

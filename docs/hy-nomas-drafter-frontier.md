@@ -2,15 +2,19 @@
 
 ## Reference-image frontier (2026-11-01)
 
-Status: source-audited design; the native image-input path is not implemented.
+Status: the native DCAE-V encoder is numerically qualified at the fixed
+512x288x120 reference geometry. Image-conditioned continuation is implemented
+behind an explicit experimental opt-in; its cache/decoder/video parity and
+character/style quality are not yet qualified. It is not enabled by default.
 The rejected text-only RoleWright take does not qualify character or style
 preservation. Do not generate another text-only take as a substitute for this
 capability.
 
 Current upstream added reference-image initialization in
 [`a31c0fe0`](https://github.com/Tencent-Hunyuan/Hy-Nomas/commit/a31c0fe0bcc493be188fd37ddba4ce2f674becb4).
-The local numerical reference remains the older October 24 snapshot; its lack
-of an image-input demo must not be attributed to current upstream. The new
+The existing DiT/PixelUMM numerical reference uses the older October 24
+snapshot. The DCAE-V encoder oracle is pinned to `a31c0fe0`; the older demo's
+lack of image input must not be attributed to current upstream. The new
 [demo contract](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/apps/README.md#start-with-a-reference-image)
 and [encoder entry point](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/a31c0fe0bcc493be188fd37ddba4ce2f674becb4/hymm/pipeline/reference_image.py)
 were inspected at that immutable revision. This is source evidence, not a
@@ -43,21 +47,20 @@ the quality of a two-character RoleWright scene remains an open probe.
 
 ### Native gap and first implementation slice
 
-The native generator accepts prebuilt latents, not RGB images. Implement a
-DCAE-V encoder with its exact checkpoint topology, chunk-causal convolutions,
-temporal cache, normalization, downsampling and pixel-unshuffle semantics.
-Existing generic Metal convolution, normalization and elementwise operations
-may be reused after parity checks. Wan VAE latents are incompatible; PixelUMM
-is a decoder, and Qwen-VL image recognition is not this DiT conditioning path.
+The experimental native generator now accepts an authenticated fitted RGB
+bundle and a separately authenticated DCAE-V encoder checkpoint. The encoder
+implements the checkpoint topology, chunk-causal convolutions, temporal cache,
+normalization, downsampling and pixel-unshuffle semantics with prepared
+MPSGraph operations and native Metal copies/arithmetic. Its tested boundaries
+are listed below. Wan VAE latents are incompatible; PixelUMM is a decoder,
+and Qwen-VL image recognition is not this DiT conditioning path.
 
-Reuse the cache-noise arithmetic kernel and compatible timeline/history
-buffers. The current schedules admit a cache writer only after denoising and
-scatter; add a distinct reference-initialization transition that skips those
-phases, admits exactly one writer and seeds T0 history. Do not bypass the
-existing generated-segment guards. Bind the image digest, fit geometry,
-encoder checkpoint, clean
-latent, caption, noise and cache policy in input provenance. Do not relabel an
-existing noise bank or a restored text-only checkpoint as an image reference.
+The implementation reuses cache-noise arithmetic and compatible timeline/history
+buffers. A distinct reference-initialization transition skips denoising and
+admits exactly one writer to seed T0 history. Generated-segment guards still
+apply to T1 onward. The input manifest and runtime receipt bind the image digest,
+fit geometry, encoder checkpoint, caption, noise and cache policy. An existing
+noise bank or restored text-only checkpoint is not an image reference.
 
 Plan encoder weights and scratch as a separate residency phase before DiT;
 retain the encoded latent and release encoder resources at the safe phase
@@ -74,8 +77,8 @@ PixelUMM reconstruction; (3) compare noisy-cache inputs and per-layer K/V;
 noise. Keep existing 2e-5 absolute/relative tolerances; localize a mismatch
 rather than widening them. Diagnostic captures belong outside the measured
 path. Numeric parity and visual character/style preservation are separate
-gates; neither substitutes for the other. No model launch or full generation
-is part of this source-audit update.
+gates; neither substitutes for the other. The current implementation slice
+admits bounded encoder and initialization probes, not a full video generation.
 
 For RoleWright, first prepare an approved single scene containing Alex and the
 living resume in the supplied style. Character turnarounds and expression
@@ -86,6 +89,114 @@ itself implement timed actions, eye-line control or exact interface text.
 Rollback is the unchanged text-only runtime. Refresh this design after an
 upstream/checkpoint, geometry, temporal-cache or timeline-contract change;
 require new runtime evidence before admitting native image-input support.
+
+### Implementation admission and rollback
+
+The missing original checkpoint is pinned to `tencent/Hy-Nomas` revision
+`bb6a8ca451bfe84947f0ea1c6d51957f983ffffe`, path
+`VAE/DCAE-V/dc-ae-v-1.0-f32t4c32-bf16.pt`, 4,277,389,995 bytes,
+SHA-256 `ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b`.
+The checkpoint has been downloaded and authenticated. Its encoder-only
+safetensors derivative preserves all 169 encoder tensors and 1,833,310,016
+BF16 payload bytes (1,833,331,160 file bytes), SHA-256
+`c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50`.
+Conversion uses the restricted weights-only
+loader and verifies the derivative against the source; it is setup work,
+not part of native inference.
+
+CAUTION: a reference must seed clean T0 pixels/latents and exactly one noisy
+cache writer, without denoising T0, replacing the fixed noise bank, or admitting
+text-only checkpoint restore as a reference session. Keep the original path as
+the default rollback. The first opt-in rejects unsupported combinations rather
+than silently changing checkpoint, prompt-edit, Cinematic or cache semantics.
+
+DoD: ingestion and schedule negative tests; a fresh guarded native build;
+encoder memory planning before allocation; identical BF16 input pixels and
+intermediate/final encoder parity against the original checkpoint on MPS;
+and zero instrumented encode allocations, readbacks or preterminal waits.
+Probe one small clip first, then a two-tile temporal-cache boundary before
+the full reference. Use the existing terminal drain at the encoder-to-DiT
+weight-phase handoff and keep its output GPU allocation resident. Stage
+captures and artifact exports are diagnostic work after the terminal drain.
+Numerical qualification does not establish RoleWright visual quality; that
+requires a subsequent short controlled image-conditioned continuation.
+
+### Observed encoder qualification (2026-11-01)
+
+The guarded native encoder and the pinned original PyTorch 2.8 MPS encoder
+consumed the same fitted RoleWright RGB pixels and original BF16 weights.
+The native measurement path contains no PyTorch. All captured BF16 payloads
+match byte-for-byte, with unchanged `atol=rtol=2e-5`:
+
+| Probe | Captures | Result |
+| --- | --- | --- |
+| 32x32x4 | normalized input, post-stage-5, latent | zero value error |
+| 32x32x80 | input, post-stage-5 tiles 0/1, latent | zero value error |
+| 512x288x120 | input, post-stage-5 tiles 0/1/2, latent | byte-identical |
+
+The full native encode took 306.621 s wall / 306.584 s GPU, with zero
+instrumented MetalBuffer allocations, readbacks or preterminal waits and one
+terminal drain. This is reference initialization cost, not generated-video
+throughput or a paired performance claim. Its named diagnostic residency was
+4,663,709,504 bytes; the production Session plan is 4,654,862,144 bytes without
+the three stage captures. The sampled process-tree peak was 8.828 GiB under
+a 12 GiB cap; minimum file-cache-aware headroom was 32.772 GiB, swap growth
+zero, and the 10% floor remained active. Opaque MPSGraph resources are not
+included in named-buffer counters; sampling cannot rule out between-poll spikes.
+
+The full-J reference timeline arithmetic probe also passed, including clean T0
+scatter/gather, cache noise and RoPE/time preparation, with no tracked
+allocations/readbacks/preterminal waits. It is not an actual per-layer DiT
+cache comparison. Focused checks passed: 52 CPU-only Crystal examples,
+29 Metal-linked checkpoint/cache examples, 14 Python tests and fresh native
+builds. Mini-Quadrumvirate review found and fixed missing conv1/downsample
+bias and MPS executable feed reordering; the current integrated schedule and
+ownership paths have a scoped correlated Adversary verdict of ROBUST.
+
+Evidence and exact artifact/source identities:
+`.landmark/evidence/2026-11-01-hy-nomas-reference-encoder.json`.
+Local weights, fixtures, build products and logs remain under
+`/opt/mldata_ssd/cogni-ml/hy-nomas-reference-20261101.SsKF88Bo`.
+The annotated supplied image is a numerical fixture, not an approved final
+RoleWright scene. No full video was generated in this slice.
+
+Remaining gates are clean-reference PixelUMM reconstruction, noisy-cache
+inputs plus layer-specific K/V against upstream, then a short controlled
+continuation from an approved single scene. Partial final tiles after a full
+tile and other production geometries are not qualified. Refresh encoder
+evidence on source, binary, weights, input, geometry, cache policy, backend,
+compiler/runtime or device change; local hashes cannot recover lost artifacts.
+
+### Preparing and admitting an image
+
+Prepare one complete scene image with
+`examples/support/hy_nomas_reference_image.py --image /absolute/scene.png
+--output-dir /opt/mldata_ssd/cogni-ml/reference-scene --encoder-sha
+c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50`.
+The output directory must be fresh. The helper decodes and fits the image once
+and prints the manifest path and SHA-256. It writes RGB8 pixels, not latents;
+normalization, temporal repetition and all encoder tensor operations run on GPU.
+
+The sequence generator accepts the following four flags together, in addition
+to its existing authenticated timeline inputs, segment count and named budget:
+
+```text
+--reference-image-inputs /absolute/reference-scene/manifest.json
+--reference-image-inputs-sha <manifest SHA-256 printed by preparation>
+--reference-encoder /absolute/encoder.safetensors
+--reference-encoder-sha c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50
+```
+
+Run `--plan-only` first; it authenticates image/weight payloads without creating
+a Metal model. Execution additionally requires `--allow-unqualified-reference`
+and the external file-cache-aware memory guard. The first slice rejects
+Cinematic, legacy per-chunk text caching and checkpoint restore/edit/capture
+combinations. Omitting the quartet retains the text-only path.
+
+`--segments 2` means a technical five-second T0 reference plus five seconds of
+generated T1, not ten generated seconds. The raw pixel output currently includes
+all of T0. Upstream's display-only trim to T0's last 12 frames is not applied;
+the receipt labels reference and generated durations separately.
 
 ## Design-sealed Cinematic comparison (2026-11-01)
 
