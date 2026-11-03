@@ -30,7 +30,13 @@ module HyNomasReferenceRefinerTrace
     "src/ml/video/kernels/hy_nomas_text_refiner.metal",
     "src/ml/video/metal_ops.cr",
     "src/ml/video/metal_linear_mps.cr",
+    "src/ml/video/kernels/linear_mps.metal",
     "src/ml/video/hy_nomas_mps_activation.cr",
+    "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
+    "src/ml/video/kernels/common.metal",
+    "src/ml/video/wan_t5.cr",
+    "src/ml/video/kernels/wan_t5.metal",
+    "src/ml/video/wan_t5_mps_bridge.mm",
   ]
 
   # These bytes are embedded when Crystal compiles the probe. Hashing the
@@ -44,7 +50,13 @@ module HyNomasReferenceRefinerTrace
     "src/ml/video/kernels/hy_nomas_text_refiner.metal"     => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/hy_nomas_text_refiner.metal") }},
     "src/ml/video/metal_ops.cr"                            => {{ read_file("#{__DIR__}/../../src/ml/video/metal_ops.cr") }},
     "src/ml/video/metal_linear_mps.cr"                     => {{ read_file("#{__DIR__}/../../src/ml/video/metal_linear_mps.cr") }},
+    "src/ml/video/kernels/linear_mps.metal"                => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/linear_mps.metal") }},
     "src/ml/video/hy_nomas_mps_activation.cr"              => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_mps_activation.cr") }},
+    "src/ml/video/hy_nomas_mps_reductions_bridge.mm"       => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_mps_reductions_bridge.mm") }},
+    "src/ml/video/kernels/common.metal"                    => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/common.metal") }},
+    "src/ml/video/wan_t5.cr"                               => {{ read_file("#{__DIR__}/../../src/ml/video/wan_t5.cr") }},
+    "src/ml/video/kernels/wan_t5.metal"                    => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/wan_t5.metal") }},
+    "src/ml/video/wan_t5_mps_bridge.mm"                    => {{ read_file("#{__DIR__}/../../src/ml/video/wan_t5_mps_bridge.mm") }},
   }
 
   record TensorSource, name : String, checkpoint : String,
@@ -149,11 +161,23 @@ module HyNomasReferenceRefinerTrace
     end
   end
 
-  def prelude_metadata(prelude_input_bf16_control : Bool = false)
+  def prelude_metadata(prelude_input_bf16_control : Bool = false,
+                       prelude_linear_bf16_control : Bool = false,
+                       prelude_silu_bf16_control : Bool = false)
+    if prelude_linear_bf16_control && !prelude_input_bf16_control
+      raise ArgumentError.new("linear BF16 control requires input BF16 control")
+    end
+    if prelude_silu_bf16_control && !prelude_linear_bf16_control
+      raise ArgumentError.new("SiLU BF16 control requires linear BF16 control")
+    end
     {
-      prelude_input_bf16_control:       prelude_input_bf16_control,
-      full_bf16_prelude_parity:         false,
-      prelude_input_bf16_control_scope: prelude_input_bf16_control ? "masked-mean sum, denominator, and quotient plus sinusoidal cos/sin output roundtrip only" : "disabled",
+      prelude_input_bf16_control:        prelude_input_bf16_control,
+      prelude_linear_bf16_control:       prelude_linear_bf16_control,
+      prelude_silu_bf16_control:         prelude_silu_bf16_control,
+      full_bf16_prelude_parity:          false,
+      prelude_input_bf16_control_scope:  prelude_input_bf16_control ? "masked-mean sum, denominator, and quotient plus sinusoidal cos/sin output roundtrip only" : "disabled",
+      prelude_linear_bf16_control_scope: prelude_linear_bf16_control ? "post-bias output roundtrip of refiner_timestep_mlp1, context_linear1, input_embed, and time_in.mlp1 only" : "disabled",
+      prelude_silu_bf16_control_scope:   prelude_silu_bf16_control ? "BF16-declared negative, exp, add, and divide with explicit RNE output expansion in the three first-prelude SiLU graphs only; backend internal rounding unqualified" : "disabled",
     }
   end
 
@@ -187,13 +211,17 @@ module HyNomasReferenceRefinerTrace
                    encode_readbacks : Int64,
                    preterminal_waits : Int32,
                    terminal_waits : Int32,
-                   prelude_input_bf16_control : Bool = false) : Hash(String, JSON::Any)
+                   prelude_input_bf16_control : Bool = false,
+                   prelude_linear_bf16_control : Bool = false,
+                   prelude_silu_bf16_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
            valid_sha256?(cache_fixture_manifest_sha256)
       raise ArgumentError.new("reference refiner trace identities must be lowercase SHA-256")
     end
     validate_execution!(encode_allocations, encode_readbacks, preterminal_waits, terminal_waits)
+    prelude = prelude_metadata(prelude_input_bf16_control,
+      prelude_linear_bf16_control, prelude_silu_bf16_control)
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner trace source inventory or order mismatch")
     end
@@ -229,7 +257,6 @@ module HyNomasReferenceRefinerTrace
 
     payload_sha256 = payload_digest.hexfinal
     payload_name = File.basename(payload_path)
-    prelude = prelude_metadata(prelude_input_bf16_control)
     raw = JSON.build(indent: "  ") do |json|
       json.object do
         json.field("schema", SCHEMA)
@@ -240,8 +267,12 @@ module HyNomasReferenceRefinerTrace
         json.field("full_text_refiner_encode_executed", true)
         json.field("capture_boundary", "preblock")
         json.field("prelude_input_bf16_control", prelude[:prelude_input_bf16_control])
+        json.field("prelude_linear_bf16_control", prelude[:prelude_linear_bf16_control])
+        json.field("prelude_silu_bf16_control", prelude[:prelude_silu_bf16_control])
         json.field("full_bf16_prelude_parity", prelude[:full_bf16_prelude_parity])
         json.field("prelude_input_bf16_control_scope", prelude[:prelude_input_bf16_control_scope])
+        json.field("prelude_linear_bf16_control_scope", prelude[:prelude_linear_bf16_control_scope])
+        json.field("prelude_silu_bf16_control_scope", prelude[:prelude_silu_bf16_control_scope])
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

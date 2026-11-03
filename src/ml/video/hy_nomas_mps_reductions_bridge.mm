@@ -610,10 +610,11 @@ extern "C" void gs_hy_nomas_mps_reduction_plan_release(void *planHandle) {
   }
 }
 
-// Test-only, pinned PyTorch 2.8 MPSGraph activation reproductions. Keep these
-// unary plans independent from attention reductions: SiLU is negative -> exp
-// -> add-one -> divide, while tanh GELU follows the exact upstream operation
-// sequence with rank-one F32 scalar constants and original input rank/layout.
+// Pinned PyTorch 2.8 MPSGraph activation reproductions. Keep these unary plans
+// independent from attention reductions: SiLU is negative -> exp -> add-one
+// -> divide, while tanh GELU follows the exact upstream operation sequence
+// with rank-one F32 scalar constants and original input rank/layout. BF16
+// SiLU mode keeps those nodes and its scalar constant in BF16 between casts.
 @interface HyNomasMPSActivationPlan : NSObject
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) MPSGraph *graph;
@@ -623,6 +624,7 @@ extern "C" void gs_hy_nomas_mps_reduction_plan_release(void *planHandle) {
 @property(nonatomic, strong) MPSGraphExecutableExecutionDescriptor *execution;
 @property(nonatomic, strong) NSArray<id<MTLBuffer>> *residentBuffers;
 @property(nonatomic) int32_t activation;
+@property(nonatomic) BOOL bf16Control;
 @end
 
 @implementation HyNomasMPSActivationPlan
@@ -630,9 +632,12 @@ extern "C" void gs_hy_nomas_mps_reduction_plan_release(void *planHandle) {
 
 static void *hy_nomas_mps_activation_plan_create(
     void *deviceHandle, const int64_t *shapeValues, int32_t rank,
-    void *inputHandle, void *outputHandle, int32_t activation) {
+    void *inputHandle, void *outputHandle, int32_t activation,
+    int32_t bf16Control) {
   if (!deviceHandle || !shapeValues || !inputHandle || !outputHandle ||
-      rank < 1 || rank > 8 || activation < 0 || activation > 1)
+      rank < 1 || rank > 8 || activation < 0 || activation > 1 ||
+      bf16Control < 0 || bf16Control > 1 ||
+      (bf16Control != 0 && activation != 0))
     return nullptr;
   if (@available(macOS 15.0, *)) {
     @autoreleasepool {
@@ -665,16 +670,32 @@ static void *hy_nomas_mps_activation_plan_create(
         }
 
         MPSGraph *graph = [MPSGraph new];
+        if (!graph)
+          return nullptr;
         graph.options = MPSGraphOptionsNone;
-        MPSGraphTensor *x = [graph placeholderWithShape:shape
-                                               dataType:MPSDataTypeFloat32
-                                                   name:activation == 0 ? @"hy_silu_x" : @"hy_gelu_x"];
+        NSString *inputName = activation == 0 ? @"hy_silu_x" : @"hy_gelu_x";
+        if (activation == 0 && bf16Control != 0)
+          inputName = @"hy_silu_x_f32";
+        MPSGraphTensor *inputTensor = [graph placeholderWithShape:shape
+                                                          dataType:MPSDataTypeFloat32
+                                                              name:inputName];
+        if (!inputTensor)
+          return nullptr;
+        MPSGraphTensor *x = inputTensor;
+        if (activation == 0 && bf16Control != 0) {
+          // PyTorch 2.8 silu_out_mps types the placeholder and every SiLU
+          // node from self.scalar_type(); the bound buffers here remain F32.
+          x = [graph castTensor:inputTensor toType:MPSDataTypeBFloat16
+                           name:@"hy_silu_input_bf16"];
+        }
         MPSGraphTensor *result = nil;
         if (activation == 0) {
           MPSGraphTensor *one =
               [graph constantWithScalar:1.0
                                   shape:@[ @1 ]
-                               dataType:MPSDataTypeFloat32];
+                               dataType:(bf16Control != 0
+                                   ? MPSDataTypeBFloat16
+                                   : MPSDataTypeFloat32)];
           MPSGraphTensor *negative = [graph negativeWithTensor:x
                                                           name:@"hy_silu_negative"];
           MPSGraphTensor *exponential =
@@ -686,7 +707,15 @@ static void *hy_nomas_mps_activation_plan_create(
           result = [graph divisionWithPrimaryTensor:x
                                 secondaryTensor:denominator
                                            name:@"hy_silu_x_over_one_plus_exp"];
-          if (!negative || !exponential || !one || !denominator)
+          if (!negative || !exponential || !one || !denominator || !result)
+            return nullptr;
+          if (bf16Control != 0 &&
+              (x.dataType != MPSDataTypeBFloat16 ||
+               negative.dataType != MPSDataTypeBFloat16 ||
+               exponential.dataType != MPSDataTypeBFloat16 ||
+               one.dataType != MPSDataTypeBFloat16 ||
+               denominator.dataType != MPSDataTypeBFloat16 ||
+               result.dataType != MPSDataTypeBFloat16))
             return nullptr;
         } else {
           // PyTorch 2.8 Activation.mm's approximate="tanh" graph, preserving
@@ -735,17 +764,120 @@ static void *hy_nomas_mps_activation_plan_create(
               !tanhValue || !scaled)
             return nullptr;
         }
-        if (!graph || !x || !result || result.shape == nil)
+        MPSGraphTensor *resultF32 = result;
+        if (activation == 0 && bf16Control != 0) {
+          // Preserve the BF16 graph result while satisfying the existing F32
+          // checkpoint binding. The integer path makes the external F32 value
+          // an explicit BF16 round-to-nearest-even expansion even if the
+          // backend executes the graph's BF16 cast as a wider operation.
+          resultF32 = [graph castTensor:result toType:MPSDataTypeFloat32
+                                   name:@"hy_silu_output_f32"];
+          if (!resultF32 || resultF32.dataType != MPSDataTypeFloat32)
+            return nullptr;
+
+          MPSGraphTensor *resultBits =
+              [graph reinterpretCastTensor:resultF32
+                                     toType:MPSDataTypeUInt32
+                                       name:@"hy_silu_output_bits"];
+          MPSGraphTensor *shift16 = [graph constantWithScalar:16.0
+                                                         shape:@[ @1 ]
+                                                      dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *oneU32 = [graph constantWithScalar:1.0
+                                                       shape:@[ @1 ]
+                                                    dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *roundingBase = [graph constantWithScalar:0x7fff
+                                                             shape:@[ @1 ]
+                                                          dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *upperWordMask = [graph constantWithScalar:0xffff0000
+                                                              shape:@[ @1 ]
+                                                           dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *magnitudeMask = [graph constantWithScalar:0x7fffffff
+                                                              shape:@[ @1 ]
+                                                           dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *infinityBits = [graph constantWithScalar:0x7f800000
+                                                             shape:@[ @1 ]
+                                                          dataType:MPSDataTypeUInt32];
+          MPSGraphTensor *quietNaNBit = [graph constantWithScalar:0x00400000
+                                                            shape:@[ @1 ]
+                                                         dataType:MPSDataTypeUInt32];
+          if (!resultBits || !shift16 || !oneU32 || !roundingBase ||
+              !upperWordMask || !magnitudeMask || !infinityBits ||
+              !quietNaNBit || resultBits.dataType != MPSDataTypeUInt32)
+            return nullptr;
+
+          MPSGraphTensor *highWord =
+              [graph bitwiseRightShiftWithPrimaryTensor:resultBits
+                                        secondaryTensor:shift16
+                                                   name:@"hy_silu_bf16_high_word"];
+          MPSGraphTensor *roundingParity =
+              [graph bitwiseANDWithPrimaryTensor:highWord
+                                 secondaryTensor:oneU32
+                                            name:@"hy_silu_bf16_rounding_parity"];
+          MPSGraphTensor *roundingBias =
+              [graph additionWithPrimaryTensor:roundingBase
+                               secondaryTensor:roundingParity
+                                          name:@"hy_silu_bf16_rounding_bias"];
+          MPSGraphTensor *roundedBits =
+              [graph additionWithPrimaryTensor:resultBits
+                               secondaryTensor:roundingBias
+                                          name:@"hy_silu_bf16_rounded_bits"];
+          MPSGraphTensor *maskedRoundedBits =
+              [graph bitwiseANDWithPrimaryTensor:roundedBits
+                                 secondaryTensor:upperWordMask
+                                            name:@"hy_silu_bf16_masked_bits"];
+          MPSGraphTensor *magnitude =
+              [graph bitwiseANDWithPrimaryTensor:resultBits
+                                 secondaryTensor:magnitudeMask
+                                            name:@"hy_silu_bf16_magnitude"];
+          MPSGraphTensor *isNaN =
+              [graph greaterThanWithPrimaryTensor:magnitude
+                                  secondaryTensor:infinityBits
+                                             name:@"hy_silu_bf16_is_nan"];
+          MPSGraphTensor *nanBaseBits =
+              [graph bitwiseANDWithPrimaryTensor:resultBits
+                                 secondaryTensor:upperWordMask
+                                            name:@"hy_silu_bf16_nan_base_bits"];
+          MPSGraphTensor *quietNaNBits =
+              [graph bitwiseORWithPrimaryTensor:nanBaseBits
+                                secondaryTensor:quietNaNBit
+                                           name:@"hy_silu_bf16_quiet_nan_bits"];
+          MPSGraphTensor *bf16ExpandedBits =
+              [graph selectWithPredicateTensor:isNaN
+                           truePredicateTensor:quietNaNBits
+                          falsePredicateTensor:maskedRoundedBits
+                                           name:@"hy_silu_bf16_nan_preserving_bits"];
+          if (!highWord || !roundingParity || !roundingBias || !roundedBits ||
+              !maskedRoundedBits || !magnitude || !isNaN || !nanBaseBits ||
+              !quietNaNBits ||
+              !bf16ExpandedBits || highWord.dataType != MPSDataTypeUInt32 ||
+              roundingParity.dataType != MPSDataTypeUInt32 ||
+              roundingBias.dataType != MPSDataTypeUInt32 ||
+              roundedBits.dataType != MPSDataTypeUInt32 ||
+              maskedRoundedBits.dataType != MPSDataTypeUInt32 ||
+              magnitude.dataType != MPSDataTypeUInt32 ||
+              nanBaseBits.dataType != MPSDataTypeUInt32 ||
+              quietNaNBits.dataType != MPSDataTypeUInt32 ||
+              bf16ExpandedBits.dataType != MPSDataTypeUInt32)
+            return nullptr;
+
+          resultF32 = [graph reinterpretCastTensor:bf16ExpandedBits
+                                             toType:MPSDataTypeFloat32
+                                               name:@"hy_silu_bf16_expanded_f32"];
+          if (!resultF32 || resultF32.dataType != MPSDataTypeFloat32)
+            return nullptr;
+        }
+        if (!graph || !inputTensor || !x || !result || !resultF32 ||
+            resultF32.shape == nil)
           return nullptr;
 
         NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds =
             [NSMutableDictionary new];
-        feeds[x] = [[MPSGraphShapedType alloc] initWithShape:shape
-                                                   dataType:MPSDataTypeFloat32];
+        feeds[inputTensor] = [[MPSGraphShapedType alloc] initWithShape:shape
+                                                            dataType:MPSDataTypeFloat32];
         MPSGraphExecutable *executable =
             [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
                                 feeds:feeds
-                        targetTensors:@[ result ]
+                        targetTensors:@[ resultF32 ]
                      targetOperations:nil
                 compilationDescriptor:nil];
         if (!executable)
@@ -765,7 +897,7 @@ static void *hy_nomas_mps_activation_plan_create(
         execution.waitUntilCompleted = NO;
         if (!inputData || !outputData || !execution ||
             executable.feedTensors.count != 1 ||
-            executable.feedTensors[0] != x)
+            executable.feedTensors[0] != inputTensor)
           return nullptr;
 
         HyNomasMPSActivationPlan *plan = [HyNomasMPSActivationPlan new];
@@ -777,6 +909,7 @@ static void *hy_nomas_mps_activation_plan_create(
         plan.execution = execution;
         plan.residentBuffers = @[ input, output ];
         plan.activation = activation;
+        plan.bf16Control = bf16Control != 0;
         return (__bridge_retained void *)plan;
       } @catch (NSException *exception) {
         (void)exception;
@@ -788,10 +921,12 @@ static void *hy_nomas_mps_activation_plan_create(
 }
 
 extern "C" void *gs_hy_nomas_mps_activation_plan_create(
-    void *deviceHandle, int32_t activation, const int64_t *shapeValues,
-    int32_t rank, void *inputHandle, void *outputHandle) {
+    void *deviceHandle, int32_t activation, int32_t bf16Control,
+    const int64_t *shapeValues, int32_t rank, void *inputHandle,
+    void *outputHandle) {
   return hy_nomas_mps_activation_plan_create(
-      deviceHandle, shapeValues, rank, inputHandle, outputHandle, activation);
+      deviceHandle, shapeValues, rank, inputHandle, outputHandle, activation,
+      bf16Control);
 }
 
 extern "C" int32_t gs_hy_nomas_mps_activation_encode(void *planHandle,

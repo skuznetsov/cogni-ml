@@ -1,5 +1,94 @@
 # Hy-Nomas local draft suite
 
+## Connected first-linear and SiLU BF16 boundaries (2026-11-02)
+
+Status: the opt-in native control now reproduces four first-linear outputs and
+three SiLU outputs byte-for-byte against the pinned source BF16 trace on the
+authenticated current T0. These are the buffers consumed by the next GPU
+operation. The complete BF16 prelude, refiner, cache and motion remain open.
+This step runs no DiT block or video generation and makes no speedup claim.
+
+The input is unchanged from the experiment below: 4,320 video rows, 263 valid
+Qwen rows, 1,280 stored rows and writer timestep 206.897. Source remains the
+adapted pinned PyTorch 2.8 MPS oracle, rather than stock CUDA/Magi execution.
+New flags require the earlier boundary controls and a trace-enabled execution:
+
+```text
+--refiner-input-bf16-control
+--refiner-linear-bf16-control
+--refiner-silu-bf16-control
+```
+
+First-linear rounding is fused into the existing post-bias dispatch. Only
+`refiner_timestep_mlp1`, `context_linear1`, `input_embed` and `time_in.mlp1`
+select it. The SiLU graphs declare BF16 negative, exp, add and divide nodes,
+check those declared types, then enforce a BF16 round-to-nearest-even output
+expansion through UInt32 operations inside the same graph. Their F32 external
+buffers and the existing chain are reused. Backend internal rounding,
+accumulation, dispatches and resource allocation remain opaque.
+
+| Consumed boundary | Failures before its correction | Failures after correction | Final maximum error |
+| --- | ---: | ---: | ---: |
+| Refiner timestep first linear | 1,799 / 2,048 | 0 / 2,048 | 0 |
+| First context linear | 2,023 / 2,048 | 0 / 2,048 | 0 |
+| Input embedding linear | 532,894 / 538,624 | 0 / 538,624 | 0 |
+| First time-vector linear | 1,248 / 2,048 | 0 / 2,048 | 0 |
+| Refiner timestep SiLU | 1,641 / 2,048 | 0 / 2,048 | 0 |
+| Context SiLU | 162 / 2,048 | 0 / 2,048 | 0 |
+| Time-vector SiLU | 855 / 2,048 | 0 / 2,048 | 0 |
+
+The first four before-counts use the input-only control; the last three use
+the linear control. Hashes confirm byte equality for all ten cumulative
+controlled boundaries, including the previous mean and two sinusoids. This
+is a result for one authenticated input, not a general equivalence proof.
+
+The first SiLU candidate, using only graph BF16 casts, produced the same F32
+payload as the linear-only run. A new zero-tolerance check rejected its raw
+outputs as non-BF16-expanded even though post-rounded diagnostic views were
+exact. Declared graph types alone therefore do not qualify a consumed value.
+The final explicit integer rounding passes that check. Why the cast-only
+graph produced wider values remains unverified; no compiler-elision claim
+follows. Both candidate source snapshots and reports are retained.
+
+The full 16-tensor BF16 gate correctly remains false at unchanged
+`atol=rtol=2e-5`. The first remaining mismatch is the second timestep linear:
+1,809 / 2,048 failures, maximum 0.0019197464. Context's second linear, the
+context sum and the final time vector also differ. Post-rounded views remain
+diagnostic and do not repair those connected operations.
+
+Fresh default replay preserves all nine preblock and 16 refiner hashes and
+passes all 16 raw comparisons against source F32. Input-only and linear-only
+ablations also preserve their prior hashes. Compiled source pins now include
+the actual linear kernel, activation bridge and supporting loaded sources;
+the comparator rejects stale or inconsistent pins. The activation bridge was
+compiled and linked in a fresh isolated build. Exact object and executable
+hashes are retained.
+
+Checks: 42 focused Python tests, 17 Crystal examples, four CLI rejection cases,
+GPU A/A, deliberate perturbation and non-BF16 sensitivity controls pass.
+All four final native runs report zero tracked allocations, readbacks and
+preterminal waits during the measured encode interval, one existing terminal
+wait, and 944,620,612 named buffer bytes. Optional diagnostic reads occur after
+that wait. These counters do not measure opaque MPS internal activity.
+Thirty guarded stages, including the expected failing admission probe,
+retain the file-cache-aware 10% floor, 6 GiB process cap and 64 MiB swap-growth
+stop. Maximum sampled group footprint is 0.964 GiB, minimum headroom 27.528
+GiB, and observed stage swap growth is zero. All final samples have no live
+children; sampling does not bound between-poll spikes or all Metal residency.
+
+Same-lineage mini-Quad verdict: ROBUST for these ten consumed boundaries on
+this input. The zero-tolerance representation check establishes BF16-expanded
+values; the separate bound source/native tensor hashes establish byte identity.
+
+Evidence: `.landmark/evidence/2026-11-02-hy-nomas-refiner-linear-silu.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-linear-20261102.8mxo6zrk`.
+Keep both new controls default-false. Next: qualify the three second-linear
+outputs and context addition on the exact corrected inputs, then the refiner
+blocks, before interpreting block-0 K/V or retesting motion. Omit the flags
+to restore normal behavior. Refresh after source, binary/runtime, weights,
+reference/noise, caption/mask, layout or precision changes; missing or mutated
+retained artifacts revoke the bounded result.
+
 ## Reference refiner input precision boundaries (2026-11-02)
 
 Status: an opt-in native input control makes the current T0 masked mean and

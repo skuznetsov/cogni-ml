@@ -2,8 +2,11 @@ require "spec"
 require "../src/ml/video/hy_nomas_text_refiner"
 
 describe ML::Video::HyNomasTextRefinerMPSPlan do
-  it "keeps the BF16 input prelude control opt-in and confined to mean and timestep kernels" do
+  it "keeps all BF16 prelude controls opt-in and preserves input-only casts" do
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_INPUT_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_LINEAR_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SILU_BF16_CONTROL.should be_false
+    ML::Video::HyNomasMPSActivation::UnaryPlan::DEFAULT_BF16_CONTROL.should be_false
 
     source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
     source.includes?("constant uint &prelude_input_bf16_control [[buffer(4)]]").should be_true
@@ -16,6 +19,41 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     source.includes?("hy_text_roundtrip_bf16(precise::sin(phase))").should be_true
     source.includes?("embedding[index] = precise::cos(phase);").should be_true
     source.includes?("embedding[index + half_dim] = precise::sin(phase);").should be_true
+  end
+
+  it "requires each prelude precision control to include its preceding boundary" do
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true)
+
+    expect_raises(ArgumentError, /input BF16 control/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, true, false)
+    end
+    expect_raises(ArgumentError, /linear BF16 control/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, false, true)
+    end
+  end
+
+  it "limits post-bias BF16 rounding to the four first prelude projections" do
+    names = ML::Video::HyNomasTextRefinerMPSPlan::PRELUDE_FIRST_LINEAR_NAMES
+    names.should eq(["refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1"])
+    {"refiner_timestep", "context_embed", "time_in.mlp2",
+     "block0.adaLN", "block0.mlp_fc1", "block1.adaLN", "block1.mlp_fc1"}.each do |name|
+      names.includes?(name).should be_false
+    end
+
+    source = ML::Video::MetalLinearMPS::SOURCE
+    source.includes?("constant uint &round_output_bf16 [[buffer(6)]]").should be_true
+    source.includes?("video_linear_mps_roundtrip_bf16(value)").should be_true
+  end
+
+  it "limits BF16 SiLU execution to the three prelude activation nodes" do
+    names = ML::Video::HyNomasTextRefinerMPSPlan::PRELUDE_SILU_NAMES
+    names.should eq(["refiner_timestep_silu", "context_silu", "time_in.silu"])
+    {"block0.condition_silu", "block0.mlp_silu",
+     "block1.condition_silu", "block1.mlp_silu"}.each do |name|
+      names.includes?(name).should be_false
+    end
   end
 
   it "binds the exact 42-tensor F32 upstream subset without renaming source keys" do

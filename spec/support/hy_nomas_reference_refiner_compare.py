@@ -41,7 +41,13 @@ NATIVE_SOURCE_FILES = (
     "src/ml/video/hy_nomas_text_refiner.cr",
     "src/ml/video/kernels/hy_nomas_text_refiner.metal",
     "src/ml/video/metal_ops.cr", "src/ml/video/metal_linear_mps.cr",
+    "src/ml/video/kernels/linear_mps.metal",
     "src/ml/video/hy_nomas_mps_activation.cr",
+    "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
+    "src/ml/video/kernels/common.metal",
+    "src/ml/video/wan_t5.cr",
+    "src/ml/video/kernels/wan_t5.metal",
+    "src/ml/video/wan_t5_mps_bridge.mm",
 )
 ATOL = shared.ATOL
 RTOL = shared.RTOL
@@ -143,6 +149,19 @@ def _validate_compiled_pins(pins: Any) -> None:
         raise Error("native refiner compiled source pins differ from the reviewed working tree")
 
 
+def _validate_prelude_controls(document: Mapping[str, Any]) -> dict[str, bool]:
+    controls = {name: document.get(name, False) for name in (
+        "prelude_input_bf16_control", "prelude_linear_bf16_control",
+        "prelude_silu_bf16_control")}
+    if any(type(value) is not bool for value in controls.values()):
+        raise Error("native refiner precision controls must be boolean")
+    if controls["prelude_linear_bf16_control"] and not controls["prelude_input_bf16_control"]:
+        raise Error("linear BF16 control requires input BF16 control")
+    if controls["prelude_silu_bf16_control"] and not controls["prelude_linear_bf16_control"]:
+        raise Error("SiLU BF16 control requires linear BF16 control")
+    return controls
+
+
 def validate_inputs(args: argparse.Namespace) -> dict[str, Any]:
     native_path, native = _load_document(args.native, args.native_sha256, NATIVE_SCHEMA)
     source_path, source = _load_document(args.source, args.source_sha256, SOURCE_SCHEMA)
@@ -168,8 +187,7 @@ def validate_inputs(args: argparse.Namespace) -> dict[str, Any]:
     }.items():
         if type(native.get(key)) is not type(expected) or native[key] != expected:
             raise Error(f"native refiner execution contract differs: {key}")
-    if type(native.get("prelude_input_bf16_control", False)) is not bool:
-        raise Error("native refiner input precision control must be a boolean")
+    _validate_prelude_controls(native)
     _validate_compiled_pins(native.get("compiled_source_sha256"))
     identity = source.get("source", {})
     if (identity.get("conditioning_manifest_sha256") != args.timeline_sha256
@@ -257,11 +275,12 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                                ("source", sdoc, inputs["source_payload"])):
         tensors[kind] = {name: shared._load_tensor(torch, np, payload, doc["tensors"][name], device)
                          for name in COMMON_ORDER}
-    queued: list[tuple[str, str, dict[str, Any]]] = []
+    queued: list[tuple[str, str, dict[str, Any], float, float]] = []
 
-    def compare(kind: str, name: str, actual: Any, expected: Any) -> None:
+    def compare(kind: str, name: str, actual: Any, expected: Any,
+                *, atol: float = ATOL, rtol: float = RTOL) -> None:
         queued.append((kind, name, shared._metric_stat_tensors(
-            torch, actual, expected, atol=ATOL, rtol=RTOL)))
+            torch, actual, expected, atol=atol, rtol=rtol), atol, rtol))
 
     for name in COMMON_ORDER:
         actual, expected = tensors["native"][name], tensors["source"][name]
@@ -269,6 +288,22 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         if name not in ("input_compact_valid", "timestep"):
             compare("native_bf16_rounding_view", name,
                     actual.to(torch.bfloat16).to(torch.float32), expected)
+    # A flag must describe the captured connected values, not just intent or
+    # a post-rounded diagnostic view. Use zero tolerance for this contract.
+    controls_enabled = _validate_prelude_controls(ndoc)
+    controlled_boundaries = []
+    if controls_enabled["prelude_input_bf16_control"]:
+        controlled_boundaries.extend(("masked_mean", "refiner_timestep_sinusoidal",
+                                      "time_in.sinusoidal"))
+    if controls_enabled["prelude_linear_bf16_control"]:
+        controlled_boundaries.extend(("refiner_timestep_mlp1", "context_linear1",
+                                      "input_embed", "time_in.mlp1"))
+    if controls_enabled["prelude_silu_bf16_control"]:
+        controlled_boundaries.extend(("refiner_timestep_silu", "context_silu", "time_in.silu"))
+    for name in controlled_boundaries:
+        actual = tensors["native"][name]
+        compare("connected_bf16_boundary", name, actual,
+                actual.to(torch.bfloat16).float(), atol=0.0, rtol=0.0)
     for name, raw_name in zip(("refiner_timestep_sinusoidal", "time_in.sinusoidal"), RAW_SINUSOIDS):
         raw = shared._load_tensor(torch, np, inputs["source_payload"], sdoc["tensors"][raw_name], device)
         compare("source_raw_sinusoid", name, tensors["native"][name], raw)
@@ -288,26 +323,37 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     control = torch.arange(16, device=device, dtype=torch.float32)
     compare("sensitivity_control", "a_vs_a", control, control)
     compare("sensitivity_control", "deliberate_perturbation", control + 0.01, control)
-    flat = [stats[key] for _kind, _name, stats in queued for key in shared.METRIC_KEYS]
+    non_bf16 = control + 0.001
+    compare("sensitivity_control", "non_bf16_boundary", non_bf16,
+            non_bf16.to(torch.bfloat16).float(), atol=0.0, rtol=0.0)
+    flat = [stats[key] for _kind, _name, stats, _atol, _rtol in queued for key in shared.METRIC_KEYS]
     # One terminal export for all comparison/replay metrics and the mask count.
     values = torch.stack([*flat, replay["denominator"].reshape(()).float()]).detach().cpu().tolist()
     rows = []
     stride = len(shared.METRIC_KEYS)
-    for index, (kind, name, _stats) in enumerate(queued):
+    for index, (kind, name, _stats, atol, rtol) in enumerate(queued):
         rows.append(dict(kind=kind, tensor=name, **shared._stats_record(
-            values[index*stride:(index+1)*stride], atol=ATOL, rtol=RTOL)))
+            values[index*stride:(index+1)*stride], atol=atol, rtol=rtol)))
     raw_rows = [row for row in rows if row["kind"] == "raw"]
+    boundary_rows = [row for row in rows if row["kind"] == "connected_bf16_boundary"]
     controls = {row["tensor"]: row for row in rows if row["kind"] == "sensitivity_control"}
     return dict(
-        numeric_gate_passed=all(row["passed"] for row in raw_rows), rows=rows,
+        numeric_gate_passed=all(row["passed"] for row in [*raw_rows, *boundary_rows]), rows=rows,
+        connected_bf16_boundary_count=len(boundary_rows),
+        connected_bf16_boundaries_passed=(all(row["passed"] for row in boundary_rows)
+                                          if boundary_rows else None),
         native_prelude_input_bf16_control=ndoc.get("prelude_input_bf16_control", False),
+        native_prelude_linear_bf16_control=ndoc.get("prelude_linear_bf16_control", False),
+        native_prelude_silu_bf16_control=ndoc.get("prelude_silu_bf16_control", False),
         actual_source_bf16_mask_sum_replay=values[-1], true_valid_text_tokens=valid,
         replay_qwen_byte_identical=True,
         replay_mask_equivalent_after_source_cast=True,
         source_refiner_mask_exact_prefix=True,
-        sensitivity_controls_passed=(controls["a_vs_a"]["passed"] and not controls["deliberate_perturbation"]["passed"]),
+        sensitivity_controls_passed=(controls["a_vs_a"]["passed"]
+                                     and not controls["deliberate_perturbation"]["passed"]
+                                     and not controls["non_bf16_boundary"]["passed"]),
         terminal_cpu_exports=1,
-        interpretation="Post-rounded views are diagnostic only. BF16 source-expression replay uses byte-identical consumed Qwen and an exact authenticated mask; it is compared only in source-bf16 mode. The F32 expression uses a different reduction order from native and is diagnostic. This comparator runs no refiner forward; the native capture identifies whether its input BF16 control was enabled. No complete refiner, K/V or motion qualification follows.",
+        interpretation="Post-rounded views are diagnostic only. BF16 source-expression replay uses byte-identical consumed Qwen and an exact authenticated mask; it is compared only in source-bf16 mode. The F32 expression uses a different reduction order from native and is diagnostic. This comparator runs no refiner forward; the native capture identifies the connected input, first-linear, and first-SiLU controls enabled. Full BF16 prelude parity remains unqualified. No complete refiner, K/V or motion qualification follows.",
     )
 
 

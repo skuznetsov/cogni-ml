@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,35 @@ import hy_nomas_reference_refiner_compare as compare
 
 
 class RefinerAdmissionTests(unittest.TestCase):
+    def test_connected_prelude_controls_require_boolean_dependencies(self):
+        self.assertEqual(compare._validate_prelude_controls({}), dict(
+            prelude_input_bf16_control=False,
+            prelude_linear_bf16_control=False,
+            prelude_silu_bf16_control=False))
+        enabled = dict(prelude_input_bf16_control=True,
+                       prelude_linear_bf16_control=True,
+                       prelude_silu_bf16_control=True)
+        self.assertEqual(compare._validate_prelude_controls(enabled), enabled)
+        for name in enabled:
+            with self.subTest(control=name), self.assertRaisesRegex(compare.Error, "boolean"):
+                compare._validate_prelude_controls({**enabled, name: 1})
+        for invalid in [dict(prelude_linear_bf16_control=True),
+                        dict(prelude_silu_bf16_control=True),
+                        dict(prelude_input_bf16_control=True, prelude_silu_bf16_control=True)]:
+            with self.subTest(controls=invalid), self.assertRaisesRegex(compare.Error, "requires"):
+                compare._validate_prelude_controls(invalid)
+
+    def test_compiled_pins_cover_linear_kernel_and_activation_bridge(self):
+        self.assertIn("src/ml/video/kernels/linear_mps.metal", compare.NATIVE_SOURCE_FILES)
+        self.assertIn("src/ml/video/hy_nomas_mps_reductions_bridge.mm", compare.NATIVE_SOURCE_FILES)
+
+    def test_native_trace_and_comparator_pin_inventories_match(self):
+        root = Path(compare.__file__).resolve().parents[2]
+        text = (root/"examples/support/hy_nomas_reference_refiner_trace.cr").read_text()
+        inventory = text.split("SOURCE_FILES = [", 1)[1].split("\n  ]", 1)[0]
+        self.assertEqual(tuple(re.findall(r'^    "([^"]+)",$', inventory, re.MULTILINE)),
+                         compare.NATIVE_SOURCE_FILES)
+
     def test_manifest_schema_hash_and_duplicate_fields_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trace.json"

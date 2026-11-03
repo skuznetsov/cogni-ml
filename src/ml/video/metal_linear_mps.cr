@@ -46,7 +46,11 @@ module ML::Video::MetalLinearMPS
                                input_dim : Int32, output_dim : Int32,
                                bias_dtype : WeightDType, plan : WanT5MPSLinearPlan,
                                weight_stage : ML::MetalBuffer,
-                               apply_bias : Bool = true) : Nil
+                               apply_bias : Bool = true,
+                               round_output_bf16 : Bool = false) : Nil
+    if round_output_bf16 && !apply_bias
+      raise ArgumentError.new("Post-bias BF16 rounding requires the bias dispatch")
+    end
     validate_preexpanded!(input, bias, output, rows, input_dim, output_dim,
       bias_dtype, plan, weight_stage)
     {% if flag?(:darwin) && !flag?(:cpu_only) %}
@@ -63,6 +67,7 @@ module ML::Video::MetalLinearMPS
     e.set_value(output_dim.to_u32, 3)
     e.set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 4)
     e.set_value(count.to_u32, 5)
+    e.set_value(round_output_bf16 ? 1_u32 : 0_u32, 6)
     e.dispatch_1d(count.to_i32)
   end
 
@@ -76,7 +81,11 @@ module ML::Video::MetalLinearMPS
                    weight_dtype : WeightDType, bias_dtype : WeightDType,
                    plan : WanT5MPSLinearPlan,
                    weight_stage : ML::MetalBuffer,
-                   apply_bias : Bool = true) : Nil
+                   apply_bias : Bool = true,
+                   round_output_bf16 : Bool = false) : Nil
+    if round_output_bf16 && !apply_bias
+      raise ArgumentError.new("Post-bias BF16 rounding requires the bias dispatch")
+    end
     MetalOps.dims(rows, input_dim, output_dim)
     MetalOps.check(input, rows.to_i64 * input_dim)
     MetalOps.check_storage(weight, input_dim.to_i64 * output_dim, weight_dtype)
@@ -99,6 +108,7 @@ module ML::Video::MetalLinearMPS
     e.set_value(output_dim.to_u32, 3)
     e.set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 4)
     e.set_value(count.to_u32, 5)
+    e.set_value(round_output_bf16 ? 1_u32 : 0_u32, 6)
     e.dispatch_1d(count.to_i32)
   end
 end

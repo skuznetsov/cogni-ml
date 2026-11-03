@@ -60,6 +60,8 @@ describe HyNomasReferenceRefinerTrace do
   it "marks prelude BF16 control as disabled by default and never full prelude parity" do
     disabled = HyNomasReferenceRefinerTrace.prelude_metadata
     disabled[:prelude_input_bf16_control].should be_false
+    disabled[:prelude_linear_bf16_control].should be_false
+    disabled[:prelude_silu_bf16_control].should be_false
     disabled[:full_bf16_prelude_parity].should be_false
     disabled[:prelude_input_bf16_control_scope].should eq("disabled")
 
@@ -67,6 +69,22 @@ describe HyNomasReferenceRefinerTrace do
     enabled[:prelude_input_bf16_control].should be_true
     enabled[:full_bf16_prelude_parity].should be_false
     enabled[:prelude_input_bf16_control_scope].should contain("masked-mean sum")
+
+    connected = HyNomasReferenceRefinerTrace.prelude_metadata(true, true, true)
+    connected[:prelude_linear_bf16_control].should be_true
+    connected[:prelude_silu_bf16_control].should be_true
+    connected[:full_bf16_prelude_parity].should be_false
+    connected[:prelude_linear_bf16_control_scope].should contain("input_embed")
+    connected[:prelude_silu_bf16_control_scope].should contain("negative, exp, add, and divide")
+  end
+
+  it "rejects disconnected precision controls before writing a trace" do
+    expect_raises(ArgumentError, "requires input BF16 control") do
+      HyNomasReferenceRefinerTrace.prelude_metadata(false, true, false)
+    end
+    expect_raises(ArgumentError, "requires linear BF16 control") do
+      HyNomasReferenceRefinerTrace.prelude_metadata(true, false, true)
+    end
   end
 
   it "fails closed before capture when refiner checkpoints are missing or unordered" do

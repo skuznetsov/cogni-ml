@@ -1,6 +1,6 @@
 # Prepared MPSGraph activations matching the pinned PyTorch 2.8 MPS operation
-# sequences. Used by the opt-in block backend after same-input bitwise controls;
-# the default Metal backend is unchanged.
+# sequences. Used by the opt-in block backend and the refiner BF16 boundary
+# control; default Metal behavior is unchanged.
 require "../metal/dispatch"
 require "../core/buffer"
 require "./metal_ops"
@@ -10,7 +10,8 @@ require "./metal_mps_command_chain"
   @[Link(ldflags: "-framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph")]
   lib HyNomasMPSActivationFFI
     fun plan_create = gs_hy_nomas_mps_activation_plan_create(
-      device : Pointer(Void), activation : Int32, shape : Pointer(Int64), rank : Int32,
+      device : Pointer(Void), activation : Int32, bf16_control : Int32,
+      shape : Pointer(Int64), rank : Int32,
       input : Pointer(Void), output : Pointer(Void),
     ) : Pointer(Void)
     fun encode = gs_hy_nomas_mps_activation_encode(plan : Pointer(Void), command : Pointer(Void)) : Int32
@@ -20,16 +21,20 @@ require "./metal_mps_command_chain"
 
 module ML::Video::HyNomasMPSActivation
   # A fixed-shape unary graph bound to caller-owned shared F32 buffers. Keep
-  # the plan and those buffers alive until the chain's terminal wait.
+  # the plan and those buffers alive until the chain's terminal wait. The
+  # optional SiLU control declares BF16 graph nodes and explicitly rounds the
+  # connected F32 output to a BF16 expansion inside that same graph.
   class UnaryPlan
-    SILU = 0
-    GELU = 1
+    SILU                 = 0
+    GELU                 = 1
+    DEFAULT_BF16_CONTROL = false
 
     @shape : Array(Int32)
     @input : ML::MetalBuffer
     @output : ML::MetalBuffer
     @expected_bytes : Int64
     @activation : Int32
+    @bf16_control : Bool
     @handle : Pointer(Void) = Pointer(Void).null
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -38,9 +43,15 @@ module ML::Video::HyNomasMPSActivation
       @shape.dup
     end
 
+    getter bf16_control : Bool
+
     protected def initialize(shape : Array(Int32), input : ML::MetalBuffer,
-                             output : ML::MetalBuffer, @activation : Int32)
+                             output : ML::MetalBuffer, @activation : Int32,
+                             @bf16_control : Bool = DEFAULT_BF16_CONTROL)
       raise ArgumentError.new("MPSGraph activation kind is unsupported") unless {SILU, GELU}.includes?(@activation)
+      if @bf16_control && @activation != SILU
+        raise ArgumentError.new("BF16 activation control is supported only for SiLU")
+      end
       @shape = shape.dup
       @input = input
       @output = output
@@ -61,6 +72,7 @@ module ML::Video::HyNomasMPSActivation
         shape64 = @shape.map(&.to_i64)
         @handle = HyNomasMPSActivationFFI.plan_create(
           ML::Metal::Device.instance.device_handle, @activation,
+          @bf16_control ? 1_i32 : 0_i32,
           shape64.to_unsafe, @shape.size.to_i32, @input.handle, @output.handle,
         )
         raise "Failed to prepare pinned PyTorch MPSGraph activation plan" if @handle.null?
@@ -139,8 +151,9 @@ module ML::Video::HyNomasMPSActivation
 
   class SiLUPlan < UnaryPlan
     def initialize(shape : Array(Int32), input : ML::MetalBuffer,
-                   output : ML::MetalBuffer)
-      super(shape, input, output, UnaryPlan::SILU)
+                   output : ML::MetalBuffer,
+                   bf16_control : Bool = UnaryPlan::DEFAULT_BF16_CONTROL)
+      super(shape, input, output, UnaryPlan::SILU, bf16_control)
     end
   end
 

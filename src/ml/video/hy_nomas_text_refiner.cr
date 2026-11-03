@@ -1,7 +1,7 @@
 # Native Metal/MPS execution for the pinned single-token Hy-Nomas text refiner.
 # The implementation keeps the Qwen input in BF16, copies the immutable valid
-# prefix or requested padded extent on the GPU, and runs the refiner in F32
-# unless attention boundary rounding is explicitly selected.
+# prefix or requested padded extent on the GPU, and runs the prelude and blocks
+# in F32 unless their opt-in precision controls are selected.
 require "../gguf/safetensors"
 require "../metal/dispatch"
 require "./checkpoint"
@@ -33,7 +33,15 @@ module ML::Video
     ROUND_KERNEL    = "hy_nomas_text_roundtrip_bf16_f32"
     CLEAR_KERNEL    = "hy_nomas_text_clear_padded_attention_f32"
 
-    DEFAULT_PRELUDE_INPUT_BF16_CONTROL = false
+    DEFAULT_PRELUDE_INPUT_BF16_CONTROL  = false
+    DEFAULT_PRELUDE_LINEAR_BF16_CONTROL = false
+    DEFAULT_PRELUDE_SILU_BF16_CONTROL   = false
+    PRELUDE_FIRST_LINEAR_NAMES          = [
+      "refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
+    ]
+    PRELUDE_SILU_NAMES = [
+      "refiner_timestep_silu", "context_silu", "time_in.silu",
+    ]
 
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
@@ -68,6 +76,8 @@ module ML::Video
     @weights : Arena
     @attention_precision : HyNomasAttentionPrecision
     @prelude_input_bf16_control : Bool
+    @prelude_linear_bf16_control : Bool
+    @prelude_silu_bf16_control : Bool
     @named_bytes : NamedBytes
     @arena : Arena? = nil
     @weight_stage : ML::MetalBuffer? = nil
@@ -90,6 +100,8 @@ module ML::Video
     getter admitted_named_bytes : NamedBytes
     getter attention_precision : HyNomasAttentionPrecision
     getter prelude_input_bf16_control : Bool
+    getter prelude_linear_bf16_control : Bool
+    getter prelude_silu_bf16_control : Bool
 
     def self.checkpoint_bindings : Array(WeightBinding)
       bindings = [] of WeightBinding
@@ -143,6 +155,16 @@ module ML::Video
       retain_padding ? TOKEN_COUNT : valid_tokens(mask)
     end
 
+    def self.validate_precision_controls!(input_bf16 : Bool, linear_bf16 : Bool,
+                                          silu_bf16 : Bool) : Nil
+      if linear_bf16 && !input_bf16
+        raise ArgumentError.new("Prelude linear BF16 control requires the input BF16 control")
+      end
+      if silu_bf16 && !linear_bf16
+        raise ArgumentError.new("Prelude SiLU BF16 control requires the linear BF16 control")
+      end
+    end
+
     def self.named_bytes(mask : Array(Int32), *, retain_padding : Bool = false) : NamedBytes
       valid = valid_tokens(mask).to_i64
       processed = processed_tokens(mask, retain_padding: retain_padding).to_i64
@@ -178,7 +200,9 @@ module ML::Video
                    attention_precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control,
                    *, seg_pos_emb_num : Int32 = 0,
                    retain_padding : Bool = false,
-                   prelude_input_bf16_control : Bool = DEFAULT_PRELUDE_INPUT_BF16_CONTROL)
+                   prelude_input_bf16_control : Bool = DEFAULT_PRELUDE_INPUT_BF16_CONTROL,
+                   prelude_linear_bf16_control : Bool = DEFAULT_PRELUDE_LINEAR_BF16_CONTROL,
+                   prelude_silu_bf16_control : Bool = DEFAULT_PRELUDE_SILU_BF16_CONTROL)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -187,6 +211,10 @@ module ML::Video
       @weights = weights
       @attention_precision = attention_precision
       @prelude_input_bf16_control = prelude_input_bf16_control
+      @prelude_linear_bf16_control = prelude_linear_bf16_control
+      @prelude_silu_bf16_control = prelude_silu_bf16_control
+      self.class.validate_precision_controls!(@prelude_input_bf16_control,
+        @prelude_linear_bf16_control, @prelude_silu_bf16_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -509,7 +537,8 @@ module ML::Video
                                    shape : Array(Int32)) : Nil
       input = checkpoint(input_name)
       output = checkpoint(name)
-      plan = HyNomasMPSActivation::SiLUPlan.new(shape, input, output)
+      bf16_control = @prelude_silu_bf16_control && PRELUDE_SILU_NAMES.includes?(name)
+      plan = HyNomasMPSActivation::SiLUPlan.new(shape, input, output, bf16_control)
       @activations[name] = plan
       @activation_plans << plan
     end
@@ -570,7 +599,9 @@ module ML::Video
       entry = @linears[name]
       MetalLinearMPS.project(chain.encoder, entry.input, entry.weight, entry.bias,
         entry.output, entry.rows, entry.input_dim, entry.output_dim,
-        entry.weight_dtype, entry.bias_dtype, entry.plan, weight_stage)
+        entry.weight_dtype, entry.bias_dtype, entry.plan, weight_stage,
+        round_output_bf16: @prelude_linear_bf16_control &&
+                           PRELUDE_FIRST_LINEAR_NAMES.includes?(name))
     end
 
     private def encode_activation(chain : ML::Metal::MPSCommandChain, name : String) : Nil

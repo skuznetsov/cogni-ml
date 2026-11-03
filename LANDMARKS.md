@@ -37756,3 +37756,44 @@ Refresh after source/toolchain/device/model/workload changes.
 - Keep the control default-false; omit its flag to restore the usual path.
   Refresh after source, binary/runtime, weights, input/noise, caption/mask,
   layout or precision changes. Missing/mutated artifacts revoke the result.
+
+### Hy-Nomas connected first-linear and SiLU BF16 boundaries (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected first-linear and SiLU
+  BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-refiner-linear-silu.json`.
+  Current authenticated T0: 4,320 video rows / V263 / stored 1,280, same source.
+- Default-false first-linear and SiLU controls require preceding input/linear
+  controls. Four first-linear outputs round after bias in the existing
+  dispatch; three SiLUs use BF16-declared nodes and explicit same-graph UInt32
+  RNE output expansion. All seven actual consumed outputs, plus the previous
+  three input boundaries, equal source BF16 tensor hashes exactly on this input.
+  No general operation or internal MPS precision equivalence follows.
+- Refuted: a cast-only BF16 SiLU graph kept the linear-only F32 payload. The
+  GPU zero-tolerance representation check rejected it; post-rounded views
+  had looked exact. Preserve that distinction. Compiler behavior causing the
+  wider values is unverified. Both snapshots and reports remain external.
+- Full BF16 raw gate remains false. First remaining second timestep linear:
+  1,809 / 2,048 failures, max 0.0019197464 at unchanged mixed 2e-5.
+  All three second-linear post-rounded views are exact; the context sum's
+  rounded view still fails 524 values. Next: correct those connected outputs
+  and source add sequence, then refiner blocks, before block-0 K/V or motion.
+- Fresh isolated bridge build; 42 Python tests, 17 Crystal examples and four
+  CLI rejection checks pass. Default nine preblock + 16 refiner hashes are
+  unchanged; input-only and linear-only ablations preserve their prior bytes.
+  Thirty guarded stages preserve file-cache-aware 10% / 6 GiB cap / 64 MiB
+  swap stop: peak sampled group 0.964 GiB, minimum headroom 27.528 GiB, no
+  observed swap growth. Final samples have no live children. Counters show no
+  new tracked encode allocations/readbacks/preterminal waits, one terminal
+  wait; opaque MPS activity and between-poll spikes are outside that scope.
+- Same-lineage mini-Quad: ROBUST for these ten boundaries on this input.
+  Representation checks alone establish BF16 expansion; the separate bound
+  source/native tensor hashes establish byte identity.
+- Canonical reports are `compare-final-*` (zero checked boundaries means null,
+  not a vacuous pass), `qualified-boundary-identities.json` (named modes and
+  bound manifest identities), and `measurement-summary-final.json` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-linear-20261102.8mxo6zrk`.
+  No speedup, full generation, T1/KV or motion fix was qualified. Keep controls
+  opt-in; omit new flags to restore the old path. Refresh on source,
+  executable/runtime, weights, input/noise, caption/mask, layout or precision
+  changes. Missing/mutated retained evidence revokes the bounded certificate.
