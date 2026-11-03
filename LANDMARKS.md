@@ -37696,3 +37696,31 @@ Refresh after source/toolchain/device/model/workload changes.
   geometry/history or runtime changes; repeat timing after host/device-state
   changes. Missing/mutated local evidence invalidates its use. Roll back by
   omitting both Cinematic flags; no remote publication was authorized.
+
+### Hy-Nomas reference T0 preblock precision control (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Reference T0 preblock precision
+  control; evidence: `.landmark/evidence/2026-11-02-hy-nomas-preblock-precision.json`.
+  Current reference, 4,320 video rows / 263 valid caption rows / writer
+  timestep 206.897. The older standalone reference fixture is a different
+  input and is excluded. No production inference changes or full generation.
+- Actual source BF16 preprocessing stops before block 0 with no block tensors
+  or cache K/V. Native patch/text/time vectors fail its unchanged 2e-5 mixed
+  gate. Native output rounding repairs the patch exactly, but not text/time
+  vectors; a single final BF16 cast is insufficient.
+- The source F32 precision control widens the same BF16 checkpoint/input
+  values and changes the refiner adapter together. All nine standalone
+  native preblock tensors pass; eight are byte-exact, text max 7.6294e-6,
+  RMS 2.0453e-7, zero failures. This does not isolate one causal operation or
+  qualify full T0/app execution, K/V, T1, motion, or a speedup.
+- 21 CPU tests and GPU A/A/perturbation controls pass. Native instrumentation:
+  zero encode allocations/readbacks/preterminal waits, one terminal drain.
+  Final guarded stages preserve 10% / 6 GiB process cap / 64 MiB swap stop;
+  minimum sampled cache-aware headroom 40.196 GiB, zero swap growth. Sampled
+  footprint does not bound all Metal memory. Mini-Quad review is correlated.
+- Next: source BF16 masked mean, timestep/context and input-projection
+  boundaries, then block-0 K/V on matched inputs. The existing attention-only
+  BF16 switch is not a complete BF16 prelude. Refresh on source/runtime,
+  binary, weights, input/noise, caption/mask, layout or precision changes;
+  mutated/missing artifacts revoke the certificate. Remove optional diagnostic
+  helpers/tests to roll back; production behavior is unchanged.

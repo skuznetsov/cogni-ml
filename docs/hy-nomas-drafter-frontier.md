@@ -1,5 +1,90 @@
 # Hy-Nomas local draft suite
 
+## Reference T0 preblock precision control (2026-11-02)
+
+Status: the standalone native T0 preblock fixture matches the source F32
+precision-control trace at unchanged `atol=rtol=2e-5`. All nine tensors pass;
+eight are byte-exact. This does not qualify the complete native T0/app path,
+any DiT block, cache K/V, T1, or the cause of the static acting.
+
+The probe uses the current reference's exact BF16 T0 latent
+`[1,32,30,9,16]`, 4,320 video rows, 263 valid caption rows and the writer
+timestep `206.897`. The extracted safetensors artifact SHA-256 is
+`9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60`;
+its latent tensor SHA-256 is
+`ef627350d3d605825b1884c49a4de5a89dc7ac027ecda64f74a6db5bc909d8e9`.
+The old standalone fixture contains a different reference and is excluded.
+
+`spec/support/hy_nomas_reference_preblock_control.py` reuses the admitted
+structured continuation's actual T0 preprocessing and stops at the first
+block call. A sentinel substitutes for block 0; no DiT block weight tensors
+are loaded, no block body runs and no cache K/V is written. CPU admission
+still authenticates the pinned block-index identities. The default capture
+preserves source BF16, and its final payload is byte-identical to the initial
+BF16 capture after the diagnostic code changes.
+
+The default source BF16 comparison fails before block 0:
+
+| Boundary | Maximum absolute error | Failed values |
+| --- | ---: | ---: |
+| Patch image embedding | 0.0037722588 | 7,368,339 / 8,847,360 |
+| Valid text-refiner output | 1.2783203125 | 535,706 / 538,624 |
+| Time vector, each of `vec` and `vec_txt` | 0.00043955445 | 1,280 / 2,048 |
+
+Clean latent, BF16-rounded noisy writer latent, both RoPE tensors and timestep
+are byte-exact. Rounding only the exported native patch embedding to BF16
+also gives an exact match. That diagnostic output rounding does not repair
+text or time vectors: 237,292 text values and 444 values in each vector still
+fail. It does not emulate intermediate BF16 boundaries.
+
+The opt-in `--precision-control-f32` capture loads the same pinned BF16
+checkpoint values into F32 global modules, widens the actual BF16 writer
+latent and loaded Qwen input at the live module prehooks, and selects the F32
+refiner-attention adapter before it is bound. The clean/noisy BF16 blend,
+timestep, caption, mask and first-block stopping boundary remain the same.
+Against this trace, all nine raw native exports pass: valid text has maximum
+error `7.62939453125e-6`, RMS `2.0452695537e-7` and zero failures; the other
+eight tensors are byte-exact. The control changes multiple precision choices
+together, so it does not isolate one causal BF16 operation or establish that
+precision alone explains the full T1 or motion difference.
+
+`spec/support/hy_nomas_reference_preblock_compare.py` authenticates the source
+and native manifests/payloads, joins the timeline identity, valid prefix,
+writer contract and exact clean-reference bytes, and computes all raw and
+diagnostic metrics on MPS. Source-only Qwen/action/cache/global identities are
+pinned by the source manifest; the native fixture schema has no matching
+fields. The raw mixed absolute/relative gate alone determines numerical
+success. A/A passes and a deliberate perturbation fails through the same GPU
+metric path. One terminal aggregate readback exports the comparison scalars;
+the source capture likewise exports its packed tensors once at the end.
+
+The existing native probe records zero instrumented encode allocations,
+readbacks and preterminal waits, with one terminal drain and 944,620,612 bytes
+of named buffers. The five final native/source/comparison stages pass the
+file-cache-aware 10% guard, 6 GiB process cap and 64 MiB swap-growth stop.
+Minimum sampled headroom is 40.196 GiB, with zero observed swap growth and no
+live children at each final sample. Sampled process footprint is not a bound
+on Metal residency or between-poll peaks. These small diagnostic stage times
+are not a matched performance benchmark; no full generation was run.
+
+Checks: the preblock-control, preblock-comparison and structured-reference
+Python suites pass 21 tests. Same-lineage mini-Quad review is ROBUST for the
+standalone preblock/F32-control claim only. Commands, exact source snapshots,
+guard logs, captures and comparisons are retained in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a` and indexed by
+`.landmark/evidence/2026-11-02-hy-nomas-preblock-precision.json`.
+
+Next discriminator: compare the source BF16 masked mean, timestep/context
+embeddings and input projection at their actual rounding boundaries, then
+compare the block-0 K/V write on matched inputs. The current native refiner's
+BF16 attention control rounds Q/K/V and attended output only; it is not a
+full BF16 prelude mode. Keep production behavior unchanged until the missing
+boundaries have their own falsifier. Refresh this certificate after changes
+to source/runtime, native binary, weights, reference/noise, caption/mask,
+geometry or precision controls. Missing or mutated retained artifacts revoke
+their use. Rollback removes the optional capture/comparison helpers and tests;
+production inference is unchanged.
+
 ## Static reference regression diagnosis (2026-11-02)
 
 Status: the original structured RoleWright take is effectively static. A
