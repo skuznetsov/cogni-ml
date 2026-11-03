@@ -39,6 +39,7 @@ module ML::Video
     DEFAULT_PRELUDE_SILU_BF16_CONTROL          = false
     DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL = false
     DEFAULT_PRELUDE_ADD_BF16_CONTROL           = false
+    DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL      = false
     PRELUDE_FIRST_LINEAR_NAMES                 = [
       "refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
     ]
@@ -48,6 +49,8 @@ module ML::Video
     PRELUDE_SECOND_LINEAR_NAMES = [
       "refiner_timestep", "context_embed", "time_in.mlp2",
     ]
+    BLOCK_BOUNDARY_CONDITION_SILU_NAMES = ["block0.condition_silu", "block1.condition_silu"]
+    BLOCK_BOUNDARY_ADALN_NAMES          = ["block0.adaLN", "block1.adaLN"]
 
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
@@ -86,6 +89,7 @@ module ML::Video
     @prelude_silu_bf16_control : Bool
     @prelude_second_linear_bf16_control : Bool
     @prelude_add_bf16_control : Bool
+    @block_boundaries_bf16_control : Bool
     @named_bytes : NamedBytes
     @arena : Arena? = nil
     @weight_stage : ML::MetalBuffer? = nil
@@ -112,6 +116,7 @@ module ML::Video
     getter prelude_silu_bf16_control : Bool
     getter prelude_second_linear_bf16_control : Bool
     getter prelude_add_bf16_control : Bool
+    getter block_boundaries_bf16_control : Bool
 
     def self.checkpoint_bindings : Array(WeightBinding)
       bindings = [] of WeightBinding
@@ -168,7 +173,8 @@ module ML::Video
     def self.validate_precision_controls!(input_bf16 : Bool, linear_bf16 : Bool,
                                           silu_bf16 : Bool,
                                           second_linear_bf16 : Bool = false,
-                                          add_bf16 : Bool = false) : Nil
+                                          add_bf16 : Bool = false,
+                                          block_boundaries_bf16_control : Bool = false) : Nil
       if linear_bf16 && !input_bf16
         raise ArgumentError.new("Prelude linear BF16 control requires the input BF16 control")
       end
@@ -180,6 +186,10 @@ module ML::Video
       end
       if add_bf16 && !second_linear_bf16
         raise ArgumentError.new("Prelude add BF16 control requires the second-linear BF16 control")
+      end
+      if block_boundaries_bf16_control &&
+         !(input_bf16 && linear_bf16 && silu_bf16 && second_linear_bf16 && add_bf16)
+        raise ArgumentError.new("Block-boundary BF16 control requires all five prelude BF16 controls")
       end
     end
 
@@ -222,7 +232,8 @@ module ML::Video
                    prelude_linear_bf16_control : Bool = DEFAULT_PRELUDE_LINEAR_BF16_CONTROL,
                    prelude_silu_bf16_control : Bool = DEFAULT_PRELUDE_SILU_BF16_CONTROL,
                    prelude_second_linear_bf16_control : Bool = DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL,
-                   prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL)
+                   prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL,
+                   block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -235,9 +246,11 @@ module ML::Video
       @prelude_silu_bf16_control = prelude_silu_bf16_control
       @prelude_second_linear_bf16_control = prelude_second_linear_bf16_control
       @prelude_add_bf16_control = prelude_add_bf16_control
+      @block_boundaries_bf16_control = block_boundaries_bf16_control
       self.class.validate_precision_controls!(@prelude_input_bf16_control,
         @prelude_linear_bf16_control, @prelude_silu_bf16_control,
-        @prelude_second_linear_bf16_control, @prelude_add_bf16_control)
+        @prelude_second_linear_bf16_control, @prelude_add_bf16_control,
+        @block_boundaries_bf16_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -564,7 +577,8 @@ module ML::Video
                                    shape : Array(Int32)) : Nil
       input = checkpoint(input_name)
       output = checkpoint(name)
-      bf16_control = @prelude_silu_bf16_control && PRELUDE_SILU_NAMES.includes?(name)
+      bf16_control = (@prelude_silu_bf16_control && PRELUDE_SILU_NAMES.includes?(name)) ||
+                     (@block_boundaries_bf16_control && BLOCK_BOUNDARY_CONDITION_SILU_NAMES.includes?(name))
       plan = HyNomasMPSActivation::SiLUPlan.new(shape, input, output, bf16_control)
       @activations[name] = plan
       @activation_plans << plan
@@ -630,7 +644,9 @@ module ML::Video
         round_output_bf16: (@prelude_linear_bf16_control &&
                             PRELUDE_FIRST_LINEAR_NAMES.includes?(name)) ||
                            (@prelude_second_linear_bf16_control &&
-                            PRELUDE_SECOND_LINEAR_NAMES.includes?(name)))
+                            PRELUDE_SECOND_LINEAR_NAMES.includes?(name)) ||
+                           (@block_boundaries_bf16_control &&
+                            BLOCK_BOUNDARY_ADALN_NAMES.includes?(name)))
     end
 
     private def encode_conditioning_add(e : ML::Metal::ComputeEncoder) : Nil
@@ -670,7 +686,8 @@ module ML::Video
         checkpoint("#{prefix}.gate_msa"), checkpoint("#{prefix}.gate_mlp"))
 
       norm_affine(chain.encoder, source, checkpoint("#{prefix}.norm1"),
-        "txt_in.individual_token_refiner.blocks.#{block}.norm1")
+        "txt_in.individual_token_refiner.blocks.#{block}.norm1",
+        round_output_bf16: @block_boundaries_bf16_control)
       encode_linear(chain, "#{prefix}.qkv")
       split_qkv(chain.encoder, checkpoint("#{prefix}.qkv"),
         checkpoint("#{prefix}.q"), checkpoint("#{prefix}.k"),
@@ -737,7 +754,8 @@ module ML::Video
     end
 
     private def norm_affine(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
-                            output : ML::MetalBuffer, prefix : String) : Nil
+                            output : ML::MetalBuffer, prefix : String,
+                            round_output_bf16 : Bool = false) : Nil
       @norm_plan.not_nil!.encode(e, input, output, @processed_tokens)
       weight_name = "#{prefix}.weight"
       bias_name = "#{prefix}.bias"
@@ -754,6 +772,7 @@ module ML::Video
         .set_value(count.to_u32, 5).set_value(HIDDEN_DIM.to_u32, 6)
         .set_value(weight_dtype.bf16? ? 1_u32 : 0_u32, 7)
         .set_value(bias_dtype.bf16? ? 1_u32 : 0_u32, 8)
+        .set_value(round_output_bf16 ? 1_u32 : 0_u32, 9)
         .dispatch_1d(count)
     end
 

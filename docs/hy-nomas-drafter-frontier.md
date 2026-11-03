@@ -1,5 +1,89 @@
 # Hy-Nomas local draft suite
 
+## Connected refiner condition, adaLN and norm1 BF16 boundaries (2026-11-03)
+
+Status: the default-off block-boundary control is qualified on one finite T0
+V263 capture, with 1,280 stored rows. Nine of its ten observed outputs are
+byte-identical to the pinned source trace: condition SiLU, adaLN and both gates
+in both blocks, plus block0 norm1. Block1 norm1 is BF16-representable but still
+differs; its input already differs after block0. The full raw refiner gate
+remains **false** at unchanged `atol=rtol=2e-5`. This is not a motion fix or
+generation/performance qualification. The oracle is the previously captured,
+pinned PyTorch 2.8.0 MPS attention adaptation; its full forward was not rerun here.
+
+The new `--refiner-block-boundaries-bf16-control` requires execution, both linked
+trace outputs and all five prelude controls from the next sections. It reuses
+the existing BF16-typed SiLU plan for each condition, rounds adaLN after bias
+in the existing linear epilogue, and rounds norm1 after its existing affine
+epilogue. Norm2 and QKV remain unchanged. No extra explicit dispatch, named
+buffer, readback or wait is introduced. This statement excludes opaque MPS
+internal activity. The default remains false; omit this new flag to restore
+the previous path with the five prelude controls unchanged.
+
+The same-input adaLN GPU replay falsified output-only rounding. It used the
+actual BF16 global checkpoint weights and the captured block0 condition:
+
+| Replay / captured boundary | Result |
+| --- | --- |
+| Raw condition SiLU vs source | Mixed tolerance passes; max error 2.6703347e-6; bytes differ |
+| BF16-rounded condition SiLU vs source | Exact |
+| F32 linear on raw condition vs captured native adaLN | Exact |
+| Round only the captured adaLN output | 13 unequal values at zero tolerance; three mixed-tolerance failures |
+| BF16-rounded condition, F32 linear/bias, BF16-rounded output | Exact source adaLN |
+| Connected control: condition SiLU, adaLN and both gates, both blocks | Eight exact tensor hashes |
+| Connected control: block0 norm1 | Exact over all 2,621,440 values |
+
+All ten controlled outputs pass zero-tolerance BF16 representation checks.
+Source equality is a separate result: its aggregate is false because block1
+norm1 has 710,895 unequal values at zero tolerance (708,512 at mixed tolerance,
+max .03125). Both check classes require complete, ordered coverage; missing or
+duplicate rows cannot pass vacuously. Their aggregates are null with the new
+control disabled. Representation never implies source equality.
+
+The first failed raw checkpoint now advances to **block0.qkv**, for full,
+valid and padding regions. Its raw max error is .03124809265; its diagnostic
+BF16-rounded view is exact, suggesting the next output-boundary discriminator.
+That view does not change the connected graph or qualify QKV arithmetic.
+Block0 output max .61703491 / RMS .02372259 and block1 output max 1.20420837 /
+RMS .03398030 remain non-parity results; they do not isolate later operations.
+
+Checks: fresh executable/bridge build, 26 Crystal examples, 48 Python tests,
+nine compiled CLI rejection cases, GPU A/A and perturbation controls pass.
+With the new control disabled, all 62 previous tensor records and three
+payloads repeat exactly. All 16 prelude hashes equal source in both new modes.
+Both native captures retain 944,620,612 named bytes and encode counters
+[0 allocations, 0 readbacks, 0 preterminal waits, 1 terminal wait]. The block
+captures embed 16 matching native source pins; prelude captures embed 14.
+Final comparison/replay stages verify 87 file pins before and after execution.
+The two Python comparator/spec files changed after native capture only to
+enforce exact-source coverage; compiled neural sources remained identical.
+
+Across nine canonical guarded stages: file-cache-aware 10% floor, 6 GiB process
+cap, 64 MiB swap-growth stop; peak sampled group footprint 2,332,182,736 bytes,
+minimum sampled headroom 25,513,803,776 bytes, zero observed stage swap growth,
+no live children in final samples. Sampling does not bound between-poll spikes
+or all opaque Metal resources. The initial assertion-text test failures remain
+historical; corrected checks are the qualified stages. Same-lineage mini-Quad
+review returned ROBUST within this one-capture scope; it is correlated, not
+independent replication. The replay harness admits 2.8.x, but this certificate
+covers only the observed 2.8.0 runtime and expires on runtime changes.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-block-boundaries.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv`.
+Canonical reports: `compare-{default,control}-final.json`,
+`adaln-replay-current-final.json`, `qualified-artifacts-final.json`,
+`guard-summary-final.json`. Commands, logs, source snapshots, binaries and
+payload hashes are retained externally. The artifact index authenticates
+coverage and bytes; it does not itself prove neural correctness.
+
+Next discriminator: qualify a connected QKV BF16 output boundary on the now
+identical block0 norm1 input; separate output representation from projection
+reduction if any mismatches survive. This supersedes the previous section's
+next discriminator. Keep the new control opt-in until the full chain passes.
+Refresh after source, executable/runtime, weights, input/noise, caption/mask,
+layout or precision changes; missing or mutated bound artifacts revoke this
+bounded result. DiT K/V, T1, reference-driven motion and generation remain open.
+
 ## Two-block refiner trace on corrected BF16 prelude inputs (2026-11-03)
 
 Status: the observational native/source trace and GPU comparison are qualified

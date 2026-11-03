@@ -152,6 +152,7 @@ kernel void hy_nomas_text_layer_norm_affine_f32(
     constant uint &dim [[buffer(6)]],
     constant uint &weight_is_bf16 [[buffer(7)]],
     constant uint &bias_is_bf16 [[buffer(8)]],
+    constant uint &round_output_bf16 [[buffer(9)]],
     uint index [[thread_position_in_grid]]) {
   if (index >= count) return;
   uint channel = index % dim;
@@ -159,7 +160,9 @@ kernel void hy_nomas_text_layer_norm_affine_f32(
                                      weight_is_bf16);
   float bias = hy_text_load_weight(bias_f32, bias_bf16, channel,
                                    bias_is_bf16);
-  values[index] = values[index] * weight + bias;
+  float value = values[index] * weight + bias;
+  if (round_output_bf16 != 0u) value = hy_text_roundtrip_bf16(value);
+  values[index] = value;
 }
 
 kernel void hy_nomas_text_roundtrip_bf16_f32(

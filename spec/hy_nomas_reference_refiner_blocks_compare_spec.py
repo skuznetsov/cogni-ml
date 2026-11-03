@@ -27,6 +27,34 @@ def document():
 
 
 class BlocksCompareTests(unittest.TestCase):
+    def test_block_control_requires_an_explicit_bool_and_limits_coverage(self):
+        for value in (None, 0, 1, "true", [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(compare.Error, "explicit bool"):
+                compare._controlled_boundaries({compare.BLOCK_CONTROL_FIELD: value})
+        with self.assertRaisesRegex(compare.Error, "explicit bool"):
+            compare._controlled_boundaries({})
+        self.assertEqual(compare._controlled_boundaries({compare.BLOCK_CONTROL_FIELD: False}), ())
+        selected = compare._controlled_boundaries({compare.BLOCK_CONTROL_FIELD: True})
+        self.assertEqual(len(selected), 10)
+        self.assertIn("block0.norm1", selected)
+        self.assertIn("block1.norm1", selected)
+        self.assertNotIn("block0.norm2", selected)
+        self.assertNotIn("block1.qkv", selected)
+
+    def test_unselected_or_missing_representation_checks_cannot_pass_vacuously(self):
+        selected = compare.BLOCK_CONTROL_TENSORS
+        for kind in ("native_controlled_bf16_representation", "controlled_boundary_source_exact"):
+            self.assertIsNone(compare._controlled_checks_passed([], (), kind))
+            rows = [dict(kind=kind, tensor=name, passed=True) for name in selected]
+            self.assertTrue(compare._controlled_checks_passed(rows, selected, kind))
+            rows[-1]["passed"] = False
+            self.assertFalse(compare._controlled_checks_passed(rows, selected, kind))
+            for broken in ([], rows[:-1], rows + rows[:1], list(reversed(rows))):
+                with self.subTest(kind=kind, size=len(broken)), self.assertRaisesRegex(compare.Error, "coverage"):
+                    compare._controlled_checks_passed(broken, selected, kind)
+            with self.assertRaisesRegex(compare.Error, "coverage"):
+                compare._controlled_checks_passed(rows, (), kind)
+
     def test_full_padding_and_explicit_interblock_alias(self):
         doc, extent = document()
         self.assertEqual(len(compare.TENSOR_ORDER), 37)

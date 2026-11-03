@@ -220,7 +220,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    prelude_linear_bf16_control : Bool,
                    prelude_silu_bf16_control : Bool,
                    prelude_second_linear_bf16_control : Bool,
-                   prelude_add_bf16_control : Bool) : Hash(String, JSON::Any)
+                   prelude_add_bf16_control : Bool,
+                   block_boundaries_bf16_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -298,6 +299,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("prelude_silu_bf16_control", prelude_silu_bf16_control)
         json.field("prelude_second_linear_bf16_control", prelude_second_linear_bf16_control)
         json.field("prelude_add_bf16_control", prelude_add_bf16_control)
+        json.field("block_boundaries_bf16_control", block_boundaries_bf16_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

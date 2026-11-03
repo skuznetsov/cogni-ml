@@ -8,6 +8,7 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SILU_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_ADD_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL.should be_false
     ML::Video::HyNomasMPSActivation::UnaryPlan::DEFAULT_BF16_CONTROL.should be_false
 
     source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
@@ -28,7 +29,11 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true)
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true, true)
 
+    expect_raises(ArgumentError, /Block-boundary BF16 control requires all five prelude BF16 controls/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, false, true)
+    end
     expect_raises(ArgumentError, /input BF16 control/) do
       ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, true, false)
     end
@@ -76,6 +81,16 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
     source.includes?("kernel void hy_nomas_text_c_add_bf16_f32(").should be_true
     source.includes?("c[index] = hy_text_roundtrip_bf16(timestep[index] + context[index]);").should be_true
+  end
+
+  it "limits the cumulative BF16 control to both condition SiLUs, adaLN projections, and norm1 affine outputs" do
+    ML::Video::HyNomasTextRefinerMPSPlan::BLOCK_BOUNDARY_CONDITION_SILU_NAMES.should eq(["block0.condition_silu", "block1.condition_silu"])
+    ML::Video::HyNomasTextRefinerMPSPlan::BLOCK_BOUNDARY_ADALN_NAMES.should eq(["block0.adaLN", "block1.adaLN"])
+
+    source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
+    source.includes?("constant uint &round_output_bf16 [[buffer(9)]]").should be_true
+    source.includes?("value = hy_text_roundtrip_bf16(value);").should be_true
+    source.includes?("values[index] = values[index] * weight + bias;").should be_false
   end
 
   it "binds the exact 42-tensor F32 upstream subset without renaming source keys" do

@@ -38,6 +38,25 @@ NATIVE_SOURCE_FILES = (
     *prelude.NATIVE_SOURCE_FILES[11:],
 )
 ATOL, RTOL = prelude.ATOL, prelude.RTOL
+BLOCK_CONTROL_FIELD = "block_boundaries_bf16_control"
+BLOCK_CONTROL_TENSORS = tuple(
+    f"block{block}.{stage}" for block in range(2)
+    for stage in ("condition_silu", "adaLN", "gate_msa", "gate_mlp", "norm1")
+)
+
+
+def _controlled_boundaries(native: Mapping[str, Any]) -> tuple[str, ...]:
+    if type(native.get(BLOCK_CONTROL_FIELD)) is not bool:
+        raise Error("native block-boundary BF16 control must be an explicit bool")
+    return BLOCK_CONTROL_TENSORS if native[BLOCK_CONTROL_FIELD] else ()
+
+
+def _controlled_checks_passed(rows: list[dict[str, Any]], selected: tuple[str, ...],
+                              kind: str) -> bool | None:
+    checked = [row for row in rows if row["kind"] == kind]
+    if tuple(row["tensor"] for row in checked) != selected:
+        raise Error(f"controlled BF16 coverage differs from the admitted mode: {kind}")
+    return all(row["passed"] for row in checked) if selected else None
 
 
 def shapes() -> dict[str, tuple[int, ...]]:
@@ -193,6 +212,7 @@ def validate_inputs(args: Any) -> dict[str, Any]:
                             "reference_latent_artifact_sha256": args.reference_latent_sha256}, "native refiner block")
     for name in prelude._validate_prelude_controls(admitted["native_document"]):
         _require_fields(native, {name: True}, "native block prelude control")
+    _controlled_boundaries(native)
     _validate_pins(native.get("compiled_source_sha256"))
     _require_fields(source, {**common, "source_refiner_manifest_sha256": args.source_refiner_sha256,
                             "source_refiner_payload_sha256": admitted["source_document"]["payload_sha256"]},
@@ -231,6 +251,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         raise Error("refiner block comparison requires MPS")
     device = torch.device("mps")
     queued = []
+    controlled = _controlled_boundaries(inputs["native_document"])
 
     def compare(kind: str, name: str, region: str, actual: Any, expected: Any,
                 *, atol: float = ATOL, rtol: float = RTOL) -> None:
@@ -252,9 +273,19 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
             compare("native_bf16_rounding_view", name, region, left.bfloat16().float(), right)
         compare("source_bf16_representation", name, "full", expected,
                 expected.bfloat16().float(), atol=0.0, rtol=0.0)
+        if name in controlled:
+            # Check the captured connected output itself. The diagnostic
+            # rounded-vs-source view above cannot establish this property.
+            compare("native_controlled_bf16_representation", name, "full", actual,
+                    actual.bfloat16().float(), atol=0.0, rtol=0.0)
+            compare("controlled_boundary_source_exact", name, "full", actual,
+                    expected, atol=0.0, rtol=0.0)
     control = torch.arange(16, device=device, dtype=torch.float32)
     compare("sensitivity_control", "a_vs_a", "full", control, control)
     compare("sensitivity_control", "deliberate_perturbation", "full", control+0.01, control)
+    non_bf16 = control + 0.001
+    compare("sensitivity_control", "non_bf16_representation", "full", non_bf16,
+            non_bf16.bfloat16().float(), atol=0.0, rtol=0.0)
     flat = [stats[key] for _kind, _name, _region, stats, _atol, _rtol in queued for key in shared.METRIC_KEYS]
     # All neural comparisons and reductions precede this one terminal export.
     values = torch.stack(flat).detach().cpu().tolist()
@@ -267,12 +298,21 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     controls = {row["tensor"]: row for row in rows if row["kind"] == "sensitivity_control"}
     return dict(numeric_gate_passed=all(row["passed"] for row in raw),
                 source_bf16_representation_passed=all(row["passed"] for row in representation),
+                block_boundaries_bf16_control=inputs["native_document"][BLOCK_CONTROL_FIELD],
+                controlled_boundary_tensors=list(controlled),
+                controlled_boundary_count=len(controlled),
+                native_controlled_bf16_representation_passed=_controlled_checks_passed(
+                    rows, controlled, "native_controlled_bf16_representation"),
+                controlled_boundary_source_exact_passed=_controlled_checks_passed(
+                    rows, controlled, "controlled_boundary_source_exact"),
                 first_divergence={region: first_divergence(rows, region) for region in ("full", "valid", "padding")},
                 first_divergence_order="canonical dependency order; gates follow their adaLN producer, not hook observation time",
                 same_input_bytes=True, terminal_cpu_exports=1,
-                sensitivity_controls_passed=controls["a_vs_a"]["passed"] and not controls["deliberate_perturbation"]["passed"],
+                sensitivity_controls_passed=(controls["a_vs_a"]["passed"]
+                    and not controls["deliberate_perturbation"]["passed"]
+                    and not controls["non_bf16_representation"]["passed"]),
                 rows=rows,
-                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
+                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. Native controlled representation rows check the actual captured outputs, not source parity. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
 
 
 def main(argv: list[str] | None = None) -> int:

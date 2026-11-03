@@ -37883,3 +37883,49 @@ Refresh after source/toolchain/device/model/workload changes.
   trace flag to roll back. Refresh after source, binary/runtime, weights,
   reference/noise, caption/mask, layout or precision changes; missing/mutated
   bound evidence revokes this result.
+
+### Hy-Nomas connected refiner condition / adaLN / norm1 BF16 boundaries (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected refiner condition,
+  adaLN and norm1 BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-block-boundaries.json`.
+  Same finite T0 V263 / stored 1,280 input and archived pinned PyTorch 2.8 MPS
+  source trace. Full upstream forward was not rerun in this experiment.
+- GPU replay falsifies output-only adaLN rounding: 13 unequal BF16 values,
+  including three mixed-tolerance failures. BF16-rounded condition plus F32
+  linear/bias and rounded output is source-exact. Raw F32 linear replay is
+  captured-native exact. These finite-case observations do not establish
+  backend internal reduction rules.
+- Default-false cumulative `--refiner-block-boundaries-bf16-control` reuses
+  BF16-typed condition SiLU and existing adaLN/norm1 epilogues in both blocks.
+  No additional explicit dispatch/named buffer/readback/wait; norm2/QKV are
+  unchanged. Requires all five prelude controls and linked block/prelude traces.
+- Nine of ten controlled captured outputs are byte-identical to source:
+  both condition SiLUs, both adaLNs, all four gates and block0 norm1. All ten
+  are BF16-representable. Block1 norm1 differs on already different input;
+  source-equality aggregate remains false. Zero-tolerance representation and
+  source-equality rows have separately enforced complete ordered coverage.
+- First failed raw checkpoint advances to block0.qkv, full/valid/padding;
+  raw max .03124809265, diagnostic rounded view exact. Full refiner gate is
+  still false at unchanged atol=rtol=2e-5. Block0 output max .61703491;
+  block1 output max 1.20420837. No motion/quality/speedup/generation claim.
+- Fresh build, 26 Crystal examples, 48 Python tests, nine compiled rejection
+  checks and GPU sensitivity pass. New-control-off reproduces all 62 prior
+  tensor records and three payloads; both modes preserve all 16 source-exact
+  prelude hashes, 944,620,612 named bytes and encode counters [0,0,0,1].
+  Block/prelude embedded source pins count 16/14; final comparator/replay pins
+  87 files. Only two Python comparator/spec files changed after native capture.
+- Nine canonical guarded stages retain 10% file-cache-aware floor / 6 GiB cap /
+  64 MiB swap stop. Peak sampled group 2,332,182,736 bytes, minimum headroom
+  25,513,803,776 bytes, zero observed stage swap growth or final live children.
+  Samples exclude spikes and opaque MPS resources. Code snapshots, binaries,
+  failed stages, commands and logs remain in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-adaln-20261103.s1v6gqbv`;
+  canonical index `qualified-artifacts-final.json`, guard index
+  `guard-summary-final.json`, reports `compare-*-final.json` and
+  `adaln-replay-current-final.json`. Same-lineage reviews are correlated.
+- Next: connected QKV output-boundary discriminator on exact block0 norm1;
+  isolate projection reduction only if needed. Omit the new block control to
+  restore the prior path. Refresh on source, binary/runtime, weights, inputs,
+  masks/captions, layout or precision changes; missing/mutated evidence revokes
+  the result. DiT K/V, T1 and reference-driven motion remain open.
