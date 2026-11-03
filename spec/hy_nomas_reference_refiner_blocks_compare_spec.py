@@ -41,19 +41,80 @@ class BlocksCompareTests(unittest.TestCase):
         self.assertNotIn("block0.norm2", selected)
         self.assertNotIn("block1.qkv", selected)
 
+    def test_control_flags_are_strict_separate_and_qkv_requires_old_control(self):
+        for value in (None, 0, 1, "true", [], {}):
+            native = {compare.BLOCK_CONTROL_FIELD: False, compare.QKV_CONTROL_FIELD: value}
+            with self.subTest(field=compare.QKV_CONTROL_FIELD, value=value), \
+                    self.assertRaisesRegex(compare.Error, "explicit bool"):
+                compare._controlled_outputs(native)
+            native = {compare.BLOCK_CONTROL_FIELD: value, compare.QKV_CONTROL_FIELD: False}
+            with self.subTest(field=compare.BLOCK_CONTROL_FIELD, value=value), \
+                    self.assertRaisesRegex(compare.Error, "explicit bool"):
+                compare._controlled_outputs(native)
+        with self.assertRaisesRegex(compare.Error, "explicit bool"):
+            compare._controlled_outputs({compare.BLOCK_CONTROL_FIELD: False})
+
+        self.assertEqual(compare._controlled_outputs({
+            compare.BLOCK_CONTROL_FIELD: False, compare.QKV_CONTROL_FIELD: False}), ((), ()))
+        boundaries, qkv = compare._controlled_outputs({
+            compare.BLOCK_CONTROL_FIELD: True, compare.QKV_CONTROL_FIELD: False})
+        self.assertEqual(boundaries, compare.BLOCK_CONTROL_TENSORS)
+        self.assertEqual(qkv, ())
+        self.assertEqual(len(boundaries), 10)
+        self.assertNotIn("block0.qkv", boundaries)
+        self.assertNotIn("block1.qkv", boundaries)
+
+        with self.assertRaisesRegex(compare.Error, "requires block-boundary"):
+            compare._controlled_outputs({compare.BLOCK_CONTROL_FIELD: False,
+                                         compare.QKV_CONTROL_FIELD: True})
+        boundaries, qkv = compare._controlled_outputs({
+            compare.BLOCK_CONTROL_FIELD: True, compare.QKV_CONTROL_FIELD: True})
+        self.assertEqual(boundaries, compare.BLOCK_CONTROL_TENSORS)
+        self.assertEqual(qkv, compare.QKV_CONTROL_TENSORS)
+        self.assertEqual(qkv, ("block0.qkv", "block0.q", "block0.k", "block0.v",
+                               "block1.qkv", "block1.q", "block1.k", "block1.v"))
+        self.assertTrue(set(boundaries).isdisjoint(qkv))
+
+    def test_qkv_prerequisite_includes_all_five_native_prelude_controls(self):
+        prelude_flags = dict.fromkeys(("prelude_input_bf16_control", "prelude_linear_bf16_control",
+                                       "prelude_silu_bf16_control", "prelude_second_linear_bf16_control",
+                                       "prelude_add_bf16_control"), True)
+        linked = {**prelude_flags, "full_bf16_prelude_parity": False}
+        native = {**prelude_flags, compare.BLOCK_CONTROL_FIELD: True,
+                  compare.QKV_CONTROL_FIELD: True}
+        self.assertEqual(compare._validate_control_prerequisites(native, linked),
+                         (compare.BLOCK_CONTROL_TENSORS, compare.QKV_CONTROL_TENSORS))
+
+        missing_prelude_control = {**native, "prelude_add_bf16_control": False}
+        with self.assertRaisesRegex(compare.Error, "native block prelude control"):
+            compare._validate_control_prerequisites(missing_prelude_control, linked)
+        incomplete_linked_prelude = {**linked, "prelude_add_bf16_control": False}
+        with self.assertRaisesRegex(compare.Error, "native block prelude control"):
+            compare._validate_control_prerequisites(native, incomplete_linked_prelude)
+
     def test_unselected_or_missing_representation_checks_cannot_pass_vacuously(self):
-        selected = compare.BLOCK_CONTROL_TENSORS
-        for kind in ("native_controlled_bf16_representation", "controlled_boundary_source_exact"):
-            self.assertIsNone(compare._controlled_checks_passed([], (), kind))
-            rows = [dict(kind=kind, tensor=name, passed=True) for name in selected]
-            self.assertTrue(compare._controlled_checks_passed(rows, selected, kind))
-            rows[-1]["passed"] = False
-            self.assertFalse(compare._controlled_checks_passed(rows, selected, kind))
-            for broken in ([], rows[:-1], rows + rows[:1], list(reversed(rows))):
-                with self.subTest(kind=kind, size=len(broken)), self.assertRaisesRegex(compare.Error, "coverage"):
-                    compare._controlled_checks_passed(broken, selected, kind)
-            with self.assertRaisesRegex(compare.Error, "coverage"):
-                compare._controlled_checks_passed(rows, (), kind)
+        groups = (
+            (compare.BLOCK_CONTROL_TENSORS,
+             ("native_controlled_bf16_representation", "controlled_boundary_source_exact")),
+            (compare.QKV_CONTROL_TENSORS,
+             ("native_controlled_qkv_bf16_representation", "controlled_qkv_source_exact")),
+        )
+        for selected, kinds in groups:
+            for kind in kinds:
+                with self.subTest(kind=kind, selected=False):
+                    self.assertIsNone(compare._controlled_checks_passed([], (), kind))
+                rows = [dict(kind=kind, tensor=name, passed=True) for name in selected]
+                self.assertTrue(compare._controlled_checks_passed(rows, selected, kind))
+                rows[-1]["passed"] = False
+                self.assertFalse(compare._controlled_checks_passed(rows, selected, kind))
+                for label, broken in (("all omitted", []), ("one omitted", rows[:-1]),
+                                      ("duplicate", rows + rows[:1]),
+                                      ("reordered", list(reversed(rows)))):
+                    with self.subTest(kind=kind, failure=label), \
+                            self.assertRaisesRegex(compare.Error, "coverage"):
+                        compare._controlled_checks_passed(broken, selected, kind)
+                with self.assertRaisesRegex(compare.Error, "coverage"):
+                    compare._controlled_checks_passed(rows, (), kind)
 
     def test_full_padding_and_explicit_interblock_alias(self):
         doc, extent = document()

@@ -39,9 +39,14 @@ NATIVE_SOURCE_FILES = (
 )
 ATOL, RTOL = prelude.ATOL, prelude.RTOL
 BLOCK_CONTROL_FIELD = "block_boundaries_bf16_control"
+QKV_CONTROL_FIELD = "qkv_bf16_control"
 BLOCK_CONTROL_TENSORS = tuple(
     f"block{block}.{stage}" for block in range(2)
     for stage in ("condition_silu", "adaLN", "gate_msa", "gate_mlp", "norm1")
+)
+QKV_CONTROL_TENSORS = tuple(
+    f"block{block}.{stage}" for block in range(2)
+    for stage in ("qkv", "q", "k", "v")
 )
 
 
@@ -49,6 +54,26 @@ def _controlled_boundaries(native: Mapping[str, Any]) -> tuple[str, ...]:
     if type(native.get(BLOCK_CONTROL_FIELD)) is not bool:
         raise Error("native block-boundary BF16 control must be an explicit bool")
     return BLOCK_CONTROL_TENSORS if native[BLOCK_CONTROL_FIELD] else ()
+
+
+def _controlled_outputs(native: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    boundaries = _controlled_boundaries(native)
+    if type(native.get(QKV_CONTROL_FIELD)) is not bool:
+        raise Error("native QKV BF16 control must be an explicit bool")
+    if native[QKV_CONTROL_FIELD] and not boundaries:
+        raise Error("native QKV BF16 control requires block-boundary BF16 control")
+    qkv = QKV_CONTROL_TENSORS if native[QKV_CONTROL_FIELD] else ()
+    return boundaries, qkv
+
+
+def _validate_control_prerequisites(native: Mapping[str, Any],
+                                    linked_prelude: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    prelude_controls = prelude._validate_prelude_controls(linked_prelude)
+    for name, enabled in prelude_controls.items():
+        if not enabled:
+            raise Error(f"native block prelude control must also be enabled in the linked trace: {name}")
+        _require_fields(native, {name: True}, "native block prelude control")
+    return _controlled_outputs(native)
 
 
 def _controlled_checks_passed(rows: list[dict[str, Any]], selected: tuple[str, ...],
@@ -210,9 +235,7 @@ def validate_inputs(args: Any) -> dict[str, Any]:
                             "cache_fixture_manifest_sha256": args.native_preblock_sha256,
                             "timeline_manifest_sha256": args.timeline_sha256,
                             "reference_latent_artifact_sha256": args.reference_latent_sha256}, "native refiner block")
-    for name in prelude._validate_prelude_controls(admitted["native_document"]):
-        _require_fields(native, {name: True}, "native block prelude control")
-    _controlled_boundaries(native)
+    _validate_control_prerequisites(native, admitted["native_document"])
     _validate_pins(native.get("compiled_source_sha256"))
     _require_fields(source, {**common, "source_refiner_manifest_sha256": args.source_refiner_sha256,
                             "source_refiner_payload_sha256": admitted["source_document"]["payload_sha256"]},
@@ -251,7 +274,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         raise Error("refiner block comparison requires MPS")
     device = torch.device("mps")
     queued = []
-    controlled = _controlled_boundaries(inputs["native_document"])
+    controlled_boundaries, controlled_qkv = _controlled_outputs(inputs["native_document"])
 
     def compare(kind: str, name: str, region: str, actual: Any, expected: Any,
                 *, atol: float = ATOL, rtol: float = RTOL) -> None:
@@ -273,12 +296,19 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
             compare("native_bf16_rounding_view", name, region, left.bfloat16().float(), right)
         compare("source_bf16_representation", name, "full", expected,
                 expected.bfloat16().float(), atol=0.0, rtol=0.0)
-        if name in controlled:
+        if name in controlled_boundaries:
             # Check the captured connected output itself. The diagnostic
             # rounded-vs-source view above cannot establish this property.
             compare("native_controlled_bf16_representation", name, "full", actual,
                     actual.bfloat16().float(), atol=0.0, rtol=0.0)
             compare("controlled_boundary_source_exact", name, "full", actual,
+                    expected, atol=0.0, rtol=0.0)
+        if name in controlled_qkv:
+            # These are the actual captured fused and split Q/K/V outputs;
+            # retain evidence independently from the older boundary controls.
+            compare("native_controlled_qkv_bf16_representation", name, "full", actual,
+                    actual.bfloat16().float(), atol=0.0, rtol=0.0)
+            compare("controlled_qkv_source_exact", name, "full", actual,
                     expected, atol=0.0, rtol=0.0)
     control = torch.arange(16, device=device, dtype=torch.float32)
     compare("sensitivity_control", "a_vs_a", "full", control, control)
@@ -299,12 +329,19 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     return dict(numeric_gate_passed=all(row["passed"] for row in raw),
                 source_bf16_representation_passed=all(row["passed"] for row in representation),
                 block_boundaries_bf16_control=inputs["native_document"][BLOCK_CONTROL_FIELD],
-                controlled_boundary_tensors=list(controlled),
-                controlled_boundary_count=len(controlled),
+                controlled_boundary_tensors=list(controlled_boundaries),
+                controlled_boundary_count=len(controlled_boundaries),
                 native_controlled_bf16_representation_passed=_controlled_checks_passed(
-                    rows, controlled, "native_controlled_bf16_representation"),
+                    rows, controlled_boundaries, "native_controlled_bf16_representation"),
                 controlled_boundary_source_exact_passed=_controlled_checks_passed(
-                    rows, controlled, "controlled_boundary_source_exact"),
+                    rows, controlled_boundaries, "controlled_boundary_source_exact"),
+                qkv_bf16_control=inputs["native_document"][QKV_CONTROL_FIELD],
+                controlled_qkv_tensors=list(controlled_qkv),
+                controlled_qkv_count=len(controlled_qkv),
+                native_controlled_qkv_bf16_representation_passed=_controlled_checks_passed(
+                    rows, controlled_qkv, "native_controlled_qkv_bf16_representation"),
+                controlled_qkv_source_exact_passed=_controlled_checks_passed(
+                    rows, controlled_qkv, "controlled_qkv_source_exact"),
                 first_divergence={region: first_divergence(rows, region) for region in ("full", "valid", "padding")},
                 first_divergence_order="canonical dependency order; gates follow their adaLN producer, not hook observation time",
                 same_input_bytes=True, terminal_cpu_exports=1,
@@ -338,7 +375,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     print(json.dumps(dict(schema=SCHEMA, output=str(output), numeric_gate_passed=result["numeric_gate_passed"],
                           first_divergence=result["first_divergence"],
-                          sensitivity_controls_passed=result["sensitivity_controls_passed"])))
+                          sensitivity_controls_passed=result["sensitivity_controls_passed"],
+                          block_boundaries_bf16_control=result["block_boundaries_bf16_control"],
+                          controlled_boundary_source_exact_passed=result[
+                              "controlled_boundary_source_exact_passed"],
+                          qkv_bf16_control=result["qkv_bf16_control"],
+                          controlled_qkv_source_exact_passed=result["controlled_qkv_source_exact_passed"])))
     return 0
 
 

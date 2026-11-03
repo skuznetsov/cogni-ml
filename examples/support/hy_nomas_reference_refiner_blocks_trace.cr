@@ -205,6 +205,12 @@ module HyNomasReferenceRefinerBlocksTrace
 
   # Called only after the producer's single terminal wait. All captured bytes
   # come from preallocated checkpoints and are read outside the encode region.
+  def validate_qkv_control!(block_boundaries_bf16_control : Bool, qkv_bf16_control : Bool) : Nil
+    if qkv_bf16_control && !block_boundaries_bf16_control
+      raise ArgumentError.new("QKV BF16 control requires the block-boundary BF16 control")
+    end
+  end
+
   def write_trace!(manifest_path : String, *,
                    reference_latent_artifact_sha256 : String,
                    timeline_manifest_sha256 : String,
@@ -221,7 +227,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    prelude_silu_bf16_control : Bool,
                    prelude_second_linear_bf16_control : Bool,
                    prelude_add_bf16_control : Bool,
-                   block_boundaries_bf16_control : Bool = false) : Hash(String, JSON::Any)
+                   block_boundaries_bf16_control : Bool = false,
+                   qkv_bf16_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -232,6 +239,7 @@ module HyNomasReferenceRefinerBlocksTrace
     validate_execution!(encode_allocations, encode_readbacks, preterminal_waits, terminal_waits)
     validate_prelude_controls!(prelude_input_bf16_control, prelude_linear_bf16_control,
       prelude_silu_bf16_control, prelude_second_linear_bf16_control, prelude_add_bf16_control)
+    validate_qkv_control!(block_boundaries_bf16_control, qkv_bf16_control)
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner block trace source inventory or order mismatch")
     end
@@ -300,6 +308,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("prelude_second_linear_bf16_control", prelude_second_linear_bf16_control)
         json.field("prelude_add_bf16_control", prelude_add_bf16_control)
         json.field("block_boundaries_bf16_control", block_boundaries_bf16_control)
+        json.field("qkv_bf16_control", qkv_bf16_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

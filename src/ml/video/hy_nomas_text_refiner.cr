@@ -40,6 +40,7 @@ module ML::Video
     DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL = false
     DEFAULT_PRELUDE_ADD_BF16_CONTROL           = false
     DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL      = false
+    DEFAULT_QKV_BF16_CONTROL                   = false
     PRELUDE_FIRST_LINEAR_NAMES                 = [
       "refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
     ]
@@ -51,6 +52,7 @@ module ML::Video
     ]
     BLOCK_BOUNDARY_CONDITION_SILU_NAMES = ["block0.condition_silu", "block1.condition_silu"]
     BLOCK_BOUNDARY_ADALN_NAMES          = ["block0.adaLN", "block1.adaLN"]
+    QKV_LINEAR_NAMES                    = ["block0.qkv", "block1.qkv"]
 
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
@@ -90,6 +92,7 @@ module ML::Video
     @prelude_second_linear_bf16_control : Bool
     @prelude_add_bf16_control : Bool
     @block_boundaries_bf16_control : Bool
+    @qkv_bf16_control : Bool
     @named_bytes : NamedBytes
     @arena : Arena? = nil
     @weight_stage : ML::MetalBuffer? = nil
@@ -117,6 +120,7 @@ module ML::Video
     getter prelude_second_linear_bf16_control : Bool
     getter prelude_add_bf16_control : Bool
     getter block_boundaries_bf16_control : Bool
+    getter qkv_bf16_control : Bool
 
     def self.checkpoint_bindings : Array(WeightBinding)
       bindings = [] of WeightBinding
@@ -174,7 +178,8 @@ module ML::Video
                                           silu_bf16 : Bool,
                                           second_linear_bf16 : Bool = false,
                                           add_bf16 : Bool = false,
-                                          block_boundaries_bf16_control : Bool = false) : Nil
+                                          block_boundaries_bf16_control : Bool = false,
+                                          qkv_bf16_control : Bool = false) : Nil
       if linear_bf16 && !input_bf16
         raise ArgumentError.new("Prelude linear BF16 control requires the input BF16 control")
       end
@@ -190,6 +195,9 @@ module ML::Video
       if block_boundaries_bf16_control &&
          !(input_bf16 && linear_bf16 && silu_bf16 && second_linear_bf16 && add_bf16)
         raise ArgumentError.new("Block-boundary BF16 control requires all five prelude BF16 controls")
+      end
+      if qkv_bf16_control && !block_boundaries_bf16_control
+        raise ArgumentError.new("QKV BF16 control requires the block-boundary BF16 control")
       end
     end
 
@@ -233,7 +241,8 @@ module ML::Video
                    prelude_silu_bf16_control : Bool = DEFAULT_PRELUDE_SILU_BF16_CONTROL,
                    prelude_second_linear_bf16_control : Bool = DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL,
                    prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL,
-                   block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL)
+                   block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL,
+                   qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -247,10 +256,11 @@ module ML::Video
       @prelude_second_linear_bf16_control = prelude_second_linear_bf16_control
       @prelude_add_bf16_control = prelude_add_bf16_control
       @block_boundaries_bf16_control = block_boundaries_bf16_control
+      @qkv_bf16_control = qkv_bf16_control
       self.class.validate_precision_controls!(@prelude_input_bf16_control,
         @prelude_linear_bf16_control, @prelude_silu_bf16_control,
         @prelude_second_linear_bf16_control, @prelude_add_bf16_control,
-        @block_boundaries_bf16_control)
+        @block_boundaries_bf16_control, @qkv_bf16_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -646,7 +656,8 @@ module ML::Video
                            (@prelude_second_linear_bf16_control &&
                             PRELUDE_SECOND_LINEAR_NAMES.includes?(name)) ||
                            (@block_boundaries_bf16_control &&
-                            BLOCK_BOUNDARY_ADALN_NAMES.includes?(name)))
+                            BLOCK_BOUNDARY_ADALN_NAMES.includes?(name)) ||
+                           (@qkv_bf16_control && QKV_LINEAR_NAMES.includes?(name)))
     end
 
     private def encode_conditioning_add(e : ML::Metal::ComputeEncoder) : Nil

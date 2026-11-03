@@ -9,6 +9,7 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_ADD_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_QKV_BF16_CONTROL.should be_false
     ML::Video::HyNomasMPSActivation::UnaryPlan::DEFAULT_BF16_CONTROL.should be_false
 
     source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
@@ -22,6 +23,14 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     source.includes?("hy_text_roundtrip_bf16(precise::sin(phase))").should be_true
     source.includes?("embedding[index] = precise::cos(phase);").should be_true
     source.includes?("embedding[index + half_dim] = precise::sin(phase);").should be_true
+  end
+
+  it "requires connected norm1 boundaries before QKV BF16 output rounding" do
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true, true, true)
+    expect_raises(ArgumentError, /QKV BF16 control requires the block-boundary BF16 control/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true, false, true)
+    end
+    ML::Video::HyNomasTextRefinerMPSPlan::QKV_LINEAR_NAMES.should eq(["block0.qkv", "block1.qkv"])
   end
 
   it "requires each prelude precision control to include its preceding boundary" do

@@ -93,6 +93,15 @@ describe HyNomasReferenceRefinerBlocksTrace do
     end
   end
 
+  it "rejects a QKV control manifest without the connected block boundaries" do
+    HyNomasReferenceRefinerBlocksTrace.validate_qkv_control!(false, false).should be_nil
+    HyNomasReferenceRefinerBlocksTrace.validate_qkv_control!(true, false).should be_nil
+    HyNomasReferenceRefinerBlocksTrace.validate_qkv_control!(true, true).should be_nil
+    expect_raises(ArgumentError, /QKV BF16 control requires the block-boundary BF16 control/) do
+      HyNomasReferenceRefinerBlocksTrace.validate_qkv_control!(false, true)
+    end
+  end
+
   it "fails closed when required checkpoints are missing" do
     expect_raises(ArgumentError) do
       HyNomasReferenceRefinerBlocksTrace.tensor_sources({} of String => ML::MetalBuffer)

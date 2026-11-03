@@ -1,0 +1,426 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_qkv_boundary_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "6718f641",
+  "status": "bounded_implementation_qualified_full_refiner_gate_failed",
+  "goal": "Qualify connected post-bias BF16 QKV boundaries and split outputs in two refiner blocks, with unchanged arithmetic when disabled.",
+  "scope": {
+    "valid_text_tokens": 263,
+    "stored_text_rows": 1280,
+    "block_count": 2,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "representation_and_exact_tolerance": 0,
+    "full_generation_executed": false,
+    "dit_blocks_executed": 0,
+    "cache_kv_written": false,
+    "neural_arithmetic": "Native Metal/MPS; comparison metrics/reductions Torch MPS with fallback disabled, one terminal diagnostic export. CPU hash/metadata qualification is not neural arithmetic."
+  },
+  "change": {
+    "flag": "--refiner-qkv-bf16-control",
+    "default": false,
+    "requires": "Existing block-boundary control, all five controls in native and linked prelude traces, execute and both trace outputs",
+    "implementation": "Select block0.qkv and block1.qkv existing post-bias RNE BF16 epilogue before Q/K/V split; F32 backing storage unchanged.",
+    "no_new_explicit_dispatch_buffer_readback_wait": true,
+    "opaque_mps_activity_excluded": true,
+    "strict_manifest_bool_required": true,
+    "older_block_manifests_without_qkv_bool_rejected": true,
+    "source_sha256": {
+      "src/ml/video/hy_nomas_text_refiner.cr": "0b4720b0357b8679489073b17a247130751694084b7a647b0295ccbc19c66fe0",
+      "examples/hy_nomas_reference_cache_probe.cr": "f1d430cf6c132cb704b1ab1d8226ac1688ef6481e5d5d975baa6d5327e2549ce",
+      "examples/support/hy_nomas_reference_refiner_blocks_trace.cr": "497906fb94ce29c4d80713a5229cbb998d1397e2650de747e99d4c452ce596c8",
+      "spec/hy_nomas_text_refiner_spec.cr": "e74c97dd583fdf12aedecc84f29140000cc5e34a17a8e74ce8977dd77ba995d5",
+      "spec/hy_nomas_reference_refiner_blocks_trace_spec.cr": "a6e5d21bce03998f73e364a339eda1d36e9d3ad159865aaf3c629b0d71dacaa1",
+      "spec/support/hy_nomas_reference_refiner_blocks_compare.py": "51083c7431c666656e5c0174eb80b3680de7b9001c7a9e1267b439a60c13b7d9",
+      "spec/hy_nomas_reference_refiner_blocks_compare_spec.py": "e28d609dc00a49b7e23d3eae43e5f4d8f6dbac1bd3e9c49c20c87062db930ed4"
+    }
+  },
+  "lineage": {
+    "external_run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231",
+    "upstream_actual_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Earlier pinned PyTorch 2.8.0 MPS attention adaptation, not a new full upstream forward",
+    "source_capture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "qualified_artifact_index": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/qualified-artifacts-final.json",
+      "bytes": 66778,
+      "sha256": "8b36ebf33450e7e3d4891cfc4835ef9873ae646538f2fd20194395ab213d7df1"
+    },
+    "source_pin_count": 91,
+    "compiled_block_pins": 16,
+    "compiled_prelude_pins": 14,
+    "artifact_count": 204,
+    "snapshots": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/qualified-sources"
+  },
+  "observed": {
+    "qkv_representation_passed": true,
+    "qkv_representable": 8,
+    "qkv_source_exact": 4,
+    "qkv_total": 8,
+    "source_exact_block0": [
+      {
+        "tensor": "block0.input",
+        "sha256": "376081d71b089fdf98e3ffac7751b64d732f6194993d0792239d3a6c759f4ecb",
+        "bytes": 10485760,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "c",
+        "sha256": "d09e13012c00a3dcc5722b1ad41f69814bf1102f8e0e664dafcd443cc7443766",
+        "bytes": 8192,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "block0.norm1",
+        "sha256": "1ce41ff26fb0edb3906c2f0a9bda550338efa0f07aeccaf6836c32aacf911080",
+        "bytes": 10485760,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "block0.qkv",
+        "sha256": "ade39ecf6c756181135ba53783b12e1badc4f67fb1ce7276a77ebf25619d71a3",
+        "bytes": 31457280,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "block0.q",
+        "sha256": "9888d028ef34e6827e3ce35139710958855ab1f1cfc9e67a3a8eb3a112a8de43",
+        "bytes": 10485760,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "block0.k",
+        "sha256": "ab01176645d935ba738d41b8b07305b2357a658aba11d920c6964760d8e7181d",
+        "bytes": 10485760,
+        "direct_byte_comparison_equal": true
+      },
+      {
+        "tensor": "block0.v",
+        "sha256": "0f98ea6bc3522bee1468356b47f4cef0a2d2f1430702541da4ce875132ba73ac",
+        "bytes": 10485760,
+        "direct_byte_comparison_equal": true
+      }
+    ],
+    "block1_qkv_source_exact": false,
+    "block1_input_already_different": true,
+    "legacy_boundary_representation_count": 10,
+    "legacy_boundary_source_exact_count": 9,
+    "numeric_gate_passed": false,
+    "first_divergence": {
+      "full": "block0.attention",
+      "valid": "block0.attention",
+      "padding": "block0.residual1"
+    },
+    "prior_first_divergence": {
+      "full": "block0.qkv",
+      "valid": "block0.qkv",
+      "padding": "block0.qkv"
+    },
+    "selected_raw_rows": [
+      {
+        "kind": "raw",
+        "tensor": "block0.qkv",
+        "region": "full",
+        "count": 7864320,
+        "finite_count": 7864320,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block0.attention",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 0.29186487197875977,
+        "mae": 0.0011765172239392996,
+        "rms": 0.005816754885017872,
+        "mismatch_count": 397504,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block0.output",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 0.6169586181640625,
+        "mae": 0.014288249425590038,
+        "rms": 0.023722147569060326,
+        "mismatch_count": 2582901,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block1.norm1",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 0.03125,
+        "mae": 0.0008290992118418217,
+        "rms": 0.002128762425854802,
+        "mismatch_count": 708375,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block1.qkv",
+        "region": "full",
+        "count": 7864320,
+        "finite_count": 7864320,
+        "max_abs": 0.0625,
+        "mae": 0.0033033574000000954,
+        "rms": 0.005941482726484537,
+        "mismatch_count": 3779283,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "raw",
+        "tensor": "block1.output",
+        "region": "full",
+        "count": 2621440,
+        "finite_count": 2621440,
+        "max_abs": 1.204193115234375,
+        "mae": 0.019984062761068344,
+        "rms": 0.033977724611759186,
+        "mismatch_count": 2597891,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "prior_modes_preserved": [
+      {
+        "mode": "default",
+        "part": "preblock",
+        "tensor_count": 9,
+        "records_and_payload_repeat_exactly": true
+      },
+      {
+        "mode": "default",
+        "part": "refiner",
+        "tensor_count": 16,
+        "records_and_payload_repeat_exactly": true
+      },
+      {
+        "mode": "default",
+        "part": "blocks",
+        "tensor_count": 37,
+        "records_and_payload_repeat_exactly": true
+      },
+      {
+        "mode": "baseline",
+        "part": "preblock",
+        "tensor_count": 9,
+        "records_and_payload_repeat_exactly": true
+      },
+      {
+        "mode": "baseline",
+        "part": "refiner",
+        "tensor_count": 16,
+        "records_and_payload_repeat_exactly": true
+      },
+      {
+        "mode": "baseline",
+        "part": "blocks",
+        "tensor_count": 37,
+        "records_and_payload_repeat_exactly": true
+      }
+    ],
+    "all_sixteen_prelude_hashes_source_exact_in_three_modes": true,
+    "named_bytes": 944620612,
+    "native_encode_counters": [
+      0,
+      0,
+      0,
+      1
+    ]
+  },
+  "verification": {
+    "crystal_examples": 28,
+    "python_tests": 50,
+    "compiled_cli_negative_cases": 11,
+    "sensitivity_controls_passed": true,
+    "canonical_stages": [
+      {
+        "stage": "native-build",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-build.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-build.result.json"
+      },
+      {
+        "stage": "native-specs",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-specs.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-specs.result.json"
+      },
+      {
+        "stage": "python-specs-final",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/python-specs-final.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/python-specs-final.result.json"
+      },
+      {
+        "stage": "native-default",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-default.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-default.result.json"
+      },
+      {
+        "stage": "native-baseline",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-baseline.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-baseline.result.json"
+      },
+      {
+        "stage": "native-qkv",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-qkv.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-qkv.result.json"
+      },
+      {
+        "stage": "compare-baseline",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/compare-baseline.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/compare-baseline.result.json"
+      },
+      {
+        "stage": "compare-qkv",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/compare-qkv.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/compare-qkv.result.json"
+      },
+      {
+        "stage": "cli-negatives",
+        "command": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/cli-negatives.command.json",
+        "result": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/cli-negatives.result.json"
+      }
+    ],
+    "historical_failed_checks": [
+      {
+        "stage": "qkv-falsifier",
+        "returncode": 1,
+        "historical_only": true
+      },
+      {
+        "stage": "python-specs",
+        "returncode": 1,
+        "historical_only": true
+      }
+    ],
+    "historical_failure_resolution": "The pre-implementation test lacked the new constant. Initial Python test exposed inconsistent native/linked prelude admission; helper now requires all five linked flags true and the negative test passes.",
+    "do_not_reuse_existing_output_paths": true,
+    "refresh": "Use a fresh external run and fresh outputs, current source snapshots and unchanged guard; rerun build/spec/CLI/native capture/comparison stages before refreshing dependent claims."
+  },
+  "memory_guard": {
+    "stage_count": 9,
+    "canonical_stages": [
+      {
+        "stage": "native-build",
+        "sampled_peak_group_bytes": 694699376,
+        "minimum_sampled_headroom_bytes": 29485219840,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 33
+      },
+      {
+        "stage": "native-specs",
+        "sampled_peak_group_bytes": 732268224,
+        "minimum_sampled_headroom_bytes": 29533995008,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 7
+      },
+      {
+        "stage": "python-specs-final",
+        "sampled_peak_group_bytes": 127878296,
+        "minimum_sampled_headroom_bytes": 30517739520,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 4
+      },
+      {
+        "stage": "native-default",
+        "sampled_peak_group_bytes": 1112786432,
+        "minimum_sampled_headroom_bytes": 29103095808,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 19
+      },
+      {
+        "stage": "native-baseline",
+        "sampled_peak_group_bytes": 1113277952,
+        "minimum_sampled_headroom_bytes": 29165518848,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 10
+      },
+      {
+        "stage": "native-qkv",
+        "sampled_peak_group_bytes": 1081591320,
+        "minimum_sampled_headroom_bytes": 29168205824,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 10
+      },
+      {
+        "stage": "compare-baseline",
+        "sampled_peak_group_bytes": 2337704192,
+        "minimum_sampled_headroom_bytes": 27447246848,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 8
+      },
+      {
+        "stage": "compare-qkv",
+        "sampled_peak_group_bytes": 2349074640,
+        "minimum_sampled_headroom_bytes": 27321368576,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 7
+      },
+      {
+        "stage": "cli-negatives",
+        "sampled_peak_group_bytes": 18432816,
+        "minimum_sampled_headroom_bytes": 30713823232,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 8
+      }
+    ],
+    "sampled_peak_group_bytes": 2349074640,
+    "minimum_sampled_headroom_bytes": 27321368576,
+    "maximum_observed_stage_swap_growth_bytes": 0,
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "process_cap_mib": 6144,
+    "swap_growth_stop_mib": 64,
+    "limitation": "Sampled telemetry does not bound between-poll spikes or opaque Metal resources."
+  },
+  "residuals": [
+    "Full raw two-block refiner gate fails; downstream errors remain material.",
+    "Block1 QKV is not an isolated same-input comparison.",
+    "One finite captured input cannot establish projection reduction equivalence across BF16 midpoints.",
+    "Source oracle is an MPS attention adaptation, not stock CUDA/Magi execution.",
+    "No full generation, reference-driven motion, quality or performance qualification.",
+    "Existing terminal captures/diagnostic exports remain; no additional synchronization introduced in the neural graph."
+  ],
+  "review": {
+    "source_audit": "ROBUST for bounded epilogue placement, layout and explicit-resource claim",
+    "final_adversary": "ROBUST within the bounded QKV implementation claim; complete raw refiner gate remains failed.",
+    "independence": "Same-lineage mini-Quad reviews are correlated, not independent replication.",
+    "final_adversary_scope": "Default-off connected QKV BF16 output boundary on the single finite captured T0 input; full raw refiner gate remains failed.",
+    "final_adversary_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/adversary-final.json"
+  },
+  "next_falsifier": "Replay QK, softmax and PV on source-exact block0 Q/K/V; distinguish masks, reductions and BF16 materialization boundaries.",
+  "rollback": "Omit --refiner-qkv-bf16-control; both prior modes are byte-preserved.",
+  "decay_trigger": "Source, compiled binary/runtime, weights, input, masks, layout or precision changes; missing or mutated evidence reopens dependent claims."
+}

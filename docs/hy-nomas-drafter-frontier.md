@@ -1,5 +1,72 @@
 # Hy-Nomas local draft suite
 
+## Connected refiner QKV BF16 output boundary (2026-11-03)
+
+The default-off `--refiner-qkv-bf16-control` makes block0 QKV and its split
+Q/K/V byte-identical to the pinned upstream capture on the same source-exact
+norm1 input. The fused QKV checkpoint covers 7,864,320 values, including all
+1,280 stored rows. This qualifies one connected boundary on one finite T0
+V263 input. The complete two-block raw gate still fails at unchanged
+`atol=rtol=2e-5`; this is not a motion, quality or performance qualification.
+
+The flag requires block-boundary control, all five prelude controls, execution
+and linked block/prelude trace outputs. It rounds after bias in the existing
+linear epilogue, before the existing Q/K/V split, for both blocks. It adds no
+explicit dispatch, named activation buffer, readback or wait; opaque MPS
+internal activity is outside that statement. Omit the flag to recover the
+previous arithmetic. The trace records an explicit `qkv_bf16_control` bool;
+the comparator rejects older manifests without it and contradictory native
+versus linked prelude controls. It does not infer or backfill missing modes.
+
+Representation, source equality and the full mixed-tolerance gate remain
+separate. All eight actual QKV/Q/K/V outputs are BF16-representable; four
+are source-exact (block0). All four block1 outputs differ on an already
+different block1 input. The preceding ten controlled boundaries retain ten
+representation passes and nine exact source hashes. Checks require complete,
+ordered coverage; both QKV aggregates are null with QKV control disabled.
+
+| Full checkpoint | Previous block controls | With QKV control |
+| --- | --- | --- |
+| block0 QKV max error | .03124809265 | 0, also direct byte equality |
+| block0 attention max error | .29821321 | .29186487 |
+| block0 output max error | .61703491 | .61695862 |
+| block1 output max error | 1.20420837 | 1.20419312 |
+
+The first raw failure moves from block0 QKV to block0 attention in full/valid
+rows, and to block0 residual1 in padding. Fixing the local boundary barely
+changes final block errors; it does not establish the cause of later errors.
+Next discriminator: replay QK, softmax and PV on the now source-exact block0
+Q/K/V, checking masks and BF16 materialization boundaries separately. F32
+accumulation followed by BF16 rounding is not a general proof of upstream
+reduction equivalence; other inputs may straddle different BF16 midpoints.
+
+Validation: fresh probe/bridge build, 28 Crystal examples, 50 Python tests,
+11 compiled CLI rejection cases, GPU A/A, perturbation and representation
+sensitivity controls. Both previous modes reproduce all 62 tensor records
+and three payloads each. All 16 prelude hashes match source in all three
+modes. Each native capture retains 944,620,612 named bytes and encode counters
+[0 allocations, 0 readbacks, 0 preterminal waits, 1 terminal wait]. All neural
+comparison reductions run on MPS before one terminal diagnostic export.
+
+Nine canonical guarded stages retain the file-cache-aware 10% floor, 6 GiB
+process cap and 64 MiB swap-growth stop. Peak sampled group footprint is
+2,349,074,640 bytes; minimum sampled headroom 27,321,368,576 bytes; observed
+stage swap growth and final live children are zero. Sampling does not bound
+between-poll spikes. The artifact qualification checks 91 current source
+snapshots, 16/14 embedded block/prelude pins, payload and tensor hashes, and
+direct source bytes for the exact block0 boundaries. Initial failing checks
+remain historical, outside the passing canonical stage set.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-qkv-boundary.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231`.
+Reports `compare-{baseline,qkv}.json`, `qualified-artifacts-final.json`,
+`default-preservation.json` and `guard-summary-final.json` retain commands,
+source snapshots and byte identities. The oracle is the earlier pinned
+PyTorch 2.8.0 MPS attention adaptation, not a newly rerun full upstream model.
+Same-lineage mini-Quad review is correlated. Refresh this bounded certificate
+on source, binary/runtime, weight, input, mask, layout or precision changes;
+missing or mutated evidence revokes it. Full generation was not run.
+
 ## Connected refiner condition, adaLN and norm1 BF16 boundaries (2026-11-03)
 
 Status: the default-off block-boundary control is qualified on one finite T0

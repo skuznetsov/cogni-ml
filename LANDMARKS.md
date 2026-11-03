@@ -37929,3 +37929,39 @@ Refresh after source/toolchain/device/model/workload changes.
   restore the prior path. Refresh on source, binary/runtime, weights, inputs,
   masks/captions, layout or precision changes; missing/mutated evidence revokes
   the result. DiT K/V, T1 and reference-driven motion remain open.
+
+### 2026-11-03 — Connected refiner QKV BF16 output boundary
+
+- Added default-off `--refiner-qkv-bf16-control`, requiring the existing block
+  and five prelude controls plus linked traces. It selects both fused QKV
+  linears' existing post-bias BF16 epilogue before splitting, with no new
+  explicit dispatch, activation buffer, readback or wait (MPS internals excluded).
+- On the same authenticated finite T0 V263 input, block0 norm1, QKV and Q/K/V
+  equal source hashes and direct bytes. QKV contains 7,864,320 values across
+  all 1,280 stored rows. All eight QKV-related outputs are BF16-representable;
+  source equality is four of eight, with block1 input already different.
+- Raw gate remains false at atol=rtol=2e-5. First failures are block0 attention
+  (full/valid) and residual1 (padding). Attention max .29186487; block0 output
+  max .61695862, block1 output max 1.20419312. No motion/quality/speedup claim.
+- Fresh build, 28 Crystal examples, 50 Python tests, 11 compiled rejection
+  cases and GPU sensitivity pass. Both previous modes reproduce 62 tensor
+  records and three payloads each; all three preserve 16 source-exact prelude
+  hashes, 944,620,612 named bytes and encode counters [0,0,0,1]. Strict bools,
+  linked prelude consistency and ordered complete QKV coverage fail closed;
+  old block manifests without the QKV bool require a fresh capture.
+- Nine canonical stages: file-cache-aware 10% floor / 6 GiB process cap /
+  64 MiB swap stop. Sampled peak 2,349,074,640 bytes; minimum headroom
+  27,321,368,576 bytes; zero observed stage swap growth/final children.
+  Sampling does not bound spikes or all opaque MPS resources.
+- Evidence `.landmark/evidence/2026-11-03-hy-nomas-refiner-qkv-boundary.json`;
+  external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231`,
+  canonical `compare-{baseline,qkv}.json`, `qualified-artifacts-final.json`,
+  `guard-summary-final.json`. Qualification retains 91 source snapshots,
+  16/14 embedded block/prelude source pins and byte/hash fallbacks. Pinned
+  oracle is the prior PyTorch 2.8.0 MPS attention adaptation; no source full
+  forward or full generation rerun. Same-lineage reviews are correlated.
+- Next: QK -> softmax -> PV replay on identical block0 Q/K/V; test masks and
+  BF16 boundaries before changing attention. Keep block1 propagation separate.
+  Roll back by omitting the QKV flag. Refresh on source, binary/runtime, weight,
+  input, mask, layout or precision changes; mutated/missing evidence reopens
+  dependent claims. DiT K/V, T1 and reference-driven motion remain open.

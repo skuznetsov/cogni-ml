@@ -44,6 +44,7 @@ prelude_silu_bf16_control = false
 prelude_second_linear_bf16_control = false
 prelude_add_bf16_control = false
 block_boundaries_bf16_control = false
+qkv_bf16_control = false
 max_named_bytes = 4_i64 * 1024**3
 execute = false
 OptionParser.parse do |parser|
@@ -61,6 +62,7 @@ OptionParser.parse do |parser|
   parser.on("--refiner-second-linear-bf16-control", "Round the three second prelude linear outputs to BF16 with RNE; requires SiLU control") { prelude_second_linear_bf16_control = true }
   parser.on("--refiner-add-bf16-control", "Round both operands and the c add output to BF16 with RNE; requires second-linear control") { prelude_add_bf16_control = true }
   parser.on("--refiner-block-boundaries-bf16-control", "Round both blocks' condition SiLU, adaLN, and norm1 boundaries through BF16; requires all five prelude controls and block trace output") { block_boundaries_bf16_control = true }
+  parser.on("--refiner-qkv-bf16-control", "Round both blocks' post-bias QKV outputs through BF16 in the existing epilogue; requires block-boundary control and block trace output") { qkv_bf16_control = true }
   parser.on("--max-named-bytes N", "Aggregate named Metal-buffer cap, up to 8 GiB") { |value| max_named_bytes = value.to_i64 }
   parser.on("--execute", "Run native timeline/patch/refiner on MPS and capture after one terminal drain") { execute = true }
 end
@@ -83,15 +85,18 @@ end
 if block_boundaries_bf16_control && refiner_blocks_trace_output_manifest.empty?
   raise ArgumentError.new("block-boundary BF16 control requires --refiner-block-trace-output")
 end
+if qkv_bf16_control && refiner_blocks_trace_output_manifest.empty?
+  raise ArgumentError.new("QKV BF16 control requires --refiner-block-trace-output")
+end
 if (prelude_input_bf16_control || prelude_linear_bf16_control || prelude_silu_bf16_control ||
-   prelude_second_linear_bf16_control || prelude_add_bf16_control || block_boundaries_bf16_control) &&
+   prelude_second_linear_bf16_control || prelude_add_bf16_control || block_boundaries_bf16_control || qkv_bf16_control) &&
    refiner_trace_output_manifest.empty?
   raise ArgumentError.new("refiner BF16 controls require --refiner-trace-output")
 end
 ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(prelude_input_bf16_control,
   prelude_linear_bf16_control, prelude_silu_bf16_control,
   prelude_second_linear_bf16_control, prelude_add_bf16_control,
-  block_boundaries_bf16_control)
+  block_boundaries_bf16_control, qkv_bf16_control)
 unless refiner_blocks_trace_output_manifest.empty?
   HyNomasReferenceRefinerBlocksTrace.validate_prelude_controls!(
     prelude_input_bf16_control, prelude_linear_bf16_control, prelude_silu_bf16_control,
@@ -211,7 +216,8 @@ begin
     prelude_silu_bf16_control: prelude_silu_bf16_control,
     prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
     prelude_add_bf16_control: prelude_add_bf16_control,
-    block_boundaries_bf16_control: block_boundaries_bf16_control)
+    block_boundaries_bf16_control: block_boundaries_bf16_control,
+    qkv_bf16_control: qkv_bf16_control)
   timeline_plan = ML::Video::HyNomasTimelineOps::Plan.new(geometry,
     timeline: latent_timeline, segment_latent: segment,
     cosine_bank: cosine_bank, sine_bank: sine_bank,
@@ -304,7 +310,8 @@ begin
       prelude_silu_bf16_control: prelude_silu_bf16_control,
       prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
       prelude_add_bf16_control: prelude_add_bf16_control,
-      block_boundaries_bf16_control: block_boundaries_bf16_control)
+      block_boundaries_bf16_control: block_boundaries_bf16_control,
+      qkv_bf16_control: qkv_bf16_control)
     puts blocks_trace_result.to_json
   end
   puts plan_report
