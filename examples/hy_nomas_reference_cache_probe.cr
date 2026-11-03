@@ -8,6 +8,7 @@ require "./support/hy_nomas_timeline_inputs"
 require "./support/hy_nomas_reference_latent"
 require "./support/hy_nomas_reference_cache_probe"
 require "./support/hy_nomas_reference_refiner_trace"
+require "./support/hy_nomas_reference_refiner_blocks_trace"
 require "./support/hy_nomas_probe_instrumentation"
 
 module HyNomasReferenceCacheProbeCLI
@@ -36,6 +37,7 @@ reference_latent_path = ""
 reference_latent_sha = ""
 output_manifest = ""
 refiner_trace_output_manifest = ""
+refiner_blocks_trace_output_manifest = ""
 prelude_input_bf16_control = false
 prelude_linear_bf16_control = false
 prelude_silu_bf16_control = false
@@ -51,6 +53,7 @@ OptionParser.parse do |parser|
   parser.on("--reference-latent-sha256 SHA", "Trusted saved latent artifact SHA-256") { |value| reference_latent_sha = value }
   parser.on("--output PATH", "Fresh output JSON manifest; sidecar is a sibling .tensors.bin") { |value| output_manifest = value }
   parser.on("--refiner-trace-output PATH", "Optional fresh separate refiner trace JSON manifest; sidecar is a sibling .tensors.bin") { |value| refiner_trace_output_manifest = value }
+  parser.on("--refiner-block-trace-output PATH", "Optional fresh full two-block refiner trace JSON manifest; sidecar is a sibling .tensors.bin") { |value| refiner_blocks_trace_output_manifest = value }
   parser.on("--refiner-input-bf16-control", "Round only the native refiner mean and timestep sinusoidal inputs through BF16") { prelude_input_bf16_control = true }
   parser.on("--refiner-linear-bf16-control", "Round the four first prelude linear outputs through BF16; requires input control") { prelude_linear_bf16_control = true }
   parser.on("--refiner-silu-bf16-control", "Use BF16-typed graphs for the three prelude SiLUs; requires linear control") { prelude_silu_bf16_control = true }
@@ -69,9 +72,20 @@ raise ArgumentError.new("--execute requires a fresh output manifest path") if ex
 if !refiner_trace_output_manifest.empty? && !execute
   raise ArgumentError.new("--refiner-trace-output requires --execute")
 end
+if !refiner_blocks_trace_output_manifest.empty? && !execute
+  raise ArgumentError.new("--refiner-block-trace-output requires --execute")
+end
+if !refiner_blocks_trace_output_manifest.empty? && refiner_trace_output_manifest.empty?
+  raise ArgumentError.new("--refiner-block-trace-output requires --refiner-trace-output for linked prelude evidence")
+end
 if (prelude_input_bf16_control || prelude_linear_bf16_control || prelude_silu_bf16_control ||
    prelude_second_linear_bf16_control || prelude_add_bf16_control) && refiner_trace_output_manifest.empty?
   raise ArgumentError.new("refiner BF16 controls require --refiner-trace-output")
+end
+unless refiner_blocks_trace_output_manifest.empty?
+  HyNomasReferenceRefinerBlocksTrace.validate_prelude_controls!(
+    prelude_input_bf16_control, prelude_linear_bf16_control, prelude_silu_bf16_control,
+    prelude_second_linear_bf16_control, prelude_add_bf16_control)
 end
 HyNomasReferenceRefinerTrace.prelude_metadata(prelude_input_bf16_control,
   prelude_linear_bf16_control, prelude_silu_bf16_control,
@@ -137,12 +151,21 @@ end
 manifest_path, payload_path = HyNomasReferenceCacheProbe.checked_output_paths!(output_manifest)
 HyNomasReferenceCacheProbe.ensure_fresh_outputs!(manifest_path, payload_path)
 refiner_trace_paths : Tuple(String, String)? = nil
+refiner_blocks_trace_paths : Tuple(String, String)? = nil
 unless refiner_trace_output_manifest.empty?
   trace_manifest_path, trace_payload_path = HyNomasReferenceRefinerTrace.checked_output_paths!(refiner_trace_output_manifest)
   HyNomasReferenceRefinerTrace.ensure_fresh_outputs!(trace_manifest_path, trace_payload_path)
   HyNomasReferenceRefinerTrace.ensure_distinct_outputs!(manifest_path, payload_path,
     trace_manifest_path, trace_payload_path)
   refiner_trace_paths = {trace_manifest_path, trace_payload_path}
+end
+unless refiner_blocks_trace_output_manifest.empty?
+  blocks_manifest_path, blocks_payload_path = HyNomasReferenceRefinerBlocksTrace.checked_output_paths!(refiner_blocks_trace_output_manifest)
+  HyNomasReferenceRefinerBlocksTrace.ensure_fresh_outputs!(blocks_manifest_path, blocks_payload_path)
+  trace_paths = refiner_trace_paths || raise("missing prelude trace path for linked block trace")
+  HyNomasReferenceRefinerBlocksTrace.ensure_distinct_outputs!(manifest_path, payload_path,
+    trace_paths[0], trace_paths[1], blocks_manifest_path, blocks_payload_path)
+  refiner_blocks_trace_paths = {blocks_manifest_path, blocks_payload_path}
 end
 
 base_arena = ML::Video::Arena.new
@@ -231,6 +254,7 @@ begin
     timeline_manifest_sha256: timeline_inputs.file.sha256,
     valid_text_tokens: valid_text_tokens,
     sources: sources)
+  prelude_trace_manifest_sha256 : String? = nil
   if trace_paths = refiner_trace_paths
     trace_sources = HyNomasReferenceRefinerTrace.tensor_sources(refiner.not_nil!.checkpoints,
       valid_text_tokens)
@@ -249,7 +273,27 @@ begin
       prelude_silu_bf16_control: prelude_silu_bf16_control,
       prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
       prelude_add_bf16_control: prelude_add_bf16_control)
+    prelude_trace_manifest_sha256 = trace_result["manifest_sha256"].as_s
     puts trace_result.to_json
+  end
+  if blocks_paths = refiner_blocks_trace_paths
+    blocks_trace_result = HyNomasReferenceRefinerBlocksTrace.write_trace!(blocks_paths[0],
+      reference_latent_artifact_sha256: reference_input.sha256,
+      timeline_manifest_sha256: timeline_inputs.file.sha256,
+      cache_fixture_manifest_sha256: result["manifest_sha256"].as_s,
+      prelude_trace_manifest_sha256: prelude_trace_manifest_sha256 || raise("missing linked refiner prelude trace result"),
+      valid_text_tokens: valid_text_tokens,
+      sources: HyNomasReferenceRefinerBlocksTrace.tensor_sources(refiner.not_nil!.checkpoints),
+      encode_allocations: encode_allocations,
+      encode_readbacks: encode_readbacks,
+      preterminal_waits: preterminal_waits,
+      terminal_waits: chain.not_nil!.wait_count,
+      prelude_input_bf16_control: prelude_input_bf16_control,
+      prelude_linear_bf16_control: prelude_linear_bf16_control,
+      prelude_silu_bf16_control: prelude_silu_bf16_control,
+      prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
+      prelude_add_bf16_control: prelude_add_bf16_control)
+    puts blocks_trace_result.to_json
   end
   puts plan_report
   puts result.to_json

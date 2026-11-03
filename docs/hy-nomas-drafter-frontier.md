@@ -1,5 +1,88 @@
 # Hy-Nomas local draft suite
 
+## Two-block refiner trace on corrected BF16 prelude inputs (2026-11-03)
+
+Status: the observational native/source trace and GPU comparison are qualified
+for one authenticated finite T0 V263 capture. The full refiner numerical gate
+fails at the unchanged `atol=rtol=2e-5`. This change adds diagnostics only; it
+does not change neural arithmetic, qualify motion, or claim a speedup.
+The oracle is pinned PyTorch 2.8 with the MPS attention adaptation, not stock
+CUDA/Magi execution.
+
+The opt-in `--refiner-block-trace-output PATH` requires execution, the linked
+prelude trace and all five prelude BF16 controls listed below. The CLI rejects
+missing controls and existing/colliding output paths before creating the
+native arena; trace/comparator admission rejects invalid capture metadata.
+The trace exports 37 named F32 views of existing
+checkpoints over both blocks, including all 1,280 stored rows (263 valid and
+1,017 padding). `block1.input` aliases `block0.output`; the payload stores 36
+unique ranges, 450,977,792 bytes. Optional native reads follow the existing
+terminal drain. No in-chain dispatch, buffer, readback or wait was added.
+Native encode counters remain zero allocations/readbacks/preterminal waits
+and one terminal wait; these counters exclude opaque MPS internal activity.
+
+The complete `block0.input` (2,621,440 values) and `c` (2,048 values) are
+byte-identical to source. In canonical dependency order, the first **failed**
+raw checkpoint is `block0.adaLN`. This is not the first nonzero difference:
+the preceding condition SiLU differs but passes the mixed tolerance. The
+original prediction that condition SiLU would fail first was refuted.
+
+| Checkpoint, full extent | Raw failures / values | Raw maximum absolute error | Failures after diagnostic BF16 rounding |
+| --- | ---: | ---: | ---: |
+| `block0.condition_silu` | 0 / 2,048 | 2.6703347e-6 | 0 |
+| `block0.adaLN` | 1,752 / 4,096 | 1.2011826e-4 | 3 |
+| `block0.norm1` | 2,488,674 / 2,621,440 | 0.015273571 | 0 |
+| `block0.output` | 2,583,092 / 2,621,440 | 0.61708069 | 180,393 |
+| `block1.output` | 2,597,826 / 2,621,440 | 1.2043610 | 674,570 |
+
+`norm1` is a separate branch from the identical block input; its diagnostic
+rounded view is exact on this capture. Neither rounded view repairs a
+connected operation. In particular, adaLN's three remaining failures rule
+out promoting output-only rounding as sufficient. Later block1 differences
+may propagate from block0 and do not isolate a block1 defect. The first
+failed valid/padding rows are `block0.norm1`, since adaLN is vector-valued.
+All 37 source BF16 representation checks pass at zero tolerance. GPU A/A
+and deliberate-perturbation controls pass. Each comparison exports one packed
+terminal metrics buffer; neural metrics are computed on MPS.
+
+The source observer captures the actual two block calls, two attention calls
+and four gate calls without replaying a neural operation. It attaches after
+the loader's final attention-adapter bind, transparently delegates the earlier
+preflight bind and restores wrapped functions on exit. Two rejected collectors
+are retained: the first lost its attention observer to rebinding; the second
+attached too early to preflight. Lifecycle/BOOL metadata regressions were
+rejected by focused tests before the final capture. The repeated source
+prelude and block payloads are byte-identical to the successful earlier run.
+The old prelude payload is also unchanged from the previous qualified step.
+
+Checks: fresh native/bridge build, 25 Crystal examples, 39 focused Python
+tests and eight compiled CLI rejection cases pass. Canonical source capture
+and comparator verify 67 source-file hashes before and after execution;
+16 embedded native source pins and retained executable/object hashes bind
+the native capture. Code snapshots, commands, logs and payload hashes are
+indexed in the evidence packet. The file-cache-aware 10% floor, 6 GiB process
+cap and 64 MiB swap-growth stop remain unchanged. Across seven canonical
+stages, peak sampled group footprint was 4,047,440,680 bytes, minimum sampled
+headroom 25,901,449,216 bytes, and observed stage swap growth zero; all final
+samples had no live children. Guard sampling cannot bound between-poll spikes
+or all opaque Metal allocations. The same-lineage
+mini-Quadrumvirate verdict is ROBUST for this diagnostic result; it is
+correlated review, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-blocks.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818`.
+Canonical captures are `native-*` and `source-qualified*`; comparison is
+`compare-qualified.json`, identity index `qualified-artifacts.json`, and
+guard index `guard-summary.json`. Earlier failed stages remain historical.
+
+Next discriminator: replay adaLN with the exact source BF16-rounded condition
+SiLU operand and identical weights/bias, separating operand precision from
+projection reduction and the bias/output boundary. Then qualify a connected
+`norm1` BF16 boundary. Do not infer DiT K/V, T1 or motion correctness from this
+trace. Roll back by omitting the new trace flag. Refresh after source,
+executable/runtime, weights, input/noise, caption/mask, layout or precision
+changes; missing or mutated bound artifacts revoke this result.
+
 ## Connected second-linear and conditioning-add BF16 boundaries (2026-11-03)
 
 Status: all 16 captured native prelude tensors are byte-identical to the

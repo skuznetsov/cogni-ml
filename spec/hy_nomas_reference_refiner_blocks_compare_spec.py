@@ -1,0 +1,125 @@
+"""CPU admission checks for the GPU-only two-block refiner comparator."""
+from __future__ import annotations
+
+import copy
+import hashlib
+import math
+from pathlib import Path
+import sys
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
+import hy_nomas_reference_refiner_blocks_compare as compare
+
+
+def document():
+    records = {}
+    offset = 0
+    for name in compare.TENSOR_ORDER:
+        if name == "block1.input":
+            records[name] = {**records["block0.output"], "alias_of": "block0.output"}
+            continue
+        size = 4 * math.prod(compare.shapes()[name])
+        records[name] = dict(dtype="F32", shape=list(compare.shapes()[name]),
+                             offset=offset, nbytes=size, sha256="1" * 64)
+        offset += size
+    return dict(tensor_order=list(compare.TENSOR_ORDER), tensors=records), offset
+
+
+class BlocksCompareTests(unittest.TestCase):
+    def test_full_padding_and_explicit_interblock_alias(self):
+        doc, extent = document()
+        self.assertEqual(len(compare.TENSOR_ORDER), 37)
+        self.assertEqual(compare.shapes()["block0.input"], (1, 1280, 2048))
+        self.assertEqual(compare.shapes()["block0.qkv"], (1, 1280, 3, 2048))
+        self.assertEqual(compare._validate_layout(doc), extent)
+        for key, value in (("offset", 1), ("sha256", "2" * 64), ("alias_of", "block1.output")):
+            bad = copy.deepcopy(doc)
+            bad["tensors"]["block1.input"][key] = value
+            with self.subTest(key=key), self.assertRaises(compare.Error):
+                compare._validate_layout(bad)
+
+    def test_extent_shape_dtype_order_and_extra_alias_fail_closed(self):
+        doc, _ = document()
+        for key, value in (("offset", True), ("nbytes", 0), ("dtype", "BF16"),
+                           ("shape", [1, 263, 2048]), ("alias_of", "c")):
+            bad = copy.deepcopy(doc)
+            bad["tensors"]["block0.norm1"][key] = value
+            with self.subTest(key=key), self.assertRaises(compare.Error):
+                compare._validate_layout(bad)
+        doc["tensor_order"].reverse()
+        with self.assertRaisesRegex(compare.Error, "inventory"):
+            compare._validate_layout(doc)
+
+    def test_first_divergence_uses_raw_execution_order_and_region(self):
+        rows = [dict(kind="raw", region="full", tensor=name, passed=True)
+                for name in compare.TENSOR_ORDER]
+        rows.extend([dict(kind="native_bf16_rounding_view", region="full",
+                          tensor="c", passed=False)])
+        self.assertIsNone(compare.first_divergence(rows, "full"))
+        for name in ("block1.output", "block0.norm1", "block0.condition_silu"):
+            next(row for row in rows if row["kind"] == "raw" and row["tensor"] == name)["passed"] = False
+        self.assertEqual(compare.first_divergence(rows, "full"), "block0.condition_silu")
+        self.assertIsNone(compare.first_divergence(rows, "padding"))
+
+    def test_operand_links_require_full_input_and_condition_identity(self):
+        native, _ = document()
+        source = copy.deepcopy(native)
+        compare._validate_exact_inputs(native, source)
+        for name in ("block0.input", "c"):
+            bad = copy.deepcopy(source)
+            bad["tensors"][name]["sha256"] = hashlib.sha256(name.encode()).hexdigest()
+            with self.subTest(name=name), self.assertRaisesRegex(compare.Error, "byte-identical"):
+                compare._validate_exact_inputs(native, bad)
+
+    def test_strict_execution_flags_cannot_be_integer_attestations(self):
+        expected = dict(encode_allocations=0, encode_readbacks=0,
+                        preterminal_waits=0, terminal_waits=1)
+        compare._require_fields(expected, expected, "test")
+        with self.assertRaises(compare.Error):
+            compare._require_fields(dict(expected, encode_allocations=False), expected, "test")
+
+    def test_prefix_links_bind_final_output_and_reject_missing_checkpoint(self):
+        payload = b"\x00" * 8192
+        doc = {"tensors": {"block1.output": {"offset": 0}}}
+        linked = {"tensors": {"block.txt_valid_f32": {"sha256": hashlib.sha256(payload).hexdigest()}}}
+        links = (("block1.output", "block.txt_valid_f32"),)
+        compare._validate_prefix_links(doc, payload, linked, 1, links)
+        with self.assertRaisesRegex(compare.Error, "detached"):
+            compare._validate_prefix_links(doc, b"\x01"+payload[1:], linked, 1, links)
+        with self.assertRaisesRegex(compare.Error, "missing"):
+            compare._validate_prefix_links(doc, payload, {"tensors": {}}, 1, links)
+
+    def test_source_contract_rejects_dtype_shape_count_and_identity_drift(self):
+        doc, _ = document()
+        identity = dict(upstream_revision="a"*40, upstream_source_sha256={"token_refiner.py": "b"*64},
+                        conditioning_manifest_sha256="c"*64)
+        doc.update(device="mps", producer_dtype="BF16", full_text_refiner_encode_executed=True,
+                   full_upstream_t0_preprocessing_parity=False, capture_boundary="after_block1_output",
+                   blocks_executed=2, source=identity, aliases={"block1.input": "block0.output"},
+                   unique_payload_tensor_order=[name for name in compare.TENSOR_ORDER if name != "block1.input"])
+        doc["execution"] = dict(mode="source-bf16", device="mps", valid_text_tokens=263,
+            processed_text_rows=1280, padded_text_rows=1017, refiner_block_forward_calls=2,
+            refiner_attention_calls=2, observed_attention_calls=2, observed_gate_calls=4,
+            dit_block_forward_calls=0, loaded_dit_blocks=0,
+            cache_kv_written=False, terminal_cpu_exports=1, unique_payload_tensor_count=36,
+            source_dtype_by_tensor=dict.fromkeys(compare.TENSOR_ORDER, "BF16"),
+            export_dtype_by_tensor=dict.fromkeys(compare.TENSOR_ORDER, "F32"))
+        for name, record in doc["tensors"].items():
+            record.update(source_dtype="BF16", source_shape=([1,1280,16,128] if name.endswith((".q", ".k", ".v"))
+                          else list(compare.shapes()[name])), source_checkpoint={"block0.input": "input_embed",
+                          "block1.input": "block0.output"}.get(name, name))
+        linked = {"source": copy.deepcopy(identity)}
+        compare._validate_source_contract(doc, linked, 263)
+        for target, key, value in (("execution", "terminal_cpu_exports", True),
+                                   ("source", "conditioning_manifest_sha256", "d"*64),
+                                   ("block0.q", "source_shape", [1,1280,2048]),
+                                   ("block0.q", "source_dtype", "F32")):
+            bad = copy.deepcopy(doc)
+            (bad[target] if target in ("source", "execution") else bad["tensors"][target])[key] = value
+            with self.subTest(target=target, key=key), self.assertRaises(compare.Error):
+                compare._validate_source_contract(bad, linked, 263)
+
+
+if __name__ == "__main__":
+    unittest.main()

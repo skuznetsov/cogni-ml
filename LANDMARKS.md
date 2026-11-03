@@ -37832,3 +37832,54 @@ Refresh after source/toolchain/device/model/workload changes.
   opt-in; omit new flags for previous behavior. Refresh on source, binary/
   runtime, weights, reference/noise, caption/mask, layout or precision changes;
   missing or mutated bound evidence revokes the result.
+
+### Hy-Nomas two-block refiner trace and first failed BF16 checkpoint (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Two-block refiner trace on
+  corrected BF16 prelude inputs; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-blocks.json`.
+  Same finite T0: 4,320 video rows / V263 / stored 1,280. Oracle remains
+  pinned PyTorch 2.8 with MPS attention adaptation, not stock CUDA/Magi.
+- Opt-in native trace records 37 names / 36 unique ranges over two existing
+  blocks (450,977,792 bytes); block1 input aliases block0 output. Requires
+  execution, linked prelude and all five BF16 prelude controls. No arithmetic
+  change or extra in-chain buffer/dispatch/readback/wait; optional native
+  reads follow the terminal drain. Encode counters remain [0,0,0,1].
+- Full block0 input and c are byte-identical to source. First failed raw
+  checkpoint in canonical dependency order: `block0.adaLN`, 1,752 / 4,096,
+  max 0.00012011826 at unchanged atol=rtol=2e-5. Refuted original prediction:
+  condition SiLU has nonzero error 2.67033e-6 but passes. Its rounded view is
+  exact; adaLN's rounded view still fails three values (max 0.0001220703125).
+  Output-only rounding is therefore not sufficient evidence for an adaLN fix.
+- Independent same-input `block0.norm1` raw branch fails 2,488,674 values,
+  max .015273571; diagnostic BF16 rounding is exact. This is not a connected
+  correction. Block0 output max .61708069; block1 max 1.2043610 / RMS
+  .03397997 may include propagated errors and do not isolate block1.
+  Valid/padding first failures are norm1; adaLN is vector-valued.
+- Source observer records actual attention2/gate4 calls without replay and
+  exports old prelude plus block tensors in one terminal CPU transfer.
+  Rebinding/preflight hook failures were rejected and corrected; BOOL metadata
+  and lifecycle regressions have focused tests. Both qualified source payloads
+  repeat the successful prior capture exactly; old qualified prelude bytes
+  are preserved. Full source BF16 representation37 and GPU sensitivity pass.
+- Fresh build, 25 Crystal examples, 39 Python tests and eight CLI rejection
+  checks pass. Canonical source/comparator verify 67 file pins before/after;
+  native capture embeds 16 matching source pins. Snapshot, executable/objects,
+  commands, artifact links and all retained failures are indexed externally.
+- Seven canonical stages preserve file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop: peak sampled group 4,047,440,680 bytes, minimum headroom
+  25,901,449,216 bytes, zero observed swap growth, no final live children.
+  Samples/counters do not bound spikes or opaque Metal/MPS resources.
+- Same-lineage mini-Quad: ROBUST for the bounded diagnostic and first-failed
+  checkpoint, correlated rather than independent replication. Full refiner
+  numerical gate remains false; no generation, motion fix, K/V/T1, attention
+  internals or speedup qualification. Canonical external records live under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818`:
+  `native-*`, `source-qualified*`, `compare-qualified.json`,
+  `qualified-artifacts.json` and `guard-summary.json`.
+- Next: replay adaLN with exact source-rounded condition SiLU and identical
+  weights/bias; separate operand precision from projection reduction and
+  bias/output boundaries. Then qualify connected norm1 rounding. Omit the
+  trace flag to roll back. Refresh after source, binary/runtime, weights,
+  reference/noise, caption/mask, layout or precision changes; missing/mutated
+  bound evidence revokes this result.
