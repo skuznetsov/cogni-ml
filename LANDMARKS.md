@@ -6,6 +6,56 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-STATIC-DIAGNOSIS-2026-11-02] Full reference decoder display is exact; stronger action restores a visible turn
+
+- The previous mask comparison also changed action wording. A matched
+  mask-off ablation leaves the new slow/head-only action effectively static;
+  old T1 wording at D576 with the new T0 caption preserves a small Resume
+  gesture. Eight versus four source steps does not restore a head turn.
+  These controls do not isolate action wording from D320/D576 or establish
+  an inherent model limitation.
+- An exact 60-latent / 240-frame / 11-window / 36-block PixelUMM control
+  completes 468 source/cache BF16 word checks. Its original raw `[-1,1]`
+  versus native display `[0,1]` mismatch is invalidated, with original bytes
+  retained. The corrected repository GPU helper authenticates saved source
+  raw, applies pinned BF16 multiply/add/clamp and reproduces all 106,168,320
+  native display values byte-exact (max/mean zero; SHA `41c96e58...1092c`).
+  Final admission/representation suites pass 57 CPU tests; final plan-only
+  admission passes. The full source body precedes the correction; no fresh
+  full-model execution of the corrected wrapper is claimed. Native raw,
+  full DiT and stock CUDA/Magi parity remain unqualified.
+- A matched source BF16 mask-off control changes only the T1 wording bundle
+  to an explicit head/shoulders turn away from the laptop toward the camera.
+  T0 is axis-2 byte-exact; D320, four steps, weights, noise and decoder stay
+  fixed. Ordered generated-T1 frames show a visible turn followed by a return
+  to the laptop; the requested hold is absent and Resume remains still.
+  Correlated Adversary: ROBUST for this scoped pairing and visual observation.
+  No deterministic production prompt builder inserts the former body locks;
+  they were authored in the test prompt.
+- The stronger masked native take also visibly turns Alex toward the camera
+  and returns toward the laptop; Resume is still and the requested hold is
+  absent. T1-only clip excludes technical T0. Correlated Adversary: ROBUST for
+  this visual observation. The masked source BF16 take through the common
+  native decoder also visibly turns then returns (scoped visual ROBUST).
+  T0 is exact against masked source BF16, but T1
+  fails unchanged `atol=rtol=2e-5`: max 3.20703125, RMS 0.1434121877,
+  126,770/138,240 mismatches, all finite. Native intermediates/K/V remain F32.
+  Native request 658.21 s, sampled peak 25.367 GiB, minimum cache-aware
+  headroom 16.222 GiB, zero swap growth; instrumented encode allocations,
+  readbacks and preterminal waits stay zero in all three GPU chains.
+- Source audit: default app retains all 30 T0 latent frames, uses fixed-image
+  writer sigma/timestep `0.206897`/`206.897` and CFG 1. Explicit low-memory
+  mode samples 18 prior frames; a historical live selection is not proved.
+  a31 app semantics match adapted 911 settings, not identical callgraphs.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence index:
+  `.landmark/evidence/2026-11-02-hy-nomas-static-diagnosis.json`; local run:
+  `/opt/mldata_ssd/cogni-ml/rolewright-static-diagnosis-20261102.grp_w5zj`.
+  Next: localize the first native/source BF16 boundary difference; retain the
+  unchanged `atol=rtol=2e-5` gate, 10% cache-aware floor, 25.5 GiB cap and
+  64 MiB swap-growth stop. Complete advertisement and full native DiT BF16
+  equivalence remain open. Refresh on source/binary/input/noise/weight/
+  geometry/precision/backend/compiler/runtime/device change or artifact loss.
+
 ### [LM-HY-NOMAS-ACTION-MASKS-2026-11-02] Structured reference mask matches source; Alex head turn remains absent
 
 - Opt-in caption T0 / single Subject1 Alex Action1 T1 now authenticates pinned

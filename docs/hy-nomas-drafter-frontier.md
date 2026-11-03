@@ -1,5 +1,139 @@
 # Hy-Nomas local draft suite
 
+## Static reference regression diagnosis (2026-11-02)
+
+Status: the original structured RoleWright take is effectively static. A
+stronger action now produces a visible head turn in masked and unmasked
+source BF16 controls and a masked native take; a reliable hold and complete acting
+remain unfulfilled. The prior comparison changed
+both the mask and the action text: the old whole-scene instruction requested
+a Resume hand-to-chest gesture, whereas the new Alex-only action removed that
+gesture and held his torso, shoulders and hands fixed. It cannot attribute the
+lost gesture to the mask alone.
+
+Three bounded source BF16 MPS controls retain the reference latent, weights,
+initial noise and decoder noise/weights. With the new caption/action, removing
+the mask does not restore a substantial head turn. With the old whole-scene
+T1 action and its original D576 padding, swapping only T0 to the new caption
+retains a small late Resume gesture; Alex remains fixed. This rejects the new
+reference caption as the sole cause of losing the old gesture. It does not
+isolate T1 wording from the D320/D576 geometry difference. Finally, increasing
+the masked source run from
+four to the app's eight image-reference denoising steps still produces no
+appreciable head turn in 25 ordered generated-T1 frames. T0 remains byte-exact;
+T1 changes, so identical output buffers are not the explanation. Nonzero
+latent or pixel differences do not establish acting.
+
+An additional matched, unmasked source BF16 control changes only the T1
+wording bundle: Alex turns his head and shoulders away from the laptop and
+Resume toward the camera, raises his chin to a frontal pose, and is asked to
+hold. D320, four steps, T0, weights, both noise sources, schedule, cache writer
+and decoder remain fixed. T1 valid text changes from 152 to 150 rows. The
+ordered 25-frame sheet shows a clear head/upper-body turn, followed by a return
+to the laptop; Resume remains still. The turn is observed, but the requested
+hold is not. This rejects a blanket inability to animate this reference in the
+adapted source path. It does not isolate the effect of direction, amplitude
+or released body constraints from one another, or qualify native DiT parity.
+The inherited unmasked receipt's `diagnostic.change` string is
+stale for this new wording control; a separately authenticated pairing note
+corrects it without rewriting the original result.
+
+The same stronger instruction also produces a visible turn in the masked
+source BF16 and native T1: Alex turns toward the camera and returns toward
+the laptop near the end; Resume remains still and the requested hold is absent. The clip
+contains only generated T1 frames `[120,240)`, excluding the technical T0.
+The native chain records zero instrumented encode allocations, readbacks and
+preterminal waits in each phase, with the existing one terminal drain per
+encoder/DiT/decoder chain. The matched masked source latent comparison keeps
+`atol=rtol=2e-5`: T0 is byte-exact, but T1 fails with maximum error
+`3.20703125`, RMS `0.1434121877` and 126,770/138,240 mismatches. All values are
+finite. Native K/V/intermediate precision remains F32 versus source BF16;
+this result is not full DiT parity. The end-to-end native request takes
+658.21 s (reference encoder 377.29 s, DiT 43.25 s, decoder 175.14 s, excluding
+their setup times), with sampled peak footprint 25.367 GiB, minimum
+cache-aware headroom 16.222 GiB and zero swap growth. These are diagnostic
+timings, not a matched performance benchmark or a speedup claim.
+
+The diagnostic action text is
+`<Action1><|Subject1|> turns his head and shoulders clearly away from the laptop and the living Resume toward the camera, lifting his chin until his face is frontal; then holds the new pose</Action1>.`
+It remains one bounded Action1/Subject1 control, not the requested complete
+advertisement or a reliably timed multi-character script. The paired T1-only
+comparison is `strong-masked-native-left-source-right-5s.mp4` in the local run
+directory: native left, source BF16 DiT with the common native decoder right.
+
+The first pretty-printed JSON attempt is rejected before model construction:
+upstream computes action offsets with default one-line `json.dumps`, which
+does not match an indented prompt. Re-serializing the same intended action in
+the baseline's default format yields nonempty source offsets `[57,258]`,
+effective `[57,150]`, and unchanged temporal windows. The rejected attempt is
+retained; no admission gate or tolerance is relaxed. A read-only audit finds
+no production builder that injects the fixed-body wording: it was authored
+in the test prompt. The bounded head-turn profile validator still applies.
+
+A pinned source audit also finds no default reference-history mismatch:
+`prev_seg_last_frame_only=false`, sliding-window attention disabled, all 4,320
+T0 video rows plus valid caption rows retained. The explicit low-memory
+preset instead samples 18/30 past frames; selection of that preset in a live
+historical request is not established. The a31 app's fixed-image branch
+skips T0 denoising and uses writer sigma `0.206897`, timestep `206.897`, 120
+repeated RGB frames / 30 latents and default CFG 1, matching the adapted
+control's settings. The older 911 model checkout predates this app branch;
+matching these settings is not proof of identical end-to-end callgraphs.
+
+These controls use a common native PixelUMM. A dedicated same-latent oracle
+now admits exactly the full 60-latent bank, global decoder-noise time prefix
+`[0,240)`, all 11 overlapping windows and all 36 decoder blocks. Its valid
+comparison is display-range planar pixels before MP4 export at unchanged
+`atol=rtol=2e-5`, with BF16 source weight-word checks and one explicit terminal
+MPS drain. The previous
+30-latent decoder certificate does not qualify this input. The decoder oracle
+is pinned to Torch 2.6.0; the DiT controls use Torch 2.8.0. An attempted launch
+in the latter environment was rejected before model construction and retained;
+the version gate is not relaxed. CPU admission/boundary checks initially pass
+41/41 in the pinned 2.6.0 environment. After the representation correction,
+the final five related CPU suites pass 57/57. The corrected oracle uses schema
+`cogni_ml.hy_nomas_decoder_continuation_control/v2`; the retained invalid
+raw-comparison scratch result remains v1 and is explicitly invalidated.
+
+The first full-source decoder run completes all 468 source/cache weight-word
+checks but its pixel comparison is invalid: it compares upstream pre-display
+`[-1,1]` output against the native CLI's already finalized `[0,1]` file. The
+receipt's F32 dtype alone does not identify this range. The original script,
+result and explicit invalidation note are retained. This mismatch is not
+evidence of a model or decoder defect, and the native pre-display raw output
+cannot be reconstructed from the rounded/clamped display file.
+
+A separate bounded GPU recovery authenticates the saved source raw pixels and
+native receipt, checks that the F32 raw file is an exact BF16 expansion,
+applies the pinned BF16 multiply/add/clamp, and compares the resulting display
+pixels at the original tolerance. All 106,168,320 values match byte-for-byte:
+maximum and mean error zero; both display-file SHA-256 digests are
+`41c96e5806f244d042cd0ebba0ace6ca230c1352e7d980281fc0607c2631092c`.
+Thus there is no native decoder-specific pixel difference for this source
+output. The corrected repository comparison helper also reproduces the exact
+display match on the complete saved tensor, and its final plan-only admission
+passes with the pinned executable and postprocess identities. This qualifies
+the same-input display boundary, not native raw parity,
+DiT parity, stock CUDA/Magi parity, or the requested acting. A duplicate MP4
+export would encode identical pixels and provides no new motion evidence.
+
+The source run takes 384.67 s with sampled peak footprint 6.453 GiB and minimum
+cache-aware headroom 18.294 GiB. The recovery takes 3.17 s, peak 3.014 GiB,
+minimum headroom 40.725 GiB. Both have zero swap growth and remain above the
+10% floor; the recovered comparison has one explicit terminal MPS drain and
+does not rerun DiT or any decoder block. Sampling does not bound between-poll
+peaks or opaque MPS resources. A first recovery helper lacked one geometry
+field and exited before its terminal comparison; its fresh corrected stage
+is retained separately.
+
+Local evidence and immutable stage commands:
+`/opt/mldata_ssd/cogni-ml/rolewright-static-diagnosis-20261102.grp_w5zj`.
+No production inference path, synchronization contract or tolerance is changed
+by these diagnostics. Full native DiT BF16 parity, reliable action timing and
+multi-character acting remain open. The common decoder is excluded as a
+native-only explanation for this case. Do not attribute the result to an inherent model limitation while the
+source attention adaptation and effective app checkpoint remain unqualified.
+
 ## Structured reference actions (2026-11-02)
 
 Status: the opt-in native structured-action mask is implemented and passes the
