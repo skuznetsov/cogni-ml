@@ -2,6 +2,22 @@ require "spec"
 require "../src/ml/video/hy_nomas_text_refiner"
 
 describe ML::Video::HyNomasTextRefinerMPSPlan do
+  it "keeps the BF16 input prelude control opt-in and confined to mean and timestep kernels" do
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_INPUT_BF16_CONTROL.should be_false
+
+    source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
+    source.includes?("constant uint &prelude_input_bf16_control [[buffer(4)]]").should be_true
+    source.includes?("constant uint &prelude_input_bf16_control [[buffer(3)]]").should be_true
+    source.includes?("sum = hy_text_roundtrip_bf16(sum);").should be_true
+    source.includes?("float denominator = hy_text_roundtrip_bf16((float)valid_rows);").should be_true
+    source.includes?("mean[channel] = hy_text_roundtrip_bf16(sum / denominator);").should be_true
+    source.includes?("mean[channel] = sum / (float)valid_rows;").should be_true
+    source.includes?("hy_text_roundtrip_bf16(precise::cos(phase))").should be_true
+    source.includes?("hy_text_roundtrip_bf16(precise::sin(phase))").should be_true
+    source.includes?("embedding[index] = precise::cos(phase);").should be_true
+    source.includes?("embedding[index + half_dim] = precise::sin(phase);").should be_true
+  end
+
   it "binds the exact 42-tensor F32 upstream subset without renaming source keys" do
     bindings = ML::Video::HyNomasTextRefinerMPSPlan.checkpoint_bindings
     bindings.size.should eq(42)

@@ -1,0 +1,388 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_input_precision_evidence/v1",
+  "date": "2026-11-02",
+  "parent_revision": "e23d414ee879d6d7a34313148bea3298774de670",
+  "status": "IN_PROGRESS: complete BF16 refiner and static-motion diagnosis remain open",
+  "verified_scope": "On the authenticated current T0 input, the opt-in native mean and two consumed sinusoidal inputs are byte-identical to the adapted pinned source BF16 trace. The default nine preblock and sixteen refiner tensor hashes remain unchanged.",
+  "reason": "Localize missing BF16 prelude boundaries before interpreting DiT/cache and static-acting differences.",
+  "risk": "CAUTION: opt-in representation boundary and diagnostic capture; default-false, no production caller enabled",
+  "rollback": "Omit --refiner-input-bf16-control or keep the constructor default. Remove optional trace helpers to remove diagnostics.",
+  "strongest_failure_mode": "Promoting diagnostic post-rounding or one-input equality to connected refiner/KV/motion parity.",
+  "guard_against_failure": "Report raw comparisons separately, leave the complete BF16 raw gate false, retain exact input/source identities, and keep the control opt-in.",
+  "source_files": {
+    "examples/hy_nomas_reference_cache_probe.cr": "e879240fc3a39a631537ac8181cb1222b92efbc8ad6f138392bc76c56e8a090b",
+    "examples/support/hy_nomas_reference_refiner_trace.cr": "9a8bbaaa9f26fb98f64927cd9adce5a6ceac740bd8885392787a2928f9742fb0",
+    "src/ml/video/hy_nomas_text_refiner.cr": "ea1352cd785ab211a0310f5f1fb8d4d12a01a4373e686534fb13bc0ca4558371",
+    "src/ml/video/kernels/hy_nomas_text_refiner.metal": "228e646a93358e78b43812fc80aa849e821a9260206edca35751aa832c3f139a",
+    "spec/hy_nomas_text_refiner_spec.cr": "a032f1e214486e31dbbfd645b77fc0afa77a855bd1efa8aa8c05b0c749450f26",
+    "spec/hy_nomas_reference_refiner_trace_spec.cr": "b09b98266dec26720ebc8c50e766f5009ebd00a82940a95996c568a3c966be1b",
+    "spec/support/hy_nomas_reference_refiner_trace.py": "2c292461159e6669dbd1cc38dca0afceef808b00c506e2bdf676affab38cdd90",
+    "spec/hy_nomas_reference_refiner_trace_spec.py": "76866ae7c2dea6373d6d20c44b7744ab68b85b5dbf438f0200cb1cb09fd11a45",
+    "spec/support/hy_nomas_reference_refiner_compare.py": "ddedee3f2f75fe21e83a1fd1a375a86fc60051c324df6e8f1f8aac646d2b1049",
+    "spec/hy_nomas_reference_refiner_compare_spec.py": "7a397a414019ba6829c7e96ebe454c4342ba7d754d71b0d4aff8ce559336f9ab"
+  },
+  "compiled_native_source_files": {
+    "examples/hy_nomas_reference_cache_probe.cr": "e879240fc3a39a631537ac8181cb1222b92efbc8ad6f138392bc76c56e8a090b",
+    "examples/support/hy_nomas_reference_cache_probe.cr": "a4eee8b561efeec66f746d7e5239495d115b482f06473c0ff1925e3359c979e7",
+    "examples/support/hy_nomas_reference_refiner_trace.cr": "9a8bbaaa9f26fb98f64927cd9adce5a6ceac740bd8885392787a2928f9742fb0",
+    "src/ml/video/hy_nomas_text_refiner.cr": "ea1352cd785ab211a0310f5f1fb8d4d12a01a4373e686534fb13bc0ca4558371",
+    "src/ml/video/kernels/hy_nomas_text_refiner.metal": "228e646a93358e78b43812fc80aa849e821a9260206edca35751aa832c3f139a",
+    "src/ml/video/metal_ops.cr": "b31c1bfa9eb9028389e69b546377f26cf7980e726a488ce5fc061e0bbc79098a",
+    "src/ml/video/metal_linear_mps.cr": "af98b74257267345e93a767fb8646f66b66a9b74d7fb6b8e018bb1c5fefd8d4d",
+    "src/ml/video/hy_nomas_mps_activation.cr": "0dc9944f778934f355fad65728e7e05dcb9ad95262d076e38b3d2070b06ccbab"
+  },
+  "upstream": {
+    "model_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "prompt_app_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "model_source_sha256": {
+      "hymm/models/dit/nomas_cpt.py": "acf827bb7feb84c9046618737146544843a3f50c3500a3b16925dadeb6c5bdee",
+      "hymm/models/dit/modules/activation_layers.py": "1e509b5e5f9527d199d6f0206f452e56fdb1bd25ce3ccc06fb47f3a16060ca39",
+      "hymm/models/dit/modules/norm_layers.py": "2bcd5b29c951051ee1afaeac08258a3ef1dea3205b821f236594719331127044",
+      "hymm/models/dit/modules/modulate_layers.py": "abfb87acc9a972b40d0f36cfa832f0816d978fc13f93236aa1dfc902aac5caee",
+      "hymm/models/dit/modules/mlp_layers.py": "b77d862d17cd2c7db6237931b80f33b6447b7ba4db5918d3fbdfd17a6fb47e07",
+      "hymm/models/dit/modules/posemb_layers.py": "27b729d04185dfd7d65ecf9ba0d761d4864153d3e656908997d60a6971afc1aa",
+      "hymm/models/dit/modules/attention/__init__.py": "2a59284ac06057ac622228d280a32fc9e907a333e8ef0efcd526928626858450",
+      "hymm/models/dit/modules/attention/magi_attn.py": "3cdd9234db6ddd006a04af53b878a6876242ed4fa352bbcfe43038519492eb47",
+      "hymm/utils/helpers.py": "51b7a08377843b5eecc59e6fd41f10317d2de096d30fc3154491aacd27fefdfb",
+      "hymm/models/text_encoder/token_refiner.py": "7c67d81b81d9b183c3261eb4bf87bb04e0bda3142ce096afc2e64aa722433eab",
+      "hymm/models/dit/modules/embed_layers.py": "5b055e383bbf532ea5aa49ee506031d96bea3e3d5b8da3a104d4bd875c2d0af3",
+      "hymm/models/dit/modules/int8_stored_bf16_linear.py": "2bfd28f483c0da76df5ece7b23d0d3f62ef38725317b13e55d41ce997812122a",
+      "hymm/models/vae/pixelumm_decoder/model.py": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+      "hymm/models/vae/pixelumm_decoder/autoencoder.py": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+      "hymm/pipeline/causal_ar.py": "f9aae49b14becb87d958665f763e510c28eeaaad9292f00ac511d1146202949f",
+      "configs/experiment/inference.yaml": "d4db57b63597f98d4bddddd98355198e4e8c25da366d2e27bc7e74a79d26ec67",
+      "hymm/models/dit/modules/kv_cache_storage.py": "53fdb67aaa967b9195f17c1d829feb12cd1e17dfa21a4e5bc0a8492790f8f0c3",
+      "hymm/pipeline/solvers/euler.py": "e7996f947b46835f97b66059e0f43019b744ecec5cda380432124f70e169e59a"
+    },
+    "oracle": "Pinned source modules with adapted MPS attention; not stock CUDA/Magi execution",
+    "torch_version": "2.8.0"
+  },
+  "input_identity": {
+    "reference_latent_artifact_sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+    "reference_latent_tensor_sha256": "ef627350d3d605825b1884c49a4de5a89dc7ac027ecda64f74a6db5bc909d8e9",
+    "timeline_manifest_sha256": "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43",
+    "consumed_qwen_tensor_sha256": "485f976e9e11c602422a95c2b8bd628581ccb3ad9703a515d7e35ae1ae4501b5",
+    "source_identities": {
+      "structured_control_schema": "cogni_ml.hy_nomas_structured_reference_control/v1",
+      "conditioning_manifest_sha256": "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43",
+      "conditioning_payload_sha256": "7a6e74206a45b3b0cf51c7975a5baab9a1cdd81159b8601bfd15907e5a3f3376",
+      "t0_qwen_manifest_sha256": "88c3bf46153439a65665204fa41a4d12561fdb1c77b187c161f46c1904d216b0",
+      "t0_qwen_payload_sha256": "c342170bc7839f94ab3b5f788219bf63996a25c11b11dd85c6cb18491119a59a",
+      "t0_qwen_tensor_sha256": "3c772d15d79e8f86dc6031ae22fae519ed18e6eb8a4889f35c8a676bb33aeb01",
+      "t1_qwen_manifest_sha256": "ad365212bbc79c57ed091239174feb3e6c245f00ab8e6dfa33b3d95e83581069",
+      "t1_qwen_payload_sha256": "9805aac28ee428768d76013ac1e23d49e3423c91d78ce726473b6ad34b780d12",
+      "t1_qwen_tensor_sha256": "7a19999aa30346f8600ca10ccdcf209b3d89c28be63c2a18f7a544261eb1e88f",
+      "action_profile_sha256": "3caa53a419f895ee26189b6bc1f92b08d06c055599125a930bfd4fd9a2872ebb",
+      "clean_t0_latent_bank_sha256": "69c29e798062bb93518122279ceb38c5324f3662af56f882fb307f19db88697c",
+      "cache_index_sha256": "a235ca592b47161472c7fd94cd3d886fce164480cd0571179c8860002063cbb0",
+      "global_shard_sha256": "2fcc2ae6f976732606f6f80ffa69e8c5def40844625f23b8d69a47f1a3c29104",
+      "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+      "upstream_source_sha256": {
+        "hymm/models/dit/nomas_cpt.py": "acf827bb7feb84c9046618737146544843a3f50c3500a3b16925dadeb6c5bdee",
+        "hymm/models/dit/modules/activation_layers.py": "1e509b5e5f9527d199d6f0206f452e56fdb1bd25ce3ccc06fb47f3a16060ca39",
+        "hymm/models/dit/modules/norm_layers.py": "2bcd5b29c951051ee1afaeac08258a3ef1dea3205b821f236594719331127044",
+        "hymm/models/dit/modules/modulate_layers.py": "abfb87acc9a972b40d0f36cfa832f0816d978fc13f93236aa1dfc902aac5caee",
+        "hymm/models/dit/modules/mlp_layers.py": "b77d862d17cd2c7db6237931b80f33b6447b7ba4db5918d3fbdfd17a6fb47e07",
+        "hymm/models/dit/modules/posemb_layers.py": "27b729d04185dfd7d65ecf9ba0d761d4864153d3e656908997d60a6971afc1aa",
+        "hymm/models/dit/modules/attention/__init__.py": "2a59284ac06057ac622228d280a32fc9e907a333e8ef0efcd526928626858450",
+        "hymm/models/dit/modules/attention/magi_attn.py": "3cdd9234db6ddd006a04af53b878a6876242ed4fa352bbcfe43038519492eb47",
+        "hymm/utils/helpers.py": "51b7a08377843b5eecc59e6fd41f10317d2de096d30fc3154491aacd27fefdfb",
+        "hymm/models/text_encoder/token_refiner.py": "7c67d81b81d9b183c3261eb4bf87bb04e0bda3142ce096afc2e64aa722433eab",
+        "hymm/models/dit/modules/embed_layers.py": "5b055e383bbf532ea5aa49ee506031d96bea3e3d5b8da3a104d4bd875c2d0af3",
+        "hymm/models/dit/modules/int8_stored_bf16_linear.py": "2bfd28f483c0da76df5ece7b23d0d3f62ef38725317b13e55d41ce997812122a",
+        "hymm/models/vae/pixelumm_decoder/model.py": "bea01a8490f8e9a4076da83d4f9fbb3cba7bd6701df5c28fb2e2c04f00131eec",
+        "hymm/models/vae/pixelumm_decoder/autoencoder.py": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+        "hymm/pipeline/causal_ar.py": "f9aae49b14becb87d958665f763e510c28eeaaad9292f00ac511d1146202949f",
+        "configs/experiment/inference.yaml": "d4db57b63597f98d4bddddd98355198e4e8c25da366d2e27bc7e74a79d26ec67",
+        "hymm/models/dit/modules/kv_cache_storage.py": "53fdb67aaa967b9195f17c1d829feb12cd1e17dfa21a4e5bc0a8492790f8f0c3",
+        "hymm/pipeline/solvers/euler.py": "e7996f947b46835f97b66059e0f43019b744ecec5cda380432124f70e169e59a"
+      }
+    },
+    "actual_source_mask": "BOOL prefix, authenticated after the one terminal export; comparison uses MPS"
+  },
+  "geometry": {
+    "latent_shape": [
+      1,
+      32,
+      30,
+      9,
+      16
+    ],
+    "video_rows": 4320,
+    "valid_caption_rows": 263,
+    "stored_text_rows": 1280,
+    "dit_text_rows": 320,
+    "writer_timestep": 206.897
+  },
+  "tolerance": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "gate": "abs(actual-reference) <= atol + rtol*abs(reference)",
+    "changed": false
+  },
+  "findings": {
+    "source_bf16_mask_sum": 264.0,
+    "true_valid_text_tokens": 263,
+    "mean_expression": "Existing native sequential F32 numerator, then BF16-rounded numerator, denominator, quotient. Same-input BF16 source-expression replay is exact on this input; general reduction equivalence is unqualified.",
+    "mean_bf16_numerator_f32_count_control": {
+      "kind": "same_input_mean_replay",
+      "tensor": "round_sum_divide_f32_count",
+      "count": 3584,
+      "finite_count": 3584,
+      "max_abs": 0.25,
+      "mae": 0.006513628643006086,
+      "rms": 0.013014285825192928,
+      "mismatch_count": 2298,
+      "passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "byte_exact_repaired_input_tensors": {
+      "masked_mean": "20aa0a959e71eb08990b3cc993654e7fc53145229eac47aba45cb5bdb3c2fc9a",
+      "refiner_timestep_sinusoidal": "674f9d017e4684cff34d24f3209f39b5de25f55787f4e37d6fd87b00a59cee84",
+      "time_in.sinusoidal": "674f9d017e4684cff34d24f3209f39b5de25f55787f4e37d6fd87b00a59cee84"
+    },
+    "first_remaining_raw_mismatch": {
+      "kind": "raw",
+      "tensor": "refiner_timestep_mlp1",
+      "count": 2048,
+      "finite_count": 2048,
+      "max_abs": 0.0019437670707702637,
+      "mae": 0.00024600018514320254,
+      "rms": 0.0003613133158069104,
+      "mismatch_count": 1799,
+      "passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "first_linear_post_bf16_rounding_exact": [
+      "refiner_timestep_mlp1",
+      "context_linear1",
+      "input_embed",
+      "time_in.mlp1"
+    ],
+    "full_raw_bf16_gate_passed": false,
+    "source_f32_control_all_sixteen_raw_pass": true,
+    "default_nine_plus_sixteen_tensor_hashes_unchanged": true,
+    "later_boundaries": "SiLU, second linear, context sum, text-refiner output and time vector remain unqualified."
+  },
+  "native_encode_instrumentation": {
+    "interval": "After prepared.encode through measured cache/patch/refiner encode, before the existing terminal drain",
+    "tracked_allocations": 0,
+    "tracked_readbacks": 0,
+    "preterminal_waits": 0,
+    "terminal_waits": 1,
+    "named_buffer_bytes": 944620612,
+    "new_dispatches_for_input_control": 0,
+    "trace_reads": "Optional trace reads after the existing terminal wait",
+    "limitations": "Counters do not cover opaque MPS resources or the entire process; named bytes are not total GPU residency."
+  },
+  "memory_guard": {
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "max_footprint_mib": 6144,
+    "max_swap_growth_mib": 64,
+    "summary": {
+      "stages": [
+        {
+          "stage": "native-build-v2",
+          "wall_seconds": 16.791878334013745,
+          "sampled_group_peak_bytes": 656639392,
+          "minimum_headroom_bytes": 37219221504,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "native-trace-v2",
+          "wall_seconds": 7.820703000063077,
+          "sampled_group_peak_bytes": 118178512,
+          "minimum_headroom_bytes": 44206850048,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "source-bf16",
+          "wall_seconds": 28.07315304200165,
+          "sampled_group_peak_bytes": 1446282944,
+          "minimum_headroom_bytes": 35252928512,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "source-f32",
+          "wall_seconds": 12.554601292009465,
+          "sampled_group_peak_bytes": 1426917224,
+          "minimum_headroom_bytes": 41628155904,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "input-control-build",
+          "wall_seconds": 16.647564750048332,
+          "sampled_group_peak_bytes": 639993224,
+          "minimum_headroom_bytes": 39676444672,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "native-default-check",
+          "wall_seconds": 9.381696333060972,
+          "sampled_group_peak_bytes": 583107784,
+          "minimum_headroom_bytes": 39635746816,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "native-input-control",
+          "wall_seconds": 3.6894943750230595,
+          "sampled_group_peak_bytes": 12632568,
+          "minimum_headroom_bytes": 40199159808,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "compare-default-bf16-final",
+          "wall_seconds": 1.6356042920378968,
+          "sampled_group_peak_bytes": 293455408,
+          "minimum_headroom_bytes": 38595837952,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "compare-default-f32-final",
+          "wall_seconds": 1.6347201250027865,
+          "sampled_group_peak_bytes": 212305096,
+          "minimum_headroom_bytes": 36062674944,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "compare-input-control-bf16-final",
+          "wall_seconds": 1.641902375034988,
+          "sampled_group_peak_bytes": 311412176,
+          "minimum_headroom_bytes": 38200672256,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "focused-python-tests",
+          "wall_seconds": 1.118016832973808,
+          "sampled_group_peak_bytes": 127911016,
+          "minimum_headroom_bytes": 39249608704,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        },
+        {
+          "stage": "focused-native-tests",
+          "wall_seconds": 2.6624172090087086,
+          "sampled_group_peak_bytes": 707298744,
+          "minimum_headroom_bytes": 38072369152,
+          "max_observed_swap_growth_bytes": 0,
+          "final_sample_live_processes": 0
+        }
+      ],
+      "stage_count": 12,
+      "sampled_group_peak_bytes": 1446282944,
+      "minimum_headroom_bytes": 35252928512,
+      "max_observed_stage_swap_growth_bytes": 0
+    },
+    "limitations": "Sampled process-group footprint is not a Metal residency or between-poll peak bound. Stage times are not paired performance benchmarks."
+  },
+  "definition_of_done": [
+    {
+      "command_record": "input-control-build.command.json",
+      "observed": "Fresh native build returns zero."
+    },
+    {
+      "command_record": "native-default-check.command.json",
+      "observed": "All nine plus sixteen default tensor hashes equal baseline."
+    },
+    {
+      "command_record": "native-input-control.command.json",
+      "observed": "Corrected mean and consumed sinusoids are byte-identical to source; counters remain 0/0/0/1."
+    },
+    {
+      "command_record": "compare-input-control-bf16-final.command.json",
+      "observed": "GPU raw input comparisons exact, first raw failure is MLP1; overall raw BF16 gate intentionally false, A/A passes, deliberate perturbation fails."
+    },
+    {
+      "command_record": "compare-default-f32-final.command.json",
+      "observed": "All sixteen raw GPU comparisons pass unchanged tolerance."
+    },
+    {
+      "command_record": "focused-python-tests.command.json",
+      "observed": "39 tests pass."
+    },
+    {
+      "command_record": "focused-native-tests.command.json",
+      "observed": "13 Crystal examples pass."
+    },
+    {
+      "command": "crystal tool format --check examples/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_refiner_trace.cr src/ml/video/hy_nomas_text_refiner.cr spec/hy_nomas_text_refiner_spec.cr spec/hy_nomas_reference_refiner_trace_spec.cr",
+      "observed": "Exit zero."
+    }
+  ],
+  "report_exit_policy": "Comparator exit zero means a report was produced. Only numeric_gate_passed qualifies the complete raw numeric gate.",
+  "adversary": {
+    "verdict": "ROBUST within input-boundary scope",
+    "provenance": "Same-lineage native/source audits plus final adversary; correlated review, not independent model evidence.",
+    "scope": "Actual final native control capture and corrected final reports, default hash preservation, source pins, exact input boundary hashes, counter interval and downstream-failure qualification.",
+    "attacks": [
+      "Post-rounded views cannot pass the raw gate",
+      "F32 source comparison cannot qualify BF16 parity",
+      "Mask BOOL-to-BF16 replay is representation-equivalent, not byte-identical",
+      "Counters exclude preparation and optional terminal trace reads",
+      "Changed or missing source/input/capture identities revoke admission"
+    ]
+  },
+  "artifact_root": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-boundaries-20261102.1mldjq7x",
+  "artifact_index": {
+    "path": "final-artifact-index.json",
+    "sha256": "c072980738fa2104346dfc783732dbc7306b86ad30103692d26af93e8a8d5451",
+    "entries": 100
+  },
+  "source_snapshot_index": {
+    "path": "source-snapshot/final-index.json",
+    "sha256": "ab450bfe573e8012fbca756d13b378d5ea0477ff3757cf8872b0436ec030ced8",
+    "entries": 19
+  },
+  "final_comparison_artifacts": {
+    "compare-default-bf16-final.json": {
+      "path": "compare-default-bf16-final.json",
+      "sha256": "d2ff06d90c1cda4d57056b25b07ed3e3b4fa0a3def6ce59809d038ad07312251",
+      "bytes": 9159
+    },
+    "compare-default-f32-final.json": {
+      "path": "compare-default-f32-final.json",
+      "sha256": "56bbb06d7e09d32326a5cb5efe6f23959dfb37a516825dae79a1bb6ffb08a202",
+      "bytes": 8281
+    },
+    "compare-input-control-bf16-final.json": {
+      "path": "compare-input-control-bf16-final.json",
+      "sha256": "f807daae23f200f8df102888d2d60aa40c0fe5bf0867819d8bd808ea2d96961e",
+      "bytes": 8992
+    }
+  },
+  "excluded_evidence": {
+    "native-build": "Make failed on the canonical external path with spaces; no execution evidence. Retried using the /opt alias.",
+    "native-trace": "Input canonical-path admission failed before GPU inference. Retried with canonical manifests.",
+    "earlier_comparison_reports": "Historical numeric captures; *-final.json reports supersede stale replay wording. Final reports alone define this claim."
+  },
+  "not_claimed": [
+    "Complete connected BF16 refiner parity",
+    "DiT block-0 or cache K/V parity",
+    "Full T0/app or T1 parity",
+    "Static acting or motion quality fixed",
+    "Speedup",
+    "Full generation"
+  ],
+  "next_frontier": "Implement BF16 first-linear and SiLU boundaries in existing operations, qualify the connected prelude, then separately compare matched-input block-0 K/V. Existing block-0 helper uses CPU metrics and needs a GPU path before that probe.",
+  "decay_triggers": [
+    "Source or binary/runtime changes",
+    "Weights, reference/noise or caption/mask changes",
+    "Layout or precision changes",
+    "Missing or mutated retained artifacts"
+  ],
+  "refresh": "Reauthenticate pins and inputs, rebuild, replay default and opt-in controls, compare raw checkpoints on GPU with unchanged tolerances and guard, and rerun the scoped adversary check.",
+  "failure_policy": "Reopen dependent claims and keep the input control opt-in; no full generation admission follows."
+}

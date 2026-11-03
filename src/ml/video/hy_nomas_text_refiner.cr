@@ -33,6 +33,8 @@ module ML::Video
     ROUND_KERNEL    = "hy_nomas_text_roundtrip_bf16_f32"
     CLEAR_KERNEL    = "hy_nomas_text_clear_padded_attention_f32"
 
+    DEFAULT_PRELUDE_INPUT_BF16_CONTROL = false
+
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
       kernel void hy_nomas_text_clear_padded_attention_f32(
@@ -65,6 +67,7 @@ module ML::Video
     @timestep : Float32
     @weights : Arena
     @attention_precision : HyNomasAttentionPrecision
+    @prelude_input_bf16_control : Bool
     @named_bytes : NamedBytes
     @arena : Arena? = nil
     @weight_stage : ML::MetalBuffer? = nil
@@ -86,6 +89,7 @@ module ML::Video
     getter processed_tokens : Int32
     getter admitted_named_bytes : NamedBytes
     getter attention_precision : HyNomasAttentionPrecision
+    getter prelude_input_bf16_control : Bool
 
     def self.checkpoint_bindings : Array(WeightBinding)
       bindings = [] of WeightBinding
@@ -173,7 +177,8 @@ module ML::Video
                    weights : Arena, max_named_bytes : Int64,
                    attention_precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control,
                    *, seg_pos_emb_num : Int32 = 0,
-                   retain_padding : Bool = false)
+                   retain_padding : Bool = false,
+                   prelude_input_bf16_control : Bool = DEFAULT_PRELUDE_INPUT_BF16_CONTROL)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -181,6 +186,7 @@ module ML::Video
       @timestep = timestep
       @weights = weights
       @attention_precision = attention_precision
+      @prelude_input_bf16_control = prelude_input_bf16_control
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -547,6 +553,7 @@ module ML::Video
         .set_buffer(checkpoint("masked_mean"), 1, ML::Metal::BufferAccess::Write)
         .set_value(@valid_tokens.to_u32, 2)
         .set_value(INPUT_DIM.to_u32, 3)
+        .set_value(@prelude_input_bf16_control ? 1_u32 : 0_u32, 4)
         .dispatch_1d(INPUT_DIM)
     end
 
@@ -555,6 +562,7 @@ module ML::Video
         .set_buffer(checkpoint("timestep"), 0)
         .set_buffer(checkpoint("refiner_timestep_sinusoidal"), 1, ML::Metal::BufferAccess::Write)
         .set_value((TIMESTEP_DIM // 2).to_u32, 2)
+        .set_value(@prelude_input_bf16_control ? 1_u32 : 0_u32, 3)
         .dispatch_1d(TIMESTEP_DIM // 2)
     end
 

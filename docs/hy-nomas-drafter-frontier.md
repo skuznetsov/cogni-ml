@@ -1,5 +1,92 @@
 # Hy-Nomas local draft suite
 
+## Reference refiner input precision boundaries (2026-11-02)
+
+Status: an opt-in native input control makes the current T0 masked mean and
+both consumed sinusoidal inputs byte-identical to source BF16. Default F32
+behavior is unchanged. The complete BF16 refiner gate still fails; this is
+not a fix for static acting, full T0/T1, or block/cache parity.
+
+The authenticated reference and caption are the same as in the preblock
+experiment below: 4,320 video rows, 263 valid Qwen rows, 1,280 stored rows,
+and writer timestep 206.897. A separate native trace exports 16 existing
+refiner checkpoints after the existing terminal wait. The nine-tensor cache
+fixture schema is unchanged. Compiled-in source snapshots bind a capture to
+the executable's source rather than mutable files on disk. The comparator
+rejects stale native source pins, changed Qwen bytes, or a source mask that
+is not the authenticated valid prefix.
+
+Source hooks observe actual module inputs and outputs, including the masked
+mean consumed by the context embedder, the real BOOL mask, and sinusoids
+before and after their BF16 casts. They run the complete source text refiner
+but stop before DiT block 0. All source trace tensors use one terminal packed
+export. Hooks and the scoped timestep-function wrapper are restored even
+after registration failure. The default source's original nine tensor hashes
+remain equal to the prior BF16 capture; this is an adapted pinned MPS source
+oracle, not an unmodified CUDA/Magi execution.
+
+Two missing input boundaries are now isolated on identical Qwen bytes:
+
+- The source sums the mask in BF16. Its 263 ones produce a BF16 count of
+  264. The source also rounds the numerator and quotient. Replaying that
+  expression on MPS matches all 3,584 actual mean values exactly. Keeping
+  the BF16 numerator but dividing by F32 count 263 fails 2,298 values, with
+  maximum error 0.25. The count alone is not the complete correction.
+- The raw F32 sinusoids match native exactly. The source then casts them to
+  BF16 before each first linear. This cast was absent from native.
+
+`--refiner-input-bf16-control` selects the bounded correction in the existing
+mean and sinusoid kernels. It requires `--refiner-trace-output` and
+`--execute`; the plan constructor also exposes the default-false option.
+It changes no linear or activation boundary. It adds no dispatch or device
+buffer. The fresh native GPU result is:
+
+| Consumed boundary | Default failures | Input-control failures | Input-control maximum error |
+| --- | ---: | ---: | ---: |
+| Masked mean | 3,537 / 3,584 | 0 / 3,584 | 0 |
+| Each sinusoidal input | 242 / 256 | 0 / 256 | 0 |
+| Refiner timestep MLP first linear | — | 1,799 / 2,048 | 0.0019437671 |
+
+The repaired mean and sinusoidal tensor hashes equal source. The first
+remaining raw mismatch is now `refiner_timestep_mlp1`; its BF16-rounded view
+is exact. After the repaired inputs, rounded first context, input-embedding,
+and `time_in` projections also match source exactly. These post-rounded views
+identify the next boundary; they do not repair later SiLU, second linear,
+context sum, text-refiner output, or time vector. The complete 16-row raw gate
+correctly stays false at unchanged `atol=rtol=2e-5`.
+
+Fresh default replay preserves all nine preblock and 16 refiner tensor hashes.
+Against the F32 source precision control, all 16 raw refiner comparisons pass.
+GPU metric A/A and deliberate-perturbation controls pass. The native counters
+cover cache/patch/refiner encode after `prepared.encode`: zero tracked
+allocations, readbacks, or preterminal waits, one existing terminal wait, and
+944,620,612 named buffer bytes. The optional trace performs expected buffer
+reads after that wait. Opaque MPS allocations are outside these counters.
+
+Checks: 39 focused Python tests, 13 Crystal examples, formatting, and a fresh
+native build pass. The 12 selected guarded stages retain a file-cache-aware
+10% floor, 6 GiB process cap and 64 MiB swap-growth stop. Maximum sampled group
+footprint is 1.347 GiB, minimum headroom 32.832 GiB, observed stage swap growth
+zero; every final sample has no live children. Samples do not bound all Metal
+residency or between-poll spikes. No timing or generation-quality claim follows.
+Same-lineage mini-Quad review is ROBUST for these input boundaries only.
+
+Evidence and immutable captures, commands, code snapshots, final reports, and
+guard logs: `.landmark/evidence/2026-11-02-hy-nomas-refiner-input-precision.json`
+and `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-boundaries-20261102.1mldjq7x`.
+The `*-final.json` comparisons supersede earlier reports' overly broad replay
+wording; the early numeric measurements remain historical.
+
+Next: implement and test first-linear/SiLU BF16 boundaries inside the existing
+operations, then qualify later prelude and block-0 K/V separately. A shared
+native nine-tensor fixture can isolate block behavior with F32 controls on
+both sides; the existing block-0 comparison helper uses CPU numerical metrics
+and needs an explicit GPU path before that experiment. No block probe ran in
+this step. Keep the input control opt-in. Refresh after source, binary/runtime,
+weights, reference/noise, caption/mask, layout, or precision changes; missing
+or mutated retained artifacts revoke the result. Omitting the control flag
+restores default behavior; remove optional trace helpers to remove diagnostics.
+
 ## Reference T0 preblock precision control (2026-11-02)
 
 Status: the standalone native T0 preblock fixture matches the source F32

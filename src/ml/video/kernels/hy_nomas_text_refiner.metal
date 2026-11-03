@@ -16,6 +16,10 @@ inline ushort hy_text_round_bf16(float value) {
   return (ushort)(bits >> 16);
 }
 
+inline float hy_text_roundtrip_bf16(float value) {
+  return as_type<float>((uint)hy_text_round_bf16(value) << 16);
+}
+
 kernel void hy_nomas_text_compact_bf16_f32(
     device const ushort *source [[buffer(0)]],
     device float *compact [[buffer(1)]],
@@ -32,13 +36,20 @@ kernel void hy_nomas_text_masked_mean_f32(
     device float *mean [[buffer(1)]],
     constant uint &valid_rows [[buffer(2)]],
     constant uint &input_dim [[buffer(3)]],
+    constant uint &prelude_input_bf16_control [[buffer(4)]],
     uint channel [[thread_position_in_grid]]) {
   if (channel >= input_dim) return;
   float sum = 0.0f;
   for (uint row = 0; row < valid_rows; ++row) {
     sum += compact[row * input_dim + channel];
   }
-  mean[channel] = sum / (float)valid_rows;
+  if (prelude_input_bf16_control != 0u) {
+    sum = hy_text_roundtrip_bf16(sum);
+    float denominator = hy_text_roundtrip_bf16((float)valid_rows);
+    mean[channel] = hy_text_roundtrip_bf16(sum / denominator);
+  } else {
+    mean[channel] = sum / (float)valid_rows;
+  }
 }
 
 // Fixed dim=256/max_period=10000 positional basis from pinned upstream
@@ -69,14 +80,20 @@ kernel void hy_nomas_text_timestep_sinusoidal_f32(
     device const float *timestep [[buffer(0)]],
     device float *embedding [[buffer(1)]],
     constant uint &half_dim [[buffer(2)]],
+    constant uint &prelude_input_bf16_control [[buffer(3)]],
     uint index [[thread_position_in_grid]]) {
   if (half_dim != 128u || index >= half_dim) return;
   float frequency = as_type<float>(HY_TEXT_TIME_FREQUENCY_BITS[index]);
   float phase = timestep[0] * frequency;
   // Safe arithmetic mode alone does not select accurate transcendental
   // functions. Match the upstream MPSGraph trig on the rounded F32 phase.
-  embedding[index] = precise::cos(phase);
-  embedding[index + half_dim] = precise::sin(phase);
+  if (prelude_input_bf16_control != 0u) {
+    embedding[index] = hy_text_roundtrip_bf16(precise::cos(phase));
+    embedding[index + half_dim] = hy_text_roundtrip_bf16(precise::sin(phase));
+  } else {
+    embedding[index] = precise::cos(phase);
+    embedding[index + half_dim] = precise::sin(phase);
+  }
 }
 
 kernel void hy_nomas_text_qkv_split_f32(

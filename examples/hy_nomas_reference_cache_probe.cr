@@ -7,6 +7,7 @@ require "./support/hy_nomas_generation"
 require "./support/hy_nomas_timeline_inputs"
 require "./support/hy_nomas_reference_latent"
 require "./support/hy_nomas_reference_cache_probe"
+require "./support/hy_nomas_reference_refiner_trace"
 require "./support/hy_nomas_probe_instrumentation"
 
 module HyNomasReferenceCacheProbeCLI
@@ -34,6 +35,8 @@ timeline_sha = ""
 reference_latent_path = ""
 reference_latent_sha = ""
 output_manifest = ""
+refiner_trace_output_manifest = ""
+prelude_input_bf16_control = false
 max_named_bytes = 4_i64 * 1024**3
 execute = false
 OptionParser.parse do |parser|
@@ -43,6 +46,8 @@ OptionParser.parse do |parser|
   parser.on("--reference-latent PATH", "Authenticated saved BF16 DCAE latent safetensors") { |value| reference_latent_path = value }
   parser.on("--reference-latent-sha256 SHA", "Trusted saved latent artifact SHA-256") { |value| reference_latent_sha = value }
   parser.on("--output PATH", "Fresh output JSON manifest; sidecar is a sibling .tensors.bin") { |value| output_manifest = value }
+  parser.on("--refiner-trace-output PATH", "Optional fresh separate refiner trace JSON manifest; sidecar is a sibling .tensors.bin") { |value| refiner_trace_output_manifest = value }
+  parser.on("--refiner-input-bf16-control", "Round only the native refiner mean and timestep sinusoidal inputs through BF16") { prelude_input_bf16_control = true }
   parser.on("--max-named-bytes N", "Aggregate named Metal-buffer cap, up to 8 GiB") { |value| max_named_bytes = value.to_i64 }
   parser.on("--execute", "Run native timeline/patch/refiner on MPS and capture after one terminal drain") { execute = true }
 end
@@ -53,6 +58,12 @@ unless ARGV.empty? && !timeline_path.empty? && !timeline_sha.empty? &&
   raise ArgumentError.new("timeline and reference-latent identities plus a positive named-buffer cap are required")
 end
 raise ArgumentError.new("--execute requires a fresh output manifest path") if execute && output_manifest.empty?
+if !refiner_trace_output_manifest.empty? && !execute
+  raise ArgumentError.new("--refiner-trace-output requires --execute")
+end
+if prelude_input_bf16_control && refiner_trace_output_manifest.empty?
+  raise ArgumentError.new("--refiner-input-bf16-control requires --refiner-trace-output")
+end
 
 timeline_inputs = HyNomasGeneration::TimelineInputs.new(timeline_path, timeline_sha)
 reference_input = HyNomasReferenceLatent::Input.new(reference_latent_path, reference_latent_sha)
@@ -113,6 +124,14 @@ end
 
 manifest_path, payload_path = HyNomasReferenceCacheProbe.checked_output_paths!(output_manifest)
 HyNomasReferenceCacheProbe.ensure_fresh_outputs!(manifest_path, payload_path)
+refiner_trace_paths : Tuple(String, String)? = nil
+unless refiner_trace_output_manifest.empty?
+  trace_manifest_path, trace_payload_path = HyNomasReferenceRefinerTrace.checked_output_paths!(refiner_trace_output_manifest)
+  HyNomasReferenceRefinerTrace.ensure_fresh_outputs!(trace_manifest_path, trace_payload_path)
+  HyNomasReferenceRefinerTrace.ensure_distinct_outputs!(manifest_path, payload_path,
+    trace_manifest_path, trace_payload_path)
+  refiner_trace_paths = {trace_manifest_path, trace_payload_path}
+end
 
 base_arena = ML::Video::Arena.new
 timeline_arena = ML::Video::Arena.new
@@ -141,7 +160,8 @@ begin
   prepared = ML::Video::PreparedWeights.new(weight_plan, global_arena)
   patch = ML::Video::HyNomasPatchMPSPlan.new(segment, HyNomasReferenceCacheProbeCLI::TOKENS, global_arena)
   refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, base.mask, 1000_f32,
-    global_arena, text_named_bytes, retain_padding: true)
+    global_arena, text_named_bytes, retain_padding: true,
+    prelude_input_bf16_control: prelude_input_bf16_control)
   timeline_plan = ML::Video::HyNomasTimelineOps::Plan.new(geometry,
     timeline: latent_timeline, segment_latent: segment,
     cosine_bank: cosine_bank, sine_bank: sine_bank,
@@ -195,6 +215,22 @@ begin
     timeline_manifest_sha256: timeline_inputs.file.sha256,
     valid_text_tokens: valid_text_tokens,
     sources: sources)
+  if trace_paths = refiner_trace_paths
+    trace_sources = HyNomasReferenceRefinerTrace.tensor_sources(refiner.not_nil!.checkpoints,
+      valid_text_tokens)
+    trace_result = HyNomasReferenceRefinerTrace.write_trace!(trace_paths[0],
+      reference_latent_artifact_sha256: reference_input.sha256,
+      timeline_manifest_sha256: timeline_inputs.file.sha256,
+      cache_fixture_manifest_sha256: result["manifest_sha256"].as_s,
+      valid_text_tokens: valid_text_tokens,
+      sources: trace_sources,
+      encode_allocations: encode_allocations,
+      encode_readbacks: encode_readbacks,
+      preterminal_waits: preterminal_waits,
+      terminal_waits: chain.not_nil!.wait_count,
+      prelude_input_bf16_control: prelude_input_bf16_control)
+    puts trace_result.to_json
+  end
   puts plan_report
   puts result.to_json
   puts({schema: "cogni_ml.hy_nomas_reference_cache_probe_result/v1",

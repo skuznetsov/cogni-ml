@@ -37724,3 +37724,35 @@ Refresh after source/toolchain/device/model/workload changes.
   binary, weights, input/noise, caption/mask, layout or precision changes;
   mutated/missing artifacts revoke the certificate. Remove optional diagnostic
   helpers/tests to roll back; production behavior is unchanged.
+
+### Hy-Nomas refiner input precision boundaries (2026-11-02)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Reference refiner input precision
+  boundaries; evidence:
+  `.landmark/evidence/2026-11-02-hy-nomas-refiner-input-precision.json`.
+  Same authenticated current T0, 4,320 video rows / 263 valid text rows.
+- Actual source BF16 mean rounds numerator, mask count (263 to 264), and
+  quotient. Raw F32 sinusoids match native before the source BF16 cast.
+  The opt-in `--refiner-input-bf16-control` reproduces these input boundaries
+  in existing kernels; corrected mean and both consumed sinusoids are
+  byte-identical to source. This is one tested input, not general reduction
+  equivalence. Default replay preserves all nine preblock plus 16 refiner
+  tensor hashes; all 16 default raw tensors pass the source F32 control.
+- Full BF16 refiner parity remains open. First raw mismatch after the input
+  control is the first timestep linear: 1,799 / 2,048 failures, maximum
+  0.0019437671 at unchanged mixed 2e-5. Its post-BF16 rounding view is exact;
+  post-rounded diagnostics do not repair the connected SiLU/linear chain.
+  Next: add and qualify those boundaries, then matched-input block-0 K/V.
+  The existing block-0 comparator needs GPU metrics before that later probe.
+- Fresh build, 39 Python tests, 13 Crystal examples, GPU A/A/perturbation
+  controls and formatting pass. Measured cache/patch/refiner encoding after
+  `prepared.encode` reports zero tracked allocations/readbacks/preterminal
+  waits and one existing terminal drain. Optional trace reads follow it.
+- Twelve selected stages preserve file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop; minimum sampled headroom 32.832 GiB, zero observed swap
+  growth. Samples/counters do not bound opaque Metal resources or spikes.
+  Same-lineage mini-Quad is ROBUST for input-boundary evidence only. No full
+  generation, K/V, T1, motion-quality fix or speedup was qualified.
+- Keep the control default-false; omit its flag to restore the usual path.
+  Refresh after source, binary/runtime, weights, input/noise, caption/mask,
+  layout or precision changes. Missing/mutated artifacts revoke the result.
