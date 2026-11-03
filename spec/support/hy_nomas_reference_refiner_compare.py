@@ -150,16 +150,39 @@ def _validate_compiled_pins(pins: Any) -> None:
 
 
 def _validate_prelude_controls(document: Mapping[str, Any]) -> dict[str, bool]:
-    controls = {name: document.get(name, False) for name in (
+    controls = {name: document.get(name) for name in (
         "prelude_input_bf16_control", "prelude_linear_bf16_control",
-        "prelude_silu_bf16_control")}
+        "prelude_silu_bf16_control", "prelude_second_linear_bf16_control",
+        "prelude_add_bf16_control")}
     if any(type(value) is not bool for value in controls.values()):
-        raise Error("native refiner precision controls must be boolean")
+        raise Error("all five native refiner precision controls must be present and boolean")
+    if document.get("full_bf16_prelude_parity") is not False:
+        raise Error("native full BF16 prelude parity must remain explicitly false")
     if controls["prelude_linear_bf16_control"] and not controls["prelude_input_bf16_control"]:
         raise Error("linear BF16 control requires input BF16 control")
     if controls["prelude_silu_bf16_control"] and not controls["prelude_linear_bf16_control"]:
         raise Error("SiLU BF16 control requires linear BF16 control")
+    if controls["prelude_second_linear_bf16_control"] and not controls["prelude_silu_bf16_control"]:
+        raise Error("second linear BF16 control requires SiLU BF16 control")
+    if controls["prelude_add_bf16_control"] and not controls["prelude_second_linear_bf16_control"]:
+        raise Error("addition BF16 control requires second linear BF16 control")
     return controls
+
+
+def _controlled_boundaries(controls: Mapping[str, bool]) -> tuple[str, ...]:
+    """List only consumed boundaries selected by validated cumulative controls."""
+    names = []
+    if controls["prelude_input_bf16_control"]:
+        names.extend(("masked_mean", "refiner_timestep_sinusoidal", "time_in.sinusoidal"))
+    if controls["prelude_linear_bf16_control"]:
+        names.extend(("refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1"))
+    if controls["prelude_silu_bf16_control"]:
+        names.extend(("refiner_timestep_silu", "context_silu", "time_in.silu"))
+    if controls["prelude_second_linear_bf16_control"]:
+        names.extend(("refiner_timestep", "context_embed", "vec"))
+    if controls["prelude_add_bf16_control"]:
+        names.append("c")
+    return tuple(names)
 
 
 def validate_inputs(args: argparse.Namespace) -> dict[str, Any]:
@@ -291,16 +314,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     # A flag must describe the captured connected values, not just intent or
     # a post-rounded diagnostic view. Use zero tolerance for this contract.
     controls_enabled = _validate_prelude_controls(ndoc)
-    controlled_boundaries = []
-    if controls_enabled["prelude_input_bf16_control"]:
-        controlled_boundaries.extend(("masked_mean", "refiner_timestep_sinusoidal",
-                                      "time_in.sinusoidal"))
-    if controls_enabled["prelude_linear_bf16_control"]:
-        controlled_boundaries.extend(("refiner_timestep_mlp1", "context_linear1",
-                                      "input_embed", "time_in.mlp1"))
-    if controls_enabled["prelude_silu_bf16_control"]:
-        controlled_boundaries.extend(("refiner_timestep_silu", "context_silu", "time_in.silu"))
-    for name in controlled_boundaries:
+    for name in _controlled_boundaries(controls_enabled):
         actual = tensors["native"][name]
         compare("connected_bf16_boundary", name, actual,
                 actual.to(torch.bfloat16).float(), atol=0.0, rtol=0.0)
@@ -345,6 +359,8 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         native_prelude_input_bf16_control=ndoc.get("prelude_input_bf16_control", False),
         native_prelude_linear_bf16_control=ndoc.get("prelude_linear_bf16_control", False),
         native_prelude_silu_bf16_control=ndoc.get("prelude_silu_bf16_control", False),
+        native_prelude_second_linear_bf16_control=ndoc.get("prelude_second_linear_bf16_control", False),
+        native_prelude_add_bf16_control=ndoc.get("prelude_add_bf16_control", False),
         actual_source_bf16_mask_sum_replay=values[-1], true_valid_text_tokens=valid,
         replay_qwen_byte_identical=True,
         replay_mask_equivalent_after_source_cast=True,
@@ -353,7 +369,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                                      and not controls["deliberate_perturbation"]["passed"]
                                      and not controls["non_bf16_boundary"]["passed"]),
         terminal_cpu_exports=1,
-        interpretation="Post-rounded views are diagnostic only. BF16 source-expression replay uses byte-identical consumed Qwen and an exact authenticated mask; it is compared only in source-bf16 mode. The F32 expression uses a different reduction order from native and is diagnostic. This comparator runs no refiner forward; the native capture identifies the connected input, first-linear, and first-SiLU controls enabled. Full BF16 prelude parity remains unqualified. No complete refiner, K/V or motion qualification follows.",
+        interpretation="Post-rounded views are diagnostic only. BF16 source-expression replay uses byte-identical consumed Qwen and an exact authenticated mask; it is compared only in source-bf16 mode. The F32 expression uses a different reduction order from native and is diagnostic. This comparator runs no refiner forward; the native capture identifies enabled connected input, first-linear, first-SiLU, second-linear and conditioning-add controls. The numeric gate covers only the 16 captured prelude rows on this input, plus selected BF16 representation checks; source byte identity requires separate tensor hashes. No complete refiner, K/V or motion qualification follows.",
     )
 
 

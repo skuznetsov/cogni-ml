@@ -37797,3 +37797,38 @@ Refresh after source/toolchain/device/model/workload changes.
   opt-in; omit new flags to restore the old path. Refresh on source,
   executable/runtime, weights, input/noise, caption/mask, layout or precision
   changes. Missing/mutated retained evidence revokes the bounded certificate.
+
+### Hy-Nomas second-linear and conditioning-add BF16 boundaries (2026-11-03)
+
+- Return: `docs/hy-nomas-drafter-frontier.md`, Connected second-linear and
+  conditioning-add BF16 boundaries; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-second-add.json`.
+  Same authenticated finite T0: 4,320 video rows / V263 / stored 1,280.
+- Default-false second-linear and add controls extend the cumulative input,
+  first-linear and SiLU controls. Three second outputs round after bias in
+  existing dispatches; add-and-RNE replaces the existing conditioning add.
+  No extra explicit dispatch, named buffer, readback or wait is introduced.
+- GPU ablation: rounding only the sum leaves 524 failures; rounding only
+  operands leaves 2,026 (max .125); rounding both gives zero. Connected native
+  add control makes all 16 captured raw tensors exact against source BF16,
+  with 14 zero-tolerance representation checks and 16 authenticated equal
+  tensor hashes. This is one finite input, not general BF16/refiner parity.
+- Fresh final build, 44 Python tests, 18 Crystal examples, eight CLI rejection
+  cases and GPU sensitivity controls pass. Prior four modes preserve nine
+  preblock + 16 refiner tensors and full payload bytes. All six modes retain
+  944,620,612 named bytes and encode counters [0,0,0,1] for allocations,
+  readbacks, preterminal waits and terminal waits respectively.
+- Forty-four guarded stages: file-cache-aware 10% / 6 GiB process cap /
+  64 MiB swap stop; peak sampled group 1,030,440,208 bytes, minimum sampled
+  headroom 20,904,476,672 bytes, no observed swap growth or final live children.
+  Samples do not bound spikes or opaque Metal/MPS resources.
+- Same-lineage mini-Quad: ROBUST for this captured prelude. Canonical external
+  records use `native-final-*`, `compare-qualified-*`, `build-final/`,
+  `qualified-artifacts-final.json` and `guard-summary-final.json` under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-second-20261103.vjm1xm6u`.
+  Helper source hashes are pinned in the packet; pre-format records remain
+  historical. No generation, speedup, refiner/KV/T1 or motion fix was qualified.
+- Next: trace both refiner blocks on corrected identical inputs. Keep controls
+  opt-in; omit new flags for previous behavior. Refresh on source, binary/
+  runtime, weights, reference/noise, caption/mask, layout or precision changes;
+  missing or mutated bound evidence revokes the result.

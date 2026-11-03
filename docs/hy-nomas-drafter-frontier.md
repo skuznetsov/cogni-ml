@@ -1,5 +1,79 @@
 # Hy-Nomas local draft suite
 
+## Connected second-linear and conditioning-add BF16 boundaries (2026-11-03)
+
+Status: all 16 captured native prelude tensors are byte-identical to the
+pinned source BF16 trace on the authenticated finite T0 V263 input. This
+qualifies the captured prelude on this input; the two refiner blocks, DiT K/V,
+T1 and reference-driven motion remain open. No generation or speedup is claimed.
+The oracle remains adapted pinned PyTorch 2.8 MPS, not stock CUDA/Magi.
+
+The added controls are default-false and cumulative:
+
+```text
+--refiner-input-bf16-control
+--refiner-linear-bf16-control
+--refiner-silu-bf16-control
+--refiner-second-linear-bf16-control
+--refiner-add-bf16-control
+```
+
+The three second projections (`refiner_timestep`, `context_embed` and
+`time_in.mlp2`, captured as `vec`) round after bias inside the existing
+projection dispatch. The conditioning add substitutes one add-and-BF16-RNE
+dispatch for the existing add, reading the already rounded operands and
+writing the existing `c` buffer. There are no additional explicit dispatches,
+named buffers, readbacks or waits. Opaque MPS activity is not covered by that
+statement. Without these flags, the old path is retained.
+
+The pre-edit GPU replay separated the two missing boundaries:
+
+| Conditioning sum variant | Failures / 2,048 | Maximum absolute error |
+| --- | ---: | ---: |
+| Previous raw sum | 2,039 | 0.24324799 |
+| Round only the sum | 524 | 0.25 |
+| Round only both operands | 2,026 | 0.125 |
+| Round operands and sum | 0 | 0 |
+
+The connected native ablation reproduces this distinction: second-linear
+control leaves only `c` failing (2,026 values, maximum 0.125); adding the sum
+boundary gives zero error in all 16 raw rows at unchanged `atol=rtol=2e-5`.
+Fourteen selected consumed boundaries also pass zero-tolerance BF16-expanded
+representation checks. Separate authenticated tensor hashes establish source
+byte identity; a representation check alone does not establish that identity.
+NaN payload semantics and general operation equivalence are unqualified.
+
+The comparator requires all five explicit Boolean control fields and rejects
+a missing or promoted full-parity claim. Trace metadata continues to set
+`full_bf16_prelude_parity=false`: a single-input capture is not general parity.
+The default has zero selected BF16 boundaries and reports `null`, not a
+vacuous pass. Default, input-only, first-linear and SiLU modes preserve all
+previous nine preblock and 16 refiner tensor hashes and complete payload bytes.
+All 16 default raw rows still pass the source F32 control.
+
+Fresh final build, 44 Python tests, 18 Crystal examples and eight CLI rejection
+cases pass. GPU A/A, deliberate perturbation and non-BF16 sensitivity controls
+pass. All six native modes retain 944,620,612 named bytes, zero tracked encode
+allocations/readbacks/preterminal waits and one existing terminal wait.
+Optional trace reads follow that wait. The file-cache-aware 10% floor, 6 GiB
+process cap and 64 MiB swap-growth stop remain in force; sampled metrics and
+their limitations are retained in the evidence packet.
+The same-lineage mini-Quadrumvirate review returned ROBUST within this finite
+captured-prelude scope; it is correlated review, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-second-add.json` and
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-second-20261103.vjm1xm6u`.
+Canonical captures are `native-final-*`, comparisons `compare-qualified-*`,
+identity/build records `qualified-artifacts-final.json`, and guard records
+`guard-summary-final.json`. Earlier captures remain historical, including
+pre-format source/binary identities; they are not final qualification inputs.
+
+Next: compare the two refiner blocks on these exact corrected inputs before
+interpreting DiT K/V or retesting motion. Keep controls opt-in. Omit the new
+flags to restore prior behavior. Refresh after source, executable/runtime,
+weights, reference/noise, caption/mask, layout or precision changes; missing
+or mutated retained artifacts revoke this bounded result.
+
 ## Connected first-linear and SiLU BF16 boundaries (2026-11-02)
 
 Status: the opt-in native control now reproduces four first-linear outputs and

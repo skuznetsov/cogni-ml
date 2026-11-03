@@ -62,8 +62,12 @@ describe HyNomasReferenceRefinerTrace do
     disabled[:prelude_input_bf16_control].should be_false
     disabled[:prelude_linear_bf16_control].should be_false
     disabled[:prelude_silu_bf16_control].should be_false
+    disabled[:prelude_second_linear_bf16_control].should be_false
+    disabled[:prelude_add_bf16_control].should be_false
     disabled[:full_bf16_prelude_parity].should be_false
     disabled[:prelude_input_bf16_control_scope].should eq("disabled")
+    disabled[:prelude_second_linear_bf16_control_scope].should eq("disabled")
+    disabled[:prelude_add_bf16_control_scope].should eq("disabled")
 
     enabled = HyNomasReferenceRefinerTrace.prelude_metadata(true)
     enabled[:prelude_input_bf16_control].should be_true
@@ -76,6 +80,15 @@ describe HyNomasReferenceRefinerTrace do
     connected[:full_bf16_prelude_parity].should be_false
     connected[:prelude_linear_bf16_control_scope].should contain("input_embed")
     connected[:prelude_silu_bf16_control_scope].should contain("negative, exp, add, and divide")
+
+    all_controls = HyNomasReferenceRefinerTrace.prelude_metadata(true, true, true, true, true)
+    all_controls[:prelude_second_linear_bf16_control].should be_true
+    all_controls[:prelude_add_bf16_control].should be_true
+    all_controls[:full_bf16_prelude_parity].should be_false
+    all_controls[:prelude_second_linear_bf16_control_scope].should contain("refiner_timestep, context_embed, and time_in.mlp2")
+    all_controls[:prelude_second_linear_bf16_control_scope].should contain("trace tensor vec")
+    all_controls[:prelude_add_bf16_control_scope].should contain("both operands")
+    all_controls[:prelude_add_bf16_control_scope].should contain("c = refiner_timestep + context_embed")
   end
 
   it "rejects disconnected precision controls before writing a trace" do
@@ -84,6 +97,12 @@ describe HyNomasReferenceRefinerTrace do
     end
     expect_raises(ArgumentError, "requires linear BF16 control") do
       HyNomasReferenceRefinerTrace.prelude_metadata(true, false, true)
+    end
+    expect_raises(ArgumentError, "requires SiLU BF16 control") do
+      HyNomasReferenceRefinerTrace.prelude_metadata(true, true, false, true, false)
+    end
+    expect_raises(ArgumentError, "requires second-linear BF16 control") do
+      HyNomasReferenceRefinerTrace.prelude_metadata(true, true, true, false, true)
     end
   end
 

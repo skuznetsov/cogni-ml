@@ -6,6 +6,8 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_INPUT_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_LINEAR_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SILU_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL.should be_false
+    ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_ADD_BF16_CONTROL.should be_false
     ML::Video::HyNomasMPSActivation::UnaryPlan::DEFAULT_BF16_CONTROL.should be_false
 
     source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
@@ -25,12 +27,19 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true)
+    ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true)
 
     expect_raises(ArgumentError, /input BF16 control/) do
       ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, true, false)
     end
     expect_raises(ArgumentError, /linear BF16 control/) do
       ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, false, true)
+    end
+    expect_raises(ArgumentError, /second-linear BF16 control requires the SiLU BF16 control/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false, true, false)
+    end
+    expect_raises(ArgumentError, /add BF16 control requires the second-linear BF16 control/) do
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, false, true)
     end
   end
 
@@ -54,6 +63,19 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
      "block1.condition_silu", "block1.mlp_silu"}.each do |name|
       names.includes?(name).should be_false
     end
+  end
+
+  it "limits BF16 rounding to the three second prelude linears and c addition" do
+    names = ML::Video::HyNomasTextRefinerMPSPlan::PRELUDE_SECOND_LINEAR_NAMES
+    names.should eq(["refiner_timestep", "context_embed", "time_in.mlp2"])
+    {"refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
+     "block0.adaLN", "block0.mlp_fc1", "block1.adaLN", "block1.mlp_fc1"}.each do |name|
+      names.includes?(name).should be_false
+    end
+
+    source = ML::Video::HyNomasTextRefinerMPSPlan::SOURCE
+    source.includes?("kernel void hy_nomas_text_c_add_bf16_f32(").should be_true
+    source.includes?("c[index] = hy_text_roundtrip_bf16(timestep[index] + context[index]);").should be_true
   end
 
   it "binds the exact 42-tensor F32 upstream subset without renaming source keys" do
@@ -100,7 +122,7 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     end
   end
 
-  it "accounts for compact F32 activations, the shared linear stage, and attention staging" do
+  it "keeps named-buffer accounting unchanged for prelude precision controls" do
     mask = Array(Int32).new(1280) { |index| index < 23 ? 1 : 0 }
     bytes = ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(mask)
     bytes.activations.should eq(8_610_820_i64)

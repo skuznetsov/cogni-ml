@@ -31,16 +31,22 @@ module ML::Video
     RESIDUAL_KERNEL = "hy_nomas_text_gated_residual_f32"
     AFFINE_KERNEL   = "hy_nomas_text_layer_norm_affine_f32"
     ROUND_KERNEL    = "hy_nomas_text_roundtrip_bf16_f32"
+    C_ADD_KERNEL    = "hy_nomas_text_c_add_bf16_f32"
     CLEAR_KERNEL    = "hy_nomas_text_clear_padded_attention_f32"
 
-    DEFAULT_PRELUDE_INPUT_BF16_CONTROL  = false
-    DEFAULT_PRELUDE_LINEAR_BF16_CONTROL = false
-    DEFAULT_PRELUDE_SILU_BF16_CONTROL   = false
-    PRELUDE_FIRST_LINEAR_NAMES          = [
+    DEFAULT_PRELUDE_INPUT_BF16_CONTROL         = false
+    DEFAULT_PRELUDE_LINEAR_BF16_CONTROL        = false
+    DEFAULT_PRELUDE_SILU_BF16_CONTROL          = false
+    DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL = false
+    DEFAULT_PRELUDE_ADD_BF16_CONTROL           = false
+    PRELUDE_FIRST_LINEAR_NAMES                 = [
       "refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
     ]
     PRELUDE_SILU_NAMES = [
       "refiner_timestep_silu", "context_silu", "time_in.silu",
+    ]
+    PRELUDE_SECOND_LINEAR_NAMES = [
+      "refiner_timestep", "context_embed", "time_in.mlp2",
     ]
 
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
@@ -78,6 +84,8 @@ module ML::Video
     @prelude_input_bf16_control : Bool
     @prelude_linear_bf16_control : Bool
     @prelude_silu_bf16_control : Bool
+    @prelude_second_linear_bf16_control : Bool
+    @prelude_add_bf16_control : Bool
     @named_bytes : NamedBytes
     @arena : Arena? = nil
     @weight_stage : ML::MetalBuffer? = nil
@@ -102,6 +110,8 @@ module ML::Video
     getter prelude_input_bf16_control : Bool
     getter prelude_linear_bf16_control : Bool
     getter prelude_silu_bf16_control : Bool
+    getter prelude_second_linear_bf16_control : Bool
+    getter prelude_add_bf16_control : Bool
 
     def self.checkpoint_bindings : Array(WeightBinding)
       bindings = [] of WeightBinding
@@ -156,12 +166,20 @@ module ML::Video
     end
 
     def self.validate_precision_controls!(input_bf16 : Bool, linear_bf16 : Bool,
-                                          silu_bf16 : Bool) : Nil
+                                          silu_bf16 : Bool,
+                                          second_linear_bf16 : Bool = false,
+                                          add_bf16 : Bool = false) : Nil
       if linear_bf16 && !input_bf16
         raise ArgumentError.new("Prelude linear BF16 control requires the input BF16 control")
       end
       if silu_bf16 && !linear_bf16
         raise ArgumentError.new("Prelude SiLU BF16 control requires the linear BF16 control")
+      end
+      if second_linear_bf16 && !silu_bf16
+        raise ArgumentError.new("Prelude second-linear BF16 control requires the SiLU BF16 control")
+      end
+      if add_bf16 && !second_linear_bf16
+        raise ArgumentError.new("Prelude add BF16 control requires the second-linear BF16 control")
       end
     end
 
@@ -202,7 +220,9 @@ module ML::Video
                    retain_padding : Bool = false,
                    prelude_input_bf16_control : Bool = DEFAULT_PRELUDE_INPUT_BF16_CONTROL,
                    prelude_linear_bf16_control : Bool = DEFAULT_PRELUDE_LINEAR_BF16_CONTROL,
-                   prelude_silu_bf16_control : Bool = DEFAULT_PRELUDE_SILU_BF16_CONTROL)
+                   prelude_silu_bf16_control : Bool = DEFAULT_PRELUDE_SILU_BF16_CONTROL,
+                   prelude_second_linear_bf16_control : Bool = DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL,
+                   prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -213,8 +233,11 @@ module ML::Video
       @prelude_input_bf16_control = prelude_input_bf16_control
       @prelude_linear_bf16_control = prelude_linear_bf16_control
       @prelude_silu_bf16_control = prelude_silu_bf16_control
+      @prelude_second_linear_bf16_control = prelude_second_linear_bf16_control
+      @prelude_add_bf16_control = prelude_add_bf16_control
       self.class.validate_precision_controls!(@prelude_input_bf16_control,
-        @prelude_linear_bf16_control, @prelude_silu_bf16_control)
+        @prelude_linear_bf16_control, @prelude_silu_bf16_control,
+        @prelude_second_linear_bf16_control, @prelude_add_bf16_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -305,8 +328,7 @@ module ML::Video
       encode_linear(chain, "context_linear1")
       encode_activation(chain, "context_silu")
       encode_linear(chain, "context_embed")
-      MetalOps.add(chain.encoder, checkpoint("refiner_timestep"), checkpoint("context_embed"),
-        checkpoint("c"), HIDDEN_DIM)
+      encode_conditioning_add(chain.encoder)
       encode_linear(chain, "input_embed")
       encode_linear(chain, "time_in.mlp1")
       encode_activation(chain, "time_in.silu")
@@ -484,6 +506,11 @@ module ML::Video
           ML::Metal::ComputePipeline.new(CLEAR_KERNEL, CLEAR_SOURCE)
         end
       end
+      if @prelude_add_bf16_control
+        @pipelines[C_ADD_KERNEL] = ML::Metal::PipelineCache.get(C_ADD_KERNEL) do
+          ML::Metal::ComputePipeline.new(C_ADD_KERNEL, SOURCE)
+        end
+      end
     end
 
     private def prepare_plans! : Nil
@@ -600,8 +627,34 @@ module ML::Video
       MetalLinearMPS.project(chain.encoder, entry.input, entry.weight, entry.bias,
         entry.output, entry.rows, entry.input_dim, entry.output_dim,
         entry.weight_dtype, entry.bias_dtype, entry.plan, weight_stage,
-        round_output_bf16: @prelude_linear_bf16_control &&
-                           PRELUDE_FIRST_LINEAR_NAMES.includes?(name))
+        round_output_bf16: (@prelude_linear_bf16_control &&
+                            PRELUDE_FIRST_LINEAR_NAMES.includes?(name)) ||
+                           (@prelude_second_linear_bf16_control &&
+                            PRELUDE_SECOND_LINEAR_NAMES.includes?(name)))
+    end
+
+    private def encode_conditioning_add(e : ML::Metal::ComputeEncoder) : Nil
+      timestep = checkpoint("refiner_timestep")
+      context = checkpoint("context_embed")
+      output = checkpoint("c")
+      unless @prelude_add_bf16_control
+        MetalOps.add(e, timestep, context, output, HIDDEN_DIM)
+        return
+      end
+
+      count = HIDDEN_DIM.to_i64
+      MetalOps.dims(HIDDEN_DIM)
+      MetalOps.check(timestep, count)
+      MetalOps.check(context, count)
+      MetalOps.check(output, count)
+      MetalOps.inplace_or_distinct(timestep, output)
+      MetalOps.inplace_or_distinct(context, output)
+      e.set_pipeline(@pipelines[C_ADD_KERNEL])
+        .set_buffer(timestep, 0)
+        .set_buffer(context, 1)
+        .set_buffer(output, 2, ML::Metal::BufferAccess::Write)
+        .set_value(HIDDEN_DIM.to_u32, 3)
+        .dispatch_1d(HIDDEN_DIM)
     end
 
     private def encode_activation(chain : ML::Metal::MPSCommandChain, name : String) : Nil

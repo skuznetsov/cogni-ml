@@ -15,22 +15,70 @@ import hy_nomas_reference_refiner_compare as compare
 
 class RefinerAdmissionTests(unittest.TestCase):
     def test_connected_prelude_controls_require_boolean_dependencies(self):
-        self.assertEqual(compare._validate_prelude_controls({}), dict(
+        defaults = dict(
             prelude_input_bf16_control=False,
             prelude_linear_bf16_control=False,
-            prelude_silu_bf16_control=False))
+            prelude_silu_bf16_control=False,
+            prelude_second_linear_bf16_control=False,
+            prelude_add_bf16_control=False)
+        document = dict(defaults, full_bf16_prelude_parity=False)
+        self.assertEqual(compare._validate_prelude_controls(document), defaults)
         enabled = dict(prelude_input_bf16_control=True,
                        prelude_linear_bf16_control=True,
-                       prelude_silu_bf16_control=True)
-        self.assertEqual(compare._validate_prelude_controls(enabled), enabled)
+                       prelude_silu_bf16_control=True,
+                       prelude_second_linear_bf16_control=True,
+                       prelude_add_bf16_control=True)
+        enabled_document = dict(enabled, full_bf16_prelude_parity=False)
+        self.assertEqual(compare._validate_prelude_controls(enabled_document), enabled)
+        with self.assertRaisesRegex(compare.Error, "boolean"):
+            compare._validate_prelude_controls({})
         for name in enabled:
             with self.subTest(control=name), self.assertRaisesRegex(compare.Error, "boolean"):
-                compare._validate_prelude_controls({**enabled, name: 1})
+                compare._validate_prelude_controls({**enabled_document, name: 1})
+            missing = dict(enabled_document)
+            missing.pop(name)
+            with self.subTest(missing=name), self.assertRaisesRegex(compare.Error, "boolean"):
+                compare._validate_prelude_controls(missing)
         for invalid in [dict(prelude_linear_bf16_control=True),
                         dict(prelude_silu_bf16_control=True),
-                        dict(prelude_input_bf16_control=True, prelude_silu_bf16_control=True)]:
+                        dict(prelude_input_bf16_control=True, prelude_silu_bf16_control=True),
+                        dict(prelude_second_linear_bf16_control=True),
+                        dict(prelude_add_bf16_control=True),
+                        {**enabled, "prelude_silu_bf16_control": False},
+                        {**enabled, "prelude_second_linear_bf16_control": False}]:
             with self.subTest(controls=invalid), self.assertRaisesRegex(compare.Error, "requires"):
-                compare._validate_prelude_controls(invalid)
+                compare._validate_prelude_controls({**document, **invalid})
+
+    def test_connected_controls_reject_missing_or_promoted_full_parity(self):
+        flags = dict.fromkeys(("prelude_input_bf16_control", "prelude_linear_bf16_control",
+                               "prelude_silu_bf16_control", "prelude_second_linear_bf16_control",
+                               "prelude_add_bf16_control"), False)
+        for value in (True, 0, None, "false"):
+            with self.subTest(value=value), self.assertRaisesRegex(compare.Error, "full BF16 prelude parity"):
+                compare._validate_prelude_controls(dict(flags, full_bf16_prelude_parity=value))
+        with self.assertRaisesRegex(compare.Error, "full BF16 prelude parity"):
+            compare._validate_prelude_controls(flags)
+
+    def test_controlled_boundary_inventory_is_cumulative_and_excludes_refiner_blocks(self):
+        flags = ("prelude_input_bf16_control", "prelude_linear_bf16_control",
+                 "prelude_silu_bf16_control", "prelude_second_linear_bf16_control",
+                 "prelude_add_bf16_control")
+        boundaries = ("masked_mean", "refiner_timestep_sinusoidal", "time_in.sinusoidal",
+                      "refiner_timestep_mlp1", "context_linear1", "input_embed", "time_in.mlp1",
+                      "refiner_timestep_silu", "context_silu", "time_in.silu",
+                      "refiner_timestep", "context_embed", "vec", "c")
+        for enabled_count, expected_count in enumerate((0, 3, 7, 10, 13, 14)):
+            document = {**dict.fromkeys(flags, False), **dict.fromkeys(flags[:enabled_count], True),
+                        "full_bf16_prelude_parity": False}
+            controls = compare._validate_prelude_controls(document)
+            names = compare._controlled_boundaries(controls)
+            self.assertEqual(names, boundaries[:expected_count])
+            self.assertEqual(len(names), expected_count)
+            self.assertEqual(len(set(names)), expected_count)
+            self.assertFalse(any(name.startswith("block") for name in names))
+            self.assertEqual("c" in names, enabled_count == 5)
+            for name in ("refiner_timestep", "context_embed", "vec"):
+                self.assertEqual(name in names, enabled_count >= 4)
 
     def test_compiled_pins_cover_linear_kernel_and_activation_bridge(self):
         self.assertIn("src/ml/video/kernels/linear_mps.metal", compare.NATIVE_SOURCE_FILES)

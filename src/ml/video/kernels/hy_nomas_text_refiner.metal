@@ -169,3 +169,13 @@ kernel void hy_nomas_text_roundtrip_bf16_f32(
   if (index >= count) return;
   values[index] = as_type<float>((uint)hy_text_round_bf16(values[index]) << 16);
 }
+
+kernel void hy_nomas_text_c_add_bf16_f32(
+    device const float *timestep [[buffer(0)]],
+    device const float *context [[buffer(1)]],
+    device float *c [[buffer(2)]],
+    constant uint &count [[buffer(3)]],
+    uint index [[thread_position_in_grid]]) {
+  if (index >= count) return;
+  c[index] = hy_text_roundtrip_bf16(timestep[index] + context[index]);
+}

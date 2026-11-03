@@ -39,6 +39,8 @@ refiner_trace_output_manifest = ""
 prelude_input_bf16_control = false
 prelude_linear_bf16_control = false
 prelude_silu_bf16_control = false
+prelude_second_linear_bf16_control = false
+prelude_add_bf16_control = false
 max_named_bytes = 4_i64 * 1024**3
 execute = false
 OptionParser.parse do |parser|
@@ -52,6 +54,8 @@ OptionParser.parse do |parser|
   parser.on("--refiner-input-bf16-control", "Round only the native refiner mean and timestep sinusoidal inputs through BF16") { prelude_input_bf16_control = true }
   parser.on("--refiner-linear-bf16-control", "Round the four first prelude linear outputs through BF16; requires input control") { prelude_linear_bf16_control = true }
   parser.on("--refiner-silu-bf16-control", "Use BF16-typed graphs for the three prelude SiLUs; requires linear control") { prelude_silu_bf16_control = true }
+  parser.on("--refiner-second-linear-bf16-control", "Round the three second prelude linear outputs to BF16 with RNE; requires SiLU control") { prelude_second_linear_bf16_control = true }
+  parser.on("--refiner-add-bf16-control", "Round both operands and the c add output to BF16 with RNE; requires second-linear control") { prelude_add_bf16_control = true }
   parser.on("--max-named-bytes N", "Aggregate named Metal-buffer cap, up to 8 GiB") { |value| max_named_bytes = value.to_i64 }
   parser.on("--execute", "Run native timeline/patch/refiner on MPS and capture after one terminal drain") { execute = true }
 end
@@ -65,11 +69,13 @@ raise ArgumentError.new("--execute requires a fresh output manifest path") if ex
 if !refiner_trace_output_manifest.empty? && !execute
   raise ArgumentError.new("--refiner-trace-output requires --execute")
 end
-if (prelude_input_bf16_control || prelude_linear_bf16_control || prelude_silu_bf16_control) && refiner_trace_output_manifest.empty?
+if (prelude_input_bf16_control || prelude_linear_bf16_control || prelude_silu_bf16_control ||
+   prelude_second_linear_bf16_control || prelude_add_bf16_control) && refiner_trace_output_manifest.empty?
   raise ArgumentError.new("refiner BF16 controls require --refiner-trace-output")
 end
 HyNomasReferenceRefinerTrace.prelude_metadata(prelude_input_bf16_control,
-  prelude_linear_bf16_control, prelude_silu_bf16_control)
+  prelude_linear_bf16_control, prelude_silu_bf16_control,
+  prelude_second_linear_bf16_control, prelude_add_bf16_control)
 
 timeline_inputs = HyNomasGeneration::TimelineInputs.new(timeline_path, timeline_sha)
 reference_input = HyNomasReferenceLatent::Input.new(reference_latent_path, reference_latent_sha)
@@ -169,7 +175,9 @@ begin
     global_arena, text_named_bytes, retain_padding: true,
     prelude_input_bf16_control: prelude_input_bf16_control,
     prelude_linear_bf16_control: prelude_linear_bf16_control,
-    prelude_silu_bf16_control: prelude_silu_bf16_control)
+    prelude_silu_bf16_control: prelude_silu_bf16_control,
+    prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
+    prelude_add_bf16_control: prelude_add_bf16_control)
   timeline_plan = ML::Video::HyNomasTimelineOps::Plan.new(geometry,
     timeline: latent_timeline, segment_latent: segment,
     cosine_bank: cosine_bank, sine_bank: sine_bank,
@@ -238,7 +246,9 @@ begin
       terminal_waits: chain.not_nil!.wait_count,
       prelude_input_bf16_control: prelude_input_bf16_control,
       prelude_linear_bf16_control: prelude_linear_bf16_control,
-      prelude_silu_bf16_control: prelude_silu_bf16_control)
+      prelude_silu_bf16_control: prelude_silu_bf16_control,
+      prelude_second_linear_bf16_control: prelude_second_linear_bf16_control,
+      prelude_add_bf16_control: prelude_add_bf16_control)
     puts trace_result.to_json
   end
   puts plan_report

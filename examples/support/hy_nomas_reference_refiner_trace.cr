@@ -163,21 +163,33 @@ module HyNomasReferenceRefinerTrace
 
   def prelude_metadata(prelude_input_bf16_control : Bool = false,
                        prelude_linear_bf16_control : Bool = false,
-                       prelude_silu_bf16_control : Bool = false)
+                       prelude_silu_bf16_control : Bool = false,
+                       prelude_second_linear_bf16_control : Bool = false,
+                       prelude_add_bf16_control : Bool = false)
     if prelude_linear_bf16_control && !prelude_input_bf16_control
       raise ArgumentError.new("linear BF16 control requires input BF16 control")
     end
     if prelude_silu_bf16_control && !prelude_linear_bf16_control
       raise ArgumentError.new("SiLU BF16 control requires linear BF16 control")
     end
+    if prelude_second_linear_bf16_control && !prelude_silu_bf16_control
+      raise ArgumentError.new("second-linear BF16 control requires SiLU BF16 control")
+    end
+    if prelude_add_bf16_control && !prelude_second_linear_bf16_control
+      raise ArgumentError.new("add BF16 control requires second-linear BF16 control")
+    end
     {
-      prelude_input_bf16_control:        prelude_input_bf16_control,
-      prelude_linear_bf16_control:       prelude_linear_bf16_control,
-      prelude_silu_bf16_control:         prelude_silu_bf16_control,
-      full_bf16_prelude_parity:          false,
-      prelude_input_bf16_control_scope:  prelude_input_bf16_control ? "masked-mean sum, denominator, and quotient plus sinusoidal cos/sin output roundtrip only" : "disabled",
-      prelude_linear_bf16_control_scope: prelude_linear_bf16_control ? "post-bias output roundtrip of refiner_timestep_mlp1, context_linear1, input_embed, and time_in.mlp1 only" : "disabled",
-      prelude_silu_bf16_control_scope:   prelude_silu_bf16_control ? "BF16-declared negative, exp, add, and divide with explicit RNE output expansion in the three first-prelude SiLU graphs only; backend internal rounding unqualified" : "disabled",
+      prelude_input_bf16_control:               prelude_input_bf16_control,
+      prelude_linear_bf16_control:              prelude_linear_bf16_control,
+      prelude_silu_bf16_control:                prelude_silu_bf16_control,
+      prelude_second_linear_bf16_control:       prelude_second_linear_bf16_control,
+      prelude_add_bf16_control:                 prelude_add_bf16_control,
+      full_bf16_prelude_parity:                 false,
+      prelude_input_bf16_control_scope:         prelude_input_bf16_control ? "masked-mean sum, denominator, and quotient plus sinusoidal cos/sin output roundtrip only" : "disabled",
+      prelude_linear_bf16_control_scope:        prelude_linear_bf16_control ? "post-bias output roundtrip of refiner_timestep_mlp1, context_linear1, input_embed, and time_in.mlp1 only" : "disabled",
+      prelude_silu_bf16_control_scope:          prelude_silu_bf16_control ? "BF16-declared negative, exp, add, and divide with explicit RNE output expansion in the three first-prelude SiLU graphs only; backend internal rounding unqualified" : "disabled",
+      prelude_second_linear_bf16_control_scope: prelude_second_linear_bf16_control ? "post-bias RNE-to-BF16 output roundtrip of refiner_timestep, context_embed, and time_in.mlp2 (trace tensor vec) projections only" : "disabled",
+      prelude_add_bf16_control_scope:           prelude_add_bf16_control ? "RNE-to-BF16 roundtrip of both operands and the c = refiner_timestep + context_embed sum only" : "disabled",
     }
   end
 
@@ -213,7 +225,9 @@ module HyNomasReferenceRefinerTrace
                    terminal_waits : Int32,
                    prelude_input_bf16_control : Bool = false,
                    prelude_linear_bf16_control : Bool = false,
-                   prelude_silu_bf16_control : Bool = false) : Hash(String, JSON::Any)
+                   prelude_silu_bf16_control : Bool = false,
+                   prelude_second_linear_bf16_control : Bool = false,
+                   prelude_add_bf16_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
            valid_sha256?(cache_fixture_manifest_sha256)
@@ -221,7 +235,8 @@ module HyNomasReferenceRefinerTrace
     end
     validate_execution!(encode_allocations, encode_readbacks, preterminal_waits, terminal_waits)
     prelude = prelude_metadata(prelude_input_bf16_control,
-      prelude_linear_bf16_control, prelude_silu_bf16_control)
+      prelude_linear_bf16_control, prelude_silu_bf16_control,
+      prelude_second_linear_bf16_control, prelude_add_bf16_control)
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner trace source inventory or order mismatch")
     end
@@ -269,10 +284,14 @@ module HyNomasReferenceRefinerTrace
         json.field("prelude_input_bf16_control", prelude[:prelude_input_bf16_control])
         json.field("prelude_linear_bf16_control", prelude[:prelude_linear_bf16_control])
         json.field("prelude_silu_bf16_control", prelude[:prelude_silu_bf16_control])
+        json.field("prelude_second_linear_bf16_control", prelude[:prelude_second_linear_bf16_control])
+        json.field("prelude_add_bf16_control", prelude[:prelude_add_bf16_control])
         json.field("full_bf16_prelude_parity", prelude[:full_bf16_prelude_parity])
         json.field("prelude_input_bf16_control_scope", prelude[:prelude_input_bf16_control_scope])
         json.field("prelude_linear_bf16_control_scope", prelude[:prelude_linear_bf16_control_scope])
         json.field("prelude_silu_bf16_control_scope", prelude[:prelude_silu_bf16_control_scope])
+        json.field("prelude_second_linear_bf16_control_scope", prelude[:prelude_second_linear_bf16_control_scope])
+        json.field("prelude_add_bf16_control_scope", prelude[:prelude_add_bf16_control_scope])
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)
