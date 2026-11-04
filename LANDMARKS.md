@@ -6,6 +6,23 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-FC2-RESIDUAL-2026-11-04] Both refiner blocks match the source on T0 V263
+
+- The default-off FC2/residual control requires source MLP SiLU control
+  and reuses existing kernels for BF16 RNE after FC2 bias, the gated
+  multiply and the residual add. The first mismatch without it is FC2.
+- All 37 trace records match the pinned MPS-adapter oracle byte-for-byte
+  through block1 output, including the 2,621,440 values consumed at the
+  block0 output/block1 input alias. The raw gate passes at `atol=rtol=2e-5`.
+- Disabled preservation and enabled repeat each match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved under the cache-aware 10% memory guard.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc2-residual.json`.
+  Rollback: omit `--refiner-source-fc2-residual-control`. Next: qualify
+  the T0 DiT reference K/V writer on the matched refiner output. Refresh
+  on source, binary, runtime, input, weights, layout, precision or evidence changes.
+
 ### [LM-HY-NOMAS-REFINER-SILU-2026-11-04] Block0 is exact through MLP SiLU
 
 - Default-off BF16 RNE at the F32 SiLU output matches the pinned

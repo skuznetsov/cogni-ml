@@ -1,5 +1,36 @@
 # Hy-Nomas local draft suite
 
+## Connected FC2 and second residual (2026-11-04)
+
+Status: VERIFIED for the two connected refiner blocks on frozen T0 V263.
+The default-off `--refiner-source-fc2-residual-control` requires source
+MLP SiLU control. It applies BF16 RNE after FC2 bias, after multiplying
+by the MLP gate, and after adding the residual in each block. Both GPU
+operations reuse their existing dispatches and buffers.
+
+The first raw mismatch with the flag disabled is block0 FC2. With the
+flag enabled, all 37 records through block1 output match the pinned
+MPS-adapter trace byte-for-byte, including all 2,621,440 values at the
+block0 output/block1 input alias. The raw GPU gate passes at unchanged
+`atol=rtol=2e-5` for full, valid and padded regions. The earlier GPU
+replay found 27,408 mismatches when rounding only the residual sum.
+
+Guarded build, 33 Crystal examples, 89 Python tests and both GPU
+comparisons passed their scoped checks. Disabled preservation and a
+fresh enabled repeat each match across 62 records. Each capture retains
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one terminal drain. The cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop remained in force.
+Minimum sampled headroom was 18.45 GiB, peak sampled process-group
+footprint was 2.18 GiB, and observed swap growth was zero.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc2-residual.json`.
+Rollback: omit `--refiner-source-fc2-residual-control`. The result covers
+the standalone refiner probe on this input. Next: feed the qualified
+block1 output to the T0 DiT reference K/V writer and compare its output.
+Refresh on source, binary, runtime, input, weights, layout, precision
+or evidence changes.
+
 ## Connected SiLU output rounding (2026-11-04)
 
 Status: VERIFIED for connected block0 MLP SiLU on frozen T0 V263.
@@ -19,7 +50,8 @@ matches all 2,621,440 source values exactly. With that FC2 output and
 the exact gate and first residual, the second residual also matches
 all 2,621,440 values exactly with RNE after both the multiply and the
 add. Final-only rounding on exact operands leaves 27,408 values over
-tolerance. The connected FC2 and second residual still use the F32 path.
+tolerance. The connected FC2 and second residual used the F32 path in
+this capture.
 
 The guarded build, 32 Crystal examples, 87 Python tests, disabled and
 fresh-repeat preservation, and GPU comparisons passed their scoped

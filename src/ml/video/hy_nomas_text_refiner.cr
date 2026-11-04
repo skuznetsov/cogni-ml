@@ -257,6 +257,12 @@ module ML::Video
       end
     end
 
+    def self.validate_source_fc2_residual_control!(enabled : Bool, source_mlp_silu_control : Bool) : Nil
+      if enabled && !source_mlp_silu_control
+        raise ArgumentError.new("Source FC2/residual control requires source MLP SiLU control")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -286,7 +292,8 @@ module ML::Video
                    @source_projection_residual_control : Bool = false,
                    @source_norm2_control : Bool = false,
                    @source_fc1_control : Bool = false,
-                   @source_mlp_silu_control : Bool = false)
+                   @source_mlp_silu_control : Bool = false,
+                   @source_fc2_residual_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -312,6 +319,7 @@ module ML::Video
       self.class.validate_source_norm2_control!(@source_norm2_control, @source_projection_residual_control)
       self.class.validate_source_fc1_control!(@source_fc1_control, @source_norm2_control)
       self.class.validate_source_mlp_silu_control!(@source_mlp_silu_control, @source_fc1_control)
+      self.class.validate_source_fc2_residual_control!(@source_fc2_residual_control, @source_mlp_silu_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -799,10 +807,10 @@ module ML::Video
         round_output_bf16: @source_norm2_control)
       encode_linear(chain, "#{prefix}.mlp_fc1", round_output_bf16: @source_fc1_control)
       encode_activation(chain, "#{prefix}.mlp_silu")
-      encode_linear(chain, "#{prefix}.mlp_fc2")
+      encode_linear(chain, "#{prefix}.mlp_fc2", round_output_bf16: @source_fc2_residual_control)
       gated_residual(chain.encoder, checkpoint("#{prefix}.residual1"),
         checkpoint("#{prefix}.mlp_fc2"), checkpoint("#{prefix}.gate_mlp"),
-        checkpoint("#{prefix}.output"))
+        checkpoint("#{prefix}.output"), round_bf16: @source_fc2_residual_control)
     end
 
     private def gated_residual(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,

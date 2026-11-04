@@ -240,7 +240,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    source_projection_residual_control : Bool = false,
                    source_norm2_control : Bool = false,
                    source_fc1_control : Bool = false,
-                   source_mlp_silu_control : Bool = false) : Hash(String, JSON::Any)
+                   source_mlp_silu_control : Bool = false,
+                   source_fc2_residual_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -266,6 +267,9 @@ module HyNomasReferenceRefinerBlocksTrace
     end
     if source_mlp_silu_control && !source_fc1_control
       raise ArgumentError.new("source MLP SiLU trace requires source FC1 control")
+    end
+    if source_fc2_residual_control && !source_mlp_silu_control
+      raise ArgumentError.new("source FC2/residual trace requires source MLP SiLU control")
     end
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner block trace source inventory or order mismatch")
@@ -341,6 +345,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("source_norm2_control", source_norm2_control)
         json.field("source_fc1_control", source_fc1_control)
         json.field("source_mlp_silu_control", source_mlp_silu_control)
+        json.field("source_fc2_residual_control", source_fc2_residual_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

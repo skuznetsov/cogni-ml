@@ -89,6 +89,15 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     end
   end
 
+  it "requires source MLP SiLU before FC2 and second residual rounding" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_fc2_residual_control!(false, false)
+    plan.validate_source_fc2_residual_control!(true, true)
+    expect_raises(ArgumentError, /requires source MLP SiLU control/) do
+      plan.validate_source_fc2_residual_control!(true, false)
+    end
+  end
+
   it "requires each prelude precision control to include its preceding boundary" do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)
