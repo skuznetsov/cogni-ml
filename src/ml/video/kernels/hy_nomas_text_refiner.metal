@@ -125,9 +125,9 @@ kernel void hy_nomas_text_split_adaln_f32(
   gate_mlp[channel] = adaln[channel + dim];
 }
 
-// Upstream apply_gate and residual addition are separate F32 operations.
+// Upstream apply_gate and residual addition materialize separate outputs.
 // Keep the product rounded before adding the residual, including broadcast
-// gates; contraction here can be amplified by the subsequent MLP projection.
+// gates, with BF16 boundaries in the source precision control.
 kernel void hy_nomas_text_gated_residual_f32(
     device const float *input [[buffer(0)]],
     device const float *delta [[buffer(1)]],
@@ -135,11 +135,14 @@ kernel void hy_nomas_text_gated_residual_f32(
     device float *output [[buffer(3)]],
     constant uint &count [[buffer(4)]],
     constant uint &dim [[buffer(5)]],
+    constant uint &round_bf16 [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
 #pragma clang fp contract(off)
   if (index >= count) return;
   float product = delta[index] * gate[index % dim];
-  output[index] = input[index] + product;
+  if (round_bf16 != 0u) product = hy_text_roundtrip_bf16(product);
+  float sum = input[index] + product;
+  output[index] = round_bf16 != 0u ? hy_text_roundtrip_bf16(sum) : sum;
 }
 
 kernel void hy_nomas_text_layer_norm_affine_f32(

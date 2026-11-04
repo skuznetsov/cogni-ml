@@ -236,7 +236,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    prelude_add_bf16_control : Bool,
                    block_boundaries_bf16_control : Bool = false,
                    qkv_bf16_control : Bool = false,
-                   source_attention_control : Bool = false) : Hash(String, JSON::Any)
+                   source_attention_control : Bool = false,
+                   source_projection_residual_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -250,6 +251,9 @@ module HyNomasReferenceRefinerBlocksTrace
     validate_qkv_control!(block_boundaries_bf16_control, qkv_bf16_control)
     if source_attention_control && !(qkv_bf16_control && valid_text_tokens == 263)
       raise ArgumentError.new("source attention trace requires BF16 QKV and V263")
+    end
+    if source_projection_residual_control && !source_attention_control
+      raise ArgumentError.new("source projection/residual trace requires source attention control")
     end
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner block trace source inventory or order mismatch")
@@ -321,6 +325,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("block_boundaries_bf16_control", block_boundaries_bf16_control)
         json.field("qkv_bf16_control", qkv_bf16_control)
         json.field("source_attention_control", source_attention_control)
+        json.field("source_projection_residual_control", source_projection_residual_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

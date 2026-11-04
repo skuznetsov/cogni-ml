@@ -44,6 +44,16 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     source.includes?("embedding[index + half_dim] = precise::sin(phase);").should be_true
   end
 
+  it "limits projection and first residual BF16 rounding to the source attention path" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_projection_residual_control!(false, false)
+    plan.validate_source_projection_residual_control!(true, true)
+    expect_raises(ArgumentError, /requires source attention control/) do
+      plan.validate_source_projection_residual_control!(true, false)
+    end
+    ML::Video::HyNomasTextRefinerMPSPlan::ATTENTION_PROJECTION_LINEAR_NAMES.should eq(["block0.proj", "block1.proj"])
+  end
+
   it "requires connected norm1 boundaries before QKV BF16 output rounding" do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, true, true, true, true, true)
     expect_raises(ArgumentError, /QKV BF16 control requires the block-boundary BF16 control/) do

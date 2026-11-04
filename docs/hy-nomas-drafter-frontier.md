@@ -1,5 +1,52 @@
 # Hy-Nomas local draft suite
 
+## Connected projection and first residual (2026-11-04)
+
+The opt-in `--refiner-source-projection-residual-control` requires source
+attention. Both text-refiner blocks round their attention projection in the
+existing post-bias epilogue. Their first residual rounds the gated product
+and the sum separately in one uncontracted Metal dispatch. The FFN residual
+retains its original F32 arithmetic.
+
+Status: VERIFIED for block0 projection and first residual on frozen T0
+V263. The native block0 context, projection and first residual
+each match all 2,621,440 source values byte-for-byte. The first divergence
+advances to `block0.norm2` in the full, valid and padded regions. Block1
+already receives a different input. Its projection and first residual
+fail the exact checks on 357,902 and 188,667 values respectively. Both
+complete block outputs fail the numeric gate.
+
+At unchanged `atol=rtol=2e-5`, the native norm2 has 514,781 mismatches
+among 538,624 valid values (max .015609). A separate GPU replay checks the
+identical input residual and rounds the captured native norm2 output to
+BF16 RNE. All 2,621,440 results then match numerically at zero tolerance,
+including 2,082,816 padding values.
+
+DoD observed: guarded build, 29 CPU Crystal examples, one Metal residual
+example, 81 Python tests and GPU comparisons with sensitivity controls.
+The disabled path matches the previous run across all 62 trace records and
+their payloads. Fresh enabled processes also match byte-for-byte. Each
+native capture reports 944,620,612 named bytes, zero encode allocations,
+read APIs or preterminal waits, and one existing terminal drain. The
+GPU comparisons and replay each export one packed diagnostic vector.
+
+Risk: CAUTION (precision and unintended FFN rounding). Rollback: omit
+`--refiner-source-projection-residual-control`. The file-cache-aware floor is
+10%, with a 6 GiB process-group cap and 64 MiB swap-growth stop. Across
+eleven guarded stages, sampled peak group footprint was 2,344,044,848
+bytes, minimum headroom was 21,470,609,408 bytes, and observed swap growth
+was zero. The oracle is the inherited PyTorch 2.8.0 MPS-adapter capture at
+Hy-Nomas revision `911cea6458a89c2663513ff7099561ec190dd491`. The claim
+covers one finite input on this adapter. Same-lineage review is correlated.
+No video was generated. Refresh on source, binary, runtime, input, weights,
+layout, precision or evidence changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-projection-residual.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-projection-20261104.nqEETlr3`.
+
+Next falsifier: enable BF16 RNE in the existing native norm2 store, then test
+the FFN boundaries and the connected block1 input on the same frozen trace.
+
 ## Connected text-refiner attention qualification (2026-11-03)
 
 Status: VERIFIED for native block0 attention on the frozen T0 V263 input.

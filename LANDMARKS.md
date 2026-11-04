@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-PROJECTION-RESIDUAL-2026-11-04] Block0 exact through first residual; norm2 is next
+
+- Default-off source projection/residual control reuses the post-bias
+  BF16 epilogue and rounds the first gated product and sum in one Metal
+  dispatch. On frozen T0 V263 block0 projection and residual1 each match
+  all 2,621,440 values byte-for-byte. Block1 receives a different input
+  and both complete block outputs still fail.
+- First divergence: block0 norm2, including padding, at unchanged
+  `atol=rtol=2e-5`. Isolated GPU BF16 RNE of the captured native norm2
+  output gives 0/2,621,440 mismatches at zero tolerance.
+- Native disabled preservation and fresh enabled repeat are byte-exact
+  across 62 records. Named bytes and [0 encode allocations, 0 reads,
+  0 preterminal waits, 1 terminal drain] are preserved. Guard: cache-aware
+  10%, 6 GiB process-group cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-projection-residual.json`.
+  Rollback: omit `--refiner-source-projection-residual-control`. Next:
+  connect norm2 RNE and qualify the FFN boundaries and block1 input.
+  Scope is the pinned MPS-adapter capture. Refresh on source, binary,
+  runtime, input, weights, layout, precision or evidence changes.
+
 ### [LM-HY-NOMAS-CONNECTED-REFINER-ATTENTION-2026-11-03] Block0 context is exact; projection is next
 
 - Default-off source attention writes main256 and vector7 into one native

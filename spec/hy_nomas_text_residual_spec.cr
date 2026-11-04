@@ -26,7 +26,7 @@ describe "Hy-Nomas text refiner residual" do
         .set_buffer(arena["input"], 0).set_buffer(arena["delta"], 1)
         .set_buffer(arena["gate"], 2)
         .set_buffer(arena["output"], 3, ML::Metal::BufferAccess::Write)
-        .set_value(4_u32, 4).set_value(2_u32, 5).dispatch_1d(4)
+        .set_value(4_u32, 4).set_value(2_u32, 5).set_value(0_u32, 6).dispatch_1d(4)
       ML::MetalBuffer.hy_text_probe_allocations.should eq(allocations)
       ML::MetalBuffer.hy_text_probe_readbacks.should eq(readbacks)
       chain.wait_count.should eq(0)

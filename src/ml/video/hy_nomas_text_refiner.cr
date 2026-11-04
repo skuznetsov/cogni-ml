@@ -56,6 +56,7 @@ module ML::Video
     BLOCK_BOUNDARY_CONDITION_SILU_NAMES = ["block0.condition_silu", "block1.condition_silu"]
     BLOCK_BOUNDARY_ADALN_NAMES          = ["block0.adaLN", "block1.adaLN"]
     QKV_LINEAR_NAMES                    = ["block0.qkv", "block1.qkv"]
+    ATTENTION_PROJECTION_LINEAR_NAMES   = ["block0.proj", "block1.proj"]
 
     SOURCE       = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_text_refiner.metal") }}
     CLEAR_SOURCE = SOURCE + <<-METAL
@@ -232,6 +233,12 @@ module ML::Video
       end
     end
 
+    def self.validate_source_projection_residual_control!(enabled : Bool, source_attention_control : Bool) : Nil
+      if enabled && !source_attention_control
+        raise ArgumentError.new("Source projection/residual control requires source attention control")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -257,7 +264,8 @@ module ML::Video
                    prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL,
                    block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL,
                    qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL,
-                   @source_attention_control : Bool = false)
+                   @source_attention_control : Bool = false,
+                   @source_projection_residual_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -278,6 +286,8 @@ module ML::Video
         @block_boundaries_bf16_control, @qkv_bf16_control)
       self.class.validate_source_attention_control!(@source_attention_control,
         @qkv_bf16_control, @valid_tokens, @processed_tokens, @attention_precision)
+      self.class.validate_source_projection_residual_control!(@source_projection_residual_control,
+        @source_attention_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -682,7 +692,9 @@ module ML::Video
                             PRELUDE_SECOND_LINEAR_NAMES.includes?(name)) ||
                            (@block_boundaries_bf16_control &&
                             BLOCK_BOUNDARY_ADALN_NAMES.includes?(name)) ||
-                           (@qkv_bf16_control && QKV_LINEAR_NAMES.includes?(name)))
+                           (@qkv_bf16_control && QKV_LINEAR_NAMES.includes?(name)) ||
+                           (@source_projection_residual_control &&
+                            ATTENTION_PROJECTION_LINEAR_NAMES.includes?(name)))
     end
 
     private def encode_conditioning_add(e : ML::Metal::ComputeEncoder) : Nil
@@ -750,7 +762,8 @@ module ML::Video
       end
       encode_linear(chain, "#{prefix}.proj")
       gated_residual(chain.encoder, source, checkpoint("#{prefix}.proj"),
-        checkpoint("#{prefix}.gate_msa"), checkpoint("#{prefix}.residual1"))
+        checkpoint("#{prefix}.gate_msa"), checkpoint("#{prefix}.residual1"),
+        round_bf16: @source_projection_residual_control)
 
       norm_affine(chain.encoder, checkpoint("#{prefix}.residual1"),
         checkpoint("#{prefix}.norm2"),
@@ -765,12 +778,14 @@ module ML::Video
 
     private def gated_residual(e : ML::Metal::ComputeEncoder, input : ML::MetalBuffer,
                                delta : ML::MetalBuffer, gate : ML::MetalBuffer,
-                               output : ML::MetalBuffer) : Nil
+                               output : ML::MetalBuffer, *, round_bf16 : Bool = false) : Nil
       e.set_pipeline(@pipelines[RESIDUAL_KERNEL])
         .set_buffer(input, 0).set_buffer(delta, 1).set_buffer(gate, 2)
         .set_buffer(output, 3, ML::Metal::BufferAccess::Write)
         .set_value((@processed_tokens * HIDDEN_DIM).to_u32, 4)
-        .set_value(HIDDEN_DIM.to_u32, 5).dispatch_1d(@processed_tokens * HIDDEN_DIM)
+        .set_value(HIDDEN_DIM.to_u32, 5)
+        .set_value(round_bf16 ? 1_u32 : 0_u32, 6)
+        .dispatch_1d(@processed_tokens * HIDDEN_DIM)
     end
 
     private def split_qkv(e : ML::Metal::ComputeEncoder, qkv : ML::MetalBuffer,
