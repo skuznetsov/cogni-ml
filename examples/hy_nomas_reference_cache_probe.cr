@@ -48,6 +48,7 @@ qkv_bf16_control = false
 source_attention_control = false
 source_projection_residual_control = false
 source_norm2_control = false
+source_fc1_control = false
 max_named_bytes = 4_i64 * 1024**3
 execute = false
 OptionParser.parse do |parser|
@@ -69,6 +70,7 @@ OptionParser.parse do |parser|
   parser.on("--refiner-source-attention-control", "Use BF16 general attention with a native vector tail for the frozen V263 geometry; requires QKV BF16 control") { source_attention_control = true }
   parser.on("--refiner-source-projection-residual-control", "Round the attention projection and first gated residual at source BF16 boundaries; requires source attention control") { source_projection_residual_control = true }
   parser.on("--refiner-source-norm2-control", "Round post-attention norm2 output through BF16 in its affine store; requires source projection/residual control") { source_norm2_control = true }
+  parser.on("--refiner-source-fc1-control", "Round FC1 output through BF16 in its existing post-bias epilogue; requires source norm2 control") { source_fc1_control = true }
   parser.on("--max-named-bytes N", "Aggregate named Metal-buffer cap, up to 8 GiB") { |value| max_named_bytes = value.to_i64 }
   parser.on("--execute", "Run native timeline/patch/refiner on MPS and capture after one terminal drain") { execute = true }
 end
@@ -127,6 +129,8 @@ ML::Video::HyNomasTextRefinerMPSPlan.validate_source_projection_residual_control
   source_projection_residual_control, source_attention_control)
 ML::Video::HyNomasTextRefinerMPSPlan.validate_source_norm2_control!(
   source_norm2_control, source_projection_residual_control)
+ML::Video::HyNomasTextRefinerMPSPlan.validate_source_fc1_control!(
+  source_fc1_control, source_norm2_control)
 
 # Authenticate the exact production weight/cache index even for plan-only
 # admission. No Metal model is prepared unless --execute is explicit.
@@ -233,7 +237,8 @@ begin
     qkv_bf16_control: qkv_bf16_control,
     source_attention_control: source_attention_control,
     source_projection_residual_control: source_projection_residual_control,
-    source_norm2_control: source_norm2_control)
+    source_norm2_control: source_norm2_control,
+    source_fc1_control: source_fc1_control)
   timeline_plan = ML::Video::HyNomasTimelineOps::Plan.new(geometry,
     timeline: latent_timeline, segment_latent: segment,
     cosine_bank: cosine_bank, sine_bank: sine_bank,
@@ -330,7 +335,8 @@ begin
       qkv_bf16_control: qkv_bf16_control,
       source_attention_control: source_attention_control,
       source_projection_residual_control: source_projection_residual_control,
-      source_norm2_control: source_norm2_control)
+      source_norm2_control: source_norm2_control,
+      source_fc1_control: source_fc1_control)
     puts blocks_trace_result.to_json
   end
   puts plan_report

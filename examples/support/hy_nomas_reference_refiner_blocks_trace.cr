@@ -238,7 +238,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    qkv_bf16_control : Bool = false,
                    source_attention_control : Bool = false,
                    source_projection_residual_control : Bool = false,
-                   source_norm2_control : Bool = false) : Hash(String, JSON::Any)
+                   source_norm2_control : Bool = false,
+                   source_fc1_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -258,6 +259,9 @@ module HyNomasReferenceRefinerBlocksTrace
     end
     if source_norm2_control && !source_projection_residual_control
       raise ArgumentError.new("source norm2 trace requires source projection/residual control")
+    end
+    if source_fc1_control && !source_norm2_control
+      raise ArgumentError.new("source FC1 trace requires source norm2 control")
     end
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner block trace source inventory or order mismatch")
@@ -331,6 +335,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("source_attention_control", source_attention_control)
         json.field("source_projection_residual_control", source_projection_residual_control)
         json.field("source_norm2_control", source_norm2_control)
+        json.field("source_fc1_control", source_fc1_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

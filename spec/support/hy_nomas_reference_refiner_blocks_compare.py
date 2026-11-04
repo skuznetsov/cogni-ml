@@ -47,6 +47,7 @@ QKV_CONTROL_FIELD = "qkv_bf16_control"
 SOURCE_ATTENTION_CONTROL_FIELD = "source_attention_control"
 SOURCE_PROJECTION_RESIDUAL_CONTROL_FIELD = "source_projection_residual_control"
 SOURCE_NORM2_CONTROL_FIELD = "source_norm2_control"
+SOURCE_FC1_CONTROL_FIELD = "source_fc1_control"
 BLOCK_CONTROL_TENSORS = tuple(
     f"block{block}.{stage}" for block in range(2)
     for stage in ("condition_silu", "adaLN", "gate_msa", "gate_mlp", "norm1")
@@ -63,6 +64,8 @@ SOURCE_PROJECTION_RESIDUAL_TENSORS = (
 SOURCE_PROJECTION_RESIDUAL_COUNT = 1280 * 2048
 SOURCE_NORM2_TENSORS = ("block0.norm2", "block1.norm2")
 SOURCE_NORM2_COUNT = 1280 * 2048
+SOURCE_FC1_TENSORS = ("block0.mlp_fc1", "block1.mlp_fc1")
+SOURCE_FC1_COUNT = 1280 * 8192
 
 
 def _controlled_boundaries(native: Mapping[str, Any]) -> tuple[str, ...]:
@@ -123,6 +126,20 @@ def _source_norm2_control(native: Mapping[str, Any],
             raise Error("native source norm2 control must be a boolean when present")
     if enabled and not source_projection_residual_control:
         raise Error("native source norm2 control requires source projection/residual control")
+    return enabled
+
+
+def _source_fc1_control(native: Mapping[str, Any], source_norm2_control: bool) -> bool:
+    if type(source_norm2_control) is not bool:
+        raise Error("native source norm2 control must be a validated boolean")
+    if SOURCE_FC1_CONTROL_FIELD not in native:
+        enabled = False
+    else:
+        enabled = native[SOURCE_FC1_CONTROL_FIELD]
+        if type(enabled) is not bool:
+            raise Error("native source FC1 control must be a boolean when present")
+    if enabled and not source_norm2_control:
+        raise Error("native source FC1 control requires source norm2 control")
     return enabled
 
 
@@ -217,6 +234,13 @@ def _source_norm2_checks_passed(rows: list[dict[str, Any]], enabled: bool
     return _source_full_exact_checks_passed(
         rows, enabled, kind="source_norm2_full_exact", tensors=SOURCE_NORM2_TENSORS,
         expected_count=SOURCE_NORM2_COUNT, label="source norm2")
+
+
+def _source_fc1_checks_passed(rows: list[dict[str, Any]], enabled: bool
+                              ) -> dict[str, bool] | None:
+    return _source_full_exact_checks_passed(
+        rows, enabled, kind="source_fc1_full_exact", tensors=SOURCE_FC1_TENSORS,
+        expected_count=SOURCE_FC1_COUNT, label="source FC1")
 
 
 def shapes() -> dict[str, tuple[int, ...]]:
@@ -376,7 +400,8 @@ def validate_inputs(args: Any) -> dict[str, Any]:
     source_attention_control = _source_attention_control(native)
     source_projection_residual_control = _source_projection_residual_control(
         native, source_attention_control)
-    _source_norm2_control(native, source_projection_residual_control)
+    source_norm2_control = _source_norm2_control(native, source_projection_residual_control)
+    _source_fc1_control(native, source_norm2_control)
     _validate_pins(native.get("compiled_source_sha256"),
                    source_attention_control=source_attention_control)
     _require_fields(source, {**common, "source_refiner_manifest_sha256": args.source_refiner_sha256,
@@ -422,6 +447,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         inputs["native_document"], source_attention_control)
     source_norm2_control = _source_norm2_control(
         inputs["native_document"], source_projection_residual_control)
+    source_fc1_control = _source_fc1_control(inputs["native_document"], source_norm2_control)
 
     def compare(kind: str, name: str, region: str, actual: Any, expected: Any,
                 *, atol: float = ATOL, rtol: float = RTOL) -> None:
@@ -470,6 +496,9 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         if source_norm2_control and name in SOURCE_NORM2_TENSORS:
             compare("source_norm2_full_exact", name, "full", actual,
                     expected, atol=0.0, rtol=0.0)
+        if source_fc1_control and name in SOURCE_FC1_TENSORS:
+            compare("source_fc1_full_exact", name, "full", actual,
+                    expected, atol=0.0, rtol=0.0)
     control = torch.arange(16, device=device, dtype=torch.float32)
     compare("sensitivity_control", "a_vs_a", "full", control, control)
     compare("sensitivity_control", "deliberate_perturbation", "full", control+0.01, control)
@@ -499,6 +528,11 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                                   source_norm2_stage_passed["block0.norm2"])
     source_norm2_block1_passed = (None if source_norm2_stage_passed is None else
                                   source_norm2_stage_passed["block1.norm2"])
+    source_fc1_stage_passed = _source_fc1_checks_passed(rows, source_fc1_control)
+    source_fc1_block0_passed = (None if source_fc1_stage_passed is None else
+                                source_fc1_stage_passed["block0.mlp_fc1"])
+    source_fc1_block1_passed = (None if source_fc1_stage_passed is None else
+                                source_fc1_stage_passed["block1.mlp_fc1"])
     return dict(numeric_gate_passed=all(row["passed"] for row in raw),
                 source_bf16_representation_passed=all(row["passed"] for row in representation),
                 block_boundaries_bf16_control=inputs["native_document"][BLOCK_CONTROL_FIELD],
@@ -534,6 +568,12 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                 source_norm2_block1_exact_passed=source_norm2_block1_passed,
                 source_norm2_exact_passed=(None if source_norm2_stage_passed is None else
                     source_norm2_block0_passed is True and source_norm2_block1_passed is True),
+                source_fc1_control=source_fc1_control,
+                source_fc1_stage_exact_passed=source_fc1_stage_passed,
+                source_fc1_block0_exact_passed=source_fc1_block0_passed,
+                source_fc1_block1_exact_passed=source_fc1_block1_passed,
+                source_fc1_exact_passed=(None if source_fc1_stage_passed is None else
+                    source_fc1_block0_passed is True and source_fc1_block1_passed is True),
                 first_divergence={region: first_divergence(rows, region) for region in ("full", "valid", "padding")},
                 first_divergence_order="canonical dependency order; gates follow their adaLN producer, not hook observation time",
                 same_input_bytes=True, terminal_cpu_exports=1,
@@ -541,7 +581,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                     and not controls["deliberate_perturbation"]["passed"]
                     and not controls["non_bf16_representation"]["passed"]),
                 rows=rows,
-                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. When enabled, source-attention control adds exact valid-output comparisons for block 0 and block 1 independently and exact zero-padding checks for both native attention outputs; it makes no attention-internal or tail-probability claim. When source-projection/residual control is enabled, exact full-tensor comparisons cover the outputs after block 0 projection, block 0 first residual, block 1 projection, and block 1 first residual independently. When source norm2 control is enabled, exact full-tensor comparisons cover captured norm2 in block 0 and block 1 independently. Native controlled representation rows check the actual captured outputs, not source parity. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
+                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. When enabled, source-attention control adds exact valid-output comparisons for block 0 and block 1 independently and exact zero-padding checks for both native attention outputs; it makes no attention-internal or tail-probability claim. When source-projection/residual control is enabled, exact full-tensor comparisons cover the outputs after block 0 projection, block 0 first residual, block 1 projection, and block 1 first residual independently. When source norm2 control is enabled, exact full-tensor comparisons cover captured norm2 in block 0 and block 1 independently. When source FC1 control is enabled, exact full-tensor comparisons cover captured FC1 in block 0 and block 1 independently. Native controlled representation rows check the actual captured outputs, not source parity. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -594,7 +634,15 @@ def main(argv: list[str] | None = None) -> int:
                               "source_norm2_block0_exact_passed"],
                           source_norm2_block1_exact_passed=result[
                               "source_norm2_block1_exact_passed"],
-                          source_norm2_exact_passed=result["source_norm2_exact_passed"])))
+                          source_norm2_exact_passed=result["source_norm2_exact_passed"],
+                          source_fc1_control=result["source_fc1_control"],
+                          source_fc1_stage_exact_passed=result[
+                              "source_fc1_stage_exact_passed"],
+                          source_fc1_block0_exact_passed=result[
+                              "source_fc1_block0_exact_passed"],
+                          source_fc1_block1_exact_passed=result[
+                              "source_fc1_block1_exact_passed"],
+                          source_fc1_exact_passed=result["source_fc1_exact_passed"])))
     return 0
 
 

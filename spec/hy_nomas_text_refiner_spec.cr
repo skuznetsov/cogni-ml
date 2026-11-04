@@ -71,6 +71,15 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     end
   end
 
+  it "requires source norm2 before post-bias FC1 output rounding" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_fc1_control!(false, false)
+    plan.validate_source_fc1_control!(true, true)
+    expect_raises(ArgumentError, /requires source norm2 control/) do
+      plan.validate_source_fc1_control!(true, false)
+    end
+  end
+
   it "requires each prelude precision control to include its preceding boundary" do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)

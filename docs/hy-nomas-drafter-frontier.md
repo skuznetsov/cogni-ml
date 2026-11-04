@@ -1,5 +1,52 @@
 # Hy-Nomas local draft suite
 
+## Connected post-bias FC1 (2026-11-04)
+
+Status: VERIFIED for connected block0 FC1 on frozen T0 V263. The
+default-off `--refiner-source-fc1-control` requires source norm2 control.
+Both refiner blocks apply BF16 RNE in the existing FC1 post-bias epilogue.
+Block0 now matches the source byte-for-byte through FC1, including
+padding (10,485,760 values).
+
+At unchanged `atol=rtol=2e-5`, the first divergence advances to SiLU
+in the full, valid and padded regions. SiLU exceeds tolerance on
+8,852,457 of 10,485,760 values (max .015625). In a separate GPU replay
+on exact FC1 input, BF16 RNE of the captured F32 SiLU output matches all
+10,485,760 source values at zero tolerance. Eager BF16 SiLU also matches
+the source. Eager F32 SiLU matches the native raw SiLU exactly on this
+input.
+
+Connected FC2 exceeds tolerance on 534,233 of 538,624 valid values
+(max .127552). The second residual exceeds tolerance on 528,856 valid
+values (max .398254) and is also the input to block1. Block1 FC1 fails
+its exact gate on 1,907,855 values. Both complete connected outputs
+still fail, and the downstream mismatches include propagated error.
+
+The guarded build, 31 Crystal examples, 85 Python tests and GPU
+comparisons passed their scoped checks. Disabled mode preserves the
+previous run byte-for-byte across 62 trace records. Two fresh enabled
+processes also match across 62 records. Each native capture reports
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one existing terminal drain. Comparisons and
+replay each export one packed diagnostic vector.
+
+Risk: CAUTION (rounding at the wrong boundary or changing other linear
+outputs). Rollback: omit `--refiner-source-fc1-control`. The cache-aware
+10% floor, 6 GiB process-group cap and 64 MiB swap-growth stop stayed
+active. Across ten guarded stages, sampled peak group footprint was
+2,337,261,896 bytes, minimum headroom was 20,062,388,224 bytes and
+observed swap growth was zero. Scope is one finite input against the
+pinned PyTorch 2.8.0 MPS-adapter capture at Hy-Nomas revision
+`911cea6458a89c2663513ff7099561ec190dd491`. Same-lineage review is
+correlated. No video was generated. Refresh on source, binary, runtime,
+input, weights, layout, precision or evidence changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-fc1.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-fc1-20261104.pgDqwFh9`.
+
+Next falsifier: apply BF16 RNE within the existing connected SiLU graph
+and test FC2 and the second residual on the same frozen trace.
+
 ## Connected post-attention norm2 (2026-11-04)
 
 Status: VERIFIED for connected block0 norm2 on frozen T0 V263. The

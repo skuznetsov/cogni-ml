@@ -245,6 +245,12 @@ module ML::Video
       end
     end
 
+    def self.validate_source_fc1_control!(enabled : Bool, source_norm2_control : Bool) : Nil
+      if enabled && !source_norm2_control
+        raise ArgumentError.new("Source FC1 control requires source norm2 control")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -272,7 +278,8 @@ module ML::Video
                    qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL,
                    @source_attention_control : Bool = false,
                    @source_projection_residual_control : Bool = false,
-                   @source_norm2_control : Bool = false)
+                   @source_norm2_control : Bool = false,
+                   @source_fc1_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -296,6 +303,7 @@ module ML::Video
       self.class.validate_source_projection_residual_control!(@source_projection_residual_control,
         @source_attention_control)
       self.class.validate_source_norm2_control!(@source_norm2_control, @source_projection_residual_control)
+      self.class.validate_source_fc1_control!(@source_fc1_control, @source_norm2_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -689,12 +697,14 @@ module ML::Video
         .dispatch_1d(TIMESTEP_DIM // 2)
     end
 
-    private def encode_linear(chain : ML::Metal::MPSCommandChain, name : String) : Nil
+    private def encode_linear(chain : ML::Metal::MPSCommandChain, name : String,
+                              *, round_output_bf16 : Bool = false) : Nil
       entry = @linears[name]
       MetalLinearMPS.project(chain.encoder, entry.input, entry.weight, entry.bias,
         entry.output, entry.rows, entry.input_dim, entry.output_dim,
         entry.weight_dtype, entry.bias_dtype, entry.plan, weight_stage,
-        round_output_bf16: (@prelude_linear_bf16_control &&
+        round_output_bf16: round_output_bf16 ||
+                           (@prelude_linear_bf16_control &&
                             PRELUDE_FIRST_LINEAR_NAMES.includes?(name)) ||
                            (@prelude_second_linear_bf16_control &&
                             PRELUDE_SECOND_LINEAR_NAMES.includes?(name)) ||
@@ -777,7 +787,7 @@ module ML::Video
         checkpoint("#{prefix}.norm2"),
         "txt_in.individual_token_refiner.blocks.#{block}.norm2",
         round_output_bf16: @source_norm2_control)
-      encode_linear(chain, "#{prefix}.mlp_fc1")
+      encode_linear(chain, "#{prefix}.mlp_fc1", round_output_bf16: @source_fc1_control)
       encode_activation(chain, "#{prefix}.mlp_silu")
       encode_linear(chain, "#{prefix}.mlp_fc2")
       gated_residual(chain.encoder, checkpoint("#{prefix}.residual1"),
