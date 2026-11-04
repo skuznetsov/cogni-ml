@@ -648,9 +648,9 @@ $(BUILD_DIR)/hy_nomas_reference_decode_probe: examples/hy_nomas_reference_decode
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_reference_cache_probe: examples/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+$(BUILD_DIR)/hy_nomas_reference_cache_probe: examples/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_cache_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
-		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(abspath $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 $(BUILD_DIR)/hy_nomas_reference_block0_probe: examples/hy_nomas_reference_block0_probe.cr examples/support/hy_nomas_reference_block0_probe.cr src/ml/video/hy_nomas_reference_block_mps.cr src/ml/video/hy_nomas_mps_bf16_linear.cr src/ml/video/hy_nomas_reference_bf16.cr src/ml/video/hy_nomas_reference_kv_cache.cr src/ml/video/kernels/hy_nomas_block.metal src/ml/video/kernels/hy_nomas_reference_bf16.metal src/ml/video/kernels/hy_nomas_reference_kv_cache.metal $(wildcard examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(WAN_T5_MPS_OBJ) $(WAN_T5_RMS_MPS_OBJ) $(HY_NOMAS_MPS_OBJ) $(HY_NOMAS_COMPACT_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) $(HY_NOMAS_REFERENCE_ATTENTION_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \

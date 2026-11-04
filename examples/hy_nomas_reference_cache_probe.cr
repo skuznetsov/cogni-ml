@@ -9,6 +9,7 @@ require "./support/hy_nomas_reference_latent"
 require "./support/hy_nomas_reference_cache_probe"
 require "./support/hy_nomas_reference_refiner_trace"
 require "./support/hy_nomas_reference_refiner_blocks_trace"
+require "./support/hy_nomas_reference_history_capture"
 require "./support/hy_nomas_probe_instrumentation"
 
 module HyNomasReferenceCacheProbeCLI
@@ -38,6 +39,7 @@ reference_latent_sha = ""
 output_manifest = ""
 refiner_trace_output_manifest = ""
 refiner_blocks_trace_output_manifest = ""
+connected_history_output = ""
 prelude_input_bf16_control = false
 prelude_linear_bf16_control = false
 prelude_silu_bf16_control = false
@@ -54,7 +56,7 @@ source_fc2_residual_control = false
 max_named_bytes = 4_i64 * 1024**3
 execute = false
 OptionParser.parse do |parser|
-  parser.banner = "Export native reference-T0 timeline/noise/patch/refiner inputs for standalone block-0 cache comparison."
+  parser.banner = "Export native reference-T0 inputs and optionally record the connected block-0 history writer."
   parser.on("--timeline-inputs PATH", "Authenticated six-segment timeline manifest") { |value| timeline_path = value }
   parser.on("--timeline-inputs-sha256 SHA", "Trusted timeline manifest SHA-256") { |value| timeline_sha = value }
   parser.on("--reference-latent PATH", "Authenticated saved BF16 DCAE latent safetensors") { |value| reference_latent_path = value }
@@ -62,6 +64,7 @@ OptionParser.parse do |parser|
   parser.on("--output PATH", "Fresh output JSON manifest; sidecar is a sibling .tensors.bin") { |value| output_manifest = value }
   parser.on("--refiner-trace-output PATH", "Optional fresh separate refiner trace JSON manifest; sidecar is a sibling .tensors.bin") { |value| refiner_trace_output_manifest = value }
   parser.on("--refiner-block-trace-output PATH", "Optional fresh full two-block refiner trace JSON manifest; sidecar is a sibling .tensors.bin") { |value| refiner_blocks_trace_output_manifest = value }
+  parser.on("--connected-history-output PATH", "Record the connected BF16 block-0 store/read in a fresh JSON receipt and sibling safetensors; requires qualified refiner controls") { |value| connected_history_output = value }
   parser.on("--refiner-input-bf16-control", "Round only the native refiner mean and timestep sinusoidal inputs through BF16") { prelude_input_bf16_control = true }
   parser.on("--refiner-linear-bf16-control", "Round the four first prelude linear outputs through BF16; requires input control") { prelude_linear_bf16_control = true }
   parser.on("--refiner-silu-bf16-control", "Use BF16-typed graphs for the three prelude SiLUs; requires linear control") { prelude_silu_bf16_control = true }
@@ -93,6 +96,10 @@ if !refiner_blocks_trace_output_manifest.empty? && !execute
 end
 if !refiner_blocks_trace_output_manifest.empty? && refiner_trace_output_manifest.empty?
   raise ArgumentError.new("--refiner-block-trace-output requires --refiner-trace-output for linked prelude evidence")
+end
+connected_history = !connected_history_output.empty?
+if connected_history && !source_fc2_residual_control
+  raise ArgumentError.new("connected history requires the source FC2/residual control and its prerequisite controls")
 end
 if block_boundaries_bf16_control && refiner_blocks_trace_output_manifest.empty?
   raise ArgumentError.new("block-boundary BF16 control requires --refiner-block-trace-output")
@@ -152,6 +159,32 @@ unless weight_plan.staging_bytes == 0 && weight_plan.entries.size == HyNomasQ4Di
   reference_input.close
   raise ArgumentError.new("reference cache global weights must use exact direct BF16 residents")
 end
+history_config = HyNomasReferenceBlock0Setup.config(
+  ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl,
+  timeline_inputs.base.compact_text_tokens) if connected_history
+history_weight_file : ML::Video::CheckpointFile? = nil
+history_weight_plan : ML::Video::WeightPlan? = nil
+history_weight_sha : String? = nil
+history_named_bytes = 0_i64
+if config = history_config
+  block0 = admission.blocks.first
+  unless block0.block_index == 0 && block0.bf16_sha256 == HyNomasReferenceBlock0Probe::BLOCK0_WEIGHT_SHA256
+    raise ArgumentError.new("connected history requires the pinned block-0 BF16 shard")
+  end
+  history_weight_sha = block0.bf16_sha256
+  history_weight_file = ML::Video::BF16WeightCache.authenticate(block0.bf16_path, history_weight_sha)
+  history_weight_plan = ML::Video::HyNomasDualStreamBlock.weight_plan([history_weight_file], config,
+    max_named_bytes, resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+  unless history_weight_plan.staging_bytes == 0 && history_weight_plan.entries.size == HyNomasReferenceBlock0Setup.bindings.size
+    raise ArgumentError.new("connected history requires exact direct BF16 block weights")
+  end
+  active_rows = HyNomasReferenceHistoryProbe.active_rows(valid_text_tokens)
+  history_named_bytes = history_weight_plan.peak_bytes +
+                        HyNomasReferenceBlock0Setup.workspace_named_bytes(config, active_rows).values.sum +
+                        ML::Video::HyNomasReferenceMPSWorkspace.reference_extra_bytes(config) +
+                        HyNomasReferenceHistoryProbe.named_bytes(config.joint_tokens, active_rows) +
+                        config.text_tokens.to_i64 * config.dim * sizeof(Float32)
+end
 
 mask = timeline_inputs.base.mask
 text_named_bytes = ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(mask, retain_padding: true).total
@@ -162,9 +195,10 @@ segment_bytes = geometry.segment_bytes
 reference_bytes = HyNomasReferenceLatent::BF16_BYTES
 planned_named_bytes = weight_plan.peak_bytes + base_input_bytes + timeline_input_bytes +
                       segment_bytes + reference_bytes +
-                      HyNomasReferenceCacheProbeCLI.patch_named_bytes + text_named_bytes
+                      HyNomasReferenceCacheProbeCLI.patch_named_bytes + text_named_bytes + history_named_bytes
 unless planned_named_bytes <= max_named_bytes
   global_file.close
+  history_weight_file.try(&.close)
   reference_input.close
   raise ArgumentError.new("reference cache probe exceeds its named-buffer cap")
 end
@@ -178,12 +212,15 @@ plan_report = {
   tensor_names:                     HyNomasReferenceCacheProbe::TENSOR_NAMES,
   named_bytes:                      planned_named_bytes,
   max_named_bytes:                  max_named_bytes,
+  connected_history:                connected_history,
+  history_named_bytes:              history_named_bytes,
   mps_execution:                    execute,
   upstream_preprocessing_parity:    false,
 }.to_pretty_json
 unless execute
   puts plan_report
   global_file.close
+  history_weight_file.try(&.close)
   reference_input.close
   exit 0
 end
@@ -192,6 +229,7 @@ manifest_path, payload_path = HyNomasReferenceCacheProbe.checked_output_paths!(o
 HyNomasReferenceCacheProbe.ensure_fresh_outputs!(manifest_path, payload_path)
 refiner_trace_paths : Tuple(String, String)? = nil
 refiner_blocks_trace_paths : Tuple(String, String)? = nil
+history_paths : Tuple(String, String)? = nil
 unless refiner_trace_output_manifest.empty?
   trace_manifest_path, trace_payload_path = HyNomasReferenceRefinerTrace.checked_output_paths!(refiner_trace_output_manifest)
   HyNomasReferenceRefinerTrace.ensure_fresh_outputs!(trace_manifest_path, trace_payload_path)
@@ -207,13 +245,31 @@ unless refiner_blocks_trace_output_manifest.empty?
     trace_paths[0], trace_paths[1], blocks_manifest_path, blocks_payload_path)
   refiner_blocks_trace_paths = {blocks_manifest_path, blocks_payload_path}
 end
+if connected_history
+  receipt, payload = HyNomasReferenceCacheProbe.checked_output_paths!(connected_history_output)
+  artifact = payload.sub(/\.tensors\.bin\z/, ".safetensors")
+  HyNomasReferenceCacheProbe.ensure_fresh_outputs!(receipt, artifact)
+  trace_paths = refiner_trace_paths.not_nil!
+  blocks_paths = refiner_blocks_trace_paths.not_nil!
+  unless [manifest_path, payload_path, trace_paths[0], trace_paths[1], blocks_paths[0],
+          blocks_paths[1], receipt, artifact].uniq.size == 8
+    raise ArgumentError.new("connected history output paths must be distinct from preblock and refiner captures")
+  end
+  history_paths = {receipt, artifact}
+end
 
 base_arena = ML::Video::Arena.new
 timeline_arena = ML::Video::Arena.new
 working_arena = ML::Video::Arena.new
 global_arena = ML::Video::Arena.new
+history_weights = ML::Video::Arena.new
+history_scratch = ML::Video::Arena.new
 reference_latent : ML::MetalBuffer? = nil
 prepared : ML::Video::PreparedWeights? = nil
+history_prepared : ML::Video::PreparedWeights? = nil
+history_block : ML::Video::HyNomasDualStreamBlock? = nil
+history_workspace : ML::Video::HyNomasReferenceMPSWorkspace? = nil
+history_text : ML::MetalBuffer? = nil
 patch : ML::Video::HyNomasPatchMPSPlan? = nil
 refiner : ML::Video::HyNomasTextRefinerMPSPlan? = nil
 timeline_plan : ML::Video::HyNomasTimelineOps::Plan? = nil
@@ -256,15 +312,30 @@ begin
     cache_timestep: refiner.checkpoints["timestep"], run_segments: 2,
     reference_initialization: true)
 
+  if config = history_config
+    history_text = working_arena.alloc("history.compact_text", config.text_tokens * config.dim)
+    ML::Video::HyNomasDualStreamBlock.prepare_scratch!(history_scratch, config)
+    history_prepared = ML::Video::PreparedWeights.new(history_weight_plan.not_nil!, history_weights)
+    history_block = ML::Video::HyNomasDualStreamBlock.new(config, history_weights, history_scratch)
+    history_workspace = ML::Video::HyNomasReferenceMPSWorkspace.new(history_block,
+      patch.output, history_text, refiner.vec, refiner.vec_txt, cosine, sine,
+      attention_query_chunk: 256, attention_heads_per_group: config.heads,
+      allow_shared_modulation: true,
+      valid_text_tokens: valid_text_tokens, text_rms_tokens: config.text_tokens,
+      reference_history: true)
+  end
   actual_named_bytes = base_arena.resident_bytes + timeline_arena.resident_bytes +
                        working_arena.resident_bytes + global_arena.resident_bytes +
-                       reference_latent.size + patch.resident_bytes + refiner.resident_bytes
+                       reference_latent.size + patch.resident_bytes + refiner.resident_bytes +
+                       history_weights.resident_bytes + history_scratch.resident_bytes +
+                       (history_workspace.try(&.resident_bytes) || 0_i64)
   unless actual_named_bytes == planned_named_bytes && actual_named_bytes <= max_named_bytes
     raise ArgumentError.new("reference cache probe allocation/admission mismatch: #{actual_named_bytes} != #{planned_named_bytes}")
   end
 
   chain = ML::Metal::MPSCommandChain.new
   prepared.encode(chain.not_nil!.encoder)
+  history_prepared.try(&.encode(chain.not_nil!.encoder))
   allocations_before = ML::MetalBuffer.hy_text_probe_allocations
   readbacks_before = ML::MetalBuffer.hy_text_probe_readbacks
   timeline_plan.admit_reference_latent!(chain.not_nil!, reference_latent)
@@ -272,6 +343,12 @@ begin
   timeline_plan.write_cache_noise!(chain.not_nil!, 0)
   patch.encode(chain.not_nil!)
   refiner.encode(chain.not_nil!)
+  if workspace = history_workspace
+    text = history_text.not_nil!
+    ML::Video::MetalOps.copy(chain.not_nil!.encoder, refiner.text_output, text, text.element_count)
+    history_block.not_nil!.encode_mps_reference_history(chain.not_nil!, patch.output, text,
+      refiner.vec, refiner.vec_txt, cosine, sine, workspace)
+  end
   encode_allocations = ML::MetalBuffer.hy_text_probe_allocations - allocations_before
   encode_readbacks = ML::MetalBuffer.hy_text_probe_readbacks - readbacks_before
   preterminal_waits = chain.not_nil!.wait_count
@@ -324,6 +401,7 @@ begin
     prelude_trace_manifest_sha256 = trace_result["manifest_sha256"].as_s
     puts trace_result.to_json
   end
+  refiner_blocks_manifest_sha256 : String? = nil
   if blocks_paths = refiner_blocks_trace_paths
     blocks_trace_result = HyNomasReferenceRefinerBlocksTrace.write_trace!(blocks_paths[0],
       reference_latent_artifact_sha256: reference_input.sha256,
@@ -349,13 +427,42 @@ begin
       source_fc1_control: source_fc1_control,
       source_mlp_silu_control: source_mlp_silu_control,
       source_fc2_residual_control: source_fc2_residual_control)
+    refiner_blocks_manifest_sha256 = blocks_trace_result["manifest_sha256"].as_s
     puts blocks_trace_result.to_json
+  end
+  if paths = history_paths
+    cache = history_workspace.not_nil!.reference_history_cache
+    sources = HyNomasReferenceHistoryCapture.sources(cache, cache.key_read, cache.value_read, valid_text_tokens)
+    artifact_sha, records, artifact_bytes = HyNomasReferenceHistoryCapture.write_safetensors!(paths[1],
+      sources, valid_text_tokens)
+    receipt = {
+      schema: "cogni_ml.hy_nomas_connected_reference_history/v1",
+      artifact: File.basename(paths[1]), artifact_sha256: artifact_sha, artifact_bytes: artifact_bytes,
+      preblock_manifest_sha256: result["manifest_sha256"].as_s,
+      refiner_blocks_manifest_sha256: refiner_blocks_manifest_sha256.not_nil!,
+      weights_sha256: history_weight_sha.not_nil!,
+      valid_text_tokens: valid_text_tokens, active_rows: cache.active_rows,
+      dit_text_tokens: history_config.not_nil!.text_tokens,
+      layout: HyNomasReferenceHistoryProbe::LAYOUT, precision: HyNomasReferenceHistoryProbe::PRECISION,
+      actual_named_bytes: actual_named_bytes,
+      encode_allocations: encode_allocations, encode_readbacks: encode_readbacks,
+      preterminal_waits: preterminal_waits, terminal_waits: chain.not_nil!.wait_count,
+      tensors: records.map { |record|
+        {name: record.name, dtype: record.dtype, shape: record.shape, nbytes: record.nbytes, sha256: record.sha256}
+      },
+    }
+    receipt_io = HyNomasReferenceCacheProbe.open_fresh_output!(paths[0])
+    begin
+      receipt_io.puts(receipt.to_pretty_json)
+    ensure
+      receipt_io.close
+    end
   end
   puts plan_report
   puts result.to_json
   puts({schema: "cogni_ml.hy_nomas_reference_cache_probe_result/v1",
         scope: HyNomasReferenceCacheProbe::SCOPE,
-        native_cache_writer_executed: false,
+        native_cache_writer_executed: connected_history,
         exported_for_standalone_block0_cache_writer: true,
         encode_allocations: encode_allocations, encode_readbacks: encode_readbacks,
         preterminal_waits: preterminal_waits, terminal_waits: chain.not_nil!.wait_count,
@@ -371,6 +478,11 @@ ensure
     end
     if active_chain.drained?
       timeline_plan.try(&.release_after_drain!(active_chain))
+      history_workspace.try(&.release)
+      history_prepared.try(&.release)
+      history_scratch.release
+      history_weights.release
+      history_weight_file.try(&.close)
       refiner.try(&.release)
       patch.try(&.release)
       prepared.try(&.release)
@@ -392,6 +504,12 @@ ensure
         refiner.try(&.object_id)
         patch.try(&.object_id)
         prepared.try(&.object_id)
+        history_block.try(&.object_id)
+        history_workspace.try(&.object_id)
+        history_prepared.try(&.object_id)
+        history_scratch.object_id
+        history_weights.object_id
+        history_weight_file.try(&.object_id)
         base_arena.object_id
         timeline_arena.object_id
         working_arena.object_id
@@ -401,6 +519,11 @@ ensure
       })
     end
   else
+    history_workspace.try(&.release)
+    history_prepared.try(&.release)
+    history_scratch.release
+    history_weights.release
+    history_weight_file.try(&.close)
     refiner.try(&.release)
     patch.try(&.release)
     prepared.try(&.release)

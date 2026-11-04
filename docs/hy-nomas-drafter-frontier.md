@@ -1,5 +1,50 @@
 # Hy-Nomas local draft suite
 
+## Connected T0 block-0 cache writer (2026-11-04)
+
+The diagnostic `--connected-history-output` attaches the qualified refiner
+and patch to the existing BF16 block-0 cache writer. The patch, time vector
+and RoPE stay in their existing Metal buffers. The first 320 refiner rows
+are copied into the block's text input on the same command chain. The probe
+retains 3,000,883,780 named bytes with zero tracked encode allocations,
+readbacks and preterminal waits, and one terminal drain. The 2 GiB cap
+control rejects the run before GPU preparation.
+
+On frozen T0 V263, the effective input comparison is exact, including
+the image patch after the writer's BF16 rounding. Both physical BF16 K/V
+tensors and both F32 reader outputs match the pinned PyTorch MPS BF16
+autocast control exactly at unchanged `atol=rtol=2e-5`. Each tensor has
+9,385,984 values over 4,320 image and 263 valid text rows. The source
+physically writes another 57 text rows and masks them. The native writer
+stores only the active prefix.
+
+With autocast disabled, the source produces different physical K/V on
+the same inputs. Maximum absolute errors are 0.0625 for K and 0.5 for V.
+The paired source trace first differs at LayerNorm output, which is F32
+under BF16 autocast and BF16 without it. Rounding the F32 LayerNorm output
+to BF16 reproduces the no-autocast output exactly in both streams. A single
+BF16 cast after modulation still leaves mismatches at the QKV input.
+SiLU and the modulation projection are exact in both streams.
+The no-autocast comparison fails the existing
+gate, so the result qualifies the autocast control only. The continuation
+adapter's no-autocast behavior remains open.
+
+Guarded checks cover 101 CPU Crystal examples, nine Metal examples, 26
+Python tests, disabled-path preservation across 62 tensors, and an exact
+repeat of the existing standalone history artifact. The connected native
+run peaked at a sampled 2.35 GiB process-group footprint with 27.24 GiB
+minimum cache-aware headroom and zero swap growth under the 10% floor.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-connected-t0-history.json`.
+The run directory retains the guarded `native-v2`,
+`source-{autocast,eager}-final` and `compare-{autocast,eager}-final`
+commands. The autocast comparison exits zero and the eager comparison
+exits one with a numeric report.
+Rollback: omit `--connected-history-output`. Refresh on source, binary,
+runtime, input, weights, layout, precision or evidence changes. Keep the
+experimental reference gate. This diagnostic stops before attention
+math and does not run T1 or video generation.
+
 ## Connected FC2 and second residual (2026-11-04)
 
 Status: VERIFIED for the two connected refiner blocks on frozen T0 V263.

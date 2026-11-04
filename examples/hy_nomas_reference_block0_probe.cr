@@ -5,7 +5,7 @@ require "../src/ml/video/bf16_weight_cache"
 require "../src/ml/video/hy_nomas_block_mps"
 require "../src/ml/video/hy_nomas_reference_block_mps"
 require "./support/hy_nomas_reference_block0_probe"
-require "./support/hy_nomas_reference_history_probe"
+require "./support/hy_nomas_reference_history_capture"
 require "./support/hy_nomas_reference_attention_probe"
 require "./support/hy_nomas_reference_cache_probe"
 require "./support/hy_nomas_probe_instrumentation"
@@ -25,27 +25,6 @@ module HyNomasReferenceBlock0ProbeCLI
     sha256 : String
   record PreQKVCaptureRecord, name : String, dtype : String, shape : Array(Int32),
     nbytes : Int32, sha256 : String
-  record HistoryCaptureRecord, name : String, dtype : String, shape : Array(Int32),
-    nbytes : Int32, sha256 : String
-
-  def config(precision : ML::Video::HyNomasAttentionPrecision) : ML::Video::HyNomasConfig
-    ML::Video::HyNomasConfig.new(
-      batches: 1,
-      video_tokens: VIDEO_TOKENS,
-      text_tokens: TEXT_TOKENS,
-      dim: DIM,
-      heads: HEADS,
-      head_dim: HEAD_DIM,
-      ffn_dim: FFN_DIM,
-      attention_precision: precision,
-    ).tap(&.validate!)
-  end
-
-  def bindings : Array(ML::Video::WeightBinding)
-    ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(config(
-      ML::Video::HyNomasAttentionPrecision::F32Control),
-      ML::GGUF::SafeTensorDType::BF16)
-  end
 
   def input_bytes(info : HyNomasReferenceBlock0Probe::ManifestInfo) : Int64
     named_bytes = 0_i64
@@ -59,39 +38,17 @@ module HyNomasReferenceBlock0ProbeCLI
     named_bytes
   end
 
-  def rms_named_bytes(config : ML::Video::HyNomasConfig) : Int64
-    per_stream = ->(tokens : Int32) do
-      rows = config.batches.to_i64 * tokens * config.heads
-      square = rows * config.head_dim * sizeof(Float32)
-      mean = rows * sizeof(Float32)
-      2_i64 * (square + mean) # Q and K each own square and row-mean buffers.
-    end
-    per_stream.call(config.video_tokens) + per_stream.call(config.text_tokens)
-  end
-
   def expected_named_bytes(info : HyNomasReferenceBlock0Probe::ManifestInfo,
                            weight_plan : ML::Video::WeightPlan,
                            config : ML::Video::HyNomasConfig,
                            reference_preattention_bf16 : Bool = false,
                            reference_history_bf16 : Bool = false,
                            reference_attention_bf16 : Bool = false) : Hash(String, Int64)
-    scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(config).sum(0_i64) do |(_name, count)|
-      count.to_i64 * sizeof(Float32)
-    end
     attention_tokens = VIDEO_TOKENS + info.valid_text_tokens
-    attention = ML::Video::HyNomasCompactAttentionMPSPlan.workspace_geometry(
-      1, attention_tokens, HEADS, HEAD_DIM, 256, HEADS).resident_bytes
-    weight_stage = ML::Video::HyNomasMPSWorkspace.required_weight_stage_count(config).to_i64 * sizeof(Float32)
-    rms = rms_named_bytes(config)
-    inputs = input_bytes(info)
     parts = {
-      "input_buffers"                  => inputs,
-      "block_weight_residents"         => weight_plan.destination_bytes,
-      "block_scratch"                  => scratch,
-      "mps_weight_stage"               => weight_stage,
-      "compact_attention_buffers"      => attention,
-      "qk_rms_square_and_mean_buffers" => rms,
-    }
+      "input_buffers"          => input_bytes(info),
+      "block_weight_residents" => weight_plan.destination_bytes,
+    }.merge(HyNomasReferenceBlock0Setup.workspace_named_bytes(config, attention_tokens))
     if reference_preattention_bf16 || reference_history_bf16
       parts["reference_bf16_buffers"] = ML::Video::HyNomasReferenceMPSWorkspace.reference_extra_bytes(config)
     end
@@ -171,23 +128,6 @@ module HyNomasReferenceBlock0ProbeCLI
       HyNomasReferenceBlock0Probe::CaptureTensor.new(name,
         preqkv_buffer(block, name, activation_buffers), shape, byte_count,
         "native_pre_qkv_boundary")
-    end
-  end
-
-  def capture_history_sources(cache_plan : ML::Video::HyNomasReferenceKVCache::Plan,
-                              key_read : ML::MetalBuffer, value_read : ML::MetalBuffer,
-                              valid_text_tokens : Int32) : Array(HyNomasReferenceBlock0Probe::CaptureTensor)
-    entries = HyNomasReferenceHistoryProbe.header_entries(valid_text_tokens)
-    buffers = {
-      "history.k_bf16"     => cache_plan.key_storage,
-      "history.v_bf16"     => cache_plan.value_storage,
-      "history.k_read_f32" => key_read,
-      "history.v_read_f32" => value_read,
-    }
-    entries.map do |entry|
-      buffer = buffers[entry.name]
-      HyNomasReferenceBlock0Probe::CaptureTensor.new(entry.name, buffer,
-        entry.shape, entry.byte_count, "first_t0_history_#{entry.dtype.downcase}")
     end
   end
 
@@ -390,61 +330,6 @@ module HyNomasReferenceBlock0ProbeCLI
     {total_digest.hexfinal, records, actual_file_bytes}
   end
 
-  def write_history_safetensors!(artifact_path : String,
-                                 sources : Array(HyNomasReferenceBlock0Probe::CaptureTensor),
-                                 valid_text_tokens : Int32) : Tuple(String, Array(HistoryCaptureRecord), Int64)
-    entries = HyNomasReferenceHistoryProbe.header_entries(valid_text_tokens)
-    unless sources.map(&.name) == HyNomasReferenceHistoryProbe::TENSOR_NAMES
-      raise ArgumentError.new("reference history capture inventory/order mismatch")
-    end
-    total_bytes = sources.zip(entries).sum(0_i64) do |source, entry|
-      unless source.name == entry.name && source.shape == entry.shape && source.byte_count == entry.byte_count
-        raise ArgumentError.new("reference history capture shape/extent mismatch: #{source.name}")
-      end
-      unless source.buffer.valid? && source.buffer.storage_mode.shared? &&
-             source.buffer.size == entry.byte_count
-        raise ArgumentError.new("reference history capture must use an exact-size shared buffer: #{source.name}")
-      end
-      entry.byte_count.to_i64
-    end
-    header = HyNomasReferenceHistoryProbe.safetensors_header(entries)
-    header_length = Bytes.new(sizeof(UInt64))
-    IO::ByteFormat::LittleEndian.encode(header.bytesize.to_u64, header_length)
-    total_digest = Digest::SHA256.new
-    total_digest.update(header_length)
-    total_digest.update(header.to_slice)
-    records = [] of HistoryCaptureRecord
-    offset = 0_i64
-    payload_io = open_fresh_output!(artifact_path)
-    begin
-      payload_io.write(header_length)
-      payload_io.write(header.to_slice)
-      sources.zip(entries).each do |source, entry|
-        view = Bytes.new(entry.byte_count)
-        source.buffer.read_bytes(view.to_unsafe, view.size)
-        digest = Digest::SHA256.hexdigest(view)
-        total_digest.update(view)
-        payload_io.write(view)
-        records << HistoryCaptureRecord.new(entry.name, entry.dtype, entry.shape,
-          entry.byte_count, digest)
-        offset += entry.byte_count
-      end
-      payload_io.flush
-      payload_io.fsync
-    ensure
-      payload_io.close
-    end
-    unless offset == total_bytes
-      raise "reference history payload size mismatch: wrote #{offset}, expected #{total_bytes}"
-    end
-    expected_file_bytes = HyNomasReferenceHistoryProbe.safetensors_file_bytes(header, total_bytes)
-    actual_file_bytes = File.size(artifact_path)
-    unless actual_file_bytes == expected_file_bytes
-      raise "reference history safetensors file size mismatch: #{actual_file_bytes} != #{expected_file_bytes}"
-    end
-    {total_digest.hexfinal, records, actual_file_bytes}
-  end
-
   def write_receipt!(path : String, *, artifact_basename : String,
                      artifact_sha256 : String, artifact_bytes : Int64,
                      records : Array(CaptureRecord), input : HyNomasReferenceBlock0Probe::InputBundle,
@@ -527,7 +412,7 @@ module HyNomasReferenceBlock0ProbeCLI
 
   def write_history_receipt!(path : String, *, artifact_basename : String,
                              artifact_sha256 : String, artifact_bytes : Int64,
-                             records : Array(HistoryCaptureRecord),
+                             records : Array(HyNomasReferenceHistoryCapture::CaptureRecord),
                              input : HyNomasReferenceBlock0Probe::InputBundle,
                              weights_sha256 : String, valid_text_tokens : Int32,
                              named_bytes : Hash(String, Int64),
@@ -690,14 +575,14 @@ begin
   reference_preattention_bf16 = precision_name == HyNomasReferenceBlock0Probe::REFERENCE_BF16_PRECISION || reference_history_bf16
   precision = precision_name == "bf16-boundary-control" || reference_preattention_bf16 ? ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl : ML::Video::HyNomasAttentionPrecision::F32Control
   bf16_linear_variant = ML::Video::HyNomasMPSBF16Linear::Variant.parse(bf16_linear_variant_name)
-  config = HyNomasReferenceBlock0ProbeCLI.config(precision)
+  config = HyNomasReferenceBlock0Setup.config(precision)
   if reference_attention_bf16 && input_bundle.info.valid_text_tokens != 529
     raise ArgumentError.new("reference BF16 attention fixture requires 529 valid text tokens")
   end
   weight_plan = ML::Video::HyNomasDualStreamBlock.weight_plan([weight_file.not_nil!], config,
     max_named_bytes, resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
   unless weight_plan.not_nil!.staging_bytes == 0 &&
-         weight_plan.not_nil!.entries.size == HyNomasReferenceBlock0ProbeCLI.bindings.size
+         weight_plan.not_nil!.entries.size == HyNomasReferenceBlock0Setup.bindings.size
     raise ArgumentError.new("block-0 weights must be an exact direct BF16 resident plan")
   end
 
@@ -889,9 +774,9 @@ begin
     elsif reference_history_bf16
       history_plan = reference_workspace.not_nil!.reference_history_cache
       key_read, value_read = history_read.not_nil!
-      history_sources = HyNomasReferenceBlock0ProbeCLI.capture_history_sources(history_plan,
+      history_sources = HyNomasReferenceHistoryCapture.sources(history_plan,
         key_read, value_read, input_bundle.info.valid_text_tokens)
-      artifact_sha256, records, artifact_bytes = HyNomasReferenceBlock0ProbeCLI.write_history_safetensors!(
+      artifact_sha256, records, artifact_bytes = HyNomasReferenceHistoryCapture.write_safetensors!(
         artifact_path, history_sources, input_bundle.info.valid_text_tokens)
       HyNomasReferenceBlock0ProbeCLI.write_history_receipt!(receipt_path,
         artifact_basename: File.basename(artifact_path), artifact_sha256: artifact_sha256,
