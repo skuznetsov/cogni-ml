@@ -43,6 +43,23 @@ in PyTorch `aten/src/ATen/native/mps/operations/Activation.mm` at tag `v2.8.0`.
 The same PyTorch notices and BSD-3-Clause license above apply. The graphs are
 used by same-input controls and the explicit Hy-Nomas MPS block backend.
 
+## PyTorch MPS vector attention compatibility probe
+
+`src/ml/video/kernels/hy_nomas_vector_attention.metal` adapts `sdpa_vector`
+from PyTorch `aten/src/ATen/native/mps/kernels/Attention.metal` at tag `v2.8.0`,
+commit `ba56102387ef21a3b04b357e5b183d48f0afefc7`. Its source SHA-256 is
+`aaab42c45caaa222c62013af8dcac896ffa2abd889dbb9427c7648be6448c0cd`.
+The upstream file credits MLX's `scaled_dot_product_attention.metal`.
+Retain the PyTorch notices and
+[BSD-3-Clause license](licenses/pytorch-v2.8.0-BSD-3-Clause.txt), and Apple's
+[MLX MIT license](licenses/mlx-MIT.txt) when redistributing this adaptation.
+
+Changes: specialize D=V=128, equal head counts and no mask, use fixed F32
+BQHD buffers with explicit BF16 input/output boundaries, and address a compact
+query interval. The source's 32-way online softmax and SIMD reduction order are
+preserved. The probe is default-off; it does not expose probabilities or change
+the production refiner. No PyTorch runtime is used by the native kernel.
+
 ## Wan 2.2 S2V
 
 The Wan-specific implementation and oracle adapter are based on the architecture

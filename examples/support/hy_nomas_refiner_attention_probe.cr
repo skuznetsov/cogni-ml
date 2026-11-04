@@ -5,6 +5,7 @@ require "../../src/ml/metal/device"
 require "../../src/ml/core/buffer"
 require "../../src/ml/video/hy_nomas_block"
 require "../../src/ml/video/hy_nomas_attention_mps"
+require "../../src/ml/video/hy_nomas_vector_attention"
 require "../../spec/support/hy_nomas_mps_reductions"
 
 # Count the wrapper's named MetalBuffer allocations and read APIs around the
@@ -62,6 +63,10 @@ module HyNomasRefinerAttentionProbe
   SCORE_ELEMENTS  = BATCHES.to_i64 * QUERY_ROWS * HEADS * KEY_ROWS
   Q_BYTES         = Q_ELEMENTS * sizeof(Float32)
   SCORE_BYTES     = SCORE_ELEMENTS * sizeof(Float32)
+  TAIL_ROWS       = 7
+  TAIL_SHAPE      = [BATCHES, TAIL_ROWS, HEADS, HEAD_DIM]
+  TAIL_ELEMENTS   = BATCHES.to_i64 * TAIL_ROWS * HEADS * HEAD_DIM
+  TAIL_BYTES      = TAIL_ELEMENTS * sizeof(Float32)
   INPUT_NAMES     = ["q", "k", "v", "source_probabilities"]
   CAPTURE_ORDER   = [
     "input.q", "input.k", "input.v", "input.source_probabilities",
@@ -72,12 +77,15 @@ module HyNomasRefinerAttentionProbe
     "bf16_boundary_attention", "bf16_boundary_attention_with_probabilities",
     "bf16_boundary_probabilities",
   ]
-  SOURCE_FILES = [
+  VECTOR_CAPTURE_ORDER = BF16_CAPTURE_ORDER + ["vector_tail_attention"]
+  SOURCE_FILES         = [
     "examples/hy_nomas_refiner_attention_probe.cr",
     "examples/support/hy_nomas_refiner_attention_probe.cr",
     "spec/support/hy_nomas_mps_reductions.cr",
     "src/ml/video/hy_nomas_mps_reductions_bridge.mm",
     "src/ml/video/hy_nomas_attention_mps.cr",
+    "src/ml/video/hy_nomas_vector_attention.cr",
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
     "src/ml/video/metal_mps_command_chain.cr",
     "src/ml/video/metal_ops.cr",
     "src/ml/core/buffer.cr",
@@ -90,6 +98,8 @@ module HyNomasRefinerAttentionProbe
     "spec/support/hy_nomas_mps_reductions.cr"              => {{ read_file("#{__DIR__}/../../spec/support/hy_nomas_mps_reductions.cr") }},
     "src/ml/video/hy_nomas_mps_reductions_bridge.mm"       => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_mps_reductions_bridge.mm") }},
     "src/ml/video/hy_nomas_attention_mps.cr"               => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_attention_mps.cr") }},
+    "src/ml/video/hy_nomas_vector_attention.cr"            => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_vector_attention.cr") }},
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal" => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/hy_nomas_vector_attention.metal") }},
     "src/ml/video/metal_mps_command_chain.cr"              => {{ read_file("#{__DIR__}/../../src/ml/video/metal_mps_command_chain.cr") }},
     "src/ml/video/metal_ops.cr"                            => {{ read_file("#{__DIR__}/../../src/ml/video/metal_ops.cr") }},
     "src/ml/core/buffer.cr"                                => {{ read_file("#{__DIR__}/../../src/ml/core/buffer.cr") }},
@@ -121,11 +131,19 @@ module HyNomasRefinerAttentionProbe
     end
   end
 
-  def validate_budget!(max_named_bytes : Int64, bf16_boundaries_control : Bool = false) : Int64
+  def validate_controls!(bf16_boundaries_control : Bool, vector_tail_control : Bool) : Nil
+    if vector_tail_control && !bf16_boundaries_control
+      raise ArgumentError.new("Vector tail control requires the BF16 boundaries control")
+    end
+  end
+
+  def validate_budget!(max_named_bytes : Int64, bf16_boundaries_control : Bool = false,
+                       vector_tail_control : Bool = false) : Int64
+    validate_controls!(bf16_boundaries_control, vector_tail_control)
     unless 0 < max_named_bytes <= MAX_NAMED_BYTES
       raise ArgumentError.new("named-buffer budget must be positive and no greater than 512 MiB")
     end
-    required = required_named_bytes(bf16_boundaries_control)
+    required = required_named_bytes(bf16_boundaries_control, vector_tail_control)
     raise ArgumentError.new("attention probe named buffers exceed caller budget") if required > max_named_bytes
     required
   end
@@ -148,7 +166,9 @@ module HyNomasRefinerAttentionProbe
 
   # Includes the four resident inputs, six distinct outputs, and all packed
   # input/output buffers allocated by MPSReductionControls during setup.
-  def required_named_bytes(bf16_boundaries_control : Bool = false) : Int64
+  def required_named_bytes(bf16_boundaries_control : Bool = false,
+                           vector_tail_control : Bool = false) : Int64
+    validate_controls!(bf16_boundaries_control, vector_tail_control)
     input_elements = 3_i64 * Q_ELEMENTS + SCORE_ELEMENTS
     output_elements = 3_i64 * Q_ELEMENTS + 3_i64 * SCORE_ELEMENTS
     packed_elements = 12_i64 * Q_ELEMENTS + 6_i64 * SCORE_ELEMENTS
@@ -156,7 +176,8 @@ module HyNomasRefinerAttentionProbe
     # Q-sized stages; the latter also owns one score-sized capture stage.
     # Caller outputs add two Q-sized buffers and one score-sized buffer.
     extra_elements = bf16_boundaries_control ? 10_i64 * Q_ELEMENTS + 2_i64 * SCORE_ELEMENTS : 0_i64
-    (input_elements + output_elements + packed_elements + extra_elements) * sizeof(Float32)
+    tail_elements = vector_tail_control ? TAIL_ELEMENTS : 0_i64
+    (input_elements + output_elements + packed_elements + extra_elements + tail_elements) * sizeof(Float32)
   end
 
   def validate_manifest_document!(document : JSON::Any, expected_sha256 : String,
@@ -453,7 +474,9 @@ module HyNomasRefinerAttentionProbe
     end
   end
 
-  def capture_sources(arena : ML::Video::Arena, bf16_boundaries_control : Bool = false) : Array(Tuple(String, ML::MetalBuffer, Array(Int32)))
+  def capture_sources(arena : ML::Video::Arena, bf16_boundaries_control : Bool = false,
+                      vector_tail_control : Bool = false) : Array(Tuple(String, ML::MetalBuffer, Array(Int32)))
+    validate_controls!(bf16_boundaries_control, vector_tail_control)
     sources = [
       {"input.q", arena["input.q"], Q_SHAPE},
       {"input.k", arena["input.k"], Q_SHAPE},
@@ -471,6 +494,7 @@ module HyNomasRefinerAttentionProbe
       sources << {"bf16_boundary_attention_with_probabilities", arena["bf16.instrumented_output"], Q_SHAPE}
       sources << {"bf16_boundary_probabilities", arena["bf16.probabilities"], SCORE_SHAPE}
     end
+    sources << {"vector_tail_attention", arena["vector.output"], TAIL_SHAPE} if vector_tail_control
     sources
   end
 
@@ -482,8 +506,10 @@ module HyNomasRefinerAttentionProbe
                      setup_named_bytes : Int64, max_named_bytes : Int64,
                      encode_allocations : Int64, encode_readbacks : Int64,
                      preterminal_waits : Int32, terminal_waits : Int32,
-                     bf16_boundaries_control : Bool = false) : Nil
-    capture_order = bf16_boundaries_control ? BF16_CAPTURE_ORDER : CAPTURE_ORDER
+                     bf16_boundaries_control : Bool = false,
+                     vector_tail_control : Bool = false) : Nil
+    validate_controls!(bf16_boundaries_control, vector_tail_control)
+    capture_order = vector_tail_control ? VECTOR_CAPTURE_ORDER : (bf16_boundaries_control ? BF16_CAPTURE_ORDER : CAPTURE_ORDER)
     unless sources.map(&.[0]) == capture_order && encode_allocations == 0 &&
            encode_readbacks == 0 && preterminal_waits == 0 && terminal_waits == 1
       raise ArgumentError.new("native attention capture requires ordered stages and allocation/readback-free single-wait execution")
@@ -528,6 +554,9 @@ module HyNomasRefinerAttentionProbe
           json.field "device", "mps"
           json.field "producer_dtype", "F32"
           json.field "bf16_boundaries_control", bf16_boundaries_control
+          json.field "vector_tail_control", vector_tail_control
+          json.field "vector_tail_scope",
+            "default-off one-pass BF16 vector context, Q7/K263/D128; no probabilities, refiner wiring or native context assembly"
           json.field "probabilities_capture_scope",
             "opt-in instrumented general-263 graph only; context-only output is captured separately; source tail7 vector probabilities remain unobserved"
           json.field "setup_named_bytes", setup_named_bytes

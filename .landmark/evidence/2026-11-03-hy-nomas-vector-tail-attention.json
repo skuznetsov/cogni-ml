@@ -1,0 +1,279 @@
+{
+  "schema": "cogni_ml.hy_nomas_vector_tail_attention_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "f81340e0aba187657b334bb24bb25ee97076e645",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "One frozen source-exact block0 T0 V263 Q/K/V input; native Q7/K263/H16/D128 one-pass vector context and GPU diagnostic assembly with native general main256.",
+    "result": "Native actual tail exact over14336 values; diagnostic context assembly exact over538624 values; five previous exact context/P gates retained.",
+    "not_claimed": [
+      "Native connected 256+7 context assembly",
+      "Complete refiner/block parity or generation wiring",
+      "Source tail probabilities (uninitialized source second return)",
+      "Other shapes/inputs/runtime parity or stock CUDA/Magi parity",
+      "Speed, motion or quality improvement"
+    ]
+  },
+  "boundaries": {
+    "risk_tier": "CAUTION",
+    "allowed_paths": [
+      "src/ml/video/hy_nomas_vector_attention.cr",
+      "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "third_party/VIDEO_NOTICES.md",
+      "third_party/licenses/mlx-MIT.txt",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json"
+    ],
+    "changed_paths": [
+      "src/ml/video/hy_nomas_vector_attention.cr",
+      "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "third_party/VIDEO_NOTICES.md",
+      "third_party/licenses/mlx-MIT.txt",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json"
+    ],
+    "default_control": false,
+    "refiner_wiring_changed": false,
+    "production_source_added": true,
+    "geometry": {
+      "batches": 1,
+      "input_query_rows": 263,
+      "query_start": 256,
+      "query_rows": 7,
+      "key_rows": 263,
+      "heads": 16,
+      "head_dim": 128
+    },
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_gate_atol": 0,
+    "exact_gate_rtol": 0,
+    "execution": "Native Metal math; comparison and diagnostic concatenation on Torch MPS with fallback disabled. CPU admission/hashing/serialization and terminal-only capture/export.",
+    "full_refiner_executed": false,
+    "full_generation_executed": false,
+    "studio_started": false,
+    "rollback": "Omit --vector-tail-control (false by default, requires --bf16-boundaries-control); revert this atomic commit to remove the standalone candidate."
+  },
+  "lineage": {
+    "external_run": "/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu",
+    "source_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Inherited caller-pinned Hy-Nomas PyTorch2.8.0 MPS-adapter replay; not regenerated this turn, not stock CUDA/Magi.",
+    "source_replay_sha256": "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+    "source_payload_sha256": "2ffb11f00d5fa8db69dff92a84c150363191c8ca697510561cd855e221fee7f0",
+    "pytorch_tag_commit": "ba56102387ef21a3b04b357e5b183d48f0afefc7",
+    "pytorch_kernel_sha256": "aaab42c45caaa222c62013af8dcac896ffa2abd889dbb9427c7648be6448c0cd",
+    "selected_source_pins": [
+      390,
+      392
+    ],
+    "native_manifest_selected_pins": 12,
+    "native_binary_sha256": "769244ee4219c06e19f28d2ca9dfa80b15a960a985afc930d13bd97e7295b456",
+    "pin_scope": "Selected source files and embedded native manifest pins, not exhaustive compiler/toolchain/dependency closure. Stages verify before/after pins; source snapshots and binary retained.",
+    "artifact_index": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu/qualified-artifacts-final.json",
+      "sha256": "8c6c23490196e3beb41ad530461ad75ea0b160a4d350f7464a3654f053586c55",
+      "artifacts": 877,
+      "readback": "All selected artifact lengths/digests and both source snapshots re-read; current392 source pins match checkout."
+    }
+  },
+  "falsifier": {
+    "rejected_equivalence": "General-263 BF16 graph tail is equivalent to actual source vector-tail attention.",
+    "preserved_failure": {
+      "kind": "source_tail_actual",
+      "count": 14336,
+      "finite_count": 14336,
+      "max_abs": 0.4375,
+      "mae": 0.007066424936056137,
+      "rms": 0.02053731679916382,
+      "mismatch_count": 7499,
+      "passed": false,
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "pivot": "Adapt the pinned one-pass kernel: scale Q before QK, preserve F32 online softmax/PV and source lane/group reductions, round final context to BF16; no tail P."
+  },
+  "results": {
+    "exact_rows": [
+      {
+        "kind": "connected_main256_gate",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_general_control",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_instrumented_context",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_main256_gate",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "connected_probability_general_control",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "vector_tail_actual_gate",
+        "count": 14336,
+        "finite_count": 14336,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "vector_tail_assembled_context_diagnostic",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      }
+    ],
+    "repeat_and_preservation": {
+      "schema": "cogni_ml.hy_nomas_vector_tail_preservation/v1",
+      "native_repeat_records": 14,
+      "repeat_payload_byte_exact": true,
+      "previous_thirteen_records_unchanged": true,
+      "original_ten_record_preservation": {
+        "native-default-03": true,
+        "native-bf16-03": true,
+        "native-vector-03": true,
+        "native-vector-repeat-03": true
+      },
+      "named_bytes": {
+        "native-default-03": 83049088,
+        "native-bf16-03": 113447680,
+        "native-vector-03": 113505024,
+        "native-vector-repeat-03": 113505024
+      },
+      "encode_counters": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "compiled_pins_match_current": true,
+      "native_binary_sha256": "769244ee4219c06e19f28d2ca9dfa80b15a960a985afc930d13bd97e7295b456"
+    },
+    "setup_named_bytes": 113505024,
+    "extra_vector_output_bytes": 57344,
+    "encode_counters": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "counter_scope": "Named wrapper APIs only; opaque MPS resources and terminal serialization excluded.",
+    "comparison_terminal_cpu_exports": 1
+  },
+  "verification": {
+    "dod": "Guarded native build/capture and GPU exact source-tail/diagnostic-context gates, unchanged main/general/F32 controls, fresh-process repeat and legacy byte preservation.",
+    "observed": "34 Crystal admission/regression examples,75 Python regression tests; exact tail/context gates, five previous exact gates, inherited F32/localization and perturbation controls pass. All14 repeat records/payload exact; old13 and original10 records unchanged.",
+    "stage_runner": "/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu/execute.py",
+    "successful_stages": [
+      "build-02",
+      "crystal-01",
+      "python-02",
+      "native-default-03",
+      "native-bf16-03",
+      "native-vector-03",
+      "native-vector-repeat-03",
+      "compare-default-03",
+      "compare-bf16-03",
+      "compare-vector-03",
+      "preservation-03"
+    ],
+    "command_records": "Each stage.command.json, matching result, stdout/stderr and guard log are retained in the external artifact index.",
+    "guards": {
+      "runtime_floor_pct": 10,
+      "max_footprint_bytes": 6442450944,
+      "max_swap_growth_bytes": 67108864,
+      "sampled_peak_group_footprint_bytes": 796493312,
+      "minimum_sampled_headroom_bytes": 23789223936,
+      "maximum_observed_swap_growth_bytes": 0
+    },
+    "sampling_limitation": "Short native captures can fall between memory samples; sampled footprint is not exact peak. File-backed headroom estimates reclaimability.",
+    "retained_invocation_failures": [
+      "build-01: Make BUILD_DIR with spaces rejected; build-02 uses /opt/mldata_ssd symlink and passes",
+      "native-default-02: noncanonical symlink input rejected before GPU setup; native-default-03 uses canonical input and passes"
+    ],
+    "repository_graph_validator_available": false,
+    "fallback_validation": "Packet parsed and allowed/changed inventory checked against exact diff; selected artifacts/source pins authenticated. Structural validation alone proves no numerical claim."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Bounded frozen context parity, default-off gate, preserved controls and no-extra-encode-read/wait contract.",
+    "review_record": "/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu/adversary-review-final.json",
+    "independence": "Same-lineage mini-Quad reviews are correlated; observed GPU measurements supply numerical evidence."
+  },
+  "trust": {
+    "F": "Executed exact GPU comparisons and admission tests, no formal backend equivalence proof.",
+    "G": "One frozen input, pinned MPS-adapter runtime and D128 tail geometry.",
+    "R": "Fresh-process A/A payload exact and legacy controls preserved; opaque backend and between-poll memory behavior unobserved."
+  },
+  "next_falsifier": "Assemble main256+tail inside a default-off native GPU plan; qualify projection/residual and connected refiner on the same frozen input.",
+  "decay_trigger": "Any source/binary/runtime/input/weight/mask/layout/precision change, or artifact loss/mutation.",
+  "refresh": "Reauthenticate pins and inherited replay, repeat guarded source-tail/context and preservation gates; reopen dependent claims on failure."
+}

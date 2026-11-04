@@ -6,6 +6,30 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-VECTOR-TAIL-ATTENTION-2026-11-03] Native tail7 exactly matches source; full context diagnostic is exact
+
+- Default-off `HyNomasVectorAttentionPlan` matches actual PyTorch 2.8.0 MPS
+  source tail7 exactly: 0/14,336 mismatches. GPU comparison assembly with
+  qualified native main256 is exact across all 538,624 context values.
+  This is not native connected 256 + 7 assembly or refiner integration.
+- Source vector attention scales Q before QK, uses F32 online softmax/PV,
+  then BF16 context rounding. The old general graph still fails on
+  7,499/14,336 tail values, max .4375 at unchanged `atol=rtol=2e-5`.
+  Never consume the vector operator's uninitialized second return as P.
+- 34 Crystal examples, 75 Python tests, five prior exact gates, fresh-process
+  14-record/payload equality and original ten-record preservation pass.
+  Added output: 57,344 bytes; combined named bytes: 113,505,024; encode
+  counters [0 allocations, 0 read APIs, 0 preterminal waits, 1 terminal wait].
+  Guard: cache-aware 10%, 6 GiB cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu`.
+  Rollback: omit `--vector-tail-control`. Next: native context assembly,
+  projection/residual, then connected refiner on frozen inputs. No full
+  generation, speed or quality claim. Correlated review; inherited pinned
+  MPS-adapter oracle, not CUDA/Magi. Refresh on source/binary/runtime/input/
+  weight/mask/layout/precision changes or evidence loss/mutation.
+
 ### [LM-HY-NOMAS-CONNECTED-BF16-ATTENTION-2026-11-03] Native main256 P/PV exact; final context needs explicit RNE
 
 - Default-off `HyNomasAttentionMPSPlan#bf16_boundaries_control` is qualified

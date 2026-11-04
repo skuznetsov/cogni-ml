@@ -1,5 +1,67 @@
 # Hy-Nomas local draft suite
 
+## Actual vector-tail attention qualification (2026-11-03)
+
+Status: VERIFIED for the default-off native one-pass vector probe on the
+frozen block0 T0 V263 input, Q rows 256–262, all 263 K/V rows, H16/D128.
+The 14,336 tail context values match actual upstream exactly. A GPU comparison
+assembly of the previously qualified main256 and the native tail also matches
+all 538,624 source context values exactly. That assembly is diagnostic only:
+it is not a connected native 256 + 7 attention plan or refiner integration.
+
+The source PyTorch 2.8.0 MPS wrapper selects a different algorithm for this
+seven-query tail. It scales Q in F32 before the dot product, uses online F32
+softmax/PV and rounds only the final context to BF16. The general graph uses
+BF16 scaled logits and probability boundaries. Its old tail still differs on
+7,499/14,336 values, max .4375 at unchanged `atol=rtol=2e-5`. That failed
+control remains explicit; it is not substituted for the actual-tail gate.
+The vector operator's second return is uninitialized and is never consumed.
+
+`HyNomasVectorAttentionPlan` reads the existing F32 expansions of BF16 Q/K/V
+in BQHD order and writes a compact 57,344-byte output. The adapted source
+kernel retains the four-products-per-lane dot, 32-way online reduction and
+partial-context merge. It does not allocate an unpacked input or probability
+buffer. Source pins and redistribution notices are in `third_party/VIDEO_NOTICES.md`.
+
+| Native comparison | Values | Mismatches | Max error |
+| --- | ---: | ---: | ---: |
+| Vector tail vs actual source, exact | 14,336 | 0 | 0 |
+| Diagnostic main256 + vector tail vs actual source, exact | 538,624 | 0 | 0 |
+| Old general tail vs actual source, mixed tolerance | 14,336 | 7,499 | .4375 |
+
+DoD observed: native build, 34 Crystal examples, 75 Python tests, all five
+prior exact main/general/P/context checks, exact actual-tail and diagnostic
+assembly gates, unchanged F32/localization and perturbation controls. A fresh
+native process produces all 14 records and the complete payload byte-exact.
+All prior 13 records are unchanged when the vector control is added; all ten
+original F32/input records remain unchanged with both controls off or on.
+The combined probe prepares 113,505,024 named bytes (57,344 above the BF16-only
+control) and records [0 encode allocations, 0 read APIs, 0 preterminal waits,
+1 terminal wait]. Opaque backend resources and terminal diagnostic export are
+outside those counters. Each comparison exports one packed metric vector.
+
+All eleven successful stages retain the file-cache-aware 10% floor, 6 GiB
+process-group cap and 64 MiB swap-growth stop. Sampled peak group footprint:
+796,493,312 bytes; minimum sampled headroom: 23,789,223,936 bytes; observed swap
+growth: zero. Short captures can fall between samples, so this is not an exact
+memory peak. No full refiner, generation or Studio was run.
+
+Risk: CAUTION (reduction/rounding and GPU resource lifetime). Rollback: omit
+`--vector-tail-control`, which is false by default and requires the BF16
+control. Evidence: `.landmark/evidence/2026-11-03-hy-nomas-vector-tail-attention.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-vector-tail-20261103.9h4dgzcu`.
+The inherited replay is caller-pinned, not recreated here; its oracle is the
+pinned PyTorch 2.8.0 MPS adapter, not stock CUDA/Magi. Selected source pins
+and the native binary are hashed; this is not an exhaustive toolchain closure.
+Same-lineage mini-Quad reviews are correlated. No speed, motion, full-block,
+other-input/shape or quality claim follows from this bounded parity result.
+Refresh on source/binary/runtime/input/weight/mask/layout/precision changes
+or evidence loss/mutation.
+
+Next falsifier: assemble the source-compatible main256 and vector-tail
+contexts inside a default-off native GPU plan, then qualify projection,
+residual and connected refiner boundaries on the same frozen input.
+
 ## Connected BF16 attention boundary qualification (2026-11-03)
 
 Status: VERIFIED for the default-off, connected `HyNomasAttentionMPSPlan`

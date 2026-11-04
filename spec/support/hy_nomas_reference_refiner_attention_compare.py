@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Compare a native connected QK/softmax/PV capture with a pinned MPS replay.
+"""Compare native connected Hy-Nomas attention captures with a pinned MPS replay.
 
 All arithmetic/metrics run on MPS, followed by one terminal metric export.
 The general-263 probability witness is source-exact for the first 256 queries;
 its last seven rows are explicitly a counterfactual to the source vector path.
+An opt-in vector-tail capture compares those seven native rows directly with
+the source and assembles a separately labeled diagnostic context.
 """
 from __future__ import annotations
 
@@ -28,8 +30,10 @@ ATOL, RTOL = replay.ATOL, replay.RTOL
 CAP = 512*1024*1024
 ATTENTION_SHAPE = (1, 263, 16, 128)
 SCORE_SHAPE = (1, 263, 16, 263)
+VECTOR_TAIL_SHAPE = (1, 7, 16, 128)
 Q_BYTES = math.prod(ATTENTION_SHAPE)*4
 SCORE_BYTES = math.prod(SCORE_SHAPE)*4
+VECTOR_TAIL_BYTES = math.prod(VECTOR_TAIL_SHAPE)*4
 # The native probe's base graph owns input, output and packed-plan buffers.
 BASE_NAMED_BYTES = 18*Q_BYTES + 10*SCORE_BYTES
 CONNECTED_NAMED_BYTES = 10*Q_BYTES + 2*SCORE_BYTES
@@ -49,11 +53,22 @@ CONNECTED_NATIVE_ORDER = NATIVE_ORDER + (
     "bf16_boundary_attention", "bf16_boundary_attention_with_probabilities",
     "bf16_boundary_probabilities",
 )
+VECTOR_TAIL_NATIVE_ORDER = CONNECTED_NATIVE_ORDER + ("vector_tail_attention",)
 CONNECTED_ROWS = (
     "connected_main256_gate", "connected_general_control",
     "connected_instrumented_context", "connected_probability_main256_gate",
     "connected_probability_general_control", "source_tail_actual",
 )
+VECTOR_TAIL_ROWS = (
+    "vector_tail_actual_gate", "vector_tail_assembled_context_diagnostic",
+)
+CONNECTED_EXACT_COUNTS = {
+    "connected_main256_gate": 1*256*16*128,
+    "connected_general_control": math.prod(ATTENTION_SHAPE),
+    "connected_instrumented_context": math.prod(ATTENTION_SHAPE),
+    "connected_probability_main256_gate": 1*256*16*263,
+    "connected_probability_general_control": math.prod(SCORE_SHAPE),
+}
 COMPILED_SOURCE_FILES = (
     "examples/hy_nomas_refiner_attention_probe.cr",
     "examples/support/hy_nomas_refiner_attention_probe.cr",
@@ -63,6 +78,8 @@ COMPILED_SOURCE_FILES = (
     "src/ml/video/metal_mps_command_chain.cr",
     "src/ml/video/metal_ops.cr", "src/ml/core/buffer.cr",
     "src/ml/metal/device.cr", "src/ml/video/hy_nomas_block.cr",
+    "src/ml/video/hy_nomas_vector_attention.cr",
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
 )
 # These embedded fingerprints are selected sources, not full binary or
 # toolchain provenance. The guarded build retains the wider source snapshot.
@@ -181,12 +198,17 @@ def _validate_compiled_pins(pins: Any) -> None:
                  f"compiled source pin differs: {relative}")
 
 
-def _validate_native_capture_contract(document: Mapping[str, Any]) -> bool:
+def _validate_native_capture_contract(document: Mapping[str, Any]) -> tuple[bool, bool]:
     control = document.get("bf16_boundaries_control", False)
+    vector_control = document.get("vector_tail_control", False)
     _require(type(control) is bool, "native BF16 boundaries control must be an exact bool")
+    _require(type(vector_control) is bool, "native vector tail control must be an exact bool")
+    _require(not vector_control or control,
+             "native vector tail control requires BF16 boundaries control")
     order = document.get("tensor_order")
     tensors = document.get("tensors")
-    expected_order = CONNECTED_NATIVE_ORDER if control else NATIVE_ORDER
+    expected_order = (VECTOR_TAIL_NATIVE_ORDER if vector_control else
+                      CONNECTED_NATIVE_ORDER if control else NATIVE_ORDER)
     _require(type(order) is list and order == list(expected_order),
              "native capture tensor order differs from BF16 boundaries control")
     _require(type(tensors) is dict and set(tensors) == set(expected_order),
@@ -202,7 +224,14 @@ def _validate_native_capture_contract(document: Mapping[str, Any]) -> bool:
                      and record.get("shape") == list(shape),
                      f"invalid connected BF16-boundary tensor: {name}")
 
-    expected_named_bytes = BASE_NAMED_BYTES + (CONNECTED_NAMED_BYTES if control else 0)
+    if vector_control:
+        record = tensors.get("vector_tail_attention")
+        _require(type(record) is dict and record.get("dtype") == "F32"
+                 and record.get("shape") == list(VECTOR_TAIL_SHAPE),
+                 "invalid native vector tail tensor")
+
+    expected_named_bytes = (BASE_NAMED_BYTES + (CONNECTED_NAMED_BYTES if control else 0)
+                            + (VECTOR_TAIL_BYTES if vector_control else 0))
     setup_bytes, max_bytes = document.get("setup_named_bytes"), document.get("max_named_bytes")
     _require(type(setup_bytes) is int and type(max_bytes) is int
              and setup_bytes == expected_named_bytes and 0 < setup_bytes <= max_bytes <= CAP,
@@ -211,50 +240,88 @@ def _validate_native_capture_contract(document: Mapping[str, Any]) -> bool:
                               preterminal_waits=0, terminal_waits=1).items():
         _require(type(document.get(key)) is int and document[key] == expected,
                  f"native counter differs: {key}")
-    return control
+    return control, vector_control
 
 
-def _qualify_connected_rows(rows: list[dict[str, Any]], enabled: bool) -> dict[str, Any]:
+def _require_exact_zero_row(row: Mapping[str, Any], name: str, expected_count: int) -> None:
+    max_abs = row.get("max_abs")
+    mae, rms = row.get("mae"), row.get("rms")
+    atol, rtol = row.get("atol"), row.get("rtol")
+    _require(type(row.get("passed")) is bool and row.get("passed") is True
+             and type(atol) in (int, float) and type(atol) is not bool and atol == 0.0
+             and type(rtol) in (int, float) and type(rtol) is not bool and rtol == 0.0
+             and type(row.get("count")) is int and row.get("count") == expected_count
+             and type(row.get("finite_count")) is int and row.get("finite_count") == expected_count
+             and type(max_abs) in (int, float) and type(max_abs) is not bool
+             and math.isfinite(max_abs) and max_abs == 0.0
+             and type(mae) in (int, float) and type(mae) is not bool
+             and math.isfinite(mae) and mae == 0.0
+             and type(rms) in (int, float) and type(rms) is not bool
+             and math.isfinite(rms) and rms == 0.0
+             and type(row.get("mismatch_count")) is int and row.get("mismatch_count") == 0,
+             f"exact comparison must have zero error and mismatches: {name}")
+
+
+def _validate_mixed_row(row: Mapping[str, Any], name: str, expected_count: int) -> None:
+    passed = row.get("passed")
+    finite_count, mismatch_count, max_abs = (
+        row.get("finite_count"), row.get("mismatch_count"), row.get("max_abs"))
+    atol, rtol = row.get("atol"), row.get("rtol")
+    _require(type(passed) is bool and type(atol) in (int, float) and type(atol) is not bool
+             and atol == ATOL and type(rtol) in (int, float) and type(rtol) is not bool
+             and rtol == RTOL and type(row.get("count")) is int
+             and row.get("count") == expected_count
+             and type(finite_count) is int and 0 <= finite_count <= expected_count
+             and type(mismatch_count) is int and 0 <= mismatch_count <= expected_count
+             and type(max_abs) in (int, float) and type(max_abs) is not bool
+             and math.isfinite(max_abs) and max_abs >= 0.0
+             and passed is (finite_count == expected_count and mismatch_count == 0),
+             f"mixed comparison metrics differ: {name}")
+
+
+def _qualify_connected_rows(rows: list[dict[str, Any]], enabled: bool,
+                            vector_enabled: bool = False) -> dict[str, Any]:
+    _require(not vector_enabled or enabled,
+             "vector tail comparison requires BF16 boundaries control")
     result = dict(
         bf16_boundaries_control=enabled,
-        production_attention_changed=enabled,
+        vector_tail_control=vector_enabled,
+        production_attention_changed=enabled or vector_enabled,
         connected_main256_gate_passed=None,
         connected_general_control_passed=None,
         connected_instrumented_context_passed=None,
         connected_probability_main256_gate_passed=None,
         connected_probability_general_control_passed=None,
         source_tail_actual_passed=None,
+        vector_tail_actual_gate_passed=None,
+        vector_tail_assembled_context_diagnostic_passed=None,
         connected_probability_scope=(
             "instrumented graph only; production context-only graph does not expose internal probabilities"
             if enabled else None
         ),
     )
     by_name = {row.get("kind"): row for row in rows}
+    _require(len(by_name) == len(rows), "duplicate connected comparison row")
     present = set(by_name) & set(CONNECTED_ROWS)
     if not enabled:
-        _require(not present, "disabled BF16 boundaries control emitted connected comparison rows")
+        _require(not present and not (set(by_name) & set(VECTOR_TAIL_ROWS)),
+                 "disabled BF16 boundaries control emitted connected comparison rows")
         return result
 
-    _require(present == set(CONNECTED_ROWS), "connected BF16 comparison coverage differs")
-    exact_rows = CONNECTED_ROWS[:-1]
-    for name in exact_rows:
-        row = by_name[name]
-        _require(type(row.get("passed")) is bool and row.get("atol") == 0.0 and row.get("rtol") == 0.0,
-                 f"connected comparison must use exact tolerance: {name}")
+    _require(present == set(CONNECTED_ROWS)
+             and (set(by_name) & set(VECTOR_TAIL_ROWS)) == (set(VECTOR_TAIL_ROWS) if vector_enabled else set()),
+             "connected BF16 comparison coverage differs")
+    for name, count in CONNECTED_EXACT_COUNTS.items():
+        _require_exact_zero_row(by_name[name], name, count)
     tail = by_name["source_tail_actual"]
-    _require(type(tail.get("passed")) is bool and tail.get("atol") == ATOL and tail.get("rtol") == RTOL,
-             "source tail actual comparison must use the unchanged mixed tolerance")
+    _validate_mixed_row(tail, "source_tail_actual", math.prod(VECTOR_TAIL_SHAPE))
 
-    _require(by_name["connected_main256_gate"]["passed"],
-             "connected candidate failed the actual-source main256 gate")
-    _require(by_name["connected_general_control"]["passed"],
-             "connected candidate differs from the general-263 context control")
-    _require(by_name["connected_instrumented_context"]["passed"],
-             "instrumented connected context differs from production context")
-    _require(by_name["connected_probability_main256_gate"]["passed"],
-             "instrumented connected probabilities failed the actual-source main256 gate")
-    _require(by_name["connected_probability_general_control"]["passed"],
-             "instrumented connected probabilities differ from the general-263 control")
+    if vector_enabled:
+        _require_exact_zero_row(by_name["vector_tail_actual_gate"],
+                                "vector_tail_actual_gate", math.prod(VECTOR_TAIL_SHAPE))
+        _require_exact_zero_row(by_name["vector_tail_assembled_context_diagnostic"],
+                                "vector_tail_assembled_context_diagnostic",
+                                math.prod(ATTENTION_SHAPE))
     result.update(
         connected_main256_gate_passed=by_name["connected_main256_gate"]["passed"],
         connected_general_control_passed=by_name["connected_general_control"]["passed"],
@@ -263,6 +330,13 @@ def _qualify_connected_rows(rows: list[dict[str, Any]], enabled: bool) -> dict[s
         connected_probability_general_control_passed=by_name["connected_probability_general_control"]["passed"],
         source_tail_actual_passed=tail["passed"],
     )
+    if vector_enabled:
+        result.update(
+            vector_tail_actual_gate_passed=by_name["vector_tail_actual_gate"]["passed"],
+            vector_tail_assembled_context_diagnostic_passed=(
+                by_name["vector_tail_assembled_context_diagnostic"]["passed"]
+            ),
+        )
     return result
 
 
@@ -287,7 +361,7 @@ def validate_inputs(args: Any) -> dict[str, Any]:
     _require(native.get("input_manifest_sha256") == args.replay_sha256
              and native.get("input_payload_sha256") == source["tensor_artifact"]["sha256"],
              "native capture is detached from the supplied replay")
-    bf16_boundaries_control = _validate_native_capture_contract(native)
+    bf16_boundaries_control, vector_tail_control = _validate_native_capture_contract(native)
     _validate_compiled_pins(native.get("compiled_source_sha256"))
     for name in ("q", "k", "v", "source_probabilities"):
         sr, nr = source["tensors"][name], native["tensors"]["input."+name]
@@ -296,7 +370,8 @@ def validate_inputs(args: Any) -> dict[str, Any]:
                  f"native replay input is not exact: {name}")
     return dict(source_document=source, source_payload=source_bytes,
                 native_document=native, native_payload=native_bytes,
-                bf16_boundaries_control=bf16_boundaries_control)
+                bf16_boundaries_control=bf16_boundaries_control,
+                vector_tail_control=vector_tail_control)
 
 
 def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
@@ -323,6 +398,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     with torch.inference_mode():
         n = {name: load("native", name) for name in NATIVE_ORDER[4:]}
         connected = bool(inputs["bf16_boundaries_control"])
+        vector_tail = bool(inputs["vector_tail_control"])
         for name, source_name in (("qk_raw", "f32_qk_raw"), ("qk_scaled", "f32_qk_scaled"),
                                   ("softmax", "f32_softmax"), ("pv", "f32_pv"),
                                   ("canonical_attention", "observed_native"),
@@ -359,6 +435,13 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
             # The last seven rows use the source vector path. This is reported
             # at the unchanged tolerance, without making it a qualification gate.
             compare("source_tail_actual", production_context[:, 256:], observed_source[:, 256:])
+            if vector_tail:
+                vector_context = load("native", "vector_tail_attention")
+                compare("vector_tail_actual_gate", vector_context,
+                        observed_source[:, 256:], exact=True)
+                assembled_context = torch.cat((production_context[:, :256], vector_context), dim=1)
+                compare("vector_tail_assembled_context_diagnostic", assembled_context,
+                        observed_source, exact=True)
         values = torch.stack([stats[key] for _, stats, _, _ in queued for key in shared.METRIC_KEYS]).detach().cpu().tolist()
     stride = len(shared.METRIC_KEYS)
     rows = [dict(kind=name, **shared._stats_record(values[i*stride:(i+1)*stride], atol=atol, rtol=rtol))
@@ -368,7 +451,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     _require(faithful and by_name["native_explicit_vs_canonical"]["passed"], "native F32 replay faithfulness failed")
     _require(by_name["sensitivity_a_vs_a"]["passed"] and not by_name["sensitivity_perturbation"]["passed"], "metric sensitivity failed")
     _qualify_localization(rows)
-    connected_result = _qualify_connected_rows(rows, connected)
+    connected_result = _qualify_connected_rows(rows, connected, vector_tail)
     return dict(device="mps", torch_version=str(torch.__version__), numeric_tolerance=dict(atol=ATOL, rtol=RTOL),
                 terminal_cpu_exports=1, native_f32_faithfulness_passed=faithful, rows=rows,
                 localization_gate_passed=True,
@@ -377,6 +460,11 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                 stage_scope="QK is a matched F32 reduction control; scaled-logit candidate is qualified by exact actual-source main256 P and PV",
                 connected_candidate_scope=("opt-in BF16-boundary block-0 attention; no full refiner wiring"
                                            if connected else None),
+                vector_tail_candidate_scope=(
+                    "native BF16 main context plus native vector tail assembled for comparison only; "
+                    "no native connected/refiner wiring claim and no tail probability capture"
+                    if vector_tail else None
+                ),
                 full_generation_executed=False, **connected_result)
 
 

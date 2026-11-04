@@ -59,6 +59,41 @@ private def native_attention_replay_manifest : JSON::Any
 end
 
 describe HyNomasRefinerAttentionProbe do
+  it "admits the one-pass source vector geometry and rejects unsupported paths before Metal" do
+    vector = ML::Video::HyNomasVectorAttentionPlan
+    vector.validate_geometry!(1, 263, 256, 7, 263, 16, 128)
+    vector.validate_geometry!(1, 8, 0, 8, 1023, 16, 128)
+    [
+      {1, 263, 255, 9, 263, 16, 128},  # Requires general attention.
+      {1, 263, 256, 7, 1024, 16, 128}, # Requires two-pass vector attention.
+      {1, 263, 256, 7, 6, 16, 128},
+      {1, 263, -1, 7, 263, 16, 128},
+      {1, 263, 257, 7, 263, 16, 128},
+      {1, 263, 256, 7, 263, 16, 64},
+      {0, 263, 256, 7, 263, 16, 128},
+      {1, 263, 256, 0, 263, 16, 128},
+      {Int32::MAX, 263, 256, 7, 263, 16, 128},
+    ].each do |geometry|
+      expect_raises(ArgumentError) { vector.validate_geometry!(*geometry) }
+    end
+  end
+
+  it "requires the existing BF16 control and budgets the compact vector output exactly" do
+    HyNomasRefinerAttentionProbe.validate_controls!(false, false)
+    HyNomasRefinerAttentionProbe.validate_controls!(true, true)
+    expect_raises(ArgumentError, /Vector tail control requires/) do
+      HyNomasRefinerAttentionProbe.required_named_bytes(false, true)
+    end
+    controlled = HyNomasRefinerAttentionProbe.required_named_bytes(true, true)
+    controlled.should eq(HyNomasRefinerAttentionProbe.required_named_bytes(true) +
+                         HyNomasRefinerAttentionProbe::TAIL_BYTES)
+    HyNomasRefinerAttentionProbe.validate_budget!(controlled, true, true).should eq(controlled)
+    expect_raises(ArgumentError) do
+      HyNomasRefinerAttentionProbe.validate_budget!(controlled - 1, true, true)
+    end
+    HyNomasRefinerAttentionProbe::VECTOR_CAPTURE_ORDER.last.should eq("vector_tail_attention")
+  end
+
   it "keeps BF16 attention opt-in and admits probability capture only with that control" do
     ML::Video::HyNomasAttentionMPSPlan::DEFAULT_BF16_BOUNDARIES_CONTROL.should be_false
     ML::Video::HyNomasAttentionMPSPlan.validate_control!(false, false)

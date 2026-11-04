@@ -31,7 +31,7 @@ def packet():
         offset=0, nbytes=8, sha256=hashlib.sha256(data).hexdigest())}), data
 
 
-def native_capture(control=False):
+def native_capture(control=False, vector=False):
     order = list(compare.NATIVE_ORDER)
     tensors = {name: dict(dtype="F32", shape=[1]) for name in order}
     if control:
@@ -41,9 +41,15 @@ def native_capture(control=False):
             "bf16_boundary_attention_with_probabilities": dict(dtype="F32", shape=list(compare.ATTENTION_SHAPE)),
             "bf16_boundary_probabilities": dict(dtype="F32", shape=list(compare.SCORE_SHAPE)),
         })
-    extra = compare.CONNECTED_NAMED_BYTES if control else 0
+    if vector:
+        order.append("vector_tail_attention")
+        tensors["vector_tail_attention"] = dict(
+            dtype="F32", shape=list(compare.VECTOR_TAIL_SHAPE))
+    extra = ((compare.CONNECTED_NAMED_BYTES if control else 0)
+             + (compare.VECTOR_TAIL_BYTES if vector else 0))
     return dict(
         bf16_boundaries_control=control,
+        vector_tail_control=vector,
         tensor_order=order,
         tensors=tensors,
         setup_named_bytes=compare.BASE_NAMED_BYTES + extra,
@@ -56,20 +62,46 @@ def native_capture(control=False):
 
 
 def connected_rows():
-    exact = ("connected_main256_gate", "connected_general_control",
-             "connected_instrumented_context", "connected_probability_main256_gate",
-             "connected_probability_general_control")
-    return ([dict(kind=name, passed=True, atol=0.0, rtol=0.0) for name in exact] +
-            [dict(kind="source_tail_actual", passed=False, atol=2e-5, rtol=2e-5)])
+    exact = compare.CONNECTED_EXACT_COUNTS
+    return ([dict(kind=name, passed=True, atol=0.0, rtol=0.0,
+                  count=count, finite_count=count, max_abs=0.0, mae=0.0, rms=0.0,
+                  mismatch_count=0)
+             for name, count in exact.items()] +
+            [dict(kind="source_tail_actual", passed=False, atol=2e-5, rtol=2e-5,
+                  count=compare.VECTOR_TAIL_BYTES // 4,
+                  finite_count=compare.VECTOR_TAIL_BYTES // 4, max_abs=0.4375,
+                  mismatch_count=7499)])
+
+
+def vector_tail_rows():
+    rows = connected_rows()
+    for name, count in (("vector_tail_actual_gate", compare.VECTOR_TAIL_BYTES // 4),
+                        ("vector_tail_assembled_context_diagnostic",
+                         compare.Q_BYTES // 4)):
+        rows.append(dict(kind=name, passed=True, atol=0.0, rtol=0.0,
+                         count=count, finite_count=count, max_abs=0.0, mae=0.0, rms=0.0,
+                         mismatch_count=0))
+    return rows
 
 
 class AttentionCompareTests(unittest.TestCase):
     def test_default_capture_control_is_legacy_false_and_connected_order_is_exact(self):
         legacy = native_capture()
         legacy.pop("bf16_boundaries_control")
-        self.assertFalse(compare._validate_native_capture_contract(legacy))
-        self.assertFalse(compare._validate_native_capture_contract(native_capture(False)))
-        self.assertTrue(compare._validate_native_capture_contract(native_capture(True)))
+        legacy.pop("vector_tail_control")
+        self.assertEqual(compare._validate_native_capture_contract(legacy), (False, False))
+        self.assertEqual(compare._validate_native_capture_contract(native_capture(False)), (False, False))
+        self.assertEqual(compare._validate_native_capture_contract(native_capture(True)), (True, False))
+        self.assertEqual(compare._validate_native_capture_contract(native_capture(True, True)), (True, True))
+
+    def test_vector_tail_flag_requires_exact_bool_and_bf16_control(self):
+        for value in (0, 1, "true", None):
+            bad = native_capture(True)
+            bad["vector_tail_control"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(compare.Error, "exact bool"):
+                compare._validate_native_capture_contract(bad)
+        with self.assertRaisesRegex(compare.Error, "requires BF16"):
+            compare._validate_native_capture_contract(native_capture(False, True))
 
     def test_connected_capture_rejects_forged_flag_missing_tensor_wrong_shape_and_nonbool(self):
         missing = native_capture(True)
@@ -83,10 +115,34 @@ class AttentionCompareTests(unittest.TestCase):
         with self.assertRaises(compare.Error):
             compare._validate_native_capture_contract(wrong_shape)
 
-        for value in (0, 1, "true", None):
-            bad = native_capture(False)
-            bad["bf16_boundaries_control"] = value
-            with self.subTest(value=value), self.assertRaises(compare.Error):
+        for key in ("bf16_boundaries_control", "vector_tail_control"):
+            for value in (0, 1, "true", None):
+                bad = native_capture(False)
+                bad[key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(compare.Error):
+                    compare._validate_native_capture_contract(bad)
+
+    def test_vector_tail_capture_requires_order_shape_and_exact_extra_bytes(self):
+        missing = native_capture(True, True)
+        missing["tensors"].pop("vector_tail_attention")
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(missing)
+
+        wrong_order = native_capture(True, True)
+        wrong_order["tensor_order"].pop()
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(wrong_order)
+
+        wrong_shape = native_capture(True, True)
+        wrong_shape["tensors"]["vector_tail_attention"]["shape"] = [1, 8, 16, 128]
+        with self.assertRaisesRegex(compare.Error, "vector tail tensor"):
+            compare._validate_native_capture_contract(wrong_shape)
+
+        for bad_bytes in (compare.BASE_NAMED_BYTES + compare.CONNECTED_NAMED_BYTES,
+                          compare.BASE_NAMED_BYTES + compare.CONNECTED_NAMED_BYTES + compare.VECTOR_TAIL_BYTES + 4):
+            bad = native_capture(True, True)
+            bad["setup_named_bytes"] = bad_bytes
+            with self.subTest(bytes=bad_bytes), self.assertRaisesRegex(compare.Error, "buffer budget"):
                 compare._validate_native_capture_contract(bad)
 
     def test_connected_capture_rejects_budget_drift_and_candidate_when_disabled(self):
@@ -99,6 +155,13 @@ class AttentionCompareTests(unittest.TestCase):
         disabled_with_candidate["tensor_order"].append("bf16_boundary_attention")
         with self.assertRaises(compare.Error):
             compare._validate_native_capture_contract(disabled_with_candidate)
+
+        vector_disabled = native_capture(True, False)
+        vector_disabled["tensor_order"].append("vector_tail_attention")
+        vector_disabled["tensors"]["vector_tail_attention"] = dict(
+            dtype="F32", shape=list(compare.VECTOR_TAIL_SHAPE))
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(vector_disabled)
 
     def test_connected_gate_requires_main_actual_source_exactness_and_keeps_tail_non_gating(self):
         result = compare._qualify_connected_rows(connected_rows(), True)
@@ -116,13 +179,59 @@ class AttentionCompareTests(unittest.TestCase):
         with self.assertRaisesRegex(compare.Error, "main256"):
             compare._qualify_connected_rows(failed_main, True)
 
+    def test_vector_tail_exact_rows_gate_zero_metrics_and_preserve_tail_diagnostic(self):
+        result = compare._qualify_connected_rows(vector_tail_rows(), True, True)
+        self.assertTrue(result["vector_tail_control"])
+        self.assertTrue(result["vector_tail_actual_gate_passed"])
+        self.assertTrue(result["vector_tail_assembled_context_diagnostic_passed"])
+        self.assertFalse(result["source_tail_actual_passed"])
+        self.assertTrue(result["production_attention_changed"])
+
+        for name in compare.VECTOR_TAIL_ROWS:
+            for key, value in (("mismatch_count", 1), ("max_abs", 0.25),
+                               ("finite_count", 1), ("passed", False),
+                               ("mae", 0.25)):
+                bad = vector_tail_rows()
+                next(row for row in bad if row["kind"] == name)[key] = value
+                with self.subTest(name=name, key=key), self.assertRaisesRegex(
+                        compare.Error, "zero error and mismatches"):
+                    compare._qualify_connected_rows(bad, True, True)
+
+        bad = vector_tail_rows()
+        bad = [row for row in bad if row["kind"] != "vector_tail_assembled_context_diagnostic"]
+        with self.assertRaisesRegex(compare.Error, "coverage"):
+            compare._qualify_connected_rows(bad, True, True)
+
+    def test_connected_exact_rows_reject_forged_pass_and_disabled_vector_rows(self):
+        for rows, enabled, vector in ((connected_rows(), True, False),
+                                      (vector_tail_rows(), True, True),
+                                      ([dict(kind="unrelated")], False, False)):
+            with self.subTest(enabled=enabled, vector=vector), self.assertRaisesRegex(
+                    compare.Error, "duplicate connected"):
+                compare._qualify_connected_rows(rows + [dict(rows[0])], enabled, vector)
+
+        forged = connected_rows()
+        next(row for row in forged if row["kind"] == "connected_main256_gate")["mismatch_count"] = 1
+        with self.assertRaisesRegex(compare.Error, "zero error and mismatches"):
+            compare._qualify_connected_rows(forged, True)
+
+        with self.assertRaisesRegex(compare.Error, "disabled BF16"):
+            compare._qualify_connected_rows(
+                [dict(kind="vector_tail_actual_gate")], False, False)
+
+        with self.assertRaisesRegex(compare.Error, "requires BF16"):
+            compare._qualify_connected_rows([], False, True)
+
     def test_default_result_has_no_connected_gates_and_reports_unchanged_attention(self):
-        result = compare._qualify_connected_rows([], False)
+        result = compare._qualify_connected_rows([], False, False)
         self.assertFalse(result["bf16_boundaries_control"])
+        self.assertFalse(result["vector_tail_control"])
         self.assertFalse(result["production_attention_changed"])
         for name in ("connected_main256_gate_passed", "connected_general_control_passed",
                      "connected_instrumented_context_passed", "connected_probability_main256_gate_passed",
-                     "connected_probability_general_control_passed", "source_tail_actual_passed"):
+                     "connected_probability_general_control_passed", "source_tail_actual_passed",
+                     "vector_tail_actual_gate_passed",
+                     "vector_tail_assembled_context_diagnostic_passed"):
             self.assertIsNone(result[name])
 
     def test_qualified_explanation_requires_all_actual_source_and_control_rows(self):
