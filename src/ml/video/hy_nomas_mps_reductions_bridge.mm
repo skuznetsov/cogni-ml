@@ -27,6 +27,7 @@
 @property(nonatomic) uint32_t keyRows;
 @property(nonatomic) uint32_t heads;
 @property(nonatomic) uint32_t headDim;
+@property(nonatomic) BOOL captureProbabilities;
 @end
 
 @implementation HyNomasMPSReductionPlan
@@ -182,27 +183,105 @@ static bool hy_nomas_mps_encode_transpose(
   return true;
 }
 
-extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
+// A BF16-typed result cast back to F32 can remain unrounded in a compiled
+// graph. Make the observable RNE boundary explicit without a CPU read or an
+// intermediate external buffer. Preserve infinities and quiet NaNs.
+static MPSGraphTensor *hy_nomas_mps_bf16_round_expand(
+    MPSGraph *graph, MPSGraphTensor *input) {
+  if (!graph || !input || input.dataType != MPSDataTypeFloat32)
+    return nil;
+  MPSGraphTensor *bits = [graph reinterpretCastTensor:input
+                                              toType:MPSDataTypeUInt32
+                                                name:@"hy_context_bits"];
+  MPSGraphTensor *shift = [graph constantWithScalar:16.0 shape:@[ @1 ]
+                                         dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *one = [graph constantWithScalar:1.0 shape:@[ @1 ]
+                                       dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *base = [graph constantWithScalar:0x7fff shape:@[ @1 ]
+                                        dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *upperMask = [graph constantWithScalar:0xffff0000 shape:@[ @1 ]
+                                             dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *magnitudeMask = [graph constantWithScalar:0x7fffffff shape:@[ @1 ]
+                                                 dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *infinity = [graph constantWithScalar:0x7f800000 shape:@[ @1 ]
+                                            dataType:MPSDataTypeUInt32];
+  MPSGraphTensor *quiet = [graph constantWithScalar:0x00400000 shape:@[ @1 ]
+                                         dataType:MPSDataTypeUInt32];
+  if (!bits || !shift || !one || !base || !upperMask || !magnitudeMask ||
+      !infinity || !quiet || bits.dataType != MPSDataTypeUInt32)
+    return nil;
+  MPSGraphTensor *high = [graph bitwiseRightShiftWithPrimaryTensor:bits
+                                                secondaryTensor:shift
+                                                           name:@"hy_context_high_word"];
+  MPSGraphTensor *parity = [graph bitwiseANDWithPrimaryTensor:high
+                                            secondaryTensor:one
+                                                       name:@"hy_context_round_parity"];
+  MPSGraphTensor *bias = [graph additionWithPrimaryTensor:base
+                                         secondaryTensor:parity
+                                                    name:@"hy_context_round_bias"];
+  MPSGraphTensor *rounded = [graph additionWithPrimaryTensor:bits
+                                            secondaryTensor:bias
+                                                       name:@"hy_context_rounded_bits"];
+  MPSGraphTensor *masked = [graph bitwiseANDWithPrimaryTensor:rounded
+                                            secondaryTensor:upperMask
+                                                       name:@"hy_context_upper_bits"];
+  MPSGraphTensor *magnitude = [graph bitwiseANDWithPrimaryTensor:bits
+                                               secondaryTensor:magnitudeMask
+                                                          name:@"hy_context_magnitude"];
+  MPSGraphTensor *isNaN = [graph greaterThanWithPrimaryTensor:magnitude
+                                            secondaryTensor:infinity
+                                                       name:@"hy_context_is_nan"];
+  MPSGraphTensor *nanBase = [graph bitwiseANDWithPrimaryTensor:bits
+                                             secondaryTensor:upperMask
+                                                        name:@"hy_context_nan_base"];
+  MPSGraphTensor *nanBits = [graph bitwiseORWithPrimaryTensor:nanBase
+                                            secondaryTensor:quiet
+                                                       name:@"hy_context_quiet_nan"];
+  MPSGraphTensor *expanded = [graph selectWithPredicateTensor:isNaN
+                                        truePredicateTensor:nanBits
+                                       falsePredicateTensor:masked
+                                                        name:@"hy_context_bf16_bits"];
+  if (!high || !parity || !bias || !rounded || !masked || !magnitude ||
+      !isNaN || !nanBase || !nanBits || !expanded ||
+      high.dataType != MPSDataTypeUInt32 || parity.dataType != MPSDataTypeUInt32 ||
+      bias.dataType != MPSDataTypeUInt32 || rounded.dataType != MPSDataTypeUInt32 ||
+      masked.dataType != MPSDataTypeUInt32 || magnitude.dataType != MPSDataTypeUInt32 ||
+      nanBase.dataType != MPSDataTypeUInt32 || nanBits.dataType != MPSDataTypeUInt32 ||
+      expanded.dataType != MPSDataTypeUInt32)
+    return nil;
+  MPSGraphTensor *result = [graph reinterpretCastTensor:expanded
+                                                toType:MPSDataTypeFloat32
+                                                  name:@"hy_context_bf16_expanded"];
+  return result && result.dataType == MPSDataTypeFloat32 ? result : nil;
+}
+
+static void *hy_nomas_mps_reduction_plan_create(
     void *deviceHandle, int32_t mode, int32_t batches, int32_t queryRows,
     int32_t keyRows, int32_t heads, int32_t headDim, float scale,
     void *inputAHandle, void *inputBHandle, void *inputCHandle,
     void *packedAHandle, void *packedBHandle, void *packedCHandle,
-    void *packedOutputHandle, void *outputHandle) {
+    void *packedOutputHandle, void *outputHandle,
+    void *packedProbabilitiesHandle, void *probabilitiesHandle) {
+  const bool attention = mode == 3 || mode == 4;
+  const bool captureProbabilities = probabilitiesHandle != nullptr;
   if (!deviceHandle || !inputAHandle || !packedAHandle ||
-      !packedOutputHandle || !outputHandle || mode < 0 || mode > 3 ||
+      !packedOutputHandle || !outputHandle || mode < 0 || mode > 4 ||
       batches <= 0 || queryRows <= 0 || keyRows <= 0 || heads <= 0 ||
       headDim <= 0 || !std::isfinite(scale) || scale <= 0.0f || scale > 1.0f)
     return nullptr;
   if ((mode == 0 || mode == 2) &&
       (!inputBHandle || !packedBHandle))
     return nullptr;
-  if (mode == 3 && (!inputBHandle || !inputCHandle || !packedBHandle ||
+  if (attention && (!inputBHandle || !inputCHandle || !packedBHandle ||
                     !packedCHandle))
     return nullptr;
   if (mode == 1 && (inputBHandle || inputCHandle || packedBHandle ||
                     packedCHandle))
     return nullptr;
-  if (mode != 3 && inputCHandle)
+  if (!attention && inputCHandle)
+    return nullptr;
+  if ((packedProbabilitiesHandle != nullptr) != captureProbabilities ||
+      (captureProbabilities && mode != 4))
     return nullptr;
 
   if (@available(macOS 15.0, *)) {
@@ -250,10 +329,14 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
       id<MTLBuffer> packedOutput =
           (__bridge id<MTLBuffer>)packedOutputHandle;
       id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandle;
+      id<MTLBuffer> packedProbabilities = packedProbabilitiesHandle
+          ? (__bridge id<MTLBuffer>)packedProbabilitiesHandle : nil;
+      id<MTLBuffer> probabilitiesOutput = probabilitiesHandle
+          ? (__bridge id<MTLBuffer>)probabilitiesHandle : nil;
 
       uint64_t inputABytes = (mode == 1 || mode == 2) ? scoreBytes : qBytes;
       uint64_t inputBBytes =
-          (mode == 0 || mode == 2 || mode == 3) ? kBytes : 0;
+          (mode == 0 || mode == 2 || attention) ? kBytes : 0;
       const uint64_t packedABytes = inputABytes;
       const uint64_t packedBBytes = inputBBytes;
       const uint64_t packedCBytes = kBytes;
@@ -273,6 +356,10 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
         [allBuffers addObject:packedC];
       [allBuffers addObject:packedOutput];
       [allBuffers addObject:output];
+      if (captureProbabilities) {
+        [allBuffers addObject:packedProbabilities];
+        [allBuffers addObject:probabilitiesOutput];
+      }
       for (id<MTLBuffer> buffer in allBuffers) {
         if (!buffer || buffer.device != device ||
             buffer.storageMode != MTLStorageModeShared)
@@ -284,7 +371,10 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
           (inputB && (inputB.length < inputBBytes ||
                       packedB.length < packedBBytes)) ||
           (inputC && (inputC.length < packedCBytes ||
-                      packedC.length < packedCBytes)))
+                      packedC.length < packedCBytes)) ||
+          (captureProbabilities &&
+              (packedProbabilities.length < scoreBytes ||
+               probabilitiesOutput.length < scoreBytes)))
         return nullptr;
       for (NSUInteger left = 0; left < allBuffers.count; ++left) {
         for (NSUInteger right = left + 1; right < allBuffers.count; ++right) {
@@ -313,8 +403,9 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
         NSMutableArray<MPSGraphTensor *> *placeholders = [NSMutableArray new];
         NSMutableArray<MPSGraphTensorData *> *inputData = [NSMutableArray new];
         MPSGraphTensor *result = nil;
+        MPSGraphTensor *probabilitiesResult = nil;
 
-        if (mode == 0 || mode == 3) {
+        if (mode == 0 || attention) {
           MPSGraphTensor *q = [graph placeholderWithShape:headQShape
                                                  dataType:MPSDataTypeFloat32
                                                      name:@"hy_q_bhqd"];
@@ -345,7 +436,7 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
                                           secondaryTensor:kTranspose
                                                      name:@"hy_qk_bhqk"];
           MPSGraphTensor *softmaxInput = nil;
-          if (mode == 3) {
+          if (attention) {
             // PyTorch 2.8 generic MPS SDPA on macOS 15 adds F32 epsilon before
             // scaling; it then softmaxes over K and multiplies by head-major V.
             MPSGraphTensor *epsilon =
@@ -364,6 +455,16 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
                 [graph multiplicationWithPrimaryTensor:epsilonLogits
                                         secondaryTensor:scaleTensor
                                                    name:@"hy_scaled_qk_bhqk"];
+            if (mode == 4) {
+              // Opt-in refiner boundary control. Round scaled scores, not
+              // raw QK: the latter is a refuted boundary on the pinned input.
+              softmaxInput = [graph castTensor:softmaxInput
+                                        toType:MPSDataTypeBFloat16
+                                          name:@"hy_scaled_qk_bf16_bhqk"];
+              if (!softmaxInput ||
+                  softmaxInput.dataType != MPSDataTypeBFloat16)
+                return nullptr;
+            }
             MPSGraphTensor *probabilities =
                 [graph softMaxWithTensor:softmaxInput
                                     axis:3
@@ -378,10 +479,31 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
                                              dataType:MPSDataTypeFloat32]];
             feeds[v] = [[MPSGraphShapedType alloc] initWithShape:headKShape
                                                        dataType:MPSDataTypeFloat32];
+            MPSGraphTensor *pvValues = v;
+            if (mode == 4) {
+              pvValues = [graph castTensor:v toType:MPSDataTypeBFloat16
+                                      name:@"hy_v_bf16_bhkd"];
+              if (!probabilities || !pvValues ||
+                  probabilities.dataType != MPSDataTypeBFloat16 ||
+                  pvValues.dataType != MPSDataTypeBFloat16)
+                return nullptr;
+              if (captureProbabilities) {
+                probabilitiesResult = [graph castTensor:probabilities
+                                                  toType:MPSDataTypeFloat32
+                                                    name:@"hy_probabilities_f32_bhqk"];
+              }
+            }
             result =
                 [graph matrixMultiplicationWithPrimaryTensor:probabilities
-                                            secondaryTensor:v
+                                            secondaryTensor:pvValues
                                                        name:@"hy_context_bhqd"];
+            if (mode == 4) {
+              if (!result || result.dataType != MPSDataTypeBFloat16)
+                return nullptr;
+              result = [graph castTensor:result toType:MPSDataTypeFloat32
+                                     name:@"hy_context_f32_bhqd"];
+              result = hy_nomas_mps_bf16_round_expand(graph, result);
+            }
           } else {
             MPSGraphTensor *scaleTensor =
                 [graph constantWithScalar:scale
@@ -438,15 +560,18 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
                                                      name:@"hy_context_bhqd"];
         }
 
-        if (!graph || !result || placeholders.count != inputData.count ||
+        if (!graph || !result || (captureProbabilities && !probabilitiesResult) ||
+            placeholders.count != inputData.count ||
             feeds.count != placeholders.count)
           return nullptr;
         NSArray<NSNumber *> *headOutputShape =
             (mode <= 1) ? headScoreShape : headQShape;
+        NSArray<MPSGraphTensor *> *targets = captureProbabilities
+            ? @[ result, probabilitiesResult ] : @[ result ];
         MPSGraphExecutable *executable =
             [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
                                 feeds:feeds
-                        targetTensors:@[ result ]
+                        targetTensors:targets
                      targetOperations:nil
                 compilationDescriptor:nil];
         if (!executable)
@@ -459,6 +584,17 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
                          dataType:MPSDataTypeFloat32];
         if (!outputData)
           return nullptr;
+        NSMutableArray<MPSGraphTensorData *> *outputs =
+            [NSMutableArray arrayWithObject:outputData];
+        if (captureProbabilities) {
+          MPSGraphTensorData *probabilitiesData =
+              [[MPSGraphTensorData alloc] initWithMTLBuffer:packedProbabilities
+                                                    shape:headScoreShape
+                                                 dataType:MPSDataTypeFloat32];
+          if (!probabilitiesData)
+            return nullptr;
+          [outputs addObject:probabilitiesData];
+        }
 
         NSMutableArray<MPSGraphTensorData *> *orderedInputs = [NSMutableArray new];
         for (MPSGraphTensor *feedTensor in executable.feedTensors) {
@@ -469,6 +605,16 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
         }
         if (orderedInputs.count != placeholders.count)
           return nullptr;
+        // Preserve the executable's declared target order just as for feeds.
+        NSMutableArray<MPSGraphTensorData *> *orderedOutputs = [NSMutableArray new];
+        for (MPSGraphTensor *targetTensor in executable.targetTensors) {
+          NSUInteger index = [targets indexOfObjectIdenticalTo:targetTensor];
+          if (index == NSNotFound || index >= outputs.count)
+            return nullptr;
+          [orderedOutputs addObject:outputs[index]];
+        }
+        if (orderedOutputs.count != targets.count)
+          return nullptr;
 
         MPSGraphExecutableExecutionDescriptor *execution =
             [MPSGraphExecutableExecutionDescriptor new];
@@ -478,7 +624,7 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
         plan.graph = graph;
         plan.executable = executable;
         plan.inputArray = [orderedInputs copy];
-        plan.outputArray = @[ outputData ];
+        plan.outputArray = [orderedOutputs copy];
         plan.execution = execution;
         plan.residentBuffers = [allBuffers copy];
         plan.toHeadMajor = toHeadMajor;
@@ -489,6 +635,7 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
         plan.keyRows = (uint32_t)keyRows;
         plan.heads = (uint32_t)heads;
         plan.headDim = (uint32_t)headDim;
+        plan.captureProbabilities = captureProbabilities;
         return (__bridge_retained void *)plan;
       } @catch (NSException *exception) {
         (void)exception;
@@ -497,6 +644,35 @@ extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
     }
   }
   return nullptr;
+}
+
+// Existing F32 callers retain the same ABI, mode and graph targets.
+extern "C" void *gs_hy_nomas_mps_reduction_plan_create(
+    void *deviceHandle, int32_t mode, int32_t batches, int32_t queryRows,
+    int32_t keyRows, int32_t heads, int32_t headDim, float scale,
+    void *inputAHandle, void *inputBHandle, void *inputCHandle,
+    void *packedAHandle, void *packedBHandle, void *packedCHandle,
+    void *packedOutputHandle, void *outputHandle) {
+  return hy_nomas_mps_reduction_plan_create(
+      deviceHandle, mode, batches, queryRows, keyRows, heads, headDim, scale,
+      inputAHandle, inputBHandle, inputCHandle, packedAHandle, packedBHandle,
+      packedCHandle, packedOutputHandle, outputHandle, nullptr, nullptr);
+}
+
+// Optional P capture is diagnostic only. Context-only and instrumented plans
+// are compared on the same inputs before using that witness to qualify P.
+extern "C" void *gs_hy_nomas_mps_bf16_attention_plan_create(
+    void *deviceHandle, int32_t batches, int32_t queryRows, int32_t keyRows,
+    int32_t heads, int32_t headDim, float scale,
+    void *inputAHandle, void *inputBHandle, void *inputCHandle,
+    void *packedAHandle, void *packedBHandle, void *packedCHandle,
+    void *packedOutputHandle, void *outputHandle,
+    void *packedProbabilitiesHandle, void *probabilitiesHandle) {
+  return hy_nomas_mps_reduction_plan_create(
+      deviceHandle, 4, batches, queryRows, keyRows, heads, headDim, scale,
+      inputAHandle, inputBHandle, inputCHandle, packedAHandle, packedBHandle,
+      packedCHandle, packedOutputHandle, outputHandle,
+      packedProbabilitiesHandle, probabilitiesHandle);
 }
 
 extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
@@ -525,7 +701,7 @@ extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
       if (plan.mode == 0 || plan.mode == 2) {
         inputB = plan.residentBuffers[cursor++];
         packedB = plan.residentBuffers[cursor++];
-      } else if (plan.mode == 3) {
+      } else if (plan.mode == 3 || plan.mode == 4) {
         inputB = plan.residentBuffers[cursor++];
         packedB = plan.residentBuffers[cursor++];
         inputC = plan.residentBuffers[cursor++];
@@ -533,6 +709,12 @@ extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
       }
       id<MTLBuffer> packedOutput = plan.residentBuffers[cursor++];
       id<MTLBuffer> output = plan.residentBuffers[cursor++];
+      id<MTLBuffer> packedProbabilities = nil;
+      id<MTLBuffer> probabilitiesOutput = nil;
+      if (plan.captureProbabilities) {
+        packedProbabilities = plan.residentBuffers[cursor++];
+        probabilitiesOutput = plan.residentBuffers[cursor++];
+      }
       if (cursor != plan.residentBuffers.count)
         return -3;
 
@@ -549,11 +731,11 @@ extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
       if (inputB) {
         HyNomasTransposeParams inputBParams = {
             plan.batches,
-            plan.mode == 0 || plan.mode == 2 || plan.mode == 3
+            plan.mode == 0 || plan.mode == 2 || plan.mode == 3 || plan.mode == 4
                 ? plan.keyRows
                 : plan.queryRows,
             plan.heads,
-            plan.mode == 0 || plan.mode == 2 || plan.mode == 3
+            plan.mode == 0 || plan.mode == 2 || plan.mode == 3 || plan.mode == 4
                 ? plan.headDim
                 : plan.keyRows};
         uint64_t inputBCount = (uint64_t)plan.batches * inputBParams.rows *
@@ -578,7 +760,7 @@ extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
                                        inputsArray:plan.inputArray
                                       resultsArray:plan.outputArray
                                executionDescriptor:plan.execution];
-        if (result.count != 1)
+        if (result.count != (plan.captureProbabilities ? 2 : 1))
           return -7;
         root = commandBuffer.rootCommandBuffer;
         if (!root || root.commandQueue.device != plan.device ||
@@ -593,6 +775,17 @@ extern "C" int32_t gs_hy_nomas_mps_reduction_encode(void *planHandle,
                                            packedOutput, output, outputParams,
                                            outputCount))
           return -9;
+        if (plan.captureProbabilities) {
+          HyNomasTransposeParams probabilityParams = {
+              plan.batches, plan.queryRows, plan.heads, plan.keyRows};
+          uint64_t probabilityCount = (uint64_t)plan.batches * plan.queryRows *
+                                       plan.heads * plan.keyRows;
+          if (!hy_nomas_mps_encode_transpose(root, plan.toStreamMajor,
+                                             packedProbabilities,
+                                             probabilitiesOutput,
+                                             probabilityParams, probabilityCount))
+            return -12;
+        }
         return 0;
       } @catch (NSException *exception) {
         (void)exception;

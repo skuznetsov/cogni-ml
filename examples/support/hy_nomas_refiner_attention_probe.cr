@@ -4,6 +4,7 @@ require "set"
 require "../../src/ml/metal/device"
 require "../../src/ml/core/buffer"
 require "../../src/ml/video/hy_nomas_block"
+require "../../src/ml/video/hy_nomas_attention_mps"
 require "../../spec/support/hy_nomas_mps_reductions"
 
 # Count the wrapper's named MetalBuffer allocations and read APIs around the
@@ -67,6 +68,10 @@ module HyNomasRefinerAttentionProbe
     "qk_raw", "qk_scaled", "softmax", "pv", "canonical_attention",
     "pv_source_probabilities",
   ]
+  BF16_CAPTURE_ORDER = CAPTURE_ORDER + [
+    "bf16_boundary_attention", "bf16_boundary_attention_with_probabilities",
+    "bf16_boundary_probabilities",
+  ]
   SOURCE_FILES = [
     "examples/hy_nomas_refiner_attention_probe.cr",
     "examples/support/hy_nomas_refiner_attention_probe.cr",
@@ -116,11 +121,11 @@ module HyNomasRefinerAttentionProbe
     end
   end
 
-  def validate_budget!(max_named_bytes : Int64) : Int64
+  def validate_budget!(max_named_bytes : Int64, bf16_boundaries_control : Bool = false) : Int64
     unless 0 < max_named_bytes <= MAX_NAMED_BYTES
       raise ArgumentError.new("named-buffer budget must be positive and no greater than 512 MiB")
     end
-    required = required_named_bytes
+    required = required_named_bytes(bf16_boundaries_control)
     raise ArgumentError.new("attention probe named buffers exceed caller budget") if required > max_named_bytes
     required
   end
@@ -143,11 +148,15 @@ module HyNomasRefinerAttentionProbe
 
   # Includes the four resident inputs, six distinct outputs, and all packed
   # input/output buffers allocated by MPSReductionControls during setup.
-  def required_named_bytes : Int64
+  def required_named_bytes(bf16_boundaries_control : Bool = false) : Int64
     input_elements = 3_i64 * Q_ELEMENTS + SCORE_ELEMENTS
     output_elements = 3_i64 * Q_ELEMENTS + 3_i64 * SCORE_ELEMENTS
     packed_elements = 12_i64 * Q_ELEMENTS + 6_i64 * SCORE_ELEMENTS
-    (input_elements + output_elements + packed_elements) * sizeof(Float32)
+    # Two opt-in plans: context-only and instrumented P. Each owns four
+    # Q-sized stages; the latter also owns one score-sized capture stage.
+    # Caller outputs add two Q-sized buffers and one score-sized buffer.
+    extra_elements = bf16_boundaries_control ? 10_i64 * Q_ELEMENTS + 2_i64 * SCORE_ELEMENTS : 0_i64
+    (input_elements + output_elements + packed_elements + extra_elements) * sizeof(Float32)
   end
 
   def validate_manifest_document!(document : JSON::Any, expected_sha256 : String,
@@ -444,8 +453,8 @@ module HyNomasRefinerAttentionProbe
     end
   end
 
-  def capture_sources(arena : ML::Video::Arena) : Array(Tuple(String, ML::MetalBuffer, Array(Int32)))
-    [
+  def capture_sources(arena : ML::Video::Arena, bf16_boundaries_control : Bool = false) : Array(Tuple(String, ML::MetalBuffer, Array(Int32)))
+    sources = [
       {"input.q", arena["input.q"], Q_SHAPE},
       {"input.k", arena["input.k"], Q_SHAPE},
       {"input.v", arena["input.v"], Q_SHAPE},
@@ -457,6 +466,12 @@ module HyNomasRefinerAttentionProbe
       {"canonical_attention", arena["4.output"], Q_SHAPE},
       {"pv_source_probabilities", arena["5.output"], Q_SHAPE},
     ]
+    if bf16_boundaries_control
+      sources << {"bf16_boundary_attention", arena["bf16.output"], Q_SHAPE}
+      sources << {"bf16_boundary_attention_with_probabilities", arena["bf16.instrumented_output"], Q_SHAPE}
+      sources << {"bf16_boundary_probabilities", arena["bf16.probabilities"], SCORE_SHAPE}
+    end
+    sources
   end
 
   # Called only after the terminal wait. The artifact stores input and actual
@@ -466,8 +481,10 @@ module HyNomasRefinerAttentionProbe
                      sources : Array(Tuple(String, ML::MetalBuffer, Array(Int32))),
                      setup_named_bytes : Int64, max_named_bytes : Int64,
                      encode_allocations : Int64, encode_readbacks : Int64,
-                     preterminal_waits : Int32, terminal_waits : Int32) : Nil
-    unless sources.map(&.[0]) == CAPTURE_ORDER && encode_allocations == 0 &&
+                     preterminal_waits : Int32, terminal_waits : Int32,
+                     bf16_boundaries_control : Bool = false) : Nil
+    capture_order = bf16_boundaries_control ? BF16_CAPTURE_ORDER : CAPTURE_ORDER
+    unless sources.map(&.[0]) == capture_order && encode_allocations == 0 &&
            encode_readbacks == 0 && preterminal_waits == 0 && terminal_waits == 1
       raise ArgumentError.new("native attention capture requires ordered stages and allocation/readback-free single-wait execution")
     end
@@ -510,6 +527,9 @@ module HyNomasRefinerAttentionProbe
           json.field "scope", "single block-0 Q/K/V attention diagnostic; no full generation"
           json.field "device", "mps"
           json.field "producer_dtype", "F32"
+          json.field "bf16_boundaries_control", bf16_boundaries_control
+          json.field "probabilities_capture_scope",
+            "opt-in instrumented general-263 graph only; context-only output is captured separately; source tail7 vector probabilities remain unobserved"
           json.field "setup_named_bytes", setup_named_bytes
           json.field "max_named_bytes", max_named_bytes
           json.field "encode_allocations", encode_allocations
@@ -519,7 +539,7 @@ module HyNomasRefinerAttentionProbe
           json.field "compiled_source_sha256" do
             json.object { source_pins.each { |path, digest| json.field path, digest } }
           end
-          json.field "tensor_order", CAPTURE_ORDER
+          json.field "tensor_order", capture_order
           json.field "tensor_artifact" do
             json.object do
               json.field "basename", File.basename(payload_path)
@@ -529,7 +549,7 @@ module HyNomasRefinerAttentionProbe
           end
           json.field "tensors" do
             json.object do
-              CAPTURE_ORDER.each do |name|
+              capture_order.each do |name|
                 record = records[name]
                 json.field name do
                   json.object do

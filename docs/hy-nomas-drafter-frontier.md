@@ -1,5 +1,77 @@
 # Hy-Nomas local draft suite
 
+## Connected BF16 attention boundary qualification (2026-11-03)
+
+Status: VERIFIED for the default-off, connected `HyNomasAttentionMPSPlan`
+control on the frozen source-exact block0 T0 V263 input. It is not wired into
+the text refiner or generation. The existing F32 mode and ABI remain the
+control. Risk: CAUTION (MPSGraph fusion, diagnostic target visibility, retained
+buffer lifetimes). Rollback: leave `bf16_boundaries_control` false, its default.
+
+The native graph uses F32 QK plus epsilon and scale, BF16 scaled logits,
+BF16-typed softmax/PV, then explicit GPU integer RNE expansion of the context. A
+plain BF16 context cast followed by F32 expansion was insufficient: P was
+exact, but the context was identical to unrounded F32 PV and differed on
+458,766/524,288 actual main256 values, max .030776023864746094. Rounding that
+captured context on GPU reproduced the source exactly. The explicit UInt32
+RNE path preserves this observable boundary inside the connected graph,
+without an external intermediate buffer, readback or wait. This does not
+establish a physical BF16 store or an internal backend dispatch count.
+
+| Connected native comparison | Values | Mismatches | Max error |
+| --- | ---: | ---: | ---: |
+| Context vs actual source main256, exact | 524,288 | 0 | 0 |
+| Instrumented P vs actual source main256, exact | 1,077,248 | 0 | 0 |
+| Context vs source general-263 control, exact | 538,624 | 0 | 0 |
+| Instrumented P vs source general-263 control, exact | 1,106,704 | 0 | 0 |
+| Instrumented context vs context-only graph, exact | 538,624 | 0 | 0 |
+| Native general tail vs actual source vector tail, unchanged mixed tolerance | 14,336 | 7,499 | .4375 |
+
+The last row remains a failed, separately reported comparison at
+`atol=rtol=2e-5`; it is outside the five passed connected qualification checks.
+No tail probabilities are consumed: the source vector operator's second
+return is uninitialized. The native graph has 263 query rows; agreement of
+its first 256 rows is not a native implementation of source query chunks
+256 + 7. Keep this control off until the actual vector tail and connected
+refiner boundaries are independently qualified. Hidden softmax accumulation
+dtype, complete-refiner parity, motion, quality and speed remain unclaimed.
+
+DoD observed: guarded fresh native build, 32 Crystal admission/regression
+examples and 71 Python regression tests; source replay comparison with five
+exact connected gates, the retained F32 localization and perturbation checks;
+and a fresh-process native repeat with all 13 tensor records and the entire
+payload byte-identical. All ten original F32/input records remain identical
+to the prior qualified capture with the control both off and on. The combined
+probe prepares 113,447,680 named bytes (83,049,088 with the control off),
+reuses them while encoding and records [0 named allocations, 0 read APIs,
+0 preterminal waits, 1 terminal wait]. Opaque MPS resources and terminal
+diagnostic serialization are outside these counters; metrics use one packed
+terminal export per comparison.
+
+All successful final-source stages retained the file-cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop. The sampled peak group
+footprint was 797,280,080 bytes, minimum sampled headroom 25,078,005,760 bytes,
+and observed swap growth zero. Short native captures may fall between samples;
+the sampled value is not an exact peak. No complete refiner or generation ran.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80`.
+The retained failed cast-only capture and context-round diagnostic distinguish
+the cause from a tolerance change. Final qualification uses `native-bf16-02`,
+`compare-bf16-02`, default-off controls and a byte-identical repeat. Each guarded
+stage verifies 390 selected source pins before and after execution; snapshots
+retain both source versions. The final binary is hashed. These are selected
+pins, not an exhaustive toolchain/dependency closure. The caller-pinned source
+replay is inherited from the preceding stage, not regenerated here; its oracle
+is the pinned PyTorch 2.8.0 MPS adapter, not stock CUDA/Magi. Same-lineage
+mini-Quad reviews are correlated. Refresh on source/binary/runtime/input/
+weight/mask/layout/precision changes or evidence loss/mutation.
+
+Next falsifier: match the actual seven-query vector context on identical Q/K/V
+without widening tolerances or using its invalid probability return; then
+qualify a default-off connected refiner path rather than extrapolating this
+bounded attention result to a whole block or generated video.
+
 ## Matched block0 QK, softmax and PV localization (2026-11-03)
 
 The bounded native probe localizes the first qualified main256 discrepancy

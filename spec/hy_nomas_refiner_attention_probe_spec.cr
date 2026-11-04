@@ -59,6 +59,31 @@ private def native_attention_replay_manifest : JSON::Any
 end
 
 describe HyNomasRefinerAttentionProbe do
+  it "keeps BF16 attention opt-in and admits probability capture only with that control" do
+    ML::Video::HyNomasAttentionMPSPlan::DEFAULT_BF16_BOUNDARIES_CONTROL.should be_false
+    ML::Video::HyNomasAttentionMPSPlan.validate_control!(false, false)
+    ML::Video::HyNomasAttentionMPSPlan.validate_control!(true, false)
+    ML::Video::HyNomasAttentionMPSPlan.validate_control!(true, true)
+    expect_raises(ArgumentError, /Probability capture requires the BF16 attention control/) do
+      ML::Video::HyNomasAttentionMPSPlan.validate_control!(false, true)
+    end
+  end
+
+  it "admits all context-only and instrumented BF16 buffers before native setup" do
+    base = HyNomasRefinerAttentionProbe.required_named_bytes
+    controlled = HyNomasRefinerAttentionProbe.required_named_bytes(true)
+    controlled.should eq(base + 10_i64 * HyNomasRefinerAttentionProbe::Q_BYTES +
+                         2_i64 * HyNomasRefinerAttentionProbe::SCORE_BYTES)
+    HyNomasRefinerAttentionProbe.validate_budget!(controlled, true).should eq(controlled)
+    expect_raises(ArgumentError) do
+      HyNomasRefinerAttentionProbe.validate_budget!(controlled - 1, true)
+    end
+    HyNomasRefinerAttentionProbe::BF16_CAPTURE_ORDER.last(3).should eq([
+      "bf16_boundary_attention", "bf16_boundary_attention_with_probabilities",
+      "bf16_boundary_probabilities",
+    ])
+  end
+
   it "admits source-exact Q/K/V and source probabilities with additional ordered replay stages" do
     packet = HyNomasRefinerAttentionProbe.validate_manifest_document!(
       native_attention_replay_manifest, "c" * 64)

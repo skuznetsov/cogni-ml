@@ -6,6 +6,35 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-CONNECTED-BF16-ATTENTION-2026-11-03] Native main256 P/PV exact; final context needs explicit RNE
+
+- Default-off `HyNomasAttentionMPSPlan#bf16_boundaries_control` is qualified
+  on the frozen block0 T0 V263 Q/K/V. Its general-263 graph matches actual
+  source main256 P (1,077,248 values) and context (524,288 values) exactly.
+  Instrumented P and context-only graphs have identical contexts. This is
+  not a native implementation of source query chunks 256 + 7.
+- A plain BF16-result/F32-output cast left the context equal to unrounded
+  F32 PV: 458,766 main256 mismatches, max .030776023864746094. GPU BF16
+  rounding made it exact. An explicit UInt32 RNE expansion inside the final
+  graph now makes the context boundary observable. Do not infer a physical
+  BF16 store, dispatch count or hidden accumulation dtype from graph types.
+- Actual source vector tail7 remains failed: 7,499/14,336 context mismatches,
+  max .4375 at unchanged `atol=rtol=2e-5`. Never consume its uninitialized
+  second return as P. The control stays off; complete-refiner parity remains
+  open. No full refiner, generation, motion, quality or speed claim.
+- Fresh build, 32 Crystal examples, 71 Python tests, GPU comparison and exact
+  fresh-process repeat pass. Original ten F32/input records are unchanged
+  with the control off/on. Named bytes: 113,447,680; encode counters [0 named
+  allocations, 0 read APIs, 0 preterminal waits, 1 terminal wait]. Guard:
+  file-cache-aware 10%, 6 GiB cap, 64 MiB swap stop; observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-connected-bf16-attention.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-bf16-attention-20261103.szfpxj80`.
+  Next: actual vector-tail context, then connected refiner. Scope is one
+  pinned MPS-adapter capture; same-lineage review is correlated. Refresh on
+  source/binary/runtime/input/weight/mask/layout/precision change or evidence
+  loss/mutation. Rollback: leave the flag at its false default.
+
 ### [LM-HY-NOMAS-REFINER-ATTENTION-2026-11-03] Main256 first differs at effective BF16 scaled logits; vector tail remains separate
 
 - Matched source-exact block0 Q/K/V, T0 V263. Six standalone native F32

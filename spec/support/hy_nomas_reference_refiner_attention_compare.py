@@ -26,6 +26,13 @@ SCHEMA = "cogni_ml.hy_nomas_refiner_attention_compare/v1"
 NATIVE_SCHEMA = "cogni_ml.hy_nomas_refiner_attention_probe_capture/v1"
 ATOL, RTOL = replay.ATOL, replay.RTOL
 CAP = 512*1024*1024
+ATTENTION_SHAPE = (1, 263, 16, 128)
+SCORE_SHAPE = (1, 263, 16, 263)
+Q_BYTES = math.prod(ATTENTION_SHAPE)*4
+SCORE_BYTES = math.prod(SCORE_SHAPE)*4
+# The native probe's base graph owns input, output and packed-plan buffers.
+BASE_NAMED_BYTES = 18*Q_BYTES + 10*SCORE_BYTES
+CONNECTED_NAMED_BYTES = 10*Q_BYTES + 2*SCORE_BYTES
 QUALIFICATION = (
     "source_chunked_vs_observed", "source_chunked_a_vs_a",
     "source_main_general_vs_chunked_main", "source_full_vs_main_probabilities",
@@ -37,6 +44,15 @@ NEGATIVE_QUALIFICATION = ("sensitivity_perturbation", "raw_round_only_p_vs_gener
 NATIVE_ORDER = (
     "input.q", "input.k", "input.v", "input.source_probabilities",
     "qk_raw", "qk_scaled", "softmax", "pv", "canonical_attention", "pv_source_probabilities",
+)
+CONNECTED_NATIVE_ORDER = NATIVE_ORDER + (
+    "bf16_boundary_attention", "bf16_boundary_attention_with_probabilities",
+    "bf16_boundary_probabilities",
+)
+CONNECTED_ROWS = (
+    "connected_main256_gate", "connected_general_control",
+    "connected_instrumented_context", "connected_probability_main256_gate",
+    "connected_probability_general_control", "source_tail_actual",
 )
 COMPILED_SOURCE_FILES = (
     "examples/hy_nomas_refiner_attention_probe.cr",
@@ -165,6 +181,91 @@ def _validate_compiled_pins(pins: Any) -> None:
                  f"compiled source pin differs: {relative}")
 
 
+def _validate_native_capture_contract(document: Mapping[str, Any]) -> bool:
+    control = document.get("bf16_boundaries_control", False)
+    _require(type(control) is bool, "native BF16 boundaries control must be an exact bool")
+    order = document.get("tensor_order")
+    tensors = document.get("tensors")
+    expected_order = CONNECTED_NATIVE_ORDER if control else NATIVE_ORDER
+    _require(type(order) is list and order == list(expected_order),
+             "native capture tensor order differs from BF16 boundaries control")
+    _require(type(tensors) is dict and set(tensors) == set(expected_order),
+             "native capture tensor inventory differs from BF16 boundaries control")
+    if control:
+        for name, shape in (
+            ("bf16_boundary_attention", ATTENTION_SHAPE),
+            ("bf16_boundary_attention_with_probabilities", ATTENTION_SHAPE),
+            ("bf16_boundary_probabilities", SCORE_SHAPE),
+        ):
+            record = tensors.get(name)
+            _require(type(record) is dict and record.get("dtype") == "F32"
+                     and record.get("shape") == list(shape),
+                     f"invalid connected BF16-boundary tensor: {name}")
+
+    expected_named_bytes = BASE_NAMED_BYTES + (CONNECTED_NAMED_BYTES if control else 0)
+    setup_bytes, max_bytes = document.get("setup_named_bytes"), document.get("max_named_bytes")
+    _require(type(setup_bytes) is int and type(max_bytes) is int
+             and setup_bytes == expected_named_bytes and 0 < setup_bytes <= max_bytes <= CAP,
+             "native attention buffer budget differs")
+    for key, expected in dict(encode_allocations=0, encode_readbacks=0,
+                              preterminal_waits=0, terminal_waits=1).items():
+        _require(type(document.get(key)) is int and document[key] == expected,
+                 f"native counter differs: {key}")
+    return control
+
+
+def _qualify_connected_rows(rows: list[dict[str, Any]], enabled: bool) -> dict[str, Any]:
+    result = dict(
+        bf16_boundaries_control=enabled,
+        production_attention_changed=enabled,
+        connected_main256_gate_passed=None,
+        connected_general_control_passed=None,
+        connected_instrumented_context_passed=None,
+        connected_probability_main256_gate_passed=None,
+        connected_probability_general_control_passed=None,
+        source_tail_actual_passed=None,
+        connected_probability_scope=(
+            "instrumented graph only; production context-only graph does not expose internal probabilities"
+            if enabled else None
+        ),
+    )
+    by_name = {row.get("kind"): row for row in rows}
+    present = set(by_name) & set(CONNECTED_ROWS)
+    if not enabled:
+        _require(not present, "disabled BF16 boundaries control emitted connected comparison rows")
+        return result
+
+    _require(present == set(CONNECTED_ROWS), "connected BF16 comparison coverage differs")
+    exact_rows = CONNECTED_ROWS[:-1]
+    for name in exact_rows:
+        row = by_name[name]
+        _require(type(row.get("passed")) is bool and row.get("atol") == 0.0 and row.get("rtol") == 0.0,
+                 f"connected comparison must use exact tolerance: {name}")
+    tail = by_name["source_tail_actual"]
+    _require(type(tail.get("passed")) is bool and tail.get("atol") == ATOL and tail.get("rtol") == RTOL,
+             "source tail actual comparison must use the unchanged mixed tolerance")
+
+    _require(by_name["connected_main256_gate"]["passed"],
+             "connected candidate failed the actual-source main256 gate")
+    _require(by_name["connected_general_control"]["passed"],
+             "connected candidate differs from the general-263 context control")
+    _require(by_name["connected_instrumented_context"]["passed"],
+             "instrumented connected context differs from production context")
+    _require(by_name["connected_probability_main256_gate"]["passed"],
+             "instrumented connected probabilities failed the actual-source main256 gate")
+    _require(by_name["connected_probability_general_control"]["passed"],
+             "instrumented connected probabilities differ from the general-263 control")
+    result.update(
+        connected_main256_gate_passed=by_name["connected_main256_gate"]["passed"],
+        connected_general_control_passed=by_name["connected_general_control"]["passed"],
+        connected_instrumented_context_passed=by_name["connected_instrumented_context"]["passed"],
+        connected_probability_main256_gate_passed=by_name["connected_probability_main256_gate"]["passed"],
+        connected_probability_general_control_passed=by_name["connected_probability_general_control"]["passed"],
+        source_tail_actual_passed=tail["passed"],
+    )
+    return result
+
+
 def _qualify_localization(rows: list[dict[str, Any]]) -> None:
     by_name = {row["kind"]: row for row in rows}
     _require(len(by_name) == len(rows)
@@ -186,9 +287,7 @@ def validate_inputs(args: Any) -> dict[str, Any]:
     _require(native.get("input_manifest_sha256") == args.replay_sha256
              and native.get("input_payload_sha256") == source["tensor_artifact"]["sha256"],
              "native capture is detached from the supplied replay")
-    _require(native.get("tensor_order") == list(NATIVE_ORDER), "native tensor order differs")
-    for key, value in dict(encode_allocations=0, encode_readbacks=0, preterminal_waits=0, terminal_waits=1).items():
-        _require(type(native.get(key)) is int and native[key] == value, f"native counter differs: {key}")
+    bf16_boundaries_control = _validate_native_capture_contract(native)
     _validate_compiled_pins(native.get("compiled_source_sha256"))
     for name in ("q", "k", "v", "source_probabilities"):
         sr, nr = source["tensors"][name], native["tensors"]["input."+name]
@@ -196,7 +295,8 @@ def validate_inputs(args: Any) -> dict[str, Any]:
                  and replay._record_bytes(native_bytes, nr) == replay._record_bytes(source_bytes, sr),
                  f"native replay input is not exact: {name}")
     return dict(source_document=source, source_payload=source_bytes,
-                native_document=native, native_payload=native_bytes)
+                native_document=native, native_payload=native_bytes,
+                bf16_boundaries_control=bf16_boundaries_control)
 
 
 def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
@@ -222,6 +322,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
 
     with torch.inference_mode():
         n = {name: load("native", name) for name in NATIVE_ORDER[4:]}
+        connected = bool(inputs["bf16_boundaries_control"])
         for name, source_name in (("qk_raw", "f32_qk_raw"), ("qk_scaled", "f32_qk_scaled"),
                                   ("softmax", "f32_softmax"), ("pv", "f32_pv"),
                                   ("canonical_attention", "observed_native"),
@@ -243,6 +344,21 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
         control = n["qk_scaled"][0, :1, :1, :16]
         compare("sensitivity_a_vs_a", control, control, exact=True)
         compare("sensitivity_perturbation", control+0.125, control, exact=True)
+        if connected:
+            production_context = load("native", "bf16_boundary_attention")
+            instrumented_context = load("native", "bf16_boundary_attention_with_probabilities")
+            instrumented_probabilities = load("native", "bf16_boundary_probabilities")
+            observed_source = load("source", "observed_source")
+            compare("connected_main256_gate", production_context[:, :256], observed_source[:, :256], exact=True)
+            compare("connected_general_control", production_context, load("source", "source_sdpa_general"), exact=True)
+            compare("connected_instrumented_context", instrumented_context, production_context, exact=True)
+            compare("connected_probability_main256_gate", instrumented_probabilities[:, :256],
+                    load("source", "source_main_probabilities")[:, :256], exact=True)
+            compare("connected_probability_general_control", instrumented_probabilities,
+                    load("source", "source_probabilities"), exact=True)
+            # The last seven rows use the source vector path. This is reported
+            # at the unchanged tolerance, without making it a qualification gate.
+            compare("source_tail_actual", production_context[:, 256:], observed_source[:, 256:])
         values = torch.stack([stats[key] for _, stats, _, _ in queued for key in shared.METRIC_KEYS]).detach().cpu().tolist()
     stride = len(shared.METRIC_KEYS)
     rows = [dict(kind=name, **shared._stats_record(values[i*stride:(i+1)*stride], atol=atol, rtol=rtol))
@@ -252,13 +368,16 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     _require(faithful and by_name["native_explicit_vs_canonical"]["passed"], "native F32 replay faithfulness failed")
     _require(by_name["sensitivity_a_vs_a"]["passed"] and not by_name["sensitivity_perturbation"]["passed"], "metric sensitivity failed")
     _qualify_localization(rows)
+    connected_result = _qualify_connected_rows(rows, connected)
     return dict(device="mps", torch_version=str(torch.__version__), numeric_tolerance=dict(atol=ATOL, rtol=RTOL),
                 terminal_cpu_exports=1, native_f32_faithfulness_passed=faithful, rows=rows,
                 localization_gate_passed=True,
                 first_qualified_main256_difference="scaled_logits_bf16_boundary",
                 source_tail_scope="7 queries use vector attention; no source tail probability claim",
                 stage_scope="QK is a matched F32 reduction control; scaled-logit candidate is qualified by exact actual-source main256 P and PV",
-                full_generation_executed=False, production_attention_changed=False)
+                connected_candidate_scope=("opt-in BF16-boundary block-0 attention; no full refiner wiring"
+                                           if connected else None),
+                full_generation_executed=False, **connected_result)
 
 
 def main(argv: list[str] | None = None) -> int:

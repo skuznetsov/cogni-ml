@@ -31,7 +31,100 @@ def packet():
         offset=0, nbytes=8, sha256=hashlib.sha256(data).hexdigest())}), data
 
 
+def native_capture(control=False):
+    order = list(compare.NATIVE_ORDER)
+    tensors = {name: dict(dtype="F32", shape=[1]) for name in order}
+    if control:
+        order.extend(compare.CONNECTED_NATIVE_ORDER[len(compare.NATIVE_ORDER):])
+        tensors.update({
+            "bf16_boundary_attention": dict(dtype="F32", shape=list(compare.ATTENTION_SHAPE)),
+            "bf16_boundary_attention_with_probabilities": dict(dtype="F32", shape=list(compare.ATTENTION_SHAPE)),
+            "bf16_boundary_probabilities": dict(dtype="F32", shape=list(compare.SCORE_SHAPE)),
+        })
+    extra = compare.CONNECTED_NAMED_BYTES if control else 0
+    return dict(
+        bf16_boundaries_control=control,
+        tensor_order=order,
+        tensors=tensors,
+        setup_named_bytes=compare.BASE_NAMED_BYTES + extra,
+        max_named_bytes=compare.CAP,
+        encode_allocations=0,
+        encode_readbacks=0,
+        preterminal_waits=0,
+        terminal_waits=1,
+    )
+
+
+def connected_rows():
+    exact = ("connected_main256_gate", "connected_general_control",
+             "connected_instrumented_context", "connected_probability_main256_gate",
+             "connected_probability_general_control")
+    return ([dict(kind=name, passed=True, atol=0.0, rtol=0.0) for name in exact] +
+            [dict(kind="source_tail_actual", passed=False, atol=2e-5, rtol=2e-5)])
+
+
 class AttentionCompareTests(unittest.TestCase):
+    def test_default_capture_control_is_legacy_false_and_connected_order_is_exact(self):
+        legacy = native_capture()
+        legacy.pop("bf16_boundaries_control")
+        self.assertFalse(compare._validate_native_capture_contract(legacy))
+        self.assertFalse(compare._validate_native_capture_contract(native_capture(False)))
+        self.assertTrue(compare._validate_native_capture_contract(native_capture(True)))
+
+    def test_connected_capture_rejects_forged_flag_missing_tensor_wrong_shape_and_nonbool(self):
+        missing = native_capture(True)
+        missing["tensor_order"] = list(compare.NATIVE_ORDER)
+        missing["tensors"].pop("bf16_boundary_attention")
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(missing)
+
+        wrong_shape = native_capture(True)
+        wrong_shape["tensors"]["bf16_boundary_probabilities"]["shape"] = [1, 263, 16, 128]
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(wrong_shape)
+
+        for value in (0, 1, "true", None):
+            bad = native_capture(False)
+            bad["bf16_boundaries_control"] = value
+            with self.subTest(value=value), self.assertRaises(compare.Error):
+                compare._validate_native_capture_contract(bad)
+
+    def test_connected_capture_rejects_budget_drift_and_candidate_when_disabled(self):
+        bad_budget = native_capture(True)
+        bad_budget["setup_named_bytes"] -= 4
+        with self.assertRaisesRegex(compare.Error, "buffer budget"):
+            compare._validate_native_capture_contract(bad_budget)
+
+        disabled_with_candidate = native_capture(False)
+        disabled_with_candidate["tensor_order"].append("bf16_boundary_attention")
+        with self.assertRaises(compare.Error):
+            compare._validate_native_capture_contract(disabled_with_candidate)
+
+    def test_connected_gate_requires_main_actual_source_exactness_and_keeps_tail_non_gating(self):
+        result = compare._qualify_connected_rows(connected_rows(), True)
+        self.assertTrue(result["connected_main256_gate_passed"])
+        self.assertTrue(result["connected_general_control_passed"])
+        self.assertTrue(result["connected_instrumented_context_passed"])
+        self.assertTrue(result["connected_probability_main256_gate_passed"])
+        self.assertTrue(result["connected_probability_general_control_passed"])
+        self.assertFalse(result["source_tail_actual_passed"])
+        self.assertTrue(result["bf16_boundaries_control"])
+        self.assertTrue(result["production_attention_changed"])
+
+        failed_main = connected_rows()
+        failed_main[0]["passed"] = False
+        with self.assertRaisesRegex(compare.Error, "main256"):
+            compare._qualify_connected_rows(failed_main, True)
+
+    def test_default_result_has_no_connected_gates_and_reports_unchanged_attention(self):
+        result = compare._qualify_connected_rows([], False)
+        self.assertFalse(result["bf16_boundaries_control"])
+        self.assertFalse(result["production_attention_changed"])
+        for name in ("connected_main256_gate_passed", "connected_general_control_passed",
+                     "connected_instrumented_context_passed", "connected_probability_main256_gate_passed",
+                     "connected_probability_general_control_passed", "source_tail_actual_passed"):
+            self.assertIsNone(result[name])
+
     def test_qualified_explanation_requires_all_actual_source_and_control_rows(self):
         good = qualification()
         compare._qualify_replay(good)

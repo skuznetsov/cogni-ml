@@ -8,12 +8,14 @@ inputs_path = ""
 inputs_sha256 = ""
 output_path = ""
 max_named_bytes = 0_i64
+bf16_boundaries_control = false
 OptionParser.parse do |parser|
   parser.banner = "Capture native Hy-Nomas block-0 Q/K/softmax/PV attention stages."
   parser.on("--inputs PATH", "Authenticated native attention replay manifest") { |value| inputs_path = value }
   parser.on("--inputs-sha256 SHA", "Trusted replay manifest SHA-256") { |value| inputs_sha256 = value }
   parser.on("--output PATH", "New capture JSON and adjacent tensor sidecar") { |value| output_path = value }
   parser.on("--max-named-bytes N", "Positive named-buffer cap, at most 512 MiB") { |value| max_named_bytes = value.to_i64 }
+  parser.on("--bf16-boundaries-control", "Opt-in BF16 scaled-logit/P/PV graph with a separate P witness") { bf16_boundaries_control = true }
 end
 unless ARGV.empty? && !inputs_path.empty? && !inputs_sha256.empty? &&
        !output_path.empty? && output_path.ends_with?(".json")
@@ -31,7 +33,7 @@ end
 unless outputs_are_distinct
   raise ArgumentError.new("attention probe inputs and outputs must be distinct files")
 end
-expected_named_bytes = validate_budget!(max_named_bytes)
+expected_named_bytes = validate_budget!(max_named_bytes, bf16_boundaries_control)
 ops = operation_documents
 
 # The existing reduction helper consumes HyNomasConfig for geometry and scale
@@ -45,6 +47,8 @@ config.validate!
 
 arena : ML::Video::Arena? = nil
 controls : HyAttentionProbe::MPSReductionControls? = nil
+bf16_plan : ML::Video::HyNomasAttentionMPSPlan? = nil
+instrumented_plan : ML::Video::HyNomasAttentionMPSPlan? = nil
 chain : ML::Metal::MPSCommandChain? = nil
 wait_attempted = false
 begin
@@ -53,7 +57,20 @@ begin
   bind_inputs_and_allocate_outputs!(arena, input_buffers)
   controls = HyAttentionProbe::MPSReductionControls.new(config, ops, arena)
   raise "attention probe must prepare six native MPS graphs" unless controls.plan_count == 6
+  if bf16_boundaries_control
+    output = arena.alloc("bf16.output", Q_ELEMENTS.to_i32)
+    instrumented_output = arena.alloc("bf16.instrumented_output", Q_ELEMENTS.to_i32)
+    probabilities = arena.alloc("bf16.probabilities", SCORE_ELEMENTS.to_i32)
+    bf16_plan = ML::Video::HyNomasAttentionMPSPlan.new(
+      BATCHES, QUERY_ROWS, HEADS, HEAD_DIM, input_buffers["q"],
+      input_buffers["k"], input_buffers["v"], output, true)
+    instrumented_plan = ML::Video::HyNomasAttentionMPSPlan.new(
+      BATCHES, QUERY_ROWS, HEADS, HEAD_DIM, input_buffers["q"],
+      input_buffers["k"], input_buffers["v"], instrumented_output, true, probabilities)
+  end
   setup_named_bytes = arena.resident_bytes
+  setup_named_bytes += bf16_plan.try(&.resident_bytes) || 0_i64
+  setup_named_bytes += instrumented_plan.try(&.resident_bytes) || 0_i64
   unless setup_named_bytes == expected_named_bytes && setup_named_bytes <= max_named_bytes
     raise ArgumentError.new("attention probe setup buffers differ from admitted named-byte budget")
   end
@@ -64,6 +81,8 @@ begin
   ops.each_with_index do |op, index|
     controls.encode(chain, op, index.to_i32)
   end
+  bf16_plan.try(&.encode(chain))
+  instrumented_plan.try(&.encode(chain))
   encode_allocations = allocation_counter - allocations_before
   encode_readbacks = readback_counter - readbacks_before
   preterminal_waits = chain.wait_count
@@ -78,8 +97,9 @@ begin
   end
 
   write_capture!(output_manifest, output_payload, replay.packet,
-    capture_sources(arena), setup_named_bytes, max_named_bytes,
-    encode_allocations, encode_readbacks, preterminal_waits, chain.wait_count)
+    capture_sources(arena, bf16_boundaries_control), setup_named_bytes, max_named_bytes,
+    encode_allocations, encode_readbacks, preterminal_waits, chain.wait_count,
+    bf16_boundaries_control)
   puts "attention_probe_complete capture=#{output_manifest} setup_named_bytes=#{setup_named_bytes} terminal_waits=#{chain.wait_count}"
 ensure
   if active_chain = chain
@@ -91,11 +111,15 @@ ensure
       end
     end
     if active_chain.completed?
+      instrumented_plan.try(&.release)
+      bf16_plan.try(&.release)
       controls.try(&.release)
       active_chain.release
       arena.try(&.release)
     end
   else
+    instrumented_plan.try(&.release)
+    bf16_plan.try(&.release)
     controls.try(&.release)
     arena.try(&.release)
   end
