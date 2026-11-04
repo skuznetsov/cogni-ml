@@ -37,9 +37,14 @@ NATIVE_SOURCE_FILES = (
     "src/ml/video/hy_nomas_attention_mps.cr",
     *prelude.NATIVE_SOURCE_FILES[11:],
 )
+SOURCE_ATTENTION_SOURCE_FILES = (
+    "src/ml/video/hy_nomas_vector_attention.cr",
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+)
 ATOL, RTOL = prelude.ATOL, prelude.RTOL
 BLOCK_CONTROL_FIELD = "block_boundaries_bf16_control"
 QKV_CONTROL_FIELD = "qkv_bf16_control"
+SOURCE_ATTENTION_CONTROL_FIELD = "source_attention_control"
 BLOCK_CONTROL_TENSORS = tuple(
     f"block{block}.{stage}" for block in range(2)
     for stage in ("condition_silu", "adaLN", "gate_msa", "gate_mlp", "norm1")
@@ -48,6 +53,9 @@ QKV_CONTROL_TENSORS = tuple(
     f"block{block}.{stage}" for block in range(2)
     for stage in ("qkv", "q", "k", "v")
 )
+SOURCE_ATTENTION_TENSORS = ("block0.attention", "block1.attention")
+SOURCE_ATTENTION_VALID_COUNT = 263 * 2048
+SOURCE_ATTENTION_PADDING_COUNT = (1280 - 263) * 2048
 
 
 def _controlled_boundaries(native: Mapping[str, Any]) -> tuple[str, ...]:
@@ -66,6 +74,21 @@ def _controlled_outputs(native: Mapping[str, Any]) -> tuple[tuple[str, ...], tup
     return boundaries, qkv
 
 
+def _source_attention_control(native: Mapping[str, Any]) -> bool:
+    if SOURCE_ATTENTION_CONTROL_FIELD not in native:
+        enabled = False
+    else:
+        enabled = native[SOURCE_ATTENTION_CONTROL_FIELD]
+        if type(enabled) is not bool:
+            raise Error("native source-attention control must be a boolean when present")
+    if enabled:
+        _controlled_outputs(native)
+        _require_fields(native, {BLOCK_CONTROL_FIELD: True, QKV_CONTROL_FIELD: True,
+                                 "valid_text_tokens": 263, "processed_tokens": 1280},
+                        "native source-attention control")
+    return enabled
+
+
 def _validate_control_prerequisites(native: Mapping[str, Any],
                                     linked_prelude: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     prelude_controls = prelude._validate_prelude_controls(linked_prelude)
@@ -82,6 +105,36 @@ def _controlled_checks_passed(rows: list[dict[str, Any]], selected: tuple[str, .
     if tuple(row["tensor"] for row in checked) != selected:
         raise Error(f"controlled BF16 coverage differs from the admitted mode: {kind}")
     return all(row["passed"] for row in checked) if selected else None
+
+
+def _source_attention_checks_passed(rows: list[dict[str, Any]], enabled: bool, *,
+                                    kind: str = "source_attention_valid_exact",
+                                    region: str = "valid", expected_count: int = SOURCE_ATTENTION_VALID_COUNT
+                                    ) -> tuple[bool | None, bool | None]:
+    checked = [row for row in rows if row["kind"] == kind]
+    expected = tuple((name, region) for name in SOURCE_ATTENTION_TENSORS) if enabled else ()
+    actual = tuple((row.get("tensor"), row.get("region")) for row in checked)
+    if actual != expected:
+        raise Error("source-attention exact coverage differs from the admitted mode")
+    if not enabled:
+        return None, None
+
+    def zero_metric(value: Any) -> bool:
+        return (type(value) in (int, float) and type(value) is not bool
+                and math.isfinite(value) and value == 0.0)
+
+    def exact_passed(row: Mapping[str, Any]) -> bool:
+        count = row.get("count")
+        return (type(row.get("passed")) is bool and row["passed"] is True
+                and type(row.get("atol")) is float and row["atol"] == 0.0
+                and type(row.get("rtol")) is float and row["rtol"] == 0.0
+                and type(count) is int and count == expected_count
+                and type(row.get("finite_count")) is int and row["finite_count"] == count
+                and type(row.get("mismatch_count")) is int and row["mismatch_count"] == 0
+                and zero_metric(row.get("max_abs")) and zero_metric(row.get("mae"))
+                and zero_metric(row.get("rms")))
+
+    return exact_passed(checked[0]), exact_passed(checked[1])
 
 
 def shapes() -> dict[str, tuple[int, ...]]:
@@ -158,8 +211,10 @@ def _validate_exact_inputs(native: Mapping[str, Any], source: Mapping[str, Any])
             raise Error(f"refiner block operands are not byte-identical: {name}")
 
 
-def _validate_pins(pins: Any) -> None:
-    if not isinstance(pins, dict) or tuple(pins) != NATIVE_SOURCE_FILES:
+def _validate_pins(pins: Any, *, source_attention_control: bool = False) -> None:
+    expected_files = (NATIVE_SOURCE_FILES + SOURCE_ATTENTION_SOURCE_FILES
+                      if source_attention_control else NATIVE_SOURCE_FILES)
+    if not isinstance(pins, dict) or tuple(pins) != expected_files:
         raise Error("refiner block compiled source pin inventory mismatch")
     root = Path(__file__).resolve().parents[2]
     for name, digest in pins.items():
@@ -236,7 +291,9 @@ def validate_inputs(args: Any) -> dict[str, Any]:
                             "timeline_manifest_sha256": args.timeline_sha256,
                             "reference_latent_artifact_sha256": args.reference_latent_sha256}, "native refiner block")
     _validate_control_prerequisites(native, admitted["native_document"])
-    _validate_pins(native.get("compiled_source_sha256"))
+    source_attention_control = _source_attention_control(native)
+    _validate_pins(native.get("compiled_source_sha256"),
+                   source_attention_control=source_attention_control)
     _require_fields(source, {**common, "source_refiner_manifest_sha256": args.source_refiner_sha256,
                             "source_refiner_payload_sha256": admitted["source_document"]["payload_sha256"]},
                     "source refiner block")
@@ -275,6 +332,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     device = torch.device("mps")
     queued = []
     controlled_boundaries, controlled_qkv = _controlled_outputs(inputs["native_document"])
+    source_attention_control = _source_attention_control(inputs["native_document"])
 
     def compare(kind: str, name: str, region: str, actual: Any, expected: Any,
                 *, atol: float = ATOL, rtol: float = RTOL) -> None:
@@ -310,6 +368,13 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                     actual.bfloat16().float(), atol=0.0, rtol=0.0)
             compare("controlled_qkv_source_exact", name, "full", actual,
                     expected, atol=0.0, rtol=0.0)
+        if source_attention_control and name in SOURCE_ATTENTION_TENSORS:
+            actual_valid, expected_valid = regions["valid"]
+            compare("source_attention_valid_exact", name, "valid", actual_valid,
+                    expected_valid, atol=0.0, rtol=0.0)
+            actual_padding, _expected_padding = regions["padding"]
+            compare("source_attention_padding_zero_exact", name, "padding", actual_padding,
+                    torch.zeros_like(actual_padding), atol=0.0, rtol=0.0)
     control = torch.arange(16, device=device, dtype=torch.float32)
     compare("sensitivity_control", "a_vs_a", "full", control, control)
     compare("sensitivity_control", "deliberate_perturbation", "full", control+0.01, control)
@@ -326,6 +391,12 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
     raw = [row for row in rows if row["kind"] == "raw" and row["region"] == "full"]
     representation = [row for row in rows if row["kind"] == "source_bf16_representation"]
     controls = {row["tensor"]: row for row in rows if row["kind"] == "sensitivity_control"}
+    source_attention_block0_passed, source_attention_block1_passed = \
+        _source_attention_checks_passed(rows, source_attention_control)
+    source_attention_block0_padding_passed, source_attention_block1_padding_passed = \
+        _source_attention_checks_passed(rows, source_attention_control,
+            kind="source_attention_padding_zero_exact", region="padding",
+            expected_count=SOURCE_ATTENTION_PADDING_COUNT)
     return dict(numeric_gate_passed=all(row["passed"] for row in raw),
                 source_bf16_representation_passed=all(row["passed"] for row in representation),
                 block_boundaries_bf16_control=inputs["native_document"][BLOCK_CONTROL_FIELD],
@@ -342,6 +413,15 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                     rows, controlled_qkv, "native_controlled_qkv_bf16_representation"),
                 controlled_qkv_source_exact_passed=_controlled_checks_passed(
                     rows, controlled_qkv, "controlled_qkv_source_exact"),
+                source_attention_control=source_attention_control,
+                source_attention_block0_exact_passed=source_attention_block0_passed,
+                source_attention_block1_exact_passed=source_attention_block1_passed,
+                source_attention_block0_padding_zero_passed=source_attention_block0_padding_passed,
+                source_attention_block1_padding_zero_passed=source_attention_block1_padding_passed,
+                source_attention_exact_passed=(None if not source_attention_control else
+                    source_attention_block0_passed is True and source_attention_block1_passed is True
+                    and source_attention_block0_padding_passed is True
+                    and source_attention_block1_padding_passed is True),
                 first_divergence={region: first_divergence(rows, region) for region in ("full", "valid", "padding")},
                 first_divergence_order="canonical dependency order; gates follow their adaLN producer, not hook observation time",
                 same_input_bytes=True, terminal_cpu_exports=1,
@@ -349,7 +429,7 @@ def _run_mps(inputs: Mapping[str, Any]) -> dict[str, Any]:
                     and not controls["deliberate_perturbation"]["passed"]
                     and not controls["non_bf16_representation"]["passed"]),
                 rows=rows,
-                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. Native controlled representation rows check the actual captured outputs, not source parity. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
+                interpretation="One authenticated finite T0 V263 input only. Source uses pinned PyTorch MPS attention adaptation. Full/valid/padding raw rows are separate; post-rounded views are diagnostic and never qualify connected arithmetic. When enabled, source-attention control adds exact valid-output comparisons for block 0 and block 1 independently and exact zero-padding checks for both native attention outputs; it makes no attention-internal or tail-probability claim. Native controlled representation rows check the actual captured outputs, not source parity. Block1 errors may propagate from block0; this capture does not isolate block1. No logits/softmax internals, DiT K/V, motion, performance, or full generation qualification follows.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -380,7 +460,15 @@ def main(argv: list[str] | None = None) -> int:
                           controlled_boundary_source_exact_passed=result[
                               "controlled_boundary_source_exact_passed"],
                           qkv_bf16_control=result["qkv_bf16_control"],
-                          controlled_qkv_source_exact_passed=result["controlled_qkv_source_exact_passed"])))
+                          controlled_qkv_source_exact_passed=result["controlled_qkv_source_exact_passed"],
+                          source_attention_control=result["source_attention_control"],
+                          source_attention_block0_exact_passed=result["source_attention_block0_exact_passed"],
+                          source_attention_block1_exact_passed=result["source_attention_block1_exact_passed"],
+                          source_attention_block0_padding_zero_passed=result[
+                              "source_attention_block0_padding_zero_passed"],
+                          source_attention_block1_padding_zero_passed=result[
+                              "source_attention_block1_padding_zero_passed"],
+                          source_attention_exact_passed=result["source_attention_exact_passed"])))
     return 0
 
 

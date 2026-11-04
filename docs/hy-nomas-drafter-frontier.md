@@ -1,5 +1,62 @@
 # Hy-Nomas local draft suite
 
+## Connected text-refiner attention qualification (2026-11-03)
+
+Status: VERIFIED for native block0 attention on the frozen T0 V263 input.
+The default-off `--refiner-source-attention-control` uses the general BF16
+graph for the valid prefix, then overwrites rows 256–262 with native vector
+attention on the same command chain and in the same context buffer before
+projection. Admission requires B1, padded V263/H16/D128 and the qualified
+BF16 QKV control. The oracle is the inherited PyTorch 2.8.0 MPS-adapter
+capture at Hy-Nomas revision `911cea6458a89c2663513ff7099561ec190dd491`.
+
+| Valid output on the same frozen input | Values above `atol=rtol=2e-5` (of 538,624) | Max absolute error |
+| --- | ---: | ---: |
+| Block0 attention, flag off | 397,504 | .291865 |
+| Block0 attention, flag on | 0 | 0 |
+| Block0 projection, flag on | 528,996 | .062489 |
+| Block0 first residual, flag on | 527,065 | .475311 |
+| Block0 output, flag on | 533,703 | .615128 |
+| Block1 attention, flag on | 351,722 | .843750 |
+| Block1 output, flag on | 535,325 | 1.199829 |
+
+Block0 Q/K/V and the complete context are byte-exact. Both native attention
+outputs have exact zero padding (2,082,816 values per block). Block1 already
+receives a different input. The first divergence moves from attention to
+projection for the full and valid tensors and remains at residual1 for padding.
+Both complete blocks still fail the numeric gate.
+
+A separate GPU replay makes the native projection byte-exact after BF16
+rounding. BF16 rounding after both gate multiplication and residual addition
+then matches all 2,621,440 source residual values exactly. Rounding only the
+final sum still fails on 6,196 valid values (max .5) even with exact projection.
+These replay results isolate the rounding boundaries for this input. The
+native projection and residual are unchanged by this control.
+
+DoD observed: guarded build, 28 Crystal examples, 79 Python tests and GPU
+comparisons with sensitivity controls. Fresh disabled mode matches the
+retained pre-change QKV control byte-for-byte, and two enabled processes
+match across all 62 preblock, prelude and block records. Each native capture
+reports 944,620,612 named bytes, zero encode allocations, read APIs and
+preterminal waits, and one existing terminal drain. Comparator and replay
+each export one packed diagnostic vector. The file-cache-aware 10% floor,
+6 GiB process-group cap and 64 MiB swap-growth stop stayed active. Across ten
+qualification stages the sampled peak group footprint was 2,341,882,232 bytes,
+minimum headroom was 21,314,895,872 bytes, and observed swap growth was zero.
+
+Risk: CAUTION (same-buffer write ordering and BF16 boundary drift).
+Rollback: omit `--refiner-source-attention-control`. Evidence:
+`.landmark/evidence/2026-11-03-hy-nomas-connected-refiner-attention.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-connected-refiner-20261103.vQBQJaCe`.
+Same-lineage mini-Quad review is correlated. The guard is sampled and the
+allocation counters cover named resources. Scope is the pinned MPS-adapter
+oracle and frozen input. No video was generated. Refresh on changes to source,
+binary, runtime, input, weights, layout, precision or evidence.
+
+Next falsifier: add post-bias BF16 RNE to the native projection and separately
+round the native gate product and residual sum, then find the next mismatch
+through norm2, the FFN and block1 at the same tolerance.
+
 ## Actual vector-tail attention qualification (2026-11-03)
 
 Status: VERIFIED for the default-off native one-pass vector probe on the

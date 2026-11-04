@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-CONNECTED-REFINER-ATTENTION-2026-11-03] Block0 context is exact; projection is next
+
+- Default-off source attention writes main256 and vector7 into one native
+  context on the existing chain. On frozen T0 V263, block0 Q/K/V and the
+  entire context match the pinned MPS-adapter source byte-for-byte. Both
+  attention paddings are exactly zero. Block1 receives a different input.
+- The first valid failure moves from attention to projection (528,996 of
+  538,624 values at unchanged `atol=rtol=2e-5`). GPU replay makes the
+  projection exact after BF16 rounding and the residual exact after separate
+  BF16 rounding of gate multiplication and addition. Final-sum rounding alone
+  still fails on 6,196 valid values. Both connected block outputs remain open.
+- 28 Crystal examples, 79 Python tests, and bytewise disabled preservation
+  and enabled repeat pass. All captures report 944,620,612 named bytes and
+  [0 encode allocations, 0 reads, 0 preterminal waits, 1 terminal drain].
+  Guard: cache-aware 10%, 6 GiB cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-connected-refiner-attention.json`.
+  Rollback: omit `--refiner-source-attention-control`. Next: native projection
+  and residual BF16 rounding, then norm2, FFN and block1. Refresh on changes
+  to source, binary, runtime, input, weights, layout, precision or evidence.
+
 ### [LM-HY-NOMAS-VECTOR-TAIL-ATTENTION-2026-11-03] Native tail7 exactly matches source; full context diagnostic is exact
 
 - Default-off `HyNomasVectorAttentionPlan` matches actual PyTorch 2.8.0 MPS

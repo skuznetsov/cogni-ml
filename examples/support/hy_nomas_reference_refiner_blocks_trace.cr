@@ -46,6 +46,10 @@ module HyNomasReferenceRefinerBlocksTrace
     "src/ml/video/kernels/wan_t5.metal",
     "src/ml/video/wan_t5_mps_bridge.mm",
   ]
+  SOURCE_ATTENTION_FILES = [
+    "src/ml/video/hy_nomas_vector_attention.cr",
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal",
+  ]
 
   # Hash the sources embedded in the compiled probe, not later working-tree
   # contents, so the output identifies the executable that made the capture.
@@ -66,6 +70,8 @@ module HyNomasReferenceRefinerBlocksTrace
     "src/ml/video/wan_t5.cr"                                      => {{ read_file("#{__DIR__}/../../src/ml/video/wan_t5.cr") }},
     "src/ml/video/kernels/wan_t5.metal"                           => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/wan_t5.metal") }},
     "src/ml/video/wan_t5_mps_bridge.mm"                           => {{ read_file("#{__DIR__}/../../src/ml/video/wan_t5_mps_bridge.mm") }},
+    "src/ml/video/hy_nomas_vector_attention.cr"                   => {{ read_file("#{__DIR__}/../../src/ml/video/hy_nomas_vector_attention.cr") }},
+    "src/ml/video/kernels/hy_nomas_vector_attention.metal"        => {{ read_file("#{__DIR__}/../../src/ml/video/kernels/hy_nomas_vector_attention.metal") }},
   }
 
   record TensorSource, name : String, checkpoint : String,
@@ -187,8 +193,9 @@ module HyNomasReferenceRefinerBlocksTrace
     end
   end
 
-  def compiled_source_sha256s : Hash(String, String)
-    SOURCE_FILES.to_h do |relative|
+  def compiled_source_sha256s(source_attention_control : Bool = false) : Hash(String, String)
+    files = source_attention_control ? SOURCE_FILES + SOURCE_ATTENTION_FILES : SOURCE_FILES
+    files.to_h do |relative|
       {relative, Digest::SHA256.hexdigest(COMPILED_SOURCE[relative])}
     end
   end
@@ -228,7 +235,8 @@ module HyNomasReferenceRefinerBlocksTrace
                    prelude_second_linear_bf16_control : Bool,
                    prelude_add_bf16_control : Bool,
                    block_boundaries_bf16_control : Bool = false,
-                   qkv_bf16_control : Bool = false) : Hash(String, JSON::Any)
+                   qkv_bf16_control : Bool = false,
+                   source_attention_control : Bool = false) : Hash(String, JSON::Any)
     unless valid_text_tokens > 0 && valid_text_tokens <= PROCESSED_TOKENS &&
            valid_sha256?(reference_latent_artifact_sha256) &&
            valid_sha256?(timeline_manifest_sha256) &&
@@ -240,6 +248,9 @@ module HyNomasReferenceRefinerBlocksTrace
     validate_prelude_controls!(prelude_input_bf16_control, prelude_linear_bf16_control,
       prelude_silu_bf16_control, prelude_second_linear_bf16_control, prelude_add_bf16_control)
     validate_qkv_control!(block_boundaries_bf16_control, qkv_bf16_control)
+    if source_attention_control && !(qkv_bf16_control && valid_text_tokens == 263)
+      raise ArgumentError.new("source attention trace requires BF16 QKV and V263")
+    end
     unless sources.map(&.name) == TENSOR_ORDER
       raise ArgumentError.new("reference refiner block trace source inventory or order mismatch")
     end
@@ -247,7 +258,7 @@ module HyNomasReferenceRefinerBlocksTrace
     source_by_name = sources.to_h { |source| {source.name, source} }
     canonical, payload_path = checked_output_paths!(manifest_path)
     ensure_fresh_outputs!(canonical, payload_path)
-    pins = compiled_source_sha256s
+    pins = compiled_source_sha256s(source_attention_control)
     records = {} of String => TensorRecord
     payload_digest = Digest::SHA256.new
     offset = 0_i64
@@ -309,6 +320,7 @@ module HyNomasReferenceRefinerBlocksTrace
         json.field("prelude_add_bf16_control", prelude_add_bf16_control)
         json.field("block_boundaries_bf16_control", block_boundaries_bf16_control)
         json.field("qkv_bf16_control", qkv_bf16_control)
+        json.field("source_attention_control", source_attention_control)
         json.field("device", "mps")
         json.field("producer_dtype", "F32")
         json.field("reference_latent_artifact_sha256", reference_latent_artifact_sha256)

@@ -2,6 +2,25 @@ require "spec"
 require "../src/ml/video/hy_nomas_text_refiner"
 
 describe ML::Video::HyNomasTextRefinerMPSPlan do
+  it "limits source attention to the padded V263 BF16-QKV probe" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_attention_control!(false, false, 7, 7)
+    plan.validate_source_attention_control!(true, true, 263, 1280)
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, false, 263, 1280)
+    end
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, true, 262, 1280)
+    end
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, true, 263, 263)
+    end
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, true, 263, 1280,
+        ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl)
+    end
+  end
+
   it "keeps all BF16 prelude controls opt-in and preserves input-only casts" do
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_INPUT_BF16_CONTROL.should be_false
     ML::Video::HyNomasTextRefinerMPSPlan::DEFAULT_PRELUDE_LINEAR_BF16_CONTROL.should be_false

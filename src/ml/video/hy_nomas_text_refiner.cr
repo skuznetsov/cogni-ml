@@ -9,19 +9,22 @@ require "./metal_ops"
 require "./metal_mps_command_chain"
 require "./metal_linear_mps"
 require "./hy_nomas_attention_mps"
+require "./hy_nomas_vector_attention"
 require "./hy_nomas_mps_norm"
 require "./hy_nomas_mps_activation"
 
 module ML::Video
   class HyNomasTextRefinerMPSPlan
-    TOKEN_COUNT  = 1280
-    INPUT_DIM    = 3584
-    HIDDEN_DIM   = 2048
-    HEADS        =   16
-    HEAD_DIM     =  128
-    FFN_DIM      = 8192
-    TIMESTEP_DIM =  256
-    BLOCKS       =    2
+    TOKEN_COUNT             = 1280
+    INPUT_DIM               = 3584
+    HIDDEN_DIM              = 2048
+    HEADS                   =   16
+    HEAD_DIM                =  128
+    FFN_DIM                 = 8192
+    TIMESTEP_DIM            =  256
+    BLOCKS                  =    2
+    SOURCE_ATTENTION_MAIN   =  256
+    SOURCE_ATTENTION_TOKENS =  263
 
     COMPACT_KERNEL  = "hy_nomas_text_compact_bf16_f32"
     MEAN_KERNEL     = "hy_nomas_text_masked_mean_f32"
@@ -102,6 +105,7 @@ module ML::Video
     @activations = {} of String => HyNomasMPSActivation::UnaryPlan
     @activation_plans = [] of HyNomasMPSActivation::UnaryPlan
     @attention_plans = [] of HyNomasAttentionMPSPlan
+    @vector_tail_plans = [] of HyNomasVectorAttentionPlan
     @norm_plan : HyNomasMPSLayerNorm::Plan? = nil
     @pipelines = {} of String => ML::Metal::ComputePipeline
     @external_weights = [] of Tuple(String, ML::MetalBuffer, WeightDType, Int64)
@@ -218,6 +222,16 @@ module ML::Video
         activation + linear_stage + attention_stage)
     end
 
+    def self.validate_source_attention_control!(enabled : Bool, qkv_bf16_control : Bool,
+                                                valid : Int32, processed : Int32,
+                                                precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control) : Nil
+      return unless enabled
+      unless qkv_bf16_control && valid == SOURCE_ATTENTION_TOKENS &&
+             processed == TOKEN_COUNT && precision.f32_control?
+        raise ArgumentError.new("Source attention control requires BF16 QKV, V263 with padding, and the default attention precision")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -242,7 +256,8 @@ module ML::Video
                    prelude_second_linear_bf16_control : Bool = DEFAULT_PRELUDE_SECOND_LINEAR_BF16_CONTROL,
                    prelude_add_bf16_control : Bool = DEFAULT_PRELUDE_ADD_BF16_CONTROL,
                    block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL,
-                   qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL)
+                   qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL,
+                   @source_attention_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -261,6 +276,8 @@ module ML::Video
         @prelude_linear_bf16_control, @prelude_silu_bf16_control,
         @prelude_second_linear_bf16_control, @prelude_add_bf16_control,
         @block_boundaries_bf16_control, @qkv_bf16_control)
+      self.class.validate_source_attention_control!(@source_attention_control,
+        @qkv_bf16_control, @valid_tokens, @processed_tokens, @attention_precision)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -546,9 +563,17 @@ module ML::Video
         prefix = "block#{block}"
         prepare_activation("#{prefix}.condition_silu", "c", [HIDDEN_DIM])
         prepare_activation("#{prefix}.mlp_silu", "#{prefix}.mlp_fc1", [@processed_tokens, FFN_DIM])
+        q = checkpoint("#{prefix}.q")
+        k = checkpoint("#{prefix}.k")
+        v = checkpoint("#{prefix}.v")
+        attention = checkpoint("#{prefix}.attention")
         @attention_plans << HyNomasAttentionMPSPlan.new(1, @valid_tokens, HEADS,
-          HEAD_DIM, checkpoint("#{prefix}.q"), checkpoint("#{prefix}.k"),
-          checkpoint("#{prefix}.v"), checkpoint("#{prefix}.attention"))
+          HEAD_DIM, q, k, v, attention, bf16_boundaries_control: @source_attention_control)
+        if @source_attention_control
+          @vector_tail_plans << HyNomasVectorAttentionPlan.new(1, @valid_tokens,
+            SOURCE_ATTENTION_MAIN, SOURCE_ATTENTION_TOKENS - SOURCE_ATTENTION_MAIN,
+            @valid_tokens, HEADS, HEAD_DIM, q, k, v, attention, write_query_interval: true)
+        end
       end
 
       prepare_linear("refiner_timestep_mlp1", "refiner_timestep_sinusoidal",
@@ -717,6 +742,9 @@ module ML::Video
           .dispatch_1d(count)
       end
       @attention_plans[block].encode(chain)
+      # The general graph writes the valid prefix. Replace its final seven
+      # rows in the same context before projection consumes that buffer.
+      @vector_tail_plans[block].encode(chain) if @source_attention_control
       if @attention_precision.bf16_boundary_control?
         round_bf16(chain.encoder, checkpoint("#{prefix}.attention"), @processed_tokens * HIDDEN_DIM)
       end
@@ -840,6 +868,8 @@ module ML::Video
       @activation_plans.reverse_each(&.release)
       @activation_plans.clear
       @activations.clear
+      @vector_tail_plans.reverse_each(&.release)
+      @vector_tail_plans.clear
       @attention_plans.reverse_each(&.release)
       @attention_plans.clear
       @linear_plans.reverse_each(&.release)

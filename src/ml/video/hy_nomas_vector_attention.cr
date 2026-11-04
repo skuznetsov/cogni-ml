@@ -9,6 +9,7 @@ module ML::Video
     SOURCE = {{ read_file("#{__DIR__}/kernels/hy_nomas_vector_attention.metal") }}
 
     @pipeline : ML::Metal::ComputePipeline
+    @output_offset : Int64
     @chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
@@ -37,9 +38,14 @@ module ML::Video
                    @query_start : Int32, @query_rows : Int32,
                    @key_rows : Int32, @heads : Int32, @head_dim : Int32,
                    @q : ML::MetalBuffer, @k : ML::MetalBuffer,
-                   @v : ML::MetalBuffer, @output : ML::MetalBuffer)
+                   @v : ML::MetalBuffer, @output : ML::MetalBuffer,
+                   *, @write_query_interval : Bool = false)
       self.class.validate_geometry!(@batches, @input_query_rows, @query_start,
         @query_rows, @key_rows, @heads, @head_dim)
+      if @write_query_interval && @batches != 1
+        raise ArgumentError.new("Hy-Nomas vector attention interval output requires one batch")
+      end
+      @output_offset = @write_query_interval ? @query_start.to_i64 * @heads * @head_dim * sizeof(Float32) : 0_i64
       validate_buffers!
       @pipeline = ML::Metal::PipelineCache.get(KERNEL) do
         ML::Metal::ComputePipeline.new(KERNEL, SOURCE)
@@ -51,7 +57,8 @@ module ML::Video
     end
 
     # No owned GPU stages: read caller Q/K/V directly, preserving the source
-    # scalar/SIMD reduction order, then write only the compact query interval.
+    # scalar/SIMD reduction order, then write the interval to a compact output
+    # or directly into the corresponding rows of a single-batch context.
     def resident_bytes : Int64
       0_i64
     end
@@ -70,7 +77,7 @@ module ML::Video
         .set_buffer(@q, 0)
         .set_buffer(@k, 1)
         .set_buffer(@v, 2)
-        .set_buffer(@output, 3, ML::Metal::BufferAccess::Write)
+        .set_buffer(@output, 3, ML::Metal::BufferAccess::Write, offset: @output_offset)
         .set_value(@input_query_rows.to_u32, 4)
         .set_value(@query_start.to_u32, 5)
         .set_value(@query_rows.to_u32, 6)
@@ -95,7 +102,7 @@ module ML::Video
     private def validate_buffers! : Nil
       q_count = @batches.to_i64 * @input_query_rows * @heads * @head_dim
       kv_count = @batches.to_i64 * @key_rows * @heads * @head_dim
-      output_count = @batches.to_i64 * @query_rows * @heads * @head_dim
+      output_count = @write_query_interval ? q_count : @batches.to_i64 * @query_rows * @heads * @head_dim
       validate_f32!(@q, q_count)
       validate_f32!(@k, kv_count)
       validate_f32!(@v, kv_count)
@@ -105,8 +112,8 @@ module ML::Video
 
     private def validate_f32!(buffer : ML::MetalBuffer, count : Int64) : Nil
       MetalOps.check(buffer, count)
-      unless buffer.storage_mode.shared? && buffer.size == count * sizeof(Float32)
-        raise ArgumentError.new("Hy-Nomas vector attention requires exact-size shared F32 bindings")
+      unless buffer.storage_mode.shared? && (@write_query_interval || buffer.size == count * sizeof(Float32))
+        raise ArgumentError.new("Hy-Nomas vector attention requires shared F32 bindings matching its layout")
       end
     end
   end

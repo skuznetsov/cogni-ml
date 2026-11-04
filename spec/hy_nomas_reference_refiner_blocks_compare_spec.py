@@ -92,6 +92,102 @@ class BlocksCompareTests(unittest.TestCase):
         with self.assertRaisesRegex(compare.Error, "native block prelude control"):
             compare._validate_control_prerequisites(native, incomplete_linked_prelude)
 
+    def test_source_attention_control_is_legacy_default_off_and_geometry_bounded(self):
+        base = {compare.BLOCK_CONTROL_FIELD: True, compare.QKV_CONTROL_FIELD: True,
+                "valid_text_tokens": 263, "processed_tokens": 1280}
+        self.assertFalse(compare._source_attention_control(base))
+        self.assertFalse(compare._source_attention_control({**base,
+            compare.SOURCE_ATTENTION_CONTROL_FIELD: False}))
+        self.assertTrue(compare._source_attention_control({**base,
+            compare.SOURCE_ATTENTION_CONTROL_FIELD: True}))
+
+        for value in (None, 0, 1, "true", [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(compare.Error, "boolean"):
+                compare._source_attention_control({**base,
+                    compare.SOURCE_ATTENTION_CONTROL_FIELD: value})
+
+        for field, value, message in (
+            (compare.QKV_CONTROL_FIELD, False, "qkv_bf16_control"),
+            (compare.BLOCK_CONTROL_FIELD, False, "requires block-boundary"),
+            ("valid_text_tokens", 262, "valid_text_tokens"),
+            ("processed_tokens", 1279, "processed_tokens"),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(compare.Error, message):
+                compare._source_attention_control({**base, field: value,
+                    compare.SOURCE_ATTENTION_CONTROL_FIELD: True})
+
+    def test_source_attention_pin_inventory_is_conditional_and_exact(self):
+        root = Path(__file__).resolve().parents[1]
+
+        def pin(names):
+            return {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
+
+        base = pin(compare.NATIVE_SOURCE_FILES)
+        enabled_names = compare.NATIVE_SOURCE_FILES + compare.SOURCE_ATTENTION_SOURCE_FILES
+        enabled = pin(enabled_names)
+        compare._validate_pins(base)
+        compare._validate_pins(enabled, source_attention_control=True)
+        with self.assertRaisesRegex(compare.Error, "inventory"):
+            compare._validate_pins(base, source_attention_control=True)
+        with self.assertRaisesRegex(compare.Error, "inventory"):
+            compare._validate_pins(enabled)
+
+    def test_source_attention_exact_gate_requires_complete_zero_error_valid_rows(self):
+        def row(tensor):
+            return dict(kind="source_attention_valid_exact", tensor=tensor, region="valid",
+                        count=compare.SOURCE_ATTENTION_VALID_COUNT,
+                        finite_count=compare.SOURCE_ATTENTION_VALID_COUNT,
+                        max_abs=0.0, mae=0.0, rms=0.0, mismatch_count=0,
+                        passed=True, atol=0.0, rtol=0.0)
+
+        rows = [row(name) for name in compare.SOURCE_ATTENTION_TENSORS]
+        self.assertEqual(compare._source_attention_checks_passed([], False), (None, None))
+        self.assertEqual(compare._source_attention_checks_passed(rows, True), (True, True))
+
+        block0_bad = [dict(rows[0], passed=False, max_abs=0.25, mismatch_count=1), rows[1]]
+        self.assertEqual(compare._source_attention_checks_passed(block0_bad, True), (False, True))
+        # Do not trust a forged `passed` flag if exact metrics show a mismatch.
+        forged = [dict(rows[0], max_abs=0.25, mismatch_count=1), rows[1]]
+        self.assertEqual(compare._source_attention_checks_passed(forged, True), (False, True))
+        forged_zero_type = [dict(rows[0], max_abs=False), rows[1]]
+        self.assertEqual(compare._source_attention_checks_passed(forged_zero_type, True), (False, True))
+        truncated = [dict(rows[0], count=compare.SOURCE_ATTENTION_VALID_COUNT-1), rows[1]]
+        self.assertEqual(compare._source_attention_checks_passed(truncated, True), (False, True))
+
+        for label, malformed in (
+            ("missing", rows[:1]),
+            ("duplicate", rows + rows[:1]),
+            ("reordered", list(reversed(rows))),
+            ("wrong region", [dict(rows[0], region="full"), rows[1]]),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(compare.Error, "coverage"):
+                compare._source_attention_checks_passed(malformed, True)
+        with self.assertRaisesRegex(compare.Error, "coverage"):
+            compare._source_attention_checks_passed(rows, False)
+
+    def test_source_attention_zero_padding_gate_requires_both_full_padding_regions(self):
+        rows = [dict(kind="source_attention_padding_zero_exact", tensor=name, region="padding",
+                     count=compare.SOURCE_ATTENTION_PADDING_COUNT,
+                     finite_count=compare.SOURCE_ATTENTION_PADDING_COUNT,
+                     max_abs=0.0, mae=0.0, rms=0.0, mismatch_count=0,
+                     passed=True, atol=0.0, rtol=0.0)
+                for name in compare.SOURCE_ATTENTION_TENSORS]
+        self.assertEqual(compare._source_attention_checks_passed(rows, True,
+            kind="source_attention_padding_zero_exact", region="padding",
+            expected_count=compare.SOURCE_ATTENTION_PADDING_COUNT), (True, True))
+        changed = [rows[0], dict(rows[1], count=1)]
+        self.assertEqual(compare._source_attention_checks_passed(changed, True,
+            kind="source_attention_padding_zero_exact", region="padding",
+            expected_count=compare.SOURCE_ATTENTION_PADDING_COUNT), (True, False))
+        nonzero = [dict(rows[0], passed=False, max_abs=0.5, mismatch_count=1), rows[1]]
+        self.assertEqual(compare._source_attention_checks_passed(nonzero, True,
+            kind="source_attention_padding_zero_exact", region="padding",
+            expected_count=compare.SOURCE_ATTENTION_PADDING_COUNT), (False, True))
+        with self.assertRaisesRegex(compare.Error, "coverage"):
+            compare._source_attention_checks_passed([], True,
+                kind="source_attention_padding_zero_exact", region="padding",
+                expected_count=compare.SOURCE_ATTENTION_PADDING_COUNT)
+
     def test_unselected_or_missing_representation_checks_cannot_pass_vacuously(self):
         groups = (
             (compare.BLOCK_CONTROL_TENSORS,
