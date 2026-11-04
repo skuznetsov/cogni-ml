@@ -6,6 +6,35 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-ATTENTION-2026-11-03] Main256 first differs at effective BF16 scaled logits; vector tail remains separate
+
+- Matched source-exact block0 Q/K/V, T0 V263. Six standalone native F32
+  QK/softmax/PV controls reproduce current PyTorch 2.8.0 MPS controls with
+  max error zero. The actual source adapter replay also reproduces the
+  earlier captured attention exactly, using query chunks 256 + 7.
+- F32 QK -> scale -> BF16 logits -> BF16-boundary P/PV reproduces actual
+  main256 probabilities/context exactly on this finite input. Native
+  common-source-P PV after BF16 rounding is exact. Raw-QK rounding before scale fails unchanged
+  `atol=rtol=2e-5`: 32,258/1,077,248 main256 P mismatches, max .1015625.
+  Hidden raw-QK tensors and softmax accumulation dtype are not observed.
+- Source tail7 uses a distinct vector kernel; its second return is not
+  probabilities and is not consumed. General-tail context differs from
+  actual source on 7,499/14,336 values, max .4375. Do not extrapolate the
+  main256 explanation to this tail.
+- Diagnostic only; production attention is unchanged and the complete raw
+  refiner gate remains failed. Five Crystal examples, 66 Python tests,
+  fresh build and GPU sensitivity checks pass. Native six-control encode:
+  83,049,088 named bytes, counters [0,0,0,1]. All neural math and metrics on
+  GPU; only terminal diagnostic capture/export reaches CPU. Guard retains
+  cache-aware 10%, 6 GiB cap, 64 MiB swap stop; no observed swap growth.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json`;
+  run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e`.
+  Next: default-off same-graph scaled-logit/probability boundaries, actual
+  main256 P/PV gate, then vector-tail parity. No full generation or quality
+  claim; MPS adaptation, not CUDA/Magi parity. Refresh on source/binary/
+  runtime/input/weight/mask/layout/precision change or evidence mutation.
+
 ### [LM-HY-NOMAS-STATIC-DIAGNOSIS-2026-11-02] Full reference decoder display is exact; stronger action restores a visible turn
 
 - The previous mask comparison also changed action wording. A matched

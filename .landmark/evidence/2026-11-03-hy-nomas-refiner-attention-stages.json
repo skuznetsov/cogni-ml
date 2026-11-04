@@ -1,0 +1,840 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_attention_stages_evidence/v1",
+  "date": "2026-11-03",
+  "base_revision": "beebcb79",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Bounded diagnostic localization on one source-exact block0 T0 valid263/stored1280 input, MPS adapter only.",
+    "result": "First qualified effective main256 difference is scaled-logit BF16 rounding before softmax. A source-equivalent BF16 logit/P/PV candidate reproduces actual main256 context and probabilities exactly.",
+    "not_claimed": [
+      "Hidden raw-QK accumulation or softmax accumulation dtype",
+      "Actual vector-tail probabilities",
+      "Complete refiner numerical gate",
+      "Production fix",
+      "Full generation, motion, quality or performance improvement"
+    ]
+  },
+  "boundaries": {
+    "risk_tier": "CAUTION",
+    "allowed_paths": [
+      "Makefile",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_replay.py",
+      "spec/hy_nomas_reference_refiner_attention_replay_spec.py",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json"
+    ],
+    "changed_paths": [
+      "Makefile",
+      "examples/hy_nomas_refiner_attention_probe.cr",
+      "examples/support/hy_nomas_refiner_attention_probe.cr",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr",
+      "spec/support/hy_nomas_reference_refiner_attention_replay.py",
+      "spec/hy_nomas_reference_refiner_attention_replay_spec.py",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py",
+      "docs/hy-nomas-drafter-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json"
+    ],
+    "production_source_changed": false,
+    "execution": "Native diagnostic Metal/MPS; source replay and metrics Torch MPS with fallback disabled. CPU performs admission, hashes, serialization and terminal diagnostic export only.",
+    "geometry": {
+      "batches": 1,
+      "query_rows": 263,
+      "key_rows": 263,
+      "heads": 16,
+      "head_dim": 128
+    },
+    "source_query_chunks": [
+      256,
+      7
+    ],
+    "stored_rows": 1280,
+    "valid_rows": 263,
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_check_tolerance": 0.0,
+    "full_generation_executed": false,
+    "full_refiner_executed": false,
+    "studio_started": false,
+    "no_new_production_synchronization": true,
+    "synchronization_scope": "Native probe has one terminal wait; each source replay/comparison packs one terminal CPU diagnostic export. Opaque backend internal activity is not counted.",
+    "rollback": "Remove only the standalone probe/helpers/specs and their two Make targets; production inference is unchanged. Revert this atomic commit to remove the complete diagnostic feature."
+  },
+  "lineage": {
+    "external_run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e",
+    "source_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "oracle": "Pinned Hy-Nomas PyTorch 2.8.0 MPS attention adaptation; not CUDA Flash/Magi parity.",
+    "input_manifest_sha256": {
+      "native-sha256": "eaecad2933a1e0b108dda1a9c55bdd694dc1b092b6f57efa93e16f2d70c1e0fd",
+      "source-sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1",
+      "native-refiner-sha256": "0e72d131c26ce1fecd90c2432d1bcaee0c56fff9b4cd3457bdd2d81c46fd5963",
+      "source-refiner-sha256": "cdfa93533c10a5e16859619200fecf75432365fa87be429d438d90540de029a7",
+      "native-preblock-sha256": "71cba4977b408cc24f7abff3af9116b4e022ae820a2215b359af7b0f5d0a2fea",
+      "reference-latent-sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+      "timeline-sha256": "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43"
+    },
+    "qkv_identity": {
+      "block0.q": "9888d028ef34e6827e3ce35139710958855ab1f1cfc9e67a3a8eb3a112a8de43",
+      "block0.k": "ab01176645d935ba738d41b8b07305b2357a658aba11d920c6964760d8e7181d",
+      "block0.v": "0f98ea6bc3522bee1468356b47f4cef0a2d2f1430702541da4ce875132ba73ac"
+    },
+    "runtime": {
+      "torch_version": "2.8.0",
+      "macos_version": "26.6.2",
+      "os_build": "Darwin Kernel Version 25.6.0: Fri Jul 31 19:18:48 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6020",
+      "device": "mps"
+    },
+    "source_code_sha256": {
+      "Makefile": "462c08ae8ccd1f038149692d2d48f1dfe65b136a643fef84b0a249236a0bd365",
+      "examples/hy_nomas_refiner_attention_probe.cr": "7776153afbcd1a22b277615e1fb5a1cd12faadb417b2bcd368cd9d669d135627",
+      "examples/support/hy_nomas_refiner_attention_probe.cr": "186ceb05526cadb3a053d4535774006de2353f129fc6983d5a252b3efae5fb90",
+      "spec/hy_nomas_refiner_attention_probe_spec.cr": "966d5fca97dc5ae300c1f8845a67b8bfba48667c1313edc8d900499276a25a12",
+      "spec/support/hy_nomas_reference_refiner_attention_replay.py": "797f59afea585ec0de8864cd1facceb4c3e32f73e2712c831957b43fc8075176",
+      "spec/hy_nomas_reference_refiner_attention_replay_spec.py": "ca6766db7870f4adf4b84be6b0b19c42661ae519d4e608e90fa52e7cea9885cd",
+      "spec/support/hy_nomas_reference_refiner_attention_compare.py": "fb2c7132c797591023284440f8a2c4a8c0c828f799a1a49183577d88d7e73170",
+      "spec/hy_nomas_reference_refiner_attention_compare_spec.py": "674101270a58b835ffac71a96a6ff0744d65d686a6c420ccb2e7bdba75e69cc8"
+    },
+    "guarded_source_pin_count": 390,
+    "native_selected_embedded_source_pin_count": 10,
+    "upstream_source_pin_count": 18,
+    "artifact_count": 470,
+    "source_snapshots": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/qualified-sources-final",
+    "qualified_artifact_index": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/qualified-artifacts-final.json",
+      "bytes": 158572,
+      "sha256": "aa7f5b06c9762b4eac481a8daa1439f27104dc6dfa2e711e41931d255fb6e2a2"
+    },
+    "source_replay": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+      "bytes": 15530,
+      "sha256": "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602"
+    },
+    "native_capture": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/native-qualified-final.json",
+      "bytes": 5071,
+      "sha256": "f7c85986a8070f44c80a5a6e1adf5512791211b21ca0f15874f8e06567920625"
+    },
+    "comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/compare-qualified-final.json",
+      "bytes": 4566,
+      "sha256": "babcca61aec4ea9c93a24dafa67098d317d5164f2c028714f6d343989fbea2c1"
+    },
+    "guard_summary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/guard-qualified-final.json",
+      "bytes": 1871,
+      "sha256": "164d5c483258e035614c280c3239dd8032be8a2aa755f68b96c714fefe60fbc5"
+    },
+    "adversary_review": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/adversary-final.json",
+      "bytes": 2527,
+      "sha256": "b1e287887df70ba4de6f95669ce259148ead6d110e1955ebf5ae9d36a203ceba"
+    },
+    "provenance_limits": [
+      "Native embeds ten selected fingerprints and guarded stages retain 390 selected source snapshots; neither is exhaustive binary/toolchain closure.",
+      "Runtime metadata is descriptive, not a pinned PyTorch binary build.",
+      "Replay generator authenticates 18 upstream files against its checkout. The consumer trusts the caller-pinned replay digest; metadata validation alone does not authenticate origin."
+    ]
+  },
+  "observed": {
+    "native_f32_faithfulness_passed": true,
+    "localization_gate_passed": true,
+    "first_qualified_main256_difference": "scaled_logits_bf16_boundary",
+    "native_comparison_rows": [
+      {
+        "kind": "native_f32_faithfulness_qk_raw",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_f32_faithfulness_qk_scaled",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_f32_faithfulness_softmax",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_f32_faithfulness_pv",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_f32_faithfulness_canonical_attention",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_f32_faithfulness_pv_source_probabilities",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "native_explicit_vs_canonical",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "scaled_logits_vs_qualified_bf16_candidate_main",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.4973602294921875,
+        "mae": 0.026659348979592323,
+        "rms": 0.045743975788354874,
+        "mismatch_count": 1065699,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "scaled_logits_bf16_round_vs_qualified_candidate_main",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "scaled_logits_vs_general_bf16_candidate_tail",
+        "count": 29456,
+        "finite_count": 29456,
+        "max_abs": 0.4983978271484375,
+        "mae": 0.02314734272658825,
+        "rms": 0.03746578097343445,
+        "mismatch_count": 29129,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "probabilities_vs_source_main",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.09960055351257324,
+        "mae": 5.379630965762772e-05,
+        "rms": 0.0008625405025668442,
+        "mismatch_count": 30670,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "probabilities_vs_source_general_all",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.09960055351257324,
+        "mae": 5.4082694987300783e-05,
+        "rms": 0.0008692954434081912,
+        "mismatch_count": 31741,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "pv_vs_source_observed_main",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.29186487197875977,
+        "mae": 0.005847840569913387,
+        "rms": 0.013001934625208378,
+        "mismatch_count": 385672,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "pv_vs_source_observed_tail",
+        "count": 14336,
+        "finite_count": 14336,
+        "max_abs": 0.015551567077636719,
+        "mae": 0.0012707093264907598,
+        "rms": 0.0021198445465415716,
+        "mismatch_count": 11832,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "common_probabilities_pv_vs_source_general",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.030776023864746094,
+        "mae": 0.0010555819608271122,
+        "rms": 0.0019176703644916415,
+        "mismatch_count": 386686,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "common_probabilities_pv_bf16_round_vs_source_general",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "common_probabilities_pv_bf16_round_vs_observed_main",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "sensitivity_a_vs_a",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "sensitivity_perturbation",
+        "count": 16,
+        "finite_count": 16,
+        "max_abs": 0.125,
+        "mae": 0.125,
+        "rms": 0.125,
+        "mismatch_count": 16,
+        "passed": false,
+        "atol": 0.0,
+        "rtol": 0.0
+      }
+    ],
+    "source_control_rows": [
+      {
+        "kind": "source_chunked_vs_observed",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "source_chunked_a_vs_a",
+        "count": 538624,
+        "finite_count": 538624,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "source_general_vs_chunked_tail7",
+        "count": 14336,
+        "finite_count": 14336,
+        "max_abs": 0.4375,
+        "mae": 0.00706642447039485,
+        "rms": 0.02053731679916382,
+        "mismatch_count": 7499,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      },
+      {
+        "kind": "source_main_general_vs_chunked_main",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "source_full_vs_main_probabilities",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "f32_raw_bf16_round_vs_bf16_raw",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "scaled_only_p_vs_general_p",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "scaled_only_pv_vs_observed_main",
+        "count": 524288,
+        "finite_count": 524288,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "scaled_only_f32_softmax_vs_general_p",
+        "count": 1106704,
+        "finite_count": 1106704,
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "rms": 0.0,
+        "mismatch_count": 0,
+        "passed": true,
+        "atol": 0.0,
+        "rtol": 0.0
+      },
+      {
+        "kind": "raw_round_only_p_vs_general_p_main",
+        "count": 1077248,
+        "finite_count": 1077248,
+        "max_abs": 0.1015625,
+        "mae": 7.400302274618298e-05,
+        "rms": 0.0012082241009920835,
+        "mismatch_count": 32258,
+        "passed": false,
+        "atol": 2e-05,
+        "rtol": 2e-05
+      }
+    ],
+    "native_setup_named_bytes": 83049088,
+    "native_encode_counters": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    },
+    "source_terminal_cpu_exports": 1,
+    "comparison_terminal_cpu_exports": 1,
+    "candidate": "F32 raw QK -> scale -> BF16 scaled logits -> softmax with BF16 probability boundary -> PV with BF16 output boundary.",
+    "raw_round_alternative": "Rounding raw QK before scale fails 32,258/1,077,248 actual main256 P values at unchanged mixed tolerance, max .1015625.",
+    "tail_limit": "The seven-query vector path has no valid returned P witness. General263 tail context is a counterfactual and differs from actual source at 7,499/14,336 values, max .4375.",
+    "remaining_full_refiner_gate": "Previously failed; not rerun or promoted by this diagnostic."
+  },
+  "verification": {
+    "dod": "Fresh native build, admission/fail-closed regressions, GPU A/A and perturbation sensitivity, exact input/cast/common-P PV checks and mandatory measured main256 scaled-logit/P/PV divergences.",
+    "executed_commands": [
+      {
+        "stage": "cpu-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "120",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/cpu-final.guard.jsonl",
+          "--",
+          "make",
+          "spec_hy_nomas_refiner_attention_probe"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/cpu-final.result.json",
+          "bytes": 45572,
+          "sha256": "38ea5605457d9e200ca7a1c11426b457bad4ffcbe2e354eb877686d4e8b94bac"
+        }
+      },
+      {
+        "stage": "build-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "240",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/build-final.guard.jsonl",
+          "--",
+          "make",
+          "hy_nomas_refiner_attention_probe",
+          "BUILD_DIR=/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/build"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/build-final.result.json",
+          "bytes": 45665,
+          "sha256": "74400e0bcc042c0a688c22da164964cdf7b487442355570118a66a68ce18dd94"
+        }
+      },
+      {
+        "stage": "python-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "120",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/python-final.guard.jsonl",
+          "--",
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "spec",
+          "-p",
+          "hy_nomas_reference_refiner*spec.py"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/python-final.result.json",
+          "bytes": 45705,
+          "sha256": "2ac292255cf12477a65c254398ea285ac929bc6818cb7f0305fe42dc0bb4dd7d"
+        }
+      },
+      {
+        "stage": "source-qualified-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "120",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/source-qualified-final.guard.jsonl",
+          "--",
+          "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_reference_refiner_attention_replay.py",
+          "--native",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-qkv-blocks.json",
+          "--native-sha256",
+          "eaecad2933a1e0b108dda1a9c55bdd694dc1b092b6f57efa93e16f2d70c1e0fd",
+          "--native-preblock",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-qkv-preblock.json",
+          "--native-preblock-sha256",
+          "71cba4977b408cc24f7abff3af9116b4e022ae820a2215b359af7b0f5d0a2fea",
+          "--reference-latent",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-t1-boundary-20261102.k3o4bk2a/current-t0.safetensors",
+          "--reference-latent-sha256",
+          "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+          "--timeline-sha256",
+          "26be294251f4e25814b97e8438edffcd7c44c80325ce0d28d91d0fa7d41f5f43",
+          "--source",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+          "--source-sha256",
+          "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+          "--native-refiner",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-qkv-20261103.no6bm231/native-qkv-refiner.json",
+          "--native-refiner-sha256",
+          "0e72d131c26ce1fecd90c2432d1bcaee0c56fff9b4cd3457bdd2d81c46fd5963",
+          "--source-refiner",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.json",
+          "--source-refiner-sha256",
+          "cdfa93533c10a5e16859619200fecf75432365fa87be429d438d90540de029a7",
+          "--upstream",
+          "/opt/mldata_ssd/cogni-ml/video-scene-20261019/upstream/hy-nomas-20261024"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.result.json",
+          "bytes": 47423,
+          "sha256": "c54088f8a39f1bdebbc29ed4c109989ad600054b63a7eeb8e6d1b64000b04f1d"
+        }
+      },
+      {
+        "stage": "native-qualified-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "120",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/native-qualified-final.guard.jsonl",
+          "--",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/build/hy_nomas_refiner_attention_probe",
+          "--inputs",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+          "--inputs-sha256",
+          "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/native-qualified-final.json",
+          "--max-named-bytes",
+          "536870912"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/native-qualified-final.result.json",
+          "bytes": 46049,
+          "sha256": "256f0e774394c20c4f24789e4764aef11fa0b10c17c62950b480e68136d2028e"
+        }
+      },
+      {
+        "stage": "compare-qualified-final",
+        "argv": [
+          "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/wan_memory_guard.py",
+          "--memory-accounting",
+          "file-cache",
+          "--runtime-floor-pct",
+          "10",
+          "--max-footprint-mib",
+          "6144",
+          "--max-swap-growth-mib",
+          "64",
+          "--timeout-sec",
+          "120",
+          "--log",
+          "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/logs/compare-qualified-final.guard.jsonl",
+          "--",
+          "/opt/mldata_ssd/cogni-ml/drama3-fish-reference-20261015/venv/bin/python",
+          "-B",
+          "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_reference_refiner_attention_compare.py",
+          "--native",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/native-qualified-final.json",
+          "--native-sha256",
+          "f7c85986a8070f44c80a5a6e1adf5512791211b21ca0f15874f8e06567920625",
+          "--replay",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/source-qualified-final.json",
+          "--replay-sha256",
+          "d58c3f5a8ae7165997fce4cd832bb07ea0d74edfa5722d5c0f7557c55023b602",
+          "--output",
+          "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/compare-qualified-final.json"
+        ],
+        "returncode": 0,
+        "source_pins_matched_before_after": true,
+        "result": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e/compare-qualified-final.result.json",
+          "bytes": 46313,
+          "sha256": "b4e1e862a1e8ea586838924c96c14ec241eecfa71db44c95cb73219789c455ff"
+        }
+      }
+    ],
+    "crystal_examples": 5,
+    "python_tests": 66,
+    "expected_and_observed_signals": [
+      "All six canonical guarded stages return zero and 390 source pins match before/after each.",
+      "All six native F32 controls and explicit-versus-canonical match with max error zero.",
+      "Source-equivalent scaled-logit candidate matches general probabilities and actual main256 context at exact 0/0.",
+      "Raw-round alternative and source/native scaled-logit/P/PV differences fail at unchanged 2e-5; sensitivity perturbations are detected."
+    ],
+    "fallback": "Native common-source-P PV followed by BF16 rounding matches observed main256 exactly, separating P errors from PV reduction/output-boundary errors.",
+    "historical_failure": "Initial cpu-spec stage failed to resolve ComputePipeline. Explicit device import was added before the frozen source state; cpu-final (five examples) passes. Historical failed logs are retained outside the canonical index.",
+    "review_verdict": "ROBUST within the bounded diagnostic contract",
+    "independent_neural_replication": false,
+    "structural_validator": "The skill-named template/validate-landmark-graph script is absent in this checkout. JSON, source/result linkage and retained artifact hashes are checked locally; these checks do not rerun neural evidence."
+  },
+  "guard": {
+    "canonical_stages": [
+      {
+        "stage": "cpu-final",
+        "sampled_peak_group_bytes": 470779200,
+        "minimum_sampled_headroom_bytes": 28494790656,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 6
+      },
+      {
+        "stage": "build-final",
+        "sampled_peak_group_bytes": 516769040,
+        "minimum_sampled_headroom_bytes": 28389867520,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 15
+      },
+      {
+        "stage": "python-final",
+        "sampled_peak_group_bytes": 120947696,
+        "minimum_sampled_headroom_bytes": 28816703488,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 4
+      },
+      {
+        "stage": "source-qualified-final",
+        "sampled_peak_group_bytes": 2501036360,
+        "minimum_sampled_headroom_bytes": 25653641216,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 7
+      },
+      {
+        "stage": "native-qualified-final",
+        "sampled_peak_group_bytes": 81992,
+        "minimum_sampled_headroom_bytes": 28503408640,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 3
+      },
+      {
+        "stage": "compare-qualified-final",
+        "sampled_peak_group_bytes": 297518376,
+        "minimum_sampled_headroom_bytes": 27634794496,
+        "observed_swap_growth_bytes": 0,
+        "final_live_processes": 0,
+        "samples": 5
+      }
+    ],
+    "sampled_peak_group_bytes": 2501036360,
+    "minimum_sampled_headroom_bytes": 25653641216,
+    "maximum_observed_stage_swap_growth_bytes": 0,
+    "memory_accounting": "file-cache",
+    "runtime_floor_pct": 10,
+    "process_cap_mib": 6144,
+    "swap_growth_stop_mib": 64,
+    "limitation": "Sampled telemetry misses between-poll peaks, including the short native capture; opaque Metal resources are not individually attributed."
+  },
+  "next": {
+    "falsifier": "A default-off native same-graph BF16 scaled-logit/P corridor must reproduce actual main256 P/PV at unchanged tolerances; qualify the seven-query vector tail separately.",
+    "avoid": "Do not round raw QK before scale, consume vector second output as probabilities or extrapolate general-tail P to actual tail.",
+    "refresh_on": [
+      "Source, binary or runtime change",
+      "Input/weight/mask/layout/precision change",
+      "Artifact loss or mutation"
+    ],
+    "failure_policy": "Reopen the bounded localization claim on witness or runtime mismatch; do not widen tolerances or promote the full-refiner gate."
+  }
+}

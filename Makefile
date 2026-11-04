@@ -634,6 +634,16 @@ hy_nomas_reference_decode_probe: $(BUILD_DIR)/hy_nomas_reference_decode_probe
 hy_nomas_reference_cache_probe: $(BUILD_DIR)/hy_nomas_reference_cache_probe
 hy_nomas_reference_block0_probe: $(BUILD_DIR)/hy_nomas_reference_block0_probe
 
+.PHONY: hy_nomas_refiner_attention_probe spec_hy_nomas_refiner_attention_probe
+hy_nomas_refiner_attention_probe: $(BUILD_DIR)/hy_nomas_refiner_attention_probe
+
+$(BUILD_DIR)/hy_nomas_refiner_attention_probe: examples/hy_nomas_refiner_attention_probe.cr examples/support/hy_nomas_refiner_attention_probe.cr spec/support/hy_nomas_mps_reductions.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+spec_hy_nomas_refiner_attention_probe:
+	$(CRYSTAL) spec -D cpu_only spec/hy_nomas_refiner_attention_probe_spec.cr $(ARGS)
+
 $(BUILD_DIR)/hy_nomas_reference_decode_probe: examples/hy_nomas_reference_decode_probe.cr examples/support/hy_nomas_reference_latent.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"

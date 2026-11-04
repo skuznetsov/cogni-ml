@@ -1,5 +1,81 @@
 # Hy-Nomas local draft suite
 
+## Matched block0 QK, softmax and PV localization (2026-11-03)
+
+The bounded native probe localizes the first qualified main256 discrepancy
+to the effective BF16 scaled-logit boundary before softmax. Q/K/V are exact
+source bytes on the T0 V263 input. All six native F32 controls (raw QK,
+scaled QK, softmax, PV, canonical attention and common-source-P PV) reproduce
+their current PyTorch 2.8.0 MPS controls with max error zero. This is an
+attention-stage diagnostic, not a production fix or a passed full-refiner gate.
+
+The source adapter processes 263 valid queries as 256 + 7, with all 263 keys
+and values in each call. Its actual chunked BF16 attention reproduces the
+earlier source capture exactly. The general-263 MPS operator's probabilities
+and context match the real first-256 call exactly. Its last seven rows are a
+counterfactual: the source uses a vector kernel there, whose second return is
+uninitialized rather than probabilities. The probe never consumes that return.
+General versus actual vector-tail context differs on 7,499/14,336 values,
+max .4375, at unchanged `atol=rtol=2e-5`.
+
+| Matched first-256 comparison | Mismatches | Max error |
+| --- | ---: | ---: |
+| Native F32 scaled logits vs qualified BF16 candidate | 1,065,699/1,077,248 | .49736023 |
+| Same logits rounded BF16 vs candidate, exact check | 0 | 0 |
+| Native F32 softmax vs actual source probabilities | 30,670/1,077,248 | .09960055 |
+| Native F32 PV vs actual source attention | 385,672/524,288 | .29186487 |
+| Native PV with actual source P, then BF16 rounding | 0 | 0 |
+
+The qualified candidate is F32 QK, scaling, BF16 logits, softmax with a BF16
+probability boundary, and PV with a BF16 output boundary. It reproduces
+1,106,704 actual general-operator probabilities and 524,288 observed main256
+context values exactly. Rounding raw QK before scaling is rejected:
+32,258/1,077,248 main256 probabilities fail the unchanged mixed tolerance,
+max .1015625. Separately materializing both raw-QK and scaled-logit BF16
+boundaries also fails. A final BF16 probability rounding alone fails too.
+MPSGraph fusion matters; raw QK is a matched reduction control, not a captured
+internal source tensor. These observations do not determine the hidden
+softmax accumulation dtype: BF16 softmax and F32 softmax of rounded logits,
+followed by BF16 probability rounding, both match this finite input.
+
+The new standalone `hy_nomas_refiner_attention_probe` reuses existing MPS
+reduction plans. QK output feeds softmax and then PV through shared Arena
+aliases, with setup-allocated fixed buffers. It encodes six controls on one
+chain with 83,049,088 named bytes and counters [0 named allocations, 0 read
+APIs, 0 preterminal waits, 1 terminal wait]. These counters exclude opaque
+MPS resources and post-terminal capture. Source replay and GPU comparison
+each have one packed terminal diagnostic export. Production sources and
+their synchronization behavior are unchanged.
+
+Validation: fresh native probe/bridge build, five Crystal admission examples,
+66 Python regression tests, GPU A/A and perturbation controls. Canonical
+guarded stages retain the cache-aware 10% floor, 6 GiB process cap and 64 MiB
+swap-growth stop. Sampled peak group footprint is 2,501,036,360 bytes;
+minimum sampled headroom 25,653,641,216 bytes; observed swap growth is zero.
+The short native capture can fall between samples, so this is not its exact
+peak. No complete refiner, DiT, decoder or generation was executed.
+
+Evidence: `.landmark/evidence/2026-11-03-hy-nomas-refiner-attention-stages.json`;
+external run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-attention-20261103.eov0vg0e`.
+`source-qualified-final.json`, `native-qualified-final.json`,
+`compare-qualified-final.json` and `qualified-artifacts-final.json` retain
+inputs, exact hashes, source snapshots, commands and scoped results. The
+native manifest embeds ten selected source fingerprints; the guarded stages
+also check 390 source snapshots before and after execution. Neither inventory
+is an exhaustive binary or toolchain dependency closure. The replay generator
+authenticates 18 upstream source files against the pinned checkout; the
+consumer trusts the caller-pinned replay digest rather than independently
+recreating that provenance. The oracle remains the pinned MPS attention adaptation,
+not stock CUDA/Magi. Runtime identity is descriptive, not a pinned PyTorch
+binary build. Same-lineage mini-Quad reviews are correlated.
+
+Next falsifier: implement a default-off native BF16 scaled-logit/probability
+corridor that matches the actual main256 P and PV, then independently match
+the seven-query vector tail. Do not round raw QK before scaling or treat
+general-tail probabilities as source observations. Refresh on source,
+binary/runtime, input, weight, mask, layout or precision change, or artifact
+loss/mutation. No motion, quality or performance improvement is claimed.
+
 ## Connected refiner QKV BF16 output boundary (2026-11-03)
 
 The default-off `--refiner-qkv-bf16-control` makes block0 QKV and its split
