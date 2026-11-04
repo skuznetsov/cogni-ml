@@ -823,15 +823,24 @@ extern "C" void gs_hy_nomas_mps_reduction_plan_release(void *planHandle) {
 @implementation HyNomasMPSActivationPlan
 @end
 
+// Values shared with HyNomasMPSActivation::UnaryPlan::Precision.
+enum HyNomasActivationPrecision : int32_t {
+  HyNomasActivationF32 = 0,
+  HyNomasActivationBF16Graph = 1,
+  HyNomasActivationBF16Output = 2,
+};
+
 static void *hy_nomas_mps_activation_plan_create(
     void *deviceHandle, const int64_t *shapeValues, int32_t rank,
     void *inputHandle, void *outputHandle, int32_t activation,
-    int32_t bf16Control) {
+    int32_t precision) {
   if (!deviceHandle || !shapeValues || !inputHandle || !outputHandle ||
       rank < 1 || rank > 8 || activation < 0 || activation > 1 ||
-      bf16Control < 0 || bf16Control > 1 ||
-      (bf16Control != 0 && activation != 0))
+      precision < HyNomasActivationF32 ||
+      precision > HyNomasActivationBF16Output ||
+      (precision != HyNomasActivationF32 && activation != 0))
     return nullptr;
+  const bool computeBF16 = precision == HyNomasActivationBF16Graph;
   if (@available(macOS 15.0, *)) {
     @autoreleasepool {
       uint64_t shapeUnsigned[8];
@@ -867,7 +876,7 @@ static void *hy_nomas_mps_activation_plan_create(
           return nullptr;
         graph.options = MPSGraphOptionsNone;
         NSString *inputName = activation == 0 ? @"hy_silu_x" : @"hy_gelu_x";
-        if (activation == 0 && bf16Control != 0)
+        if (computeBF16)
           inputName = @"hy_silu_x_f32";
         MPSGraphTensor *inputTensor = [graph placeholderWithShape:shape
                                                           dataType:MPSDataTypeFloat32
@@ -875,7 +884,7 @@ static void *hy_nomas_mps_activation_plan_create(
         if (!inputTensor)
           return nullptr;
         MPSGraphTensor *x = inputTensor;
-        if (activation == 0 && bf16Control != 0) {
+        if (computeBF16) {
           // PyTorch 2.8 silu_out_mps types the placeholder and every SiLU
           // node from self.scalar_type(); the bound buffers here remain F32.
           x = [graph castTensor:inputTensor toType:MPSDataTypeBFloat16
@@ -886,7 +895,7 @@ static void *hy_nomas_mps_activation_plan_create(
           MPSGraphTensor *one =
               [graph constantWithScalar:1.0
                                   shape:@[ @1 ]
-                               dataType:(bf16Control != 0
+                               dataType:(computeBF16
                                    ? MPSDataTypeBFloat16
                                    : MPSDataTypeFloat32)];
           MPSGraphTensor *negative = [graph negativeWithTensor:x
@@ -902,7 +911,7 @@ static void *hy_nomas_mps_activation_plan_create(
                                            name:@"hy_silu_x_over_one_plus_exp"];
           if (!negative || !exponential || !one || !denominator || !result)
             return nullptr;
-          if (bf16Control != 0 &&
+          if (computeBF16 &&
               (x.dataType != MPSDataTypeBFloat16 ||
                negative.dataType != MPSDataTypeBFloat16 ||
                exponential.dataType != MPSDataTypeBFloat16 ||
@@ -958,13 +967,13 @@ static void *hy_nomas_mps_activation_plan_create(
             return nullptr;
         }
         MPSGraphTensor *resultF32 = result;
-        if (activation == 0 && bf16Control != 0) {
-          // Preserve the BF16 graph result while satisfying the existing F32
-          // checkpoint binding. The integer path makes the external F32 value
-          // an explicit BF16 round-to-nearest-even expansion even if the
-          // backend executes the graph's BF16 cast as a wider operation.
-          resultF32 = [graph castTensor:result toType:MPSDataTypeFloat32
-                                   name:@"hy_silu_output_f32"];
+        if (precision != HyNomasActivationF32) {
+          // Produce an explicit BF16 round-to-nearest-even expansion in the
+          // existing F32 checkpoint, including when the SiLU nodes are F32.
+          if (computeBF16) {
+            resultF32 = [graph castTensor:result toType:MPSDataTypeFloat32
+                                     name:@"hy_silu_output_f32"];
+          }
           if (!resultF32 || resultF32.dataType != MPSDataTypeFloat32)
             return nullptr;
 
@@ -1102,7 +1111,7 @@ static void *hy_nomas_mps_activation_plan_create(
         plan.execution = execution;
         plan.residentBuffers = @[ input, output ];
         plan.activation = activation;
-        plan.bf16Control = bf16Control != 0;
+        plan.bf16Control = computeBF16;
         return (__bridge_retained void *)plan;
       } @catch (NSException *exception) {
         (void)exception;
@@ -1114,12 +1123,12 @@ static void *hy_nomas_mps_activation_plan_create(
 }
 
 extern "C" void *gs_hy_nomas_mps_activation_plan_create(
-    void *deviceHandle, int32_t activation, int32_t bf16Control,
+    void *deviceHandle, int32_t activation, int32_t precision,
     const int64_t *shapeValues, int32_t rank, void *inputHandle,
     void *outputHandle) {
   return hy_nomas_mps_activation_plan_create(
       deviceHandle, shapeValues, rank, inputHandle, outputHandle, activation,
-      bf16Control);
+      precision);
 }
 
 extern "C" int32_t gs_hy_nomas_mps_activation_encode(void *planHandle,

@@ -1,5 +1,40 @@
 # Hy-Nomas local draft suite
 
+## Connected SiLU output rounding (2026-11-04)
+
+Status: VERIFIED for connected block0 MLP SiLU on frozen T0 V263.
+The default-off `--refiner-source-mlp-silu-control` requires source FC1
+control. Both blocks apply BF16 RNE at the output of the existing F32
+SiLU graph. Block0 matches the pinned MPS-adapter oracle byte-for-byte
+through SiLU across 10,485,760 values, including padding.
+
+At unchanged `atol=rtol=2e-5`, the first divergence moves from SiLU to
+FC2 in the full, valid and padded regions. FC2 exceeds tolerance on
+527,239 of 538,624 valid values (max .124557). The second residual,
+which supplies block1 input, exceeds tolerance on 528,887 valid values
+(max .398163). Block1 SiLU fails its exact gate on 1,496,652 values.
+
+A separate GPU replay rounds the captured FC2 output to BF16 and
+matches all 2,621,440 source values exactly. With that FC2 output and
+the exact gate and first residual, the second residual also matches
+all 2,621,440 values exactly with RNE after both the multiply and the
+add. Final-only rounding on exact operands leaves 27,408 values over
+tolerance. The connected FC2 and second residual still use the F32 path.
+
+The guarded build, 32 Crystal examples, 87 Python tests, disabled and
+fresh-repeat preservation, and GPU comparisons passed their scoped
+checks. Both preservation pairs match across 62 records. The native
+captures retain 944,620,612 named bytes, zero encode allocations, zero
+read APIs, zero preterminal waits and one terminal drain. Guard uses
+the cache-aware 10% floor, 6 GiB process-group cap and 64 MiB swap-growth
+stop. Observed swap growth was zero. Video generation was out of scope.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-silu.json`.
+Rollback: omit `--refiner-source-mlp-silu-control`. Next: reuse the
+existing post-bias epilogue and gated residual for the three FC2/residual
+rounding points, then qualify the connected block1 input. Refresh on
+source, binary, runtime, input, weights, layout, precision or evidence changes.
+
 ## Connected post-bias FC1 (2026-11-04)
 
 Status: VERIFIED for connected block0 FC1 on frozen T0 V263. The

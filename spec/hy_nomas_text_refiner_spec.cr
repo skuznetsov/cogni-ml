@@ -80,6 +80,15 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     end
   end
 
+  it "requires source FC1 before MLP SiLU output rounding" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_mlp_silu_control!(false, false)
+    plan.validate_source_mlp_silu_control!(true, true)
+    expect_raises(ArgumentError, /requires source FC1 control/) do
+      plan.validate_source_mlp_silu_control!(true, false)
+    end
+  end
+
   it "requires each prelude precision control to include its preceding boundary" do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)

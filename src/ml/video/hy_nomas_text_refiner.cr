@@ -251,6 +251,12 @@ module ML::Video
       end
     end
 
+    def self.validate_source_mlp_silu_control!(enabled : Bool, source_fc1_control : Bool) : Nil
+      if enabled && !source_fc1_control
+        raise ArgumentError.new("Source MLP SiLU control requires source FC1 control")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -279,7 +285,8 @@ module ML::Video
                    @source_attention_control : Bool = false,
                    @source_projection_residual_control : Bool = false,
                    @source_norm2_control : Bool = false,
-                   @source_fc1_control : Bool = false)
+                   @source_fc1_control : Bool = false,
+                   @source_mlp_silu_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -304,6 +311,7 @@ module ML::Video
         @source_attention_control)
       self.class.validate_source_norm2_control!(@source_norm2_control, @source_projection_residual_control)
       self.class.validate_source_fc1_control!(@source_fc1_control, @source_norm2_control)
+      self.class.validate_source_mlp_silu_control!(@source_mlp_silu_control, @source_fc1_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -588,7 +596,8 @@ module ML::Video
       BLOCKS.times do |block|
         prefix = "block#{block}"
         prepare_activation("#{prefix}.condition_silu", "c", [HIDDEN_DIM])
-        prepare_activation("#{prefix}.mlp_silu", "#{prefix}.mlp_fc1", [@processed_tokens, FFN_DIM])
+        prepare_activation("#{prefix}.mlp_silu", "#{prefix}.mlp_fc1", [@processed_tokens, FFN_DIM],
+          round_output_bf16: @source_mlp_silu_control)
         q = checkpoint("#{prefix}.q")
         k = checkpoint("#{prefix}.k")
         v = checkpoint("#{prefix}.v")
@@ -635,12 +644,13 @@ module ML::Video
     end
 
     private def prepare_activation(name : String, input_name : String,
-                                   shape : Array(Int32)) : Nil
+                                   shape : Array(Int32), *, round_output_bf16 : Bool = false) : Nil
       input = checkpoint(input_name)
       output = checkpoint(name)
       bf16_control = (@prelude_silu_bf16_control && PRELUDE_SILU_NAMES.includes?(name)) ||
                      (@block_boundaries_bf16_control && BLOCK_BOUNDARY_CONDITION_SILU_NAMES.includes?(name))
-      plan = HyNomasMPSActivation::SiLUPlan.new(shape, input, output, bf16_control)
+      plan = HyNomasMPSActivation::SiLUPlan.new(shape, input, output, bf16_control,
+        round_output_bf16: round_output_bf16)
       @activations[name] = plan
       @activation_plans << plan
     end

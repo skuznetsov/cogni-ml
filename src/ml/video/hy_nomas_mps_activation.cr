@@ -10,7 +10,7 @@ require "./metal_mps_command_chain"
   @[Link(ldflags: "-framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph")]
   lib HyNomasMPSActivationFFI
     fun plan_create = gs_hy_nomas_mps_activation_plan_create(
-      device : Pointer(Void), activation : Int32, bf16_control : Int32,
+      device : Pointer(Void), activation : Int32, precision : Int32,
       shape : Pointer(Int64), rank : Int32,
       input : Pointer(Void), output : Pointer(Void),
     ) : Pointer(Void)
@@ -22,12 +22,18 @@ require "./metal_mps_command_chain"
 module ML::Video::HyNomasMPSActivation
   # A fixed-shape unary graph bound to caller-owned shared F32 buffers. Keep
   # the plan and those buffers alive until the chain's terminal wait. The
-  # optional SiLU control declares BF16 graph nodes and explicitly rounds the
-  # connected F32 output to a BF16 expansion inside that same graph.
+  # optional SiLU controls round the connected F32 output to a BF16 expansion
+  # inside that same graph, with or without changing its arithmetic nodes.
   class UnaryPlan
     SILU                 = 0
     GELU                 = 1
     DEFAULT_BF16_CONTROL = false
+
+    private enum Precision
+      F32        = 0
+      BF16Graph  = 1
+      BF16Output = 2
+    end
 
     @shape : Array(Int32)
     @input : ML::MetalBuffer
@@ -47,10 +53,14 @@ module ML::Video::HyNomasMPSActivation
 
     protected def initialize(shape : Array(Int32), input : ML::MetalBuffer,
                              output : ML::MetalBuffer, @activation : Int32,
-                             @bf16_control : Bool = DEFAULT_BF16_CONTROL)
+                             @bf16_control : Bool = DEFAULT_BF16_CONTROL,
+                             *, round_output_bf16 : Bool = false)
       raise ArgumentError.new("MPSGraph activation kind is unsupported") unless {SILU, GELU}.includes?(@activation)
-      if @bf16_control && @activation != SILU
+      if (@bf16_control || round_output_bf16) && @activation != SILU
         raise ArgumentError.new("BF16 activation control is supported only for SiLU")
+      end
+      if @bf16_control && round_output_bf16
+        raise ArgumentError.new("Choose one SiLU BF16 precision mode")
       end
       @shape = shape.dup
       @input = input
@@ -70,9 +80,11 @@ module ML::Video::HyNomasMPSActivation
 
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         shape64 = @shape.map(&.to_i64)
+        precision = Precision::F32
+        precision = Precision::BF16Graph if @bf16_control
+        precision = Precision::BF16Output if round_output_bf16
         @handle = HyNomasMPSActivationFFI.plan_create(
-          ML::Metal::Device.instance.device_handle, @activation,
-          @bf16_control ? 1_i32 : 0_i32,
+          ML::Metal::Device.instance.device_handle, @activation, precision.value,
           shape64.to_unsafe, @shape.size.to_i32, @input.handle, @output.handle,
         )
         raise "Failed to prepare pinned PyTorch MPSGraph activation plan" if @handle.null?
@@ -152,8 +164,10 @@ module ML::Video::HyNomasMPSActivation
   class SiLUPlan < UnaryPlan
     def initialize(shape : Array(Int32), input : ML::MetalBuffer,
                    output : ML::MetalBuffer,
-                   bf16_control : Bool = UnaryPlan::DEFAULT_BF16_CONTROL)
-      super(shape, input, output, UnaryPlan::SILU, bf16_control)
+                   bf16_control : Bool = UnaryPlan::DEFAULT_BF16_CONTROL,
+                   *, round_output_bf16 : Bool = false)
+      super(shape, input, output, UnaryPlan::SILU, bf16_control,
+        round_output_bf16: round_output_bf16)
     end
   end
 
