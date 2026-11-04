@@ -132,6 +132,66 @@ class BlocksCompareTests(unittest.TestCase):
             compare._source_projection_residual_control({
                 compare.SOURCE_PROJECTION_RESIDUAL_CONTROL_FIELD: True}, False)
 
+    def test_source_norm2_control_is_default_off_and_projection_residual_gated(self):
+        self.assertFalse(compare._source_norm2_control({}, False))
+        self.assertFalse(compare._source_norm2_control({
+            compare.SOURCE_NORM2_CONTROL_FIELD: False}, True))
+        self.assertTrue(compare._source_norm2_control({
+            compare.SOURCE_NORM2_CONTROL_FIELD: True}, True))
+
+        for value in (None, 0, 1, "true", [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(compare.Error, "boolean"):
+                compare._source_norm2_control({compare.SOURCE_NORM2_CONTROL_FIELD: value}, True)
+
+        for control in (None, 0, 1, "true", [], {}):
+            with self.subTest(projection_residual_control=control), \
+                    self.assertRaisesRegex(compare.Error, "validated boolean"):
+                compare._source_norm2_control({}, control)
+
+        with self.assertRaisesRegex(compare.Error, "requires source projection/residual"):
+            compare._source_norm2_control({compare.SOURCE_NORM2_CONTROL_FIELD: True}, False)
+
+    def test_source_norm2_exact_gate_covers_both_full_finite_blocks(self):
+        tensors = ("block0.norm2", "block1.norm2")
+        self.assertEqual(compare.SOURCE_NORM2_TENSORS, tensors)
+        self.assertEqual(compare.SOURCE_NORM2_COUNT, 2_621_440)
+        for name in tensors:
+            self.assertEqual(math.prod(compare.shapes()[name]), compare.SOURCE_NORM2_COUNT)
+
+        def row(tensor):
+            return dict(kind="source_norm2_full_exact", tensor=tensor, region="full",
+                        count=compare.SOURCE_NORM2_COUNT,
+                        finite_count=compare.SOURCE_NORM2_COUNT,
+                        max_abs=0.0, mae=0.0, rms=0.0, mismatch_count=0,
+                        passed=True, atol=0.0, rtol=0.0)
+
+        rows = [row(name) for name in tensors]
+        expected = dict.fromkeys(tensors, True)
+        self.assertIsNone(compare._source_norm2_checks_passed([], False))
+        self.assertEqual(compare._source_norm2_checks_passed(rows, True), expected)
+
+        for field, value in (("count", compare.SOURCE_NORM2_COUNT-1),
+                             ("finite_count", compare.SOURCE_NORM2_COUNT-1),
+                             ("mismatch_count", 1), ("max_abs", 0.25),
+                             ("mae", float("nan")), ("rms", False),
+                             ("atol", 1e-8), ("rtol", 1e-8), ("passed", False)):
+            bad = [dict(item) for item in rows]
+            bad[0][field] = value
+            with self.subTest(field=field):
+                result = compare._source_norm2_checks_passed(bad, True)
+                self.assertFalse(result[tensors[0]])
+                self.assertTrue(result[tensors[1]])
+
+        for label, malformed in (
+            ("missing", rows[:-1]), ("duplicate", rows + rows[:1]),
+            ("reordered", list(reversed(rows))),
+            ("wrong region", [dict(rows[0], region="valid"), rows[1]]),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(compare.Error, "coverage"):
+                compare._source_norm2_checks_passed(malformed, True)
+        with self.assertRaisesRegex(compare.Error, "coverage"):
+            compare._source_norm2_checks_passed(rows, False)
+
     def test_source_projection_residual_exact_gate_requires_all_full_finite_rows(self):
         self.assertEqual(compare.SOURCE_PROJECTION_RESIDUAL_TENSORS, (
             "block0.proj", "block0.residual1", "block1.proj", "block1.residual1"))

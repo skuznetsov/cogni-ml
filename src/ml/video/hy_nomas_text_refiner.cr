@@ -239,6 +239,12 @@ module ML::Video
       end
     end
 
+    def self.validate_source_norm2_control!(enabled : Bool, source_projection_residual_control : Bool) : Nil
+      if enabled && !source_projection_residual_control
+        raise ArgumentError.new("Source norm2 control requires source projection/residual control")
+      end
+    end
+
     def self.admit_named_bytes!(mask : Array(Int32), max_named_bytes : Int64,
                                 seg_pos_emb_num : Int32 = 0,
                                 *, retain_padding : Bool = false) : NamedBytes
@@ -265,7 +271,8 @@ module ML::Video
                    block_boundaries_bf16_control : Bool = DEFAULT_BLOCK_BOUNDARIES_BF16_CONTROL,
                    qkv_bf16_control : Bool = DEFAULT_QKV_BF16_CONTROL,
                    @source_attention_control : Bool = false,
-                   @source_projection_residual_control : Bool = false)
+                   @source_projection_residual_control : Bool = false,
+                   @source_norm2_control : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -288,6 +295,7 @@ module ML::Video
         @qkv_bf16_control, @valid_tokens, @processed_tokens, @attention_precision)
       self.class.validate_source_projection_residual_control!(@source_projection_residual_control,
         @source_attention_control)
+      self.class.validate_source_norm2_control!(@source_norm2_control, @source_projection_residual_control)
       @named_bytes = self.class.admit_named_bytes!(@mask, max_named_bytes, seg_pos_emb_num,
         retain_padding: retain_padding)
       @admitted_named_bytes = @named_bytes
@@ -767,7 +775,8 @@ module ML::Video
 
       norm_affine(chain.encoder, checkpoint("#{prefix}.residual1"),
         checkpoint("#{prefix}.norm2"),
-        "txt_in.individual_token_refiner.blocks.#{block}.norm2")
+        "txt_in.individual_token_refiner.blocks.#{block}.norm2",
+        round_output_bf16: @source_norm2_control)
       encode_linear(chain, "#{prefix}.mlp_fc1")
       encode_activation(chain, "#{prefix}.mlp_silu")
       encode_linear(chain, "#{prefix}.mlp_fc2")

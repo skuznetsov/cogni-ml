@@ -1,0 +1,247 @@
+{
+  "schema": "cogni_ml.hy_nomas_refiner_norm2_evidence/v1",
+  "date": "2026-11-04",
+  "base_revision": "ba5aaca200657725db2e5dd6e84117deccebcefd",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native connected block0 norm2 on one finite frozen T0 input, B1/V263/processed1280/H16/D128.",
+    "oracle": "Inherited caller-pinned Hy-Nomas 911cea6458a89c2663513ff7099561ec190dd491 on the PyTorch 2.8.0 MPS adapter.",
+    "adversary": "ROBUST within scope. Disabled preservation, fresh repeat, comparator sensitivity controls and source record digests agree. Same-lineage review is correlated.",
+    "next_boundary": "block0.mlp_fc1. GPU output rounding alone matches upstream on the frozen identical norm2 input; connected FFN and block1 are still divergent.",
+    "refresh": "Rerun on source, binary, runtime, input, weights, layout, precision or evidence changes.",
+    "rollback": "Omit --refiner-source-norm2-control, which defaults false."
+  },
+  "run": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok",
+  "execution": {
+    "mixed_atol": 2e-05,
+    "mixed_rtol": 2e-05,
+    "exact_tolerance": 0,
+    "full_generation_executed": false,
+    "diagnostic_terminal_exports_per_gpu_compare_or_replay": 1,
+    "crystal_examples": 30,
+    "python_tests": 83,
+    "named_bytes": 944620612,
+    "native_instrumentation": {
+      "encode_allocations": 0,
+      "encode_readbacks": 0,
+      "preterminal_waits": 0,
+      "terminal_waits": 1
+    }
+  },
+  "first_divergence": {
+    "control": {
+      "full": "block0.norm2",
+      "valid": "block0.norm2",
+      "padding": "block0.norm2"
+    },
+    "enabled": {
+      "full": "block0.mlp_fc1",
+      "valid": "block0.mlp_fc1",
+      "padding": "block0.mlp_fc1"
+    }
+  },
+  "metric_fields": [
+    "count",
+    "mismatch_count",
+    "max_abs"
+  ],
+  "norm2_full_exact": {
+    "block0.norm2": [
+      2621440,
+      0,
+      0.0
+    ],
+    "block1.norm2": [
+      2621440,
+      184517,
+      0.0625
+    ]
+  },
+  "valid_raw": {
+    "control": {
+      "block0.norm2": [
+        538624,
+        514781,
+        0.015609264373779297
+      ],
+      "block0.mlp_fc1": [
+        2154496,
+        2135572,
+        0.04994964599609375
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        2067135,
+        0.040503501892089844
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        535618,
+        0.141937255859375
+      ],
+      "block0.output": [
+        538624,
+        529039,
+        0.39776611328125
+      ],
+      "block1.input": [
+        538624,
+        529039,
+        0.39776611328125
+      ],
+      "block1.output": [
+        538624,
+        531590,
+        1.2971954345703125
+      ]
+    },
+    "enabled": {
+      "block0.norm2": [
+        538624,
+        0,
+        0.0
+      ],
+      "block0.mlp_fc1": [
+        2154496,
+        2115687,
+        0.054958343505859375
+      ],
+      "block0.mlp_silu": [
+        2154496,
+        2037275,
+        0.032357215881347656
+      ],
+      "block0.mlp_fc2": [
+        538624,
+        535025,
+        0.13375091552734375
+      ],
+      "block0.output": [
+        538624,
+        528927,
+        0.3983154296875
+      ],
+      "block1.input": [
+        538624,
+        528927,
+        0.3983154296875
+      ],
+      "block1.output": [
+        538624,
+        531654,
+        1.29730224609375
+      ]
+    }
+  },
+  "fc1_raw_at_mixed_tolerance": {
+    "full": [
+      10485760,
+      10310052,
+      0.054958343505859375
+    ],
+    "valid": [
+      2154496,
+      2115687,
+      0.054958343505859375
+    ],
+    "padding": [
+      8331264,
+      8194365,
+      0.03125
+    ]
+  },
+  "fc1_bf16_rne_at_zero_tolerance": {
+    "full": [
+      10485760,
+      0,
+      0.0
+    ],
+    "valid": [
+      2154496,
+      0,
+      0.0
+    ],
+    "padding": [
+      8331264,
+      0,
+      0.0
+    ]
+  },
+  "guard": {
+    "stages": [
+      "build",
+      "crystal",
+      "control",
+      "enabled",
+      "enabled-repeat",
+      "preservation",
+      "fc1-replay",
+      "python",
+      "control-compare",
+      "enabled-compare"
+    ],
+    "file_cache_aware_floor_pct": 10,
+    "max_process_group_bytes": 6442450944,
+    "max_swap_growth_bytes": 67108864,
+    "minimum_sampled_headroom_bytes": 21468872704,
+    "peak_sampled_process_group_bytes": 2319616328,
+    "observed_peak_stage_swap_growth_bytes": 0
+  },
+  "artifacts": {
+    "source_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.json",
+      "bytes": 17182,
+      "sha256": "a5b1cb8453b30ac415941318f19e9abebbe6bc52aae7e8d10e6a0bf5b445b0c1"
+    },
+    "source_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-blocks-20261103.1pvdt818/source-qualified.blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "6ec5d747bc6c855296325d994d2ff12b0a6324dc1dbcaa04ec1fc77b210e2ab6"
+    },
+    "native_binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/build/hy_nomas_reference_cache_probe",
+      "bytes": 2401024,
+      "sha256": "de000f53d4d1c78d131436fbbef5e0724dda61c39a645ff68ef681f1d052b838"
+    },
+    "native_enabled_manifest": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/enabled-blocks.json",
+      "bytes": 15415,
+      "sha256": "d25a2a5cc231a688641a09891874dc309b2e33f9f0fe036d4f5c81f6f54982d5"
+    },
+    "native_enabled_payload": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/enabled-blocks.tensors.bin",
+      "bytes": 450977792,
+      "sha256": "9c8665630254789ef3ba538b937b60e566eb5d2bf98898d1ca5e24af0c8222a0"
+    },
+    "control_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/control-compare.json",
+      "bytes": 63347,
+      "sha256": "6bdb6a8a35e87c472a7f0af4a3219ad5aa09b4987ac1e40d0cefe629f119dfa3"
+    },
+    "enabled_comparison": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/enabled-compare.json",
+      "bytes": 63489,
+      "sha256": "d374ad71cfd57407a1c1d7d2bfbbd9e236d3b02b2345d57d0ead6c4794a581f4"
+    },
+    "fc1_replay_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/fc1-replay.py",
+      "bytes": 2730,
+      "sha256": "1db7c3a162ad3861c0df44e762cd5f5dd2bf53420a5ea54300e341bee1db412b"
+    },
+    "fc1_replay_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/logs/fc1-replay.out",
+      "bytes": 5221,
+      "sha256": "91d05c5c73f3d12b378dd5254d17e54e0185918a5132d53ee4c2e22998b7b40a"
+    },
+    "preservation_results": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/logs/preservation.out",
+      "bytes": 1087,
+      "sha256": "bb2b01cf9b27e05bce352bf4352c85a6126140f67135b059c0b503d68226040d"
+    },
+    "stage_runner": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok/execute.py",
+      "bytes": 2509,
+      "sha256": "bf2e785df68c3658519e1ffbdf9e21d90735a817434cce5e26c3ddcbf788d30f"
+    }
+  }
+}

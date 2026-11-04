@@ -6,6 +6,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-NORM2-2026-11-04] Block0 is exact through norm2
+
+- The default-off source norm2 control reuses the BF16 RNE affine store.
+  Block0 norm2 matches the pinned MPS-adapter oracle byte-for-byte across
+  2,621,440 values on frozen T0 V263, including padding.
+- The first raw mismatch is block0 FC1 at unchanged `atol=rtol=2e-5`.
+  GPU replay rounds the native post-bias FC1 output to BF16 and matches
+  all 10,485,760 source values at zero tolerance. Connected block1 still
+  receives a divergent input, identical to native block0 output.
+- Disabled preservation and enabled replay match across 62 records.
+  Named memory and [0 encode allocations, 0 reads, 0 preterminal waits,
+  1 terminal drain] are preserved. Guard: cache-aware 10%, 6 GiB process
+  group cap, 64 MiB swap stop, observed swap growth 0.
+- Return: `docs/hy-nomas-drafter-frontier.md`; evidence:
+  `.landmark/evidence/2026-11-04-hy-nomas-refiner-norm2.json`. Rollback:
+  omit `--refiner-source-norm2-control`. Next: connect BF16 RNE at FC1
+  and test SiLU, FC2, the second residual and block1 input. Refresh on
+  source, binary, runtime, input, weights, layout, precision or evidence
+  changes.
+
 ### [LM-HY-NOMAS-REFINER-PROJECTION-RESIDUAL-2026-11-04] Block0 exact through first residual; norm2 is next
 
 - Default-off source projection/residual control reuses the post-bias

@@ -1,5 +1,53 @@
 # Hy-Nomas local draft suite
 
+## Connected post-attention norm2 (2026-11-04)
+
+Status: VERIFIED for connected block0 norm2 on frozen T0 V263. The
+default-off `--refiner-source-norm2-control` requires source projection and
+first-residual control. It rounds the affine output of norm2 to BF16 RNE
+in the existing Metal store for both refiner blocks.
+
+Block0 matches upstream byte-for-byte through norm2, including padding
+(2,621,440 values). At unchanged `atol=rtol=2e-5`, the first divergence
+is now `block0.mlp_fc1` in the full, valid and padded regions. Its native
+post-bias output exceeds tolerance on 10,310,052 of 10,485,760 values
+(max .054958). On the identical norm2 input, a separate GPU replay
+rounds that captured FC1 output to BF16 and matches all 10,485,760
+source values at zero tolerance.
+
+The connected block1 input aliases the divergent block0 output. It
+exceeds the mixed tolerance on 528,927 of 538,624 valid values
+(max .398315). Block1 norm2 fails its full exact comparison on
+184,517 values. Block1's local arithmetic still needs an identical-input
+check. Both complete connected block outputs fail the numeric gate.
+
+The guarded build, 30 Crystal examples, 83 Python tests and GPU
+comparisons passed their scoped checks. Disabled mode preserves the
+previous output byte-for-byte across 62 trace records. Two enabled
+processes also match across all 62 records. Each native capture reports
+944,620,612 named bytes, zero encode allocations, zero read APIs, zero
+preterminal waits and one existing terminal drain. Comparisons and replay
+each export one packed diagnostic vector.
+
+Risk: CAUTION (precision and unintended changes to downstream
+arithmetic). Rollback: omit `--refiner-source-norm2-control`. The
+cache-aware 10% memory floor, 6 GiB process-group cap and 64 MiB swap-growth
+stop stayed active. Across ten guarded stages, sampled peak group
+footprint was 2,319,616,328 bytes, minimum headroom was 21,468,872,704
+bytes and observed swap growth was zero. The oracle is the pinned
+PyTorch 2.8.0 MPS-adapter capture at Hy-Nomas revision
+`911cea6458a89c2663513ff7099561ec190dd491` on one finite frozen input.
+Same-lineage review is correlated. No video was generated. Refresh on
+source, binary, runtime, input, weights, layout, precision or evidence
+changes.
+
+Evidence: `.landmark/evidence/2026-11-04-hy-nomas-refiner-norm2.json`;
+run `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-norm2-20261104.XImGVBok`.
+
+Next falsifier: apply BF16 RNE in the existing FC1 post-bias epilogue and
+compare SiLU, FC2, the second residual and block1 input at the same
+tolerance.
+
 ## Connected projection and first residual (2026-11-04)
 
 The opt-in `--refiner-source-projection-residual-control` requires source

@@ -62,6 +62,15 @@ describe ML::Video::HyNomasTextRefinerMPSPlan do
     ML::Video::HyNomasTextRefinerMPSPlan::QKV_LINEAR_NAMES.should eq(["block0.qkv", "block1.qkv"])
   end
 
+  it "requires the source projection and first residual before norm2 BF16 output rounding" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_norm2_control!(false, false)
+    plan.validate_source_norm2_control!(true, true)
+    expect_raises(ArgumentError, /requires source projection\/residual control/) do
+      plan.validate_source_norm2_control!(true, false)
+    end
+  end
+
   it "requires each prelude precision control to include its preceding boundary" do
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(false, false, false)
     ML::Video::HyNomasTextRefinerMPSPlan.validate_precision_controls!(true, true, false)
