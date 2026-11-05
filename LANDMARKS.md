@@ -108,11 +108,14 @@ Rich landmarks include full State/Relations/Evidence structure.
   binds the latent bank to report/receipt, and rejects stale binding,
   latent and inventory copies. The same-lineage review rates this scoped
   stale-evidence check ROBUST, not an independent report attestation.
-- The first two seconds sampled at 8 fps do not establish a clearer head
-  turn. The inspected full frames preserve Alex's desk hands and show
-  Resume's glove reaching its chest in both takes; a discrete tap/return
-  remains open. Keep the accepted ROI control. Reject only this rewrite
-  as a demonstrated improvement on this fixture, not prompting generally.
+- The user's playback assessment supersedes the inconclusive 8-fps head
+  review: the accepted control (left in the head-pose pair) has a slight
+  Alex head turn followed by Resume hand motion; the rewrite (right) has
+  only Resume hand motion. Reject the rewrite as a regression of Alex's
+  beat on this fixture and keep the accepted ROI control. The sampled
+  review missed the subtle turn. The inspected frames preserve Alex's
+  desk hands and show Resume's glove reaching its chest in both takes;
+  a discrete tap/return remains open. Do not generalize to all prompts.
   Native DiT/decode retain zero tracked encode allocations, readbacks and
   preterminal waits, one terminal drain each, and sampled peaks of 24.94 /
   18.41 GiB. The 10% floor holds with zero swap growth. Evidence:

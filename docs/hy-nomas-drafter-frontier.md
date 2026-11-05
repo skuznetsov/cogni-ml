@@ -152,14 +152,17 @@ Negative copies with stale binding, latent hash or inventory are rejected.
 The same-lineage adversary rates these stale-evidence and scope checks
 ROBUST; this is not an independent attestation against fabricated reports.
 
-The 8-fps whole-head contact sheet over the first two seconds does not
-establish a distinct look-down/turn or an improvement over the accepted
-control. Alex's hands remain on the desk in the inspected full frames;
-Resume raises its own glove toward its chest in both takes. A clean
-discrete tap/return remains open. Retain the accepted control rather than
-promoting the rewrite. This rejects this wording as a demonstrated acting
-improvement on this fixed fixture, not prompting or multi-actor motion in
-general. Numerical equality remains separate from visual compliance.
+The user's playback assessment resolves the inconclusive 8-fps head-frame
+inspection: in the accepted control (left in the head-pose pair), Alex
+slightly turns his head, then Resume moves its hand. In the rewrite
+(right), only Resume's hand moves. The new wording therefore regresses
+the visible Alex beat on this matched take; retain the accepted control.
+The sampled-frame review failed to distinguish that subtle head motion.
+Alex's hands remain on the desk in the inspected full frames, and Resume
+raises its glove toward its chest in both takes; a clean discrete
+tap/return remains open. Reject this rewrite on this fixture, without
+generalizing to all prompts or multi-actor motion. Numerical equality
+remains separate from visual compliance.
 
 The new native DiT and reused qualified decoder each record zero tracked
 encode allocations, readbacks and preterminal waits, with one terminal
