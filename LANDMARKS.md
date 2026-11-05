@@ -65,10 +65,40 @@ Rich landmarks include full State/Relations/Evidence structure.
   pin and is not comparison evidence. The paired media is
   `anchor/native-left-upstream-right-5s.mp4`. On these exact latents the
   hand smear is not a native-decoder-specific defect; acting remains open.
-  Next: a scratch-only matched query-ROI mask experiment, keeping prompt,
-  noise, text queries and global video/history keys unchanged. This is
-  custom attention, not a claim about stock upstream spatial control;
-  global video keys can still relay actions across actor regions.
+- The scratch-only matched query-ROI experiment keeps anchored conditioning,
+  noise, text queries and global video/history keys unchanged. Fixed authored
+  Alex/Resume rectangles remove only 228,315 action-text visibility pairs;
+  the actual native labels and explicit source mask match all 4,544 by 9,127
+  pairs, with no additions, an A/A pass and an altered-mask rejection.
+  A third native/source DiT gate matches all 24 real comparisons bit-for-bit
+  at unchanged `atol=rtol=2e-5`; A/A passes and one altered value fails.
+  Native DiT and decode each record zero tracked encode allocations,
+  readbacks and preterminal waits with one terminal drain. Their sampled
+  peaks are 24.94 and 18.42 GiB separately, with zero swap growth and the
+  unchanged cache-aware 10% floor.
+- The query ROI removes the extra Alex hand visible at 2.75 s in the
+  anchored temporal-only take. Resume raises its own glove to its chest;
+  a complete tap/return and a distinct Alex head turn remain unqualified.
+  This is a fixed-camera, custom mask experiment, not stock upstream spatial
+  control, detected identity or a production API. Globally visible video
+  keys and other conditioning paths can still relay actions between regions.
+  The numerical review is ROBUST for the observed run; the same-lineage
+  visual review is partial. Do not widen this to general character control.
+  Evidence: `roi/compare-gpu.json`, SHA-256
+  `2bea5367da4dea43783243b6aefa0daa06e29eadf7879160e88eba23cbc51bd2`,
+  plus `roi/launch-binding.json` and the guarded argv files. The paired clip
+  `roi/temporal-left-roi-right-5s.mp4` shows temporal-only left, ROI right
+  (SHA-256 `5ecebdeef2f82eea178bdf40f56310fcbd9ecaa66ae9275bdd024ee9492796c0`).
+  Refresh on mask/geometry changes as well as the existing input/runtime
+  triggers. Next: score head-turn and tap/return endpoints independently.
+  `roi/verified-run-files.json` hashes the 22 native comparison files as an
+  explicitly post-comparison snapshot, not a rerun or prior attestation.
+- The CPU token-span audit rules out Action2 truncation on this input:
+  the 108-row hidden-state crop drops the system/user-header prefix after
+  Qwen sees the full sequence. Retained [49,132) and [132,224) spans contain
+  both complete action bodies and close tags. This does not establish that
+  DiT follows them. Evidence: `roi/conditioning-crop-audit.json`, SHA-256
+  `25af873dcdd1e913fc5f6daec58a6fdaa3c2c219841ab2d881059b49fa3d7018`.
 
 ### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
 

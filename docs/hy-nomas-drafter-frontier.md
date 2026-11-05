@@ -2,8 +2,9 @@
 
 ## Two sequential reference actions (2026-11-05)
 
-Status: v2 metadata and two bounded V224 numerical gates are implemented;
-explicit actor anchors animate the paper glove, but hand artifacts remain.
+Status: v2 metadata and two bounded V224 numerical gates are implemented.
+Explicit actor anchors animate the paper glove. A third, scratch-only
+query-ROI probe removes the sampled Alex hand ghost; full acting remains open.
 V1 remains unchanged. The first compact masked prompt still fails its
 acting goal: Alex moves, his hand can smear, and the paper stays still.
 A fresh unmasked historical-conditioning replay does move the paper glove,
@@ -92,16 +93,44 @@ The saved report's source/selected shape fields identify the 180-to-60
 prefix; its older "terminal 60-latent bank" description is corrected in
 the helper without rerunning or rewriting the numerical evidence.
 
-Next falsifier: in scratch only, restrict Action1 text exposure to Alex's
+The scratch-only query-ROI probe restricts Action1 text exposure to Alex's
 video-query rectangle and Action2 to the paper's rectangle on the fixed
-30x9x16 latent grid. Keep conditioning, noise, text queries, global head,
-and all video/history keys unchanged. Admit no production spatial-mask API
-yet. Require CPU equality between actual native labels and the explicit
-source mask, A/A plus an altered-mask rejection, then the unchanged numeric
-gate before visual inspection. This is a custom mask intervention, not a
-stock upstream feature. A positive result would support direct action-text
-leakage; a negative result is inconclusive because globally visible video
-keys can relay conditioned features between regions in later blocks.
+30x9x16 latent grid. It keeps the anchored conditioning, noise, text queries,
+global head and all video/history keys unchanged. The authored half-open
+rectangles are Alex H[0,9)/W[1,8) and Resume H[2,8)/W[10,15); they are not
+detected identities or tracked objects. Actual native labels and the explicit
+source mask match all 4,544 by 9,127 visibility pairs. The change removes
+228,315 action-text pairs and adds none. A/A passes and an altered mask fails.
+
+The matched native/source ROI execution passes all 24 tensor comparisons
+bit-for-bit at unchanged `atol=rtol=2e-5`, including all four Euler states.
+Its A/A passes and the single-value perturbation fails. Both DiT and the
+qualified native decoder record zero tracked encode allocations, readbacks
+and preterminal waits, with one terminal drain each. All successful guarded
+stages preserve the cache-aware 10% floor and show zero swap growth.
+The sampled native DiT peak is 24.94 GiB; decoding peaks at 18.42 GiB.
+These are separate stage samples, not concurrent pipeline requirements.
+
+In the five-second paired take, Alex's extra translucent hand at 2.75 s in
+the temporal-only control is absent with the query ROI. Resume raises its
+own glove to its printed chest in both anchored takes. The gray movement
+near the laptop's right edge belongs to the paper glove, not Alex's hand.
+This supports direct action-text leakage as a contributor on this fixed
+camera. It does not establish a clean discrete tap/return or an unambiguous
+Alex head turn. The same-lineage visual review rates the acting result
+partial. Do not enable a production spatial-mask API from this fixture.
+Global/refiner/vector conditioning and globally visible video keys can
+still relay action cues between regions. This is a custom intervention,
+not stock upstream spatial control or a general character-isolation proof.
+Next: retain this matched control and score the remaining head-turn and
+tap/return endpoints independently before widening character control.
+
+The CPU tokenizer audit rules out a misleading alternative: the 108-token
+crop removes the system prefix and user header from exported hidden-state
+rows, after Qwen has processed the full input. It does not remove the end
+of Action2. The retained spans [49,132) and [132,224) decode to the complete
+two actions, including both closing tags and the paper's tap/return words.
+This establishes retained text, not instruction compliance by DiT.
 
 The explicit source-BF16 request now rejects unsupported refiner prefix
 lengths before model preparation instead of silently disabling all source
@@ -124,6 +153,27 @@ PixelUMM control; its report SHA-256 is
 `anchor/native-left-upstream-right-5s.mp4` retains the identical paired
 decode, with the native result on the left and the source adapter on the
 right.
+`roi/compare.json` retains the full CPU mask check, and
+`roi/compare-gpu.json` retains the third numerical gate (SHA-256
+`2bea5367da4dea43783243b6aefa0daa06e29eadf7879160e88eba23cbc51bd2`).
+Replay `roi/native/native-roi-execute.guarded.argv.json`,
+`roi/source/source-v2-roi.guarded.argv.json` and
+`roi-compare-tensors.command.json` with fresh output paths. The frozen
+ROI/script/binary/input identities are bound by `roi/launch-binding.json`.
+`roi/temporal-left-roi-right-5s.mp4` places the anchored temporal-only
+control on the left and the custom ROI take on the right; its SHA-256 is
+`5ecebdeef2f82eea178bdf40f56310fcbd9ecaa66ae9275bdd024ee9492796c0`.
+`roi/roi-pair-2_75s.png` retains the discriminating hand frame;
+`roi/roi-pair-3_5s.png` retains both paper chest-gesture poses.
+`roi/verified-run-files.json` (SHA-256
+`81535edd5617409d5e7e211098c5ee12616189e7666d5a0182ffc9d09066cdbc`)
+hashes the 22 native files consumed by the 24 comparisons and binds their
+source captures, commands and guards. This is an after-comparison snapshot
+for future stale-byte checks, not a contemporaneous attestation or rerun.
+`roi/conditioning-crop-audit.json` (SHA-256
+`25af873dcdd1e913fc5f6daec58a6fdaa3c2c219841ab2d881059b49fa3d7018`)
+retains the token-span audit; `roi/conditioning-crop-audit-artifacts.json`
+indexes byte-identical external-SSD copies of its CPU runner and guard.
 Refresh on prompt, conditioning, weights, source, runtime, precision, binary
 or attention-schedule changes. Numerical parity must never promote the
 failed acting result to a character-control capability.
