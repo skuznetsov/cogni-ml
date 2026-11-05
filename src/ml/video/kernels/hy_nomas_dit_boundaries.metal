@@ -33,6 +33,7 @@ kernel void hy_nomas_dit_final_modulate_f32(
     constant uint &dim [[buffer(3)]],
     constant uint &count [[buffer(4)]],
     constant uint &source_bf16 [[buffer(5)]],
+    constant uint &source_autocast [[buffer(6)]],
     uint index [[thread_position_in_grid]]) {
   if (index < count) {
     uint channel = index % dim;
@@ -42,7 +43,9 @@ kernel void hy_nomas_dit_final_modulate_f32(
     if (source_bf16 != 0u)
       factor = video_linear_mps_roundtrip_bf16(factor);
     float scaled = norm[index] * factor;
-    if (source_bf16 != 0u)
+    // LayerNorm produces F32 under autocast. The scale add still has BF16
+    // operands, while the product and shift stay F32 until Linear's cast.
+    if (source_bf16 != 0u && source_autocast == 0u)
       scaled = video_linear_mps_roundtrip_bf16(scaled);
     float value = scaled + shift;
     destination[index] = source_bf16 != 0u ? video_linear_mps_roundtrip_bf16(value) : value;

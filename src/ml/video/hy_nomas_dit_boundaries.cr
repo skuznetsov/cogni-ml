@@ -170,7 +170,8 @@ module ML::Video
        WeightBinding.new("img_in.proj.bias", "img_in.proj.bias", [DIM.to_i64])]
     end
 
-    def initialize(@input : ML::MetalBuffer, @tokens : Int32, weights : Arena)
+    def initialize(@input : ML::MetalBuffer, @tokens : Int32, weights : Arena,
+                   *, @source_bf16 : Bool = false)
       HyNomasDiTBoundaryMPSPlan.validate_token_count!(@tokens)
       @transpose = pipeline("hy_nomas_dit_channels_to_tokens_f32")
       super(weights)
@@ -199,7 +200,7 @@ module ML::Video
         .set_buffer(@arena["tokens"], 1, ML::Metal::BufferAccess::Write)
         .set_value(@tokens.to_u32, 2).set_value(CHANNELS.to_u32, 3)
         .dispatch_1d(@tokens * CHANNELS)
-      project!(e, "img_in.proj")
+      project!(e, "img_in.proj", round_output_bf16: @source_bf16)
     end
   end
 
@@ -223,10 +224,14 @@ module ML::Video
     end
 
     def initialize(@input : ML::MetalBuffer, @vec : ML::MetalBuffer,
-                   @tokens : Int32, weights : Arena, *, @source_bf16 : Bool = false)
+                   @tokens : Int32, weights : Arena, *, @source_bf16 : Bool = false,
+                   @source_autocast : Bool = false)
       HyNomasDiTBoundaryMPSPlan.validate_token_count!(@tokens)
+      if @source_autocast && !@source_bf16
+        raise ArgumentError.new("Final projection autocast requires source BF16 boundaries")
+      end
       @norm = HyNomasMPSLayerNorm::Plan.new(DIM)
-      @round_norm = HyNomasReferenceBF16::Plan.new(DIM) if @source_bf16
+      @round_norm = HyNomasReferenceBF16::Plan.new(DIM) if @source_bf16 && !@source_autocast
       @modulate = pipeline("hy_nomas_dit_final_modulate_f32")
       @unpatch = pipeline("hy_nomas_dit_tokens_to_channels_f32")
       super(weights)
@@ -278,6 +283,7 @@ module ML::Video
         .set_buffer(@arena["modulated"], 2, ML::Metal::BufferAccess::Write)
         .set_value(DIM.to_u32, 3).set_value((@tokens * DIM).to_u32, 4)
         .set_value(@source_bf16 ? 1_u32 : 0_u32, 5)
+        .set_value(@source_autocast ? 1_u32 : 0_u32, 6)
         .dispatch_1d(@tokens * DIM)
       project!(e, "final_layer.linear", round_output_bf16: @source_bf16)
       chain.encoder.set_pipeline(@unpatch).set_buffer(@arena["linear"], 0)

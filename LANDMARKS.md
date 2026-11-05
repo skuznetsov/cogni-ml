@@ -6,9 +6,60 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
+
+- Tencent `911cea64` encloses the entire cached DiT forward in BF16
+  autocast. A blocks-only autocast control reproduced the previous native
+  trajectory exactly. With the source's full scope, the first divergence
+  was the refiner's masked mean. Substituting only the F32 mean cast at the
+  first linear input reproduced the five source refiner outputs bitwise.
+  On identical block-53 output and timestep vector, the old final head
+  also changed 44,954 of 138,240 velocity values.
+- The opt-in source-BF16 sequence now rounds the patch projection and
+  uses the qualified refiner for padded V263/V150. The refiner keeps the
+  masked sum and division in F32 until the next BF16 linear input.
+  The final head keeps LayerNorm and the modulation product and shift
+  in F32 until its last BF16 linear input. These changes add no command
+  chain boundary and remove the separate final norm rounding dispatch.
+- A fresh native `--dit-only` replay used the original RoleWright PNG,
+  live DCAE, mask, BF16 weights and noise. It reproduced the saved-DCAE
+  diagnostic's four Euler captures and full native bank byte-for-byte.
+  The GPU comparator reported zero error across all 24 comparisons,
+  including patch, text, vector, sampled cache/block boundaries, first
+  velocity, all four Euler updates and the active timeline. The
+  PyTorch 2.8.0 MPS oracle uses the pinned source operators with the
+  source's full autocast scope and an explicit SDPA adapter. The unchanged
+  `atol=rtol=2e-5` gate rejected a single-value perturbation.
+- The replay measured 376.55 s for the reference encoder and 52.20 s
+  for DiT on M2 Max. Each chain recorded zero tracked encode allocations,
+  readbacks and preterminal waits, and one terminal drain. Sampled peak
+  footprint was 25.21 GiB with 17.00 GiB minimum cache-aware headroom
+  and no swap growth under the 10% floor.
+- Native PixelUMM decoded the authenticated bank with the original
+  decoder noise in 166.29 s. The sampled peak was 18.41 GiB, minimum
+  cache-aware headroom was 18.85 GiB, and swap did not grow. The decoder
+  recorded zero tracked encode allocations, readbacks and preterminal
+  waits. The exported 512x288 clip contains the 120 generated T1 frames
+  at 24 fps. Alex visibly turns from the laptop toward the camera, then
+  looks back toward the laptop. Resume stays mostly still. The clip
+  preserves the previous strong-prompt take's broad acting pattern.
+- Evidence and exact commands are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-final-euler-20261104.c7zj7lnM`.
+  Re-run `production-replay-autocast.command.json` with fresh output and
+  `compare-production-autocast.command.json` using the replay output.
+  Require `gate_passed`, zero differing bits in the 24 comparisons and
+  one rejected perturbation. The JSON report SHA-256 is
+  `e94b11341362d9bc709ab916639bb9e6a79d104483f1aa7091d5142fffc53912`.
+  The clip and ordered frame contact sheet are
+  `rolewright-alex-head-turn-5s.mp4` and `rolewright-contact.png`.
+- This gate covers this two-segment fixture and the MPS oracle. Refresh
+  on changes to the input, mask, weights, precision, runtime or source
+  attention schedule. Other refiner prefix lengths and stock CUDA/Magi
+  remain outside the gate.
+
 ### [LM-HY-NOMAS-FINAL-EULER-SOURCE-BF16-2026-11-04] Final projection and first Euler update match the source on frozen T1
 
-- The final head under `--reference-source-bf16` preserves the source BF16
+- At `70e45046`, the final head under `--reference-source-bf16` preserves BF16
   boundaries for SiLU, LayerNorm, both linear projections and modulation.
   The two projections accumulate in F32 and round once after bias.
   Modulation rounds the scale factor, product and sum separately. The head
@@ -32,9 +83,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   with fresh output paths and require `jq -e .gate_passed` on the report.
   The comparison SHA-256 is
   `28ebc8035d444f29eb6e79890aed015f241fbfa684beb5da75cdc29af44b566e`.
-- This gate uses frozen head inputs. The production patch and refiner still
-  need an exact T0/T1 prelude gate, followed by all four T1 latent updates
-  through the normal sequence owner and a separate rendered-motion check.
+- This gate uses frozen head inputs without autocast. The full-autocast
+  sequence gate above supersedes it for the RoleWright production path.
   Refresh if the source, runtime, weights, inputs or precision path changes.
 
 ### [LM-HY-NOMAS-FULL-DIT-SOURCE-BF16-2026-11-04] All 54 staged DiT blocks match the source at the T0/T1 boundary

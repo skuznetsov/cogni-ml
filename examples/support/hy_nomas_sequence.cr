@@ -578,20 +578,16 @@ module HyNomasSequence
         cos_bank = inputs.upload!("input.rope_cos", @bank_arena)
         sin_bank = inputs.upload!("input.rope_sin", @bank_arena)
         eps = inputs.upload!("cache.eps_bf16", @bank_arena)
-        @patch = ML::Video::HyNomasPatchMPSPlan.new(@latent, 4320, @globals)
+        @patch = ML::Video::HyNomasPatchMPSPlan.new(@latent, 4320, @globals, source_bf16: source_bf16)
         plan_cleanup << -> { @patch.release }
-        @refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, base.mask, 1000_f32, @globals,
-          ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(base.mask, retain_padding: true).total,
-          retain_padding: true)
+        @refiner = prepare_refiner(qwen, base.mask, source_bf16)
         plan_cleanup << -> { @refiner.release }
         if edited = prompt_inputs
           arena = ML::Video::Arena.new
           @prompt_arena = arena
           arena_cleanup << -> { arena.release }
           edited_qwen = edited.upload!("input.qwen_bf16", arena)
-          refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(edited_qwen, edited.mask, 1000_f32, @globals,
-            ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(edited.mask, retain_padding: true).total,
-            retain_padding: true)
+          refiner = prepare_refiner(edited_qwen, edited.mask, source_bf16: false)
           @prompt_refiner = refiner
           plan_cleanup << -> { refiner.release }
           @prompt_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new
@@ -600,9 +596,7 @@ module HyNomasSequence
           @prompt_arena = arena
           arena_cleanup << -> { arena.release }
           action_qwen = action_inputs.upload!("input.qwen_bf16", arena)
-          refiner = ML::Video::HyNomasTextRefinerMPSPlan.new(action_qwen, action_inputs.mask, 1000_f32, @globals,
-            ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(action_inputs.mask, retain_padding: true).total,
-            retain_padding: true)
+          refiner = prepare_refiner(action_qwen, action_inputs.mask, source_bf16)
           @prompt_refiner = refiner
           plan_cleanup << -> { refiner.release }
           @prompt_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new
@@ -641,7 +635,7 @@ module HyNomasSequence
         plan_cleanup << -> { @history.release }
         @serial.attach_history_provider!(@history)
         @final = ML::Video::HyNomasFinalMPSPlan.new(blocks.last.image_output, @refiner.vec, 4320, @globals,
-          source_bf16: source_bf16)
+          source_bf16: source_bf16, source_autocast: source_bf16)
         plan_cleanup << -> { @final.release }
         @segment_count.times do
           @eulers << ML::Video::HyNomasEulerPlan.new(@latent, @final.output,
@@ -787,6 +781,23 @@ module HyNomasSequence
         HyNomasGeneration.emit("sequence_segment_encoded", segment: segment + 1,
           clean_global_latent_stop: (segment + 1) * 30, cache_writer: segment + 1 < @segment_count)
       end
+    end
+
+    private def prepare_refiner(qwen : ML::MetalBuffer, mask : Array(Int32), source_bf16 : Bool) : ML::Video::HyNomasTextRefinerMPSPlan
+      # The source attention schedule is qualified only for these two prefix
+      # lengths. Preserve the original refiner for other reference prompts.
+      bytes = ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(mask, retain_padding: true).total
+      enabled = source_bf16 && ML::Video::HyNomasTextRefinerMPSPlan.source_attention_tokens?(
+        ML::Video::HyNomasTextRefinerMPSPlan.valid_tokens(mask))
+      ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, mask, 1000_f32, @globals, bytes,
+        retain_padding: true, prelude_input_bf16_control: enabled,
+        prelude_linear_bf16_control: enabled, prelude_silu_bf16_control: enabled,
+        prelude_second_linear_bf16_control: enabled, prelude_add_bf16_control: enabled,
+        block_boundaries_bf16_control: enabled, qkv_bf16_control: enabled,
+        source_attention_control: enabled, source_projection_residual_control: enabled,
+        source_norm2_control: enabled, source_fc1_control: enabled,
+        source_mlp_silu_control: enabled, source_fc2_residual_control: enabled,
+        source_mean_autocast: enabled)
     end
 
     # Keep serial/final bindings stable. The edited refiner has its own mask,

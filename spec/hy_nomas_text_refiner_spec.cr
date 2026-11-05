@@ -2,15 +2,19 @@ require "spec"
 require "../src/ml/video/hy_nomas_text_refiner"
 
 describe ML::Video::HyNomasTextRefinerMPSPlan do
-  it "limits source attention to the padded V263 BF16-QKV probe" do
+  it "limits source attention to padded V263 and V150 with BF16 QKV" do
     plan = ML::Video::HyNomasTextRefinerMPSPlan
     plan.validate_source_attention_control!(false, false, 7, 7)
     plan.validate_source_attention_control!(true, true, 263, 1280)
+    plan.validate_source_attention_control!(true, true, 150, 1280)
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, false, 263, 1280)
     end
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, true, 262, 1280)
+    end
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, true, 149, 1280)
     end
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, true, 263, 263)

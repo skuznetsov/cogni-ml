@@ -25,6 +25,7 @@ module ML::Video
     BLOCKS                  =    2
     SOURCE_ATTENTION_MAIN   =  256
     SOURCE_ATTENTION_TOKENS =  263
+    SOURCE_ACTION_TOKENS    =  150
 
     COMPACT_KERNEL  = "hy_nomas_text_compact_bf16_f32"
     MEAN_KERNEL     = "hy_nomas_text_masked_mean_f32"
@@ -223,13 +224,17 @@ module ML::Video
         activation + linear_stage + attention_stage)
     end
 
+    def self.source_attention_tokens?(valid : Int32) : Bool
+      valid == SOURCE_ATTENTION_TOKENS || valid == SOURCE_ACTION_TOKENS
+    end
+
     def self.validate_source_attention_control!(enabled : Bool, qkv_bf16_control : Bool,
                                                 valid : Int32, processed : Int32,
                                                 precision : HyNomasAttentionPrecision = HyNomasAttentionPrecision::F32Control) : Nil
       return unless enabled
-      unless qkv_bf16_control && valid == SOURCE_ATTENTION_TOKENS &&
+      unless qkv_bf16_control && source_attention_tokens?(valid) &&
              processed == TOKEN_COUNT && precision.f32_control?
-        raise ArgumentError.new("Source attention control requires BF16 QKV, V263 with padding, and the default attention precision")
+        raise ArgumentError.new("Source attention control requires BF16 QKV, V263 or V150 with padding, and the default attention precision")
       end
     end
 
@@ -293,7 +298,8 @@ module ML::Video
                    @source_norm2_control : Bool = false,
                    @source_fc1_control : Bool = false,
                    @source_mlp_silu_control : Bool = false,
-                   @source_fc2_residual_control : Bool = false)
+                   @source_fc2_residual_control : Bool = false,
+                   @source_mean_autocast : Bool = false)
       @source = source
       @mask = mask.dup
       @valid_tokens = self.class.valid_tokens(@mask)
@@ -308,6 +314,9 @@ module ML::Video
       @prelude_add_bf16_control = prelude_add_bf16_control
       @block_boundaries_bf16_control = block_boundaries_bf16_control
       @qkv_bf16_control = qkv_bf16_control
+      if @source_mean_autocast && !@prelude_input_bf16_control
+        raise ArgumentError.new("Source masked-mean autocast requires BF16 prelude input control")
+      end
       self.class.validate_precision_controls!(@prelude_input_bf16_control,
         @prelude_linear_bf16_control, @prelude_silu_bf16_control,
         @prelude_second_linear_bf16_control, @prelude_add_bf16_control,
@@ -612,7 +621,7 @@ module ML::Video
         attention = checkpoint("#{prefix}.attention")
         @attention_plans << HyNomasAttentionMPSPlan.new(1, @valid_tokens, HEADS,
           HEAD_DIM, q, k, v, attention, bf16_boundaries_control: @source_attention_control)
-        if @source_attention_control
+        if @source_attention_control && @valid_tokens == SOURCE_ATTENTION_TOKENS
           @vector_tail_plans << HyNomasVectorAttentionPlan.new(1, @valid_tokens,
             SOURCE_ATTENTION_MAIN, SOURCE_ATTENTION_TOKENS - SOURCE_ATTENTION_MAIN,
             @valid_tokens, HEADS, HEAD_DIM, q, k, v, attention, write_query_interval: true)
@@ -703,6 +712,7 @@ module ML::Video
         .set_value(@valid_tokens.to_u32, 2)
         .set_value(INPUT_DIM.to_u32, 3)
         .set_value(@prelude_input_bf16_control ? 1_u32 : 0_u32, 4)
+        .set_value(@source_mean_autocast ? 1_u32 : 0_u32, 5)
         .dispatch_1d(INPUT_DIM)
     end
 
@@ -792,7 +802,7 @@ module ML::Video
       @attention_plans[block].encode(chain)
       # The general graph writes the valid prefix. Replace its final seven
       # rows in the same context before projection consumes that buffer.
-      @vector_tail_plans[block].encode(chain) if @source_attention_control
+      @vector_tail_plans[block].encode(chain) unless @vector_tail_plans.empty?
       if @attention_precision.bf16_boundary_control?
         round_bf16(chain.encoder, checkpoint("#{prefix}.attention"), @processed_tokens * HIDDEN_DIM)
       end

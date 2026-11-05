@@ -37,13 +37,18 @@ kernel void hy_nomas_text_masked_mean_f32(
     constant uint &valid_rows [[buffer(2)]],
     constant uint &input_dim [[buffer(3)]],
     constant uint &prelude_input_bf16_control [[buffer(4)]],
+    constant uint &source_mean_autocast [[buffer(5)]],
     uint channel [[thread_position_in_grid]]) {
   if (channel >= input_dim) return;
   float sum = 0.0f;
   for (uint row = 0; row < valid_rows; ++row) {
     sum += compact[row * input_dim + channel];
   }
-  if (prelude_input_bf16_control != 0u) {
+  if (source_mean_autocast != 0u) {
+    // Autocast keeps both sums and the quotient in F32. The next Linear
+    // consumes a BF16 cast of that quotient.
+    mean[channel] = hy_text_roundtrip_bf16(precise::divide(sum, (float)valid_rows));
+  } else if (prelude_input_bf16_control != 0u) {
     sum = hy_text_roundtrip_bf16(sum);
     float denominator = hy_text_roundtrip_bf16((float)valid_rows);
     mean[channel] = hy_text_roundtrip_bf16(sum / denominator);
