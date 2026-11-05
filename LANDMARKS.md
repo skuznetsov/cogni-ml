@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-TRANSFER-2026-11-05] An Action2-only instruction changes unchanged Action1 representations
+
+- The equal-geometry V224 semantic pair changes only Resume's chest-tap
+  instruction to keeping its gloves at its sides. Raw global/Action1 Qwen
+  rows `[0,132)` match bit-for-bit before padding normalization; actual
+  positions, masks and prefix token IDs also match. Source B is freshly
+  captured; whole sidecars, selected crops and accepted A generation input
+  are authenticated. Padding is explicitly normalized in both inputs.
+- Native and pinned Tencent `911cea64` MPS-adapted source match exactly in
+  all 15 A0/A1/B checkpoints. A/A is exact in both. At the second refiner
+  output, relative RMS change is 0.3786% for Action1 and 0.3821% for global
+  rows; shared `c` changes 3.9341%, while timestep-only `vec` is unchanged.
+  This establishes representational transfer for this pair, not the cause
+  of weak visible acting or the value of isolating actors.
+- The native probe reuses buffers in one chain with one terminal drain;
+  measured encode allocations of named GPU buffers, readbacks and waits are
+  zero. Opaque MPS allocations are outside that counter. The 1,464,800,260
+  byte named plan is not total GPU peak. Guards retain the cache-aware 10%
+  floor and 64 MiB swap-growth stop; observed swap growth is zero. No full
+  DiT, decoder or new render was run.
+- The release build, 39 focused CPU tests, real-fixture CPU admission,
+  geometry/A/A-floor rejection and comparator falsifiers pass. Source mean
+  input dtype is explicitly checked. Qwen capture is Transformers 4.57.3;
+  this is not a runtime receipt for the project's 4.57.1 pin or stock CUDA.
+  Final same-lineage adversary verdict is ROBUST for the frozen pair's
+  transfer/parity claim; it is not an independent reproduction.
+- Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-transfer-20261105/`.
+  `qualification.json` indexes bound artifacts, commands and limits.
+  `native.json` SHA-256 is
+  `9ef4a28d6aa1595b452907cf99421670d938c7341237f7ff254313ed159d1d12`.
+  See [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+  Next isolate shared `c` versus text-attention before direct DiT route
+  ablation. Rollback: omit the probe; production control is unchanged.
+  Refresh on source/runtime, weights, input/layout, precision or binary
+  change. A visual-control conclusion remains open.
+
 ### [LM-HY-NOMAS-OBJECT-CONTROL-2026-11-05] Temporal/query masks do not establish independent actors
 
 - Source audit: SubjectN is textual identity; the published mask path selects
@@ -13,13 +49,13 @@ Rich landmarks include full State/Relations/Evidence structure.
   Native shared refiner conditioning and unmasked text attention precede DiT
   masks; globally visible video keys permit later relay. The exported vec is
   time-only. These are reachable paths, not a measured cause of weak acting.
-- Keep the accepted Alex/Resume ROI take. Controller changes remain proposed:
-  first qualify an Action2-only, equal-token-count refiner counterfactual with
-  identical global/Action1 input rows, A/A and a source gate for each condition.
+- Keep the accepted Alex/Resume ROI take. Controller changes remain proposed.
+  The first Action2-only refiner counterfactual is now qualified above;
+  causal attribution to visible acting still requires a matched experiment.
   Existing BF16 receipts do not admit short separate-conditioning branches.
 - See [the object control frontier](docs/hy-nomas-object-control-frontier.md)
   for sources, competing hypotheses, ranked controllers and per-step mini-Quad.
-  The 29 focused CPU tests pass; no new model/GPU/render was run. Runtime
+  The original audit passed 29 focused CPU tests without a new GPU run. Runtime
   constraints remain unchanged. Refresh on source, layout or precision changes.
 
 ### [LM-HY-NOMAS-SEQUENTIAL-ACTORS-2026-11-05] Temporal masks match upstream; explicit actor anchors move Resume

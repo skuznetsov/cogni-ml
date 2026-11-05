@@ -1,9 +1,11 @@
 # Hy-Nomas object control frontier
 
-Status (2026-11-05): source audit completed; controller changes are proposed.
-The accepted five-second Alex/Resume ROI take remains the control. No model,
-GPU probe, paid API call or new render was run for this audit. Numerical
-parity is scoped to the frozen fixtures in
+Status (2026-11-05): source audit and the first semantic refiner-only A/A/B
+probe completed against the pinned source MPS adapter. Controller changes
+remain proposed. The accepted five-second Alex/Resume ROI take remains the
+visual control. The original
+audit was read-only; the subsequent bounded GPU experiment is recorded below.
+Numerical parity of the generation path remains scoped to the frozen fixtures in
 [the drafter frontier](hy-nomas-drafter-frontier.md); visible actor control
 is still partial.
 
@@ -71,7 +73,8 @@ Keep three hypotheses separate:
    intended region, but the model cannot reliably express the desired
    pose/contact while preserving the paper/human identities.
 
-The first implementation slice is a **refiner-only counterfactual**:
+The first implementation slice, executed below, is a **refiner-only
+counterfactual**:
 
 - Freeze the accepted V224 input, weights, timestep, mask and source/native
   precision controls. Run A/A. Change only Action2 wording, preserving the
@@ -90,10 +93,9 @@ The first implementation slice is a **refiner-only counterfactual**:
   inputs is an intervention effect, not a numerical parity failure.
 - Reuse buffers, keep computation on GPU, and inspect only at the existing
   terminal comparison boundary. No decoder or full DiT is needed.
-  Reuse `examples/hy_nomas_text_conditioning_probe.cr`,
-  `examples/support/hy_nomas_text_probe.cr` and
-  `spec/support/hy_nomas_text_conditioning_reference.py` where practical;
-  add a refiner-only runner before executing this slice.
+  The dedicated runner is `examples/hy_nomas_refiner_transfer_probe.cr`,
+  with the source oracle in
+  `spec/support/hy_nomas_refiner_transfer_reference.py`.
 - Synthetic Action2-row perturbations can precede the semantic pair as a
   cheap sensitivity probe, but do not establish transfer of a real
   instruction. A positive semantic result still needs a later matched
@@ -113,6 +115,89 @@ and in any contact region, including the interaction
 `v11 - v10 - v01 + v00`; non-additivity is not itself an error.
 Swapping actor ROIs is only a stress test: disagreement
 could reflect a strong named-subject prior rather than a broken mask.
+
+## First measured refiner transfer
+
+The frozen V224 pair changes only Resume's Action2 wording: a glove raise
+and chest tap becomes keeping both gloves at its sides without a tap.
+The raw prompt length, crop, token positions, attention mask and action
+spans remain equal. Global/Action1 Qwen rows `[0,132)` are bit-identical
+before padding normalization (473,088 BF16 values). Changed valid input
+rows are confined to `[193,224)` inside Action2. Padding `[224,1280)` is
+explicitly normalized to zero in both inputs; this is not a claim that the
+uncropped, unnormalized full encoder outputs match.
+
+Fresh upstream Qwen states for B were captured with Transformers 4.57.3
+and Torch 2.8.0 on MPS. The original project pins Transformers 4.57.1;
+the actual capture does not qualify that runtime. The refiner oracle uses
+Tencent source `911cea6458a89c2663513ff7099561ec190dd491`, its authenticated
+42-tensor subset converted from F32 storage to BF16, and the previously
+qualified MPS attention adapter. The whole original DiT checkpoint was
+not downloaded or authenticated by this experiment.
+
+All five checkpoints in each of A0/A1/B agree bit-for-bit between native
+and source: masked mean at the BF16 Linear input, shared `c`, time-only
+`vec`, and the valid-prefix outputs of both refiner blocks. Source and
+native A/A are exact at all five checkpoints. The gate remains
+`atol=rtol=2e-5`; no tolerance was widened.
+
+| A1 versus B boundary | RMS(delta) / RMS(A1) | Maximum absolute delta |
+| --- | ---: | ---: |
+| Masked mean at BF16 Linear input | 2.9905% | 1.1875 |
+| Shared refiner `c` | 3.9341% | 3.0 |
+| Exported time `vec` | 0% (exact) | 0 |
+| Block 1 global rows | 0.3821% | 0.5 |
+| Block 1 Action1 rows | 0.3786% | 0.75 |
+| Block 1 Action2 rows | 32.7017% | 109.625 |
+
+This demonstrates transfer from the changed instruction to representations
+of unchanged global/Action1 text in this pair. It does not identify the
+relative contribution of shared `c` and text attention, establish a
+visible acting effect, or show that cross-object sharing is undesirable.
+The next discriminator holds shared `c` fixed separately from text
+self-attention before the same-latent M00/M10/M01/M11 DiT experiment.
+
+The native runner prepares weights once and reuses its input, refiner and
+snapshot buffers in one command chain. Instrumentation observes zero named
+GPU-buffer allocations, activation readbacks or waits during encoding, one
+terminal drain, then 15 checkpoint readbacks. This excludes opaque MPS
+allocations and CPU bookkeeping. The named-buffer plan is 1,464,800,260
+bytes under a 2 GiB budget; it is not a measured total GPU peak. Source
+captures keep snapshots on GPU and export once at their terminal boundary.
+The source mean-input hook verifies that MPS autocast produces an F32 mean
+before the BF16 Linear cast.
+
+All guarded processes completed with the cache-aware 10% floor and 64 MiB
+swap-growth stop intact. Observed swap growth was zero; the smallest
+sampled available headroom was 18.26 GiB during Qwen extraction. The short
+native run's process samples cannot certify an instantaneous GPU peak.
+No full DiT, decoder or new render was run in this slice. Timings from this
+single qualification are not a performance comparison.
+
+Evidence is retained outside git in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-transfer-20261105/`:
+
+- `source-qwen-pair-audit.json` binds the semantic/token checks to the two
+  source Qwen manifests. The native admission also authenticates their
+  payloads, crop ranges and the accepted A generation bundle.
+- `source-v2.json` SHA-256:
+  `8974bfce4bb557f84a1c75be168e4e7ddc623b6fd6552c796360771bd201a877`.
+- `native.json` SHA-256:
+  `9ef4a28d6aa1595b452907cf99421670d938c7341237f7ff254313ed159d1d12`.
+- `qualification.json` indexes source/binary pins, guarded command receipts,
+  numeric results and seeded negatives. Source/native `*.argv.json` and
+  build/admission receipts record the executed commands; repeat with fresh
+  output paths because the probes reject replacement of existing reports.
+
+CPU admission accepts the actual pair and rejects altered geometry and a
+failed source A/A floor before Metal setup. Comparator controls reject an
+out-of-tolerance value. These checks guard the oracle and admission; they
+do not validate a controller or a visual-quality improvement.
+The final read-only adversary review returned ROBUST for this frozen pair's
+transfer and numerical-parity claim. It is a same-lineage review, not an
+independent reproduction. Native admission relies on the trusted source
+manifest digest; its A/A metadata checks are less strict than the source
+producer's complete-record validator.
 
 ## Proposed authoring and runtime boundary
 
@@ -196,19 +281,26 @@ mechanism; do not repeat prompt amplification. Stop a slice on attribution
 failure, numerical regression, memory/swap guard, identity loss or stronger
 motion with worse hands/contact. Do not relax tolerances to admit it.
 
-Audit DoD (CPU only, executed 2026-11-05; 29 tests pass):
+Initial audit DoD was CPU-only (29 tests). The refiner slice adds ten
+admission/comparator tests; all 39 focused tests pass on 2026-11-05:
 
 ```sh
-python3 -B -m unittest spec.hy_nomas_action_conditioning_spec \
+python3 -B -m unittest spec.hy_nomas_refiner_transfer_test \
+  spec.hy_nomas_action_conditioning_spec \
   spec.hy_nomas_reference_attention_test spec.video_block_diff_test
+crystal tool format --check examples/hy_nomas_refiner_transfer_probe.cr \
+  examples/support/hy_nomas_refiner_transfer_probe.cr
 git diff --check
 git diff --cached --check
 ```
 
-The tests guard existing metadata/mask/diagnostic behavior; they do not
-validate a proposed controller. Refresh this audit on upstream/native source,
-conditioning layout or precision changes; refresh any later visual conclusion
-on prompt, reference, noise, schedule, geometry, model or decoder changes.
-Next: implement and qualify the refiner-only paired runner, then use its
-result to select the first controller. No production spatial-control API or
-simultaneous-object guarantee is admitted by this document.
+The release build, guarded source/native A/A/B runs and actual-fixture
+admission/negative runs are separately recorded in the evidence directory;
+passing CPU tests alone does not establish GPU parity. Rollback is to omit
+the new probe; the production runtime and accepted take were not changed.
+Refresh the numerical result on source, runtime, weights, input, geometry,
+precision or binary changes. Refresh any later visual conclusion on prompt,
+reference, noise, schedule, geometry, model or decoder changes.
+Next: separate shared-`c` and text-attention transfer, then qualify the direct
+DiT routes. No production spatial-control API or simultaneous-object
+guarantee is admitted by this document.
