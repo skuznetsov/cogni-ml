@@ -6,6 +6,36 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-T1-DIT-BLOCKS01-2026-11-04] Frozen RoleWright T1 blocks 0–1 match upstream MPS
+
+- At T1 step 0 (t=1000), one native Metal chain runs both DiT blocks on
+  frozen RoleWright inputs. Block 1 reads block 0's image and text output
+  buffers directly. All 24 captures match Tencent `911cea64` through its
+  PyTorch 2.8.0 MPS adapter bit-for-bit, including the 4,320 image rows and
+  150 active text rows at width 2,048 from each block. Both attention outputs
+  have zero padding. The gate remains `atol=rtol=2e-5`.
+- The oracle writes distinct per-layer T0 BF16 K/V from the authenticated
+  frozen T0 prelude. Its 4,583 active rows per layer match the rows consumed
+  by T1. Block 0 also matches the prior verified native T0 writer. Selecting
+  block 0's history for block 1 preserves current Q/K/V exactly but fails
+  9,108,949 attention values. Recomputing the T0 prelude in the new harness
+  changed block 0's history and was excluded to preserve fixture identity.
+- Native execution uses two attention workspaces for distinct diagnostic
+  bindings and one terminal wait, with no intermediate CPU transfer.
+  The cache-aware 10% guard, 6 GiB process cap and 64 MiB swap-growth limit
+  held across source and native runs. The passing native run sampled a
+  4.59 GiB peak with zero observed swap growth.
+- Replay: `compare.py` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t1-two-blocks-20261104.Yz5Nsflx`
+  verifies the capture digests, 18 previous anchors, per-layer cache reads,
+  guards and wrong-slot control. The passing `comparison.json` SHA-256 is
+  `74a03588bb606b597ed12cba7ace6a49b4ddda8edfa96378f789ba569d6a8c33`.
+  Next discriminator: qualify the native T0 block-1 writer from the same
+  frozen prelude and feed its K/V directly to T1. The diagnostic covers no
+  later blocks or rendered motion. Keep the prompt-enhancer A/B separate.
+  Refresh on source, runtime, binary, input, weight, precision or artifact
+  changes.
+
 ### [LM-HY-NOMAS-T1-DIT-BLOCK0-2026-11-04] Frozen RoleWright T1 block 0 matches upstream MPS
 
 - An isolated native diagnostic from `a3e9dc28` connects block-0 Q/K/V,
@@ -28,11 +58,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Evidence and replay scripts: local external-SSD directory
   `/opt/mldata_ssd/cogni-ml/hy-nomas-t1-post-block0-20261104.PZZ1QDSU`,
   especially `comparison.json`, `compare.py`, and the guarded run logs.
-  The probe is outside the production path. Next: connect block 1 with
-  its own authenticated T0 K/V on the same GPU chain and compare its
-  output. Keep prompt-enhancer quality A/B separate. No full T1,
-  original Magi/CUDA, motion or quality claim. Refresh on source, binary,
-  runtime, inputs, weights, cache, geometry, precision or artifact changes.
+  The probe is outside the production path. See
+  LM-HY-NOMAS-T1-DIT-BLOCKS01-2026-11-04 for the two-block continuation.
+  No full T1, original Magi/CUDA, motion or quality claim. Refresh on source,
+  binary, runtime, inputs, weights, cache, geometry, precision or artifact changes.
 
 ### [LM-HY-NOMAS-REFINER-FC2-RESIDUAL-2026-11-04] Both refiner blocks match the source on T0 V263
 
