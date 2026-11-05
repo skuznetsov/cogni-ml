@@ -6,6 +6,42 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-REFINER-C-FACTORIAL-2026-11-05] Fixed shared conditioning preserves Action2 transfer into Action1
+
+- The authenticated V224 Action2-only pair now has five cases: natural A0,
+  exact no-op A1, natural B, B text with frozen A `c` (X10), and A text with
+  frozen B `c` (X01). The override is at the source individual-token-refiner
+  `c` input and the matching native post-conditioning-add boundary. All
+  25 source/native checkpoints are bit-identical; all 14 native factor
+  invariants and the source parent replay/no-op are exact at unchanged
+  `atol=rtol=2e-5`.
+- At block 1, Action1 relative RMS effects are 0.378594% for text at fixed
+  `cA`, 0.028422% for `c` at fixed A text, 0.378625% combined and 0.037549%
+  interaction. Global effects are 0.382001%, 0.030372%, 0.382068% and
+  0.036175%. With `c` fixed, only text self-attention can transfer information
+  across rows. Freezing `c` alone leaves the measured prefix effect nearly
+  intact for this pair; these are conditional effects, not additive channel
+  percentages or a cause of weak visible acting.
+- One weights encode/command chain, zero named GPU allocations, activation
+  readbacks or waits during encode; one terminal drain then 25 reads. The
+  named plan is 1,472,201,732 bytes, excluding opaque MPS resources. The
+  cache-aware 10% floor, 6 GiB process cap and 64 MiB swap-growth stop remain;
+  observed swap growth is zero. No DiT, decoder or full render was run.
+- Release build, actual-fixture CPU admission, 46 focused CPU tests and
+  independent Float64 source-payload recomputation pass. The 24 block/span
+  effect summaries agree with native within 3.56e-15. Final same-lineage
+  adversary review is ROBUST within this numerical scope, not independent
+  reproduction, timing or semantic-object-control evidence.
+- Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/`.
+  `qualification.json` binds source/binary/object pins, commands and limits;
+  `native.json` SHA-256 is
+  `c5b5676b8b1ab962256675bd78c889903b8a9ef0c63737192e612759d7c95d09`.
+  See [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+  Next: same-latent direct DiT M00/M10/M01/M11 route ablation with fixed T0,
+  refined text and noise, before rendering. Rollback: omit the probes;
+  production control is unchanged. Refresh on source/runtime, weights,
+  input/layout, precision, binary or evidence changes.
+
 ### [LM-HY-NOMAS-REFINER-TRANSFER-2026-11-05] An Action2-only instruction changes unchanged Action1 representations
 
 - The equal-geometry V224 semantic pair changes only Resume's chest-tap
@@ -37,8 +73,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   `native.json` SHA-256 is
   `9ef4a28d6aa1595b452907cf99421670d938c7341237f7ff254313ed159d1d12`.
   See [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
-  Next isolate shared `c` versus text-attention before direct DiT route
-  ablation. Rollback: omit the probe; production control is unchanged.
+  The shared-`c` factorial result is recorded above; direct DiT route
+  ablation remains next. Rollback: omit the probe; production control is
+  unchanged.
   Refresh on source/runtime, weights, input/layout, precision or binary
   change. A visual-control conclusion remains open.
 

@@ -1,10 +1,10 @@
 # Hy-Nomas object control frontier
 
-Status (2026-11-05): source audit and the first semantic refiner-only A/A/B
-probe completed against the pinned source MPS adapter. Controller changes
-remain proposed. The accepted five-second Alex/Resume ROI take remains the
-visual control. The original
-audit was read-only; the subsequent bounded GPU experiment is recorded below.
+Status (2026-11-05): source audit, semantic refiner-only A/A/B and shared-`c`
+factorial probes completed against the pinned source MPS adapter. Controller
+changes remain proposed. The accepted five-second Alex/Resume ROI take remains
+the visual control. The original audit was read-only; subsequent bounded GPU
+experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
 [the drafter frontier](hy-nomas-drafter-frontier.md); visible actor control
 is still partial.
@@ -154,8 +154,8 @@ This demonstrates transfer from the changed instruction to representations
 of unchanged global/Action1 text in this pair. It does not identify the
 relative contribution of shared `c` and text attention, establish a
 visible acting effect, or show that cross-object sharing is undesirable.
-The next discriminator holds shared `c` fixed separately from text
-self-attention before the same-latent M00/M10/M01/M11 DiT experiment.
+The shared-`c` discriminator below separates conditional effects before
+the same-latent M00/M10/M01/M11 DiT experiment.
 
 The native runner prepares weights once and reuses its input, refiner and
 snapshot buffers in one command chain. Instrumentation observes zero named
@@ -198,6 +198,92 @@ transfer and numerical-parity claim. It is a same-lineage review, not an
 independent reproduction. Native admission relies on the trusted source
 manifest digest; its A/A metadata checks are less strict than the source
 producer's complete-record validator.
+
+## Measured shared-conditioning discriminator
+
+The factorial probe reuses the authenticated V224 semantic pair above and
+intervenes only at the refiner's shared `c`, after the timestep/context
+addition and before either refiner block. The production attention algorithm,
+weights, masks, precision and input geometry remain unchanged.
+
+| Case | Text rows | Shared `c` | Purpose |
+| --- | --- | --- | --- |
+| A0 | A | Natural A | Baseline, immutable GPU snapshot of `cA` |
+| A1 | A | Frozen `cA` | No-op override and snapshot-alias control |
+| B | B | Natural B | Combined intervention, immutable GPU snapshot of `cB` |
+| X10 | B | Frozen `cA` | Text intervention at fixed shared conditioning |
+| X01 | A | Frozen `cB` | Shared-conditioning intervention at fixed text |
+
+The source producer authenticates and replays the parent A0/A1/B outputs.
+The native probe uses the production encode for A0/B and a diagnostic-only
+override for A1/X10/X01. Both implementations keep frozen conditioning and
+captures on GPU until the existing terminal comparison boundary. A1 must
+reproduce A0, overridden `c` must equal its frozen source, and time-only `vec`
+must remain unchanged. The no-op and all 14 native factor invariants are exact;
+the source payload also reproduces all 15 parent checkpoints bit-for-bit.
+All 25 source/native checkpoints are bit-identical at the existing
+`atol=rtol=2e-5` gate. Seven new CPU tests cover malformed factors, missing
+cases/checkpoints, parent binding, source A/A and replay defects, and a seeded
+numerical mismatch. Native CPU admission accepts the actual child and parent
+before Metal allocation; its self-tests also reject a changed used-`c` value.
+
+The second refiner block gives these `RMS(effect) / RMS(A0)` measurements:
+
+| Output span | Text at fixed `cA`: X10-A0 | `c` at fixed text A: X01-A0 | Combined: B-A0 | Interaction: B-X10-X01+A0 |
+| --- | ---: | ---: | ---: | ---: |
+| Global | 0.382001% | 0.030372% | 0.382068% | 0.036175% |
+| Action1 | 0.378594% | 0.028422% | 0.378625% | 0.037549% |
+| Action2 | 32.701707% | 0.027275% | 32.701741% | 0.037050% |
+
+The fixed-`c` intervention leaves transfer to unchanged global/Action1 rows
+well above the exact A/A floor. After conditioning is fixed, attention is
+the refiner's only remaining cross-row operation. Text self-attention is
+therefore the larger measured conditional route for this pair; freezing
+shared `c` alone leaves nearly the same Action1 effect as the combined
+intervention. This is not a percentage attribution to independent channels:
+`c` can alter later attention, and the interaction is nonzero. No conclusion
+about visible acting or the value of removing useful context follows yet.
+
+Interaction is computed elementwise in Float64 before any RMS reduction.
+A separate CPU calculation authenticates the source payload, its parent
+replay/no-op and used-`c`/mean/time invariants, then recomputes all 24
+block/span effect summaries. Native and independently computed statistics
+agree within 3.56e-15 absolute difference. This post-terminal check does
+not insert a readback or wait into the GPU chain.
+
+The native runner is `examples/hy_nomas_refiner_c_factorial_probe.cr`; its
+source oracle is `spec/support/hy_nomas_refiner_c_factorial_reference.py`.
+It records one prepared-weight encode and one command chain, zero named
+GPU-buffer allocations/readbacks/waits during encoding, one terminal drain,
+then 25 checkpoint reads. The aggregate named plan is 1,472,201,732 bytes
+under 2 GiB; opaque MPS resources are excluded. Both model runs retain the
+cache-aware 10% floor, 6 GiB process cap and 64 MiB swap-growth stop. Observed
+swap growth is zero; minimum sampled headroom across source/native runtime
+and admission stages is 28.51 GiB. The short native run's sampled process
+peak is 1.64 GiB, not a certificate of instantaneous total GPU memory.
+No full DiT, decoder or new render was run, and these single qualifications
+are not speed benchmarks.
+
+Evidence is outside git in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-refiner-c-factorial-20261105.w8oj5rem/`:
+
+- `source.json` SHA-256:
+  `8f9cb5cc6b7df387be446a93bdc3d550818fc930746ea4ecbf8b16f3807bf95b`.
+- `native.json` SHA-256:
+  `c5b5676b8b1ab962256675bd78c889903b8a9ef0c63737192e612759d7c95d09`.
+- `qualification.json` binds current probe/source/binary/object hashes,
+  the inherited source inputs and weights, actual command receipts, numerical
+  results and guard limits. Replays need fresh output paths. The child
+  manifest inherits the authenticated parent source fields; the current
+  factorial producer is pinned separately in this index.
+
+Final same-lineage adversary verdict is ROBUST for the conditional numerical
+factorization and parity claim, not an independent reproduction or a visual
+control verdict. Rollback is omission of the diagnostic probes; production
+control and generation APIs are unchanged. Refresh on source/runtime, weights,
+input/layout, precision, binary or evidence changes. Next: qualify same-latent
+direct DiT M00/M10/M01/M11 effects with saved refined states, fixed T0/noise
+and per-actor/contact/outside-region measurements before a new full render.
 
 ## Proposed authoring and runtime boundary
 
@@ -281,26 +367,26 @@ mechanism; do not repeat prompt amplification. Stop a slice on attribution
 failure, numerical regression, memory/swap guard, identity loss or stronger
 motion with worse hands/contact. Do not relax tolerances to admit it.
 
-Initial audit DoD was CPU-only (29 tests). The refiner slice adds ten
-admission/comparator tests; all 39 focused tests pass on 2026-11-05:
+Initial audit DoD was CPU-only (29 tests). The transfer and factorial slices
+add seventeen admission/comparator tests; all 46 focused tests pass on 2026-11-05:
 
 ```sh
-python3 -B -m unittest spec.hy_nomas_refiner_transfer_test \
+python3 -B -m unittest spec.hy_nomas_refiner_c_factorial_test \
+  spec.hy_nomas_refiner_transfer_test \
   spec.hy_nomas_action_conditioning_spec \
   spec.hy_nomas_reference_attention_test spec.video_block_diff_test
-crystal tool format --check examples/hy_nomas_refiner_transfer_probe.cr \
-  examples/support/hy_nomas_refiner_transfer_probe.cr
+crystal tool format --check examples/hy_nomas_refiner_c_factorial_probe.cr \
+  examples/support/hy_nomas_refiner_c_factorial_probe.cr
 git diff --check
 git diff --cached --check
 ```
 
-The release build, guarded source/native A/A/B runs and actual-fixture
-admission/negative runs are separately recorded in the evidence directory;
+The release builds, guarded source/native runs and actual-fixture admission
+are separately recorded in their evidence directories;
 passing CPU tests alone does not establish GPU parity. Rollback is to omit
 the new probe; the production runtime and accepted take were not changed.
 Refresh the numerical result on source, runtime, weights, input, geometry,
 precision or binary changes. Refresh any later visual conclusion on prompt,
 reference, noise, schedule, geometry, model or decoder changes.
-Next: separate shared-`c` and text-attention transfer, then qualify the direct
-DiT routes. No production spatial-control API or simultaneous-object
-guarantee is admitted by this document.
+Next: qualify the direct DiT routes. No production spatial-control API or
+simultaneous-object guarantee is admitted by this document.
