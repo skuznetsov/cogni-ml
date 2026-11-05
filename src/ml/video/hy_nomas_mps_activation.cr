@@ -20,19 +20,20 @@ require "./metal_mps_command_chain"
 {% end %}
 
 module ML::Video::HyNomasMPSActivation
-  # A fixed-shape unary graph bound to caller-owned shared F32 buffers. Keep
-  # the plan and those buffers alive until the chain's terminal wait. The
-  # optional SiLU controls round the connected F32 output to a BF16 expansion
-  # inside that same graph, with or without changing its arithmetic nodes.
+  # Fixed-shape unary graphs bound to caller-owned shared buffers. Keep the
+  # plan and those buffers alive until the chain's terminal wait. The optional
+  # SiLU controls round the connected F32 output to a BF16 expansion inside
+  # that same graph, with or without changing its arithmetic nodes.
   class UnaryPlan
     SILU                 = 0
     GELU                 = 1
     DEFAULT_BF16_CONTROL = false
 
     private enum Precision
-      F32        = 0
-      BF16Graph  = 1
-      BF16Output = 2
+      F32          = 0
+      BF16Graph    = 1
+      BF16Output   = 2
+      PhysicalBF16 = 3
     end
 
     @shape : Array(Int32)
@@ -41,6 +42,7 @@ module ML::Video::HyNomasMPSActivation
     @expected_bytes : Int64
     @activation : Int32
     @bf16_control : Bool
+    @physical_bf16 : Bool
     @handle : Pointer(Void) = Pointer(Void).null
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
@@ -54,10 +56,17 @@ module ML::Video::HyNomasMPSActivation
     protected def initialize(shape : Array(Int32), input : ML::MetalBuffer,
                              output : ML::MetalBuffer, @activation : Int32,
                              @bf16_control : Bool = DEFAULT_BF16_CONTROL,
-                             *, round_output_bf16 : Bool = false)
+                             *, round_output_bf16 : Bool = false,
+                             @physical_bf16 : Bool = false)
       raise ArgumentError.new("MPSGraph activation kind is unsupported") unless {SILU, GELU}.includes?(@activation)
+      if @physical_bf16 && @activation != GELU
+        raise ArgumentError.new("Physical BF16 activation is supported only for GELU")
+      end
       if (@bf16_control || round_output_bf16) && @activation != SILU
         raise ArgumentError.new("BF16 activation control is supported only for SiLU")
+      end
+      if @physical_bf16 && (@bf16_control || round_output_bf16)
+        raise ArgumentError.new("Physical BF16 GELU cannot use an F32-buffer BF16 control")
       end
       if @bf16_control && round_output_bf16
         raise ArgumentError.new("Choose one SiLU BF16 precision mode")
@@ -72,10 +81,15 @@ module ML::Video::HyNomasMPSActivation
         raise ArgumentError.new("activation tensor exceeds the native count limit") if count > Int32::MAX // dimension
         count *= dimension
       end
-      @expected_bytes = count * sizeof(Float32)
+      @expected_bytes = count * (@physical_bf16 ? sizeof(UInt16) : sizeof(Float32))
       validate_bindings!
-      MetalOps.check(@input, count)
-      MetalOps.check(@output, count)
+      if @physical_bf16
+        MetalOps.check_storage(@input, count, WeightDType::BF16)
+        MetalOps.check_storage(@output, count, WeightDType::BF16)
+      else
+        MetalOps.check(@input, count)
+        MetalOps.check(@output, count)
+      end
       MetalOps.distinct(@input, @output)
 
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
@@ -83,6 +97,7 @@ module ML::Video::HyNomasMPSActivation
         precision = Precision::F32
         precision = Precision::BF16Graph if @bf16_control
         precision = Precision::BF16Output if round_output_bf16
+        precision = Precision::PhysicalBF16 if @physical_bf16
         @handle = HyNomasMPSActivationFFI.plan_create(
           ML::Metal::Device.instance.device_handle, @activation, precision.value,
           shape64.to_unsafe, @shape.size.to_i32, @input.handle, @output.handle,
@@ -155,7 +170,7 @@ module ML::Video::HyNomasMPSActivation
              @input.storage_mode == ML::StorageMode::Shared &&
              @output.storage_mode == ML::StorageMode::Shared &&
              @input.size == @expected_bytes && @output.size == @expected_bytes
-        raise ArgumentError.new("MPSGraph activation fixed F32 buffer binding changed")
+        raise ArgumentError.new("MPSGraph activation fixed buffer binding changed")
       end
       MetalOps.distinct(@input, @output)
     end
@@ -175,6 +190,16 @@ module ML::Video::HyNomasMPSActivation
     def initialize(shape : Array(Int32), input : ML::MetalBuffer,
                    output : ML::MetalBuffer)
       super(shape, input, output, UnaryPlan::GELU)
+    end
+  end
+
+  # Physical BF16 input and output buffers with the PyTorch tanh GELU graph.
+  # Unlike the boundary controls above, this plan binds two-byte BF16 storage
+  # directly and leaves output conversion to the caller's next operation.
+  class BF16GELUPlan < UnaryPlan
+    def initialize(shape : Array(Int32), input : ML::MetalBuffer,
+                   output : ML::MetalBuffer)
+      super(shape, input, output, UnaryPlan::GELU, physical_bf16: true)
     end
   end
 end

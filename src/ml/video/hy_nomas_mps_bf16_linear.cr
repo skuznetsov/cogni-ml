@@ -1,5 +1,4 @@
-# Fixed-binding MPSGraph control for one real BF16 Hy-Nomas linear layer.
-# It is diagnostic-only and is not wired into the production block.
+# Fixed-binding MPSGraph execution for a BF16 Hy-Nomas linear layer.
 require "../metal/dispatch"
 require "../core/buffer"
 require "./metal_ops"

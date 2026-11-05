@@ -740,21 +740,21 @@ $(BUILD_DIR)/hy_nomas_generate: examples/hy_nomas_generate.cr examples/support/h
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_sequence_generate: examples/hy_nomas_sequence_generate.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(DCAE_V_MPS_OBJ) $(DCAE_V_NORM_MPS_OBJ)
+$(BUILD_DIR)/hy_nomas_sequence_generate: examples/hy_nomas_sequence_generate.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal $(DCAE_V_MPS_OBJ) $(DCAE_V_NORM_MPS_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
-		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_sequence_resume_probe: examples/hy_nomas_sequence_resume_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) examples/support/hy_nomas_cache_qbit.metal src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+$(BUILD_DIR)/hy_nomas_sequence_resume_probe: examples/hy_nomas_sequence_resume_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr) examples/support/hy_nomas_cache_qbit.metal src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
 	$(CRYSTAL) build $< --release -o $@ \
-		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 $(BUILD_DIR)/hy_nomas_cache_qbit_probe: examples/hy_nomas_cache_qbit_probe.cr examples/support/hy_nomas_cache_qbit.cr examples/support/hy_nomas_cache_qbit.metal src/ml/gguf/qwen_qbit_gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
-$(BUILD_DIR)/hy_nomas_compact_sequence_probe: examples/hy_nomas_compact_sequence_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr examples/support/hy_nomas*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ)
+$(BUILD_DIR)/hy_nomas_compact_sequence_probe: examples/hy_nomas_compact_sequence_probe.cr $(wildcard examples/support/pixelumm*.cr examples/support/hy_nomas*.cr examples/support/hy_nomas*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ) $(HY_NOMAS_HISTORY_ATTENTION_OBJ) $(HY_NOMAS_BF16_LINEAR_OBJ) src/ml/video/hy_nomas_source_bf16_mps.cr src/ml/video/kernels/hy_nomas_reference_bf16.metal
 	$(CRYSTAL) build $< --release -o $@ \
-		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(abspath $(HY_NOMAS_HISTORY_ATTENTION_OBJ)) $(abspath $(HY_NOMAS_BF16_LINEAR_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 
 $(BUILD_DIR)/hy_nomas_cache_qbit_checkpoint_probe: examples/hy_nomas_cache_qbit_checkpoint_probe.cr $(wildcard examples/support/hy_nomas_cache_qbit*.cr examples/support/hy_nomas_cache_qbit*.metal) src/ml/gguf/qwen_qbit_gaussian_codec.cr $(BRIDGE_OBJ) $(WAN_SPEC_OBJS)
 	$(CRYSTAL) build $< --release -o $@ \

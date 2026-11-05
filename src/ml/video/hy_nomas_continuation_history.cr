@@ -376,7 +376,8 @@ module ML::Video
                       text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
                       segment_text_tokens : Array(Int32)? = nil,
                       segment_cache_text : Array(Bool)? = nil,
-                      segment_attention_labels : Array(AttentionLabels)? = nil) : Geometry
+                      segment_attention_labels : Array(AttentionLabels)? = nil,
+                      source_bf16_attention : Bool = false) : Geometry
       unless (2..MAX_SEGMENTS).includes?(segment_count) &&
              video_tokens > 0 && valid_text_tokens > 0 &&
              storage_text_tokens >= valid_text_tokens &&
@@ -453,7 +454,8 @@ module ML::Video
         workspace = HyNomasHistoryAttentionWorkspace.geometry(
           history_rows.to_i32, query_rows, heads, head_dim, current_rows: current_rows,
           query_labels: labels.try(&.[segment].query),
-          key_labels: labels.try(&.[segment].key))
+          key_labels: labels.try(&.[segment].key),
+          source_bf16_attention: source_bf16_attention)
         workspace_geometries << workspace
         workspace_bytes = checked_sum(workspace_bytes, workspace.workspace_bytes,
           "Hy-Nomas continuation workspace bytes")
@@ -469,7 +471,8 @@ module ML::Video
                              else
                                HyNomasHistoryAttentionWorkspace.geometry(
                                  history_rows.to_i32, query_rows, heads, head_dim,
-                                 current_rows: writer_current_rows.to_i32)
+                                 current_rows: writer_current_rows.to_i32,
+                                 source_bf16_attention: source_bf16_attention)
                              end
           writer_workspace_geometries << writer_workspace
           unless writer_workspace == workspace
@@ -528,12 +531,14 @@ module ML::Video
                          text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
                          segment_text_tokens : Array(Int32)? = nil,
                          segment_cache_text : Array(Bool)? = nil,
-                         segment_attention_labels : Array(AttentionLabels)? = nil) : Int64
+                         segment_attention_labels : Array(AttentionLabels)? = nil,
+                         source_bf16_attention : Bool = false) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
         layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
-        segment_attention_labels: segment_attention_labels).named_bytes
+        segment_attention_labels: segment_attention_labels,
+        source_bf16_attention: source_bf16_attention).named_bytes
     end
 
     def self.named_bytes(*, segment_count : Int32, video_tokens : Int32,
@@ -543,12 +548,14 @@ module ML::Video
                          text_cache_policy : TextCachePolicy = TextCachePolicy::PerChunk,
                          segment_text_tokens : Array(Int32)? = nil,
                          segment_cache_text : Array(Bool)? = nil,
-                         segment_attention_labels : Array(AttentionLabels)? = nil) : Int64
+                         segment_attention_labels : Array(AttentionLabels)? = nil,
+                         source_bf16_attention : Bool = false) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
         layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
-        segment_attention_labels: segment_attention_labels).named_bytes
+        segment_attention_labels: segment_attention_labels,
+        source_bf16_attention: source_bf16_attention).named_bytes
     end
 
     def initialize(*, segment_count : Int32, video_tokens : Int32,
@@ -560,6 +567,7 @@ module ML::Video
                    segment_text_tokens : Array(Int32)? = nil,
                    segment_cache_text : Array(Bool)? = nil,
                    segment_attention_labels : Array(AttentionLabels)? = nil,
+                   source_bf16_attention : Bool = false,
                    query : ML::MetalBuffer, key : ML::MetalBuffer,
                    value : ML::MetalBuffer, output : ML::MetalBuffer)
       @shape = self.class.geometry(segment_count, video_tokens,
@@ -567,7 +575,8 @@ module ML::Video
         denoise_steps, text_cache_policy: text_cache_policy,
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
-        segment_attention_labels: segment_attention_labels)
+        segment_attention_labels: segment_attention_labels,
+        source_bf16_attention: source_bf16_attention)
       @schedule = HyNomasContinuationHistorySchedule.new(segment_count, layers,
         denoise_steps, reference_initialization)
       @query = query
@@ -866,7 +875,8 @@ module ML::Video
       workspace = HyNomasHistoryAttentionWorkspace.new(
         geometry.history_rows, @shape.query_rows, @shape.heads, @shape.head_dim,
         current_rows: geometry.current_rows,
-        query_labels: labels.try(&.query), key_labels: labels.try(&.key))
+        query_labels: labels.try(&.query), key_labels: labels.try(&.key),
+        source_bf16_attention: geometry.source_bf16_attention)
       @history_workspaces << workspace
       if geometry.history_rows > 0
         @cache_pairs.each do |cache_key, cache_value|

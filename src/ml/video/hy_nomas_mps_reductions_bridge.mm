@@ -806,8 +806,9 @@ extern "C" void gs_hy_nomas_mps_reduction_plan_release(void *planHandle) {
 // Pinned PyTorch 2.8 MPSGraph activation reproductions. Keep these unary plans
 // independent from attention reductions: SiLU is negative -> exp -> add-one
 // -> divide, while tanh GELU follows the exact upstream operation sequence
-// with rank-one F32 scalar constants and original input rank/layout. BF16
-// SiLU mode keeps those nodes and its scalar constant in BF16 between casts.
+// with rank-one F32 scalar constants on the F32 path. Physical BF16 GELU binds
+// BF16 tensors and constants directly. BF16 SiLU mode keeps its nodes and
+// scalar constant in BF16 between casts.
 @interface HyNomasMPSActivationPlan : NSObject
 @property(nonatomic, strong) id<MTLDevice> device;
 @property(nonatomic, strong) MPSGraph *graph;
@@ -828,6 +829,7 @@ enum HyNomasActivationPrecision : int32_t {
   HyNomasActivationF32 = 0,
   HyNomasActivationBF16Graph = 1,
   HyNomasActivationBF16Output = 2,
+  HyNomasActivationPhysicalBF16 = 3,
 };
 
 static void *hy_nomas_mps_activation_plan_create(
@@ -837,9 +839,13 @@ static void *hy_nomas_mps_activation_plan_create(
   if (!deviceHandle || !shapeValues || !inputHandle || !outputHandle ||
       rank < 1 || rank > 8 || activation < 0 || activation > 1 ||
       precision < HyNomasActivationF32 ||
-      precision > HyNomasActivationBF16Output ||
-      (precision != HyNomasActivationF32 && activation != 0))
+      precision > HyNomasActivationPhysicalBF16 ||
+      (precision == HyNomasActivationPhysicalBF16
+           ? activation != 1
+           : (precision != HyNomasActivationF32 && activation != 0)))
     return nullptr;
+  const bool physicalBF16 = precision == HyNomasActivationPhysicalBF16;
+  const MPSDataType ioType = physicalBF16 ? MPSDataTypeBFloat16 : MPSDataTypeFloat32;
   const bool computeBF16 = precision == HyNomasActivationBF16Graph;
   if (@available(macOS 15.0, *)) {
     @autoreleasepool {
@@ -854,7 +860,7 @@ static void *hy_nomas_mps_activation_plan_create(
           elementCount > (uint64_t)INT32_MAX ||
           elementCount > UINT64_MAX / sizeof(float))
         return nullptr;
-      const uint64_t byteCount = elementCount * sizeof(float);
+      const uint64_t byteCount = elementCount * (physicalBF16 ? 2 : 4);
       id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
       id<MTLBuffer> input = (__bridge id<MTLBuffer>)inputHandle;
       id<MTLBuffer> output = (__bridge id<MTLBuffer>)outputHandle;
@@ -879,7 +885,7 @@ static void *hy_nomas_mps_activation_plan_create(
         if (computeBF16)
           inputName = @"hy_silu_x_f32";
         MPSGraphTensor *inputTensor = [graph placeholderWithShape:shape
-                                                          dataType:MPSDataTypeFloat32
+                                                          dataType:ioType
                                                               name:inputName];
         if (!inputTensor)
           return nullptr;
@@ -926,16 +932,16 @@ static void *hy_nomas_mps_activation_plan_create(
           constexpr float kKappa = 0.044715f;
           MPSGraphTensor *beta = [graph constantWithScalar:kBeta
                                                       shape:@[ @1 ]
-                                                   dataType:MPSDataTypeFloat32];
+                                                   dataType:ioType];
           MPSGraphTensor *kappa = [graph constantWithScalar:kKappa
                                                        shape:@[ @1 ]
-                                                    dataType:MPSDataTypeFloat32];
+                                                    dataType:ioType];
           MPSGraphTensor *one = [graph constantWithScalar:1.0f
                                                     shape:@[ @1 ]
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:ioType];
           MPSGraphTensor *half = [graph constantWithScalar:0.5f
                                                      shape:@[ @1 ]
-                                                  dataType:MPSDataTypeFloat32];
+                                                  dataType:ioType];
           MPSGraphTensor *cube = [graph multiplicationWithPrimaryTensor:x
                                                         secondaryTensor:x
                                                                    name:@"hy_gelu_x_squared"];
@@ -967,7 +973,7 @@ static void *hy_nomas_mps_activation_plan_create(
             return nullptr;
         }
         MPSGraphTensor *resultF32 = result;
-        if (precision != HyNomasActivationF32) {
+        if (!physicalBF16 && precision != HyNomasActivationF32) {
           // Produce an explicit BF16 round-to-nearest-even expansion in the
           // existing F32 checkpoint, including when the SiLU nodes are F32.
           if (computeBF16) {
@@ -1075,7 +1081,7 @@ static void *hy_nomas_mps_activation_plan_create(
         NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds =
             [NSMutableDictionary new];
         feeds[inputTensor] = [[MPSGraphShapedType alloc] initWithShape:shape
-                                                            dataType:MPSDataTypeFloat32];
+                                                            dataType:ioType];
         MPSGraphExecutable *executable =
             [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
                                 feeds:feeds
@@ -1089,11 +1095,11 @@ static void *hy_nomas_mps_activation_plan_create(
         MPSGraphTensorData *inputData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:input
                                                     shape:shape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:ioType];
         MPSGraphTensorData *outputData =
             [[MPSGraphTensorData alloc] initWithMTLBuffer:output
                                                     shape:shape
-                                                 dataType:MPSDataTypeFloat32];
+                                                 dataType:ioType];
         MPSGraphExecutableExecutionDescriptor *execution =
             [MPSGraphExecutableExecutionDescriptor new];
         execution.waitUntilCompleted = NO;

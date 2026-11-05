@@ -54,6 +54,7 @@
 @property(nonatomic) float scale;
 @property(nonatomic) BOOL historyFrozen;
 @property(nonatomic) BOOL masked;
+@property(nonatomic) BOOL sourceBF16Attention;
 @end
 
 @implementation HyNomasHistoryAttentionWorkspaceNative
@@ -85,9 +86,16 @@ static id<MTLDevice> hy_nomas_history_cached_device = nil;
 static id<MTLComputePipelineState> hy_nomas_history_join_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_gather_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_scatter_pipeline = nil;
+static id<MTLDevice> hy_nomas_history_bf16_cached_device = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_join_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_gather_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_scatter_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_action_mask_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_masked_scatter_pipeline = nil;
 static id<MTLDevice> hy_nomas_history_action_cached_device = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_action_mask_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_masked_scatter_pipeline = nil;
+static id<MTLDevice> hy_nomas_history_bf16_action_cached_device = nil;
 
 static bool hy_nomas_history_product(const uint64_t *values, size_t count,
                                      uint64_t *result) {
@@ -127,24 +135,48 @@ static bool hy_nomas_history_valid_buffer(id<MTLDevice> device,
 }
 
 static bool hy_nomas_history_pipelines(
-    id<MTLDevice> device, id<MTLComputePipelineState> *joinPipeline,
+    id<MTLDevice> device, bool sourceBF16Attention,
+    id<MTLComputePipelineState> *joinPipeline,
     id<MTLComputePipelineState> *gatherPipeline,
     id<MTLComputePipelineState> *scatterPipeline) {
   if (!device || !joinPipeline || !gatherPipeline || !scatterPipeline)
     return false;
   @synchronized([HyNomasHistoryAttentionWorkspaceNative class]) {
-    if (hy_nomas_history_cached_device == device &&
-        hy_nomas_history_join_pipeline && hy_nomas_history_gather_pipeline &&
-        hy_nomas_history_scatter_pipeline) {
-      *joinPipeline = hy_nomas_history_join_pipeline;
-      *gatherPipeline = hy_nomas_history_gather_pipeline;
-      *scatterPipeline = hy_nomas_history_scatter_pipeline;
+    id<MTLDevice> cachedDevice = sourceBF16Attention
+                                     ? hy_nomas_history_bf16_cached_device
+                                     : hy_nomas_history_cached_device;
+    id<MTLComputePipelineState> cachedJoin = sourceBF16Attention
+                                                  ? hy_nomas_history_bf16_join_pipeline
+                                                  : hy_nomas_history_join_pipeline;
+    id<MTLComputePipelineState> cachedGather = sourceBF16Attention
+                                                    ? hy_nomas_history_bf16_gather_pipeline
+                                                    : hy_nomas_history_gather_pipeline;
+    id<MTLComputePipelineState> cachedScatter = sourceBF16Attention
+                                                     ? hy_nomas_history_bf16_scatter_pipeline
+                                                     : hy_nomas_history_scatter_pipeline;
+    if (cachedDevice == device && cachedJoin && cachedGather && cachedScatter) {
+      *joinPipeline = cachedJoin;
+      *gatherPipeline = cachedGather;
+      *scatterPipeline = cachedScatter;
       return true;
     }
 
     NSString *source = [NSString stringWithUTF8String:R"metal(
       #include <metal_stdlib>
       using namespace metal;
+      #if GS_HY_HISTORY_BF16
+      typedef ushort GsHyNomasHistoryScalar;
+      inline GsHyNomasHistoryScalar gs_hy_nomas_pack(float value) {
+        return ushort(as_type<uint>(value) >> 16);
+      }
+      inline float gs_hy_nomas_unpack(GsHyNomasHistoryScalar value) {
+        return as_type<float>(uint(value) << 16);
+      }
+      #else
+      typedef float GsHyNomasHistoryScalar;
+      inline GsHyNomasHistoryScalar gs_hy_nomas_pack(float value) { return value; }
+      inline float gs_hy_nomas_unpack(GsHyNomasHistoryScalar value) { return value; }
+      #endif
       struct GsHyNomasHistoryAttentionParams {
         uint historyRows;
         uint queryRows;
@@ -157,7 +189,7 @@ static bool hy_nomas_history_pipelines(
       kernel void gs_hy_nomas_history_join_bqhd_to_bhkd(
           device const float *history [[buffer(0)]],
           device const float *current [[buffer(1)]],
-          device float *joined [[buffer(2)]],
+          device GsHyNomasHistoryScalar *joined [[buffer(2)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
           uint index [[thread_position_in_grid]]) {
         const uint total = p.keyRows * p.heads * p.headDim;
@@ -168,11 +200,11 @@ static bool hy_nomas_history_pipelines(
         const uint sourceRow = row < p.historyRows ? row : row - p.historyRows;
         const uint sourceIndex = (sourceRow * p.heads + head) * p.headDim + width;
         const float value = row < p.historyRows ? history[sourceIndex] : current[sourceIndex];
-        joined[index] = value;
+        joined[index] = gs_hy_nomas_pack(value);
       }
       kernel void gs_hy_nomas_history_gather_q_bqhd_to_bhqd(
           device const float *source [[buffer(0)]],
-          device float *destination [[buffer(1)]],
+          device GsHyNomasHistoryScalar *destination [[buffer(1)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(2)]],
           uint index [[thread_position_in_grid]]) {
         const uint total = p.currentRows * p.heads * p.headDim;
@@ -181,10 +213,10 @@ static bool hy_nomas_history_pipelines(
         const uint row = (index / p.headDim) % p.currentRows;
         const uint head = index / (p.headDim * p.currentRows);
         const uint sourceIndex = ((p.rowStart + row) * p.heads + head) * p.headDim + width;
-        destination[index] = source[sourceIndex];
+        destination[index] = gs_hy_nomas_pack(source[sourceIndex]);
       }
       kernel void gs_hy_nomas_history_scatter_context_bhqd_to_bqhd(
-          device const float *source [[buffer(0)]],
+          device const GsHyNomasHistoryScalar *source [[buffer(0)]],
           device float *destination [[buffer(1)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(2)]],
           uint index [[thread_position_in_grid]]) {
@@ -194,12 +226,14 @@ static bool hy_nomas_history_pipelines(
         const uint row = (index / p.headDim) % p.currentRows;
         const uint head = index / (p.headDim * p.currentRows);
         const uint destinationIndex = ((p.rowStart + row) * p.heads + head) * p.headDim + width;
-        destination[destinationIndex] = source[index];
+        destination[destinationIndex] = gs_hy_nomas_unpack(source[index]);
       }
     )metal"];
     NSError *error = nil;
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.preprocessorMacros = @{ @"GS_HY_HISTORY_BF16" : @(sourceBF16Attention) };
     id<MTLLibrary> library = [device newLibraryWithSource:source
-                                                   options:nil
+                                                   options:options
                                                      error:&error];
     if (!library || error)
       return false;
@@ -223,10 +257,17 @@ static bool hy_nomas_history_pipelines(
         [device newComputePipelineStateWithFunction:scatterFunction error:&error];
     if (!scatter || error)
       return false;
-    hy_nomas_history_cached_device = device;
-    hy_nomas_history_join_pipeline = join;
-    hy_nomas_history_gather_pipeline = gather;
-    hy_nomas_history_scatter_pipeline = scatter;
+    if (sourceBF16Attention) {
+      hy_nomas_history_bf16_cached_device = device;
+      hy_nomas_history_bf16_join_pipeline = join;
+      hy_nomas_history_bf16_gather_pipeline = gather;
+      hy_nomas_history_bf16_scatter_pipeline = scatter;
+    } else {
+      hy_nomas_history_cached_device = device;
+      hy_nomas_history_join_pipeline = join;
+      hy_nomas_history_gather_pipeline = gather;
+      hy_nomas_history_scatter_pipeline = scatter;
+    }
     *joinPipeline = join;
     *gatherPipeline = gather;
     *scatterPipeline = scatter;
@@ -235,22 +276,45 @@ static bool hy_nomas_history_pipelines(
 }
 
 static bool hy_nomas_history_action_pipelines(
-    id<MTLDevice> device, id<MTLComputePipelineState> *maskPipeline,
+    id<MTLDevice> device, bool sourceBF16Attention,
+    id<MTLComputePipelineState> *maskPipeline,
     id<MTLComputePipelineState> *scatterPipeline) {
   if (!device || !maskPipeline || !scatterPipeline)
     return false;
   @synchronized([HyNomasHistoryAttentionWorkspaceNative class]) {
-    if (hy_nomas_history_action_cached_device == device &&
-        hy_nomas_history_action_mask_pipeline &&
-        hy_nomas_history_masked_scatter_pipeline) {
-      *maskPipeline = hy_nomas_history_action_mask_pipeline;
-      *scatterPipeline = hy_nomas_history_masked_scatter_pipeline;
+    id<MTLDevice> cachedDevice = sourceBF16Attention
+                                     ? hy_nomas_history_bf16_action_cached_device
+                                     : hy_nomas_history_action_cached_device;
+    id<MTLComputePipelineState> cachedMask = sourceBF16Attention
+                                                  ? hy_nomas_history_bf16_action_mask_pipeline
+                                                  : hy_nomas_history_action_mask_pipeline;
+    id<MTLComputePipelineState> cachedScatter = sourceBF16Attention
+                                                     ? hy_nomas_history_bf16_masked_scatter_pipeline
+                                                     : hy_nomas_history_masked_scatter_pipeline;
+    if (cachedDevice == device && cachedMask && cachedScatter) {
+      *maskPipeline = cachedMask;
+      *scatterPipeline = cachedScatter;
       return true;
     }
 
     NSString *source = [NSString stringWithUTF8String:R"metal(
       #include <metal_stdlib>
       using namespace metal;
+      #if GS_HY_HISTORY_BF16
+      typedef ushort GsHyNomasHistoryScalar;
+      inline GsHyNomasHistoryScalar gs_hy_nomas_mask_value(bool allowed) {
+        return allowed ? 0u : 0xff80u;
+      }
+      inline float gs_hy_nomas_unpack(GsHyNomasHistoryScalar value) {
+        return as_type<float>(uint(value) << 16);
+      }
+      #else
+      typedef float GsHyNomasHistoryScalar;
+      inline GsHyNomasHistoryScalar gs_hy_nomas_mask_value(bool allowed) {
+        return allowed ? 0.0f : 1.0f;
+      }
+      inline float gs_hy_nomas_unpack(GsHyNomasHistoryScalar value) { return value; }
+      #endif
       struct GsHyNomasHistoryAttentionParams {
         uint historyRows;
         uint queryRows;
@@ -263,7 +327,7 @@ static bool hy_nomas_history_action_pipelines(
       kernel void gs_hy_nomas_history_build_action_mask(
           device const int *queryLabels [[buffer(0)]],
           device const int *keyLabels [[buffer(1)]],
-          device float *mask [[buffer(2)]],
+          device GsHyNomasHistoryScalar *mask [[buffer(2)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
           uint index [[thread_position_in_grid]]) {
         const uint total = p.currentRows * p.keyRows;
@@ -278,10 +342,10 @@ static bool hy_nomas_history_action_pipelines(
                                  ? key == 0
                                  : (keyLabel == 0 ||
                                     (keyLabel > 0 && keyLabel == queryLabel));
-        mask[index] = allowed ? 0.0f : 1.0f;
+        mask[index] = gs_hy_nomas_mask_value(allowed);
       }
       kernel void gs_hy_nomas_history_scatter_masked_context_bhqd_to_bqhd(
-          device const float *source [[buffer(0)]],
+          device const GsHyNomasHistoryScalar *source [[buffer(0)]],
           device const int *queryLabels [[buffer(1)]],
           device float *destination [[buffer(2)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
@@ -294,12 +358,14 @@ static bool hy_nomas_history_action_pipelines(
         const uint destinationIndex = ((p.rowStart + row) * p.heads + head) * p.headDim + width;
         destination[destinationIndex] = queryLabels[p.rowStart + row] < 0
                                            ? 0.0f
-                                           : source[index];
+                                           : gs_hy_nomas_unpack(source[index]);
       }
     )metal"];
     NSError *error = nil;
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.preprocessorMacros = @{ @"GS_HY_HISTORY_BF16" : @(sourceBF16Attention) };
     id<MTLLibrary> library = [device newLibraryWithSource:source
-                                                   options:nil
+                                                   options:options
                                                      error:&error];
     if (!library || error)
       return false;
@@ -317,9 +383,15 @@ static bool hy_nomas_history_action_pipelines(
         [device newComputePipelineStateWithFunction:scatterFunction error:&error];
     if (!scatter || error)
       return false;
-    hy_nomas_history_action_cached_device = device;
-    hy_nomas_history_action_mask_pipeline = mask;
-    hy_nomas_history_masked_scatter_pipeline = scatter;
+    if (sourceBF16Attention) {
+      hy_nomas_history_bf16_action_cached_device = device;
+      hy_nomas_history_bf16_action_mask_pipeline = mask;
+      hy_nomas_history_bf16_masked_scatter_pipeline = scatter;
+    } else {
+      hy_nomas_history_action_cached_device = device;
+      hy_nomas_history_action_mask_pipeline = mask;
+      hy_nomas_history_masked_scatter_pipeline = scatter;
+    }
     *maskPipeline = mask;
     *scatterPipeline = scatter;
     return true;
@@ -329,22 +401,26 @@ static bool hy_nomas_history_action_pipelines(
 static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
     id<MTLDevice> device, id<MTLBuffer> queryStage, id<MTLBuffer> keyStage,
     id<MTLBuffer> valueStage, id<MTLBuffer> outputStage, uint32_t heads,
-    uint32_t rows, uint32_t keyRows, uint32_t headDim, float scale) {
+    uint32_t rows, uint32_t keyRows, uint32_t headDim, float scale,
+    bool sourceBF16Attention) {
   @try {
     NSArray<NSNumber *> *queryShape =
         @[ @1, @(heads), @(rows), @(headDim) ];
     NSArray<NSNumber *> *keyShape =
         @[ @1, @(heads), @(keyRows), @(headDim) ];
+    const MPSDataType activationType = sourceBF16Attention
+                                          ? MPSDataTypeBFloat16
+                                          : MPSDataTypeFloat32;
     MPSGraph *graph = [MPSGraph new];
     graph.options = MPSGraphOptionsNone;
     MPSGraphTensor *query = [graph placeholderWithShape:queryShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:activationType
                                                    name:@"hy_history_query_bhqd"];
     MPSGraphTensor *key = [graph placeholderWithShape:keyShape
-                                             dataType:MPSDataTypeFloat32
+                                             dataType:activationType
                                                  name:@"hy_history_key_bhkd"];
     MPSGraphTensor *value = [graph placeholderWithShape:keyShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:activationType
                                                    name:@"hy_history_value_bhkd"];
     MPSGraphTensor *keyTranspose = [graph transposeTensor:key
                                                 dimension:2
@@ -354,32 +430,52 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
         [graph matrixMultiplicationWithPrimaryTensor:query
                                     secondaryTensor:keyTranspose
                                                name:@"hy_history_logits_bhqk"];
-    // Match the pinned upstream PyTorch 2.8 generic MPS SDPA equation:
-    // add F32 epsilon before 1/sqrt(D), softmax over K, then multiply V.
-    MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
-                                                   shape:@[ @1 ]
-                                                dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *epsilonLogits =
-        [graph additionWithPrimaryTensor:logits
-                         secondaryTensor:epsilon
-                                    name:@"hy_history_logits_plus_epsilon"];
-    MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
-                                                       shape:@[ @1 ]
-                                                    dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *scaledLogits =
-        [graph multiplicationWithPrimaryTensor:epsilonLogits
-                               secondaryTensor:scaleTensor
-                                          name:@"hy_history_scaled_logits"];
-    MPSGraphTensor *probabilities =
-        [graph softMaxWithTensor:scaledLogits
-                            axis:3
-                            name:@"hy_history_probabilities"];
-    MPSGraphTensor *context =
-        [graph matrixMultiplicationWithPrimaryTensor:probabilities
-                                    secondaryTensor:value
-                                               name:@"hy_history_context_bhqd"];
+    MPSGraphTensor *context = nil;
+    MPSGraphTensor *epsilonLogits = nil;
+    MPSGraphTensor *scaledLogits = nil;
+    MPSGraphTensor *probabilities = nil;
+    if (sourceBF16Attention) {
+      MPSGraphTensor *logitsF32 =
+          [graph castTensor:logits toType:MPSDataTypeFloat32 name:nil];
+      MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
+                                                         shape:@[ @1 ]
+                                                      dataType:MPSDataTypeFloat32];
+      MPSGraphTensor *scaledF32 =
+          [graph multiplicationWithPrimaryTensor:logitsF32
+                                 secondaryTensor:scaleTensor
+                                            name:nil];
+      MPSGraphTensor *scaledBF16 =
+          [graph castTensor:scaledF32 toType:MPSDataTypeBFloat16 name:nil];
+      probabilities = [graph softMaxWithTensor:scaledBF16 axis:3 name:nil];
+      context = [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                           secondaryTensor:value
+                                                      name:nil];
+    } else {
+      // Match the pinned upstream PyTorch 2.8 generic MPS SDPA equation:
+      // add F32 epsilon before 1/sqrt(D), softmax over K, then multiply V.
+      MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
+                                                     shape:@[ @1 ]
+                                                  dataType:MPSDataTypeFloat32];
+      epsilonLogits = [graph additionWithPrimaryTensor:logits
+                                      secondaryTensor:epsilon
+                                                 name:@"hy_history_logits_plus_epsilon"];
+      MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
+                                                         shape:@[ @1 ]
+                                                      dataType:MPSDataTypeFloat32];
+      scaledLogits = [graph multiplicationWithPrimaryTensor:epsilonLogits
+                                           secondaryTensor:scaleTensor
+                                                      name:@"hy_history_scaled_logits"];
+      probabilities = [graph softMaxWithTensor:scaledLogits
+                                           axis:3
+                                           name:@"hy_history_probabilities"];
+      context = [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                           secondaryTensor:value
+                                                      name:@"hy_history_context_bhqd"];
+    }
     if (!graph || !query || !key || !value || !keyTranspose || !logits ||
-        !epsilonLogits || !scaledLogits || !probabilities || !context)
+        !probabilities || !context ||
+        (!sourceBF16Attention && (!epsilonLogits || !scaledLogits)) ||
+        (sourceBF16Attention && context.dataType != MPSDataTypeBFloat16))
       return nil;
 
     NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds =
@@ -388,20 +484,20 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
     NSArray<MPSGraphTensorData *> *inputData = @[
       [[MPSGraphTensorData alloc] initWithMTLBuffer:queryStage
                                              shape:queryShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
       [[MPSGraphTensorData alloc] initWithMTLBuffer:keyStage
                                              shape:keyShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
       [[MPSGraphTensorData alloc] initWithMTLBuffer:valueStage
                                              shape:keyShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
     ];
     feeds[query] = [[MPSGraphShapedType alloc] initWithShape:queryShape
-                                                    dataType:MPSDataTypeFloat32];
+                                                    dataType:activationType];
     feeds[key] = [[MPSGraphShapedType alloc] initWithShape:keyShape
-                                                  dataType:MPSDataTypeFloat32];
+                                                  dataType:activationType];
     feeds[value] = [[MPSGraphShapedType alloc] initWithShape:keyShape
-                                                    dataType:MPSDataTypeFloat32];
+                                                    dataType:activationType];
     MPSGraphExecutable *executable =
         [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
                             feeds:feeds
@@ -414,7 +510,7 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_variant(
     MPSGraphTensorData *outputData = [[MPSGraphTensorData alloc]
         initWithMTLBuffer:outputStage
                     shape:queryShape
-                 dataType:MPSDataTypeFloat32];
+                 dataType:activationType];
     if (!outputData)
       return nil;
     NSMutableArray<MPSGraphTensorData *> *orderedInputs = [NSMutableArray new];
@@ -448,7 +544,8 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
     id<MTLDevice> device, id<MTLBuffer> queryStage, id<MTLBuffer> keyStage,
     id<MTLBuffer> valueStage, id<MTLBuffer> maskStage,
     id<MTLBuffer> outputStage, uint32_t heads, uint32_t rows,
-    uint32_t keyRows, uint32_t headDim, float scale) {
+    uint32_t keyRows, uint32_t headDim, float scale,
+    bool sourceBF16Attention) {
   @try {
     NSArray<NSNumber *> *queryShape =
         @[ @1, @(heads), @(rows), @(headDim) ];
@@ -456,19 +553,22 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
         @[ @1, @(heads), @(keyRows), @(headDim) ];
     NSArray<NSNumber *> *maskShape =
         @[ @1, @1, @(rows), @(keyRows) ];
+    const MPSDataType activationType = sourceBF16Attention
+                                          ? MPSDataTypeBFloat16
+                                          : MPSDataTypeFloat32;
     MPSGraph *graph = [MPSGraph new];
     graph.options = MPSGraphOptionsNone;
     MPSGraphTensor *query = [graph placeholderWithShape:queryShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:activationType
                                                    name:@"hy_history_query_bhqd"];
     MPSGraphTensor *key = [graph placeholderWithShape:keyShape
-                                             dataType:MPSDataTypeFloat32
+                                             dataType:activationType
                                                  name:@"hy_history_key_bhkd"];
     MPSGraphTensor *value = [graph placeholderWithShape:keyShape
-                                               dataType:MPSDataTypeFloat32
+                                               dataType:activationType
                                                    name:@"hy_history_value_bhkd"];
     MPSGraphTensor *mask = [graph placeholderWithShape:maskShape
-                                              dataType:MPSDataTypeFloat32
+                                              dataType:activationType
                                                   name:@"hy_history_action_mask_qk"];
     MPSGraphTensor *keyTranspose = [graph transposeTensor:key
                                                 dimension:2
@@ -478,49 +578,72 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
         [graph matrixMultiplicationWithPrimaryTensor:query
                                     secondaryTensor:keyTranspose
                                                name:@"hy_history_logits_bhqk"];
-    MPSGraphTensor *zero = [graph constantWithScalar:0.0
-                                                shape:@[ @1 ]
-                                             dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *blocked =
-        [graph greaterThanWithPrimaryTensor:mask
-                            secondaryTensor:zero
-                                       name:@"hy_history_action_mask_blocked"];
-    MPSGraphTensor *negativeInfinityTensor =
-        [graph constantWithScalar:-INFINITY
-                            shape:@[ @1 ]
-                         dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *maskedLogits =
-        [graph selectWithPredicateTensor:blocked
-                     truePredicateTensor:negativeInfinityTensor
-                    falsePredicateTensor:logits
-                                   name:@"hy_history_logits_masked"];
-    // Keep the pinned unmasked F32 equation and operation order for visible
-    // pairs: epsilon, scale, softmax over K, then multiply V.
-    MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
-                                                   shape:@[ @1 ]
-                                                dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *epsilonLogits =
-        [graph additionWithPrimaryTensor:maskedLogits
-                         secondaryTensor:epsilon
-                                    name:@"hy_history_logits_plus_epsilon"];
-    MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
-                                                       shape:@[ @1 ]
-                                                    dataType:MPSDataTypeFloat32];
-    MPSGraphTensor *scaledLogits =
-        [graph multiplicationWithPrimaryTensor:epsilonLogits
-                               secondaryTensor:scaleTensor
-                                          name:@"hy_history_scaled_logits"];
-    MPSGraphTensor *probabilities =
-        [graph softMaxWithTensor:scaledLogits
-                            axis:3
-                            name:@"hy_history_probabilities"];
-    MPSGraphTensor *context =
-        [graph matrixMultiplicationWithPrimaryTensor:probabilities
-                                    secondaryTensor:value
-                                               name:@"hy_history_context_bhqd"];
+    MPSGraphTensor *context = nil;
+    MPSGraphTensor *blocked = nil;
+    MPSGraphTensor *negativeInfinityTensor = nil;
+    MPSGraphTensor *maskedLogits = nil;
+    MPSGraphTensor *epsilonLogits = nil;
+    MPSGraphTensor *scaledLogits = nil;
+    MPSGraphTensor *probabilities = nil;
+    if (sourceBF16Attention) {
+      MPSGraphTensor *logitsF32 =
+          [graph castTensor:logits toType:MPSDataTypeFloat32 name:nil];
+      MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
+                                                         shape:@[ @1 ]
+                                                      dataType:MPSDataTypeFloat32];
+      MPSGraphTensor *scaledF32 =
+          [graph multiplicationWithPrimaryTensor:logitsF32
+                                 secondaryTensor:scaleTensor
+                                            name:nil];
+      MPSGraphTensor *scaledBF16 =
+          [graph castTensor:scaledF32 toType:MPSDataTypeBFloat16 name:nil];
+      maskedLogits = [graph additionWithPrimaryTensor:scaledBF16
+                                      secondaryTensor:mask
+                                                 name:nil];
+      probabilities = [graph softMaxWithTensor:maskedLogits axis:3 name:nil];
+      context = [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                           secondaryTensor:value
+                                                      name:nil];
+    } else {
+      MPSGraphTensor *zero = [graph constantWithScalar:0.0
+                                                  shape:@[ @1 ]
+                                               dataType:MPSDataTypeFloat32];
+      blocked = [graph greaterThanWithPrimaryTensor:mask
+                                    secondaryTensor:zero
+                                               name:@"hy_history_action_mask_blocked"];
+      negativeInfinityTensor = [graph constantWithScalar:-INFINITY
+                                                     shape:@[ @1 ]
+                                                  dataType:MPSDataTypeFloat32];
+      maskedLogits = [graph selectWithPredicateTensor:blocked
+                                  truePredicateTensor:negativeInfinityTensor
+                                 falsePredicateTensor:logits
+                                                name:@"hy_history_logits_masked"];
+      // Keep the pinned unmasked F32 equation and operation order for visible
+      // pairs: epsilon, scale, softmax over K, then multiply V.
+      MPSGraphTensor *epsilon = [graph constantWithScalar:1.0e-20f
+                                                     shape:@[ @1 ]
+                                                  dataType:MPSDataTypeFloat32];
+      epsilonLogits = [graph additionWithPrimaryTensor:maskedLogits
+                                       secondaryTensor:epsilon
+                                                  name:@"hy_history_logits_plus_epsilon"];
+      MPSGraphTensor *scaleTensor = [graph constantWithScalar:scale
+                                                         shape:@[ @1 ]
+                                                      dataType:MPSDataTypeFloat32];
+      scaledLogits = [graph multiplicationWithPrimaryTensor:epsilonLogits
+                                           secondaryTensor:scaleTensor
+                                                      name:@"hy_history_scaled_logits"];
+      probabilities = [graph softMaxWithTensor:scaledLogits
+                                           axis:3
+                                           name:@"hy_history_probabilities"];
+      context = [graph matrixMultiplicationWithPrimaryTensor:probabilities
+                                           secondaryTensor:value
+                                                      name:@"hy_history_context_bhqd"];
+    }
     if (!graph || !query || !key || !value || !mask || !keyTranspose || !logits ||
-        !blocked || !negativeInfinityTensor || !maskedLogits || !epsilonLogits ||
-        !scaledLogits || !probabilities || !context)
+        !maskedLogits || !probabilities || !context ||
+        (!sourceBF16Attention && (!blocked || !negativeInfinityTensor ||
+                                  !epsilonLogits || !scaledLogits)) ||
+        (sourceBF16Attention && context.dataType != MPSDataTypeBFloat16))
       return nil;
 
     NSMutableDictionary<MPSGraphTensor *, MPSGraphShapedType *> *feeds =
@@ -529,25 +652,25 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
     NSArray<MPSGraphTensorData *> *inputData = @[
       [[MPSGraphTensorData alloc] initWithMTLBuffer:queryStage
                                              shape:queryShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
       [[MPSGraphTensorData alloc] initWithMTLBuffer:keyStage
                                              shape:keyShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
       [[MPSGraphTensorData alloc] initWithMTLBuffer:valueStage
                                              shape:keyShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
       [[MPSGraphTensorData alloc] initWithMTLBuffer:maskStage
                                              shape:maskShape
-                                          dataType:MPSDataTypeFloat32],
+                                          dataType:activationType],
     ];
     feeds[query] = [[MPSGraphShapedType alloc] initWithShape:queryShape
-                                                    dataType:MPSDataTypeFloat32];
+                                                    dataType:activationType];
     feeds[key] = [[MPSGraphShapedType alloc] initWithShape:keyShape
-                                                  dataType:MPSDataTypeFloat32];
+                                                  dataType:activationType];
     feeds[value] = [[MPSGraphShapedType alloc] initWithShape:keyShape
-                                                    dataType:MPSDataTypeFloat32];
+                                                    dataType:activationType];
     feeds[mask] = [[MPSGraphShapedType alloc] initWithShape:maskShape
-                                                   dataType:MPSDataTypeFloat32];
+                                                   dataType:activationType];
     MPSGraphExecutable *executable =
         [graph compileWithDevice:[MPSGraphDevice deviceWithMTLDevice:device]
                             feeds:feeds
@@ -560,7 +683,7 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
     MPSGraphTensorData *outputData = [[MPSGraphTensorData alloc]
         initWithMTLBuffer:outputStage
                     shape:queryShape
-                 dataType:MPSDataTypeFloat32];
+                 dataType:activationType];
     if (!outputData)
       return nil;
     NSMutableArray<MPSGraphTensorData *> *orderedInputs = [NSMutableArray new];
@@ -643,7 +766,7 @@ static void *hy_nomas_history_attention_workspace_create_internal(
     float scale,
     void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
     void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
-    void *maskStageHandle) {
+    void *maskStageHandle, bool sourceBF16Attention) {
   const bool masked = queryLabelsHandle || keyLabelsHandle || maskStageHandle;
   if (!deviceHandle || !queryStageHandle || !keyStageHandle ||
       !valueStageHandle || !outputStageHandle || historyRows < 0 ||
@@ -657,6 +780,9 @@ static void *hy_nomas_history_attention_workspace_create_internal(
   if (keyRows64 <= 0 || keyRows64 > INT32_MAX)
     return nullptr;
   const uint32_t keyRows = (uint32_t)keyRows64;
+  const uint64_t stageBytesPerElement = sourceBF16Attention
+                                            ? sizeof(uint16_t)
+                                            : sizeof(float);
   const uint64_t queryShape[] = {1, (uint64_t)queryRows, (uint64_t)heads,
                                  (uint64_t)headDim};
   const uint64_t keyShape[] = {1, keyRows, (uint64_t)heads,
@@ -673,9 +799,9 @@ static void *hy_nomas_history_attention_workspace_create_internal(
       !hy_nomas_history_product(scoreShape, 4, &scoreElements) ||
       queryElements > (uint64_t)INT32_MAX || keyElements > (uint64_t)INT32_MAX ||
       tileElements > (uint64_t)INT32_MAX || scoreElements > (uint64_t)INT32_MAX ||
-      queryElements > UINT64_MAX / sizeof(float) ||
-      keyElements > UINT64_MAX / sizeof(float) ||
-      tileElements > UINT64_MAX / sizeof(float))
+      queryElements > UINT64_MAX / stageBytesPerElement ||
+      keyElements > UINT64_MAX / stageBytesPerElement ||
+      tileElements > UINT64_MAX / stageBytesPerElement)
     return nullptr;
 
   id<MTLDevice> device = (__bridge id<MTLDevice>)deviceHandle;
@@ -694,10 +820,10 @@ static void *hy_nomas_history_attention_workspace_create_internal(
                                 : nil;
   NSArray<id<MTLBuffer>> *buffers =
       @[ queryStage, keyStage, valueStage, outputStage ];
-  const uint64_t requiredBytes[] = {tileElements * sizeof(float),
-                                    keyElements * sizeof(float),
-                                    keyElements * sizeof(float),
-                                    tileElements * sizeof(float)};
+  const uint64_t requiredBytes[] = {tileElements * stageBytesPerElement,
+                                    keyElements * stageBytesPerElement,
+                                    keyElements * stageBytesPerElement,
+                                    tileElements * stageBytesPerElement};
   for (NSUInteger index = 0; index < buffers.count; ++index) {
     if (!hy_nomas_history_valid_buffer(device, buffers[index],
                                       requiredBytes[index]))
@@ -719,7 +845,7 @@ static void *hy_nomas_history_attention_workspace_create_internal(
     const uint64_t queryLabelBytes = (uint64_t)queryRows * sizeof(int32_t);
     const uint64_t keyLabelBytes = (uint64_t)keyRows * sizeof(int32_t);
     const uint64_t maskBytes =
-        (uint64_t)queryChunk * keyRows * sizeof(float);
+        (uint64_t)queryChunk * keyRows * stageBytesPerElement;
     if (!hy_nomas_history_valid_buffer(device, queryLabels, queryLabelBytes) ||
         !hy_nomas_history_valid_buffer(device, keyLabels, keyLabelBytes) ||
         !hy_nomas_history_valid_buffer(device, maskStage, maskBytes))
@@ -770,11 +896,13 @@ static void *hy_nomas_history_attention_workspace_create_internal(
         id<MTLComputePipelineState> scatterPipeline = nil;
         id<MTLComputePipelineState> actionMaskPipeline = nil;
         id<MTLComputePipelineState> maskedScatterPipeline = nil;
-        if (!hy_nomas_history_pipelines(device, &joinPipeline,
+        if (!hy_nomas_history_pipelines(device, sourceBF16Attention,
+                                        &joinPipeline,
                                         &gatherPipeline, &scatterPipeline))
           return nullptr;
         if (masked &&
-            !hy_nomas_history_action_pipelines(device, &actionMaskPipeline,
+            !hy_nomas_history_action_pipelines(device, sourceBF16Attention,
+                                                &actionMaskPipeline,
                                                 &maskedScatterPipeline))
           return nullptr;
         uint32_t tailRows = (uint32_t)queryRows % (uint32_t)queryChunk;
@@ -783,11 +911,12 @@ static void *hy_nomas_history_attention_workspace_create_internal(
                 ? hy_nomas_history_compile_masked_variant(
                       device, queryStage, keyStage, valueStage, maskStage,
                       outputStage, (uint32_t)heads, (uint32_t)queryChunk,
-                      keyRows, (uint32_t)headDim, scale)
+                      keyRows, (uint32_t)headDim, scale,
+                      sourceBF16Attention)
                 : hy_nomas_history_compile_variant(
                       device, queryStage, keyStage, valueStage, outputStage,
                       (uint32_t)heads, (uint32_t)queryChunk, keyRows,
-                      (uint32_t)headDim, scale);
+                      (uint32_t)headDim, scale, sourceBF16Attention);
         if (!full)
           return nullptr;
         HyNomasHistoryAttentionVariant *tail = nil;
@@ -796,11 +925,11 @@ static void *hy_nomas_history_attention_workspace_create_internal(
                      ? hy_nomas_history_compile_masked_variant(
                            device, queryStage, keyStage, valueStage, maskStage,
                            outputStage, (uint32_t)heads, tailRows, keyRows,
-                           (uint32_t)headDim, scale)
+                           (uint32_t)headDim, scale, sourceBF16Attention)
                      : hy_nomas_history_compile_variant(
                            device, queryStage, keyStage, valueStage, outputStage,
                            (uint32_t)heads, tailRows, keyRows,
-                           (uint32_t)headDim, scale);
+                           (uint32_t)headDim, scale, sourceBF16Attention);
           if (!tail)
             return nullptr;
         }
@@ -833,6 +962,7 @@ static void *hy_nomas_history_attention_workspace_create_internal(
         workspace.queryChunk = (uint32_t)queryChunk;
         workspace.scale = scale;
         workspace.masked = masked;
+        workspace.sourceBF16Attention = sourceBF16Attention;
         return (__bridge_retained void *)workspace;
       } @catch (NSException *exception) {
         (void)exception;
@@ -852,7 +982,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
   return hy_nomas_history_attention_workspace_create_internal(
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
-      outputStageHandle, nullptr, nullptr, nullptr);
+      outputStageHandle, nullptr, nullptr, nullptr, false);
 }
 
 extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked(
@@ -865,7 +995,34 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked(
   return hy_nomas_history_attention_workspace_create_internal(
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
-      outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle);
+      outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle,
+      false);
+}
+
+extern "C" void *gs_hy_nomas_history_attention_workspace_create_source_bf16(
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
+    void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
+    void *outputStageHandle) {
+  return hy_nomas_history_attention_workspace_create_internal(
+      deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
+      queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
+      outputStageHandle, nullptr, nullptr, nullptr, true);
+}
+
+extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked_source_bf16(
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
+    void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
+    void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
+    void *maskStageHandle) {
+  return hy_nomas_history_attention_workspace_create_internal(
+      deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
+      queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
+      outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle,
+      true);
 }
 
 extern "C" int32_t gs_hy_nomas_history_attention_workspace_register_history(

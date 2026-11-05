@@ -21,6 +21,7 @@ reference_action_inputs_sha = ""
 reference_action_mask_path = ""
 reference_action_mask_sha = ""
 allow_unqualified_reference = false
+source_bf16 = false
 OptionParser.parse do |p|
   p.banner = "Experimental GPU Hy-Nomas continuation: two through six linked 5-second segments, 512x288 at 24 fps"
   p.on("--inputs PATH", "Authenticated continuation input bundle") { |v| input_path = v }
@@ -43,6 +44,7 @@ OptionParser.parse do |p|
   p.on("--reference-action-mask PATH", "Authenticated upstream action offsets and video windows") { |v| reference_action_mask_path = v }
   p.on("--reference-action-mask-sha SHA", "Trusted action-mask profile SHA-256") { |v| reference_action_mask_sha = v }
   p.on("--allow-unqualified-reference", "Explicitly opt in to experimental image-conditioned continuation") { allow_unqualified_reference = true }
+  p.on("--reference-source-bf16", "Experimental source-BF16 DiT and history attention for two reference segments") { source_bf16 = true }
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
 HyNomasSequence.validate_segments!(segments)
@@ -115,7 +117,8 @@ HyNomasSequence.validate_reference_action!(reference_action, reference_action_in
   segments: segments, reference_latent_bytes: reference_latent_bytes,
   text_cache_policy: text_cache_policy, cinematic: cinematic)
 dit_peak = HyNomasSequence.peak_named_bytes(inputs, segments, text_cache_policy,
-  reference_latent_bytes: reference_latent_bytes, reference_action: reference_action)
+  reference_latent_bytes: reference_latent_bytes, reference_action: reference_action,
+  source_bf16: source_bf16)
 dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base, reference_action: reference_action)
 raise ArgumentError.new("sequence peak named buffers exceed budget") unless dit_peak <= budget
 latent_frames = segments * 30
@@ -134,10 +137,11 @@ emit_memory_plan = -> do
   HyNomasGeneration.emit("sequence_memory_plan", segments: segments, steps_per_segment: 4,
     dit_peak_named_bytes: dit_peak, dit_steady_named_bytes: dit_steady,
     history_named_bytes: HyNomasSequence.history_bytes(inputs.base, segments, text_cache_policy,
-      reference_action: reference_action),
+      reference_action: reference_action, source_bf16: source_bf16),
     decoder_named_bytes: metadata.try(&.named_bytes), decoder_peak_named_bytes: decoder_peak,
     frames: pixel_frames, named_budget_bytes: budget,
-    cache_precision: "F32 native post-RoPE K/V; no additional BF16 rounding",
+    cache_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 native post-RoPE K/V; no additional BF16 rounding",
+    source_bf16: source_bf16,
     dit_variant: weight_identity[:dit_variant],
     dit_weight_index_sha256: weight_identity[:dit_weight_index_sha256],
     cinematic_lineage: weight_identity[:cinematic_lineage],
@@ -231,7 +235,8 @@ begin
   reference_latent = reference_session.try(&.latent_for_dit)
   dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, segments, admission,
     text_cache_policy, cinematic: cinematic, reference_latent: reference_latent,
-    reference_action: reference_action, reference_action_inputs: reference_action_inputs)
+    reference_action: reference_action, reference_action_inputs: reference_action_inputs,
+    source_bf16: source_bf16)
   raise "sequence preflight/allocation admission disagree" unless dit.named_bytes == dit_steady
   timings["dit_setup_seconds"] = (Time.monotonic - setup).total_seconds
   chain = ML::Metal::MPSCommandChain.new
@@ -356,7 +361,8 @@ begin
              dit_weight_index_sha256: weight_identity[:dit_weight_index_sha256],
              cinematic_lineage: weight_identity[:cinematic_lineage],
              cinematic_lineage_sha256: weight_identity[:cinematic_lineage_sha256],
-             cache_precision: "F32 exact native K/V boundary; upstream cache is BF16",
+             cache_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 exact native K/V boundary; upstream cache is BF16",
+             source_bf16: source_bf16,
              text_cache_policy: text_cache_policy.once_per_scene? ? "once_per_scene" : "per_chunk",
              cache_writer: {kind: reference_requested ? "technical_t0_reference_init" : "separate_noisy_forward",
                             scope: reference_requested ? "technical reference segment T0 only" : "each nonfinal generated segment",

@@ -1,6 +1,6 @@
-# F32 Hy-Nomas continuation attention. Each segment owns one compact workspace
-# and one reusable plan shared across its layer-cache inventory. History is a
-# packed, segment-major list of valid rows; no padded keys are exposed.
+# Hy-Nomas continuation attention. The default F32 path remains available; an
+# opt-in source BF16 path packs only private scratch while public inputs and
+# history caches remain F32. Each segment owns one workspace and reusable plan.
 require "./hy_nomas_block"
 require "./metal_mps_command_chain"
 
@@ -15,6 +15,21 @@ require "./metal_mps_command_chain"
       output_stage : Pointer(Void),
     ) : Pointer(Void)
     fun workspace_create_masked = gs_hy_nomas_history_attention_workspace_create_masked(
+      device : Pointer(Void), history_rows : Int32, query_rows : Int32,
+      current_rows : Int32,
+      heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
+      query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
+      output_stage : Pointer(Void), query_labels : Pointer(Void), key_labels : Pointer(Void),
+      mask_stage : Pointer(Void),
+    ) : Pointer(Void)
+    fun workspace_create_source_bf16 = gs_hy_nomas_history_attention_workspace_create_source_bf16(
+      device : Pointer(Void), history_rows : Int32, query_rows : Int32,
+      current_rows : Int32,
+      heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
+      query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
+      output_stage : Pointer(Void),
+    ) : Pointer(Void)
+    fun workspace_create_masked_source_bf16 = gs_hy_nomas_history_attention_workspace_create_masked_source_bf16(
       device : Pointer(Void), history_rows : Int32, query_rows : Int32,
       current_rows : Int32,
       heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
@@ -57,7 +72,8 @@ module ML::Video
       current_io_bytes : Int64, no_history_control : Bool,
       masked : Bool, mask_elements : Int32,
       query_label_bytes : Int64, key_label_bytes : Int64,
-      action_mask_bytes : Int64
+      action_mask_bytes : Int64,
+      source_bf16_attention : Bool
 
     Q_STAGE_KEY      = "hy_nomas_history_attention.q"
     K_STAGE_KEY      = "hy_nomas_history_attention.k"
@@ -96,7 +112,8 @@ module ML::Video
                       heads : Int32, head_dim : Int32,
                       current_rows : Int32 = query_rows,
                       query_labels : Array(Int32)? = nil,
-                      key_labels : Array(Int32)? = nil) : Geometry
+                      key_labels : Array(Int32)? = nil,
+                      source_bf16_attention : Bool = false) : Geometry
       unless history_rows >= 0 && query_rows > 0 && current_rows > 0 &&
              current_rows <= query_rows && heads > 0 && head_dim > 0
         raise ArgumentError.new("Invalid Hy-Nomas history attention geometry")
@@ -128,12 +145,13 @@ module ML::Video
       max_score_bytes = max_score_elements * sizeof(Float32)
       query_label_bytes = masked ? query_rows.to_i64 * sizeof(Int32) : 0_i64
       key_label_bytes = masked ? key_rows.to_i64 * sizeof(Int32) : 0_i64
-      action_mask_bytes = mask_elements.to_i64 * sizeof(Float32) + query_label_bytes + key_label_bytes
-      workspace_elements = 2_i64 * tile_elements + 2_i64 * key_elements + mask_elements
-      workspace_elements += (query_label_bytes + key_label_bytes) // sizeof(Float32)
+      scratch_bytes_per_element = source_bf16_attention ? 2_i64 : sizeof(Float32).to_i64
+      action_mask_bytes = mask_elements.to_i64 * scratch_bytes_per_element + query_label_bytes + key_label_bytes
+      scratch_elements = 2_i64 * tile_elements + 2_i64 * key_elements + mask_elements
+      workspace_bytes = scratch_elements * scratch_bytes_per_element + query_label_bytes + key_label_bytes
       active_history_elements = 2_i64 * history_elements
-      if action_mask_bytes < 0 || workspace_elements < 0 ||
-         workspace_elements > Int64::MAX // sizeof(Float32) ||
+      if action_mask_bytes < 0 || scratch_elements < 0 || workspace_bytes < 0 ||
+         scratch_elements > Int64::MAX // scratch_bytes_per_element ||
          active_history_elements > Int64::MAX // sizeof(Float32) ||
          (2_i64 * query_elements + 2_i64 * current_elements) > Int64::MAX // sizeof(Float32)
         raise ArgumentError.new("Hy-Nomas history attention byte count overflow")
@@ -141,11 +159,12 @@ module ML::Video
       Geometry.new(history_rows, query_rows, current_rows, key_rows, heads, head_dim,
         query_chunk, graph_calls, query_elements, current_elements, history_elements, key_elements,
         max_score_elements, max_score_bytes,
-        workspace_elements * sizeof(Float32),
+        workspace_bytes,
         active_history_elements * sizeof(Float32),
         (2_i64 * query_elements + 2_i64 * current_elements) * sizeof(Float32),
         history_rows == 0 && current_rows == query_rows,
-        masked, mask_elements, query_label_bytes, key_label_bytes, action_mask_bytes)
+        masked, mask_elements, query_label_bytes, key_label_bytes, action_mask_bytes,
+        source_bf16_attention)
     end
 
     private def self.validate_action_labels!(query_rows : Int32, key_rows : Int32,
@@ -191,19 +210,32 @@ module ML::Video
                    heads : Int32, head_dim : Int32,
                    current_rows : Int32 = query_rows,
                    query_labels : Array(Int32)? = nil,
-                   key_labels : Array(Int32)? = nil)
+                   key_labels : Array(Int32)? = nil,
+                   source_bf16_attention : Bool = false)
       query_label_snapshot = query_labels.try(&.dup)
       key_label_snapshot = key_labels.try(&.dup)
       @shape = self.class.geometry(history_rows, query_rows, heads, head_dim,
-        current_rows, query_label_snapshot, key_label_snapshot)
+        current_rows, query_label_snapshot, key_label_snapshot,
+        source_bf16_attention)
       @arena = Arena.new
       begin
-        @arena.alloc(Q_STAGE_KEY, tile_elements)
-        @arena.alloc(K_STAGE_KEY, @shape.key_elements)
-        @arena.alloc(V_STAGE_KEY, @shape.key_elements)
-        @arena.alloc(OUTPUT_STAGE_KEY, tile_elements)
+        if @shape.source_bf16_attention
+          @arena.alloc_weight(Q_STAGE_KEY, tile_elements, WeightDType::BF16)
+          @arena.alloc_weight(K_STAGE_KEY, @shape.key_elements, WeightDType::BF16)
+          @arena.alloc_weight(V_STAGE_KEY, @shape.key_elements, WeightDType::BF16)
+          @arena.alloc_weight(OUTPUT_STAGE_KEY, tile_elements, WeightDType::BF16)
+        else
+          @arena.alloc(Q_STAGE_KEY, tile_elements)
+          @arena.alloc(K_STAGE_KEY, @shape.key_elements)
+          @arena.alloc(V_STAGE_KEY, @shape.key_elements)
+          @arena.alloc(OUTPUT_STAGE_KEY, tile_elements)
+        end
         if @shape.masked
-          @arena.alloc(MASK_STAGE_KEY, @shape.mask_elements)
+          if @shape.source_bf16_attention
+            @arena.alloc_weight(MASK_STAGE_KEY, @shape.mask_elements, WeightDType::BF16)
+          else
+            @arena.alloc(MASK_STAGE_KEY, @shape.mask_elements)
+          end
           @query_label_buffer = ML::MetalBuffer.new(@shape.query_label_bytes)
           @key_label_buffer = ML::MetalBuffer.new(@shape.key_label_bytes)
           @query_label_buffer.not_nil!.write_bytes(
@@ -217,20 +249,39 @@ module ML::Video
         end
         {% if flag?(:darwin) && !flag?(:cpu_only) %}
           if @shape.masked
-            @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked(
-              ML::Metal::Device.instance.device_handle,
-              @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
-              @shape.head_dim, @shape.query_chunk,
-              1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
-              q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
-              query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+            if @shape.source_bf16_attention
+              @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked_source_bf16(
+                ML::Metal::Device.instance.device_handle,
+                @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                @shape.head_dim, @shape.query_chunk,
+                1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
+                query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+            else
+              @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked(
+                ML::Metal::Device.instance.device_handle,
+                @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                @shape.head_dim, @shape.query_chunk,
+                1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
+                query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+            end
           else
-            @handle = HyNomasHistoryAttentionMPSFFI.workspace_create(
-              ML::Metal::Device.instance.device_handle,
-              @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
-              @shape.head_dim, @shape.query_chunk,
-              1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
-              q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
+            if @shape.source_bf16_attention
+              @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_source_bf16(
+                ML::Metal::Device.instance.device_handle,
+                @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                @shape.head_dim, @shape.query_chunk,
+                1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
+            else
+              @handle = HyNomasHistoryAttentionMPSFFI.workspace_create(
+                ML::Metal::Device.instance.device_handle,
+                @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                @shape.head_dim, @shape.query_chunk,
+                1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle)
+            end
           end
           raise "Failed to prepare Hy-Nomas history attention workspace" if @handle.null?
         {% else %}
@@ -412,11 +463,12 @@ module ML::Video
         OUTPUT_STAGE_KEY => tile_elements,
       }
       expected[MASK_STAGE_KEY] = @shape.mask_elements if @shape.masked
+      expected_dtype = @shape.source_bf16_attention ? WeightDType::BF16 : WeightDType::F32
       expected.each do |name, elements|
         buffer = @arena[name]
-        MetalOps.check(buffer, elements.to_i64)
-        unless buffer.storage_mode.shared? && @arena.dtype(name).f32?
-          raise ArgumentError.new("Hy-Nomas history attention workspace requires shared F32 buffers")
+        MetalOps.check_storage(buffer, elements.to_i64, expected_dtype)
+        unless buffer.storage_mode.shared? && @arena.dtype(name) == expected_dtype
+          raise ArgumentError.new("Hy-Nomas history attention workspace scratch dtype mismatch")
         end
       end
       buffers = workspace_buffers

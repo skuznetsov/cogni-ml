@@ -6,6 +6,40 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SERIAL-SOURCE-BF16-2026-11-04] Source-BF16 parity through the serial T0 writer and T1 reader
+
+- `hy_nomas_sequence_generate --reference-source-bf16` selects the
+  source-BF16 serial workspace and history graph for two-segment image
+  continuation. T0 uses source SiLU, projection, FFN and residual
+  boundaries. T1 reads the same per-layer cache slots with BF16
+  attention. Persistent K/V still stores widened BF16 values in F32.
+- With frozen RoleWright inputs, real BF16 weights, and action masks,
+  the normal serial owner and continuation provider match Tencent
+  `911cea64` via PyTorch 2.8.0 MPS bit-for-bit across 28 tensors
+  (184,016,896 values), covering both T0 K/V pairs and both T1 block
+  outputs on the first denoising step. The unchanged gate is
+  `atol=rtol=2e-5`. The T0 block-0 prospective K/V also match their
+  cache copies bit-for-bit. The stock F32 path reproduces all 30 prior
+  stock captures bit-for-bit.
+- Each route used one command chain for T0 and T1 with zero explicit
+  waits, named MetalBuffer allocations or CPU readbacks during encode.
+  Diagnostic reads followed the single terminal wait. The BF16 probe
+  sampled a 3.51 GiB peak with no swap growth under the cache-aware
+  10% reserve, 6 GiB process cap, and 64 MiB swap-growth limit.
+- The checks ran from the repository root using the scratch bundle under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-rolewright-source-bf16-20261104.urj4z3vo`.
+  Commands were `python3 -B build.py`, `python3 -B launch.py serial-stock`,
+  `python3 -B launch.py serial-source-bf16`, then
+  `python3 -B compare.py serial-stock serial-source-bf16` with paths
+  to the bundle scripts. The comparison SHA-256 is
+  `8819c3e1c384788bebb758891871849a768ba07b4ae9c4ab0b28969f759a78cf`.
+- The production CLI builds and admits the masked input in CPU-only
+  planning at 24.37 GiB of named DiT buffers. The GPU probe binds
+  two pretrained weight arenas directly and reduces provider admission
+  to two layers. The 54-layer staging path and rendered motion remain
+  outside this gate. Refresh on code, upstream, runtime, fixture, mask
+  geometry, or weight changes.
+
 ### [LM-HY-NOMAS-SERIAL-T0-T1-2026-11-04] Serial history copy is exact and the writer and reader arithmetic diverge
 
 - A two-layer build uses `HyNomasMPSSerialWorkspace` and the continuation

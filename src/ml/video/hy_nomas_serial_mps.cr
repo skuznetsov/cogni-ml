@@ -15,6 +15,9 @@ module ML::Video
   end
 
   class HyNomasMPSSerialWorkspace
+    alias WorkspaceFactory = Proc(HyNomasDualStreamBlock, Array(ML::MetalBuffer),
+                                  Int32, Int32, Bool, Int32?, Int32?, HyNomasMPSWorkspace)
+
     @blocks = [] of HyNomasDualStreamBlock
     getter scratch_bytes : Int64 = 0_i64
     getter mps_workspace_bytes : Int64 = 0_i64
@@ -60,7 +63,8 @@ module ML::Video
                    full_dit : Bool = false,
                    compact_valid_text : Bool = false,
                    compact_text_tokens : Int32? = nil,
-                   weight_loader : HyNomasSerialWeightLoader? = nil)
+                   weight_loader : HyNomasSerialWeightLoader? = nil,
+                   workspace_factory : WorkspaceFactory? = nil)
       config.validate!
       @config = config
       if !compact_valid_text && !compact_text_tokens.nil?
@@ -149,12 +153,19 @@ module ML::Video
           @blocks << HyNomasDualStreamBlock.new(@block_config, weights[index], view)
           @block_inputs << {previous.image_output, previous.text_output}
         end
-        @workspace = HyNomasMPSWorkspace.new(@blocks[0], img, block_txt, vec,
-          vec_txt, cos, sin, attention_query_chunk: attention_query_chunk,
-          attention_heads_per_group: attention_heads_per_group,
-          allow_shared_modulation: allow_shared_modulation,
-          valid_text_tokens: compact_valid_text ? compact_count : valid_text_tokens,
-          text_rms_tokens: compact_valid_text ? config.text_tokens : nil)
+        active_text = compact_valid_text ? compact_count : valid_text_tokens
+        rms_text = compact_valid_text ? config.text_tokens : nil
+        @workspace = if factory = workspace_factory
+                       factory.call(@blocks[0], [img, block_txt, vec, vec_txt, cos, sin],
+                         attention_query_chunk, attention_heads_per_group,
+                         allow_shared_modulation, active_text, rms_text)
+                     else
+                       HyNomasMPSWorkspace.new(@blocks[0], img, block_txt, vec,
+                         vec_txt, cos, sin, attention_query_chunk: attention_query_chunk,
+                         attention_heads_per_group: attention_heads_per_group,
+                         allow_shared_modulation: allow_shared_modulation,
+                         valid_text_tokens: active_text, text_rms_tokens: rms_text)
+                     end
         workspace.register_serial_blocks!(@blocks, @block_inputs,
           full_dit: full_dit)
         @scratch_bytes = @arena.resident_bytes

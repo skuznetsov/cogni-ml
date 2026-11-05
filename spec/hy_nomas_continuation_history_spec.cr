@@ -30,6 +30,27 @@ describe ML::Video::HyNomasContinuationHistory do
     stored[0].query[0].should eq(0)
   end
 
+  it "accounts for BF16 masked attention scratch without changing persistent history" do
+    label = ML::Video::HyNomasContinuationHistory::AttentionLabels
+    labels = [label.new([0, 0, 0, -1], [0, 0, 0]),
+              label.new([0, 1, 0, 1], [0, 0, 0, 0, 0, 0, 1])]
+    f32 = ML::Video::HyNomasContinuationHistory.geometry(2, 2, 2, 2, 54, 1, 2,
+      segment_text_tokens: [1, 2], segment_cache_text: [true, true],
+      segment_attention_labels: labels)
+    bf16 = ML::Video::HyNomasContinuationHistory.geometry(2, 2, 2, 2, 54, 1, 2,
+      segment_text_tokens: [1, 2], segment_cache_text: [true, true],
+      segment_attention_labels: labels, source_bf16_attention: true)
+
+    bf16.cache_bytes.should eq(f32.cache_bytes)
+    bf16.workspace_geometries.all?(&.source_bf16_attention).should be_true
+    bf16.writer_workspace_geometries.first.should eq(bf16.workspace_geometries.first)
+    bf16.workspace_geometries.zip(f32.workspace_geometries).each do |source, stock|
+      labels_bytes = stock.query_label_bytes + stock.key_label_bytes
+      source.workspace_bytes.should eq((stock.workspace_bytes - labels_bytes) // 2 + labels_bytes)
+      source.action_mask_bytes.should eq((stock.action_mask_bytes - labels_bytes) // 2 + labels_bytes)
+    end
+  end
+
   it "rejects label profiles requiring an unimplemented distinct masked writer" do
     label = ML::Video::HyNomasContinuationHistory::AttentionLabels.new(
       Array(Int32).new(6, 0), Array(Int32).new(6, 0))

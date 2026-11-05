@@ -1,6 +1,7 @@
 require "./hy_nomas_timeline_inputs"
 require "./hy_nomas_cinematic"
 require "../../src/ml/video/hy_nomas_continuation_history"
+require "../../src/ml/video/hy_nomas_source_bf16_mps"
 require "../../src/ml/video/hy_nomas_timeline_ops"
 require "../../src/ml/video/hy_nomas_resume_bundle"
 require "../../src/ml/video/hy_nomas_segment_edit"
@@ -181,7 +182,8 @@ module HyNomasSequence
   def history_bytes(inputs : HyNomasGeneration::Inputs, segments : Int32,
                     text_cache_policy = HISTORY_TEXT_POLICY, *,
                     prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
-                    reference_action : ML::Video::HyNomasReferenceAction? = nil) : Int64
+                    reference_action : ML::Video::HyNomasReferenceAction? = nil,
+                    source_bf16 : Bool = false) : Int64
     valid = query_text_tokens(inputs, prompt_edit, reference_action: reference_action)
     has_profile = !prompt_edit.nil? || !reference_action.nil?
     ML::Video::HyNomasContinuationHistory.named_bytes(segment_count: validate_segments!(segments),
@@ -194,7 +196,8 @@ module HyNomasSequence
       else
         nil
       end,
-      segment_attention_labels: reference_attention_labels(inputs.valid_text_tokens, reference_action))
+      segment_attention_labels: reference_attention_labels(inputs.valid_text_tokens, reference_action),
+      source_bf16_attention: source_bf16)
   end
 
   # The current action path is deliberately bounded to caption-only T0 and one
@@ -232,20 +235,40 @@ module HyNomasSequence
                        text_cache_policy = HISTORY_TEXT_POLICY, *,
                        prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
                        reference_action : ML::Video::HyNomasReferenceAction? = nil,
-                       reference_latent_bytes : Int64 = 0_i64) : Int64
+                       reference_latent_bytes : Int64 = 0_i64,
+                       source_bf16 : Bool = false) : Int64
     unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
       raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
+    end
+    if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
+      raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
     end
     valid = query_text_tokens(inputs.base, prompt_edit, reference_action: reference_action)
     scratch_growth = HyNomasGeneration.dit_scratch_bytes(valid, ((valid + 63) // 64) * 64) -
                      HyNomasGeneration.dit_scratch_bytes(inputs.base.valid_text_tokens, inputs.base.compact_text_tokens)
+    source_scratch = if source_bf16
+                       config = dit_config(source_bf16).compact_valid_text_prefix(valid, ((valid + 63) // 64) * 64)
+                       # Source BF16 RMS computes only the compact stream;
+                       # the ordinary reserve includes two full text reductions.
+                       rms_savings = 2_i64 * (HyNomasGeneration::CONFIG.text_tokens - config.text_tokens) *
+                                     (config.dim + config.heads) * sizeof(Float32)
+                       ML::Video::HyNomasSourceBF16MPSWorkspace.extra_bytes(config) - rms_savings
+                     else
+                       0_i64
+                     end
     HyNomasGeneration.dit_resident_weight_bytes(HyNomasGeneration::DiTWeights::BF16,
       HyNomasGeneration.stage_bytes, HyNomasGeneration.stage_bytes * 54) +
       HyNomasGeneration.dit_reserve_bytes(inputs.base, STEPS) +
       scratch_growth + prompt_edit_bytes(prompt_edit) + reference_action_bytes(reference_action) +
       history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit,
-        reference_action: reference_action) +
-      additional_inputs_bytes(inputs, segments) + reference_latent_bytes
+        reference_action: reference_action, source_bf16: source_bf16) +
+      additional_inputs_bytes(inputs, segments) + reference_latent_bytes + source_scratch
+  end
+
+  def dit_config(source_bf16 : Bool) : ML::Video::HyNomasConfig
+    config = HyNomasGeneration::CONFIG
+    return config unless source_bf16
+    config.copy_with(attention_precision: ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl)
   end
 
   def checkpoint_inventory(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
@@ -449,7 +472,8 @@ module HyNomasSequence
                    prompt_inputs : HyNomasGeneration::Inputs? = nil,
                    @reference_action : ML::Video::HyNomasReferenceAction? = nil,
                    @reference_action_inputs : HyNomasGeneration::Inputs? = nil,
-                   reference_latent : ML::MetalBuffer? = nil)
+                   reference_latent : ML::MetalBuffer? = nil,
+                   source_bf16 : Bool = false)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
       @reference_latent = reference_latent
@@ -487,7 +511,7 @@ module HyNomasSequence
       storage = ((valid + 63) // 64) * 64
       @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy,
         prompt_edit: @prompt_edit, reference_action: @reference_action,
-        reference_latent_bytes: reference_latent.try(&.size) || 0_i64)
+        reference_latent_bytes: reference_latent.try(&.size) || 0_i64, source_bf16: source_bf16)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit,
         reference_action: @reference_action)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
@@ -583,12 +607,13 @@ module HyNomasSequence
           plan_cleanup << -> { refiner.release }
           @prompt_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new
         end
-        @serial = ML::Video::HyNomasMPSSerialWorkspace.new(HyNomasGeneration::CONFIG,
+        @serial = ML::Video::HyNomasMPSSerialWorkspace.new(HyNomasSequence.dit_config(source_bf16),
           Array(ML::Video::Arena).new(54) { @stage }, @patch.output, @refiner.text_output,
           @refiner.vec, @refiner.vec_txt, cos, sin, attention_query_chunk: 256,
           attention_heads_per_group: 16, valid_text_tokens: valid,
           allow_shared_modulation: true, full_dit: true, weight_loader: @loader,
-          compact_valid_text: true, compact_text_tokens: storage)
+          compact_valid_text: true, compact_text_tokens: storage,
+          workspace_factory: source_bf16 ? ML::Video::HyNomasSourceBF16MPSWorkspace.factory : nil)
         plan_cleanup << -> { @serial.release }
         blocks = @serial.blocks
         joint = blocks.first.checkpoints
@@ -610,6 +635,7 @@ module HyNomasSequence
             nil
           end,
           segment_attention_labels: HyNomasSequence.reference_attention_labels(base.valid_text_tokens, @reference_action),
+          source_bf16_attention: source_bf16,
           query: joint["joint.query"], key: joint["joint.key"],
           value: joint["joint.value"], output: joint["joint.attention"])
         plan_cleanup << -> { @history.release }
@@ -636,7 +662,7 @@ module HyNomasSequence
           raise ArgumentError.new("sequence allocation/admission mismatch: #{actual} != #{@named_bytes}")
         end
         HyNomasGeneration.emit("sequence_prepared", named_bytes: actual, segments: @segment_count,
-          history_precision: "F32 exact native cache boundary")
+          history_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 exact native cache boundary")
       rescue ex
         cleanup = [] of Proc(Nil)
         cleanup << -> { @eulers.reverse_each(&.release) } unless @eulers.empty?

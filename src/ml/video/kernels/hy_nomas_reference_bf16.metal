@@ -43,3 +43,25 @@ kernel void hy_nomas_reference_bf16_rms_finish(
             hy_nomas_bf16_roundtrip_f32(normalized_bf16 * gain);
     }
 }
+
+// Source residual rounds the gated update and the sum as separate BF16 ops.
+kernel void hy_nomas_source_bf16_residual(
+    device const float *base [[buffer(0)]],
+    device const float *delta [[buffer(1)]],
+    device const float *gate [[buffer(2)]],
+    device float *output [[buffer(3)]],
+    constant uint &count [[buffer(4)]],
+    uint index [[thread_position_in_grid]]) {
+#pragma clang fp contract(off)
+    if (index >= count) return;
+    float update = hy_nomas_bf16_roundtrip_f32(delta[index] * gate[index]);
+    output[index] = hy_nomas_bf16_roundtrip_f32(base[index] + update);
+}
+
+kernel void hy_nomas_source_bf16_expand(
+    device const ushort *input [[buffer(0)]],
+    device float *output [[buffer(1)]],
+    constant uint &count [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index < count) output[index] = as_type<float>(uint(input[index]) << 16u);
+}
