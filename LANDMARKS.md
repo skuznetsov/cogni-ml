@@ -6,6 +6,40 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-T0-T1-NATIVE-BLOCKS01-2026-11-04] Native T0 K/V feeds both T1 blocks
+
+- On the frozen RoleWright preludes and the same BF16 weights, the T0
+  diagnostic writes block 0's K/V, runs its post-attention path, and feeds
+  the resulting GPU image/text buffers to block 1's K/V writer. Both
+  physical BF16 cache pairs cover 4,583 active rows per layer. The two
+  BF16 pairs, their F32 GPU read stages, and all 24 T1 step-0 captures
+  match Tencent `911cea64` through PyTorch 2.8.0 MPS bit-for-bit at the
+  unchanged `atol=rtol=2e-5` gate. The comparison covers 32 tensors.
+- T1 registers the native cache read stages before encoding and selects
+  the matching layer's slot. Only frozen inputs and weights are uploaded
+  during setup. There are no intermediate CPU transfers or explicit
+  waits, and both phases share one Metal command chain with one terminal
+  wait. T1 still uses BF16-to-F32 GPU read stages for its history ABI.
+  Selecting block 0's cache for T1 block 1 preserves the native caches,
+  block 0, and block 1's current Q/K/V bit-for-bit but takes 9,108,949
+  values in block 1's attention outside tolerance.
+- The first square T0 graph hit the 6 GiB cap at a sampled 6.46 GiB.
+  The passing probe uses 256-row BF16 query chunks over the active T0
+  prefix with all rows visible. It sampled a 5.56 GiB peak and zero swap
+  growth under the same 6 GiB cap, 10% cache-aware reserve and 64 MiB
+  swap-growth limit. The sampled footprint is for the diagnostic, not a
+  full-model memory budget.
+- Replay `python3 -B compare.py` in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t0-t1-native-two-blocks-20261104.77OcZYzW`
+  verifies the hashes, guard receipts, padding and wrong-slot control
+  against the pinned source captures. The passing `comparison.json`
+  SHA-256 is `a89f572311bb2e387867d0e47702ec468001be4879a46180780301db34c15b83`.
+  Next discriminator: compare the serial continuation provider against
+  this two-block fixture before extending the layer range. Scope is the
+  native diagnostic, not the production sequence or rendered motion.
+  Keep the prompt-enhancer A/B separate. Refresh on source, runtime,
+  binary, input, weights, precision, geometry, or artifact changes.
+
 ### [LM-HY-NOMAS-T1-DIT-BLOCKS01-2026-11-04] Frozen RoleWright T1 blocks 0–1 match upstream MPS
 
 - At T1 step 0 (t=1000), one native Metal chain runs both DiT blocks on
@@ -30,11 +64,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   verifies the capture digests, 18 previous anchors, per-layer cache reads,
   guards and wrong-slot control. The passing `comparison.json` SHA-256 is
   `74a03588bb606b597ed12cba7ace6a49b4ddda8edfa96378f789ba569d6a8c33`.
-  Next discriminator: qualify the native T0 block-1 writer from the same
-  frozen prelude and feed its K/V directly to T1. The diagnostic covers no
-  later blocks or rendered motion. Keep the prompt-enhancer A/B separate.
-  Refresh on source, runtime, binary, input, weight, precision or artifact
-  changes.
+  See LM-HY-NOMAS-T0-T1-NATIVE-BLOCKS01-2026-11-04 for the run with both
+  native T0 writers. The diagnostic covers no later blocks or rendered
+  motion. Keep the prompt-enhancer A/B separate. Refresh on source,
+  runtime, binary, input, weight, precision or artifact changes.
 
 ### [LM-HY-NOMAS-T1-DIT-BLOCK0-2026-11-04] Frozen RoleWright T1 block 0 matches upstream MPS
 
