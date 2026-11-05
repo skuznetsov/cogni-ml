@@ -6,6 +6,34 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-T1-DIT-BLOCK0-2026-11-04] Frozen RoleWright T1 block 0 matches upstream MPS
+
+- An isolated native diagnostic from `a3e9dc28` connects block-0 Q/K/V,
+  action-masked history attention, output projections, both residuals,
+  and the FFNs. At T1 step 0 (t=1000), 28 captures match the pinned
+  Tencent `911cea64` source running on the PyTorch 2.8.0 MPS adapter.
+  Both outputs feeding block 1 are bit-exact: 4,320 image rows and 150
+  active text rows at width 2,048. The source input and history digests
+  match the previous attention probe; native attention padding is zero.
+- Omitting the BF16 rounding of the gated product leaves the attention
+  projections exact but fails the first residual on 570,854 image and
+  67,808 text values. F32 GELU with a final BF16 cast fails 4,345,529
+  image and 266,167 text values against source BF16 GELU at unchanged
+  `atol=rtol=2e-5`. The passing probe feeds BF16 FC1 output into the BF16
+  GELU graph and rounds both the gated product and the residual sum.
+- One terminal GPU wait and no intermediate CPU transfers. Guard:
+  cache-aware 10% reserve, 6 GiB process cap, 64 MiB swap stop. The native
+  probe sampled a 2.80 GiB peak footprint with no observed swap growth.
+  These diagnostic measurements do not establish production memory or speed.
+- Evidence and replay scripts: local external-SSD directory
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-t1-post-block0-20261104.PZZ1QDSU`,
+  especially `comparison.json`, `compare.py`, and the guarded run logs.
+  The probe is outside the production path. Next: connect block 1 with
+  its own authenticated T0 K/V on the same GPU chain and compare its
+  output. Keep prompt-enhancer quality A/B separate. No full T1,
+  original Magi/CUDA, motion or quality claim. Refresh on source, binary,
+  runtime, inputs, weights, cache, geometry, precision or artifact changes.
+
 ### [LM-HY-NOMAS-REFINER-FC2-RESIDUAL-2026-11-04] Both refiner blocks match the source on T0 V263
 
 - The default-off FC2/residual control requires source MLP SiLU control
