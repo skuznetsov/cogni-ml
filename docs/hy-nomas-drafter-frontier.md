@@ -1,5 +1,94 @@
 # Hy-Nomas local draft suite
 
+## Two sequential reference actions (2026-11-05)
+
+Status: v2 metadata and two bounded V224 numerical gates are implemented;
+explicit actor anchors animate the paper glove, but hand artifacts remain.
+V1 remains unchanged. The first compact masked prompt still fails its
+acting goal: Alex moves, his hand can smear, and the paper stays still.
+A fresh unmasked historical-conditioning replay does move the paper glove,
+so the model is not categorically unable to animate this character.
+Numerical parity and visible execution of both actions are separate gates.
+
+Add an explicit `cogni_ml.hy_nomas_action_conditioning/v2` profile for exactly
+two chronological, nonoverlapping actions in the final T1 segment of the
+existing reference-T0 + generated-T1 experiment. Action1 belongs to
+`<|Subject1|>` (Alex); Action2 belongs to `<|Subject2|>` (the paper resume).
+Both subjects must be declared in the authenticated T0 caption. Keep v1
+parsing, identity, labels and rejection behavior unchanged.
+
+V2 keeps the authenticated geometry, token contract, pinned source helpers
+and conditioning hashes. It replaces `action` with an ordered `actions`
+array. Each action has the existing action metadata and latent bounds.
+`text_offsets` contains `head_end`, `valid_text_tokens`, three
+`source_offsets_raw`, three `effective_offsets`, and the existing endpoint
+note. Effective offsets strictly partition global head, Action1 and Action2
+text, ending at the authenticated valid-token count. Video windows tile all
+30 latent frames with indices -1 (gap), 0 or 1, each action occurring once.
+Labels use global 0, action labels `[1, 2]`, padding -1 and the existing
+query/key scope. Video and cached-history keys remain globally visible.
+
+Reject overlapping, reversed, missing, duplicated, unknown-subject or
+empty-latent actions, mismatched wrappers/offsets, truncated action text and
+changed hash bindings. Earlier action-history segments, simultaneous actor
+spatial masks and general multi-segment action editing remain unsupported.
+This is CPU metadata preparation; GPU kernels, scratch lifetime and command
+drains must not change. Rollback is selecting the unchanged v1 profile.
+
+Risk: CAUTION (incorrect action-to-text/subject binding). DoD: the focused
+Python and Crystal action/admission specs pass, including unchanged v1 and
+negative v2 controls; native label ranges match the pinned upstream helpers.
+Then compare one bounded five-second native/source BF16 probe with identical
+conditioning, T0 and noise at unchanged `atol=rtol=2e-5`, under the cache-aware
+10% memory floor. Inspect Alex's turn and the paper gesture independently.
+No full advertisement or long generation is admitted by this slice.
+
+The first compact V224 replay matched the pinned full-BF16-autocast MPS
+oracle bit-for-bit across 24 comparisons: 17 sampled boundaries, four Euler
+updates and three timeline checks. The comparator's A/A check passed and a
+single-value perturbation failed the unchanged tolerance. Actual native
+query/key labels also matched every visible pair in the upstream range
+matrix (4,544 queries by 9,127 keys). This qualifies the frozen fixture and
+the explicit MPS attention adapter, not stock CUDA/Magi or arbitrary prompts.
+The replay uses the previously qualified frozen DCAE output; it does not
+requalify the image encoder or PixelUMM.
+
+Despite this numerical result, the decoded take gives Alex a white glove
+and makes him perform the chest tap assigned to the paper Resume. The paper
+stays almost still. Temporal action masks therefore pass their numerical
+gate but fail the intended actor binding. They do not provide spatial actor
+masks. Head text remains visible to every action query; its visibility is
+not the missing feature. The interactive upstream rewriter controls only
+Subject1, whereas the captioning/SFT examples allow multiple subject IDs.
+T1 omits the local subject roster under the pinned global-only-first shaping
+rule, but can attend the two-subject T0 history and its current global head.
+Adding explicit actor appearance and position inside each action body,
+while retaining V224, T0, noise and timestamps, also passes all 24 numeric
+comparisons bit-for-bit. The paper now raises its own glove to its printed
+chest. Alex's human hand still smears. This is a partial visual improvement,
+not a completed acting or hand-quality gate. The next discriminator decodes
+the same new latents through upstream PixelUMM to distinguish decoder
+differences from generated motion defects.
+
+The explicit source-BF16 request now rejects unsupported refiner prefix
+lengths before model preparation instead of silently disabling all source
+rounding controls. V224 is admitted alongside the existing V263/V150
+fixtures. This is a token-count admission guard, not a proof for every V224
+prompt. Native v2 admission also rejects subject-ID-only or whitespace-only
+action bodies, matching the Python exporter without changing v1.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/rolewright-sequential-actions-20261105.w7m2k9qa`.
+Replay `compare-v2.argv.json` and require `gate_passed`, zero differing bits
+in the 24 real comparisons and exactly one rejected perturbation.
+`native-range-compare.json` records the exact label/range comparison;
+`contact.png` and `rolewright-alex-and-resume-5s.mp4` retain the failed take.
+`anchor/compare-anchor.argv.json` and `anchor/compare-anchor.json` retain
+the second numeric gate; the corresponding `anchor/contact.png` and clip
+show the paper gesture and remaining hand artifact.
+Refresh on prompt, conditioning, weights, source, runtime, precision, binary
+or attention-schedule changes. Numerical parity must never promote the
+failed acting result to a character-control capability.
+
 ## Connected T0 block-0 cache writer (2026-11-04)
 
 The diagnostic `--connected-history-output` attaches the qualified refiner

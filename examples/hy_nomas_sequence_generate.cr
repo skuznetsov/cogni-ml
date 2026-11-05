@@ -321,7 +321,11 @@ begin
              inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
              prompt: inputs.base.prompt, qwen_valid_tokens: inputs.base.valid_text_tokens,
              qwen_input: "authenticated saved upstream state26 crop; native live text encoding excluded",
-             conditioning: reference_action.try(&.action_conditioning) ? "caption-only T0 with Subject1 Alex; authenticated T1 Action1 offsets and temporal attention mask" : (reference_action ? "caption-only reference T0 then separately authenticated T1 action text; tagged action tails rejected" : "one shared scene-level prompt; tagged action tails and per-segment prompts rejected"),
+             conditioning: if profile = reference_action.try(&.action_conditioning)
+               profile.sequential_actions? ? "caption-only T0 with Subject1 Alex and Subject2 Resume; authenticated sequential T1 Action1/Action2 offsets and temporal attention masks" : "caption-only T0 with Subject1 Alex; authenticated T1 Action1 offsets and temporal attention mask"
+             else
+               reference_action ? "caption-only reference T0 then separately authenticated T1 action text; tagged action tails rejected" : "one shared scene-level prompt; tagged action tails and per-segment prompts rejected"
+             end,
              text_conditioning_mode: reference_action.try(&.action_conditioning) ? "reference_caption_then_masked_action" : (reference_action ? "reference_caption_then_action" : "shared_scene"),
              reference_action: reference_action.try(&.identity),
              segment_text_tokens: reference_action.try(&.text_tokens(inputs.base.valid_text_tokens)),

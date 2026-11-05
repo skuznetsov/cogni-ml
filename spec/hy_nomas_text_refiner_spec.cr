@@ -2,26 +2,52 @@ require "spec"
 require "../src/ml/video/hy_nomas_text_refiner"
 
 describe ML::Video::HyNomasTextRefinerMPSPlan do
-  it "limits source attention to padded V263 and V150 with BF16 QKV" do
+  it "admits V263, V150, and experimental V224 only with the source BF16 guards" do
     plan = ML::Video::HyNomasTextRefinerMPSPlan
     plan.validate_source_attention_control!(false, false, 7, 7)
     plan.validate_source_attention_control!(true, true, 263, 1280)
     plan.validate_source_attention_control!(true, true, 150, 1280)
+    plan.validate_source_attention_control!(true, true, 224, 1280)
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, false, 263, 1280)
     end
     expect_raises(ArgumentError, /Source attention control/) do
-      plan.validate_source_attention_control!(true, true, 262, 1280)
+      plan.validate_source_attention_control!(true, false, 224, 1280)
+    end
+    {223, 225, 262}.each do |valid|
+      expect_raises(ArgumentError, /Source attention control/) do
+        plan.validate_source_attention_control!(true, true, valid, 1280)
+      end
     end
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, true, 149, 1280)
     end
-    expect_raises(ArgumentError, /Source attention control/) do
-      plan.validate_source_attention_control!(true, true, 263, 263)
+    {224, 263}.each do |valid|
+      expect_raises(ArgumentError, /Source attention control/) do
+        plan.validate_source_attention_control!(true, true, valid, valid)
+      end
     end
     expect_raises(ArgumentError, /Source attention control/) do
       plan.validate_source_attention_control!(true, true, 263, 1280,
         ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl)
+    end
+    expect_raises(ArgumentError, /Source attention control/) do
+      plan.validate_source_attention_control!(true, true, 224, 1280,
+        ML::Video::HyNomasAttentionPrecision::BF16BoundaryControl)
+    end
+  end
+
+  it "fails closed for unsupported requested source BF16 refiner prefixes" do
+    plan = ML::Video::HyNomasTextRefinerMPSPlan
+    plan.validate_source_bf16_request!(true, 224)
+    plan.validate_source_bf16_request!(true, 263)
+    plan.validate_source_bf16_request!(true, 150)
+    plan.validate_source_bf16_request!(false, 225)
+
+    {223, 225}.each do |valid|
+      expect_raises(ArgumentError, /no admitted precision path/) do
+        plan.validate_source_bf16_request!(true, valid)
+      end
     end
   end
 

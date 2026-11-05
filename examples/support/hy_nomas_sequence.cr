@@ -103,10 +103,25 @@ module HyNomasSequence
   # The bounded reference test maps Subject1 to Alex in the global T0 roster.
   # Subject tags are literal prompt text, so a valid T1 profile alone cannot
   # establish which character its action is meant to address.
-  def validate_reference_subject_roster!(caption_prompt : String) : Nil
+  def validate_reference_subject_roster!(caption_prompt : String, *,
+                                         sequential_actions : Bool = false) : Nil
     validate_shared_scene_prompt!(caption_prompt)
     document = JSON.parse(caption_prompt)
     subjects = document.as_h["subject_list"].as_a
+    if sequential_actions
+      unless subjects.size == 2
+        raise ArgumentError.new("Sequential reference actions require the ordered T0 Subject1 Alex and Subject2 Resume roster")
+      end
+      [{"<|Subject1|>", "Alex"}, {"<|Subject2|>", "Resume"}].each_with_index do |(identifier, name), index|
+        subject = subjects[index].as_h
+        unless subject["subject_id"].as_s == identifier &&
+               subject["display_name"].as_s == name &&
+               !subject["subject_attribute"].as_s.strip.empty?
+          raise ArgumentError.new("Sequential reference actions require the ordered T0 Subject1 Alex and Subject2 Resume roster")
+        end
+      end
+      return
+    end
     subject = subjects.size == 1 ? subjects.first.as_h : nil
     unless subject && subject["subject_id"].as_s == "<|Subject1|>" &&
            subject["display_name"].as_s == "Alex" &&
@@ -114,6 +129,9 @@ module HyNomasSequence
       raise ArgumentError.new("Structured reference action requires the single T0 Subject1 roster entry for Alex")
     end
   rescue ex : JSON::ParseException | KeyError | TypeCastError
+    if sequential_actions
+      raise ArgumentError.new("Sequential reference actions require the ordered T0 Subject1 Alex and Subject2 Resume roster")
+    end
     raise ArgumentError.new("Structured reference action requires the single T0 Subject1 roster entry for Alex")
   end
 
@@ -242,6 +260,12 @@ module HyNomasSequence
     end
     if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
       raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
+    end
+    if source_bf16
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_source_bf16_request!(true, inputs.base.valid_text_tokens)
+      if action = reference_action
+        ML::Video::HyNomasTextRefinerMPSPlan.validate_source_bf16_request!(true, action.valid_text_tokens)
+      end
     end
     valid = query_text_tokens(inputs.base, prompt_edit, reference_action: reference_action)
     scratch_growth = HyNomasGeneration.dit_scratch_bytes(valid, ((valid + 63) // 64) * 64) -
@@ -407,9 +431,9 @@ module HyNomasSequence
       raise ArgumentError.new("Reference actions require separate authenticated conditioning")
     end
     return unless action && action_inputs
-    if action.action_conditioning
+    if profile = action.action_conditioning
       raise ArgumentError.new("Structured reference action requires an authenticated T0 caption") unless caption_prompt
-      validate_reference_subject_roster!(caption_prompt)
+      validate_reference_subject_roster!(caption_prompt, sequential_actions: profile.sequential_actions?)
     end
     validate_reference_action_admission!(action, segments: segments,
       reference_latent_bytes: reference_latent_bytes, text_cache_policy: text_cache_policy,
@@ -784,11 +808,12 @@ module HyNomasSequence
     end
 
     private def prepare_refiner(qwen : ML::MetalBuffer, mask : Array(Int32), source_bf16 : Bool) : ML::Video::HyNomasTextRefinerMPSPlan
-      # The source attention schedule is qualified only for these two prefix
-      # lengths. Preserve the original refiner for other reference prompts.
+      # Source-BF16 is an explicit precision request. Reject an unqualified
+      # prefix instead of silently running its refiner with F32 boundaries.
+      valid = ML::Video::HyNomasTextRefinerMPSPlan.valid_tokens(mask)
+      ML::Video::HyNomasTextRefinerMPSPlan.validate_source_bf16_request!(source_bf16, valid)
       bytes = ML::Video::HyNomasTextRefinerMPSPlan.named_bytes(mask, retain_padding: true).total
-      enabled = source_bf16 && ML::Video::HyNomasTextRefinerMPSPlan.source_attention_tokens?(
-        ML::Video::HyNomasTextRefinerMPSPlan.valid_tokens(mask))
+      enabled = source_bf16
       ML::Video::HyNomasTextRefinerMPSPlan.new(qwen, mask, 1000_f32, @globals, bytes,
         retain_padding: true, prelude_input_bf16_control: enabled,
         prelude_linear_bf16_control: enabled, prelude_silu_bf16_control: enabled,

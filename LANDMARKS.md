@@ -6,6 +6,50 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SEQUENTIAL-ACTORS-2026-11-05] Temporal masks match upstream; explicit actor anchors move Resume
+
+- The opt-in `hy_nomas_action_conditioning/v2` profile admits exactly two
+  sequential final-T1 actions, bound to the authenticated ordered T0 roster
+  Subject1 Alex / Subject2 Resume. It validates nonempty action bodies,
+  wrappers, timestamps, offsets, windows and conditioning hashes. V1 stays
+  the default and retains its parser, identity and labels. An actual saved
+  v1 Python re-export is byte-identical to its previous profile.
+- Native query/key labels match every visible pair in the pinned source
+  range matrix (4,544 queries by 9,127 keys). All video/history keys and the
+  current global head remain visible; the masks separate time windows,
+  not spatial actors. Interactive upstream prompts control Subject1 only;
+  separate captioning/SFT examples contain multiple subject IDs. Neither
+  fact establishes general multi-character control.
+- Two frozen V224 probes, with identical T0, noise and action timestamps,
+  each match the pinned `911cea64` full-BF16-autocast MPS adapter bit-for-bit
+  in 24 comparisons: 17 sampled boundaries, four Euler updates and three
+  timeline checks. Each A/A passes and one altered value is rejected at
+  unchanged `atol=rtol=2e-5`. The instrumented native core records zero
+  encode allocations, readbacks and preterminal waits, with one drain.
+  This reuses the previously qualified frozen DCAE bank; it does not
+  requalify PixelUMM, arbitrary prompts or stock CUDA/Magi.
+- The compact prompt misassigns Resume's glove/chest action to Alex.
+  Explicit appearance and position inside each action body make Resume
+  raise its own glove to its printed chest. Alex's human hand still smears.
+  Numerical parity is ROBUST for these fixtures; the intended complete
+  acting and hand-quality result remains open. Reviews are same-lineage.
+- Requested source-BF16 prefixes outside V263/V150/experimental V224 now
+  fail before model preparation instead of silently disabling source
+  rounding. This is a token-count guard, not general V224 qualification.
+  Guarded final checks pass: 37 Crystal examples, 13 Python tests, release
+  CLI build and v2 plan. The cache-aware 10% floor and 64 MiB swap-growth
+  stop remain; observed swap growth is zero in both numeric probes.
+- Evidence: `/opt/mldata_ssd/cogni-ml/rolewright-sequential-actions-20261105.w7m2k9qa`.
+  Replay `compare-v2.argv.json` and `anchor/compare-anchor.argv.json` with
+  their bound artifacts. Report SHA-256 values are
+  `f3b6608d29ced3e0e859f3db9e8ccfc4668131f1b4b4167dfe7bbc3454b572e0`
+  and `4ab2d2d6a81f44212730afcf19b83676c090a32e20a30831073ced96cf2b9f1e`.
+  `anchor/contact.png` and `anchor/rolewright-alex-and-resume-5s.mp4` retain
+  the partial visual improvement. Roll back by selecting v1. Refresh on
+  prompt, conditioning, weights, source, runtime, precision or binary
+  changes. Next: compare native/upstream PixelUMM on these exact latents
+  and decoder noise, authenticating the native 180-to-60 GPU prefix gather.
+
 ### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
 
 - Tencent `911cea64` encloses the entire cached DiT forward in BF16

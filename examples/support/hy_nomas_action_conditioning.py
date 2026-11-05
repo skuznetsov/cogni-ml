@@ -26,6 +26,7 @@ UPSTREAM_SOURCE_SHA256 = {
     "configs/constants.py": "b4ab0055d0a2fade687f012f0e305915f5305df58dc82e2ad8bde25ef4236af9",
 }
 PROFILE_SCHEMA = "cogni_ml.hy_nomas_action_conditioning/v1"
+PROFILE_SCHEMA_V2 = "cogni_ml.hy_nomas_action_conditioning/v2"
 TEMPLATE_NAME = "li-dit-encode-video-json"
 TEMPLATE_SHA256 = "3e7b69bdf2a057bf2d6a8322dfb8ad619e686e4e8240b65f29e94492bee0c4a6"
 TEXT_LENGTH = 1280
@@ -40,6 +41,10 @@ MAX_INPUT_BYTES = 16 * 1024 * 1024
 SHA_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 ACTION_WRAPPER_RE = re.compile(r"\A<Action1>(?P<body>.*?)</Action1>\.\Z", re.DOTALL)
 VIDEO_JSON_TEMPLATE_SHA256 = TEMPLATE_SHA256
+OFFSET_ENDPOINT_NOTE = (
+    "BasePipeline returns the raw attention-mask sum; pinned nomas_cpt clamps it with min(offset, "
+    "valid current text query tokens), yielding the authenticated cropped-mask count"
+)
 
 
 class ActionConditioningError(ValueError):
@@ -157,6 +162,105 @@ def validate_t1_prompt(prompt: str) -> dict[str, Any]:
     }
 
 
+def _normalized_local_action(action: dict[str, Any], index: int) -> dict[str, Any]:
+    """Validate and normalize one v2 action without weakening the v1 validator."""
+    if set(action) != {"start_time", "end_time", "action_description"}:
+        raise ActionConditioningError(f"Action{index} must contain only start_time, end_time, and action_description")
+    for key in ("start_time", "end_time"):
+        if not isinstance(action[key], str):
+            raise ActionConditioningError(f"Action{index} timestamps must be segment-local strings")
+        parsed = _parse_timestamp(action[key])
+        if action[key] != _format_relative_timestamp(parsed):
+            raise ActionConditioningError(f"Action{index} timestamps must use normalized segment-local format")
+    start = _parse_timestamp(action["start_time"])
+    end = _parse_timestamp(action["end_time"])
+    if not 0.0 <= start < end <= SEGMENT_END_SECONDS - SEGMENT_START_SECONDS:
+        raise ActionConditioningError(f"Action{index} timestamps must be segment-local and bounded to 0–5 seconds")
+
+    description = action["action_description"]
+    if not isinstance(description, str):
+        raise ActionConditioningError(f"Action{index} action_description must be text")
+    wrapper = re.fullmatch(
+        rf"<Action{index}>(?P<body>.*?)</Action{index}>\.", description, flags=re.DOTALL
+    )
+    if (wrapper is None or description.count("<Action") != 1
+            or description.count("</Action") != 1):
+        raise ActionConditioningError(f"Action{index} description must use one paired literal <Action{index}> wrapper")
+    body = wrapper.group("body")
+    subject_ids = re.findall(r"<\|Subject\d+\|>", body)
+    expected_subject = f"<|Subject{index}|>"
+    if subject_ids != [expected_subject]:
+        raise ActionConditioningError(f"Action{index} must reference only the upstream {expected_subject} identifier")
+    if "<|Subject" in description.replace(expected_subject, ""):
+        raise ActionConditioningError(f"Action{index} contains an unknown or misplaced subject identifier")
+    if not body.replace(expected_subject, "").strip():
+        raise ActionConditioningError(f"Action{index} description must include nonempty action text")
+    return {
+        "action_id": index,
+        "subject_id": expected_subject,
+        "start_time_local_seconds": start,
+        "end_time_local_seconds": end,
+        "action_description": description,
+        "time_origin": "segment_local_seconds",
+        "source_segment_start_seconds": SEGMENT_START_SECONDS,
+        "source_segment_end_seconds": SEGMENT_END_SECONDS,
+    }
+
+
+def validate_t1_prompt_v2(prompt: str) -> list[dict[str, Any]]:
+    """Validate the exact two-action T1 prompt admitted by profile v2."""
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 64 * 1024:
+        raise ActionConditioningError("T1 prompt must be nonempty UTF-8 JSON under 64 KiB")
+    try:
+        document = json.loads(prompt)
+    except (json.JSONDecodeError, UnicodeEncodeError) as error:
+        raise ActionConditioningError("T1 prompt is not valid JSON") from error
+    if not isinstance(document, dict):
+        raise ActionConditioningError("T1 prompt root must be an object")
+    segments = document.get("segments")
+    if not isinstance(segments, list) or len(segments) != 1 or not isinstance(segments[0], dict):
+        raise ActionConditioningError("T1 prompt must contain exactly one T1 segment")
+    segment = segments[0]
+    try:
+        segment_start = _parse_timestamp(segment.get("start_time"))
+        segment_end = _parse_timestamp(segment.get("end_time"))
+    except ActionConditioningError as error:
+        raise ActionConditioningError("T1 segment has invalid global time boundaries") from error
+    if segment_start != SEGMENT_START_SECONDS or segment_end != SEGMENT_END_SECONDS:
+        raise ActionConditioningError("T1 starts at 5s and ends at 10s in the global timeline")
+
+    raw_actions = segment.get("contained_actions")
+    if not isinstance(raw_actions, list) or len(raw_actions) != 2 or any(not isinstance(item, dict) for item in raw_actions):
+        raise ActionConditioningError("T1 must contain exactly two ordered contained actions")
+    actions = [_normalized_local_action(action, index) for index, action in enumerate(raw_actions, start=1)]
+    if not actions[0]["start_time_local_seconds"] < actions[1]["start_time_local_seconds"]:
+        raise ActionConditioningError("Action1 and Action2 must be chronological")
+    if actions[0]["end_time_local_seconds"] > actions[1]["start_time_local_seconds"]:
+        raise ActionConditioningError("Action1 and Action2 must not overlap")
+    return actions
+
+
+def _profile_schema_version(profile_schema: str) -> str:
+    if profile_schema in ("v1", PROFILE_SCHEMA):
+        return "v1"
+    if profile_schema in ("v2", PROFILE_SCHEMA_V2):
+        return "v2"
+    raise ActionConditioningError("profile_schema must be v1 or v2")
+
+
+def _validate_v2_caption_roster(caption: dict[str, Any]) -> None:
+    subjects = caption.get("subject_list")
+    expected = (("<|Subject1|>", "Alex"), ("<|Subject2|>", "Resume"))
+    if not isinstance(subjects, list) or len(subjects) != len(expected):
+        raise ActionConditioningError("v2 prompt shaping requires the ordered T0 Subject1 Alex and Subject2 Resume roster")
+    for subject, (subject_id, display_name) in zip(subjects, expected):
+        if (not isinstance(subject, dict) or subject.get("subject_id") != subject_id
+                or subject.get("display_name") != display_name
+                or not isinstance(subject.get("subject_attribute"), str)
+                or not subject["subject_attribute"].strip()):
+            raise ActionConditioningError("v2 prompt shaping requires the ordered T0 Subject1 Alex and Subject2 Resume roster")
+
+
 def _upstream_source_record(upstream_root: Path) -> tuple[Path, dict[str, str]]:
     root = upstream_root.expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -237,10 +341,18 @@ def _shape_helpers(upstream_root: Path) -> dict[str, Any]:
     )
 
 
-def shape_reference_prompts(upstream_root: Path, caption: dict[str, Any], followup: dict[str, Any]) -> tuple[str, str]:
+def shape_reference_prompts(
+    upstream_root: Path,
+    caption: dict[str, Any],
+    followup: dict[str, Any],
+    profile_schema: str = "v1",
+) -> tuple[str, str]:
     """Shape T0 and T1 using the exact pinned inference AST (CPU only)."""
+    schema_version = _profile_schema_version(profile_schema)
     if not isinstance(caption, dict) or not isinstance(followup, dict):
         raise ActionConditioningError("caption and follow-up inputs must be JSON objects")
+    if schema_version == "v2":
+        _validate_v2_caption_roster(caption)
     caption_segments = caption.get("segments")
     followup_segments = followup.get("segments")
     if not isinstance(caption_segments, list) or len(caption_segments) != 1:
@@ -262,6 +374,8 @@ def shape_reference_prompts(upstream_root: Path, caption: dict[str, Any], follow
     shaped = prompts.split(helpers["PROMPT_SEPARATOR"])
     if count != 2 or len(shaped) != 2:
         raise ActionConditioningError("pinned prompt shaper did not produce exactly T0 and T1")
+    if schema_version == "v2":
+        validate_t1_prompt_v2(shaped[1])
     return shaped[0], shaped[1]
 
 
@@ -326,7 +440,67 @@ def _install_pinned_timestamp_parser(inference_path: Path):
     return old
 
 
-def _token_contract(document: dict[str, Any], tokenizer_root: Path) -> tuple[Any, dict[str, Any]]:
+def _plain_token_row(value: Any, field: str) -> list[int]:
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().tolist()
+    elif hasattr(value, "tolist"):
+        value = value.tolist()
+    if (not isinstance(value, list) or len(value) != 1
+            or not isinstance(value[0], list)
+            or any(isinstance(item, bool) or not isinstance(item, int) for item in value[0])):
+        raise ActionConditioningError(f"untruncated tokenizer returned an invalid {field} row")
+    return value[0]
+
+
+def _verify_v2_untruncated_prompt(
+    prompt: str,
+    contract: dict[str, Any],
+    tokenizer: Any,
+    text_encoder: Any,
+    template: dict[str, Any],
+) -> None:
+    """Recompute the exact no-truncation preflight before admitting v2 offsets."""
+    record = contract["contract"].get("untruncated_preflight")
+    maximum = contract["crop_start"] + contract["text_length"]
+    if (not isinstance(record, dict)
+            or record.get("method") != "apply_chat_template_without_truncation_or_padding"
+            or record.get("truncation_required") is not False
+            or record.get("maximum_raw_length") != maximum
+            or isinstance(record.get("raw_length"), bool)
+            or not isinstance(record.get("raw_length"), int)
+            or not contract["crop_start"] < record["raw_length"] <= maximum
+            or not isinstance(record.get("token_ids_sha256"), str)
+            or not SHA_RE.fullmatch(record["token_ids_sha256"])):
+        raise ActionConditioningError("v2 requires an authenticated no-truncation prompt preflight")
+    try:
+        messages = text_encoder.apply_text_to_template(prompt, template["template"])
+        encoding = tokenizer.apply_chat_template(
+            [messages],
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_attention_mask=True,
+            truncation=False,
+            padding=False,
+        )
+        token_ids = _plain_token_row(encoding["input_ids"], "input_ids")
+    except ActionConditioningError:
+        raise
+    except Exception as error:
+        raise ActionConditioningError("cannot recompute v2 prompt tokens without truncation") from error
+    if (len(token_ids) != record["raw_length"]
+            or len(token_ids) > maximum
+            or _canonical_json_sha256(token_ids) != record["token_ids_sha256"]
+            or contract["raw_token_ids"][:len(token_ids)] != token_ids
+            or any(value != 1 for value in contract["raw_attention_mask"][:len(token_ids)])
+            or any(contract["raw_attention_mask"][len(token_ids):])):
+        raise ActionConditioningError("v2 untruncated tokens differ from the authenticated Qwen token contract")
+
+
+def _token_contract(
+    document: dict[str, Any], tokenizer_root: Path, profile_schema: str = "v1",
+) -> tuple[Any, dict[str, Any]]:
+    schema_version = _profile_schema_version(profile_schema)
     qwen = document.get("qwen_source")
     geometry = document.get("geometry")
     if not isinstance(qwen, dict) or not isinstance(geometry, dict):
@@ -340,7 +514,10 @@ def _token_contract(document: dict[str, Any], tokenizer_root: Path) -> tuple[Any
     prompt_sha = _sha256_bytes(prompt.encode("utf-8"))
     if prompt_sha != contract.get("prompt_sha256") or prompt_sha != qwen.get("prompt_sha256"):
         raise ActionConditioningError("conditioning prompt SHA-256 differs from its Qwen contract")
-    action = validate_t1_prompt(prompt)
+    if schema_version == "v1":
+        action_contract: dict[str, Any] = {"action": validate_t1_prompt(prompt)}
+    else:
+        action_contract = {"actions": validate_t1_prompt_v2(prompt)}
 
     crop_start = contract.get("crop_start")
     text_length = contract.get("text_length")
@@ -422,9 +599,8 @@ def _token_contract(document: dict[str, Any], tokenizer_root: Path) -> tuple[Any
         raise ActionConditioningError("cannot load the authenticated local Qwen tokenizer") from error
     if tokenizer.padding_side != padding.get("side") or tokenizer.pad_token_id != pad_token_id:
         raise ActionConditioningError("loaded Qwen tokenizer padding differs from the prompt contract")
-    return tokenizer, {
+    result = {
         "contract": contract,
-        "action": action,
         "crop_start": crop_start,
         "text_length": text_length,
         "valid_text_tokens": valid_tokens,
@@ -435,10 +611,12 @@ def _token_contract(document: dict[str, Any], tokenizer_root: Path) -> tuple[Any
         "tokenizer_assets": assets,
         "tokenizer": prompt_contract_tokenizer,
     }
+    result.update(action_contract)
+    return tokenizer, result
 
 
 def _derive_action_offsets_and_windows(
-    upstream_root: Path, prompt: str, tokenizer: Any, contract: dict[str, Any],
+    upstream_root: Path, prompt: str, tokenizer: Any, contract: dict[str, Any], action_count: int = 1,
 ) -> tuple[list[int], list[list[int]] | None, list[int], list[int]]:
     root, _ = _upstream_source_record(upstream_root)
     template = _video_json_template(root / "configs/constants.py")
@@ -470,9 +648,12 @@ def _derive_action_offsets_and_windows(
         raw_mask = text_encoder.text2tokens([prompt], data_type="video", max_length=TEXT_LENGTH)["attention_mask"].squeeze(0).tolist()
         if raw_ids != contract["raw_token_ids"] or raw_mask != contract["raw_attention_mask"]:
             raise ActionConditioningError("pinned tokenizer output differs from the actual Qwen prompt contract IDs")
+        if action_count == 2:
+            _verify_v2_untruncated_prompt(prompt, contract, tokenizer, text_encoder, template)
         source_offsets = pipeline._compute_action_text_offsets(prompt)
-        if not isinstance(source_offsets, list) or len(source_offsets) != 2:
-            raise ActionConditioningError("upstream action offset helper did not return one head/action boundary pair")
+        if not isinstance(source_offsets, list) or len(source_offsets) != action_count + 1:
+            expected = "one head/action boundary pair" if action_count == 1 else "one head and two action boundary points"
+            raise ActionConditioningError(f"upstream action offset helper did not return {expected}")
         if any(isinstance(value, bool) or not isinstance(value, int) for value in source_offsets):
             raise ActionConditioningError("upstream action text offsets must be integer token positions")
 
@@ -501,6 +682,20 @@ def clamp_source_action_offsets(source_offsets: list[int], valid_text_tokens: in
             or not 1 <= valid_text_tokens <= MAX_VALID_TEXT_TOKENS):
         raise ActionConditioningError("action text offsets do not fit the bounded token contract")
     return [min(offset, valid_text_tokens) for offset in source_offsets]
+
+
+def clamp_source_action_offsets_v2(source_offsets: list[int], valid_text_tokens: int) -> list[int]:
+    """Clamp the pinned head/Action1/Action2 boundaries to visible T1 tokens."""
+    if (not isinstance(source_offsets, list) or len(source_offsets) != 3
+            or any(isinstance(value, bool) or not isinstance(value, int)
+                   or value < 0 or value > TEXT_LENGTH for value in source_offsets)
+            or isinstance(valid_text_tokens, bool) or not isinstance(valid_text_tokens, int)
+            or not 1 <= valid_text_tokens <= MAX_VALID_TEXT_TOKENS):
+        raise ActionConditioningError("v2 action text offsets do not fit the bounded token contract")
+    effective = [min(offset, valid_text_tokens) for offset in source_offsets]
+    if not effective[0] < effective[1] < effective[2] == valid_text_tokens:
+        raise ActionConditioningError("v2 action text offsets must partition a nonempty head and two actions")
+    return effective
 
 
 def _verify_windows(windows: list[list[int]] | None, action: dict[str, Any]) -> tuple[bool, list[list[int]] | None]:
@@ -532,12 +727,69 @@ def _verify_windows(windows: list[list[int]] | None, action: dict[str, Any]) -> 
     return True, normalized
 
 
+def _latent_frame_for_seconds(seconds: float) -> int:
+    return int(seconds * VIDEO_FPS) // TEMPORAL_RATIO
+
+
+def _verify_windows_v2(
+    windows: list[list[int]] | None, actions: list[dict[str, Any]],
+) -> list[list[int]]:
+    """Check the AST-produced two-action windows against exact timestamp geometry."""
+    if windows is None or not isinstance(windows, list) or not windows:
+        raise ActionConditioningError("v2 action windows must tile the 30-frame segment")
+    if len(actions) != 2:
+        raise ActionConditioningError("v2 video window validation requires exactly two ordered actions")
+    expected: list[list[int]] = []
+    cursor = 0
+    previous_start = -1.0
+    previous_end = -1.0
+    for index, action in enumerate(actions):
+        start_seconds = action.get("start_time_local_seconds")
+        end_seconds = action.get("end_time_local_seconds")
+        if (isinstance(start_seconds, bool) or not isinstance(start_seconds, (int, float))
+                or isinstance(end_seconds, bool) or not isinstance(end_seconds, (int, float))
+                or not 0 <= start_seconds < end_seconds <= 5.0):
+            raise ActionConditioningError(f"v2 Action{index + 1} has invalid local timestamps")
+        if start_seconds <= previous_start or start_seconds < previous_end:
+            raise ActionConditioningError("v2 actions must be chronological and nonoverlapping")
+        latent_start = _latent_frame_for_seconds(float(start_seconds))
+        latent_end = _latent_frame_for_seconds(float(end_seconds))
+        if not 0 <= latent_start < latent_end <= SEGMENT_LATENT_FRAMES:
+            raise ActionConditioningError(f"v2 Action{index + 1} has an empty or out-of-range latent span")
+        if latent_start < cursor:
+            raise ActionConditioningError("v2 actions overlap in latent-frame geometry")
+        if latent_start > cursor:
+            expected.append([cursor, latent_start, -1])
+        expected.append([latent_start, latent_end, index])
+        cursor = latent_end
+        previous_start = float(start_seconds)
+        previous_end = float(end_seconds)
+    if cursor < SEGMENT_LATENT_FRAMES:
+        expected.append([cursor, SEGMENT_LATENT_FRAMES, -1])
+
+    normalized: list[list[int]] = []
+    for window in windows:
+        if (not isinstance(window, list) or len(window) != 3
+                or any(isinstance(value, bool) or not isinstance(value, int) for value in window)):
+            raise ActionConditioningError("v2 upstream action window is malformed")
+        start, end, action_index = window
+        if (not 0 <= start < end <= SEGMENT_LATENT_FRAMES or action_index not in (-1, 0, 1)):
+            raise ActionConditioningError("v2 upstream action window is out of range")
+        normalized.append([start, end, action_index])
+    action_indices = [window[2] for window in normalized if window[2] >= 0]
+    if action_indices != [0, 1] or normalized != expected:
+        raise ActionConditioningError("v2 upstream windows must tile the segment with each exact action span once")
+    return normalized
+
+
 def export_action_conditioning(
     conditioning_inputs: Path,
     conditioning_sha256: str,
     upstream_root: Path,
     tokenizer_root: Path,
+    profile_schema: str = "v1",
 ) -> dict[str, Any]:
+    schema_version = _profile_schema_version(profile_schema)
     if not SHA_RE.fullmatch(conditioning_sha256):
         raise ActionConditioningError("conditioning manifest SHA-256 must be lowercase hexadecimal")
     input_path = conditioning_inputs.expanduser().resolve(strict=True)
@@ -560,11 +812,97 @@ def export_action_conditioning(
     prompt = document.get("prompt")
     if not isinstance(prompt, str):
         raise ActionConditioningError("conditioning prompt is missing")
-    tokenizer, contract = _token_contract(document, tokenizer_root)
+    tokenizer, contract = _token_contract(document, tokenizer_root, schema_version)
+    action_count = 1 if schema_version == "v1" else 2
     source_offsets, windows, token_ids, attention_mask = _derive_action_offsets_and_windows(
-        root, prompt, tokenizer, contract
+        root, prompt, tokenizer, contract, action_count=action_count
     )
     valid_tokens = contract["valid_text_tokens"]
+    if schema_version == "v2":
+        effective_offsets = clamp_source_action_offsets_v2(source_offsets, valid_tokens)
+        windows = _verify_windows_v2(windows, contract["actions"])
+        actions = []
+        for action_index, action in enumerate(contract["actions"]):
+            action_window = next(window for window in windows if window[2] == action_index)
+            actions.append({
+                **action,
+                "latent_start": action_window[0],
+                "latent_end": action_window[1],
+            })
+        return {
+            "schema": PROFILE_SCHEMA_V2,
+            "conditioning_manifest_sha256": conditioning_sha256,
+            "conditioning_payload_sha256": payload_sha256,
+            "prompt_sha256": _sha256_bytes(prompt.encode("utf-8")),
+            "prompt": prompt,
+            "valid_text_tokens": valid_tokens,
+            "geometry": {
+                "run_segments": 2,
+                "segment_index": 1,
+                "segment_start_seconds": SEGMENT_START_SECONDS,
+                "segment_end_seconds": SEGMENT_END_SECONDS,
+                "latent_frames": SEGMENT_LATENT_FRAMES,
+                "tokens_per_frame": TOKENS_PER_FRAME,
+                "video_tokens": SEGMENT_LATENT_FRAMES * TOKENS_PER_FRAME,
+                "text_length": TEXT_LENGTH,
+            },
+            "token_contract": {
+                "schema": contract["contract"].get("schema"),
+                "schema_version": contract["contract"].get("schema_version"),
+                "prompt_sha256": contract["contract"].get("prompt_sha256"),
+                "crop_start": contract["crop_start"],
+                "text_length": contract["text_length"],
+                "template_name": TEMPLATE_NAME,
+                "template_sha256": TEMPLATE_SHA256,
+                "valid_text_tokens": valid_tokens,
+                "raw_token_ids_sha256": _canonical_json_sha256(token_ids),
+                "raw_attention_mask_sha256": _canonical_json_sha256(attention_mask),
+                "cropped_token_ids_sha256": _canonical_json_sha256(contract["cropped_token_ids"]),
+                "cropped_attention_mask_sha256": _canonical_json_sha256(contract["cropped_attention_mask"]),
+                "tokenizer_assets": contract["tokenizer_assets"],
+                "tokenizer_identity": {
+                    "repo_id": contract["tokenizer"].get("repo_id"),
+                    "revision": contract["tokenizer"].get("revision"),
+                    "transformers_version": contract["tokenizer"].get("runtime", {}).get("transformers_version"),
+                    "tokenizers_version": contract["tokenizer"].get("runtime", {}).get("tokenizers", {}).get("version"),
+                },
+            },
+            "source": {
+                "upstream_revision": UPSTREAM_REVISION,
+                "source_sha256": source_hashes,
+                "offset_method": "BasePipeline._compute_action_text_offsets (AST-extracted from pinned base.py)",
+                "video_window_method": "BasePipeline._compute_action_video_windows (AST-extracted from pinned base.py)",
+                "text_tokenizer_methods": ["TextEncoder.apply_text_to_template", "TextEncoder.text2tokens"],
+                "offset_clamp_method": "nomas_cpt.py clamps every source offset with min(offset, valid_current_text_query_tokens)",
+                "time_normalizer": "hymm.inference._normalize_contained_action_timestamps (AST-extracted)",
+                "time_origin": "segment_local_seconds",
+                "resolve_subject_ids": False,
+                "action_wrapper_representation": "literal_text_markup_not_token_ids",
+                "t0_roster_validation": (
+                    "This T1-only export does not prove the T0 subject roster; native sequence admission "
+                    "validates the separately authenticated T0 caption for v2."
+                ),
+            },
+            "actions": actions,
+            "text_offsets": {
+                "head_end": effective_offsets[0],
+                "valid_text_tokens": valid_tokens,
+                "source_offsets_raw": source_offsets,
+                "effective_offsets": effective_offsets,
+                "offset_method_endpoint_note": OFFSET_ENDPOINT_NOTE,
+            },
+            "video_windows": windows,
+            "intra_segment_active": True,
+            "labels": {
+                "global": 0,
+                "actions": [1, 2],
+                "padding": -1,
+                "video_gap_window_index": -1,
+                "query_scope": "global_head_and_matching_action_window",
+                "key_scope": "global_history_or_matching_action",
+            },
+        }
+
     effective_offsets = clamp_source_action_offsets(source_offsets, valid_tokens)
     head_end, action_end = effective_offsets
     intra_segment_active, windows = _verify_windows(windows, contract["action"])
@@ -632,7 +970,7 @@ def export_action_conditioning(
             "valid_text_tokens": action_end,
             "source_offsets_raw": source_offsets,
             "effective_offsets": effective_offsets,
-            "offset_method_endpoint_note": "BasePipeline returns the raw attention-mask sum; pinned nomas_cpt clamps it with min(offset, valid current text query tokens), yielding the authenticated cropped-mask count",
+            "offset_method_endpoint_note": OFFSET_ENDPOINT_NOTE,
         },
         "video_windows": windows,
         "intra_segment_active": intra_segment_active,
@@ -653,6 +991,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--conditioning-sha", required=True)
     parser.add_argument("--upstream", required=True, type=Path)
     parser.add_argument("--tokenizer-root", required=True, type=Path)
+    parser.add_argument("--profile-schema", choices=("v1", "v2"), default="v1")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -661,6 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             args.conditioning_sha,
             args.upstream,
             args.tokenizer_root,
+            profile_schema=args.profile_schema,
         )
         output = args.output.expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)

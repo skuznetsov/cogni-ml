@@ -3,6 +3,7 @@ require "json"
 
 module ML::Video::HyNomasActionConditioning
   PROFILE_SCHEMA        = "cogni_ml.hy_nomas_action_conditioning/v1"
+  PROFILE_SCHEMA_V2     = "cogni_ml.hy_nomas_action_conditioning/v2"
   PROMPT_SCHEMA         = "cogni_ml.hy_nomas_qwen25_video_prompt_reference"
   UPSTREAM_REVISION     = "a31c0fe0bcc493be188fd37ddba4ce2f674becb4"
   TEMPLATE_NAME         = "li-dit-encode-video-json"
@@ -25,7 +26,35 @@ module ML::Video::HyNomasActionConditioning
 
   record LabelPair, query_labels : Array(Int32), key_labels : Array(Int32)
 
+  record Action,
+    action_id : Int32,
+    subject_id : String,
+    start_time_local_seconds : Float64,
+    end_time_local_seconds : Float64,
+    action_description : String,
+    time_origin : String,
+    source_segment_start_seconds : Float64,
+    source_segment_end_seconds : Float64,
+    latent_start : Int32,
+    latent_end : Int32 do
+    def identity
+      {
+        action_id:                    @action_id,
+        subject_id:                   @subject_id,
+        start_time_local_seconds:     @start_time_local_seconds,
+        end_time_local_seconds:       @end_time_local_seconds,
+        action_description:           @action_description,
+        time_origin:                  @time_origin,
+        source_segment_start_seconds: @source_segment_start_seconds,
+        source_segment_end_seconds:   @source_segment_end_seconds,
+        latent_start:                 @latent_start,
+        latent_end:                   @latent_end,
+      }
+    end
+  end
+
   struct Profile
+    getter schema : String
     getter profile_sha256 : String
     getter conditioning_manifest_sha256 : String
     getter conditioning_payload_sha256 : String
@@ -42,8 +71,10 @@ module ML::Video::HyNomasActionConditioning
     getter latent_end : Int32
     getter intra_segment_active : Bool
     getter video_windows : Array(Tuple(Int32, Int32, Int32))?
+    getter actions : Array(Action)
 
-    private def initialize(@profile_sha256 : String,
+    private def initialize(@schema : String,
+                           @profile_sha256 : String,
                            @conditioning_manifest_sha256 : String,
                            @conditioning_payload_sha256 : String,
                            @prompt_sha256 : String,
@@ -58,7 +89,12 @@ module ML::Video::HyNomasActionConditioning
                            @latent_start : Int32,
                            @latent_end : Int32,
                            @intra_segment_active : Bool,
-                           @video_windows : Array(Tuple(Int32, Int32, Int32))?)
+                           @video_windows : Array(Tuple(Int32, Int32, Int32))?,
+                           @actions : Array(Action))
+    end
+
+    def sequential_actions? : Bool
+      @schema == PROFILE_SCHEMA_V2
     end
 
     def self.from_file(path : String, sha256 : String,
@@ -96,25 +132,51 @@ module ML::Video::HyNomasActionConditioning
     end
 
     def identity
-      {
-        schema:                       PROFILE_SCHEMA,
-        profile_sha256:               @profile_sha256,
-        conditioning_manifest_sha256: @conditioning_manifest_sha256,
-        conditioning_payload_sha256:  @conditioning_payload_sha256,
-        prompt_sha256:                @prompt_sha256,
-        valid_text_tokens:            @valid_text_tokens,
-        action_id:                    1,
-        action_start_seconds:         @action_start_seconds,
-        action_end_seconds:           @action_end_seconds,
-        head_end:                     @head_end,
-        action_start:                 @action_start,
-        action_end:                   @action_end,
-        source_offsets_raw:           @source_offsets_raw,
-        effective_offsets:            @effective_offsets,
-        latent_start:                 @latent_start,
-        latent_end:                   @latent_end,
-        intra_segment_active:         @intra_segment_active,
-      }
+      if sequential_actions?
+        {
+          schema:                       @schema,
+          profile_sha256:               @profile_sha256,
+          conditioning_manifest_sha256: @conditioning_manifest_sha256,
+          conditioning_payload_sha256:  @conditioning_payload_sha256,
+          prompt_sha256:                @prompt_sha256,
+          valid_text_tokens:            @valid_text_tokens,
+          action_id:                    1,
+          action_start_seconds:         @action_start_seconds,
+          action_end_seconds:           @action_end_seconds,
+          head_end:                     @head_end,
+          action_start:                 @action_start,
+          action_end:                   @action_end,
+          source_offsets_raw:           @source_offsets_raw,
+          effective_offsets:            @effective_offsets,
+          latent_start:                 @latent_start,
+          latent_end:                   @latent_end,
+          intra_segment_active:         @intra_segment_active,
+          actions:                      @actions.map(&.identity),
+          video_windows:                @video_windows,
+        }
+      else
+        # Preserve the exact v1 tuple and serialization; its action fields
+        # remain the scalar Action1 compatibility view used above for v2.
+        {
+          schema:                       PROFILE_SCHEMA,
+          profile_sha256:               @profile_sha256,
+          conditioning_manifest_sha256: @conditioning_manifest_sha256,
+          conditioning_payload_sha256:  @conditioning_payload_sha256,
+          prompt_sha256:                @prompt_sha256,
+          valid_text_tokens:            @valid_text_tokens,
+          action_id:                    1,
+          action_start_seconds:         @action_start_seconds,
+          action_end_seconds:           @action_end_seconds,
+          head_end:                     @head_end,
+          action_start:                 @action_start,
+          action_end:                   @action_end,
+          source_offsets_raw:           @source_offsets_raw,
+          effective_offsets:            @effective_offsets,
+          latent_start:                 @latent_start,
+          latent_end:                   @latent_end,
+          intra_segment_active:         @intra_segment_active,
+        }
+      end
     end
 
     # Query rows are current video rows followed by the padded text query. Keys
@@ -132,18 +194,37 @@ module ML::Video::HyNomasActionConditioning
 
       video_labels = Array(Int32).new(video_tokens, 0)
       if @intra_segment_active
-        first = @latent_start * TOKENS_PER_FRAME
-        last = @latent_end * TOKENS_PER_FRAME
-        video_labels[first...last] = Array(Int32).new(last - first, 1)
+        if sequential_actions?
+          @video_windows.not_nil!.each do |start_frame, end_frame, action_index|
+            next if action_index < 0
+            first = start_frame * TOKENS_PER_FRAME
+            last = end_frame * TOKENS_PER_FRAME
+            video_labels[first...last] = Array(Int32).new(last - first, action_index + 1)
+          end
+        else
+          first = @latent_start * TOKENS_PER_FRAME
+          last = @latent_end * TOKENS_PER_FRAME
+          video_labels[first...last] = Array(Int32).new(last - first, 1)
+        end
       end
 
       text_query_labels = Array(Int32).new(query_text_tokens, -1)
       @valid_text_tokens.times do |index|
-        text_query_labels[index] = if @intra_segment_active && index >= @action_start && index < @action_end
-                                     1
-                                   else
-                                     0
-                                   end
+        if sequential_actions?
+          text_query_labels[index] = if index < @effective_offsets[0]
+                                       0
+                                     elsif index < @effective_offsets[1]
+                                       1
+                                     else
+                                       2
+                                     end
+        else
+          text_query_labels[index] = if @intra_segment_active && index >= @action_start && index < @action_end
+                                       1
+                                     else
+                                       0
+                                     end
+        end
       end
       query_labels = video_labels + text_query_labels
 
@@ -163,7 +244,8 @@ module ML::Video::HyNomasActionConditioning
                                         expected_prompt : String,
                                         expected_valid_text_tokens : Int32) : Profile
       root = document.as_h
-      unless string(root, "schema") == PROFILE_SCHEMA
+      schema = string(root, "schema")
+      unless schema == PROFILE_SCHEMA || schema == PROFILE_SCHEMA_V2
         raise ArgumentError.new("Unsupported Hy-Nomas action profile schema")
       end
       manifest_sha = string(root, "conditioning_manifest_sha256")
@@ -191,6 +273,12 @@ module ML::Video::HyNomasActionConditioning
       validate_token_contract!(token_contract, prompt_sha, valid)
       source = hash(root, "source")
       validate_source!(source)
+
+      if schema == PROFILE_SCHEMA_V2
+        return validate_v2_document!(root, profile_sha256, manifest_sha, payload_sha,
+          prompt_sha, prompt, valid)
+      end
+
       action = hash(root, "action")
       action_start_seconds = number(action, "start_time_local_seconds")
       action_end_seconds = number(action, "end_time_local_seconds")
@@ -233,10 +321,120 @@ module ML::Video::HyNomasActionConditioning
         raise ArgumentError.new("Hy-Nomas action label semantics do not match the native mask contract")
       end
 
-      new(profile_sha256, manifest_sha, payload_sha, prompt_sha, valid,
+      action_value = Action.new(1, "<|Subject1|>", action_start_seconds, action_end_seconds,
+        string(action, "action_description"), "segment_local_seconds", 5.0, 10.0,
+        latent_start, latent_end)
+      new(PROFILE_SCHEMA, profile_sha256, manifest_sha, payload_sha, prompt_sha, valid,
         head_end, action_start, action_end, source_offsets_raw, effective_offsets,
         action_start_seconds, action_end_seconds,
-        latent_start, latent_end, active, windows)
+        latent_start, latent_end, active, windows, [action_value])
+    end
+
+    private def self.validate_v2_document!(root : Hash(String, JSON::Any),
+                                           profile_sha256 : String,
+                                           manifest_sha : String,
+                                           payload_sha : String,
+                                           prompt_sha : String,
+                                           prompt : String,
+                                           valid : Int32) : Profile
+      if root.has_key?("action")
+        raise ArgumentError.new("V2 Hy-Nomas action profile must replace action with actions")
+      end
+      raw_actions = field(root, "actions").as_a
+      unless raw_actions.size == 2
+        raise ArgumentError.new("V2 Hy-Nomas action profile requires exactly two ordered actions")
+      end
+
+      actions = [] of Action
+      expected_subjects = ["<|Subject1|>", "<|Subject2|>"]
+      raw_actions.each_with_index do |raw_action, index|
+        action = raw_action.as_h
+        unless action.keys.sort == [
+                 "action_description", "action_id", "end_time_local_seconds",
+                 "latent_end", "latent_start", "source_segment_end_seconds",
+                 "source_segment_start_seconds", "start_time_local_seconds",
+                 "subject_id", "time_origin",
+               ].sort
+          raise ArgumentError.new("V2 Hy-Nomas action metadata fields are malformed")
+        end
+
+        action_id = integer(action, "action_id")
+        subject_id = string(action, "subject_id")
+        start_seconds = number(action, "start_time_local_seconds")
+        end_seconds = number(action, "end_time_local_seconds")
+        description = string(action, "action_description")
+        time_origin = string(action, "time_origin")
+        source_start = number(action, "source_segment_start_seconds")
+        source_end = number(action, "source_segment_end_seconds")
+        latent_start = integer(action, "latent_start")
+        latent_end = integer(action, "latent_end")
+        expected_id = index + 1
+        expected_subject = expected_subjects[index]
+
+        unless action_id == expected_id && subject_id == expected_subject &&
+               time_origin == "segment_local_seconds" && source_start == 5.0 && source_end == 10.0 &&
+               0.0 <= start_seconds < end_seconds <= 5.0
+          raise ArgumentError.new("Malformed V2 Action#{expected_id} metadata or subject binding")
+        end
+        unless latent_start == latent_frame_for(start_seconds) &&
+               latent_end == latent_frame_for(end_seconds) &&
+               0 <= latent_start < latent_end <= SEGMENT_LATENT_FRAMES
+          raise ArgumentError.new("V2 Action#{expected_id} must occupy a nonempty timestamp-derived latent span")
+        end
+        validate_action_wrapper!(description, expected_id, expected_subject)
+        actions << Action.new(action_id, subject_id, start_seconds, end_seconds,
+          description, time_origin, source_start, source_end, latent_start, latent_end)
+      end
+      unless actions[0].start_time_local_seconds < actions[1].start_time_local_seconds &&
+             actions[0].end_time_local_seconds <= actions[1].start_time_local_seconds &&
+             actions[0].latent_end <= actions[1].latent_start
+        raise ArgumentError.new("V2 actions must be chronological and nonoverlapping")
+      end
+      validate_prompt_actions!(prompt, actions)
+
+      offsets = hash(root, "text_offsets")
+      head_end = integer(offsets, "head_end")
+      source_offsets_raw = integer_array(offsets, "source_offsets_raw")
+      effective_offsets = integer_array(offsets, "effective_offsets")
+      expected_effective = source_offsets_raw.map { |offset| offset < valid ? offset : valid }
+      unless integer(offsets, "valid_text_tokens") == valid &&
+             source_offsets_raw.size == 3 && effective_offsets.size == 3 &&
+             source_offsets_raw.all? { |offset| 0 <= offset <= TEXT_LENGTH } &&
+             effective_offsets == expected_effective && effective_offsets[0] == head_end &&
+             0 < effective_offsets[0] < effective_offsets[1] < effective_offsets[2] &&
+             effective_offsets[2] == valid &&
+             string(offsets, "offset_method_endpoint_note") ==
+               "BasePipeline returns the raw attention-mask sum; pinned nomas_cpt clamps it with min(offset, valid current text query tokens), yielding the authenticated cropped-mask count"
+        raise ArgumentError.new("V2 Hy-Nomas action text offsets do not partition head and two actions")
+      end
+
+      windows = validate_v2_windows!(field(root, "video_windows"), actions)
+      unless boolean(root, "intra_segment_active")
+        raise ArgumentError.new("V2 Hy-Nomas actions require active intra-segment windows")
+      end
+
+      labels = hash(root, "labels")
+      action_labels_raw = field(labels, "actions").as_a.map(&.as_i64)
+      unless action_labels_raw == [1_i64, 2_i64]
+        raise ArgumentError.new("V2 Hy-Nomas action label IDs must be exactly [1, 2]")
+      end
+      action_labels = action_labels_raw.map(&.to_i32)
+      unless integer(labels, "global") == 0 && action_labels == [1, 2] &&
+             !labels.has_key?("action") && integer(labels, "padding") == -1 &&
+             integer(labels, "video_gap_window_index") == -1 &&
+             string(labels, "query_scope") == "global_head_and_matching_action_window" &&
+             string(labels, "key_scope") == "global_history_or_matching_action"
+        raise ArgumentError.new("V2 Hy-Nomas action labels do not match the native mask contract")
+      end
+
+      # Existing scalar getters keep their v1 meaning and expose Action1 for
+      # callers that have not migrated to the typed actions array.
+      first_action = actions[0]
+      new(PROFILE_SCHEMA_V2, profile_sha256, manifest_sha, payload_sha, prompt_sha, valid,
+        head_end, effective_offsets[0], effective_offsets[1], source_offsets_raw,
+        effective_offsets, first_action.start_time_local_seconds,
+        first_action.end_time_local_seconds, first_action.latent_start,
+        first_action.latent_end, true, windows, actions)
     end
 
     private def self.validate_token_contract!(contract : Hash(String, JSON::Any),
@@ -291,6 +489,107 @@ module ML::Video::HyNomasActionConditioning
           raise ArgumentError.new("Hy-Nomas action profile upstream source digest differs: #{path}")
         end
       end
+    end
+
+    private def self.validate_prompt_actions!(prompt : String, actions : Array(Action)) : Nil
+      parsed = JSON.parse(prompt).as_h
+      segments = parsed["segments"].as_a
+      unless segments.size == 1
+        raise ArgumentError.new("V2 Hy-Nomas action prompt must contain one T1 segment")
+      end
+      segment = segments[0].as_h
+      unless timestamp_seconds(segment["start_time"].as_s) == 5.0 &&
+             timestamp_seconds(segment["end_time"].as_s) == 10.0
+        raise ArgumentError.new("V2 Hy-Nomas prompt has the wrong global T1 segment time origin")
+      end
+      prompt_actions = segment["contained_actions"].as_a
+      unless prompt_actions.size == 2
+        raise ArgumentError.new("V2 Hy-Nomas prompt must contain exactly Action1 and Action2")
+      end
+
+      prompt_actions.each_with_index do |raw_action, index|
+        prompt_action = raw_action.as_h
+        unless prompt_action.keys.sort == ["action_description", "end_time", "start_time"]
+          raise ArgumentError.new("V2 Hy-Nomas Action#{index + 1} prompt fields are malformed")
+        end
+        action = actions[index]
+        start_time = prompt_action["start_time"].as_s
+        end_time = prompt_action["end_time"].as_s
+        unless start_time == format_timestamp(action.start_time_local_seconds) &&
+               end_time == format_timestamp(action.end_time_local_seconds) &&
+               timestamp_seconds(start_time) == action.start_time_local_seconds &&
+               timestamp_seconds(end_time) == action.end_time_local_seconds &&
+               prompt_action["action_description"].as_s == action.action_description
+          raise ArgumentError.new("V2 Hy-Nomas Action#{index + 1} prompt and profile metadata differ")
+        end
+      end
+    end
+
+    private def self.validate_action_wrapper!(description : String,
+                                              action_id : Int32,
+                                              subject_id : String) : Nil
+      opening = "<Action#{action_id}>"
+      closing = "</Action#{action_id}>."
+      unless description.starts_with?(opening) && description.ends_with?(closing) &&
+             description.scan(/<Action/).size == 1 && description.scan(/<\/Action/).size == 1
+        raise ArgumentError.new("V2 action description has a missing, truncated, or mismatched Action#{action_id} wrapper")
+      end
+      body = description[opening.size...(description.size - closing.size)]
+      unless body && !body.empty? && body.scan(/<\|Subject\d+\|>/).size == 1 &&
+             body.includes?(subject_id) && !body.gsub(subject_id, "").includes?("<|Subject")
+        raise ArgumentError.new("V2 Action#{action_id} must refer only to #{subject_id} inside its wrapper")
+      end
+      if body.gsub(subject_id, "").strip.empty?
+        raise ArgumentError.new("V2 Action#{action_id} must include nonempty action text after #{subject_id}")
+      end
+    end
+
+    private def self.validate_v2_windows!(value : JSON::Any,
+                                          actions : Array(Action)) : Array(Tuple(Int32, Int32, Int32))
+      windows_json = value.as_a
+      windows = [] of Tuple(Int32, Int32, Int32)
+      windows_json.each do |raw_window|
+        entries = raw_window.as_a
+        unless entries.size == 3
+          raise ArgumentError.new("V2 Hy-Nomas action window must contain three integers")
+        end
+        start_value = entries[0].as_i64
+        end_value = entries[1].as_i64
+        action_value = entries[2].as_i64
+        unless 0 <= start_value < end_value <= SEGMENT_LATENT_FRAMES && action_value.in?(-1_i64..1_i64)
+          raise ArgumentError.new("V2 Hy-Nomas action window is out of range")
+        end
+        windows << {start_value.to_i32, end_value.to_i32, action_value.to_i32}
+      end
+
+      expected = [] of Tuple(Int32, Int32, Int32)
+      cursor = 0_i32
+      actions.each_with_index do |action, index|
+        if action.latent_start > cursor
+          expected << {cursor, action.latent_start, -1}
+        end
+        expected << {action.latent_start, action.latent_end, index.to_i32}
+        cursor = action.latent_end
+      end
+      if cursor < SEGMENT_LATENT_FRAMES
+        expected << {cursor, SEGMENT_LATENT_FRAMES, -1}
+      end
+      unless windows == expected
+        raise ArgumentError.new("V2 Hy-Nomas video windows must tile the segment with exact timestamp-derived action spans")
+      end
+      windows
+    end
+
+    private def self.latent_frame_for(seconds : Float64) : Int32
+      (seconds * 24).to_i32 // 4
+    end
+
+    private def self.format_timestamp(seconds : Float64) : String
+      minutes = (seconds / 60.0).to_i
+      remainder_millis = (seconds * 1000.0).round.to_i - minutes * 60_000
+      seconds_part = remainder_millis // 1000
+      millis_part = remainder_millis % 1000
+      "#{minutes.to_s.rjust(2, '0')}:#{seconds_part.to_s.rjust(2, '0')}.#{millis_part.to_s.rjust(3, '0')}"
     end
 
     private def self.validate_prompt_action!(prompt : String,

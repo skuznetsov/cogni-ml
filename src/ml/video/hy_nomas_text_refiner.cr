@@ -26,6 +26,8 @@ module ML::Video
     SOURCE_ATTENTION_MAIN   =  256
     SOURCE_ATTENTION_TOKENS =  263
     SOURCE_ACTION_TOKENS    =  150
+    # Sequential-action fixture prefix, checked against the pinned MPS source.
+    SOURCE_SEQUENTIAL_ACTION_TOKENS = 224
 
     COMPACT_KERNEL  = "hy_nomas_text_compact_bf16_f32"
     MEAN_KERNEL     = "hy_nomas_text_masked_mean_f32"
@@ -225,7 +227,17 @@ module ML::Video
     end
 
     def self.source_attention_tokens?(valid : Int32) : Bool
-      valid == SOURCE_ATTENTION_TOKENS || valid == SOURCE_ACTION_TOKENS
+      valid == SOURCE_ATTENTION_TOKENS || valid == SOURCE_ACTION_TOKENS ||
+        valid == SOURCE_SEQUENTIAL_ACTION_TOKENS
+    end
+
+    # Reject a requested source-BF16 path instead of silently running the
+    # refiner with all source precision controls disabled for an unknown size.
+    def self.validate_source_bf16_request!(requested : Bool, valid : Int32) : Nil
+      return unless requested
+      unless source_attention_tokens?(valid)
+        raise ArgumentError.new("Source BF16 refiner request has no admitted precision path for V#{valid} (allowed: V263, V150, experimental V224)")
+      end
     end
 
     def self.validate_source_attention_control!(enabled : Bool, qkv_bf16_control : Bool,
@@ -234,7 +246,7 @@ module ML::Video
       return unless enabled
       unless qkv_bf16_control && source_attention_tokens?(valid) &&
              processed == TOKEN_COUNT && precision.f32_control?
-        raise ArgumentError.new("Source attention control requires BF16 QKV, V263 or V150 with padding, and the default attention precision")
+        raise ArgumentError.new("Source attention control requires BF16 QKV, a padded V263/V150/experimental V224 prefix, and the default attention precision")
       end
     end
 

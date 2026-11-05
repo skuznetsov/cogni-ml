@@ -69,6 +69,36 @@ describe HyNomasSequence do
     end
   end
 
+  it "admits two reference subjects only for the sequential-action profile" do
+    prompt = %({"subject_list":[{"subject_id":"<|Subject1|>","display_name":"Alex","subject_attribute":"Teal shirt, seated left"},{"subject_id":"<|Subject2|>","display_name":"Resume","subject_attribute":"Cream paper, white gloves, standing right"}],"segments":[{}]})
+    HyNomasSequence.validate_reference_subject_roster!(prompt, sequential_actions: true)
+    expect_raises(ArgumentError, /single T0 Subject1/) do
+      HyNomasSequence.validate_reference_subject_roster!(prompt)
+    end
+  end
+
+  it "rejects missing, swapped and malformed sequential reference subjects" do
+    subject1 = %({"subject_id":"<|Subject1|>","display_name":"Alex","subject_attribute":"Teal shirt"})
+    subject2 = %({"subject_id":"<|Subject2|>","display_name":"Resume","subject_attribute":"Cream paper"})
+    rosters = ["[]", "[#{subject1}]", "[#{subject2},#{subject1}]",
+               "[#{subject1},#{subject1}]", "[#{subject1},#{subject2},#{subject2}]",
+               "[#{subject1},null]", "[#{subject1},{}]",
+               "[#{subject1},#{subject2.sub("Resume", "Alex")}]",
+               "[#{subject1},#{subject2.sub("Cream paper", " ")}]",
+               "[#{subject1},#{subject2.sub("<|Subject2|>", "<|Subject3|>")}]"]
+    rosters.each do |roster|
+      expect_raises(ArgumentError, /ordered T0 Subject1/) do
+        HyNomasSequence.validate_reference_subject_roster!(
+          %({"subject_list":#{roster},"segments":[{}]}), sequential_actions: true)
+      end
+    end
+    expect_raises(ArgumentError, /action tails/) do
+      HyNomasSequence.validate_reference_subject_roster!(
+        %({"subject_list":[#{subject1},#{subject2}],"segments":[{"contained_actions":[{}]}]}),
+        sequential_actions: true)
+    end
+  end
+
   it "counts four denoise forwards plus one separate writer per nonfinal segment" do
     HyNomasSequence.forwards(2).should eq(9)
     HyNomasSequence.forwards(4).should eq(19)
