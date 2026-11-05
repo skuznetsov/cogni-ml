@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-FULL-DIT-SOURCE-BF16-2026-11-04] All 54 staged DiT blocks match the source at the T0/T1 boundary
+
+- At native revision `ae7505c1`, the serial source-BF16 DiT with the
+  production loader and one shared GPU weight stage matched Tencent
+  `911cea64` via PyTorch 2.8.0 MPS on frozen RoleWright block inputs.
+  The full-depth test used all 54 authenticated BF16 weight sets and the
+  source action mask. T0 history K/V and first T1 denoise block image and
+  active-text outputs matched bit-for-bit at every layer, 216 tensors and
+  1,508,032,512 values. Maximum absolute error was zero at unchanged
+  `atol=rtol=2e-5`.
+- The 2-, 32- and 54-layer native runs matched on their overlapping
+  prefixes. The source oracle loaded one block at a time and interleaved
+  each layer's T0 write and first T1 read, preserving dependency order
+  within both streams. It reproduced the eight archived two-block
+  reference tensors before continuing. The comparator checked the pinned
+  inputs, ordered weight digests, action profile identity, capture geometry,
+  raw payload digests, finite values and both memory guard receipts. It
+  rejected a changed action profile digest and a reversed weight order.
+- The native frozen-input harness ran both forwards on one command chain.
+  Encode recorded zero explicit waits, tracked MetalBuffer allocations and
+  CPU readbacks. Its scratch-only observer read the existing cache and
+  output banks after the single terminal wait. The two forwards through
+  that wait took 17.47 s on M2 Max, excluding setup and capture. The
+  native guard sampled a 23.31 GiB peak and 14.10 GiB minimum headroom
+  with a 26 GiB cap, a file-cache-aware 10% reserve and no swap growth.
+- Evidence and exact commands are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-full-bf16-20261104.VNSd5y9q`.
+  Recheck from the repository root with `native_compare_full.py` using
+  `native_full.gpu.2.result.json`, `source-full-j.json`,
+  `source-full-j.guard.jsonl` and a fresh report path. The comparison SHA-256 is
+  `0088f2727f3882eaca1acd7ae90654ac4a52ae0e6e3cde9816a3b3b8b019f1c8`.
+  The focused CPU specs passed 46 examples.
+- This gate covers the DiT boundaries on frozen inputs. The native prelude,
+  final projection, Euler updates, later T1 steps, decoder and rendered
+  motion need separate gates. Next, compare the first T1 velocity and Euler
+  update on the same input. Refresh this gate if the source, runtime,
+  weights, frozen inputs, action masks, geometry or precision path changes.
+
 ### [LM-HY-NOMAS-SERIAL-SOURCE-BF16-2026-11-04] Source-BF16 parity through the serial T0 writer and T1 reader
 
 - `hy_nomas_sequence_generate --reference-source-bf16` selects the
