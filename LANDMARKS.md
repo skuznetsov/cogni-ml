@@ -99,6 +99,32 @@ Rich landmarks include full State/Relations/Evidence structure.
   both complete action bodies and close tags. This does not establish that
   DiT follows them. Evidence: `roi/conditioning-crop-audit.json`, SHA-256
   `25af873dcdd1e913fc5f6daec58a6fdaa3c2c219841ab2d881059b49fa3d7018`.
+- The user prefers the matched ROI take. A follow-up changes only Action1
+  to look down and then turn toward Resume; CPU checks preserve Action2,
+  timing, token boundaries, ROI and all non-Qwen inputs. The fourth V224
+  native/source gate again passes all 24 comparisons bit-for-bit; full
+  mask agreement and both numerical controls pass at unchanged tolerances.
+  A pre-decode check rehashes the current binding and native inventory,
+  binds the latent bank to report/receipt, and rejects stale binding,
+  latent and inventory copies. The same-lineage review rates this scoped
+  stale-evidence check ROBUST, not an independent report attestation.
+- The first two seconds sampled at 8 fps do not establish a clearer head
+  turn. The inspected full frames preserve Alex's desk hands and show
+  Resume's glove reaching its chest in both takes; a discrete tap/return
+  remains open. Keep the accepted ROI control. Reject only this rewrite
+  as a demonstrated improvement on this fixture, not prompting generally.
+  Native DiT/decode retain zero tracked encode allocations, readbacks and
+  preterminal waits, one terminal drain each, and sampled peaks of 24.94 /
+  18.41 GiB. The 10% floor holds with zero swap growth. Evidence:
+  `/opt/mldata_ssd/cogni-ml/rolewright-actor-beats-20261105.z3997ccv`.
+  `compare/compare-gpu.json` SHA-256 is
+  `4559d6e5f7f56375a67d14f5c75e4b558ecb2eabfbadf108c6fa43a9a9f8cdc5`;
+  `decode_candidate.py --validate-only` checks current files and negative
+  controls. `candidate/control-left-head-pose-right-5s.mp4` shows accepted
+  control left, rewrite right; inspect `candidate/action1-head-pose-full-contact.png`
+  for the corrected whole-head crop. The decoder reuses its earlier
+  qualification; this is neither a new decoder-source gate nor a full ad.
+  Refresh on input/mask/source/binary/runtime/precision changes.
 
 ### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
 

@@ -132,6 +132,60 @@ of Action2. The retained spans [49,132) and [132,224) decode to the complete
 two actions, including both closing tags and the paper's tap/return words.
 This establishes retained text, not instruction compliance by DiT.
 
+The user preferred the right-hand query-ROI take; retain it as the visual
+control. A fourth bounded V224 probe changes only Action1's instruction
+from turning toward the paper to looking down and then turning toward it.
+Action2, camera, reference, T0, noise, four Euler steps, timestamps, token
+boundaries and authored query rectangles stay fixed. A CPU comparison
+restores only the Action1 string and requires exact prompt equality; it
+also verifies the conditioning payload hashes, unchanged non-Qwen inputs,
+action layout and ROI. The changed hidden states are derived from the new
+prompt, not an additional independently selected input.
+
+The candidate again matches the pinned full-BF16-autocast MPS adapter in
+all 24 comparisons bit-for-bit. The complete visibility matrix also
+matches, with the same 228,315 removed pairs and no additions. Before
+decoding, the current binding and every bound file are rehashed; all 22
+native intermediate files must match the comparator's before/after
+snapshots. The current latent bank must match both report and receipt.
+Negative copies with stale binding, latent hash or inventory are rejected.
+The same-lineage adversary rates these stale-evidence and scope checks
+ROBUST; this is not an independent attestation against fabricated reports.
+
+The 8-fps whole-head contact sheet over the first two seconds does not
+establish a distinct look-down/turn or an improvement over the accepted
+control. Alex's hands remain on the desk in the inspected full frames;
+Resume raises its own glove toward its chest in both takes. A clean
+discrete tap/return remains open. Retain the accepted control rather than
+promoting the rewrite. This rejects this wording as a demonstrated acting
+improvement on this fixed fixture, not prompting or multi-actor motion in
+general. Numerical equality remains separate from visual compliance.
+
+The new native DiT and reused qualified decoder each record zero tracked
+encode allocations, readbacks and preterminal waits, with one terminal
+drain. Their separate sampled peaks are 24.94 and 18.41 GiB; minimum
+cache-aware headroom is 10.90 and 19.87 GiB. All successful guarded stages
+preserve the 10% floor with zero swap growth. The initial native attempt
+exited before model loading because its empty output directory was missing;
+the retry creates it and retains a separate bound command and guard log.
+
+Follow-up evidence:
+`/opt/mldata_ssd/cogni-ml/rolewright-actor-beats-20261105.z3997ccv`.
+`compare/compare-gpu.json` has SHA-256
+`4559d6e5f7f56375a67d14f5c75e4b558ecb2eabfbadf108c6fa43a9a9f8cdc5`;
+`harness/launch-binding.json` binds the retry, native/source commands and
+CPU controls. `decode_candidate.py --validate-only` checks current bytes
+and the three stale-evidence negatives; `decode-preflight.json` records
+the measured control/candidate differences. `head-pose-full-contact.argv.json`
+replays the corrected whole-head crop. Its `candidate/action1-head-pose-full-contact.png`
+supersedes the earlier crop that cut off part of the face.
+`candidate/control-left-head-pose-right-5s.mp4` places the accepted ROI
+control on the left and the changed Action1 on the right (SHA-256
+`d1c32b646144ed8005f7b0d2f04e218a89f4a8c0c4b0b8b9dbd88a1170a074f7`).
+The previously qualified decoder is reused; no new same-latent PixelUMM
+source qualification or full advertisement is claimed. Refresh these
+comparisons on any input, mask, source, binary, runtime or precision change.
+
 The explicit source-BF16 request now rejects unsupported refiner prefix
 lengths before model preparation instead of silently disabling all source
 rounding controls. V224 is admitted alongside the existing V263/V150
