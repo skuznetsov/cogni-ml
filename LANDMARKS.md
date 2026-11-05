@@ -6,6 +6,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-OBJECT-CONTROL-2026-11-05] Temporal/query masks do not establish independent actors
+
+- Source audit: SubjectN is textual identity; the published mask path selects
+  action text by time across the scene. Current stock PE controls one Subject1.
+  Native shared refiner conditioning and unmasked text attention precede DiT
+  masks; globally visible video keys permit later relay. The exported vec is
+  time-only. These are reachable paths, not a measured cause of weak acting.
+- Keep the accepted Alex/Resume ROI take. Controller changes remain proposed:
+  first qualify an Action2-only, equal-token-count refiner counterfactual with
+  identical global/Action1 input rows, A/A and a source gate for each condition.
+  Existing BF16 receipts do not admit short separate-conditioning branches.
+- See [the object control frontier](docs/hy-nomas-object-control-frontier.md)
+  for sources, competing hypotheses, ranked controllers and per-step mini-Quad.
+  The 29 focused CPU tests pass; no new model/GPU/render was run. Runtime
+  constraints remain unchanged. Refresh on source, layout or precision changes.
+
 ### [LM-HY-NOMAS-SEQUENTIAL-ACTORS-2026-11-05] Temporal masks match upstream; explicit actor anchors move Resume
 
 - The opt-in `hy_nomas_action_conditioning/v2` profile admits exactly two

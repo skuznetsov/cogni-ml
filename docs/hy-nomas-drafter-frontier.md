@@ -1,5 +1,10 @@
 # Hy-Nomas local draft suite
 
+The active multi-object-control investigation and bounded next experiment
+are in [the object control frontier](hy-nomas-object-control-frontier.md).
+It distinguishes source-supported temporal action masks, custom query ROI,
+refiner conditioning transfer and visible actor compliance.
+
 ## Two sequential reference actions (2026-11-05)
 
 Status: v2 metadata and two bounded V224 numerical gates are implemented.
@@ -119,8 +124,9 @@ This supports direct action-text leakage as a contributor on this fixed
 camera. It does not establish a clean discrete tap/return or an unambiguous
 Alex head turn. The same-lineage visual review rates the acting result
 partial. Do not enable a production spatial-mask API from this fixture.
-Global/refiner/vector conditioning and globally visible video keys can
-still relay action cues between regions. This is a custom intervention,
+Shared text-refiner conditioning/self-attention and globally visible video
+keys can still relay action cues between regions. The exported time vector
+is time-only, not pooled text conditioning. This is a custom intervention,
 not stock upstream spatial control or a general character-isolation proof.
 Next: retain this matched control and score the remaining head-turn and
 tap/return endpoints independently before widening character control.
