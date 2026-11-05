@@ -6,6 +6,44 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SERIAL-T0-T1-2026-11-04] Serial history copy is exact and the writer and reader arithmetic diverge
+
+- A two-layer build uses `HyNomasMPSSerialWorkspace` and the continuation
+  provider to connect frozen RoleWright T0 to the first T1 step. The probe
+  reduces the provider's layer admission from 54 to two and uses directly
+  bound BF16 weight arenas. It retains the stock write/read schedule and
+  F32 cache layout. GPU scratch is shared across blocks and T0/T1 use one
+  command chain with no intermediate readbacks or explicit waits.
+- The earliest captured T0 block-0 difference against Tencent `911cea64`
+  on PyTorch 2.8.0 MPS is conditioning SiLU (654 of 2,048 values outside
+  tolerance per stream, maximum absolute error 0.000232). Conditioning
+  input and both pre-attention LayerNorm outputs are bitwise equal.
+  Both K and V differ before append. The F32 cache copies the block-0 K/V
+  buffers bit-for-bit. Rounding only at the join/split boundary still fails
+  the T0 K/V and the T1 block outputs at `atol=rtol=2e-5`.
+- With exact per-layer T0 K/V and T1 Q/K/V injected, all four cache
+  captures are bitwise exact. The stock F32 history graph still differs in
+  8,672,441 and 8,811,188 of 9,154,560 attention values in blocks 0 and 1,
+  respectively. The packed BF16 diagnostic graph matches both outputs
+  bit-for-bit through the same provider and with the same history slots.
+  This separates a reader-side precision/order mismatch from the writer's
+  earlier divergence.
+- Replay on the external SSD under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-serial-rolewright-20261104.xEHAstMi`.
+  Run `python3 -B compare.py serial-stock serial-bf16-join`,
+  `python3 -B compare.py frozen-qkv-stock frozen-qkv-bf16`, then
+  `python3 -B check_result.py`. The comparison SHA-256 values are
+  `4e7443cfb7a4cab21845b149fca08925466227ba40ba702a4961e70a1cf36bae`,
+  `9a0698418422e2c1c01ce1e3734f9beaeacc5603e89580b1773fc1304a094e73`, and
+  `bb6493e868b9099430db9c19735d32eb79223d2d6c7a777e889e4d81c7953b9e`.
+  Main serial A/B sampled a peak of 3.67 GiB with zero swap growth under
+  a 6 GiB cap, a cache-aware 10% reserve, and a 64 MiB swap-growth limit.
+- Next, connect the source BF16 conditioning and projection boundaries
+  to the serial writer, then attach the packed BF16 reader and recheck
+  both T0 K/V pairs and T1 block outputs. Scope is two blocks on this
+  frozen fixture. Keep the rendered-motion prompt A/B separate. Refresh
+  on binary, upstream, runtime, fixture, layout, precision or weight changes.
+
 ### [LM-HY-NOMAS-T0-T1-NATIVE-BLOCKS01-2026-11-04] Native T0 K/V feeds both T1 blocks
 
 - On the frozen RoleWright preludes and the same BF16 weights, the T0
@@ -34,8 +72,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   verifies the hashes, guard receipts, padding and wrong-slot control
   against the pinned source captures. The passing `comparison.json`
   SHA-256 is `a89f572311bb2e387867d0e47702ec468001be4879a46180780301db34c15b83`.
-  Next discriminator: compare the serial continuation provider against
-  this two-block fixture before extending the layer range. Scope is the
+  See LM-HY-NOMAS-SERIAL-T0-T1-2026-11-04 for the serial continuation
+  provider comparison on this two-block fixture. Scope is the
   native diagnostic, not the production sequence or rendered motion.
   Keep the prompt-enhancer A/B separate. Refresh on source, runtime,
   binary, input, weights, precision, geometry, or artifact changes.
