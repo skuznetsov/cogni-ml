@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CPU-only admission tests for the exact 60-to-240 PixelUMM control."""
+"""CPU admission tests for standalone/prefix 60-to-240 PixelUMM controls."""
 from __future__ import annotations
 
 import hashlib
@@ -68,15 +68,80 @@ def valid_receipt() -> dict[str, object]:
     }
 
 
+def valid_prefix_receipt() -> dict[str, object]:
+    receipt = valid_receipt()
+    receipt.update({
+        "latent_bytes": control.LATENT_BANK_BYTES,
+        "latent_bank_bytes": control.LATENT_BANK_BYTES,
+        "latent_bank_shape": list(control.LATENT_BANK_SHAPE),
+        "latent_bank_frames": 180,
+        "latent_selection": control.PREFIX_LATENT_SELECTION,
+        "metrics": {"latent_prefix_gpu_gathered": 1},
+    })
+    return receipt
+
+
 class ContinuationControlAdmissionSpec(unittest.TestCase):
     def test_admits_exact_saved_native_decode_contract(self) -> None:
         admitted = control.validate_native_decode_receipt_document(valid_receipt())
         self.assertEqual(admitted["latent_shape"], control.LATENT_SHAPE)
+        self.assertEqual(admitted["source_bank_shape"], control.LATENT_SHAPE)
+        self.assertEqual(admitted["source_bank_bytes"], control.LATENT_BYTES)
+        self.assertFalse(admitted["latent_prefix_gpu_gathered"])
         self.assertEqual(admitted["noise_prefix_shape"], control.NOISE_PREFIX_SHAPE)
         self.assertEqual(admitted["window_starts"], control.WINDOW_STARTS)
         self.assertEqual(admitted["native_output_representation"], control.NATIVE_DISPLAY_REPRESENTATION)
         self.assertEqual(admitted["native_executable_sha256"], control.EXPECTED_NATIVE_EXECUTABLE_SHA256)
         self.assertFalse(admitted["full_upstream_video_parity"])
+
+    def test_admits_only_authenticated_180_frame_bank_gpu_prefix(self) -> None:
+        admitted = control.validate_native_decode_receipt_document(valid_prefix_receipt())
+        self.assertEqual(admitted["latent_shape"], control.LATENT_SHAPE)
+        self.assertEqual(admitted["source_bank_shape"], control.LATENT_BANK_SHAPE)
+        self.assertEqual(admitted["source_bank_bytes"], control.LATENT_BANK_BYTES)
+        self.assertTrue(admitted["latent_prefix_gpu_gathered"])
+
+    def test_rejects_prefix_without_gpu_gather_metric(self) -> None:
+        receipt = valid_prefix_receipt()
+        del receipt["metrics"]["latent_prefix_gpu_gathered"]
+        with self.assertRaisesRegex(control.DecoderControlError, "latent_prefix_gpu_gathered=1"):
+            control.validate_native_decode_receipt_document(receipt)
+
+    def test_rejects_prefix_with_wrong_gpu_gather_metric(self) -> None:
+        for value in (0, True, "1"):
+            receipt = valid_prefix_receipt()
+            receipt["metrics"]["latent_prefix_gpu_gathered"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(
+                control.DecoderControlError, "latent_prefix_gpu_gathered=1"
+            ):
+                control.validate_native_decode_receipt_document(receipt)
+
+    def test_rejects_prefix_with_wrong_source_bank_byte_extent(self) -> None:
+        for field in ("latent_bytes", "latent_bank_bytes"):
+            receipt = valid_prefix_receipt()
+            receipt[field] = control.LATENT_BANK_BYTES - 4
+            with self.subTest(field=field), self.assertRaisesRegex(
+                control.DecoderControlError, field
+            ):
+                control.validate_native_decode_receipt_document(receipt)
+
+    def test_rejects_prefix_with_wrong_source_bank_geometry(self) -> None:
+        receipt = valid_prefix_receipt()
+        receipt["latent_bank_shape"] = [1, 32, 120, 9, 16]
+        with self.assertRaisesRegex(control.DecoderControlError, "latent_bank_shape"):
+            control.validate_native_decode_receipt_document(receipt)
+
+    def test_rejects_prefix_with_wrong_selected_geometry(self) -> None:
+        receipt = valid_prefix_receipt()
+        receipt["latent_shape"] = [1, 32, 59, 9, 16]
+        with self.assertRaisesRegex(control.DecoderControlError, "latent_shape"):
+            control.validate_native_decode_receipt_document(receipt)
+
+    def test_rejects_boolean_shape_dimensions(self) -> None:
+        receipt = valid_prefix_receipt()
+        receipt["latent_bank_shape"] = [True, 32, 180, 9, 16]
+        with self.assertRaisesRegex(control.DecoderControlError, "latent_bank_shape"):
+            control.validate_native_decode_receipt_document(receipt)
 
     def test_rejects_unpinned_native_executable(self) -> None:
         receipt = valid_receipt()

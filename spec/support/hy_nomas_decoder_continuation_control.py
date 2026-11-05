@@ -42,6 +42,7 @@ WIDTH = 512
 HEIGHT = 288
 FPS = 24
 LATENT_SHAPE = (1, 32, 60, 9, 16)
+LATENT_BANK_SHAPE = (1, 32, 180, 9, 16)
 NOISE_SOURCE_SHAPE = (1, 3, 720, HEIGHT, WIDTH)
 NOISE_PREFIX_SHAPE = (1, 3, 240, HEIGHT, WIDTH)
 RAW_SHAPE = NOISE_PREFIX_SHAPE
@@ -49,6 +50,7 @@ WINDOW_LATENTS = 10
 OVERLAP_LATENTS = 5
 WINDOW_STARTS = tuple(range(0, LATENT_SHAPE[2] - WINDOW_LATENTS + 1, OVERLAP_LATENTS))
 LATENT_BYTES = math.prod(LATENT_SHAPE) * 4
+LATENT_BANK_BYTES = math.prod(LATENT_BANK_SHAPE) * 4
 NOISE_SOURCE_BYTES = math.prod(NOISE_SOURCE_SHAPE) * 4
 RAW_BYTES = math.prod(RAW_SHAPE) * 4
 GIB = 1024**3
@@ -63,6 +65,11 @@ METRIC_CHUNK_ELEMENTS = 1 << 20
 EXPECTED_LATENT_BOUNDARY = (
     "caller-supplied terminal diagnostic latent bank; any shorter decode prefix "
     "is gathered on GPU; not produced by this request's DiT or solver"
+)
+STANDALONE_LATENT_SELECTION = "authenticated latent bank global frames [0, 60) consumed directly"
+PREFIX_LATENT_SELECTION = (
+    "global latent frames [0, 60) from each NCTHW channel using "
+    "HyNomasTimelineOps::PrefixPlan"
 )
 EXPECTED_NOISE_SELECTION = (
     "global pixel-noise frames [0, 240) from each NCTHW channel using "
@@ -218,6 +225,15 @@ def _require_int(document: Mapping, field: str, expected: int) -> None:
         raise DecoderControlError(f"native decode receipt {field} does not match admitted geometry")
 
 
+def _require_shape(document: Mapping, field: str, expected: tuple[int, ...]) -> tuple[int, ...]:
+    value = document.get(field)
+    if (type(value) is not list or len(value) != len(expected)
+            or any(type(dimension) is not int for dimension in value)
+            or tuple(value) != expected):
+        raise DecoderControlError(f"native decode receipt {field} mismatch")
+    return tuple(value)
+
+
 def validate_native_decode_receipt_document(document: Mapping) -> dict[str, object]:
     """Admit the fixed decode contract and derive output semantics from its pinned binary."""
     if type(document) is not dict or document.get("schema") != NATIVE_SCHEMA:
@@ -238,21 +254,49 @@ def validate_native_decode_receipt_document(document: Mapping) -> dict[str, obje
             "native output representation is derived from the pinned native executable, not a receipt claim"
         )
     for field, expected in (
-        ("latent_bytes", LATENT_BYTES), ("latent_bank_bytes", LATENT_BYTES),
         ("latent_frames", 60), ("latent_selected_frames", 60),
-        ("latent_prefix_start_frame", 0), ("latent_bank_frames", 60),
+        ("latent_prefix_start_frame", 0),
         ("frames", 240), ("width", WIDTH), ("height", HEIGHT), ("fps", FPS),
         ("pixel_noise_frames", 240), ("pixel_noise_prefix_start_frame", 0),
         ("output_bytes", RAW_BYTES),
     ):
         _require_int(document, field, expected)
-    for field in ("latent_shape", "latent_bank_shape"):
-        if document.get(field) != list(LATENT_SHAPE):
-            raise DecoderControlError(f"native decode receipt {field} mismatch")
+    _require_shape(document, "latent_shape", LATENT_SHAPE)
+    source_bank_value = document.get("latent_bank_shape")
+    if type(source_bank_value) is list and all(type(dimension) is int for dimension in source_bank_value) \
+            and tuple(source_bank_value) == LATENT_SHAPE:
+        source_bank_shape_tuple = LATENT_SHAPE
+        source_bank_bytes = LATENT_BYTES
+        _require_int(document, "latent_bytes", LATENT_BYTES)
+        _require_int(document, "latent_bank_bytes", LATENT_BYTES)
+        _require_int(document, "latent_bank_frames", 60)
+        if document.get("latent_selection") != STANDALONE_LATENT_SELECTION:
+            raise DecoderControlError(
+                "native latent selection is not the authenticated 60-frame terminal bank"
+            )
+        gpu_gather = False
+    elif type(source_bank_value) is list and all(type(dimension) is int for dimension in source_bank_value) \
+            and tuple(source_bank_value) == LATENT_BANK_SHAPE:
+        source_bank_shape_tuple = LATENT_BANK_SHAPE
+        source_bank_bytes = LATENT_BANK_BYTES
+        _require_int(document, "latent_bytes", LATENT_BANK_BYTES)
+        _require_int(document, "latent_bank_bytes", LATENT_BANK_BYTES)
+        _require_int(document, "latent_bank_frames", 180)
+        if document.get("latent_selection") != PREFIX_LATENT_SELECTION:
+            raise DecoderControlError(
+                "native latent selection is not the admitted global 60-frame prefix"
+            )
+        metrics = document.get("metrics")
+        if type(metrics) is not dict or type(metrics.get("latent_prefix_gpu_gathered")) is not int \
+                or metrics["latent_prefix_gpu_gathered"] != 1:
+            raise DecoderControlError(
+                "native decode receipt must attest latent_prefix_gpu_gathered=1 for a bank prefix"
+            )
+        gpu_gather = True
+    else:
+        raise DecoderControlError("native decode receipt latent_bank_shape mismatch")
     if document.get("latent_dtype") != "F32 little-endian":
         raise DecoderControlError("native latent dtype is not F32 little-endian")
-    if document.get("latent_selection") != "authenticated latent bank global frames [0, 60) consumed directly":
-        raise DecoderControlError("native latent selection is not the authenticated 60-frame terminal bank")
     if document.get("latent_boundary") != EXPECTED_LATENT_BOUNDARY:
         raise DecoderControlError("native latent boundary is not the admitted caller-supplied terminal bank")
     for field in ("latent_sha256", "latent_bank_sha256", "decoder_weight_cache_sha256",
@@ -312,6 +356,9 @@ def validate_native_decode_receipt_document(document: Mapping) -> dict[str, obje
         "native_display_sha256": document["output_sha256"],
         "window_starts": WINDOW_STARTS,
         "latent_shape": LATENT_SHAPE,
+        "source_bank_shape": source_bank_shape_tuple,
+        "source_bank_bytes": source_bank_bytes,
+        "latent_prefix_gpu_gathered": gpu_gather,
         "noise_prefix_shape": NOISE_PREFIX_SHAPE,
         "full_upstream_video_parity": False,
     }
@@ -452,7 +499,7 @@ def preflight(*, receipt_path: Path, receipt_sha256: str, output_prefix: Path) -
     )
     latent_path = same_latent._regular_artifact(
         str(admitted["latent_path"]), "native terminal latent",
-        admitted["latent_sha256"], LATENT_BYTES,
+        admitted["latent_sha256"], admitted["source_bank_bytes"],
     )
     display_path = same_latent._regular_artifact(
         str(admitted["native_display_path"]), "native display pixels",
@@ -617,9 +664,20 @@ def run_control(admission: Mapping[str, object]) -> dict[str, object]:
     )
     del head_runtime_weights
 
-    latent_cpu = _mapped_f32(admission["latent_path"], shape=LATENT_SHAPE)
-    latent = latent_cpu.to(device=device)
-    del latent_cpu
+    if admission["admitted"]["latent_prefix_gpu_gathered"]:
+        latent_bank_cpu = _mapped_f32(
+            admission["latent_path"], shape=admission["admitted"]["source_bank_shape"]
+        )
+        latent_bank = latent_bank_cpu.to(device=device)
+        del latent_bank_cpu
+        # The native receipt attests this exact axis-two NCTHW GPU prefix. Keep
+        # the upload at full-bank extent and make the selected view contiguous.
+        latent = latent_bank[:, :, :LATENT_SHAPE[2]].contiguous()
+        del latent_bank
+    else:
+        latent_cpu = _mapped_f32(admission["latent_path"], shape=LATENT_SHAPE)
+        latent = latent_cpu.to(device=device)
+        del latent_cpu
     native_display_cpu = _mapped_f32(admission["native_display_path"], shape=RAW_SHAPE)
     native_display = native_display_cpu.to(device=device)
     del native_display_cpu
@@ -730,6 +788,9 @@ def run_control(admission: Mapping[str, object]) -> dict[str, object]:
         "native_receipt_claimed_full_upstream_video_parity": False,
         "native_receipt_is_runtime_source_proof": False,
         "native_terminal_latent_sha256": admission["admitted"]["latent_sha256"],
+        "native_latent_bank_shape": list(admission["admitted"]["source_bank_shape"]),
+        "native_selected_latent_shape": list(admission["admitted"]["latent_shape"]),
+        "native_latent_prefix_gpu_gathered": admission["admitted"]["latent_prefix_gpu_gathered"],
         "continuation_manifest_sha256": admission["manifest_sha256"],
         "continuation_payload_sha256": admission["payload_sha256"],
         "pixel_noise_record_sha256": noise_record["sha256"],
@@ -738,7 +799,13 @@ def run_control(admission: Mapping[str, object]) -> dict[str, object]:
         "native_display_pixels_sha256": admission["native_display_sha256"],
         "display_postprocess_source": admission["display_postprocess_source"],
         "decoder_semantics": {
-            "native_latent_source": "authenticated caller-supplied terminal 60-latent bank; no DiT rerun",
+            "native_latent_source": (
+                "authenticated caller-supplied terminal latent bank; decoder consumes "
+                "global frames [0, 60) per NCTHW channel; no DiT rerun"
+            ),
+            "source_bank_shape": list(admission["admitted"]["source_bank_shape"]),
+            "selected_latent_shape": list(admission["admitted"]["latent_shape"]),
+            "latent_prefix_gpu_gathered": admission["admitted"]["latent_prefix_gpu_gathered"],
             "noise_source": "authenticated global decoder.noise NCTHW F32 record sliced on axis 2",
             "noise_prefix_frames": [0, 240],
             "window_latent_starts": list(WINDOW_STARTS),
@@ -817,6 +884,9 @@ def main(argv: list[str] | None = None) -> int:
                 "native_executable_sha256": admitted["native_executable_sha256"],
                 "native_output_representation": admitted["native_output_representation"],
                 "native_terminal_latent_sha256": admitted["admitted"]["latent_sha256"],
+                "native_latent_bank_shape": list(admitted["admitted"]["source_bank_shape"]),
+                "native_selected_latent_shape": list(admitted["admitted"]["latent_shape"]),
+                "native_latent_prefix_gpu_gathered": admitted["admitted"]["latent_prefix_gpu_gathered"],
                 "native_display_pixels_sha256": admitted["admitted"]["native_display_sha256"],
                 "display_postprocess_source": admitted["display_postprocess_source"],
                 "continuation_manifest_sha256": admitted["manifest_sha256"],

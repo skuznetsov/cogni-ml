@@ -66,9 +66,42 @@ Adding explicit actor appearance and position inside each action body,
 while retaining V224, T0, noise and timestamps, also passes all 24 numeric
 comparisons bit-for-bit. The paper now raises its own glove to its printed
 chest. Alex's human hand still smears. This is a partial visual improvement,
-not a completed acting or hand-quality gate. The next discriminator decodes
-the same new latents through upstream PixelUMM to distinguish decoder
-differences from generated motion defects.
+not a completed acting or hand-quality gate.
+
+The same-latent PixelUMM control now admits the authenticated full
+`[1,32,180,9,16]` bank only when the pinned native receipt reports the
+60-frame GPU prefix gather. It uploads the entire bank to MPS, then
+selects axis 2 and makes the prefix contiguous; taking a flat byte prefix
+would break channel strides. The existing standalone 60-frame path stays
+unchanged. Wrong bank geometry, byte extent or missing/boolean/string gather
+metrics are rejected, and 23 focused CPU tests pass.
+
+On the anchored take, the pinned Torch 2.6 PixelUMM source adapter with all
+36 blocks, 11 overlapping windows and the full head matches every one of
+106,168,320 native display values exactly. All 468 source/cache weight-word
+checks pass. Comparison includes the source BF16 multiply/add/clamp from
+raw `[-1,1]` to display `[0,1]`; it does not compare unlike pixel ranges.
+The cache-aware 10% floor and 64 MiB swap-growth limit remain unchanged;
+the guarded replay completes with zero swap growth. Its only readback is
+the existing terminal comparison/export boundary. The earlier Torch 2.8
+attempt failed the runtime pin before model loading and is not evidence.
+This qualifies this decoder fixture and explicit MPS attention adapter,
+not unmodified CUDA/flex attention or arbitrary generated motion. The hand
+smear is present in both decodes of the same generated latents.
+The saved report's source/selected shape fields identify the 180-to-60
+prefix; its older "terminal 60-latent bank" description is corrected in
+the helper without rerunning or rewriting the numerical evidence.
+
+Next falsifier: in scratch only, restrict Action1 text exposure to Alex's
+video-query rectangle and Action2 to the paper's rectangle on the fixed
+30x9x16 latent grid. Keep conditioning, noise, text queries, global head,
+and all video/history keys unchanged. Admit no production spatial-mask API
+yet. Require CPU equality between actual native labels and the explicit
+source mask, A/A plus an altered-mask rejection, then the unchanged numeric
+gate before visual inspection. This is a custom mask intervention, not a
+stock upstream feature. A positive result would support direct action-text
+leakage; a negative result is inconclusive because globally visible video
+keys can relay conditioned features between regions in later blocks.
 
 The explicit source-BF16 request now rejects unsupported refiner prefix
 lengths before model preparation instead of silently disabling all source
@@ -85,6 +118,12 @@ in the 24 real comparisons and exactly one rejected perturbation.
 `anchor/compare-anchor.argv.json` and `anchor/compare-anchor.json` retain
 the second numeric gate; the corresponding `anchor/contact.png` and clip
 show the paper gesture and remaining hand artifact.
+`anchor/decoded/source-prefix-torch26.argv.json` replays the exact-latent
+PixelUMM control; its report SHA-256 is
+`415a6b81392435b37d1f072867232620fadf4b477274274b840c58137cbecf44`.
+`anchor/native-left-upstream-right-5s.mp4` retains the identical paired
+decode, with the native result on the left and the source adapter on the
+right.
 Refresh on prompt, conditioning, weights, source, runtime, precision, binary
 or attention-schedule changes. Numerical parity must never promote the
 failed acting result to a character-control capability.

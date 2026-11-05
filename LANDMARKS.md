@@ -27,7 +27,7 @@ Rich landmarks include full State/Relations/Evidence structure.
   unchanged `atol=rtol=2e-5`. The instrumented native core records zero
   encode allocations, readbacks and preterminal waits, with one drain.
   This reuses the previously qualified frozen DCAE bank; it does not
-  requalify PixelUMM, arbitrary prompts or stock CUDA/Magi.
+  requalify the image encoder, arbitrary prompts or stock CUDA/Magi.
 - The compact prompt misassigns Resume's glove/chest action to Alex.
   Explicit appearance and position inside each action body make Resume
   raise its own glove to its printed chest. Alex's human hand still smears.
@@ -47,8 +47,28 @@ Rich landmarks include full State/Relations/Evidence structure.
   `anchor/contact.png` and `anchor/rolewright-alex-and-resume-5s.mp4` retain
   the partial visual improvement. Roll back by selecting v1. Refresh on
   prompt, conditioning, weights, source, runtime, precision or binary
-  changes. Next: compare native/upstream PixelUMM on these exact latents
-  and decoder noise, authenticating the native 180-to-60 GPU prefix gather.
+  changes.
+- The same-latent PixelUMM control authenticates the full 180-frame NCTHW
+  bank and gathers its first 60 latent frames on MPS. The pinned Torch
+  2.6 source adapter, all 36 blocks, 11 overlapping windows and decoder
+  head match all 106,168,320 native display values exactly (maximum and
+  mean error zero); all 468 source/cache weight-word checks pass. Source
+  raw BF16 pixels are converted through the pinned multiply/add/clamp
+  before comparison with native display pixels. The 23 CPU admission
+  tests pass, including missing/false/string gather metrics and incorrect
+  bank extents. No in-chain host synchronization was added. The guarded
+  source replay stayed above the 10% cache-aware floor with zero swap
+  growth. Its report SHA-256 is
+  `415a6b81392435b37d1f072867232620fadf4b477274274b840c58137cbecf44`;
+  replay `anchor/decoded/source-prefix-torch26.argv.json`. The preceding
+  Torch 2.8 attempt was rejected before loading the model by the runtime
+  pin and is not comparison evidence. The paired media is
+  `anchor/native-left-upstream-right-5s.mp4`. On these exact latents the
+  hand smear is not a native-decoder-specific defect; acting remains open.
+  Next: a scratch-only matched query-ROI mask experiment, keeping prompt,
+  noise, text queries and global video/history keys unchanged. This is
+  custom attention, not a claim about stock upstream spatial control;
+  global video keys can still relay actions across actor regions.
 
 ### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
 
