@@ -164,6 +164,38 @@ tap/return remains open. Reject this rewrite on this fixture, without
 generalizing to all prompts or multi-actor motion. Numerical equality
 remains separate from visual compliance.
 
+An offline local-change diagnostic now distinguishes the motion missed by
+the sampled-frame review. `scripts/video_block_diff.py` streams each clip
+through ffmpeg once, area-pools pixels by four, and measures mean absolute
+RGB differences in 16x16 blocks at lags of one and six frames. It retains
+at most seven pooled frames; per-frame scalar statistics grow with clip
+length. The aligned ROIs are Alex's head `[128,0,112,128]`, his desk hands
+`[96,176,128,48]`, Resume `[336,64,112,192]`, its glove region
+`[336,128,64,96]`, and wall `[256,0,96,48]`, in x/y/width/height pixels.
+
+On all 120 frames of each existing clip, the head-region mean difference
+over 0-2 s is 1.038 versus 0.284 at lag one, and 5.191 versus 1.013 at lag
+six (accepted control versus rewrite, values expressed on the 0-255 RGB
+scale). The glove-region lag-six difference over 2-5 s is 4.305 versus
+4.169. Pairs must have both endpoints inside the stated interval. A
+scale-one control preserves the head contrast, 9.380 versus 1.986, and
+similar glove change, 6.613 versus 6.415. This supports the user's playback
+distinction; it does not identify head pose, natural motion or a clean tap.
+Brightness changes, compression and camera motion also register, while
+pooling can erase fine motion. CPU controls cover pooling-hidden changes,
+brightness-only changes, a known translated patch, edge-area weighting
+and truncated raw frames.
+
+The reports, exact CLI arguments and timeline plot are under
+`/opt/mldata_ssd/cogni-ml/rolewright-block-diff-20261105.wsem3mlz`.
+The scale-four invocation analyzed both five-second clips in 0.77 s wall
+time including subprocess startup and JSON output; this single observation
+is not an inference benchmark. No model ran and no GPU inference path,
+synchronization or numerical gate changed. Refresh the diagnostic on video,
+ROI, pooling, lag or implementation changes; use scale one when pooling
+sensitivity is uncertain. The metric is an inspection aid, not an acting
+quality or tensor-parity gate.
+
 The new native DiT and reused qualified decoder each record zero tracked
 encode allocations, readbacks and preterminal waits, with one terminal
 drain. Their separate sampled peaks are 24.94 and 18.41 GiB; minimum

@@ -128,6 +128,16 @@ Rich landmarks include full State/Relations/Evidence structure.
   for the corrected whole-head crop. The decoder reuses its earlier
   qualification; this is neither a new decoder-source gate nor a full ad.
   Refresh on input/mask/source/binary/runtime/precision changes.
+- Offline `scripts/video_block_diff.py` now scans all decoded frames with
+  pooled-pixel block differences and a bounded lag ring. On the existing
+  matched pair, lag-six head change over 0-2 s is 5.191 versus 1.013 on the
+  0-255 RGB scale (accepted/rewrite); glove change over 2-5 s is similar,
+  4.305 versus 4.169. Scale-one controls retain the distinction. Evidence:
+  `/opt/mldata_ssd/cogni-ml/rolewright-block-diff-20261105.wsem3mlz`.
+  This corroborates the playback observation without claiming pose or
+  acting quality. Pooling-hidden motion and brightness-only change are
+  explicit CPU counterexamples. Refresh on video/ROI/scale/lag/code changes;
+  this offline diagnostic adds nothing to the GPU inference path.
 
 ### [LM-HY-NOMAS-ROLEWRIGHT-FULL-AUTOCAST-2026-11-04] Connected T0 and all four T1 Euler updates match the pinned source
 
