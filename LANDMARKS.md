@@ -6,6 +6,37 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-FINAL-EULER-SOURCE-BF16-2026-11-04] Final projection and first Euler update match the source on frozen T1
+
+- The final head under `--reference-source-bf16` preserves the source BF16
+  boundaries for SiLU, LayerNorm, both linear projections and modulation.
+  The two projections accumulate in F32 and round once after bias.
+  Modulation rounds the scale factor, product and sum separately. The head
+  reuses its buffers, adds one in-place norm dispatch and adds no host wait.
+- On authenticated RoleWright T1 inputs from the 54-block gate below, the
+  native head and Euler plan match Tencent `911cea64` on PyTorch 2.8.0 MPS
+  without autocast. All nine raw comparisons are byte-exact, including
+  velocity and the 138,240 values in the first updated latent. The unchanged
+  gate is `atol=rtol=2e-5`. The previous head missed the gate on velocity
+  by up to 0.03308201. Injecting the exact source velocity into the previous
+  native Euler plan already reproduced the source update bit-for-bit.
+- The native probe records zero explicit preterminal waits, readbacks and
+  encode-time named buffer allocations. The file-cache-aware 10% guard
+  observed 38.23 GiB minimum headroom and zero swap growth. The comparison
+  rejects a one-value perturbation. The default F32 route retains all nine
+  previous output digests. The production CLI built and planned the
+  frozen `--dit-only` input, and 109 CPU plus two Metal specs passed.
+- Evidence and exact command arguments are in
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-final-euler-20261104.c7zj7lnM`.
+  Replay `native-ndarray.command.json` and `compare-ndarray.command.json`
+  with fresh output paths and require `jq -e .gate_passed` on the report.
+  The comparison SHA-256 is
+  `28ebc8035d444f29eb6e79890aed015f241fbfa684beb5da75cdc29af44b566e`.
+- This gate uses frozen head inputs. The production patch and refiner still
+  need an exact T0/T1 prelude gate, followed by all four T1 latent updates
+  through the normal sequence owner and a separate rendered-motion check.
+  Refresh if the source, runtime, weights, inputs or precision path changes.
+
 ### [LM-HY-NOMAS-FULL-DIT-SOURCE-BF16-2026-11-04] All 54 staged DiT blocks match the source at the T0/T1 boundary
 
 - At native revision `ae7505c1`, the serial source-BF16 DiT with the

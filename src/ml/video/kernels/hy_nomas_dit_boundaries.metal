@@ -32,12 +32,19 @@ kernel void hy_nomas_dit_final_modulate_f32(
     device float *destination [[buffer(2)]],
     constant uint &dim [[buffer(3)]],
     constant uint &count [[buffer(4)]],
+    constant uint &source_bf16 [[buffer(5)]],
     uint index [[thread_position_in_grid]]) {
   if (index < count) {
     uint channel = index % dim;
     float shift = modulation[channel];
     float scale = modulation[dim + channel];
-    float scaled = norm[index] * (1.0f + scale);
-    destination[index] = scaled + shift;
+    float factor = 1.0f + scale;
+    if (source_bf16 != 0u)
+      factor = video_linear_mps_roundtrip_bf16(factor);
+    float scaled = norm[index] * factor;
+    if (source_bf16 != 0u)
+      scaled = video_linear_mps_roundtrip_bf16(scaled);
+    float value = scaled + shift;
+    destination[index] = source_bf16 != 0u ? video_linear_mps_roundtrip_bf16(value) : value;
   }
 }

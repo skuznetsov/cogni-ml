@@ -1,4 +1,5 @@
 require "./hy_nomas_text_refiner"
+require "./hy_nomas_reference_bf16"
 
 module ML::Video
   # Setup-owned input/final adapters for the first-segment, camera-off DiT.
@@ -11,7 +12,7 @@ module ML::Video
     # both boundary plans.
     MAX_SUPPORTED_TOKENS = 9_360
 
-    SOURCE = MetalOps::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_dit_boundaries.metal") }}
+    SOURCE = MetalLinearMPS::SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/hy_nomas_dit_boundaries.metal") }}
     private record Linear, input : ML::MetalBuffer, output : ML::MetalBuffer,
       weight : ML::MetalBuffer, bias : ML::MetalBuffer,
       weight_dtype : WeightDType, bias_dtype : WeightDType,
@@ -141,11 +142,13 @@ module ML::Video
         bias_dtype, rows, input_dim, output_dim, plan)
     end
 
-    protected def project!(encoder : ML::Metal::ComputeEncoder, name : String) : Nil
+    protected def project!(encoder : ML::Metal::ComputeEncoder, name : String,
+                           *, round_output_bf16 : Bool = false) : Nil
       entry = @linears[name]
       MetalLinearMPS.project(encoder, entry.input, entry.weight, entry.bias,
         entry.output, entry.rows, entry.input_dim, entry.output_dim,
-        entry.weight_dtype, entry.bias_dtype, entry.plan, @arena["weight_stage"])
+        entry.weight_dtype, entry.bias_dtype, entry.plan, @arena["weight_stage"],
+        round_output_bf16: round_output_bf16)
     end
 
     protected def pipeline(name : String) : ML::Metal::ComputePipeline
@@ -207,6 +210,7 @@ module ML::Video
     @vec : ML::MetalBuffer
     @tokens : Int32
     @norm : HyNomasMPSLayerNorm::Plan
+    @round_norm : HyNomasReferenceBF16::Plan? = nil
     @silu : HyNomasMPSActivation::SiLUPlan? = nil
     @modulate : ML::Metal::ComputePipeline
     @unpatch : ML::Metal::ComputePipeline
@@ -219,9 +223,10 @@ module ML::Video
     end
 
     def initialize(@input : ML::MetalBuffer, @vec : ML::MetalBuffer,
-                   @tokens : Int32, weights : Arena)
+                   @tokens : Int32, weights : Arena, *, @source_bf16 : Bool = false)
       HyNomasDiTBoundaryMPSPlan.validate_token_count!(@tokens)
       @norm = HyNomasMPSLayerNorm::Plan.new(DIM)
+      @round_norm = HyNomasReferenceBF16::Plan.new(DIM) if @source_bf16
       @modulate = pipeline("hy_nomas_dit_final_modulate_f32")
       @unpatch = pipeline("hy_nomas_dit_tokens_to_channels_f32")
       super(weights)
@@ -229,7 +234,8 @@ module ML::Video
         input!(@input, @tokens.to_i64 * DIM)
         input!(@vec, DIM.to_i64)
         @arena.alloc("silu", DIM)
-        silu = HyNomasMPSActivation::SiLUPlan.new([1, DIM], @vec, @arena["silu"])
+        silu = HyNomasMPSActivation::SiLUPlan.new([1, DIM], @vec, @arena["silu"],
+          round_output_bf16: @source_bf16)
         @silu = silu
         @activations << silu
         @arena.alloc("norm", @tokens * DIM)
@@ -262,14 +268,18 @@ module ML::Video
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
       bind!(chain)
       @silu.not_nil!.encode(chain)
-      project!(chain.encoder, "final_layer.adaLN_modulation.1")
-      @norm.encode(chain.encoder, @input, @arena["norm"], @tokens)
-      chain.encoder.set_pipeline(@modulate).set_buffer(@arena["norm"], 0)
+      e = chain.encoder
+      project!(e, "final_layer.adaLN_modulation.1", round_output_bf16: @source_bf16)
+      norm = @arena["norm"]
+      @norm.encode(e, @input, norm, @tokens)
+      @round_norm.try(&.round(e, norm, norm, @tokens * DIM))
+      e.set_pipeline(@modulate).set_buffer(norm, 0)
         .set_buffer(@arena["modulation"], 1)
         .set_buffer(@arena["modulated"], 2, ML::Metal::BufferAccess::Write)
         .set_value(DIM.to_u32, 3).set_value((@tokens * DIM).to_u32, 4)
+        .set_value(@source_bf16 ? 1_u32 : 0_u32, 5)
         .dispatch_1d(@tokens * DIM)
-      project!(chain.encoder, "final_layer.linear")
+      project!(e, "final_layer.linear", round_output_bf16: @source_bf16)
       chain.encoder.set_pipeline(@unpatch).set_buffer(@arena["linear"], 0)
         .set_buffer(@arena["output"], 1, ML::Metal::BufferAccess::Write)
         .set_value(@tokens.to_u32, 2).set_value(CHANNELS.to_u32, 3)

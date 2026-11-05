@@ -640,7 +640,8 @@ module HyNomasSequence
           value: joint["joint.value"], output: joint["joint.attention"])
         plan_cleanup << -> { @history.release }
         @serial.attach_history_provider!(@history)
-        @final = ML::Video::HyNomasFinalMPSPlan.new(blocks.last.image_output, @refiner.vec, 4320, @globals)
+        @final = ML::Video::HyNomasFinalMPSPlan.new(blocks.last.image_output, @refiner.vec, 4320, @globals,
+          source_bf16: source_bf16)
         plan_cleanup << -> { @final.release }
         @segment_count.times do
           @eulers << ML::Video::HyNomasEulerPlan.new(@latent, @final.output,
