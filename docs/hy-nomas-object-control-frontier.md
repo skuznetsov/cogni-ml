@@ -506,6 +506,133 @@ through global attention. It is not a guarantee of an unchanged background
 or of physical consistency. Keep branch outputs on GPU and reuse scratch
 serially; do not triple activation memory by batching without a budget.
 
+## Bounded part-prior enrichment experiment (2026-11-05)
+
+The next CAUTION slice preserves the accepted M11 hard actor/time support.
+It adds a finite BF16 pre-softmax logit prior only on already-visible
+video-query -> matching-action-text-key pairs. This is enrichment inside a
+hard ROI, not softening its excluded edges. History, video and global keys
+keep zero additive bias; all text-query rows keep their original mask.
+Their probabilities can still change through softmax normalization.
+
+For a query in the selected action window, use `bias = lambda * w(h,w)`.
+The authored static prior is a separable tent, normalized to peak one, on the
+9x16 video-query grid. Alex's center is `(h=1.5,w=5.5)` over frames `[1,10)`;
+Resume's glove/chest center is `(4.5,11.5)` over `[12,28)`. Alex's radii are
+two cells; Resume's are 1.5 vertical and two horizontal cells. Cell `(h,w)`
+is centered at pixel `(32*(w+0.5),32*(h+0.5))` in the 512x288 reference.
+These locations are authored from the pinned reference
+overlay, not measured pose tracks or segmentation. Pin the image, full
+per-query BF16 values and row ordering before GPU execution. Never infer
+these priors from the resulting video.
+
+Use eight fixed-input arms: zero, Alex at `ln(1.5)` and `ln(2)`, Resume at
+the same doses, a high-dose spatial sham for each, and zero repeated.
+The shams shift Alex's prior down three cells and Resume's up two cells,
+preserving the per-frame value histogram and actor/time support. A rejected
+radius-two Resume prior with a one-cell sham overlapped too strongly for a
+useful negative control; it was replaced before GPU execution. The doses
+multiply matching-key prior odds by approximately 1.5 and 2 before BF16
+rounding. They do not multiply motion magnitude.
+
+Falsifiers and DoD:
+
+- CPU admission rejects nonfinite, negative, over-budget, out-of-support or
+  text-query bias, mismatched hashes/geometry and altered sham histograms.
+- A small MPS additive-mask preflight must pass before a full source probe.
+- Zero and repeated zero use the old Boolean path and must replay the accepted
+  M11 parent bit-for-bit at all five checkpoints. Every new native capture
+  must match the pinned-source equation adapter at the existing 2e-5 bounds.
+- First-block text and image rows outside each prior's support stay exact.
+  Later global propagation is measured, not prohibited. Report raw and
+  baseline-normalized velocity RMS in the intended part, actor complement,
+  other actor and outside both actors; compare the matched spatial shams.
+  Fix independent evaluation boxes before execution: Alex's head uses
+  `t[1,10),h[0,4),w[4,8)`; Resume's glove/chest uses
+  `t[12,28),h[4,6),w[11,13)`. For each action, require the intended high-dose
+  target RMS and target/complement RMS ratio to exceed its own sham, and
+  require target RMS not to decrease from low to high dose. An undefined
+  ratio cannot pass. Apply these gates separately to source and native
+  increments. In both, the high-dose target increment RMS must exceed
+  `RMS(2e-5 + 2e-5 * abs(own_zero))` over the same fixed target region.
+  Freeze this floor before inspecting effect measurements: exact A/A alone
+  does not resolve a change below the source/native parity allowance.
+  These gates measure resolved representation sensitivity only; they do not
+  establish a perceptual effect or intended acting.
+- Encode reuses buffers and the existing mask dispatch. Require zero named
+  encode allocations/readbacks, no intermediate waits and one terminal drain.
+  Recompute the named-byte plan for eight arms; retain the external process
+  footprint guard, cache-aware 10% floor and 64 MiB swap-growth stop.
+
+The strongest failure is localized representation change without the intended
+head turn or glove action. Numerical localization only earns a separate short
+render; it cannot establish acting. Stop before rendering on parity, zero/A-A,
+resource or locality failures, or if the intended prior does not beat the sham
+in final localization. Do not select a dose from an image-difference score
+alone. If localization passes but articulation fails, pivot to explicit pose
+or trajectory support instead of increasing the dose.
+
+Rollback is the unchanged default/nil-bias path and the accepted take. The
+optional history-attention API remains experimental until its own gates pass;
+this slice does not admit a production spatial controller. Evidence decays on
+changes to priors, input/parent, source, precision, weights, geometry or binary.
+
+### Frozen-input result (2026-11-05)
+
+All 40 source/native tensors from the eight arms are byte-identical, including
+the first and last block image/text checkpoints and final velocity. Zero and
+repeated zero replay all five accepted parent checkpoints exactly on both
+implementations. First-block text and zero-prior image rows also remain exact.
+The fixed tolerances are still `atol=rtol=2e-5`.
+
+Both implementations independently pass the predeclared dose, sham and
+localization checks; their numbers are identical:
+
+| Target | Low-dose target RMS | High-dose target RMS | Sham target RMS | High target/complement RMS | Sham target/complement RMS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Alex head | 0.158176 | 0.204026 | 0.064890 | 5.815283 | 2.664713 |
+| Resume glove/chest | 0.158965 | 0.257119 | 0.201574 | 3.899654 | 2.397252 |
+
+The respective fixed parity-allowance RMS floors are `5.927495e-5` and
+`5.845713e-5`. These finite-case results establish resolved representation
+sensitivity and locality, not a head turn, glove gesture or visible quality.
+Do not combine the two nonzero priors and call that combination qualified;
+the tested arms change one actor prior at a time.
+
+Native encoding uses one chain, one terminal wait, zero named allocations and
+zero activation readbacks before the drain; its 40 captures are read afterward.
+The named peak is 20,208,934,020 bytes (18.82 GiB). External sampling observed a
+21,121,988,648-byte native process-group peak and minimum cache-aware headroom
+of 21,506,048,000 bytes, with zero swap growth. The source peak was
+4,435,905,200 bytes. Both stages ended with no live child processes under the
+10% floor and 64 MiB swap-growth stop. Sampling excludes between-poll spikes;
+named accounting excludes opaque MPS resources. These qualification forwards
+are not a speed benchmark.
+
+The accepted oracle used the isolated PyTorch 2.8.0 MPS environment. Earlier
+2.6.0 parent replay and 2.8.0 manifest-publication failures remain rejected
+stages; they are not successful qualifications or a controlled attribution of
+the difference to the PyTorch version. The flat accepted-ROI replay contract
+has a regression through comparison, manifest rendering and validation.
+
+Evidence: `/opt/mldata_ssd/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/`.
+`qualification.json` SHA-256 is
+`a5763db3a63ac91ed02069f0a72b890b226735296bd59a7c52c345c4da03c96e`;
+source and native payload SHA-256 is
+`3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2`.
+The strengthened effect floor was frozen before observing these effects.
+The curated repository index is
+`.landmark/evidence/2026-11-05-hy-nomas-soft-routes.json`; its external
+`qualified-artifacts.json` binds the exact source/build, failed stages and
+guard receipts. The final focused suites passed 87 Python tests and eight
+Crystal examples. Same-lineage read-only review is correlated, not an
+independent replication.
+
+Next: a bounded four-step visual zero/Alex/Resume comparison with fixed
+reference, camera, noise and decoder. A single saved-state velocity is not a
+rendered denoising trajectory. If articulation fails, retain this numerical
+result and pivot to explicit pose/trajectory support, without escalating dose.
+
 ## Research precedents and compatibility limits
 
 - [DiTraj](https://arxiv.org/abs/2509.21839) separates foreground/background
@@ -569,6 +696,6 @@ the new probe; the production runtime and accepted take were not changed.
 Refresh the numerical result on source, runtime, weights, input, geometry,
 precision or binary changes. Refresh any later visual conclusion on prompt,
 reference, noise, schedule, geometry, model or decoder changes.
-Next: test the bounded soft spatial routing dose response, then qualify any
-numerical improvement with a short rendered pose/gesture check. No production
+Next: qualify the passed bounded soft spatial routing dose response with a
+short rendered pose/gesture check. No production
 spatial-control API or simultaneous-object guarantee is admitted by this document.

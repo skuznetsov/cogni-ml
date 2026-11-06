@@ -52,7 +52,7 @@ module HyNomasDiTRouteFactorialGPU
   # No Arena, MetalBuffer, pipeline or device is constructed by this estimate.
   # Opaque MPS resources and host/reference storage remain under the external
   # footprint guard, not under this exact named-allocation accounting.
-  def memory_plan : Hash(String, Int64)
+  def memory_plan(action_logit_biases : Hash(String, Array(Float32))? = nil) : Hash(String, Int64)
     bindings = ML::Video::HyNomasDualStreamBlock.checkpoint_bindings(CONFIG)
     stage = bindings.sum(0_i64) { |binding| binding.shape.reduce(1_i64) { |n, d| n * d } * 2 }
     scratch = ML::Video::HyNomasDualStreamBlock.scratch_plan(CONFIG).sum(0_i64) { |_, n| n.to_i64 * 4 }
@@ -66,14 +66,19 @@ module HyNomasDiTRouteFactorialGPU
       HEADS, HEAD_DIM, source_bf16_attention: true).workspace_bytes.to_i64
     # Label values do not change geometry. Global labels are sufficient for
     # this allocation estimate; actual execution authenticates all mask bytes.
-    t1_attention = ML::Video::HyNomasHistoryAttentionWorkspace.geometry(HISTORY,
-      QUERY, HEADS, HEAD_DIM, query_labels: Array(Int32).new(QUERY, 0),
-      key_labels: Array(Int32).new(HISTORY + QUERY, 0),
-      source_bf16_attention: true).workspace_bytes.to_i64
+    case_order = action_logit_biases ? action_logit_biases.keys : CASE_ORDER
+    t1_attention = case_order[0...-1].sum(0_i64) do |name|
+      bias = action_logit_biases.try(&.[name])
+      bias = nil if bias.try(&.all?(&.zero?))
+      ML::Video::HyNomasHistoryAttentionWorkspace.geometry(HISTORY,
+        QUERY, HEADS, HEAD_DIM, query_labels: Array(Int32).new(QUERY, 1),
+        key_labels: Array(Int32).new(HISTORY + QUERY, 0),
+        source_bf16_attention: true, action_logit_bias: bias).workspace_bytes.to_i64
+    end
     current = (IMAGE_ELEMENTS.to_i64 + TEXT_ELEMENTS + DIM + 2_i64 * ROPE_ELEMENTS) * 4
-    states = 6_i64 * (IMAGE_ELEMENTS.to_i64 + TEXT_ELEMENTS) * 4
+    states = (case_order.size.to_i64 + 1) * (IMAGE_ELEMENTS.to_i64 + TEXT_ELEMENTS) * 4
     constants = (2_i64 * DIM + 4_i64 * ROPE_ELEMENTS) * 4
-    snapshots = CASE_ORDER.size.to_i64 * CHECKPOINTS.sum(0_i64) { |name| checkpoint_elements(name).to_i64 * 4 }
+    snapshots = case_order.size.to_i64 * CHECKPOINTS.sum(0_i64) { |name| checkpoint_elements(name).to_i64 * 4 }
     final_weights = ML::Video::HyNomasFinalMPSPlan.checkpoint_bindings.sum(0_i64) do |binding|
       binding.shape.reduce(1_i64) { |n, d| n * d } * 2
     end
@@ -81,10 +86,10 @@ module HyNomasDiTRouteFactorialGPU
                      2_i64 * LATENT_ELEMENTS + 2_i64 * DIM * DIM) * 4
     parts = {"resident_block_weights" => BLOCKS.to_i64 * stage, "block_weight_stage" => stage,
              "shared_block_scratch" => scratch, "source_bf16_workspace" => mps,
-             "current_inputs" => current, "six_state_banks" => states,
+             "current_inputs" => current, (action_logit_biases ? "state_banks" : "six_state_banks") => states,
              "input_constants" => constants, "snapshots" => snapshots,
              "single_layer_kv" => 2_i64 * HISTORY * DIM * 4,
-             "attention_workspaces" => t0_attention + 4_i64 * t1_attention,
+             "attention_workspaces" => t0_attention + t1_attention,
              "final_weights" => final_weights, "final_workspace" => final_scratch} of String => Int64
     parts["aggregate_named_bytes"] = parts.values.sum(0_i64)
     # Setup briefly has the ordinary compact attention plan before attaching
@@ -106,12 +111,15 @@ module HyNomasDiTRouteFactorialGPU
     @workspaces = [] of ML::Video::HyNomasHistoryAttentionWorkspace
     @plans = {} of String => ML::Video::HyNomasHistoryAttentionMPSPlan
     @selected = "T0"
+    @repeat_name = "M11_repeat"
+    @baseline_name = "M11"
     @last_chain : ML::Metal::MPSCommandChain? = nil
     @released = false
 
     def initialize(@query : ML::MetalBuffer, @key : ML::MetalBuffer,
                    @value : ML::MetalBuffer, @output : ML::MetalBuffer,
-                   fixture : HyNomasDiTRouteFactorialProbe::Reference)
+                   fixture : HyNomasDiTRouteFactorialProbe::Reference,
+                   action_logit_biases : Hash(String, Array(Float32))? = nil)
       @arena = ML::Video::Arena.new
       @cache_key = @arena.alloc("layer.T0.key", HISTORY * DIM)
       @cache_value = @arena.alloc("layer.T0.value", HISTORY * DIM)
@@ -121,10 +129,16 @@ module HyNomasDiTRouteFactorialGPU
         @workspaces << t0
         t0.freeze_history_inventory!
         @plans["T0"] = ML::Video::HyNomasHistoryAttentionMPSPlan.new(t0, @query, @key, @value, @output)
-        ["M11", "M00", "M10", "M01"].each do |name|
+        case_order = action_logit_biases ? action_logit_biases.keys : CASE_ORDER
+        @baseline_name = case_order.first
+        @repeat_name = case_order.last
+        case_order[0...-1].each do |name|
+          bias = action_logit_biases.try(&.[name])
+          bias = nil if bias.try(&.all?(&.zero?))
           work = ML::Video::HyNomasHistoryAttentionWorkspace.new(HISTORY, QUERY,
-            HEADS, HEAD_DIM, query_labels: fixture.native_query_labels_for(name),
-            key_labels: fixture.key_labels, source_bf16_attention: true)
+            HEADS, HEAD_DIM, query_labels: fixture.native_query_labels_for(action_logit_biases ? "M11" : name),
+            key_labels: fixture.key_labels, source_bf16_attention: true,
+            action_logit_bias: bias)
           @workspaces << work
           work.register_history_pair!(@cache_key, @cache_value)
           work.freeze_history_inventory!
@@ -138,7 +152,7 @@ module HyNomasDiTRouteFactorialGPU
 
     def select!(name : String) : Nil
       raise ArgumentError.new("released route attention") if @released
-      key = name == "M11_repeat" ? "M11" : name
+      key = name == @repeat_name ? @baseline_name : name
       raise ArgumentError.new("unknown route attention case") unless @plans.has_key?(key)
       @selected = key
     end
@@ -206,9 +220,23 @@ module HyNomasDiTRouteFactorialGPU
     @wait_attempted = false
     @released = false
     getter plan : Hash(String, Int64)
+    @case_order : Array(String)
 
-    def initialize(fixture : HyNomasDiTRouteFactorialProbe::Reference, budget : Int64)
-      @plan = HyNomasDiTRouteFactorialGPU.memory_plan
+    def initialize(fixture : HyNomasDiTRouteFactorialProbe::Reference, budget : Int64,
+                   action_logit_biases : Hash(String, Array(Float32))? = nil)
+      @case_order = action_logit_biases ? action_logit_biases.keys : CASE_ORDER
+      if biases = action_logit_biases
+        unless @case_order.size >= 2 && biases[@case_order.first].all?(&.zero?) &&
+               biases[@case_order.last] == biases[@case_order.first]
+          raise ArgumentError.new("soft-route runner requires zero baseline and exact final repeat")
+        end
+        @case_order.each do |name|
+          unless biases[name].size == QUERY
+            raise ArgumentError.new("soft-route bias row count differs from compact queries")
+          end
+        end
+      end
+      @plan = HyNomasDiTRouteFactorialGPU.memory_plan(action_logit_biases)
       raise ArgumentError.new("direct-route peak named buffers exceed budget") if @plan["peak_named_bytes"] > budget
       admission = ML::Video::HyNomasQ4StackIndex::Admission.new(fixture.cache_index_path,
         fixture.cache_index_sha256, SOURCE_SHA, CACHE_CONFIG)
@@ -258,7 +286,7 @@ module HyNomasDiTRouteFactorialGPU
           @inputs.upload("T0.#{kind}", values[0, ROPE_ELEMENTS])
           @inputs.upload("T1.#{kind}", values[ROPE_ELEMENTS, ROPE_ELEMENTS])
         end
-        (["T0"] + CASE_ORDER).each do |name|
+        (["T0"] + @case_order).each do |name|
           prefix = name == "T0" ? "t0" : "t1.step1"
           @states.upload("#{name}.image", fixture.inputs["#{prefix}.patch"])
           padded = Array(Float32).new(TEXT_ELEMENTS, 0.0_f32)
@@ -266,7 +294,7 @@ module HyNomasDiTRouteFactorialGPU
           values.each_with_index { |value, index| padded[index] = value }
           @states.upload("#{name}.text", padded)
         end
-        CASE_ORDER.each do |name|
+        @case_order.each do |name|
           CHECKPOINTS.each do |checkpoint|
             @snapshots.alloc("#{name}.#{checkpoint}", HyNomasDiTRouteFactorialGPU.checkpoint_elements(checkpoint))
           end
@@ -281,7 +309,7 @@ module HyNomasDiTRouteFactorialGPU
         @workspace = @serial.dit_route_probe_workspace
         joint = @block.checkpoints
         @attention = Attention.new(joint["joint.query"], joint["joint.key"],
-          joint["joint.value"], joint["joint.attention"], fixture)
+          joint["joint.value"], joint["joint.attention"], fixture, action_logit_biases)
         cleanup << -> { @attention.release }
         @serial.attach_history_provider!(@attention)
         @final = ML::Video::HyNomasFinalMPSPlan.new(img, vec, VIDEO, @globals,
@@ -320,7 +348,7 @@ module HyNomasDiTRouteFactorialGPU
         joint = @block.checkpoints
         copy(chain, joint["joint.key"], @attention.cache_key, HISTORY * DIM)
         copy(chain, joint["joint.value"], @attention.cache_value, HISTORY * DIM)
-        CASE_ORDER.each do |name|
+        @case_order.each do |name|
           encode_state(chain, name, "T1")
           if layer == 0 || layer == BLOCKS - 1
             copy(chain, @block.image_output, @snapshots["#{name}.block#{layer}.image"], IMAGE_ELEMENTS)
@@ -328,7 +356,7 @@ module HyNomasDiTRouteFactorialGPU
           end
         end
       end
-      CASE_ORDER.each do |name|
+      @case_order.each do |name|
         copy(chain, @states["#{name}.image"], @inputs["working.image"], IMAGE_ELEMENTS)
         copy(chain, @inputs["T1.vec"], @inputs["working.vec"], DIM)
         @final.encode(chain)
@@ -344,7 +372,7 @@ module HyNomasDiTRouteFactorialGPU
       raise "direct-route chain did not have one terminal wait" unless chain.completed? && chain.wait_count == 1
       seconds = (Time.instant - started).total_seconds
       outputs = {} of String => Array(Float32)
-      CASE_ORDER.each do |name|
+      @case_order.each do |name|
         CHECKPOINTS.each do |checkpoint|
           key = "#{name}.#{checkpoint}"
           outputs[key] = @snapshots[key].read(HyNomasDiTRouteFactorialGPU.checkpoint_elements(checkpoint))

@@ -6,6 +6,55 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SOFT-ROUTES-2026-11-05] Bounded spatial action priors pass frozen numerical parity and locality
+
+- The opt-in BF16 action-logit prior adds a fixed per-query value only to
+  matching positive action-text keys inside the accepted M11 hard support.
+  Nil preserves the original Boolean path. Authored head/glove tents, doses
+  `ln(1.5)` / `ln(2)`, histogram-matched spatial shams and the resolved-effect
+  floor were frozen before observing effects; these are not pose tracks.
+- Eight arms through all 54 BF16 blocks yield 40 bit-identical source/native
+  tensors at unchanged `atol=rtol=2e-5`. Zero, repeated zero and the accepted
+  parent are exact in both implementations. First-block text and zero-prior
+  image rows stay exact. Later propagation is allowed and measured.
+- Alex-head low/high/sham velocity-change RMS: .158176 / .204026 / .064890;
+  high target/complement ratio 5.815283 versus sham 2.664713. Resume glove/
+  chest: .158965 / .257119 / .201574; ratios 3.899654 versus 2.397252.
+  Both source and native independently pass the frozen checks, including
+  high-target RMS above fixed parity-allowance RMS floors 5.927495e-5 and
+  5.845713e-5. This is finite numerical selectivity, not acting or improved
+  visible quality. Simultaneous nonzero priors are not qualified.
+- Native encoding retains one chain, one terminal wait and zero named
+  allocations or activation readbacks before the drain, followed by forty
+  captures. Named peak 20,208,934,020 bytes; sampled process-group peak
+  21,121,988,648 bytes, minimum cache-aware headroom 21,506,048,000 bytes.
+  Source sampled peak 4,435,905,200 bytes. Both stages retain the 10% floor,
+  64 MiB swap-growth stop, zero observed swap growth and no final children.
+  Counters omit opaque MPS resources and between-sample spikes; these
+  qualification timings are not a speed benchmark.
+- 87 focused Python tests, eight Crystal examples, release build, admission,
+  seven malformed-manifest rejections and the independent checker pass.
+  Fresh bridge object rebuild is byte-exact; executable rebuild sections
+  match while UUID/signature and whole-file hashes differ. One fresh bridge
+  and fourteen inherited parent objects form the recorded native build.
+  Same-lineage mini-Quad is ROBUST only for this frozen numerical scope.
+- Canonical evidence:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/`.
+  `qualified-artifacts.json` binds source/runtime, exact command/guard
+  receipts, inputs, build sections and rejected stages. Qualification SHA
+  `a5763db3a63ac91ed02069f0a72b890b226735296bd59a7c52c345c4da03c96e`;
+  common source/native payload SHA
+  `3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2`.
+  Curated index `.landmark/evidence/2026-11-05-hy-nomas-soft-routes.json`;
+  return [object-control frontier](docs/hy-nomas-object-control-frontier.md).
+- Next: separate four-step zero/Alex/Resume renders with fixed reference,
+  camera, noise and decoder; first require exact zero-final baseline replay.
+  A single saved velocity is not a generated trajectory. Pivot to explicit
+  pose/trajectory support if articulation fails; do not escalate the dose.
+  Rollback: omit the diagnostic and optional bias. Refresh on input/parent,
+  priors, source/runtime, weights, precision, geometry, binary/objects or
+  evidence changes. Missing or mutated bound artifacts revoke the claim.
+
 ### [LM-HY-NOMAS-DIRECT-ROUTES-2026-11-05] Saved-state DiT routes are source/native exact and show conditional actor-local sensitivity
 
 - Qualified scope: M11/M00/M10/M01/M11_repeat on the accepted sequential

@@ -1,0 +1,295 @@
+{
+  "schema": "cogni_ml.hy_nomas_soft_routes_evidence/v1",
+  "date": "2026-11-05",
+  "base_revision": "a5c8440b",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Frozen saved-state first T1 forward through all 54 BF16 DiT blocks: eight separate bias/control arms, forty source/native checkpoints, resolved numerical sensitivity and localization. No scheduler or decoder in this qualification.",
+    "adversary": "ROBUST in frozen numerical sensitivity/locality scope after actual report and external guard inspection; same-lineage review is correlated, not independent replication.",
+    "refresh": [
+      "weights",
+      "source/runtime",
+      "binary/linked objects",
+      "inputs/layout",
+      "bias maps",
+      "precision",
+      "evidence mutation/removal"
+    ],
+    "rollback": "Omit the diagnostic CLI and optional action_logit_bias; nil uses the original Boolean mask path."
+  },
+  "boundaries": {
+    "risk": "CAUTION: optional Metal/MPS attention API extension; no default inference change.",
+    "changed_paths": [
+      "docs/hy-nomas-object-control-frontier.md",
+      "examples/hy_nomas_soft_route_probe.cr",
+      "examples/support/hy_nomas_soft_route_probe.cr",
+      "examples/support/hy_nomas_soft_route_maps.py",
+      "examples/support/hy_nomas_soft_route_qualify.py",
+      "examples/support/hy_nomas_dit_route_factorial_gpu.cr",
+      "src/ml/video/hy_nomas_history_attention.cr",
+      "src/ml/video/hy_nomas_history_attention_bridge.mm",
+      "spec/support/hy_nomas_soft_route_reference.py",
+      "spec/support/hy_nomas_dit_route_factorial_runtime.py",
+      "spec/hy_nomas_history_action_mask_spec.cr",
+      "spec/hy_nomas_soft_route_test.py",
+      "spec/hy_nomas_soft_route_qualify_test.py",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-05-hy-nomas-soft-routes.json"
+    ],
+    "production_default_behavior_changed": false,
+    "render_is_separate": true
+  },
+  "recipe": {
+    "case_order": [
+      "zero",
+      "A1_low",
+      "A1_high",
+      "A2_low",
+      "A2_high",
+      "A1_sham",
+      "A2_sham",
+      "zero_repeat"
+    ],
+    "bias": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/bias-v2.json",
+      "bytes": 408608,
+      "sha256": "81dd6c8d9ba01bd8824cba8c0c48f238f9180c2cb22a3f18f7c2cb2d5331235e"
+    },
+    "effect_gate_frozen_before_source_publication": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/effect-gate-freeze.json",
+      "bytes": 735,
+      "sha256": "16797aa9c06ad3b04f7237b97f50ccef2900d322836f44e4805dbc403acc3dfc"
+    },
+    "low_and_high_logit_doses": "ln(1.5), ln(2), rounded to BF16",
+    "support": "Nonnegative per-query bias to same positive action-label text keys inside fixed M11 hard actor/time support; zero text/global/history/video additive bias; blocked edges stay -inf. Global/history probabilities may change through normalization.",
+    "priors": "Authored reference-grid tents, not measured pose/segmentation tracks. Histogram-matched spatial shams stay inside the same actor/time support.",
+    "simultaneous_actor_bias_qualified": false
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "source_native_checkpoints_bit_exact": 40,
+    "parent_zero_and_repeat_exact_per_artifact": true,
+    "AA_exact_per_artifact": true,
+    "block0_text_and_zero_bias_image_rows_exact": true,
+    "source_and_native_localization_gates_separately_pass": true,
+    "full_pipeline_upstream_video_parity": false,
+    "cpu_tests": 87,
+    "crystal_examples": 8,
+    "malformed_native_manifests_rejected": 7,
+    "release_build": "Fresh attention bridge plus fourteen inherited parent objects; release build and rebuild-section binding passed.",
+    "dod_command": "python3 -B -m unittest spec.hy_nomas_soft_route_test spec.hy_nomas_soft_route_qualify_test spec.hy_nomas_dit_route_factorial_test spec.hy_nomas_refiner_c_factorial_test spec.hy_nomas_refiner_transfer_test spec.hy_nomas_action_conditioning_spec spec.hy_nomas_reference_attention_test spec.video_block_diff_test -q",
+    "dod_signal": "87 focused CPU tests, eight Crystal examples, CPU admission/negative gates, guarded source/native and independent qualification pass. Forty tensor pairs and parent/AA/protected-row invariants are bit exact.",
+    "gpu_replay": "Use fresh output names; exact admitted/source/native/qualification/build argv, stdout and guard receipts are bound by qualified-artifacts.json."
+  },
+  "results": {
+    "A1_soft_dose_localization": {
+      "action": "A1",
+      "artifact": "source",
+      "checks": {
+        "dose_response_low_not_greater_than_high": true,
+        "high_target_effect_exceeds_parity_allowance": true,
+        "high_target_rms_exceeds_sham": true,
+        "high_target_to_complement_ratio_exceeds_sham": true,
+        "target_and_complement_denominators_defined": true,
+        "targeted_high_change_nonzero": true
+      },
+      "high_target_rms": 0.20402626375225075,
+      "high_target_to_complement_ratio": 5.815283325469408,
+      "low_target_rms": 0.158175544056494,
+      "passed": true,
+      "sham_target_rms": 0.06489013869638917,
+      "sham_target_to_complement_ratio": 2.6647134263670553,
+      "target_change_threshold_rationale": "RMS of the fixed elementwise comparison allowances ATOL + RTOL*abs(own zero baseline) over the target part region, computed in float64. The high-dose target increment must strictly exceed this parity-scale floor. This establishes numerical sensitivity only, not visible acting or statistical significance.",
+      "target_change_threshold_rms": 5.9274952768871315e-05
+    },
+    "A1_native_soft_dose_localization": {
+      "action": "A1",
+      "artifact": "native",
+      "checks": {
+        "dose_response_low_not_greater_than_high": true,
+        "high_target_effect_exceeds_parity_allowance": true,
+        "high_target_rms_exceeds_sham": true,
+        "high_target_to_complement_ratio_exceeds_sham": true,
+        "target_and_complement_denominators_defined": true,
+        "targeted_high_change_nonzero": true
+      },
+      "high_target_rms": 0.20402626375225075,
+      "high_target_to_complement_ratio": 5.815283325469408,
+      "low_target_rms": 0.158175544056494,
+      "passed": true,
+      "sham_target_rms": 0.06489013869638917,
+      "sham_target_to_complement_ratio": 2.6647134263670553,
+      "target_change_threshold_rationale": "RMS of the fixed elementwise comparison allowances ATOL + RTOL*abs(own zero baseline) over the target part region, computed in float64. The high-dose target increment must strictly exceed this parity-scale floor. This establishes numerical sensitivity only, not visible acting or statistical significance.",
+      "target_change_threshold_rms": 5.9274952768871315e-05
+    },
+    "A2_soft_dose_localization": {
+      "action": "A2",
+      "artifact": "source",
+      "checks": {
+        "dose_response_low_not_greater_than_high": true,
+        "high_target_effect_exceeds_parity_allowance": true,
+        "high_target_rms_exceeds_sham": true,
+        "high_target_to_complement_ratio_exceeds_sham": true,
+        "target_and_complement_denominators_defined": true,
+        "targeted_high_change_nonzero": true
+      },
+      "high_target_rms": 0.25711856610172557,
+      "high_target_to_complement_ratio": 3.899653773925454,
+      "low_target_rms": 0.15896547866570107,
+      "passed": true,
+      "sham_target_rms": 0.2015737286072884,
+      "sham_target_to_complement_ratio": 2.397251591751546,
+      "target_change_threshold_rationale": "RMS of the fixed elementwise comparison allowances ATOL + RTOL*abs(own zero baseline) over the target part region, computed in float64. The high-dose target increment must strictly exceed this parity-scale floor. This establishes numerical sensitivity only, not visible acting or statistical significance.",
+      "target_change_threshold_rms": 5.845713106558987e-05
+    },
+    "A2_native_soft_dose_localization": {
+      "action": "A2",
+      "artifact": "native",
+      "checks": {
+        "dose_response_low_not_greater_than_high": true,
+        "high_target_effect_exceeds_parity_allowance": true,
+        "high_target_rms_exceeds_sham": true,
+        "high_target_to_complement_ratio_exceeds_sham": true,
+        "target_and_complement_denominators_defined": true,
+        "targeted_high_change_nonzero": true
+      },
+      "high_target_rms": 0.25711856610172557,
+      "high_target_to_complement_ratio": 3.899653773925454,
+      "low_target_rms": 0.15896547866570107,
+      "passed": true,
+      "sham_target_rms": 0.2015737286072884,
+      "sham_target_to_complement_ratio": 2.397251591751546,
+      "target_change_threshold_rationale": "RMS of the fixed elementwise comparison allowances ATOL + RTOL*abs(own zero baseline) over the target part region, computed in float64. The high-dose target increment must strictly exceed this parity-scale floor. This establishes numerical sensitivity only, not visible acting or statistical significance.",
+      "target_change_threshold_rms": 5.845713106558987e-05
+    }
+  },
+  "execution": {
+    "blocks": 54,
+    "command_chains": 1,
+    "terminal_waits": 1,
+    "named_allocations_during_encode": 0,
+    "activation_readbacks_before_terminal_wait": 0,
+    "postwait_checkpoint_readbacks": 40,
+    "forward_seconds": 82.927244416,
+    "scheduler_updates": 0,
+    "decoder_calls": 0
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "native_process_cap_bytes": 23622320128,
+    "swap_growth_limit_bytes": 67108864,
+    "sampled_native_peak_process_bytes": 21121988648,
+    "sampled_native_minimum_headroom_bytes": 21506048000,
+    "source_sampled_peak_process_bytes": 4435905200,
+    "native_swap_growth_bytes": 0,
+    "source_swap_growth_bytes": 0,
+    "native_final_live_children": 0,
+    "source_final_live_children": 0,
+    "native_named_plan": {
+      "resident_block_weights": 16314144768,
+      "block_weight_stage": 302113792,
+      "shared_block_scratch": 1325253120,
+      "source_bf16_workspace": 386404352,
+      "current_inputs": 42442752,
+      "state_banks": 342097920,
+      "input_constants": 8863744,
+      "snapshots": 600014848,
+      "single_layer_kv": 75087872,
+      "attention_workspaces": 610848324,
+      "final_weights": 16916544,
+      "final_workspace": 105463808,
+      "aggregate_named_bytes": 20129651844,
+      "setup_transient_attention_bytes": 79282176,
+      "peak_named_bytes": 20208934020
+    },
+    "opaque_mps_resources_in_named_counter": false,
+    "instantaneous_total_gpu_peak_certified": false
+  },
+  "artifacts": {
+    "qualified-artifacts.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/qualified-artifacts.json",
+      "bytes": 31210,
+      "sha256": "37433e8fc14d1a9ed910c9b29a06062e62a2e11c7ac7bdffbb010303ea235fd7"
+    },
+    "guard-summary.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/guard-summary.json",
+      "bytes": 21749,
+      "sha256": "d9e8049fb36fe8e9c80f79e3a2092dd9d91bb07df2424e9ab2d5674e0378938b"
+    },
+    "qualification.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/qualification.json",
+      "bytes": 100402,
+      "sha256": "a5763db3a63ac91ed02069f0a72b890b226735296bd59a7c52c345c4da03c96e"
+    },
+    "source.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/source.json",
+      "bytes": 45242,
+      "sha256": "e7e0eefc258cc6b50d8df4e352b5106c7a022cee4c41a2a196249db96f637b31"
+    },
+    "native.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/native.json",
+      "bytes": 10803,
+      "sha256": "46fe108250132c0aeb25cc9d12c5c0a698b2d254b9a50d989a847c40300d1074"
+    },
+    "oracle-environment.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/oracle-environment.json",
+      "bytes": 508,
+      "sha256": "65772e49683b4d45cafbe8e7b1fd43093eff0b79c7a95b345f94b90396ec537c"
+    },
+    "source-code-snapshot-v2.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/source-code-snapshot-v2.json",
+      "bytes": 1353,
+      "sha256": "0de52b9a369e210cbd682ae3e0619af759198858144e122d55cd7023231bcede"
+    },
+    "native-source-snapshot.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/native-source-snapshot.json",
+      "bytes": 1676,
+      "sha256": "3a03b9a93456158c3e79f655c4923a770fae8657bf0fc0847a55a27cb24edb2d"
+    },
+    "native-binary-section-binding.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/native-binary-section-binding.json",
+      "bytes": 9458,
+      "sha256": "9921fa0c353eec0b47a4ae413454e742b3bececf23c41719ba4529ce96cae566"
+    }
+  },
+  "source_payload_sha256": "3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2",
+  "native_payload_sha256": "3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2",
+  "source_oracle": "Pinned Tencent equations through the isolated PyTorch 2.8.0 MPS BF16 adapter, not stock CUDA/Magi. The environment inherits unused torchaudio/torchvision packages with incompatible torch requirements; they were not imported by this oracle.",
+  "build_binding": "Native executable linked one freshly compiled attention object and fourteen inherited objects from the qualified parent build. Rebuild has identical Mach-O sections but differs in UUID/signature and total size; fresh attention object rebuild is byte-identical.",
+  "failed_stage_history": [
+    {
+      "stage": "source-preflight",
+      "reason": "Deleted prior virtual environment; no model execution."
+    },
+    {
+      "stage": "source-preflight-base",
+      "reason": "Saturating analytic arange fixture rejected; fixture replaced before model qualification."
+    },
+    {
+      "stage": "source",
+      "reason": "Final-component upstream directory symlink rejected before model execution."
+    },
+    {
+      "stage": "source-canonical",
+      "reason": "Missing BLOCKS runtime name; runtime receipt regression added."
+    },
+    {
+      "stage": "source-final",
+      "reason": "PyTorch 2.6.0 parent velocity exact replay failed; not a successful qualification."
+    },
+    {
+      "stage": "source-torch28",
+      "reason": "Numerical path completed but accepted-ROI schema publication failed; no captures retained, so not qualified."
+    }
+  ],
+  "limitations": [
+    "Numerical sensitivity/locality does not prove acting, physical contact, intended ownership or better visual quality.",
+    "Later global propagation is measured, not forbidden; no hard spatial isolation or additive motion shares.",
+    "The effect floor is the fixed parity allowance RMS, not a perceptual or statistical threshold.",
+    "Earlier torch 2.6 parent replay and 2.8 publication failures remain rejected; no controlled version-causality claim.",
+    "Qualification times are not a performance benchmark; sampled process memory does not bound instantaneous peaks.",
+    "The bounded four-step visual trial and its decoder recovery need separate resource and lineage checks."
+  ],
+  "next_boundary": "Matched four-step zero/A1_high/A2_high visual comparison from the same reference, camera, prompt, initial noise and decoder noise. Require exact zero-final replay of the accepted baseline before interpretation; if articulation fails, pivot to explicit pose/trajectory instead of escalating dose."
+}

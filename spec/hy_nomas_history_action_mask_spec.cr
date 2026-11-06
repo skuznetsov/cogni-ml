@@ -88,4 +88,52 @@ describe ML::Video::HyNomasHistoryAttentionWorkspace do
     masked.action_mask_bytes.should eq(256_i64 * 5 * sizeof(Float32) +
                                        263_i64 * sizeof(Int32))
   end
+
+  it "accounts for an optional source-BF16 per-query action logit bias" do
+    labels = [0, 1, 2, -1]
+    keys = [0, 1, 2, 0]
+    baseline = ML::Video::HyNomasHistoryAttentionWorkspace.geometry(
+      0, 4, 1, 2, query_labels: labels, key_labels: keys,
+      source_bf16_attention: true)
+    biased = ML::Video::HyNomasHistoryAttentionWorkspace.geometry(
+      0, 4, 1, 2, query_labels: labels, key_labels: keys,
+      source_bf16_attention: true,
+      action_logit_bias: [0.0_f32, 0.25_f32, 2.0_f32, 0.0_f32])
+
+    biased.action_logit_bias_bytes.should eq(4_i64 * sizeof(UInt16))
+    biased.action_mask_bytes.should eq(baseline.action_mask_bytes + 4_i64 * sizeof(UInt16))
+    biased.workspace_bytes.should eq(baseline.workspace_bytes + 4_i64 * sizeof(UInt16))
+  end
+
+  it "rejects malformed, non-finite, out-of-range, or misrouted action biases" do
+    labels = [0, 1, 2, -1]
+    keys = [0, 1, 2, 0]
+    invalid_biases = [
+      [0.0_f32, 0.5_f32],
+      [0.1_f32, 0.25_f32, 2.0_f32, 0.0_f32],
+      [0.0_f32, -0.1_f32, 2.0_f32, 0.0_f32],
+      [0.0_f32, 2.01_f32, 2.0_f32, 0.0_f32],
+      [0.0_f32, Float32::NAN, 2.0_f32, 0.0_f32],
+      [0.0_f32, Float32::INFINITY, 2.0_f32, 0.0_f32],
+      [0.25_f32, 0.25_f32, 2.0_f32, 0.0_f32],
+      [0.0_f32, 0.25_f32, 2.0_f32, 0.25_f32],
+    ]
+    invalid_biases.each do |bias|
+      expect_raises(ArgumentError) do
+        ML::Video::HyNomasHistoryAttentionWorkspace.geometry(
+          0, 4, 1, 2, query_labels: labels, key_labels: keys,
+          source_bf16_attention: true, action_logit_bias: bias)
+      end
+    end
+
+    expect_raises(ArgumentError) do
+      ML::Video::HyNomasHistoryAttentionWorkspace.geometry(
+        0, 4, 1, 2, action_logit_bias: Array(Float32).new(4, 0.0_f32))
+    end
+    expect_raises(ArgumentError) do
+      ML::Video::HyNomasHistoryAttentionWorkspace.geometry(
+        0, 4, 1, 2, query_labels: labels, key_labels: keys,
+        action_logit_bias: Array(Float32).new(4, 0.0_f32))
+    end
+  end
 end

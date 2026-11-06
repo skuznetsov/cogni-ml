@@ -11,6 +11,7 @@
 #include <cmath>
 #include <stdint.h>
 #include <limits.h>
+#include <cstring>
 #include <unordered_set>
 
 @interface HyNomasHistoryAttentionVariant : NSObject
@@ -42,6 +43,7 @@
 @property(nonatomic, strong) id<MTLBuffer> queryLabels;
 @property(nonatomic, strong) id<MTLBuffer> keyLabels;
 @property(nonatomic, strong) id<MTLBuffer> maskStage;
+@property(nonatomic, strong) id<MTLBuffer> actionLogitBias;
 @property(nonatomic, strong) NSMutableArray<id<MTLBuffer>> *historyKeys;
 @property(nonatomic, strong) NSMutableArray<id<MTLBuffer>> *historyValues;
 @property(nonatomic) uint32_t historyRows;
@@ -96,6 +98,9 @@ static id<MTLDevice> hy_nomas_history_action_cached_device = nil;
 static id<MTLComputePipelineState> hy_nomas_history_bf16_action_mask_pipeline = nil;
 static id<MTLComputePipelineState> hy_nomas_history_bf16_masked_scatter_pipeline = nil;
 static id<MTLDevice> hy_nomas_history_bf16_action_cached_device = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_biased_action_mask_pipeline = nil;
+static id<MTLComputePipelineState> hy_nomas_history_bf16_biased_masked_scatter_pipeline = nil;
+static id<MTLDevice> hy_nomas_history_bf16_biased_action_cached_device = nil;
 
 static bool hy_nomas_history_product(const uint64_t *values, size_t count,
                                      uint64_t *result) {
@@ -277,20 +282,28 @@ static bool hy_nomas_history_pipelines(
 
 static bool hy_nomas_history_action_pipelines(
     id<MTLDevice> device, bool sourceBF16Attention,
+    bool hasActionLogitBias,
     id<MTLComputePipelineState> *maskPipeline,
     id<MTLComputePipelineState> *scatterPipeline) {
-  if (!device || !maskPipeline || !scatterPipeline)
+  if (!device || !maskPipeline || !scatterPipeline ||
+      (hasActionLogitBias && !sourceBF16Attention))
     return false;
   @synchronized([HyNomasHistoryAttentionWorkspaceNative class]) {
-    id<MTLDevice> cachedDevice = sourceBF16Attention
-                                     ? hy_nomas_history_bf16_action_cached_device
-                                     : hy_nomas_history_action_cached_device;
-    id<MTLComputePipelineState> cachedMask = sourceBF16Attention
-                                                  ? hy_nomas_history_bf16_action_mask_pipeline
-                                                  : hy_nomas_history_action_mask_pipeline;
-    id<MTLComputePipelineState> cachedScatter = sourceBF16Attention
-                                                     ? hy_nomas_history_bf16_masked_scatter_pipeline
-                                                     : hy_nomas_history_masked_scatter_pipeline;
+    id<MTLDevice> cachedDevice = hasActionLogitBias
+                                     ? hy_nomas_history_bf16_biased_action_cached_device
+                                     : (sourceBF16Attention
+                                            ? hy_nomas_history_bf16_action_cached_device
+                                            : hy_nomas_history_action_cached_device);
+    id<MTLComputePipelineState> cachedMask = hasActionLogitBias
+                                                  ? hy_nomas_history_bf16_biased_action_mask_pipeline
+                                                  : (sourceBF16Attention
+                                                         ? hy_nomas_history_bf16_action_mask_pipeline
+                                                         : hy_nomas_history_action_mask_pipeline);
+    id<MTLComputePipelineState> cachedScatter = hasActionLogitBias
+                                                     ? hy_nomas_history_bf16_biased_masked_scatter_pipeline
+                                                     : (sourceBF16Attention
+                                                            ? hy_nomas_history_bf16_masked_scatter_pipeline
+                                                            : hy_nomas_history_masked_scatter_pipeline);
     if (cachedDevice == device && cachedMask && cachedScatter) {
       *maskPipeline = cachedMask;
       *scatterPipeline = cachedScatter;
@@ -329,6 +342,9 @@ static bool hy_nomas_history_action_pipelines(
           device const int *keyLabels [[buffer(1)]],
           device GsHyNomasHistoryScalar *mask [[buffer(2)]],
           constant GsHyNomasHistoryAttentionParams &p [[buffer(3)]],
+#if GS_HY_HISTORY_ACTION_LOGIT_BIAS
+          device const ushort *actionLogitBias [[buffer(4)]],
+#endif
           uint index [[thread_position_in_grid]]) {
         const uint total = p.currentRows * p.keyRows;
         if (index >= total) return;
@@ -342,7 +358,13 @@ static bool hy_nomas_history_action_pipelines(
                                  ? key == 0
                                  : (keyLabel == 0 ||
                                     (keyLabel > 0 && keyLabel == queryLabel));
+#if GS_HY_HISTORY_ACTION_LOGIT_BIAS
+        mask[index] = (allowed && queryLabel > 0 && keyLabel == queryLabel)
+                          ? actionLogitBias[p.rowStart + row]
+                          : gs_hy_nomas_mask_value(allowed);
+#else
         mask[index] = gs_hy_nomas_mask_value(allowed);
+#endif
       }
       kernel void gs_hy_nomas_history_scatter_masked_context_bhqd_to_bqhd(
           device const GsHyNomasHistoryScalar *source [[buffer(0)]],
@@ -363,7 +385,10 @@ static bool hy_nomas_history_action_pipelines(
     )metal"];
     NSError *error = nil;
     MTLCompileOptions *options = [MTLCompileOptions new];
-    options.preprocessorMacros = @{ @"GS_HY_HISTORY_BF16" : @(sourceBF16Attention) };
+    options.preprocessorMacros = @{
+      @"GS_HY_HISTORY_BF16" : @(sourceBF16Attention),
+      @"GS_HY_HISTORY_ACTION_LOGIT_BIAS" : @(hasActionLogitBias)
+    };
     id<MTLLibrary> library = [device newLibraryWithSource:source
                                                    options:options
                                                      error:&error];
@@ -383,7 +408,11 @@ static bool hy_nomas_history_action_pipelines(
         [device newComputePipelineStateWithFunction:scatterFunction error:&error];
     if (!scatter || error)
       return false;
-    if (sourceBF16Attention) {
+    if (hasActionLogitBias) {
+      hy_nomas_history_bf16_biased_action_cached_device = device;
+      hy_nomas_history_bf16_biased_action_mask_pipeline = mask;
+      hy_nomas_history_bf16_biased_masked_scatter_pipeline = scatter;
+    } else if (sourceBF16Attention) {
       hy_nomas_history_bf16_action_cached_device = device;
       hy_nomas_history_bf16_action_mask_pipeline = mask;
       hy_nomas_history_bf16_masked_scatter_pipeline = scatter;
@@ -716,7 +745,8 @@ static HyNomasHistoryAttentionVariant *hy_nomas_history_compile_masked_variant(
 static bool hy_nomas_history_encode_compute(
     id<MTLCommandBuffer> root, id<MTLComputePipelineState> pipeline,
     id<MTLBuffer> sourceA, id<MTLBuffer> sourceB, id<MTLBuffer> destination,
-    const GsHyNomasHistoryAttentionParams &params, uint64_t workItems) {
+    const GsHyNomasHistoryAttentionParams &params, uint64_t workItems,
+    id<MTLBuffer> actionLogitBias = nil) {
   if (!root || !pipeline || !destination || workItems == 0 ||
       workItems > (uint64_t)NSUIntegerMax)
     return false;
@@ -730,6 +760,8 @@ static bool hy_nomas_history_encode_compute(
     [encoder setBuffer:sourceB offset:0 atIndex:1];
   [encoder setBuffer:destination offset:0 atIndex:2];
   [encoder setBytes:&params length:sizeof(params) atIndex:3];
+  if (actionLogitBias)
+    [encoder setBuffer:actionLogitBias offset:0 atIndex:4];
   NSUInteger width = std::min((NSUInteger)256,
                               pipeline.maxTotalThreadsPerThreadgroup);
   [encoder dispatchThreads:MTLSizeMake((NSUInteger)workItems, 1, 1)
@@ -766,14 +798,17 @@ static void *hy_nomas_history_attention_workspace_create_internal(
     float scale,
     void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
     void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
-    void *maskStageHandle, bool sourceBF16Attention) {
+    void *maskStageHandle, void *actionLogitBiasHandle,
+    bool sourceBF16Attention) {
   const bool masked = queryLabelsHandle || keyLabelsHandle || maskStageHandle;
+  const bool hasActionLogitBias = actionLogitBiasHandle != nullptr;
   if (!deviceHandle || !queryStageHandle || !keyStageHandle ||
       !valueStageHandle || !outputStageHandle || historyRows < 0 ||
       queryRows <= 0 || currentRows <= 0 || currentRows > queryRows ||
       heads <= 0 || headDim <= 0 || queryChunk <= 0 ||
       queryChunk != std::min(queryRows, 256) || !std::isfinite(scale) ||
       scale <= 0.0f || scale > 1.0f ||
+      (hasActionLogitBias && (!sourceBF16Attention || !masked)) ||
       (masked && (!queryLabelsHandle || !keyLabelsHandle || !maskStageHandle)))
     return nullptr;
   const int64_t keyRows64 = (int64_t)historyRows + (int64_t)currentRows;
@@ -818,6 +853,9 @@ static void *hy_nomas_history_attention_workspace_create_internal(
   id<MTLBuffer> maskStage = masked
                                 ? (__bridge id<MTLBuffer>)maskStageHandle
                                 : nil;
+  id<MTLBuffer> actionLogitBias = hasActionLogitBias
+                                      ? (__bridge id<MTLBuffer>)actionLogitBiasHandle
+                                      : nil;
   NSArray<id<MTLBuffer>> *buffers =
       @[ queryStage, keyStage, valueStage, outputStage ];
   const uint64_t requiredBytes[] = {tileElements * stageBytesPerElement,
@@ -846,19 +884,31 @@ static void *hy_nomas_history_attention_workspace_create_internal(
     const uint64_t keyLabelBytes = (uint64_t)keyRows * sizeof(int32_t);
     const uint64_t maskBytes =
         (uint64_t)queryChunk * keyRows * stageBytesPerElement;
+    const uint64_t actionLogitBiasBytes =
+        (uint64_t)queryRows * sizeof(uint16_t);
     if (!hy_nomas_history_valid_buffer(device, queryLabels, queryLabelBytes) ||
         !hy_nomas_history_valid_buffer(device, keyLabels, keyLabelBytes) ||
-        !hy_nomas_history_valid_buffer(device, maskStage, maskBytes))
+        !hy_nomas_history_valid_buffer(device, maskStage, maskBytes) ||
+        (hasActionLogitBias &&
+         (!hy_nomas_history_valid_buffer(device, actionLogitBias,
+                                         actionLogitBiasBytes) ||
+          actionLogitBias.length != actionLogitBiasBytes)))
       return nullptr;
     for (id<MTLBuffer> stage : buffers) {
       if (!hy_nomas_history_disjoint(queryLabels, stage) ||
           !hy_nomas_history_disjoint(keyLabels, stage) ||
-          !hy_nomas_history_disjoint(maskStage, stage))
+          !hy_nomas_history_disjoint(maskStage, stage) ||
+          (hasActionLogitBias &&
+           !hy_nomas_history_disjoint(actionLogitBias, stage)))
         return nullptr;
     }
     if (!hy_nomas_history_disjoint(queryLabels, keyLabels) ||
         !hy_nomas_history_disjoint(queryLabels, maskStage) ||
-        !hy_nomas_history_disjoint(keyLabels, maskStage))
+        !hy_nomas_history_disjoint(keyLabels, maskStage) ||
+        (hasActionLogitBias &&
+         (!hy_nomas_history_disjoint(actionLogitBias, queryLabels) ||
+          !hy_nomas_history_disjoint(actionLogitBias, keyLabels) ||
+          !hy_nomas_history_disjoint(actionLogitBias, maskStage))))
       return nullptr;
     const int32_t *queryLabelData = (const int32_t *)queryLabels.contents;
     const int32_t *keyLabelData = (const int32_t *)keyLabels.contents;
@@ -882,9 +932,23 @@ static void *hy_nomas_history_attention_workspace_create_internal(
       if (!hasGlobalKey && visibleActionKeys.find(label) == visibleActionKeys.end())
         return nullptr;
     }
+    if (hasActionLogitBias) {
+      const uint16_t *biasWords = (const uint16_t *)actionLogitBias.contents;
+      for (uint32_t row = 0; row < (uint32_t)queryRows; ++row) {
+        const uint32_t floatBits = (uint32_t)biasWords[row] << 16;
+        float decodedBias = 0.0f;
+        std::memcpy(&decodedBias, &floatBits, sizeof(decodedBias));
+        if (!std::isfinite(decodedBias) || decodedBias < 0.0f ||
+            decodedBias > 2.0f ||
+            (decodedBias != 0.0f && queryLabelData[row] <= 0))
+          return nullptr;
+      }
+    }
     [maskedResidentBuffers addObject:queryLabels];
     [maskedResidentBuffers addObject:keyLabels];
     [maskedResidentBuffers addObject:maskStage];
+    if (hasActionLogitBias)
+      [maskedResidentBuffers addObject:actionLogitBias];
     residentBuffers = [maskedResidentBuffers copy];
   }
 
@@ -902,6 +966,7 @@ static void *hy_nomas_history_attention_workspace_create_internal(
           return nullptr;
         if (masked &&
             !hy_nomas_history_action_pipelines(device, sourceBF16Attention,
+                                                hasActionLogitBias,
                                                 &actionMaskPipeline,
                                                 &maskedScatterPipeline))
           return nullptr;
@@ -949,6 +1014,7 @@ static void *hy_nomas_history_attention_workspace_create_internal(
         workspace.queryLabels = queryLabels;
         workspace.keyLabels = keyLabels;
         workspace.maskStage = maskStage;
+        workspace.actionLogitBias = actionLogitBias;
         workspace.actionMaskPipeline = actionMaskPipeline;
         workspace.maskedScatterPipeline = maskedScatterPipeline;
         workspace.historyKeys = [NSMutableArray new];
@@ -982,7 +1048,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create(
   return hy_nomas_history_attention_workspace_create_internal(
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
-      outputStageHandle, nullptr, nullptr, nullptr, false);
+      outputStageHandle, nullptr, nullptr, nullptr, nullptr, false);
 }
 
 extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked(
@@ -996,7 +1062,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked(
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
       outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle,
-      false);
+      nullptr, false);
 }
 
 extern "C" void *gs_hy_nomas_history_attention_workspace_create_source_bf16(
@@ -1008,7 +1074,7 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create_source_bf16(
   return hy_nomas_history_attention_workspace_create_internal(
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
-      outputStageHandle, nullptr, nullptr, nullptr, true);
+      outputStageHandle, nullptr, nullptr, nullptr, nullptr, true);
 }
 
 extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked_source_bf16(
@@ -1022,7 +1088,23 @@ extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked_source_bf
       deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
       queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
       outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle,
-      true);
+      nullptr, true);
+}
+
+extern "C" void *gs_hy_nomas_history_attention_workspace_create_masked_source_bf16_with_action_logit_bias(
+    void *deviceHandle, int32_t historyRows, int32_t queryRows,
+    int32_t currentRows, int32_t heads, int32_t headDim, int32_t queryChunk,
+    float scale,
+    void *queryStageHandle, void *keyStageHandle, void *valueStageHandle,
+    void *outputStageHandle, void *queryLabelsHandle, void *keyLabelsHandle,
+    void *maskStageHandle, void *actionLogitBiasHandle) {
+  if (!actionLogitBiasHandle)
+    return nullptr;
+  return hy_nomas_history_attention_workspace_create_internal(
+      deviceHandle, historyRows, queryRows, currentRows, heads, headDim,
+      queryChunk, scale, queryStageHandle, keyStageHandle, valueStageHandle,
+      outputStageHandle, queryLabelsHandle, keyLabelsHandle, maskStageHandle,
+      actionLogitBiasHandle, true);
 }
 
 extern "C" int32_t gs_hy_nomas_history_attention_workspace_register_history(
@@ -1199,7 +1281,8 @@ extern "C" int32_t gs_hy_nomas_history_attention_encode(
           root = commandBuffer.rootCommandBuffer;
           if (!hy_nomas_history_encode_compute(
                   root, workspace.actionMaskPipeline, workspace.queryLabels,
-                  workspace.keyLabels, workspace.maskStage, params, maskWork))
+                  workspace.keyLabels, workspace.maskStage, params, maskWork,
+                  workspace.actionLogitBias))
             return -12;
         }
         HyNomasHistoryAttentionVariant *variant =

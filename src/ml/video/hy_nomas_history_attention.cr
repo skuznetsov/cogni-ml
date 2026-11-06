@@ -37,6 +37,14 @@ require "./metal_mps_command_chain"
       output_stage : Pointer(Void), query_labels : Pointer(Void), key_labels : Pointer(Void),
       mask_stage : Pointer(Void),
     ) : Pointer(Void)
+    fun workspace_create_masked_source_bf16_with_action_logit_bias = gs_hy_nomas_history_attention_workspace_create_masked_source_bf16_with_action_logit_bias(
+      device : Pointer(Void), history_rows : Int32, query_rows : Int32,
+      current_rows : Int32,
+      heads : Int32, head_dim : Int32, query_chunk : Int32, scale : Float32,
+      query_stage : Pointer(Void), key_stage : Pointer(Void), value_stage : Pointer(Void),
+      output_stage : Pointer(Void), query_labels : Pointer(Void), key_labels : Pointer(Void),
+      mask_stage : Pointer(Void), action_logit_bias : Pointer(Void),
+    ) : Pointer(Void)
     fun workspace_release = gs_hy_nomas_history_attention_workspace_release(
       workspace : Pointer(Void),
     ) : Void
@@ -73,13 +81,15 @@ module ML::Video
       masked : Bool, mask_elements : Int32,
       query_label_bytes : Int64, key_label_bytes : Int64,
       action_mask_bytes : Int64,
+      action_logit_bias_bytes : Int64,
       source_bf16_attention : Bool
 
-    Q_STAGE_KEY      = "hy_nomas_history_attention.q"
-    K_STAGE_KEY      = "hy_nomas_history_attention.k"
-    V_STAGE_KEY      = "hy_nomas_history_attention.v"
-    OUTPUT_STAGE_KEY = "hy_nomas_history_attention.output"
-    MASK_STAGE_KEY   = "hy_nomas_history_attention.mask"
+    Q_STAGE_KEY           = "hy_nomas_history_attention.q"
+    K_STAGE_KEY           = "hy_nomas_history_attention.k"
+    V_STAGE_KEY           = "hy_nomas_history_attention.v"
+    OUTPUT_STAGE_KEY      = "hy_nomas_history_attention.output"
+    MASK_STAGE_KEY        = "hy_nomas_history_attention.mask"
+    ACTION_LOGIT_BIAS_KEY = "hy_nomas_history_attention.action_logit_bias"
 
     @@lifetime_mutex = Mutex.new
     @@live_workspaces = [] of HyNomasHistoryAttentionWorkspace
@@ -92,6 +102,7 @@ module ML::Video
     @arena : Arena
     @query_label_buffer : ML::MetalBuffer? = nil
     @key_label_buffer : ML::MetalBuffer? = nil
+    @action_logit_bias_buffer : ML::MetalBuffer? = nil
     @handle = Pointer(Void).null
     @chain : ML::Metal::MPSCommandChain? = nil
     @plans = 0_i32
@@ -108,12 +119,16 @@ module ML::Video
 
     # Pure admission calculation: score memory is bounded by one 256-row query
     # tile, while K/V staging holds exactly the valid history plus current rows.
+    # An action logit bias is copied into immutable BF16 workspace metadata and
+    # applies only to allowed positive query/key label matches. Callers must
+    # provide zero for every non-action query row, including text queries.
     def self.geometry(history_rows : Int32, query_rows : Int32,
                       heads : Int32, head_dim : Int32,
                       current_rows : Int32 = query_rows,
                       query_labels : Array(Int32)? = nil,
                       key_labels : Array(Int32)? = nil,
-                      source_bf16_attention : Bool = false) : Geometry
+                      source_bf16_attention : Bool = false,
+                      action_logit_bias : Array(Float32)? = nil) : Geometry
       unless history_rows >= 0 && query_rows > 0 && current_rows > 0 &&
              current_rows <= query_rows && heads > 0 && head_dim > 0
         raise ArgumentError.new("Invalid Hy-Nomas history attention geometry")
@@ -125,6 +140,8 @@ module ML::Video
       key_rows = key_rows_64.to_i32
       validate_action_labels!(query_rows, key_rows, query_labels, key_labels)
       masked = !query_labels.nil?
+      validate_action_logit_bias!(query_rows, query_labels, source_bf16_attention,
+        action_logit_bias)
       query_chunk = Math.min(query_rows, MAX_QUERY_CHUNK).to_i32
       graph_calls = ((query_rows.to_i64 + query_chunk - 1) // query_chunk).to_i32
       query_elements = HyNomasDualStreamBlock.checked_count(1, query_rows, heads, head_dim)
@@ -145,10 +162,13 @@ module ML::Video
       max_score_bytes = max_score_elements * sizeof(Float32)
       query_label_bytes = masked ? query_rows.to_i64 * sizeof(Int32) : 0_i64
       key_label_bytes = masked ? key_rows.to_i64 * sizeof(Int32) : 0_i64
+      action_logit_bias_bytes = action_logit_bias ? query_rows.to_i64 * sizeof(UInt16) : 0_i64
       scratch_bytes_per_element = source_bf16_attention ? 2_i64 : sizeof(Float32).to_i64
-      action_mask_bytes = mask_elements.to_i64 * scratch_bytes_per_element + query_label_bytes + key_label_bytes
+      action_mask_bytes = mask_elements.to_i64 * scratch_bytes_per_element + query_label_bytes +
+                          key_label_bytes + action_logit_bias_bytes
       scratch_elements = 2_i64 * tile_elements + 2_i64 * key_elements + mask_elements
-      workspace_bytes = scratch_elements * scratch_bytes_per_element + query_label_bytes + key_label_bytes
+      workspace_bytes = scratch_elements * scratch_bytes_per_element + query_label_bytes +
+                        key_label_bytes + action_logit_bias_bytes
       active_history_elements = 2_i64 * history_elements
       if action_mask_bytes < 0 || scratch_elements < 0 || workspace_bytes < 0 ||
          scratch_elements > Int64::MAX // scratch_bytes_per_element ||
@@ -164,7 +184,36 @@ module ML::Video
         (2_i64 * query_elements + 2_i64 * current_elements) * sizeof(Float32),
         history_rows == 0 && current_rows == query_rows,
         masked, mask_elements, query_label_bytes, key_label_bytes, action_mask_bytes,
-        source_bf16_attention)
+        action_logit_bias_bytes, source_bf16_attention)
+    end
+
+    private def self.validate_action_logit_bias!(query_rows : Int32,
+                                                 query_labels : Array(Int32)?,
+                                                 source_bf16_attention : Bool,
+                                                 action_logit_bias : Array(Float32)?) : Nil
+      return unless bias = action_logit_bias
+      unless source_bf16_attention && query_labels
+        raise ArgumentError.new("Hy-Nomas action logit bias requires a masked source-BF16 workspace")
+      end
+      unless bias.size == query_rows
+        raise ArgumentError.new("Hy-Nomas action logit bias count does not match query rows")
+      end
+      labels = query_labels.not_nil!
+      bias.each_with_index do |value, index|
+        unless value.finite? && value >= 0.0_f32 && value <= 2.0_f32
+          raise ArgumentError.new("Hy-Nomas action logit bias values must be finite and between zero and two")
+        end
+        if value != 0.0_f32 && labels[index] <= 0
+          raise ArgumentError.new("Hy-Nomas action logit bias may target only positive action queries")
+        end
+      end
+    end
+
+    private def action_logit_bias_bf16_bits(value : Float32) : UInt16
+      return 0_u16 if value == 0.0_f32
+      bits = value.unsafe_as(UInt32)
+      lsb = (bits >> 16) & 1_u32
+      ((bits + 0x7fff_u32 + lsb) >> 16).to_u16
     end
 
     private def self.validate_action_labels!(query_rows : Int32, key_rows : Int32,
@@ -211,12 +260,14 @@ module ML::Video
                    current_rows : Int32 = query_rows,
                    query_labels : Array(Int32)? = nil,
                    key_labels : Array(Int32)? = nil,
-                   source_bf16_attention : Bool = false)
+                   source_bf16_attention : Bool = false,
+                   action_logit_bias : Array(Float32)? = nil)
       query_label_snapshot = query_labels.try(&.dup)
       key_label_snapshot = key_labels.try(&.dup)
+      action_logit_bias_snapshot = action_logit_bias.try(&.dup)
       @shape = self.class.geometry(history_rows, query_rows, heads, head_dim,
         current_rows, query_label_snapshot, key_label_snapshot,
-        source_bf16_attention)
+        source_bf16_attention, action_logit_bias_snapshot)
       @arena = Arena.new
       begin
         if @shape.source_bf16_attention
@@ -242,6 +293,13 @@ module ML::Video
             query_label_snapshot.not_nil!.to_unsafe.as(Pointer(UInt8)), @shape.query_label_bytes.to_i)
           @key_label_buffer.not_nil!.write_bytes(
             key_label_snapshot.not_nil!.to_unsafe.as(Pointer(UInt8)), @shape.key_label_bytes.to_i)
+          if bias_values = action_logit_bias_snapshot
+            bias_words = bias_values.map { |value| action_logit_bias_bf16_bits(value) }
+            @action_logit_bias_buffer = @arena.alloc_weight(
+              ACTION_LOGIT_BIAS_KEY, @shape.query_rows, WeightDType::BF16)
+            @action_logit_bias_buffer.not_nil!.write_bytes(
+              bias_words.to_unsafe.as(Pointer(UInt8)), @shape.action_logit_bias_bytes.to_i)
+          end
         end
         validate_stages!
         unless resident_bytes == @shape.workspace_bytes
@@ -250,13 +308,24 @@ module ML::Video
         {% if flag?(:darwin) && !flag?(:cpu_only) %}
           if @shape.masked
             if @shape.source_bf16_attention
-              @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked_source_bf16(
-                ML::Metal::Device.instance.device_handle,
-                @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
-                @shape.head_dim, @shape.query_chunk,
-                1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
-                q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
-                query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+              if bias_buffer = @action_logit_bias_buffer
+                @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked_source_bf16_with_action_logit_bias(
+                  ML::Metal::Device.instance.device_handle,
+                  @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                  @shape.head_dim, @shape.query_chunk,
+                  1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                  q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
+                  query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle,
+                  bias_buffer.handle)
+              else
+                @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked_source_bf16(
+                  ML::Metal::Device.instance.device_handle,
+                  @shape.history_rows, @shape.query_rows, @shape.current_rows, @shape.heads,
+                  @shape.head_dim, @shape.query_chunk,
+                  1.0_f32 / Math.sqrt(@shape.head_dim.to_f32),
+                  q_stage.handle, k_stage.handle, v_stage.handle, output_stage.handle,
+                  query_label_buffer.handle, key_label_buffer.handle, mask_stage.handle)
+              end
             else
               @handle = HyNomasHistoryAttentionMPSFFI.workspace_create_masked(
                 ML::Metal::Device.instance.device_handle,
@@ -331,6 +400,10 @@ module ML::Video
 
     private def key_label_buffer : ML::MetalBuffer
       @key_label_buffer || raise ArgumentError.new("Unmasked Hy-Nomas history workspace has no key labels")
+    end
+
+    private def action_logit_bias_buffer : ML::MetalBuffer
+      @action_logit_bias_buffer || raise ArgumentError.new("Hy-Nomas history workspace has no action logit bias")
     end
 
     def native_handle : Pointer(Void)
@@ -463,6 +536,7 @@ module ML::Video
         OUTPUT_STAGE_KEY => tile_elements,
       }
       expected[MASK_STAGE_KEY] = @shape.mask_elements if @shape.masked
+      expected[ACTION_LOGIT_BIAS_KEY] = @shape.query_rows if @shape.action_logit_bias_bytes > 0
       expected_dtype = @shape.source_bf16_attention ? WeightDType::BF16 : WeightDType::F32
       expected.each do |name, elements|
         buffer = @arena[name]
@@ -487,6 +561,7 @@ module ML::Video
       buffers << mask_stage if @shape.masked
       buffers << query_label_buffer if @shape.masked
       buffers << key_label_buffer if @shape.masked
+      buffers << action_logit_bias_buffer if @shape.action_logit_bias_bytes > 0
       buffers
     end
 
@@ -497,6 +572,9 @@ module ML::Video
       if @shape.masked
         {mask_stage, query_label_buffer, key_label_buffer}.each do |stage|
           return true if MetalOps.overlap?(buffer, stage)
+        end
+        if bias = @action_logit_bias_buffer
+          return true if MetalOps.overlap?(buffer, bias)
         end
       end
       false
@@ -511,6 +589,7 @@ module ML::Video
         buffer.release
         @key_label_buffer = nil
       end
+      @action_logit_bias_buffer = nil
     end
 
     private def release_native_workspace : Nil
