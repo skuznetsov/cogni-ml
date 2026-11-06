@@ -6,6 +6,73 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-DIRECT-ROUTES-2026-11-05] Saved-state DiT routes are source/native exact and show conditional actor-local sensitivity
+
+- Qualified scope: M11/M00/M10/M01/M11_repeat on the accepted sequential
+  Alex/Resume ROI take, with saved refined states, T0, timestep and noise
+  fixed. Only selected video-query to matching action-text-key edges toggle.
+  The run retains all 54 BF16 blocks, unchanged `atol=rtol=2e-5`, cache-aware
+  10% reserve and 64 MiB swap-growth stop. No scheduler, decoder or full render.
+- Pinned Tencent equations through the BF16 MPS adapter pass all five exact
+  accepted-parent replay checkpoints and all five exact A/A checkpoints.
+  Block-0 text and video rows outside disabled routes remain exact;
+  elementwise block-0 image interaction is zero. Independent Float64
+  recomputation and a seeded numerical negative pass. This is not stock
+  CUDA reproduction, acting success or evidence of better visual quality.
+- Conditional relative RMS velocity effects in the Alex/Action1 window:
+  Action1 18.19582%, Action2 1.02300%, interaction 9.54723%. In the
+  Resume/Action2 window: 1.06056%, 9.28511%, 2.06126%. Outside both actor
+  regions: 1.42065%, 1.18584%, 1.38269%. M00 still retains fixed refined
+  text and shared/global/history conditioning. Nonzero later interaction
+  and outside effects reject hard isolation or additive route shares.
+- Native/source comparison is bit-exact at all 25 captures from the 54-block
+  run: five per arm, covering velocity and image/text outputs of blocks 0
+  and 53. All five accepted-parent and native A/A checkpoints, block-0
+  text/protected-image invariants and zero block-0 interaction pass a
+  separate byte-authenticated Float64 checker. Release build, CPU self-test,
+  actual-fixture admission, three malformed-manifest rejections and 54
+  focused CPU tests pass. A numerical perturbation and metadata-only parent
+  substitution are rejected. Same-lineage final review is ROBUST within
+  this frozen numerical scope, not an independent reproduction.
+- First native failure was a diagnostic label-boundary collision: source
+  `-1` denotes 720 active global video queries, while the native bridge uses
+  negative labels for padding and zero-scatters context. Differences began
+  only in frames 0/10/11/28/29. Translating those active query labels to `0`
+  before binding preserves every Boolean mask edge and restores parity.
+  Production padding semantics and generation kernels are unchanged.
+- One native command chain, one terminal drain, zero named allocations or
+  activation readbacks during encoding, then 25 checkpoint reads. Named
+  peak is 19,625,061,552 bytes, excluding opaque MPS resources. Sampled
+  process peak is 20,325,119,608 bytes; swap growth is zero. The unchanged
+  cache-aware 10% floor, 22 GiB process cap and 64 MiB swap-growth stop pass.
+  These counters and one qualification timing are not a speed benchmark or
+  an instantaneous total-GPU-peak certificate.
+- Evidence and restart pointer:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/`.
+  `source-qualified.json` SHA-256 is
+  `efcf746fd334218d25b0a922647f10962c6d5102144f7d80cff67bb327a40c89`;
+  `qualification.json` binds the final code/binary/actual linked objects,
+  frozen inputs, commands, guards and independent math. Preserve the older
+  `qualification-source.json` and failed `native.json` as historical
+  evidence. Qualified `native-fixed.json` SHA-256 is
+  `b879232edbeb83d78ef108e80d8c5396628b94d8826e2171ab6b672b6377de87`.
+  The small curated index is
+  `.landmark/evidence/2026-11-05-hy-nomas-direct-routes.json`.
+- Deleted DiT assets were restored into the separate persistent directory
+  `/opt/mldata_ssd/models/hy-nomas/`, outside disposable `cogni-ml/`
+  experiments. The original pinned checkpoint SHA and all 55 BF16 cache
+  files match the frozen fixture; `recovery-verified.json` records the
+  checks. Legacy paths are compatibility aliases. This is not an inventory
+  or recovery claim for every other model in the video pipeline.
+- Next controller candidate after parity: a bounded soft spatial routing
+  dose response, followed by a short visible pose/glove test. Numerical
+  selectivity does not establish articulation; pivot to explicit pose or
+  trajectory support if that remains weak. Rollback: omit the diagnostic
+  probes; production generation and the accepted take remain unchanged.
+  Refresh on source/runtime, weights, inputs/layout, precision, binary,
+  linked objects or evidence changes. See
+  [the object-control frontier](docs/hy-nomas-object-control-frontier.md).
+
 ### [LM-HY-NOMAS-REFINER-C-FACTORIAL-2026-11-05] Fixed shared conditioning preserves Action2 transfer into Action1
 
 - The authenticated V224 Action2-only pair now has five cases: natural A0,

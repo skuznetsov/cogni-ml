@@ -1,10 +1,11 @@
 # Hy-Nomas object control frontier
 
 Status (2026-11-05): source audit, semantic refiner-only A/A/B and shared-`c`
-factorial probes completed against the pinned source MPS adapter. Controller
-changes remain proposed. The accepted five-second Alex/Resume ROI take remains
-the visual control. The original audit was read-only; subsequent bounded GPU
-experiments are recorded below.
+factorial probes completed against the pinned source MPS adapter. The direct
+DiT route factorial is now bit-exact at all 25 source/native checkpoints,
+including accepted-parent replay and A/A. Controller changes remain proposed.
+The accepted five-second Alex/Resume ROI take remains the visual control. The original audit
+was read-only; subsequent bounded GPU experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
 [the drafter frontier](hy-nomas-drafter-frontier.md); visible actor control
 is still partial.
@@ -107,8 +108,9 @@ If transfer is substantial, separate the shared-`c` route from text
 self-attention in a follow-up ablation before treating all sharing as bad.
 Then measure the direct DiT route before choosing a controller:
 on saved refined states, compare M00/M10/M01/M11, where the two bits enable
-the direct Action1/Action2 text routes. Keep text states, time geometry,
-noise and T0 fixed. M00 means **no direct action-text route**, not
+the direct ROI-video-query to Action1/Action2 text-key routes. Keep text
+query routes, refined states, time geometry, noise and T0 fixed. M00 means
+**no direct ROI-video to action-text route**, not
 action-free conditioning. Start with a same-latent DiT forward, not four
 decoded videos. Measure velocity deltas inside each actor ROI, outside both
 and in any contact region, including the interaction
@@ -281,9 +283,183 @@ Final same-lineage adversary verdict is ROBUST for the conditional numerical
 factorization and parity claim, not an independent reproduction or a visual
 control verdict. Rollback is omission of the diagnostic probes; production
 control and generation APIs are unchanged. Refresh on source/runtime, weights,
-input/layout, precision, binary or evidence changes. Next: qualify same-latent
-direct DiT M00/M10/M01/M11 effects with saved refined states, fixed T0/noise
-and per-actor/contact/outside-region measurements before a new full render.
+input/layout, precision, binary or evidence changes. The subsequent same-latent
+direct DiT M00/M10/M01/M11 qualification is completed below; the current next
+candidate is the bounded soft spatial routing dose response.
+
+## Direct DiT route experiment contract
+
+This bounded CAUTION slice is diagnostic only. It uses the original accepted
+sequential-actions ROI take, not the later look-down rewrite or semantic B.
+Its eight authenticated captures freeze T0/T1 patch, refined valid text and
+time vector, T1 initial latent and the accepted first-step velocity. There
+is no scheduler update, decoder or render. Rollback is omission of the new
+probe; the production arithmetic and accepted take remain the control.
+
+For each of all 54 blocks, enable the same two route bits by clearing only
+the selected **video**-query to matching action-text-key edges. This is mask
+equivalent to setting the selected query labels to global zero; the source
+probe edits edge ranges directly. Never relabel action keys or text queries.
+Preserve the authored spatial ROI clearing,
+all history/current-video/global-text keys, text-query submatrix and all
+non-target pairs. Relative to M11, M10 removes exactly 44,160 Action2 edges,
+M01 removes 47,061 Action1 edges, and M00 removes their 91,221-edge union;
+every case adds zero edges. A changed text-query route rejects the probe.
+
+Run M11, M00, M10, M01 and M11_repeat. M11 must first replay the accepted
+parent velocity; the repeated arm establishes the A/A floor. Full-forward
+source/native comparison keeps `atol=rtol=2e-5`. The compact execution
+schedule computes T0 then all five T1 arms at each layer, reusing one
+layer's K/V and block scratch rather than retaining all 54 T0 caches or
+layer output banks. Case state banks stay distinct. Equivalence of this
+schedule is a hypothesis until the parent replay passes. Source means the
+pinned Tencent equations through the BF16 MPS adapter, not stock CUDA.
+
+Predeclare velocity regions at `[channels=32,time=30,height=9,width=16]`:
+Alex `h[0,9),w[1,8)`; Resume `h[2,8),w[10,15)`; their outside union;
+Action1/Alex `t[1,10)`; and Action2/Resume `t[12,28)`. A coarse authored
+Resume chest proxy is `t[12,28),h[4,6),w[11,13)`; it is not an observed
+contact or segmentation result. It overlaps Resume and must not be counted
+as an independent partition. Compute `v10-v00`, `v01-v00`, `v11-v00` and
+`v11-v10-v01+v00` elementwise in Float64 before regional summaries.
+Report conditional route sensitivity, not successful acting, independent
+route percentages, semantic synergy or a visual-quality improvement.
+
+DoD is the new `spec.hy_nomas_dit_route_factorial_test` CPU suite, release
+build and actual-fixture admission of
+`examples/hy_nomas_dit_route_factorial_probe.cr`, then guarded source/native
+full forwards with exact mask changes, accepted M11 replay, A/A and the
+unchanged numeric gate. Observe named allocations/readbacks/waits during
+encoding, preserving zero new in-chain synchronization. Recheck the
+cache-aware 10% memory floor and 64 MiB swap-growth stop before execution.
+Failure of replay, mask attribution, numeric comparison or either memory
+guard stops this slice before a new render.
+At block 0, all text outputs and video rows outside the disabled routes must
+remain exact. The two disjoint query regions must have zero elementwise
+image interaction there; a later interaction may arise through global video
+relay. These local checks distinguish a targeted intervention from an
+unintended change to every row.
+
+## Measured direct DiT route sensitivity (source/native qualified)
+
+The five arms ran through all 54 pinned source blocks on the same saved
+refined inputs, T0, timestep and noise. M11 exactly replays all five accepted
+parent checkpoints, including the final velocity. M11_repeat is exact at all
+five checkpoints. At block 0, every text output and every video row outside
+the disabled routes remains exact, and the elementwise image interaction is
+zero. This supports the targeted-mask attribution for the frozen fixture.
+
+The final velocity has these conditional effects. Each percentage is
+`RMS(delta) / RMS(M00 in the same region)`, with elementwise Float64 subtraction
+before the regional reduction. The regions were declared before execution.
+
+| Region | Action1, Action2 off (`v10-v00`) | Action2, Action1 off (`v01-v00`) | Interaction (`v11-v10-v01+v00`) |
+| --- | ---: | ---: | ---: |
+| Alex during Action1 | 18.19582% | 1.02300% | 9.54723% |
+| Resume during Action2 | 1.06056% | 9.28511% | 2.06126% |
+| Resume chest proxy | 1.12107% | 19.33723% | 3.52204% |
+| Outside both actor regions | 1.42065% | 1.18584% | 1.38269% |
+
+The own-actor contrast is larger than the other-action contrast in each
+authored actor window. This is evidence of localized numerical sensitivity,
+not correct pose, gesture, contact or action completion. The chest proxy is
+coarse authored support, not a segmentation or contact observation. Effects
+outside the two regions and the later nonzero interaction reject a hard
+spatial fence or additive independent-route interpretation. M00 retains the
+same refined text, shared conditioning, global keys and T0 history; it does
+not mean an unconditioned model.
+
+The qualified source run stages one BF16 block at a time: 324 block-attention
+calls and 5,832 query chunks, one explicit terminal synchronization and one
+packed activation export. All F32 snapshot promotions are encoded before
+that terminal synchronization. No scheduler, refiner, decoder or render is
+called. The source guard retains the cache-aware 10% floor, an 8 GiB process
+cap and a 64 MiB swap-growth stop; observed swap growth is zero. This single
+qualification is not a speed benchmark or stock CUDA reproduction.
+
+Evidence is outside git in
+`/opt/mldata_ssd/cogni-ml/hy-nomas-direct-routes-20261105.klzuhg0r/`:
+
+- `source-qualified.json` SHA-256:
+  `efcf746fd334218d25b0a922647f10962c6d5102144f7d80cff67bb327a40c89`.
+- `source-qualified.tensors.f32le` SHA-256:
+  `2f2c634a97787df22be094efafb778924a545827192c6c50597a63df0578a24a`.
+- `source2-independent.json` recomputes exact replay, A/A, block-0 locality
+  and the Float64 effects directly from authenticated output bytes; its
+  seeded numerical negative is rejected. Its SHA-256 is
+  `d226c3b835a777a24b5482098bf1fa05407444d52d4ddb80262a7f6a73002644`.
+- `source2.executed-runtime.json` SHA-256 is
+  `88f95c92c060fdd25019ba5f85359ce9a431fdc8597f2ecda20f5639019ee71e`;
+  it pins the executed source runtime at
+  `b8e45aaeb207365f3e2927c461e5720d0b673f8b2f19034837e3956fec8294fb`.
+- `qualification-source.json` preserves the earlier source-only index with
+  native explicitly pending. It is historical, not the final native receipt.
+  Its unchanged SHA-256 is
+  `2a48f4140f52fa8f8497e1d3f26f1abfd1655f7756cbc8f0e34b7144e8a27625`.
+- `native-fixed.json` SHA-256:
+  `b879232edbeb83d78ef108e80d8c5396628b94d8826e2171ab6b672b6377de87`.
+  Its 375,009,280-byte payload has the same SHA as the qualified source
+  payload: all 25 checkpoint arrays are bit-identical.
+- `native-fixed-independent.json` SHA-256:
+  `4c49ea9e5dfaebf01d323e11a8101eb48ba6b21828da882bd4075e42b9073554`.
+  The separately authored checker authenticates manifest, payload and tensor
+  ranges, and recomputes all 25 comparisons, five native parent checkpoints,
+  five native A/A checkpoints, exact block-0 locality and seven Float64
+  regional effect summaries. Its seeded numerical negative is rejected.
+  A metadata-only replacement of the parent manifest is also rejected.
+- `qualification.json` binds final code, executed source runtime, native
+  binary and actual linked objects, frozen inputs, command/guard receipts,
+  independent-checker code and persistent-model recovery receipts. The
+  checker uses Python assertions; the executed unoptimized invocation and
+  negative controls keep those gates active. An index is not proof itself.
+
+Final same-lineage adversary review is ROBUST for this frozen source/native
+numerical sensitivity claim. It is not an independent reproduction, stock
+CUDA comparison or visual-control qualification.
+
+The native release build, CPU self-test, actual-fixture CPU admission, three
+malformed-manifest rejections and 54 focused CPU tests pass. One native
+command chain reuses the planned buffers across all 54 blocks and five
+arms: zero named allocations or activation readbacks during encoding, one
+terminal drain, then 25 checkpoint reads. There are no scheduler or decoder
+calls. The named plan peaks at 19,625,061,552 bytes (18.2773 GiB), excluding
+opaque MPS resources. Sampled process peak is 20,325,119,608 bytes; observed
+swap growth is zero. The cache-aware 10% floor, 22 GiB process cap and
+64 MiB swap-growth stop remain unchanged. Neither sampled process memory
+nor the named-buffer plan certifies instantaneous total GPU peak. The
+54.90-second qualification forward is not a generation-speed benchmark.
+
+The first native run with a saved payload failed before qualification.
+Its authenticated block-0 differences were confined to all 144 video rows
+in frames 0, 10, 11, 28 and 29; the other 25 frames were bit-exact. Source
+label `-1` means an active global-only video query outside action windows.
+The native attention bridge instead reserves negative query labels for
+padding and zero-scatters their context. The diagnostic binding now maps
+only those 720 active video-query labels to native global `0`; both values
+permit exactly global keys, so no Boolean mask edge changes. Self-tests
+check the translation count and exact preservation of all remaining labels
+for every arm. Source labels and mask hashes remain frozen; production
+padding semantics are unchanged. Failed `native.json` and the range-hashed
+`native3-block0-diagnostic.json` remain available to falsify this diagnosis.
+Diagnostic output creation also uses exclusive `O_EXCL` writes; tests reject
+replacement of an existing file or symlink without touching its contents.
+
+Deleted DiT weights were recovered into the separate persistent folder
+`/opt/mldata_ssd/models/hy-nomas/`, outside disposable experiments. The
+34,213,991,280-byte pinned checkpoint and all 55 BF16 cache files
+(16,623,052,016 bytes) match their prior hashes. `README.md` and
+`recovery-verified.json` identify the location and exact checks; legacy
+weight paths are directory aliases into that store. Q4 derivatives only
+reproduce the existing cache index; this probe uses BF16. Recovery of other
+pipeline models and Q4 visual quality are outside this claim.
+
+After the native gate, the next bounded candidate is a soft spatial routing
+dose response with saved refined states/T0/noise unchanged. Retain global
+video/history context and test whether own-versus-cross-actor selectivity
+improves without comparable outside-region effects. A numerical gain still
+needs a short rendered pose/gesture check. If the instructions reach the
+right region but articulation remains weak, pivot to explicit pose/trajectory
+support rather than repeating prompt amplification.
 
 ## Proposed authoring and runtime boundary
 
@@ -368,15 +544,20 @@ failure, numerical regression, memory/swap guard, identity loss or stronger
 motion with worse hands/contact. Do not relax tolerances to admit it.
 
 Initial audit DoD was CPU-only (29 tests). The transfer and factorial slices
-add seventeen admission/comparator tests; all 46 focused tests pass on 2026-11-05:
+add twenty-five admission/comparator tests; all 54 focused tests pass on
+2026-11-05:
 
 ```sh
-python3 -B -m unittest spec.hy_nomas_refiner_c_factorial_test \
+python3 -B -m unittest spec.hy_nomas_dit_route_factorial_test \
+  spec.hy_nomas_refiner_c_factorial_test \
   spec.hy_nomas_refiner_transfer_test \
   spec.hy_nomas_action_conditioning_spec \
   spec.hy_nomas_reference_attention_test spec.video_block_diff_test
 crystal tool format --check examples/hy_nomas_refiner_c_factorial_probe.cr \
-  examples/support/hy_nomas_refiner_c_factorial_probe.cr
+  examples/support/hy_nomas_refiner_c_factorial_probe.cr \
+  examples/hy_nomas_dit_route_factorial_probe.cr \
+  examples/support/hy_nomas_dit_route_factorial_probe.cr \
+  examples/support/hy_nomas_dit_route_factorial_gpu.cr
 git diff --check
 git diff --cached --check
 ```
@@ -388,5 +569,6 @@ the new probe; the production runtime and accepted take were not changed.
 Refresh the numerical result on source, runtime, weights, input, geometry,
 precision or binary changes. Refresh any later visual conclusion on prompt,
 reference, noise, schedule, geometry, model or decoder changes.
-Next: qualify the direct DiT routes. No production spatial-control API or
-simultaneous-object guarantee is admitted by this document.
+Next: test the bounded soft spatial routing dose response, then qualify any
+numerical improvement with a short rendered pose/gesture check. No production
+spatial-control API or simultaneous-object guarantee is admitted by this document.
