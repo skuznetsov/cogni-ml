@@ -3,8 +3,10 @@
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,
-with a large pre/post-RoPE contrast. This qualifies the affinity measurement,
-not semantic correspondence. Query transport and actor controllers remain proposed.
+with a large pre/post-RoPE contrast. A fixed-destination-phase content roll
+reduces relocated-content matches sharply; these heads are not qualified
+as phase-invariant object correspondences. This qualifies the affinity
+measurement, not semantic correspondence. Query transport and actor controllers remain proposed.
 The accepted five-second Alex/Resume ROI take remains the visual control. The original audit
 was read-only; subsequent bounded GPU experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
@@ -956,6 +958,95 @@ RoPE boundary. After that, capture independent states with labeled nonzero
 displacement and compare against same-location/equal-area shams before
 attempting transport. The alternative saved runs lack authenticated Q/K;
 their preblock/KV bundles do not supply this missing evidence.
+
+## Fixed-phase content null (2026-11-06, qualified diagnostic)
+
+The following design was frozen before inspecting new scores. Freeze frames 1/14/29 and heads 12/15 from
+the preceding same-pass screen. For each frame compare identity,
+`R_j K_(j-17)` (content roll, destination phases fixed), and
+`R_(j-17) K_(j-17)` (content and phase roll). Indices wrap over 144 cells;
+the relocated content target for query i is `(i+17) mod 144`. Q is unchanged.
+Apply the existing native RoPE and BF16 roundtrip kernels, with GPU gathers,
+then the existing F32 score/metric kernels in one chain. The source control
+calls the pinned upstream `apply_rotary_emb` on the same BF16 tensors and
+authenticated F32 phases. No full generation or runtime-default change.
+
+CAUTION: a wrong roll sign, moved phase table, lost BF16 boundary, or
+post-hoc head selection could manufacture a correspondence result. DoD:
+focused CPU rejection tests; identity Q/K matching the saved post-RoPE
+capture exactly; all nine native/source pairs passing unchanged
+`atol=rtol=2e-5` with exact discrete metrics; exact moving-arm roll
+equivariance; zero in-chain allocation/readback/wait counters. Keep the
+cache-aware 10% floor and 64 MiB swap-growth stop. Rollback is omission of
+the new opt-in probe. Compare strict same-position and relocated-content
+winners separately; neither is independent-state or semantic ground truth.
+Even a favorable null result does not admit actor transport. Next evidence
+must use independent states and labeled nonzero displacement.
+
+All nine native/source pairs pass at unchanged `atol=rtol=2e-5`, with exact
+discrete metrics. Query, key and score arrays are byte-identical in every
+pair; the largest metric difference is 2.682209014892578e-7. Both identity
+Q/K outputs also match the saved post-RoPE BF16 capture exactly. Moving-arm
+scores are exact column rolls; independent post-drain metric audits pass
+with maximum error 4.76837158203125e-7. The diagnostic computes F32 QK
+after the upstream BF16 RoPE boundary; it is not full BF16 attention or PV.
+
+Strict winners out of 144 query positions, measured separately for each head:
+
+| Frame | Head | Identity: original content | Moving phases: relocated content | Fixed phases: relocated content | Fixed phases: same position |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 12 | 109 | 109 | 14 | 69 |
+| 14 | 12 | 118 | 118 | 12 | 76 |
+| 29 | 12 | 121 | 121 | 14 | 70 |
+| 1 | 15 | 138 | 138 | 2 | 101 |
+| 14 | 15 | 139 | 139 | 2 | 106 |
+| 29 | 15 | 136 | 136 | 2 | 104 |
+
+The moving-phase control preserves the original content-match counts.
+With destination phases fixed, many winners instead remain
+at the same position despite receiving different K content. This rejects
+phase-invariant index retrieval for these two heads on the tested slices.
+It does not establish that the heads lack semantic information, explain
+the weak Resume acting, or test cross-frame tracking. The synthetic roll
+is a restricted same-frame intervention, not a labeled physical motion.
+Do not promote raw post-RoPE affinity into an actor transport controller.
+
+The new opt-in native probe uses the production uncontracted RoPE kernel
+and BF16 RNE helper, ten named buffers (8,607,744 bytes) and eight dispatches
+in all three arms. Encode counters observe zero named buffer allocations,
+readbacks or waits; one terminal wait precedes four diagnostic readbacks.
+CPU fixture preparation and post-drain audits remain outside the chain.
+The native reader verifies submitted byte integrity and format; the Python
+qualifier additionally authenticates the capture ancestry and exact phase
+rows. A standalone CLI report is not an ancestry certificate.
+
+Twenty-eight CPU tests, five malformed native admissions and three
+format-valid lineage substitutions pass their expected rejection checks.
+The real native fixture is admitted without Metal initialization. All 23
+positive build/preparation/measurement/qualification stages finish with
+the cache-aware 10% floor, 2 GiB process cap and 64 MiB swap-growth stop.
+Their minimum sampled headroom is 23,540,858,880 bytes, maximum sampled
+process-group footprint is 481,494,048 bytes and observed swap growth is
+zero. These samples do not establish a native GPU peak or speedup. No
+production generation path, model defaults or full generation changed.
+Same-lineage read-only adversary review is ROBUST within the frozen
+measurement scope; it is correlated, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-06-hy-nomas-query-fixed-phase.json`.
+Exact guarded GPU commands, fixtures, source snapshots and outputs are
+indexed under external `query-fixed-phases-tuyhkhbg/`. Re-run CPU checks with
+`python3 -B -m unittest -v spec.hy_nomas_query_fixed_phase_test
+spec.hy_nomas_query_head_robustness_test spec.hy_nomas_query_correspondence_test
+spec.hy_nomas_query_capture_test`; GPU replay requires fresh output paths.
+Refresh on source/runtime, binary/objects, weights, input/phase bytes,
+geometry/precision/selection policy or missing/mutated evidence. Linked-object
+compilation and complete runtime bytes are not reconstructed.
+
+Next: obtain authenticated independent-state Q/K with labeled nonzero
+displacements, then compare pre-RoPE features and position-controlled
+candidates against same-location/equal-area shams before any causal rollout.
+The current saved alternatives lack that Q/K evidence. Preserve the accepted
+Alex/Resume take and original generation path as the visual/runtime controls.
 
 ## Research precedents and compatibility limits
 

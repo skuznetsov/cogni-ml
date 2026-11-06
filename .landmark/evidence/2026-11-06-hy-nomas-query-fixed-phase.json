@@ -1,0 +1,254 @@
+{
+  "schema": "cogni_ml.hy_nomas_query_fixed_phase_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "767b93bfd9e7256edad1e6e3723c3965dc365db4",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Authenticated same-pass fixed-destination-phase K-content null and numerical parity only. Not full attention, semantic tracking, actor transport, acting, native peak or speed.",
+    "adversary": "ROBUST within the frozen measurement scope. Read-only same-lineage review is correlated, not independent replication.",
+    "refresh_on": [
+      "source/runtime",
+      "scripts/binary/linked objects",
+      "weights",
+      "input/capture/phase bytes",
+      "geometry/precision/selection policy",
+      "missing or mutated bound evidence"
+    ],
+    "rollback": "Omit the new opt-in probe/qualifier; production generation and defaults are unchanged."
+  },
+  "boundaries": {
+    "risk": "CAUTION: new diagnostic GPU kernels and fixture/lineage qualification; no production path change.",
+    "allowed_paths": [
+      "examples/hy_nomas_query_fixed_phase_probe.cr",
+      "examples/support/hy_nomas_query_fixed_phase_probe.cr",
+      "spec/support/hy_nomas_query_fixed_phase.py",
+      "spec/hy_nomas_query_fixed_phase_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-06-hy-nomas-query-fixed-phase.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_query_fixed_phase_probe.cr",
+      "examples/support/hy_nomas_query_fixed_phase_probe.cr",
+      "spec/support/hy_nomas_query_fixed_phase.py",
+      "spec/hy_nomas_query_fixed_phase_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-06-hy-nomas-query-fixed-phase.json"
+    ],
+    "production_defaults_changed": false,
+    "full_generation_run": false,
+    "model_launched": false,
+    "query_transport_implemented": false,
+    "actor_control_qualified": false
+  },
+  "frozen_design": {
+    "heads": [
+      12,
+      15
+    ],
+    "frames": [
+      1,
+      14,
+      29
+    ],
+    "key_roll": 17,
+    "positions_per_frame": 144,
+    "case_count": 9,
+    "independent_saved_states": 1,
+    "policy": {
+      "heads": [
+        12,
+        15
+      ],
+      "frames": [
+        1,
+        14,
+        29
+      ],
+      "key_roll": 17,
+      "positions": 144,
+      "atol": 2e-05,
+      "rtol": 2e-05,
+      "independent_saved_states": 1,
+      "transport_gate": false
+    },
+    "arm_equations": {
+      "identity": "BF16(R_j K_j)",
+      "moving": "BF16(R_(j-17) K_(j-17))",
+      "fixed": "BF16(R_j K_(j-17))"
+    },
+    "query_unchanged": true,
+    "roll_direction": "Destination j receives K_(j-17); content target for query i is (i+17) mod144.",
+    "declaration": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-fixed-phases-tuyhkhbg/frozen-design-before-scores.md",
+      "sha256": "958c6ba40d609f284c56b0869a1ca0bf96876a8be26f8680f16828b930e712f4"
+    }
+  },
+  "source": {
+    "block_pin": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "posemb_sha256": "27b729d04185dfd7d65ecf9ba0d761d4864153d3e656908997d60a6971afc1aa",
+    "torch_version": "2.8.0",
+    "source_device": "MPS with CPU fallback disabled",
+    "weights_sha256": "01be7388fa4267f1f566c3ced405418f94d0ed2b4ee969cc880fb2518ab7c87b",
+    "capture_sha256": "89967d4b9fb4d55d7d2fa45a07d0cc9a5bf8273ffddea3c2ba035cd342d60897",
+    "capture_receipt_sha256": "9649ad3c7ae94359812dcc88162ae86fe34f9c359fb8e49e14e60a8156ae18e8",
+    "phase_manifest_sha256": "0fd4898e12699ba058a8ad5047b55eb9b4a2898c8cb9a9f795235732a321488a",
+    "phase_payload_sha256": "44b527535f2e3835b7168055b49d387987a37bcd43ddea97879cacf9ee03a257",
+    "T0_sigma": 0.206897,
+    "timestep": 206.897,
+    "full_QK_shape": [
+      1,
+      4320,
+      16,
+      128
+    ],
+    "selected_QK_shape": [
+      144,
+      16,
+      128
+    ],
+    "equation": "Exact saved BF16 QK-normalized bytes -> GPU gather -> pinned F32 RoPE -> BF16 RNE -> F32 QK and row metrics.",
+    "scope_limit": "Saved one-block capture consumed native preblock inputs. No independent noise-to-preblock replay or fresh full-model capture is qualified."
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_metric_columns": [
+      "greater_count",
+      "argmax"
+    ],
+    "dod_command": "python3 -B -m unittest -v spec.hy_nomas_query_fixed_phase_test spec.hy_nomas_query_head_robustness_test spec.hy_nomas_query_correspondence_test spec.hy_nomas_query_capture_test",
+    "dod_signal": "28 CPU tests; release build; valid native admission plus five expected format rejections; three format-valid ancestry substitutions; all nine paired native/source GPU cases; exact identity Q/K; six source/native moving-arm checks and both post-drain metric audits pass.",
+    "plan_sha256": "e23384318032adb62bc45e1aa728fd1c8a624fd0a6d8436094f167325ce9bcaa",
+    "native_binary_sha256": "494e251e858eedc4af277600957107550625a95df7e5e1081432a2ae3ac46c97",
+    "Q_K_scores_byte_identical_all_pairs": true,
+    "maximum_metric_abs_difference": 2.682209014892578e-07,
+    "maximum_postdrain_metric_audit_abs_difference": 4.76837158203125e-07,
+    "qualification": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-fixed-phases-tuyhkhbg/qualified.json",
+      "sha256": "955a30510e6349eb17b18af345e1b315e385380363dea69744d704d8e478c825"
+    },
+    "observed_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-fixed-phases-tuyhkhbg/observed-audit.json",
+      "sha256": "6499cbaf64ccd4db90a8a27ed116b64d369ae4a9e2cf5a25f3443c5e7ea0aebb"
+    },
+    "native_admission_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-fixed-phases-tuyhkhbg/admission-binding-audit.json",
+      "sha256": "978ad1620cda9c67ce4b9b842fa09d4cbe10667ce0876cade9169df472a921b0"
+    },
+    "GPU_commands": "The external index binds the release build argv and all 18 guarded child commands, source/native reports and frozen plan. The matrix runs source and native sequentially with fail-fast identity/pair checks. No PyTorch is in the native path.",
+    "repository_graph_validation": "The skill template and scripts/validate-landmark-graph.sh are absent. JSON parsing, live indexed digest/reference checks, source/path review, Crystal format and git diff --check are used; no graph-validator result is claimed."
+  },
+  "execution": {
+    "native_named_bytes": 8607744,
+    "native_named_buffers": 10,
+    "dispatches_each_arm": 8,
+    "command_chains": 1,
+    "named_encode_allocations": 0,
+    "encode_readbacks": 0,
+    "encode_waits": 0,
+    "terminal_waits": 1,
+    "post_wait_readbacks": 4,
+    "native_equation": "Production uncontracted RoPE and BF16 helper sources with opt-in gather/round wrappers and existing correspondence kernels.",
+    "CPU_scope": "Input byte preparation/admission before execution, then qualification and raw-score diagnostics after drain.",
+    "admission_boundary": "Native CLI validates submitted integrity/format; qualify additionally binds real pre-RoPE Q/K and destination phases to authenticated ancestry. A standalone source/native report is not an ancestry certificate."
+  },
+  "memory": {
+    "stage_count": 23,
+    "cache_aware_floor_pct": 10,
+    "stage_cap_bytes": 2147483648,
+    "swap_growth_stop_bytes": 67108864,
+    "minimum_headroom_bytes": 23540858880,
+    "minimum_pressure_free_pct": 89,
+    "maximum_sampled_group_footprint_bytes": 481494048,
+    "maximum_observed_swap_growth_bytes": 0,
+    "all_final_children_zero": true,
+    "native_peak_or_speed_qualified": false,
+    "native_admission_stages": 6,
+    "native_admission_guard_signals": "One valid child exit0; five targeted ArgumentError exits1, all finished normally under unchanged guards with no live final children.",
+    "limit": "Polling misses between-sample peaks; named buffers exclude opaque resources. No native peak or speedup is certified."
+  },
+  "findings": {
+    "frame_order": [
+      1,
+      14,
+      29
+    ],
+    "identity_original_content_counts": {
+      "12": [
+        109,
+        118,
+        121
+      ],
+      "15": [
+        138,
+        139,
+        136
+      ]
+    },
+    "moving_phase_relocated_counts": {
+      "12": [
+        109,
+        118,
+        121
+      ],
+      "15": [
+        138,
+        139,
+        136
+      ]
+    },
+    "fixed_phase_relocated_counts": {
+      "12": [
+        14,
+        12,
+        14
+      ],
+      "15": [
+        2,
+        2,
+        2
+      ]
+    },
+    "fixed_phase_diagonal_counts": {
+      "12": [
+        69,
+        76,
+        70
+      ],
+      "15": [
+        101,
+        106,
+        104
+      ]
+    },
+    "interpretation": "Reject phase-invariant index retrieval in the tested heads/slices. Fixed phases retain many same-position winners while moved-content wins fall sharply. The content/phase control does not label physical motion or establish a cause of weak acting."
+  },
+  "continuation": {
+    "return_pointer": "docs/hy-nomas-object-control-frontier.md, Fixed-phase content null",
+    "decision": "Do not promote raw post-RoPE affinity into actor transport.",
+    "next_falsifier": "Authenticated independent-state Q/K with labeled nonzero displacement; compare pre-RoPE or position-controlled candidates against same-location/equal-area shams before causal rollout.",
+    "missing_evidence": "Alternative saved runs have preblock or KV artifacts but lack authenticated independent-state Q/K.",
+    "visual_control": "Keep the accepted Alex/Resume ROI take; this diagnostic produces no new video."
+  },
+  "evidence_index": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-fixed-phases-tuyhkhbg/qualified-artifacts-v1.json",
+    "sha256": "18834ed1dd2c874bd31257877b0d5fae48ce8e48088a43457135bfcd7487c02d",
+    "groups": {
+      "experiment_artifacts": 198,
+      "source_snapshots": 17,
+      "inherited_references": 22,
+      "native_admission_artifacts": 36
+    },
+    "availability": "External SSD. Missing/mutated bytes reopen affected claims."
+  },
+  "limitations": [
+    "One saved T0 state and restricted same-frame keys; no independent scenes or labeled cross-frame correspondences.",
+    "Synthetic index rolling may not lie on the natural-motion manifold.",
+    "F32 QK after BF16 RoPE is not full BF16 attention, PV or a causal generation intervention.",
+    "Inherited linked-object compilation and complete runtime bytes are not reconstructed.",
+    "The parent index is digest-bound, not transitively revalidated.",
+    "Same-lineage model review is correlated."
+  ]
+}

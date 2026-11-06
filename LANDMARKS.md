@@ -6,6 +6,45 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QUERY-FIXED-PHASE-2026-11-06] Frozen affinity heads fail phase-invariant content retrieval
+
+- The fixed-phase null freezes heads 12/15, frames 1/14/29 and K roll +17.
+  Native GPU gathers change K content before destination RoPE; the moving
+  control rolls K after RoPE. All nine native/source pairs pass unchanged
+  `atol=rtol=2e-5`, with byte-identical Q/K/scores and exact discrete metrics.
+  Largest metric difference is 2.69e-7; post-drain audits stay below 4.77e-7.
+  Identity Q/K exactly reproduce the saved post-RoPE capture. Moving-arm
+  score rolls, stable argmax and unchanged Q checks pass.
+- Strict relocated-content counts out of 144 fall from 109/118/121 to
+  14/12/14 for head 12 and from 138/139/136 to 2/2/2 for head 15 when phases
+  stay at the destination. Fixed-phase same-position counts remain
+  69/76/70 and 101/106/104. This refutes phase-invariant index retrieval for
+  these slices, not semantic information in general or visible acting.
+  One saved noisy T0 state, restricted same-frame F32 QK after BF16 RoPE;
+  no full attention/PV, independent-state tracking or transport is tested.
+- The opt-in native probe uses production uncontracted RoPE/BF16 helpers,
+  ten buffers (8,607,744 named bytes), eight dispatches, zero named encode
+  allocations/readbacks/waits, one terminal wait and four post-wait exports.
+  Twenty-eight CPU tests, five native format negatives and three valid-format
+  ancestry substitutions meet their expected signals. The reader checks
+  submitted integrity; the qualifier authenticates source/phase ancestry.
+- Twenty-three positive guarded stages preserve the cache-aware 10% floor,
+  2 GiB cap and 64 MiB swap stop, with no observed swap growth/final children.
+  Minimum sampled headroom 23,540,858,880 bytes; sampled group peak 481,494,048
+  bytes is not a native peak. No full generation or production change.
+  Same-lineage adversary is ROBUST within scope, correlated rather than
+  independent replication. Evidence:
+  `.landmark/evidence/2026-11-06-hy-nomas-query-fixed-phase.json`.
+- Return: `docs/hy-nomas-object-control-frontier.md`, fixed-phase diagnostic.
+  Do not promote raw post-RoPE affinity into actor transport. Next falsifier:
+  independent-state labeled nonzero-displacement matches, comparing pre-RoPE
+  or position-controlled features against same-location/equal-area shams.
+  Other saved states lack authenticated Q/K. Rollback: omit the opt-in probe;
+  keep the accepted visual take and original generation path. Refresh on
+  source/runtime, binary/objects, weights, input/phase bytes, geometry,
+  precision, selection policy or missing/mutated evidence. Linked-object
+  compilation and complete runtime bytes remain outside the certificate.
+
 ### [LM-HY-NOMAS-QUERY-HEAD-ROBUSTNESS-2026-11-06] Frozen heads retain RoPE-associated affinity; transport remains unqualified
 
 - Freeze heads 12/15 and frames 1/14/29 before scores. All nine native/MPS
