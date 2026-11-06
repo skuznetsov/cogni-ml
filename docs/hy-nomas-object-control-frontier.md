@@ -1,9 +1,9 @@
 # Hy-Nomas object control frontier
 
-Status (2026-11-05): source audit, semantic refiner-only A/A/B and shared-`c`
-factorial probes completed against the pinned source MPS adapter. The direct
-DiT route factorial is now bit-exact at all 25 source/native checkpoints,
-including accepted-parent replay and A/A. Controller changes remain proposed.
+Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
+their frozen source/native gates. The new first-frame Q/K diagnostic also
+passes on one authenticated T0 state; only selected heads show strong
+self preference. Query transport and actor controllers remain proposed.
 The accepted five-second Alex/Resume ROI take remains the visual control. The original audit
 was read-only; subsequent bounded GPU experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
@@ -775,6 +775,85 @@ ROBUST within that frozen numerical scope and is correlated. The diagnostic
 CLIs remain opt-in; omit them for rollback. Any changed bound input, source,
 runtime, weight, binary/object, precision, geometry, schedule, bias or decoder,
 or missing/mutated evidence, reopens the affected claim.
+
+### Query self-correspondence screening (2026-11-06, qualified diagnostic)
+
+The next bounded probe tests an attention prerequisite, not a controller.
+QWERTY (arXiv:2607.01869, section 3) motivates transporting source queries
+when they prefer the corresponding source keys. Its full-sequence,
+50-step experiments do not establish compatibility with four-step causal
+Hy-Nomas. The local probe implements neither STCD nor query warping.
+
+At 512 x 288 the latent grid is 16 x 9: one cell spans 32 x 32 pixels.
+The Resume glove occupies approximately one such cell. Direct latent
+translation cannot isolate the glove from the wrist/page, and image-plane
+rotation cannot specify head yaw. Neither is admitted as an acting fix.
+
+The opt-in native probe computes F32 first-frame QK scores and six GPU
+metrics on saved, losslessly BF16-expanded Q/K of shape [144, 16, 128].
+The source-equation oracle uses the same inputs on MPS. Preserve
+`atol=rtol=2e-5`, exact discrete metrics, reused buffers, zero in-chain
+readbacks/waits and one terminal wait. A post-drain independent audit checks
+the exported metrics against the scores. Positive identical-Q/K, shuffled
+keys and all-tied controls must distinguish strict preference from a stable
+argmax tie. Existing noisy T1 Q/K do not establish a reference-cache premise.
+Capture operational T0 Q/K at the same upstream block-0 hook before attention;
+retain the preprocessing scope and authenticated fixture lineage. The saved
+native T0 bundle declares sigma 0.206897 / timestep 206.897, not zero noise.
+Do not promote a same-state T0 measurement to a clean-input QWERTY result.
+The 144-key self mass is restricted-frame affinity, not a full model attention
+probability; the authored rectangles are not validated object masks.
+
+This is CAUTION diagnostic work. Omit the new CLIs for rollback; production
+generation remains unchanged. Runs use the existing cache-aware 10% floor
+and 64 MiB swap-growth stop, with bounded process caps recorded per stage.
+The executed DoD passes: 15 CPU tests, native release build and seven
+CPU-only admission cases, three paired GPU controls and one authenticated
+T0 capture. The identical-Q/K control has strict self preference 1.0;
+shuffled and tied controls have 0.0. All four native/source score arrays
+are byte-identical. T0 metric error is at most 1.7881393432617188e-7;
+the largest metric difference across the controls is 1.1920928955078125e-6.
+Exact discrete comparisons and both independent post-drain metric audits
+pass. The native diagnostic uses 3,741,696 named bytes, two dispatches,
+zero named encode allocations/readbacks/waits, one terminal wait and two
+post-wait diagnostic readbacks. This does not qualify the full BF16
+attention path or the legacy source capture's synchronization behavior.
+
+The captured source block is pinned to `a31c0fe0bcc493be188fd37ddba4ce2f674becb4`;
+`911cea6458a89c2663513ff7099561ec190dd491` is the separate timeline
+preprocessing provenance. The block consumes authenticated native
+image/text/vector/RoPE tensors. Latent, noisy-latent and timestep records
+are authenticated but not consumed, so this is not an independent replay
+of noise-to-preblock preparation. Rewrapping the embedded BF16 latent
+reproduces the missing original safetensors SHA `9e21e8b9...` exactly;
+the original manifest/payload remain unchanged. JSON receipt key order is
+not semantic: admission checks exact inventory/count, header records and
+contiguous tensor extents instead of comparing dictionary insertion order.
+
+Real block-0 strict self preference is 572/2304 head-position pairs
+(24.83%). The authored Alex/Resume rectangles give 23.05%/23.54%.
+Heads 12 and 15 differ markedly from the pooled result: 120/144 and
+136/144 positions prefer their own key. Within the authored Alex rectangle
+they reach 12/16 and 11/16; within Resume, 23/30 and 29/30. This is an
+exploratory head-selection signal from one state, not validated actor
+segmentation or a transported-query result. The pooled restricted-frame
+self mass is 0.05869 versus uniform 1/144; it is not full attention mass.
+
+All ten qualified guarded stages finish with zero live children and zero
+observed swap growth. Source-capture sampled peak is 1,732,561,032 bytes;
+the 10% floor is preserved. Sampling misses between-poll spikes, and the
+short native runs do not establish a measured native peak or speedup.
+Evidence: `.landmark/evidence/2026-11-06-hy-nomas-query-affinity.json`;
+external `query-correspondence-26ede1fe/qualified-artifacts-v1.json`.
+
+Refresh with `python3 -B -m unittest spec.hy_nomas_query_correspondence_test
+spec.hy_nomas_query_capture_test -q`, the saved build/guard argv and the
+qualifier's `--verify-model-capture` mode. A numerical pass only admits the
+affinity measurement. Next, test the head/layer selection on held-out
+saved states before attempting transport; do not apply an all-head warp
+based on the pooled result. A transport probe still needs neutral and
+equal-area spatial-sham controls, protected actors/background, source
+residue checks and a causal rollout before any visible-control claim.
 
 ## Research precedents and compatibility limits
 

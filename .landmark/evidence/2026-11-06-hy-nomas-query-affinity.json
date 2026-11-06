@@ -1,0 +1,196 @@
+{
+  "schema": "cogni_ml.hy_nomas_query_affinity_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "e221a270117895d57000571501c56c5c94bb82ec",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Native F32 restricted-frame Q/K affinity diagnostic and authenticated one-block BF16 source capture only; no acting, warp, full attention, full T0 preprocessing or speed claim.",
+    "adversary": "ROBUST for authenticated T0 first-frame affinity measurement; VULNERABLE if interpreted as actor tracking or an acting controller. Read-only same-lineage review is correlated, not independent replication.",
+    "refresh_on": [
+      "source/runtime",
+      "weights",
+      "scripts/binary/linked objects",
+      "inputs/capture geometry/precision",
+      "missing or mutated bound evidence"
+    ],
+    "rollback": "Omit the opt-in query diagnostic and capture CLIs; production runtime is unchanged."
+  },
+  "boundaries": {
+    "risk": "CAUTION: bounded GPU diagnostic and authenticated source capture; no production defaults changed.",
+    "allowed_paths": [
+      "examples/hy_nomas_query_correspondence_probe.cr",
+      "examples/support/hy_nomas_query_correspondence_probe.cr",
+      "spec/support/hy_nomas_query_capture.py",
+      "spec/support/hy_nomas_query_correspondence_reference.py",
+      "spec/hy_nomas_query_capture_test.py",
+      "spec/hy_nomas_query_correspondence_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-06-hy-nomas-query-affinity.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_query_correspondence_probe.cr",
+      "examples/support/hy_nomas_query_correspondence_probe.cr",
+      "spec/support/hy_nomas_query_capture.py",
+      "spec/support/hy_nomas_query_correspondence_reference.py",
+      "spec/hy_nomas_query_capture_test.py",
+      "spec/hy_nomas_query_correspondence_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-06-hy-nomas-query-affinity.json"
+    ],
+    "production_defaults_changed": false,
+    "full_generation_run": false,
+    "query_transport_implemented": false,
+    "STCD_implemented": false,
+    "actor_control_qualified": false
+  },
+  "capture": {
+    "input_manifest_sha256": "02024f72af2b09de6994637fde4799d5320a04f7cabc769710c192a5d01ed2a8",
+    "source_block_pin": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "timeline_preprocessing_pin": "911cea6458a89c2663513ff7099561ec190dd491",
+    "hook": "Block 0 first cache append before attention; img.q_rope and img.k_rope.",
+    "full_source_shape": [
+      1,
+      4320,
+      16,
+      128
+    ],
+    "selected_row_range": [
+      0,
+      144
+    ],
+    "selected_shape": [
+      144,
+      16,
+      128
+    ],
+    "input_storage": "F32 lossless expansion of exact BF16 Q/K; native and source score arithmetic is F32.",
+    "recorded_T0_sigma": 0.206897,
+    "recorded_timestep": 206.897,
+    "scope_limit": "Consumes authenticated saved native image/text/vector/RoPE preblock tensors. Latent/noisy-latent/timestep records are authenticated but not consumed; this is not independent noise-to-preblock replay or a clean-input experiment.",
+    "recovered_original_latent_sha256": "9e21e8b9e4cc49d355081023346309daa09c52ac6eedafa00a1de577ff17cf60",
+    "receipt_order_fix": "Validate exact tensor inventory/count, headers, shape and contiguous extents; JSON key insertion order is not semantic."
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "exact_metric_columns": [
+      "greater_count",
+      "argmax"
+    ],
+    "dod_commands": [
+      "python3 -B -m unittest spec.hy_nomas_query_correspondence_test spec.hy_nomas_query_capture_test -q",
+      "crystal tool format --check examples/hy_nomas_query_correspondence_probe.cr examples/support/hy_nomas_query_correspondence_probe.cr"
+    ],
+    "dod_signal": "15 CPU tests, native release build, 7 CPU-only native admission cases and 4 paired native/source GPU cases pass. Both post-drain metric audits pass; all score arrays are byte-identical.",
+    "gpu_commands": "Exact build and guarded capture/native/source/qualification argv and output digests are bound by the external index; T0 qualifier used --verify-model-capture.",
+    "python_tests": 15,
+    "native_admission_cases": 7,
+    "scores_per_case": 331776,
+    "metrics_per_case": 13824,
+    "score_arrays_byte_identical": true,
+    "largest_control_metric_abs_error": 1.1920928955078125e-06,
+    "T0_metric_abs_error": 1.7881393432617188e-07,
+    "qualifications": {
+      "positive": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/positive-qualification-v3.json",
+        "sha256": "9b8d065596bb8315ea669a1b87f7daf8c3f854e12ff9eb353e9e0c5ea595f3af",
+        "claim_scope": "submitted_array_affinity"
+      },
+      "shuffled": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/shuffled-qualification-v3.json",
+        "sha256": "db3b64b24e409fc306a792f95917009205dddaa636864b5118ba10034890ff48",
+        "claim_scope": "submitted_array_affinity"
+      },
+      "ties": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/ties-qualification-v3.json",
+        "sha256": "2b714b3aa6ed51eede7e6f2e786d70e3fad5935291f42a8d089d6bf9f7198949",
+        "claim_scope": "submitted_array_affinity"
+      },
+      "t0": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/t0-qualification-v3.json",
+        "sha256": "3bb5ee9a809361ba4e30e23603e87b6ab8762ff0571bb40fb02d37b102b58be4",
+        "claim_scope": "authenticated_model_capture_affinity"
+      }
+    },
+    "native_build_receipt": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/native-build-v3.receipt.json",
+      "sha256": "be9f75c4675e7dd5c02f5931d2bcafcc6cc23aa8d54c15b0b93eb841105a34f2"
+    },
+    "native_binary_sha256": "0eafae36447cae361c97ec69226e29b4561cc0e3c1834e0f0bce4c5a212a6c77",
+    "source_snapshots": 14,
+    "indexed_file_digests_verified": 127,
+    "repository_graph_validation": "The skill template and scripts/validate-landmark-graph.sh are absent in this checkout; use existing packet style, JSON parsing, exact path review, whitespace checks and live evidence digest verification. No graph-validator execution or clean rebuild is claimed."
+  },
+  "execution": {
+    "native_named_bytes": 3741696,
+    "native_named_buffers": 4,
+    "native_dispatches": 2,
+    "native_command_chains": 1,
+    "native_named_encode_allocations": 0,
+    "native_encode_readbacks": 0,
+    "native_encode_waits": 0,
+    "native_terminal_waits": 1,
+    "native_postwait_readbacks": 2,
+    "audit_scope": "Independent CPU metric audits and per-head summaries run only after the GPU diagnostic drain; no production data path is added.",
+    "source_capture_limit": "Existing source block capture has post-forward diagnostic checks and exports; no one-drain synchronization guarantee is claimed for that capture."
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "swap_growth_stop_bytes": 67108864,
+    "qualified_guard_stages": 10,
+    "maximum_observed_swap_growth_bytes": 0,
+    "final_live_children_all_stages": 0,
+    "source_capture_sampled_peak_bytes": 1732561032,
+    "source_capture_process_cap_bytes": 6442450944,
+    "other_stage_process_cap_bytes": 2147483648,
+    "native_peak_qualified": false,
+    "limit": "Polling misses between-sample transients. Named bytes exclude opaque Metal/runtime allocations; short native runs establish neither native peak nor speedup."
+  },
+  "findings": {
+    "strict_self_pairs": 572,
+    "all_head_position_pairs": 2304,
+    "strict_self_fraction": 0.2482638888888889,
+    "exploratory_head_12": {
+      "self_pairs": 120,
+      "positions": 144,
+      "authored_alex_self_pairs": 12,
+      "alex_positions": 16,
+      "authored_resume_self_pairs": 23,
+      "resume_positions": 30
+    },
+    "exploratory_head_15": {
+      "self_pairs": 136,
+      "positions": 144,
+      "authored_alex_self_pairs": 11,
+      "alex_positions": 16,
+      "authored_resume_self_pairs": 29,
+      "resume_positions": 30
+    },
+    "interpretation": "Do not apply an all-head query warp. Heads 12/15 are exploratory selections on one saved state. Within-frame self preference is not cross-frame correspondence; authored rectangles are not validated actor masks and 144-key self mass is not full-attention probability."
+  },
+  "continuation": {
+    "return_pointer": "docs/hy-nomas-object-control-frontier.md, Query self-correspondence screening",
+    "next_falsifier": "Evaluate frozen head/layer selections on held-out saved states before attempting query transport.",
+    "later_required_controls": [
+      "neutral replay",
+      "equal-area spatial sham",
+      "protected Alex/Resume/background",
+      "source residue",
+      "causal rollout and visible acting review"
+    ],
+    "known_geometric_limit": "A 32-pixel latent cell does not isolate glove from wrist/page; 2D translation or rotation does not specify head yaw."
+  },
+  "evidence_index": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/query-correspondence-26ede1fe/qualified-artifacts-v1.json",
+    "sha256": "9727685c9334cf96cebbd2cbf63194b5963dee065d71783611fd986d3610c3ff",
+    "availability": "External SSD; missing/mutated bytes reopen dependent claims."
+  },
+  "limitations": [
+    "Inherited linked-object compile provenance and complete runtime bytes are not reconstructed.",
+    "Sampled guard peaks miss between-poll transients; short native jobs are not a measured native peak.",
+    "Source block capture uses existing post-forward diagnostic checks/exports; no one-drain guarantee for that capture.",
+    "Native diagnostic has one terminal wait and two post-wait readbacks; CPU metric audits and per-head summary run after that drain."
+  ]
+}

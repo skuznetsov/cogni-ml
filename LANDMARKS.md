@@ -6,6 +6,41 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QUERY-AFFINITY-2026-11-06] Native first-frame affinity qualifies; actor transport remains untested
+
+- The opt-in GPU diagnostic computes F32 QK scores and six row metrics on
+  losslessly BF16-expanded [144,16,128] Q/K. Three synthetic controls and one
+  authenticated T0 block-0 capture have byte-identical native/source scores;
+  maximum metric difference is 1.20e-6 across controls and 1.79e-7 on T0.
+  Discrete columns and independent post-drain audits pass at unchanged
+  `atol=rtol=2e-5`. Fifteen CPU tests and seven native admission cases pass.
+- Source block pin is `a31c0fe0bcc493be188fd37ddba4ce2f674becb4`; timeline
+  preprocessing has a separate pin. Recorded T0 sigma is .206897. The
+  one-block source consumes saved native preblock inputs, not latent/noise
+  preparation. Rewrapping embedded latent bytes recovers the original
+  safetensors SHA `9e21e8b9...` exactly. Input publication binds source
+  tensors, weights, scripts and exact selected rows before qualification.
+- Strict self preference is 572/2304 head-position pairs (24.83%); heads
+  12/15 reach 120/144 and 136/144. These are exploratory results from one
+  state over 144 first-frame keys, not cross-frame tracking, validated
+  actor segmentation, full-attention mass or evidence of acting.
+- Native reuses four buffers (3,741,696 named bytes), two dispatches and
+  one terminal wait; zero named encode allocations/readbacks/waits. Ten
+  guarded stages preserve the cache-aware 10% floor with no observed swap
+  growth or final children. Source capture sampled peak is 1,732,561,032
+  bytes; short native runs do not establish peak memory or speedup.
+  Same-lineage review is ROBUST within this diagnostic scope, correlated
+  rather than independent. Inherited object compilation/full runtime
+  provenance and between-poll memory spikes remain outside the claim.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-query-affinity.json`;
+  external `query-correspondence-26ede1fe/qualified-artifacts-v1.json`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, query screening.
+  Next: test selected heads/layers on held-out states before any transport;
+  later require neutral/spatial-sham and protected-actor causal controls.
+  Rollback: omit the diagnostic CLIs; production unchanged. Refresh on
+  source/runtime, weights, scripts/binary/objects, inputs, geometry/precision
+  or missing/mutated bound evidence.
+
 ### [LM-HY-NOMAS-SOFT-ROUTE-RENDER-2026-11-06] Four-step replay is exact; attention bias does not establish requested acting
 
 - Three separate zero/Alex/Resume arms complete four Euler steps through
