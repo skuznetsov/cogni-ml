@@ -6,6 +6,52 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-SOFT-ROUTE-RENDER-2026-11-06] Four-step replay is exact; attention bias does not establish requested acting
+
+- Three separate zero/Alex/Resume arms complete four Euler steps through
+  all 54 BF16 blocks with fixed reference, conditioning, initial noise and
+  schedule. Eighteen source/native tensor pairs are byte-identical; all
+  twenty-two frozen replay gates pass at unchanged `atol=rtol=2e-5`.
+  Qualification SHA `2bf0aea53b2f4f3aa324dac1c9145e42f174d4b0df8c78e41d5e477fbb0ad792`;
+  both payloads SHA `7a6aaee1339832106c52578fa6b2aff2c6f925bb50346153c4ce6bffc8d26d09`.
+  Oracle is the pinned Tencent PyTorch 2.8 MPS BF16 adaptation, not stock CUDA.
+- Native reuses GPU states/scratch and has one chain, one terminal wait,
+  zero named encode allocations/readbacks and eighteen post-drain captures.
+  Four ordered stage passes are admitted; a fifth is rejected. Admission
+  budgets resident BF16 weights rather than Q4 storage. Named peak
+  20,279,905,400 bytes; sampled group peak 20,588,213,328 bytes. Source/native
+  and all three decoders preserve the cache-aware 10% floor, zero observed
+  swap growth and no final children. Opaque MPS resources and sampling gaps
+  remain outside these accounting guarantees; timings are not speed benchmarks.
+- Matched recovered-BF16 PixelUMM/noise produces three five-second takes.
+  Selected-frame review shows Alex gaze/expression differences without a
+  substantial head turn; Resume retains essentially the same small late
+  glove-to-chest gesture in all three. Whole-clip pooled RGB differences
+  locate image change, not acting. No full-playback, pose/contact, combined
+  bias, production controller or quality-improvement qualification.
+- Build, admission, 37 Python tests and one cursor example pass, with seeded
+  wrong-trajectory and resource/lineage negatives. All 106 source and 102
+  native records matched live bytes and saved copies before final formatter
+  alignment. A separate parsed-AST/per-line non-whitespace check binds the
+  archived originals to the formatted CLI/support; CPU tests and format pass
+  afterward. One Python trailing blank line is separately removed with an
+  identical positioned AST and passing tests/whitespace check. GPU results
+  remain scoped to the frozen v5 binary/snapshots.
+  Inherited compile commands and full runtime bytes are not reconstructed.
+  Same-lineage review is ROBUST within scope and correlated.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-soft-route-render.json`;
+  external `hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/qualified-artifacts.json`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, four-step replay result.
+  The root eight-arm report is historical, not the current render gate.
+- Next: stop dose escalation and investigate a real pose/part-trajectory
+  conditioner. Pinned upstream has camera trajectories; `joint_control_spec`
+  is sidecar-only benchmark metadata, not an actor actuator. Do not infer
+  full DiT retraining is necessary. First pose test needs one head-yaw track,
+  neutral/spatial-sham controls and protected Resume/background measurements.
+  Rollback: omit the diagnostic CLIs. Refresh on bound source/runtime,
+  weights, binary/objects, input/noise, bias, geometry/precision/schedule or
+  decoder changes; missing/mutated evidence reopens dependent claims.
+
 ### [LM-PIXELUMM-RECOVERED-CACHE-2026-11-05] Persistent recovered BF16 cache passes explicit decoder admission
 
 - Deleted PixelUMM source, stem/head subsets and the 36-block BF16 payload
@@ -68,10 +114,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   `3631809566303dc23ac81ed8789de0bde7d4b622e7a7798295bc41bdd03979f2`.
   Curated index `.landmark/evidence/2026-11-05-hy-nomas-soft-routes.json`;
   return [object-control frontier](docs/hy-nomas-object-control-frontier.md).
-- Next: separate four-step zero/Alex/Resume renders with fixed reference,
-  camera, noise and decoder; first require exact zero-final baseline replay.
-  A single saved velocity is not a generated trajectory. Pivot to explicit
-  pose/trajectory support if articulation fails; do not escalate the dose.
+- The separate four-step render now passes exact numerical replay; see
+  LM-HY-NOMAS-SOFT-ROUTE-RENDER-2026-11-06. Requested acting remains open;
+  pivot to explicit pose/trajectory support without escalating the dose.
   Rollback: omit the diagnostic and optional bias. Refresh on input/parent,
   priors, source/runtime, weights, precision, geometry, binary/objects or
   evidence changes. Missing or mutated bound artifacts revoke the claim.

@@ -1,0 +1,275 @@
+{
+  "schema": "cogni_ml.hy_nomas_soft_route_render_evidence/v1",
+  "date": "2026-11-06",
+  "base_revision": "1aaec40fc7ac336dab11380058b96af18e7e51ca",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Frozen three-arm four-Euler-step numerical replay through 54 BF16 blocks and a matched-settings five-second visual comparison; requested acting is not established.",
+    "adversary": "ROBUST within frozen v5 numerical replay, sampled resource and selected-frame visual-conclusion scope after actual-artifact read-only review. Same-lineage review is correlated, not independent replication; final formatter equivalence is separately bound.",
+    "refresh_on": [
+      "source/runtime",
+      "binary/linked objects",
+      "weights/decoder",
+      "inputs/conditioning/noise",
+      "bias/hard support",
+      "geometry/precision/schedule",
+      "missing or mutated evidence"
+    ],
+    "rollback": "Omit the opt-in diagnostic CLIs and optional action-logit prior; preserve the accepted zero baseline."
+  },
+  "boundaries": {
+    "risk": "CAUTION: diagnostic GPU trajectory, reused buffers and staged-weight cursor; production defaults unchanged.",
+    "production_defaults_changed": false,
+    "simultaneous_actor_bias_qualified": false,
+    "scope_note": "This is a bounded three-arm continuation comparison, not full multi-segment production generation or an object-controller release.",
+    "production_entrypoint_or_multi_segment_generation_run": false
+  },
+  "recipe": {
+    "arms": [
+      "zero",
+      "A1_high",
+      "A2_high"
+    ],
+    "steps": 4,
+    "blocks": 54,
+    "output_frames_per_arm": 120,
+    "fps": 24,
+    "width": 512,
+    "height": 288,
+    "reference_conditioning_camera_and_initial_noise_fixed": true,
+    "decoder_and_pixel_noise_shared": true,
+    "oracle": "Pinned Tencent equations via PyTorch 2.8.0 MPS BF16 adaptation, not stock CUDA/Magi."
+  },
+  "verification": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "bit_identical_tensor_pairs": 18,
+    "exact_replay_gates": 22,
+    "python_tests": 37,
+    "crystal_cursor_examples": 1,
+    "snapshot_records_checked": {
+      "source": 106,
+      "native": 102
+    },
+    "dod_command": "python3 -B -m unittest spec.hy_nomas_soft_route_render_qualify_test spec.hy_nomas_soft_route_render_reference_test spec.hy_nomas_soft_route_qualify_test spec.hy_nomas_export_test -q",
+    "dod_signal": "37 Python tests, one ordered-stage cursor example, build/admission and guarded source/native qualification pass; three decoder/export receipts pass.",
+    "gpu_commands": "Exact build/admission/source/native/decode/export/qualification argv, stdout and guards are bound by the external index.",
+    "preformat_current_and_saved_snapshot_bytes_match": true,
+    "final_formatting_equivalence": {
+      "crystal_parsed_ast_rendering_equal": true,
+      "per_line_non_whitespace_content_equal": true,
+      "line_counts_equal": true,
+      "postformat_python_tests": 37,
+      "postformat_crystal_cursor_examples": 1,
+      "format_check": {
+        "argv": [
+          "crystal",
+          "tool",
+          "format",
+          "--check",
+          "examples/hy_nomas_soft_route_render.cr",
+          "examples/support/hy_nomas_soft_route_render.cr",
+          "spec/hy_nomas_soft_route_render_cursor_spec.cr"
+        ],
+        "observed_exit_code": 0
+      }
+    },
+    "gpu_source_scope": "Numerical replay remains certified for archived original sources and binary v5. Final Crystal alignment and one Python trailing-blank-line deletion are separately bound by parsed-AST equivalence and post-cleanup CPU checks; no post-cleanup GPU rerun or clean rebuild is claimed.",
+    "final_python_eof_equivalence": {
+      "exactly_one_final_newline_deleted": true,
+      "python_ast_including_positions_equal": true,
+      "postcleanup_python_tests": 37,
+      "staged_whitespace_check_observed_exit_code": 0
+    }
+  },
+  "execution": {
+    "native_command_chains": 1,
+    "native_terminal_waits": 1,
+    "native_named_encode_allocations": 0,
+    "native_activation_readbacks_before_wait": 0,
+    "native_postwait_captures": 18,
+    "outer_steps_and_admitted_stage_passes": 4,
+    "logical_T0_T1_forwards": 16,
+    "stage_count_limit": "Receipt count is the outer-step constant, not direct private-cursor telemetry; ordered four-pass CPU test rejects a fifth."
+  },
+  "memory": {
+    "cache_aware_floor_pct": 10,
+    "swap_growth_limit_bytes": 67108864,
+    "native_process_cap_bytes": 23622320128,
+    "native_named_ceiling_bytes": 22548578304,
+    "native_named_peak_bytes": 20279905400,
+    "native_sampled_peak_group_bytes": 20588213328,
+    "source_and_native": {
+      "render-source-v5": {
+        "sample_count": 308,
+        "max_footprint_bytes": 8589934592,
+        "sampled_peak_group_bytes": 2676295912,
+        "minimum_cache_aware_headroom_bytes": 34323365888,
+        "minimum_pressure_free_pct": 86,
+        "observed_swap_growth_bytes": 0,
+        "max_swap_growth_bytes": 67108864,
+        "runtime_floor_pct": 10,
+        "final_live_children": 0
+      },
+      "render-native-v3": {
+        "sample_count": 300,
+        "max_footprint_bytes": 23622320128,
+        "sampled_peak_group_bytes": 20588213328,
+        "minimum_cache_aware_headroom_bytes": 24393662464,
+        "minimum_pressure_free_pct": 82,
+        "observed_swap_growth_bytes": 0,
+        "max_swap_growth_bytes": 67108864,
+        "runtime_floor_pct": 10,
+        "final_live_children": 0
+      }
+    },
+    "decoder_guards": {
+      "zero": {
+        "sample_count": 335,
+        "max_footprint_bytes": 23622320128,
+        "sampled_peak_group_bytes": 19769717120,
+        "minimum_cache_aware_headroom_bytes": 25447333888,
+        "minimum_pressure_free_pct": 80,
+        "observed_swap_growth_bytes": 0,
+        "max_swap_growth_bytes": 67108864,
+        "runtime_floor_pct": 10,
+        "final_live_children": 0
+      },
+      "A1_high": {
+        "sample_count": 342,
+        "max_footprint_bytes": 23622320128,
+        "sampled_peak_group_bytes": 19759919416,
+        "minimum_cache_aware_headroom_bytes": 18807144448,
+        "minimum_pressure_free_pct": 80,
+        "observed_swap_growth_bytes": 0,
+        "max_swap_growth_bytes": 67108864,
+        "runtime_floor_pct": 10,
+        "final_live_children": 0
+      },
+      "A2_high": {
+        "sample_count": 339,
+        "max_footprint_bytes": 23622320128,
+        "sampled_peak_group_bytes": 19765064088,
+        "minimum_cache_aware_headroom_bytes": 24932319232,
+        "minimum_pressure_free_pct": 80,
+        "observed_swap_growth_bytes": 0,
+        "max_swap_growth_bytes": 67108864,
+        "runtime_floor_pct": 10,
+        "final_live_children": 0
+      }
+    },
+    "accounting_limit": "Named accounting excludes opaque Metal/MPS resources; polling excludes between-sample peaks. These runs are not controlled speed benchmarks."
+  },
+  "visual": {
+    "requested_articulation": "not established",
+    "review": "Selected frames and whole-clip pooled image changes; no literal full-playback or pose/keypoint measurement.",
+    "findings": [
+      "A1_high changes gaze and expression in the selected Alex head frames; a substantial requested head turn is not visible.",
+      "The Resume glove is near the side until about 3 seconds, near the chest at 4 seconds, and lowered near 4.96 seconds in all three arms; local details vary but the selected frames do not establish an improved targeted gesture.",
+      "The Resume paper body and legs remain mostly fixed in the selected frames. Selected frames retain the illustrated scene appearance.",
+      "These crops do not certify full temporal naturalness, anatomy, contact, correct acting or simultaneous actor control."
+    ],
+    "full_playback_quality_verified": false,
+    "production_controller_qualified": false,
+    "rendered_sham_or_visual_AA": false
+  },
+  "artifacts": {
+    "qualified-artifacts.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/qualified-artifacts.json",
+      "bytes": 41366,
+      "sha256": "58aecb57c00aaa31492e7535aea0daf317aba6e3ce1e958e3821603b53a0454c"
+    },
+    "qualification.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/qualification.json",
+      "bytes": 12503,
+      "sha256": "2bf0aea53b2f4f3aa324dac1c9145e42f174d4b0df8c78e41d5e477fbb0ad792"
+    },
+    "native.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/native.json",
+      "bytes": 16771,
+      "sha256": "18d37d0527eef88e2245be8de8075974b757b4e00d0d6a09cdc58ed31fc33018"
+    },
+    "source.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/source.json",
+      "bytes": 30641,
+      "sha256": "c1034866068583cb662ac8f03468371df5997781d95413f24a432d0d9ab13d07"
+    },
+    "comparison.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/comparison.json",
+      "bytes": 1616,
+      "sha256": "4f861e192f9b320d8882204a456a9c3127cd23a9b317280d76533df40f4637ab"
+    },
+    "visual-review.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/visual-review.json",
+      "bytes": 5389,
+      "sha256": "4e142ce60052fe84c09d00541b4f31ad6f3d9b2a30d05ac5befee7644e5f4795"
+    },
+    "pose-interface-audit.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/pose-interface-audit.json",
+      "bytes": 3297,
+      "sha256": "1f34ac9706cf8ad984ffcd0229693dc2bc4fad7672bbb82e266bcb79a0ec6c32"
+    },
+    "snapshot-verification.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/snapshot-verification.json",
+      "bytes": 806,
+      "sha256": "1dca09fbb732a7ec25f01e34ea9a50151d28f3519bdbc454e6dd2ff145b2fe3d"
+    },
+    "final-formatting-equivalence.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/final-formatting-equivalence.json",
+      "bytes": 8802,
+      "sha256": "3811d3e923c3f5fd269ac037e827a712f4e0525c5a4d4705330e5d182c12c591"
+    },
+    "final-python-eof-equivalence.json": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-v1/final-python-eof-equivalence.json",
+      "bytes": 2922,
+      "sha256": "6bb27dde01a28fe0b5ff002aac93c66fc7a9f214f1011b6c142e673c9671680a"
+    }
+  },
+  "index_publication_guard": {
+    "stem": "render-index-v1",
+    "exit_code": 0,
+    "files": {
+      "argv": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-index-v1.argv.json",
+        "bytes": 564,
+        "sha256": "c8c0fe5ddc477c88bfaf15f75f3fce2fabbaae461cc67e41823d8eb418b213bc"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-index-v1.receipt.json",
+        "bytes": 363,
+        "sha256": "427e5f25083af12fc962df34a9440012a150d44c39bb4664d04dfc934541a330"
+      },
+      "stdout": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-index-v1.stdout.log",
+        "bytes": 217,
+        "sha256": "ca1b230cfce63a80f933ac25a10f6194f8a19196c05c36346437e8f4cc45adfa"
+      },
+      "guard_log": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-soft-routes-20261105.j0wgy7yl/render-index-v1.guard.jsonl",
+        "bytes": 2577,
+        "sha256": "2a1958157d945df54201c5a46ad90518606b5081ec767090bae55aa4b83664f0"
+      }
+    },
+    "summary": {
+      "sample_count": 6,
+      "max_footprint_bytes": 4294967296,
+      "sampled_peak_group_bytes": 45335344,
+      "minimum_cache_aware_headroom_bytes": 46189985792,
+      "minimum_pressure_free_pct": 90,
+      "observed_swap_growth_bytes": 0,
+      "max_swap_growth_bytes": 67108864,
+      "runtime_floor_pct": 10,
+      "final_live_children": 0
+    }
+  },
+  "limitations": [
+    "Same-lineage review is correlated, not independent replication.",
+    "Named accounting excludes opaque MPS resources; telemetry sampling excludes between-poll peaks.",
+    "Native weight-stage-pass telemetry is the outer-step constant, constrained by the cap and successful ordered run, not a direct cursor read.",
+    "Snapshots bind exact source and linked objects but do not reconstruct inherited object compile commands or exhaustively capture installed runtime bytes.",
+    "Pixel motion diagnostics do not establish acting, naturalness or correct pose.",
+    "No explicit actor-local pose trajectory has been supplied or tested; camera trajectories and benchmark sidecar metadata do not establish that capability.",
+    "The source-byte snapshot recheck predates final Crystal alignment and one Python trailing-blank-line removal; archived originals and final sources are connected by explicit AST/line or EOF equivalence and post-cleanup CPU tests, not a post-cleanup GPU replay."
+  ],
+  "next_boundary": "Do not escalate attention dose. Investigate an actual compatible pose/part-trajectory conditioner; test one head-yaw track against neutral and spatial sham, with protected Resume/background motion measured. Full DiT retraining is not established as necessary."
+}

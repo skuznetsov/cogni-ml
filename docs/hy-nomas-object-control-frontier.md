@@ -649,10 +649,132 @@ guard receipts. The final focused suites passed 87 Python tests and eight
 Crystal examples. Same-lineage read-only review is correlated, not an
 independent replication.
 
-Next: a bounded four-step visual zero/Alex/Resume comparison with fixed
-reference, camera, noise and decoder. A single saved-state velocity is not a
-rendered denoising trajectory. If articulation fails, retain this numerical
-result and pivot to explicit pose/trajectory support, without escalating dose.
+The bounded four-step visual comparison is now recorded below. Its numerical
+gate passes, but the requested articulation is not established. Retain the
+numerical result and pivot to explicit pose/trajectory support without
+escalating dose.
+
+### Bounded four-step render contract (2026-11-05)
+
+The admitted render compares `zero`, `A1_high` and `A2_high` separately, with
+the already qualified doses and hard M11 support. All three start from the
+saved parent `t1.initial_latent` (SHA-256 `503615dc8920afe80d441fa025380c4b764b1e81f07d3a44525127010ddb2e5a`).
+The conditioning anchor supplies the authenticated Qwen states only: its
+different `input.latent` is explicitly unused. The pinned noise-selection
+record binds that choice before model execution.
+
+Four Euler steps use the accepted shift-5 schedule. Every step restarts T0
+from its fixed patch/text states; each layer prepares one T0 K/V pair shared
+by the three T1 arms. This recomputes T0 across steps rather than retaining
+54 layers of history. The native path reuses one staged block, one-layer K/V
+and preallocated arm states. Final-head output must populate the same GPU
+velocity buffer consumed by that arm's Euler update.
+
+Before decoding, independently compare all twelve post-Euler latent states,
+three first-step velocities and zero-arm patch/text/vector against source at
+the unchanged tolerances. Both implementations must exactly reproduce all
+four accepted zero Euler states and its first-step prelude/velocity, plus the
+three previously qualified first-step velocities: eighteen parity checks and
+twenty-two exact replay gates. A shared wrong trajectory must fail despite
+source/native agreement. Check execution receipts separately from numerical
+values: zero named encode allocations/readbacks, one native terminal wait,
+and observed per-arm attention counts. External guards retain the 10% floor,
+64 MiB swap-growth stop and a 22 GiB process cap; the named ceiling is 21 GiB.
+
+If those gates pass, decode the same clean T0 followed by each new T1 using
+the explicitly pinned recovered BF16 PixelUMM cache and identical pixel
+noise. Export only the new 120 frames (five seconds at 24 fps) for comparison.
+Inspect head/gaze, Resume glove/body, hands/contact and appearance separately;
+pooled image differences only locate change. No combined actor bias or
+production controller is admitted. Rollback remains omission of these
+diagnostic CLIs. The render result expires on source, binary, weight, input,
+noise, bias, geometry, schedule or decoder changes.
+
+### Four-step replay passes; requested articulation remains open (2026-11-06)
+
+The three separate arms complete all four Euler steps through 54 BF16 blocks.
+All eighteen source/native tensor pairs are byte-identical, and all twenty-two
+exact replay gates pass independently against the accepted frozen captures.
+Both payloads have SHA-256
+`7a6aaee1339832106c52578fa6b2aff2c6f925bb50346153c4ce6bffc8d26d09`;
+the current `render-v1/qualification.json` SHA-256 is
+`2bf0aea53b2f4f3aa324dac1c9145e42f174d4b0df8c78e41d5e477fbb0ad792`.
+Do not substitute the older eight-arm qualification at the evidence root.
+The source oracle is the pinned Tencent equations through PyTorch 2.8.0 MPS
+BF16 adaptation, not stock CUDA/Magi. Tolerances remain `atol=rtol=2e-5`.
+
+The new diagnostic reuses GPU arm states, velocity, one-layer history and
+staged weights. Native encoding records one chain and one terminal wait,
+zero named encode allocations/readbacks, and eighteen post-drain captures.
+Four outer steps require four ordered weight-stage passes; sixteen logical
+T0/T1 forwards do not require sixteen passes. The stage-count receipt field
+comes from the outer-step constant, not a private cursor read. A focused
+cursor test admits four ordered passes and rejects the fifth.
+
+Admission uses the resident BF16 weight size, not compressed Q4 payload size.
+Named peak is 20,279,905,400 bytes, below the 21 GiB named ceiling. Sampling
+observes a 20,588,213,328-byte native process-group peak. All source/native
+and three decoder guards preserve the cache-aware 10% floor, zero observed
+swap growth and no final live children. Each decoder uses the same recovered
+BF16 cache and pixel-noise selection, one terminal wait and zero named encode
+allocations/readbacks. Sampling excludes between-poll peaks and named
+accounting excludes opaque Metal/MPS resources. These are qualification runs,
+not a controlled performance benchmark.
+
+Each decoded take exports the new 120 frames at 512 x 288 / 24 fps. The
+comparison labels are `Baseline`, `Alex bias`, `Resume bias`. Inspection of
+frames 0, 12, 24, 48, 72, 96 and 119 finds gaze/expression changes in the Alex
+arm, but no substantial requested head turn. The Resume arm retains essentially
+the same late glove-to-chest gesture visible in the other two arms. The paper
+body and legs are mostly fixed in these selected frames. This is not a
+full-playback review, pose/keypoint measurement or anatomy/contact certificate.
+The small whole-clip pooled image-change differences do not establish acting.
+No rendered sham, simultaneous bias or production object controller is qualified.
+
+The predeclared articulation gate is therefore not satisfied by the available
+visual evidence. Stop attention-dose escalation. A read-only audit of pinned
+upstream `911cea6458a89c2663513ff7099561ec190dd491` finds camera trajectories
+in `hymm/pipeline/bidirectional.py:265` and cached camera injection in
+`hymm/pipeline/causal_ar.py:1177`. `joint_control_spec` is benchmark metadata,
+stripped before encoding and restored only to the sidecar
+(`hymm/inference.py:91`, `:169`). The accepted local route has no actor-local
+pose/part-trajectory input. This does not prove full DiT retraining is required.
+The next admissible investigation is a compatible pose/part conditioner;
+its first positive test needs one head-yaw trajectory, neutral and spatial-sham
+controls, and protected Resume/background measurements. Camera movement must
+be separated from head movement relative to the background.
+
+Release build, CPU admission, one Crystal cursor example and 37 focused Python
+tests pass. A seeded wrong shared zero trajectory, late-step perturbation,
+missing capture, extra wait/readback, incorrect memory basis and stale or
+noncanonical output paths fail closed. The focused Python DoD is:
+
+```sh
+python3 -B -m unittest spec.hy_nomas_soft_route_render_qualify_test \
+  spec.hy_nomas_soft_route_render_reference_test \
+  spec.hy_nomas_soft_route_qualify_test spec.hy_nomas_export_test -q
+```
+
+The curated index is
+`.landmark/evidence/2026-11-06-hy-nomas-soft-route-render.json`.
+Its external `render-v1/qualified-artifacts.json` binds the exact commands,
+guards, binary, 106 source / 102 native snapshot records, captures, three
+decoder receipts, videos, visual review and rejected stages. Source bytes and
+saved copies were hash-rechecked before final Crystal formatter alignment.
+`final-formatting-equivalence.json` separately binds the archived originals
+to the formatted CLI/support files: identical parsed AST renderings, line
+counts and per-line non-whitespace contents; 37 Python tests, the cursor test
+and format check pass afterward. GPU results remain tied to the frozen v5
+binary and pre-format snapshots; no post-format GPU rerun is claimed.
+`final-python-eof-equivalence.json` separately binds removal of one trailing
+blank line from the oracle: its Python AST including positions is unchanged,
+37 tests pass again, and the staged whitespace check passes.
+Inherited object compile commands are not reconstructed and runtime metadata
+is not a complete runtime byte snapshot. Same-lineage adversary review is
+ROBUST within that frozen numerical scope and is correlated. The diagnostic
+CLIs remain opt-in; omit them for rollback. Any changed bound input, source,
+runtime, weight, binary/object, precision, geometry, schedule, bias or decoder,
+or missing/mutated evidence, reopens the affected claim.
 
 ## Research precedents and compatibility limits
 
@@ -717,6 +839,7 @@ the new probe; the production runtime and accepted take were not changed.
 Refresh the numerical result on source, runtime, weights, input, geometry,
 precision or binary changes. Refresh any later visual conclusion on prompt,
 reference, noise, schedule, geometry, model or decoder changes.
-Next: qualify the passed bounded soft spatial routing dose response with a
-short rendered pose/gesture check. No production
-spatial-control API or simultaneous-object guarantee is admitted by this document.
+Next: investigate an actual actor-local pose/part-trajectory conditioning
+interface after the bounded render failed to establish the requested acting.
+No production spatial-control API or simultaneous-object guarantee is admitted
+by this document.
