@@ -7,6 +7,26 @@ describe HyNomasLatentDecodeAdmission do
   rolewright_path = "/tmp/rolewright-continuation.json"
   rolewright_sha = "b" * 64
 
+  it "keeps the historical decoder cache pin unless an explicit pair is supplied" do
+    HyNomasLatentDecodeAdmission.resolve_decoder_cache!("", "").should be_nil
+    HyNomasLatentDecodeAdmission.resolve_decoder_cache!("/tmp/recovered-cache.json", rolewright_sha)
+      .should eq({"/tmp/recovered-cache.json", rolewright_sha})
+  end
+
+  it "rejects one-sided or malformed recovered decoder cache identities" do
+    [
+      {"/tmp/recovered-cache.json", ""},
+      {"", rolewright_sha},
+      {"relative/cache.json", rolewright_sha},
+      {"/tmp/recovered-cache.json", "B" * 64},
+      {"/tmp/recovered-cache.json", "b" * 63},
+    ].each do |path, sha|
+      expect_raises(ArgumentError) do
+        HyNomasLatentDecodeAdmission.resolve_decoder_cache!(path, sha)
+      end
+    end
+  end
+
   it "preserves the legacy Echo continuation default and omits it for 30 frames" do
     HyNomasLatentDecodeAdmission.resolve_continuation!(60, true, "", "",
       default_path, default_sha).should eq({default_path, default_sha})

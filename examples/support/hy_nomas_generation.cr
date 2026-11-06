@@ -579,9 +579,14 @@ module HyNomasGeneration
     getter capture_raw : Bool
 
     def initialize(inputs : Inputs, budget : Int64, *, @capture_raw : Bool = false,
-                   total_latent_frames : Int32 = ML::Video::PixelUMMGeneration::LATENT_FRAMES)
+                   total_latent_frames : Int32 = ML::Video::PixelUMMGeneration::LATENT_FRAMES,
+                   cache_identity : Tuple(String, String)? = nil)
       @config = inputs.geometry.pixelumm_config(total_latent_frames)
-      @cache = TensorFile.new(File.realpath(PIXEL_CACHE), PIXEL_CACHE_SHA, 16_i64 * GIB)
+      cache_path, cache_sha = cache_identity || {PIXEL_CACHE, PIXEL_CACHE_SHA}
+      if cache_identity && !(Path[cache_path].absolute? && File.file?(cache_path) && !File.symlink?(cache_path))
+        raise ArgumentError.new("decoder cache must be an absolute regular manifest without a symlink leaf")
+      end
+      @cache = TensorFile.new(File.realpath(cache_path), cache_sha, 16_i64 * GIB)
       doc = @cache.document
       unless doc["schema"].as_s == "cogni_ml.pixelumm_bf16_weight_cache/v1" &&
              doc["upstream_revision"].as_s == PixelUMMBlockProbe::UPSTREAM_REVISION &&

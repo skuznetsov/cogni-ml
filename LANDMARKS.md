@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-PIXELUMM-RECOVERED-CACHE-2026-11-05] Persistent recovered BF16 cache passes explicit decoder admission
+
+- Deleted PixelUMM source, stem/head subsets and the 36-block BF16 payload
+  are restored under `/opt/mldata_ssd/models/hy-nomas/pixelumm-ft-bac719a8/`.
+  Full payload SHA `152ba021b52d9546e4c8821b17ab11f67f46486d521b500de3766f14dd2217ca`
+  equals the archived commitment. The replacement manifest SHA
+  `7cbf6d8a3587f0cd23e07120a9ad1a222b4ffadfa4c1c840609c425d16e3476d`
+  records CPU RNE provenance; the historical MPS manifest was not recreated.
+- The decoder's paired explicit path/SHA override preserves the default pin,
+  authenticates full payload and 468 weight records before Metal ownership,
+  and emits the actual cache identity. Release build, 26 Crystal examples,
+  nine compiled rejection cases, canonical name/shape/offset audit and a
+  positive CPU plan pass. Same-lineage adversary verdict is ROBUST for
+  admission only. No decoder run or video-quality claim.
+- Evidence `.landmark/evidence/2026-11-05-pixelumm-recovered-cache.json`;
+  external `decoder-cache-qualified-artifacts.json` binds commands, guards,
+  binary and recovery receipts. Four admission/build stages retain the
+  cache-aware 10% floor with zero sampled swap growth; polling cannot exclude
+  between-sample spikes. Rollback: omit the paired override. Refresh on
+  cache/source/runtime/validation/binary mutation or missing bound evidence.
+
 ### [LM-HY-NOMAS-SOFT-ROUTES-2026-11-05] Bounded spatial action priors pass frozen numerical parity and locality
 
 - The opt-in BF16 action-logit prior adds a fixed per-query value only to

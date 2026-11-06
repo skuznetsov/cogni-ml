@@ -168,6 +168,8 @@ input_path = ""
 input_sha = ""
 continuation_path_option = ""
 continuation_sha_option = ""
+decoder_cache_option = ""
+decoder_cache_sha_option = ""
 latent_path = ""
 latent_sha = ""
 output_dir = ""
@@ -181,6 +183,8 @@ OptionParser.parse do |p|
   p.on("--inputs-sha SHA", "Trusted input metadata identity") { |v| input_sha = v }
   p.on("--continuation PATH", "Authenticated long decoder noise bundle; required for non-Echo inputs") { |v| continuation_path_option = v }
   p.on("--continuation-sha SHA", "Trusted continuation metadata identity") { |v| continuation_sha_option = v }
+  p.on("--decoder-cache PATH", "Explicit recovered BF16 cache manifest; historical default is unchanged") { |v| decoder_cache_option = v }
+  p.on("--decoder-cache-sha SHA", "Trusted recovered cache metadata identity") { |v| decoder_cache_sha_option = v }
   p.on("--latent PATH", "Imported terminal F32 NCTHW latent or latent bank") { |v| latent_path = v }
   p.on("--latent-sha SHA", "Trusted latent artifact SHA-256") { |v| latent_sha = v }
   p.on("--latent-frames N", "Latent frames: 30 by default, or authenticated 60/90-frame opt-in") { |v| latent_frames = v.to_i32 }
@@ -191,6 +195,7 @@ OptionParser.parse do |p|
 end
 
 raise ArgumentError.new("--inputs, --inputs-sha, --latent and --latent-sha are required") if {input_path, input_sha, latent_path, latent_sha}.any?(&.empty?)
+decoder_cache_identity = HyNomasLatentDecodeAdmission.resolve_decoder_cache!(decoder_cache_option, decoder_cache_sha_option)
 HyNomasLatentDecode.validate_latent_frames!(latent_frames)
 latent_bank_frames = latent_frames
 if bank_frames = latent_bank_frames_option
@@ -251,7 +256,7 @@ if identity = continuation_identity
   source_noise_bytes = continuation.records["decoder.noise"].nbytes
 end
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget_mib * 1024 * 1024,
-  total_latent_frames: latent_frames)
+  total_latent_frames: latent_frames, cache_identity: decoder_cache_identity)
 metadata.cache.verify_payload!
 decoder_noise_prefix_bytes = metadata.config.output_elements * sizeof(Float32)
 unless decoder_noise_prefix_bytes == HyNomasLatentDecode.pixel_noise_elements(latent_frames) * sizeof(Float32)
@@ -264,6 +269,8 @@ unless decoder_peak_named_bytes <= budget_mib * 1024 * 1024
 end
 preflight_seconds = (Time.instant - request_start).total_seconds
 HyNomasGeneration.emit("decoder_memory_plan", decoder_named_bytes: decoder_peak_named_bytes,
+  decoder_weight_cache_manifest: metadata.cache.path,
+  decoder_weight_cache_sha256: metadata.cache.sha256,
   decoder_metadata_named_bytes: metadata.named_bytes, source_noise_bytes: source_noise_bytes,
   decoder_external_named_bytes: decoder_external_named_bytes,
   decoder_noise_prefix_bytes: decoder_noise_prefix_bytes,
@@ -400,7 +407,8 @@ begin
     latent_bank_frames:                  latent_bank_frames,
     latent_selection:                    latent_selection,
     latent_boundary:                     "caller-supplied terminal diagnostic latent bank; any shorter decode prefix is gathered on GPU; not produced by this request's DiT or solver",
-    decoder_weight_cache_sha256:         HyNomasGeneration::PIXEL_CACHE_SHA,
+    decoder_weight_cache_manifest:       metadata.cache.path,
+    decoder_weight_cache_sha256:         metadata.cache.sha256,
     stem_weights_sha256:                 HyNomasGeneration::STEM_SHA,
     head_weights_sha256:                 HyNomasGeneration::HEAD_SHA,
     continuation_source:                 timeline_inputs.try(&.file.path),

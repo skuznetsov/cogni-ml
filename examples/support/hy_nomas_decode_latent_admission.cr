@@ -27,6 +27,19 @@ module HyNomasLatentDecodeAdmission
   alias RopeRecordIdentity = Tuple(String, Array(Int32), Int64, String)
   alias ContinuationIdentity = Tuple(String, String)
 
+  # Recovered caches have a new provenance manifest even when their tensor
+  # payload is identical. Never silently replace the historical default pin.
+  def resolve_decoder_cache!(path : String, sha : String) : ContinuationIdentity?
+    unless path.empty? == sha.empty?
+      raise ArgumentError.new("--decoder-cache and --decoder-cache-sha must be supplied together")
+    end
+    return nil if path.empty?
+    unless path.starts_with?("/") && sha.matches?(/\A[0-9a-f]{64}\z/)
+      raise ArgumentError.new("decoder cache override requires an absolute path and lowercase SHA-256")
+    end
+    {path, sha}
+  end
+
   def resolve_continuation!(latent_frames : Int32, default_base : Bool,
                             path_override : String, sha_override : String,
                             default_path : String, default_sha : String) : ContinuationIdentity?

@@ -453,6 +453,27 @@ weight paths are directory aliases into that store. Q4 derivatives only
 reproduce the existing cache index; this probe uses BF16. Recovery of other
 pipeline models and Q4 visual quality are outside this claim.
 
+PixelUMM was subsequently recovered into
+`/opt/mldata_ssd/models/hy-nomas/pixelumm-ft-bac719a8/`. The complete pinned
+31,553,868,864-byte source and the stem/head subset files match their archived
+SHA-256 values. CPU integer BF16 RNE reconstruction reproduces the archived
+13,892,143,104-byte 36-block payload exactly, SHA-256
+`152ba021b52d9546e4c8821b17ab11f67f46486d521b500de3766f14dd2217ca`.
+The new manifest honestly records CPU conversion provenance; it does not
+recreate the deleted MPS-provenance manifest.
+
+The latent decoder accepts an explicit paired `--decoder-cache` and
+`--decoder-cache-sha` override. The historical default remains unchanged.
+The override retains regular-file, full-digest, source-lineage, dtype, shape,
+inventory and payload checks, and records its actual canonical identity in
+both plan and output receipts. Twenty-six Crystal examples, a release build,
+nine compiled CLI rejection cases and the positive CPU plan pass. A separate
+check binds all 468 names/shapes/offsets to the canonical archived payload
+order. The plan authenticates the complete payload before GPU construction;
+its 30-frame fixture is initial noise, not generated video. No inference or
+visual-equivalence claim follows from these admission checks. Evidence:
+`.landmark/evidence/2026-11-05-pixelumm-recovered-cache.json`.
+
 After the native gate, the next bounded candidate is a soft spatial routing
 dose response with saved refined states/T0/noise unchanged. Retain global
 video/history context and test whether own-versus-cross-actor selectivity
