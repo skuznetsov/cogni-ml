@@ -38953,3 +38953,44 @@ Refresh after source/toolchain/device/model/workload changes.
   Roll back by omitting the QKV flag. Refresh on source, binary/runtime, weight,
   input, mask, layout or precision changes; mutated/missing evidence reopens
   dependent claims. DiT K/V, T1 and reference-driven motion remain open.
+
+### 2026-11-06 — Upstream activation recording with exact video lineage
+
+- Added an opt-in lossless named-boundary recorder for the pinned PyTorch 2.8.0
+  BF16/MPS DiT adaptation at Tencent `911cea6458a89c2663513ff7099561ec190dd491`.
+  One selected A1_high continuation records T0 and T1 at all 54 blocks and four
+  Euler steps: 432 calls, 23,040 tensors, 440 shards, 296,265,981,952 payload
+  bytes. A1_high includes the existing soft attention prior, not vanilla CUDA.
+- Pilot traced/untraced outputs/cache and all four full Euler latents are
+  bit-identical to their controls. Full record/shard hashes passed. Opaque MPS
+  scratch, full QK/probability matrices and Qwen/PixelUMM internals are excluded.
+  Diagnostic GPU-to-CPU/SSD exports add waits; timings are not speed benchmarks.
+- Rejected the previous A1_high DiT-to-video association: the old decoder bank
+  did not contain the identically named final latent. Numerical replay and
+  that old video's own visual observations survive as separate evidence.
+  The new upstream decoder consumes the trace's exact BF16-to-F32 final latent
+  and binds raw/RGB/MP4 hashes: 120 frames, 24 fps, 512x288, five seconds.
+- Actual-file CPU preflight exposed path-alias, decoder-only source inventory
+  and cache-order assumptions; canonical trusted root, separate DCAE pinning
+  and authenticated lexical cache order resolved admission. All 468 decoder
+  BF16 tensor ranges were hashed while streamed; aggregate cache hash is only
+  declared. Generic numeric offset coercion is outside the claim; CLI pins the
+  exact integer-valued manifest before cache admission.
+- Selected frames show Resume glove-to-chest movement but mostly fixed body
+  and head; substantial Alex head turn is not visible. Nonzero residual RMS in
+  both coarse actor ROIs excludes only zero updates, not failed action control.
+  Next: selected-query attention reconstruction with exact K layout/masks,
+  then same-input history/action-text interventions. Affinity is not causality.
+- 72 CPU tests and Ruff for eight new Python files pass. Guarded pilot, full
+  capture and decode exit zero with cache-aware 10% reserve / 64 MiB swap stop,
+  observed zero swap growth and no final children. Sampled peaks: capture
+  3,715,975,760 bytes; decode 5,060,760,976 bytes. No between-sample peak claim.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json`;
+  guide `docs/hy-nomas-activation-tracing.md`; external artifacts
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz`, index
+  `qualified-artifacts-v2.json`. Actual-artifact review ROBUST within named
+  capture-to-video scope; same-lineage review is correlated. No semantic actor
+  control, native full-pipeline parity or full-playback quality certification.
+- Rollback: omit the diagnostic observer/runner/decoder; native defaults are
+  unchanged. Refresh on producer/runtime, weight, input, mask, prior, geometry,
+  precision, schedule or artifact mutation; missing evidence revokes its use.

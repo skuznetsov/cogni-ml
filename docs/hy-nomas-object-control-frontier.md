@@ -7,8 +7,11 @@ with a large pre/post-RoPE contrast. A fixed-destination-phase content roll
 reduces relocated-content matches sharply; these heads are not qualified
 as phase-invariant object correspondences. This qualifies the affinity
 measurement, not semantic correspondence. Query transport and actor controllers remain proposed.
-The accepted five-second Alex/Resume ROI take remains the visual control. The original audit
-was read-only; subsequent bounded GPU experiments are recorded below.
+The accepted five-second Alex/Resume ROI take remains a visual-only control.
+Its saved decoder bank does not authenticate the identically named DiT latent.
+A new upstream activation recording now has an exact-linked five-second video;
+selected frames still show limited acting (see the recording section below).
+The original audit was read-only; subsequent bounded GPU experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
 [the drafter frontier](hy-nomas-drafter-frontier.md); visible actor control
 is still partial.
@@ -1047,6 +1050,72 @@ displacements, then compare pre-RoPE features and position-controlled
 candidates against same-location/equal-area shams before any causal rollout.
 The current saved alternatives lack that Q/K evidence. Preserve the accepted
 Alex/Resume take and original generation path as the visual/runtime controls.
+
+## Bounded upstream activation recording (2026-11-06)
+
+The user requested an upstream video replay with observable actions and
+activation recording. This diagnostic is CAUTION: it may consume substantial
+SSD space and export GPU tensors at block boundaries. It does not change the
+native generation runtime, attention equations, precision, or tolerances.
+Rollback is to omit the new recorder/runner and retain the accepted take.
+
+First scope: replay one accepted four-step, 512x288, 120-frame action arm with
+all 54 pinned upstream BF16 DiT blocks, the existing MPS attention adapter, and
+layerwise weight staging. Record named module outputs plus projection inputs,
+pre/post-RoPE Q/K, attention Q/K/V and outputs, both residual boundaries,
+prelude/refiner/head outputs, and Euler latents at every step. Internal fused
+MPS scratch and implicit QK/softmax matrices are excluded, rather than claimed
+as captured. PixelUMM and Qwen internals are outside this first trace scope.
+Decode the resulting latent separately and link the decoder provenance.
+
+A provenance audit found that the previous `decode-A1_high/latent-bank.f32le`
+does not contain the saved `A1_high.step4.latent` in its last 30 latent
+frames. That prior video remains a visual-only comparison; it cannot
+establish motion produced by this accepted DiT trajectory. The new decode
+must consume the trace final latent directly and bind its exact hash.
+
+The reference is the accepted saved source trajectory, not the text prompt:
+each recorded Euler latent must replay the same arm exactly. Actual motion
+must be checked in decoded frames; a requested movement is not a known
+trajectory. The strongest failure is that capture mutates aliases or changes
+execution results. Clone on GPU when observed; stream one bounded block batch
+losslessly in its original BF16/F16/F32 representation; compare traced and
+untraced block outputs and all four accepted Euler boundaries. A partial trace
+must remain explicitly incomplete. Quota, disk reserve, duplicate labels,
+truncation, and hash corruption must fail closed.
+
+DoD: focused recorder/runner CPU tests, a guarded block-level snapshot parity
+probe, a guarded full single-arm trace with exact Euler replay, trace-index
+integrity validation, and an inspectable upstream video with source-linked
+motion observations. Preserve atol=rtol=2e-5, the cache-aware 10% host reserve,
+64 MiB maximum swap growth, one model-owning process, fresh external-SSD output
+paths, and an explicit process/storage cap. Recording adds diagnostic exports;
+its elapsed time is not an inference performance benchmark. No native runtime
+speedup, full-pipeline parity, or semantic tracking claim follows from capture.
+
+Observed result: the guarded pilot, full trace and separate upstream decode
+passed. The trace contains 23,040 tensors in 440 shards (296,265,981,952 bytes),
+all 432 block calls, and four Euler latents bit-identical to the accepted
+source control. The exact trace final latent now binds to a 120-frame,
+24-fps MP4. All 468 streamed decoder tensor hashes passed. Sampled peaks were
+3,715,975,760 bytes for capture and 5,060,760,976 bytes for decode; both retain
+the cache-aware 10% floor, zero observed swap growth and no final live children.
+
+Six selected frames show Resume's glove rising toward its chest after about
+three seconds, with mostly fixed body/head; a substantial Alex head turn is
+not visible. The selected-record analysis finds nonzero attention and FFN
+residual updates in both coarse actor ROIs, which only excludes zero updates
+in those tensor ranges. Requested acting and its causal failure remain open.
+Next falsifier: selected-query attention reconstruction with exact compact K
+order, valid lengths, masks and prior, then a same-input intervention separating
+history/current-video/global-text/action-text influence. Attention mass alone
+will not qualify control.
+
+The 72-test CPU suite and eight-file Ruff check pass. Actual-artifact adversary
+review is ROBUST within named-boundary capture and exact-latent video lineage;
+it does not certify native/full-CUDA parity or semantic motion. See
+[the recorder guide](hy-nomas-activation-tracing.md) and
+`.landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json`.
 
 ## Research precedents and compatibility limits
 

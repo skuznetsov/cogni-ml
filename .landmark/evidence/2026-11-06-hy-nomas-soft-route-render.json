@@ -4,7 +4,7 @@
   "base_revision": "1aaec40fc7ac336dab11380058b96af18e7e51ca",
   "claim": {
     "level": "VERIFIED",
-    "scope": "Frozen three-arm four-Euler-step numerical replay through 54 BF16 blocks and a matched-settings five-second visual comparison; requested acting is not established.",
+    "scope": "Frozen three-arm four-Euler-step numerical replay through 54 BF16 blocks, plus a separate matched-settings five-second visual comparison. The prior MP4s are not authenticated to the identically named saved DiT final latents; requested acting is not established.",
     "adversary": "ROBUST within frozen v5 numerical replay, sampled resource and selected-frame visual-conclusion scope after actual-artifact read-only review. Same-lineage review is correlated, not independent replication; final formatter equivalence is separately bound.",
     "refresh_on": [
       "source/runtime",
@@ -171,7 +171,8 @@
     ],
     "full_playback_quality_verified": false,
     "production_controller_qualified": false,
-    "rendered_sham_or_visual_AA": false
+    "rendered_sham_or_visual_AA": false,
+    "video_linked_to_saved_dit_latents": false
   },
   "artifacts": {
     "qualified-artifacts.json": {
@@ -271,5 +272,13 @@
     "No explicit actor-local pose trajectory has been supplied or tested; camera trajectories and benchmark sidecar metadata do not establish that capability.",
     "The source-byte snapshot recheck predates final Crystal alignment and one Python trailing-blank-line removal; archived originals and final sources are connected by explicit AST/line or EOF equivalence and post-cleanup CPU tests, not a post-cleanup GPU replay."
   ],
-  "next_boundary": "Do not escalate attention dose. Investigate an actual compatible pose/part-trajectory conditioner; test one head-yaw track against neutral and spatial sham, with protected Resume/background motion measured. Full DiT retraining is not established as necessary."
+  "next_boundary": "Do not escalate attention dose. Investigate an actual compatible pose/part-trajectory conditioner; test one head-yaw track against neutral and spatial sham, with protected Resume/background motion measured. Full DiT retraining is not established as necessary.",
+  "provenance_correction": {
+    "date": "2026-11-06",
+    "affected_arm_audited": "A1_high",
+    "finding": "The final 30 frames of decode-A1_high/latent-bank.f32le do not equal saved A1_high.step4.latent; the prior DiT-to-decoder association is rejected.",
+    "surviving_scope": "Archived source/native numerical replay and decoder-bank-to-pixels/video provenance remain separate scoped evidence. Prior MP4s can support only their own visual observations.",
+    "replacement_boundary": "Authenticate the full activation trace, require exact final Euler-to-F32-latent equality, then decode those exact bytes in a separately guarded upstream process.",
+    "return_pointer": "docs/hy-nomas-activation-tracing.md"
+  }
 }

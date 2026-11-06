@@ -426,13 +426,17 @@ def _comparison_record(label: str, expected: Any, actual: Any) -> dict[str, Any]
             "passed": outside == 0}
 
 
-def validate_captures(captures: Mapping[str, Any]) -> dict[str, Any]:
+def validate_captures(captures: Mapping[str, Any], *, cases: tuple[str, ...] = CASE_ORDER) -> dict[str, Any]:
     import numpy as np
 
-    if type(captures) is not dict or set(captures) != set(TENSOR_ORDER):
+    if not cases or len(set(cases)) != len(cases) or any(case not in CASE_ORDER for case in cases):
+        raise RenderReferenceError("source render case selection mismatch")
+    order = tuple(name for name in TENSOR_ORDER if name.split(".")[0] in cases
+                  or name in ("zero.step1.patch", "zero.step1.text_valid", "zero.step1.vector"))
+    if type(captures) is not dict or set(captures) != set(order):
         raise RenderReferenceError("source render capture inventory mismatch")
     result = {}
-    for name in TENSOR_ORDER:
+    for name in order:
         value = np.asarray(captures[name])
         if (value.shape != TENSOR_SHAPES[name] or value.dtype != np.dtype("float32")
                 or not np.isfinite(value).all()):
@@ -639,10 +643,16 @@ def _load_anchor_qwen(torch: Any, np: Any, checked: Mapping[str, Any], device: A
     return torch.from_numpy(copied).view(torch.bfloat16).to(device=device, dtype=torch.bfloat16)
 
 
-def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_path: Path,
+                *, cases: tuple[str, ...] = CASE_ORDER, observer: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run four Euler steps with a single staged BF16 block and one layer cache."""
     import numpy as np
 
+    if not cases or len(set(cases)) != len(cases) or any(case not in CASE_ORDER for case in cases):
+        raise RenderReferenceError("source render case selection mismatch")
+    # The existing CLI and publisher retain the full three-arm contract. A
+    # diagnostic caller may replay a subset without changing its equations.
+    first_case = cases[0]
     support_path = Path("/opt/mldata_ssd/cogni-ml/hy-nomas-final-euler-20261104.c7zj7lnM")
     if str(support_path) not in sys.path:
         sys.path.insert(0, str(support_path))
@@ -730,6 +740,8 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
     finally:
         source._cache_attention_dispatch_factory = original_factory
     source.two_segment._bind_runtime_cache_functions([block], None, cache_function)
+    if observer is not None:
+        observer.install(torch, block, globals_, state)
 
     cache = {key: torch.zeros((1, direct.PHYSICAL_CACHE_ROWS, direct.HEADS, direct.HEAD_DIM),
                               device=device, dtype=dtype) for key in ("k", "v")}
@@ -769,7 +781,7 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
     rope_t0 = (ropes[0][0], ropes[1][0])
     rope_t1 = (ropes[0][1], ropes[1][1])
 
-    latents = {case: initial.clone() for case in CASE_ORDER}
+    latents = {case: initial.clone() for case in cases}
     captured: list[tuple[str, Any]] = []
     def capture(name: str, tensor: Any) -> None:
         if tensor.device.type != "mps" or tensor.dtype is not dtype:
@@ -777,11 +789,12 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
         captured.append((name, tensor.detach().contiguous().clone()))
 
     receipt = {
-        "case_order": list(CASE_ORDER), "schedule": "four outer Euler steps, each with layer-outer T0 then zero/A1_high/A2_high T1 arms",
-        "full_blocks_per_arm": 54, "steps": STEPS, "block_calls": 864,
-        "t0_writer_block_calls": 216, "t1_arm_block_calls": 648, "weights_staged": 216,
-        "refiner_calls": STEPS, "final_head_calls": STEPS * len(CASE_ORDER),
-        "euler_updates": STEPS * len(CASE_ORDER), "one_resident_block": True,
+        "case_order": list(cases), "schedule": ("four outer Euler steps, each with layer-outer T0 then zero/A1_high/A2_high T1 arms"
+            if cases == CASE_ORDER else "four outer Euler steps, each with layer-outer T0 then selected T1 arms"),
+        "full_blocks_per_arm": 54, "steps": STEPS, "block_calls": 216 * (1 + len(cases)),
+        "t0_writer_block_calls": 216, "t1_arm_block_calls": 216 * len(cases), "weights_staged": 216,
+        "refiner_calls": STEPS, "final_head_calls": STEPS * len(cases),
+        "euler_updates": STEPS * len(cases), "one_resident_block": True,
         "one_layer_kv_cache": True, "source_range_builder_invocations": 1,
         "source_mask_cases": 5, "explicit_terminal_mps_synchronize_count": 0,
         "terminal_export_count": 0, "intermediate_readbacks": 0,
@@ -794,6 +807,8 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
     with torch.inference_mode(), torch.autocast("mps", dtype=dtype):
         for step in range(STEPS):
             timestep = timesteps[step].reshape(1)
+            if observer is not None:
+                observer.begin_prelude(step)
             vector = globals_["time_in"](timestep)
             refiner_state["valid_text_tokens"] = direct.T1_VALID_TEXT_ROWS
             refiner_state["attention_block"] = 0
@@ -801,16 +816,18 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
             full_text = globals_["txt_in"](qwen, timestep, qwen_mask)
             if refiner_state["attention_block"] != 2 or tuple(full_text.shape) != (1, 1280, direct.HIDDEN):
                 raise RenderReferenceError("pinned action text refiner did not complete both blocks")
-            patches = {case: globals_["img_in"](latents[case]) for case in CASE_ORDER}
+            patches = {case: globals_["img_in"](latents[case]) for case in cases}
             if any(tuple(patch.shape) != (1, direct.VIDEO_ROWS, direct.HIDDEN) for patch in patches.values()):
                 raise RenderReferenceError("pinned T1 patch embedding geometry mismatch")
+            if observer is not None:
+                observer.end_prelude(patches)
             if step == 0:
-                capture("zero.step1.patch", patches["zero"])
+                capture("zero.step1.patch", patches[first_case])
                 capture("zero.step1.text_valid", full_text[:, :direct.T1_VALID_TEXT_ROWS])
                 capture("zero.step1.vector", vector)
             base_text = full_text[:, :direct.TEXT_STORAGE_ROWS].contiguous()
             arms: dict[str, list[Any]] = {
-                case: [patches[case], base_text.clone()] for case in CASE_ORDER
+                case: [patches[case], base_text.clone()] for case in cases
             }
             writer = [writer_start[0].clone(), writer_start[1].clone()]
             for layer, entry in enumerate(model["cache_index"]["blocks"]):
@@ -830,6 +847,8 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
                 cache_mask.zero_()
                 state["call"] = {"condition": "t0_caption", "valid_text_tokens": direct.T0_VALID_TEXT_ROWS,
                                  "cache_valid_len": 0, "update_cache": True, "cache_txt": True}
+                if observer is not None:
+                    observer.begin_block(step, layer, "T0", writer[0], writer[1], t0_vector, rope_t0)
                 writer = block(
                     img=writer[0], txt=writer[1], vec=t0_vector, vec_txt=t0_vector,
                     freqs_cis=rope_t0, text_mask=t0_mask, attn_param=None, is_flash=False,
@@ -839,11 +858,15 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
                     cache_attn_mode="torch", cache_mask=cache_mask,
                 )
                 writer = list(writer)
+                if observer is not None:
+                    observer.end_block(writer)
                 state["call"] = {"condition": "t1_action", "valid_text_tokens": direct.T1_VALID_TEXT_ROWS,
                                  "cache_valid_len": direct.PHYSICAL_CACHE_ROWS,
                                  "update_cache": False, "cache_txt": True}
-                for case in CASE_ORDER:
+                for case in cases:
                     state["case"] = case
+                    if observer is not None:
+                        observer.begin_block(step, layer, case, arms[case][0], arms[case][1], vector, rope_t1)
                     arms[case] = list(block(
                         img=arms[case][0], txt=arms[case][1], vec=vector, vec_txt=vector,
                         freqs_cis=rope_t1, text_mask=t1_mask, attn_param=None, is_flash=False,
@@ -852,7 +875,11 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
                         cache_valid_len=direct.PHYSICAL_CACHE_ROWS, update_cache=False,
                         cache_txt=True, cache_attn_mode="torch", cache_mask=cache_mask,
                     ))
-            for case in CASE_ORDER:
+                    if observer is not None:
+                        observer.end_block(arms[case])
+            for case in cases:
+                if observer is not None:
+                    observer.begin_head(step, case)
                 prediction_tokens = globals_["final_layer"](arms[case][0], vector)
                 if tuple(prediction_tokens.shape) != (1, direct.VIDEO_ROWS, 32):
                     raise RenderReferenceError("pinned final head output shape mismatch")
@@ -862,6 +889,8 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
                 latents[case] = (latents[case].float() + prediction.float() *
                                  deltas[step]).to(dtype)
                 capture(f"{case}.step{step + 1}.latent", latents[case])
+                if observer is not None:
+                    observer.end_head(step, case, prediction, latents[case])
                 del prediction_tokens, prediction
             del arms, patches, base_text, full_text, vector, writer
 
@@ -869,11 +898,12 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
     receipt["t0_attention_calls"] = state["receipt"]["t0_attention_calls"]
     receipt["t1_attention_calls"] = state["receipt"]["t1_attention_calls"]
     receipt["attention_query_chunks"] = state["receipt"]["attention_query_chunks"]
-    expected_counts = {"attention_calls": 864, "t0_attention_calls": 216,
-                       "t1_attention_calls": 648, "attention_query_chunks": 15_552}
+    expected_counts = {"attention_calls": 216 * (1 + len(cases)), "t0_attention_calls": 216,
+                       "t1_attention_calls": 216 * len(cases),
+                       "attention_query_chunks": 216 * (1 + len(cases)) * 18}
     if any(receipt[key] != value for key, value in expected_counts.items()):
         raise RenderReferenceError("source render call-count receipt mismatch")
-    if len(captured) != len(TENSOR_ORDER):
+    if len(captured) != 5 * len(cases) + 3:
         raise RenderReferenceError("source render capture count mismatch")
     layout = [(name, tuple(tensor.shape), int(tensor.numel())) for name, tensor in captured]
     packed = torch.cat([tensor.float().reshape(-1) for _, tensor in captured], dim=0).contiguous()
@@ -889,12 +919,16 @@ def _run_source(checked: Mapping[str, Any], model: Mapping[str, Any], upstream_p
     if cursor != host.size:
         raise RenderReferenceError("terminal source export inventory mismatch")
     receipt["captures"] = len(outputs)
-    receipt["total_block_invocations"] = 864
+    receipt["total_block_invocations"] = expected_counts["attention_calls"]
     receipt["weights_staged"] = 216
     receipt["mask_builder"] = mask_receipt
     receipt["scheduler"] = source.single._schedule_record(scheduler)
     receipt["autocast"] = "pinned source BF16 MPS"
-    return validate_captures(outputs), receipt
+    if observer is not None:
+        receipt["diagnostic_activation_exports"] = observer.receipt()
+        receipt["intermediate_readbacks"] = len(observer.expected)
+        observer.uninstall()
+    return validate_captures(outputs, cases=cases), receipt
 
 
 def _publish(output_manifest: Path, checked: Mapping[str, Any], model: Mapping[str, Any],
