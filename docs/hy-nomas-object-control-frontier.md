@@ -1,9 +1,10 @@
 # Hy-Nomas object control frontier
 
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
-their frozen source/native gates. The new first-frame Q/K diagnostic also
-passes on one authenticated T0 state; only selected heads show strong
-self preference. Query transport and actor controllers remain proposed.
+their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
+diagonal preference on three held-out frames of one authenticated T0 pass,
+with a large pre/post-RoPE contrast. This qualifies the affinity measurement,
+not semantic correspondence. Query transport and actor controllers remain proposed.
 The accepted five-second Alex/Resume ROI take remains the visual control. The original audit
 was read-only; subsequent bounded GPU experiments are recorded below.
 Numerical parity of the generation path remains scoped to the frozen fixtures in
@@ -854,6 +855,107 @@ saved states before attempting transport; do not apply an all-head warp
 based on the pooled result. A transport probe still needs neutral and
 equal-area spatial-sham controls, protected actors/background, source
 residue checks and a causal rollout before any visible-control claim.
+
+### Frozen-head robustness and RoPE discriminator (2026-11-06, qualified diagnostic)
+
+The following design was frozen before scoring; its saved declaration and
+frontier snapshot are indexed with the results.
+
+Freeze heads 12 and 15 from the discovery frame; do not select replacements
+after viewing new scores. The authenticated source artifact also contains
+all 30 frames of pre-RoPE QK-normalized and post-RoPE BF16 Q/K. Select frames
+1, 14 and 29 before scoring. These are held-out row ranges in the same T0
+forward, not independent scenes, noise seeds or model runs. Record exact
+range identities and duplicate content; do not treat patches as independent
+samples. The saved alternative runs have preblock inputs or K/V caches but
+no usable authenticated Q/K capture for an independent-state comparison.
+
+The exploratory high-diagonal-affinity screen requires each frozen head
+to have at least 108/144 strict diagonal maxima on every selected post-RoPE
+frame. Report each head/frame separately even if the screen fails. This
+75% screening threshold is not an accuracy tolerance or a transport gate.
+Compare pre/post-RoPE on each selected frame and the discovery frame's
+pre-RoPE companion. A fixed key roll by 17 positions on frame 14 at both
+boundaries must permute the score columns exactly; it is an equivariance
+control, not a content-destruction test with position phases preserved.
+It moves RoPE phases with the key. A pre/post contrast alone cannot prove
+semantic matching or establish that RoPE causes any observed preference.
+
+This CAUTION slice reuses the frozen native binary and equation oracle,
+adds only opt-in CPU fixture preparation and post-drain evaluation, and
+changes no production path. DoD: targeted CPU lineage/permutation falsifiers,
+all nine paired native/MPS cases at unchanged `atol=rtol=2e-5` with exact
+discrete columns and post-drain audits, exact shuffled-score equivariance,
+and the existing 10% cache-aware floor / 64 MiB swap-growth stop. Inference
+math stays on GPU with the existing one terminal wait; input byte selection
+and diagnostic evaluation happen outside the chain. Rollback: omit the new
+evaluation CLI. The strongest failure is a position/content proxy being
+mistaken for actor correspondence. Transport remains blocked on independent
+states with nonzero-displacement labeled correspondences beating same-location
+and equal-area shams, followed by causal protected-actor/background controls.
+
+The bounded DoD passes: 23 CPU tests, four real-fixture admission falsifiers,
+all nine GPU native/source pairs and four exact source/native roll checks.
+Every score array is byte-identical; the largest metric difference is
+2.682209014892578e-7. Independent post-drain audits of both metric outputs
+pass with maximum error 4.76837158203125e-7. Discrete metric columns and
+source/native per-head strict counts, fractions and screen outcomes agree
+exactly. Floating summary means are not byte-identical; the frozen numeric
+tolerances were not changed. An exploratory whole-summary dictionary-equality
+assertion was rejected in favor of exact discrete comparisons plus the
+existing numeric checks; this was an audit correction, not a relaxed gate.
+
+Strict diagonal maxima, out of 144 positions per head:
+
+| Held-out frame | Head 12 before RoPE | Head 12 after RoPE | Head 15 before RoPE | Head 15 after RoPE |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 8 | 109 | 13 | 138 |
+| 14 | 9 | 118 | 12 | 139 |
+| 29 | 10 | 121 | 15 | 136 |
+
+Both heads meet the frozen 108-position post-RoPE screen on all three
+frames; head 12 at frame 1 clears it by only one position. Frame 0's
+pre-RoPE companion gives 10/144 and 19/144. No heads were reselected.
+The fixed key roll gives zero post-RoPE diagonal winners for both heads
+on frame 14, while permuting score columns and stable argmax correctly.
+This confirms indexing, not position-independent content matching.
+
+For each held-out head/frame, mean absolute change of the same-position
+logit across RoPE is only .0031-.0038, while mean diagonal margin improves
+by .48-.68. In exact arithmetic a shared orthogonal rotation preserves
+the same-position dot product; relative rotations change off-diagonal
+competitors. BF16 rounding remains present here. The measured contrast is
+consistent with positional structure, but does not isolate its causal
+contribution or establish semantic tracking. The screen is not a transport gate.
+
+All 21 guarded stages exit zero with no final children or observed swap
+growth. Minimum cache-aware headroom is 25,206,915,072 bytes and minimum
+reported pressure-free percentage is 91; the 10% floor, 2 GiB stage cap
+and 64 MiB swap-growth stop remain enabled. Maximum sampled process-group
+footprint is 191,186,288 bytes; polling misses short peaks. This is neither
+a qualified native peak nor a speed benchmark. The unchanged native binary
+keeps its existing one terminal wait and post-drain exports. No production
+path or full generation was run. Same-lineage read-only adversary review is
+ROBUST within this measurement scope and is correlated, not independent replication.
+
+Evidence: `.landmark/evidence/2026-11-06-hy-nomas-query-head-robustness.json`;
+external `query-heads-ht33zt1c/qualified-artifacts-v1.json`, SHA
+`0efd537bed89d16c96932a63156583483f44f9d6621aa434c7d9cda2fab06fda`.
+The index binds 188 experiment artifacts, ten source snapshots and six
+inherited references. It does not reconstruct inherited linked-object
+compilation or complete runtime bytes, or revalidate every parent artifact.
+Missing/mutated bound evidence, source/runtime, binary/objects, weights,
+inputs, geometry/precision or selection policy reopen affected claims.
+
+Refresh CPU checks with `python3 -B -m unittest -v
+spec.hy_nomas_query_head_robustness_test spec.hy_nomas_query_correspondence_test
+spec.hy_nomas_query_capture_test`; exact guarded GPU/qualification argv are
+indexed externally. Next falsifier: permute K content while holding the
+destination RoPE phases fixed, using a GPU gather and the existing BF16
+RoPE boundary. After that, capture independent states with labeled nonzero
+displacement and compare against same-location/equal-area shams before
+attempting transport. The alternative saved runs lack authenticated Q/K;
+their preblock/KV bundles do not supply this missing evidence.
 
 ## Research precedents and compatibility limits
 

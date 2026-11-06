@@ -6,6 +6,38 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-HY-NOMAS-QUERY-HEAD-ROBUSTNESS-2026-11-06] Frozen heads retain RoPE-associated affinity; transport remains unqualified
+
+- Freeze heads 12/15 and frames 1/14/29 before scores. All nine native/MPS
+  array cases pass at unchanged `atol=rtol=2e-5`; all scores are byte-identical,
+  largest metric difference 2.69e-7, post-drain audit error 4.77e-7. Exact
+  discrete metrics, per-head screen outcomes and four roll checks pass.
+  Twenty-three CPU tests and four forged real-fixture admissions pass.
+- Strict diagonal counts after RoPE are 109/118/121 and 138/139/136 of 144;
+  before RoPE they are 8/9/10 and 13/12/15. Both retain the frozen 108/144
+  screen; head 12 frame 1 has one-position headroom. These are distinct frame
+  ranges in one noisy T0 pass at sigma .206897, not independent states/scenes,
+  cross-frame labels or semantic tracking. The key roll moves phases with
+  content and proves equivariance only. Small floating summary differences
+  refute whole-dictionary exactness; numeric gates were not relaxed.
+- Twenty-one guarded stages retain the cache-aware 10% floor, 2 GiB cap and
+  64 MiB swap stop, with zero observed swap growth/final children. Minimum
+  headroom is 25,206,915,072 bytes; sampled group peak 191,186,288 bytes is
+  not a measured native peak. The frozen binary's buffers/drain are reused;
+  no production changes or full generation. Same-lineage review is ROBUST
+  within measurement scope and correlated, not independent replication.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-query-head-robustness.json`;
+  external `query-heads-ht33zt1c/qualified-artifacts-v1.json` SHA
+  `0efd537bed89d16c96932a63156583483f44f9d6621aa434c7d9cda2fab06fda`.
+  Return: `docs/hy-nomas-object-control-frontier.md`, frozen-head diagnostic.
+  Next: K-content derangement with destination RoPE positions fixed on GPU;
+  then independent labeled nonzero-displacement matches beating same-location
+  and equal-area shams before any transport/acting claim. Other saved runs
+  lack authenticated Q/K. Rollback: omit the opt-in evaluation CLI.
+  Refresh on changed source/runtime, binary/objects, weights, bound inputs,
+  geometry/precision/selection policy or missing/mutated evidence. Inherited
+  object compilation/full runtime bytes remain outside the certificate.
+
 ### [LM-HY-NOMAS-QUERY-AFFINITY-2026-11-06] Native first-frame affinity qualifies; actor transport remains untested
 
 - The opt-in GPU diagnostic computes F32 QK scores and six row metrics on
