@@ -1,0 +1,75 @@
+{
+  "schema": "cogni_ml.hy_nomas_portrait_tail_localization/v1",
+  "date": "2026-11-07",
+  "source_commit": "cc6c5437a9ac8ccc9dcf3ffbdb044f0b7bf18c6c",
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Postterminal observations in one previously qualified native/source portrait capture and the pinned raw decoder mapping",
+    "root_cause_status": "IN_PROGRESS",
+    "not_claimed": ["natural blinking", "head movement", "causal decoder defect", "a runtime fix", "stock image-to-video or CUDA parity"]
+  },
+  "observations": {
+    "pixel_eye_roi_xyxy": [185, 85, 335, 150],
+    "pixel_frame_count": 120,
+    "pixel_frames_per_second": 24,
+    "eye_adjacent_peak_right_frame_zero_based": 117,
+    "eye_adjacent_peak_seconds": 4.875,
+    "eye_adjacent_peak_rgb_mae": 0.01423170405982906,
+    "eye_adjacent_first_four_seconds_mean_mae": 0.0014963907163742687,
+    "static_encoder_period_latents": 10,
+    "empirical_static_baseline": "T0[20 + (i % 10)] for each T1 latent i in [0,30)",
+    "nearest_static_phase_matches": 30,
+    "coarse_latent_eye_roi_xyxy": [5, 2, 11, 5],
+    "final_two_phase_aligned_eye_rmse_rounded": [0.33664, 0.45886],
+    "temporal_shift_found_in_raw_path": false,
+    "last_global_latent_nominal_local_pixel_range": [116, 120],
+    "limitations": "Pixel differences and coarse latent features do not establish semantic motion; attention mixes positions. The static phase is an empirical baseline, not a causal intervention."
+  },
+  "artifacts": {
+    "analysis": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-motion-localization-v1/analysis.json",
+      "sha256": "c4118491090762810c6c5448da392a2e2407dce26c3b757e7762b033bace39a2",
+      "bytes": 74406
+    },
+    "verifier": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-motion-localization-v1/verify_observations.py",
+      "sha256": "8573a21b540b6bf79194e9365498616f113096a14f0afc1787b4207cff6b0aaf",
+      "bytes": 3251
+    },
+    "prior_capture_lineage": ".landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json",
+    "upstream_boundary_source": {
+      "path": "/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/pixelumm_decoder/autoencoder.py",
+      "sha256": "65e0d77b9f2e9a3ca457d6a51bfdb239f7b9dc3fc8a0ad014025c36d6be9f0cf",
+      "documented_edge_issue_lines": [160, 169],
+      "nonfinal_only_tail_fix_lines": [592, 617]
+    },
+    "availability": "Local external-SSD artifacts; refresh or downgrade on loss or mutation"
+  },
+  "verification": {
+    "command": "python3 -B /opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-motion-localization-v1/verify_observations.py",
+    "observed_exit_code": 0,
+    "expected_and_observed_signal": "result=pass, eye_peak_frame=117, eye_peak_seconds=4.875, nearest_static_phase_matches=30, root_cause_proven=false",
+    "checks": ["artifact and prior receipt hashes", "raw pixel ROI statistics", "all thirty nearest static latent phases", "phase-aligned latent errors", "pinned decoder source hash"],
+    "no_model_or_gpu_run": true,
+    "new_synchronization_or_readback": false,
+    "tolerances_changed": false,
+    "memory_floor_changed": false,
+    "repository_graph_validator": "The generic template/validator is absent in this checkout; this local evidence shape is not claimed to pass that validator."
+  },
+  "adversary": {
+    "verdict": "ROBUST within the observation scope; root cause remains open",
+    "lineage": "Same-lineage review is correlated",
+    "checks": "Recomputed raw eye ROI statistics and native/source ROI equality; recomputed latent phase matching independently; narrowed temporal mapping claim to the raw path"
+  },
+  "decision": "Test the same DiT terminal latents/noise with the last latent off the decoder right edge before attributing the visual tail to delayed acting or changing conditioning",
+  "next_falsifier": "Compare common output frames under a decoder-only right-edge counterfactual; label any synthetic future context. No such GPU counterfactual has been run.",
+  "secondary_hypotheses": ["repeated static T0 history suppresses motion", "shared T0/T1 caption allocates actions weakly", "four-step schedule contributes"],
+  "boundaries": {
+    "allowed_paths": ["docs/hy-nomas-object-control-frontier.md", "LANDMARKS.md", ".landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json"],
+    "changed_paths": ["docs/hy-nomas-object-control-frontier.md", "LANDMARKS.md", ".landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json"],
+    "production_inference_changed": false
+  },
+  "refresh_on": ["source or input changes", "runtime or precision changes", "conditioning/noise/weights changes", "cache/window/blender/geometry changes", "artifact mutation or loss"],
+  "rollback": "Remove the diagnostic evidence and notes; inference defaults remain unchanged"
+}

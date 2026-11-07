@@ -39100,3 +39100,28 @@ Refresh after source/toolchain/device/model/workload changes.
   Evidence `.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json`.
   Refresh on changed source/runtime/weights/conditioning/noise/cache/geometry
   or mutated/missing artifacts. Rollback: omit diagnostic helpers and references.
+
+### 2026-11-07 — Portrait tail localization, cause still open
+
+- Saved raw T1 eye-region adjacent MAE peaks at zero-based frame 117, 4.875 s:
+  0.0142317 versus 0.00149639 over the first four seconds. Earlier tiny pixel
+  differences do not establish acting. No raw crop/window/frame-order shift
+  was found. This is not a demonstrated delayed head turn or natural blink.
+- Repeated-photo T0 has a ten-latent encoder phase. All 30 T1 nearest static
+  phases match `20 + (i % 10)`; against that baseline, coarse eye-neighborhood
+  RMSE is 0.33664/0.45886 in the final two latents. Feature deviation predates
+  decoding, but does not identify an anatomical or semantic cause.
+- Pinned PixelUMM `autoencoder.py:160-169,592-617` documents a right-edge
+  last-latent quality issue; its opt-in tail fix excludes the final push.
+  Final latent 59 nominally maps to T1 pixels [116,120); the window tail is
+  unblended. This correspondence is a candidate, not causal proof.
+- Next falsifier: same terminal DiT latents/noise, decoder counterfactual with
+  latent 59 off the right edge; compare common frames and label synthetic
+  future context. Static-history/shared-caption suppression remains untested.
+  Do not crop away the defect and call acting fixed.
+- Analysis/verifier use completed captures on CPU; no model/GPU run or runtime
+  change. DoD verifier exit 0; correlated adversary recomputed both ROI and
+  latent-phase observations, ROBUST only within that scope. Root cause open.
+  Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json`.
+  Refresh on input/source/runtime/geometry changes or artifact mutation/loss.
+  Rollback: remove this diagnostic note; production inference is untouched.

@@ -154,6 +154,38 @@ diagnostic helpers; inference defaults are unchanged.
 Evidence: [.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json](../.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json).
 External media: `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/native-left-upstream-right-5s.mp4`.
 
+### Portrait tail localization (2026-11-07)
+
+Postterminal CPU analysis of the authenticated captures locates the largest
+adjacent eye-region pixel difference at T1-local frame 117 (4.875 s, zero-based,
+24 fps). Its RGB MAE is 0.0142317, versus 0.00149639 averaged over transitions
+within the first four seconds. Small differences occur earlier; these do not
+establish acting, a head turn or natural blinking. No temporal crop, window or
+frame-order shift was found in the raw decoder path.
+
+The repeated-photo encoder has a ten-latent phase: compare T1 latent `i` with
+clean T0 `20 + (i % 10)`, rather than treating every static-reference latent as
+equal. Against this empirical baseline, the coarse eye-neighborhood latent
+RMSE rises to 0.33664 and 0.45886 for the final two latents. This is a terminal
+feature deviation before decoding, not proof of anatomical eye motion.
+
+Pinned PixelUMM `autoencoder.py:160-169` explicitly documents over-sharpening of
+the last latent on a decode window's right edge. Its opt-in streaming tail fix
+only applies to non-final pushes (`:592-617`); the final push remains unpadded.
+Here the final latent nominally expands to local frames `[116,120)`, and the
+final twenty frames are outside the overlap blend. Attention mixes latent
+positions, so this grid mapping is not a one-latent causal attribution.
+
+Next falsifier: preserve the exact terminal DiT latents and decoder noise,
+move that latent away from the decoder's right edge, and compare common output
+frames. Any synthetic future context must be labeled as such. Static-history
+suppression and shared-caption allocation remain separate, untested hypotheses.
+Neither the source comment nor temporal coincidence proves the root cause;
+cropping the tail would not establish the requested motion. No model or GPU
+run was made for this localization; inference defaults and guards are unchanged.
+
+Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,
