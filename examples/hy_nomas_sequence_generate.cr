@@ -1,6 +1,7 @@
 require "option_parser"
 require "./support/hy_nomas_sequence"
 require "./support/hy_nomas_reference_encoder"
+require "./support/hy_nomas_decode_latent_admission"
 
 input_path = ""
 input_sha = ""
@@ -12,6 +13,8 @@ dit_only = false
 text_cache_policy = HyNomasSequence::HISTORY_TEXT_POLICY
 cinematic_path = ""
 cinematic_sha = ""
+decoder_cache_path = ""
+decoder_cache_sha = ""
 reference_image_inputs_path = ""
 reference_image_inputs_sha = ""
 reference_encoder_path = ""
@@ -35,6 +38,8 @@ OptionParser.parse do |p|
   end
   p.on("--cinematic-cache PATH", "Opt-in authenticated Cinematic BF16 cache lineage") { |v| cinematic_path = v }
   p.on("--cinematic-cache-sha SHA", "Trusted Cinematic lineage SHA-256") { |v| cinematic_sha = v }
+  p.on("--decoder-cache PATH", "Opt-in authenticated PixelUMM BF16 cache manifest") { |v| decoder_cache_path = v }
+  p.on("--decoder-cache-sha SHA", "Trusted PixelUMM cache manifest SHA-256") { |v| decoder_cache_sha = v }
   p.on("--reference-image-inputs PATH", "Authenticated prepared RGB8 reference image manifest") { |v| reference_image_inputs_path = v }
   p.on("--reference-image-inputs-sha SHA", "Trusted reference image manifest SHA-256") { |v| reference_image_inputs_sha = v }
   p.on("--reference-encoder PATH", "Experimental native BF16 DCAE encoder safetensors") { |v| reference_encoder_path = v }
@@ -47,6 +52,7 @@ OptionParser.parse do |p|
   p.on("--reference-source-bf16", "Experimental source-BF16 DiT and history attention for two reference segments") { source_bf16 = true }
   p.on("--plan-only", "CPU-only authentication and aggregate admission") { plan_only = true }
 end
+decoder_cache_identity = HyNomasLatentDecodeAdmission.resolve_decoder_cache!(decoder_cache_path, decoder_cache_sha)
 HyNomasSequence.validate_segments!(segments)
 raise ArgumentError.new("--inputs and --inputs-sha are required") if input_path.empty? || input_sha.empty?
 unless (24_576..49_152).includes?(budget_mib)
@@ -79,7 +85,7 @@ reference_session = nil.as(HyNomasReferenceEncoder::Session?)
 if reference_requested
   reference_inputs = ML::Video::HyNomasReferenceImage::Inputs.new(
     ML::Video::HyNomasReferenceImage.canonical_manifest_argument!(reference_image_inputs_path), reference_image_inputs_sha,
-    HyNomasReferenceEncoder::ENCODER_SAFETENSORS_SHA256)
+    reference_encoder_sha)
 end
 inputs = HyNomasGeneration::TimelineInputs.new(File.realpath(input_path), input_sha)
 inputs.verify_payload!
@@ -123,7 +129,8 @@ dit_steady = dit_peak - HyNomasSequence.old_attention_bytes(inputs.base, referen
 raise ArgumentError.new("sequence peak named buffers exceed budget") unless dit_peak <= budget
 latent_frames = segments * 30
 pixel_frames = latent_frames * 4
-metadata = dit_only ? nil : HyNomasGeneration::DecoderMetadata.new(inputs.base, budget, total_latent_frames: latent_frames)
+metadata = dit_only ? nil : HyNomasGeneration::DecoderMetadata.new(inputs.base, budget,
+  total_latent_frames: latent_frames, cache_identity: decoder_cache_identity)
 # A shorter decoder consumes gathered prefixes. Their destinations are already
 # counted by DecoderMetadata; retain both full source banks until its chain drains.
 decoder_peak = metadata.try do |decoder_metadata|

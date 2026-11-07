@@ -1,5 +1,32 @@
 require "spec"
 require "../examples/support/hy_nomas_sequence"
+require "../examples/support/hy_nomas_decode_latent_admission"
+
+describe "sequence decoder cache override" do
+  it "preserves the default identity and passes an explicit path and digest pair" do
+    HyNomasLatentDecodeAdmission.resolve_decoder_cache!("", "").should be_nil
+    path = "/opt/mldata_ssd/recovered-pixelumm-cache.json"
+    sha = "d" * 64
+    HyNomasLatentDecodeAdmission.resolve_decoder_cache!(path, sha).should eq({path, sha})
+  end
+
+  it "rejects partial cache overrides before file authentication" do
+    [{"/opt/mldata_ssd/recovered-pixelumm-cache.json", ""}, {"", "d" * 64}].each do |path, sha|
+      expect_raises(ArgumentError, /must be supplied together/) do
+        HyNomasLatentDecodeAdmission.resolve_decoder_cache!(path, sha)
+      end
+    end
+  end
+
+  it "rejects relative cache paths and malformed cache digests" do
+    [{"relative/cache.json", "d" * 64}, {"/cache.json", "D" * 64},
+     {"/cache.json", "d" * 63}, {"/cache.json", "g" * 64}].each do |path, sha|
+      expect_raises(ArgumentError, /absolute path and lowercase SHA-256/) do
+        HyNomasLatentDecodeAdmission.resolve_decoder_cache!(path, sha)
+      end
+    end
+  end
+end
 
 describe "shared scene text policy" do
   it "uses one cached text block per admitted JSON scene" do

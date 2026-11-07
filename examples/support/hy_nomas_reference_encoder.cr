@@ -6,9 +6,12 @@ require "../../src/ml/video/dcae_v_encoder"
 module HyNomasReferenceEncoder
   # Converted encoder safetensors admitted for this experimental T0 path.
   ENCODER_SAFETENSORS_SHA256 = "c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50"
-  FIXED_CFG                  = ML::Video::DCAEVEncoderConfig.new(288, 512, 120)
-  MPS_MEMORY_SCOPE           = "MPSGraph private workspace is opaque to MetalBuffer accounting; excluded from named-byte totals and not assumed zero"
-  DIT_ENCODE_METRIC_KEYS     = %w(dit_encode_allocations dit_encode_readbacks dit_preterminal_waits)
+  # The recovered container independently matched all 169 pinned BF16 tensor
+  # payloads; preserve the original container identity as a separate admission.
+  RECOVERED_ENCODER_SAFETENSORS_SHA256 = "d0bbacbebe8960b147388d0bf61ec8bbc0eb8d575574d6ec5c5abe4878c8d6c1"
+  FIXED_CFG                            = ML::Video::DCAEVEncoderConfig.new(288, 512, 120)
+  MPS_MEMORY_SCOPE                     = "MPSGraph private workspace is opaque to MetalBuffer accounting; excluded from named-byte totals and not assumed zero"
+  DIT_ENCODE_METRIC_KEYS               = %w(dit_encode_allocations dit_encode_readbacks dit_preterminal_waits)
 
   # Counts named MetalBuffer residency only. The native MPSGraph plan set is
   # created separately and its private workspace is opaque, not a zero-byte
@@ -89,6 +92,20 @@ module HyNomasReferenceEncoder
     end
   end
 
+  def self.validate_encoder_sha!(sha : String) : String
+    unless {ENCODER_SAFETENSORS_SHA256, RECOVERED_ENCODER_SAFETENSORS_SHA256}.includes?(sha)
+      raise ArgumentError.new("reference encoder safetensors SHA-256 is not an admitted encoder identity")
+    end
+    sha
+  end
+
+  def self.validate_encoder_identity!(requested_sha : String, inputs_sha : String) : Nil
+    validate_encoder_sha!(requested_sha)
+    unless inputs_sha == requested_sha
+      raise ArgumentError.new("reference image encoder SHA-256 differs from the requested encoder identity")
+    end
+  end
+
   # Pure command-line contract so the all-or-none and unqualified execution
   # gate can be exercised without opening Metal or authenticating model files.
   def self.validate_cli!(image_inputs_path : String, image_inputs_sha : String,
@@ -104,6 +121,7 @@ module HyNomasReferenceEncoder
     if allow_unqualified && !requested
       raise ArgumentError.new("--allow-unqualified-reference requires all reference image and encoder flags")
     end
+    validate_encoder_sha!(encoder_sha) if requested
     if requested && cinematic_requested
       raise ArgumentError.new("reference initialization does not support Cinematic checkpoints")
     end
@@ -151,9 +169,7 @@ module HyNomasReferenceEncoder
     def initialize(@inputs : ML::Video::HyNomasReferenceImage::Inputs,
                    weights_path : String, weights_sha256 : String,
                    @budget_bytes : Int64)
-      unless weights_sha256 == ENCODER_SAFETENSORS_SHA256 && @inputs.encoder_sha == ENCODER_SAFETENSORS_SHA256
-        raise ArgumentError.new("reference encoder safetensors SHA-256 is not the admitted encoder identity")
-      end
+      HyNomasReferenceEncoder.validate_encoder_identity!(weights_sha256, @inputs.encoder_sha)
       raise ArgumentError.new("reference encoder budget must be positive") unless @budget_bytes > 0
       @config = FIXED_CFG
       @residency = ResidencyPlan.for(@config)

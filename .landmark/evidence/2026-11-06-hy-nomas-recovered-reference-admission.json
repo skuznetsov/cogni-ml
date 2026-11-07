@@ -1,0 +1,64 @@
+{
+  "schema": "cogni_ml.recovered_reference_admission/v1",
+  "status": "VERIFIED within authenticated-container admission and native compilation scope",
+  "date": "2026-11-06",
+  "recovery_receipt": {
+    "path": "/opt/mldata_ssd/models/hy-nomas/dcae-source/dcae-v-encoder-recovery.json",
+    "sha256": "6566b4a4c0a1b7b7b5bad7a39425e8b930507161d4b47c448bdd66432d051331"
+  },
+  "source": {
+    "bytes": 4277389995,
+    "load_policy": "torch.load(weights_only=True,mmap=True,map_location=cpu)",
+    "path": "/opt/mldata_ssd/models/hy-nomas/dcae-source/VAE/DCAE-V/dc-ae-v-1.0-f32t4c32-bf16.pt",
+    "repository": "Tencent-Hunyuan/Hy-Nomas",
+    "revision": "bb6a8ca451bfe84947f0ea1c6d51957f983ffffe",
+    "sha256": "ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b",
+    "state_dict_selection": "model_state_dict"
+  },
+  "converter": {
+    "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/dcae_v_checkpoint.py",
+    "sha256": "9b8aa20d9d6efb15924bce83adbdf516cc66ea04e58500c5c0a9ec6f427335ce"
+  },
+  "upstream": {
+    "path": "/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/autoencoder_dcae_v.py",
+    "sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+  },
+  "output": {
+    "bytes": 1833331160,
+    "manifest_path": "/opt/mldata_ssd/models/hy-nomas/dcae-v-encoder-bf16.safetensors.manifest.json",
+    "manifest_sha256": "7e763ac94dbeabbb800eb9cfa3e2d5459680f8ea303a286e4afce589666a6f80",
+    "path": "/opt/mldata_ssd/models/hy-nomas/dcae-v-encoder-bf16.safetensors",
+    "sha256": "d0bbacbebe8960b147388d0bf61ec8bbc0eb8d575574d6ec5c5abe4878c8d6c1"
+  },
+  "verification": {
+    "bitwise_equal_tensor_count": 169,
+    "method": "CPU mmap source tensors vs safetensors payload; per-tensor torch.equal and packed raw bytes",
+    "mismatch_count": 0,
+    "payload_bytes": 1833310016,
+    "sorted_name_nul_then_raw_payload_sha256": "86319ae601c0810f437c026aae74414ac7a77c3a3e9dcaaedd2cfa5c99f2ece9",
+    "tensor_count": 169
+  },
+  "admission": {
+    "original_container_sha256": "c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50",
+    "recovered_container_sha256": "d0bbacbebe8960b147388d0bf61ec8bbc0eb8d575574d6ec5c5abe4878c8d6c1",
+    "image_and_requested_encoder_identity_must_match": true,
+    "all_other_identities_reject": true,
+    "sequence_decoder_cache": "Explicit path/digest pair; existing full authentication and default preserved"
+  },
+  "dod": {
+    "cpu_command": "crystal spec -Dcpu_only spec/dcae_v_encoder_spec.cr spec/hy_nomas_reference_image_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_sequence_admission_spec.cr spec/hy_nomas_decode_latent_admission_spec.cr",
+    "observed": "44 examples, 0 failures, 0 errors; unknown/mixed identity and partial cache options reject",
+    "native_build": "make BUILD_DIR=/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build hy_nomas_sequence_generate",
+    "native_build_observed": "exit 0; release build with existing Time.monotonic deprecation warnings"
+  },
+  "rollback": "Omit explicit decoder-cache override and continue using the original admitted encoder identity",
+  "limits": [
+    "No new encoder arithmetic or image-to-video parity claim",
+    "A recovered container identity is separately admitted, not treated as the original container hash"
+  ],
+  "refresh_on": [
+    "changed source/checkpoint/payload/converter",
+    "changed admission code or prepared-image identity",
+    "missing or mutated recovery receipt"
+  ]
+}

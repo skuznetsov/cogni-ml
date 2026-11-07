@@ -1,4 +1,5 @@
 require "spec"
+require "../src/ml/metal/device"
 require "../examples/support/hy_nomas_reference_encoder"
 
 describe HyNomasReferenceEncoder do
@@ -28,17 +29,18 @@ describe HyNomasReferenceEncoder do
     }
 
     validate.call("", "", "", "", false, false).should be_false
-    validate.call("manifest.json", "a" * 64, "encoder.safetensors", "b" * 64,
+    encoder_sha = HyNomasReferenceEncoder::ENCODER_SAFETENSORS_SHA256
+    validate.call("manifest.json", "a" * 64, "encoder.safetensors", encoder_sha,
       true, false).should be_true
-    validate.call("manifest.json", "a" * 64, "encoder.safetensors", "b" * 64,
+    validate.call("manifest.json", "a" * 64, "encoder.safetensors", encoder_sha,
       false, true).should be_true
-    expect_raises(ArgumentError, /supplied together/) { validate.call("manifest.json", "", "encoder.safetensors", "b" * 64, false, false) }
-    expect_raises(ArgumentError, /unqualified/) { validate.call("manifest.json", "a" * 64, "encoder.safetensors", "b" * 64, false, false) }
+    expect_raises(ArgumentError, /supplied together/) { validate.call("manifest.json", "", "encoder.safetensors", encoder_sha, false, false) }
+    expect_raises(ArgumentError, /unqualified/) { validate.call("manifest.json", "a" * 64, "encoder.safetensors", encoder_sha, false, false) }
     expect_raises(ArgumentError, /requires all reference/) { validate.call("", "", "", "", true, false) }
   end
 
   it "rejects reference initialization with Cinematic or legacy text caching" do
-    args = {"manifest.json", "a" * 64, "encoder.safetensors", "b" * 64}
+    args = {"manifest.json", "a" * 64, "encoder.safetensors", HyNomasReferenceEncoder::ENCODER_SAFETENSORS_SHA256}
     expect_raises(ArgumentError, /Cinematic/) do
       HyNomasReferenceEncoder.validate_cli!(*args,
         allow_unqualified: true, plan_only: false, cinematic_requested: true, legacy_text: false)
@@ -46,6 +48,48 @@ describe HyNomasReferenceEncoder do
     expect_raises(ArgumentError, /once-per-scene/) do
       HyNomasReferenceEncoder.validate_cli!(*args,
         allow_unqualified: true, plan_only: false, cinematic_requested: false, legacy_text: true)
+    end
+  end
+
+  it "rejects an unpinned encoder identity during pure CLI admission" do
+    expect_raises(ArgumentError, /admitted encoder identity/) do
+      HyNomasReferenceEncoder.validate_cli!("manifest.json", "a" * 64,
+        "encoder.safetensors", "b" * 64,
+        allow_unqualified: true, plan_only: false,
+        cinematic_requested: false, legacy_text: false)
+    end
+  end
+
+  it "admits only the original and recovered encoder containers" do
+    trusted = {"c77e705b3d1534f1d3fcca68d146c9eecd479be5d01110aadee7b81ddc05ed50",
+               "d0bbacbebe8960b147388d0bf61ec8bbc0eb8d575574d6ec5c5abe4878c8d6c1"}
+    HyNomasReferenceEncoder::ENCODER_SAFETENSORS_SHA256.should eq(trusted[0])
+    HyNomasReferenceEncoder::RECOVERED_ENCODER_SAFETENSORS_SHA256.should eq(trusted[1])
+    trusted.each do |sha|
+      HyNomasReferenceEncoder.validate_encoder_sha!(sha).should eq(sha)
+      HyNomasReferenceEncoder.validate_encoder_identity!(sha, sha).should be_nil
+      HyNomasReferenceEncoder.validate_cli!("manifest.json", "a" * 64,
+        "encoder.safetensors", sha,
+        allow_unqualified: false, plan_only: true,
+        cinematic_requested: false, legacy_text: false).should be_true
+    end
+    ["", "b" * 64, trusted[0].upcase, trusted[1][0, 63]].each do |sha|
+      expect_raises(ArgumentError, /admitted encoder identity/) do
+        HyNomasReferenceEncoder.validate_encoder_sha!(sha)
+      end
+    end
+  end
+
+  it "rejects mixed trusted image and encoder identities" do
+    original = HyNomasReferenceEncoder::ENCODER_SAFETENSORS_SHA256
+    recovered = HyNomasReferenceEncoder::RECOVERED_ENCODER_SAFETENSORS_SHA256
+    [{original, recovered}, {recovered, original}, {original, "b" * 64}].each do |requested, inputs|
+      expect_raises(ArgumentError, /differs from the requested encoder identity/) do
+        HyNomasReferenceEncoder.validate_encoder_identity!(requested, inputs)
+      end
+    end
+    expect_raises(ArgumentError, /admitted encoder identity/) do
+      HyNomasReferenceEncoder.validate_encoder_identity!("b" * 64, "b" * 64)
     end
   end
 
