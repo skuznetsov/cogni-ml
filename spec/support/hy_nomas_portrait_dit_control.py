@@ -80,13 +80,20 @@ def history_visibility_record(
         raise ValueError('t1_current_text_kv must be boolean')
     if t1_current_text_kv and not t0_hide_caption_keys:
         raise ValueError('--t1-current-text-kv requires --hide-t0-caption-keys')
-    if t0_hide_caption_keys and keep_latents != LATENTS_PER_SEGMENT:
-        raise ValueError('--hide-t0-caption-keys requires --t0-history-keep-latents 30')
     if keep_latents is None:
         keep_latents = LATENTS_PER_SEGMENT
         explicit_mask = False
     else:
         explicit_mask = True
+    if t0_hide_caption_keys and not explicit_mask:
+        raise ValueError('--hide-t0-caption-keys requires --t0-history-keep-latents 30')
+    if keep_latents == 0 and not (t0_hide_caption_keys and t1_current_text_kv):
+        raise ValueError(
+            '--t0-history-keep-latents 0 requires --hide-t0-caption-keys '
+            'and --t1-current-text-kv'
+        )
+    if t0_hide_caption_keys and keep_latents == 10:
+        raise ValueError('--hide-t0-caption-keys requires --t0-history-keep-latents 30')
     layout = source.compact_t0_history_visibility_layout(
         keep_latents,
         VALID,
@@ -95,7 +102,9 @@ def history_visibility_record(
     )
     return dict(
         kind=(
-            'T0 caption mask with current T1 text K/V rescue'
+            'all T0 keys hidden with current T1 text K/V'
+            if keep_latents == 0
+            else 'T0 caption mask with current T1 text K/V rescue'
             if t1_current_text_kv
             else 'fixed-shape T0 key visibility diagnostic'
             if t0_hide_caption_keys
@@ -113,14 +122,20 @@ def history_visibility_record(
         t0_video_key_rows=layout['t0_video_rows'],
         hidden_t0_video_key_rows=layout['hidden_t0_video_prefix_rows'],
         visible_t0_video_key_rows=layout['visible_t0_video_rows'],
+        all_t0_video_keys_hidden=layout['visible_t0_video_rows'] == 0,
         hidden_t0_caption_key_rows=layout['hidden_t0_caption_key_rows'],
         retained_t0_caption_key_rows=layout['retained_t0_caption_key_rows'],
+        all_t0_keys_hidden=(
+            layout['hidden_t0_video_prefix_rows'] + layout['hidden_t0_caption_key_rows']
+            == layout['t0_video_rows'] + layout['t0_text_end'] - layout['t0_text_start']
+        ),
         retained_current_t1_video_key_rows=VIDEO_ROWS,
         current_t1_text_key_rows=layout['current_t1_text_key_rows'],
         visible_current_t1_text_key_rows=layout['current_t1_text_key_rows'],
         current_t1_text_key_start=layout['current_t1_text_start'],
         current_t1_text_key_end=layout['current_t1_text_end'],
         compact_attention_key_rows=layout['key_rows'],
+        t1_query_rows=VIDEO_ROWS + VALID,
         t0_cache_content_unchanged=True,
         t0_cache_writer_unchanged=True,
         t1_query_rows_unchanged=True,
@@ -129,7 +144,13 @@ def history_visibility_record(
         trained_stock_contract=False,
         t1_text_kv_attention_only=t1_current_text_kv,
         interpretation=(
-            'Leaves the T0 writer unchanged and hides all admitted T0 caption keys on T1 reads. '
+            'Leaves the T0 writer unchanged and hides all T0 video and caption keys on T1 reads. '
+            'Each T1 denoise forward includes its current text K/V in attention only '
+            '(update_cache=False); all T1 video and current text keys remain visible, and T1 '
+            'query rows, text refinement, RoPE, and geometry remain unchanged. This adds no '
+            'persistent cache write or storage.'
+            if keep_latents == 0
+            else 'Leaves the T0 writer unchanged and hides all admitted T0 caption keys on T1 reads. '
             'Each T1 denoise forward includes its current text K/V in attention only '
             '(update_cache=False); all T0 and T1 video keys remain visible, and T1 query rows, '
             'text refinement, RoPE, and geometry remain unchanged. This adds no persistent '
@@ -241,6 +262,7 @@ def execute(admitted, output):
                  t0_valid_tokens=VALID,
                  t0_history_hide_caption_keys=admitted['history_visibility']['t0_hide_caption_keys'],
                  t1_current_text_kv=admitted['history_visibility']['t1_current_text_kv'],
+                 t0_history_all_keys_hidden=admitted['history_visibility']['all_t0_keys_hidden'],
                  t0_history_keep_latents=(
                      admitted['history_visibility']['keep_latents']
                      if admitted['history_visibility']['explicit_all_true_mask']
@@ -478,10 +500,10 @@ def main():
     parser.add_argument('--upstream', type=Path, default=Path('/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8'))
     parser.add_argument('--cache-index', type=Path, default=source.single.DEFAULT_CACHE_INDEX)
     parser.add_argument('--output-dir', type=Path, required=True)
-    parser.add_argument('--t0-history-keep-latents', type=int, choices=(10, 30),
-                        help='diagnostic T1 visibility mask; 30 retains all T0 video, 10 hides oldest 20 T0 latents')
+    parser.add_argument('--t0-history-keep-latents', type=int, choices=(0, 10, 30),
+                        help='diagnostic T1 visibility mask; 30 retains all T0 video, 10 hides oldest 20, 0 hides all T0 keys only with both rescue flags')
     parser.add_argument('--hide-t0-caption-keys', action='store_true',
-                        help='hide all cached T0 caption keys from T1 attention; requires explicit keep-latents 30')
+                        help='hide cached T0 caption keys; requires explicit keep-latents 30, or keep 0 with current T1 text K/V rescue')
     parser.add_argument('--t1-current-text-kv', action='store_true',
                         help='add current T1 text K/V to attention while T0 caption keys are hidden')
     parser.add_argument('--native-latents', type=Path,

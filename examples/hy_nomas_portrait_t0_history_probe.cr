@@ -151,6 +151,14 @@ module HyNomasPortraitT0HistoryProbe
     }
   end
 
+  def t0_video_key_row_counts(visible_latents : Int32) : NamedTuple(hidden: Int32, visible: Int32)
+    unless {0, 10, 30}.includes?(visible_latents)
+      raise ArgumentError.new("T0 video key row counts require 0, 10, or 30 visible latents")
+    end
+    {hidden:  (30 - visible_latents) * HyNomasSequence::T0_HISTORY_TOKENS,
+     visible: visible_latents * HyNomasSequence::T0_HISTORY_TOKENS}
+  end
+
   def parse_args : Args
     inputs_path = INPUTS_PATH
     inputs_sha = INPUTS_SHA
@@ -159,7 +167,7 @@ module HyNomasPortraitT0HistoryProbe
     bank_path = BASELINE_BANK
     bank_sha = BASELINE_BANK_SHA
     output_dir = ""
-    keep_t0_latents = 0
+    keep_t0_latents = -1
     hide_t0_caption_keys = false
     t1_current_text_kv = false
     budget_mib = 30_720_i64
@@ -172,16 +180,14 @@ module HyNomasPortraitT0HistoryProbe
       p.on("--baseline-receipt-sha SHA", "Trusted saved baseline receipt SHA-256") { |v| receipt_sha = v }
       p.on("--baseline-bank PATH", "Saved native full latent bank") { |v| bank_path = v }
       p.on("--baseline-bank-sha SHA", "Trusted saved baseline bank SHA-256") { |v| bank_sha = v }
-      p.on("--keep-t0-latents N", "30 for all-visible masked-workspace A/A, or 10 for the intervention") { |v| keep_t0_latents = v.to_i }
-      p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader while keeping all 30 T0 video latents visible") { hide_t0_caption_keys = true }
+      p.on("--keep-t0-latents N", "30 for all-visible, 10 for recent-only, or 0 for the all-video-hidden T1-text control") { |v| keep_t0_latents = v.to_i }
+      p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader") { hide_t0_caption_keys = true }
       p.on("--t1-current-text-kv", "Expose current T1 text K/V after hiding T0 caption keys") { t1_current_text_kv = true }
       p.on("--output-dir PATH", "Existing empty output directory on /opt/mldata_ssd") { |v| output_dir = v }
       p.on("--budget-mib N", "Named buffer cap; use with the external 10% GPU memory-floor guard") { |v| budget_mib = v.to_i64 }
       p.on("--plan-only", "Authenticate inputs and emit CPU-only memory plan") { plan_only = true }
     end
-    unless {10, 30}.includes?(keep_t0_latents)
-      raise ArgumentError.new("--keep-t0-latents must be 10 or 30")
-    end
+    HyNomasSequence.validate_t0_history_keep_argument!(keep_t0_latents)
     HyNomasSequence.validate_t0_history_visibility!(keep_t0_latents, hide_t0_caption_keys,
       t1_current_text_kv)
     unless (18_432..49_152).includes?(budget_mib)
@@ -214,6 +220,7 @@ module HyNomasPortraitT0HistoryProbe
     HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents,
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv)
+    video_key_rows = t0_video_key_row_counts(args.keep_t0_latents)
     dit_plan = HyNomasSequence.peak_named_bytes(inputs, 2,
       reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
       source_bf16: true, t0_key_visible_latents: args.keep_t0_latents,
@@ -232,15 +239,17 @@ module HyNomasPortraitT0HistoryProbe
       baseline_f32_bank_buffer_bytes: BASELINE_BANK_BYTES,
       compact_t0_f32_buffer_bytes: T0_BYTES,
       named_budget_bytes: budget, reserve_pct: 10,
-      mask_path: if args.t1_current_text_kv
-        "masked T1 workspace with current text K/V keys"
+      mask_path: if args.t1_current_text_kv && args.keep_t0_latents == 0
+        "all T0 video and caption keys masked; current T1 text K/V included"
+      elsif args.t1_current_text_kv
+        "T0 caption mask; current T1 text K/V included"
       else
         "same-size T1 masked workspace in both arms"
       end,
       t0_writer: "unmasked", t1_key_rows: args.t1_current_text_kv ? 8_640 + 2 * inputs.base.valid_text_tokens : 8_640 + inputs.base.valid_text_tokens,
       t1_query_rows: 4_320 + inputs.base.valid_text_tokens,
-      hidden_t0_video_key_rows: args.keep_t0_latents == 10 ? 2_880 : 0,
-      visible_t0_video_key_rows: args.keep_t0_latents == 10 ? 1_440 : 4_320,
+      hidden_t0_video_key_rows: video_key_rows[:hidden],
+      visible_t0_video_key_rows: video_key_rows[:visible],
       hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
       retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,
       t1_current_text_key_rows: args.t1_current_text_kv ? inputs.base.valid_text_tokens : 0,
@@ -399,7 +408,9 @@ module HyNomasPortraitT0HistoryProbe
       keep_t0_video_latents: args.keep_t0_latents,
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv,
-      arm: if args.hide_t0_caption_keys
+      arm: if args.keep_t0_latents == 0
+        "all_t0_video_and_caption_keys_hidden_t1_current_text_kv"
+      elsif args.hide_t0_caption_keys
         if args.t1_current_text_kv
           "all_t0_video_visible_t0_caption_keys_hidden_t1_current_text_kv"
         else
@@ -417,14 +428,16 @@ module HyNomasPortraitT0HistoryProbe
       admitted_cache_payload_bytes: admission.payload_bytes,
       source_bf16: true, segments: 2, steps_per_segment: 4,
       t0_writer_attention: "unmasked nil profile",
-      t1_reader_attention: if args.t1_current_text_kv
+      t1_reader_attention: if args.t1_current_text_kv && args.keep_t0_latents == 0
+        "all T0 video and caption keys masked; current T1 text K/V keys included"
+      elsif args.t1_current_text_kv
         "T0 caption mask; current T1 text K/V keys included"
       else
         "masked profile; same workspace geometry in both arms"
       end,
       t0_video_key_rows: 4_320,
-      hidden_t0_video_key_rows: args.keep_t0_latents == 10 ? 2_880 : 0,
-      visible_t0_video_key_rows: args.keep_t0_latents == 10 ? 1_440 : 4_320,
+      hidden_t0_video_key_rows: video_key_rows[:hidden],
+      visible_t0_video_key_rows: video_key_rows[:visible],
       t0_text_key_rows: inputs.base.valid_text_tokens,
       hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
       retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,

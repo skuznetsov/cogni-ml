@@ -452,6 +452,70 @@ Rollback: omit `--t1-current-text-kv` and the opt-in probe. Refresh on changed
 source/runtime/binary/weights/input/noise/schedule/geometry or evidence loss.
 Evidence: [.landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json](../.landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json).
 
+### All T0 keys hidden from the T1 DiT reader (2026-11-07)
+
+The bounded follow-up adds `--keep-t0-latents 0` only with both
+`--hide-t0-caption-keys --t1-current-text-kv`. It hides all 4,320 T0 video
+and 263 T0 caption keys while keeping current T1 video and text keys visible.
+The writer remains unmasked, T1 uses `cache_txt=True, update_cache=False`,
+and there is no persistent T1 append. Both arms keep Q=4,583, K=9,166 and
+25,616,659,800 peak named bytes; only key visibility changes. The CLI requires
+an explicit keep value: its unset sentinel is -1, not the newly admitted 0.
+Invalid cross-flag combinations fail before planning or Metal initialization.
+Production callers retain their existing defaults and strict admission.
+
+Freeze the same photo, prompt, saved Qwen states, original BF16 weights,
+writer noise/timestep, T1 noise, four Euler steps and segment30 RoPE.
+The new binary's keep30 A/A reproduces the accepted whole bank byte-for-byte.
+The keep0 arm preserves T0 exactly and changes T1. Native T1 matches pinned
+911cea Torch 2.8 MPS exactly on all 138,240 F32 values, without changing
+`atol=rtol=2e-5`. Eleven sampled writer records and nine pre-block T1 input
+records remain identical; the first changed sample is
+`t1.step1.block0.image`.
+
+The same-arm cyclic90 PixelUMM display matches Torch 2.6 MPS exactly on all
+53,084,160 finite values at unchanged `atol=rtol=2e-5`. The native decoder
+uses the accepted noise, ten-latent windows and five-latent overlap, with
+display crop `[120,240)`. Transport verification
+reconstructs T1, prefix60 and cyclic90 from each arm's actual channel-major
+native bank, rather than trusting transport hashes alone. A negative probe
+substituting the legitimate control cyclic90 into hidden-arm metadata is
+rejected at actual byte equality. A second negative probe substitutes the
+previous source display while retaining zero-error claims; the actual
+native/source pixel-byte check rejects it.
+
+Root and the correlated reviewer inspected full-face contacts at frames
+0, 24, 48, 72, 96, 112 and 119, plus all 120 hidden-arm eye crops. The
+hidden arm briefly blends the portrait, then settles into a visibly different,
+nearly static face. No blink or clear head turn is established. This rejects
+this mask as a useful motion correction in the fixture; RGB change alone
+does not establish acting. It does not uniquely explain the weak motion.
+T0 remains in PixelUMM overlap, RoPE remains at segment30, and masking also
+changes softmax support. This is not a no-history or stock photo-I2V test.
+
+Thirty-two Python tests, 34 Crystal examples, the release probe build,
+formatting and actual-byte gates pass. Native DiT sampled peaks are
+24.17/24.17 GiB; native/source PixelUMM peaks are 18.81/8.04 GiB. The
+cache-aware memory floor stays at 10%, with zero observed swap growth.
+Native instrumented preterminal allocation/readback/wait counts are 0/0/0,
+with one terminal wait per stage; opaque MPS allocations are excluded.
+The separate GPU pooled-RGB diagnostic is postterminal and does not score
+natural motion or establish inference speed.
+
+The correlated read-only adversary returned ROBUST within admission,
+same-arm parity, artifact lineage and the scoped visual rejection. Retired
+373,036,400 bytes of owned raw captures, compiler caches and superseded
+preliminary payloads after hash checks. Weights, inputs, the final binary,
+compact latent banks, pixels, record indexes, receipts and media remain;
+replaying the intermediate audit requires recapture.
+
+Keep the intervention opt-in. Park further direct-key masking variants;
+the next discriminator is repeated-photo T0 versus a stock-generated or
+real-video T0 context, with frozen T1 prompt/noise and source gates.
+Refresh on source/runtime/binary/weights/input/noise/schedule/geometry changes
+or evidence loss. Rollback: omit the zero-visible history probe. Evidence:
+[.landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json](../.landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,

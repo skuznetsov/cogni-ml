@@ -233,21 +233,32 @@ module HyNomasSequence
       source_bf16_attention: source_bf16)
   end
 
-  # T1 uses one masked workspace in both arms. `visible_latents` controls only
-  # which early T0 video keys receive label -1; the optional caption mask also
-  # affects only T1. T0 itself remains unmasked.
+  # T1 uses a fixed-shape masked workspace in every visibility arm.
+  # `visible_latents` controls which T0 video keys receive label -1; the
+  # optional caption mask affects only T1. T0 itself remains unmasked.
   def validate_t0_history_visibility!(visible_latents : Int32?, t0_hide_caption_keys : Bool,
                                       t1_current_text_kv : Bool = false) : Nil
-    if t1_current_text_kv && (!t0_hide_caption_keys || visible_latents != 30)
-      raise ArgumentError.new("T1 current text K/V requires hidden T0 caption keys and all 30 T0 video latents visible")
+    if t1_current_text_kv && (!t0_hide_caption_keys || !(visible_latents == 30 || visible_latents == 0))
+      raise ArgumentError.new("T1 current text K/V requires hidden T0 caption keys and 30 or 0 T0 video latents visible")
+    end
+    zero_video_control = visible_latents == 0 && t0_hide_caption_keys && t1_current_text_kv
+    if visible_latents == 0 && !zero_video_control
+      raise ArgumentError.new("Hiding all T0 video keys requires hidden T0 caption keys and current T1 text K/V")
     end
     return if visible_latents.nil? && !t0_hide_caption_keys && !t1_current_text_kv
-    if t0_hide_caption_keys && visible_latents != 30
+    if t0_hide_caption_keys && visible_latents != 30 && !zero_video_control
       raise ArgumentError.new("Hiding T0 caption keys requires all 30 T0 video latents visible")
     end
     visible = visible_latents || raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
-    unless {10, 30}.includes?(visible)
+    unless {10, 30}.includes?(visible) || zero_video_control
       raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
+    end
+  end
+
+  def validate_t0_history_keep_argument!(visible_latents : Int32) : Nil
+    raise ArgumentError.new("--keep-t0-latents is required") if visible_latents == -1
+    unless {0, 10, 30}.includes?(visible_latents)
+      raise ArgumentError.new("--keep-t0-latents must be 10, 30, or the guarded 0-latent control")
     end
   end
 
@@ -827,7 +838,11 @@ module HyNomasSequence
           t1_current_text_key_rows: @t1_current_text_kv ? base.valid_text_tokens : 0,
           t0_writer_attention: @t0_key_visible_latents ? "unmasked" : nil,
           t1_attention_profile: if @t1_current_text_kv
-            "T0 caption mask; current T1 text K/V included"
+            if @t0_key_visible_latents == 0
+              "all T0 video and caption keys masked; current T1 text K/V included"
+            else
+              "T0 caption mask; current T1 text K/V included"
+            end
           elsif @t0_key_visible_latents
             "same-size masked workspace"
           else

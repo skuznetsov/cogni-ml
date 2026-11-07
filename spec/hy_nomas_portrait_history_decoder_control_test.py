@@ -19,11 +19,27 @@ class HistoryPrefixTest(unittest.TestCase):
             "keep_t0_latents": 30,
             "t0_hide_caption_keys": True,
             "t1_current_text_kv": True,
+            "all_t0_video_keys_hidden": False,
+            "all_t0_keys_hidden": False,
         })
         with self.assertRaisesRegex(control.base.ControlError, "requires hidden T0 caption keys"):
             control.history_probe_metadata(30, False, True)
         with self.assertRaisesRegex(control.base.ControlError, "requires all 30 T0 video latents"):
             control.history_probe_metadata(10, True, True)
+
+    def test_all_t0_hidden_decoder_metadata_requires_caption_hidden_text_rescue(self):
+        metadata = control.history_probe_metadata(0, True, True)
+        self.assertEqual(metadata, {
+            "keep_t0_latents": 0,
+            "t0_hide_caption_keys": True,
+            "t1_current_text_kv": True,
+            "all_t0_video_keys_hidden": True,
+            "all_t0_keys_hidden": True,
+        })
+        for hide_caption, current_text in ((False, False), (True, False), (False, True)):
+            with self.subTest(hide_caption=hide_caption, current_text=current_text):
+                with self.assertRaises(control.base.ControlError):
+                    control.history_probe_metadata(0, hide_caption, current_text)
 
     @staticmethod
     def bank(frames):

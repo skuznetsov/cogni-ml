@@ -53,14 +53,26 @@ def validate_native_noise(receipt: dict) -> None:
 
 
 def history_probe_metadata(keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv):
+    if not isinstance(hide_t0_caption_keys, bool):
+        raise base.ControlError("T0 caption visibility flag must be boolean")
+    if not isinstance(t1_current_text_kv, bool):
+        raise base.ControlError("T1 current text K/V flag must be boolean")
     if t1_current_text_kv and not hide_t0_caption_keys:
         raise base.ControlError("T1 current text K/V requires hidden T0 caption keys")
-    if hide_t0_caption_keys and keep_t0_latents != 30:
+    if keep_t0_latents not in (0, 10, 30):
+        raise base.ControlError("T0 history diagnostic keeps 0, 10, or all 30 video latents")
+    if keep_t0_latents == 0 and not (hide_t0_caption_keys and t1_current_text_kv):
+        raise base.ControlError(
+            "zero T0 video history requires hidden T0 caption keys and current T1 text K/V"
+        )
+    if hide_t0_caption_keys and keep_t0_latents == 10:
         raise base.ControlError("hiding T0 caption keys requires all 30 T0 video latents")
     return {
         "keep_t0_latents": keep_t0_latents,
         "t0_hide_caption_keys": hide_t0_caption_keys,
         "t1_current_text_kv": t1_current_text_kv,
+        "all_t0_video_keys_hidden": keep_t0_latents == 0,
+        "all_t0_keys_hidden": keep_t0_latents == 0 and hide_t0_caption_keys,
     }
 
 
@@ -117,7 +129,7 @@ def main(argv=None):
     parser.description = __doc__
     parser.add_argument("--prefix60", type=Path, required=True)
     parser.add_argument("--prefix60-sha256", required=True)
-    parser.add_argument("--keep-t0-latents", type=int, choices=(10, 30), required=True)
+    parser.add_argument("--keep-t0-latents", type=int, choices=(0, 10, 30), required=True)
     parser.add_argument("--hide-t0-caption-keys", action="store_true")
     parser.add_argument("--t1-current-text-kv", action="store_true",
                         help="record the admitted current T1 text K/V rescue metadata")

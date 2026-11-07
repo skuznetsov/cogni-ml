@@ -39297,3 +39297,40 @@ Refresh after source/toolchain/device/model/workload changes.
   K/V section. Evidence .landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json.
   Refresh on source/runtime/binary/weights/input/noise/schedule/geometry or
   artifact changes/loss. Rollback: omit the flag and diagnostic profile.
+
+### 2026-11-07 — Hiding all T0 DiT keys loses likeness without useful motion
+
+- Guarded keep0 requires both --hide-t0-caption-keys and --t1-current-text-kv.
+  T1 hides 4,320 T0 video plus 263 old caption keys and retains its own video
+  and text keys. T0 writer remains unmasked; no persistent T1 append. Both
+  keep30/keep0 arms retain Q4583/K9166 and identical named workspace. The
+  explicit CLI argument uses -1 as its unset sentinel. Defaults are unchanged.
+- New-binary keep30 A/A reproduces the accepted whole bank byte-for-byte.
+  Keep0 preserves T0 and changes T1; all 138,240 native/source T1 values match
+  exactly against pinned 911cea Torch 2.8 MPS. Eleven sampled writer and nine
+  pre-block T1 input records remain identical; first changed sampled record is
+  t1.step1.block0.image. Same-arm cyclic90 PixelUMM matches Torch 2.6 MPS on
+  all 53,084,160 display values exactly, unchanged atol=rtol=2e-5.
+- Actual channel-major transport and native/source crop bytes are checked.
+  Substituting legitimate control cyclic90 or stale source pixels is rejected.
+  Thirty-two Python tests, 34 Crystal examples, build and static checks pass.
+  Native encode preterminal allocation/readback/wait counts remain 0/0/0,
+  terminal wait 1 per stage; opaque MPS allocations are excluded. Reserve 10%,
+  observed swap growth zero. No inference speedup claim.
+- Full-face contacts and all 120 eye crops show a changed, nearly static face
+  in the hidden arm, without an established blink or clear head turn. Reject
+  the mask as a motion correction. PixelUMM still has T0 overlap and RoPE
+  remains at segment30; softmax support changes. This is not stock photo-I2V
+  or removal of every history path, and the weak-motion cause remains open.
+- Park direct-key masking variants. Next discriminator: repeated-photo T0
+  versus stock-generated or real-video T0 with fixed T1 prompt/noise and
+  source gates. Return pointer: all-T0-keys section in
+  docs/hy-nomas-object-control-frontier.md. Evidence:
+  .landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json. Refresh on source,
+  runtime, binary, weights, input, noise, schedule, geometry or evidence changes.
+  Rollback: omit the opt-in probe; no src/ kernels or production defaults change.
+- Correlated read-only adversary ROBUST within the stated scope. Retired
+  373,036,400 bytes of owned captures, caches and superseded preliminary
+  payloads after hash checks; retain weights, inputs, final binary, compact
+  latents, pixels, record indexes, receipts and media. Intermediate audit
+  replay requires recapture.

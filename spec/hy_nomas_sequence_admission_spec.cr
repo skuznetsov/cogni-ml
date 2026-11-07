@@ -298,11 +298,86 @@ describe HyNomasSequence do
     end
   end
 
+  it "admits an all-T0-video-hidden control only with hidden T0 caption and current T1 text keys" do
+    rescue_keep_all = HyNomasSequence.t0_history_attention_profiles(263, 30,
+      t0_hide_caption_keys: true, t1_current_text_kv: true)
+    hidden_all_video = HyNomasSequence.t0_history_attention_profiles(263, 0,
+      t0_hide_caption_keys: true, t1_current_text_kv: true)
+
+    rescue_keep_all[0].should be_nil
+    hidden_all_video[0].should be_nil
+    rescue_t1 = rescue_keep_all[1].not_nil!
+    hidden_t1 = hidden_all_video[1].not_nil!
+    hidden_t1.query.size.should eq(4_583)
+    hidden_t1.query.should eq(rescue_t1.query)
+    hidden_t1.query.all?(&.zero?).should be_true
+    hidden_t1.key.size.should eq(9_166)
+    hidden_t1.key[0, 4_583].should eq(Array(Int32).new(4_583, -1))
+    hidden_t1.key[4_583, 4_320].all?(&.zero?).should be_true
+    hidden_t1.key[8_903, 263].all?(&.zero?).should be_true
+
+    profile = HyNomasSequence.t1_current_text_profile(263, 2)
+    common = {
+      text_cache_policy:     ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens:   profile[:segment_text_tokens],
+      segment_cache_text:    profile[:segment_cache_text],
+      source_bf16_attention: true,
+    }
+    keep_all_geometry = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: rescue_keep_all)
+    hidden_all_geometry = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: hidden_all_video)
+    hidden_all_geometry.named_bytes.should eq(keep_all_geometry.named_bytes)
+    hidden_all_geometry.workspace_geometries[1].query_rows.should eq(4_583)
+    hidden_all_geometry.workspace_geometries[1].current_rows.should eq(4_583)
+    hidden_all_geometry.workspace_geometries[1].key_rows.should eq(9_166)
+    hidden_all_geometry.workspace_geometries[0].masked.should be_false
+    hidden_all_geometry.writer_workspace_geometries[0].should eq(keep_all_geometry.writer_workspace_geometries[0])
+    hidden_all_geometry.append_elements(0).should eq(keep_all_geometry.append_elements(0))
+    expect_raises(ArgumentError, /Final or invalid chunk/) do
+      hidden_all_geometry.append_elements(1)
+    end
+
+    HyNomasSequence.validate_t0_history_admission!(0, true, true,
+      source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+      segments: 2)
+    expect_raises(ArgumentError, /requires hidden T0 caption keys and current T1 text K\/V/) do
+      HyNomasSequence.validate_t0_history_admission!(0, true, false,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2)
+    end
+    expect_raises(ArgumentError, /requires hidden T0 caption keys and current T1 text K\/V/) do
+      HyNomasSequence.t0_history_attention_profiles(263, 0,
+        t0_hide_caption_keys: true)
+    end
+    expect_raises(ArgumentError, /T1 current text K\/V requires hidden T0 caption keys and 30 or 0 T0 video latents visible/) do
+      HyNomasSequence.t0_history_attention_profiles(263, 0,
+        t0_hide_caption_keys: false, t1_current_text_kv: true)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasSequence.validate_t0_history_admission!(0, true, true,
+        source_bf16: false, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2)
+    end
+  end
+
   it "rejects unsupported T0 history visibility windows" do
     [0, 9, 11, 20, 29, 31].each do |visible|
       expect_raises(ArgumentError) do
         HyNomasSequence.t0_history_attention_profiles(263, visible)
       end
+    end
+  end
+
+  it "requires an explicit keep-latents argument before applying guarded visibility rules" do
+    expect_raises(ArgumentError, /--keep-t0-latents is required/) do
+      HyNomasSequence.validate_t0_history_keep_argument!(-1)
+    end
+    {0, 10, 30}.each do |visible|
+      HyNomasSequence.validate_t0_history_keep_argument!(visible)
+    end
+    expect_raises(ArgumentError, /must be 10, 30, or the guarded 0-latent control/) do
+      HyNomasSequence.validate_t0_history_keep_argument!(11)
     end
   end
 end

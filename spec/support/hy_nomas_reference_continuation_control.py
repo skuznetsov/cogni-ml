@@ -71,17 +71,21 @@ def compact_t0_history_visibility_layout(
     t1_current_text_kv: bool = False,
 ) -> dict[str, int]:
     """Describe compact T1 keys, optionally including current T1 text K/V."""
-    if keep_latents not in (10, 30):
-        raise ControlError("T0 history diagnostic keeps either 10 or all 30 latent frames")
     if not 0 < t0_valid_tokens <= DIT_TEXT_ROWS:
         raise ControlError("T0 history diagnostic requires admitted valid caption rows")
     if not isinstance(t0_hide_caption_keys, bool):
         raise ControlError("T0 history caption visibility flag must be boolean")
     if not isinstance(t1_current_text_kv, bool):
         raise ControlError("current T1 text K/V flag must be boolean")
+    if keep_latents not in (0, 10, 30):
+        raise ControlError("T0 history diagnostic keeps 0, 10, or all 30 latent frames")
     if t1_current_text_kv and not t0_hide_caption_keys:
         raise ControlError("current T1 text K/V requires hidden T0 caption keys")
-    if t0_hide_caption_keys and keep_latents != LATENTS_PER_SEGMENT:
+    if keep_latents == 0 and not (t0_hide_caption_keys and t1_current_text_kv):
+        raise ControlError(
+            "zero T0 video history requires hidden T0 caption keys and current T1 text K/V"
+        )
+    if t0_hide_caption_keys and keep_latents == 10:
         raise ControlError("caption-key visibility diagnostic requires all 30 T0 latent frames")
     tokens_per_latent = VIDEO_TOKENS // LATENTS_PER_SEGMENT
     hidden_video_rows = (LATENTS_PER_SEGMENT - keep_latents) * tokens_per_latent
