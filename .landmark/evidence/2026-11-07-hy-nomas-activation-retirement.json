@@ -1,0 +1,66 @@
+{
+  "schema": "cogni_ml.hy_nomas_activation_retirement/v1",
+  "date": "2026-11-07",
+  "source_commit": "b46697d7",
+  "authorization": "User explicitly declared saved activations unnecessary and requested cleanup of obsolete owned temporary files.",
+  "scope": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz",
+  "removed": {
+    "files": 447,
+    "logical_bytes": 299585810432,
+    "groups": [
+      "full-v1",
+      "pilot-v2",
+      "pilot-v3",
+      "pilot-v4"
+    ],
+    "kind": "raw activation batch payloads only"
+  },
+  "receipt": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/activation-cleanup-20261107T132859Z-7c94b9ef.json",
+    "sha256": "96b49331faeca747f696a8b2f4bda0b792fd4198f7f51db93cc8c0414b9e6c87"
+  },
+  "retained": [
+    "decode-v2/display.mp4",
+    "decode-v2/display.rgb24",
+    "decode-v2/raw.f32le",
+    "decode-v2/receipt.json",
+    "full-v1/activations/index.json",
+    "full-v1/final-latent.f32le",
+    "full-v1/replay.json",
+    "pilot-v2/activations/index.json",
+    "pilot-v3/activations/index.json",
+    "pilot-v3/replay.json",
+    "pilot-v4/activations/index.json",
+    "pilot-v4/replay.json",
+    "qualified-artifacts-v2.json"
+  ],
+  "verification": {
+    "all_indexed_payload_shards_absent": true,
+    "retained_small_artifact_hashes_unchanged": true,
+    "larger_retained_outputs_size_inode_mtime_unchanged": true,
+    "no_payload_rehash_before_cleanup": true,
+    "cleanup_process_resumed": false,
+    "note": "Initial shell returned early; its original process completed the deletion and emitted this receipt. A subsequent reconciliation failed closed without further deletion.",
+    "command": "python3 -B /Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz/verify-activation-retirement.py",
+    "verifier_sha256": "c160f4e618cfda6ba4d3880d4970e935bd2b6a4f53df6d31599f32b975bb24ba",
+    "expected_signal": "result=pass, removed_shards=447, removed_bytes=299585810432, retained_artifacts=13",
+    "observed_exit_code": 0
+  },
+  "availability": {
+    "full_and_pilot_activation_payloads": "retired_by_user_request",
+    "historical_recording_checks": "preserved as historical receipts, not independently repeatable against deleted payloads",
+    "future_activation_replay": "requires a new recording",
+    "current_portrait_probe_artifacts": "preserved",
+    "weights_runtimes_user_references_final_videos": "preserved"
+  },
+  "supersedes_current_payload_availability_in": [
+    ".landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json",
+    "docs/hy-nomas-activation-tracing.md"
+  ],
+  "production_inference_changed": false,
+  "rollback": "Deleted payloads cannot be restored from indexes; rerun the recorder if needed. Retained final latents and videos remain usable.",
+  "adversary": {
+    "verdict": "ROBUST within enumerated deletion/retention scope",
+    "check": "Root separately verified the exact cleanup receipt hash, all four empty shard sets, and retained small artifact hashes. No claim of scanning all temporary files on the SSD."
+  }
+}

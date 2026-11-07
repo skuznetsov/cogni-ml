@@ -39125,3 +39125,18 @@ Refresh after source/toolchain/device/model/workload changes.
   Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json`.
   Refresh on input/source/runtime/geometry changes or artifact mutation/loss.
   Rollback: remove this diagnostic note; production inference is untouched.
+
+### 2026-11-07 — Obsolete activation payloads retired
+
+- At the user's explicit request, removed 447 raw activation shards from the
+  owned upstream trace's full-v1 and pilot-v2/v3/v4 directories: 299,585,810,432
+  logical bytes (about 279 GiB). Indexes, replay receipts, final latents, videos,
+  source snapshots, weights and the active portrait probe remain available.
+- Post-cleanup enumeration found no target payloads; retained small artifact
+  hashes and larger output identities match the cleanup receipt. Historical
+  capture checks remain historical evidence, but replay or revalidation of
+  deleted activations requires recording them again. Do not treat an index as
+  an available corpus. Evidence:
+  `.landmark/evidence/2026-11-07-hy-nomas-activation-retirement.json`.
+- Keep reusable inputs and reviewable final results; remove owned obsolete
+  temporary payloads after their experiment closes. No inference change.

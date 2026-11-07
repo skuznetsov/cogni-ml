@@ -193,8 +193,15 @@ controller.
 
 External recording root:
 `/opt/mldata_ssd/cogni-ml/hy-nomas-upstream-trace-20261106.zd8_wvuz`.
-The `full-v1` recording, guard logs, exact commands and frozen source snapshots
-remain outside Git. Missing or mutated sources, weights, inputs, schedules,
+The `full-v1` guard logs, exact commands and frozen source snapshots remain
+outside Git. On 2026-11-07 the user retired the raw activation payloads:
+447 shards across `full-v1` and pilots v2-v4, totaling 299,585,810,432 bytes,
+were deleted. Indexes, replay receipts, final latents and decoded media remain.
+The successful recording checks above describe the historical run; its missing
+payloads can no longer be revalidated or replayed without a new recording.
+The current portrait experiment, model weights and runtimes were preserved.
+Cleanup lineage: `.landmark/evidence/2026-11-07-hy-nomas-activation-retirement.json`.
+Missing or mutated sources, weights, inputs, schedules,
 geometry, precision or bound artifacts invalidate dependent replay claims.
 `decode-v2/display.mp4` is the exact-linked video; `analysis-v1.json` contains
 the selected-record statistics and `inspection-v3` the selected-frame crops.
