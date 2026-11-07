@@ -1,12 +1,18 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 import hy_nomas_portrait_history_decoder_control as control  # noqa: E402
 
 
 class HistoryPrefixTest(unittest.TestCase):
+    def test_caption_key_label_rejects_a_video_history_intervention(self):
+        args = SimpleNamespace(keep_t0_latents=10, hide_t0_caption_keys=True)
+        with self.assertRaisesRegex(control.base.ControlError, "caption.*30"):
+            control.preflight(args)
+
     @staticmethod
     def bank(frames):
         return b"".join(bytes([channel + frame % 17]) * (9 * 16 * 4)

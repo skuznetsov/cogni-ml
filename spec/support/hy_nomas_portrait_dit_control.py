@@ -68,46 +68,78 @@ def _admit_comparison_latents(path_arg, digest):
     return dict(path=path, sha256=digest, shape=list(source.LATENT_SEGMENT_SHAPE))
 
 
-def history_visibility_record(keep_latents):
+def history_visibility_record(keep_latents, t0_hide_caption_keys=False):
+    if not isinstance(t0_hide_caption_keys, bool):
+        raise ValueError('t0_hide_caption_keys must be boolean')
+    if t0_hide_caption_keys and keep_latents != LATENTS_PER_SEGMENT:
+        raise ValueError('--hide-t0-caption-keys requires --t0-history-keep-latents 30')
     if keep_latents is None:
         keep_latents = LATENTS_PER_SEGMENT
         explicit_mask = False
     else:
         explicit_mask = True
-    layout = source.compact_t0_history_visibility_layout(keep_latents, VALID)
+    layout = source.compact_t0_history_visibility_layout(
+        keep_latents, VALID, t0_hide_caption_keys=t0_hide_caption_keys)
     return dict(
-        kind='fixed-shape T0 video-key visibility diagnostic',
+        kind=(
+            'fixed-shape T0 key visibility diagnostic'
+            if t0_hide_caption_keys
+            else 'fixed-shape T0 video-key visibility diagnostic'
+        ),
         diagnostic_only=True,
         keep_latents=keep_latents,
-        explicit_all_true_mask=explicit_mask and keep_latents == LATENTS_PER_SEGMENT,
+        t0_hide_caption_keys=t0_hide_caption_keys,
+        explicit_all_true_mask=(
+            explicit_mask and keep_latents == LATENTS_PER_SEGMENT and not t0_hide_caption_keys
+        ),
         t0_video_latents=LATENTS_PER_SEGMENT,
         t0_video_key_rows=layout['t0_video_rows'],
         hidden_t0_video_key_rows=layout['hidden_t0_video_prefix_rows'],
         visible_t0_video_key_rows=layout['visible_t0_video_rows'],
-        retained_t0_caption_key_rows=VALID,
+        hidden_t0_caption_key_rows=layout['hidden_t0_caption_key_rows'],
+        retained_t0_caption_key_rows=layout['retained_t0_caption_key_rows'],
         retained_current_t1_video_key_rows=VIDEO_ROWS,
         compact_attention_key_rows=layout['key_rows'],
         t0_cache_content_unchanged=True,
         t0_cache_writer_unchanged=True,
+        t1_query_rows_unchanged=True,
+        t1_text_refinement_unchanged=True,
         t1_rope_and_query_geometry_unchanged=True,
         trained_stock_contract=False,
         interpretation=(
-            'Masks visibility to the oldest repeated-photo T0 image keys. All T0 K/V '
+            'Leaves the T0 writer unmasked, then hides only all admitted T0 caption keys from '
+            'T1 attention. All T0 and T1 video keys remain visible; T1 query rows, text '
+            'refinement, RoPE, and geometry remain unchanged. All T0 K/V remain cached; this '
+            'does not reduce cache storage or dense attention extent.'
+            if t0_hide_caption_keys
+            else 'Masks visibility to the oldest repeated-photo T0 image keys. All T0 K/V '
             'remain cached; this does not reduce cache storage or dense attention extent.'
         ),
     )
 
 
-def build_t0_history_attention_mask(torch, device, keep_latents):
-    layout = source.compact_t0_history_visibility_layout(keep_latents, VALID)
+def build_t0_history_attention_mask(
+    torch,
+    device,
+    keep_latents,
+    t0_hide_caption_keys=False,
+):
+    layout = source.compact_t0_history_visibility_layout(
+        keep_latents, VALID, t0_hide_caption_keys=t0_hide_caption_keys)
     mask = torch.ones((1, layout['key_rows']), dtype=torch.bool, device=device)
     hidden_rows = layout['hidden_t0_video_prefix_rows']
     if hidden_rows:
         mask[:, :hidden_rows] = False
+    if layout['hidden_t0_caption_key_rows']:
+        mask[:, layout['t0_text_start']:layout['t0_text_end']] = False
     return layout, mask
 
 
 def admit(args):
+    visibility = history_visibility_record(
+        getattr(args, 't0_history_keep_latents', None),
+        getattr(args, 'hide_t0_caption_keys', False),
+    )
     root = args.input_root.resolve(strict=True)
     manifest_path = root / 'photo-continuation-v2.json'
     manifest = checked_json(manifest_path, MANIFEST_SHA)
@@ -143,7 +175,6 @@ def admit(args):
         getattr(args, 'native_latents', None),
         getattr(args, 'native_latents_sha256', None),
     )
-    visibility = history_visibility_record(getattr(args, 't0_history_keep_latents', None))
     model = source._authenticate_model_sources(SimpleNamespace(
         upstream=args.upstream, cache_index=args.cache_index, cache_index_sha256=INDEX_SHA))
     return dict(root=root, manifest_path=manifest_path, document=manifest,
@@ -174,17 +205,20 @@ def execute(admitted, output):
     device, dtype = torch.device('mps'), torch.bfloat16
     state = dict(dtype=dtype, device_type='mps', call=None, attention_layout='compact',
                  t0_valid_tokens=VALID,
+                 t0_history_hide_caption_keys=admitted['history_visibility']['t0_hide_caption_keys'],
                  t0_history_keep_latents=(
                      admitted['history_visibility']['keep_latents']
                      if admitted['history_visibility']['explicit_all_true_mask']
                      or admitted['history_visibility']['hidden_t0_video_key_rows'] > 0
+                     or admitted['history_visibility']['hidden_t0_caption_key_rows'] > 0
                      else None
                  ),
                  receipt=dict(attention_calls=0, attention_query_chunks=0,
                               t0_history_visibility_mask_calls=0))
     if state['t0_history_keep_latents'] is not None:
         _, visibility_mask = build_t0_history_attention_mask(
-            torch, device, state['t0_history_keep_latents'])
+            torch, device, state['t0_history_keep_latents'],
+            t0_hide_caption_keys=state['t0_history_hide_caption_keys'])
         state['t0_history_attention_mask'] = visibility_mask
     helpers = source.block_reference._install_upstream_modules(Path(admitted['upstream_path']))
     regular_state = dict(mode='bf16', compare=source.single._NoopCompare(),
@@ -403,13 +437,19 @@ def main():
     parser.add_argument('--cache-index', type=Path, default=source.single.DEFAULT_CACHE_INDEX)
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--t0-history-keep-latents', type=int, choices=(10, 30),
-                        help='diagnostic T1 visibility mask; 30 is all-true A/A, 10 hides oldest 20 T0 latents')
+                        help='diagnostic T1 visibility mask; 30 retains all T0 video, 10 hides oldest 20 T0 latents')
+    parser.add_argument('--hide-t0-caption-keys', action='store_true',
+                        help='hide all cached T0 caption keys from T1 attention; requires explicit keep-latents 30')
     parser.add_argument('--native-latents', type=Path,
                         help='optional authenticated same-arm native T1 raw F32 segment for the 2e-5 gate')
     parser.add_argument('--native-latents-sha256',
                         help='required SHA-256 when --native-latents is supplied')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
+    try:
+        history_visibility_record(args.t0_history_keep_latents, args.hide_t0_caption_keys)
+    except ValueError as error:
+        parser.error(str(error))
     if not args.output_dir.is_absolute() or args.output_dir.exists() or args.output_dir.is_symlink():
         parser.error('output-dir must be a fresh absolute path')
     args.output_dir = args.output_dir.parent.resolve(strict=True) / args.output_dir.name

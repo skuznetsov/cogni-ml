@@ -204,12 +204,15 @@ module HyNomasSequence
                     prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
                     reference_action : ML::Video::HyNomasReferenceAction? = nil,
                     source_bf16 : Bool = false,
-                    t0_key_visible_latents : Int32? = nil) : Int64
+                    t0_key_visible_latents : Int32? = nil,
+                    t0_hide_caption_keys : Bool = false) : Int64
     valid = query_text_tokens(inputs, prompt_edit, reference_action: reference_action)
     has_profile = !prompt_edit.nil? || !reference_action.nil?
-    attention_profiles = if t0_key_visible_latents
+    validate_t0_history_visibility!(t0_key_visible_latents, t0_hide_caption_keys)
+    attention_profiles = if t0_key_visible_latents || t0_hide_caption_keys
                            raise ArgumentError.new("T0 history visibility cannot be combined with prompt or action edits") if prompt_edit || reference_action
-                           t0_history_attention_profiles(inputs.valid_text_tokens, t0_key_visible_latents)
+                           t0_history_attention_profiles(inputs.valid_text_tokens, t0_key_visible_latents.not_nil!,
+                             t0_hide_caption_keys: t0_hide_caption_keys)
                          else
                            nil
                          end
@@ -229,10 +232,44 @@ module HyNomasSequence
   end
 
   # T1 uses one masked workspace in both arms. `visible_latents` controls only
-  # which early T0 video keys receive label -1; T0 itself remains unmasked.
+  # which early T0 video keys receive label -1; the optional caption mask also
+  # affects only T1. T0 itself remains unmasked.
+  def validate_t0_history_visibility!(visible_latents : Int32?, t0_hide_caption_keys : Bool) : Nil
+    return if visible_latents.nil? && !t0_hide_caption_keys
+    if t0_hide_caption_keys && visible_latents != 30
+      raise ArgumentError.new("Hiding T0 caption keys requires all 30 T0 video latents visible")
+    end
+    visible = visible_latents || raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
+    unless {10, 30}.includes?(visible)
+      raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
+    end
+  end
+
+  # Pure pre-allocation admission shared by the sizing path and GPU owner.
+  def validate_t0_history_admission!(visible_latents : Int32?, t0_hide_caption_keys : Bool, *,
+                                     source_bf16 : Bool,
+                                     reference_latent_bytes : Int64,
+                                     segments : Int32,
+                                     text_cache_policy = HISTORY_TEXT_POLICY,
+                                     cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                                     prepare_capture : Bool = false,
+                                     noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
+                                     prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                                     reference_action : ML::Video::HyNomasReferenceAction? = nil) : Nil
+    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys)
+    return if visible_latents.nil? && !t0_hide_caption_keys
+    unless source_bf16 && reference_latent_bytes == REFERENCE_LATENT_BYTES && segments == 2 &&
+           text_cache_policy.once_per_scene? && !cinematic && !prepare_capture &&
+           !noise_edit && !prompt_edit && !reference_action
+      raise ArgumentError.new("T0 history visibility requires a two-segment source-BF16 reference run without edits")
+    end
+  end
+
   def t0_history_attention_profiles(caption_valid_text_tokens : Int32,
-                                    visible_latents : Int32) : Array(ML::Video::HyNomasContinuationHistory::AttentionLabels?)
-    unless {10, 30}.includes?(visible_latents) && caption_valid_text_tokens > 0
+                                    visible_latents : Int32, *,
+                                    t0_hide_caption_keys : Bool = false) : Array(ML::Video::HyNomasContinuationHistory::AttentionLabels?)
+    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys)
+    unless caption_valid_text_tokens > 0
       raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
     end
     query_rows = 4320 + caption_valid_text_tokens
@@ -241,6 +278,9 @@ module HyNomasSequence
     key = Array(Int32).new(key_rows, 0_i32)
     hidden_rows = (T0_HISTORY_LATENTS - visible_latents) * T0_HISTORY_TOKENS
     hidden_rows.times { |row| key[row] = -1_i32 }
+    if t0_hide_caption_keys
+      caption_valid_text_tokens.times { |row| key[4320 + row] = -1_i32 }
+    end
     label = ML::Video::HyNomasContinuationHistory::AttentionLabels.new(query, key)
     [nil, label]
   end
@@ -282,19 +322,20 @@ module HyNomasSequence
                        reference_action : ML::Video::HyNomasReferenceAction? = nil,
                        reference_latent_bytes : Int64 = 0_i64,
                        source_bf16 : Bool = false,
-                       t0_key_visible_latents : Int32? = nil) : Int64
+                       t0_key_visible_latents : Int32? = nil,
+                       t0_hide_caption_keys : Bool = false) : Int64
     unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
       raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
     end
     if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
       raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
     end
-    if t0_key_visible_latents
-      unless source_bf16 && reference_latent_bytes == REFERENCE_LATENT_BYTES && segments == 2 &&
-             text_cache_policy.once_per_scene? && !prompt_edit && !reference_action
-        raise ArgumentError.new("T0 history visibility requires two-segment source-BF16 reference initialization without edits")
-      end
-      t0_history_attention_profiles(inputs.base.valid_text_tokens, t0_key_visible_latents)
+    validate_t0_history_admission!(t0_key_visible_latents, t0_hide_caption_keys,
+      source_bf16: source_bf16, reference_latent_bytes: reference_latent_bytes, segments: segments,
+      text_cache_policy: text_cache_policy, prompt_edit: prompt_edit, reference_action: reference_action)
+    if t0_key_visible_latents || t0_hide_caption_keys
+      t0_history_attention_profiles(inputs.base.valid_text_tokens, t0_key_visible_latents.not_nil!,
+        t0_hide_caption_keys: t0_hide_caption_keys)
     end
     if source_bf16
       ML::Video::HyNomasTextRefinerMPSPlan.validate_source_bf16_request!(true, inputs.base.valid_text_tokens)
@@ -321,7 +362,8 @@ module HyNomasSequence
       scratch_growth + prompt_edit_bytes(prompt_edit) + reference_action_bytes(reference_action) +
       history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit,
         reference_action: reference_action, source_bf16: source_bf16,
-        t0_key_visible_latents: t0_key_visible_latents) +
+        t0_key_visible_latents: t0_key_visible_latents,
+        t0_hide_caption_keys: t0_hide_caption_keys) +
       additional_inputs_bytes(inputs, segments) + reference_latent_bytes + source_scratch
   end
 
@@ -491,6 +533,7 @@ module HyNomasSequence
     getter peak_named_bytes : Int64
     getter segment_count : Int32
     getter t0_key_visible_latents : Int32?
+    getter t0_hide_caption_keys : Bool
     @inputs_arena : ML::Video::Arena
     @bank_arena : ML::Video::Arena
     @globals : ML::Video::Arena
@@ -535,7 +578,8 @@ module HyNomasSequence
                    @reference_action_inputs : HyNomasGeneration::Inputs? = nil,
                    reference_latent : ML::MetalBuffer? = nil,
                    source_bf16 : Bool = false,
-                   @t0_key_visible_latents : Int32? = nil)
+                   @t0_key_visible_latents : Int32? = nil,
+                   @t0_hide_caption_keys : Bool = false)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
       @reference_latent = reference_latent
@@ -547,12 +591,15 @@ module HyNomasSequence
           raise ArgumentError.new("reference initialization does not support Cinematic, captures, edits, or legacy text caching")
         end
       end
+      HyNomasSequence.validate_t0_history_admission!(@t0_key_visible_latents, @t0_hide_caption_keys,
+        source_bf16: source_bf16,
+        reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
+        segments: @segment_count, text_cache_policy: text_cache_policy, cinematic: cinematic,
+        prepare_capture: prepare_capture, noise_edit: @noise_edit, prompt_edit: @prompt_edit,
+        reference_action: @reference_action)
       if visible_latents = @t0_key_visible_latents
-        unless reference_latent && source_bf16 && @segment_count == 2 &&
-               text_cache_policy.once_per_scene? && !cinematic && !@noise_edit && !@prompt_edit && !@reference_action
-          raise ArgumentError.new("T0 history visibility requires a two-segment source-BF16 reference run without edits")
-        end
-        HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, visible_latents)
+        HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, visible_latents,
+          t0_hide_caption_keys: @t0_hide_caption_keys)
       end
       HyNomasSequence.validate_checkpoint_variant!(cinematic, prepare_capture: prepare_capture)
       HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
@@ -581,7 +628,8 @@ module HyNomasSequence
       @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy,
         prompt_edit: @prompt_edit, reference_action: @reference_action,
         reference_latent_bytes: reference_latent.try(&.size) || 0_i64, source_bf16: source_bf16,
-        t0_key_visible_latents: @t0_key_visible_latents)
+        t0_key_visible_latents: @t0_key_visible_latents,
+        t0_hide_caption_keys: @t0_hide_caption_keys)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit,
         reference_action: @reference_action)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
@@ -699,8 +747,11 @@ module HyNomasSequence
             nil
           end,
           segment_attention_labels: HyNomasSequence.reference_attention_labels(base.valid_text_tokens, @reference_action),
-          segment_attention_profiles: @t0_key_visible_latents.try do |visible_latents|
-            HyNomasSequence.t0_history_attention_profiles(base.valid_text_tokens, visible_latents)
+          segment_attention_profiles: if visible_latents = @t0_key_visible_latents
+            HyNomasSequence.t0_history_attention_profiles(base.valid_text_tokens, visible_latents,
+              t0_hide_caption_keys: @t0_hide_caption_keys)
+          else
+            nil
           end,
           source_bf16_attention: source_bf16,
           query: joint["joint.query"], key: joint["joint.key"],
@@ -732,6 +783,7 @@ module HyNomasSequence
         HyNomasGeneration.emit("sequence_prepared", named_bytes: actual, segments: @segment_count,
           history_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 exact native cache boundary",
           t0_key_visible_latents: @t0_key_visible_latents,
+          t0_hide_caption_keys: @t0_hide_caption_keys,
           t0_writer_attention: @t0_key_visible_latents ? "unmasked" : nil,
           t1_attention_profile: @t0_key_visible_latents ? "same-size masked workspace" : nil)
       rescue ex

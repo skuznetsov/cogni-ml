@@ -29,6 +29,7 @@ module HyNomasPortraitT0HistoryProbe
     baseline_bank_sha : String,
     output_dir : String,
     keep_t0_latents : Int32,
+    hide_t0_caption_keys : Bool,
     budget_mib : Int64,
     plan_only : Bool
 
@@ -121,7 +122,8 @@ module HyNomasPortraitT0HistoryProbe
   end
 
   def output_checks!(bank_path : String, timeline : ML::MetalBuffer,
-                     baseline : Bytes, keep_t0_latents : Int32) : NamedTuple(
+                     baseline : Bytes, keep_t0_latents : Int32,
+                     hide_t0_caption_keys : Bool = false) : NamedTuple(
     t0_sha256_matches_baseline: Bool,
     t1_sha256_matches_baseline: Bool,
     t0_sha256: String,
@@ -135,7 +137,7 @@ module HyNomasPortraitT0HistoryProbe
     t0_matches = actual[:t0_sha256] == expected[:t0_sha256]
     raise ArgumentError.new("native DiT changed the authenticated clean T0 prefix") unless t0_matches
     t1_matches = actual[:t1_sha256] == expected[:t1_sha256]
-    if keep_t0_latents == 30 && !t1_matches
+    if keep_t0_latents == 30 && !hide_t0_caption_keys && !t1_matches
       raise ArgumentError.new("all-visible T1 A/A latent digest differs from the saved native baseline")
     end
     {
@@ -157,6 +159,7 @@ module HyNomasPortraitT0HistoryProbe
     bank_sha = BASELINE_BANK_SHA
     output_dir = ""
     keep_t0_latents = 0
+    hide_t0_caption_keys = false
     budget_mib = 30_720_i64
     plan_only = false
     OptionParser.parse do |p|
@@ -168,6 +171,7 @@ module HyNomasPortraitT0HistoryProbe
       p.on("--baseline-bank PATH", "Saved native full latent bank") { |v| bank_path = v }
       p.on("--baseline-bank-sha SHA", "Trusted saved baseline bank SHA-256") { |v| bank_sha = v }
       p.on("--keep-t0-latents N", "30 for all-visible masked-workspace A/A, or 10 for the intervention") { |v| keep_t0_latents = v.to_i }
+      p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader while keeping all 30 T0 video latents visible") { hide_t0_caption_keys = true }
       p.on("--output-dir PATH", "Existing empty output directory on /opt/mldata_ssd") { |v| output_dir = v }
       p.on("--budget-mib N", "Named buffer cap; use with the external 10% GPU memory-floor guard") { |v| budget_mib = v.to_i64 }
       p.on("--plan-only", "Authenticate inputs and emit CPU-only memory plan") { plan_only = true }
@@ -175,12 +179,13 @@ module HyNomasPortraitT0HistoryProbe
     unless {10, 30}.includes?(keep_t0_latents)
       raise ArgumentError.new("--keep-t0-latents must be 10 or 30")
     end
+    HyNomasSequence.validate_t0_history_visibility!(keep_t0_latents, hide_t0_caption_keys)
     unless (18_432..49_152).includes?(budget_mib)
       raise ArgumentError.new("named buffer budget must be within 18..48 GiB")
     end
     raise ArgumentError.new("--output-dir is required unless --plan-only is used") if output_dir.empty? && !plan_only
     Args.new(inputs_path, inputs_sha, receipt_path, receipt_sha, bank_path, bank_sha,
-      output_dir, keep_t0_latents, budget_mib, plan_only)
+      output_dir, keep_t0_latents, hide_t0_caption_keys, budget_mib, plan_only)
   end
 
   def run : Nil
@@ -201,16 +206,19 @@ module HyNomasPortraitT0HistoryProbe
     validate_t0_bf16_expansion!(baseline)
     baseline_t0_t1_digests = logical_prefix_digests(baseline)
     admission = HyNomasGeneration.authenticate_bf16_index
-    HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents)
+    HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys)
     dit_plan = HyNomasSequence.peak_named_bytes(inputs, 2,
       reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
-      source_bf16: true, t0_key_visible_latents: args.keep_t0_latents)
+      source_bf16: true, t0_key_visible_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys)
     probe_plan = dit_plan + PROBE_GPU_EXTRA_BYTES
     steady = dit_plan - HyNomasSequence.old_attention_bytes(inputs.base)
     budget = args.budget_mib * 1024 * 1024
     raise ArgumentError.new("native T0 history probe named plan exceeds its budget") if probe_plan > budget
     HyNomasGeneration.emit("portrait_t0_history_memory_plan",
       segments: 2, steps_per_segment: 4, keep_t0_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
       dit_peak_named_bytes: dit_plan, probe_peak_named_bytes: probe_plan,
       dit_steady_named_bytes: steady,
       baseline_f32_bank_buffer_bytes: BASELINE_BANK_BYTES,
@@ -220,7 +228,8 @@ module HyNomasPortraitT0HistoryProbe
       t0_writer: "unmasked", t1_key_rows: 8_903,
       hidden_t0_video_key_rows: args.keep_t0_latents == 10 ? 2_880 : 0,
       visible_t0_video_key_rows: args.keep_t0_latents == 10 ? 1_440 : 4_320,
-      retained_t0_text_key_rows: inputs.base.valid_text_tokens,
+      hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
+      retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,
       t1_current_video_key_rows: 4_320,
       baseline_receipt_sha256: args.baseline_receipt_sha,
       baseline_bank_sha256: args.baseline_bank_sha,
@@ -268,7 +277,8 @@ module HyNomasPortraitT0HistoryProbe
       setup_start = Time.monotonic
       dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, 2, admission,
         reference_latent: reference, source_bf16: true,
-        t0_key_visible_latents: args.keep_t0_latents)
+        t0_key_visible_latents: args.keep_t0_latents,
+        t0_hide_caption_keys: args.hide_t0_caption_keys)
       raise "native T0 history preflight/allocation admission disagree" unless dit.named_bytes == steady
       timings["dit_setup_seconds"] = (Time.monotonic - setup_start).total_seconds
       chain = ML::Metal::MPSCommandChain.new
@@ -301,7 +311,8 @@ module HyNomasPortraitT0HistoryProbe
       end
       diagnostics["latent_bank"] = bank_path
       diagnostics["latent_bank_sha256"] = sha256(bank_path)
-      checks = output_checks!(bank_path, timeline, baseline, args.keep_t0_latents)
+      checks = output_checks!(bank_path, timeline, baseline, args.keep_t0_latents,
+        args.hide_t0_caption_keys)
       diagnostics["t0_sha256"] = checks.not_nil![:t0_sha256]
       diagnostics["t1_sha256"] = checks.not_nil![:t1_sha256]
       diagnostics["prefix60_sha256"] = checks.not_nil![:prefix60_sha256]
@@ -370,7 +381,14 @@ module HyNomasPortraitT0HistoryProbe
       baseline_latent_bank: baseline_bank,
       baseline_latent_bank_sha256: args.baseline_bank_sha,
       keep_t0_video_latents: args.keep_t0_latents,
-      arm: args.keep_t0_latents == 30 ? "all_visible_masked_workspace_aa" : "first_20_t0_video_latents_hidden",
+      t0_hide_caption_keys: args.hide_t0_caption_keys,
+      arm: if args.hide_t0_caption_keys
+        "all_t0_video_visible_t0_caption_keys_hidden"
+      elsif args.keep_t0_latents == 30
+        "all_visible_masked_workspace_aa"
+      else
+        "first_20_t0_video_latents_hidden"
+      end,
       upstream_revision: HyNomasGeneration::TimelineInputs::PINNED_REVISION,
       weight_index_sha256: admission.sha256,
       weight_source_sha256: admission.source_sha256,
@@ -383,6 +401,8 @@ module HyNomasPortraitT0HistoryProbe
       hidden_t0_video_key_rows: args.keep_t0_latents == 10 ? 2_880 : 0,
       visible_t0_video_key_rows: args.keep_t0_latents == 10 ? 1_440 : 4_320,
       t0_text_key_rows: inputs.base.valid_text_tokens,
+      hidden_t0_caption_key_rows: args.hide_t0_caption_keys ? inputs.base.valid_text_tokens : 0,
+      retained_t0_text_key_rows: args.hide_t0_caption_keys ? 0 : inputs.base.valid_text_tokens,
       t1_video_key_rows: 4_320,
       t1_total_key_rows: 8_903,
       t1_query_rows: 4_320 + inputs.base.valid_text_tokens,
@@ -401,7 +421,8 @@ module HyNomasPortraitT0HistoryProbe
       io.puts(report.to_pretty_json)
     end
     HyNomasGeneration.emit("portrait_t0_history_completed", output: diagnostics,
-      keep_t0_video_latents: args.keep_t0_latents, metrics: metrics)
+      keep_t0_video_latents: args.keep_t0_latents,
+      t0_hide_caption_keys: args.hide_t0_caption_keys, metrics: metrics)
   end
 end
 

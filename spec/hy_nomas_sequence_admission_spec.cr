@@ -171,6 +171,73 @@ describe HyNomasSequence do
     keep_recent.workspace_geometries[1].masked.should be_true
   end
 
+  it "hides only T0 caption keys for the all-visible T1 reader without changing workspace bytes" do
+    all_visible = HyNomasSequence.t0_history_attention_profiles(263, 30)
+    hide_caption = HyNomasSequence.t0_history_attention_profiles(263, 30,
+      t0_hide_caption_keys: true)
+
+    all_visible[0].should be_nil
+    hide_caption[0].should be_nil
+    baseline_t1 = all_visible[1].not_nil!
+    hidden_t1 = hide_caption[1].not_nil!
+    hidden_t1.query.size.should eq(4_583)
+    hidden_t1.key.size.should eq(8_903)
+    hidden_t1.query.should eq(baseline_t1.query)
+    hidden_t1.query.all?(&.zero?).should be_true
+    hidden_t1.key[0, 4_320].all?(&.zero?).should be_true
+    hidden_t1.key[4_320, 263].should eq(Array(Int32).new(263, -1))
+    hidden_t1.key[4_583..].all?(&.zero?).should be_true
+
+    common = {
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens: [263, 263], segment_cache_text: [true, false],
+      source_bf16_attention: true,
+    }
+    all_visible_geometry = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: all_visible)
+    hide_caption_geometry = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: hide_caption)
+    hide_caption_geometry.named_bytes.should eq(all_visible_geometry.named_bytes)
+    hide_caption_geometry.workspace_geometries[0].masked.should be_false
+    hide_caption_geometry.writer_workspace_geometries[0].should eq(hide_caption_geometry.workspace_geometries[0])
+    hide_caption_geometry.workspace_geometries[1].masked.should be_true
+
+    expect_raises(ArgumentError, /all 30 T0 video latents visible/) do
+      HyNomasSequence.t0_history_attention_profiles(263, 10, t0_hide_caption_keys: true)
+    end
+    expect_raises(ArgumentError, /all 30 T0 video latents visible/) do
+      HyNomasSequence.validate_t0_history_admission!(nil, true,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2)
+    end
+    {
+      {source_bf16: false, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES, segments: 2},
+      {source_bf16: true, reference_latent_bytes: 0_i64, segments: 2},
+      {source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES, segments: 3},
+    }.each do |bounds|
+      expect_raises(ArgumentError, /two-segment source-BF16 reference run without edits/) do
+        HyNomasSequence.validate_t0_history_admission!(30, true, **bounds)
+      end
+    end
+    expect_raises(ArgumentError, /two-segment source-BF16 reference run without edits/) do
+      HyNomasSequence.validate_t0_history_admission!(30, true,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2, text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::PerChunk)
+    end
+    noise_edit = ML::Video::HyNomasSegmentNoiseEdit.new(2, 1, 2)
+    expect_raises(ArgumentError, /two-segment source-BF16 reference run without edits/) do
+      HyNomasSequence.validate_t0_history_admission!(30, true,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2, noise_edit: noise_edit)
+    end
+    prompt_edit = ML::Video::HyNomasSegmentPromptEdit.new(2, 1, "a" * 64, "b" * 64, "c" * 64, 263)
+    expect_raises(ArgumentError, /two-segment source-BF16 reference run without edits/) do
+      HyNomasSequence.validate_t0_history_admission!(30, true,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2, prompt_edit: prompt_edit)
+    end
+  end
+
   it "rejects unsupported T0 history visibility windows" do
     [0, 9, 11, 20, 29, 31].each do |visible|
       expect_raises(ArgumentError) do

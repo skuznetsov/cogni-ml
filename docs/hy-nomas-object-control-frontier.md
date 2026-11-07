@@ -313,6 +313,79 @@ claims on source/runtime/binary/weight/input/noise/geometry changes; missing
 retired payloads require recapture for intermediate-activation replay.
 Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json).
 
+### Direct T0 caption-key visibility (2026-11-07)
+
+The next counterfactual keeps all thirty T0 video latents visible and hides
+only the 263 T0 caption keys `[4320,4583)` from every T1 query. Both arms use
+4,583 query rows, 8,903 key rows and the same workspace; T1 text queries and
+refinement remain present. Query geometry is preserved, not the deeper-layer
+query values after intervention. The T0 writer stays unmasked. This opt-in
+mode rejects missing/last10 video visibility and incompatible edits before
+GPU allocation; production defaults retain their previous behavior.
+
+Freeze the portrait, prompt, saved Qwen states, original BF16 weights, clean
+T0, writer noise/timestep, T1 noise, four-step Euler schedule and RoPE. The
+visible native A/A reproduces the complete historical bank bitwise. Both
+native DiT arms match their same-arm pinned Torch 2.8 MPS source on all
+138,240 T1 values exactly, at unchanged `atol=rtol=2e-5`. All 34 visible source
+A/A records and eleven sampled T0 writer records match their controls.
+Both same-arm PixelUMM source gates match all 53,084,160 finite F32 display
+values bitwise, with zero maximum/mean absolute error at the same tolerances.
+The artifact verifier hashes the actual channel-strided native display crop
+and requires equality with the actual source display bytes. Substituting a
+legitimate visible-source artifact into the hidden-source receipt while
+retaining its claimed zero errors is rejected by that verifier.
+
+Decode both prefixes with the accepted cyclic90 policy and compare all 120
+T1 frames `[120,240)` at 24 fps. Selected frames 0, 24, 48, 72, 96, 112 and
+119 show a ghost/colored overlay at frame 0 in the hidden-caption arm and
+severe multicolor, duplicated-face corruption by frame 24 (1 s). The visible
+control retains the portrait. Larger RGB changes in the treatment cannot be
+interpreted as useful motion. These selected stills do not certify playback
+naturalness. Review:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-caption-v1/caption-visible-left-hidden-right-5s.mp4`.
+
+The pinned source explains an important limitation of this intervention:
+`hymm/models/dit/nomas_cpt.py:626-638` uses history plus current image K/V when
+`cache_txt=False`, while current text remains in Q at lines 640 and 677.
+This T1 path therefore loses its only direct text K/V block when T0 caption
+keys are hidden. Text influence can still remain in queries, refiners and
+mixed video states. The observed collapse does not by itself establish which
+of those routes causes weak motion in the original visible-caption control.
+
+Decision: reject caption-key removal as a portrait correction. Do not promote
+either direct history-mask experiment into a production motion policy or a
+general exclusion of static-history effects. Change the discriminator: keep
+T0 caption keys hidden but expose current T1 text K/V with the source's
+`cache_txt=True, update_cache=False` path, preserving the prompt and noise.
+This is a proposed rescue control, not an implemented result; it changes key
+extent and requires a fresh memory plan and same-arm gates. If it restores
+the image, it supports loss of direct text K/V as the collapse trigger. If
+weak motion remains, test technical repeated-photo T0 against actual video
+or stock-generated T0 rather than repeating similar direct-key masks.
+
+Twenty focused Python tests, 31 Crystal examples, the release probe build,
+Ruff, Crystal formatting, native/source gates and actual-byte crossbinding
+pass. Native DiT sampled peaks are 24.17/24.16 GiB; the hidden-caption native
+decoder peaks at 18.81 GiB. All guards retain the cache-aware 10% reserve with
+zero observed swap growth. Native preterminal encode allocation/readback/wait
+counters are 0/0/0 with one terminal wait per stage; opaque MPS allocations
+are outside these counters. No timing here establishes a speedup. The
+skill-referenced structural graph validator is absent in this checkout, so
+the evidence packet remains COMPLETED with separately passed numerical DoD.
+
+The correlated read-only adversary returned ROBUST within endpoint parity,
+artifact lineage and the selected-frame rejection. Masking also renormalizes
+softmax, so it does not isolate a semantic cause. After size and hash checks,
+we retired the two owned capture payloads (626,982,944 bytes) and the owned
+build cache (31,601,150 bytes). Inputs, weights, compact latents, pixel
+outputs, receipts and review media remain; intermediate replay needs recapture.
+
+Rollback: omit `--hide-t0-caption-keys` and the diagnostic profile. Refresh on
+source/runtime/binary/weight/input/noise/schedule/geometry changes or artifact
+mutation/loss. Evidence:
+[.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,

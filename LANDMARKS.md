@@ -39216,3 +39216,46 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on source/runtime/binary/weight/input/noise/schedule/geometry changes
   or artifact mutation/loss. Rollback: omit opt-in profiles/probe; defaults and
   legacy attention labels retain their previous behavior.
+
+### 2026-11-07 — Hiding direct T0 caption keys corrupts the portrait
+
+- Fixed-shape follow-up retains all thirty T0 video latents and hides only
+  caption keys [4320,4583) from all T1 queries. Both arms retain 4,583 query
+  rows and 8,903 keys; T0 writer, inputs, BF16 arithmetic, noise, schedule and
+  RoPE stay fixed. Query geometry, not deeper-layer query values, is unchanged.
+  The opt-in profile rejects incompatible settings before GPU allocation.
+- Visible native A/A reproduces the full historical bank. Each native/source
+  Torch 2.8 MPS terminal DiT result matches all 138,240 T1 values bitwise;
+  34 source A/A records and eleven sampled writer records match. Each same-arm
+  cyclic90 PixelUMM display matches all 53,084,160 values bitwise against
+  Torch 2.6 MPS, at unchanged atol=rtol=2e-5. Actual native crop bytes are
+  crossbound to source pixels; a stale visible-source substitution is rejected.
+- Selected frames show colored/ghost overlap at frame 0 and severe duplicated
+  multicolor faces by frame 24 (1 s) with caption keys hidden. Reject this as
+  a correction; larger RGB differences are not useful motion. The original
+  weak-motion cause and indirect static-history effects remain open.
+- Pinned nomas_cpt.py:626-638 with cache_txt=False supplies history plus current
+  image K/V, while current text remains in Q. Hiding T0 captions removes the
+  last direct text K/V block; mixed video/query/refiner influence remains.
+  Next falsifier: restore current T1 text K/V with cache_txt=True and
+  update_cache=False while retaining the hidden T0 caption. This rescue is
+  unimplemented, changes key extent and requires a fresh memory plan/gate.
+  If coherent motion remains absent, compare technical repeated-photo T0
+  against real-video or stock-generated T0 rather than more direct-key masks.
+- Twenty Python tests, 31 Crystal examples, release build, formatting and
+  numerical/artifact gates pass. Native DiT sampled peaks 24.17/24.16 GiB;
+  hidden native PixelUMM 18.81 GiB. Cache-aware reserve remains 10%, observed
+  swap growth zero. Native encode allocation/readback/preterminal-wait counters
+  0/0/0, one terminal wait per stage; opaque MPS allocations are excluded.
+  No speedup or natural-motion claim. The referenced structural graph validator
+  is absent; packet status is COMPLETED with separately passed numerical DoD.
+- Correlated read-only adversary ROBUST within parity, artifact lineage and
+  selected-frame rejection; softmax renormalization remains a causal confound.
+  Retired two authenticated raw captures (626,982,944 bytes) and the owned
+  build cache (31,601,150 bytes), preserving inputs, weights, compact latents,
+  pixel outputs and review media. Intermediate replay requires recapture.
+- Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json`;
+  review pair under the experiment's photo-t0-caption-v1 directory. Refresh on
+  source/runtime/binary/weights/input/noise/schedule/geometry changes or artifact
+  mutation/loss. Rollback: omit --hide-t0-caption-keys and the diagnostic probe;
+  production defaults and the unmasked T0 writer are unchanged.

@@ -53,6 +53,8 @@ def validate_native_noise(receipt: dict) -> None:
 
 
 def preflight(args):
+    if getattr(args, "hide_t0_caption_keys", False) and args.keep_t0_latents != 30:
+        raise base.ControlError("hiding T0 caption keys requires all 30 T0 video latents")
     args.input_latents = None
     args.input_latents_sha256 = None
     admitted = base.preflight(args)
@@ -86,10 +88,11 @@ def preflight(args):
         "native90_receipt_sha256": receipt_sha,
         "history_probe": {
             "keep_t0_latents": args.keep_t0_latents,
+            "t0_hide_caption_keys": getattr(args, "hide_t0_caption_keys", False),
             "same_arm_prefix60": str(prefix_path),
             "same_arm_prefix60_sha256": prefix_sha,
             "clean_t0_unchanged": True,
-            "scope": "decoder parity only; the keep-latents label is caller metadata",
+            "scope": "decoder parity only; history mask labels are caller metadata",
         },
     })
     return admitted
@@ -101,6 +104,7 @@ def main(argv=None):
     parser.add_argument("--prefix60", type=Path, required=True)
     parser.add_argument("--prefix60-sha256", required=True)
     parser.add_argument("--keep-t0-latents", type=int, choices=(10, 30), required=True)
+    parser.add_argument("--hide-t0-caption-keys", action="store_true")
     args = parser.parse_args(argv)
     try:
         admitted = preflight(args)
