@@ -195,6 +195,9 @@ def _admit_qwen_inputs(path_arg: Path | str, expected_manifest_sha256: str) -> d
     if not isinstance(expected_manifest_sha256, str) or not _DIGEST.fullmatch(expected_manifest_sha256):
         raise InputsError("--qwen-inputs-sha256 must be 64 lowercase hex characters")
     path = _regular_canonical_file(path_arg, "Qwen input manifest")
+    # Classify the historical location without requiring its fixture to exist
+    # when an explicitly authenticated alternate bundle is supplied.
+    is_default = path == DEFAULT_QWEN_INPUTS.resolve(strict=False)
     before = path.stat()
     if before.st_size > 1024 * 1024:
         raise InputsError("Qwen input manifest exceeds its size limit")
@@ -206,7 +209,7 @@ def _admit_qwen_inputs(path_arg: Path | str, expected_manifest_sha256: str) -> d
     manifest_sha256 = hashlib.sha256(raw).hexdigest()
     if manifest_sha256 != expected_manifest_sha256:
         raise InputsError("Qwen input manifest digest differs from the admitted digest")
-    if path == DEFAULT_QWEN_INPUTS.resolve(strict=True) and manifest_sha256 != _MANIFEST_SHA256:
+    if is_default and manifest_sha256 != _MANIFEST_SHA256:
         raise InputsError("detailed v2 source manifest is not the pinned artifact")
     try:
         document = json.loads(raw.decode("utf-8"))
@@ -235,7 +238,7 @@ def _admit_qwen_inputs(path_arg: Path | str, expected_manifest_sha256: str) -> d
         raise InputsError("Qwen input payload changed while being authenticated")
     if payload_sha256 != document.get("payload_sha256"):
         raise InputsError("Qwen input aggregate payload digest mismatch")
-    if path == DEFAULT_QWEN_INPUTS.resolve(strict=True) and payload_sha256 != _DETAILED_PAYLOAD_SHA256:
+    if is_default and payload_sha256 != _DETAILED_PAYLOAD_SHA256:
         raise InputsError("detailed v2 source payload is not the pinned artifact")
     if _hash_range(payload_path, qwen_record["offset"], qwen_record["nbytes"]) != qwen_record["sha256"]:
         raise InputsError("Qwen tensor record digest differs from its input payload")

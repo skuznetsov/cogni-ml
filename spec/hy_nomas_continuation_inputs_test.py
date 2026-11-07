@@ -6,14 +6,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 SUPPORT = Path(__file__).resolve().parent / "support"
 sys.path.insert(0, str(SUPPORT))
 
 import hy_nomas_continuation_inputs as inputs  # noqa: E402
+import hy_nomas_generation_inputs as generation_inputs  # noqa: E402
 
 
 class _FakeDevice:
@@ -160,6 +164,121 @@ def _valid_document() -> dict:
             "python_version": "3.12.0",
         },
     }
+
+
+class HyNomasQwenInputAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.path = self.root / "alternate.json"
+        self.payload_path = self.root / "alternate.tensors.bin"
+        reference_path = self.root / "reference.json"
+        sidecar_path = self.root / "reference.bf16le"
+        qwen = bytes(range(8))
+        sidecar = b"\0" * (26 * len(qwen)) + qwen
+        sidecar_path.write_bytes(sidecar)
+        prompt_contract = {"prompt": "synthetic admission fixture"}
+        reference_path.write_text(json.dumps({
+            "schema": "cogni_ml.qwen25_vl_pretrained_decoder_prefix_reference",
+            "schema_version": 1,
+            "hy_nomas_prompt": prompt_contract,
+            "sidecars": {"bf16": {
+                "path": sidecar_path.name,
+                "sha256": hashlib.sha256(sidecar).hexdigest(),
+                "nbytes": len(sidecar),
+                "encoding": "bfloat16-le",
+            }},
+        }), encoding="utf-8")
+        payload = qwen + b"cos0sin0"
+        self.payload_path.write_bytes(payload)
+        records = {}
+        for name, offset, size in (("input.qwen_bf16", 0, 8),
+                                   ("input.rope_cos", 8, 4), ("input.rope_sin", 12, 4)):
+            records[name] = {
+                "dtype": "BF16" if name == "input.qwen_bf16" else "F32",
+                "shape": [1, 2, 2] if name == "input.qwen_bf16" else [1],
+                "offset": offset,
+                "nbytes": size,
+                "sha256": hashlib.sha256(payload[offset:offset + size]).hexdigest(),
+            }
+        self.document = {
+            "schema": "cogni_ml.hy_nomas_generation_inputs/v2",
+            "upstream_revision": inputs.PINNED_REVISION,
+            "payload": self.payload_path.name,
+            "payload_bytes": len(payload),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+            "tensors": records,
+            "qwen_source": {
+                "reference_path": str(reference_path),
+                "reference_sha256": inputs._hash_file(reference_path),
+                "sidecar_path": str(sidecar_path),
+                "sidecar_sha256": hashlib.sha256(sidecar).hexdigest(),
+                "sidecar_bytes": len(sidecar),
+                "prompt_contract": prompt_contract,
+                "state_index": 26,
+                "raw_sequence_length": 2,
+                "crop": [0, 2],
+            },
+        }
+        self.write_manifest()
+        # Generation-schema checks have their own suite. Keep this unit fixture
+        # small while exercising continuation's real file, digest, and range checks.
+        self.enterContext(mock.patch.object(generation_inputs, "validate_document"))
+        self.enterContext(mock.patch.object(inputs, "QWEN_SHAPE", (1, 2, 2)))
+        self.enterContext(mock.patch.object(
+            inputs, "DEFAULT_QWEN_INPUTS", self.root / "removed-default" / "inputs.json"
+        ))
+
+    def write_manifest(self):
+        self.path.write_text(json.dumps(self.document), encoding="utf-8")
+
+    def admit(self):
+        return inputs._admit_qwen_inputs(self.path, inputs._hash_file(self.path))
+
+    def test_explicit_authenticated_bundle_does_not_require_historical_default(self):
+        self.assertFalse(inputs.DEFAULT_QWEN_INPUTS.parent.exists())
+        source = self.admit()
+        self.assertEqual(source["path"], str(self.path))
+        self.assertEqual(source["payload_sha256"], self.document["payload_sha256"])
+        self.assertEqual(source["qwen_sidecar_sha256"],
+                         self.document["tensors"]["input.qwen_bf16"]["sha256"])
+
+    def test_default_location_retains_manifest_pin_through_a_directory_alias(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        for default in (self.path, alias / self.path.name):
+            with self.subTest(default=default), mock.patch.object(inputs, "DEFAULT_QWEN_INPUTS", default):
+                with self.assertRaisesRegex(inputs.InputsError, "source manifest is not the pinned artifact"):
+                    self.admit()
+
+    def test_default_location_retains_payload_pin_after_manifest_authentication(self):
+        with mock.patch.object(inputs, "DEFAULT_QWEN_INPUTS", self.path), \
+                mock.patch.object(inputs, "_MANIFEST_SHA256", inputs._hash_file(self.path)):
+            with self.assertRaisesRegex(inputs.InputsError, "source payload is not the pinned artifact"):
+                self.admit()
+
+    def test_alternate_still_requires_the_explicit_manifest_digest(self):
+        for sha, message in (("0" * 64, "differs from the admitted digest"),
+                             ("A" * 64, "64 lowercase hex characters")):
+            with self.subTest(sha=sha), self.assertRaisesRegex(inputs.InputsError, message):
+                inputs._admit_qwen_inputs(self.path, sha)
+
+    def test_alternate_still_authenticates_the_payload_and_tensor_range(self):
+        self.payload_path.write_bytes(b"x" * self.document["payload_bytes"])
+        with self.assertRaisesRegex(inputs.InputsError, "aggregate payload digest mismatch"):
+            self.admit()
+        self.document["payload_sha256"] = inputs._hash_file(self.payload_path)
+        self.document["tensors"]["input.qwen_bf16"]["offset"] = self.document["payload_bytes"]
+        self.write_manifest()
+        with self.assertRaisesRegex(inputs.InputsError, "source tensor range is outside its payload"):
+            self.admit()
+
+    def test_alternate_manifest_must_remain_a_canonical_regular_file(self):
+        alias = self.root / "alternate-alias.json"
+        alias.symlink_to(self.path)
+        with self.assertRaisesRegex(inputs.InputsError, "canonical regular file"):
+            inputs._admit_qwen_inputs(alias, inputs._hash_file(self.path))
 
 
 class HyNomasContinuationInputsTests(unittest.TestCase):
