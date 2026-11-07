@@ -674,6 +674,7 @@ $(BUILD_DIR)/hy_nomas_reference_timeline_probe: examples/hy_nomas_reference_time
 spec_dcae_v_encoder:
 	$(CRYSTAL) spec -D cpu_only spec/dcae_v_encoder_spec.cr spec/hy_nomas_reference_image_spec.cr spec/hy_nomas_reference_encoder_spec.cr spec/hy_nomas_timeline_ops_spec.cr spec/hy_nomas_continuation_history_spec.cr spec/hy_nomas_sequence_admission_spec.cr $(ARGS)
 pixelumm_global_assembly_probe: $(BUILD_DIR)/pixelumm_global_assembly_probe
+pixelumm_continuation_probe: $(BUILD_DIR)/pixelumm_continuation_probe
 hy_nomas_history_attention_probe: $(BUILD_DIR)/hy_nomas_history_attention_probe
 hy_nomas_action_attention_probe: $(BUILD_DIR)/hy_nomas_action_attention_probe
 hy_nomas_sequence_generate: $(BUILD_DIR)/hy_nomas_sequence_generate
@@ -684,6 +685,11 @@ hy_nomas_sequence_resume_probe: $(BUILD_DIR)/hy_nomas_sequence_resume_probe
 hy_nomas_cache_qbit_probe: $(BUILD_DIR)/hy_nomas_cache_qbit_probe
 
 $(BUILD_DIR)/pixelumm_global_assembly_probe: examples/pixelumm_global_assembly_probe.cr examples/support/pixelumm_global_assembly_probe.cr examples/support/pixelumm_global_assembly_probe.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
+
+.PHONY: pixelumm_continuation_probe
+$(BUILD_DIR)/pixelumm_continuation_probe: examples/pixelumm_continuation_probe.cr $(wildcard examples/support/pixelumm_continuation_probe.*) $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_SPEC_OBJS) $(PIXELUMM_HEAD_OBJ)
 	$(CRYSTAL) build $< --release -o $@ \
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_SPEC_OBJS)) $(abspath $(PIXELUMM_HEAD_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS) -lproc"
 

@@ -62,6 +62,60 @@ describe HyNomasLatentDecodeAdmission do
     end
   end
 
+  it "admits the explicit two-segment previous-window inputs only as one complete set" do
+    imported = HyNomasLatentDecodeAdmission.resolve_previous_window!(
+      30, 30, "", "", "/tmp/previous-latent.f32le", "c" * 64,
+      "/tmp/previous-noise.f32le", "d" * 64)
+    imported.should eq({"/tmp/previous-latent.f32le", "c" * 64,
+                        "/tmp/previous-noise.f32le", "d" * 64})
+
+    HyNomasLatentDecodeAdmission.resolve_previous_window!(30, 30, "", "", "", "", "", "")
+      .should be_nil
+
+    invalid = [
+      {"/tmp/previous-latent.f32le", "c" * 64, "", ""},
+      {"", "", "/tmp/previous-noise.f32le", "d" * 64},
+      {"/tmp/previous-latent.f32le", "", "/tmp/previous-noise.f32le", "d" * 64},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", ""},
+    ]
+    invalid.each do |previous_latent, previous_latent_sha, previous_noise, previous_noise_sha|
+      expect_raises(ArgumentError, /all four previous-window/) do
+        HyNomasLatentDecodeAdmission.resolve_previous_window!(30, 30, "", "",
+          previous_latent, previous_latent_sha, previous_noise, previous_noise_sha)
+      end
+    end
+  end
+
+  it "rejects malformed digests, incompatible modes, and conflicting noise sources" do
+    invalid = [
+      {"relative/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "d" * 64,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "C" * 64, "/tmp/previous-noise.f32le", "d" * 64,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 63, "/tmp/previous-noise.f32le", "d" * 64,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "relative/previous-noise.f32le", "d" * 64,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "D" * 64,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "d" * 63,
+       30, 30, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "d" * 64,
+       60, 60, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "d" * 64,
+       30, 180, "", ""},
+      {"/tmp/previous-latent.f32le", "c" * 64, "/tmp/previous-noise.f32le", "d" * 64,
+       30, 30, "/tmp/continuation.json", "e" * 64},
+    ]
+    invalid.each do |previous_latent, previous_latent_sha, previous_noise, previous_noise_sha, latent_frames, latent_bank_frames, continuation_path, continuation_sha|
+      expect_raises(ArgumentError) do
+        HyNomasLatentDecodeAdmission.resolve_previous_window!(latent_frames, latent_bank_frames,
+          continuation_path, continuation_sha, previous_latent, previous_latent_sha,
+          previous_noise, previous_noise_sha)
+      end
+    end
+  end
+
   it "requires exact path and SHA binding between supplied inputs and continuation base" do
     HyNomasLatentDecodeAdmission.validate_base_binding!(rolewright_path, rolewright_sha,
       rolewright_path, rolewright_sha).should be_nil

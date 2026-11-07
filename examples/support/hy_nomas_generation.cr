@@ -7,6 +7,7 @@ require "./pixelumm_two_block_probe"
 require "../../src/ml/video/hy_nomas_bf16_stack"
 require "../../src/ml/video/hy_nomas_euler"
 require "../../src/ml/video/pixelumm_generation"
+require "../../src/ml/video/pixelumm_continuation"
 require "../../src/ml/video/pixelumm_decoder_head_mps"
 
 # Opt-in, bounded first segment. All neural handoffs stay on GPU. DiT and
@@ -573,6 +574,8 @@ module HyNomasGeneration
     getter stem_plan : ML::Video::WeightPlan
     getter head_plan : ML::Video::WeightPlan
     getter config : ML::Video::PixelUMMGeneration::Config
+    getter output_config : ML::Video::PixelUMMGeneration::Config
+    getter continuation_config : ML::Video::PixelUMMContinuation::Config?
     getter captures = Array(Array(String)).new(36) { [] of String }
     getter workspace_bytes : Int64
     getter named_bytes : Int64
@@ -580,8 +583,16 @@ module HyNomasGeneration
 
     def initialize(inputs : Inputs, budget : Int64, *, @capture_raw : Bool = false,
                    total_latent_frames : Int32 = ML::Video::PixelUMMGeneration::LATENT_FRAMES,
+                   previous_latent_frames : Int32? = nil,
                    cache_identity : Tuple(String, String)? = nil)
-      @config = inputs.geometry.pixelumm_config(total_latent_frames)
+      @output_config = inputs.geometry.pixelumm_config(total_latent_frames)
+      @continuation_config = if frames = previous_latent_frames
+                               ML::Video::PixelUMMContinuation::Config.new(
+                                 previous_latent_frames: frames, current_latent_frames: total_latent_frames,
+                                 latent_height: @output_config.latent_height,
+                                 latent_width: @output_config.latent_width)
+                             end
+      @config = @continuation_config.try(&.decoder_config) || @output_config
       cache_path, cache_sha = cache_identity || {PIXEL_CACHE, PIXEL_CACHE_SHA}
       if cache_identity && !(Path[cache_path].absolute? && File.file?(cache_path) && !File.symlink?(cache_path))
         raise ArgumentError.new("decoder cache must be an absolute regular manifest without a symlink leaf")
@@ -608,11 +619,19 @@ module HyNomasGeneration
         @captures, reuse_outputs: true)
       hc = ML::Video::PixelUMMDecoderHeadMPS::Config.new(temporal: bc.temporal, height: bc.height, width: bc.width)
       @named_bytes = @cache.payload_bytes + @stem_plan.peak_bytes + @head_plan.peak_bytes +
-                     (@config.latent_elements + @config.output_elements) * sizeof(Float32) +
+                     (@output_config.latent_elements + @output_config.output_elements) * sizeof(Float32) +
                      inputs.bytes(%w(decoder.rope_cos decoder.rope_sin)) +
                      @workspace_bytes + ML::Video::PixelUMMDecoderHeadMPS::Plan.owned_bytes(hc) +
                      @config.stem_named_bytes_by_name.values.sum + @config.assembly_named_bytes_by_name.values.sum +
                      (@capture_raw ? @config.output_elements * sizeof(Float32) : 0_i64)
+      if context = @continuation_config
+        previous_elements = context.previous_latent_frames.to_i64 * (
+          ML::Video::PixelUMMGeneration::LATENT_CHANNELS.to_i64 * @config.latent_height * @config.latent_width +
+          ML::Video::PixelUMMGeneration::TUBELET_T.to_i64 * ML::Video::PixelUMMGeneration::PIXEL_CHANNELS *
+          @config.pixel_height * @config.pixel_width
+        )
+        @named_bytes += previous_elements * sizeof(Float32) + context.named_bytes
+      end
       raise ArgumentError.new("decoder aggregate named buffers exceed the budget") unless @named_bytes <= budget
     end
 
@@ -639,21 +658,28 @@ module HyNomasGeneration
     @released = false
     @raw_capture : ML::MetalBuffer? = nil
     @window_starts : Array(Int32)
+    @continuation : ML::Video::PixelUMMContinuation::Plan? = nil
 
     def initialize(inputs : Inputs, latent : ML::MetalBuffer, metadata : DecoderMetadata,
-                   *, timeline_noise : ML::MetalBuffer? = nil)
+                   *, timeline_noise : ML::MetalBuffer? = nil,
+                   previous_latent : ML::MetalBuffer? = nil,
+                   previous_noise : ML::MetalBuffer? = nil)
       @named_bytes = metadata.named_bytes
       @window_starts = metadata.config.window_starts
-      unless latent.size == metadata.config.latent_elements * sizeof(Float32)
+      unless latent.size == metadata.output_config.latent_elements * sizeof(Float32)
         raise ArgumentError.new("decoder latent extent does not match admitted timeline")
       end
       if supplied = timeline_noise
-        unless supplied.size == metadata.config.output_elements * sizeof(Float32) && supplied.storage_mode.shared?
+        unless supplied.size == metadata.output_config.output_elements * sizeof(Float32) && supplied.storage_mode.shared?
           raise ArgumentError.new("decoder noise extent does not match admitted timeline")
         end
         ML::Video::MetalOps.distinct(latent, supplied)
-      elsif metadata.config.total_latent_frames != ML::Video::PixelUMMGeneration::LATENT_FRAMES
+      elsif metadata.output_config.total_latent_frames != ML::Video::PixelUMMGeneration::LATENT_FRAMES
         raise ArgumentError.new("a long decoder timeline requires its authenticated full-duration noise")
+      end
+      unless previous_latent.nil? == previous_noise.nil? &&
+             previous_latent.nil? == metadata.continuation_config.nil?
+        raise ArgumentError.new("decoder continuation requires admitted previous latent and noise together")
       end
       # Streaming hashes finish before any decoder Metal allocation.
       metadata.cache.verify_payload!
@@ -665,9 +691,19 @@ module HyNomasGeneration
       @stem_prepared = ML::Video::PreparedWeights.new(metadata.stem_plan, @stem_arena)
       @head_prepared = ML::Video::PreparedWeights.new(metadata.head_plan, @head_arena)
       noise = timeline_noise || inputs.upload!("decoder.noise", @input_arena)
+      stem_latent = latent
+      stem_noise = noise
+      if context = metadata.continuation_config
+        plan = ML::Video::PixelUMMContinuation::Plan.new(context,
+          previous_latent: previous_latent.not_nil!, previous_noise: previous_noise.not_nil!,
+          current_latent: latent, current_noise: noise)
+        @continuation = plan
+        stem_latent = plan.latent_f32
+        stem_noise = plan.noise_f32
+      end
       cos = inputs.upload!("decoder.rope_cos", @input_arena)
       sin = inputs.upload!("decoder.rope_sin", @input_arena)
-      @stem = ML::Video::PixelUMMGeneration::StemPlan.new(metadata.config, latent: latent, noise: noise,
+      @stem = ML::Video::PixelUMMGeneration::StemPlan.new(metadata.config, latent: stem_latent, noise: stem_noise,
         weights: ML::Video::PixelUMMGeneration::StemWeights.new(
           embed_weight: @stem_arena["embed.weight"], embed_bias: @stem_arena["embed.bias"],
           cond_weight: @stem_arena["cond_proj.weight"], cond_bias: @stem_arena["cond_proj.bias"]))
@@ -698,6 +734,8 @@ module HyNomasGeneration
         weights: @head_arena.buffers.dup, max_named_bytes: ML::Video::PixelUMMDecoderHeadMPS::Plan.owned_bytes(hc),
         max_passes_per_chain: metadata.config.window_count)
       actual = @input_arena.resident_bytes + latent.size + (timeline_noise.try(&.size) || 0_i64) + @weight_arena.resident_bytes +
+               (previous_latent.try(&.size) || 0_i64) + (previous_noise.try(&.size) || 0_i64) +
+               (@continuation.try(&.named_bytes) || 0_i64) +
                @stem_arena.resident_bytes + metadata.stem_plan.staging_bytes +
                @head_arena.resident_bytes + metadata.head_plan.staging_bytes +
                @workspace.named_bytes + @head.named_bytes +
@@ -707,6 +745,9 @@ module HyNomasGeneration
     end
 
     def output : ML::MetalBuffer
+      if plan = @continuation
+        return plan.output_f32
+      end
       @assembly.output_f32
     end
 
@@ -717,6 +758,7 @@ module HyNomasGeneration
     def encode(chain : ML::Metal::MPSCommandChain) : Nil
       raise ArgumentError.new("decoder request is single-use") if @released || @chain
       @chain = chain
+      @continuation.try(&.encode_inputs(chain))
       @stem_prepared.encode(chain.encoder)
       @head_prepared.encode(chain.encoder)
       @window_starts.each_with_index do |start, index|
@@ -731,6 +773,7 @@ module HyNomasGeneration
           (raw.size // sizeof(Float32)).to_i32)
       end
       @assembly.encode_finalize(chain)
+      @continuation.try(&.encode_output(chain, source: @assembly.output_f32))
     end
 
     def release : Nil
@@ -743,6 +786,7 @@ module HyNomasGeneration
       @workspace.release
       @assembly.release
       @stem.release
+      @continuation.try(&.release)
       @head_prepared.release
       @stem_prepared.release
       @weight_arena.release

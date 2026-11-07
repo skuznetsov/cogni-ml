@@ -66,6 +66,35 @@ module HyNomasLatentDecodeAdmission
     end
   end
 
+  # The imported previous-window route is intentionally limited to decoding
+  # one current 30-latent segment with exactly one previous 30-latent segment
+  # available for its context. It has its own authenticated noise input and
+  # cannot be mixed with the full-timeline continuation bundle.
+  def resolve_previous_window!(latent_frames : Int32, latent_bank_frames : Int32,
+                               continuation_path : String, continuation_sha : String,
+                               previous_latent_path : String, previous_latent_sha : String,
+                               previous_noise_path : String, previous_noise_sha : String) : Tuple(String, String, String, String)?
+    values = {previous_latent_path, previous_latent_sha, previous_noise_path, previous_noise_sha}
+    return nil if values.all?(&.empty?)
+    unless values.all? { |value| !value.empty? }
+      raise ArgumentError.new("all four previous-window options must be supplied together")
+    end
+    unless latent_frames == 30 && latent_bank_frames == 30
+      raise ArgumentError.new("previous-window context supports only a 30-frame current latent with a 30-frame latent bank")
+    end
+    unless continuation_path.empty? && continuation_sha.empty?
+      raise ArgumentError.new("previous-window context cannot be combined with --continuation")
+    end
+    unless previous_latent_path.starts_with?("/") && previous_noise_path.starts_with?("/")
+      raise ArgumentError.new("previous-window latent and noise paths must be absolute")
+    end
+    unless previous_latent_sha.matches?(/\A[0-9a-f]{64}\z/) &&
+           previous_noise_sha.matches?(/\A[0-9a-f]{64}\z/)
+      raise ArgumentError.new("previous-window latent and noise identities require lowercase SHA-256 digests")
+    end
+    {previous_latent_path, previous_latent_sha, previous_noise_path, previous_noise_sha}
+  end
+
   def validate_base_binding!(continuation_base_path : String, continuation_base_sha : String,
                              input_path : String, input_sha : String) : Nil
     unless continuation_base_path == input_path && continuation_base_sha == input_sha

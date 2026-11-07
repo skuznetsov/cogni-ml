@@ -39022,3 +39022,31 @@ Refresh after source/toolchain/device/model/workload changes.
 - Return to selected-query attention/action control with context-complete
   continuation decoding. Rollback: omit the external context probe/display;
   native defaults and the frozen standalone decode helper remain unchanged.
+
+### 2026-11-06 — Native previous-window PixelUMM continuation
+
+- Standalone decode now optionally joins the previous five clean latent frames
+  and twenty noise frames on GPU, runs the existing ten-latent/five-overlap
+  windows, and crops twenty context pixels on GPU. All four previous-input
+  CLI arguments are required together and source hashes/extents are checked.
+  The existing cumulative sequence and default standalone path are unchanged.
+- Bounded full-J DoD passes: all 36 blocks/six windows; raw 140 frames and
+  displayed 120 frames are bitwise equal to the pinned upstream gathered MPS
+  adapter on Torch 2.6.0. 115,015,680 F32 values, maxabs 0; `atol=rtol=2e-5`
+  unchanged. This fixture declares a T1-noise-tail surrogate for missing T0
+  noise; no stock RNG/CUDA, full-pipeline or independent actor-control claim.
+- Encode allocation/readback/preterminal-wait counters remain 0/0/0; one
+  terminal drain. Named bytes 17,520,565,392; decoder execution 116.95 s in one
+  run. Guard exit 0 with 22 GiB cap, cache-aware 10% floor and 64 MiB swap stop,
+  zero swap growth. Not a paired speedup measurement. CPU suite: 26/26 pass;
+  synthetic GPU geometry/overlap and missing-context counterfactual pass.
+- Torch 2.8 full-output failure is retained separately. Same-input block-0
+  square sums match across 2.6/2.8, but pre-gain BF16 differs at 361 positions;
+  native matches 2.6 bitwise. Never silently substitute oracle runtime lineage.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-native-continuation.json`;
+  external root `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue`,
+  `comparison-upstream26.json` and native/upstream raw/display hashes.
+  Refresh on changed source, runtime, weights, inputs/noise, precision, overlap,
+  dimensions or mutated/missing evidence. Rollback: omit the new opt-in quartet.
+- Next: a bounded photo-reference head-turn/smile take with the user's explicitly
+  supplied local photo. Image identity/acting quality remain visual questions.

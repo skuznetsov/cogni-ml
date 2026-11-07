@@ -16,6 +16,8 @@ module HyNomasLatentDecode
   DEFAULT_LATENT_FRAMES    =  30
   LONG_LATENT_FRAMES       =  60
   REPEATED_LATENT_FRAMES   =  90
+  PREVIOUS_LATENT_FRAMES   =  30
+  PREVIOUS_NOISE_FRAMES    = 120
   LATENT_BANK_FRAMES       = 180
   LATENT_CHANNELS          =  32
   LATENT_HEIGHT            =   9
@@ -152,6 +154,33 @@ module HyNomasLatentDecode
     raw
   end
 
+  # Load the full previous segment's authenticated decoder noise. The core
+  # continuation plan selects only its final 20 pixel frames for the five
+  # previous latent frames. The file contract is raw F32 NCTHW, little-endian.
+  def load_previous_noise!(path : String, trusted_sha256 : String) : String
+    unless Path[path].absolute? && File.file?(path) && !File.symlink?(path)
+      raise ArgumentError.new("previous noise must be an absolute regular file without a symlink leaf")
+    end
+    unless PixelUMMBlockProbe.valid_digest?(trusted_sha256)
+      raise ArgumentError.new("--previous-noise-sha must be a lowercase SHA-256 digest")
+    end
+    expected_bytes = pixel_noise_elements(DEFAULT_LATENT_FRAMES) * sizeof(Float32)
+    expected_shape = pixel_noise_shape(DEFAULT_LATENT_FRAMES)
+    unless File.size(path) == expected_bytes
+      raise ArgumentError.new("previous noise extent must be #{expected_bytes} bytes for F32 NCTHW #{expected_shape}")
+    end
+
+    raw = File.read(path)
+    raise ArgumentError.new("previous noise SHA-256 mismatch") unless Digest::SHA256.hexdigest(raw) == trusted_sha256
+    words = raw.to_slice.to_unsafe.as(UInt32*)
+    pixel_noise_elements(DEFAULT_LATENT_FRAMES).times do |index|
+      if (words[index] & 0x7f80_0000_u32) == 0x7f80_0000_u32
+        raise ArgumentError.new("previous noise contains non-finite F32 at element #{index}")
+      end
+    end
+    raw
+  end
+
   def validate_output_dir!(path : String) : String
     unless Path[path].absolute? && File.directory?(path) && !File.symlink?(path) && Dir.empty?(path)
       raise ArgumentError.new("output directory must be an existing empty absolute directory")
@@ -172,11 +201,16 @@ decoder_cache_option = ""
 decoder_cache_sha_option = ""
 latent_path = ""
 latent_sha = ""
+previous_latent_path_option = ""
+previous_latent_sha_option = ""
+previous_noise_path_option = ""
+previous_noise_sha_option = ""
 output_dir = ""
 latent_frames = HyNomasLatentDecode::DEFAULT_LATENT_FRAMES
 latent_bank_frames_option = nil.as(Int32?)
 budget_mib = 22_528_i64
 plan_only = false
+capture_raw = false
 OptionParser.parse do |p|
   p.banner = "Diagnostic PixelUMM decode of an authenticated terminal F32 latent bank"
   p.on("--inputs PATH", "Authenticated conditioned v2 input bundle (Echo default identity retained)") { |v| input_path = v }
@@ -189,8 +223,13 @@ OptionParser.parse do |p|
   p.on("--latent-sha SHA", "Trusted latent artifact SHA-256") { |v| latent_sha = v }
   p.on("--latent-frames N", "Latent frames: 30 by default, or authenticated 60/90-frame opt-in") { |v| latent_frames = v.to_i32 }
   p.on("--latent-bank-frames N", "Authenticated input bank frames; defaults to --latent-frames, or 180 for a 60/90-frame GPU prefix") { |v| latent_bank_frames_option = v.to_i32 }
+  p.on("--previous-latent PATH", "Imported previous-segment F32 NCTHW 30-latent context") { |v| previous_latent_path_option = v }
+  p.on("--previous-latent-sha SHA", "Trusted previous latent artifact SHA-256") { |v| previous_latent_sha_option = v }
+  p.on("--previous-noise PATH", "Imported previous-segment F32 NCTHW 120-frame decoder noise") { |v| previous_noise_path_option = v }
+  p.on("--previous-noise-sha SHA", "Trusted previous noise artifact SHA-256") { |v| previous_noise_sha_option = v }
   p.on("--output-dir PATH", "Existing empty result directory on external scratch storage") { |v| output_dir = v }
   p.on("--budget-mib N", "Aggregate named buffers, 16..24 GiB") { |v| budget_mib = v.to_i64 }
+  p.on("--capture-raw", "Also export raw internal decoder frames as raw.f32le") { capture_raw = true }
   p.on("--plan-only", "CPU-only authentication and memory admission") { plan_only = true }
 end
 
@@ -202,6 +241,10 @@ if bank_frames = latent_bank_frames_option
   latent_bank_frames = bank_frames
 end
 HyNomasLatentDecode.validate_latent_bank_frames!(latent_frames, latent_bank_frames)
+previous_window_identity = HyNomasLatentDecodeAdmission.resolve_previous_window!(
+  latent_frames, latent_bank_frames, continuation_path_option, continuation_sha_option,
+  previous_latent_path_option, previous_latent_sha_option,
+  previous_noise_path_option, previous_noise_sha_option)
 unless (16_384..24_576).includes?(budget_mib)
   raise ArgumentError.new("named budget must be within 16..24 GiB")
 end
@@ -228,6 +271,20 @@ executable_path = Process.executable_path || raise ArgumentError.new("decoder re
 executable_sha256 = PixelUMMBlockProbe.sha_file(executable_path)
 latent_raw = HyNomasLatentDecode.load_latent!(latent_path, latent_sha, latent_bank_frames)
 latent_path = File.realpath(latent_path)
+previous_latent_raw = nil.as(String?)
+previous_noise_raw = nil.as(String?)
+previous_latent_path = nil.as(String?)
+previous_latent_sha = nil.as(String?)
+previous_noise_path = nil.as(String?)
+previous_noise_sha = nil.as(String?)
+if identity = previous_window_identity
+  previous_latent_path, previous_latent_sha, previous_noise_path, previous_noise_sha = identity
+  previous_latent_raw = HyNomasLatentDecode.load_latent!(
+    previous_latent_path, previous_latent_sha, HyNomasLatentDecode::PREVIOUS_LATENT_FRAMES)
+  previous_latent_path = File.realpath(previous_latent_path)
+  previous_noise_raw = HyNomasLatentDecode.load_previous_noise!(previous_noise_path, previous_noise_sha)
+  previous_noise_path = File.realpath(previous_noise_path)
+end
 source_latent_bank_bytes = if latent_bank_frames > latent_frames
                              HyNomasLatentDecode.latent_bytes(latent_bank_frames)
                            else
@@ -256,9 +313,11 @@ if identity = continuation_identity
   source_noise_bytes = continuation.records["decoder.noise"].nbytes
 end
 metadata = HyNomasGeneration::DecoderMetadata.new(inputs, budget_mib * 1024 * 1024,
-  total_latent_frames: latent_frames, cache_identity: decoder_cache_identity)
+  total_latent_frames: latent_frames,
+  previous_latent_frames: previous_window_identity ? HyNomasLatentDecode::PREVIOUS_LATENT_FRAMES : nil,
+  capture_raw: capture_raw, cache_identity: decoder_cache_identity)
 metadata.cache.verify_payload!
-decoder_noise_prefix_bytes = metadata.config.output_elements * sizeof(Float32)
+decoder_noise_prefix_bytes = metadata.output_config.output_elements * sizeof(Float32)
 unless decoder_noise_prefix_bytes == HyNomasLatentDecode.pixel_noise_elements(latent_frames) * sizeof(Float32)
   raise ArgumentError.new("admitted decoder noise and 4x latent pixel-noise prefix geometry differ")
 end
@@ -274,6 +333,8 @@ HyNomasGeneration.emit("decoder_memory_plan", decoder_named_bytes: decoder_peak_
   decoder_metadata_named_bytes: metadata.named_bytes, source_noise_bytes: source_noise_bytes,
   decoder_external_named_bytes: decoder_external_named_bytes,
   decoder_noise_prefix_bytes: decoder_noise_prefix_bytes,
+  previous_latent_source_bytes: previous_latent_raw.try(&.bytesize),
+  previous_noise_source_bytes: previous_noise_raw.try(&.bytesize),
   source_latent_bank_bytes: source_latent_bank_bytes,
   named_budget_bytes: budget_mib * 1024 * 1024,
   latent_shape: HyNomasLatentDecode.latent_shape(latent_frames),
@@ -282,6 +343,8 @@ HyNomasGeneration.emit("decoder_memory_plan", decoder_named_bytes: decoder_peak_
   decoder_noise_shape: HyNomasLatentDecode.pixel_noise_shape(latent_frames),
   latent_sha256: latent_sha, preflight_seconds: preflight_seconds,
   pixel_noise_source_sha256: timeline_inputs.try(&.records["decoder.noise"].sha256),
+  previous_latent_sha256: previous_latent_sha,
+  previous_noise_sha256: previous_noise_sha,
   scope: "terminal imported latent; no DiT or solver execution")
 
 if plan_only
@@ -303,6 +366,20 @@ begin
   shared = ML::Video::Arena.new
   latent_bank = shared.alloc("diagnostic_latent_bank", HyNomasLatentDecode.latent_elements(latent_bank_frames).to_i32)
   latent_bank.write_bytes(latent_raw.to_slice.to_unsafe, latent_raw.bytesize)
+  previous_latent_buffer = nil.as(ML::MetalBuffer?)
+  previous_noise_buffer = nil.as(ML::MetalBuffer?)
+  if raw = previous_latent_raw
+    previous_latent_buffer = shared.alloc("diagnostic_previous_latent",
+      HyNomasLatentDecode.latent_elements(HyNomasLatentDecode::PREVIOUS_LATENT_FRAMES).to_i32)
+    previous_latent_buffer.not_nil!.write_bytes(raw.to_slice.to_unsafe, raw.bytesize)
+    previous_latent_raw = nil
+  end
+  if raw = previous_noise_raw
+    previous_noise_buffer = shared.alloc("diagnostic_previous_noise",
+      HyNomasLatentDecode.pixel_noise_elements(HyNomasLatentDecode::PREVIOUS_LATENT_FRAMES).to_i32)
+    previous_noise_buffer.not_nil!.write_bytes(raw.to_slice.to_unsafe, raw.bytesize)
+    previous_noise_raw = nil
+  end
   latent = if latent_bank_frames == latent_frames
              latent_bank
            else
@@ -338,7 +415,11 @@ begin
       source: source_noise, destination: timeline_noise.not_nil!)
   end
   setup = Time.instant
-  decoder = if supplied_noise = timeline_noise
+  decoder = if previous_latent = previous_latent_buffer
+              previous_noise = previous_noise_buffer || raise ArgumentError.new("previous-window noise buffer is unavailable")
+              HyNomasGeneration::Decoder.new(inputs, latent, metadata,
+                timeline_noise: timeline_noise, previous_latent: previous_latent, previous_noise: previous_noise)
+            elsif supplied_noise = timeline_noise
               HyNomasGeneration::Decoder.new(inputs, latent, metadata, timeline_noise: supplied_noise)
             else
               HyNomasGeneration::Decoder.new(inputs, latent, metadata)
@@ -355,6 +436,10 @@ begin
   metrics["decoder_encode_allocations"] = ML::MetalBuffer.hy_text_probe_allocations - allocations
   metrics["decoder_encode_readbacks"] = ML::MetalBuffer.hy_text_probe_readbacks - readbacks
   metrics["decoder_preterminal_waits"] = chain.wait_count.to_i64
+  if previous_window_identity
+    metrics["decoder_continuation_gpu_joined"] = 1_i64
+    metrics["decoder_continuation_gpu_cropped"] = 1_i64
+  end
   unless metrics["decoder_encode_allocations"] == 0 && metrics["decoder_encode_readbacks"] == 0 && chain.wait_count == 0
     raise "decoder encode introduced allocation/readback/wait"
   end
@@ -372,21 +457,40 @@ begin
   HyNomasGeneration.write_fresh_output(pixels_path) do |f|
     f.write(Bytes.new(pixels.contents.as(UInt8*), pixels.size.to_i32))
   end
+  raw_receipt = nil.as(JSON::Any?)
+  if capture_raw
+    raw_pixels = decoder.raw_output
+    raw_path = File.join(output_dir, "raw.f32le")
+    HyNomasGeneration.write_fresh_output(raw_path) do |f|
+      f.write(Bytes.new(raw_pixels.contents.as(UInt8*), raw_pixels.size.to_i32))
+    end
+    raw_receipt = JSON.parse({
+      "path"   => raw_path,
+      "bytes"  => raw_pixels.size,
+      "sha256" => PixelUMMBlockProbe.sha_file(raw_path),
+      "shape"  => metadata.config.output_shape,
+      "range"  => "raw decoder output in [-1,1] before display conversion and continuation crop",
+    }.to_json)
+  end
   timings["request_seconds"] = (Time.instant - request_start).total_seconds
   noise_source_path = timeline_inputs.try(&.file.path) || inputs.file.path
   noise_manifest_sha = timeline_inputs.try(&.file.sha256) || inputs.file.sha256
   noise_record_sha = timeline_inputs.try(&.records["decoder.noise"].sha256) || inputs.records["decoder.noise"].sha256
-  noise_selection = if timeline_inputs
+  noise_selection = if previous_window_identity
+                      "authenticated current-segment decoder.noise frames [0, #{HyNomasLatentDecode.pixel_noise_frames(latent_frames)}) are joined after the previous segment's final 20 pixel-noise frames"
+                    elsif timeline_inputs
                       "global pixel-noise frames [0, #{HyNomasLatentDecode.pixel_noise_frames(latent_frames)}) from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
                     else
                       "authenticated decoder.noise record consumed directly"
                     end
-  latent_selection = if latent_prefix_plan
+  latent_selection = if previous_window_identity
+                       "authenticated current-segment latent frames [0, #{latent_frames}) consumed directly; previous-segment tail is supplied separately"
+                     elsif latent_prefix_plan
                        "global latent frames [0, #{latent_frames}) from each NCTHW channel using HyNomasTimelineOps::PrefixPlan"
                      else
                        "authenticated latent bank global frames [0, #{latent_frames}) consumed directly"
                      end
-  receipt = {
+  receipt_base = {
     schema:                              "cogni_ml.hy_nomas_decode_latent/v1",
     upstream_revision:                   PixelUMMBlockProbe::UPSTREAM_REVISION,
     executable:                          executable_path,
@@ -429,7 +533,7 @@ begin
     pixelumm:                            {steps: 1, window_latents: 10, overlap_latents: 5,
                starts: metadata.config.window_starts},
     precision:                        "BF16 decoder block/head weights; F32 stem weights and native activation/MPS arithmetic; original fixed noise and PixelUMM path",
-    frames:                           metadata.config.pixel_frames,
+    frames:                           metadata.output_config.pixel_frames,
     width:                            metadata.config.pixel_width,
     height:                           metadata.config.pixel_height,
     fps:                              24,
@@ -437,7 +541,7 @@ begin
     output:                           pixels_path,
     output_bytes:                     pixels.size,
     output_sha256:                    PixelUMMBlockProbe.sha_file(pixels_path),
-    output_shape:                     [1, 3, metadata.config.pixel_frames, metadata.config.pixel_height, metadata.config.pixel_width],
+    output_shape:                     metadata.output_config.output_shape,
     decoder_named_bytes:              decoder_peak_named_bytes,
     decoder_metadata_named_bytes:     metadata.named_bytes,
     decoder_noise_prefix_bytes:       decoder_noise_prefix_bytes,
@@ -449,6 +553,35 @@ begin
     metrics:                          metrics,
     full_upstream_video_parity:       false,
   }
+  receipt = JSON.parse(receipt_base.to_json).as_h
+  if previous_window_identity
+    continuation_receipt = {
+      "mode"                           => "imported_previous_window",
+      "previous_latent_source"         => previous_latent_path.not_nil!,
+      "previous_latent_sha256"         => previous_latent_sha.not_nil!,
+      "previous_latent_source_frames"  => [25, 30],
+      "previous_latent_joined_frames"  => [0, 5],
+      "current_latent_source_frames"   => [0, 30],
+      "current_latent_joined_frames"   => [5, 35],
+      "previous_noise_source"          => previous_noise_path.not_nil!,
+      "previous_noise_sha256"          => previous_noise_sha.not_nil!,
+      "previous_noise_input_frames"    => [0, HyNomasLatentDecode::PREVIOUS_NOISE_FRAMES],
+      "previous_noise_selected_frames" => [100, 120],
+      "previous_noise_joined_frames"   => [0, 20],
+      "current_noise_source"           => noise_source_path,
+      "current_noise_record_sha256"    => noise_record_sha,
+      "current_noise_source_frames"    => [0, HyNomasLatentDecode.pixel_noise_frames(latent_frames)],
+      "current_noise_joined_frames"    => [20, 140],
+      "internal_latent_frames"         => [0, 35],
+      "internal_window_starts"         => metadata.config.window_starts,
+      "crop_local_pixel_frames"        => [20, 140],
+      "output_current_segment_frames"  => [0, metadata.output_config.pixel_frames],
+    }
+    receipt["continuation"] = JSON.parse(continuation_receipt.to_json)
+  end
+  if raw_receipt
+    receipt["raw_output"] = raw_receipt
+  end
   HyNomasGeneration.write_fresh_output(File.join(output_dir, "receipt.json")) { |f| f.puts(receipt.to_pretty_json) }
   HyNomasGeneration.emit("decoder_pixels_saved", output: pixels_path,
     total_seconds: timings["request_seconds"])

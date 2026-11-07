@@ -1,5 +1,65 @@
 # Hy-Nomas object control frontier
 
+## Native continuation decode slice (2026-11-06)
+
+Status: verified for the bounded native/Torch 2.6 MPS continuation fixture.
+The standalone T1 decode omitted the preceding context, whereas the existing
+cumulative native sequence already includes window starts 25 and 30 and remains
+unchanged. For an explicitly supplied continuation, retain the previous five clean latent
+frames and twenty decoder-noise frames, prepend them to the current segment
+on GPU, use the existing ordered ten-latent windows and BF16 cosine blender,
+then crop the first twenty pixel frames on GPU. A 30-latent continuation thus
+decodes 35 latent frames with six windows and exports 120 new pixel frames.
+
+The previous and current noise are explicit authenticated inputs; never
+regenerate them or silently substitute current noise for history. The earlier
+onset counterfactual used a declared noise surrogate and is not stock RNG
+parity. Reference images remain conditioning inputs, not actor controllers.
+
+The standalone CLI accepts the all-or-none quartet `--previous-latent`,
+`--previous-latent-sha`, `--previous-noise`, `--previous-noise-sha`. It authenticates
+both complete source histories before GPU allocation and preserves their full
+channel strides. Its receipt distinguishes borrowed source bytes, joined decoder
+inputs, raw 140-frame output and the cropped 120-frame display output.
+
+Observed verification:
+
+- CPU geometry/admission suite: 26 examples, zero failures. Synthetic GPU
+  join/crop and existing overlap
+  comparison are exact; omitting context changes the expected onset.
+- All 36 blocks and six windows at 512x288: raw `[1,3,140,288,512]` and display
+  `[1,3,120,288,512]` match the authenticated upstream gathered adapter **bitwise**:
+  115,015,680 F32 values, maxabs 0, zero nonfinite values, unchanged tolerances.
+- Instrumented encode allocations/readbacks/preterminal waits are zero; the
+  decoder retains its one terminal drain. Named buffers total 17,520,565,392
+  bytes; the 22 GiB guard exited 0 at the 10% cache-aware floor without swap
+  growth. One native run took 116.95 seconds in decoder execution; this is not
+  a paired performance claim.
+- A separate Torch 2.8 comparison fails and remains recorded. On identical
+  block-0 input, the square-reduction output is exact in both runtimes, but
+  inverse-root/pre-gain BF16 values differ at 361 positions between 2.6 and 2.8.
+  Native pre-gain and gain outputs match 2.6 bitwise. Runtime lineage must be
+  explicit; this slice does not qualify the 2.8 arithmetic or stock CUDA path.
+
+Evidence: [.landmark/evidence/2026-11-06-hy-nomas-native-continuation.json](../.landmark/evidence/2026-11-06-hy-nomas-native-continuation.json),
+external root `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue`.
+The explicit previous-noise fixture is a frozen T1-noise-tail surrogate for
+missing T0 noise. This qualifies assembly/decoding of the declared inputs,
+not stock full-clip RNG replay, overall image-to-video parity, or actor control.
+
+Risk: CAUTION (NCTHW channel strides, wrong temporal/noise origin, premature
+resource release). Rollback: omit the opt-in previous-input arguments and use
+the unchanged standalone or cumulative decoder. DoD: CPU geometry/admission
+specs, a synthetic GPU join/crop/overlap sensitivity probe, and a bounded
+same-latent native/upstream decode at unchanged `atol=rtol=2e-5`. Instrumented
+encode allocations, readbacks and preterminal waits must remain zero, with
+one existing terminal drain. Count every joined/cropped buffer before model
+allocation; retain file-cache-aware 10% memory reserve and the 64 MiB
+swap-growth stop. Missing-context and wrong-channel controls must fail.
+Do not promote this slice to stock CUDA/RNG parity or independent actor
+control. Requalify after changing inputs, weights, geometry, arithmetic,
+overlap, runtime or any bound artifact.
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,
