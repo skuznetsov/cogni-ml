@@ -86,11 +86,73 @@ blink nor a convincing head turn is demonstrated. This remains a reference-path
 execution smoke test, not successful actor control or a fresh full-pipeline
 upstream parity result. The tail inspection used stored F32 pixels on CPU only;
 it did not rerun the model or change the GPU path.
-Before blaming weak motion on model capacity, compare the same reference,
-conditioning, noise and cache construction against upstream. Decoder-only
-parity does not settle that question.
+The same-input source control below now covers the photo encoder, DiT result
+and generated display pixels. Its bounded numerical parity does not establish
+that the experimental photo-conditioning scheme produces useful motion.
 
 Evidence: [.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json](../.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json).
+
+### Same-portrait upstream control (2026-11-06)
+
+The supplied portrait now passes a staged comparison against pinned upstream
+`911cea6458a89c2663513ff7099561ec190dd491` on the same cached RGB8 pixels,
+saved V263 Qwen state26, initial latent noise, cache epsilon and decoder noise.
+No random tensor was redrawn. Original BF16 weights are used throughout;
+the historical DiT cache directory name does not select Q4 arithmetic.
+
+- Upstream DCAE-V encodes the repeated 120-frame photo into the same 30-frame
+  clean T0: all 138,240 F32-expanded BF16 values are bitwise equal.
+- Upstream DiT runs one T0 cache writer and four T1 denoising forwards through
+  all 54 blocks. The 138,240 generated T1 values are bitwise equal. The complete
+  first-60-latent decoder input has SHA-256
+  `19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42`,
+  independently equal to the channel-strided native bank prefix.
+- Upstream PixelUMM consumes that upstream DiT output, saved noise frames
+  `[0,240)` and the already tile-major saved RoPE. All 36 blocks and 11 windows
+  (starts 0,5,...,50, ten latent frames with five-frame overlap) reproduce the
+  native generated display crop `[120,240)` exactly: 53,084,160 finite F32
+  values, maxabs/RMSE/unequal/outside-tolerance all zero. The exported five-second
+  MP4 is also byte-identical. The side-by-side video is native left, source right.
+
+The unchanged gate is `atol=rtol=2e-5`; equality is stronger for this fixture.
+Encoder and DiT use Torch 2.8.0 MPS; PixelUMM uses the established Torch 2.6.0
+gathered local-attention adapter. The rejected 2.8 decoder result above remains
+rejected. This is not an unmodified CUDA/FlexAttention or live native Qwen test,
+and no claim covers every DiT intermediate: native midpoint captures are absent.
+Each isolated stage keeps arithmetic/comparison on MPS with zero intermediate
+readbacks, zero explicit MPS synchronization calls and one packed terminal
+transfer. The production native path is untouched. All three sampled guards
+exit 0 with an 18 GiB process cap, 10% cache-aware reserve and 64 MiB swap-growth
+stop. Peak footprints are 9.78/4.73/5.79 GiB for encoder/DiT/decoder; minimum
+headroom is 19.84/24.27/17.85 GiB, with zero swap growth. These isolated diagnostic
+timings and resource layouts do not establish a performance speedup.
+
+The weak motion and late asymmetric eye deformation occur in both outputs.
+There is still no demonstrated natural blink or convincing head turn. The
+ordinary pinned `seg_ar` path initializes generated noise and encodes text;
+it does not expose the repeated-photo T0 construction as a stock image-reference
+entrypoint (`hymm/pipeline/base.py:268-295`, `causal_ar.py:1985-1998,2034-2039`).
+The portrait T0 is an experimental conditioning extension. For this one
+00:00-00:10 scene, first-chunk text caching followed by reuse agrees with source
+(`causal_ar.py:2193-2201,2367,2617`); there is no demonstrated text-cache mismatch.
+The preset cache sigma matches, but source draws epsilon from its CPU generator;
+the present comparison explicitly replays saved tensors instead of claiming
+stock seed/draw-order parity. Four denoising steps are a chosen control, whereas
+the pinned experiment preset uses eight (`configs/experiment/inference.yaml:84`).
+None of these observations identifies the cause of weak motion by itself.
+
+Decision: stop treating this portrait's visible defect as evidence of an
+unlocated native arithmetic error. The next bounded discriminator is the
+photo-conditioning/motion contract, retaining the exact path as control.
+Adversary verdict: ROBUST for the declared endpoints and their linkage only;
+same-lineage review remains correlated. The decoder producer hash is recorded
+from the frozen worktree, not attested inside its immutable run receipt.
+Refresh after changes to sources, weights, runtime, conditioning/noise,
+cache/RoPE/window/blender geometry or bound artifacts. Rollback: omit the new
+diagnostic helpers; inference defaults are unchanged.
+
+Evidence: [.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json](../.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json).
+External media: `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/native-left-upstream-right-5s.mp4`.
 
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong

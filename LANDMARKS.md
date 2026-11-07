@@ -39060,8 +39060,43 @@ Refresh after source/toolchain/device/model/workload changes.
   unnatural eye displacement. CPU-only tail/eye-crop inspection shows asymmetric
   deformation without a complete close-and-reopen cycle; the earlier blink
   interpretation is withdrawn. No natural blink or convincing head turn is
-  demonstrated. This is not photo full-pipeline upstream parity or actor-control
-  closure. Same-input upstream reference, conditioning, noise and cache replay
-  is the next discriminator before
-  attributing weak motion to model capacity. Evidence:
+  demonstrated. This smoke result alone is not photo full-pipeline upstream
+  parity or actor-control closure. The staged same-input control below now
+  compares the photo encoder, DiT and generated display endpoints. Evidence:
   `.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json`.
+
+### 2026-11-06 — Same-portrait upstream MPS control
+
+- Same cached photo, saved V263 Qwen state26 and exact saved noise; original
+  BF16 weights, four T1 Euler steps. Source DCAE-V clean T0 and DiT generated
+  T1 each match all 138,240 native values bitwise. Upstream DiT first-60 output
+  SHA `19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42`
+  equals the channel-strided native prefix and is the actual decoder input.
+- Source PixelUMM: 36 blocks, 11 windows, saved noise [0,240), saved already
+  tile-major RoPE and source cosine overlap. Generated pixel crop [120,240)
+  is byte-identical across 53,084,160 finite F32 values; maxabs/RMSE/outside 0,
+  unchanged `atol=rtol=2e-5`. Five-second MP4 hashes also match. Pair:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-upstream-comparison-v1/native-left-upstream-right-5s.mp4`.
+- Pinned source 911cea; DCAE/DiT Torch 2.8.0 MPS, PixelUMM pinned Torch 2.6.0
+  gathered adapter. Earlier 2.8 decoder failure remains rejected. No stock
+  CUDA/FlexAttention, live native Qwen, all-intermediate or natural-motion claim.
+  Zero intermediate readbacks/explicit MPS sync calls; one terminal transfer
+  per isolated stage. Native production code is unchanged.
+- Guard exit 0 for all stages: 18 GiB cap, cache-aware 10% reserve, 64 MiB
+  swap stop; max sampled peak 9.78 GiB, minimum headroom 17.85 GiB, swap growth 0.
+  Sampled enforcement is not a guarantee against between-poll spikes. Do not
+  promote these diagnostic timings to a native speedup measurement.
+- Weak motion and late eye deformation are reproduced by this source MPS
+  reference at fixed conditioning. The repeated-photo technical T0 is our
+  experimental extension: ordinary pinned seg_ar consumes text and initial
+  noise, without a stock reference-photo entrypoint. Same-scene text-cache
+  reuse matches source; no text-cache bug is established. Matching saved noise
+  is not stock RNG draw-order parity. The preset is eight steps; this control
+  explicitly chose four. Neither observation proves the cause of weak motion.
+- Decision/return pointer: test the photo-conditioning/motion contract next,
+  preserving this exact numerical control. Adversary ROBUST only for declared
+  endpoints/linkage; same-lineage review is correlated. Decoder producer SHA
+  is frozen worktree identity, not bound within its immutable receipt.
+  Evidence `.landmark/evidence/2026-11-06-hy-nomas-portrait-upstream-control.json`.
+  Refresh on changed source/runtime/weights/conditioning/noise/cache/geometry
+  or mutated/missing artifacts. Rollback: omit diagnostic helpers and references.
