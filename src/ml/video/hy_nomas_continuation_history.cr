@@ -311,6 +311,7 @@ module ML::Video
       text_cache_policy : TextCachePolicy,
       segment_text_profile : SegmentTextProfile,
       segment_attention_labels : Array(AttentionLabels)?,
+      segment_attention_profiles : Array(AttentionLabels?)?,
       workspace_bytes : Int64,
       named_bytes : Int64 do
       def segment_text_tokens : Array(Int32)
@@ -377,6 +378,7 @@ module ML::Video
                       segment_text_tokens : Array(Int32)? = nil,
                       segment_cache_text : Array(Bool)? = nil,
                       segment_attention_labels : Array(AttentionLabels)? = nil,
+                      segment_attention_profiles : Array(AttentionLabels?)? = nil,
                       source_bf16_attention : Bool = false) : Geometry
       unless (2..MAX_SEGMENTS).includes?(segment_count) &&
              video_tokens > 0 && valid_text_tokens > 0 &&
@@ -388,8 +390,18 @@ module ML::Video
       profile = validated_segment_text_profile(segment_count, valid_text_tokens,
         text_cache_policy, segment_text_tokens, segment_cache_text)
       labels = segment_attention_labels.try(&.dup)
+      attention_profiles = segment_attention_profiles.try(&.dup)
+      if labels && attention_profiles
+        raise ArgumentError.new("Supply either complete or optional per-segment attention profiles")
+      end
+      attention_profiles ||= labels.try do |complete|
+        complete.map { |label| label.as(AttentionLabels?) }
+      end
       if labels && (labels.size != segment_count || !profile.cache_text.all?)
         raise ArgumentError.new("Attention labels require one profile per segment and cached current text")
+      end
+      if segment_attention_profiles && attention_profiles.try(&.size) != segment_count
+        raise ArgumentError.new("Optional attention profiles require one slot per segment")
       end
 
       query_rows_64 = video_tokens.to_i64 + valid_text_tokens
@@ -451,10 +463,11 @@ module ML::Video
           raise ArgumentError.new("Hy-Nomas continuation segment history exceeds the native limit")
         end
         current_rows = append_rows[segment]
+        segment_labels = attention_profiles.try(&.[segment])
         workspace = HyNomasHistoryAttentionWorkspace.geometry(
           history_rows.to_i32, query_rows, heads, head_dim, current_rows: current_rows,
-          query_labels: labels.try(&.[segment].query),
-          key_labels: labels.try(&.[segment].key),
+          query_labels: segment_labels.try(&.query),
+          key_labels: segment_labels.try(&.key),
           source_bf16_attention: source_bf16_attention)
         workspace_geometries << workspace
         workspace_bytes = checked_sum(workspace_bytes, workspace.workspace_bytes,
@@ -489,7 +502,7 @@ module ML::Video
         query_elements_64.to_i32, storage_elements_64.to_i32,
         max_history_rows, cache_elements_64.to_i32, cache_bytes,
         workspace_geometries, writer_workspace_geometries, text_cache_policy, profile,
-        labels, workspace_bytes, named_bytes)
+        labels, attention_profiles, workspace_bytes, named_bytes)
     end
 
     private def self.validated_segment_text_profile(segment_count : Int32,
@@ -532,12 +545,14 @@ module ML::Video
                          segment_text_tokens : Array(Int32)? = nil,
                          segment_cache_text : Array(Bool)? = nil,
                          segment_attention_labels : Array(AttentionLabels)? = nil,
+                         segment_attention_profiles : Array(AttentionLabels?)? = nil,
                          source_bf16_attention : Bool = false) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
         layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
         segment_attention_labels: segment_attention_labels,
+        segment_attention_profiles: segment_attention_profiles,
         source_bf16_attention: source_bf16_attention).named_bytes
     end
 
@@ -549,12 +564,14 @@ module ML::Video
                          segment_text_tokens : Array(Int32)? = nil,
                          segment_cache_text : Array(Bool)? = nil,
                          segment_attention_labels : Array(AttentionLabels)? = nil,
+                         segment_attention_profiles : Array(AttentionLabels?)? = nil,
                          source_bf16_attention : Bool = false) : Int64
       geometry(segment_count, video_tokens, valid_text_tokens, storage_text_tokens,
         layers, heads, head_dim, denoise_steps, text_cache_policy: text_cache_policy,
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
         segment_attention_labels: segment_attention_labels,
+        segment_attention_profiles: segment_attention_profiles,
         source_bf16_attention: source_bf16_attention).named_bytes
     end
 
@@ -567,6 +584,7 @@ module ML::Video
                    segment_text_tokens : Array(Int32)? = nil,
                    segment_cache_text : Array(Bool)? = nil,
                    segment_attention_labels : Array(AttentionLabels)? = nil,
+                   segment_attention_profiles : Array(AttentionLabels?)? = nil,
                    source_bf16_attention : Bool = false,
                    query : ML::MetalBuffer, key : ML::MetalBuffer,
                    value : ML::MetalBuffer, output : ML::MetalBuffer)
@@ -576,6 +594,7 @@ module ML::Video
         segment_text_tokens: segment_text_tokens,
         segment_cache_text: segment_cache_text,
         segment_attention_labels: segment_attention_labels,
+        segment_attention_profiles: segment_attention_profiles,
         source_bf16_attention: source_bf16_attention)
       @schedule = HyNomasContinuationHistorySchedule.new(segment_count, layers,
         denoise_steps, reference_initialization)
@@ -589,7 +608,7 @@ module ML::Video
       begin
         allocate_layer_caches!
         @shape.workspace_geometries.each_with_index do |geometry, segment|
-          labels = @shape.segment_attention_labels.try(&.[segment])
+          labels = @shape.segment_attention_profiles.try(&.[segment])
           @history_plans << prepare_attention_plan!(geometry, labels)
           if writer_geometry = @shape.writer_workspace_geometries[segment]?
             @writer_plans << (writer_geometry == geometry ? @history_plans.last : prepare_attention_plan!(writer_geometry, labels))

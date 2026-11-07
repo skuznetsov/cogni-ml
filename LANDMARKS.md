@@ -39171,3 +39171,48 @@ Refresh after source/toolchain/device/model/workload changes.
   helper `spec/support/hy_nomas_portrait_tail_control.py`. Refresh on changed
   source/runtime/weights/conditioning/noise/geometry or missing/mutated evidence.
   Rollback: omit diagnostics; production inference is unchanged.
+
+### 2026-11-07 — Fixed-shape T0 video-history visibility does not establish natural motion
+
+- Preserve the user's improved-gaze observation from the prior cyclic context.
+  Freeze prompt, saved V263 Qwen, original BF16 weights/arithmetic, clean T0,
+  T0 writer/noise/timestep, T1 noise, four-step schedule and RoPE. Compare an
+  explicit all-visible T1 mask with one hiding only the oldest twenty of thirty
+  T0 latent video frames. Both use 4,583 query rows and 8,903 keys; T0 caption
+  and current T1 video remain visible. The T0 writer stays unmasked.
+- Native all30 reproduces the full historical latent bank bitwise. Each arm's
+  terminal T1 matches pinned 911cea Torch 2.8 MPS on all 138,240 values exactly;
+  source all30 A/A matches 34 captured records and eleven sampled T0 writer
+  records match between arms. This is not a full native cache export.
+- Same-arm cyclic90 PixelUMM replay preserves noise, windows, overlap and local
+  RoPE. Both native/source Torch 2.6 MPS display crops match all 53,084,160
+  finite F32 values bitwise; unchanged atol=rtol=2e-5 throughout. Reuse all30
+  decode only through complete input-artifact identity. Pair:
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/all30-left-last10-right-5s.mp4`.
+- Coarse adjacent-frame face/eye RGB change rises 4.25%/10.03%, but the eye
+  peak stays at frame 117 (4.875 s); selected frames retain nearly the same
+  head pose and late asymmetric eye deformation. Magnitude is not quality.
+  Do not adopt last10 as a motion correction. Retained deep K/V and caption
+  states already mix all thirty T0 frames, so indirect static-history influence
+  remains open. This is experimental portrait conditioning, not stock I2V.
+- Native DiT sampled peaks 24.16/24.17 GiB; last10 PixelUMM 18.81 GiB.
+  Cache-aware reserve 10%, observed swap growth zero. Native encode allocation,
+  readback and preterminal-wait counters 0/0/0; one terminal wait per stage.
+  Opaque MPS allocations are outside these counters. No speedup claim.
+- Fourteen Python tests, thirty Crystal examples, release build, same-arm GPU
+  gates and dereferenced input/output/command bindings pass. First all30 source
+  execution predates the wrapper: its command/source hashes and successful
+  guard remain, without a wrapper source-unchanged claim. The skill-referenced
+  structural graph validator is absent; packet status remains COMPLETED rather
+  than a structurally validated closure. Raw captures retired after verified
+  hashes: two files, 626,982,944 bytes; replay requires recapture.
+- Correlated read-only adversary: ROBUST within endpoint parity, fixed-input
+  lineage and selected-frame observation. Byte checks confirm both cyclic90
+  extensions. This does not qualify natural motion or resolve its cause.
+- Return pointer: isolate T0 caption-key access from video-key influence while
+  preserving query/text refinement and geometry. Require actual acting and
+  identity checks before promotion. Evidence:
+  `.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json`.
+  Refresh on source/runtime/binary/weight/input/noise/schedule/geometry changes
+  or artifact mutation/loss. Rollback: omit opt-in profiles/probe; defaults and
+  legacy attention labels retain their previous behavior.

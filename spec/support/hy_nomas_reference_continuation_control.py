@@ -63,6 +63,27 @@ HASH_CHUNK = 8 * 1024 * 1024
 MAX_PLANNED_CAP_GIB = 25.5
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 
+
+def compact_t0_history_visibility_layout(keep_latents: int, t0_valid_tokens: int) -> dict[str, int]:
+    """Describe a same-shape T1 mask over compact T0-video/text/T1-video keys."""
+    if keep_latents not in (10, 30):
+        raise ControlError("T0 history diagnostic keeps either 10 or all 30 latent frames")
+    if not 0 < t0_valid_tokens <= DIT_TEXT_ROWS:
+        raise ControlError("T0 history diagnostic requires admitted valid caption rows")
+    tokens_per_latent = VIDEO_TOKENS // LATENTS_PER_SEGMENT
+    hidden_video_rows = (LATENTS_PER_SEGMENT - keep_latents) * tokens_per_latent
+    key_rows = 2 * VIDEO_TOKENS + t0_valid_tokens
+    return {
+        "key_rows": key_rows,
+        "t0_video_rows": VIDEO_TOKENS,
+        "hidden_t0_video_prefix_rows": hidden_video_rows,
+        "visible_t0_video_rows": VIDEO_TOKENS - hidden_video_rows,
+        "t0_text_start": VIDEO_TOKENS,
+        "t0_text_end": VIDEO_TOKENS + t0_valid_tokens,
+        "t1_video_start": VIDEO_TOKENS + t0_valid_tokens,
+        "t1_video_end": key_rows,
+    }
+
 DEFAULT_T0_LATENT_BANK = Path(
     "/opt/mldata_ssd/cogni-ml/rolewright-reference-video-20261102.ux_lr9kv/"
     "results/latent-bank.f32le"
@@ -662,6 +683,23 @@ def _cache_attention_dispatch_factory(torch: Any, state: dict[str, Any]) -> Any:
             if tuple(attention_k.shape) != (1, expected_compact, HEADS, HEAD_DIM):
                 raise ControlError("compacted cache rows differ from the authenticated T0/T1 masks")
             attention_mask = None
+            keep_t0_latents = state.get("t0_history_keep_latents")
+            if keep_t0_latents is not None and cache_valid_len == CACHE_CAPACITY:
+                if cache_txt:
+                    raise ControlError("T0 history visibility diagnostic requires the admitted T1 cache read")
+                mask = state.get("t0_history_attention_mask")
+                if (
+                    mask is None
+                    or tuple(mask.shape) != (1, expected_compact)
+                    or mask.device != q_full.device
+                    or mask.dtype != torch.bool
+                    or expected_compact != 2 * VIDEO_TOKENS + state["t0_valid_tokens"]
+                ):
+                    raise ControlError("T0 history visibility mask escaped compact T1 key geometry")
+                attention_mask = mask
+                state["receipt"]["t0_history_visibility_mask_calls"] = (
+                    state["receipt"].get("t0_history_visibility_mask_calls", 0) + 1
+                )
         elif state["attention_layout"] == "padded":
             attention_mask = kv_mask[:, None, None, :]
         else:

@@ -1,0 +1,720 @@
+{
+  "schema": "cogni_ml.hy_nomas_portrait_t0_history/v1",
+  "date": "2026-11-07",
+  "source_base_commit": "b44a3073a17dd67da1ae561eca36e9b96dc02f35",
+  "claim": {
+    "level": "COMPLETED",
+    "scope": "Fixed-shape T0-video-key visibility intervention, exact same-arm terminal DiT/PixelUMM parity and the named postterminal observations",
+    "numerical_verification": "passed; all direct experiment DoD signals executed",
+    "root_cause_status": "IN_PROGRESS",
+    "not_claimed": [
+      "natural head turn or blinking",
+      "general exclusion of static-history suppression",
+      "trained stock I2V behavior",
+      "stock CUDA/FlexAttention parity",
+      "inference speedup",
+      "production motion correction"
+    ],
+    "packet_validation_limitation": "The skill-referenced scripts/validate-landmark-graph.sh is absent in this checkout. Packet claim level remains COMPLETED; substantive numerical checks and artifact dereferencing passed separately."
+  },
+  "boundaries": {
+    "risk": "CAUTION: opt-in attention API and bounded GPU diagnostic",
+    "allowed_paths": [
+      "examples/hy_nomas_portrait_t0_history_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_sequence_admission_spec.cr",
+      "spec/support/hy_nomas_portrait_dit_control.py",
+      "spec/support/hy_nomas_reference_continuation_control.py",
+      "spec/support/hy_nomas_portrait_tail_control.py",
+      "spec/support/hy_nomas_portrait_history_decoder_control.py",
+      "spec/hy_nomas_portrait_t0_history_mask_test.py",
+      "spec/hy_nomas_portrait_history_decoder_control_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json"
+    ],
+    "changed_paths": [
+      "examples/hy_nomas_portrait_t0_history_probe.cr",
+      "examples/support/hy_nomas_sequence.cr",
+      "src/ml/video/hy_nomas_continuation_history.cr",
+      "spec/hy_nomas_continuation_history_spec.cr",
+      "spec/hy_nomas_sequence_admission_spec.cr",
+      "spec/support/hy_nomas_portrait_dit_control.py",
+      "spec/support/hy_nomas_reference_continuation_control.py",
+      "spec/support/hy_nomas_portrait_tail_control.py",
+      "spec/support/hy_nomas_portrait_history_decoder_control.py",
+      "spec/hy_nomas_portrait_t0_history_mask_test.py",
+      "spec/hy_nomas_portrait_history_decoder_control_test.py",
+      "docs/hy-nomas-object-control-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json"
+    ],
+    "production_defaults_changed": false,
+    "rollback": "Omit segment profiles and the portrait probe. Legacy attention labels and default inference retain their previous behavior."
+  },
+  "source_files_at_execution": {
+    "examples/hy_nomas_portrait_t0_history_probe.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_portrait_t0_history_probe.cr",
+      "sha256": "912e7cf597652bf3648c9d36c1a58062db85827159bd029ea072c27c29418ef6",
+      "bytes": 20860
+    },
+    "examples/support/hy_nomas_sequence.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_sequence.cr",
+      "sha256": "8d8ced442e83122ed2d4355d34cde677c7ac4a2b6eb347bee43d6aae831b7443",
+      "bytes": 59286
+    },
+    "src/ml/video/hy_nomas_continuation_history.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/src/ml/video/hy_nomas_continuation_history.cr",
+      "sha256": "702cda98c1736b2ff3f772db891be4c67aafba2b290e3d4102e37d4a9db575b5",
+      "bytes": 45727
+    },
+    "spec/hy_nomas_continuation_history_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_continuation_history_spec.cr",
+      "sha256": "72a603d7190ade69d05532bcd35d363c7862ca3ce2e2354a46c4356a5fdff78d",
+      "bytes": 15748
+    },
+    "spec/hy_nomas_sequence_admission_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_sequence_admission_spec.cr",
+      "sha256": "bc93f8278ffc3ad993deb7debb9cb9e0e5536f604252e8a735be71444a674758",
+      "bytes": 8291
+    },
+    "spec/support/hy_nomas_portrait_dit_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_dit_control.py",
+      "sha256": "15b82ebc7c2698d5888c9fa36e762f287bfe99a9433d1afe3028d3f142aa29b3",
+      "bytes": 24485
+    },
+    "spec/support/hy_nomas_reference_continuation_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_reference_continuation_control.py",
+      "sha256": "ba727829c812dfba586371c5c889ac2b77b7c58d5327a1101a6dad939d64fe57",
+      "bytes": 57119
+    },
+    "spec/support/hy_nomas_portrait_tail_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_tail_control.py",
+      "sha256": "fee6bbc886102e517ba26a5170d327995a5fdfc5f03f5a44a099cf83a38109e2",
+      "bytes": 33436
+    },
+    "spec/support/hy_nomas_portrait_history_decoder_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_history_decoder_control.py",
+      "sha256": "d65bf5e0700aeab236b08b3ce7cd5363d820da595b3c80b2191cbc1ce7d53fde",
+      "bytes": 5594
+    },
+    "spec/hy_nomas_portrait_t0_history_mask_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_portrait_t0_history_mask_test.py",
+      "sha256": "e30e56b31842c5453ae076aaaa60c3c0611d322d62c10462874b6afaa92f8d01",
+      "bytes": 5810
+    },
+    "spec/hy_nomas_portrait_history_decoder_control_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_portrait_history_decoder_control_test.py",
+      "sha256": "8d3ccbd2e65c836eca81407e64b823dd0ca3cf6bf0a669a473588398a89d7f63",
+      "bytes": 2068
+    }
+  },
+  "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+  "experiment": {
+    "baseline": "all30 explicit all-visible T1 mask; unmasked T0 writer",
+    "treatment": "last10 masks oldest 20 T0 video latent frames in the T1 reader only",
+    "preserved": [
+      "prompt and saved Qwen",
+      "original BF16 weights/arithmetic",
+      "clean T0",
+      "T0 cache writer/noise/sigma/timestep",
+      "T1 noise/four-step Euler schedule",
+      "query/key extent and RoPE",
+      "cyclic90 decoder extension/noise/windows/overlap"
+    ],
+    "t0_latent_frames": 30,
+    "t1_query_rows": 4583,
+    "key_layout": {
+      "t0_video": 4320,
+      "t0_caption": 263,
+      "t1_current_video": 4320,
+      "total": 8903,
+      "t1_text_is_query_only": true
+    },
+    "hidden_old_t0_video_keys": 2880,
+    "visible_last_t0_video_keys": 1440,
+    "mask_does_not_save_cache_or_dense_attention_memory": true,
+    "decoder_display_crop": [
+      120,
+      240
+    ],
+    "decoder_policy": "Each same-arm 60-latent prefix plus [50,60) repeated three times; 90 latents, ten-frame windows, five-frame overlap",
+    "synthetic_future_context": true,
+    "all30_decode_reused": "Whole cyclic90 input is byte-identical to the accepted decoded artifact; weights/noise/RoPE/binary/window identities checked."
+  },
+  "quadrumvirate": {
+    "prediction": "If direct old static-video keys dominate the weak motion, hiding them should permit earlier coherent head/eye action.",
+    "highest_risk_assumption": "Retained K/V and caption states still encode all30; old-key visibility is only one route for static-history information.",
+    "move": "Same-shape all30 A/A and last10, native/source numeric controls and separately inspected T1 media.",
+    "countercheck": "Exact all30 bank A/A, 34 source A/A records, 11 same writer records, fixed noise/weights/RoPE and identical decoder policy; motion magnitude is not quality.",
+    "decision": "Do not promote last10 as a correction: this slice does not establish earlier natural action.",
+    "next_falsifier": "Separate retained T0 caption-key access from video-key influence, preserving query/text refinement and geometry; require actual acting and identity checks."
+  },
+  "numerical_gate": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "tolerances_changed": false,
+    "dit_values_per_arm": 138240,
+    "dit_max_abs_error_both_arms": 0.0,
+    "dit_unequal_values_both_arms": 0,
+    "pixelumm_display_values_per_arm": 53084160,
+    "pixelumm_max_abs_error_both_arms": 0.0,
+    "pixelumm_mean_abs_error_both_arms": 0.0,
+    "all_finite": true,
+    "all30_aa_source_records": 34,
+    "same_writer_records_between_arms": 11,
+    "source_runtime": {
+      "dit_torch": "2.8.0",
+      "pixelumm_torch": "2.6.0",
+      "device": "MPS",
+      "cpu_fallback": false
+    },
+    "transfer_scope": "Native instrumented encode allocations/readbacks/preterminal waits 0/0/0, one terminal wait per stage. Opaque MPS allocations excluded. Source one packed terminal transfer is code-path audit metadata, not native telemetry."
+  },
+  "observations": {
+    "user_prior_observation": "Gaze direction already improved with the preceding cyclic decoder context. This test keeps that context in both arms.",
+    "metric": "Adjacent-frame RGB MAE after 4x4 mean pooling; magnitude only, not pose or perceptual quality",
+    "regions_xyxy": {
+      "full": [
+        0,
+        0,
+        512,
+        288
+      ],
+      "face": [
+        160,
+        20,
+        356,
+        268
+      ],
+      "eyes": [
+        184,
+        84,
+        336,
+        152
+      ],
+      "background": [
+        0,
+        0,
+        128,
+        288
+      ]
+    },
+    "summaries": {
+      "full": {
+        "all30_adjacent": {
+          "mean": 0.0008217088761739433,
+          "max": 0.0014965931186452508,
+          "max_destination_frame": 52,
+          "first4s_mean": 0.0008169104112312198,
+          "last1s_mean": 0.0008407027926295996,
+          "per_second_mean": [
+            0.0008267801604233682,
+            0.0008035052451305091,
+            0.0008314976585097611,
+            0.000806269992608577,
+            0.0008407027926295996
+          ]
+        },
+        "last10_adjacent": {
+          "mean": 0.0008389864815399051,
+          "max": 0.0017050901660695672,
+          "max_destination_frame": 117,
+          "first4s_mean": 0.0008316237945109606,
+          "last1s_mean": 0.0008681304752826691,
+          "per_second_mean": [
+            0.0008765881648287177,
+            0.0008064039866439998,
+            0.0008347660186700523,
+            0.0008106104214675725,
+            0.0008681304752826691
+          ]
+        },
+        "cross_arm": {
+          "mean": 0.005857501644641161,
+          "max": 0.006587814539670944,
+          "max_destination_frame": 118,
+          "first4s_mean": 0.005708867218345404,
+          "last1s_mean": 0.006452040281146765,
+          "per_second_mean": [
+            0.0047171819023787975,
+            0.005870116408914328,
+            0.006077283527702093,
+            0.006170886103063822,
+            0.006452040281146765
+          ]
+        }
+      },
+      "face": {
+        "all30_adjacent": {
+          "mean": 0.0008856733329594135,
+          "max": 0.003191815922036767,
+          "max_destination_frame": 117,
+          "first4s_mean": 0.0008510076440870762,
+          "last1s_mean": 0.0010228913743048906,
+          "per_second_mean": [
+            0.000874812831170857,
+            0.0008453018963336945,
+            0.0008504210854880512,
+            0.0008344869711436331,
+            0.0010228913743048906
+          ]
+        },
+        "last10_adjacent": {
+          "mean": 0.0009232878219336271,
+          "max": 0.003892200067639351,
+          "max_destination_frame": 117,
+          "first4s_mean": 0.0008804402896203101,
+          "last1s_mean": 0.0010928924893960357,
+          "per_second_mean": [
+            0.0009809463517740369,
+            0.0008502703276462853,
+            0.0008518374525010586,
+            0.0008428948931396008,
+            0.0010928924893960357
+          ]
+        },
+        "cross_arm": {
+          "mean": 0.011407669633626938,
+          "max": 0.013171312399208546,
+          "max_destination_frame": 118,
+          "first4s_mean": 0.011091296561062336,
+          "last1s_mean": 0.01267316285520792,
+          "per_second_mean": [
+            0.009075155481696129,
+            0.011381040327250957,
+            0.011830226518213749,
+            0.01207876205444336,
+            0.01267316285520792
+          ]
+        }
+      },
+      "eyes": {
+        "all30_adjacent": {
+          "mean": 0.0010877333115786314,
+          "max": 0.013238519430160522,
+          "max_destination_frame": 117,
+          "first4s_mean": 0.0008992227958515286,
+          "last1s_mean": 0.0018339207163080573,
+          "per_second_mean": [
+            0.0009329174645245075,
+            0.0008824824471957982,
+            0.0008905185968615115,
+            0.0008923767600208521,
+            0.0018339207163080573
+          ]
+        },
+        "last10_adjacent": {
+          "mean": 0.001196807948872447,
+          "max": 0.016376381739974022,
+          "max_destination_frame": 117,
+          "first4s_mean": 0.0009408470941707492,
+          "last1s_mean": 0.002209986560046673,
+          "per_second_mean": [
+            0.0010613385820761323,
+            0.0009025151375681162,
+            0.0008924922440201044,
+            0.0009120630566030741,
+            0.002209986560046673
+          ]
+        },
+        "cross_arm": {
+          "mean": 0.012808894738554955,
+          "max": 0.017695723101496696,
+          "max_destination_frame": 118,
+          "first4s_mean": 0.01231982558965683,
+          "last1s_mean": 0.01476516854017973,
+          "per_second_mean": [
+            0.010042904876172543,
+            0.012592296116054058,
+            0.013060476630926132,
+            0.01358362752944231,
+            0.01476516854017973
+          ]
+        }
+      },
+      "background": {
+        "all30_adjacent": {
+          "mean": 0.0007436531595885754,
+          "max": 0.001604256802238524,
+          "max_destination_frame": 52,
+          "first4s_mean": 0.000752597174141556,
+          "last1s_mean": 0.0007082496304064989,
+          "per_second_mean": [
+            0.0007403776398859918,
+            0.0007404427160508931,
+            0.0007941288058646023,
+            0.0007349303923547268,
+            0.0007082496304064989
+          ]
+        },
+        "last10_adjacent": {
+          "mean": 0.0007508046692237258,
+          "max": 0.0016131048323586583,
+          "max_destination_frame": 12,
+          "first4s_mean": 0.0007601237739436328,
+          "last1s_mean": 0.0007139164954423904,
+          "per_second_mean": [
+            0.0007609561434946954,
+            0.0007374316337518394,
+            0.0007983453688211739,
+            0.0007437968160957098,
+            0.0007139164954423904
+          ]
+        },
+        "cross_arm": {
+          "mean": 0.001170557108707726,
+          "max": 0.0014074643841013312,
+          "max_destination_frame": 110,
+          "first4s_mean": 0.0011480082757771015,
+          "last1s_mean": 0.0012607523240149021,
+          "per_second_mean": [
+            0.0010101926745846868,
+            0.0011775552993640304,
+            0.0012218834599480033,
+            0.0011824016692116857,
+            0.0012607523240149021
+          ]
+        }
+      }
+    },
+    "selected_frames": [
+      0,
+      24,
+      48,
+      72,
+      96,
+      112,
+      119
+    ],
+    "selected_frame_review": "Nearly unchanged head pose through the interior; late asymmetric eye deformation persists. Full-video comparison supplied for user review; stills do not certify playback naturalness.",
+    "causal_limit": "Masking direct oldest T0 video keys alone did not establish the requested motion. Retained deep cache/text mixing and temporal/noise/RoPE phase prevent rejecting the complete static-history hypothesis."
+  },
+  "memory": {
+    "reserve_pct": 10,
+    "accounting": "file-cache",
+    "swap_growth_stop_mib": 64,
+    "runs": {
+      "native_dit_all30": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-all30-v2.guard.jsonl",
+          "bytes": 38947,
+          "sha256": "07a901a2bf27dcbf675cf7c199893b2141a713aacd1d1836d35140c619293ce0"
+        },
+        "cap_mib": 30720,
+        "peak_sampled_bytes": 25944552216,
+        "minimum_headroom_bytes": 13370015744,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "source_dit_all30": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-all30-v1.guard.jsonl",
+          "bytes": 39711,
+          "sha256": "6781aa81e37132cbdddee704f4aed28ea9d176792568a6e9c79b877e181a0c51"
+        },
+        "cap_mib": 18432,
+        "peak_sampled_bytes": 5059512168,
+        "minimum_headroom_bytes": 27978481664,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "native_dit_last10": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-last10-v2.guard.jsonl",
+          "bytes": 43005,
+          "sha256": "6bca49bebb32fa9ba8d17770f8889e3dfe0e81376568d051a9f42be270929777"
+        },
+        "cap_mib": 30720,
+        "peak_sampled_bytes": 25949680576,
+        "minimum_headroom_bytes": 14699823104,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "source_dit_last10": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-last10-v1.guard.jsonl",
+          "bytes": 40024,
+          "sha256": "283c80b86b84b3edf954cc05857cbd79eac75b7afa805b420379c0e8d173a1e5"
+        },
+        "cap_mib": 18432,
+        "peak_sampled_bytes": 5055121448,
+        "minimum_headroom_bytes": 38546472960,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "native_decoder_all30": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-tail-context-v1/native90-v2.guard.jsonl",
+          "bytes": 167614,
+          "sha256": "a79e5b4b45c7a2a3eb76a2c07f0852ad60abe38a2ae9b54fc770aaca8afb2e35"
+        },
+        "cap_mib": 22528,
+        "peak_sampled_bytes": 20191031608,
+        "minimum_headroom_bytes": 18096209920,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "source_decoder_all30": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-tail-context-v1/upstream90-v1.guard.jsonl",
+          "bytes": 213071,
+          "sha256": "ae87eafb8ef46005d69fb622c0d3e2f6a7673060dd82e14a2ff390e08cda0d8c"
+        },
+        "cap_mib": 18432,
+        "peak_sampled_bytes": 8529331976,
+        "minimum_headroom_bytes": 19459080192,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "native_decoder_last10": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-decoder-last10-v1.guard.jsonl",
+          "bytes": 172473,
+          "sha256": "6fe72a9831325e733c13b20e74975ae053e817f905f2bf379adb7c5d13e4e0fe"
+        },
+        "cap_mib": 22528,
+        "peak_sampled_bytes": 20195324168,
+        "minimum_headroom_bytes": 18072682496,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "source_decoder_last10": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-decoder-last10-v1.guard.jsonl",
+          "bytes": 238455,
+          "sha256": "dfb069d92afb5daa2e2dbf51aaef4eb4f8e3ed8865551e7404fe549ec99dad2d"
+        },
+        "cap_mib": 18432,
+        "peak_sampled_bytes": 8701577160,
+        "minimum_headroom_bytes": 16094248960,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      },
+      "postterminal_motion": {
+        "artifact": {
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/motion-gpu.guard.jsonl",
+          "bytes": 3526,
+          "sha256": "6dc4aa37c733d8dfa37b169f19f5c4a274694d20e06ca9fb3b739316fe4ce87d"
+        },
+        "cap_mib": 8192,
+        "peak_sampled_bytes": 1516095336,
+        "minimum_headroom_bytes": 45245038592,
+        "swap_growth_bytes": 0,
+        "reserve_pct": 10
+      }
+    },
+    "limitation": "Sampled guard cannot exclude between-poll spikes; file cache is an estimate of reclaimability."
+  },
+  "verification": {
+    "python_tests": {
+      "command": "python3 -B -m unittest discover -s spec -p 'hy_nomas_portrait*test.py'",
+      "observed": "14 tests OK"
+    },
+    "crystal_specs": {
+      "command_manifest": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-cpu-specs-v1.command.json",
+        "sha256": "9472f80c505da456b229bd36bdf3adaf0e1a137865008dfce9d4ebb18b982c68",
+        "bytes": 3391
+      },
+      "result": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-cpu-specs-v1.command.execution.json",
+        "sha256": "c9958e2aae387ff3e6633c2a2cd1f726e662e1649e12cd9e6d49285d554cb2c1",
+        "bytes": 210
+      },
+      "observed": "30 examples, 0 failures, 0 errors"
+    },
+    "release_build": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-build-v3.command.json",
+      "sha256": "b67e061809b5e8d1d4a15c908c98cbaff7e57180294ce4ac8464c846ccdd9903",
+      "bytes": 3504
+    },
+    "binding_verifier": {
+      "command": "python3 -B /Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/verify-bindings.py",
+      "script": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/verify-bindings.py",
+        "sha256": "60e7260b4422f8aef715f29f579f800c68c55ce996e23d285688e0fedfff5666",
+        "bytes": 13284
+      },
+      "result": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/verified-bindings.json",
+        "sha256": "74ef2c65b9ce95dfd662d69b4577fdbf35e71aea6985837cc7d5f75cb9f4c419",
+        "bytes": 14075
+      },
+      "observed": "passed; actual artifacts dereferenced"
+    },
+    "capture_verifier": {
+      "command": "python3 -B /Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/verify-bindings.py --captures-only",
+      "result": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/capture-audit.json",
+        "sha256": "154df7d7ee1bac5e8b9e832dfc6ee17455e0cc800af0d7461abfda895ae7abaa",
+        "bytes": 21045
+      },
+      "observed": "34 source A/A record hashes and 11 writer hashes verified before payload retirement"
+    },
+    "format_lint_diff": "Ruff all six changed Python files, Crystal format --check five changed Crystal files, git diff --check passed",
+    "landmark_graph": {
+      "command": "bash scripts/validate-landmark-graph.sh",
+      "observed": "unavailable: script absent; no structural validator claim"
+    }
+  },
+  "artifacts": {
+    "binding_result": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/verified-bindings.json",
+      "sha256": "74ef2c65b9ce95dfd662d69b4577fdbf35e71aea6985837cc7d5f75cb9f4c419",
+      "bytes": 14075
+    },
+    "capture_audit": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/capture-audit.json",
+      "sha256": "154df7d7ee1bac5e8b9e832dfc6ee17455e0cc800af0d7461abfda895ae7abaa",
+      "bytes": 21045
+    },
+    "raw_capture_retirement": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/retirement.json",
+      "sha256": "7a313636b6a2fef15c859726e84800711a425a8cb74fce703c75bc5bd952e4fc",
+      "bytes": 1222
+    },
+    "gpu_motion": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/motion-gpu.json",
+      "sha256": "552431acee8231c19bb67a40928a5f2f70b4fc1970d32158aa02ddbe6cdc8c67",
+      "bytes": 53919
+    },
+    "motion_script": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/analyze-motion-gpu.py",
+      "sha256": "d3d2b3af84b8721d6d8ab06ca544a7322ee57417cede1ddf5f1330c369d678ea",
+      "bytes": 2979
+    },
+    "export_script": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/export-comparison.py",
+      "sha256": "59706519f1dd456ff49e7ae029562e3866f54a10930ed2bbadfd1aa5e757d939",
+      "bytes": 2766
+    },
+    "media": {
+      "schema": "cogni_ml.portrait_history_media/v1",
+      "operation": "Postterminal CPU display conversion and MP4 packaging only",
+      "video": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/all30-left-last10-right-5s.mp4",
+        "bytes": 220534,
+        "sha256": "e9d2457b65282f2a55780c9fcf1976416ae421aaa024aa31cf665bca497b9d2f"
+      },
+      "contact": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/history-review.png",
+        "bytes": 1959877,
+        "sha256": "27b654a353778c8e3afe37dabc689087a4b2c8ef6e2c0275f2abfa7e4deec276"
+      },
+      "eyes": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/eyes-review.png",
+        "bytes": 302946,
+        "sha256": "415e771f733559bc93da59d1aa0074418e696d6c4170b15cb6d12130c19481b0"
+      },
+      "selected_frames": [
+        0,
+        24,
+        48,
+        72,
+        96,
+        112,
+        119
+      ],
+      "labels": [
+        "All 30 T0 frames visible",
+        "Only last 10 T0 frames visible"
+      ],
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "width": 1024,
+            "height": 312,
+            "r_frame_rate": "24/1",
+            "duration": "5.000000",
+            "nb_frames": "120"
+          }
+        ]
+      }
+    },
+    "commands": {
+      "native-build-v3": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-build-v3.command.json",
+        "sha256": "b67e061809b5e8d1d4a15c908c98cbaff7e57180294ce4ac8464c846ccdd9903",
+        "bytes": 3504
+      },
+      "native-cpu-specs-v1": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-cpu-specs-v1.command.json",
+        "sha256": "9472f80c505da456b229bd36bdf3adaf0e1a137865008dfce9d4ebb18b982c68",
+        "bytes": 3391
+      },
+      "native-all30-v2": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-all30-v2.command.json",
+        "sha256": "a4ab4a54f7e848b2379bed6a698b9e64883e2f517e5ff8981ab07332fdb8fe12",
+        "bytes": 1804
+      },
+      "native-last10-v2": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-last10-v2.command.json",
+        "sha256": "a452d78f289c3ea62513ee71a2806a53e1cbf0b88825b9536f38225246e9cf81",
+        "bytes": 1807
+      },
+      "upstream-all30-v1": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-all30-v1.command.json",
+        "sha256": "c36b5f94b7458bcc5b527063fe8ca088b711ed4e1d57168feeb42ad5e7025b78",
+        "bytes": 1131
+      },
+      "upstream-last10-v1": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-last10-v1.command.json",
+        "sha256": "69738fd646a966858e8191beb6b9a2ea2a1229ec6b77cb50054722ec5603051e",
+        "bytes": 1722
+      },
+      "native-decoder-last10-v1": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/native-decoder-last10-v1.command.json",
+        "sha256": "d818be78089c23c1db64a4da38e4a987b0f3d25adb70cc6bb395f97202c83e80",
+        "bytes": 2519
+      },
+      "upstream-decoder-last10-v1": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/upstream-decoder-last10-v1.command.json",
+        "sha256": "96c41ad0b3d3a612e929cbbc8f088a81badb58fbef4093b56cd5414e90f29f2f",
+        "bytes": 2770
+      },
+      "motion-gpu": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/motion-gpu.command.json",
+        "sha256": "4b1ee3520fce5e0d1e712f779d9f41afb25bab2e992a38d49791e30d7377bb21",
+        "bytes": 1225
+      }
+    },
+    "execution_receipt_limitation": "The first upstream all30 run predates the run_recorded wrapper and has no *.command.execution.json. Frozen command/producer hashes, successful guard and exact output are retained; no source_unchanged wrapper claim is made for that run."
+  },
+  "adversary": {
+    "reviewed_at": "2026-11-07T16:10:26.342045+00:00",
+    "reviewer": "t0_history_adversary",
+    "lineage": "Correlated same-team read-only review; not independent replication",
+    "verdict": "ROBUST",
+    "scope": "Fixed-shape direct T0-video-key visibility, exact same-arm terminal DiT/PixelUMM parity and the named postterminal observations; no natural-acting or root-cause claim.",
+    "checked": [
+      "Both arms match all 138,240 DiT values and 53,084,160 finite PixelUMM values exactly",
+      "Both cyclic90 inputs byte-match the per-channel same-arm 60-frame prefix plus [50,60) repeated three times",
+      "All30 comparator/baseline links and two-arm ordered motion inputs in the updated binding verifier",
+      "Both contact sheets and the narrow selected-frame observation",
+      "Last10 source Pixel receipt and wrapper exit 0/source_unchanged"
+    ],
+    "residual_limits": [
+      "First all30 source run has no wrapper execution receipt; no source_unchanged claim",
+      "Still-frame review does not certify playback naturalness",
+      "Binder verifies source execution wrappers but does not serialize their returned wrapper hashes or assert all source runtime/sync fields; current raw receipts/manifests retain consistent values."
+    ],
+    "review_artifact": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t0-history-v1/adversary-review.json",
+      "sha256": "6777672b065ae77c7c23b7c0bb3dcf105afb712d50d88fb5fab1271d8562f50e",
+      "bytes": 1234
+    }
+  },
+  "decay": {
+    "triggers": [
+      "source/runtime/binary/weight/input/noise/schedule/geometry change",
+      "artifact mutation or loss"
+    ],
+    "refresh": "Rerun admission, guarded same-arm gates and crossbinding. Recapture retired activations for intermediate replay. Repeat visual assessment on changed generation conditions.",
+    "failure_policy": "Reopen dependent claims; do not reuse stale receipt or broaden parity to acting."
+  }
+}

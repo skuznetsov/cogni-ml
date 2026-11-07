@@ -134,4 +134,48 @@ describe HyNomasSequence do
       expect_raises(ArgumentError) { HyNomasSequence.forwards(count) }
     end
   end
+
+  it "keeps the T0 reference writer unmasked and changes only the early T0 video keys" do
+    all_visible = HyNomasSequence.t0_history_attention_profiles(263, 30)
+    recent_only = HyNomasSequence.t0_history_attention_profiles(263, 10)
+    all_visible.size.should eq(2)
+    recent_only.size.should eq(2)
+    all_visible[0].should be_nil
+    recent_only[0].should be_nil
+
+    all_keys = all_visible[1].not_nil!.key
+    recent_keys = recent_only[1].not_nil!.key
+    all_visible[1].not_nil!.query.size.should eq(4_583)
+    all_keys.size.should eq(8_903)
+    recent_keys.size.should eq(8_903)
+    all_visible[1].not_nil!.query.all?(&.zero?).should be_true
+    recent_only[1].not_nil!.query.all?(&.zero?).should be_true
+    all_keys.all?(&.zero?).should be_true
+    recent_keys[0, 2_880].should eq(Array(Int32).new(2_880, -1))
+    recent_keys[2_880..].all?(&.zero?).should be_true
+
+    # Both arms take the same masked workspace path; only the T1 key labels differ.
+    common = {
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens: [263, 263], segment_cache_text: [true, false],
+      source_bf16_attention: true,
+    }
+    keep_all = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: all_visible)
+    keep_recent = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      **common, segment_attention_profiles: recent_only)
+    keep_all.named_bytes.should eq(keep_recent.named_bytes)
+    keep_all.workspace_geometries[0].masked.should be_false
+    keep_all.writer_workspace_geometries[0].should eq(keep_all.workspace_geometries[0])
+    keep_all.workspace_geometries[1].masked.should be_true
+    keep_recent.workspace_geometries[1].masked.should be_true
+  end
+
+  it "rejects unsupported T0 history visibility windows" do
+    [0, 9, 11, 20, 29, 31].each do |visible|
+      expect_raises(ArgumentError) do
+        HyNomasSequence.t0_history_attention_profiles(263, visible)
+      end
+    end
+  end
 end

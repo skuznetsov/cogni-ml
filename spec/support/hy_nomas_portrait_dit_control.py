@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 SUPPORT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SUPPORT))
-import hy_nomas_reference_continuation_control as source
+import hy_nomas_reference_continuation_control as source  # noqa: E402
 
 DEFAULT_ROOT = Path('/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue')
 MANIFEST_SHA = '0f35bb09964f2b28d28069e8d39a8a1d6194607d4269de6bb824ff54d828e2ac'
@@ -30,6 +30,7 @@ ATOL = RTOL = 2e-5
 VALID = 263
 TEXT_ROWS = 320
 VIDEO_ROWS = 4320
+LATENTS_PER_SEGMENT = 30
 CACHE_ROWS = VIDEO_ROWS + TEXT_ROWS
 SHAPES = {
     'input.latent_bank': ('F32', [1, 32, 180, 9, 16]),
@@ -53,6 +54,57 @@ def checked_json(path, digest):
     if source._sha256(path) != digest:
         raise ValueError(f'input digest mismatch: {path.name}')
     return source.attention_reference._json_no_duplicates(path.read_bytes(), path.name)
+
+
+def _admit_comparison_latents(path_arg, digest):
+    if path_arg is None and digest is None:
+        return None
+    if path_arg is None or not isinstance(digest, str) or source._HEX.fullmatch(digest) is None:
+        raise ValueError('comparison native latents require a path and lowercase SHA-256')
+    path = source._regular_file(path_arg, 'comparison native T1 latents')
+    expected_bytes = math.prod(source.LATENT_SEGMENT_SHAPE) * 4
+    if path.stat().st_size != expected_bytes or source._sha256(path) != digest:
+        raise ValueError('comparison native T1 latent shape or digest differs')
+    return dict(path=path, sha256=digest, shape=list(source.LATENT_SEGMENT_SHAPE))
+
+
+def history_visibility_record(keep_latents):
+    if keep_latents is None:
+        keep_latents = LATENTS_PER_SEGMENT
+        explicit_mask = False
+    else:
+        explicit_mask = True
+    layout = source.compact_t0_history_visibility_layout(keep_latents, VALID)
+    return dict(
+        kind='fixed-shape T0 video-key visibility diagnostic',
+        diagnostic_only=True,
+        keep_latents=keep_latents,
+        explicit_all_true_mask=explicit_mask and keep_latents == LATENTS_PER_SEGMENT,
+        t0_video_latents=LATENTS_PER_SEGMENT,
+        t0_video_key_rows=layout['t0_video_rows'],
+        hidden_t0_video_key_rows=layout['hidden_t0_video_prefix_rows'],
+        visible_t0_video_key_rows=layout['visible_t0_video_rows'],
+        retained_t0_caption_key_rows=VALID,
+        retained_current_t1_video_key_rows=VIDEO_ROWS,
+        compact_attention_key_rows=layout['key_rows'],
+        t0_cache_content_unchanged=True,
+        t0_cache_writer_unchanged=True,
+        t1_rope_and_query_geometry_unchanged=True,
+        trained_stock_contract=False,
+        interpretation=(
+            'Masks visibility to the oldest repeated-photo T0 image keys. All T0 K/V '
+            'remain cached; this does not reduce cache storage or dense attention extent.'
+        ),
+    )
+
+
+def build_t0_history_attention_mask(torch, device, keep_latents):
+    layout = source.compact_t0_history_visibility_layout(keep_latents, VALID)
+    mask = torch.ones((1, layout['key_rows']), dtype=torch.bool, device=device)
+    hidden_rows = layout['hidden_t0_video_prefix_rows']
+    if hidden_rows:
+        mask[:, :hidden_rows] = False
+    return layout, mask
 
 
 def admit(args):
@@ -87,6 +139,11 @@ def admit(args):
     scene = json.loads(receipt['prompt'])
     if len(scene['segments']) != 1 or scene['segments'][0]['contained_actions']:
         raise ValueError('shared scene must not contain separate actions')
+    comparison_latents = _admit_comparison_latents(
+        getattr(args, 'native_latents', None),
+        getattr(args, 'native_latents_sha256', None),
+    )
+    visibility = history_visibility_record(getattr(args, 't0_history_keep_latents', None))
     model = source._authenticate_model_sources(SimpleNamespace(
         upstream=args.upstream, cache_index=args.cache_index, cache_index_sha256=INDEX_SHA))
     return dict(root=root, manifest_path=manifest_path, document=manifest,
@@ -96,6 +153,7 @@ def admit(args):
                 rope_sin_record=manifest['tensors']['input.rope_sin'],
                 cache_epsilon_record=manifest['tensors']['cache.eps_bf16'],
                 qwen_record=manifest['tensors']['input.qwen_bf16'], mask=mask,
+                comparison_latents=comparison_latents, history_visibility=visibility,
                 **model)
 
 
@@ -116,7 +174,18 @@ def execute(admitted, output):
     device, dtype = torch.device('mps'), torch.bfloat16
     state = dict(dtype=dtype, device_type='mps', call=None, attention_layout='compact',
                  t0_valid_tokens=VALID,
-                 receipt=dict(attention_calls=0, attention_query_chunks=0))
+                 t0_history_keep_latents=(
+                     admitted['history_visibility']['keep_latents']
+                     if admitted['history_visibility']['explicit_all_true_mask']
+                     or admitted['history_visibility']['hidden_t0_video_key_rows'] > 0
+                     else None
+                 ),
+                 receipt=dict(attention_calls=0, attention_query_chunks=0,
+                              t0_history_visibility_mask_calls=0))
+    if state['t0_history_keep_latents'] is not None:
+        _, visibility_mask = build_t0_history_attention_mask(
+            torch, device, state['t0_history_keep_latents'])
+        state['t0_history_attention_mask'] = visibility_mask
     helpers = source.block_reference._install_upstream_modules(Path(admitted['upstream_path']))
     regular_state = dict(mode='bf16', compare=source.single._NoopCompare(),
                          receipt=dict(attention_calls=0, attention_query_chunks=0))
@@ -152,9 +221,29 @@ def execute(admitted, output):
     initial = source._load_t1_noise(torch, np, admitted, device)
     times = scheduler.timesteps.to(device=device, dtype=torch.float32)
     deltas = (scheduler.sigmas[1:] - scheduler.sigmas[:-1]).to(device=device, dtype=torch.float32)
-    native_values = np.memmap(admitted['path'], dtype='<f4', mode='r', shape=source.LATENT_BANK_SHAPE)
-    native = torch.from_numpy(np.array(native_values[:, :, 30:60], copy=True)).to(device)
-    del native_values
+    comparison_latents = admitted['comparison_latents']
+    if comparison_latents is None:
+        native_values = np.memmap(admitted['path'], dtype='<f4', mode='r', shape=source.LATENT_BANK_SHAPE)
+        native_cpu = np.array(native_values[:, :, 30:60], copy=True)
+        del native_values
+        comparison_reference = dict(
+            kind='authenticated historical native T1 bank slice',
+            path=str(admitted['path']),
+            sha256=admitted['receipt']['diagnostics']['latent_bank_sha256'],
+        )
+    else:
+        native_values = np.memmap(
+            comparison_latents['path'], dtype='<f4', mode='r',
+            shape=source.LATENT_SEGMENT_SHAPE)
+        native_cpu = np.array(native_values, copy=True)
+        del native_values
+        comparison_reference = dict(
+            kind='authenticated same-arm native T1 latent segment',
+            path=str(comparison_latents['path']),
+            sha256=comparison_latents['sha256'],
+        )
+    native = torch.from_numpy(native_cpu).to(device)
+    del native_cpu
     captured = []
 
     def capture(name, value):
@@ -232,9 +321,14 @@ def execute(admitted, output):
                               f'{CACHE_ROWS + VIDEO_ROWS}->{2 * VIDEO_ROWS + VALID}': 216}
         if state['receipt']['attention_row_inventory'] != expected_inventory:
             raise ValueError('shared-scene attention included unadmitted text keys')
+        expected_visibility_calls = 216 if state['t0_history_keep_latents'] is not None else 0
+        if state['receipt']['t0_history_visibility_mask_calls'] != expected_visibility_calls:
+            raise ValueError('T0 history visibility mask call count differs from the 4x54 T1 schedule')
         actual = latent.float()
         delta = actual - native
-        bad = (~torch.isfinite(actual)) | (delta.abs() > ATOL + RTOL * native.abs())
+        bad = (~torch.isfinite(actual)) | (~torch.isfinite(native)) | (
+            delta.abs() > ATOL + RTOL * native.abs()
+        )
         stats = torch.stack((delta.abs().max(), (delta.square().mean()).sqrt(),
                              bad.float().sum(), (delta != 0).float().sum()))
         terminal = torch.cat((clean, latent), dim=2).float()
@@ -242,6 +336,19 @@ def execute(admitted, output):
         capture('comparison.native_t1', stats)
         # One blocking terminal transfer; no scalar observations between forwards.
         packed = torch.cat([value.float().reshape(-1) for _, value in captured]).cpu().numpy()
+    stats_offset = 0
+    for name, value in captured:
+        if name == 'comparison.native_t1':
+            break
+        stats_offset += value.numel()
+    stats_values = packed[stats_offset:stats_offset + 4].tolist()
+    comparison_passed = int(stats_values[2]) == 0
+    max_abs = float(stats_values[0])
+    rmse = float(stats_values[1])
+    if not math.isfinite(max_abs):
+        max_abs = None
+    if not math.isfinite(rmse):
+        rmse = None
     elapsed = time.monotonic() - started
     output.mkdir(mode=0o700)
     packed_path = output / 'captures.f32le'
@@ -259,8 +366,6 @@ def execute(admitted, output):
     latent_path = output / 'latent.f32le'
     with latent_path.open('xb') as stream:
         stream.write(terminal_raw)
-    stats_record = by_name['comparison.native_t1']
-    stats_values = packed[stats_record['offset'] // 4:stats_record['offset'] // 4 + 4].tolist()
     receipt = dict(schema='cogni_ml.hy_nomas_portrait_dit_control/v1',
                    runtime=dict(torch_version=torch.__version__, device='mps', fallback=0,
                                 diffusers_version=diffusers_version),
@@ -269,21 +374,26 @@ def execute(admitted, output):
                    conditioning_payload_sha256=admitted['document']['payload_sha256'],
                    native_receipt_sha256=RECEIPT_SHA,
                    native_latent_sha256=admitted['receipt']['diagnostics']['latent_bank_sha256'],
+                   comparison_reference=comparison_reference,
                    cache_index_sha256=INDEX_SHA, upstream_revision=source.PINNED_REVISION,
                    upstream_sources=admitted['source_hashes'],
                    shared_scene_plan=shared_scene_plan(), schedule=source.single._schedule_record(scheduler),
+                   history_visibility=admitted['history_visibility'],
                    attention=state['receipt'], seconds_through_terminal=elapsed,
                    intermediate_readbacks=0, explicit_mps_synchronize_calls=0, terminal_transfer_count=1,
                    one_resident_bf16_block=True, persistent_layer_caches=54,
                    scope='supplied native clean T0 and saved Qwen; upstream five-forward DiT; encoders excluded',
-                   comparison=dict(atol=ATOL, rtol=RTOL, max_abs=stats_values[0],
-                                   rmse=stats_values[1], outside_tolerance=int(stats_values[2]),
+                   comparison=dict(atol=ATOL, rtol=RTOL, passed=comparison_passed,
+                                   max_abs=max_abs, rmse=rmse,
+                                   outside_tolerance=int(stats_values[2]),
                                    unequal=int(stats_values[3]), values=native.numel()),
                    result=dict(path=str(latent_path), shape=list(terminal.shape),
                                sha256=source._sha256(latent_path)),
                    capture_payload=dict(path=str(packed_path), sha256=source._sha256(packed_path), records=records))
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2, allow_nan=False) + '\n')
     print(json.dumps({key: receipt[key] for key in ('comparison', 'seconds_through_terminal', 'result')}), flush=True)
+    if not comparison_passed:
+        raise ValueError('upstream/native T1 comparison exceeded the admitted 2e-5 tolerance')
 
 
 def main():
@@ -292,6 +402,12 @@ def main():
     parser.add_argument('--upstream', type=Path, default=Path('/opt/mldata_ssd/models/hy-nomas/upstream-911cea6458a8'))
     parser.add_argument('--cache-index', type=Path, default=source.single.DEFAULT_CACHE_INDEX)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--t0-history-keep-latents', type=int, choices=(10, 30),
+                        help='diagnostic T1 visibility mask; 30 is all-true A/A, 10 hides oldest 20 T0 latents')
+    parser.add_argument('--native-latents', type=Path,
+                        help='optional authenticated same-arm native T1 raw F32 segment for the 2e-5 gate')
+    parser.add_argument('--native-latents-sha256',
+                        help='required SHA-256 when --native-latents is supplied')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
     if not args.output_dir.is_absolute() or args.output_dir.exists() or args.output_dir.is_symlink():
@@ -301,9 +417,25 @@ def main():
     if args.execute:
         execute(admitted, args.output_dir)
     else:
-        print(json.dumps(dict(model_launched=False, validated=True, conditioning_sha256=MANIFEST_SHA,
-                              total_bf16_weight_bytes=admitted['total_weight_bytes'],
-                              forward_plan=shared_scene_plan(), output_dir=str(args.output_dir))))
+        print(json.dumps(dict(
+            model_launched=False,
+            validated=True,
+            conditioning_sha256=MANIFEST_SHA,
+            total_bf16_weight_bytes=admitted['total_weight_bytes'],
+            forward_plan=shared_scene_plan(),
+            history_visibility=admitted['history_visibility'],
+            comparison_native=(
+                dict(
+                    kind='authenticated same-arm native T1 latent segment',
+                    path=str(admitted['comparison_latents']['path']),
+                    sha256=admitted['comparison_latents']['sha256'],
+                    shape=admitted['comparison_latents']['shape'],
+                )
+                if admitted['comparison_latents'] is not None
+                else dict(kind='authenticated historical native T1 bank slice', sha256=RECEIPT_SHA)
+            ),
+            output_dir=str(args.output_dir),
+        )))
 
 
 if __name__ == '__main__':

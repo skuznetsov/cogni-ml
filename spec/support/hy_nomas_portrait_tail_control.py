@@ -283,7 +283,7 @@ def _runtime_preflight(torch, block_reference, arch, cache_bytes: int) -> dict[s
     }
 
 
-def execute(admission: Mapping[str, object]) -> dict[str, object]:
+def execute(admission: Mapping[str, object], *, historical_controls: bool = True) -> dict[str, object]:
     started_at = time.perf_counter()
     import torch
 
@@ -523,6 +523,24 @@ def execute(admission: Mapping[str, object]) -> dict[str, object]:
         "upstream_t1_display_sha256": output_sha,
         "single_terminal_mps_sync_and_pack_transfer": True,
     }
+    if not historical_controls:
+        # A caller authenticates a new same-arm 60-latent prefix and native90
+        # output. Historical portrait equality is then neither required nor
+        # claimed: the upstream/native replay is the numerical control.
+        result["schema"] = "cogni_ml.hy_nomas_portrait_history_decoder_control/v1"
+        result["experiment_scope"] = (
+            "same-arm native/upstream PixelUMM replay of authenticated T0+T1 "
+            "and a cyclic synthetic future; no DiT rerun or causal decoder claim"
+        )
+        result["historical_fixture_receipt_sha256"] = result.pop("native_baseline_receipt_sha256")
+        result["same_arm_prefix60_sha256"] = result.pop("common_prefix_sha256")
+        result["synthetic_future_context"] = {
+            "source_latent_cycle": [50, 60], "repeats": 3,
+            "custom_latent_frames": 90, "same_arm_prefix60_bitexact": True,
+        }
+        result.pop("baseline_controls")
+        result["gates"] = {"native90_t1_within_tolerance": gates["native90_t1_within_tolerance"]}
+        result["history_probe"] = admission["history_probe"]
     receipt_path = out_dir / "receipt.json"
     with receipt_path.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, allow_nan=False)

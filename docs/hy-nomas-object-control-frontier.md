@@ -244,6 +244,75 @@ artifacts. Rollback: omit the diagnostic helper; production defaults are unchang
 Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json).
 Review: `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-tail-context-v1/baseline-left-context-right-5s.mp4`.
 
+### Fixed-shape T0 history visibility (2026-11-07)
+
+The user reports improved gaze direction in the cyclic-context result. Retain
+that observation while testing a different cause of weak motion: direct
+attention to the repeated static-photo T0 video history. Freeze the prompt,
+saved Qwen states, original BF16 weights, clean T0, writer noise/timestep,
+T1 noise, four-step Euler schedule and RoPE. Both arms keep thirty T0 latent
+frames, 4,583 T1 query rows and the same masked attention workspace with 8,903
+keys: T0 video 4,320, valid T0 caption 263, current T1 video 4,320. T1 text is
+query-only. The all30 A/A exposes all keys; last10 hides exactly the oldest
+2,880 T0 video keys. The T0 writer remains unmasked in both arms.
+
+The native all30 arm reproduces the complete historical latent bank bitwise.
+Both native arms match the pinned Torch 2.8 MPS source terminal T1 on all
+138,240 values with zero maximum error, unequal values and tolerance failures
+at unchanged `atol=rtol=2e-5`. All 34 saved source A/A records match the previous
+source control; the eleven captured T0 writer records, including block-0 K/V,
+match between arms. This is sampled-boundary writer evidence, not an export
+of every layer's native cache. Final runner receipts authenticate the exact
+consumed receipt/bank bytes and record admitted weight/source identities.
+
+Decode each clean T0 + generated T1 prefix using the same accepted synthetic
+cyclic90 policy, fixed PixelUMM noise, local RoPE, ten-latent windows and
+five-latent overlap. The all30 decoder is reused only because its complete
+input artifact is byte-identical to the accepted decode. Compare the full
+120-frame T1 crop `[120,240)` at 24 fps; neither arm is trimmed. The separate
+same-arm PixelUMM source gate and guarded execution receipts are indexed in
+the evidence packet below. Both arms match all 53,084,160 finite F32 display
+values bitwise, with maximum and mean absolute error zero at unchanged
+`atol=rtol=2e-5`.
+
+The postterminal GPU diagnostic pools RGB into 4x4 blocks before adjacent-frame
+differences. Face-region mean change rises from 0.00088567 to 0.00092329
+(+4.25%); eye-region mean rises from 0.00108773 to 0.00119681 (+10.03%). The
+largest eye-region transition stays at frame 117 (4.875 s) in both arms;
+its magnitude rises from 0.01323852 to 0.01637638. These are motion-magnitude
+proxies, not pose error or quality scores. Selected frames at 0, 24, 48, 72,
+96, 112 and 119 retain nearly the same head pose and show late asymmetric
+eye deformation. They do not establish a natural blink or a requested head
+turn. Do not promote a larger difference to better acting.
+
+Decision: do not adopt last10 visibility as a motion correction. This one
+counterfactual does not support direct old-video-key visibility as the main
+cause of the observed freezing. It does not eliminate all static-history
+effects: retained K/V and caption states were computed from all thirty T0
+frames, and temporal/noise/RoPE phase remains entangled with frame age. This
+experimental portrait conditioning is not a trained stock image-to-video
+contract. Next falsifier: separate the retained T0 caption-key route from
+video-key influence while preserving query/text refinement and geometry;
+qualify identity and actual acting before any production promotion.
+
+Native DiT sampled peaks are 24.16/24.17 GiB; last10 PixelUMM peaks at
+18.81 GiB. All admitted guards retain the cache-aware 10% reserve with no
+observed swap growth. Instrumented native encode allocations/readbacks and
+preterminal waits are zero, followed by one terminal wait per stage. These
+counters exclude opaque MPS/driver allocations; the source's single terminal
+transfer statement is a code-path audit. No timing here establishes a speedup.
+The two raw diagnostic activation payloads (626,982,944 bytes) were retired
+after hash verification;
+compact inputs, record indexes, receipts and review media remain available.
+
+DoD: fourteen portrait Python tests, thirty focused Crystal examples, release
+probe build, guarded native/source same-arm gates, dereferenced artifact
+crossbinding, Ruff, Crystal format and diff checks. Rollback: omit the opt-in
+history profiles/probe; inference defaults are unchanged. Refresh numerical
+claims on source/runtime/binary/weight/input/noise/geometry changes; missing
+retired payloads require recapture for intermediate-activation replay.
+Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-history.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,

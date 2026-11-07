@@ -65,6 +65,24 @@ describe ML::Video::HyNomasContinuationHistory do
     end
   end
 
+  it "keeps an optional T0 writer unmasked while accepting the masked T1 reader" do
+    label = ML::Video::HyNomasContinuationHistory::AttentionLabels.new(
+      Array(Int32).new(6, 0), Array(Int32).new(10, 0))
+    geometry = ML::Video::HyNomasContinuationHistory.geometry(2, 4, 2, 2, 54, 1, 2,
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens: [2, 2], segment_cache_text: [true, false],
+      segment_attention_profiles: [nil, label], source_bf16_attention: true)
+
+    geometry.segment_attention_labels.should be_nil
+    geometry.segment_attention_profiles.not_nil!.size.should eq(2)
+    geometry.segment_attention_profiles.not_nil![0].should be_nil
+    geometry.workspace_geometries[0].masked.should be_false
+    geometry.writer_workspace_geometries[0].should eq(geometry.workspace_geometries[0])
+    geometry.workspace_geometries[1].masked.should be_true
+    geometry.workspace_geometries[1].query_label_bytes.should eq(6_i64 * sizeof(Int32))
+    geometry.workspace_geometries[1].key_label_bytes.should eq(10_i64 * sizeof(Int32))
+  end
+
   it "restores only a fresh schedule at an extendable post-writer boundary" do
     schedule = ML::Video::HyNomasContinuationHistorySchedule.new(3, 2)
     [-1, 0, 3, 4].each do |invalid|
