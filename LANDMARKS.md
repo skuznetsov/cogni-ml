@@ -39140,3 +39140,34 @@ Refresh after source/toolchain/device/model/workload changes.
   `.landmark/evidence/2026-11-07-hy-nomas-activation-retirement.json`.
 - Keep reusable inputs and reviewable final results; remove owned obsolete
   temporary payloads after their experiment closes. No inference change.
+
+### 2026-11-07 — Cyclic portrait-tail context does not correct eye deformation
+
+- Decoder-only test preserves the exact 60-latent prefix and common saved noise,
+  appending source latents [50,60) three times. Decode 90 latents in 17 windows;
+  compare the original 120 T1 display frames without trimming. This is synthetic
+  context plus local RoPE relocation and overlap blending, not genuine future
+  motion, stock randomized tail padding, or a DiT rerun.
+- Native/source Torch 2.6 MPS T1 display matches all 53,084,160 values bitwise;
+  maxabs/meanabs 0 at unchanged 2e-5 tolerances. GPU A/A checks preserve the
+  original first 100 display frames and the window-50 unblended tail after
+  BF16 postprocessing. No baseline raw-BF16 A/A comparison is claimed.
+- Only original T1 frames 100..119 change. Eye-ROI adjacent RGB MAE still peaks
+  at frame 117 (4.875 s), rising 0.01423170 to 0.01676856 (+17.8%). Selected
+  frames retain asymmetric eye deformation. This motion-magnitude proxy is not
+  an eye-pose error or proof of natural blinking. Reject this cyclic correction;
+  the general right-edge/context hypothesis and motion-conditioning cause remain
+  open. Do not promote numerical parity to acting quality.
+- Native: encode allocations/readbacks/preterminal waits 0/0/0, one terminal
+  wait; 22 GiB cap, sampled peak 18.80 GiB. The earlier 18 GiB native attempt was
+  stopped by the guard, not admitted as a passing result. Source: one code-audited
+  terminal packed transfer, 18 GiB cap, sampled peak 7.94 GiB. Both retain the
+  cache-aware 10% reserve and show zero swap growth. No new per-block activation
+  capture. These diagnostic timings do not establish a speedup.
+- Focused six CPU tests, Ruff, both GPU runs and postterminal verifier pass.
+  Correlated adversary ROBUST within artifact/layout/display-gate scope; causal
+  inference remains limited by the joint intervention and synthetic context.
+  Evidence `.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json`;
+  helper `spec/support/hy_nomas_portrait_tail_control.py`. Refresh on changed
+  source/runtime/weights/conditioning/noise/geometry or missing/mutated evidence.
+  Rollback: omit diagnostics; production inference is unchanged.

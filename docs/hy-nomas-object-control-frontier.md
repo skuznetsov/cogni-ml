@@ -176,15 +176,73 @@ Here the final latent nominally expands to local frames `[116,120)`, and the
 final twenty frames are outside the overlap blend. Attention mixes latent
 positions, so this grid mapping is not a one-latent causal attribution.
 
-Next falsifier: preserve the exact terminal DiT latents and decoder noise,
-move that latent away from the decoder's right edge, and compare common output
-frames. Any synthetic future context must be labeled as such. Static-history
-suppression and shared-caption allocation remain separate, untested hypotheses.
-Neither the source comment nor temporal coincidence proves the root cause;
-cropping the tail would not establish the requested motion. No model or GPU
-run was made for this localization; inference defaults and guards are unchanged.
+The next falsifier selected here was to preserve the exact terminal DiT latents
+and decoder noise, move that latent away from the decoder's right edge, and
+compare common output frames. The decoder-only follow-up is recorded below.
+Static-history suppression and shared-caption allocation remain separate,
+untested hypotheses. Neither the source comment nor temporal coincidence proves
+the root cause; cropping the tail would not establish the requested motion.
+This localization itself used completed captures without a new GPU run.
 
 Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-localization.json).
+
+### Portrait tail with synthetic future context (2026-11-07)
+
+The decoder-only counterfactual preserves all sixty original latents bitwise,
+then appends the original latent cycle `[50,60)` three times. It uses captured
+decoder noise `[0,360)`, preserving the common `[0,240)` noise, the same BF16
+weights, saved local RoPE and ten-latent windows with five-latent overlap.
+Seventeen windows replace eleven; DiT is not rerun. This synthetic continuation
+is neither genuine future motion nor upstream's randomized streaming tail fix.
+It jointly changes context, local temporal positions and overlap blending, so
+it does not isolate one of those factors.
+
+Compare the same original T1 pixel crop `[120,240)` in both outputs. Its first
+100 frames remain byte-identical; exactly the last twenty change, as predicted
+by the added window at latent 55. The largest adjacent eye-region RGB MAE still
+occurs at local frame 117 (4.875 s): 0.01676856 versus 0.01423170 before the
+intervention, an increase of 17.8%. Selected tail frames still show asymmetric
+eye deformation. This is a negative result for this cyclic-context correction,
+not evidence of natural blinking or a complete causal explanation.
+
+The unchanged native decoder records zero encode allocations, encode readbacks
+and preterminal waits, with one terminal wait. Its 22 GiB guarded run completed
+with a sampled 18.80 GiB peak and no swap growth; the cache-aware 10% reserve was
+preserved. An earlier 18 GiB attempt was stopped by the guard during the first
+encoded window, so that smaller budget is rejected for this native geometry.
+These diagnostic timings are not a speedup measurement. Inference defaults
+remain unchanged.
+
+The pinned Torch 2.6 MPS source check passes all 53,084,160 T1 display values
+with max/mean absolute difference zero and unchanged `atol=rtol=2e-5`.
+Postterminal artifact hashes also establish byte equality. GPU A/A checks pass
+for the unaffected first 100 display frames and the original window-50 tail
+after BF16 display postprocessing. The latter does not establish raw-BF16 A/A
+equality: no baseline raw artifact was retained. The source guard completed
+under its 18 GiB cap with a sampled 7.94 GiB peak, minimum cache-aware headroom
+18.12 GiB and no swap growth.
+
+Numerical gates and eye-ROI reductions run on GPU before one terminal packed
+transfer. The source's no-intermediate-transfer statement is a code-path audit,
+not measured runtime telemetry; native counters are instrumented separately.
+No per-block activations are exported. The ROI statistic measures adjacent
+pixel-change magnitude, not eye-pose accuracy. This does not rule out an effect
+from genuine future context or the separately untested stock tail policy.
+The motion-conditioning and terminal-DiT-feature investigation remains open.
+
+Reproduce the authenticated CPU preflight with
+`spec/support/hy_nomas_portrait_tail_control.py --preflight`; the evidence packet
+binds the full argument list. Execute only under the recorded memory guard.
+This helper is qualified for that exact native receipt. Reusing another receipt
+requires reviewing continuation, noise, weight and RoPE identities as well as
+rerunning the gates; replacing the CLI receipt SHA alone does not qualify it.
+Focused CPU checks: `python3 -B -m unittest spec.hy_nomas_portrait_tail_control_test`
+and `ruff check spec/support/hy_nomas_portrait_tail_control.py spec/hy_nomas_portrait_tail_control_test.py`.
+Refresh on source/runtime/weight/input/noise/RoPE/window/blend changes or lost
+artifacts. Rollback: omit the diagnostic helper; production defaults are unchanged.
+
+Evidence: [.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-tail-context.json).
+Review: `/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-tail-context-v1/baseline-left-context-right-5s.mp4`.
 
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
