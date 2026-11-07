@@ -38994,3 +38994,31 @@ Refresh after source/toolchain/device/model/workload changes.
 - Rollback: omit the diagnostic observer/runner/decoder; native defaults are
   unchanged. Refresh on producer/runtime, weight, input, mask, prior, geometry,
   precision, schedule or artifact mutation; missing evidence revokes its use.
+
+### 2026-11-06 — Continuation decoder onset context
+
+- User identified initial defects around Alex's head. Blur/ringing exist in
+  raw PixelUMM output before MP4. The exact-linked diagnostic decoded T1 alone;
+  the pinned causal-AR/streaming continuation retains previous latent context.
+- Two-window MPS counterfactual: same saved T1 latents/noise, one resident
+  BF16 block, all 36 blocks and 468 weight-range hashes. Standalone first20
+  equals saved raw bitwise (maxabs 0). Adding T0's last five latents and the
+  upstream overlap blend removes the observed onset pattern in selected crops.
+- CPU BF16 upstream-blender checks prove the two-window onset crop and unchanged
+  tail geometry. The new 120-frame MP4 replaces only frames0:20; remaining RGB
+  is reused without interpolation. This tests context plus blending, not a
+  pure context ablation or full cumulative neural decode. No separate T0 noise
+  survives; authenticated per-index tail noise is reused, T1 noise unchanged.
+  No stock full-clip-noise, semantic motion or native/full-pipeline parity claim.
+- Guard exit0: 10% cache-aware floor / 10 GiB cap / 64 MiB swap stop; sampled
+  peak 3,972,229,632 bytes, minimum headroom 25,320,177,664 bytes, zero swap growth
+  and final children. One terminal diagnostic wait; no production-path change.
+- Evidence `.landmark/evidence/2026-11-06-hy-nomas-continuation-onset.json`;
+  external `/opt/mldata_ssd/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v`,
+  result `context-v1/display.mp4`. Actual-artifact review ROBUST only for the
+  bounded intervention; stronger stock-cause attribution remains VULNERABLE.
+  Same-lineage review is correlated. Refresh on changed sources, weights,
+  inputs/noise, precision, window/blend geometry or missing/mutated artifacts.
+- Return to selected-query attention/action control with context-complete
+  continuation decoding. Rollback: omit the external context probe/display;
+  native defaults and the frozen standalone decode helper remain unchanged.

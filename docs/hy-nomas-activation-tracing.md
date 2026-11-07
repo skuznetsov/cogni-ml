@@ -176,8 +176,9 @@ exited with no live children. Decoder internals were not activation-recorded.
 Six selected frames and enlarged actor crops show Resume's glove rising toward
 its chest after about three seconds while its body and head remain mostly
 fixed. A substantial requested Alex head turn is not visible in these frames.
-The first frame is softer than later selected frames; its cause is not
-localized. These observations belong to this exact-linked upstream video,
+The first frame is softer than later selected frames; the subsequent onset
+investigation below narrows this observation. These observations belong to
+this exact-linked upstream video,
 not the rejected association with the previous identically named MP4.
 They do not certify full-playback quality or successful actor control.
 
@@ -225,3 +226,51 @@ python3 -B -m unittest \
 
 To roll back this diagnostic, omit the observer or the recorder invocation.
 The source helper's default three-arm contract remains unchanged.
+
+## Continuation onset context (2026-11-06)
+
+The first-frame blur and frames 1-3 ringing around Alex's head already exist
+in `decode-v2` raw pixels, before MP4 encoding. That diagnostic decoded the
+30-latent T1 tensor standalone. The pinned causal-AR continuation instead
+passes cumulative latents to its decoder; its streaming path also retains
+previous latent pushes. Exact trace-to-pixel lineage remains valid, but the
+standalone clip is not a context-complete continuation decode.
+
+A bounded counterfactual replayed two ten-latent PixelUMM windows: cumulative
+starts 30 (T1 alone) and 25 (T0's last five latents plus T1's first five).
+Both used the saved T1 noise and the same weights, BF16 arithmetic, positions
+and gathered-attention MPS adaptation. All 36 blocks ran with one resident
+block; all 468 streamed weight ranges were hashed. The standalone control's
+first 20 frames equal the saved raw baseline bitwise, max absolute error zero.
+
+The upstream temporal blender adds the history window before the T1 window;
+their overlap supplies T1 pixel frames `[0:20]`. CPU BF16 checks establish
+that this two-window crop equals the corresponding full-timeline blend and
+that later frames do not receive history-window contributions. The receipt's
+window-start list `[30,25]` is construction order, not blender insertion order.
+
+Inspected head and full-frame crops show the initial blur and ringing absent
+after the context-and-blend intervention. This establishes a reproducible
+boundary/context effect for these saved inputs. It does not isolate context
+from overlap blending or establish stock decoder, native-runtime, semantic
+motion or full-playback parity. No separate T0 noise recording survives: the
+prefix reuses authenticated T1 noise frames `[100:120]`, index-aligned with
+T0's tail under the pinned per-latent seed method. T1 noise stays unchanged.
+This is not replay of the original source's full-clip random draw.
+
+The new five-second diagnostic MP4 recomputes frames `[0:20]` and reuses
+original RGB frames `[20:120]`, without trimming, interpolation or repeated
+frames. No DiT or full-generation rerun was needed. Neural computation used
+MPS with fallback disabled and one terminal synchronization for diagnostic
+export; CPU inspection and video assembly are outside the inference path.
+The sampled guard retained the 10% cache-aware floor, a 10 GiB process cap and
+64 MiB swap-growth stop: peak group footprint 3,972,229,632 bytes, minimum
+headroom 25,320,177,664 bytes, zero swap growth and no final live children.
+
+External root: `/opt/mldata_ssd/cogni-ml/hy-nomas-firstframes-20261106.kn1ie45v`.
+Result: `context-v1/display.mp4`; comparisons: `onset-context-head.png` and
+`onset-context-full.png`. Evidence and exact commands:
+`.landmark/evidence/2026-11-06-hy-nomas-continuation-onset.json`.
+Native production code and the frozen standalone decoder remain unchanged.
+The next actor-control probe should retain continuation decoder context;
+visible onset improvement alone does not establish successful actor motion.
