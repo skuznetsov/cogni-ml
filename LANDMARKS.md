@@ -39027,7 +39027,7 @@ Refresh after source/toolchain/device/model/workload changes.
 
 - Standalone decode now optionally joins the previous five clean latent frames
   and twenty noise frames on GPU, runs the existing ten-latent/five-overlap
-  windows, and crops twenty context pixels on GPU. All four previous-input
+  windows, and crops twenty context pixel frames on GPU. All four previous-input
   CLI arguments are required together and source hashes/extents are checked.
   The existing cumulative sequence and default standalone path are unchanged.
 - Bounded full-J DoD passes: all 36 blocks/six windows; raw 140 frames and
@@ -39048,5 +39048,16 @@ Refresh after source/toolchain/device/model/workload changes.
   `comparison-upstream26.json` and native/upstream raw/display hashes.
   Refresh on changed source, runtime, weights, inputs/noise, precision, overlap,
   dimensions or mutated/missing evidence. Rollback: omit the new opt-in quartet.
-- Next: a bounded photo-reference head-turn/smile take with the user's explicitly
-  supplied local photo. Image identity/acting quality remain visual questions.
+- Local portrait smoke completed on original BF16/source-BF16 V263: technical
+  T0 plus generated T1; exported frames [120,240), 120 frames/5 s/24 fps.
+  Request 669.74 s (DCAE 356.70, DiT 58.56, decoder 193.76); sampled peak
+  24.60 GiB, minimum headroom 16.90 GiB, swap growth 0 under the 30 GiB cap
+  and 10% cache-aware reserve. Three phases retain 0/0/0 instrumented encode
+  allocations/readbacks/preterminal waits and one existing terminal wait each.
+  Plan/execution/final input identities and terminal export checks agree.
+- Selected portrait frames retain identity but are nearly static except for
+  late eyelid closure; no convincing head turn. This is not photo full-pipeline
+  upstream parity or actor-control closure. Same-input upstream reference,
+  conditioning, noise and cache replay is the next discriminator before
+  attributing weak motion to model capacity. Evidence:
+  `.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json`.

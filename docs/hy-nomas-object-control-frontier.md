@@ -60,6 +60,32 @@ Do not promote this slice to stock CUDA/RNG parity or independent actor
 control. Requalify after changing inputs, weights, geometry, arithmetic,
 overlap, runtime or any bound artifact.
 
+### Local portrait smoke test (2026-11-06)
+
+The explicitly supplied local portrait completed native reference initialization
+and one generated T1 segment using original BF16 weights, admitted V263
+conditioning, source-BF16 boundaries, four denoising steps and the recovered
+encoder/cache identities. Saved upstream Qwen state26 is used; native live
+text encoding is excluded. The exported five seconds are exactly source pixel
+frames `[120,240)`, excluding technical T0, with 120 frames at 24 fps.
+
+The request took 669.74 s: DCAE encoding 356.70 s, DiT 58.56 s and PixelUMM
+193.76 s, with setup/preflight accounting for the remainder. Each phase retains
+zero instrumented encode allocations/readbacks/preterminal waits and one
+existing terminal drain. The 30 GiB process guard exited 0; sampled peak was
+24.60 GiB, minimum cache-aware headroom 16.90 GiB and swap growth zero at the
+10% reserve. This single reference-initialization run is not a speedup benchmark.
+
+Selected frames preserve the recognizable face without obvious onset ghosting,
+but expression is nearly static apart from late eyelid closure. A convincing
+head turn is not demonstrated. This is a usable reference-path smoke test,
+not successful actor control or a fresh full-pipeline upstream parity result.
+Before blaming weak motion on model capacity, compare the same reference,
+conditioning, noise and cache construction against upstream. Decoder-only
+parity does not settle that question.
+
+Evidence: [.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json](../.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,
