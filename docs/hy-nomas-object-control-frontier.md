@@ -77,9 +77,15 @@ existing terminal drain. The 30 GiB process guard exited 0; sampled peak was
 10% reserve. This single reference-initialization run is not a speedup benchmark.
 
 Selected frames preserve the recognizable face without obvious onset ghosting,
-but expression is nearly static apart from late eyelid closure. A convincing
-head turn is not demonstrated. This is a usable reference-path smoke test,
-not successful actor control or a fresh full-pipeline upstream parity result.
+but the head is nearly static. The user reported noticeable changes only in
+the final two frames, with unnatural eye displacement rather than blinking.
+Targeted inspection of generated frames 114-119 and enlarged eye crops shows
+asymmetric eye deformation and no complete close-and-reopen cycle. The earlier
+blink interpretation from sparse sampling is withdrawn; neither a natural
+blink nor a convincing head turn is demonstrated. This remains a reference-path
+execution smoke test, not successful actor control or a fresh full-pipeline
+upstream parity result. The tail inspection used stored F32 pixels on CPU only;
+it did not rerun the model or change the GPU path.
 Before blaming weak motion on model capacity, compare the same reference,
 conditioning, noise and cache construction against upstream. Decoder-only
 parity does not settle that question.

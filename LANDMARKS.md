@@ -39055,9 +39055,13 @@ Refresh after source/toolchain/device/model/workload changes.
   and 10% cache-aware reserve. Three phases retain 0/0/0 instrumented encode
   allocations/readbacks/preterminal waits and one existing terminal wait each.
   Plan/execution/final input identities and terminal export checks agree.
-- Selected portrait frames retain identity but are nearly static except for
-  late eyelid closure; no convincing head turn. This is not photo full-pipeline
-  upstream parity or actor-control closure. Same-input upstream reference,
-  conditioning, noise and cache replay is the next discriminator before
+- Selected portrait frames retain identity but the head is nearly static.
+  User playback reports noticeable changes only in the last two frames with
+  unnatural eye displacement. CPU-only tail/eye-crop inspection shows asymmetric
+  deformation without a complete close-and-reopen cycle; the earlier blink
+  interpretation is withdrawn. No natural blink or convincing head turn is
+  demonstrated. This is not photo full-pipeline upstream parity or actor-control
+  closure. Same-input upstream reference, conditioning, noise and cache replay
+  is the next discriminator before
   attributing weak motion to model capacity. Evidence:
   `.landmark/evidence/2026-11-06-hy-nomas-native-portrait-smoke.json`.

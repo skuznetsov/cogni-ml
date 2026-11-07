@@ -1,7 +1,7 @@
 {
   "schema": "cogni_ml.native_portrait_smoke_evidence/v1",
   "date": "2026-11-06",
-  "status": "VERIFIED for bounded native execution and terminal export; acting remains limited",
+  "status": "VERIFIED for bounded native execution and terminal export; requested motion is not demonstrated",
   "source_commit": "7173741a40f9b642813aca613ae99d85d2d5a6dc",
   "executable": {
     "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_sequence_generate",
@@ -200,8 +200,16 @@
     }
   },
   "visual_observation": {
-    "method": "Original portrait and contact sheet at generated frame indices 0,1,4,8,16,24,48,72,96,119",
-    "observation": "Reference face remains recognizable without obvious onset ghosting in inspected frames; mostly near-static expression with eyelid closure at the tail; a convincing head turn is not demonstrated",
+    "method": "Original portrait, initial sparse contact sheet, then CPU-only inspection of stored F32 frames 0,96,114,115,116,117,118,119 and enlarged eye crops",
+    "observation": "Reference face remains recognizable without obvious onset ghosting in inspected frames; head is nearly static, with asymmetric eye deformation at the tail. A natural blink or convincing head turn is not demonstrated",
+    "user_playback_observation": "Changes were noticeable only in the last two frames; eyes shifted unnaturally rather than blinking",
+    "correction": "The earlier eyelid-closure description was interpreted as a blink from sparse sampling and is withdrawn. Tail frames show no complete close-and-reopen cycle; pixel differences alone cannot validate the requested motion",
+    "tail_review": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-eye-tail-review-v1/analysis.json",
+      "sha256": "3733a64550dd0566912728c4066eb397465f3b8d0faea2694212b763c21d320e",
+      "scope": "CPU terminal file inspection only; input crop digest checked before and after, no model/GPU execution or production-path change",
+      "limit": "Selected tail frames and descriptive eye-ROI differences do not establish the cause of the artifact or whole-pipeline parity"
+    },
     "motion_statistic_scope": "descriptive scene-motion magnitude only; it does not measure acting quality, identity consistency, or semantic compliance",
     "mean_adjacent_block_luma_delta": 0.0005395427714449321
   },
