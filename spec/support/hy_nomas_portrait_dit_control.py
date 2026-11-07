@@ -41,11 +41,12 @@ SHAPES = {
 }
 
 
-def shared_scene_plan():
+def shared_scene_plan(t1_current_text_kv=False):
     return [dict(kind='writer' if index == 0 else 'denoise',
                  condition='t0_caption' if index == 0 else 't1_shared_scene',
                  valid_text_tokens=VALID, cache_valid_len=0 if index == 0 else CACHE_ROWS,
-                 update_cache=index == 0, cache_txt=index == 0,
+                 update_cache=index == 0,
+                 cache_txt=index == 0 or t1_current_text_kv,
                  rope_bank=0 if index == 0 else 1)
             for index in range(5)]
 
@@ -68,9 +69,17 @@ def _admit_comparison_latents(path_arg, digest):
     return dict(path=path, sha256=digest, shape=list(source.LATENT_SEGMENT_SHAPE))
 
 
-def history_visibility_record(keep_latents, t0_hide_caption_keys=False):
+def history_visibility_record(
+    keep_latents,
+    t0_hide_caption_keys=False,
+    t1_current_text_kv=False,
+):
     if not isinstance(t0_hide_caption_keys, bool):
         raise ValueError('t0_hide_caption_keys must be boolean')
+    if not isinstance(t1_current_text_kv, bool):
+        raise ValueError('t1_current_text_kv must be boolean')
+    if t1_current_text_kv and not t0_hide_caption_keys:
+        raise ValueError('--t1-current-text-kv requires --hide-t0-caption-keys')
     if t0_hide_caption_keys and keep_latents != LATENTS_PER_SEGMENT:
         raise ValueError('--hide-t0-caption-keys requires --t0-history-keep-latents 30')
     if keep_latents is None:
@@ -79,18 +88,26 @@ def history_visibility_record(keep_latents, t0_hide_caption_keys=False):
     else:
         explicit_mask = True
     layout = source.compact_t0_history_visibility_layout(
-        keep_latents, VALID, t0_hide_caption_keys=t0_hide_caption_keys)
+        keep_latents,
+        VALID,
+        t0_hide_caption_keys=t0_hide_caption_keys,
+        t1_current_text_kv=t1_current_text_kv,
+    )
     return dict(
         kind=(
-            'fixed-shape T0 key visibility diagnostic'
+            'T0 caption mask with current T1 text K/V rescue'
+            if t1_current_text_kv
+            else 'fixed-shape T0 key visibility diagnostic'
             if t0_hide_caption_keys
             else 'fixed-shape T0 video-key visibility diagnostic'
         ),
         diagnostic_only=True,
         keep_latents=keep_latents,
         t0_hide_caption_keys=t0_hide_caption_keys,
+        t1_current_text_kv=t1_current_text_kv,
         explicit_all_true_mask=(
-            explicit_mask and keep_latents == LATENTS_PER_SEGMENT and not t0_hide_caption_keys
+            explicit_mask and keep_latents == LATENTS_PER_SEGMENT
+            and not t0_hide_caption_keys and not t1_current_text_kv
         ),
         t0_video_latents=LATENTS_PER_SEGMENT,
         t0_video_key_rows=layout['t0_video_rows'],
@@ -99,6 +116,10 @@ def history_visibility_record(keep_latents, t0_hide_caption_keys=False):
         hidden_t0_caption_key_rows=layout['hidden_t0_caption_key_rows'],
         retained_t0_caption_key_rows=layout['retained_t0_caption_key_rows'],
         retained_current_t1_video_key_rows=VIDEO_ROWS,
+        current_t1_text_key_rows=layout['current_t1_text_key_rows'],
+        visible_current_t1_text_key_rows=layout['current_t1_text_key_rows'],
+        current_t1_text_key_start=layout['current_t1_text_start'],
+        current_t1_text_key_end=layout['current_t1_text_end'],
         compact_attention_key_rows=layout['key_rows'],
         t0_cache_content_unchanged=True,
         t0_cache_writer_unchanged=True,
@@ -106,8 +127,15 @@ def history_visibility_record(keep_latents, t0_hide_caption_keys=False):
         t1_text_refinement_unchanged=True,
         t1_rope_and_query_geometry_unchanged=True,
         trained_stock_contract=False,
+        t1_text_kv_attention_only=t1_current_text_kv,
         interpretation=(
-            'Leaves the T0 writer unmasked, then hides only all admitted T0 caption keys from '
+            'Leaves the T0 writer unchanged and hides all admitted T0 caption keys on T1 reads. '
+            'Each T1 denoise forward includes its current text K/V in attention only '
+            '(update_cache=False); all T0 and T1 video keys remain visible, and T1 query rows, '
+            'text refinement, RoPE, and geometry remain unchanged. This adds no persistent '
+            'cache write or storage.'
+            if t1_current_text_kv
+            else 'Leaves the T0 writer unmasked, then hides only all admitted T0 caption keys from '
             'T1 attention. All T0 and T1 video keys remain visible; T1 query rows, text '
             'refinement, RoPE, and geometry remain unchanged. All T0 K/V remain cached; this '
             'does not reduce cache storage or dense attention extent.'
@@ -123,9 +151,14 @@ def build_t0_history_attention_mask(
     device,
     keep_latents,
     t0_hide_caption_keys=False,
+    t1_current_text_kv=False,
 ):
     layout = source.compact_t0_history_visibility_layout(
-        keep_latents, VALID, t0_hide_caption_keys=t0_hide_caption_keys)
+        keep_latents,
+        VALID,
+        t0_hide_caption_keys=t0_hide_caption_keys,
+        t1_current_text_kv=t1_current_text_kv,
+    )
     mask = torch.ones((1, layout['key_rows']), dtype=torch.bool, device=device)
     hidden_rows = layout['hidden_t0_video_prefix_rows']
     if hidden_rows:
@@ -139,6 +172,7 @@ def admit(args):
     visibility = history_visibility_record(
         getattr(args, 't0_history_keep_latents', None),
         getattr(args, 'hide_t0_caption_keys', False),
+        getattr(args, 't1_current_text_kv', False),
     )
     root = args.input_root.resolve(strict=True)
     manifest_path = root / 'photo-continuation-v2.json'
@@ -206,6 +240,7 @@ def execute(admitted, output):
     state = dict(dtype=dtype, device_type='mps', call=None, attention_layout='compact',
                  t0_valid_tokens=VALID,
                  t0_history_hide_caption_keys=admitted['history_visibility']['t0_hide_caption_keys'],
+                 t1_current_text_kv=admitted['history_visibility']['t1_current_text_kv'],
                  t0_history_keep_latents=(
                      admitted['history_visibility']['keep_latents']
                      if admitted['history_visibility']['explicit_all_true_mask']
@@ -218,7 +253,8 @@ def execute(admitted, output):
     if state['t0_history_keep_latents'] is not None:
         _, visibility_mask = build_t0_history_attention_mask(
             torch, device, state['t0_history_keep_latents'],
-            t0_hide_caption_keys=state['t0_history_hide_caption_keys'])
+            t0_hide_caption_keys=state['t0_history_hide_caption_keys'],
+            t1_current_text_kv=state['t1_current_text_kv'])
         state['t0_history_attention_mask'] = visibility_mask
     helpers = source.block_reference._install_upstream_modules(Path(admitted['upstream_path']))
     regular_state = dict(mode='bf16', compare=source.single._NoopCompare(),
@@ -293,7 +329,8 @@ def execute(admitted, output):
                       + epsilon.float() * source.WRITER_SIGMA).to(dtype)
         capture('t0.noised_latent', writer)
         latent = initial
-        for index, call in enumerate(shared_scene_plan()):
+        plan = shared_scene_plan(state['t1_current_text_kv'])
+        for index, call in enumerate(plan):
             state['call'] = call
             timestep = (torch.full((1,), source.WRITER_TIMESTEP, device=device, dtype=torch.float32)
                         if index == 0 else times[index - 1].reshape(1))
@@ -351,8 +388,13 @@ def execute(admitted, output):
                                   enqueue_seconds=time.monotonic() - started)), flush=True)
         if state['receipt']['attention_calls'] != 270:
             raise ValueError('incomplete upstream 54-block five-forward schedule')
+        current_text_rows = VALID if state['t1_current_text_kv'] else 0
+        t1_full_k_rows = CACHE_ROWS + VIDEO_ROWS + (
+            TEXT_ROWS if state['t1_current_text_kv'] else 0
+        )
+        t1_compact_k_rows = 2 * VIDEO_ROWS + VALID + current_text_rows
         expected_inventory = {f'{CACHE_ROWS}->{VIDEO_ROWS + VALID}': 54,
-                              f'{CACHE_ROWS + VIDEO_ROWS}->{2 * VIDEO_ROWS + VALID}': 216}
+                              f'{t1_full_k_rows}->{t1_compact_k_rows}': 216}
         if state['receipt']['attention_row_inventory'] != expected_inventory:
             raise ValueError('shared-scene attention included unadmitted text keys')
         expected_visibility_calls = 216 if state['t0_history_keep_latents'] is not None else 0
@@ -411,7 +453,7 @@ def execute(admitted, output):
                    comparison_reference=comparison_reference,
                    cache_index_sha256=INDEX_SHA, upstream_revision=source.PINNED_REVISION,
                    upstream_sources=admitted['source_hashes'],
-                   shared_scene_plan=shared_scene_plan(), schedule=source.single._schedule_record(scheduler),
+                   shared_scene_plan=plan, schedule=source.single._schedule_record(scheduler),
                    history_visibility=admitted['history_visibility'],
                    attention=state['receipt'], seconds_through_terminal=elapsed,
                    intermediate_readbacks=0, explicit_mps_synchronize_calls=0, terminal_transfer_count=1,
@@ -440,6 +482,8 @@ def main():
                         help='diagnostic T1 visibility mask; 30 retains all T0 video, 10 hides oldest 20 T0 latents')
     parser.add_argument('--hide-t0-caption-keys', action='store_true',
                         help='hide all cached T0 caption keys from T1 attention; requires explicit keep-latents 30')
+    parser.add_argument('--t1-current-text-kv', action='store_true',
+                        help='add current T1 text K/V to attention while T0 caption keys are hidden')
     parser.add_argument('--native-latents', type=Path,
                         help='optional authenticated same-arm native T1 raw F32 segment for the 2e-5 gate')
     parser.add_argument('--native-latents-sha256',
@@ -447,7 +491,11 @@ def main():
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
     try:
-        history_visibility_record(args.t0_history_keep_latents, args.hide_t0_caption_keys)
+        history_visibility_record(
+            args.t0_history_keep_latents,
+            args.hide_t0_caption_keys,
+            args.t1_current_text_kv,
+        )
     except ValueError as error:
         parser.error(str(error))
     if not args.output_dir.is_absolute() or args.output_dir.exists() or args.output_dir.is_symlink():
@@ -462,7 +510,7 @@ def main():
             validated=True,
             conditioning_sha256=MANIFEST_SHA,
             total_bf16_weight_bytes=admitted['total_weight_bytes'],
-            forward_plan=shared_scene_plan(),
+            forward_plan=shared_scene_plan(admitted['history_visibility']['t1_current_text_kv']),
             history_visibility=admitted['history_visibility'],
             comparison_native=(
                 dict(

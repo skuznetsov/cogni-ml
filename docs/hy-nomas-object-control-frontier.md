@@ -358,8 +358,8 @@ either direct history-mask experiment into a production motion policy or a
 general exclusion of static-history effects. Change the discriminator: keep
 T0 caption keys hidden but expose current T1 text K/V with the source's
 `cache_txt=True, update_cache=False` path, preserving the prompt and noise.
-This is a proposed rescue control, not an implemented result; it changes key
-extent and requires a fresh memory plan and same-arm gates. If it restores
+This follow-up changes key extent; its implementation, fresh memory plan
+and same-arm gates are recorded below. If it restores
 the image, it supports loss of direct text K/V as the collapse trigger. If
 weak motion remains, test technical repeated-photo T0 against actual video
 or stock-generated T0 rather than repeating similar direct-key masks.
@@ -385,6 +385,72 @@ Rollback: omit `--hide-t0-caption-keys` and the diagnostic profile. Refresh on
 source/runtime/binary/weight/input/noise/schedule/geometry changes or artifact
 mutation/loss. Evidence:
 [.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json](../.landmark/evidence/2026-11-07-hy-nomas-portrait-t0-caption.json).
+
+### Current T1 text K/V with hidden T0 caption keys (2026-11-07)
+
+The opt-in `--t1-current-text-kv` follow-up keeps all thirty T0 video latents
+visible and the old 263 caption keys hidden. Each of four T1 denoise calls
+uses `cache_txt=True, update_cache=False`: current T1 text K/V is visible
+without a persistent T1 cache append. T0 stays unmasked. Query rows remain
+4,583; key rows increase from 8,903 to 9,166. Valid key order is T0 video
+`[0,4320)`, hidden T0 caption `[4320,4583)`, T1 video `[4583,8903)`, visible
+current T1 caption `[8903,9166)`. Upstream records 54 writer calls compacting
+4,640 to 4,583 rows and 216 reader calls compacting 9,280 to 9,166 rows.
+
+Freeze the same portrait, prompt, saved Qwen states, original BF16 weights
+and rounding, clean T0, writer noise/timestep, T1 noise, four-step Euler
+schedule and RoPE. A fresh shared-workspace memory plan adds 2,290,204 bytes
+(2.18 MiB); the new binary's visible A/A reproduces the entire historical
+bank bitwise. Native T1 matches pinned 911cea Torch 2.8 MPS on all 138,240
+values exactly at unchanged `atol=rtol=2e-5`. Eleven sampled T0 writer
+records and nine saved T1 input records match the hidden-only control;
+the first changed sampled record is `t1.step1.block0.image`. This checks
+the sampled intervention boundary, not a full native per-layer cache dump.
+
+Same-arm cyclic90 PixelUMM replay uses the accepted noise, ten-latent
+windows, five-latent overlap and display crop `[120,240)`. All 53,084,160
+finite F32 display values match Torch 2.6 MPS exactly. The verifier hashes
+the actual channel-strided native crop and actual source pixels; a recorded
+negative probe substitutes a legitimate baseline source crop while retaining
+the rescue receipt's zero-error claims and is rejected at actual-byte equality.
+The reused baseline decode is admitted through whole-input byte identity.
+
+Root and the correlated reviewer inspected full-face and eye contacts at
+frames 0, 24, 48, 72, 96, 112 and 119. The rescue retains a coherent single
+portrait at these frames, unlike the hidden-only arm's severe colored,
+duplicated-face collapse by frame 24. Both baseline and rescue remain nearly
+static; no substantial head turn is established. Selected stills and pooled
+RGB differences do not certify natural playback or acting. Pair:
+`/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-t1-text-kv-v1/baseline-left-t1-text-kv-right-5s.mp4`.
+
+Decision: the current text-K/V intervention rescues sampled image coherence
+in this fixture, but is not a motion correction. Added text K/V also changes
+softmax support/normalization and T0 video K/V retains indirect history;
+this does not uniquely attribute the collapse to semantic text values or
+explain the original weak motion. Preserve production defaults. Change the
+next discriminator to technical repeated-photo T0 versus real-video or
+stock-generated T0 context under frozen prompt/noise/source gates, rather
+than iterating similar direct-key masks. Synthetic cyclic future context
+and experimental portrait initialization remain causal limits.
+
+Twenty-six Python tests, 32 focused Crystal examples, the release build,
+Ruff, Crystal format, same-arm gates and actual-byte bindings pass.
+Native DiT A/A/rescue sampled peaks are 24.17/24.17 GiB;
+native/source decoder peaks are 18.81/7.94 GiB.
+All guards retain cache-aware 10% reserve with zero observed swap growth.
+Native preterminal allocation/readback/wait counters remain 0/0/0, with
+one terminal wait per stage; opaque MPS/driver allocations are excluded.
+No timing here establishes a speedup. The correlated read-only adversary
+returned ROBUST within the declared numerical, artifact and selected-frame
+scope. The skill-referenced graph validator/template are absent; the packet
+remains COMPLETED with separately passed numerical DoD.
+
+Retired the owned diagnostic payload and build cache after size/hash checks
+(345,208,990 bytes). Inputs, weights, compact latents, pixel outputs,
+record indexes, receipts and media remain; intermediate replay needs recapture.
+Rollback: omit `--t1-current-text-kv` and the opt-in probe. Refresh on changed
+source/runtime/binary/weights/input/noise/schedule/geometry or evidence loss.
+Evidence: [.landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json](../.landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json).
 
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong

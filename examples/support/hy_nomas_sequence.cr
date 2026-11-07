@@ -205,14 +205,20 @@ module HyNomasSequence
                     reference_action : ML::Video::HyNomasReferenceAction? = nil,
                     source_bf16 : Bool = false,
                     t0_key_visible_latents : Int32? = nil,
-                    t0_hide_caption_keys : Bool = false) : Int64
+                    t0_hide_caption_keys : Bool = false,
+                    t1_current_text_kv : Bool = false) : Int64
     valid = query_text_tokens(inputs, prompt_edit, reference_action: reference_action)
-    has_profile = !prompt_edit.nil? || !reference_action.nil?
-    validate_t0_history_visibility!(t0_key_visible_latents, t0_hide_caption_keys)
-    attention_profiles = if t0_key_visible_latents || t0_hide_caption_keys
-                           raise ArgumentError.new("T0 history visibility cannot be combined with prompt or action edits") if prompt_edit || reference_action
+    validate_t0_history_visibility!(t0_key_visible_latents, t0_hide_caption_keys, t1_current_text_kv)
+    t0_profile_enabled = !t0_key_visible_latents.nil? || t0_hide_caption_keys || t1_current_text_kv
+    if t0_profile_enabled && (prompt_edit || reference_action)
+      raise ArgumentError.new("T0 history visibility cannot be combined with prompt or action edits")
+    end
+    history_text = history_text_profile(inputs, segments, prompt_edit, reference_action: reference_action,
+      t1_current_text_kv: t1_current_text_kv)
+    attention_profiles = if t0_profile_enabled
                            t0_history_attention_profiles(inputs.valid_text_tokens, t0_key_visible_latents.not_nil!,
-                             t0_hide_caption_keys: t0_hide_caption_keys)
+                             t0_hide_caption_keys: t0_hide_caption_keys,
+                             t1_current_text_kv: t1_current_text_kv)
                          else
                            nil
                          end
@@ -220,12 +226,8 @@ module HyNomasSequence
       video_tokens: 4320, valid_text_tokens: valid,
       storage_text_tokens: ((valid + 63) // 64) * 64, layers: 54, heads: 16, head_dim: 128,
       text_cache_policy: text_cache_policy,
-      segment_text_tokens: has_profile ? text_tokens(inputs, segments, prompt_edit, reference_action: reference_action) : nil,
-      segment_cache_text: if has_profile
-        cache_text(segments, prompt_edit, reference_action: reference_action)
-      else
-        nil
-      end,
+      segment_text_tokens: history_text[:segment_text_tokens],
+      segment_cache_text: history_text[:segment_cache_text],
       segment_attention_labels: reference_attention_labels(inputs.valid_text_tokens, reference_action),
       segment_attention_profiles: attention_profiles,
       source_bf16_attention: source_bf16)
@@ -234,8 +236,12 @@ module HyNomasSequence
   # T1 uses one masked workspace in both arms. `visible_latents` controls only
   # which early T0 video keys receive label -1; the optional caption mask also
   # affects only T1. T0 itself remains unmasked.
-  def validate_t0_history_visibility!(visible_latents : Int32?, t0_hide_caption_keys : Bool) : Nil
-    return if visible_latents.nil? && !t0_hide_caption_keys
+  def validate_t0_history_visibility!(visible_latents : Int32?, t0_hide_caption_keys : Bool,
+                                      t1_current_text_kv : Bool = false) : Nil
+    if t1_current_text_kv && (!t0_hide_caption_keys || visible_latents != 30)
+      raise ArgumentError.new("T1 current text K/V requires hidden T0 caption keys and all 30 T0 video latents visible")
+    end
+    return if visible_latents.nil? && !t0_hide_caption_keys && !t1_current_text_kv
     if t0_hide_caption_keys && visible_latents != 30
       raise ArgumentError.new("Hiding T0 caption keys requires all 30 T0 video latents visible")
     end
@@ -246,7 +252,8 @@ module HyNomasSequence
   end
 
   # Pure pre-allocation admission shared by the sizing path and GPU owner.
-  def validate_t0_history_admission!(visible_latents : Int32?, t0_hide_caption_keys : Bool, *,
+  def validate_t0_history_admission!(visible_latents : Int32?, t0_hide_caption_keys : Bool,
+                                     t1_current_text_kv : Bool = false, *,
                                      source_bf16 : Bool,
                                      reference_latent_bytes : Int64,
                                      segments : Int32,
@@ -256,8 +263,8 @@ module HyNomasSequence
                                      noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
                                      prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
                                      reference_action : ML::Video::HyNomasReferenceAction? = nil) : Nil
-    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys)
-    return if visible_latents.nil? && !t0_hide_caption_keys
+    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys, t1_current_text_kv)
+    return if visible_latents.nil? && !t0_hide_caption_keys && !t1_current_text_kv
     unless source_bf16 && reference_latent_bytes == REFERENCE_LATENT_BYTES && segments == 2 &&
            text_cache_policy.once_per_scene? && !cinematic && !prepare_capture &&
            !noise_edit && !prompt_edit && !reference_action
@@ -265,15 +272,46 @@ module HyNomasSequence
     end
   end
 
+  # The final T1 current rows are included in its reader workspace. The
+  # continuation schedule has no final-segment writer, so these rows are not
+  # appended to persistent history.
+  def t1_current_text_profile(valid_text_tokens : Int32, segments : Int32) : NamedTuple(
+    segment_text_tokens: Array(Int32), segment_cache_text: Array(Bool))
+    unless valid_text_tokens > 0
+      raise ArgumentError.new("T1 current text K/V requires valid caption text")
+    end
+    count = validate_segments!(segments)
+    {segment_text_tokens: Array.new(count, valid_text_tokens),
+     segment_cache_text:  Array.new(count, true)}
+  end
+
+  def history_text_profile(inputs : HyNomasGeneration::Inputs, segments : Int32,
+                           prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil, *,
+                           reference_action : ML::Video::HyNomasReferenceAction? = nil,
+                           t1_current_text_kv : Bool = false) : NamedTuple(
+    segment_text_tokens: Array(Int32)?, segment_cache_text: Array(Bool)?)
+    if t1_current_text_kv
+      profile = t1_current_text_profile(inputs.valid_text_tokens, segments)
+      {segment_text_tokens: profile[:segment_text_tokens],
+       segment_cache_text:  profile[:segment_cache_text]}
+    elsif prompt_edit || reference_action
+      {segment_text_tokens: text_tokens(inputs, segments, prompt_edit, reference_action: reference_action),
+       segment_cache_text:  cache_text(segments, prompt_edit, reference_action: reference_action)}
+    else
+      {segment_text_tokens: nil, segment_cache_text: nil}
+    end
+  end
+
   def t0_history_attention_profiles(caption_valid_text_tokens : Int32,
                                     visible_latents : Int32, *,
-                                    t0_hide_caption_keys : Bool = false) : Array(ML::Video::HyNomasContinuationHistory::AttentionLabels?)
-    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys)
+                                    t0_hide_caption_keys : Bool = false,
+                                    t1_current_text_kv : Bool = false) : Array(ML::Video::HyNomasContinuationHistory::AttentionLabels?)
+    validate_t0_history_visibility!(visible_latents, t0_hide_caption_keys, t1_current_text_kv)
     unless caption_valid_text_tokens > 0
       raise ArgumentError.new("T0 history probe keeps exactly 10 or 30 latents and requires valid caption text")
     end
     query_rows = 4320 + caption_valid_text_tokens
-    key_rows = 2 * 4320 + caption_valid_text_tokens
+    key_rows = 2 * 4320 + caption_valid_text_tokens * (t1_current_text_kv ? 2 : 1)
     query = Array(Int32).new(query_rows, 0_i32)
     key = Array(Int32).new(key_rows, 0_i32)
     hidden_rows = (T0_HISTORY_LATENTS - visible_latents) * T0_HISTORY_TOKENS
@@ -323,19 +361,21 @@ module HyNomasSequence
                        reference_latent_bytes : Int64 = 0_i64,
                        source_bf16 : Bool = false,
                        t0_key_visible_latents : Int32? = nil,
-                       t0_hide_caption_keys : Bool = false) : Int64
+                       t0_hide_caption_keys : Bool = false,
+                       t1_current_text_kv : Bool = false) : Int64
     unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
       raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
     end
     if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
       raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
     end
-    validate_t0_history_admission!(t0_key_visible_latents, t0_hide_caption_keys,
+    validate_t0_history_admission!(t0_key_visible_latents, t0_hide_caption_keys, t1_current_text_kv,
       source_bf16: source_bf16, reference_latent_bytes: reference_latent_bytes, segments: segments,
       text_cache_policy: text_cache_policy, prompt_edit: prompt_edit, reference_action: reference_action)
-    if t0_key_visible_latents || t0_hide_caption_keys
+    if !t0_key_visible_latents.nil? || t0_hide_caption_keys || t1_current_text_kv
       t0_history_attention_profiles(inputs.base.valid_text_tokens, t0_key_visible_latents.not_nil!,
-        t0_hide_caption_keys: t0_hide_caption_keys)
+        t0_hide_caption_keys: t0_hide_caption_keys,
+        t1_current_text_kv: t1_current_text_kv)
     end
     if source_bf16
       ML::Video::HyNomasTextRefinerMPSPlan.validate_source_bf16_request!(true, inputs.base.valid_text_tokens)
@@ -363,7 +403,8 @@ module HyNomasSequence
       history_bytes(inputs.base, segments, text_cache_policy, prompt_edit: prompt_edit,
         reference_action: reference_action, source_bf16: source_bf16,
         t0_key_visible_latents: t0_key_visible_latents,
-        t0_hide_caption_keys: t0_hide_caption_keys) +
+        t0_hide_caption_keys: t0_hide_caption_keys,
+        t1_current_text_kv: t1_current_text_kv) +
       additional_inputs_bytes(inputs, segments) + reference_latent_bytes + source_scratch
   end
 
@@ -534,6 +575,7 @@ module HyNomasSequence
     getter segment_count : Int32
     getter t0_key_visible_latents : Int32?
     getter t0_hide_caption_keys : Bool
+    getter t1_current_text_kv : Bool
     @inputs_arena : ML::Video::Arena
     @bank_arena : ML::Video::Arena
     @globals : ML::Video::Arena
@@ -579,7 +621,8 @@ module HyNomasSequence
                    reference_latent : ML::MetalBuffer? = nil,
                    source_bf16 : Bool = false,
                    @t0_key_visible_latents : Int32? = nil,
-                   @t0_hide_caption_keys : Bool = false)
+                   @t0_hide_caption_keys : Bool = false,
+                   @t1_current_text_kv : Bool = false)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
       @reference_latent = reference_latent
@@ -592,6 +635,7 @@ module HyNomasSequence
         end
       end
       HyNomasSequence.validate_t0_history_admission!(@t0_key_visible_latents, @t0_hide_caption_keys,
+        @t1_current_text_kv,
         source_bf16: source_bf16,
         reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
         segments: @segment_count, text_cache_policy: text_cache_policy, cinematic: cinematic,
@@ -599,7 +643,8 @@ module HyNomasSequence
         reference_action: @reference_action)
       if visible_latents = @t0_key_visible_latents
         HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, visible_latents,
-          t0_hide_caption_keys: @t0_hide_caption_keys)
+          t0_hide_caption_keys: @t0_hide_caption_keys,
+          t1_current_text_kv: @t1_current_text_kv)
       end
       HyNomasSequence.validate_checkpoint_variant!(cinematic, prepare_capture: prepare_capture)
       HyNomasSequence.validate_noise_edit!(@noise_edit, @segment_count)
@@ -629,7 +674,8 @@ module HyNomasSequence
         prompt_edit: @prompt_edit, reference_action: @reference_action,
         reference_latent_bytes: reference_latent.try(&.size) || 0_i64, source_bf16: source_bf16,
         t0_key_visible_latents: @t0_key_visible_latents,
-        t0_hide_caption_keys: @t0_hide_caption_keys)
+        t0_hide_caption_keys: @t0_hide_caption_keys,
+        t1_current_text_kv: @t1_current_text_kv)
       @named_bytes = @peak_named_bytes - HyNomasSequence.old_attention_bytes(base, @prompt_edit,
         reference_action: @reference_action)
       raise ArgumentError.new("sequence peak named buffers exceed budget") unless @peak_named_bytes <= budget
@@ -729,27 +775,20 @@ module HyNomasSequence
         plan_cleanup << -> { @serial.release }
         blocks = @serial.blocks
         joint = blocks.first.checkpoints
+        history_text = HyNomasSequence.history_text_profile(base, @segment_count, @prompt_edit,
+          reference_action: @reference_action, t1_current_text_kv: @t1_current_text_kv)
         @history = ML::Video::HyNomasContinuationHistory.new(segment_count: @segment_count,
           video_tokens: 4320, valid_text_tokens: valid,
           storage_text_tokens: storage, layers: 54, heads: 16, head_dim: 128,
           text_cache_policy: text_cache_policy,
           reference_initialization: !@reference_latent.nil?,
-          segment_text_tokens: if @prompt_edit || @reference_action
-            HyNomasSequence.text_tokens(base, @segment_count, @prompt_edit,
-              reference_action: @reference_action)
-          else
-            nil
-          end,
-          segment_cache_text: if @prompt_edit || @reference_action
-            HyNomasSequence.cache_text(@segment_count, @prompt_edit,
-              reference_action: @reference_action)
-          else
-            nil
-          end,
+          segment_text_tokens: history_text[:segment_text_tokens],
+          segment_cache_text: history_text[:segment_cache_text],
           segment_attention_labels: HyNomasSequence.reference_attention_labels(base.valid_text_tokens, @reference_action),
           segment_attention_profiles: if visible_latents = @t0_key_visible_latents
             HyNomasSequence.t0_history_attention_profiles(base.valid_text_tokens, visible_latents,
-              t0_hide_caption_keys: @t0_hide_caption_keys)
+              t0_hide_caption_keys: @t0_hide_caption_keys,
+              t1_current_text_kv: @t1_current_text_kv)
           else
             nil
           end,
@@ -784,8 +823,16 @@ module HyNomasSequence
           history_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 exact native cache boundary",
           t0_key_visible_latents: @t0_key_visible_latents,
           t0_hide_caption_keys: @t0_hide_caption_keys,
+          t1_current_text_kv: @t1_current_text_kv,
+          t1_current_text_key_rows: @t1_current_text_kv ? base.valid_text_tokens : 0,
           t0_writer_attention: @t0_key_visible_latents ? "unmasked" : nil,
-          t1_attention_profile: @t0_key_visible_latents ? "same-size masked workspace" : nil)
+          t1_attention_profile: if @t1_current_text_kv
+            "T0 caption mask; current T1 text K/V included"
+          elsif @t0_key_visible_latents
+            "same-size masked workspace"
+          else
+            nil
+          end)
       rescue ex
         cleanup = [] of Proc(Nil)
         cleanup << -> { @eulers.reverse_each(&.release) } unless @eulers.empty?

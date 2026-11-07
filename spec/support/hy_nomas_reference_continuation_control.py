@@ -68,20 +68,28 @@ def compact_t0_history_visibility_layout(
     keep_latents: int,
     t0_valid_tokens: int,
     t0_hide_caption_keys: bool = False,
+    t1_current_text_kv: bool = False,
 ) -> dict[str, int]:
-    """Describe a same-shape T1 mask over compact T0-video/text/T1-video keys."""
+    """Describe compact T1 keys, optionally including current T1 text K/V."""
     if keep_latents not in (10, 30):
         raise ControlError("T0 history diagnostic keeps either 10 or all 30 latent frames")
     if not 0 < t0_valid_tokens <= DIT_TEXT_ROWS:
         raise ControlError("T0 history diagnostic requires admitted valid caption rows")
     if not isinstance(t0_hide_caption_keys, bool):
         raise ControlError("T0 history caption visibility flag must be boolean")
+    if not isinstance(t1_current_text_kv, bool):
+        raise ControlError("current T1 text K/V flag must be boolean")
+    if t1_current_text_kv and not t0_hide_caption_keys:
+        raise ControlError("current T1 text K/V requires hidden T0 caption keys")
     if t0_hide_caption_keys and keep_latents != LATENTS_PER_SEGMENT:
         raise ControlError("caption-key visibility diagnostic requires all 30 T0 latent frames")
     tokens_per_latent = VIDEO_TOKENS // LATENTS_PER_SEGMENT
     hidden_video_rows = (LATENTS_PER_SEGMENT - keep_latents) * tokens_per_latent
     hidden_caption_rows = t0_valid_tokens if t0_hide_caption_keys else 0
-    key_rows = 2 * VIDEO_TOKENS + t0_valid_tokens
+    current_text_rows = t0_valid_tokens if t1_current_text_kv else 0
+    t1_video_start = VIDEO_TOKENS + t0_valid_tokens
+    t1_video_end = t1_video_start + VIDEO_TOKENS
+    key_rows = t1_video_end + current_text_rows
     return {
         "key_rows": key_rows,
         "t0_video_rows": VIDEO_TOKENS,
@@ -91,8 +99,11 @@ def compact_t0_history_visibility_layout(
         "t0_text_end": VIDEO_TOKENS + t0_valid_tokens,
         "hidden_t0_caption_key_rows": hidden_caption_rows,
         "retained_t0_caption_key_rows": t0_valid_tokens - hidden_caption_rows,
-        "t1_video_start": VIDEO_TOKENS + t0_valid_tokens,
-        "t1_video_end": key_rows,
+        "t1_video_start": t1_video_start,
+        "t1_video_end": t1_video_end,
+        "current_t1_text_key_rows": current_text_rows,
+        "current_t1_text_start": t1_video_end,
+        "current_t1_text_end": key_rows,
     }
 
 DEFAULT_T0_LATENT_BANK = Path(
@@ -695,15 +706,21 @@ def _cache_attention_dispatch_factory(torch: Any, state: dict[str, Any]) -> Any:
                 raise ControlError("compacted cache rows differ from the authenticated T0/T1 masks")
             attention_mask = None
             if _uses_t0_history_visibility_mask(state, cache_valid_len):
-                if cache_txt:
-                    raise ControlError("T0 history visibility diagnostic requires the admitted T1 cache read")
+                current_text_expected = bool(state.get("t1_current_text_kv", False))
+                if cache_txt != current_text_expected:
+                    raise ControlError("T0 history visibility read differs from admitted current T1 text K/V")
                 mask = state.get("t0_history_attention_mask")
+                expected_mask_rows = (
+                    2 * VIDEO_TOKENS
+                    + state["t0_valid_tokens"]
+                    + (call["valid_text_tokens"] if current_text_expected else 0)
+                )
                 if (
                     mask is None
                     or tuple(mask.shape) != (1, expected_compact)
                     or mask.device != q_full.device
                     or mask.dtype != torch.bool
-                    or expected_compact != 2 * VIDEO_TOKENS + state["t0_valid_tokens"]
+                    or expected_compact != expected_mask_rows
                 ):
                     raise ControlError("T0 history visibility mask escaped compact T1 key geometry")
                 attention_mask = mask

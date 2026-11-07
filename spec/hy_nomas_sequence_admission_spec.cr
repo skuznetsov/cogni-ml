@@ -238,6 +238,66 @@ describe HyNomasSequence do
     end
   end
 
+  it "adds current T1 text keys only when hidden T0 caption keys remain all-video-visible" do
+    hidden_t0_caption = HyNomasSequence.t0_history_attention_profiles(263, 30,
+      t0_hide_caption_keys: true)
+    current_t1_text = HyNomasSequence.t0_history_attention_profiles(263, 30,
+      t0_hide_caption_keys: true, t1_current_text_kv: true)
+    hidden_t1 = hidden_t0_caption[1].not_nil!
+    current_t1 = current_t1_text[1].not_nil!
+
+    current_t1.query.size.should eq(4_583)
+    current_t1.query.should eq(hidden_t1.query)
+    current_t1.key.size.should eq(9_166)
+    current_t1.key[0, 4_320].all?(&.zero?).should be_true
+    current_t1.key[4_320, 263].should eq(Array(Int32).new(263, -1))
+    current_t1.key[4_583, 4_320].all?(&.zero?).should be_true
+    current_t1.key[8_903, 263].all?(&.zero?).should be_true
+
+    text_profile = HyNomasSequence.t1_current_text_profile(263, 2)
+    text_profile[:segment_text_tokens].should eq([263, 263])
+    text_profile[:segment_cache_text].should eq([true, true])
+    current = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens: text_profile[:segment_text_tokens],
+      segment_cache_text: text_profile[:segment_cache_text],
+      source_bf16_attention: true, segment_attention_profiles: current_t1_text)
+    hidden = ML::Video::HyNomasContinuationHistory.geometry(2, 4_320, 263, 320, 54, 16, 128,
+      text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene,
+      segment_text_tokens: text_profile[:segment_text_tokens],
+      segment_cache_text: [true, false],
+      source_bf16_attention: true, segment_attention_profiles: hidden_t0_caption)
+    current.query_rows.should eq(4_583)
+    current.workspace_geometries[1].query_rows.should eq(4_583)
+    current.workspace_geometries[1].current_rows.should eq(4_583)
+    current.workspace_geometries[1].key_rows.should eq(9_166)
+    current.workspace_geometries[0].key_rows.should eq(4_583)
+    current.max_history_rows.should eq(hidden.max_history_rows)
+    current.append_elements(0).should eq(hidden.append_elements(0))
+    current.writer_workspace_geometries[0].should eq(hidden.writer_workspace_geometries[0])
+    expect_raises(ArgumentError, /Final or invalid chunk/) do
+      current.append_elements(1)
+    end
+
+    expect_raises(ArgumentError) do
+      HyNomasSequence.t0_history_attention_profiles(263, 30, t1_current_text_kv: true)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasSequence.t0_history_attention_profiles(263, 10,
+        t0_hide_caption_keys: true, t1_current_text_kv: true)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasSequence.validate_t0_history_admission!(30, false, true,
+        source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2)
+    end
+    expect_raises(ArgumentError) do
+      HyNomasSequence.validate_t0_history_admission!(30, true, true,
+        source_bf16: false, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+        segments: 2)
+    end
+  end
+
   it "rejects unsupported T0 history visibility windows" do
     [0, 9, 11, 20, 29, 31].each do |visible|
       expect_raises(ArgumentError) do

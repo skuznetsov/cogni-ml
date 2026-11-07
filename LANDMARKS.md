@@ -39259,3 +39259,41 @@ Refresh after source/toolchain/device/model/workload changes.
   source/runtime/binary/weights/input/noise/schedule/geometry changes or artifact
   mutation/loss. Rollback: omit --hide-t0-caption-keys and the diagnostic probe;
   production defaults and the unmasked T0 writer are unchanged.
+
+### 2026-11-07 — Current T1 text K/V rescues coherence, not natural motion
+
+- Opt-in --t1-current-text-kv retains all 30 T0 video latents, hides old 263
+  caption keys and exposes current 263 T1 caption K/V. Source cache_txt=True,
+  update_cache=False for all 4 T1 calls; no persistent T1 append. Unmasked
+  T0 writer and 4,583 query rows remain; keys grow from 8,903 to 9,166, adding only
+  2,290,204 shared-workspace bytes. Production defaults remain unchanged.
+- New-binary visible A/A whole bank matches the historical baseline. Native
+  T1 matches pinned 911cea Torch 2.8 MPS on all 138,240 values bitwise; eleven
+  sampled writer records and nine T1 input records remain unchanged versus
+  hidden-only. First changed sampled record: t1.step1.block0.image.
+  Same-arm cyclic90 PixelUMM display matches all 53,084,160 finite values
+  bitwise against Torch 2.6 MPS, unchanged atol=rtol=2e-5. Actual native/source
+  crop-byte checks pass; recorded stale-source-crop substitution is rejected.
+- Root and correlated reviewer inspected full-face/eye selected frames:
+  current T1 text K/V restores a coherent portrait versus hidden-only severe
+  multicolor duplicated-face collapse, but both rescue and baseline remain
+  nearly static; no substantial head turn is established. This supports the
+  intervention package, not unique semantic attribution or a motion fix.
+  Added attention support renormalizes softmax; T0 video K/V retains indirect
+  conditioning. Stills/RGB magnitude do not certify acting quality.
+- Twenty-six Python tests, 32 Crystal examples, release build and static/gates
+  pass. Cache-aware floor 10%, observed swap growth zero; native DiT sampled peak
+  24.17GiB, native/source decoder 18.81/7.94GiB.
+  Native instrumented preterminal allocation/readback/wait 0/0/0, terminal 1
+  per stage; opaque MPS allocations excluded. No speedup claim. Correlated
+  adversary ROBUST within scope; missing structural validator keeps packet
+  COMPLETED independently of passed numerical DoD. Retired owned diagnostic
+  payload/build cache (345,208,990 bytes); retain inputs, weights, compact
+  latents, pixels, receipts, media. Intermediate replay requires recapture.
+- Next falsifier: technical repeated-photo T0 versus real-video or stock-
+  generated T0, preserving prompt/noise and source gates. Do not iterate
+  similar direct-key masks or promote this rescue into a motion policy.
+  Return pointer: docs/hy-nomas-object-control-frontier.md, current T1 text
+  K/V section. Evidence .landmark/evidence/2026-11-07-hy-nomas-t1-text-kv.json.
+  Refresh on source/runtime/binary/weights/input/noise/schedule/geometry or
+  artifact changes/loss. Rollback: omit the flag and diagnostic profile.

@@ -13,6 +13,18 @@ class HistoryPrefixTest(unittest.TestCase):
         with self.assertRaisesRegex(control.base.ControlError, "caption.*30"):
             control.preflight(args)
 
+    def test_current_t1_text_kv_metadata_requires_caption_hidden_keep_thirty(self):
+        metadata = control.history_probe_metadata(30, True, True)
+        self.assertEqual(metadata, {
+            "keep_t0_latents": 30,
+            "t0_hide_caption_keys": True,
+            "t1_current_text_kv": True,
+        })
+        with self.assertRaisesRegex(control.base.ControlError, "requires hidden T0 caption keys"):
+            control.history_probe_metadata(30, False, True)
+        with self.assertRaisesRegex(control.base.ControlError, "requires all 30 T0 video latents"):
+            control.history_probe_metadata(10, True, True)
+
     @staticmethod
     def bank(frames):
         return b"".join(bytes([channel + frame % 17]) * (9 * 16 * 4)

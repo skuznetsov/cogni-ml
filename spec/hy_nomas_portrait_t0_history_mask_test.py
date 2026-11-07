@@ -74,6 +74,19 @@ class CompactT0HistoryMaskTest(unittest.TestCase):
         self.assertEqual((caption_hidden["t0_text_start"], caption_hidden["t0_text_end"]), (4320, 4583))
         self.assertEqual((caption_hidden["t1_video_start"], caption_hidden["t1_video_end"]), (4583, 8903))
 
+    def test_current_t1_text_layout_appends_only_valid_text_keys(self) -> None:
+        rescue = source.compact_t0_history_visibility_layout(
+            30, portrait.VALID, t0_hide_caption_keys=True, t1_current_text_kv=True)
+
+        self.assertEqual(rescue["key_rows"], 9166)
+        self.assertEqual(rescue["visible_t0_video_rows"], 4320)
+        self.assertEqual(rescue["hidden_t0_caption_key_rows"], 263)
+        self.assertEqual(rescue["retained_t0_caption_key_rows"], 0)
+        self.assertEqual((rescue["t0_text_start"], rescue["t0_text_end"]), (4320, 4583))
+        self.assertEqual((rescue["t1_video_start"], rescue["t1_video_end"]), (4583, 8903))
+        self.assertEqual(rescue["current_t1_text_key_rows"], 263)
+        self.assertEqual((rescue["current_t1_text_start"], rescue["current_t1_text_end"]), (8903, 9166))
+
     def test_materialized_mask_hides_only_old_t0_video_prefix(self) -> None:
         all_visible_layout, all_visible = portrait.build_t0_history_attention_mask(
             _FakeTorch, "mps", 30)
@@ -95,6 +108,36 @@ class CompactT0HistoryMaskTest(unittest.TestCase):
         self.assertTrue(all(mask.values[:4320]))
         self.assertFalse(any(mask.values[4320:4583]))
         self.assertTrue(all(mask.values[4583:]))
+
+    def test_caption_hidden_rescue_mask_appends_visible_t1_text_keys(self) -> None:
+        layout, mask = portrait.build_t0_history_attention_mask(
+            _FakeTorch, "mps", 30, t0_hide_caption_keys=True, t1_current_text_kv=True)
+
+        self.assertEqual(layout["key_rows"], 9166)
+        self.assertEqual(mask.values, [True] * 4320 + [False] * 263 + [True] * 4320 + [True] * 263)
+        self.assertTrue(all(mask.values[:4320]))
+        self.assertFalse(any(mask.values[4320:4583]))
+        self.assertTrue(all(mask.values[4583:]))
+
+    def test_rescue_metadata_and_schedule_keep_writer_and_queries_fixed(self) -> None:
+        record = portrait.history_visibility_record(
+            30, t0_hide_caption_keys=True, t1_current_text_kv=True)
+        ordinary = portrait.shared_scene_plan()
+        rescue = portrait.shared_scene_plan(t1_current_text_kv=True)
+
+        self.assertEqual(record["compact_attention_key_rows"], 9166)
+        self.assertEqual(record["hidden_t0_caption_key_rows"], 263)
+        self.assertEqual(record["retained_t0_caption_key_rows"], 0)
+        self.assertEqual(record["current_t1_text_key_rows"], 263)
+        self.assertEqual(record["visible_current_t1_text_key_rows"], 263)
+        self.assertTrue(record["t0_cache_writer_unchanged"])
+        self.assertTrue(record["t1_query_rows_unchanged"])
+        self.assertTrue(record["t1_text_refinement_unchanged"])
+        self.assertEqual(rescue[0], ordinary[0])
+        self.assertTrue(all(call["cache_txt"] for call in rescue[1:]))
+        self.assertTrue(all(not call["update_cache"] for call in rescue[1:]))
+        self.assertTrue(all(call["cache_valid_len"] == portrait.CACHE_ROWS for call in rescue[1:]))
+        self.assertTrue(all(not call["cache_txt"] for call in ordinary[1:]))
 
     def test_visibility_record_names_fixed_cache_and_untrained_scope(self) -> None:
         historical = portrait.history_visibility_record(None)
@@ -143,6 +186,24 @@ class CompactT0HistoryMaskTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "requires --t0-history-keep-latents 30"):
                     portrait.history_visibility_record(keep_latents, t0_hide_caption_keys=True)
 
+    def test_t1_current_text_kv_requires_caption_hidden_keep_thirty(self) -> None:
+        with self.assertRaisesRegex(source.ControlError, "requires hidden T0 caption keys"):
+            source.compact_t0_history_visibility_layout(
+                30, portrait.VALID, t1_current_text_kv=True)
+        with self.assertRaisesRegex(source.ControlError, "requires all 30 T0 latent frames"):
+            source.compact_t0_history_visibility_layout(
+                10, portrait.VALID, t0_hide_caption_keys=True, t1_current_text_kv=True)
+        with self.assertRaisesRegex(ValueError, "requires --hide-t0-caption-keys"):
+            portrait.history_visibility_record(30, t1_current_text_kv=True)
+        for keep_latents in (None, 10):
+            with self.subTest(keep_latents=keep_latents):
+                with self.assertRaisesRegex(ValueError, "requires --t0-history-keep-latents 30"):
+                    portrait.history_visibility_record(
+                        keep_latents,
+                        t0_hide_caption_keys=True,
+                        t1_current_text_kv=True,
+                    )
+
     def test_cli_rejects_caption_mask_without_explicit_keep_thirty(self) -> None:
         for keep_args in ([], ["--t0-history-keep-latents", "10"]):
             with self.subTest(keep_args=keep_args):
@@ -159,6 +220,31 @@ class CompactT0HistoryMaskTest(unittest.TestCase):
                         portrait.main()
                 self.assertEqual(caught.exception.code, 2)
                 self.assertIn("requires --t0-history-keep-latents 30", stderr.getvalue())
+
+    def test_cli_rejects_current_t1_text_kv_without_both_admissions(self) -> None:
+        invalid_args = (
+            ["--t1-current-text-kv"],
+            ["--hide-t0-caption-keys", "--t1-current-text-kv"],
+            ["--t0-history-keep-latents", "10", "--hide-t0-caption-keys",
+             "--t1-current-text-kv"],
+        )
+        for extra in invalid_args:
+            with self.subTest(extra=extra):
+                argv = [
+                    "hy-nomas-portrait-dit-control",
+                    "--output-dir",
+                    "/tmp/hy-nomas-current-text-kv-invalid",
+                    *extra,
+                ]
+                stderr = io.StringIO()
+                with patch("sys.argv", argv), contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as caught:
+                        portrait.main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertRegex(
+                    stderr.getvalue(),
+                    "requires (--hide-t0-caption-keys|--t0-history-keep-latents 30)",
+                )
 
     def test_rejects_unadmitted_keep_counts_and_caption_extents(self) -> None:
         for keep_latents in (0, 9, 20, 31):

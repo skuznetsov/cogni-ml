@@ -52,9 +52,24 @@ def validate_native_noise(receipt: dict) -> None:
         raise base.ControlError("same-arm decoder noise, RoPE or weight identity changed")
 
 
-def preflight(args):
-    if getattr(args, "hide_t0_caption_keys", False) and args.keep_t0_latents != 30:
+def history_probe_metadata(keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv):
+    if t1_current_text_kv and not hide_t0_caption_keys:
+        raise base.ControlError("T1 current text K/V requires hidden T0 caption keys")
+    if hide_t0_caption_keys and keep_t0_latents != 30:
         raise base.ControlError("hiding T0 caption keys requires all 30 T0 video latents")
+    return {
+        "keep_t0_latents": keep_t0_latents,
+        "t0_hide_caption_keys": hide_t0_caption_keys,
+        "t1_current_text_kv": t1_current_text_kv,
+    }
+
+
+def preflight(args):
+    history_metadata = history_probe_metadata(
+        args.keep_t0_latents,
+        getattr(args, "hide_t0_caption_keys", False),
+        getattr(args, "t1_current_text_kv", False),
+    )
     args.input_latents = None
     args.input_latents_sha256 = None
     admitted = base.preflight(args)
@@ -87,8 +102,7 @@ def preflight(args):
         "native90_receipt": native_receipt,
         "native90_receipt_sha256": receipt_sha,
         "history_probe": {
-            "keep_t0_latents": args.keep_t0_latents,
-            "t0_hide_caption_keys": getattr(args, "hide_t0_caption_keys", False),
+            **history_metadata,
             "same_arm_prefix60": str(prefix_path),
             "same_arm_prefix60_sha256": prefix_sha,
             "clean_t0_unchanged": True,
@@ -105,6 +119,8 @@ def main(argv=None):
     parser.add_argument("--prefix60-sha256", required=True)
     parser.add_argument("--keep-t0-latents", type=int, choices=(10, 30), required=True)
     parser.add_argument("--hide-t0-caption-keys", action="store_true")
+    parser.add_argument("--t1-current-text-kv", action="store_true",
+                        help="record the admitted current T1 text K/V rescue metadata")
     args = parser.parse_args(argv)
     try:
         admitted = preflight(args)
