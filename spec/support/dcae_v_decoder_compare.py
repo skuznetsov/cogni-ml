@@ -22,6 +22,9 @@ DEFAULT_CHUNK_ELEMENTS = 262144
 MAX_CHUNK_ELEMENTS = 1048576
 SMOKE_LATENT_SHAPE = (1, 32, 20, 1, 1)
 FULL_LATENT_SHAPE = (1, 32, 60, 9, 16)
+# Complete causal prefixes of the authenticated paired bank. These are
+# output-only profiling controls, not another independent upstream execution.
+PROFILE_LATENT_SHAPES = ((1, 32, 10, 9, 16), (1, 32, 20, 9, 16))
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _TRACE_KEY = re.compile(r"trace\.(project_in|stages\.[1-6]|project_out)\.tile([0-9]+)\Z")
 _TRACE_BOUNDARY_ORDER = (
@@ -218,13 +221,13 @@ def _validate_decoder_schema(artifact: TensorArtifact) -> None:
     if "input.latent" not in tensors or "output.pixels" not in tensors:
         raise CompareError("decoder artifact requires input.latent and output.pixels")
     latent_shape = tensors["input.latent"]["shape"]
-    if latent_shape not in (SMOKE_LATENT_SHAPE, FULL_LATENT_SHAPE):
+    if latent_shape not in (SMOKE_LATENT_SHAPE, FULL_LATENT_SHAPE, *PROFILE_LATENT_SHAPES):
         raise CompareError("input.latent shape is outside the pinned smoke/final-bank geometries")
     if tensors["output.pixels"]["shape"] != _expected_output_shape(latent_shape):
         raise CompareError("output.pixels shape does not match the pinned decoder geometry")
 
     trace_names = [name for name in tensors if name.startswith("trace.")]
-    if latent_shape == FULL_LATENT_SHAPE:
+    if latent_shape == FULL_LATENT_SHAPE or latent_shape in PROFILE_LATENT_SHAPES:
         if trace_names:
             raise CompareError("the full paired-bank artifact must be output-only")
         return

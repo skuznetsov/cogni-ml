@@ -86,11 +86,11 @@ $(WAN_T5_RMS_MPS_OBJ): src/ml/video/wan_t5_rms_mps_bridge.mm | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "Wan MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(DCAE_V_MPS_OBJ): src/ml/video/dcae_v_mps_bridge.mm | $(BUILD_SENTINEL)
+$(DCAE_V_MPS_OBJ): src/ml/video/dcae_v_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "DCAE-V MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
-$(DCAE_V_NORM_MPS_OBJ): src/ml/video/dcae_v_norm_mps_bridge.mm | $(BUILD_SENTINEL)
+$(DCAE_V_NORM_MPS_OBJ): src/ml/video/dcae_v_norm_mps_bridge.mm src/ml/video/dcae_v_mps_profile.h src/ml/video/mps_api_profile.h | $(BUILD_SENTINEL)
 	@test "$(IS_DARWIN)" = Darwin || (echo "DCAE-V MPS requires macOS"; exit 1)
 	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
 
@@ -637,7 +637,7 @@ $(BUILD_DIR)/dcae_v_decoder_probe: examples/dcae_v_decoder_probe.cr examples/sup
 		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 spec_dcae_v_decoder:
-	$(CRYSTAL) spec -D cpu_only spec/dcae_v_decoder_spec.cr $(ARGS)
+	$(CRYSTAL) spec -D cpu_only spec/dcae_v_decoder_spec.cr spec/dcae_v_decoder_profile_spec.cr $(ARGS)
 
 .PHONY: hy_nomas_reference_decode_probe hy_nomas_reference_cache_probe hy_nomas_reference_block0_probe spec_hy_nomas_reference_handoff
 hy_nomas_reference_decode_probe: $(BUILD_DIR)/hy_nomas_reference_decode_probe

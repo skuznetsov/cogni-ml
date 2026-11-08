@@ -1,4 +1,5 @@
 require "./dcae_v_encoder"
+require "./dcae_v_decoder_profile"
 
 module ML::Video
   # The released decoder's cache grid is ten latent frames. A short final
@@ -93,8 +94,19 @@ module ML::Video
   # An immutable sequence of fixed bindings. Every invocation starts with a
   # no-cache tile and overwrites all cache frames on GPU before their next use.
   # Closures, graph resources and all buffer owners are prepared before encode.
+  struct DCAEVDecoderPlanOperation
+    getter name : String
+    getter category : String
+    getter stage : String
+    getter encode : Proc(ML::Metal::MPSCommandChain, Nil)
+
+    def initialize(@name : String, @category : String, @stage : String,
+                   @encode : Proc(ML::Metal::MPSCommandChain, Nil))
+    end
+  end
+
   class DCAEVDecoderPlan
-    @operations = [] of Proc(ML::Metal::MPSCommandChain, Nil)
+    @operations = [] of DCAEVDecoderPlanOperation
     @convs = [] of DCAEVConvMPS::Plan
     @norms = [] of DCAEVNormMPS::RMSNormPlan
     @silus = [] of DCAEVNormMPS::SiLUPlan
@@ -107,30 +119,35 @@ module ML::Video
     def initialize(@owners : Array(ML::MetalBuffer))
     end
 
-    def add(&operation : ML::Metal::MPSCommandChain -> Nil) : Nil
-      @operations << operation
+    def add(name : String, category : String, stage : String,
+            &operation : ML::Metal::MPSCommandChain -> Nil) : Nil
+      @operations << DCAEVDecoderPlanOperation.new(name, category, stage, operation)
     end
 
     def template(key : String, &factory : -> DCAEVConvMPS::Template) : DCAEVConvMPS::Template
       @templates[key] ||= factory.call
     end
 
-    def add(plan : DCAEVConvMPS::Plan) : Nil
+    def add(plan : DCAEVConvMPS::Plan, name : String,
+            category : String, stage : String) : Nil
       @convs << plan
-      add { |chain| plan.encode(chain) }
+      add(name, category, stage) { |chain| plan.encode(chain) }
     end
 
-    def add(plan : DCAEVNormMPS::RMSNormPlan) : Nil
+    def add(plan : DCAEVNormMPS::RMSNormPlan, name : String,
+            stage : String) : Nil
       @norms << plan
-      add { |chain| plan.encode(chain) }
+      add(name, "norm", stage) { |chain| plan.encode(chain) }
     end
 
-    def add(plan : DCAEVNormMPS::SiLUPlan) : Nil
+    def add(plan : DCAEVNormMPS::SiLUPlan, name : String,
+            stage : String) : Nil
       @silus << plan
-      add { |chain| plan.encode(chain) }
+      add(name, "silu", stage) { |chain| plan.encode(chain) }
     end
 
-    def encode(chain : ML::Metal::MPSCommandChain) : Nil
+    def encode(chain : ML::Metal::MPSCommandChain,
+               *, profile : DCAEVDecoderProfileRecorder? = nil) : Nil
       raise ArgumentError.new("DCAE-V decoder plan has been released") if @released
       if previous = @last_chain
         unless previous.same?(chain) || previous.completed?
@@ -138,7 +155,15 @@ module ML::Video
         end
       end
       @last_chain = chain
-      @operations.each { |operation| operation.call(chain) }
+      @operations.each do |operation|
+        if recorder = profile
+          recorder.measure(chain, operation.name, operation.category, operation.stage) do
+            operation.encode.call(chain)
+          end
+        else
+          operation.encode.call(chain)
+        end
+      end
     end
 
     def operation_count : Int32
@@ -372,7 +397,8 @@ module ML::Video
               add_conv(plan, original, expanded, weights, workspace, cfg, tile,
                 upsample_prefix(stage), WIDTHS[stage + 1], channels * 4, t, h, w, true)
               add_shuffle(plan, expanded, original, workspace.scratch(next_slot), cfg,
-                WIDTHS[stage + 1], channels, t, h, w, sf, tf, true)
+                WIDTHS[stage + 1], channels, t, h, w, sf, tf, true,
+                "tile#{tile}/stage_#{stage}.upsample.shuffle", "stage_#{stage}")
               slot = next_slot
               t *= tf
               h *= sf
@@ -386,24 +412,28 @@ module ML::Video
               result = workspace.scratch(next_slot)
               add_conv(plan, original, temp, weights, workspace, cfg, tile,
                 "#{prefix}.conv1", channels, channels, t, h, w, true)
-              plan.add(DCAEVNormMPS::SiLUPlan.new(shape(cfg, channels, t, h, w).map(&.to_i32), temp, result))
+              plan.add(DCAEVNormMPS::SiLUPlan.new(shape(cfg, channels, t, h, w).map(&.to_i32), temp, result),
+                "tile#{tile}/#{prefix}.silu", "stage_#{stage}")
               add_conv(plan, result, temp, weights, workspace, cfg, tile,
                 "#{prefix}.conv2", channels, channels, t, h, w, false)
-              add_norm(plan, temp, result, weights, workspace, cfg, "#{prefix}.conv2.norm", channels, t, h, w)
-              add_residual(plan, result, original, DCAEVShape.count("decoder residual", cfg.batches, channels, t, h, w))
+              add_norm(plan, temp, result, weights, workspace, cfg, tile, "#{prefix}.conv2.norm", channels, t, h, w)
+              add_residual(plan, result, original, DCAEVShape.count("decoder residual", cfg.batches, channels, t, h, w),
+                "tile#{tile}/#{prefix}.residual_add", "stage_#{stage}")
               slot = next_slot
             end
             add_trace(plan, traces, "trace.stages.#{stage}.tile#{tile}", workspace.scratch(slot), cfg, channels, t, h, w)
           end
           normed = workspace.scratch((slot + 1) % 3)
           activated = workspace.scratch((slot + 2) % 3)
-          add_norm(plan, workspace.scratch(slot), normed, weights, workspace, cfg,
+          add_norm(plan, workspace.scratch(slot), normed, weights, workspace, cfg, tile,
             "decoder.project_out.op_list.0", 256, t, h, w)
-          plan.add(DCAEVNormMPS::SiLUPlan.new(shape(cfg, 256, t, h, w).map(&.to_i32), normed, activated))
+          plan.add(DCAEVNormMPS::SiLUPlan.new(shape(cfg, 256, t, h, w).map(&.to_i32), normed, activated),
+            "tile#{tile}/decoder.project_out.silu", "project_out")
           expanded = workspace.scratch(slot)
           add_conv(plan, activated, expanded, weights, workspace, cfg, tile,
             "decoder.project_out.op_list.2.conv", 256, 12, t, h, w, true)
-          add_shuffle(plan, expanded, activated, normed, cfg, 256, 3, t, h, w, 2, 1, false)
+          add_shuffle(plan, expanded, activated, normed, cfg, 256, 3, t, h, w, 2, 1, false,
+            "tile#{tile}/decoder.project_out.shuffle", "project_out")
           add_trace(plan, traces, "trace.project_out.tile#{tile}", normed, cfg, 3, 40, h * 2, w * 2)
           add_scatter(plan, normed, output, cfg, tile)
         end
@@ -425,11 +455,20 @@ module ML::Video
         DCAEVConvMPS::Template.new(cfg.batches, cin, cout, cout, t, t, h, w,
           0, false, true, tile > 0, bias, 1, 1, false)
       end
+      stage = profile_stage(prefix)
+      category = if prefix == "decoder.project_in" || prefix.starts_with?("decoder.project_out")
+                   "project_conv3d"
+                 elsif prefix.ends_with?(".conv")
+                   "upsample_conv3d"
+                 else
+                   "residual_conv3d"
+                 end
       plan.add(template.bind(input, tile > 0 ? cache : nil, weights["#{prefix}.conv.weight"],
-        bias ? weights["#{prefix}.conv.bias"] : nil, output))
+        bias ? weights["#{prefix}.conv.bias"] : nil, output),
+        "tile#{tile}/#{prefix}.conv3d", category, stage)
       cache_pipeline = DCAEVEncoder.pipeline("dcae_v_cache_last_frame_bf16")
       count = DCAEVShape.count("decoder cache", cfg.batches, cin, h, w)
-      plan.add do |chain|
+      plan.add("tile#{tile}/#{prefix}.cache_last_frame", "cache_store", stage) do |chain|
         e = chain.encoder
         e.set_pipeline(cache_pipeline)
         e.set_buffer(input, 0).set_buffer(cache, 1, ML::Metal::BufferAccess::Write)
@@ -442,15 +481,17 @@ module ML::Video
     private def self.add_norm(plan : DCAEVDecoderPlan, input : ML::MetalBuffer,
                               output : ML::MetalBuffer, weights : Arena,
                               workspace : DCAEVDecoderWorkspace, cfg : DCAEVDecoderConfig,
-                              prefix : String, c : Int32, t : Int32, h : Int32, w : Int32) : Nil
+                              tile : Int32, prefix : String, c : Int32, t : Int32, h : Int32, w : Int32) : Nil
       plan.add(DCAEVNormMPS::RMSNormPlan.new(shape(cfg, c, t, h, w).map(&.to_i32), input,
-        output, workspace.mean_a, workspace.mean_b, weights["#{prefix}.weight"], weights["#{prefix}.bias"]))
+        output, workspace.mean_a, workspace.mean_b, weights["#{prefix}.weight"], weights["#{prefix}.bias"]),
+        "tile#{tile}/#{prefix}.rmsnorm", profile_stage(prefix))
     end
 
     private def self.add_residual(plan : DCAEVDecoderPlan, result : ML::MetalBuffer,
-                                  original : ML::MetalBuffer, count : Int32) : Nil
+                                  original : ML::MetalBuffer, count : Int32,
+                                  name : String, stage : String) : Nil
       p = DCAEVEncoder.pipeline("dcae_v_residual_add_bf16_inplace")
-      plan.add do |chain|
+      plan.add(name, "residual_add", stage) do |chain|
         e = chain.encoder
         e.set_pipeline(p)
         e.set_buffer(result, 0, ML::Metal::BufferAccess::ReadWrite).set_buffer(original, 1)
@@ -466,7 +507,7 @@ module ML::Video
       p = pipeline("dcae_v_decoder_gather_latent_bf16")
       count = DCAEVShape.count("decoder latent tile", cfg.batches, 32, 10, cfg.height, cfg.width)
       offset = cfg.tile_offset(tile)
-      plan.add do |chain|
+      plan.add("tile#{tile}/gather_latent", "gather", "input") do |chain|
         e = chain.encoder
         e.set_pipeline(p)
         e.set_buffer(input, 0).set_buffer(output, 1, ML::Metal::BufferAccess::Write)
@@ -480,13 +521,13 @@ module ML::Video
                                  shortcut : ML::MetalBuffer, output : ML::MetalBuffer,
                                  cfg : DCAEVDecoderConfig, cin : Int32, cout : Int32,
                                  t : Int32, h : Int32, w : Int32, sf : Int32, tf : Int32,
-                                 use_shortcut : Bool) : Nil
+                                 use_shortcut : Bool, name : String, stage : String) : Nil
       p = pipeline("dcae_v_decoder_pixel_shuffle_bf16")
       expanded_channels = cout * sf * sf * tf
       repeat = use_shortcut ? expanded_channels // cin : 1
       raise ArgumentError.new("Invalid decoder shortcut channel expansion") if use_shortcut && expanded_channels % cin != 0
       count = DCAEVShape.count("decoder shuffled tile", cfg.batches, cout, t * tf, h * sf, w * sf)
-      plan.add do |chain|
+      plan.add(name, "shuffle", stage) do |chain|
         e = chain.encoder
         e.set_pipeline(p)
         e.set_buffer(expanded, 0).set_buffer(shortcut, 1).set_buffer(output, 2, ML::Metal::BufferAccess::Write)
@@ -502,7 +543,7 @@ module ML::Video
       p = pipeline("dcae_v_decoder_scatter_output_bf16")
       count = DCAEVShape.count("decoder RGB tile", cfg.batches, 3, 40, cfg.output_height, cfg.output_width)
       offset = tile * 40
-      plan.add do |chain|
+      plan.add("tile#{tile}/scatter_output", "scatter", "output") do |chain|
         e = chain.encoder
         e.set_pipeline(p)
         e.set_buffer(input, 0).set_buffer(output, 1, ML::Metal::BufferAccess::Write)
@@ -518,11 +559,29 @@ module ML::Video
       return unless target = traces[name]?
       p = DCAEVEncoder.pipeline("dcae_v_copy_bf16")
       count = DCAEVShape.count("decoder trace", cfg.batches, c, t, h, w)
-      plan.add do |chain|
+      stage = if name.starts_with?("trace.stages.")
+                "stage_#{name.split('.')[2]}"
+              elsif name.starts_with?("trace.project_in.")
+                "project_in"
+              else
+                "project_out"
+              end
+      plan.add(name, "trace_copy", stage) do |chain|
         e = chain.encoder
         e.set_pipeline(p)
         e.set_buffer(input, 0).set_buffer(target, 1, ML::Metal::BufferAccess::Write)
         e.set_value(count.to_u32, 2).dispatch_1d(count)
+      end
+    end
+
+    private def self.profile_stage(prefix : String) : String
+      components = prefix.split('.')
+      if components.size > 2 && components[0] == "decoder" && components[1] == "stages"
+        "stage_#{components[2]}"
+      elsif prefix == "decoder.project_in"
+        "project_in"
+      else
+        "project_out"
       end
     end
   end

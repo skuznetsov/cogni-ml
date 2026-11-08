@@ -11,11 +11,24 @@ require "../src/ml/video/dcae_v_decoder"
 module DCAEVDecoderProbe
   extend self
   @@in_flight = [] of Proc(Nil)
+  CONV_LAYOUT = "native"
+
+  def validate_output(path : String) : Nil
+    unless Path[path].absolute? && !File.exists?(path) && File.directory?(File.dirname(path)) &&
+           File.realpath(File.dirname(path)).starts_with?(File.realpath("/opt/mldata_ssd") + "/")
+      raise ArgumentError.new("Decoder output must be a fresh absolute file on the external scratch SSD")
+    end
+  end
 
   def write_artifact(path : String, tensors : Hash(String, Tuple(ML::MetalBuffer, Array(Int64)))) : Nil
     offset = 0_i64
     header = JSON.build do |json|
       json.object do
+        json.field "__metadata__" do
+          json.object do
+            json.field "conv_layout", CONV_LAYOUT
+          end
+        end
         tensors.each do |name, entry|
           buffer, shape = entry
           bytes = shape.product * 2
@@ -47,6 +60,92 @@ module DCAEVDecoderProbe
     end
   end
 
+  def write_profile(profile : ML::Video::DCAEVDecoderProfile,
+                    request : Int32) : Nil
+    puts(JSON.build do |json|
+      json.object do
+        json.field "event", "dcae_decoder_profile"
+        json.field "request", request
+        json.field "conv_layout", CONV_LAYOUT
+        json.field "timing_boundary", "operation host encode wall time; existing MPS root intervals read after the request terminal wait"
+        json.field "gpu_attribution_semantics", "Root candidate sums may double-count shared intervals; definite sums include roots with a single operation or stage/category candidate. These are interval attribution bounds, not exclusive kernel times."
+        json.field "gpu_root_interval_summary" do
+          json.object do
+            json.field "root_count", profile.root_profile.root_count
+            json.field "root_duration_sum_seconds", profile.root_profile.root_duration_seconds
+            json.field "union_seconds", profile.root_profile.union_seconds
+            json.field "envelope_seconds", profile.root_profile.envelope_seconds
+            json.field "overlap_seconds", profile.root_profile.overlap_seconds
+          end
+        end
+        json.field "operations" do
+          json.array do
+            profile.operations.each do |operation|
+              json.object do
+                json.field "name", operation.name
+                json.field "stage", operation.stage
+                json.field "category", operation.category
+                json.field "encode_wall_seconds", operation.encode_wall_seconds
+                json.field "start_root_count", operation.start_root_count
+                json.field "end_root_count", operation.end_root_count
+                json.field "gpu_candidate_root_duration_sum_seconds",
+                  profile.operation_candidate_root_duration_sum_seconds[operation.name]
+                json.field "gpu_definite_root_duration_sum_seconds",
+                  profile.operation_definite_root_duration_sum_seconds[operation.name]
+              end
+            end
+          end
+        end
+        json.field "gpu_candidate_root_duration_sum_seconds_by_stage_category",
+          profile.group_candidate_root_duration_sum_seconds
+        json.field "gpu_definite_root_duration_sum_seconds_by_stage_category",
+          profile.group_definite_root_duration_sum_seconds
+        json.field "gpu_root_candidates" do
+          json.array do
+            profile.root_candidates.each_with_index do |candidates, index|
+              root = profile.roots[index]
+              json.object do
+                json.field "sequence", root.sequence
+                json.field "gpu_start_seconds", root.gpu_start_seconds
+                json.field "gpu_end_seconds", root.gpu_end_seconds
+                json.field "candidates", candidates
+              end
+            end
+          end
+        end
+        json.field "mps_api_profile_phase0_unassigned" do
+          if phase = profile.api_profile_unassigned
+            json.object do
+              json.field "name", phase.name
+              json.field "operations" do
+                json.object do
+                  phase.operations.each do |name, stats|
+                    json.field name do
+                      json.object do
+                        json.field "count", stats.count
+                        json.field "wall_total_ns", stats.wall_total_ns
+                        json.field "wall_max_ns", stats.wall_max_ns
+                        json.field "thread_cpu_total_ns", stats.thread_cpu_total_ns
+                        json.field "thread_cpu_max_ns", stats.thread_cpu_max_ns
+                        json.field "nested_count", stats.nested_count
+                        json.field "nested_wall_total_ns", stats.nested_wall_total_ns
+                        json.field "nested_thread_cpu_total_ns", stats.nested_thread_cpu_total_ns
+                        json.field "exclusive_wall_total_ns", stats.exclusive_wall_total_ns
+                        json.field "exclusive_thread_cpu_total_ns", stats.exclusive_thread_cpu_total_ns
+                      end
+                    end
+                  end
+                end
+              end
+            end
+          else
+            json.null
+          end
+        end
+      end
+    end)
+  end
+
   def run : Nil
     setup_start = Time.instant
     weights_path = weights_sha = reference_path = reference_sha = output_path = ""
@@ -54,6 +153,7 @@ module DCAEVDecoderProbe
     runs = 1_i32
     plan_only = false
     capture_stages = false
+    profile_enabled = false
     OptionParser.parse do |p|
       p.banner = "Native original BF16 DCAE-V decoder; run under wan_memory_guard.py"
       p.on("--weights PATH", "Original decoder-only BF16 safetensors") { |v| weights_path = v }
@@ -64,6 +164,7 @@ module DCAEVDecoderProbe
       p.on("--budget-mib N", "Caller-owned residency cap") { |v| budget_mib = v.to_i64 }
       p.on("--runs N", "Sequential requests reusing buffers and plans") { |v| runs = v.to_i32 }
       p.on("--capture-stages", "Capture every tile's stage outputs on GPU") { capture_stages = true }
+      p.on("--profile", "Record per-operation host encode time and existing MPS root intervals") { profile_enabled = true }
       p.on("--plan-only", "Authenticate and plan without Metal") { plan_only = true }
     end
     unless [weights_path, weights_sha, reference_path, reference_sha].none?(&.empty?) &&
@@ -100,18 +201,19 @@ module DCAEVDecoderProbe
       weight_plan = ML::Video::WeightPlan.new([weights], ML::Video::DCAEVDecoder.checkpoint_bindings(cfg),
         budget, reserve_bytes: io_bytes + workspace_bytes,
         resident_dtype: ML::Video::WeightDType::BF16, require_all: true)
+      raise "Original BF16 decoder weights must not require GPU staging" unless weight_plan.staging_bytes.zero?
       named_bytes = weight_plan.destination_bytes + workspace_bytes + io_bytes
+      # Graph-private pack extent, not a named allocation or an upper bound on
+      # all MPS scratch. The process guard remains the admission boundary.
       puts({event: "dcae_decoder_memory_plan", input_shape: shape,
             weights_sha256: weights_sha, reference_sha256: reference_sha,
             weight_bytes: weight_plan.destination_bytes, workspace_bytes: workspace_bytes,
             io_trace_bytes: io_bytes, named_bytes: named_bytes, budget_bytes: budget,
             temporal_tiles: cfg.tile_count, opaque_mpsgraph_bytes_known: false,
+            conv_layout: CONV_LAYOUT,
             full_video_generation: false}.to_json)
       return if plan_only
-      unless Path[output_path].absolute? && !File.exists?(output_path) && File.directory?(File.dirname(output_path)) &&
-             File.realpath(File.dirname(output_path)).starts_with?(File.realpath("/opt/mldata_ssd") + "/")
-        raise ArgumentError.new("Decoder output must be a fresh absolute file on the external scratch SSD")
-      end
+      validate_output(output_path)
       weight_arena = wa = ML::Video::Arena.new
       workspace_arena = ws = ML::Video::Arena.new
       io_arena = ia = ML::Video::Arena.new
@@ -125,18 +227,30 @@ module DCAEVDecoderProbe
       reference.copy_raw(input_info, Bytes.new(input.contents.as(UInt8*), input.size.to_i32))
       traces = {} of String => ML::MetalBuffer
       tensors.each { |name, entry| traces[name] = entry[0] if name.starts_with?("trace.") }
-      plan = active_plan = ML::Video::DCAEVDecoder.prepare_mps!(input, tensors["output.pixels"][0], wa, workspace, cfg, traces)
+      plan_prepare_start = Time.instant
+      plan = active_plan = ML::Video::DCAEVDecoder.prepare_mps!(input, tensors["output.pixels"][0], wa,
+        workspace, cfg, traces)
+      plan_prepare_seconds = (Time.instant - plan_prepare_start).total_seconds
       raise "DCAE-V decoder memory plan/allocation mismatch" unless wa.resident_bytes + ws.resident_bytes + ia.resident_bytes == named_bytes
       puts({event: "dcae_decoder_prepared", setup_seconds: (Time.instant - setup_start).total_seconds,
             operations: active_plan.operation_count, convolution_templates: active_plan.template_count,
-            runs: runs, capture_stages: capture_stages}.to_json)
+            runs: runs, measured_requests: runs,
+            plan_prepare_seconds: plan_prepare_seconds,
+            capture_stages: capture_stages, profile: profile_enabled,
+            weight_residency: "BF16 bytes copied to resident buffers during setup",
+            weight_staging_bytes: weight_plan.staging_bytes,
+            conv_layout: CONV_LAYOUT}.to_json)
       runs.times do |index|
         chain = active = ML::Metal::MPSCommandChain.new
+        profile_capture = profile_enabled ? ML::Video::DCAEVDecoderProfileRecorder.new : nil
+        active.enable_api_profile!(phase_roots: false) if profile_capture
         allocations = ML::MetalBuffer.hy_text_probe_allocations
         reads = ML::MetalBuffer.hy_text_probe_readbacks
         start = Time.instant
+        # Required BF16 sources were copied directly during setup. This call
+        # validates their lifetimes; it dispatches no upload or GPU conversion.
         pw.encode(active.encoder) if index == 0
-        active_plan.encode(active)
+        active_plan.encode(active, profile: profile_capture)
         encoded_seconds = (Time.instant - start).total_seconds
         metrics = {allocations:       ML::MetalBuffer.hy_text_probe_allocations - allocations,
                    readbacks:         ML::MetalBuffer.hy_text_probe_readbacks - reads,
@@ -145,11 +259,17 @@ module DCAEVDecoderProbe
         wait_start = Time.instant
         active.commit_and_wait
         wait_seconds = (Time.instant - wait_start).total_seconds
-        puts({event: "dcae_decoder_native_request", request: index, weights_upload: index == 0,
-              sample_kind: index == 0 ? "first_request_with_upload" : "reused_request_diagnostic",
-              wall_seconds: (Time.instant - start).total_seconds, encode_seconds: encoded_seconds,
+        wall_seconds = (Time.instant - start).total_seconds
+        puts({event: "dcae_decoder_native_request", request: index, weights_upload: false,
+              prepared_weight_validation: index == 0,
+              sample_kind: index == 0 ? "first_request" : "reused_request_diagnostic",
+              wall_seconds: wall_seconds, encode_seconds: encoded_seconds,
               terminal_wait_seconds: wait_seconds, gpu_seconds: active.gpu_elapsed_seconds, segments: active.segment_count,
-              waits: active.wait_count, metrics: metrics, named_bytes: named_bytes}.to_json)
+              waits: active.wait_count, metrics: metrics, named_bytes: named_bytes,
+              conv_layout: CONV_LAYOUT, profile: profile_enabled}.to_json)
+        if recorder = profile_capture
+          write_profile(recorder.build(active), index.to_i32)
+        end
         active.release
         # The plan retains the completed chain as a lifetime certificate. The
         # wrapper may be released; completed? remains true after release.
@@ -158,6 +278,7 @@ module DCAEVDecoderProbe
       puts({event: "dcae_decoder_native_completed", output: output_path,
             output_sha256: File.open(output_path) { |io| Digest::SHA256.hexdigest(io) },
             named_bytes: named_bytes, full_video_generation: false,
+            conv_layout: CONV_LAYOUT,
             upstream_comparison_required: true}.to_json)
     ensure
       can_release = true

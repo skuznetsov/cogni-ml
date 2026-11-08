@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <cmath>
+#include "dcae_v_mps_profile.h"
 
 @interface DCAEVNormGraphStep : NSObject
 @property(nonatomic, strong) MPSGraph *graph;
@@ -587,11 +588,15 @@ extern "C" int32_t gs_dcae_v_rms_norm_mps_encode(void *planHandle,
           if (!step.executable || !step.execution || !step.inputs ||
               !step.outputs || step.outputs.count != 1)
             return -3;
-          NSArray<MPSGraphTensorData *> *result =
-              [step.executable encodeToCommandBuffer:commandBuffer
-                                         inputsArray:step.inputs
-                                        resultsArray:step.outputs
-                                 executionDescriptor:step.execution];
+          NSArray<MPSGraphTensorData *> *result = nil;
+          {
+            DCAEVGraphAPIScope graphScope((__bridge void *)commandBuffer);
+            result = [step.executable
+                encodeToCommandBuffer:commandBuffer
+                          inputsArray:step.inputs
+                         resultsArray:step.outputs
+                  executionDescriptor:step.execution];
+          }
           if (!result || result.count != 1)
             return -4;
           root = commandBuffer.rootCommandBuffer;
@@ -643,11 +648,15 @@ extern "C" int32_t gs_dcae_v_silu_mps_encode(void *planHandle,
           !dcae_v_norm_bindings_disjoint(plan.residentBuffers))
         return -6;
       @try {
-        NSArray<MPSGraphTensorData *> *result =
-            [plan.step.executable encodeToCommandBuffer:commandBuffer
-                                           inputsArray:plan.step.inputs
-                                          resultsArray:plan.step.outputs
-                                   executionDescriptor:plan.step.execution];
+        NSArray<MPSGraphTensorData *> *result = nil;
+        {
+          DCAEVGraphAPIScope graphScope((__bridge void *)commandBuffer);
+          result = [plan.step.executable
+              encodeToCommandBuffer:commandBuffer
+                        inputsArray:plan.step.inputs
+                       resultsArray:plan.step.outputs
+                executionDescriptor:plan.step.execution];
+        }
         if (!result || result.count != 1)
           return -3;
         root = commandBuffer.rootCommandBuffer;

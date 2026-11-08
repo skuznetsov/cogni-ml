@@ -7,6 +7,7 @@
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include <limits>
+#include "dcae_v_mps_profile.h"
 #include <stdint.h>
 #include <stdio.h>
 
@@ -566,11 +567,15 @@ extern "C" int32_t gs_dcae_v_mps_conv_encode(void *planHandle,
       MPSCommandBuffer *command = (__bridge MPSCommandBuffer *)commandHandle;
       if (!plan || !plan.templatePlan.executable || !command)
         return -2;
-      NSArray<MPSGraphTensorData *> *result =
-          [plan.templatePlan.executable encodeToCommandBuffer:command
-                                                  inputsArray:plan.inputs
-                                                 resultsArray:plan.outputs
-                                          executionDescriptor:plan.templatePlan.execution];
+      NSArray<MPSGraphTensorData *> *result = nil;
+      {
+        DCAEVGraphAPIScope graphScope((__bridge void *)command);
+        result = [plan.templatePlan.executable
+            encodeToCommandBuffer:command
+                      inputsArray:plan.inputs
+                     resultsArray:plan.outputs
+              executionDescriptor:plan.templatePlan.execution];
+      }
       return result.count == 1 ? 0 : -3;
     } @catch (NSException *exception) {
       (void)exception;

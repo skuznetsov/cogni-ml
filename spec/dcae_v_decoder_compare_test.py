@@ -12,6 +12,7 @@ from pathlib import Path
 import struct
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +121,29 @@ class DCAEVDecoderCompareTests(unittest.TestCase):
             candidate_sha,
             chunk_elements=chunk_elements,
         )
+
+    def test_real_spatial_causal_prefix_schema_is_output_only(self):
+        for frames in (10, 20):
+            tensors = {
+                "input.latent": {"shape": (1, 32, frames, 9, 16)},
+                "output.pixels": {"shape": (1, 3, frames * 4, 288, 512)},
+            }
+            compare._validate_decoder_schema(SimpleNamespace(tensors=tensors))
+            tensors["trace.project_in.tile0"] = {"shape": (1, 1024, 10, 9, 16)}
+            with self.assertRaises(compare.CompareError):
+                compare._validate_decoder_schema(SimpleNamespace(tensors=tensors))
+
+    def test_real_spatial_prefix_rejects_wrong_extent_and_partial_tile(self):
+        for latent, output in (
+            ((1, 32, 10, 9, 16), (1, 3, 80, 288, 512)),
+            ((1, 32, 15, 9, 16), (1, 3, 60, 288, 512)),
+            ((1, 32, 10, 16, 9), (1, 3, 40, 512, 288)),
+        ):
+            with self.assertRaises(compare.CompareError):
+                compare._validate_decoder_schema(SimpleNamespace(tensors={
+                    "input.latent": {"shape": latent},
+                    "output.pixels": {"shape": output},
+                }))
 
     def test_exact_bf16_smoke_pair_passes_with_small_chunks(self):
         with self._temporary_directory() as temporary:

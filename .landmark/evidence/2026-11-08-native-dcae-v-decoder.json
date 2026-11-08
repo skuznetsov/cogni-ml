@@ -8,7 +8,7 @@
     "level": "VERIFIED",
     "scope": "Opt-in native original DCAE-V decoder, serial B1 complete ten-latent tiles; exact upstream fixture parity, GPU boundary/resource counters and guarded descriptive decoder samples.",
     "numerical": "All 18 small tensors and all 106168320 full output BF16 values match original upstream bitwise; unchanged atol=rtol=2e-5.",
-    "performance": "One first native decoder request after preparation per decoder; upload/setup boundaries differ. Sampled memory and request times are descriptive.",
+    "performance": "One first native decoder request after preparation per decoder; both weight populations occur during setup. Historical DCAE upload event labels were inaccurate; see telemetry_correction. Sampled memory and request times are descriptive.",
     "not_claimed": [
       "Matched speedup or statistically stable timing ratio",
       "Warm/cold cache or frequency-controlled performance",
@@ -492,7 +492,7 @@
   "performance": {
     "classification": "Descriptive only; one first request per decoder, serial, no matched warmup or GPU frequency/process-cold control.",
     "timing_boundary": {
-      "native_dcae": "request includes weight encode/upload; prepared setup excluded",
+      "native_dcae": "BF16 bytes copied into resident weight buffers during setup, excluded from the request timer; PreparedWeights.encode validates already-resident zero-staging weights and performs no upload or conversion.",
       "pixelumm": "block-cache upload occurs in decoder setup, excluded from request timer",
       "ratio": "descriptive only; not a matched timing speedup"
     },
@@ -669,5 +669,18 @@
     "BF16 rounding or cache schedule change",
     "timing or memory-accounting policy change",
     "evidence loss or replacement"
-  ]
+  ],
+  "telemetry_correction": {
+    "date": "2026-11-08",
+    "historical_fields_retained": [
+      "execution.native_dcae.weights_upload",
+      "execution.native_dcae.sample_kind"
+    ],
+    "correction": "The copied historical event labels weights_upload=true and first_request_with_upload are inaccurate. Original BF16 sources are copied by PreparedWeights construction during setup; staging_bytes=0. The timed first encode validates source lifetimes and encodes no upload. Raw logs and their digests remain unchanged.",
+    "source": [
+      "src/ml/video/bf16_weight_cache.cr: PreparedWeights initialization and encode",
+      "examples/dcae_v_decoder_probe.cr: zero-staging assertion and corrected request labels"
+    ],
+    "followup_packet": ".landmark/evidence/2026-11-08-dcae-conv3d-profile.json"
+  }
 }

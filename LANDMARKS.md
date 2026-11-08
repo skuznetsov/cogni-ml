@@ -39536,8 +39536,10 @@ Refresh after source/toolchain/device/model/workload changes.
 - One serial first-request sample: native DCAE 684.661 s and 10.607 GiB
   sampled process peak, PixelUMM 141.552 s and 18.413 GiB. Both decode ten
   seconds of context (five history plus five new), not ten seconds of new
-  generation. DCAE includes weight upload in its request timer; PixelUMM
-  uploads the block cache in setup. The 4.84 request-time ratio is descriptive
+  generation. Both weight populations occur in setup. The old DCAE event
+  incorrectly labels its first request as containing an upload; that request
+  only validates already-resident BF16 weights with zero staging. The 4.84
+  request-time ratio is descriptive
   only; no matched speedup, warm/cold, frequency-controlled or end-to-end
   rate claim. DCAE's observed sampled peak is 42.4% lower in this pair.
 - All guarded model processes are sequential, cache-aware reserve 10%,
@@ -39549,7 +39551,9 @@ Refresh after source/toolchain/device/model/workload changes.
   pins the archived pre-cleanup oracle; a post-export traces.clear cleanup
   reproduces the identical small artifact. Audit v3 additionally asserts
   weight/reference/output/common-input command joins. Correlated final
-  adversary is ROBUST after correcting the upload-timing claim.
+  adversary covered the bounded numerical/resource checks. The upload-timing
+  interpretation was corrected during the subsequent Conv3D profile; the raw
+  historical event remains unchanged and is annotated in its evidence packet.
 - Retired 23,045,232 bytes of owned rebuildable compiler cache and the empty
   temporary directory; retained weights, binaries, payloads and evidence.
   The port is a reusable module plus probe, not an end-to-end pipeline switch.
@@ -39563,3 +39567,55 @@ Refresh after source/toolchain/device/model/workload changes.
   on source/binary/runtime, weights, geometry, input, rounding/cache schedule,
   measurement policy or evidence changes. Rollback: omit the opt-in decoder
   and probe; PixelUMM and encoder defaults remain unchanged.
+
+### 2026-11-08 — Bounded native DCAE Conv3D profiling; no admitted speedup
+
+- Added opt-in operation markers, conservative command-root attribution and
+  graph API wall/thread-CPU timing. Interpret root durations as stage-associated
+  intervals, including possible internal GPU waits/idle time, not exclusive
+  convolution arithmetic. API phase 0 is a whole-request aggregate. Disabled
+  graph hooks still have a lightweight check; zero overhead is not claimed.
+- On the final default-path T10 real-spatial profile, 297 roots cover 111.443 s;
+  the request takes 111.490 s. Stage-2/stage-1 residual Conv3D-associated
+  intervals contribute at least 57.079/27.780 s (76.146% combined). All
+  17,740,800 input/output BF16 values match frozen upstream bitwise at
+  unchanged atol=rtol=2e-5. The final changing-input two-tile small control
+  matches all 18 tensors after two serial requests. A separate byte/hash audit
+  verifies the T10/T20 causal prefixes against the authenticated T60 source.
+- Auto-layout ABBA after equal warmup gives A 118.93/137.93 s and
+  B 149.72/144.05 s; order drift prevents a stable effect estimate and no gain
+  is admitted. Explicit channels-last, BF16 temporal subtiles and core Level 0
+  also have no matched gain. Conv2D temporal lowering and F32 Conv3D violate
+  unchanged stage-2 tolerances and were removed from the current API.
+  Do not reinterpret unmatched 105.12/105.93/114.38 s samples as a speedup.
+- The strict timestamp validator rejects one profiled temporal-subtile run
+  before export; its unprofiled retry separately passes numerical comparison.
+  A combined Instruments capture exceeds the unchanged 18 GiB group cap and
+  leaves an unreadable partial trace; its cleanup permission error is retained,
+  with a later empty native-probe/xctrace process census. The shorter trace
+  completes and reproduces output bitwise, but contains only shader inventory,
+  no per-shader durations or counter samples. Both raw bundles were retired
+  after allowlisted extraction; no hardware bottleneck inference is admitted.
+- All admitted native requests retain one terminal wait, zero instrumented
+  named hot allocations/readbacks/preterminal waits, 10% cache-aware reserve
+  and zero observed swap growth. Opaque MPS resources remain sampled by the
+  process guard. Paired plans coexist; this is not single-plan residency.
+- Profiling controls remain opt-in and the original Conv3D default is intact.
+  Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-conv3d-profile.json. The performance goal
+  remains IN_PROGRESS. Stage-2 conv1/SiLU fusion passes all 18 small traces
+  and real T10 bitwise. ABBA A140.383/B128.791/B126.325/A121.575 s and
+  BAAB B127.541/A143.951/A123.644/B117.792 s are confounded by position/reuse
+  drift; no matched speedup is admitted. All seven experimental controls were
+  removed from the active API and retained as pinned external source/binaries.
+- A separate tiny C512/T40/H3W5 pre/post-bias diagnostic matches fresh
+  PyTorch MPS Conv3D output bitwise at both BF16 boundaries for both caches;
+  CPU fallback is disabled. Native ordered FMA already fails pre-bias on
+  82/83 of 307,200 values, versus 67/69 post-bias. Explicit bias addition
+  agrees. An upcast-F32 MPS lane rounds to both MPS BF16 outputs, but is not
+  its hidden accumulator. Do not tile or promote the rejected reduction.
+  Next useful discriminator must address reduction/BF16 midpoint crossings or
+  obtain per-kernel evidence inside the dominant Conv3D-associated intervals;
+  further layout sweeps without one are parked.
+  Refresh on source/binary/runtime, fixture, weights, geometry, cache/rounding,
+  measurement or guard-policy changes. Parity is not a video-quality claim.
