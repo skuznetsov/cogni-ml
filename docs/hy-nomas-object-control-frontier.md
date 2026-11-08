@@ -1948,6 +1948,32 @@ schedule, geometry or artifact changes. Rollback: omit the final-DCAE helper;
 the clean-T0 helper retains its previous rendering path and production
 defaults are unchanged.
 
+## Native original DCAE decoder (2026-11-08)
+
+The original DCAE-V now has an opt-in Crystal/Metal/MPS implementation with
+171 exact BF16 bindings, reusable scratch and causal feature caches. It
+matches upstream bitwise on the varying two-tile 18-capture control and all
+106,168,320 output values of the same full paired60 final bank. The fresh
+PixelUMM T1 export also matches the saved upstream output byte-for-byte.
+
+One serial first-request observation is 684.661 s / 10.607 GiB sampled
+process peak for native DCAE versus 141.552 s / 18.413 GiB for PixelUMM.
+DCAE includes weight upload in its request timer; PixelUMM uploads its block
+cache during setup. These are descriptive decoder samples with different
+setup/upload boundaries, not an end-to-end generation rate or matched
+speedup. Both decode ten seconds of context, including five seconds of
+history. Guard reserve remains 10%, observed swap growth is zero, and each
+native request has zero instrumented preterminal allocations/readbacks/waits
+and one terminal drain. Opaque MPS resources and API waits are outside those
+counters.
+
+See `docs/dcae-v-decoder-frontier.md` and
+`.landmark/evidence/2026-11-08-native-dcae-v-decoder.json` for the pins,
+commands, limits and rollback. This port is not wired into the end-to-end
+pipeline, and exact original-decoder parity does not establish repaired
+likeness or motion. Next proposed performance discriminator: profile the
+high-resolution Conv3D stages without changing BF16 boundaries.
+
 ## Research precedents and compatibility limits
 
 - [DiTraj](https://arxiv.org/abs/2509.21839) separates foreground/background

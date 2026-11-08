@@ -39517,3 +39517,49 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on source/binary/runtime, weights, input/normalization, noise,
   schedule, geometry or evidence change. Rollback: omit the opt-in final
   control; no production default changed.
+
+### 2026-11-08 — Native original DCAE-V decoder and bounded comparison
+
+- Added an opt-in Crystal/Metal/MPS decoder with the original 171 BF16
+  bindings, 38 prepared convolution templates, reusable scratch and causal
+  feature caches. GPU arithmetic preserves original BF16 boundaries and F32
+  accumulation. The dedicated decoder-only sidecar lives under
+  /opt/mldata_ssd/models/hy-nomas/dcae-v-native-decoder-ebbee483/; model files
+  and run payloads are excluded from Git.
+- Varying two-tile input passes all 18 upstream tensors bitwise (input,
+  output and 16 stage boundaries);
+  a second request reuses the same native resources. Full paired60 output
+  passes on 106,168,320 BF16 values with zero unequal/nonfinite values at
+  unchanged atol=rtol=2e-5. Fresh PixelUMM T1 also directly matches all
+  212,336,640 bytes of the saved upstream T1 fixture. This is a prior-source
+  join for PixelUMM, not a new upstream PixelUMM execution.
+- One serial first-request sample: native DCAE 684.661 s and 10.607 GiB
+  sampled process peak, PixelUMM 141.552 s and 18.413 GiB. Both decode ten
+  seconds of context (five history plus five new), not ten seconds of new
+  generation. DCAE includes weight upload in its request timer; PixelUMM
+  uploads the block cache in setup. The 4.84 request-time ratio is descriptive
+  only; no matched speedup, warm/cold, frequency-controlled or end-to-end
+  rate claim. DCAE's observed sampled peak is 42.4% lower in this pair.
+- All guarded model processes are sequential, cache-aware reserve 10%,
+  observed swap growth zero. Each native request records zero instrumented
+  preterminal named allocations/readbacks/waits and one terminal drain.
+  Opaque MPS allocations and API waits remain outside those counters.
+- Release build, 11 focused Crystal specs, 26 Python tests, Ruff, Crystal
+  formatting and authenticated artifact audit pass. The full upstream run
+  pins the archived pre-cleanup oracle; a post-export traces.clear cleanup
+  reproduces the identical small artifact. Audit v3 additionally asserts
+  weight/reference/output/common-input command joins. Correlated final
+  adversary is ROBUST after correcting the upload-timing claim.
+- Retired 23,045,232 bytes of owned rebuildable compiler cache and the empty
+  temporary directory; retained weights, binaries, payloads and evidence.
+  The port is a reusable module plus probe, not an end-to-end pipeline switch.
+  Batch one and complete ten-latent tiles are verified; a workspace requires
+  serial ownership. Exact decoder parity does not establish repaired likeness
+  or motion.
+- Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-native-dcae-v-decoder.json. Next proposed
+  performance discriminator: profile the high-resolution Conv3D stages;
+  their logical FLOP cost model is not measured bottleneck evidence. Refresh
+  on source/binary/runtime, weights, geometry, input, rounding/cache schedule,
+  measurement policy or evidence changes. Rollback: omit the opt-in decoder
+  and probe; PixelUMM and encoder defaults remain unchanged.

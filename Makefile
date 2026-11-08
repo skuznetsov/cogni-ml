@@ -629,6 +629,16 @@ $(BUILD_DIR)/pixelumm_generation_probe: examples/pixelumm_generation_probe.cr ex
 dcae_v_encoder_probe: $(BUILD_DIR)/dcae_v_encoder_probe
 hy_nomas_reference_timeline_probe: $(BUILD_DIR)/hy_nomas_reference_timeline_probe
 
+.PHONY: dcae_v_decoder_probe spec_dcae_v_decoder
+dcae_v_decoder_probe: $(BUILD_DIR)/dcae_v_decoder_probe
+
+$(BUILD_DIR)/dcae_v_decoder_probe: examples/dcae_v_decoder_probe.cr examples/support/hy_nomas_probe_instrumentation.cr src/ml/video/dcae_v_decoder.cr src/ml/video/kernels/dcae_v_decoder.metal $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(DCAE_V_MPS_OBJ) $(DCAE_V_NORM_MPS_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_NORM_MPS_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
+
+spec_dcae_v_decoder:
+	$(CRYSTAL) spec -D cpu_only spec/dcae_v_decoder_spec.cr $(ARGS)
+
 .PHONY: hy_nomas_reference_decode_probe hy_nomas_reference_cache_probe hy_nomas_reference_block0_probe spec_hy_nomas_reference_handoff
 hy_nomas_reference_decode_probe: $(BUILD_DIR)/hy_nomas_reference_decode_probe
 hy_nomas_reference_cache_probe: $(BUILD_DIR)/hy_nomas_reference_cache_probe
