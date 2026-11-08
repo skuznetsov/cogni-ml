@@ -39475,3 +39475,45 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on source/binary/runtime, weights, reference/normalization, conditioning,
   noise/schedule, geometry or evidence changes. Rollback: omit diagnostic flag
   and helpers; no production default changed.
+
+### 2026-11-08 — Original DCAE isolates a PixelUMM appearance contribution
+
+- Decoded the same authenticated `[clean photo T0, final T1]` paired60 bank
+  with the original pinned upstream DCAE-V and fresh native PixelUMM. The
+  endpoint joins the prior four-step checkpoint control; no encoder or DiT
+  rerun. Full T0 context is retained before cropping T1 display frames
+  [120,240). DCAE retains its six causal tiles; PixelUMM retains eleven
+  overlapping windows, fixed noise and global positions.
+- Fresh native/source PixelUMM T1 displays match on 53,084,160 finite values,
+  max/mean error zero at unchanged atol=rtol=2e-5. Separate CPU comparison
+  finds 212,336,640 identical exported F32 bytes. Native Crystal probe is
+  freshly built with fifteen reused, rehashed native objects. Source uses
+  the existing gathered MPS attention adapter; unmodified CUDA parity and
+  fresh native-object builds are outside scope.
+- Original DCAE's first 120 RGB8 frames exactly reproduce the earlier clean
+  photo reconstruction in the same sole terminal pack. Six inspected T1
+  crops retain fine photo texture more closely with DCAE; PixelUMM changes
+  skin creases and eye contours with the latent fixed. The late eyelid change
+  is visible in both. This is a bounded decoder contribution, not repaired
+  likeness or natural motion. Cross-decoder display RMSE 0.0131478 is
+  descriptive, not a parity or quality gate.
+- Three model-owning runs are sequential, reserve 10%, sampled swap growth
+  zero. Sampled peaks: native PixelUMM 18.410 GiB under 20 GiB; source PixelUMM
+  5.795 and original DCAE 13.057 GiB under 18 GiB. CPU-only admission overlaps
+  source PixelUMM. Native instrumented preterminal allocation/readback/wait
+  0/0/0, terminal 1; source/DCAE one packed export, explicit sync 0 and
+  intermediate readback 0. Opaque MPS allocation is outside named accounting.
+- Focused 21 Python tests, Ruff, release probe build and artifact checks pass.
+  Native request 167.139 s and original-DCAE control 754.470 s include ten seconds
+  of context and different validation work; no matched speedup or generation
+  rate claim. Preview is 120 frames at 24 fps, without interpolation.
+- Return pointer: same-final-latent section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-08-hy-nomas-final-dcae-pixelumm.json.
+  Correlated read-only adversary ROBUST within the frozen fixture and six
+  inspected crops; the texture judgment remains qualitative. Identity/motion
+  work remains IN_PROGRESS. Next proposed discriminator: blinded review of
+  preselected crops across the exported interval, with no new model run.
+  Refresh on source/binary/runtime, weights, input/normalization, noise,
+  schedule, geometry or evidence change. Rollback: omit the opt-in final
+  control; no production default changed.

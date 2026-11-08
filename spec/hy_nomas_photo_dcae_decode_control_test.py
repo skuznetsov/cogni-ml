@@ -128,6 +128,19 @@ class PhotoDcaeDecodeAdmissionTest(unittest.TestCase):
         with self.assertRaisesRegex(control.ControlError, "inventory"):
             control.validate_decoder_metadata(missing, expected)
 
+    def test_decode_geometry_preserves_clean_default_and_final_context(self):
+        self.assertEqual(control.validate_decode_geometry([1, 32, 30, 9, 16], 0),
+                         (1, 3, 120, 288, 512))
+        self.assertEqual(control.validate_decode_geometry([1, 32, 60, 9, 16], 120),
+                         (1, 3, 240, 288, 512))
+        for shape, start in (([1, 32, 30, 9, 16], 120),
+                             ([1, 32, 60, 9, 16], 0),
+                             ([1, 32, 60, 9, 16], 119),
+                             ([1, 32, 60, 9, 16], True),
+                             ([1, 32, 90, 9, 16], 120)):
+            with self.subTest(shape=shape, start=start), self.assertRaises(control.ControlError):
+                control.validate_decode_geometry(shape, start)
+
 
 if __name__ == "__main__":
     unittest.main()

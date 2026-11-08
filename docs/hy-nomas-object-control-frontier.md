@@ -1874,6 +1874,80 @@ this completed slice. Refresh on source/binary/runtime, weights, input, noise,
 schedule, normalization, geometry or artifact changes. Rollback: omit the
 capture flag and the new diagnostic helpers; no production default changed.
 
+## Same final latent through original DCAE and PixelUMM (2026-11-08)
+
+The preceding decoder counterfactual is now executed. Both decoders consume
+the same authenticated `[clean photo T0, final T1]` BF16-expanded latent bank,
+shape `[1,32,60,9,16]`, SHA-256
+`19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42`.
+The final endpoint is joined to the earlier four-step checkpoint comparison;
+neither the encoder nor DiT is rerun. This slice adds an opt-in final-DCAE
+admission helper rather than changing the production decoder.
+
+The original pinned upstream DCAE-V decodes all 60 latent frames in one
+request, preserving its temporal feature cache across six ten-latent tiles.
+Only afterward are display frames `[120,240)` selected. PixelUMM preserves
+its production eleven-window schedule, ten-latent windows and five-latent
+overlap, with the same frozen noise and global RoPE positions as its source
+control. The decoders intentionally retain their different original temporal
+schedules. Cropping T1 before DCAE decoding would be a different experiment.
+
+The same terminal DCAE pack also checks its first 120 frames against the
+earlier original-photo reconstruction. That RGB8 causal-prefix check is
+bitwise equal, SHA-256
+`98f3710e8cc4fba50ad1bcd66863c81e1d3f3a0f932a02a5c06e535d59619978`.
+It uses the earlier F32-normalized render solely to reproduce that control.
+The final T1 comparison uses the production BF16 multiply/add/clamp display
+boundary for both decoders, followed by F32 RGB8 rendering.
+
+A fresh native PixelUMM build and fresh upstream MPS control match on every
+T1 display value: max/mean error zero, 53,084,160 finite values, unchanged
+`atol=rtol=2e-5`. A separate CPU comparison finds all 212,336,640 exported
+T1 F32 bytes equal. This source control still uses the existing gathered
+QK-softmax-PV adapter, not unmodified CUDA/flex attention. The fresh Crystal
+build reuses fifteen hash-pinned native objects; those objects were not
+rebuilt in this slice. All launch source inventories remain unchanged.
+
+In six inspected frame crops, original DCAE retains the prepared photo's
+fine facial texture more closely. PixelUMM adds stronger skin creases and
+changes eye contours with the final latent held fixed. This demonstrates a
+decoder contribution to the visible change in this fixture; numerical
+native/source parity does not remove that learned reconstruction behavior.
+The final-frame eyelid change remains visible with both decoders. Neither a
+natural blink, repaired likeness, nor motion correction is established.
+
+Across the complete T1 display interval, the descriptive DCAE/PixelUMM RGB
+RMSE is 0.0131478 and mean absolute difference 0.00818057 in `[0,1]`, including
+the padded background. These compare different decoders and are not parity
+or perceptual-quality gates. No tolerance is widened. Media shows DCAE left,
+PixelUMM right; the photo appears separately in the three-panel keyframe.
+The five-second preview contains 120 frames at 24 fps, without interpolation.
+
+All three model-owning executions are sequential under the file-cache-aware
+10% reserve and 64 MiB swap-growth stop. Native PixelUMM's sampled peak is
+18.410 GiB under its 20 GiB cap; source PixelUMM is 5.795 GiB and original
+DCAE 13.057 GiB under their 18 GiB caps. Swap growth is zero. The CPU-only
+DCAE plan overlaps source PixelUMM; no two models overlap. Named DCAE host
+and device inventory is 7.719 GiB and excludes opaque MPS workspace.
+Native instrumented preterminal allocation/readback/wait counters remain
+0/0/0 with one terminal wait. Each source control exports one terminal pack,
+with no intermediate readback or explicit MPS synchronization.
+
+Observed request times are 167.139 s for native PixelUMM and 754.470 s for the
+original-DCAE control. These include ten seconds of temporal context and
+different validation/rendering work; they are not a matched speed benchmark
+or a new end-to-end generation rate. Focused 21 Python tests, four-file Ruff,
+the release probe build and artifact checks pass.
+
+Evidence: `.landmark/evidence/2026-11-08-hy-nomas-final-dcae-pixelumm.json`.
+Next proposed discriminator: a blinded review of preselected crops across
+the full exported interval, without another model run. The late eyelid change
+remains a separate open question. No additional model run is admitted by this
+slice. Refresh on source/binary/runtime, weights, input, normalization, noise,
+schedule, geometry or artifact changes. Rollback: omit the final-DCAE helper;
+the clean-T0 helper retains its previous rendering path and production
+defaults are unchanged.
+
 ## Research precedents and compatibility limits
 
 - [DiTraj](https://arxiv.org/abs/2509.21839) separates foreground/background

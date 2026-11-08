@@ -1,0 +1,588 @@
+{
+  "schema": "cogni_ml.hy_nomas_final_dcae_pixelumm/v1",
+  "date": "2026-11-08",
+  "source_base_commit": "b1cef40591d523d9dc4c92255170567c0c28b149",
+  "source_state": "base commit plus individually hash-pinned diagnostic worktree files; not a claim that the base commit contains the new helpers",
+  "packet_status": "VERIFIED",
+  "claim": {
+    "scope": "one frozen original-photo final-T1 fixture; same authenticated paired60 bank decoded with original upstream DCAE and fresh native/source PixelUMM",
+    "numerical": "fresh native/source PixelUMM T1 output bytes identical; original DCAE causal T0 prefix matches prior clean reconstruction",
+    "qualitative_observation": "In six inspected crops original DCAE retains fine photo texture more closely; PixelUMM changes skin creases and eye contours at fixed final latent. Both retain a late eyelid change.",
+    "quality_claim_level": "qualitative observation, not a blinded perceptual or identity score",
+    "identity_motion_status": "IN_PROGRESS",
+    "not_claimed": [
+      "repaired likeness",
+      "natural blink or motion correction",
+      "cross-decoder numerical parity",
+      "unmodified CUDA/flex-attention parity",
+      "fresh upstream encoder or DiT rerun",
+      "new native original-DCAE decoder",
+      "fresh native-object builds",
+      "matched decoder speedup or end-to-end generation rate",
+      "tamperproof historical attestation"
+    ]
+  },
+  "risk": "CAUTION: opt-in diagnostic admission and context-preserving source decode; production defaults unchanged",
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "original_dcae_module_history_revision": "a31c0fe0bcc493be188fd37ddba4ce2f674becb4",
+    "original_dcae_module_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+    "pixelumm_attention_adapter": "gathered_spatial_tiles_qk_softmax_pv_fp32_accum",
+    "mps_cpu_fallback": false
+  },
+  "inputs": {
+    "paired60_bank": {
+      "bytes": 1105920,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-roundtrip-20261108.sgkg7c_i/checkpoint-control-formatted/native-step4-paired60.f32le",
+      "sha256": "19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42"
+    },
+    "clean_t0_sha256": "6730c2618b6534768d626bbbd70119a46e2808bbcce7a7c20e6dd87e8e22e7ed",
+    "historical_checkpoint_control": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-roundtrip-20261108.sgkg7c_i/checkpoint-control-formatted/receipt.json",
+      "bytes": 5602,
+      "sha256": "dbc43825526bc484f804bb88069b2f3a9c8644a4541f956c44b87685e5fe6915"
+    },
+    "checkpoint_scope": "four earlier native/source velocity, clean-estimate and Euler-state comparisons; source captures reused, no encoder/DiT rerun in this slice",
+    "photo_sha256": "d38704c64cffcb83e1c43218964cff8824d63a3a3bca9e77dcc88369a0756ed9",
+    "prepared_rgb8_sha256": "c5d6ea9b0ade1f91946844f22f36b764231bccb37098f5cb61ba543fe0e884b2",
+    "pixelumm_noise_sha256": "12fc5a9263e6784264b6b91e7e980acd00f81a9b0f9b19742dc9618cc498f0b2",
+    "pixelumm_rope_cos_sha256": "c704e1397520e7a8536994143e56672bea6cab31170b0ffe7a364cb8abb4ac0e",
+    "pixelumm_rope_sin_sha256": "0f3d33d7ce2581e918bc2d91cc73639d9bdf42eb2dfd28a20785b6face97c639"
+  },
+  "decoder_geometry": {
+    "input_shape": [
+      1,
+      32,
+      60,
+      9,
+      16
+    ],
+    "full_pixel_shape": [
+      1,
+      3,
+      240,
+      288,
+      512
+    ],
+    "display_crop": [
+      120,
+      240
+    ],
+    "original_dcae": {
+      "tile_latents": 10,
+      "tiles": 6,
+      "overlap_latents": 0,
+      "feature_cache_across_tiles": true,
+      "crop_after_full_decode": true
+    },
+    "pixelumm": {
+      "steps": 1,
+      "window_latents": 10,
+      "overlap_latents": 5,
+      "starts": [
+        0,
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50
+      ]
+    },
+    "normalization": "final T1 uses BF16 x*0.5+0.5/clamp then F32; prefix hash alone reproduces legacy F32-normalized render"
+  },
+  "numerical": {
+    "atol": 2e-05,
+    "rtol": 2e-05,
+    "native_source_pixelumm": {
+      "bank": {
+        "bytes": 1105920,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-roundtrip-20261108.sgkg7c_i/checkpoint-control-formatted/native-step4-paired60.f32le",
+        "sha256": "19250cf779b9218f8c2ae9055c6272fcd01444de1c30deaa37bf477eef97ff42"
+      },
+      "crop": {
+        "atol": 2e-05,
+        "compared_bytes": 212336640,
+        "gpu_receipt_max_abs": 0.0,
+        "gpu_receipt_mean_abs": 0.0,
+        "native_frames": [
+          120,
+          240
+        ],
+        "native_sha256": "d68b3f87f34c7de271421a7f80cef18715e6af80650ec90e921660b4917dc298",
+        "rtol": 2e-05,
+        "source_frames": [
+          0,
+          120
+        ],
+        "source_sha256": "d68b3f87f34c7de271421a7f80cef18715e6af80650ec90e921660b4917dc298",
+        "unequal_bytes": 0
+      },
+      "gpu_transfer_contract": {
+        "native_explicit_sync_field_present": false,
+        "native_instrumented_metrics": {
+          "decoder_encode_allocations": 0,
+          "decoder_encode_readbacks": 0,
+          "decoder_preterminal_waits": 0,
+          "decoder_waits": 1,
+          "latent_prefix_gpu_gathered": 0
+        },
+        "source_runtime": {
+          "explicit_sync_calls": 0,
+          "intermediate_readbacks": 0,
+          "pytorch_enable_mps_fallback": "0",
+          "terminal_transfer_count": 1,
+          "torch_version": "2.6.0"
+        }
+      },
+      "native_output": {
+        "bytes": 424673280,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final/pixels.f32le",
+        "sha256": "44af661a5157136472124a72bc12a0ba1b7bb00a4510941f6f8d44d776bad898"
+      },
+      "source_t1_output": {
+        "bytes": 212336640,
+        "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/upstream-final/upstream-t1-display.f32le",
+        "sha256": "d68b3f87f34c7de271421a7f80cef18715e6af80650ec90e921660b4917dc298"
+      }
+    },
+    "causal_dcae_prefix": {
+      "bitwise_equal": true,
+      "expected_sha256": "98f3710e8cc4fba50ad1bcd66863c81e1d3f3a0f932a02a5c06e535d59619978",
+      "frames": [
+        0,
+        120
+      ],
+      "historical_file_sha256": "98f3710e8cc4fba50ad1bcd66863c81e1d3f3a0f932a02a5c06e535d59619978",
+      "receipt_sha256": "98f3710e8cc4fba50ad1bcd66863c81e1d3f3a0f932a02a5c06e535d59619978"
+    },
+    "cross_decoder_difference": {
+      "reference": "authenticated native PixelUMM T1 display frames [120,240)",
+      "reference_pixels_sha256": "44af661a5157136472124a72bc12a0ba1b7bb00a4510941f6f8d44d776bad898",
+      "representation": "F32 planar RGB [0,1] after BF16 multiply/add/clamp",
+      "scope": "descriptive cross-decoder difference; no equality, likeness or quality gate",
+      "max_abs": 0.451171875,
+      "rmse": 0.013147782534360886,
+      "mean_abs": 0.008180570788681507,
+      "values": 53084160,
+      "all_values_finite": true
+    },
+    "cross_decoder_metric_scope": "descriptive difference on [0,1] whole T1 including padded background; not a parity or perceptual-quality threshold"
+  },
+  "outputs": {
+    "native_pixelumm_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final/receipt.json",
+      "bytes": 5159,
+      "sha256": "b2e33d3b088492eb4112ed0313999959ecb87ef618667e4e2c8c6a8ec9903ffc"
+    },
+    "source_pixelumm_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/upstream-final/receipt.json",
+      "bytes": 4905,
+      "sha256": "9971aa46bd61b36edd7e6428718fbf66b9852c9f73a1f8464d6ddc9217409a33"
+    },
+    "original_dcae_receipt": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae/receipt.json",
+      "bytes": 5986,
+      "sha256": "59cb9df8cdada772a18bf8ca2330e005a1d27b08791f7635a8ed40bf47f6a0f2"
+    },
+    "original_dcae_rgb8": {
+      "bytes": 53084160,
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae/reconstruction.rgb8",
+      "sha256": "8d0f5aa6268437707ff82d3670e01c517eb8f151159ff67f2a5a21a2eb2aa67e",
+      "shape": [
+        120,
+        288,
+        512,
+        3
+      ]
+    }
+  },
+  "execution": {
+    "audit": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/final-pair-verification.json",
+      "bytes": 16938,
+      "sha256": "0a7d1ca2e28450f71657e0dc9624ba889a8f55de0caf1409ce21259d29d52be3"
+    },
+    "audit_script": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/verify_final_pair.py",
+      "bytes": 27363,
+      "sha256": "1149293e64a492870fa3e92d1f9a38dc880ffde0929f79c9fd38677fbd97f147"
+    },
+    "source_inventory": {
+      "hash_entries_checked": 611,
+      "head": "b1cef40591d523d9dc4c92255170567c0c28b149",
+      "manifest_count": 6,
+      "mismatches": 0,
+      "repo": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "unique_source_files_checked": 593
+    },
+    "guard_seriality": {
+      "all_guard_windows_nonoverlapping": false,
+      "guard_window_overlaps": [
+        {
+          "first": "upstream-final",
+          "second": "original-final-dcae-plan"
+        }
+      ],
+      "model_execution_order": [
+        "native-final",
+        "upstream-final",
+        "original-final-dcae"
+      ],
+      "model_executions_nonoverlapping": true,
+      "note": "CPU-only plan guards may overlap a model guard; only the three model executions are required to be serial."
+    },
+    "reserve_pct": 10,
+    "memory_accounting": "file-cache",
+    "swap_growth_stop_mib": 64,
+    "observed_swap_growth_bytes": 0,
+    "models": [
+      {
+        "name": "native-final",
+        "wall_seconds": 168.68118437496014,
+        "guard": {
+          "events": 329,
+          "finish_monotonic": 1189499.599481583,
+          "guard_log": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final.guard.jsonl",
+          "max_footprint_bytes": 21474836480,
+          "max_swap_growth_bytes": 67108864,
+          "min_headroom_bytes": 27270529024,
+          "min_pressure_free_pct": 76,
+          "peak_group_footprint_bytes": 19767324912,
+          "returncode": 0,
+          "runtime_floor_pct": 10,
+          "samples": 326,
+          "start_monotonic": 1189330.975410833,
+          "swap_growth_bytes": 0,
+          "terminal_live_processes": 0
+        }
+      },
+      {
+        "name": "upstream-final",
+        "wall_seconds": 215.36209370894358,
+        "guard": {
+          "events": 421,
+          "finish_monotonic": 1189776.101570833,
+          "guard_log": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/upstream-final.guard.jsonl",
+          "max_footprint_bytes": 19327352832,
+          "max_swap_growth_bytes": 67108864,
+          "min_headroom_bytes": 26947141632,
+          "min_pressure_free_pct": 76,
+          "peak_group_footprint_bytes": 6222711064,
+          "returncode": 0,
+          "runtime_floor_pct": 10,
+          "samples": 418,
+          "start_monotonic": 1189560.797142875,
+          "swap_growth_bytes": 0,
+          "terminal_live_processes": 0
+        }
+      },
+      {
+        "name": "original-final-dcae",
+        "wall_seconds": 754.4701621250715,
+        "guard": {
+          "events": 1464,
+          "finish_monotonic": 1190559.137287166,
+          "guard_log": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae.guard.jsonl",
+          "max_footprint_bytes": 19327352832,
+          "max_swap_growth_bytes": 67108864,
+          "min_headroom_bytes": 29293395968,
+          "min_pressure_free_pct": 65,
+          "peak_group_footprint_bytes": 14020282528,
+          "returncode": 0,
+          "runtime_floor_pct": 10,
+          "samples": 1461,
+          "start_monotonic": 1189804.724680708,
+          "swap_growth_bytes": 0,
+          "terminal_live_processes": 0
+        }
+      }
+    ],
+    "commands": [
+      {
+        "name": "native-build",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-build.command.json",
+          "bytes": 82200,
+          "sha256": "7b634d6f6a68dbc0b299a5f5a53b0d3cf34e585572f644224b7a4fe244ff6d5e"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-build.command.execution.json",
+          "bytes": 337,
+          "sha256": "537192bddc626af175cac64bbe9180fd0f9f60cd35c90c32e2debbb44c8469b7"
+        }
+      },
+      {
+        "name": "native-final-plan",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final-plan.command.json",
+          "bytes": 2741,
+          "sha256": "6a8439488b9a3073f82ab2a3626381873f1bc70197d03377dc1fb1b97bdccd76"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final-plan.command.execution.json",
+          "bytes": 343,
+          "sha256": "a908eeceb9574e6febe0cf6964b62b67965171b9eec33bd3b7f4cb380d996fdb"
+        }
+      },
+      {
+        "name": "native-final",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final.command.json",
+          "bytes": 2800,
+          "sha256": "6be2a4ef4fa7d6be1c9bbe4db841212236487aecbee197063ba094fb6a41d13b"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/native-final.command.execution.json",
+          "bytes": 339,
+          "sha256": "dceac300368fe41b18eaacf93493ba9226aaff6e597f1ed46fab7cc46aafe416"
+        }
+      },
+      {
+        "name": "upstream-final",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/upstream-final.command.json",
+          "bytes": 36098,
+          "sha256": "4eb316d813f4e8baffca4d2d8a4909737f1e73be97107732e01f4d3593041ae2"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/upstream-final.command.execution.json",
+          "bytes": 341,
+          "sha256": "da7129e99632bbdbd05bd77a2cd5cd147b364ef519ed31158d0c13a026cd9830"
+        }
+      },
+      {
+        "name": "original-final-dcae-plan",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae-plan.command.json",
+          "bytes": 5089,
+          "sha256": "846d5e337afdac8ae85149907ca09f6a9c76f96cf95e3c631d1d9bc9e3be14b7"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae-plan.command.execution.json",
+          "bytes": 349,
+          "sha256": "3dbaade6f9f10d9d0fe7ef5bf26dd9436962c60226b32a7924b6ddd93e528039"
+        }
+      },
+      {
+        "name": "original-final-dcae",
+        "manifest": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae.command.json",
+          "bytes": 5276,
+          "sha256": "da5664633b43b8b9049bf18c9ec84ee18c42700dab2a317318560057083f96a5"
+        },
+        "execution": {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/original-final-dcae.command.execution.json",
+          "bytes": 345,
+          "sha256": "c4f8304894a195262c9375bbea12a84f19b3ef4a5850d4e9bc53f4565144988b"
+        }
+      }
+    ],
+    "native_probe_request_seconds": 167.138550708,
+    "native_probe_gpu_seconds": 148.7070758768823,
+    "native_instrumented_metrics": {
+      "decoder_encode_allocations": 0,
+      "decoder_encode_readbacks": 0,
+      "decoder_preterminal_waits": 0,
+      "decoder_segments": 13509,
+      "decoder_waits": 1,
+      "latent_prefix_gpu_gathered": 0
+    },
+    "source_pixelumm_terminal": {
+      "torch_version": "2.6.0",
+      "pytorch_enable_mps_fallback": "0",
+      "wall_seconds": 206.25561462482437,
+      "intermediate_readbacks": 0,
+      "explicit_sync_calls": 0,
+      "terminal_transfer_count": 1
+    },
+    "dcae_terminal": {
+      "explicit_mps_synchronize_calls": 0,
+      "intermediate_readbacks": 0,
+      "terminal_transfer_count": 1
+    },
+    "dcae_named_inventory_gib": 7.718869298696518,
+    "opaque_mps_workspace_in_named_inventory": false,
+    "performance_scope": "different validation/rendering paths, ten seconds of context, not a matched speed benchmark",
+    "provenance_limits": {
+      "gpu_metrics_basis": "GPU-side receipts and external sampled guard logs; this verifier independently rechecks serialized output bytes and joins, not model arithmetic",
+      "guard_limit": "file-cache headroom is sampled/reclaimability-based and cannot prove opaque MPS workspace usage",
+      "large_weight_bytes_rehashed": 0,
+      "weight_identity_basis": "pinned receipt and cache/checkpoint manifest SHA-256 identities; multi-GB model/checkpoint payloads were not rehashed"
+    },
+    "native_binary": {
+      "executable": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/build/hy_nomas_decode_latent",
+      "linked_object_count": 15,
+      "linked_objects": [
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/bridge.o",
+          "sha256": "a5689350b2929b77a6d07ebc55867d515cea2c6a1098d63081f9fa58ecbb2385"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/metal_mps_command_chain.o",
+          "sha256": "fdca34424336ff225612ee9bad4ae25d8faac03213ca691229691782d4868f4d"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/metal_stage_io.o",
+          "sha256": "b0e2c503c8d4564772748dca9c76ff08a786c30329981595ea045ca6165d2a8a"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/wan_t5_mps_bridge.o",
+          "sha256": "e42a79acae65aae6c94c2d66260740e712e091448a43ee405638f60c5dd98707"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/wan_t5_rms_mps_bridge.o",
+          "sha256": "9ee75ae8bd8629629b0f20fdd6598152fa42c18184e1f6b3e6b32aeb2d2a77bc"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/wan_t5_attention_mps_bridge.o",
+          "sha256": "693a3072feaa04fd719f13be8103d7aa23bb8658dd1add86c20ba9b33c9d086f"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/wan_attention_mps_bridge.o",
+          "sha256": "9fe22bf1c794318371b1dc529d35eaba2feb4d7bc004fe4a35cb1a22d871e924"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_mps_reductions.o",
+          "sha256": "35c7cd53184679564b03118f1e4237cca7bbe24b579115625e80df4624ada3f8"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_attention_compact.o",
+          "sha256": "77b38732e0d438929b49ecedc578288667a2f8587fc2bcee57021ac298cd659f"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/qwen25_mps_bridge.o",
+          "sha256": "d29a0049697c2f1c042ad04539c83e28d9f6ad488c2062bb99cf3ecd2e460ba3"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/pixelumm_decoder_head_mps_bridge.o",
+          "sha256": "1722be3146e9f30dfca70088b9262be0765750bedd7b7142978c71931992af11"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_history_attention.o",
+          "sha256": "f480e1155541c6e90337c329f1914d680f8d991665db06d882dd7536055e9fe1"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_mps_bf16_linear.o",
+          "sha256": "9b4b12d48b52f59bf90a04e2e35a6c3d9f0be0cb9f8fddc60c241c63ed132c38"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/dcae_v_mps_bridge.o",
+          "sha256": "590d6238d99b7965f402138015944dd7119e6a13ba3a967972a817e40cc23770"
+        },
+        {
+          "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/dcae_v_norm_mps_bridge.o",
+          "sha256": "054f1d6015c9b3f41365ad31dfc25934b87262c6336e1d58659fa83c580b9c49"
+        }
+      ],
+      "sha256": "5e6058662b1a284c1bf372ef2568a80794b8af318e7baa2d1e90d73ccb13236a"
+    }
+  },
+  "validation": {
+    "observed_cpu_checks": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/cpu-checks.json",
+      "bytes": 2166,
+      "sha256": "63e25c80923e2e4b4b5b5b656965d8f4f68c515d84dccfa5a6525df62f5a8020"
+    },
+    "python_tests": 21,
+    "ruff": "four affected Python files passed",
+    "release_probe_build": "passed, one existing Time.monotonic deprecation warning; fifteen native objects reused",
+    "artifact_audit_command": [
+      "python3",
+      "-B",
+      "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/verify_final_pair.py"
+    ],
+    "expected_signal": "passed=true, native/source unequal_bytes=0, causal prefix exact, unchanged launch inventories and clean guards",
+    "negative_cases": "wrong bank/context/step/capture/resources/path/extent/terminal contracts and nonzero outside/unequal/nonfinite checkpoint counts rejected"
+  },
+  "media": {
+    "scope": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/media-scope.json",
+      "bytes": 3104,
+      "sha256": "0bd1256696c6f16a782a3aa815ed2e86f19255be759df0e4a494d105e470e1f9"
+    },
+    "renderer": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/render_comparison.py",
+      "bytes": 4342,
+      "sha256": "6e63264baae9222469e2609a1411c5e05571a52f3aed331122be6463060de80a"
+    },
+    "keyframe": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/final-decoders-f060.png",
+      "bytes": 344589,
+      "sha256": "79c7c86a763d7c8f00b17a603e79abd40baf1ec8c86440020daa11ab6692e505"
+    },
+    "timeline": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/final-decoders-timeline.png",
+      "bytes": 1342570,
+      "sha256": "db187ea7fbd9abcd496fbb5269aeb9696178c198c801ee6b79963faccb5058a5"
+    },
+    "video": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/dcae-left-pixelumm-right-5s.mp4",
+      "bytes": 173917,
+      "sha256": "31b32382c10a26472869dc363d3c695ec5c64d10c284541937e00f74540847fb"
+    },
+    "video_metadata": {
+      "width": 576,
+      "height": 324,
+      "frames": 120,
+      "fps": 24,
+      "duration_seconds": 5,
+      "interpolation": false,
+      "left": "original upstream DCAE",
+      "right": "native PixelUMM; fresh upstream-MPS control matches exactly"
+    },
+    "inspection_scope": "six selected local frames 0,24,60,96,113,119; portrait crop x112:400; no claim of full natural motion from still frames"
+  },
+  "review": {
+    "verdict": "ROBUST",
+    "correlated": true,
+    "artifact": {
+      "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/final-review.json",
+      "bytes": 1556,
+      "sha256": "14721436db1282cf1a70c49b1edd888c2d62d7d37b2a11116a66dd3b6fbce845"
+    },
+    "scope": "bounded frozen-fixture artifact/numerical result and six-crop qualitative observation"
+  },
+  "cleanup": {
+    "path": "/opt/mldata_ssd/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/photo-final-decoders-20261108.b8cnpzyc/cleanup.json",
+    "bytes": 897,
+    "sha256": "cde3b16563f0e0dc484bf71e97f8933e49117ff566ff3ff8c2bc834521c25b49"
+  },
+  "next_falsifier": "blinded review of preselected crops across the full exported interval, without another model run; late eyelid timing remains separate",
+  "rollback": "omit opt-in final-DCAE helper; clean-T0 rendering math and production decoder defaults remain unchanged",
+  "refresh_on": [
+    "source/binary/runtime",
+    "weights",
+    "reference or normalization",
+    "conditioning",
+    "noise or schedule",
+    "geometry",
+    "evidence loss or replacement"
+  ],
+  "source_files_at_verification": {
+    "spec/support/hy_nomas_photo_final_dcae_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_photo_final_dcae_control.py",
+      "bytes": 17391,
+      "sha256": "d524d689e47663f229063400d1cafd983e3527267afdeec3efd9614da8b1a0f6"
+    },
+    "spec/support/hy_nomas_photo_dcae_decode_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_photo_dcae_decode_control.py",
+      "bytes": 36539,
+      "sha256": "17c42fe1e7cc7cab30003edc2ede12bd69184240c3848b029e14e11364b0ea3f"
+    },
+    "spec/hy_nomas_photo_final_dcae_control_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_photo_final_dcae_control_test.py",
+      "bytes": 13308,
+      "sha256": "db1ee40b49c15e0a0109a5087d117a08184e7f2cca003717788d740173a07c96"
+    },
+    "spec/hy_nomas_photo_dcae_decode_control_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_photo_dcae_decode_control_test.py",
+      "bytes": 7629,
+      "sha256": "a93be86e72dbc28a74b3c07e1bd044e284c6d228451d399973479b3fcfc5e303"
+    }
+  }
+}

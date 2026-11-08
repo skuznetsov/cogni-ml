@@ -433,6 +433,20 @@ def admit(args: argparse.Namespace, torch: Any) -> dict[str, Any]:
     }
 
 
+def validate_decode_geometry(shape: object, render_start_frame: object) -> tuple[int, ...]:
+    """Admit clean T0 or context-preserving T0+T1, rendering exactly T1."""
+    latent_shape = _positive_shape(shape, "decode latent")
+    if type(render_start_frame) is not int:
+        raise ControlError("decode render start must be an integer")
+    expected_start = {
+        LATENT_SHAPE: 0,
+        (1, 32, 60, 9, 16): 120,
+    }.get(tuple(latent_shape))
+    if expected_start is None or render_start_frame != expected_start:
+        raise ControlError("decode must preserve the admitted T0/T1 context and render range")
+    return (1, 3, latent_shape[2] * 4, 288, 512)
+
+
 def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
     import numpy as np
 
@@ -444,6 +458,42 @@ def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
         raise ControlError("this Torch build has no MPS backend")
     if admitted["weights_path"].stat().st_size != DCAE_CHECKPOINT_BYTES:
         raise ControlError("original checkpoint changed after admission")
+
+    decode_input = admitted.get("decode_input", {
+        "path": admitted["latent_path"], "sha256": admitted["latent_sha256"],
+        "shape": list(LATENT_SHAPE), "render_start_frame": 0,
+        "scope": "authenticated clean original-photo T0; no DiT",
+    })
+    latent_shape = tuple(decode_input["shape"])
+    render_start = decode_input["render_start_frame"]
+    full_output_shape = validate_decode_geometry(latent_shape, render_start)
+    pixel_reference = admitted.get("pixelumm_reference")
+    prefix_control = admitted.get("prefix_control")
+    if latent_shape[2] == 60:
+        if (not isinstance(pixel_reference, dict) or not isinstance(prefix_control, dict)
+                or pixel_reference.get("shape") != [1, 3, 240, 288, 512]
+                or pixel_reference.get("crop") != [120, 240]):
+            raise ControlError("paired decode requires authenticated PixelUMM and causal-prefix controls")
+    elif pixel_reference is not None or prefix_control is not None:
+        raise ControlError("clean T0 decode cannot use final-endpoint comparison controls")
+    latent_np = np.fromfile(decode_input["path"], dtype="<f4")
+    if latent_np.size != math.prod(latent_shape):
+        raise ControlError("decode latent extent changed before execution")
+    _require_digest(hashlib.sha256(latent_np.tobytes()).hexdigest(),
+                    decode_input["sha256"], "decode latent before execution")
+    if pixel_reference is not None:
+        pixel_path = _regular_path(pixel_reference["path"], "PixelUMM reference pixels")
+        if pixel_path.stat().st_size != math.prod(pixel_reference["shape"]) * 4:
+            raise ControlError("PixelUMM reference pixel extent changed before execution")
+        # Pin the bytes used for upload before allocating the GPU model. Hashing
+        # a path and reopening it later would permit a different reference crop.
+        pixel_bytes = _read_regular(pixel_path, "PixelUMM reference pixels",
+                                    max_bytes=math.prod(pixel_reference["shape"]) * 4)
+        _require_digest(hashlib.sha256(pixel_bytes).hexdigest(), pixel_reference["sha256"],
+                        "PixelUMM reference pixels before execution")
+        pixels = np.frombuffer(pixel_bytes, dtype="<f4").reshape(pixel_reference["shape"])
+        selected_pixels = pixels[:, :, 120:240].copy()
+        del pixels, pixel_bytes
 
     upstream = admitted["schema"]["upstream"]
     config = admitted["schema"]["config"]
@@ -459,46 +509,80 @@ def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
     del local_decoder
     model.eval()
 
-    latent_np = np.fromfile(admitted["latent_path"], dtype="<f4")
-    if latent_np.size != math.prod(LATENT_SHAPE):
-        raise ControlError("T0 latent extent changed before execution")
-    latent = torch.from_numpy(latent_np.reshape(LATENT_SHAPE).copy())
+    latent = torch.from_numpy(latent_np.reshape(latent_shape).copy())
     latent = latent.to(device="mps", dtype=torch.bfloat16).contiguous()
-    if tuple(latent.shape) != LATENT_SHAPE:
-        raise ControlError("T0 latent tensor shape changed during load")
+    if tuple(latent.shape) != latent_shape:
+        raise ControlError("decode latent tensor shape changed during load")
 
-    rgb8 = np.fromfile(admitted["payload_path"], dtype=np.uint8)
-    if rgb8.size != REFERENCE_RGB8_BYTES:
-        raise ControlError("prepared RGB8 extent changed before execution")
-    source = torch.from_numpy(rgb8.reshape(288, 512, 3).copy()).permute(2, 0, 1)
-    source = source.to(device="mps", dtype=torch.bfloat16).div_(127.5).sub_(1)
-    source = source[None, :, None].contiguous()
+    if pixel_reference is not None:
+        source = torch.from_numpy(selected_pixels).to(device="mps", dtype=torch.float32)
+    else:
+        rgb8 = np.fromfile(admitted["payload_path"], dtype=np.uint8)
+        if rgb8.size != REFERENCE_RGB8_BYTES:
+            raise ControlError("prepared RGB8 extent changed before execution")
+        source = torch.from_numpy(rgb8.reshape(288, 512, 3).copy()).permute(2, 0, 1)
+        source = source.to(device="mps", dtype=torch.bfloat16).div_(127.5).sub_(1)
+        source = source[None, :, None].contiguous()
 
     started = time.monotonic()
     with torch.no_grad():
         decoded = model.decode(latent)
     decode_enqueue_seconds = time.monotonic() - started
-    if tuple(decoded.shape) != REFERENCE_SHAPE or decoded.dtype is not torch.bfloat16:
+    if tuple(decoded.shape) != full_output_shape or decoded.dtype is not torch.bfloat16:
         raise ControlError(f"DCAE decoder output violates geometry/dtype: {tuple(decoded.shape)}, {decoded.dtype}")
+    prefix_display = None
+    if prefix_control is not None:
+        # Reproduce the earlier clean-T0 render in this same terminal pack.
+        # It is a causal-prefix regression check, not another model request.
+        prefix_display = decoded[:, :, :120].float().clamp(-1.0, 1.0).add_(1.0).mul_(127.5)
+        prefix_display = prefix_display.round_().clamp_(0, 255)
+        prefix_display = prefix_display[0].permute(1, 2, 3, 0).contiguous().to(torch.uint8).reshape(-1)
+    # Keep the source feature cache across every T0/T1 tile. Select the display
+    # interval only after the complete upstream decode, without a readback.
+    decoded = decoded[:, :, render_start:render_start + REFERENCE_SHAPE[2]]
 
     # Comparison stays in F32 on MPS. One HWC RGB8 render and these scalars are
     # packed as bytes for the sole MPS->CPU transfer; no .item() or sync occurs.
-    decoded_f32 = decoded.float()
+    # The paired control uses exactly the production BF16 display boundary.
+    # Preserve the existing normalized [-1,1] T0-fidelity path otherwise.
+    decoded_f32 = (decoded.mul(0.5).add(0.5).clamp(0, 1).float()
+                   if pixel_reference is not None else decoded.float())
     source_f32 = source.float()
     delta = (decoded_f32 - source_f32).abs()
-    limit = ATOL + RTOL * source_f32.abs()
+    if pixel_reference is not None:
+        third_metric = delta.mean()
+    else:
+        limit = ATOL + RTOL * source_f32.abs()
+        third_metric = (delta > limit).sum().to(torch.float32)
     metrics = torch.stack((
         delta.max(), delta.square().mean().sqrt(),
-        (delta > limit).sum().to(torch.float32),
+        third_metric,
         torch.isfinite(decoded_f32).all().to(torch.float32),
     )).contiguous()
-    display = decoded_f32.clamp(-1.0, 1.0).add_(1.0).mul_(127.5).round_().clamp_(0, 255)
+    if pixel_reference is not None:
+        display = decoded_f32.mul(255).round_().clamp_(0, 255)
+    else:
+        display = decoded_f32.clamp(-1.0, 1.0).add_(1.0).mul_(127.5).round_().clamp_(0, 255)
     display = display[0].permute(1, 2, 3, 0).contiguous().to(torch.uint8).reshape(-1)
-    packed = torch.cat((display, metrics.view(torch.uint8))).contiguous().cpu().numpy()
+    parts = [display]
+    if prefix_display is not None:
+        parts.append(prefix_display)
+    parts.append(metrics.view(torch.uint8))
+    packed = torch.cat(parts).contiguous().cpu().numpy()
     through_terminal_seconds = time.monotonic() - started
     display_bytes = math.prod(REFERENCE_SHAPE[2:]) * 3
     rendered = packed[:display_bytes]
-    metric_values = packed[display_bytes:].view("<f4")
+    metrics_start = display_bytes
+    prefix_result = None
+    if prefix_display is not None:
+        prefix_payload = packed[display_bytes:2 * display_bytes].tobytes()
+        prefix_sha = hashlib.sha256(prefix_payload).hexdigest()
+        _require_digest(prefix_sha, prefix_control["expected_rgb8_sha256"], "decoded causal T0 prefix")
+        prefix_result = {"frames": [0, 120], "rgb8_sha256": prefix_sha,
+                         "bitwise_equal_to_prior_clean_dcae": True,
+                         "scope": "legacy F32-normalized render, same six-tile decoder request"}
+        metrics_start += display_bytes
+    metric_values = packed[metrics_start:].view("<f4")
     if rendered.size != display_bytes or metric_values.size != 4:
         raise ControlError("terminal packed result has an invalid extent")
     if not np.isfinite(metric_values).all() or metric_values[3] != 1.0:
@@ -512,8 +596,24 @@ def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
     payload = rendered.tobytes()
     with image_path.open("xb") as stream:
         stream.write(payload)
+    comparison = {
+        "reference": "prepared original photo RGB8 normalized to BF16 [-1,1], repeated across 120 frames",
+        "atol": ATOL, "rtol": RTOL,
+        "max_abs": float(metric_values[0]), "rmse": float(metric_values[1]),
+        "outside_tolerance": int(metric_values[2]), "values": math.prod(REFERENCE_SHAPE),
+    }
+    if pixel_reference is not None:
+        comparison = {
+            "reference": "authenticated native PixelUMM T1 display frames [120,240)",
+            "reference_pixels_sha256": pixel_reference["sha256"],
+            "representation": "F32 planar RGB [0,1] after BF16 multiply/add/clamp",
+            "scope": "descriptive cross-decoder difference; no equality, likeness or quality gate",
+            "max_abs": float(metric_values[0]), "rmse": float(metric_values[1]),
+            "mean_abs": float(metric_values[2]), "values": math.prod(REFERENCE_SHAPE),
+            "all_values_finite": True,
+        }
     result = {
-        "schema": "cogni_ml.hy_nomas_photo_dcae_decode/v1",
+        "schema": admitted.get("output_schema", "cogni_ml.hy_nomas_photo_dcae_decode/v1"),
         "upstream_revision": UPSTREAM_REVISION,
         "dcae_module_history_revision": DCAE_MODULE_REVISION,
         "dcae_module_sha256": admitted["module_sha256"],
@@ -527,17 +627,18 @@ def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
         "t0_latent_sha256": admitted["latent_sha256"],
         "runtime": {"torch": torch.__version__, "device": "mps", "dtype": "BF16",
                     "mps_fallback": False, "autocast": False},
-        "decode": {"input_shape": list(LATENT_SHAPE), "output_shape": list(REFERENCE_SHAPE),
+        "decode": {"input_shape": list(latent_shape), "input_sha256": decode_input["sha256"],
+                   "full_output_shape": list(full_output_shape),
+                   "output_shape": list(REFERENCE_SHAPE), "render_start_frame": render_start,
+                   "scope": decode_input["scope"],
                    "tile_latents": TILE_LATENTS, "tile_frames": TILE_FRAMES,
                    "overlap_latents": 0, "temporal_feature_cache": True,
-                   "tiles": 3, "decoder_weights_only": True},
-        "comparison": {"reference": "prepared original photo RGB8 normalized to BF16 [-1,1], repeated across 120 frames",
-                       "atol": ATOL, "rtol": RTOL,
-                       "max_abs": float(metric_values[0]), "rmse": float(metric_values[1]),
-                       "outside_tolerance": int(metric_values[2]),
-                       "values": math.prod(REFERENCE_SHAPE)},
+                   "tiles": latent_shape[2] // TILE_LATENTS, "decoder_weights_only": True},
+        "comparison": comparison,
         "render": {"path": str(image_path), "shape": [120, 288, 512, 3],
-                   "dtype": "RGB8", "conversion": "clamp [-1,1], map to [0,255], round" ,
+                   "dtype": "RGB8", "conversion": (
+                       "BF16 x*0.5+0.5, clamp [0,1], F32 multiply by255, round"
+                       if pixel_reference is not None else "clamp [-1,1], map to [0,255], round"),
                    "payload_bytes": len(payload), "payload_sha256": hashlib.sha256(payload).hexdigest()},
         "terminal_transfer_count": 1,
         "intermediate_readbacks": 0,
@@ -546,6 +647,10 @@ def execute(admitted: dict[str, Any], torch: Any) -> dict[str, Any]:
         "seconds_through_terminal": through_terminal_seconds,
         "memory_estimate": admitted["memory_estimate"],
     }
+    if "counterfactual" in admitted:
+        result["counterfactual"] = admitted["counterfactual"]
+    if prefix_result is not None:
+        result["causal_prefix_control"] = prefix_result
     (output_dir / "receipt.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     return result
 
