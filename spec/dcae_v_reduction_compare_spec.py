@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "examples/support/dcae_v_reduction_compare.py"
@@ -129,6 +130,108 @@ class CandidateGateSpec(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout)["mode"], "observation-only")
         self.assertFalse(json.loads(run.stdout)["gate_passed"])
+
+    def prefix_manifest(self):
+        manifest = json.loads((self.root / "manifest.json").read_text())
+        prefix = {"reference_path": "/pinned/reference.safetensors", "reference_sha256": "a" * 64,
+                  "target_conv": compare.PREFIX_TARGET, "tile_count": 2,
+                  "activation_shape": [1, 512, 40, 72, 128], "cache_shape": [1, 512, 1, 72, 128]}
+        manifest.update(activation_prefix=prefix, shape=prefix["activation_shape"], weights_sha256="b" * 64)
+        return manifest
+
+    def prefix_report(self, manifest):
+        report = dict(manifest["activation_prefix"], weights_sha256=manifest["weights_sha256"],
+                      upstream_sha256=compare.PREFIX_UPSTREAM_SHA,
+                      schema="cogni_ml.dcae_v_activation_prefix_upstream/v1",
+                      checkpoint={"sha256": compare.PREFIX_CHECKPOINT_SHA},
+                      upstream={"revision": compare.PREFIX_UPSTREAM_REVISION,
+                                "module_sha256": compare.PREFIX_UPSTREAM_SHA},
+                      native_weight_cache={"sha256": manifest["weights_sha256"],
+                                           "selected_prefix_tensor_count": 90,
+                                           "selected_prefix_bytes_bitwise_joined_to_original_checkpoint": 2096936960},
+                      reference={"sha256": manifest["activation_prefix"]["reference_sha256"],
+                                 "tensor": "input.latent", "tensor_dtype": "BF16",
+                                 "tensor_shape": [1, 32, 20, 9, 16], "tensor_sha256": compare.PREFIX_INPUT_SHA,
+                                 "lineage_audit_sha256": compare.PREFIX_LINEAGE_SHA,
+                                 "full_source_reference_sha256": compare.PREFIX_SOURCE_REFERENCE_SHA},
+                      prefix_weight_load={"materialized_tensor_count": 90,
+                                          "materialized_bf16_bytes": 2096936960,
+                                          "encoder_weights_materialized": False,
+                                          "later_decoder_weights_materialized": False,
+                                          "target_conv_weights_materialized": False}, artifacts={})
+        for case in ("invalid", "valid"):
+            for suffix, shape in (("input", report["activation_shape"]), ("cache", report["cache_shape"])):
+                report["artifacts"][f"{case}-{suffix}.bf16"] = {
+                    "dtype": "BF16", "shape": shape, "sha256": "same", "bytes": compare.math.prod(shape) * 2}
+        return report
+
+    def test_real_activation_without_independent_prefix_cannot_pass_candidate_gate(self):
+        (self.root / "manifest.json").write_text(json.dumps(self.prefix_manifest()))
+        result, passed = compare.compare(self.root, "order0-lanes1-tree0", False, False)
+        self.assertTrue(result["required_candidate_passed"])
+        self.assertFalse(result["controls_passed"])
+        self.assertFalse(passed)
+
+    def test_full_prefix_wrong_provenance_or_old_cache_rejects_even_with_passing_samples(self):
+        manifest = self.prefix_manifest()
+        oracle = self.root / "prefix-oracle"
+        oracle.mkdir()
+        report = self.prefix_report(manifest)
+        (oracle / "upstream-prefix.json").write_text(json.dumps(report))
+        transport = {"cold_cache_all_zero": True, "cached_input_is_previous_activation_tail": True}
+        with patch.object(compare, "file_digest", return_value="same"), patch.object(compare, "causal_cache_invariant", return_value=transport):
+            self.assertTrue(compare.authenticate_prefix(self.root, manifest, oracle)[1])
+            report["reference_sha256"] = "c" * 64
+            (oracle / "upstream-prefix.json").write_text(json.dumps(report))
+            self.assertFalse(compare.authenticate_prefix(self.root, manifest, oracle)[1])
+        report["reference_sha256"] = "a" * 64
+        (oracle / "upstream-prefix.json").write_text(json.dumps(report))
+        with patch.object(compare, "file_digest", side_effect=lambda p, _: "changed" if p == oracle / "valid-cache.bf16" else "same"), patch.object(compare, "causal_cache_invariant", return_value=transport):
+            result, passed = compare.authenticate_prefix(self.root, manifest, oracle)
+            self.assertFalse(passed)
+            self.assertFalse(result["files"]["valid-cache.bf16"]["bitwise_equal"])
+
+    def test_nested_lineage_and_artifact_claims_cannot_be_hidden_by_equal_bytes(self):
+        manifest = self.prefix_manifest()
+        oracle = self.root / "prefix-oracle"
+        oracle.mkdir()
+        mutations = [
+            lambda r: r.update(schema="unknown/v1"),
+            lambda r: r["checkpoint"].update(sha256="0" * 64),
+            lambda r: r["upstream"].update(revision="0" * 40),
+            lambda r: r["native_weight_cache"].update(selected_prefix_tensor_count=89),
+            lambda r: r["reference"].update(lineage_audit_sha256="0" * 64),
+            lambda r: r["prefix_weight_load"].update(later_decoder_weights_materialized=True),
+            lambda r: r["artifacts"]["valid-cache.bf16"].update(sha256="0" * 64),
+        ]
+        transport = {"cold_cache_all_zero": True, "cached_input_is_previous_activation_tail": True}
+        for i, mutate in enumerate(mutations):
+            with self.subTest(mutation=i):
+                report = self.prefix_report(manifest)
+                mutate(report)
+                (oracle / "upstream-prefix.json").write_text(json.dumps(report))
+                with patch.object(compare, "file_digest", return_value="same"), patch.object(compare, "causal_cache_invariant", return_value=transport):
+                    result, passed = compare.authenticate_prefix(self.root, manifest, oracle)
+                    self.assertFalse(passed)
+                    self.assertTrue(all(v["bitwise_equal"] for v in result["files"].values()))
+
+    def test_prefix_extent_and_unsupported_capture_boundary_are_rejected(self):
+        path = self.root / "tiny.bf16"
+        path.write_bytes(b"\x80\x3f")
+        with self.assertRaisesRegex(ValueError, "extent"):
+            compare.file_digest(path, 4)
+        manifest = self.prefix_manifest()
+        manifest["activation_prefix"]["target_conv"] = "decoder.stages.2.op_list.2.main.conv1.conv"
+        with self.assertRaisesRegex(ValueError, "boundary"):
+            compare.authenticate_prefix(self.root, manifest, None)
+
+    def test_old_cache_is_previous_ncthw_tail_not_overwritten_current_tail(self):
+        compare.write_raw(self.root / "invalid-input.bf16", "H", [1, 2, 3, 4, 5, 6])
+        compare.write_raw(self.root / "invalid-cache.bf16", "H", [0, 0])
+        compare.write_raw(self.root / "valid-cache.bf16", "H", [3, 6])
+        self.assertTrue(compare.causal_cache_invariant(self.root, [1, 2, 3, 1, 1])["cached_input_is_previous_activation_tail"])
+        (self.root / "valid-cache.bf16").write_bytes(b"\x01\x00\x04\x00")
+        self.assertFalse(compare.causal_cache_invariant(self.root, [1, 2, 3, 1, 1])["cached_input_is_previous_activation_tail"])
 
 
 if __name__ == "__main__":

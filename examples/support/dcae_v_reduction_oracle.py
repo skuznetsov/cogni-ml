@@ -31,7 +31,9 @@ def load(torch, path, dtype, shape):
 def save(torch, tensor, path):
     if path.exists():
         raise FileExistsError(path)
-    bits = tensor.detach().to("cpu").contiguous().view(torch.uint16).reshape(-1)
+    if tensor.device.type != "cpu":
+        raise RuntimeError("Exports must use the already completed terminal transfer")
+    bits = tensor.detach().contiguous().view(torch.uint16).reshape(-1)
     path.write_bytes(ctypes.string_at(bits.data_ptr(), bits.numel() * 2))
 
 
@@ -67,14 +69,26 @@ def main() -> None:
     exec(compile(ast.Module(body=functions, type_ignores=[]), str(UPSTREAM), "exec"), scope)
     conv = scope["_custom_conv3d"]
     root = args.root
-    x = load(torch, root / "input.bf16", torch.uint16, shape)
     cache_shape = (1, 512, 1, shape[3], shape[4])
-    cache = load(torch, root / "cache.bf16", torch.uint16, cache_shape)
+    real_prefix = m.get("activation_prefix")
+    if real_prefix:
+        if shape != (1, 512, 40, 72, 128) or real_prefix["tile_count"] != 2:
+            raise ValueError("Unadmitted real-activation prefix")
+        inputs = [load(torch, root / f"{case}-input.bf16", torch.uint16, shape)
+                  for case in ("invalid", "valid")]
+        caches = [load(torch, root / f"{case}-cache.bf16", torch.uint16, cache_shape)
+                  for case in ("invalid", "valid")]
+    else:
+        x = load(torch, root / "input.bf16", torch.uint16, shape)
+        cache = load(torch, root / "cache.bf16", torch.uint16, cache_shape)
+        inputs, caches = [x, x], [cache, cache]
     weight = load(torch, root / "weight.bf16", torch.uint16, (512, 512, 3, 3, 3))
     bias = load(torch, root / "bias.bf16", torch.uint16, (1, 512, 1, 1, 1))
     zeros = torch.zeros(cache_shape, dtype=torch.bfloat16, device="mps")
     outputs = []
-    for case, left in (("invalid", zeros), ("valid", cache)):
+    for index, case in enumerate(("invalid", "valid")):
+        x = inputs[index]
+        left = caches[index] if index else zeros
         indices = load(torch, root / f"{case}-indices.u32", torch.int32, (m["samples"],)).to(torch.int64)
         joined = torch.cat((left, x, zeros), dim=2)
         pre = conv(joined, weight, None, (1, 1, 1), (0, 1, 1), (1, 1, 1), 1)
@@ -90,12 +104,12 @@ def main() -> None:
         if any(t.device.type != "mps" for t in (sampled_pre, sampled_post, sampled_biased)):
             raise RuntimeError("Sampling left the GPU")
         outputs.append((case, sampled_pre, sampled_post, sampled_biased))
-    # Evidence exports are the sole host tensor transfers, after both GPU
-    # operator cases have been enqueued. No checkpoint or full model is loaded.
-    for case, pre, post, biased in outputs:
-        save(torch, pre, root / f"torch-{case}-pre.bf16")
-        save(torch, post, root / f"torch-{case}-post.bf16")
-        save(torch, biased, root / f"torch-{case}-biased.bf16")
+    # One terminal transfer after both GPU operator cases. This diagnostic
+    # process is separate from the native chain and never native timing.
+    packed = torch.stack([tensor for _, *values in outputs for tensor in values]).to("cpu")
+    for index, (case, _, _, _) in enumerate(outputs):
+        for offset, name in enumerate(("pre", "post", "biased")):
+            save(torch, packed[index * 3 + offset], root / f"torch-{case}-{name}.bf16")
         index_path = root / f"torch-{case}-indices.u32"
         if index_path.exists():
             raise FileExistsError(index_path)
@@ -103,7 +117,9 @@ def main() -> None:
     report = {"schema": "dcae_conv3d_reduction_upstream_operator/v1", "torch_version": torch.__version__,
               "upstream_path": str(UPSTREAM), "upstream_sha256": UPSTREAM_SHA,
               "executed_functions": sorted(names), "shape": shape, "device": "mps", "cpu_fallback": False,
-              "scope": "Pinned upstream Conv3D function with BF16 causal concat and separate bias; same Apple backend, sampled evidence only; no native timing or full-model inference"}
+              "terminal_tensor_transfers": 1, "explicit_mps_synchronizations": 0,
+              "activation_prefix": real_prefix,
+              "scope": "Pinned upstream Conv3D function on the identical native-exported input/cache, with BF16 causal concat and separate bias; same Apple backend, sampled evidence only; no native timing, prefix authentication or full-model inference"}
     target = root / "upstream-operator.json"
     if target.exists():
         raise FileExistsError(target)

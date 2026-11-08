@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from array import array
 from fractions import Fraction
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,119 @@ import sys
 
 ATOL = RTOL = 2e-5
 VECTOR_K, VECTOR_COUNT = 32, 256
+PREFIX_TARGET = "decoder.stages.2.op_list.1.main.conv1.conv"
+PREFIX_UPSTREAM_SHA = "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+PREFIX_UPSTREAM_REVISION = "911cea6458a89c2663513ff7099561ec190dd491"
+PREFIX_CHECKPOINT_SHA = "ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b"
+PREFIX_LINEAGE_SHA = "7961bd5f4ed32793e83ddd5eb5e982c49a3958d647f5718046ce3f867eaa256c"
+PREFIX_SOURCE_REFERENCE_SHA = "0e873cba80446ef26920469ef3c1700f6e1686d021fb35b973872de4e383c2c7"
+PREFIX_INPUT_SHA = "43081cf72cc0feda5edff7531f449209a542a2fb8d5ba8ae15d3067a06462a3c"
+
+
+def prefix_report_consistency(reference: dict, expected: dict) -> dict:
+    """Check pinned report claims; source/launch receipts establish execution separately."""
+    checkpoint = reference.get("checkpoint", {})
+    cache = reference.get("native_weight_cache", {})
+    source = reference.get("upstream", {})
+    fixture = reference.get("reference", {})
+    loaded = reference.get("prefix_weight_load", {})
+    return {
+        "schema": reference.get("schema") == "cogni_ml.dcae_v_activation_prefix_upstream/v1",
+        "flat_boundary": all(reference.get(k) == v for k, v in expected.items()),
+        "original_checkpoint": checkpoint.get("sha256") == PREFIX_CHECKPOINT_SHA,
+        "original_upstream": (source.get("revision") == PREFIX_UPSTREAM_REVISION and
+                              source.get("module_sha256") == PREFIX_UPSTREAM_SHA),
+        "native_cache_join": (cache.get("sha256") == expected["weights_sha256"] and
+                              cache.get("selected_prefix_tensor_count") == 90 and
+                              cache.get("selected_prefix_bytes_bitwise_joined_to_original_checkpoint") == 2096936960),
+        "reference_lineage": (fixture.get("sha256") == expected["reference_sha256"] and
+                              fixture.get("tensor") == "input.latent" and
+                              fixture.get("tensor_dtype") == "BF16" and
+                              fixture.get("tensor_shape") == [1, 32, 20, 9, 16] and
+                              fixture.get("tensor_sha256") == PREFIX_INPUT_SHA and
+                              fixture.get("lineage_audit_sha256") == PREFIX_LINEAGE_SHA and
+                              fixture.get("full_source_reference_sha256") == PREFIX_SOURCE_REFERENCE_SHA),
+        "bounded_weight_load": (loaded.get("materialized_tensor_count") == 90 and
+                                loaded.get("materialized_bf16_bytes") == 2096936960 and
+                                loaded.get("encoder_weights_materialized") is False and
+                                loaded.get("later_decoder_weights_materialized") is False and
+                                loaded.get("target_conv_weights_materialized") is False),
+    }
+
+
+def file_digest(path: Path, expected_bytes: int) -> str:
+    if path.stat().st_size != expected_bytes:
+        raise ValueError(f"Wrong full prefix tensor extent: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def causal_cache_invariant(root: Path, shape: list[int]) -> dict:
+    """Audit old-cache transport after drain, independent of either prefix."""
+    batch, channels, frames, height, width = shape
+    if batch != 1 or frames < 2:
+        raise ValueError("Unsupported cache audit geometry")
+    frame_bytes = height * width * 2
+    with (root / "invalid-cache.bf16").open("rb") as stream:
+        cold_zero = all(not any(chunk) for chunk in iter(lambda: stream.read(1024 * 1024), b""))
+    tail = hashlib.sha256()
+    with (root / "invalid-input.bf16").open("rb") as stream:
+        for channel in range(channels):
+            stream.seek((channel * frames + frames - 1) * frame_bytes)
+            raw_frame = stream.read(frame_bytes)
+            if len(raw_frame) != frame_bytes:
+                raise ValueError("Truncated first prefix activation")
+            tail.update(raw_frame)
+    cached_sha = file_digest(root / "valid-cache.bf16", channels * frame_bytes)
+    return {"cold_cache_all_zero": cold_zero, "previous_activation_tail_sha256": tail.hexdigest(),
+            "old_cache_sha256": cached_sha, "cached_input_is_previous_activation_tail": tail.hexdigest() == cached_sha}
+
+
+def authenticate_prefix(root: Path, manifest: dict, oracle: Path | None) -> tuple[dict | None, bool]:
+    """Post-drain, full-byte prefix check, separate from sampled operator checks."""
+    prefix = manifest.get("activation_prefix")
+    if not prefix:
+        if oracle is not None:
+            raise ValueError("Prefix oracle supplied for a synthetic fixture")
+        return None, True
+    expected = {"reference_path": prefix["reference_path"], "reference_sha256": prefix["reference_sha256"],
+                "target_conv": PREFIX_TARGET, "tile_count": 2,
+                "activation_shape": [1, 512, 40, 72, 128], "cache_shape": [1, 512, 1, 72, 128],
+                "weights_sha256": manifest["weights_sha256"], "upstream_sha256": PREFIX_UPSTREAM_SHA}
+    if (manifest["shape"] != expected["activation_shape"] or
+            any(prefix.get(k) != expected[k] for k in ("target_conv", "tile_count", "activation_shape", "cache_shape"))):
+        raise ValueError("Unadmitted native prefix boundary")
+    result = {"scope": "Full BF16 bytes for each real prefix activation and the OLD target cache, independent of Conv3D output samples",
+              "required": True, "provenance_matches": False, "files": {}}
+    if oracle is None or not (oracle / "upstream-prefix.json").is_file():
+        result["failure"] = "Separate upstream prefix evidence is required"
+        return result, False
+    reference = json.loads((oracle / "upstream-prefix.json").read_text())
+    result["reported_lineage_checks"] = prefix_report_consistency(reference, expected)
+    result["provenance_matches"] = all(result["reported_lineage_checks"].values())
+    result["execution_evidence"] = "Report consistency is not proof of execution; use the separate pinned source/launch receipts"
+    ok = result["provenance_matches"]
+    for case in ("invalid", "valid"):
+        for suffix, shape in (("input", expected["activation_shape"]), ("cache", expected["cache_shape"])):
+            name = f"{case}-{suffix}.bf16"
+            size = math.prod(shape) * 2
+            actual_sha, reference_sha = file_digest(root / name, size), file_digest(oracle / name, size)
+            equal = actual_sha == reference_sha
+            artifact = reference.get("artifacts", {}).get(name, {})
+            metadata_matches = (artifact.get("bytes") == size and artifact.get("dtype") == "BF16" and
+                                artifact.get("shape") == shape and artifact.get("sha256") == reference_sha)
+            result["files"][name] = {"bytes": size, "native_sha256": actual_sha,
+                                     "upstream_sha256": reference_sha, "bitwise_equal": equal,
+                                     "upstream_artifact_record_matches": metadata_matches}
+            ok &= equal and metadata_matches
+    transport = causal_cache_invariant(root, expected["activation_shape"])
+    result["causal_cache_transport"] = transport
+    ok &= transport["cold_cache_all_zero"] and transport["cached_input_is_previous_activation_tail"]
+    result["passed"] = bool(ok)
+    return result, bool(ok)
 
 
 def raw(path: Path, code: str, count: int) -> array:
@@ -150,7 +264,8 @@ def metrics(actual, reference, indices, lo=0, hi=None) -> dict:
             "first_failures": first}
 
 
-def compare(root: Path, require_candidate: str | None, require_upstream: bool, positive_control: bool) -> tuple[dict, bool]:
+def compare(root: Path, require_candidate: str | None, require_upstream: bool, positive_control: bool,
+            prefix_oracle: Path | None = None) -> tuple[dict, bool]:
     m = json.loads((root / "manifest.json").read_text())
     if m["schema"] != "dcae_conv3d_reduction_probe/v1" or m["samples"] != 8192 or m["uniform_samples"] != 4096:
         raise ValueError("Unsupported probe schema/sampling geometry")
@@ -162,8 +277,11 @@ def compare(root: Path, require_candidate: str | None, require_upstream: bool, p
     vector_failures = {"bf16": sum(a != b for a, b in zip(vector_pre, expected["bf16"], strict=True)),
                        "f32": sum(a != b for a, b in zip(vector_raw, expected["f32"], strict=True))}
     controls_ok = not any(vector_failures.values()) and m["terminal_waits"] == 1 and all(v == 0 for v in m["hot_metrics"].values())
+    prefix_report, prefix_ok = authenticate_prefix(root, m, prefix_oracle)
+    controls_ok &= prefix_ok
     result = {"schema": "dcae_conv3d_reduction_comparison/v1", "atol": ATOL, "rtol": RTOL,
-              "shape": m["shape"], "sampling": m["sampling"], "exact_vector_failures": vector_failures, "cases": {}}
+              "shape": m["shape"], "sampling": m["sampling"], "exact_vector_failures": vector_failures,
+              "activation_prefix": prefix_report, "cases": {}}
     required_ok = True
     positive_failures = 0
     for case in ("invalid", "valid"):
@@ -226,7 +344,8 @@ def compare(root: Path, require_candidate: str | None, require_upstream: bool, p
                   required_candidate_passed=bool(required_ok) if require_candidate else None,
                   ordered_fma_positive_control_failures=positive_failures,
                   gate_passed=bool(controls_ok and require_candidate is not None and required_ok),
-                  scope="Synthetic real-geometry operator; sampled native evidence only. No hidden MPS schedule, real-activation, full-model or speedup claim.")
+                  scope=("Real decoder-prefix operator inputs, independently authenticated in full; sampled native reductions only. No hidden MPS schedule, full-decoder or speedup claim."
+                         if prefix_report and prefix_ok else "Synthetic or unauthenticated real-geometry operator; sampled native evidence only. No hidden MPS schedule, real-activation parity, full-model or speedup claim."))
     return result, result["gate_passed"]
 
 
@@ -239,6 +358,7 @@ def main() -> int:
     mode.add_argument("--observe-only", action="store_true", help="Exit status checks controls; never a candidate gate pass")
     parser.add_argument("--require-upstream", action="store_true")
     parser.add_argument("--positive-control", action="store_true")
+    parser.add_argument("--prefix-oracle", type=Path, help="Separate upstream full-prefix activation/cache exports; required for real inputs")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.make_vectors:
@@ -246,7 +366,7 @@ def main() -> int:
         return 0
     if not args.require_candidate and not args.observe_only:
         parser.error("Choose --require-candidate NAME or --observe-only explicitly")
-    result, passed = compare(args.root, args.require_candidate, args.require_upstream, args.positive_control)
+    result, passed = compare(args.root, args.require_candidate, args.require_upstream, args.positive_control, args.prefix_oracle)
     result["mode"] = "observation-only" if args.observe_only else "required-candidate"
     encoded = json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n"
     if args.report:

@@ -39656,3 +39656,39 @@ Refresh after source/toolchain/device/model/workload changes.
   activation/cache from a bounded decoder-prefix run, then the same declared
   comparison, without full generation. Refresh on source/binary/runtime,
   weights, input/geometry/cache, sampling/rounding or measurement-policy changes.
+
+### 2026-11-08 — DCAE stage-2 reductions on authenticated real activations
+
+- The opt-in reduction probe now executes two sequential ten-latent decoder
+  prefixes on its existing GPU chain, stopping before stage-2 residual conv1.
+  The 90 loaded BF16 prefix tensors are byte-joined to the original checkpoint.
+  Both full C512/T40/H72/W128 activations and both OLD causal caches match a
+  fresh pinned upstream prefix bitwise (773,849,088 bytes). Cold cache zero and
+  previous-activation last-frame transport are independently checked after drain.
+- Full MPS original/multi-output and F32-rounded/BF16 controls pass on every
+  188,743,680 output values per cache case. Fresh upstream pre/post-bias and
+  original biased-Conv3D checks match all 8,192 sampled values per case.
+  All 18 F32 schedules and the exact reference still fail atol=rtol=2e-5.
+  Exact failures are 1,910/1,911: 5/2 stratified and 1,905/1,909 deliberately
+  midpoint-selected, with zero boundary failures. These are selected counts,
+  not full-tensor prevalence. Exact-to-F32-to-BF16 still fails 1,893/1,877;
+  staged rounding alone cannot reproduce upstream arithmetic.
+- Native named residency is 5,945,318,352 bytes; the sampled group peak is
+  7.878 GiB. The separate upstream prefix/operator peaks are 7.106/4.561 GiB.
+  All runs preserve the cache-aware 10% reserve and zero observed swap growth.
+  One terminal drain and zero named hot allocations/readbacks/preterminal
+  waits remain; opaque MPS/driver activity is not thereby excluded.
+- Fourteen comparator, four oracle and 44 guard tests plus two native contract
+  examples pass. Nine post-drain CLI checks distinguish controls from candidate
+  passage and reject missing provenance, wrong nested checkpoint, and an equal
+  corrupted cache on both sides. Report metadata consistency is separate from
+  the observed source-pinned execution receipts. The correlated adversary
+  verdict covers this diagnostic only, not backend independence or speedup.
+- No production decoder default, numerical tolerance or full-generation scope
+  changed. The diagnostic interval is not a Conv3D benchmark. Return pointers:
+  docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-real-stage2-reduction.json. Native reduction
+  parity/performance remain open. Next falsifier: fixed-shape sparse K masks
+  separating inner-tile and outer-partial accumulation, then a held-out tile;
+  kernel-selection changes remain a confound. Refresh on source/binary/runtime,
+  weights, fixture, geometry, capture/cache, rounding or sampling-policy changes.

@@ -1,0 +1,554 @@
+{
+  "adversary": {
+    "attacks": [
+      "Cold-cache zero and previous-activation channelwise final-frame invariant independently checked.",
+      "Both candidates fail real and small control gates even while operator controls pass.",
+      "Wrong flat provenance, nested checkpoint, absent oracle and identical corrupted cache on both sides are rejected.",
+      "Fresh source-pinned model execution and actual full payloads are distinct from report schema consistency.",
+      "Staged-rounding equality and selected-point scores do not identify hidden upstream arithmetic or establish speedup."
+    ],
+    "correlation": "Same-lineage source/math/comparator reviews are correlated, not independent backend evidence.",
+    "residuals": [
+      "The comparator permits synthetic comparisons when both prefix metadata and --prefix-oracle are absent; it is not a general real-input gate.",
+      "The comparator cross-compares fixture hashes in reports; separate pinned launch/oracle execution authenticates the actual whole fixture.",
+      "Only two prefix tiles and one retained latent fixture are tested."
+    ],
+    "scope": "Recorded real-prefix diagnostic comparison with explicit upstream and prefix-oracle arguments.",
+    "verdict": "ROBUST"
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/2026-11-08-dcae-real-stage2-reduction.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_reduction_probe.cr",
+      "examples/support/dcae_v_activation_prefix.cr",
+      "examples/support/dcae_v_activation_prefix_oracle.py",
+      "examples/support/dcae_v_reduction_compare.py",
+      "examples/support/dcae_v_reduction_oracle.py",
+      "spec/dcae_v_activation_prefix_spec.cr",
+      "spec/dcae_v_activation_prefix_oracle_spec.py",
+      "spec/dcae_v_reduction_compare_spec.py"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/2026-11-08-dcae-real-stage2-reduction.json",
+      "LANDMARKS.md",
+      "Makefile",
+      "docs/dcae-v-decoder-frontier.md",
+      "examples/dcae_v_reduction_probe.cr",
+      "examples/support/dcae_v_activation_prefix.cr",
+      "examples/support/dcae_v_activation_prefix_oracle.py",
+      "examples/support/dcae_v_reduction_compare.py",
+      "examples/support/dcae_v_reduction_oracle.py",
+      "spec/dcae_v_activation_prefix_spec.cr",
+      "spec/dcae_v_activation_prefix_oracle_spec.py",
+      "spec/dcae_v_reduction_compare_spec.py"
+    ],
+    "unchanged": [
+      "src/ production implementations/defaults",
+      "atol=rtol=2e-5",
+      "10% reserve",
+      "No full generation"
+    ]
+  },
+  "claim": {
+    "level": "VERIFIED",
+    "not_claimed": [
+      "Full decoder or generated-video parity",
+      "Hidden Apple BF16 accumulator/reduction schedule",
+      "Full-tensor native candidate error prevalence",
+      "Backend independence from Apple MPS",
+      "No opaque MPS allocations, driver waits or between-poll spikes",
+      "Single-convolution speed, generation rate or visual-quality improvement"
+    ],
+    "reduction_and_performance_objective": "IN_PROGRESS: no optimized production arithmetic or speedup admitted.",
+    "scope": "Opt-in diagnostic on two sequential decoder-prefix tiles, stopping before stage-2 residual conv1. Full stage-2 inputs and OLD caches match a fresh pinned upstream prefix bitwise; MPS operator controls pass; all 19 sampled native reduction candidates fail unchanged tolerances."
+  },
+  "cleanup": {
+    "audit": {
+      "availability": "local retained evidence",
+      "bytes": 1002757,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/cleanup.json",
+      "sha256": "5dd4e9d2e0dfc413e95cbb1b4ec6b2f1f2ee53327975119ea22124148978b598"
+    },
+    "preserved": "Weights, final executable/source archives, current raw replay data and preexisting user bytecode directories.",
+    "retired_payload_bytes": 67967350,
+    "script": {
+      "availability": "local retained evidence",
+      "bytes": 1899,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/cleanup.py",
+      "sha256": "3fb62a3ec954b20c2e72d21b9f58b2a10917fce99daf04a0135d67e1afec1971"
+    }
+  },
+  "comparison": {
+    "all_candidate_report": {
+      "availability": "local retained evidence",
+      "bytes": 330736,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/real-observed-final.json",
+      "sha256": "14b98b4fef172d6bae3df51b4aa54f134c777afbb62ca91fc24887b53ce56304"
+    },
+    "atol": 2e-05,
+    "cache_cases": [
+      "cold tile with zero OLD cache",
+      "following tile with previous activation final-frame OLD cache"
+    ],
+    "cache_shape": [
+      1,
+      512,
+      1,
+      72,
+      128
+    ],
+    "candidate_count": 19,
+    "candidate_tolerance_failures": {
+      "invalid": {
+        "exact-integer": {
+          "boundary": 0,
+          "near_midpoint": 1905,
+          "post": 1874,
+          "pre": 1910,
+          "stratified": 5
+        },
+        "order0-lanes1-tree0": {
+          "boundary": 0,
+          "near_midpoint": 1850,
+          "post": 1814,
+          "pre": 1855,
+          "stratified": 5
+        }
+      },
+      "valid": {
+        "exact-integer": {
+          "boundary": 0,
+          "near_midpoint": 1909,
+          "post": 1865,
+          "pre": 1911,
+          "stratified": 2
+        },
+        "order0-lanes1-tree0": {
+          "boundary": 0,
+          "near_midpoint": 1944,
+          "post": 1900,
+          "pre": 1947,
+          "stratified": 3
+        }
+      }
+    },
+    "candidates_passing_both_cases": 0,
+    "capture": "Before first stage-2 residual conv1, after stage-2 upsample; no invented pre-convolution RMS/SiLU.",
+    "exact_vectors": {
+      "bf16_failures": 0,
+      "count": 256,
+      "expected": "Independent Python Fraction bit patterns; setup/post-drain checking only on CPU.",
+      "f32_failures": 0,
+      "k": 32
+    },
+    "fixture_scope": "Authenticated byte prefix of a retained full upstream reference; not a newly sampled DiT distribution.",
+    "full_native_control_elements_per_case": 188743680,
+    "full_prefix_payloads": {
+      "causal_cache_transport": {
+        "cached_input_is_previous_activation_tail": true,
+        "cold_cache_all_zero": true,
+        "old_cache_sha256": "d8305d8fef86f74e5257a6290b98f524ab3990815b7b8caaf8f5b64d0c706010",
+        "previous_activation_tail_sha256": "d8305d8fef86f74e5257a6290b98f524ab3990815b7b8caaf8f5b64d0c706010"
+      },
+      "execution_evidence": "Report consistency is not proof of execution; use the separate pinned source/launch receipts",
+      "files": {
+        "invalid-cache.bf16": {
+          "bitwise_equal": true,
+          "bytes": 9437184,
+          "native_sha256": "d2ee4703cd9698945ca7b9fe1689ea3095597eac1a0afd8dba00cac7894fdc43",
+          "upstream_artifact_record_matches": true,
+          "upstream_sha256": "d2ee4703cd9698945ca7b9fe1689ea3095597eac1a0afd8dba00cac7894fdc43"
+        },
+        "invalid-input.bf16": {
+          "bitwise_equal": true,
+          "bytes": 377487360,
+          "native_sha256": "54620719956153868f5c75bcd269fa7e832cc608ef9489675ada5e4d207f86b5",
+          "upstream_artifact_record_matches": true,
+          "upstream_sha256": "54620719956153868f5c75bcd269fa7e832cc608ef9489675ada5e4d207f86b5"
+        },
+        "valid-cache.bf16": {
+          "bitwise_equal": true,
+          "bytes": 9437184,
+          "native_sha256": "d8305d8fef86f74e5257a6290b98f524ab3990815b7b8caaf8f5b64d0c706010",
+          "upstream_artifact_record_matches": true,
+          "upstream_sha256": "d8305d8fef86f74e5257a6290b98f524ab3990815b7b8caaf8f5b64d0c706010"
+        },
+        "valid-input.bf16": {
+          "bitwise_equal": true,
+          "bytes": 377487360,
+          "native_sha256": "52fb8fb971864a8c1f04c2dc99a42b37532c2214363d5a6739935109dd17d8f3",
+          "upstream_artifact_record_matches": true,
+          "upstream_sha256": "52fb8fb971864a8c1f04c2dc99a42b37532c2214363d5a6739935109dd17d8f3"
+        }
+      },
+      "passed": true,
+      "provenance_matches": true,
+      "reported_lineage_checks": {
+        "bounded_weight_load": true,
+        "flat_boundary": true,
+        "native_cache_join": true,
+        "original_checkpoint": true,
+        "original_upstream": true,
+        "reference_lineage": true,
+        "schema": true
+      },
+      "required": true,
+      "scope": "Full BF16 bytes for each real prefix activation and the OLD target cache, independent of Conv3D output samples"
+    },
+    "latent_shape": [
+      1,
+      32,
+      20,
+      9,
+      16
+    ],
+    "rtol": 2e-05,
+    "sample_groups": {
+      "boundary": 512,
+      "midpoint_selected": 4096,
+      "stratified": 3584
+    },
+    "selection_limit": "GPU midpoint selection deliberately enriches rounding-sensitive points; counts are not prevalence estimates.",
+    "shape": [
+      1,
+      512,
+      40,
+      72,
+      128
+    ],
+    "target_conv": "decoder.stages.2.op_list.1.main.conv1.conv",
+    "tile_count": 2,
+    "upstream_operator_points_per_case": 8192
+  },
+  "date": "2026-11-08",
+  "failure_policy": "Do not replace production arithmetic when any real-data candidate gate fails. Do not promote control success to full-model, hidden-backend or performance equivalence.",
+  "falsifier": "Any full input/cache mismatch, incorrect previous-frame transport, provenance inconsistency, nonfinite value or unchanged-tolerance candidate failure blocks the real-data result or that candidate as appropriate.",
+  "guard": {
+    "limits": "Sampled process accounting cannot exclude all between-poll spikes, external compiler services or opaque driver waits.",
+    "policy": "Cache-aware reserve 10%; process-group cap 18 GiB; swap-growth stop 64 MiB; timeout 1200 seconds; serial model jobs.",
+    "receipts": "Exact command configurations, execution receipts and guard logs with digests are indexed by stage in final-audit.json.",
+    "runs": {
+      "native-real": {
+        "min_headroom_bytes": 22772695040,
+        "peak_group_gib": 7.878176331520081,
+        "samples": 115,
+        "source_unchanged": true,
+        "swap_growth_bytes": 0
+      },
+      "native-small-final": {
+        "min_headroom_bytes": 32254689280,
+        "peak_group_gib": 0.07173239439725876,
+        "samples": 7,
+        "source_unchanged": true,
+        "swap_growth_bytes": 0
+      },
+      "upstream-prefix": {
+        "min_headroom_bytes": 24014258176,
+        "peak_group_gib": 7.10563887655735,
+        "samples": 99,
+        "source_unchanged": true,
+        "swap_growth_bytes": 0
+      },
+      "upstream-real": {
+        "min_headroom_bytes": 26464501760,
+        "peak_group_gib": 4.5608997493982315,
+        "samples": 25,
+        "source_unchanged": true,
+        "swap_growth_bytes": 0
+      },
+      "upstream-small-final": {
+        "min_headroom_bytes": 32566231040,
+        "peak_group_gib": 0.12387185543775558,
+        "samples": 4,
+        "source_unchanged": true,
+        "swap_growth_bytes": 0
+      }
+    }
+  },
+  "links": [
+    "docs/dcae-v-decoder-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/2026-11-08-dcae-conv3d-reduction.json"
+  ],
+  "next_falsifier": "Use fixed-shape sparse K masks at authenticated real failing coordinates to distinguish inner-tile and outer-partial F32 accumulation. Treat kernel-selection changes as a confound; test any survivor on a held-out tile. Park further undirected layout/grouping sweeps.",
+  "raw_artifacts": {
+    "availability": "Local artifacts, not portable repository fixtures; a missing artifact invalidates dependent claims until refreshed.",
+    "manifest": {
+      "availability": "local retained evidence",
+      "bytes": 79433,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/artifact-manifest.json",
+      "sha256": "b1a18eef24cc8d0ea73607e6e086de4e488ec8e057006d485ac8ff612ba8c7e0"
+    },
+    "storage": "External SSD only. Full current prefix inputs/caches and compact reduction vectors retained for bounded post-drain reproduction; no all-layer activation dump."
+  },
+  "refresh_triggers": [
+    "Source/binary/runtime changes",
+    "Weights or fixture changes",
+    "Capture boundary, geometry, tile/cache schedule changes",
+    "Rounding/sample policy changes",
+    "Missing or changed retained evidence"
+  ],
+  "risk_tier": "CAUTION",
+  "rollback": "Remove opt-in activation-prefix diagnostic support; production decoder arithmetic and existing synthetic positive control remain available.",
+  "schema": "cogni_ml.dcae_real_stage2_reduction_evidence/v1",
+  "source_base_commit": "4b724d9938289f0c5de72dc01eaba05f1296df8a",
+  "source_pins": {
+    "checkpoint": {
+      "bytes": 4277389995,
+      "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/dcae-source/VAE/DCAE-V/dc-ae-v-1.0-f32t4c32-bf16.pt",
+      "sha256": "ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b"
+    },
+    "lineage": {
+      "bytes": 3339,
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/prefix-lineage-verified.json",
+      "sha256": "7961bd5f4ed32793e83ddd5eb5e982c49a3958d647f5718046ce3f867eaa256c"
+    },
+    "native_weight_cache": {
+      "bytes": 2443982472,
+      "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/dcae-v-native-decoder-ebbee483/decoder-bf16.safetensors",
+      "sha256": "f53c94b06685027b8131b7f52cab519edee1e51287d93d8fdac6a17506f8881b"
+    },
+    "reference": {
+      "bytes": 70963592,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/upstream-prefix20.safetensors",
+      "sha256": "db96ee9247e69b338e3ce8d4ea349404208d6d50d6ba022548751b566632bc4e"
+    },
+    "upstream_module": {
+      "bytes": 63218,
+      "path": "/Volumes/Nata's Data/MLData/models/hy-nomas/upstream-911cea6458a8/hymm/models/vae/autoencoder_dcae_v.py",
+      "sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1"
+    }
+  },
+  "source_state": "Uncommitted diagnostic implementation at execution; exact source/binary pins in successful launch receipts and external source archives. Post-drain comparator hardening has its own final SHA and replay receipt.",
+  "staged_rounding": {
+    "cached": {
+      "bf16_changed": 46,
+      "direct_failures_repaired": 40,
+      "new_failures": 6,
+      "remaining_failures": 1877
+    },
+    "cold": {
+      "bf16_changed": 37,
+      "direct_failures_repaired": 27,
+      "new_failures": 10,
+      "remaining_failures": 1893
+    },
+    "interpretation": "Exact-to-F32-to-BF16 changes observable values but does not reproduce MPS. Equal BF16 outputs alone do not establish equal F32 sums or a general double-rounding cause.",
+    "report": {
+      "availability": "local retained evidence",
+      "bytes": 395033,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/math-analysis.json",
+      "sha256": "5cf920cab406ebd88e6cb4bad0a118f9fa81504af436fee387db2c32d81c856e"
+    },
+    "script": {
+      "availability": "local retained evidence",
+      "bytes": 17858,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/math-analysis.py",
+      "sha256": "073e47bce049bb51144db9126505b0b592246c9605f8e399ae6186c41034e529"
+    }
+  },
+  "synchronization": {
+    "lifetime": "All native named owners/plans/bindings allocated before encoding, retained through the existing chain terminal drain. Prefix activations/caches directly consumed on GPU; exports and CPU comparisons after drain.",
+    "named_bytes": 5945318352,
+    "named_hot_metrics": {
+      "allocations": 0,
+      "preterminal_waits": 0,
+      "readbacks": 0
+    },
+    "terminal_native_waits": 1,
+    "upstream_scope": "Separate serial diagnostic process; sampling on GPU, one packed terminal transfer per process, no explicit MPS synchronization. Not native timing."
+  },
+  "upstream": {
+    "backend_limit": "Original upstream and native MPS controls share the Apple backend; this is not backend-independent replication.",
+    "join_scope": "Every loaded prefix tensor uint16-bitwise compared to native BF16 cache during original-checkpoint execution.",
+    "loaded_prefix_bf16_bytes": 2096936960,
+    "loaded_prefix_tensor_count": 90,
+    "module_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+    "oracle_operator": {
+      "availability": "local retained evidence",
+      "bytes": 1272,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/real/upstream-operator.json",
+      "sha256": "7a534b1929caea5ff7bbfd8547cdf84f99e20c3e5743cdc5f6ef083f40cbfecc"
+    },
+    "oracle_prefix": {
+      "availability": "local retained evidence",
+      "bytes": 7423,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/upstream-prefix/upstream-prefix.json",
+      "sha256": "bc20952e30f81586faf7ae045a3ab2316cf32e047d2901f49ce9972372e82850"
+    },
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "runtime": "PyTorch 2.8.0 on MPS, CPU fallback disabled; pinned original decoder prefix and unmodified Conv3D function ASTs.",
+    "target_weight_export_join": {
+      "availability": "local retained evidence",
+      "bytes": 863,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/target-weight-join.json",
+      "sha256": "6e537a6fe0502edf79b26fad5158c01bf4efe03c39e8a57db813eea0f9cccba5"
+    }
+  },
+  "verification": {
+    "audit_script": {
+      "availability": "local retained evidence",
+      "bytes": 10476,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/final-audit.py",
+      "sha256": "52f287d79a56a3dd34dca21adae08bbcfdca14910cc3aa17f92f9221db4fc093"
+    },
+    "binary": {
+      "availability": "local retained evidence",
+      "bytes": 1324760,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/build/dcae_v_reduction_probe",
+      "sha256": "6ef2f0ec7127f01b715b96186ddd205d2a6890af62f6a9ab5a370385f3521447"
+    },
+    "build_command": "make BUILD_DIR=<run>/build dcae_v_reduction_probe, with TMPDIR, CRYSTAL_CACHE_DIR and CLANG_MODULE_CACHE_PATH under this external run root",
+    "build_exit_code": 0,
+    "build_log": {
+      "availability": "local retained evidence",
+      "bytes": 830,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/build-probe-formatted.log",
+      "sha256": "2f181a70766e5970335d42f755de42ba3e7b234b5079421d98846709bd554039"
+    },
+    "cli_outcomes": [
+      {
+        "controls_passed": true,
+        "expected_exit": 0,
+        "gate_passed": false,
+        "name": "real-observed-final",
+        "observed_exit": 0
+      },
+      {
+        "controls_passed": true,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "small-gate-order0-lanes1-tree0",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": true,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "small-gate-exact-integer",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": true,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "real-gate-order0-lanes1-tree0",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": true,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "real-gate-exact-integer",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": false,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "wrong-provenance",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": false,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "wrong-checkpoint",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": false,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "matching-wrong-cache",
+        "observed_exit": 1
+      },
+      {
+        "controls_passed": false,
+        "expected_exit": 1,
+        "gate_passed": false,
+        "name": "missing-prefix-oracle",
+        "observed_exit": 1
+      }
+    ],
+    "comparison_receipt": {
+      "availability": "local retained evidence",
+      "bytes": 9390,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/final-comparison-receipt.json",
+      "sha256": "3fa3fc2f2e603aa2a401d723e2077d1c9a0922a57f3c159f839017915d8933f2"
+    },
+    "comparison_replay": {
+      "availability": "local retained evidence",
+      "bytes": 3537,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/final-compare.py",
+      "sha256": "1a78d2d04514afe5e3b72fa447bc80084a0a20bad653ca98f139caf6d4b8dc57"
+    },
+    "cpu_tests": [
+      {
+        "command": "/opt/mldata_ssd/runtimes/cogni-ml/hy-nomas-oracle-torch2.8.0/bin/python -B -m unittest spec/dcae_v_reduction_compare_spec.py spec/dcae_v_activation_prefix_oracle_spec.py spec/wan_memory_guard_spec.py",
+        "exit_code": 0,
+        "log": {
+          "availability": "local retained evidence",
+          "bytes": 161,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/python-tests-final.log",
+          "sha256": "3a437749e0a1f0994d3f8f4999fd44fc788f6ac3cf8830c82368920c93aba592"
+        },
+        "tests": 62
+      },
+      {
+        "command": "crystal spec --define cpu_only --error-trace spec/dcae_v_activation_prefix_spec.cr",
+        "examples": 2,
+        "exit_code": 0,
+        "log": {
+          "availability": "local retained evidence",
+          "bytes": 77,
+          "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/crystal-tests.log",
+          "sha256": "58aab2c3bca501d431bb221fec3ddba256a0172af23bbdd98b4451e45c990d50"
+        }
+      }
+    ],
+    "curator": {
+      "availability": "local retained evidence",
+      "bytes": 13726,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/curate-evidence.py",
+      "sha256": "bea80a89922084fcef2f141c94d39c90a91f9670f2680102cbba1891375b5972"
+    },
+    "definition_of_done": [
+      "Release build",
+      "Focused prefix-boundary/comparator/guard tests",
+      "Guarded known-mismatch small control and real two-tile native prefix",
+      "Fresh original-checkpoint upstream prefix and full payload authentication",
+      "Fresh upstream operator on identical native inputs/caches",
+      "Required-candidate and corrupted-provenance CLI failures",
+      "Resource, lifetime, source/digest and cache-transport audit"
+    ],
+    "live_byte_audit": {
+      "availability": "local retained evidence",
+      "bytes": 23565,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/final-audit.json",
+      "sha256": "7d770bb0259d22dd27dfa24405d00b547c3db7ab2bb2fda99e8c9611b9739e59"
+    },
+    "postprocessor_sources": {
+      "examples/support/dcae_v_reduction_compare.py": {
+        "bytes": 21054,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/post-audit-sources/examples/support/dcae_v_reduction_compare.py",
+        "sha256": "98707700fbef46f75423c1d58db6063f965a13f8b017264d9fe72157571c91d9"
+      },
+      "spec/dcae_v_reduction_compare_spec.py": {
+        "bytes": 14313,
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/post-audit-sources/spec/dcae_v_reduction_compare_spec.py",
+        "sha256": "9b4be69c3522110d0517f3200ed1bf99818fe215cda6e3a329376e358a2e8d3c"
+      }
+    },
+    "static_checks": {
+      "availability": "local retained evidence",
+      "bytes": 1963,
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/static-checks.json",
+      "sha256": "23210d0a3d573b4d0e48e8d5b386345863800fe612bc5b46ec8b80c01e669e1a"
+    },
+    "structural_scope": "Skill-referenced evidence template and graph validator are absent. No graph-validator pass is claimed. The live-byte audit checks actual payload/source/report digests and observed receipts; it does not rerun GPU work or prove execution from metadata alone."
+  }
+}

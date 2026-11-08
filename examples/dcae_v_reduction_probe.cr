@@ -4,6 +4,7 @@ require "./support/hy_nomas_probe_instrumentation"
 require "../src/ml/metal/device"
 require "../src/ml/video/bf16_weight_cache"
 require "../src/ml/video/dcae_v_mps"
+require "./support/dcae_v_activation_prefix"
 
 @[Link(ldflags: "-framework Metal -framework Foundation -framework MetalPerformanceShaders -framework MetalPerformanceShadersGraph")]
 lib DCAEReductionFFI
@@ -30,10 +31,12 @@ module DCAEReductionProbe
   VECTOR_COUNT    =  256
   SOURCE          = {{ read_file("#{__DIR__}/support/dcae_v_reduction_probe.metal") }} + "\n" + {{ read_file("#{__DIR__}/support/dcae_v_reduction_native.metal") }}
 
-  private record Args, weights : String, sha : String, output : String, vectors : String, small : Bool
+  private record Args, weights : String, sha : String, output : String, vectors : String,
+    small : Bool, reference : String, reference_sha : String
 
   private def parse_args : Args
     weights, sha, output, vectors, small, admitted = DEFAULT_WEIGHTS, DEFAULT_SHA, "", "", false, false
+    reference, reference_sha = "", ""
     OptionParser.parse do |p|
       p.banner = "Usage: dcae_v_reduction_probe --admitted --output DIR --vectors DIR [--small-fixture]"
       p.on("--weights PATH", "Pinned BF16 checkpoint") { |v| weights = v }
@@ -41,13 +44,20 @@ module DCAEReductionProbe
       p.on("--output DIR", "Fresh absolute output directory") { |v| output = v }
       p.on("--vectors DIR", "Exact-reference validation vectors") { |v| vectors = v }
       p.on("--small-fixture", "Retained H3/W5 ordered-FMA positive control") { small = true }
+      p.on("--activation-prefix PATH", "Authenticated two-tile decoder reference for real stage-2 inputs") { |v| reference = v }
+      p.on("--activation-prefix-sha256 SHA", "Two-tile reference hash") { |v| reference_sha = v }
       p.on("--admitted", "Required external guard admission") { admitted = true }
       p.on("-h", "--help", "Show help") { puts p; exit }
     end
     raise ArgumentError.new("Guard admission is required") unless admitted
     raise ArgumentError.new("Absolute paths and a lowercase checkpoint hash are required") unless {weights, output, vectors}.all? { |v| Path[v].absolute? } && sha.matches?(/\A[0-9a-f]{64}\z/)
     raise ArgumentError.new("Output must be fresh; vectors must exist") if File.exists?(output) || !File.directory?(vectors)
-    Args.new(weights, sha, output, vectors, small)
+    if !reference.empty? || !reference_sha.empty?
+      unless !small && Path[reference].absolute? && reference_sha.matches?(/\A[0-9a-f]{64}\z/)
+        raise ArgumentError.new("Real activations require a pinned absolute reference and full geometry")
+      end
+    end
+    Args.new(weights, sha, output, vectors, small, reference, reference_sha)
   end
 
   private def words(values : Array(UInt32)) : ML::MetalBuffer
@@ -164,6 +174,8 @@ module DCAEReductionProbe
     cache_count = CHANNELS * h * w
     Dir.mkdir(args.output)
     checkpoint = ML::Video::BF16WeightCache.authenticate(args.weights, args.sha)
+    reference = nil.as(ML::Video::CheckpointFile?)
+    prefix = nil.as(DCAEVActivationPrefix?)
     arena = ML::Video::Arena.new
     prepared = nil.as(ML::Video::PreparedWeights?)
     buffers = [] of ML::MetalBuffer
@@ -173,6 +185,10 @@ module DCAEReductionProbe
     plans = [] of ReductionPlan
     chain = nil.as(ML::Metal::MPSCommandChain?)
     begin
+      unless args.reference.empty?
+        reference = ML::Video::BF16WeightCache.authenticate(args.reference, args.reference_sha)
+        prefix = DCAEVActivationPrefix.new(checkpoint, reference.not_nil!)
+      end
       weight_shape = [512_i64, 512_i64, 3_i64, 3_i64, 3_i64]
       bias_shape = [512_i64]
       bindings = [
@@ -196,7 +212,13 @@ module DCAEReductionProbe
         buffers << b
         b
       end
-      input, cache = alloc.call(count.to_i64 * 2), alloc.call(cache_count.to_i64 * 2)
+      if actual = prefix
+        inputs = [actual.activation(0), actual.activation(1)]
+        caches = [actual.old_cache(0), actual.old_cache(1)]
+      else
+        input, cache = alloc.call(count.to_i64 * 2), alloc.call(cache_count.to_i64 * 2)
+        inputs, caches = [input, input], [cache, cache]
+      end
       original, pre, post = alloc.call(count.to_i64 * 2), alloc.call(count.to_i64 * 2), alloc.call(count.to_i64 * 2)
       f32 = alloc.call(count.to_i64 * 4)
       fill_input = params.call([count.to_u32, 0x2026_u32, args.small ? 0_u32 : 1_u32])
@@ -227,7 +249,8 @@ module DCAEReductionProbe
           alloc.call(SAMPLES.to_i64 * 2), alloc.call(SAMPLES.to_i64 * 4), candidates)
       end
 
-      cases.each do |item|
+      cases.each_with_index do |item, index|
+        input, cache = inputs[index], caches[index]
         t = ML::Video::DCAEVConvMPS::Template.new(1, CHANNELS, CHANNELS, CHANNELS,
           FRAMES, FRAMES, h, w, 0, false, true, item.valid, true, 1, 1, false)
         baseline_templates << t
@@ -250,18 +273,22 @@ module DCAEReductionProbe
         name = "dcae_reduce_#{suffix}"
         kernels[suffix] = ML::Metal::ComputePipeline.new(name, SOURCE, name)
       end
-      named_bytes = buffers.sum(&.size) + arena.resident_bytes
+      named_bytes = buffers.sum(&.size) + arena.resident_bytes + (prefix.try(&.named_bytes) || 0_i64)
+      raise "Diagnostic named residency exceeds the admitted 6 GiB plan" if named_bytes > 6_i64 * 1024 * 1024 * 1024
       active = chain = ML::Metal::MPSCommandChain.new
       allocations_before = ML::MetalBuffer.hy_text_probe_allocations
       readbacks_before = ML::MetalBuffer.hy_text_probe_readbacks
       prepared.encode(active.encoder)
       e = active.encoder
-      e.set_pipeline(kernels["fill"]).set_buffer(input, 0, ML::Metal::BufferAccess::Write).set_buffer(fill_input, 1).dispatch_1d(count)
-      e.set_pipeline(kernels["fill"]).set_buffer(cache, 0, ML::Metal::BufferAccess::Write).set_buffer(fill_cache, 1).dispatch_1d(cache_count)
+      unless prefix
+        e.set_pipeline(kernels["fill"]).set_buffer(inputs[0], 0, ML::Metal::BufferAccess::Write).set_buffer(fill_input, 1).dispatch_1d(count)
+        e.set_pipeline(kernels["fill"]).set_buffer(caches[0], 0, ML::Metal::BufferAccess::Write).set_buffer(fill_cache, 1).dispatch_1d(cache_count)
+      end
       e.set_pipeline(kernels["exact_vectors"]).set_buffer(vector_x, 0).set_buffer(vector_w, 1)
       e.set_buffer(vector_raw, 2, ML::Metal::BufferAccess::Write).set_buffer(vector_pre, 3, ML::Metal::BufferAccess::Write)
       e.set_buffer(vector_params, 4).dispatch_1d(VECTOR_COUNT, 64)
       cases.each_with_index do |item, index|
+        prefix.try(&.encode_tile(active, index))
         baseline_plans[index].encode(active)
         plans[index * 2].encode(active)
         plans[index * 2 + 1].encode(active)
@@ -282,7 +309,7 @@ module DCAEReductionProbe
         e.set_buffer(gather_params, 9).dispatch_1d(SAMPLES)
         item.candidates.each do |candidate|
           native(active, kernels[candidate.name == "exact-integer" ? "exact" : "native"],
-            input, cache, weight, bias, candidate, item.indices)
+            inputs[index], caches[index], weight, bias, candidate, item.indices)
         end
       end
       hot = {allocations:       ML::MetalBuffer.hy_text_probe_allocations - allocations_before,
@@ -292,9 +319,19 @@ module DCAEReductionProbe
       active.commit_and_wait
       raise "Expected sole terminal drain" unless active.wait_count == 1 && active.drained?
       checkpoint.unchanged!
-      {"input.bf16" => input, "cache.bf16" => cache, "weight.bf16" => weight,
+      reference.try(&.unchanged!)
+      {"weight.bf16" => weight,
        "bias.bf16" => bias, "vectors.f32" => vector_raw, "vectors.bf16" => vector_pre}.each do |name, b|
         export_raw(File.join(args.output, name), b)
+      end
+      if prefix
+        cases.each_with_index do |item, index|
+          export_raw(File.join(args.output, "#{item.name}-input.bf16"), inputs[index])
+          export_raw(File.join(args.output, "#{item.name}-cache.bf16"), caches[index])
+        end
+      else
+        export_raw(File.join(args.output, "input.bf16"), inputs[0])
+        export_raw(File.join(args.output, "cache.bf16"), caches[0])
       end
       cases.each do |item|
         {"indices.u32" => item.indices, "full-stats.u32" => item.stats, "original.bf16" => item.original,
@@ -311,15 +348,20 @@ module DCAEReductionProbe
         schema: "dcae_conv3d_reduction_probe/v1", weights_path: args.weights, weights_sha256: args.sha,
         weight_tensor: WEIGHT, bias_tensor: BIAS, shape: [1, CHANNELS, FRAMES, h, w],
         weight_shape: weight_shape, samples: SAMPLES, uniform_samples: UNIFORM, boundary_samples: 512,
-        input_kind: args.small ? "legacy periodic synthetic BF16 positive control" : "GPU hash seeded finite BF16 synthetic real-geometry input",
-        input_seed: 0x2026, cache_seed: 0x0512, named_bytes: named_bytes,
+        input_kind: prefix ? "Real BF16 stage-2 activations from two causal decoder-prefix tiles" : (args.small ? "legacy periodic synthetic BF16 positive control" : "GPU hash seeded finite BF16 synthetic real-geometry input"),
+        activation_prefix: prefix ? {
+          reference_path: args.reference, reference_sha256: args.reference_sha,
+          target_conv: "decoder.stages.2.op_list.1.main.conv1.conv", tile_count: 2,
+          activation_shape: [1, CHANNELS, FRAMES, h, w], cache_shape: [1, CHANNELS, 1, h, w],
+        } : nil,
+        input_seed: prefix ? nil : 0x2026, cache_seed: prefix ? nil : 0x0512, named_bytes: named_bytes,
         candidates: cases.first.candidates.map(&.name), hot_metrics: hot, terminal_waits: active.wait_count,
         graph_roots: active.segment_count, diagnostic_gpu_seconds: active.gpu_elapsed_seconds,
         vectors_directory: args.vectors, vector_k: VECTOR_K, vector_count: VECTOR_COUNT,
         full_stats: ["original-vs-multi-post-bit", "original-vs-multi-post-tolerance", "bf16-nonfinite",
                      "mps-f32-rounded-vs-pre-bit", "mps-f32-rounded-vs-pre-tolerance", "f32-nonfinite"],
         sampling: "512 boundary + 3584 stratified + 4096 GPU-selected near-BF16-midpoint coordinates; not unbiased error prevalence",
-        scope: "Full-shape MPS operators; sampled native reductions on synthetic input. No actual activation, hidden-MPS-accumulator, speedup or full-decoder parity claim.",
+        scope: prefix ? "Bounded real decoder-prefix activations and full-shape MPS operators; sampled native reductions. Requires separate upstream prefix authentication. No hidden-MPS-accumulator, speedup or full-decoder parity claim." : "Full-shape MPS operators; sampled native reductions on synthetic input. No actual activation, hidden-MPS-accumulator, speedup or full-decoder parity claim.",
       }
       File.write(File.join(args.output, "manifest.json"), manifest.to_json + "\n")
       puts manifest.to_json
@@ -328,10 +370,12 @@ module DCAEReductionProbe
         active.commit_and_wait unless active.drained?
         plans.each(&.release(active))
         baseline_plans.each(&.release(active))
+        prefix.try(&.release(active))
         active.release
       else
         plans.each(&.release)
         baseline_plans.each(&.release)
+        prefix.try(&.release)
       end
       templates.each(&.release)
       baseline_templates.each(&.release)
@@ -339,6 +383,7 @@ module DCAEReductionProbe
       arena.release
       buffers.each(&.release)
       checkpoint.close
+      reference.try(&.close)
     end
   end
 end

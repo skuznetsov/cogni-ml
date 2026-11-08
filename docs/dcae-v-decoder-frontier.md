@@ -1,7 +1,9 @@
 # Original DCAE-V native decoder frontier
 
 Status: native opt-in decoder and full-context BF16 parity verified;
-Conv3D profiling implemented, with no admitted performance gain yet.
+Conv3D profiling implemented, with no admitted performance gain yet. The bounded
+stage-2 real-activation reduction comparison is verified; no native replacement
+has passed its unchanged upstream gate.
 
 ## Goal and boundary
 
@@ -415,3 +417,107 @@ running only the decoder prefix, then repeat the same declared comparisons.
 This tests distribution dependence without a full generation. Do not promote
 the weak score advantage of one grouping or repeat layout sweeps as evidence
 of an identified reduction schedule.
+
+## Real-activation stage-2 prefix probe, 2026-11-08
+
+Design boundary: execute only the first two complete ten-latent tiles of the
+authenticated decoder input through the entry to
+`decoder.stages.2.op_list.1.main.conv1.conv`. Preserve the existing prefix
+arithmetic and causal cache schedule. The cold tile and the following cached
+tile must have their own activation buffers; do not substitute synthetic
+history into the first activation and call it a real second tile. The target
+input is BF16 `[1,512,40,72,128]`; its old cache is `[1,512,1,72,128]`.
+
+This is a CAUTION, opt-in diagnostic extension. Strongest failure mode:
+capturing the cache after it was overwritten, or interpreting prefix error as
+Conv3D reduction error. The guard checks are full BF16 input/cache comparison
+against an independently executed pinned upstream prefix, followed by a
+separate upstream operator call on the identical exported native input/cache.
+The latter is a post-drain diagnostic process, not an intermediate transfer in
+the connected native path or independent evidence about Apple's backend.
+
+The native prefix and reduction consumers share GPU buffers on one existing
+chain. Allocate owners, graph bindings and outputs before execution; retain
+them until its sole terminal drain. Require zero named hot allocations,
+readbacks and preterminal waits. Retain the synthetic small fixture as the
+known-mismatch instrument control, rather than assuming real activations
+must reproduce the same mismatch. Report boundary, stratified and midpoint
+samples separately at unchanged `atol=rtol=2e-5`.
+
+Before launch, compute named residency and admit a process cap plus the 10%
+cache-aware reserve in the existing external guard; retain the 64 MiB
+swap-growth stop and bounded timeout. Run native and upstream jobs serially.
+No full decoder, DiT, generation, default arithmetic change or speedup claim
+is admitted. Rollback removes the new opt-in prefix/diagnostic entry points;
+the existing complete-decoder path and synthetic control remain available.
+
+DoD: focused prefix-boundary and comparator falsifiers, release probe build,
+guarded real-activation native and upstream prefix runs, full input/cache
+authentication, unchanged-tolerance sampled reduction comparison on identical
+inputs, and a resource/synchronization adversary audit. Refresh on changes to
+source, binary, runtime, weights, input, tile/cache schedule, capture boundary
+or sample selection.
+
+The final release probe and fresh upstream runs now complete inside the guard.
+The prefix materializes only 90 original BF16 tensors (2,096,936,960 bytes),
+bitwise joined to the native decoder cache. Both full stage-2 activations and
+both old-cache buffers match upstream bitwise: 773,849,088 BF16 payload bytes
+in total. The cold cache is all zero; the cached tile's old cache equals the
+channelwise final temporal frame of the preceding activation. Target weight
+and bias exports separately match their exact checkpoint payloads. The latent
+fixture is the authenticated prefix of a retained full reference, not a new
+DiT-generated distribution or a complete decoder invocation.
+
+All full native MPS controls pass on 188,743,680 output values per case.
+The fresh pinned upstream operator matches all 8,192 sampled pre/post-bias
+values per case, including its biased Conv3D call versus separate BF16 bias
+addition. All 18 native F32 schedules and the exact-integer reference still
+fail at unchanged `atol=rtol=2e-5`:
+
+| Pre-bias tolerance failures | Cold tile | Following cached tile |
+| --- | ---: | ---: |
+| Ordered FMA: boundary / stratified / midpoint | 0 / 5 / 1,850 | 0 / 3 / 1,944 |
+| Exact integer: boundary / stratified / midpoint | 0 / 5 / 1,905 | 0 / 2 / 1,909 |
+
+The sample groups contain 512 / 3,584 / 4,096 coordinates respectively.
+The midpoint group is deliberately enriched; these are not error-prevalence
+estimates. Exact accumulation staged through F32 changes 37/46 BF16 values,
+repairs 27/40 direct-exact failures, and introduces 10/6 new failures.
+It still fails on 1,893/1,877 coordinates. Staged rounding changes observable
+values without identifying a general cause; equal BF16 results alone do not
+establish equal F32 sums. Mathematical exactness does not identify the upstream
+reduction schedule. A grouping's score on these selected points
+is not a candidate for promotion without a held-out check.
+
+The connected native prefix and reductions retain one terminal drain and zero
+instrumented named hot allocations/readbacks/preterminal waits. Named GPU
+residency is 5,945,318,352 bytes. Sampled process-group peaks are 7.878 GiB for
+native prefix plus diagnostics, 7.106 GiB for the separate upstream prefix,
+and 4.561 GiB for the separate operator oracle. All preserve the cache-aware
+10% reserve with zero observed swap growth. Sampling cannot exclude opaque
+driver/compiler waits or between-poll spikes. The diagnostic interval includes
+the prefix, multiple full convolutions, sampling and 19 native candidates;
+it is neither a single-convolution benchmark nor a generation-rate estimate.
+
+The final comparator checks report schema, nested pinned source/checkpoint,
+cache joins, reference lineage and artifact records as well as full payloads.
+Report consistency is not execution proof: separate source-pinned launcher
+receipts record the observed runs. Nine CLI checks reject ordered/exact
+candidate promotion, absent prefix evidence, altered flat/nested provenance,
+and a matching corrupted cache whose previous-frame invariant fails.
+Fourteen comparator, four upstream-prefix and 44 memory-guard tests pass,
+as do two native CPU prefix-contract examples. The correlated source/evidence
+adversary is scoped to this diagnostic; no production arithmetic is replaced.
+Every recorded real comparison supplies `--require-upstream --prefix-oracle`.
+The CLI still permits synthetic comparisons when both prefix metadata and
+the oracle argument are absent; it is not a general real-input admission gate.
+Whole-fixture authentication comes from the separately pinned launch and oracle
+execution, rather than metadata consistency alone.
+The curated result is
+`.landmark/evidence/2026-11-08-dcae-real-stage2-reduction.json`.
+
+Next discriminator: isolate inner-tile versus outer-partial F32 accumulation
+at the real failing coordinates, using sparse K masks while holding the full
+operator geometry fixed. Any kernel-selection change remains a confound.
+Test a surviving formulation on a separate tile before promotion. Further
+layout/grouping sweeps without a discriminating arithmetic probe are parked.
