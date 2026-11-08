@@ -380,4 +380,70 @@ describe HyNomasSequence do
       HyNomasSequence.validate_t0_history_keep_argument!(11)
     end
   end
+
+  it "admits source-BF16 generated T0 only as a strict unmasked two-segment control" do
+    HyNomasSequence.validate_source_bf16_initialization!(
+      source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
+      segments: 2)
+    HyNomasSequence.validate_source_bf16_initialization!(
+      source_bf16: true, reference_latent_bytes: 0_i64, segments: 2,
+      generated_t0_control: true)
+
+    expect_raises(ArgumentError, /requires two-segment reference initialization/) do
+      HyNomasSequence.validate_source_bf16_initialization!(
+        source_bf16: true, reference_latent_bytes: 0_i64, segments: 2)
+    end
+
+    {
+      {source_bf16: false, reference_latent_bytes: 0_i64, segments: 2},
+      {source_bf16: true, reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES, segments: 2},
+      {source_bf16: true, reference_latent_bytes: 0_i64, segments: 3},
+    }.each do |bounds|
+      expect_raises(ArgumentError, /generated T0 source-BF16 control/) do
+        HyNomasSequence.validate_source_bf16_initialization!(
+          **bounds, generated_t0_control: true)
+      end
+    end
+
+    expect_raises(ArgumentError, /generated T0 source-BF16 control/) do
+      HyNomasSequence.validate_source_bf16_initialization!(
+        source_bf16: true, reference_latent_bytes: 0_i64, segments: 2,
+        generated_t0_control: true,
+        text_cache_policy: ML::Video::HyNomasContinuationHistory::TextCachePolicy::PerChunk)
+    end
+
+    expect_raises(ArgumentError, /generated T0 source-BF16 control/) do
+      HyNomasSequence.validate_source_bf16_initialization!(
+        source_bf16: true, reference_latent_bytes: 0_i64, segments: 2,
+        generated_t0_control: true, t0_key_visible_latents: 30)
+    end
+
+    expect_raises(ArgumentError, /generated T0 source-BF16 control/) do
+      HyNomasSequence.validate_source_bf16_initialization!(
+        source_bf16: true, reference_latent_bytes: 0_i64, segments: 2,
+        generated_t0_control: true, prepare_capture: true)
+    end
+  end
+
+  it "admits generated portrait T0 only for keep-30 with ordinary unmasked history" do
+    HyNomasSequence.validate_portrait_t0_context!("repeated-photo", 10,
+      t0_hide_caption_keys: true)
+    HyNomasSequence.validate_portrait_t0_context!("generated", 30)
+    [10, 0].each do |visible|
+      expect_raises(ArgumentError, /generated T0 context requires keep=30/) do
+        HyNomasSequence.validate_portrait_t0_context!("generated", visible)
+      end
+    end
+    expect_raises(ArgumentError, /generated T0 context requires keep=30/) do
+      HyNomasSequence.validate_portrait_t0_context!("generated", 30,
+        t0_hide_caption_keys: true)
+    end
+    expect_raises(ArgumentError, /generated T0 context requires keep=30/) do
+      HyNomasSequence.validate_portrait_t0_context!("generated", 30,
+        t1_current_text_kv: true)
+    end
+    expect_raises(ArgumentError, /T0 context must be repeated-photo or generated/) do
+      HyNomasSequence.validate_portrait_t0_context!("photo", 30)
+    end
+  end
 end

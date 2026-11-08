@@ -363,26 +363,76 @@ module HyNomasSequence
       4320 + query_text_tokens(inputs, prompt_edit, reference_action: reference_action), 16, 128, 256, 16).resident_bytes
   end
 
+  def validate_portrait_t0_context!(mode : String, visible_latents : Int32,
+                                    t0_hide_caption_keys : Bool = false,
+                                    t1_current_text_kv : Bool = false) : Nil
+    unless {"repeated-photo", "generated"}.includes?(mode)
+      raise ArgumentError.new("T0 context must be repeated-photo or generated")
+    end
+    return unless mode == "generated"
+    unless visible_latents == 30 && !t0_hide_caption_keys && !t1_current_text_kv
+      raise ArgumentError.new("generated T0 context requires keep=30 with no T0 history masks")
+    end
+  end
+
+  def validate_source_bf16_initialization!(*,
+                                           source_bf16 : Bool,
+                                           reference_latent_bytes : Int64,
+                                           segments : Int32,
+                                           generated_t0_control : Bool = false,
+                                           text_cache_policy = HISTORY_TEXT_POLICY,
+                                           cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                                           prepare_capture : Bool = false,
+                                           noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
+                                           prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                                           reference_action : ML::Video::HyNomasReferenceAction? = nil,
+                                           t0_key_visible_latents : Int32? = nil,
+                                           t0_hide_caption_keys : Bool = false,
+                                           t1_current_text_kv : Bool = false) : Nil
+    if generated_t0_control
+      unless source_bf16 && reference_latent_bytes == 0 && segments == 2 &&
+             text_cache_policy.once_per_scene? && !cinematic && !prepare_capture &&
+             !noise_edit && !prompt_edit && !reference_action &&
+             t0_key_visible_latents.nil? && !t0_hide_caption_keys && !t1_current_text_kv
+        raise ArgumentError.new("generated T0 source-BF16 control requires two unmasked segments, shared once-per-scene text, no reference latent, and no edits, LoRA, captures, actions, or checkpoint profiles")
+      end
+      return
+    end
+    if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
+      raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
+    end
+  end
+
   # Include the temporarily coexisting original attention plan while the
   # prepared provider is attached. Steady residency subtracts that old plan.
   def peak_named_bytes(inputs : HyNomasGeneration::TimelineInputs, segments : Int32,
                        text_cache_policy = HISTORY_TEXT_POLICY, *,
                        prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                       noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
                        reference_action : ML::Video::HyNomasReferenceAction? = nil,
                        reference_latent_bytes : Int64 = 0_i64,
                        source_bf16 : Bool = false,
+                       generated_t0_control : Bool = false,
+                       cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                       prepare_capture : Bool = false,
                        t0_key_visible_latents : Int32? = nil,
                        t0_hide_caption_keys : Bool = false,
                        t1_current_text_kv : Bool = false) : Int64
     unless reference_latent_bytes == 0 || reference_latent_bytes == REFERENCE_LATENT_BYTES
       raise ArgumentError.new("reference latent residency must match the fixed BF16 DCAE T0 extent")
     end
-    if source_bf16 && (reference_latent_bytes == 0 || segments != 2 || prompt_edit)
-      raise ArgumentError.new("Source BF16 requires two-segment reference initialization")
-    end
+    validate_source_bf16_initialization!(source_bf16: source_bf16,
+      reference_latent_bytes: reference_latent_bytes, segments: segments,
+      generated_t0_control: generated_t0_control, text_cache_policy: text_cache_policy,
+      cinematic: cinematic, prepare_capture: prepare_capture,
+      noise_edit: noise_edit, prompt_edit: prompt_edit, reference_action: reference_action,
+      t0_key_visible_latents: t0_key_visible_latents,
+      t0_hide_caption_keys: t0_hide_caption_keys, t1_current_text_kv: t1_current_text_kv)
     validate_t0_history_admission!(t0_key_visible_latents, t0_hide_caption_keys, t1_current_text_kv,
       source_bf16: source_bf16, reference_latent_bytes: reference_latent_bytes, segments: segments,
-      text_cache_policy: text_cache_policy, prompt_edit: prompt_edit, reference_action: reference_action)
+      text_cache_policy: text_cache_policy, cinematic: cinematic,
+      prepare_capture: prepare_capture, noise_edit: noise_edit,
+      prompt_edit: prompt_edit, reference_action: reference_action)
     if !t0_key_visible_latents.nil? || t0_hide_caption_keys || t1_current_text_kv
       t0_history_attention_profiles(inputs.base.valid_text_tokens, t0_key_visible_latents.not_nil!,
         t0_hide_caption_keys: t0_hide_caption_keys,
@@ -584,6 +634,9 @@ module HyNomasSequence
     getter named_bytes : Int64
     getter peak_named_bytes : Int64
     getter segment_count : Int32
+    getter generated_t0_control : Bool
+    getter t0_denoise_steps : Int32
+    getter t0_cache_writer_forwards : Int32
     getter t0_key_visible_latents : Int32?
     getter t0_hide_caption_keys : Bool
     getter t1_current_text_kv : Bool
@@ -602,6 +655,9 @@ module HyNomasSequence
     @history : ML::Video::HyNomasContinuationHistory
     @timeline_ops : ML::Video::HyNomasTimelineOps::Plan
     @reference_latent : ML::MetalBuffer?
+    @generated_t0_control = false
+    @t0_denoise_steps = 0
+    @t0_cache_writer_forwards = 0
     @latent : ML::MetalBuffer
     @timeline : ML::MetalBuffer
     @chain : ML::Metal::MPSCommandChain? = nil
@@ -631,12 +687,14 @@ module HyNomasSequence
                    @reference_action_inputs : HyNomasGeneration::Inputs? = nil,
                    reference_latent : ML::MetalBuffer? = nil,
                    source_bf16 : Bool = false,
+                   generated_t0_control : Bool = false,
                    @t0_key_visible_latents : Int32? = nil,
                    @t0_hide_caption_keys : Bool = false,
                    @t1_current_text_kv : Bool = false)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
       @reference_latent = reference_latent
+      @generated_t0_control = generated_t0_control
       if reference = reference_latent
         unless reference.valid? && reference.size == HyNomasSequence::REFERENCE_LATENT_BYTES
           raise ArgumentError.new("reference initialization requires an exact-size caller-owned BF16 DCAE latent")
@@ -645,6 +703,15 @@ module HyNomasSequence
           raise ArgumentError.new("reference initialization does not support Cinematic, captures, edits, or legacy text caching")
         end
       end
+      HyNomasSequence.validate_source_bf16_initialization!(source_bf16: source_bf16,
+        reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
+        segments: @segment_count, generated_t0_control: @generated_t0_control,
+        text_cache_policy: text_cache_policy, cinematic: cinematic,
+        prepare_capture: prepare_capture, noise_edit: @noise_edit, prompt_edit: @prompt_edit,
+        reference_action: @reference_action,
+        t0_key_visible_latents: @t0_key_visible_latents,
+        t0_hide_caption_keys: @t0_hide_caption_keys,
+        t1_current_text_kv: @t1_current_text_kv)
       HyNomasSequence.validate_t0_history_admission!(@t0_key_visible_latents, @t0_hide_caption_keys,
         @t1_current_text_kv,
         source_bf16: source_bf16,
@@ -672,7 +739,7 @@ module HyNomasSequence
       if (@noise_edit || @prompt_edit) && !text_cache_policy.once_per_scene?
         raise ArgumentError.new("Segment edits require the admitted once-per-scene policy")
       end
-      if text_cache_policy.once_per_scene? && !cinematic && !@reference_latent
+      if text_cache_policy.once_per_scene? && !cinematic && !@reference_latent && !@generated_t0_control
         (1...@segment_count).each do |next_segment|
           @checkpoint_contracts[next_segment] = HyNomasSequence.checkpoint_contract(inputs, @segment_count, next_segment, @noise_edit, @prompt_edit)
           @checkpoint_inventories[next_segment] = HyNomasSequence.checkpoint_inventory(inputs, @segment_count, next_segment, @prompt_edit)
@@ -684,6 +751,8 @@ module HyNomasSequence
       @peak_named_bytes = HyNomasSequence.peak_named_bytes(inputs, @segment_count, text_cache_policy,
         prompt_edit: @prompt_edit, reference_action: @reference_action,
         reference_latent_bytes: reference_latent.try(&.size) || 0_i64, source_bf16: source_bf16,
+        generated_t0_control: @generated_t0_control,
+        cinematic: cinematic, prepare_capture: prepare_capture, noise_edit: @noise_edit,
         t0_key_visible_latents: @t0_key_visible_latents,
         t0_hide_caption_keys: @t0_hide_caption_keys,
         t1_current_text_kv: @t1_current_text_kv)
@@ -831,6 +900,7 @@ module HyNomasSequence
           raise ArgumentError.new("sequence allocation/admission mismatch: #{actual} != #{@named_bytes}")
         end
         HyNomasGeneration.emit("sequence_prepared", named_bytes: actual, segments: @segment_count,
+          generated_t0_control: @generated_t0_control,
           history_precision: source_bf16 ? "F32 storage of source-BF16 post-RoPE K/V" : "F32 exact native cache boundary",
           t0_key_visible_latents: @t0_key_visible_latents,
           t0_hide_caption_keys: @t0_hide_caption_keys,
@@ -876,6 +946,10 @@ module HyNomasSequence
            !capture_steps.nil? || !after_boundary.nil?
           raise ArgumentError.new("reference initialization requires generated T1 and does not support captures or boundary callbacks")
         end
+      end
+      if @generated_t0_control && (stop_after_segments != @segment_count || !capture_segment.nil? ||
+         !captures.nil? || !capture_steps.nil? || !after_boundary.nil?)
+        raise ArgumentError.new("Generated T0 source-BF16 control requires the complete uncheckpointed two-segment run")
       end
       if edit = @prompt_edit
         if @next_segment < edit.target_segment
@@ -924,6 +998,7 @@ module HyNomasSequence
         encode_refiner(chain, 0)
         @serial.encode(chain)
         @timeline_ops.record_cache_forward_enqueued!(chain, 0)
+        @t0_cache_writer_forwards += 1
         @timeline_ops.advance_segment!(chain, 0)
         @next_segment = 1
         HyNomasGeneration.emit("sequence_reference_initialized",
@@ -943,6 +1018,7 @@ module HyNomasSequence
           @serial.encode(chain)
           @final.encode(chain)
           @eulers[segment].encode_update(chain, step)
+          @t0_denoise_steps += 1 if segment == 0
           if capture_segment == segment && captures
             @capture_copy.not_nil!.encode(chain.encoder, @latent, captures[step],
               (@latent.size // sizeof(Float32)).to_i32, 0)
@@ -962,6 +1038,7 @@ module HyNomasSequence
           encode_refiner(chain, segment)
           @serial.encode(chain)
           @timeline_ops.record_cache_forward_enqueued!(chain, segment)
+          @t0_cache_writer_forwards += 1 if segment == 0
         end
         @timeline_ops.advance_segment!(chain, segment)
         @next_segment = segment + 1
@@ -1116,6 +1193,9 @@ module HyNomasSequence
     end
 
     private def reject_reference_checkpoint! : Nil
+      if @generated_t0_control
+        raise ArgumentError.new("Generated T0 source-BF16 control does not support checkpoint or restore")
+      end
       if @reference_latent
         raise ArgumentError.new("Reference-initialized sequences do not support checkpoint or restore")
       end

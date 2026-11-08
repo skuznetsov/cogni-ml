@@ -516,6 +516,86 @@ Refresh on source/runtime/binary/weights/input/noise/schedule/geometry changes
 or evidence loss. Rollback: omit the zero-visible history probe. Evidence:
 [.landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json](../.landmark/evidence/2026-11-07-hy-nomas-t0-all-hidden.json).
 
+### Repeated-photo versus generated T0 context (2026-11-07)
+
+The opt-in portrait probe now accepts `--t0-context repeated-photo|generated`.
+The default remains repeated-photo. Generated mode admits exactly two
+source-BF16 segments, once-per-scene text and ordinary unmasked attention;
+it rejects reference initialization, history masks, edits, actions, LoRA,
+captures and checkpoint/restore. Its T0 starts from the saved initial noise,
+runs four Euler steps, then writes the ordinary T0 cache before T1. The
+photo control uses the accepted DCAE repeated-photo latent and one cache
+writer without denoising T0. Neither arm appends a final T1 cache writer.
+T1 retains Q=4,583 and K=8,903. No `src/` kernel or production default changes.
+
+Both arms freeze the prompt, saved Qwen states, original BF16 weights,
+T1 noise, segment30 RoPE, cache-writer epsilon/timestep, four-step Euler
+schedule and decoder inputs. The newly built photo arm reproduces the
+accepted entire latent bank byte-for-byte. The source-BF16 generated T0
+uses ordinary text-to-video initialization, **without the photograph**.
+This is a comparison of two context packages, not an isolated motion-only
+intervention or a photo-likeness correction. Four steps are the experiment's
+override; the pinned upstream default is eight.
+
+Against pinned `911cea6458a89c2663513ff7099561ec190dd491`, native and
+Torch 2.8 MPS match bit-for-bit on all 138,240 F32 values of each T0 and
+T1 endpoint in both arms, at unchanged `atol=rtol=2e-5`. Generated source
+T0 is independently denoised from the frozen noise, not imported from the
+native endpoint. Photo T0 is the previously accepted DCAE endpoint rather
+than a new DCAE execution. Each same-arm cyclic90 PixelUMM T1 crop matches
+Torch 2.6 MPS bit-for-bit on all 53,084,160 finite values at the same tolerance.
+The decoder uses ten-latent windows, five-latent overlap and display crop
+`[120,240)`. Repeated last-T1 latents only supply diagnostic future context;
+the full90 display is not a generated three-segment video.
+
+The actual-byte verifier reconstructs T0, T1, prefix60 and cyclic90 from
+each native channel-major bank and joins the corresponding source endpoints,
+decoder receipts, full native output and source crop bytes. Recorded negative
+probes reject opposite-arm prefix60, cyclic90 and RGB substitutions in both
+directions. Recorded commands, current source bytes, interpreter and inference
+binary identities are checked. Earlier sidecars lack launch-time command
+digests and transitive-helper hashes; the unchanged helpers match their
+recorded HEAD/current bytes. Reused decoder binary historical source/object
+provenance is outside scope. This is local execution/current-artifact
+consistency, not tamperproof historical attestation.
+
+Root and the correlated reviewer inspected all 120 T1 face frames per arm
+and selected T0 frames. Generated T0 shows a head turn, but depicts a
+visibly different man. Both T1s remain nearly static through most of the
+five seconds; an eyelid change appears only near frames 113-119. Sustained
+acting, a natural blink and restored likeness are not established. Reject
+this context substitution as a motion correction for this fixture. It does
+not identify the cause of weak motion: identity, initialization and preceding
+action state differ. The user's likeness objection remains unresolved.
+
+Forty-two Python tests, 36 Crystal examples, the release probe build, Ruff,
+Crystal formatting and actual-byte gates pass. Native DiT sampled peaks
+are 24.16/24.17 GiB and native PixelUMM peaks are 18.81/18.81 GiB. The
+cache-aware reserve stays at 10%, with zero observed swap growth. Native
+instrumented preterminal allocation/readback/wait counts are 0/0/0, with
+one terminal wait per inference stage; opaque MPS allocations are excluded.
+Source model compute uses MPS with CPU fallback disabled. CPU hashing,
+negative comparisons and MP4 packaging run after terminal transfers and
+are outside model compute. No inference speedup is claimed.
+
+The correlated read-only adversary returned ROBUST for this bounded
+implementation, same-arm parity, artifact binding and negative visual result.
+The skill-referenced graph validator/template are absent; no structural
+validator success is claimed. Retired 345,345,526 bytes of owned intermediate
+captures and compiler cache, preserving weights, frozen inputs, binaries,
+compact endpoints, pixels, receipts, indexes and review media. Intermediate
+replay requires recapture; the endpoint audit remains available.
+
+Next history-specific discriminator: compare a generated moving T0 with a
+staticized copy of its final frame, passing both through the same DCAE path
+and freezing T1 inputs. This would reduce the identity/endpoint-pose confound;
+it remains proposed and needs fresh admission and a memory plan. A distinct
+T1 action/continuation prompt is a separate untested hypothesis. Neither
+should be conflated with photo identity conditioning. Rollback: omit the new
+mode and diagnostic probe. Refresh on source/runtime/binary/weights/input/
+noise/schedule/geometry changes or evidence loss. Evidence:
+[.landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json](../.landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json).
+
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
 diagonal preference on three held-out frames of one authenticated T0 pass,

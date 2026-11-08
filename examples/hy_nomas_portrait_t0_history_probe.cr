@@ -28,6 +28,7 @@ module HyNomasPortraitT0HistoryProbe
     baseline_bank_path : String,
     baseline_bank_sha : String,
     output_dir : String,
+    t0_context_mode : String,
     keep_t0_latents : Int32,
     hide_t0_caption_keys : Bool,
     t1_current_text_kv : Bool,
@@ -124,7 +125,9 @@ module HyNomasPortraitT0HistoryProbe
 
   def output_checks!(bank_path : String, timeline : ML::MetalBuffer,
                      baseline : Bytes, keep_t0_latents : Int32,
-                     hide_t0_caption_keys : Bool = false) : NamedTuple(
+                     hide_t0_caption_keys : Bool = false,
+                     t0_context_mode : String = "repeated-photo",
+                     t1_current_text_kv : Bool = false) : NamedTuple(
     t0_sha256_matches_baseline: Bool,
     t1_sha256_matches_baseline: Bool,
     t0_sha256: String,
@@ -136,9 +139,12 @@ module HyNomasPortraitT0HistoryProbe
     expected = logical_prefix_digests(baseline)
     raise ArgumentError.new("native output latent bank was not written") unless File.file?(bank_path)
     t0_matches = actual[:t0_sha256] == expected[:t0_sha256]
-    raise ArgumentError.new("native DiT changed the authenticated clean T0 prefix") unless t0_matches
+    if t0_context_mode == "repeated-photo" && !t0_matches
+      raise ArgumentError.new("native DiT changed the authenticated clean T0 prefix")
+    end
     t1_matches = actual[:t1_sha256] == expected[:t1_sha256]
-    if keep_t0_latents == 30 && !hide_t0_caption_keys && !t1_matches
+    if t0_context_mode == "repeated-photo" && keep_t0_latents == 30 &&
+       !hide_t0_caption_keys && !t1_current_text_kv && !t1_matches
       raise ArgumentError.new("all-visible T1 A/A latent digest differs from the saved native baseline")
     end
     {
@@ -167,6 +173,7 @@ module HyNomasPortraitT0HistoryProbe
     bank_path = BASELINE_BANK
     bank_sha = BASELINE_BANK_SHA
     output_dir = ""
+    t0_context_mode = "repeated-photo"
     keep_t0_latents = -1
     hide_t0_caption_keys = false
     t1_current_text_kv = false
@@ -180,6 +187,7 @@ module HyNomasPortraitT0HistoryProbe
       p.on("--baseline-receipt-sha SHA", "Trusted saved baseline receipt SHA-256") { |v| receipt_sha = v }
       p.on("--baseline-bank PATH", "Saved native full latent bank") { |v| bank_path = v }
       p.on("--baseline-bank-sha SHA", "Trusted saved baseline bank SHA-256") { |v| bank_sha = v }
+      p.on("--t0-context MODE", "T0 input: repeated-photo (default) or generated") { |v| t0_context_mode = v }
       p.on("--keep-t0-latents N", "30 for all-visible, 10 for recent-only, or 0 for the all-video-hidden T1-text control") { |v| keep_t0_latents = v.to_i }
       p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader") { hide_t0_caption_keys = true }
       p.on("--t1-current-text-kv", "Expose current T1 text K/V after hiding T0 caption keys") { t1_current_text_kv = true }
@@ -188,6 +196,8 @@ module HyNomasPortraitT0HistoryProbe
       p.on("--plan-only", "Authenticate inputs and emit CPU-only memory plan") { plan_only = true }
     end
     HyNomasSequence.validate_t0_history_keep_argument!(keep_t0_latents)
+    HyNomasSequence.validate_portrait_t0_context!(t0_context_mode, keep_t0_latents,
+      hide_t0_caption_keys, t1_current_text_kv)
     HyNomasSequence.validate_t0_history_visibility!(keep_t0_latents, hide_t0_caption_keys,
       t1_current_text_kv)
     unless (18_432..49_152).includes?(budget_mib)
@@ -195,7 +205,7 @@ module HyNomasPortraitT0HistoryProbe
     end
     raise ArgumentError.new("--output-dir is required unless --plan-only is used") if output_dir.empty? && !plan_only
     Args.new(inputs_path, inputs_sha, receipt_path, receipt_sha, bank_path, bank_sha,
-      output_dir, keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv,
+      output_dir, t0_context_mode, keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv,
       budget_mib, plan_only)
   end
 
@@ -217,29 +227,44 @@ module HyNomasPortraitT0HistoryProbe
     validate_t0_bf16_expansion!(baseline)
     baseline_t0_t1_digests = logical_prefix_digests(baseline)
     admission = HyNomasGeneration.authenticate_bf16_index
-    HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents,
-      t0_hide_caption_keys: args.hide_t0_caption_keys,
-      t1_current_text_kv: args.t1_current_text_kv)
+    generated_t0 = args.t0_context_mode == "generated"
+    t0_key_visible_latents = if generated_t0 ||
+                                (args.keep_t0_latents == 30 && !args.hide_t0_caption_keys && !args.t1_current_text_kv)
+                               nil.as(Int32?)
+                             else
+                               args.keep_t0_latents
+                             end
+    unless generated_t0
+      HyNomasSequence.t0_history_attention_profiles(inputs.base.valid_text_tokens, args.keep_t0_latents,
+        t0_hide_caption_keys: args.hide_t0_caption_keys,
+        t1_current_text_kv: args.t1_current_text_kv)
+    end
     video_key_rows = t0_video_key_row_counts(args.keep_t0_latents)
     dit_plan = HyNomasSequence.peak_named_bytes(inputs, 2,
-      reference_latent_bytes: HyNomasSequence::REFERENCE_LATENT_BYTES,
-      source_bf16: true, t0_key_visible_latents: args.keep_t0_latents,
+      reference_latent_bytes: generated_t0 ? 0_i64 : HyNomasSequence::REFERENCE_LATENT_BYTES,
+      source_bf16: true, generated_t0_control: generated_t0,
+      t0_key_visible_latents: t0_key_visible_latents,
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv)
-    probe_plan = dit_plan + PROBE_GPU_EXTRA_BYTES
+    probe_extra = generated_t0 ? 0_i64 : PROBE_GPU_EXTRA_BYTES
+    probe_plan = dit_plan + probe_extra
     steady = dit_plan - HyNomasSequence.old_attention_bytes(inputs.base)
     budget = args.budget_mib * 1024 * 1024
     raise ArgumentError.new("native T0 history probe named plan exceeds its budget") if probe_plan > budget
     HyNomasGeneration.emit("portrait_t0_history_memory_plan",
-      segments: 2, steps_per_segment: 4, keep_t0_latents: args.keep_t0_latents,
+      segments: 2, steps_per_segment: 4, t0_context_mode: args.t0_context_mode,
+      keep_t0_latents: args.keep_t0_latents,
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv,
+      generated_t0_control: generated_t0,
       dit_peak_named_bytes: dit_plan, probe_peak_named_bytes: probe_plan,
       dit_steady_named_bytes: steady,
-      baseline_f32_bank_buffer_bytes: BASELINE_BANK_BYTES,
-      compact_t0_f32_buffer_bytes: T0_BYTES,
+      baseline_f32_bank_buffer_bytes: generated_t0 ? 0 : BASELINE_BANK_BYTES,
+      compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
       named_budget_bytes: budget, reserve_pct: 10,
-      mask_path: if args.t1_current_text_kv && args.keep_t0_latents == 0
+      mask_path: if t0_key_visible_latents.nil?
+        "ordinary unmasked shared-scene T0 and T1 attention"
+      elsif args.t1_current_text_kv && args.keep_t0_latents == 0
         "all T0 video and caption keys masked; current T1 text K/V included"
       elsif args.t1_current_text_kv
         "T0 caption mask; current T1 text K/V included"
@@ -287,21 +312,24 @@ module HyNomasPortraitT0HistoryProbe
     begin
       timeline = inputs.upload!("input.latent_bank", timeline_arena)
       latent = current_arena.alloc("input.latent", 32 * 30 * 9 * 16)
-      baseline_f32 = reference_arena.alloc("probe.baseline_f32_bank", (BASELINE_BANK_BYTES // sizeof(Float32)).to_i32)
-      compact_t0_f32 = reference_arena.alloc("probe.compact_t0_f32", (T0_BYTES // sizeof(Float32)).to_i32)
-      reference = reference_arena.alloc_weight("t0.reference_latent", 32 * 30 * 9 * 16,
-        ML::Video::WeightDType::BF16)
-      baseline_f32.write_bytes(baseline.to_unsafe, baseline.size)
-      prefix_geometry = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
-        channels: CHANNELS, total_frames: BANK_FRAMES, prefix_frames: LATENT_FRAMES,
-        height: 9, width: 16)
-      prefix_plan = ML::Video::HyNomasTimelineOps::PrefixPlan.new(prefix_geometry,
-        source: baseline_f32, destination: compact_t0_f32)
-      bf16_pipeline = ML::Video::PixelUMMGeneration.pipeline("pixelumm_generation_round_f32_to_bf16")
+      reference = nil.as(ML::MetalBuffer?)
+      compact_t0_f32 = nil.as(ML::MetalBuffer?)
+      unless generated_t0
+        baseline_f32 = reference_arena.alloc("probe.baseline_f32_bank", (BASELINE_BANK_BYTES // sizeof(Float32)).to_i32)
+        compact_t0_f32 = reference_arena.alloc("probe.compact_t0_f32", (T0_BYTES // sizeof(Float32)).to_i32)
+        reference = reference_arena.alloc_weight("t0.reference_latent", 32 * 30 * 9 * 16,
+          ML::Video::WeightDType::BF16)
+        baseline_f32.write_bytes(baseline.to_unsafe, baseline.size)
+        prefix_geometry = ML::Video::HyNomasTimelineOps::PrefixGeometry.new(
+          channels: CHANNELS, total_frames: BANK_FRAMES, prefix_frames: LATENT_FRAMES,
+          height: 9, width: 16)
+        prefix_plan = ML::Video::HyNomasTimelineOps::PrefixPlan.new(prefix_geometry,
+          source: baseline_f32, destination: compact_t0_f32)
+      end
       setup_start = Time.monotonic
       dit = HyNomasSequence::DiT.new(inputs, timeline, latent, budget, 2, admission,
-        reference_latent: reference, source_bf16: true,
-        t0_key_visible_latents: args.keep_t0_latents,
+        reference_latent: reference, source_bf16: true, generated_t0_control: generated_t0,
+        t0_key_visible_latents: t0_key_visible_latents,
         t0_hide_caption_keys: args.hide_t0_caption_keys,
         t1_current_text_kv: args.t1_current_text_kv)
       raise "native T0 history preflight/allocation admission disagree" unless dit.named_bytes == steady
@@ -310,12 +338,16 @@ module HyNomasPortraitT0HistoryProbe
       allocations = ML::MetalBuffer.hy_text_probe_allocations
       readbacks = ML::MetalBuffer.hy_text_probe_readbacks
       run_start = Time.monotonic
-      prefix_plan.not_nil!.encode!(chain)
-      chain.encoder.set_pipeline(bf16_pipeline)
-        .set_buffer(compact_t0_f32, 0)
-        .set_buffer(reference, 1, ML::Metal::BufferAccess::Write)
-        .set_value((reference.size // sizeof(UInt16)).to_u32, 2)
-        .dispatch_1d((reference.size // sizeof(UInt16)).to_i32)
+      if plan = prefix_plan
+        reference_buffer = reference.not_nil!
+        plan.encode!(chain)
+        bf16_pipeline = ML::Video::PixelUMMGeneration.pipeline("pixelumm_generation_round_f32_to_bf16")
+        chain.encoder.set_pipeline(bf16_pipeline)
+          .set_buffer(compact_t0_f32.not_nil!, 0)
+          .set_buffer(reference_buffer, 1, ML::Metal::BufferAccess::Write)
+          .set_value((reference_buffer.size // sizeof(UInt16)).to_u32, 2)
+          .dispatch_1d((reference_buffer.size // sizeof(UInt16)).to_i32)
+      end
       dit.encode(chain)
       metrics["chain_preterminal_allocations"] = ML::MetalBuffer.hy_text_probe_allocations - allocations
       metrics["chain_preterminal_readbacks"] = ML::MetalBuffer.hy_text_probe_readbacks - readbacks
@@ -328,6 +360,8 @@ module HyNomasPortraitT0HistoryProbe
       timings["dit_gpu_seconds"] = chain.gpu_elapsed_seconds
       metrics["dit_segments"] = chain.segment_count.to_i64
       metrics["dit_terminal_waits"] = chain.wait_count.to_i64
+      metrics["t0_denoise_steps"] = dit.t0_denoise_steps.to_i64
+      metrics["t0_cache_writer_forwards"] = dit.t0_cache_writer_forwards.to_i64
       raise "native T0 history probe requires one terminal wait" unless chain.wait_count == 1 && chain.completed?
 
       bank_path = File.join(output_dir, "latent-bank.f32le")
@@ -337,7 +371,7 @@ module HyNomasPortraitT0HistoryProbe
       diagnostics["latent_bank"] = bank_path
       diagnostics["latent_bank_sha256"] = sha256(bank_path)
       checks = output_checks!(bank_path, timeline, baseline, args.keep_t0_latents,
-        args.hide_t0_caption_keys)
+        args.hide_t0_caption_keys, args.t0_context_mode, args.t1_current_text_kv)
       diagnostics["t0_sha256"] = checks.not_nil![:t0_sha256]
       diagnostics["t1_sha256"] = checks.not_nil![:t1_sha256]
       diagnostics["prefix60_sha256"] = checks.not_nil![:prefix60_sha256]
@@ -396,19 +430,46 @@ module HyNomasPortraitT0HistoryProbe
     raise request_error.not_nil! if request_error
     raise "native T0 history cleanup failed: #{cleanup_errors.join("; ")}" unless cleanup_errors.empty?
 
+    frozen_t1_identities = {
+      continuation_manifest_sha256:  inputs.file.sha256,
+      latent_bank_sha256:            inputs.records["input.latent_bank"].sha256,
+      t1_latent_noise_global_frames: [30, 60],
+      qwen_manifest_sha256:          inputs.base.file.sha256,
+      qwen_payload_sha256:           inputs.base.file.document["payload_sha256"].as_s,
+      rope_cos_sha256:               inputs.records["input.rope_cos"].sha256,
+      rope_sin_sha256:               inputs.records["input.rope_sin"].sha256,
+      cache_eps_bf16_sha256:         inputs.records["cache.eps_bf16"].sha256,
+      shared_text_tokens:            inputs.base.valid_text_tokens,
+    }
+    t0_provenance = {
+      context_mode:               args.t0_context_mode,
+      source_bank_sha256:         generated_t0 ? inputs.records["input.latent_bank"].sha256 : args.baseline_bank_sha,
+      source_global_frames:       [0, 30],
+      generated_from_input_noise: generated_t0,
+      input_noise_global_frames:  generated_t0 ? [0, 30] : nil,
+      reference_initialization:   !generated_t0,
+      denoise_steps:              metrics["t0_denoise_steps"],
+      cache_writer_forwards:      metrics["t0_cache_writer_forwards"],
+      output_t0_sha256:           diagnostics["t0_sha256"],
+    }
     report = {
       schema: "cogni_ml.hy_nomas_portrait_t0_history_probe/v1",
+      t0_context_mode: args.t0_context_mode,
       inputs: inputs.file.path, inputs_sha256: inputs.file.sha256,
       qwen_manifest_sha256: inputs.base.file.sha256,
       qwen_payload_sha256: inputs.base.file.document["payload_sha256"].as_s,
+      frozen_t1_identities: frozen_t1_identities,
       baseline_receipt: args.baseline_receipt_path,
       baseline_receipt_sha256: args.baseline_receipt_sha,
       baseline_latent_bank: baseline_bank,
       baseline_latent_bank_sha256: args.baseline_bank_sha,
+      t0_provenance: t0_provenance,
       keep_t0_video_latents: args.keep_t0_latents,
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv,
-      arm: if args.keep_t0_latents == 0
+      arm: if args.t0_context_mode == "generated"
+        "stock_generated_t0_source_bf16_unmasked"
+      elsif args.keep_t0_latents == 0
         "all_t0_video_and_caption_keys_hidden_t1_current_text_kv"
       elsif args.hide_t0_caption_keys
         if args.t1_current_text_kv
@@ -416,8 +477,8 @@ module HyNomasPortraitT0HistoryProbe
         else
           "all_t0_video_visible_t0_caption_keys_hidden"
         end
-      elsif args.keep_t0_latents == 30
-        "all_visible_masked_workspace_aa"
+      elsif args.keep_t0_latents == 30 && !args.hide_t0_caption_keys && !args.t1_current_text_kv
+        "all_visible_unmasked_workspace_aa"
       else
         "first_20_t0_video_latents_hidden"
       end,
@@ -427,8 +488,14 @@ module HyNomasPortraitT0HistoryProbe
       globals_bf16_sha256: admission.globals_bf16_sha256,
       admitted_cache_payload_bytes: admission.payload_bytes,
       source_bf16: true, segments: 2, steps_per_segment: 4,
+      generated_t0_control: generated_t0,
+      t0_reference_initialization: !generated_t0,
+      t0_denoise_steps: metrics["t0_denoise_steps"],
+      t0_cache_writer_forwards: metrics["t0_cache_writer_forwards"],
       t0_writer_attention: "unmasked nil profile",
-      t1_reader_attention: if args.t1_current_text_kv && args.keep_t0_latents == 0
+      t1_reader_attention: if t0_key_visible_latents.nil?
+        "ordinary unmasked shared-scene history; one T0 text block with V263"
+      elsif args.t1_current_text_kv && args.keep_t0_latents == 0
         "all T0 video and caption keys masked; current T1 text K/V keys included"
       elsif args.t1_current_text_kv
         "T0 caption mask; current T1 text K/V keys included"
@@ -452,8 +519,8 @@ module HyNomasPortraitT0HistoryProbe
       checks: checks,
       dit_peak_named_bytes: dit_plan, probe_peak_named_bytes: probe_plan,
       dit_steady_named_bytes: steady,
-      baseline_f32_bank_buffer_bytes: BASELINE_BANK_BYTES,
-      compact_t0_f32_buffer_bytes: T0_BYTES,
+      baseline_f32_bank_buffer_bytes: generated_t0 ? 0 : BASELINE_BANK_BYTES,
+      compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
       named_budget_bytes: budget, full_upstream_video_parity: false,
     }
     HyNomasGeneration.write_fresh_output(File.join(output_dir, "receipt.json")) do |io|

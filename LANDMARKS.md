@@ -39334,3 +39334,48 @@ Refresh after source/toolchain/device/model/workload changes.
   payloads after hash checks; retain weights, inputs, final binary, compact
   latents, pixels, record indexes, receipts and media. Intermediate audit
   replay requires recapture.
+
+### 2026-11-07 — Generated T0 does not restore sustained portrait T1 motion
+
+- The opt-in portrait probe adds --t0-context repeated-photo|generated.
+  Generated mode admits two source-BF16 unmasked segments, once-per-scene
+  text, no reference latent/edits/actions/LoRA/captures/checkpoints. It runs
+  four T0 Euler steps and one writer; photo T0 retains the accepted DCAE
+  endpoint and one writer. Both use identical frozen T1 prompt/Qwen/noise/
+  RoPE/cache epsilon/schedule, Q=4,583/K=8,903 and no final T1 writer. Defaults
+  and src/ kernels are unchanged; generated T0 receives no photograph.
+- The new photo arm reproduces the accepted whole bank exactly. Both arms'
+  native/source Torch 2.8 MPS T0 and T1 endpoints match all 138,240 values
+  per endpoint bitwise. Generated source T0 is independently denoised.
+  Same-arm cyclic90 PixelUMM T1 displays match Torch 2.6 MPS bitwise on
+  all 53,084,160 finite values at unchanged atol=rtol=2e-5. Actual transport,
+  full native output and source crop bytes are crossbound; opposite-arm
+  prefix60/cyclic90/RGB substitutions are rejected in both directions.
+- All 120 T1 face frames per arm and selected T0 frames were inspected.
+  Generated T0 turns its head but shows a different man; both T1s remain
+  nearly static until a late eyelid change around frames 113-119. Reject
+  the substitution as a useful motion correction in this fixture. This
+  context-package comparison does not isolate motion or fix likeness;
+  identity, initialization and preceding action state differ. User likeness
+  objection and the weak-motion cause remain open. Four steps override the
+  upstream default eight; cyclic future latents are display context only.
+- Forty-two Python tests, 36 Crystal examples, release build, formatting,
+  Ruff, actual-byte gates and negative probes pass. Native DiT sampled
+  peaks 24.16/24.17 GiB; decoder 18.81/18.81 GiB. Cache-aware reserve 10%,
+  observed swap growth zero. Instrumented preterminal allocation/readback/
+  wait 0/0/0, one terminal wait per stage; opaque MPS allocations excluded.
+  No speedup claim. Correlated adversary ROBUST within the bounded scope.
+- Provenance is local execution/current-artifact consistency, not historical
+  tamperproof attestation: old sidecars lack launch command/transitive-helper
+  hashes and reused decoder binary source provenance is outside scope.
+  Structural graph validator/template are absent. Retired 345,345,526 bytes
+  of owned capture/build cache; retained weights, inputs, binaries, compact
+  endpoints, pixels and media. Intermediate audit requires recapture.
+- Return pointer: repeated-photo/generated context section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json. Next proposed
+  history discriminator: moving T0 versus its staticized final frame, same
+  DCAE path and fixed T1 inputs, reducing identity/endpoint-pose confounds.
+  A distinct T1 continuation action is a separate untested branch. No new
+  experiment is admitted yet. Refresh on source/runtime/binary/weights/input/
+  noise/schedule/geometry or evidence loss. Rollback: omit the new mode/probe.
