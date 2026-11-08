@@ -6,6 +6,7 @@ require "../../src/ml/video/hy_nomas_timeline_ops"
 require "../../src/ml/video/hy_nomas_resume_bundle"
 require "../../src/ml/video/hy_nomas_segment_edit"
 require "../../src/ml/video/hy_nomas_reference_action"
+require "./hy_nomas_reference_t1_step_capture"
 require "./hy_nomas_cache_qbit_checkpoint"
 
 # Opt-in finite continuation. The first-segment entry point remains separate;
@@ -13,11 +14,18 @@ require "./hy_nomas_cache_qbit_checkpoint"
 module HyNomasSequence
   extend self
 
-  STEPS                  = 4
-  HISTORY_TEXT_POLICY    = ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene
-  REFERENCE_LATENT_BYTES = 1_i64 * 32 * 30 * 9 * 16 * sizeof(UInt16)
-  T0_HISTORY_LATENTS     =  30
-  T0_HISTORY_TOKENS      = 144
+  STEPS                                  = 4
+  HISTORY_TEXT_POLICY                    = ML::Video::HyNomasContinuationHistory::TextCachePolicy::OncePerScene
+  REFERENCE_LATENT_BYTES                 = 1_i64 * 32 * 30 * 9 * 16 * sizeof(UInt16)
+  T0_HISTORY_LATENTS                     =  30
+  T0_HISTORY_TOKENS                      = 144
+  REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES = ML::Video::HyNomasReferenceT1StepCapturePlan::BUFFER_BYTES
+  REFERENCE_T1_STEP_CAPTURE_BYTES        = STEPS.to_i64 * 3 * REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES
+
+  record ReferenceT1StepCaptureBuffers,
+    velocity_bf16 : ML::MetalBuffer,
+    x0_bf16 : ML::MetalBuffer,
+    after_euler_bf16 : ML::MetalBuffer
 
   # Keep command-chain owners strongly reachable when a failed terminal wait
   # cannot prove that their GPU work has drained.
@@ -375,6 +383,36 @@ module HyNomasSequence
     end
   end
 
+  # Keep checkpoint capture confined to the authenticated source-photo T0
+  # path. It cannot be combined with visibility experiments or edited runs.
+  def validate_reference_t1_step_capture!(enabled : Bool, *,
+                                          source_bf16 : Bool,
+                                          reference_latent_bytes : Int64,
+                                          segments : Int32,
+                                          generated_t0_control : Bool = false,
+                                          text_cache_policy = HISTORY_TEXT_POLICY,
+                                          cinematic : HyNomasCinematic::IndexIdentity? = nil,
+                                          noise_edit : ML::Video::HyNomasSegmentNoiseEdit? = nil,
+                                          prompt_edit : ML::Video::HyNomasSegmentPromptEdit? = nil,
+                                          reference_action : ML::Video::HyNomasReferenceAction? = nil,
+                                          t0_key_visible_latents : Int32? = nil,
+                                          t0_hide_caption_keys : Bool = false,
+                                          t1_current_text_kv : Bool = false) : Nil
+    return unless enabled
+    unless source_bf16 && reference_latent_bytes == REFERENCE_LATENT_BYTES && segments == 2 &&
+           !generated_t0_control && text_cache_policy.once_per_scene? && !cinematic &&
+           !noise_edit && !prompt_edit && !reference_action && t0_key_visible_latents.nil? &&
+           !t0_hide_caption_keys && !t1_current_text_kv
+      raise ArgumentError.new("reference T1 step capture requires the unmasked two-segment source-BF16 original-photo reference run without edits")
+    end
+  end
+
+  def reference_t1_step_capture_schedule : Array(Tuple(Float32, Float32))
+    ML::Video::HyNomasEulerPlan.schedule(STEPS, 5_f32).map do |step|
+      Tuple.new(step.sigma, step.dt)
+    end
+  end
+
   def validate_source_bf16_initialization!(*,
                                            source_bf16 : Bool,
                                            reference_latent_bytes : Int64,
@@ -640,6 +678,7 @@ module HyNomasSequence
     getter t0_key_visible_latents : Int32?
     getter t0_hide_caption_keys : Bool
     getter t1_current_text_kv : Bool
+    getter reference_t1_capture_schedule : Array(Tuple(Float32, Float32))
     @inputs_arena : ML::Video::Arena
     @bank_arena : ML::Video::Arena
     @globals : ML::Video::Arena
@@ -666,6 +705,9 @@ module HyNomasSequence
     @next_segment = 0
     @resume_failed = false
     @capture_copy : ML::Video::HyNomasContinuationHistoryKernels::AppendPlan? = nil
+    @reference_t1_capture_plan : ML::Video::HyNomasReferenceT1StepCapturePlan? = nil
+    @reference_t1_step_captures : Array(ReferenceT1StepCaptureBuffers)? = nil
+    @reference_t1_capture_schedule = [] of Tuple(Float32, Float32)
     @prompt_copy : ML::Video::HyNomasContinuationHistoryKernels::AppendPlan? = nil
     @prompt_arena : ML::Video::Arena? = nil
     @prompt_refiner : ML::Video::HyNomasTextRefinerMPSPlan? = nil
@@ -690,11 +732,43 @@ module HyNomasSequence
                    generated_t0_control : Bool = false,
                    @t0_key_visible_latents : Int32? = nil,
                    @t0_hide_caption_keys : Bool = false,
-                   @t1_current_text_kv : Bool = false)
+                   @t1_current_text_kv : Bool = false,
+                   reference_t1_step_captures : Array(ReferenceT1StepCaptureBuffers)? = nil)
       HyNomasSequence.validate_segments!(@segment_count)
       @cinematic = cinematic
       @reference_latent = reference_latent
       @generated_t0_control = generated_t0_control
+      @reference_t1_step_captures = reference_t1_step_captures
+      reference_t1_capture_enabled = !reference_t1_step_captures.nil?
+      HyNomasSequence.validate_reference_t1_step_capture!(reference_t1_capture_enabled,
+        source_bf16: source_bf16,
+        reference_latent_bytes: reference_latent.try(&.size) || 0_i64,
+        segments: @segment_count, generated_t0_control: @generated_t0_control,
+        text_cache_policy: text_cache_policy, cinematic: cinematic,
+        noise_edit: @noise_edit, prompt_edit: @prompt_edit,
+        reference_action: @reference_action,
+        t0_key_visible_latents: @t0_key_visible_latents,
+        t0_hide_caption_keys: @t0_hide_caption_keys,
+        t1_current_text_kv: @t1_current_text_kv)
+      if captures = reference_t1_step_captures
+        unless captures.size == STEPS
+          raise ArgumentError.new("reference T1 step capture requires one buffer set for each of four Euler steps")
+        end
+        buffers = [] of ML::MetalBuffer
+        captures.each do |capture|
+          {capture.velocity_bf16, capture.x0_bf16, capture.after_euler_bf16}.each do |buffer|
+            unless buffer.valid? && buffer.size == REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES && buffer.storage_mode.shared?
+              raise ArgumentError.new("reference T1 step capture requires exact shared BF16-expanded F32 buffers")
+            end
+            unless buffers.none? { |other| ML::Video::MetalOps.overlap?(buffer, other) } &&
+                   !ML::Video::MetalOps.overlap?(buffer, @timeline) &&
+                   !ML::Video::MetalOps.overlap?(buffer, @latent)
+              raise ArgumentError.new("reference T1 step capture buffers must be disjoint")
+            end
+            buffers << buffer
+          end
+        end
+      end
       if reference = reference_latent
         unless reference.valid? && reference.size == HyNomasSequence::REFERENCE_LATENT_BYTES
           raise ArgumentError.new("reference initialization requires an exact-size caller-owned BF16 DCAE latent")
@@ -884,12 +958,28 @@ module HyNomasSequence
           @eulers << ML::Video::HyNomasEulerPlan.new(@latent, @final.output,
             @refiner.checkpoints["timestep"], steps: STEPS, shift: 5_f32)
         end
+        if captures = @reference_t1_step_captures
+          @reference_t1_capture_plan = ML::Video::HyNomasReferenceT1StepCapturePlan.new
+          @reference_t1_capture_schedule = @eulers[1].schedule.map do |step|
+            Tuple.new(step.sigma, step.dt)
+          end
+          unless @reference_t1_capture_schedule.size == captures.size
+            raise ArgumentError.new("reference T1 capture schedule differs from the four-step buffers")
+          end
+          captures.each do |capture|
+            unless !ML::Video::MetalOps.overlap?(capture.velocity_bf16, @final.output) &&
+                   !ML::Video::MetalOps.overlap?(capture.x0_bf16, @final.output) &&
+                   !ML::Video::MetalOps.overlap?(capture.after_euler_bf16, @final.output)
+              raise ArgumentError.new("reference T1 capture outputs must not overlap the DiT velocity")
+            end
+          end
+        end
         @timeline_ops = ML::Video::HyNomasTimelineOps::Plan.new(ML::Video::HyNomasTimelineOps::Geometry.new,
           timeline: @timeline, segment_latent: @latent, cosine_bank: cos_bank, sine_bank: sin_bank,
           cosine: cos, sine: sin, cache_eps_bf16: eps,
           cache_timestep: @refiner.checkpoints["timestep"], run_segments: @segment_count,
           reference_initialization: !@reference_latent.nil?)
-        @capture_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new if prepare_capture
+        @capture_copy = ML::Video::HyNomasContinuationHistoryKernels::AppendPlan.new if prepare_capture || reference_t1_capture_enabled
         actual = @loader.cache_payload_bytes + @stage.resident_bytes + @globals.resident_bytes +
                  @inputs_arena.resident_bytes + @bank_arena.resident_bytes + @latent.size + @timeline.size + @patch.resident_bytes +
                  (@reference_latent.try(&.size) || 0_i64) +
@@ -1017,8 +1107,22 @@ module HyNomasSequence
           @history.select_segment!(segment, writer: false)
           @serial.encode(chain)
           @final.encode(chain)
+          reference_capture = if segment == 1
+                                @reference_t1_step_captures.try(&.[step]?)
+                              else
+                                nil
+                              end
+          if capture = reference_capture
+            sigma = @reference_t1_capture_schedule[step][0]
+            @reference_t1_capture_plan.not_nil!.encode(chain.encoder, @latent, @final.output,
+              capture.velocity_bf16, capture.x0_bf16, sigma)
+          end
           @eulers[segment].encode_update(chain, step)
           @t0_denoise_steps += 1 if segment == 0
+          if capture = reference_capture
+            @capture_copy.not_nil!.encode(chain.encoder, @latent, capture.after_euler_bf16,
+              (@latent.size // sizeof(Float32)).to_i32, 0)
+          end
           if capture_segment == segment && captures
             @capture_copy.not_nil!.encode(chain.encoder, @latent, captures[step],
               (@latent.size // sizeof(Float32)).to_i32, 0)

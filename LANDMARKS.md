@@ -39426,3 +39426,52 @@ Refresh after source/toolchain/device/model/workload changes.
   Rollback: omit diagnostic probe. Correlated read-only adversary ROBUST within
   this bounded numerical/artifact and negative visual scope. Root-cause work
   remains IN_PROGRESS.
+
+### 2026-11-08 — Separate photo reconstruction from DiT appearance changes
+
+- The earlier statement that selected portrait frames retain identity is
+  withdrawn: the user reports a likeness mismatch. Generated T0 receives no
+  photograph and is not the original-photo control. This slice starts from
+  the authenticated clean photo DCAE latent; encoder results are historical
+  reuse, not a fresh encode.
+- The original upstream DCAE decoder reconstructs that latent without DiT.
+  It looks closer to the prepared photo in selected crops; normalized BF16
+  input-fidelity RMSE 0.0163221 is lossy reconstruction, not numerical parity.
+  Native DCAE conversion remains encoder-only. PixelUMM is the production
+  decoder and already changes fine skin texture in the no-DiT control.
+- Added opt-in same-chain T1 captures: effective BF16 velocity, BF16 clean
+  estimate before Euler, and BF16 state after Euler, four steps, 6,635,520
+  preallocated bytes, one terminal wait. All twelve comparisons are bitwise
+  equal to historical source velocities/states and GPU-reconstructed source
+  clean estimates. Current formatted release reproduces the earlier capture
+  and final bank exactly. Default capture remains disabled.
+- Same-position/noise/window PixelUMM clean and first-clean-estimate native/
+  source controls have zero error on 53,084,160 finite values, atol=rtol=2e-5.
+  First-estimate changes to eyes/mouth partly reverse at the final endpoint;
+  monotone accumulated drift, an exact internal layer, natural blinking and
+  repaired likeness are not established. Final historical decoder pixels
+  were rejoined to the fresh fourth estimate and byte-compared again.
+- Eleven launch/execution records and 1,856 inventory entries were checked.
+  The earlier clean helper launch predates optional named-step validation;
+  that one current-source drift remains explicit. Fresh first-estimate control
+  matches current helper bytes. Native decode executable is hash-pinned;
+  its original build lineage and unmodified CUDA/flex-attention parity are
+  outside scope. Source controls use the existing gathered MPS adapter.
+- Focused 47 Python tests, 32 Crystal examples, release build, Ruff and
+  four-file Crystal formatting pass. Sequential model runs preserve the
+  cache-aware 10% reserve and 64 MiB swap-growth stop; observed swap growth 0.
+  Native DiT sampled peak 24.167 GiB; PixelUMM 18.411 GiB. Instrumented native
+  preterminal allocation/readback/wait 0/0/0, one terminal per stage; opaque
+  MPS allocations excluded. No speedup claim. Retired 33,693,941 bytes of own
+  rebuildable cache/preliminary previews; retained weights and audit payloads.
+- Return pointer: original-photo section of docs/hy-nomas-object-control-frontier.md
+  and .landmark/evidence/2026-11-08-hy-nomas-photo-appearance-localization.json.
+  Correlated read-only adversary verdict ROBUST within this bounded diagnostic;
+  the packet remains COMPLETED and does not establish likeness or internal-layer
+  cause. A separate streamed first-estimate pixel comparison found zero unequal
+  bytes across 212,336,640 bytes.
+  Likeness root cause remains IN_PROGRESS. Next proposed falsifier: fixed final
+  T1 latent decoded with original DCAE versus PixelUMM; not executed here.
+  Refresh on source/binary/runtime, weights, reference/normalization, conditioning,
+  noise/schedule, geometry or evidence changes. Rollback: omit diagnostic flag
+  and helpers; no production default changed.

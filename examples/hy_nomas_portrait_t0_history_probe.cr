@@ -32,8 +32,29 @@ module HyNomasPortraitT0HistoryProbe
     keep_t0_latents : Int32,
     hide_t0_caption_keys : Bool,
     t1_current_text_kv : Bool,
+    capture_reference_t1_steps : Bool,
     budget_mib : Int64,
     plan_only : Bool
+
+  record CaptureOutput,
+    path : String,
+    nbytes : Int64,
+    sha256 : String,
+    shape : Array(Int32),
+    dtype : String,
+    encoding : String do
+    include JSON::Serializable
+  end
+
+  record ReferenceT1StepCaptureReceipt,
+    step : Int32,
+    sigma_f32 : Float32,
+    dt_f32 : Float32,
+    velocity_bf16 : CaptureOutput,
+    x0_bf16 : CaptureOutput,
+    after_euler_bf16 : CaptureOutput do
+    include JSON::Serializable
+  end
 
   def sha256(path : String) : String
     digest = Digest::SHA256.new
@@ -44,6 +65,33 @@ module HyNomasPortraitT0HistoryProbe
       end
     end
     digest.hexfinal
+  end
+
+  def write_reference_t1_step_captures!(output_dir : String,
+                                        buffers : Array(HyNomasSequence::ReferenceT1StepCaptureBuffers),
+                                        schedule : Array(Tuple(Float32, Float32))) : Array(ReferenceT1StepCaptureReceipt)
+    unless buffers.size == HyNomasSequence::STEPS && schedule.size == buffers.size
+      raise ArgumentError.new("reference T1 step capture output differs from its four-step schedule")
+    end
+    buffers.map_with_index do |capture, index|
+      step = index + 1
+      sigma, dt = schedule[index]
+      outputs = {
+        {"velocity_bf16", capture.velocity_bf16},
+        {"x0_bf16", capture.x0_bf16},
+        {"after_euler_bf16", capture.after_euler_bf16},
+      }.map do |label, buffer|
+        filename = "t1_step#{step.to_s.rjust(2, '0')}_#{label}.f32le"
+        path = File.join(output_dir, filename)
+        HyNomasGeneration.write_fresh_output(path) do |io|
+          io.write(Bytes.new(buffer.contents.as(UInt8*), buffer.size.to_i32))
+        end
+        CaptureOutput.new(path, buffer.size, sha256(path), [1, 32, 30, 9, 16],
+          "BF16", "f32le_bf16_expansion")
+      end
+      ReferenceT1StepCaptureReceipt.new(step.to_i32, sigma, dt,
+        outputs[0], outputs[1], outputs[2])
+    end
   end
 
   def read_u32_le(bytes : Bytes, element : Int64) : UInt32
@@ -177,6 +225,7 @@ module HyNomasPortraitT0HistoryProbe
     keep_t0_latents = -1
     hide_t0_caption_keys = false
     t1_current_text_kv = false
+    capture_reference_t1_steps = false
     budget_mib = 30_720_i64
     plan_only = false
     OptionParser.parse do |p|
@@ -191,6 +240,7 @@ module HyNomasPortraitT0HistoryProbe
       p.on("--keep-t0-latents N", "30 for all-visible, 10 for recent-only, or 0 for the all-video-hidden T1-text control") { |v| keep_t0_latents = v.to_i }
       p.on("--hide-t0-caption-keys", "Mask T0 caption keys for the T1 reader") { hide_t0_caption_keys = true }
       p.on("--t1-current-text-kv", "Expose current T1 text K/V after hiding T0 caption keys") { t1_current_text_kv = true }
+      p.on("--capture-reference-t1-steps", "Capture BF16-effective T1 velocity, x0, and after-Euler states for all four steps") { capture_reference_t1_steps = true }
       p.on("--output-dir PATH", "Existing empty output directory on /opt/mldata_ssd") { |v| output_dir = v }
       p.on("--budget-mib N", "Named buffer cap; use with the external 10% GPU memory-floor guard") { |v| budget_mib = v.to_i64 }
       p.on("--plan-only", "Authenticate inputs and emit CPU-only memory plan") { plan_only = true }
@@ -200,13 +250,24 @@ module HyNomasPortraitT0HistoryProbe
       hide_t0_caption_keys, t1_current_text_kv)
     HyNomasSequence.validate_t0_history_visibility!(keep_t0_latents, hide_t0_caption_keys,
       t1_current_text_kv)
+    HyNomasSequence.validate_reference_t1_step_capture!(capture_reference_t1_steps,
+      source_bf16: true,
+      reference_latent_bytes: t0_context_mode == "repeated-photo" ? HyNomasSequence::REFERENCE_LATENT_BYTES : 0_i64,
+      segments: 2, generated_t0_control: t0_context_mode == "generated",
+      t0_key_visible_latents: if keep_t0_latents == 30 && !hide_t0_caption_keys && !t1_current_text_kv
+        nil
+      else
+        keep_t0_latents
+      end,
+      t0_hide_caption_keys: hide_t0_caption_keys,
+      t1_current_text_kv: t1_current_text_kv)
     unless (18_432..49_152).includes?(budget_mib)
       raise ArgumentError.new("named buffer budget must be within 18..48 GiB")
     end
     raise ArgumentError.new("--output-dir is required unless --plan-only is used") if output_dir.empty? && !plan_only
     Args.new(inputs_path, inputs_sha, receipt_path, receipt_sha, bank_path, bank_sha,
       output_dir, t0_context_mode, keep_t0_latents, hide_t0_caption_keys, t1_current_text_kv,
-      budget_mib, plan_only)
+      capture_reference_t1_steps, budget_mib, plan_only)
   end
 
   def run : Nil
@@ -247,7 +308,8 @@ module HyNomasPortraitT0HistoryProbe
       t0_hide_caption_keys: args.hide_t0_caption_keys,
       t1_current_text_kv: args.t1_current_text_kv)
     probe_extra = generated_t0 ? 0_i64 : PROBE_GPU_EXTRA_BYTES
-    probe_plan = dit_plan + probe_extra
+    capture_bytes = args.capture_reference_t1_steps ? HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BYTES : 0_i64
+    probe_plan = dit_plan + probe_extra + capture_bytes
     steady = dit_plan - HyNomasSequence.old_attention_bytes(inputs.base)
     budget = args.budget_mib * 1024 * 1024
     raise ArgumentError.new("native T0 history probe named plan exceeds its budget") if probe_plan > budget
@@ -261,6 +323,8 @@ module HyNomasPortraitT0HistoryProbe
       dit_steady_named_bytes: steady,
       baseline_f32_bank_buffer_bytes: generated_t0 ? 0 : BASELINE_BANK_BYTES,
       compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
+      reference_t1_step_capture_buffers_bytes: capture_bytes,
+      reference_t1_step_capture_steps: args.capture_reference_t1_steps ? HyNomasSequence::STEPS : 0,
       named_budget_bytes: budget, reserve_pct: 10,
       mask_path: if t0_key_visible_latents.nil?
         "ordinary unmasked shared-scene T0 and T1 attention"
@@ -297,6 +361,8 @@ module HyNomasPortraitT0HistoryProbe
     timeline_arena = ML::Video::Arena.new
     current_arena = ML::Video::Arena.new
     reference_arena = ML::Video::Arena.new
+    capture_arena = nil.as(ML::Video::Arena?)
+    step_capture_buffers = nil.as(Array(HyNomasSequence::ReferenceT1StepCaptureBuffers)?)
     dit = nil.as(HyNomasSequence::DiT?)
     chain = nil.as(ML::Metal::MPSCommandChain?)
     prefix_plan = nil.as(ML::Video::HyNomasTimelineOps::PrefixPlan?)
@@ -305,6 +371,7 @@ module HyNomasPortraitT0HistoryProbe
     diagnostics = {} of String => String
     metrics = {} of String => Int64
     timings = {} of String => Float64
+    step_capture_receipts = nil.as(Array(ReferenceT1StepCaptureReceipt)?)
     checks = nil.as(NamedTuple(t0_sha256_matches_baseline: Bool,
       t1_sha256_matches_baseline: Bool, t0_sha256: String,
       t1_sha256: String, baseline_t1_sha256: String,
@@ -314,6 +381,17 @@ module HyNomasPortraitT0HistoryProbe
       latent = current_arena.alloc("input.latent", 32 * 30 * 9 * 16)
       reference = nil.as(ML::MetalBuffer?)
       compact_t0_f32 = nil.as(ML::MetalBuffer?)
+      if args.capture_reference_t1_steps
+        arena = ML::Video::Arena.new
+        capture_arena = arena
+        step_capture_buffers = Array(HyNomasSequence::ReferenceT1StepCaptureBuffers).new(HyNomasSequence::STEPS) do |step|
+          prefix = "probe.reference_t1_step#{(step + 1).to_s.rjust(2, '0')}"
+          HyNomasSequence::ReferenceT1StepCaptureBuffers.new(
+            arena.alloc("#{prefix}.velocity_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32),
+            arena.alloc("#{prefix}.x0_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32),
+            arena.alloc("#{prefix}.after_euler_bf16", (HyNomasSequence::REFERENCE_T1_STEP_CAPTURE_BUFFER_BYTES // sizeof(Float32)).to_i32))
+        end
+      end
       unless generated_t0
         baseline_f32 = reference_arena.alloc("probe.baseline_f32_bank", (BASELINE_BANK_BYTES // sizeof(Float32)).to_i32)
         compact_t0_f32 = reference_arena.alloc("probe.compact_t0_f32", (T0_BYTES // sizeof(Float32)).to_i32)
@@ -331,7 +409,8 @@ module HyNomasPortraitT0HistoryProbe
         reference_latent: reference, source_bf16: true, generated_t0_control: generated_t0,
         t0_key_visible_latents: t0_key_visible_latents,
         t0_hide_caption_keys: args.hide_t0_caption_keys,
-        t1_current_text_kv: args.t1_current_text_kv)
+        t1_current_text_kv: args.t1_current_text_kv,
+        reference_t1_step_captures: step_capture_buffers)
       raise "native T0 history preflight/allocation admission disagree" unless dit.named_bytes == steady
       timings["dit_setup_seconds"] = (Time.monotonic - setup_start).total_seconds
       chain = ML::Metal::MPSCommandChain.new
@@ -370,6 +449,11 @@ module HyNomasPortraitT0HistoryProbe
       end
       diagnostics["latent_bank"] = bank_path
       diagnostics["latent_bank_sha256"] = sha256(bank_path)
+      if captures = step_capture_buffers
+        step_capture_receipts = write_reference_t1_step_captures!(output_dir, captures,
+          dit.not_nil!.reference_t1_capture_schedule)
+        metrics["reference_t1_captured_steps"] = step_capture_receipts.not_nil!.size.to_i64
+      end
       checks = output_checks!(bank_path, timeline, baseline, args.keep_t0_latents,
         args.hide_t0_caption_keys, args.t0_context_mode, args.t1_current_text_kv)
       diagnostics["t0_sha256"] = checks.not_nil![:t0_sha256]
@@ -410,6 +494,7 @@ module HyNomasPortraitT0HistoryProbe
             prefix_plan.try(&.object_id)
             active_chain.object_id
             reference_arena.object_id
+            capture_arena.try(&.object_id)
             current_arena.object_id
             timeline_arena.object_id
             nil
@@ -421,6 +506,7 @@ module HyNomasPortraitT0HistoryProbe
         dit.try { |owner| actions << -> { owner.release } }
         chain.try { |owner| actions << -> { owner.release } }
         actions << -> { reference_arena.release }
+        capture_arena.try { |owner| actions << -> { owner.release } }
         actions << -> { current_arena.release }
         actions << -> { timeline_arena.release }
       end
@@ -523,8 +609,22 @@ module HyNomasPortraitT0HistoryProbe
       compact_t0_f32_buffer_bytes: generated_t0 ? 0 : T0_BYTES,
       named_budget_bytes: budget, full_upstream_video_parity: false,
     }
+    receipt_contents = report.to_pretty_json
+    if captures = step_capture_receipts
+      document = JSON.parse(receipt_contents)
+      fields = document.as_h
+      fields["reference_t1_step_capture"] = JSON::Any.new(true)
+      fields["reference_t1_step_capture_contract"] = JSON.parse(%({
+        "source": "original-photo reference T0, source-BF16 native T1",
+        "capture_chain": "same DiT command chain; one terminal wait",
+        "capture_values": "BF16-effective velocity, BF16-rounded x0 estimate, BF16-after-Euler latent"
+      }))
+      fields["reference_t1_step_capture_buffers_bytes"] = JSON.parse(capture_bytes.to_json)
+      fields["reference_t1_step_captures"] = JSON.parse(captures.to_json)
+      receipt_contents = document.to_pretty_json
+    end
     HyNomasGeneration.write_fresh_output(File.join(output_dir, "receipt.json")) do |io|
-      io.puts(report.to_pretty_json)
+      io.puts(receipt_contents)
     end
     HyNomasGeneration.emit("portrait_t0_history_completed", output: diagnostics,
       keep_t0_video_latents: args.keep_t0_latents,

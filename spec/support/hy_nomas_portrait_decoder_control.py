@@ -664,7 +664,7 @@ def execute(admission: Mapping[str, object]) -> dict[str, object]:
     output_pixels = out_dir / "upstream-t1-display.f32le"
     output_sha = _write_fresh(output_pixels, pixels_array)
     result = {
-        "schema": SCHEMA,
+        "schema": admission.get("output_schema", SCHEMA),
         "upstream_revision": UPSTREAM_REVISION,
         "upstream_model_sha256": model_sha,
         "native_receipt_sha256": admission["receipt_sha256"],
@@ -699,7 +699,7 @@ def execute(admission: Mapping[str, object]) -> dict[str, object]:
             "dit_rerun": False,
         },
         "comparison": {
-            "scope": "generated T1 pixels only; native clean T0 frames [0,120) excluded",
+            "scope": admission.get("comparison_scope", "generated T1 pixels only; native clean T0 frames [0,120) excluded"),
             "native_pixel_crop": list(T1_PIXEL_CROP),
             "shape": [1, 3, 120, 288, 512],
             "representation": "display F32 planar RGB [0,1] after pinned BF16 postprocess",
@@ -724,6 +724,8 @@ def execute(admission: Mapping[str, object]) -> dict[str, object]:
         "upstream_t1_display_sha256": output_sha,
         "single_terminal_mps_sync_and_pack_transfer": True,
     }
+    if "photo_diagnostic" in admission:
+        result["photo_diagnostic"] = admission["photo_diagnostic"]
     receipt_path = out_dir / "receipt.json"
     try:
         with receipt_path.open("x", encoding="utf-8") as stream:

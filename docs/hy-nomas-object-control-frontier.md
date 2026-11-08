@@ -1803,6 +1803,77 @@ it does not certify native/full-CUDA parity or semantic motion. See
 [the recorder guide](hy-nomas-activation-tracing.md) and
 `.landmark/evidence/2026-11-06-hy-nomas-upstream-activation-recording.json`.
 
+## Original-photo appearance localization (2026-11-08)
+
+The user rejected the generated-T0 substitution as a different-looking man.
+That branch received no photograph. It is not an identity-preserving reference
+path and is excluded from this experiment. Numerical parity alone did not
+establish the earlier visual likeness claims.
+
+The new diagnostic starts with the authenticated original-photo DCAE latent,
+not a generated lookalike. The encoder result is reused from the earlier
+native/source bitwise comparison; the encoder was not rerun. The pinned
+original DCAE decoder reconstructs that clean latent without DiT. This is an
+upstream decoder-only MPS control: the native converted DCAE checkpoint
+contains the encoder, not the original decoder. Its normalized BF16
+input-fidelity RMSE is 0.0163221 and max error 0.23046875. Those are lossy-codec
+errors, not a tolerance-based native/source parity test.
+
+Separately, the production decoder is PixelUMM. A clean T0/T0 bank and the
+first T1 clean estimate use identical decoder weights, noise, RoPE, temporal
+positions, eleven ten-latent windows and five-latent overlap. Compare only
+global display frames [120,240). Both native/source display comparisons have
+zero error over 53,084,160 finite values at the unchanged atol=rtol=2e-5.
+The clean control predates the later optional checkpoint-join validation in
+the helper; its launch inventory is retained and that source drift is explicit.
+The first-estimate control binds to the current helper source inventory.
+
+The opt-in `--capture-reference-t1-steps` path preallocates 6,635,520 bytes for
+four BF16-effective velocities, four BF16-rounded clean estimates and four
+after-Euler states. It records them on the existing DiT chain, exports only
+after its one terminal wait, and leaves the default path disabled. The clean
+estimate is `BF16(F32(x_sigma) - F32(sigma) * F32(BF16(v)))`; it is a diagnostic
+estimate, not the noisy after-Euler state or a final image from a one-step
+generation. All twelve comparisons match bitwise: source velocities and
+after-Euler states come from authenticated historical captures, while source
+clean estimates are reconstructed on GPU from those states and velocities.
+The formatted release build also reproduces the
+initial capture and final bank bitwise. The upstream DiT was not rerun.
+
+The fresh fourth clean estimate equals the accepted final endpoint. Its
+paired60 bank passes the current CPU preflight. The historical final native
+T1 crop and source decoder output were rehashed and byte-compared again
+(212,336,640 identical bytes); this reuses the final decode rather than
+claiming a fresh current-source decoder run.
+
+In the inspected six-frame contact sheet, the original DCAE retains the
+photo's fine facial detail more closely. PixelUMM changes skin lines and
+texture even without DiT. With the same PixelUMM setup, the first clean
+estimate changes the eyes and mouth further; the final result partly reverses
+those changes. This localizes a visible change to the first denoising
+prediction, not an exact internal DiT layer or a monotone accumulated error.
+It does not establish a biometric likeness score or repair identity/motion.
+
+The controls use pinned upstream revision
+`911cea6458a89c2663513ff7099561ec190dd491`, BF16 weights, MPS with CPU fallback
+disabled, and the existing gathered-attention adapter. They do not establish
+unmodified CUDA/flex-attention parity. All model runs were sequential under
+the cache-aware 10% host reserve, process caps and 64 MiB swap-growth stop.
+Native instrumented preterminal allocation/readback/wait counters are 0/0/0;
+source controls pack one terminal transfer. Opaque MPS resource allocation
+is outside those native counters. Focused checks pass: 47 Python tests,
+32 Crystal examples, release build, Ruff and Crystal formatting.
+
+Evidence and exact commands are indexed in
+`.landmark/evidence/2026-11-08-hy-nomas-photo-appearance-localization.json`.
+This is a bounded diagnostic result, with likeness correction still open.
+Next falsifier: decode the same final T1 latent with the original DCAE decoder
+and PixelUMM, holding the latent fixed, to separate latent appearance from
+PixelUMM's learned reconstruction. That additional model run is not part of
+this completed slice. Refresh on source/binary/runtime, weights, input, noise,
+schedule, normalization, geometry or artifact changes. Rollback: omit the
+capture flag and the new diagnostic helpers; no production default changed.
+
 ## Research precedents and compatibility limits
 
 - [DiTraj](https://arxiv.org/abs/2509.21839) separates foreground/background
