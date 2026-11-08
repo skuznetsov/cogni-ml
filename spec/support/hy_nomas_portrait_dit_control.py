@@ -380,7 +380,7 @@ def _comparison_stats(torch, actual, native):
                         bad.float().sum(), (delta != 0).float().sum()))
 
 
-def execute(admitted, output):
+def execute(admitted, output, *, clean_provider=None, context_record=None):
     import numpy as np
     from safetensors import safe_open
 
@@ -395,6 +395,8 @@ def execute(admitted, output):
     source.DIT_TEXT_ROWS, source.CACHE_CAPACITY = TEXT_ROWS, CACHE_ROWS
     source.QUERY_CHUNK = 256
     device, dtype = torch.device('mps'), torch.bfloat16
+    if clean_provider is not None:
+        clean_provider.prepare(torch, np, admitted, device)
     state = dict(dtype=dtype, device_type='mps', call=None, attention_layout='compact',
                  t0_valid_tokens=VALID,
                  t0_history_hide_caption_keys=admitted['history_visibility']['t0_hide_caption_keys'],
@@ -445,6 +447,8 @@ def execute(admitted, output):
     text_mask = qmask[:, :TEXT_ROWS]
     if admitted['t0_context'] == 'generated':
         clean = _load_t0_initial_noise(torch, np, admitted, device)
+    elif clean_provider is not None:
+        clean = None
     else:
         clean = source._load_t0_clean(torch, np, admitted, device)
     epsilon = source._load_cache_epsilon(torch, np, admitted, device)
@@ -490,7 +494,7 @@ def execute(admitted, output):
     captured = []
 
     def capture(name, value):
-        if admitted['t0_context'] == 'generated' and not name.startswith(
+        if (admitted['t0_context'] == 'generated' or clean_provider is not None) and not name.startswith(
             ('result.', 'comparison.')
         ):
             return
@@ -551,6 +555,8 @@ def execute(admitted, output):
                                       stage=f't0.denoise{step + 1}',
                                       enqueue_seconds=time.monotonic() - started)), flush=True)
 
+        if clean_provider is not None:
+            clean = clean_provider(torch, np, admitted, device)
         capture('t0.clean_latent', clean)
         with torch.autocast('mps', enabled=False):
             writer = (clean.float() * (1.0 - source.WRITER_SIGMA)
@@ -636,7 +642,7 @@ def execute(admitted, output):
             raise ValueError('T0 history visibility mask call count differs from the 4x54 T1 schedule')
         t0_stats = _comparison_stats(torch, clean, native_t0)
         t1_stats = _comparison_stats(torch, latent, native)
-        if admitted['t0_context'] == 'generated':
+        if admitted['t0_context'] == 'generated' or clean_provider is not None:
             capture('result.t0', clean.float())
             capture('result.t1', latent.float())
             result_shape = [1, 32, 2 * LATENTS_PER_SEGMENT, 9, 16]
@@ -648,6 +654,10 @@ def execute(admitted, output):
             capture('comparison.native_t0', t0_stats)
         if t1_stats is not None:
             capture('comparison.native_t1', t1_stats)
+        if clean_provider is not None:
+            if clean_provider.clip_comparison is None:
+                raise ValueError('RGB-history input clip comparison was not produced')
+            capture('comparison.native_normalized_clip', clean_provider.clip_comparison)
         # One blocking terminal transfer; no scalar observations between forwards.
         packed = torch.cat([value.float().reshape(-1) for _, value in captured]).cpu().numpy()
     comparison_values = {}
@@ -657,27 +667,48 @@ def execute(admitted, output):
             comparison_values[name] = packed[stats_offset:stats_offset + 4].tolist()
         stats_offset += value.numel()
 
-    def comparison_record(name, reference):
+    def comparison_record(name, reference, *, value_count=None, require_bitwise=False):
         values = comparison_values.get(name)
         if values is None:
             return dict(reference=reference, atol=ATOL, rtol=RTOL, passed=None)
         max_abs = float(values[0])
         rmse = float(values[1])
-        return dict(
+        outside_tolerance = int(values[2])
+        unequal = int(values[3])
+        record = dict(
             reference=reference,
             atol=ATOL,
             rtol=RTOL,
-            passed=int(values[2]) == 0,
+            passed=outside_tolerance == 0 and (not require_bitwise or unequal == 0),
             max_abs=max_abs if math.isfinite(max_abs) else None,
             rmse=rmse if math.isfinite(rmse) else None,
-            outside_tolerance=int(values[2]),
-            unequal=int(values[3]),
-            values=math.prod(source.LATENT_SEGMENT_SHAPE),
+            outside_tolerance=outside_tolerance,
+            unequal=unequal,
+            values=value_count or math.prod(source.LATENT_SEGMENT_SHAPE),
         )
+        if require_bitwise:
+            record['bitwise_equal'] = unequal == 0
+        return record
 
-    t0_comparison = comparison_record('comparison.native_t0', native_t0_reference)
-    t1_comparison = comparison_record('comparison.native_t1', comparison_reference)
-    comparison_results = (t0_comparison, t1_comparison)
+    t0_comparison = comparison_record(
+        'comparison.native_t0', native_t0_reference,
+        value_count=math.prod(source.LATENT_SEGMENT_SHAPE),
+    )
+    t1_comparison = comparison_record(
+        'comparison.native_t1', comparison_reference,
+        value_count=math.prod(source.LATENT_SEGMENT_SHAPE),
+    )
+    clip_comparison = comparison_record(
+        'comparison.native_normalized_clip',
+        (dict(kind='authenticated native BF16 DCAE input clip',
+              path=str(admitted['native_rgb']['normalized_clip_path']),
+              sha256=admitted['native_rgb']['output']['normalized_clip_bf16_sha256'])
+         if clean_provider is not None else None),
+        value_count=(clean_provider.clip_elements if clean_provider is not None else None),
+        require_bitwise=clean_provider is not None,
+    )
+    comparison_results = ((t0_comparison, t1_comparison, clip_comparison)
+                          if clean_provider is not None else (t0_comparison, t1_comparison))
     compared_endpoints = [result for result in comparison_results if result['passed'] is not None]
     comparisons_passed = (
         all(result['passed'] for result in compared_endpoints)
@@ -707,7 +738,7 @@ def execute(admitted, output):
 
     latent_path = output / 'latent.f32le'
     endpoints = None
-    if admitted['t0_context'] == 'generated':
+    if admitted['t0_context'] == 'generated' or clean_provider is not None:
         t0_endpoint = write_capture('result.t0', 't0.f32le')
         t1_endpoint = write_capture('result.t1', 't1.f32le')
         t0_record, t1_record = by_name['result.t0'], by_name['result.t1']
@@ -728,7 +759,7 @@ def execute(admitted, output):
         terminal_raw = packed_bytes[record['offset']:record['offset'] + record['nbytes']]
         with latent_path.open('xb') as stream:
             stream.write(terminal_raw)
-    t0_context_record = dict(
+    t0_context_record = context_record or dict(
         kind=(
             'stock-generated T0 from the authenticated saved noise segment; no photo conditioning'
             if admitted['t0_context'] == 'generated'
@@ -742,6 +773,9 @@ def execute(admitted, output):
         generated_identity_claim='none' if admitted['t0_context'] == 'generated' else None,
         source_rng_parity='saved MPS noise; stock upstream CPU RNG values are not claimed',
     )
+    endpoint_comparisons = dict(t0=t0_comparison, t1=t1_comparison)
+    if clean_provider is not None:
+        endpoint_comparisons['normalized_clip'] = clip_comparison
     receipt = dict(schema='cogni_ml.hy_nomas_portrait_dit_control/v1',
                    runtime=dict(torch_version=torch.__version__, device='mps', fallback=0,
                                 diffusers_version=diffusers_version),
@@ -764,14 +798,14 @@ def execute(admitted, output):
                    attention=state['receipt'], seconds_through_terminal=elapsed,
                    intermediate_readbacks=0, explicit_mps_synchronize_calls=0, terminal_transfer_count=1,
                    one_resident_bf16_block=True, persistent_layer_caches=54,
-                   scope=(
+                   scope=(context_record.get('scope') if context_record is not None else (
                        'saved MPS T0 noise denoised with pinned upstream equations, then separate writer '
                        'and frozen-noise T1 continuation; no photo conditioning or likeness claim'
                        if admitted['t0_context'] == 'generated'
                        else 'supplied clean photo-reference T0 plus saved Qwen; upstream five-forward DiT; encoders excluded'
-                   ),
+                   )),
                    comparison=t1_comparison,
-                   endpoint_comparisons=dict(t0=t0_comparison, t1=t1_comparison),
+                   endpoint_comparisons=endpoint_comparisons,
                    comparisons_passed=comparisons_passed,
                    result=dict(path=str(latent_path), shape=result_shape,
                                sha256=source._sha256(latent_path), endpoints=endpoints),
@@ -782,6 +816,7 @@ def execute(admitted, output):
     )}), flush=True)
     if comparisons_passed is False:
         raise ValueError('upstream/native endpoint comparison exceeded the admitted 2e-5 tolerance')
+    return receipt
 
 
 def main():

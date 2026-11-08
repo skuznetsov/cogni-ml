@@ -39379,3 +39379,50 @@ Refresh after source/toolchain/device/model/workload changes.
   A distinct T1 continuation action is a separate untested branch. No new
   experiment is admitted yet. Refresh on source/runtime/binary/weights/input/
   noise/schedule/geometry or evidence loss. Rollback: omit the new mode/probe.
+
+### 2026-11-07 — Moving RGB history does not restore sustained T1 motion
+
+- Added an opt-in connected native DCAE -> T0 cache writer -> T1 probe.
+  Moving frames [0,120) and frame 119 repeated 120 times come from one
+  authenticated generated RGB bank, with fresh identical BF16 DCAE weights.
+  T1 retains all eight frozen input identities, prompt/Qwen, original BF16
+  weights, four-step schedule and ordinary unmasked Q4583/K8903 attention.
+  DCAE output is borrowed directly on GPU; owners remain live through drain.
+  Production defaults and src/ kernels are unchanged.
+- All eight guarded native/source runs completed. Actual exported DCAE/T0
+  and T1 endpoints have zero error on 138,240 values each; same-arm PixelUMM
+  T1 crops have zero error on 53,084,160 finite values, atol=rtol=2e-5.
+  Native normalized BF16 input bytes are reconstructed independently.
+  Source encodes its own MPS clip and reports zero differing values against
+  that native clip in its sole terminal transfer; source clip raw bytes were
+  not exported or independently CPU-hashed. Decoder argv/input/output joins,
+  channel-major prefix60/cyclic90 transport and negative substitutions pass.
+  Root rehashed 640 unique current source files against all 8 launch inventories;
+  zero mismatches. This is local consistency, not tamperproof attestation.
+- All 120 T1 face frames in each arm and selected full frames were inspected.
+  Both T1s remain nearly static. Only moving history has a brief partial
+  eyelid closure at 117-119, without established natural full blink or sustained
+  acting. Reject moving history as a useful motion correction in this fixture.
+  Static history alone does not explain weak motion; DCAE temporal effects and
+  DiT/PixelUMM history remain coupled. User likeness is not fixed. Four steps
+  override upstream default 8; cyclic future is diagnostic display context.
+- Focused 58 Python tests, 43 Crystal examples, release build, Ruff and
+  git diff --check pass. Crystal formatter reports alignment-only differences
+  in two diagnostic files; do not count it as passed. Named preterminal
+  allocation/readback/wait counters remain 0/0/0, terminal 1 per native stage;
+  opaque MPSGraph allocation is excluded. Reserve 10%, observed swap growth 0.
+  Initial 32 GiB cap stopped at 32.058 GiB without a localized peak stage; the
+  re-estimated 36 GiB cap completed, sampled native peak 33.225 GiB. No speedup.
+- Retired 80,149,313 bytes of owned compiler caches/repros/preliminary preview
+  and superseded verifier. Retained weights, frozen inputs, binaries, compact
+  latents, raw outputs, receipts, final verifier/index and media. Rebuilding
+  requires fresh compilation caches; endpoint/pixel audit remains available.
+- Return pointer: moving/repeat-last RGB section in
+  docs/hy-nomas-object-control-frontier.md and
+  .landmark/evidence/2026-11-07-hy-nomas-t0-rgb-history.json. Next proposed
+  falsifier: a distinct T1 continuation/action instruction with fixed history
+  and noise. No further model run admitted here. Refresh on code/binary/runtime,
+  upstream/weights/normalization/geometry/frozen-input changes or evidence loss.
+  Rollback: omit diagnostic probe. Correlated read-only adversary ROBUST within
+  this bounded numerical/artifact and negative visual scope. Root-cause work
+  remains IN_PROGRESS.

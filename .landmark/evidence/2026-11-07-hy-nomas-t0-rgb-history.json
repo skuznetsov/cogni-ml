@@ -1,0 +1,514 @@
+{
+  "schema": "cogni_ml.hy_nomas_t0_rgb_history/v1",
+  "date": "2026-11-07",
+  "source_base_commit": "d64717e9562947981fb23f0bef690d2347faaa67",
+  "packet_status": "COMPLETED",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in connected GPU DCAE to T0 writer to T1 pair, same-arm source DiT and PixelUMM numerical parity and actual-artifact/recorded-input consistency on one frozen portrait fixture",
+    "visual_outcome": "Moving history does not restore sustained T1 motion; only its last frames show a partial eyelid change. Repeat-last remains nearly static.",
+    "root_cause_status": "IN_PROGRESS",
+    "not_claimed": [
+      "isolated motion causality",
+      "natural acting or complete blinking",
+      "photo likeness correction",
+      "upstream default eight-step schedule",
+      "inference speedup",
+      "CUDA parity",
+      "independent CPU byte hash of source-consumed BF16 clip",
+      "tamperproof historical attestation"
+    ]
+  },
+  "risk": "CAUTION: opt-in diagnostic probe and reference helpers; no src/ kernel, production default or session API changes",
+  "experiment": {
+    "manifest": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/experiment.json",
+      "bytes": 2669,
+      "sha256": "9555bd3c90e999c2ba9b2f036d2e922167513f9580b983af18c79b3ca5f64b41"
+    },
+    "upstream_revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "source_rgb_shape": [
+      1,
+      3,
+      360,
+      288,
+      512
+    ],
+    "moving": "frames [0,120)",
+    "repeat_last": "frame 119 repeated 120 times",
+    "normalization": "GPU F32 clamp [0,1], then BF16 RNE(2*x-1)",
+    "encoder": "Same pinned BF16 DCAE with fresh state in each native/source arm; no imported old DiT T0 latent",
+    "frozen": "All eight saved T1 input identities, prompt/Qwen states, original BF16 weights, RoPE, cache-writer epsilon/timestep and four-step Euler schedule",
+    "attention": "Ordinary unmasked T1 Q4583/K8903; cache_txt=False, update_cache=False",
+    "decoder": "Same-arm channel-major prefix60 plus cyclic90 diagnostic tail; 17 ten-latent windows with overlap 5; T1 display [120,240) at 24 fps; cyclic future is display context, not a generated third segment"
+  },
+  "source_files_at_verification": {
+    "examples/hy_nomas_t0_rgb_history_probe.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/hy_nomas_t0_rgb_history_probe.cr",
+      "bytes": 17291,
+      "sha256": "715f2667efcfabc4335244bc446fd1ca17366b896358c4aa54840badd5a6dba5"
+    },
+    "examples/support/hy_nomas_t0_rgb_history.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/examples/support/hy_nomas_t0_rgb_history.cr",
+      "bytes": 24719,
+      "sha256": "120127b02ea25b106a08b420ae77ce5a45765866be70d5f63d811d8a2f043b6d"
+    },
+    "spec/hy_nomas_t0_rgb_history_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_t0_rgb_history_spec.cr",
+      "bytes": 4514,
+      "sha256": "3c4d1e3031359f097fa5aab199c991d6eef99914c8f1d79df5d5d7e7cf76c6ac"
+    },
+    "spec/support/hy_nomas_t0_rgb_artifacts.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_t0_rgb_artifacts.py",
+      "bytes": 4411,
+      "sha256": "198b468df873be7867daff258c09e66ca4f50fbd1acc6d1dd11b1987d7101903"
+    },
+    "spec/support/hy_nomas_t0_rgb_dit_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_t0_rgb_dit_control.py",
+      "bytes": 24005,
+      "sha256": "1631d6243a195e54117c17ae631a400662289d9fc1c799e43453da5a59253cba"
+    },
+    "spec/support/hy_nomas_t0_rgb_decoder_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_t0_rgb_decoder_control.py",
+      "bytes": 7555,
+      "sha256": "40e788f44f28fb5bb40b7d3a472fb11b8fb9fad71387df36393657d03965d4b4"
+    },
+    "spec/support/hy_nomas_portrait_dit_control.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/support/hy_nomas_portrait_dit_control.py",
+      "bytes": 48729,
+      "sha256": "e826ebb4f79afff9bb6b8dc2d89c8b03738038c4df48fd9d61bb3fc5b346d278"
+    },
+    "spec/hy_nomas_t0_rgb_artifacts_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_t0_rgb_artifacts_test.py",
+      "bytes": 3820,
+      "sha256": "0852037e44132eb652942fc376e8055058258b067e7016f5dd3d00134f387717"
+    },
+    "spec/hy_nomas_t0_rgb_dit_control_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_t0_rgb_dit_control_test.py",
+      "bytes": 8307,
+      "sha256": "9fd30300a40e20d63fb4368ac79192b302342e737ef9d8eb1326854eb4668d9b"
+    },
+    "spec/hy_nomas_t0_rgb_decoder_control_test.py": {
+      "path": "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml/spec/hy_nomas_t0_rgb_decoder_control_test.py",
+      "bytes": 3658,
+      "sha256": "c331bcb1093e1230d3adbeda49b0a37ffd24061c9bf314d2dfea25ecab257086"
+    }
+  },
+  "binaries": {
+    "connected_probe": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/build/hy_nomas_t0_rgb_history_probe",
+      "bytes": 3698608,
+      "sha256": "e050edf11866db51d9378ae6bdc8b6cd49a3b2274bb70b686a6fc4b22802835c"
+    },
+    "reused_pixelumm": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/build/hy_nomas_decode_latent",
+      "bytes": 2536024,
+      "sha256": "2c857f83d5b95633ba4d671c910f1d2a9552b3a2e80df10852a19021e0f380fa"
+    },
+    "reused_decoder_build_scope": "Current binary identity is bound by recorded run; historical source-build provenance is outside this claim"
+  },
+  "dod": {
+    "python": "58 tests passed; python-cpu-specs-v1.log",
+    "crystal": "43 examples, 0 failures, 0 errors; native-cpu-specs-v2 recorded command",
+    "release_build": "native-build-v5 recorded command passed",
+    "static": "Ruff for seven affected Python files and git diff --check passed",
+    "formatter": "Crystal 1.22.1 --check reports alignment-only differences in two diagnostic Crystal files; not a passed check; frozen model source retained",
+    "artifact_command": [
+      "python3",
+      "-B",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/verify-pair.py",
+      "--repo",
+      "/Users/sergey/.codex/worktrees/wan-cross-segments/cogni-ml",
+      "--write",
+      "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/evidence-index.json"
+    ],
+    "expected": "Verify eight recorded runs, source/executable/command joins, frozen inputs, actual native clip reconstruction, source consumed-clip GPU value equality, endpoint/raw Pixel checks, actual decoder argv/input joins and negative substitutions at unchanged atol=rtol=2e-5",
+    "observed": "Definitive recorded v4 CPU verifier exit 0; unchanged helper source and command; actual per-arm endpoints and Pixel T1 recomputed zero max/mean error, zero unequal/outside values; input/output path joins and negative substitutions pass."
+  },
+  "numerical_result": {
+    "tolerances": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    },
+    "per_arm": {
+      "moving": {
+        "endpoints": {
+          "t0": {
+            "atol": 2e-05,
+            "max_abs": 0.0,
+            "mean_abs": 0.0,
+            "outside_tolerance": 0,
+            "rmse": 0.0,
+            "rtol": 2e-05,
+            "unequal": 0,
+            "values": 138240
+          },
+          "t1": {
+            "atol": 2e-05,
+            "max_abs": 0.0,
+            "mean_abs": 0.0,
+            "outside_tolerance": 0,
+            "rmse": 0.0,
+            "rtol": 2e-05,
+            "unequal": 0,
+            "values": 138240
+          }
+        },
+        "pixel_t1": {
+          "atol": 2e-05,
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "outside_tolerance": 0,
+          "rmse": 0.0,
+          "rtol": 2e-05,
+          "unequal": 0,
+          "values": 53084160
+        }
+      },
+      "repeat-last": {
+        "endpoints": {
+          "t0": {
+            "atol": 2e-05,
+            "max_abs": 0.0,
+            "mean_abs": 0.0,
+            "outside_tolerance": 0,
+            "rmse": 0.0,
+            "rtol": 2e-05,
+            "unequal": 0,
+            "values": 138240
+          },
+          "t1": {
+            "atol": 2e-05,
+            "max_abs": 0.0,
+            "mean_abs": 0.0,
+            "outside_tolerance": 0,
+            "rmse": 0.0,
+            "rtol": 2e-05,
+            "unequal": 0,
+            "values": 138240
+          }
+        },
+        "pixel_t1": {
+          "atol": 2e-05,
+          "max_abs": 0.0,
+          "mean_abs": 0.0,
+          "outside_tolerance": 0,
+          "rmse": 0.0,
+          "rtol": 2e-05,
+          "unequal": 0,
+          "values": 53084160
+        }
+      }
+    },
+    "input_evidence_scope": "Native exported normalized BF16 clip independently reconstructed from authenticated source RGB. Source passes its own MPS clip to DCAE and compares that consumed tensor on GPU, with zero differing finite values in the sole terminal readback. Source raw BF16 clip was not exported; exact numerical equality does not certify signed-zero byte identity."
+  },
+  "gpu_contract": {
+    "native": "Named MetalBuffer allocation/readback/wait counters 0/0/0 before the sole terminal wait per stage; borrowed DCAE output retained through chain drain",
+    "source": "MPS fallback disabled, no intermediate readback or explicit synchronize, one packed terminal transfer",
+    "allocation_scope": "Opaque MPSGraph allocations excluded from named MetalBuffer instrumentation",
+    "time_scope": "Stage timestamps observe host enqueue only, not device completion or peak attribution"
+  },
+  "memory": {
+    "runtime_floor_pct": 10,
+    "accounting": "file-cache",
+    "max_swap_growth_mib": 64,
+    "connected_named_gib": 28.701273385435343,
+    "completed_connected_process_cap_gib": 36,
+    "first_cap_failure": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-moving-v1-stop-analysis.json",
+      "bytes": 846,
+      "sha256": "7874541fd33af32191e166bc8e0c398f60e1dcaee95a2d858b0274028bf22c1a"
+    },
+    "failure_scope": "32 GiB process cap stopped initial run at 32.058 GiB sampled footprint; stage not localized. Old executable was overwritten by v5; do not treat current binary as that failed run identity. Re-estimated 36 GiB cap preserves 10% reserve; other/opaque allowance is not all identified MPS private memory.",
+    "post_model_memory": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/memory-after-model-pair.json",
+      "bytes": 386,
+      "sha256": "68c8cd339bd1b34378556fdb9fc4a307f57bfff2d61e53fe35162d392023a5f4"
+    }
+  },
+  "runs": {
+    "native-moving-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-moving-v2.command.json",
+        "bytes": 81239,
+        "sha256": "dbfb5372a3c70adf8ad07c9e8e9d5a43e3bbde922dd64afdc6bff5f0ab921f64"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-moving-v2.command.execution.json",
+        "bytes": 343,
+        "sha256": "f852c48faf83e678844693b1b1309f9e644b8272fc3807b171dcfb45804ec05e"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-moving-v2/receipt.json",
+        "bytes": 5706,
+        "sha256": "17de90ad51447cea50a6619c9f8a56a5d95f3a28ba5d1507e19d9d10849ee1a6"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-moving-v2.guard.jsonl",
+        "bytes": 218298,
+        "sha256": "f16759a27cea195ec8abc0ff5922f3a712bf2ee9e34357ed2cbcf4f9f5fe97e5"
+      },
+      "wall_seconds": 366.7784861661494,
+      "peak_sampled_footprint_gib": 33.22520373761654,
+      "minimum_sampled_headroom_gib": 12.67864990234375,
+      "sampled_swap_growth_bytes": 0
+    },
+    "upstream-moving-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-moving-v2.command.json",
+        "bytes": 32291,
+        "sha256": "9728a5f8e3a387d2e67741092c1663abba03742e75e909ee12c51817721fe856"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-moving-v2.command.execution.json",
+        "bytes": 346,
+        "sha256": "cd981d155cabb35dd7c2926be335e77df9561dce9f510624cdc4ae913deec304"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-moving-v2/receipt.json",
+        "bytes": 16417,
+        "sha256": "da83ee3381861c943f1e9450fbb83a3fc9172064a1c8fde267a065cf6f45656b"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-moving-v2.guard.jsonl",
+        "bytes": 231832,
+        "sha256": "709ae2a36edfbe6cf822736f8a49d77d86654a6077c47fefb886089b34ebf04d"
+      },
+      "wall_seconds": 386.42222716705874,
+      "peak_sampled_footprint_gib": 11.907259225845337,
+      "minimum_sampled_headroom_gib": 32.014404296875,
+      "sampled_swap_growth_bytes": 0
+    },
+    "native-decoder-moving-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-moving-v2.command.json",
+        "bytes": 33191,
+        "sha256": "3ee838c73761ab89980de30e61c415d0b2f376e4983066e190bc8382638889a0"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-moving-v2.command.execution.json",
+        "bytes": 351,
+        "sha256": "fcd7c11c388800d2502b2c29a9c77b6f13ba6745cdefef61c8a658f29fdb6810"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-moving-v2/receipt.json",
+        "bytes": 5151,
+        "sha256": "b312e06df84ca4856a344d73659f677ec30bd8761229dc088926fb89932d0687"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-moving-v2.guard.jsonl",
+        "bytes": 177616,
+        "sha256": "84647a51e4fb2789b2b4038da2f746896a7ac31b9c447ad862d02cb888f17812"
+      },
+      "wall_seconds": 298.1861022908706,
+      "peak_sampled_footprint_gib": 18.80483678728342,
+      "minimum_sampled_headroom_gib": 26.58782958984375,
+      "sampled_swap_growth_bytes": 0
+    },
+    "upstream-decoder-moving-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-moving-v2.command.json",
+        "bytes": 32995,
+        "sha256": "386d3dd496011922a13b23c0081c019c188cc90967f4648de9a44dea7e8673fd"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-moving-v2.command.execution.json",
+        "bytes": 353,
+        "sha256": "659f0bc354dabe9159379438c62101a1c33369113cf8efc54c195574131cd623"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-moving-v2/receipt.json",
+        "bytes": 8936,
+        "sha256": "55a12f532a6a837549f96041049565bc5c9ed447bb63909bdf6447251039abe4"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-moving-v2.guard.jsonl",
+        "bytes": 208026,
+        "sha256": "bb57b524655edc6f088923fc11ecf42ff660f7c363d9ec23f315894ff80e2ed6"
+      },
+      "wall_seconds": 348.8015740830451,
+      "peak_sampled_footprint_gib": 7.977647595107555,
+      "minimum_sampled_headroom_gib": 24.942245483398438,
+      "sampled_swap_growth_bytes": 0
+    },
+    "native-repeat-last-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-repeat-last-v2.command.json",
+        "bytes": 81259,
+        "sha256": "b6d535ef3359f1a88939e3b5cd61834641c506b4581e20d5953e9fb16ff87fe2"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-repeat-last-v2.command.execution.json",
+        "bytes": 349,
+        "sha256": "abd7fc94e3e061787eaeca94e9bfefc624b6746c99e257ede5c37f3794845c24"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-repeat-last-v2/receipt.json",
+        "bytes": 5739,
+        "sha256": "f62eb7559669ac803de9bb0ae49fa250b58fac81029920152e08c367ed5e3bf2"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-repeat-last-v2.guard.jsonl",
+        "bytes": 227099,
+        "sha256": "12ad814f0b7a5311343e761f0ec6e11cff2a9b5b7d3fef3bf5f78e0784cb805e"
+      },
+      "wall_seconds": 381.04462991608307,
+      "peak_sampled_footprint_gib": 33.222518257796764,
+      "minimum_sampled_headroom_gib": 13.1441650390625,
+      "sampled_swap_growth_bytes": 0
+    },
+    "upstream-repeat-last-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-repeat-last-v2.command.json",
+        "bytes": 32321,
+        "sha256": "ca23ec375fb928ae4f164e571c344c8b82cbfcc807866a8fea49dbf75ee4aaab"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-repeat-last-v2.command.execution.json",
+        "bytes": 351,
+        "sha256": "482c1e8c62ecac54c3e075861613a0538e86cab5d886730620d4fa854a0aba96"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-repeat-last-v2/receipt.json",
+        "bytes": 16475,
+        "sha256": "6c5d8ffb55ad739f27a026f219fe55ac79dfdc3144adf004d470aa3cc92b2ab8"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-repeat-last-v2.guard.jsonl",
+        "bytes": 219998,
+        "sha256": "6eede8a2361cb9eba6742fe05eae9bab679ee55e837cd5567d5db8859b7b0a53"
+      },
+      "wall_seconds": 367.36400629091077,
+      "peak_sampled_footprint_gib": 12.90941035747528,
+      "minimum_sampled_headroom_gib": 31.99127197265625,
+      "sampled_swap_growth_bytes": 0
+    },
+    "native-decoder-repeat-last-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-repeat-last-v2.command.json",
+        "bytes": 33211,
+        "sha256": "a4715cb815e9baeec8adb46becfa8bb3351f1e568a17b9499655d85019710952"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-repeat-last-v2.command.execution.json",
+        "bytes": 357,
+        "sha256": "2a37c9c6474b4f869d8c58a80acc18be4b7ee477e56e80b1c1b48c6b6e0f5d6e"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-repeat-last-v2/receipt.json",
+        "bytes": 5158,
+        "sha256": "d21973ef8409c395fc4bd6b5c492f2454398bee1947498e29e60d84a9f3e9514"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/native-decoder-repeat-last-v2.guard.jsonl",
+        "bytes": 146072,
+        "sha256": "225f587e30249bd7cfc4981c76d1ffb77ba2b478f364a6262c34daed9cf8a759"
+      },
+      "wall_seconds": 242.99930041702464,
+      "peak_sampled_footprint_gib": 18.80691173672676,
+      "minimum_sampled_headroom_gib": 26.200149536132812,
+      "sampled_swap_growth_bytes": 0
+    },
+    "upstream-decoder-repeat-last-v2": {
+      "command": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-repeat-last-v2.command.json",
+        "bytes": 33035,
+        "sha256": "103a47579db92cd555498c679156fbdc1317b080229ce34f5cc38304dd456fe7"
+      },
+      "execution": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-repeat-last-v2.command.execution.json",
+        "bytes": 358,
+        "sha256": "189aa901a1934e542d0e188440a2a05fdd2fb07e0edcdbf7627df9d6d81112d7"
+      },
+      "receipt": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-repeat-last-v2/receipt.json",
+        "bytes": 9004,
+        "sha256": "b2c387b7f84608e4dcfafd2f0cc338fc540efddd8c1913ba598144f0bce6f649"
+      },
+      "guard": {
+        "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/upstream-decoder-repeat-last-v2.guard.jsonl",
+        "bytes": 207725,
+        "sha256": "7e67f85fdfb5ceb03a1adea9a56072626b9bbfa3a1f00061c2fc26f513cbd6bf"
+      },
+      "wall_seconds": 347.7037624581717,
+      "peak_sampled_footprint_gib": 8.130464479327202,
+      "minimum_sampled_headroom_gib": 25.755691528320312,
+      "sampled_swap_growth_bytes": 0
+    }
+  },
+  "visual_review": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/root-visual-review.json",
+    "bytes": 2713,
+    "sha256": "ea8e0bdbb9883c5685444390280443529dfada2ee9010c3820788a24b56383da"
+  },
+  "media": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/media.json",
+    "bytes": 2455,
+    "sha256": "6f2f42f0f04952a18b8489484a5b2085d09e85f78b68970eeb27fa8bee909f23"
+  },
+  "coarse_rgb_diagnostics": {
+    "artifact": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/motion-diagnostics.json",
+      "bytes": 80547,
+      "sha256": "2a0c5c594a42776c68c37a703ea09e25ac7c976b06be013b15ff50cf51f6e15b"
+    },
+    "scope": "Coarse 8x8 RGB differences only; not semantic movement, acting or naturalness evidence"
+  },
+  "adversary": {
+    "reviewer": "correlated same-lineage read-only agent",
+    "verdict": "ROBUST",
+    "scope": "Code lifetimes, source independence, actual artifact and recorded decoder-input joins; separate visual and numerical conclusions",
+    "observed": "Read-only review agrees with v4 and independent current-source audit; actual input/output joins, unchanged-tolerance zero-error numerical checks, rejected substitutions and negative visual conclusion are supported within the declared fixture. Review is correlated, not independent model lineage."
+  },
+  "cleanup": {
+    "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/cleanup.json",
+    "bytes": 1851,
+    "sha256": "906341ea9bd4432935207f4bb3d3999f848fc0684aa180fc7a3c26ce40eb4b53"
+  },
+  "rollback": "Omit opt-in diagnostic probe; existing production defaults are unchanged",
+  "next_falsifier": "Proposed only: distinct T1 continuation/action instruction with fixed history and noise; no new model run admitted here",
+  "refresh_on": [
+    "code or binary change",
+    "runtime or upstream revision change",
+    "weights, normalization, geometry, frozen prompt/Qwen/noise/schedule/RoPE/cache changes",
+    "input/output evidence loss"
+  ],
+  "structural_packet_limit": "Skill-referenced graph validator/template are absent; no structural validator success claimed. Packet is an index, not substantive proof.",
+  "artifact_audit": {
+    "index": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/evidence-index.json",
+      "bytes": 41492,
+      "sha256": "4ae6f6d3203c52766d4f3372348242a223ef8edcc11b1e1067feeb648c83c0ca"
+    },
+    "verifier": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/verify-pair.py",
+      "bytes": 45691,
+      "sha256": "9ba69843735cef93d1aec8c10f857242f94d1bab5fed1cc938198394169fffcd"
+    },
+    "recorded_command": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/verify-pair-v4.command.json",
+      "bytes": 8682,
+      "sha256": "0f7a4187e202491b208b48a7c431a089ccd310f803439f5af95c4d2836d23f80"
+    },
+    "execution": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/verify-pair-v4.command.execution.json",
+      "bytes": 342,
+      "sha256": "f0f2246797178937546fca5ccad8e992a0e387fa2acf54da7295f04019acdc6f"
+    },
+    "current_source_binding": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/hy-nomas-native-context-20261106.ui7736ue/moving-static-dcae-1b2d7289/current-source-bindings.json",
+      "bytes": 1205,
+      "sha256": "5c4c11c3918c029ccfa44aec6688aa9f21ef8a71512c7fd0f69afd78284e9f6a"
+    },
+    "current_source_binding_scope": "Root CPU-rehashed all 640 unique current source files against all 8 recorded launch inventories; zero mismatches. Recorded source_unchanged alone is not a current-byte hash check. This consistency audit is not tamperproof historical attestation.",
+    "negative_bindings": {
+      "opposite_arm_clip_rejected": {
+        "moving": true,
+        "repeat-last": true
+      },
+      "opposite_arm_receipt_rejected": true,
+      "wrong_frame118_rejected": true,
+      "wrong_range_rejected": true
+    }
+  }
+}

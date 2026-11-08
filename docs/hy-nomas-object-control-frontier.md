@@ -588,13 +588,103 @@ replay requires recapture; the endpoint audit remains available.
 
 Next history-specific discriminator: compare a generated moving T0 with a
 staticized copy of its final frame, passing both through the same DCAE path
-and freezing T1 inputs. This would reduce the identity/endpoint-pose confound;
-it remains proposed and needs fresh admission and a memory plan. A distinct
+and freezing T1 inputs. This would reduce the identity/endpoint-pose confound.
+A distinct
 T1 action/continuation prompt is a separate untested hypothesis. Neither
 should be conflated with photo identity conditioning. Rollback: omit the new
 mode and diagnostic probe. Refresh on source/runtime/binary/weights/input/
 noise/schedule/geometry changes or evidence loss. Evidence:
 [.landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json](../.landmark/evidence/2026-11-07-hy-nomas-t0-context-source.json).
+
+### Moving versus repeated-last-frame T0 through DCAE (2026-11-07)
+
+VERIFIED within this bounded fixture: the numerical and artifact-consistency
+DoD passes. Both arms consume the
+same authenticated native PixelUMM F32 planar RGB output, shape
+`[1,3,360,288,512]`. Moving T0 uses frames `[0,120)`; static T0 repeats its
+frame 119 exactly 120 times. Both independently normalize/clamp RGB `[0,1]`
+to BF16 `[-1,1]` on GPU and run the same pinned DCAE encoder with fresh state.
+Neither arm may import its previous DiT latent as the new T0. DCAE temporal
+effects are part of this intervention; static RGB need not encode to repeated
+latents. The generated subject is not the user's reference identity.
+
+Freeze saved T1 noise, Qwen states/prompt, RoPE, writer epsilon/timestep,
+four-step schedule, original BF16 weights and ordinary unmasked attention.
+Preallocate the connected native DCAE -> T0 writer -> T1 path before encode;
+borrow the DCAE output buffer directly and export only after the one terminal
+wait. Retain all owners until drain. No new production default or session API
+is admitted. Rollback is to omit this diagnostic probe.
+
+CAUTION: a wrong frame/channel gather, normalization rounding, stale encoder
+state or hidden readback could invalidate the comparison. Before models run,
+authenticate source bytes and calculate combined named residency plus opaque
+MPS headroom. Keep one model-owning process, the cache-aware 10% host reserve,
+64 MiB swap-growth stop and per-process cap. Stop on guard failure or any
+unresolved source mismatch; do not relax `atol=rtol=2e-5`.
+
+DoD: focused CPU admission/negative tests and release build; guarded serial
+native/source runs; actual-byte gates for the native selected RGB clip, DCAE
+endpoint, T0/T1 endpoints and same-arm PixelUMM display crop; source-consumed
+clip GPU value comparison; rejection of frame-118,
+wrong-range and opposite-arm substitutions; native preterminal allocation,
+readback and wait counts of zero and one terminal wait. Inspect both complete
+T1 face sequences and selected input T0 frames. Numerical parity qualifies
+implementation only; natural sustained motion and likeness require separate
+visual evidence. Refresh on input, normalization, code, binary, runtime,
+weights, geometry or frozen-T1 changes.
+
+All eight guarded model runs completed with unchanged captured source and
+launch commands. Both arms report zero native/source error at DCAE/T0 and
+T1 (138,240 values per endpoint) and the PixelUMM T1 crop (53,084,160 finite
+values). The source constructs its own GPU clip and passes that same tensor
+to its DCAE encoder; the all-value GPU comparison reports zero differing
+values against the authenticated native clip. Source clip bytes were not
+exported, so this is a value-equality check, not an independent CPU byte audit
+of that source tensor. T0/T1 and PixelUMM outputs are exported for actual-byte
+comparison. Recorded decoder input paths/digests and output directories join
+to the same-arm verified prefix60/cyclic90 files and recorded runs. The final
+CPU verifier recomputes endpoint and PixelUMM comparisons; all frame-118,
+wrong-range and opposite-arm negative substitutions are rejected. A separate
+root audit rehashes all 640 unique current source files against the eight
+recorded launch inventories, with zero mismatches. These are local consistency
+checks, not historical tamperproof attestation.
+
+The connected native named-buffer plan is 28.70 GiB. The first 32 GiB process
+cap stopped a run at a sampled 32.058 GiB footprint; its log does not localize
+the peak to a model stage. The completed pair uses a re-estimated 36 GiB cap,
+with the same cache-aware 10% host reserve and 64 MiB swap-growth stop. Native
+connected sampled peaks are 33.225/33.223 GiB, with at least 12.67 GiB sampled
+host headroom and zero observed swap growth. Named MetalBuffer allocation,
+readback and wait counters are 0/0/0 before the terminal wait, which occurs
+once per native stage. Opaque MPSGraph allocations are outside those counters.
+Enqueue-stage host timestamps do not establish GPU completion or peak cause.
+
+Both complete 120-frame T1 face contact sheets and selected full T0/T1 frames
+were inspected. Moving T0 turns toward the camera; repeat-last holds its final
+pose. Both T1s are nearly static. Only moving T0 shows a brief partial eyelid
+closure near T1 frames 117-119; a natural full blink or sustained acting is not
+established. Reject moving history as a useful sustained-motion correction in
+this fixture. Static history alone is insufficient to explain the weak motion.
+This intervention includes DCAE temporal encoding and DiT/PixelUMM history;
+it does not isolate a pure motion cause or improve the user's likeness. Coarse
+block RGB differences are supporting diagnostics, not semantic motion scores.
+The four-step schedule overrides the pinned upstream default eight. Cyclic
+future latents provide diagnostic decoder display context, not a generated
+third segment. No inference speedup or production-default change is claimed.
+
+Focused checks pass: 58 Python tests, 43 Crystal examples, release build,
+Ruff and `git diff --check`. The final Crystal 1.22.1 formatter check reports
+alignment-only differences in two diagnostic files; it is not counted as a
+passed check. Preserve the exact tested source bytes for this recorded run.
+Next proposed discriminator: a distinct T1 continuation/action instruction,
+keeping the input history and noise fixed. No further model run is admitted
+by this result. The correlated read-only adversary returned ROBUST within this
+numerical, artifact and negative visual scope. Retired 80,149,313 bytes of
+owned compiler caches/repros, preliminary preview and superseded verifier;
+preserved weights, frozen inputs, binaries, compact latents, raw outputs,
+receipts and final review media. Actual endpoint/pixel audit remains available;
+compilation caches must be recreated for rebuilding. Evidence:
+[.landmark/evidence/2026-11-07-hy-nomas-t0-rgb-history.json](../.landmark/evidence/2026-11-07-hy-nomas-t0-rgb-history.json).
 
 Status (2026-11-06): bounded refiner/DiT probes and four-step replay pass
 their frozen source/native gates. Frozen Q/K heads 12/15 retain strong
