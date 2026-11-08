@@ -29,6 +29,7 @@ WAN_T5_MPS_OBJ := $(BUILD_DIR)/wan_t5_mps_bridge.o
 WAN_T5_RMS_MPS_OBJ := $(BUILD_DIR)/wan_t5_rms_mps_bridge.o
 DCAE_V_MPS_OBJ := $(BUILD_DIR)/dcae_v_mps_bridge.o
 DCAE_V_NORM_MPS_OBJ := $(BUILD_DIR)/dcae_v_norm_mps_bridge.o
+DCAE_V_REDUCTION_OBJ := $(BUILD_DIR)/dcae_v_reduction_bridge.o
 WAN_T5_ATTENTION_MPS_OBJ := $(BUILD_DIR)/wan_t5_attention_mps_bridge.o
 WAN_ATTENTION_MPS_OBJ := $(BUILD_DIR)/wan_attention_mps_bridge.o
 HY_NOMAS_MPS_OBJ := $(BUILD_DIR)/hy_nomas_mps_reductions.o
@@ -638,6 +639,16 @@ $(BUILD_DIR)/dcae_v_decoder_probe: examples/dcae_v_decoder_probe.cr examples/sup
 
 spec_dcae_v_decoder:
 	$(CRYSTAL) spec -D cpu_only spec/dcae_v_decoder_spec.cr spec/dcae_v_decoder_profile_spec.cr $(ARGS)
+
+.PHONY: dcae_v_reduction_probe
+dcae_v_reduction_probe: $(BUILD_DIR)/dcae_v_reduction_probe
+
+$(DCAE_V_REDUCTION_OBJ): examples/support/dcae_v_reduction_bridge.mm | $(BUILD_SENTINEL)
+	clang++ -c $< -o $@ -std=c++17 -fobjc-arc -fPIC
+
+$(BUILD_DIR)/dcae_v_reduction_probe: examples/dcae_v_reduction_probe.cr examples/support/dcae_v_reduction_probe.metal examples/support/dcae_v_reduction_native.metal examples/support/hy_nomas_probe_instrumentation.cr $(QWEN25_PREFIX_SOURCES) $(BRIDGE_OBJ) $(WAN_MPS_CHAIN_OBJ) $(WAN_STAGE_IO_OBJ) $(DCAE_V_MPS_OBJ) $(DCAE_V_REDUCTION_OBJ)
+	$(CRYSTAL) build $< --release -o $@ \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(abspath $(WAN_MPS_CHAIN_OBJ)) $(abspath $(WAN_STAGE_IO_OBJ)) $(abspath $(DCAE_V_MPS_OBJ)) $(abspath $(DCAE_V_REDUCTION_OBJ)) $(LINK_FLAGS) $(WAN_SPEC_LINK_FLAGS)"
 
 .PHONY: hy_nomas_reference_decode_probe hy_nomas_reference_cache_probe hy_nomas_reference_block0_probe spec_hy_nomas_reference_handoff
 hy_nomas_reference_decode_probe: $(BUILD_DIR)/hy_nomas_reference_decode_probe

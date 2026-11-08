@@ -39619,3 +39619,40 @@ Refresh after source/toolchain/device/model/workload changes.
   further layout sweeps without one are parked.
   Refresh on source/binary/runtime, fixture, weights, geometry, cache/rounding,
   measurement or guard-policy changes. Parity is not a video-quality claim.
+
+### 2026-11-08 — DCAE Conv3D pre-BF16 reduction on the full stage-2 shape
+
+- Added a diagnostic-only native probe for C512/T40/H72/W128 with the real
+  stage-2 conv1 BF16 weights, synthetic GPU-generated inputs and both causal
+  cache states. All buffers/plans precede the chain; one terminal drain and
+  zero instrumented named hot allocations/readbacks/preterminal waits persist.
+  No production decoder/default change or full generation is admitted.
+- Full original/multi-target post-bias MPS outputs match bitwise on all
+  188,743,680 values per cache case. The separate upcast-F32 MPS convolution
+  rounded to BF16 also matches every exposed pre-bias value. This is a fixture
+  boundary equivalence, not access to the hidden BF16 accumulator. A fresh
+  pinned upstream operator matches all 8,192 sampled pre/post-bias values per
+  case, including original biased Conv3D versus separate BF16 bias addition.
+- The GPU exact-integer reference passes 256 independent exact Fraction/RNE
+  vectors for BF16 and F32. All 18 native F32 orders/groupings and the exact
+  reference nevertheless fail unchanged atol=rtol=2e-5 on both fixtures.
+  Full-shape exact failures are 1,872/8,192 per case: 6/3,584 stratified,
+  1,866/4,096 midpoint-enriched, zero tolerance failures in 512 edge samples.
+  These are selected-coordinate counts, not full-tensor error prevalence.
+  Staging exact accumulation through F32 repairs only 42/44 of the failures;
+  1,830/1,828 persist. The reduction schedule remains unidentified.
+- Comparator control success cannot pass a candidate gate without an explicit
+  candidate. Ordered-FMA/exact candidate replays fail as expected; nine focused
+  rounding/gate and 44 guard tests pass. The correlated static/evidence audit
+  is ROBUST only for this synthetic diagnostic. A post-drain sampled rounding
+  check independently supports the GPU full-output comparison counter.
+- Native/upstream sampled process peaks are 3.686/3.563 GiB, with 10% cache-aware
+  reserve and zero observed swap growth. Opaque driver/compiler activity and
+  between-sample spikes are not excluded. Diagnostic intervals contain many
+  operations and cannot be cited as per-Conv3D speed or generation rate.
+- Return pointer: docs/dcae-v-decoder-frontier.md and
+  .landmark/evidence/2026-11-08-dcae-conv3d-reduction.json. Native reduction
+  parity/performance remain IN_PROGRESS. Next falsifier: true stage-2
+  activation/cache from a bounded decoder-prefix run, then the same declared
+  comparison, without full generation. Refresh on source/binary/runtime,
+  weights, input/geometry/cache, sampling/rounding or measurement-policy changes.

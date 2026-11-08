@@ -327,3 +327,91 @@ Refresh after source, binary, runtime, weights, geometry, input, cache schedule,
 rounding, or measurement-policy changes. Raw artifacts are stored under
 `/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/`; the curated
 index is `.landmark/evidence/2026-11-08-dcae-conv3d-profile.json`.
+
+## Pre-BF16 Conv3D reduction frontier, 2026-11-08
+
+The next bounded probe keeps the original decoder unchanged and uses the first
+stage-2 residual conv1 weights at the real operator geometry
+`[1,512,40,72,128]`, with `[512,512,3,3,3]` weights. It compares full-shape
+original/multi-target MPS controls before interpreting sampled native reductions.
+The initial shared input is deterministic synthetic BF16, explicitly not a
+captured model activation. Both invalid and valid causal-history cases are
+required. Boundary, stratified and GPU-selected near-midpoint output coordinates
+must be identified separately; sampled agreement cannot establish full-output
+or full-decoder parity.
+
+The falsifier is any nonfinite value or unchanged-tolerance prebias failure on
+an authenticated coordinate. The old ordered-FMA mismatch is the positive
+control: an instrument that cannot detect it on the retained small fixture is
+not admitted. Native variants distinguish accumulation order, grouping and
+rounding from input/index errors. A separately upcast F32 MPS convolution is a
+reference lane, never the hidden BF16 accumulator. A separate PyTorch MPS
+operator oracle authenticates exposed BF16 boundaries and shares the Apple
+backend; it is not backend-independent evidence or part of a native timing.
+
+This is a CAUTION diagnostic change, reversible by removing the new probe
+files. No production arithmetic/default changes are admitted. The external
+guard retains a 10% cache-aware reserve, at most 18 GiB process-group footprint,
+64 MiB swap-growth stop and a bounded timeout. All outputs and graph bindings
+are allocated before the chain, with zero named hot allocations/readbacks and
+zero preterminal waits, followed by the existing sole terminal drain. Opaque
+MPS allocations remain covered by sampled process accounting.
+
+DoD is a release probe build, focused comparator/rounding checks including a
+known mismatch, guarded small-fixture control, guarded real-geometry native
+probe and separate upstream operator comparison, and a synchronization/index
+audit. A passing diagnostic does not admit a speedup, real-activation parity or
+full generation. Refresh on source/binary/runtime/weights/input/shape/cache or
+sampling-policy changes. New raw artifacts belong under
+`/opt/mldata_ssd/cogni-ml/dcae-conv-reduction-20261108.jeXGNXnF/`.
+
+The guarded probe now executes both this full geometry and the retained
+`H3/W5` positive control. On the full shape, the original and multi-target
+post-bias MPS graphs agree bitwise on all 188,743,680 output values per cache
+case. Rounding the separate upcast-F32 MPS convolution to BF16 also agrees
+bitwise with the exposed pre-bias BF16 output on every value in both cases.
+This establishes an observable boundary equivalence for this synthetic
+fixture, not access to the hidden BF16 accumulator. The pinned upstream
+operator matches all 8,192 sampled pre/post-bias values per case, including
+its original biased Conv3D call versus a separate BF16 bias addition.
+
+The native exact-integer reference passes all 256 independently constructed
+Fraction/RN-even vectors for both F32 and BF16, including cancellation,
+subnormal, overflow and double-rounding discriminators. Its direct BF16
+result nevertheless fails unchanged upstream tolerances on 1,872/8,192
+selected coordinates per full-shape case: 6/3,584 stratified coordinates and
+1,866/4,096 deliberately midpoint-enriched coordinates. The boundary samples
+have zero tolerance failures. All 18 ordered/grouped native F32 reductions
+also fail; ordinary ordered FMA has 1,852/1,856 failures. These sampled counts
+are not full-tensor prevalence, and exact mathematical summation is not an
+upstream reduction schedule. Neither higher accuracy nor these grouping
+variants are admitted as decoder replacements.
+
+The compact post-drain double-rounding check changes 49/8,192 exact BF16
+values per case when exact accumulation is first rounded to F32. This repairs
+only 42/44 of the 1,872 direct-exact tolerance failures; 1,830/1,828 remain.
+Thus staged F32 rounding is a real contributor on this sample, but cannot
+explain most mismatches. The current data do not identify the MPS schedule.
+
+Both native runs retain one terminal drain and zero instrumented named hot
+allocations/readbacks/preterminal waits. The full native process group has
+a sampled peak of 3.686 GiB; the separate upstream process group peaks at
+3.563 GiB. All four completed native/upstream runs preserve the 10% reserve
+and have zero observed swap growth. Process sampling cannot exclude spikes
+between samples, driver waits or allocations in external compiler services.
+The complete diagnostic GPU interval includes multiple full convolutions,
+sampling and 19 native candidates; it is not a Conv3D speed measurement.
+
+The comparator requires an explicitly named candidate for a passing candidate
+gate. Observation-only control success is separate, and both ordered-FMA and
+exact-integer candidate gates return failure on both fixtures. Nine focused
+rounding/gate tests and 44 memory-guard tests pass. The diagnostic is verified
+within this fixture; native upstream-equivalent reduction and performance
+improvement remain open. The curated evidence index is
+`.landmark/evidence/2026-11-08-dcae-conv3d-reduction.json`.
+
+Next discriminator: capture the true stage-2 BF16 input and causal cache by
+running only the decoder prefix, then repeat the same declared comparisons.
+This tests distribution dependence without a full generation. Do not promote
+the weak score advantage of one grouping or repeat layout sweeps as evidence
+of an identified reduction schedule.
