@@ -39784,3 +39784,22 @@ Refresh after source/toolchain/device/model/workload changes.
   cache cases and a paired full-shape timing against MPS. Refresh the
   sampled certificate on upstream, runtime, precision, geometry, weight,
   fixture or sampling changes.
+
+### 2026-11-08 — DCAE tiled G8 is bitwise exact on both full stage-2 caches
+
+- A tile of four output channels and two x positions preserves each
+  output's continuous G8 FMA order. It matches pinned upstream stage-2
+  conv1 before bias on all 188,743,680 values per cache in both F32 and
+  BF16. The GPU comparator passes its negative witnesses and every
+  comparison at the existing `atol=rtol=2e-5` gate.
+- Warm BF16 batches in both orders give median paired G8/MPS ratios
+  1.006× cold and 1.034× live. Pair ranges cross parity, so the data
+  support keeping G8 as a diagnostic and MPS in the production decoder.
+  The stage-boundary clock failed its MPS witnesses. Use the audited
+  completed-batch wall time with one terminal readout per batch and
+  zero explicit intermediate GPU waits.
+- Peak sampled footprint was 5.933 GiB, minimum cache-aware headroom
+  23.997 GiB and swap growth zero at the 10% floor. Return pointer
+  `docs/dcae-v-decoder-frontier.md` has the source pins and timing
+  protocol. Refresh on upstream, runtime, geometry, inputs, precision
+  or timing-method changes.

@@ -1,10 +1,11 @@
 # Original DCAE-V native decoder frontier
 
 The native opt-in decoder has verified full-context BF16 parity.
-Conv3D profiling is implemented and performance gains remain unproven. Bounded
-real-activation probes separate local FMA and partial-sum merge sensitivity at
-stage 2. The unchanged full-weight upstream gate still rejects the tested
-native reductions.
+Conv3D profiling is implemented and performance gains remain unproven.
+The tiled G8 diagnostic matches the full stage-2 pre-bias Conv3D output
+bitwise for both real cache cases. Paired BF16 timing shows no consistent
+advantage over MPS. Earlier reduction schedules failed the full-weight
+upstream gate.
 
 ## Goal and boundary
 
@@ -910,3 +911,94 @@ parity on both cache cases before timing paired full-shape Conv3D against
 MPS. The sampled result covers stage-2 conv1 before bias for the pinned
 fixture and runtime. Refresh it on upstream operator, MPS runtime,
 precision, geometry, weight, fixture or sampling changes.
+
+## Full-output stage-2 Conv3D tiled over G8 accumulators
+
+Keep the authenticated cold and live stage-2 inputs and weights. Tile only
+the output coordinates and retain one continuous F32 accumulator per
+coordinate in the dense G8 order. Pack BF16 weights on GPU for adjacent
+output channels, with identical bits. Cover all 188,743,680 outputs per
+cache before bias. Test native F32 and native BF16 stores separately against
+the corresponding pinned upstream calls. Require exact F32/BF16 equality
+and report failures at the existing `atol=rtol=2e-5` gate.
+
+The falsifiers are a missing or duplicate output coordinate, a failed
+comparison witness, a mismatch against the retained upstream sample, or any
+full-output difference. Initialize candidate buffers with non-finite
+sentinels and reduce coverage, raw-bit differences and finite errors on GPU.
+Time hot BF16 only after parity. Warm both arms and measure both orders on
+each cache with the same operands and output geometry. Keep preparation and
+comparison outside the intervals. Require one terminal readout per probe
+chain and zero explicit intermediate GPU waits.
+
+Admit one guarded process at a time with an 8 GiB process-group cap, 10%
+cache-aware reserve and 64 MiB swap-growth stop. Completion requires a
+guarded `dcae_v_tiled_g8.py` parity capture, then paired full-shape BF16
+intervals against the pinned MPS operator. The risk is limited to the
+diagnostic; removing its files rolls it back. Production promotion requires
+a separate decoder-level performance result.
+
+The native kernel tiles four adjacent output channels and two x positions
+per thread, with adjacent SIMD lanes visiting adjacent x. Sixteen
+dispatches cover 32 output channels each. BF16 inputs and reordered weights
+remain resident, with one F32 accumulator per output and an optional direct
+round-to-nearest-even BF16 store. No partial reductions or intermediate F32
+output buffer are used in the BF16 arm.
+
+| Cache | F32 bit mismatches | BF16 bit mismatches | Max absolute error |
+| --- | ---: | ---: | ---: |
+| Cold | 0 / 188,743,680 | 0 / 188,743,680 | 0 |
+| Live | 0 / 188,743,680 | 0 / 188,743,680 | 0 |
+
+Each fresh upstream column also reproduced its 8,192 retained sample
+values bitwise. The comparator witness covered a strided tail and
+distinguished signed zero, a finite error inside tolerance, a finite error
+outside tolerance and an equal-bit NaN. An offline audit checked coverage
+and spatial bounds, and rejected shortened coverage and a forged tail
+mismatch.
+
+The source-pinned parity command, guard telemetry, compact result and audit
+are in `/opt/mldata_ssd/cogni-ml/dcae-tiled-g8-20261108.8gG8Qbk5`. The parity
+SHA-256 is `53da951ea304722546f6cdac622646ec73e871ab416bc444540e50d7af63d3b1`.
+The guarded run on Apple M2 Max (macOS build `25G83`, Torch 2.8.0) took
+23.392 s including setup, both precisions, both caches and controls.
+The sampled process-group peak was 5.084 GiB, minimum cache-aware headroom
+25.610 GiB and observed swap growth zero.
+
+Reject the stage-boundary timestamp attempt. The first clock witness
+reported 0.048 ms for two F32 1536-square MPS matmuls. A warmed witness
+returned an invalid timestamp. Those markers do not establish elapsed
+Conv3D time across the MPS graph path on this runtime.
+
+The paired timing uses completed BF16 batch wall time in one process.
+The setup chain prepares weights and activations, warms both arms in
+ABBA order on each cache, and checks both full BF16 outputs. Each
+measured batch runs two convolutions and reads one scalar after the
+second call. The scalar is checked against the warmup result. ABBA
+and BAAB are measured separately on each cache. Wall time per call
+includes host encoding and the amortized terminal drain. The tiled
+arm uses a prepared output buffer, and the pinned MPS operator uses
+its eager output allocation. No intermediate tensor reads, timestamp
+encoders, explicit device waits or CPU arithmetic fallback are used.
+
+| Causal cache | Tiled G8 median per call | MPS median per call | Median paired G8 / MPS | Pair range |
+| --- | ---: | ---: | ---: | ---: |
+| Cold | 2.735 s | 2.696 s | 1.006× | 0.977–1.038× |
+| Live | 2.891 s | 2.763 s | 1.034× | 0.989–1.067× |
+
+The cold-cache pairs change sign with order, and the live-cache pairs
+also span parity. This single guarded matrix establishes no repeatable
+speedup. Keep the tiled G8 route as a diagnostic. MPS is the production
+decoder route. The evidence covers the pinned stage-2 pre-bias Conv3D
+shape and fixtures on M2 Max. These are warm operator-batch times
+including host encoding and terminal completion. Refresh on changes to
+the upstream operator, runtime, GPU, geometry, inputs, weights, cache
+semantics, arithmetic or timing method.
+
+The source-pinned timing command, execution receipt, guard telemetry and
+independent recount are in the same scratch evidence directory. The
+timing SHA-256 is `9c90c854e2987e5b8008f7769444cde97927c27ff96b53bd06209fb3273c6cf1`.
+The guarded timing took 113.221 s including setup, warmups and all
+measured batches. The sampled process-group peak was 5.933 GiB, minimum
+cache-aware headroom 23.997 GiB and observed swap growth zero. Both runs
+kept the 10% reserve. The focused 62 tests passed.
