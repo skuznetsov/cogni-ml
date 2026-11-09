@@ -39895,3 +39895,18 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/dcae-v-decoder-frontier.md` records both receipts and replay.
   Refresh on runtime, input, geometry, resources, observer or thermal
   regime changes.
+
+### 2026-11-09 — Reversed DCAE pair matches thermal pressure on the live tile
+
+- MPS → C8 after 301 s per arm gave 49/49 and 39/39 Nominal live-tile
+  samples. The prior order showed 13 Moderate samples in second-position
+  MPS. The elevated pressure did not follow the second position in the
+  reversal. Mean and median C8 clocks were 3.98% and 4.30% lower than
+  MPS, so the 18.32% wall reduction stays descriptive under the existing
+  matching rule.
+- Both outputs matched the saved upstream BF16 prefix bitwise at
+  `atol=rtol=2e-5`. One terminal wait per request, zero preterminal waits
+  or readbacks, 17.99 GiB minimum cache-aware headroom under the 10%
+  reserve policy and zero swap growth. The order comparison and receipt
+  are in `docs/dcae-v-decoder-frontier.md`. Refresh on runtime, input,
+  geometry, resources, observer or thermal regime changes.

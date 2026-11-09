@@ -1361,3 +1361,46 @@ directory's `run_matched.py` and `analyze_matched.py` to its own fresh
 sibling directory and run them in order with `python3 -B` from the
 worktree. Refresh timing evidence after changes to the runtime, geometry,
 input, resource plan, observer or thermal regime.
+
+### MPS-first pair after 301 seconds of recovery
+
+The reversed pair reused the pinned binary, inputs, observer, admission
+rule and memory guard. Measured recovery was 301.144 s before MPS and
+301.178 s before C8. The final 30 samples of each pause passed the quiet
+Nominal gate, with zero median GPU activity. These are the live-tile
+interior samples from the two long-recovery pairs.
+
+| Order | Backend | Active GPU frequency, mean / median | Median GPU power | Thermal pressure |
+| --- | --- | ---: | ---: | --- |
+| C8 → MPS | C8 | 1335.9 / 1334.5 MHz | 55.82 W | 40 Nominal |
+| C8 → MPS | MPS | 1344.7 / 1347 MHz | 59.12 W | 36 Nominal, 13 Moderate |
+| MPS → C8 | MPS | 1393.7 / 1396 MHz | 62.02 W | 49 Nominal |
+| MPS → C8 | C8 | 1338.2 / 1336 MHz | 55.79 W | 39 Nominal |
+
+Every valid interior sample showed 100% active GPU residency. The live
+tile's thermal histogram total variation fell to zero. C8's mean
+and median frequencies were 3.98% and 4.30% below MPS, beyond the 2%
+limit. The cold tile missed the same limit on mean frequency by 0.16
+percentage points. The live tile's GPU root interval was 85.632–85.691 s
+for C8 versus 104.013–104.072 s for MPS. Whole-request wall time was
+169.982 s versus 208.117 s, an observed reduction of 18.32%. The
+frequency mismatch keeps these timing differences descriptive.
+
+The reverse order challenges a pressure shift that always follows the
+second position. C8's live-tile median clock changed by 1.5 MHz across
+orders, while MPS's changed by 49 MHz. Thermal pressure is a system-wide
+category. One pair in each order leaves the contributions of the backend
+and host conditions across the two sessions unresolved.
+
+Both requests matched all 35,389,440 BF16 output words of the saved
+upstream causal prefix bitwise at `atol=rtol=2e-5`. The CPU audit ran
+after the existing terminal wait. Each request recorded zero preterminal
+waits, readbacks and named allocations. Sampled peaks were 9.66 GiB for
+MPS and 9.89 GiB for C8. Minimum cache-aware headroom was 17.99 GiB under
+the 10% reserve policy, with zero swap growth. The run covered only the
+two decoder tiles.
+
+The paired receipt and replay scripts are in
+`/opt/mldata_ssd/cogni-ml/dcae-mps-c8-301s-20261109.5ZPBqdvV`.
+SHA-256 of `pair-result.json` is
+`b0f66ab87a34aaf28daa7fd9f6ee3f6ee423c4db97244d15944c36c354cbf23e`.
