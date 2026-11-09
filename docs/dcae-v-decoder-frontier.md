@@ -1222,3 +1222,72 @@ those inputs, the kernel, buffer plan or measurement method.
 
 See `.landmark/evidence/2026-11-09-dcae-stage1-c8.json` for source pins,
 timings, guard samples and replay paths.
+
+## Two-tile C8 A/A timing, 2026-11-09
+
+On M2 Max (64 GiB, macOS 26.6.2), two fresh processes each ran their
+first request on the same pinned T20 prefix and BF16 weights at
+`86098128`. Both used `--runs 1 --profile --cache-profile --c8-stage1`
+after a 20-second pre-launch pause with no explicit GPU warmup or cache
+purge. Each request used 60 C8 convolutions, 482 operations, 443 command
+roots and 6,035,592,728 bytes of named GPU buffers. Operation and root
+candidate sequences matched. GPU timing uses existing root timestamps
+collected after the one terminal wait. The request counters recorded
+zero preterminal waits, tensor readbacks and named GPU allocations.
+
+| Measurement | A1 | A2 |
+| --- | ---: | ---: |
+| Decode wall | 173.304 s | 194.987 s |
+| Union of GPU root intervals | 173.255 s | 194.937 s |
+| Gaps between roots, total | 0.282 ms | 0.297 ms |
+| `commitAndContinue` wall, 442 calls | 137.573 s | 153.085 s |
+| `commitAndContinue` calling thread CPU | 8.296 ms | 7.962 ms |
+| MPSGraph encode wall outside nested continuations, 590 calls | 0.119 s | 0.114 s |
+| Median active GPU frequency | 1315.5 MHz | 1169.5 MHz |
+
+The 21.683 s wall increase contains 21.682 s of additional GPU root
+duration. The earlier connected C8 repeats also showed 26.32 s more wall
+time and 26.32 s more root duration. Aggregate API wall time overlaps GPU
+execution. For example, A1 host encoding attributed 8.35 s to live-tile
+stage 6 while its possible GPU roots totaled under 0.88 s. The continuation
+totals show wait-like time on the calling thread and leave individual
+driver wait reasons unresolved.
+
+| Cache tile | Stage 1 increase | Stage 2 increase | Tile increase |
+| --- | ---: | ---: | ---: |
+| Cold | 2.29 s | 5.15 s | 8.53 s |
+| Live | 4.65 s | 6.87 s | 13.15 s |
+
+Each column counts roots whose candidates belong entirely to the named
+phase or tile. Stages 1 and 2 account for 18.96 s together. The 60 roots
+with a C8 candidate account for 17.23 s, including any co-encoded work.
+The largest single increase was 0.89 s in a live-tile stage-1 root with
+only an MPS Conv3D candidate. Root intervals bound attribution at the
+command level and do not isolate kernel execution.
+
+System-wide `powermetrics` sampled every 2 s. Median active residency
+was 100% in both arms. A1 had 74 Nominal and 10 Moderate eligible
+thermal samples. A2 had 94 Heavy samples. Across the four tile and
+stage combinations above, the C8 candidate root duration ratios were
+within 0.59 percentage points of the inverse ratios of the corresponding
+mean GPU frequencies. This associates the spread with lower GPU frequency
+under thermal pressure. The sequential pair leaves the causal effect of
+thermal pressure unresolved. Admit the next C8/MPS comparison only with
+comparable measured frequency and thermal state by tile.
+
+Both outputs matched all 35,389,440 BF16 pixel words of the retained
+pinned upstream prefix bitwise at unchanged `atol=rtol=2e-5`. The
+post-drain CPU audit checked each tile separately. A one-word mutation
+in frame 79 failed only the live tile and full-tensor comparisons.
+The cache-aware guard kept the 10% reserve, with 21.52 GiB minimum
+sampled headroom, 9.89 GiB peak group footprint and zero swap growth.
+The probe ran the decoder alone.
+
+The run commands, source and binary pins, root attribution, power windows
+and audit are in
+`/opt/mldata_ssd/cogni-ml/dcae-c8-aa-20261109.eOmDH50M/pair-result.json`
+(SHA-256 `984a27bf37c5a74b89ddc9a4826054a21855e4297bc661619aecf4894ea43833`).
+For replay, copy `run_pair.py` and `analyze_pair.py` to a fresh directory
+on the same SSD and run them in that order with `python3 -B` from the
+worktree. Refresh timing evidence after changes to the runtime, geometry,
+input, resource plan, observer or thermal regime.

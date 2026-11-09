@@ -39856,3 +39856,22 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/dcae-v-decoder-frontier.md` and
   `.landmark/evidence/2026-11-09-dcae-stage1-c8.json`. Refresh on source,
   runtime, geometry, inputs, precision, workspace or measurement changes.
+
+### 2026-11-09 — Two-tile C8 A/A drift is inside GPU command intervals
+
+- Identical C8 runs took 173.30 and 194.99 s. The GPU root interval
+  union grew by 21.68 s with under 0.30 ms of gaps in each arm. Stages
+  2 and 1 contributed 12.02 and 6.94 s on phase-only roots. The 442
+  `commitAndContinue` calls gained 15.51 s of wall time at about 8 ms
+  of calling-thread CPU per arm. Keep these API and GPU totals separate.
+- GPU active frequency fell from a median 1315.5 to 1169.5 MHz as
+  observed thermal pressure reached Heavy. Match measured GPU frequency
+  and thermal state by tile for the next C8/MPS comparison. The A/A
+  establishes timing attribution within this pair. Per-call driver
+  wait causes and the causal effect of thermal pressure remain open.
+- Both runs matched the retained upstream prefix bitwise on both tiles
+  at `atol=rtol=2e-5`. One terminal wait, 9.89 GiB sampled peak,
+  21.52 GiB minimum cache-aware headroom at the 10% floor and no swap
+  growth. Return pointer `docs/dcae-v-decoder-frontier.md` records the
+  receipt and replay. Refresh on runtime, input, geometry, resource plan,
+  observer or thermal regime changes.
