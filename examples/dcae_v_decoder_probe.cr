@@ -11,7 +11,6 @@ require "../src/ml/video/dcae_v_decoder"
 module DCAEVDecoderProbe
   extend self
   @@in_flight = [] of Proc(Nil)
-  CONV_LAYOUT = "native"
 
   def validate_output(path : String) : Nil
     unless Path[path].absolute? && !File.exists?(path) && File.directory?(File.dirname(path)) &&
@@ -20,13 +19,13 @@ module DCAEVDecoderProbe
     end
   end
 
-  def write_artifact(path : String, tensors : Hash(String, Tuple(ML::MetalBuffer, Array(Int64)))) : Nil
+  def write_artifact(path : String, tensors : Hash(String, Tuple(ML::MetalBuffer, Array(Int64))), layout : String) : Nil
     offset = 0_i64
     header = JSON.build do |json|
       json.object do
         json.field "__metadata__" do
           json.object do
-            json.field "conv_layout", CONV_LAYOUT
+            json.field "conv_layout", layout
           end
         end
         tensors.each do |name, entry|
@@ -61,12 +60,12 @@ module DCAEVDecoderProbe
   end
 
   def write_profile(profile : ML::Video::DCAEVDecoderProfile,
-                    request : Int32) : Nil
+                    request : Int32, layout : String) : Nil
     puts(JSON.build do |json|
       json.object do
         json.field "event", "dcae_decoder_profile"
         json.field "request", request
-        json.field "conv_layout", CONV_LAYOUT
+        json.field "conv_layout", layout
         json.field "timing_boundary", "operation host encode wall time; existing MPS root intervals read after the request terminal wait"
         json.field "gpu_attribution_semantics", "Root candidate sums may double-count shared intervals; definite sums include roots with a single operation or stage/category candidate. These are interval attribution bounds, not exclusive kernel times."
         json.field "gpu_root_interval_summary" do
@@ -146,6 +145,37 @@ module DCAEVDecoderProbe
     end)
   end
 
+  # A root can straddle a causal tile boundary. Retain the shared root in the
+  # upper bound only. GPU interval sums do not measure exclusive kernel time.
+  def write_cache_profile(profile : ML::Video::DCAEVDecoderProfile, request : Int32,
+                          tiles : Int32, layout : String) : Nil
+    root_tiles = profile.root_candidates.map do |operations|
+      operations.map do |name|
+        match = name.match(/\Atile(\d+)\/|\.tile(\d+)\z/) || raise "Unlabelled DCAE-V tile operation: #{name}"
+        (match[1]? || match[2]).to_i32
+      end.uniq
+    end
+    tiles.times do |tile|
+      possible = [] of ML::Video::MPSCommandRootTiming
+      definite_seconds = 0.0
+      root_tiles.each_with_index do |candidates, index|
+        next unless candidates.includes?(tile)
+        root = profile.roots[index]
+        possible << root
+        definite_seconds += root.gpu_end_seconds - root.gpu_start_seconds if candidates.size == 1
+      end
+      raise "No completed DCAE-V roots for tile #{tile}" if possible.empty?
+      puts({event: "dcae_decoder_cache_profile", request: request, conv_layout: layout,
+            tile: tile, cache: tile == 0 ? "cold" : "live",
+            possible_root_count: possible.size,
+            shared_root_count: root_tiles.count { |candidates| candidates.size > 1 && candidates.includes?(tile) },
+            first_possible_gpu_start_seconds: possible.min_of(&.gpu_start_seconds),
+            last_possible_gpu_end_seconds: possible.max_of(&.gpu_end_seconds),
+            definite_gpu_root_seconds: definite_seconds,
+            possible_gpu_root_seconds: possible.sum { |root| root.gpu_end_seconds - root.gpu_start_seconds }}.to_json)
+    end
+  end
+
   def run : Nil
     setup_start = Time.instant
     weights_path = weights_sha = reference_path = reference_sha = output_path = ""
@@ -154,6 +184,8 @@ module DCAEVDecoderProbe
     plan_only = false
     capture_stages = false
     profile_enabled = false
+    cache_profile = false
+    packed_c8 = false
     OptionParser.parse do |p|
       p.banner = "Native original BF16 DCAE-V decoder; run under wan_memory_guard.py"
       p.on("--weights PATH", "Original decoder-only BF16 safetensors") { |v| weights_path = v }
@@ -165,8 +197,11 @@ module DCAEVDecoderProbe
       p.on("--runs N", "Sequential requests reusing buffers and plans") { |v| runs = v.to_i32 }
       p.on("--capture-stages", "Capture every tile's stage outputs on GPU") { capture_stages = true }
       p.on("--profile", "Record per-operation host encode time and existing MPS root intervals") { profile_enabled = true }
+      p.on("--cache-profile", "Summarize existing GPU root intervals by causal cache tile") { cache_profile = true }
+      p.on("--c8", "Use packed C8 for the verified stage-2 residual Conv3D geometry") { packed_c8 = true }
       p.on("--plan-only", "Authenticate and plan without Metal") { plan_only = true }
     end
+    layout = packed_c8 ? "c8_stage2" : "native"
     unless [weights_path, weights_sha, reference_path, reference_sha].none?(&.empty?) &&
            (3072..32768).includes?(budget_mib) && (1..4).includes?(runs)
       raise ArgumentError.new("Pinned weights/reference and budget 3..32 GiB, runs 1..4 are required")
@@ -196,7 +231,7 @@ module DCAEVDecoderProbe
         raise ArgumentError.new("DCAE-V decoder reference keys or shapes differ from declared capture")
       end
       io_bytes = expected.sum { |_, dims| dims.product * 2 }
-      workspace_bytes = ML::Video::DCAEVDecoder.workspace_required_bytes(cfg)
+      workspace_bytes = ML::Video::DCAEVDecoder.workspace_required_bytes(cfg, packed_c8: packed_c8)
       budget = budget_mib * 1024 * 1024
       weight_plan = ML::Video::WeightPlan.new([weights], ML::Video::DCAEVDecoder.checkpoint_bindings(cfg),
         budget, reserve_bytes: io_bytes + workspace_bytes,
@@ -210,7 +245,7 @@ module DCAEVDecoderProbe
             weight_bytes: weight_plan.destination_bytes, workspace_bytes: workspace_bytes,
             io_trace_bytes: io_bytes, named_bytes: named_bytes, budget_bytes: budget,
             temporal_tiles: cfg.tile_count, opaque_mpsgraph_bytes_known: false,
-            conv_layout: CONV_LAYOUT,
+            conv_layout: layout,
             full_video_generation: false}.to_json)
       return if plan_only
       validate_output(output_path)
@@ -218,7 +253,8 @@ module DCAEVDecoderProbe
       workspace_arena = ws = ML::Video::Arena.new
       io_arena = ia = ML::Video::Arena.new
       prepared = pw = ML::Video::PreparedWeights.new(weight_plan, wa)
-      workspace = ML::Video::DCAEVDecoder.prepare!(ws, cfg, budget, weight_plan.destination_bytes + io_bytes)
+      workspace = ML::Video::DCAEVDecoder.prepare!(ws, cfg, budget, weight_plan.destination_bytes + io_bytes,
+        packed_c8: packed_c8)
       tensors = {} of String => Tuple(ML::MetalBuffer, Array(Int64))
       expected.each do |name, dims|
         tensors[name] = {ia.alloc_weight(name, dims.product.to_i32, ML::Video::WeightDType::BF16), dims}
@@ -230,6 +266,9 @@ module DCAEVDecoderProbe
       plan_prepare_start = Time.instant
       plan = active_plan = ML::Video::DCAEVDecoder.prepare_mps!(input, tensors["output.pixels"][0], wa,
         workspace, cfg, traces)
+      if packed_c8 && active_plan.c8_convolution_count != cfg.tile_count * 2 * ML::Video::DCAEVDecoder::DEPTHS[2]
+        raise "DCAE-V C8 plan does not cover all stage-2 residual convolutions"
+      end
       plan_prepare_seconds = (Time.instant - plan_prepare_start).total_seconds
       raise "DCAE-V decoder memory plan/allocation mismatch" unless wa.resident_bytes + ws.resident_bytes + ia.resident_bytes == named_bytes
       puts({event: "dcae_decoder_prepared", setup_seconds: (Time.instant - setup_start).total_seconds,
@@ -237,13 +276,14 @@ module DCAEVDecoderProbe
             runs: runs, measured_requests: runs,
             plan_prepare_seconds: plan_prepare_seconds,
             capture_stages: capture_stages, profile: profile_enabled,
+            cache_profile: cache_profile, c8_convolutions: active_plan.c8_convolution_count,
             weight_residency: "BF16 bytes copied to resident buffers during setup",
             weight_staging_bytes: weight_plan.staging_bytes,
-            conv_layout: CONV_LAYOUT}.to_json)
+            conv_layout: layout}.to_json)
       runs.times do |index|
         chain = active = ML::Metal::MPSCommandChain.new
-        profile_capture = profile_enabled ? ML::Video::DCAEVDecoderProfileRecorder.new : nil
-        active.enable_api_profile!(phase_roots: false) if profile_capture
+        profile_capture = profile_enabled || cache_profile ? ML::Video::DCAEVDecoderProfileRecorder.new : nil
+        active.enable_api_profile!(phase_roots: false) if profile_enabled
         allocations = ML::MetalBuffer.hy_text_probe_allocations
         reads = ML::MetalBuffer.hy_text_probe_readbacks
         start = Time.instant
@@ -266,19 +306,21 @@ module DCAEVDecoderProbe
               wall_seconds: wall_seconds, encode_seconds: encoded_seconds,
               terminal_wait_seconds: wait_seconds, gpu_seconds: active.gpu_elapsed_seconds, segments: active.segment_count,
               waits: active.wait_count, metrics: metrics, named_bytes: named_bytes,
-              conv_layout: CONV_LAYOUT, profile: profile_enabled}.to_json)
+              conv_layout: layout, profile: profile_enabled, cache_profile: cache_profile}.to_json)
         if recorder = profile_capture
-          write_profile(recorder.build(active), index.to_i32)
+          profile = recorder.build(active)
+          write_profile(profile, index.to_i32, layout) if profile_enabled
+          write_cache_profile(profile, index.to_i32, cfg.tile_count, layout) if cache_profile
         end
         active.release
         # The plan retains the completed chain as a lifetime certificate. The
         # wrapper may be released; completed? remains true after release.
       end
-      write_artifact(output_path, tensors)
+      write_artifact(output_path, tensors, layout)
       puts({event: "dcae_decoder_native_completed", output: output_path,
             output_sha256: File.open(output_path) { |io| Digest::SHA256.hexdigest(io) },
             named_bytes: named_bytes, full_video_generation: false,
-            conv_layout: CONV_LAYOUT,
+            conv_layout: layout,
             upstream_comparison_required: true}.to_json)
     ensure
       can_release = true

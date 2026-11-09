@@ -39821,3 +39821,19 @@ Refresh after source/toolchain/device/model/workload changes.
   at the 10% floor. Return pointer `docs/dcae-v-decoder-frontier.md`
   holds the pins and replay evidence. Promotion requires a connected
   decoder result with the same precision gate and end-to-end timing.
+
+### 2026-11-09 — Packed C8 qualifies as an optional DCAE-V route
+
+- The connected decoder applies C8 to 20 stage-2 residual convolutions
+  per causal tile and reuses 391.5 MiB of GPU packs. All four runs matched
+  the pinned upstream T20 prefix bitwise on both cache tiles at unchanged
+  `atol=rtol=2e-5`. A last-frame mutation failed the live gate.
+- Against MPS, decode wall time fell 13.8% and 5.3% in opposite orders.
+  The live tile improved in both pairs; the cold tile did not. Sampled
+  peak rose from 9.66 to 10.33 GiB. Host drift limits generalization, so
+  MPS remains the default and `--c8` selects the measured route.
+- No new in-chain GPU waits or tensor transfers. Minimum sampled cache-aware
+  headroom was 11.30 GiB at the 10% floor; no swap growth. Return pointer:
+  `docs/dcae-v-decoder-frontier.md` and
+  `.landmark/evidence/2026-11-09-dcae-c8-decoder.json`. Refresh after an
+  upstream, runtime, geometry, input, precision, or measurement change.

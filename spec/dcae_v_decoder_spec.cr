@@ -48,6 +48,24 @@ describe ML::Video::DCAEVDecoderConfig do
       ML::Video::DCAEVDecoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(1, 2, 10)))
   end
 
+  it "admits C8 only at the validated geometry and budgets one reused pack pair" do
+    decoder = ML::Video::DCAEVDecoder
+    cfg = ML::Video::DCAEVDecoderConfig.new(9, 16, 20)
+    base = decoder.workspace_required_bytes(cfg)
+    decoder.workspace_required_bytes(cfg, packed_c8: true).should eq(base + 410_517_504_i64)
+    decoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(9, 16, 10), packed_c8: true)
+      .should eq(base + 410_517_504_i64)
+    expect_raises(ArgumentError, /9x16/) do
+      decoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(9, 15, 20), packed_c8: true)
+    end
+    expect_raises(ArgumentError, /9x16/) do
+      decoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(9, 16, 20, 2), packed_c8: true)
+    end
+    ML::Video::DCAEVDecoderC8.eligible?(1, 512, 512, 40, 72, 128).should be_true
+    ML::Video::DCAEVDecoderC8.eligible?(1, 512, 2048, 40, 72, 128).should be_false
+    ML::Video::DCAEVDecoderC8.eligible?(1, 512, 512, 40, 36, 64).should be_false
+  end
+
   it "rejects unsupported or overflowing geometry before GPU work" do
     expect_raises(ArgumentError) { ML::Video::DCAEVDecoderConfig.new(0, 1, 10) }
     expect_raises(ArgumentError, /multiples of 10/) { ML::Video::DCAEVDecoderConfig.new(1, 1, 11) }

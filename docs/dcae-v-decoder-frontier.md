@@ -1,11 +1,11 @@
 # Original DCAE-V native decoder frontier
 
 The native opt-in decoder has verified full-context BF16 parity.
-Conv3D profiling is implemented and performance gains remain unproven.
-The tiled G8 diagnostic matches the full stage-2 pre-bias Conv3D output
-bitwise for both real cache cases. Paired BF16 timing shows no consistent
-advantage over MPS. Earlier reduction schedules failed the full-weight
-upstream gate.
+The optional packed C8 route preserves bitwise parity and reduces observed
+two-tile decoder time on M2 Max. The earlier strided tiled G8 diagnostic
+matched the full stage-2 pre-bias Conv3D output bitwise on both cache cases
+but did not consistently beat MPS. Other reduction schedules failed the
+full-weight upstream gate.
 
 ## Goal and boundary
 
@@ -1094,3 +1094,73 @@ footprint was 6.085 GiB, minimum cache-aware headroom was 18.876 GiB
 and observed swap growth was zero. The focused 62 tests passed.
 Refresh on changes to the pinned operator, runtime, GPU, input or
 weight layout, geometry, cache semantics or timing method.
+
+## Connected C8 decoder gate
+
+Compare the complete decoder on the first two causal tiles of the pinned
+`[1,32,60,9,16]` upstream bank. Admit the optional C8 route only for stage-2
+residual convolutions with `[1,512,40,72,128]` input/output and contiguous
+OIDHW BF16 weights. Keep the MPS path as the default and for all other
+operations. Roll back by selecting the original MPS decoder plan.
+
+Preserve the G8 FMA order, the first BF16 boundary before the bias add, the
+second BF16 boundary after bias, and the cache-last-frame store. Pack the
+current tile plus its causal pad and the current filter on the same GPU
+chain. Include both packs in request timing; reserve the two reusable
+buffers at plan setup. No extra command continuation, terminal wait, or
+host tensor transfer is needed. The strongest falsifier is a mismatch on
+the second tile caused by stale history or by a changed BF16 boundary.
+
+DoD: build `dcae_v_decoder_probe`, run `make spec_dcae_v_decoder`, and run
+both variants serially against the same authenticated T20 upstream prefix.
+Use the existing output comparator at `atol=rtol=2e-5` and compare each
+tile's pixels separately. Require zero named GPU allocations, readbacks and
+preterminal waits in the timed request. Report independent process peaks
+and time on the same weights, input, and timeline; split existing GPU root
+intervals by tile, disclosing shared roots. Keep the cache-aware 10%
+reserve and 64 MiB swap-growth stop; size the cap from prior connected
+measurements and added named scratch. No DiT or full video generation.
+
+### Observed result, 2026-11-09
+
+The native decoder ran all layers for two consecutive causal tiles of real
+latents, `[1,32,20,9,16]` to `[1,3,80,288,512]`. C8 replaced the 20 stage-2
+residual convolutions per tile. All four runs matched the authenticated
+prefix of the pinned upstream BF16 output bitwise: 17,694,720 values per
+tile, zero nonfinites, unchanged `atol=rtol=2e-5`. A one-value mutation at
+frame 79 failed the full comparison and the live-tile comparison, while
+the cold tile still passed.
+
+Each process ran one request after setup on the same weights and input.
+Request wall time includes both GPU packs and the existing terminal drain;
+it excludes setup and post-drain export. GPU times below bound the sum of
+existing command-root intervals: one root spans the two tiles. Footprints
+are sampled process-group maxima within those time windows, including
+shared workspace and opaque MPS resources. They are not allocations
+owned by a particular tile. The whole-process peak includes setup and
+export samples as well.
+
+| Run order | Cold GPU time | Cold peak | Live GPU time | Live peak | Decode wall | Whole peak |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| B1 C8 | 91.101–91.160 s | 10.263 GiB | 91.315–91.374 s | 10.334 GiB | 182.583 s | 10.334 GiB |
+| A1 MPS | 104.974–105.034 s | 9.574 GiB | 106.699–106.759 s | 9.657 GiB | 211.784 s | 9.657 GiB |
+| A2 MPS | 115.900–115.973 s | 9.574 GiB | 125.423–125.497 s | 9.657 GiB | 241.447 s | 9.657 GiB |
+| B2 C8 | 116.556–116.631 s | 10.269 GiB | 112.031–112.105 s | 10.334 GiB | 228.711 s | 10.334 GiB |
+
+C8 reduced total wall time by 13.8% and 5.3% in the two orders. The live
+tile improved by about 14.4% and 10.7%; the cold tile improved by 13.2%
+in the first pair and was 0.6% slower in the second. Total sampled peak
+rose about 0.68 GiB with 391.5 MiB of additional named pack storage. The
+guard kept the cache-aware 10% reserve with a 12 GiB process-group cap;
+minimum sampled headroom was 11.30 GiB and swap growth was zero. All
+requests recorded zero named GPU allocations, tensor readbacks and waits
+before the one existing terminal wait.
+
+The absolute times drifted across this sequence; startup headroom changed
+from 19.34 to 35.49 GiB across the first pair. This establishes the observed
+two-tile comparison on M2 Max, without a stable speedup magnitude across
+host states or a full-generation rate. Keep MPS as the default. Select
+`--c8` in the probe or `packed_c8: true` in workspace preparation for the
+admitted geometry. The source and binary pins, guard samples, paired
+deltas and audit are indexed by
+`.landmark/evidence/2026-11-09-dcae-c8-decoder.json`.

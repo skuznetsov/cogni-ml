@@ -1,4 +1,5 @@
 require "./dcae_v_encoder"
+require "./dcae_v_decoder_c8"
 require "./dcae_v_decoder_profile"
 
 module ML::Video
@@ -69,8 +70,10 @@ module ML::Video
     getter arena : Arena
     getter config : DCAEVDecoderConfig
     getter planned_bytes : Int64
+    getter packed_c8 : Bool
 
-    def initialize(@arena : Arena, @config : DCAEVDecoderConfig, @planned_bytes : Int64)
+    def initialize(@arena : Arena, @config : DCAEVDecoderConfig, @planned_bytes : Int64,
+                   @packed_c8 : Bool = false)
     end
 
     def scratch(index : Int32) : ML::MetalBuffer
@@ -115,8 +118,9 @@ module ML::Video
     @released = false
     @owners : Array(ML::MetalBuffer)
     getter graph_private_bytes_known : Bool = false
+    getter c8_convolution_count = 0_i32
 
-    def initialize(@owners : Array(ML::MetalBuffer))
+    def initialize(@owners : Array(ML::MetalBuffer), @c8 : DCAEVDecoderC8::Plan? = nil)
     end
 
     def add(name : String, category : String, stage : String,
@@ -132,6 +136,16 @@ module ML::Video
             category : String, stage : String) : Nil
       @convs << plan
       add(name, category, stage) { |chain| plan.encode(chain) }
+    end
+
+    def add_c8(input : ML::MetalBuffer, cache : ML::MetalBuffer?, weight : ML::MetalBuffer,
+               bias : ML::MetalBuffer?, output : ML::MetalBuffer, name : String,
+               stage : String) : Nil
+      c8 = @c8 || raise ArgumentError.new("DCAE-V C8 workspace was not prepared")
+      @c8_convolution_count += 1
+      add(name, "residual_conv3d_c8", stage) do |chain|
+        c8.encode(chain, input, cache, weight, bias, output)
+      end
     end
 
     def add(plan : DCAEVNormMPS::RMSNormPlan, name : String,
@@ -189,6 +203,7 @@ module ML::Video
       @silus.clear
       @templates.clear
       @owners.clear
+      @c8 = nil
       @last_chain = nil
       @released = true
     end
@@ -287,11 +302,18 @@ module ML::Video
       specs
     end
 
-    def self.workspace_required_bytes(cfg : DCAEVDecoderConfig) : Int64
+    def self.workspace_required_bytes(cfg : DCAEVDecoderConfig, *, packed_c8 : Bool = false) : Int64
       caches = cache_specs(cfg).sum do |spec|
         DCAEVShape.count("decoder cache", cfg.batches, spec.channels, spec.height, spec.width).to_i64
       end
-      (scratch_values(cfg).to_i64 * 3 + caches + mean_values(cfg).to_i64 * 2) * 2
+      planned = (scratch_values(cfg).to_i64 * 3 + caches + mean_values(cfg).to_i64 * 2) * 2
+      if packed_c8
+        unless cfg.batches == 1 && cfg.height == 9 && cfg.width == 16
+          raise ArgumentError.new("DCAE-V C8 requires a single latent tile grid of 9x16")
+        end
+        planned += DCAEVDecoderC8.scratch_bytes
+      end
+      planned
     end
 
     def self.trace_shapes(cfg : DCAEVDecoderConfig) : Hash(String, Array(Int64))
@@ -318,9 +340,10 @@ module ML::Video
     end
 
     def self.prepare!(arena : Arena, cfg : DCAEVDecoderConfig,
-                      budget_bytes : Int64, reserve_bytes : Int64 = 0_i64) : DCAEVDecoderWorkspace
+                      budget_bytes : Int64, reserve_bytes : Int64 = 0_i64,
+                      *, packed_c8 : Bool = false) : DCAEVDecoderWorkspace
       raise ArgumentError.new("DCAE-V decoder workspace must start empty") unless arena.resident_bytes == 0
-      planned = workspace_required_bytes(cfg)
+      planned = workspace_required_bytes(cfg, packed_c8: packed_c8)
       unless budget_bytes > 0 && reserve_bytes >= 0 && planned <= budget_bytes && reserve_bytes <= budget_bytes - planned
         raise ArgumentError.new("DCAE-V decoder workspace exceeds residency budget")
       end
@@ -343,12 +366,19 @@ module ML::Video
           arena.alloc_weight(name, mean_values(cfg), WeightDType::BF16)
           allocated << name
         end
+        if packed_c8
+          {DCAEVDecoderC8::INPUT_PACK  => DCAEVDecoderC8::INPUT_PACK_VALUES,
+           DCAEVDecoderC8::WEIGHT_PACK => DCAEVDecoderC8::WEIGHT_PACK_VALUES}.each do |name, count|
+            arena.alloc_weight(name, count, WeightDType::BF16)
+            allocated << name
+          end
+        end
       rescue ex
         allocated.each { |name| arena.remove(name) }
         raise ex
       end
       raise "DCAE-V decoder workspace allocation differs from plan" unless arena.resident_bytes == planned
-      DCAEVDecoderWorkspace.new(arena, cfg, planned)
+      DCAEVDecoderWorkspace.new(arena, cfg, planned, packed_c8)
     end
 
     # All validation and graph preparation precede the timed encode. Optional
@@ -357,7 +387,7 @@ module ML::Video
                           weights : Arena, workspace : DCAEVDecoderWorkspace,
                           cfg : DCAEVDecoderConfig,
                           traces = {} of String => ML::MetalBuffer) : DCAEVDecoderPlan
-      unless workspace.config == cfg && workspace.planned_bytes == workspace_required_bytes(cfg) &&
+      unless workspace.config == cfg && workspace.planned_bytes == workspace_required_bytes(cfg, packed_c8: workspace.packed_c8) &&
              workspace.arena.resident_bytes == workspace.planned_bytes
         raise ArgumentError.new("DCAE-V decoder workspace/config mismatch")
       end
@@ -378,7 +408,8 @@ module ML::Video
           raise ArgumentError.new("DCAE-V decoder buffers overlap") if MetalOps.overlap?(buffer, owners[other])
         end
       end
-      plan = DCAEVDecoderPlan.new(owners)
+      c8 = DCAEVDecoderC8::Plan.new(workspace.arena) if workspace.packed_c8
+      plan = DCAEVDecoderPlan.new(owners, c8)
       begin
         cfg.tile_count.times do |tile|
           h, w, t, slot = cfg.height, cfg.width, 10, 0
@@ -450,11 +481,6 @@ module ML::Video
                               tile : Int32, prefix : String, cin : Int32, cout : Int32,
                               t : Int32, h : Int32, w : Int32, bias : Bool) : Nil
       cache = workspace.cache(prefix)
-      key = [cfg.batches, cin, cout, t, h, w, tile > 0, bias].map(&.to_s).join("|")
-      template = plan.template(key) do
-        DCAEVConvMPS::Template.new(cfg.batches, cin, cout, cout, t, t, h, w,
-          0, false, true, tile > 0, bias, 1, 1, false)
-      end
       stage = profile_stage(prefix)
       category = if prefix == "decoder.project_in" || prefix.starts_with?("decoder.project_out")
                    "project_conv3d"
@@ -463,9 +489,21 @@ module ML::Video
                  else
                    "residual_conv3d"
                  end
-      plan.add(template.bind(input, tile > 0 ? cache : nil, weights["#{prefix}.conv.weight"],
-        bias ? weights["#{prefix}.conv.bias"] : nil, output),
-        "tile#{tile}/#{prefix}.conv3d", category, stage)
+      live_cache = tile > 0 ? cache : nil
+      weight = weights["#{prefix}.conv.weight"]
+      bias_buffer = bias ? weights["#{prefix}.conv.bias"] : nil
+      operation = "tile#{tile}/#{prefix}.conv3d"
+      if workspace.packed_c8 && stage == "stage_2" && category == "residual_conv3d" &&
+         DCAEVDecoderC8.eligible?(cfg.batches, cin, cout, t, h, w)
+        plan.add_c8(input, live_cache, weight, bias_buffer, output, operation, stage)
+      else
+        key = [cfg.batches, cin, cout, t, h, w, tile > 0, bias].map(&.to_s).join("|")
+        template = plan.template(key) do
+          DCAEVConvMPS::Template.new(cfg.batches, cin, cout, cout, t, t, h, w,
+            0, false, true, tile > 0, bias, 1, 1, false)
+        end
+        plan.add(template.bind(input, live_cache, weight, bias_buffer, output), operation, category, stage)
+      end
       cache_pipeline = DCAEVEncoder.pipeline("dcae_v_cache_last_frame_bf16")
       count = DCAEVShape.count("decoder cache", cfg.batches, cin, h, w)
       plan.add("tile#{tile}/#{prefix}.cache_last_frame", "cache_store", stage) do |chain|
