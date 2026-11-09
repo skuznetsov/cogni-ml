@@ -39747,3 +39747,20 @@ Refresh after source/toolchain/device/model/workload changes.
 - Keep MPS as the production path. Predict the three aligned taps and a
   crossed spatial/channel mask before trying the dense reduction. Refresh
   on backend, operator, precision, geometry, mask or fixture changes.
+
+### 2026-11-08 — DCAE Conv3D G8 survives aligned and crossed three-tile masks
+
+- The predeclared channel-group → tap → lane FMA order was the only
+  fixed policy with zero F32 bit mismatches across all 32,768 outputs
+  of masks `34/106/178` and `99/106/107` on both real cache cases. G8
+  also matched every actual BF16 value; G16 failed the existing gate
+  once. There were 327 aligned first-frame samples with all three
+  tiles active on the live cache.
+- Cold-cache and temporal/spatial padding projections matched the
+  retained pair controls. The offline audit independently recounted
+  the gates and rejected aliased, misrounded and forged observations.
+  Sampled group peak was 5.107 GiB under the 10% floor with no swap
+  growth. See docs/dcae-v-decoder-frontier.md for pins and replay.
+- Next falsifier is continuous G8 over dense K at the original sampled
+  coordinates, including the previous BF16 failure points. Scope the
+  result to the pinned upstream, runtime, precision, shape and fixtures.

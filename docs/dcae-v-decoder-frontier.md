@@ -762,3 +762,80 @@ or disjoint channel blocks. This separates pairwise agreement from a
 general channel-group order. Keep the production MPS path until the
 dense F32 and BF16 checks pass. Refresh this result on changes to the
 upstream operator, MPS runtime, precision, geometry, masks or fixture.
+
+## Conv3D G8 prediction on three-tile masks
+
+Predict one F32 FMA accumulator, ordered by global eight-channel group,
+then ascending `kt,kh,kw`, then lane. Test `34/106/178` (three aligned
+temporal taps) and `99/106/107` (the left spatial tap in channels 192–255
+crosses the center tap in channels 128–191). Use G4, G16, reverse tap
+within G8, G64 channel-first, and tap-first controls. G64 and tap-first
+share an order on the aligned mask and differ on the crossed mask. GPU
+cancellation inputs must distinguish the unequal schedules across masks.
+
+Keep the same stage-2 geometry, weights, sampled coordinates and cold/live
+cache. Recheck full upstream outputs, isolated tiles, the cold first frame,
+last-frame temporal padding and left spatial padding against the pinned
+controls. Require interior samples that exercise all three tiles and a
+cached first-frame witness. An F32 bit mismatch with these controls intact
+falsifies the candidate for that mask. Test each rounded policy separately
+against actual upstream BF16 at `atol=rtol=2e-5`.
+
+The diagnostic is opt-in. Its completion check is a cache-aware guarded
+`dcae_v_crossed_g8.py --admitted` capture with the existing 10% floor,
+18 GiB process-group cap and 64 MiB swap-growth cap, followed by `--replay`
+and an offline challenge to the controls. Use one terminal transfer and
+zero explicit intermediate waits. Scope is the sampled masks. The probe
+can be rolled back by removing its two support files.
+
+G8 was the only fixed policy with bitwise F32 agreement on all 32,768
+outputs.
+
+| Cache | Mask | G4 | G8 | G16 | G8 reverse | G64 | Tap-first |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cold | 34/106/178 | 1,742 | 0 | 2,334 | 3,277 | 3,697 | 3,697 |
+| Cold | 99/106/107 | 928 | 0 | 1,297 | 2,283 | 2,947 | 3,610 |
+| Live | 34/106/178 | 1,819 | 0 | 2,352 | 3,278 | 3,787 | 3,787 |
+| Live | 99/106/107 | 865 | 0 | 1,231 | 2,176 | 2,911 | 3,543 |
+
+On the aligned cached first frame, all three tiles contributed at 327
+sampled points, and reverse G8 differed from G8 at 127 of them. The audit
+verified nonzero prior-frame activation and weight words at all 45
+active singleton points in that set. The two new masks projected to the
+pinned pair outputs in F32 and actual BF16 at all tested cache and
+padding edges. Fresh unmasked outputs matched the pinned controls, and
+the eight GPU cancellation inputs distinguished all six policies across
+the two masks.
+
+G8 had zero BF16 value differences against the actual upstream BF16
+outputs. G16 exceeded the unchanged gate once (cold aligned mask,
+absolute error `3.0517578125e-5`). The other four policies passed.
+
+The source-pinned command, guard telemetry, observations, comparison
+and post-drain audit are in
+`/opt/mldata_ssd/cogni-ml/dcae-crossed-g8-20261108.Cz0kzvYV`.
+The observation SHA-256 is
+`3b662bdd3d44ac30666acf2b3e76ab52442f7ec1b603a507dc85b1ea61d232fa`.
+The comparison SHA-256 is
+`ab940abbe273c9348704ff91acc3c98a6a533336ce02acc29c81fd18cda8da4f`.
+The audit independently enumerated G8 and recounted all F32/BF16
+failures, then rejected aliased policies, bad rounding, a forged cold
+frame and a changed full-weight control.
+
+```sh
+python3 -B examples/support/dcae_v_crossed_g8.py \
+  /opt/mldata_ssd/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/real \
+  /opt/mldata_ssd/cogni-ml/dcae-crossed-g8-20261108.Cz0kzvYV --replay
+```
+
+The guarded diagnostic on Apple M2 Max (macOS build `25G83`, Torch 2.8.0)
+took 42.771 s including its controls. Sampled process-group peak was
+5.107 GiB, minimum cache-aware headroom 18.835 GiB and swap growth zero.
+It used one terminal reporting transfer and zero explicit intermediate
+waits.
+
+The next falsifier is the same channel-group/tap/lane order on dense K,
+on the retained sampled coordinates with both caches. Score the prior
+full-weight failure points separately. Dense parity and any performance
+gain are separate gates. Refresh on upstream operator, MPS runtime,
+precision, geometry, mask or fixture changes.
