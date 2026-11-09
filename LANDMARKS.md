@@ -39692,3 +39692,25 @@ Refresh after source/toolchain/device/model/workload changes.
   separating inner-tile and outer-partial accumulation, then a held-out tile;
   kernel-selection changes remain a confound. Refresh on source/binary/runtime,
   weights, fixture, geometry, capture/cache, rounding or sampling-policy changes.
+
+### 2026-11-08 — DCAE stage-2 local FMA and partial-sum merge separated
+
+- On the same two authenticated activations, the GPU probe freezes 216 K64
+  F32 sums per sample before either merge. On prior failing points, reversing
+  the local FMA changes 55–62/53–54 BF16 values (cold/cached). Reversing the
+  merge changes 154–163/176–181. Every full-weight candidate still fails
+  `atol=rtol=2e-5`. The result applies to the selected points and tested
+  orders.
+- Forward FMA reproduces all four single-mask upstream F32 outputs exactly.
+  All 15 addition trees over those four isolated F32 sums fail to reproduce
+  the union's exact F32 on 2,765/2,719 points, with zero such cases in the
+  single-product controls. Thirteen of 15 fixed trees still pass the
+  sparse BF16 gate on both inputs. This rejects exact F32 composition of
+  these specific partials. The internal full-weight reduction remains open.
+- The pinned operator and native probe share one MPS stream, with one
+  terminal reporting transfer and zero explicit intermediate waits.
+  Sampled peak is 4.372 GiB with the 10% cache-aware reserve and zero swap
+  growth. See docs/dcae-v-decoder-frontier.md for the source-pinned run and
+  sample evidence. The next falsifier uses the adjacent K64 pair alone to
+  compare a running FMA accumulator against frozen partials on both
+  activations.

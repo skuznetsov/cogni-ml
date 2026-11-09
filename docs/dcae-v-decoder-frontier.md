@@ -1,9 +1,10 @@
 # Original DCAE-V native decoder frontier
 
-Status: native opt-in decoder and full-context BF16 parity verified;
-Conv3D profiling implemented, with no admitted performance gain yet. The bounded
-stage-2 real-activation reduction comparison is verified; no native replacement
-has passed its unchanged upstream gate.
+The native opt-in decoder has verified full-context BF16 parity.
+Conv3D profiling is implemented and performance gains remain unproven. Bounded
+real-activation probes separate local FMA and partial-sum merge sensitivity at
+stage 2. The unchanged full-weight upstream gate still rejects the tested
+native reductions.
 
 ## Goal and boundary
 
@@ -521,3 +522,97 @@ at the real failing coordinates, using sparse K masks while holding the full
 operator geometry fixed. Any kernel-selection change remains a confound.
 Test a surviving formulation on a separate tile before promotion. Further
 layout/grouping sweeps without a discriminating arithmetic probe are parked.
+
+## Conv3D K-tile accumulation and partial-sum merge
+
+Reuse the authenticated stage-2 input/cache and output coordinates. Use
+tap-major K with 64 adjacent channels per tile, giving 216 tiles. Materialize
+two FP32 partial vectors per point (forward and reverse local FMA), then
+consume each immutable vector in both merge orders. The paired comparisons
+hold one factor fixed. Report the prior failing coordinates separately from
+the boundary, stratified and midpoint-enriched populations.
+
+For upstream, run the original Conv3D operator with the same full tensor
+geometry and runtime weight masks for four individual tiles and their union.
+Every eighth output channel keeps only the middle coefficient of each tile,
+giving a one-product indexing and arithmetic control at the same geometry.
+Test all 15 binary addition trees over the four stored upstream FP32 sums
+against the upstream union. Compare raw FP32 and the unchanged BF16 gate
+(`atol=rtol=2e-5`), and calibrate FP32-to-BF16 against the actual upstream
+BF16 call for each mask. Freeze the mask and policies before looking at the
+following cached activation.
+
+This opt-in diagnostic runs Metal and the pinned upstream operator on the
+same MPS stream with one terminal readout, guarded at 10% cache-aware reserve,
+18 GiB process cap and 64 MiB swap growth. Admission requires the prior
+authenticated payload digests. DoD requires the fresh full-shape BF16
+baseline, the singleton control, a sensitive paired experiment, and a guarded
+run on both activations. An exact F32 mismatch with all 15 trees rejects
+addition-only composition of these separately computed sums in this mask
+geometry. Actual internal boundaries and the full-weight failure mechanism
+remain open. Masking and dtype can affect backend arithmetic. Rollback
+removes the opt-in probe.
+
+The fresh unmasked BF16 and F32 upstream outputs reproduced their respective
+retained controls on all 8,192 points in each case. The Metal cancellation
+witness gave `[0, 2^-24, 0, 2^-24]` for FMA and merge. With the other
+factor held fixed, changing the selected order moved these numbers of values
+among the points that failed the previous ordered-FMA gate:
+
+| Factor | Cold F32 / BF16 (1,855 points) | Cached F32 / BF16 (1,947 points) |
+| --- | ---: | ---: |
+| Reverse FMA within K64 | 1,030–1,083 / 55–62 | 1,072–1,079 / 53–54 |
+| Reverse merge of frozen F32 partials | 1,685–1,689 / 154–163 | 1,773–1,777 / 176–181 |
+
+The ranges are the two fixed settings of the other factor. All four native
+variants still fail the unchanged full-weight BF16 gate, with 1,867–1,887
+failures cold and 1,846–1,880 cached. Boundary failures are zero; stratified
+failures are 5–6 cold and 1–2 cached. The remainder is in the
+midpoint-enriched group, so these counts do not estimate prevalence.
+Comparing the full-weight native F32 values directly to upstream F32 gives
+one or two tolerance failures cold and two or three cached.
+
+Forward FMA reproduced each of the four isolated upstream F32 masks exactly
+on both activations. Reverse FMA differed on 1,482–2,194 points per mask and
+case. Both orders matched the single-product controls on all 1,024 such
+points per mask and case. In the union, none of the 15 F32 trees was exact on
+2,765/2,719 points (cold/cached), including 638/660 of the previous failing
+points. Every tree was exact in the single-product control, including
+939/977 points where all four products were nonzero. The largest pointwise
+best-tree F32 error was `7.153e-7` in each case. Every tree passed the F32
+tolerance check. After one BF16 rounding, 13 fixed trees passed the union
+gate on both activations; 12 matched numerically exactly in both. For each
+mask and case, rounded upstream F32 matched the actual upstream BF16 call.
+Exact F32 non-composability of these isolated sums and sparse BF16 gate
+passage are therefore separate observations.
+
+The guarded GPU run used the pinned Tencent source at `911cea6458a8` with
+Torch 2.8.0 MPS on M2 Max, macOS 26.6.2. Sampled process-group peak was
+4.372 GiB, minimum estimated headroom 21.350 GiB, and observed swap growth
+zero. There was one terminal transfer for numerical reporting and no
+explicit intermediate device wait. Sampling and source inspection leave
+driver-internal waits and between-poll spikes unobserved. The 72.494 s
+interval includes all masked controls and is diagnostic elapsed time.
+
+The source-pinned command, execution receipt, guard samples and 4.5 MiB
+observation payload are in
+`/opt/mldata_ssd/cogni-ml/dcae-k-partials-20261108.ieU66mM0`.
+The payload SHA-256 is
+`0b9b08839b49c34f13ff527313bce7bce8b43ab256552017878d529f913a09dc`.
+The pinned prior artifact manifest provides both per-case index lists.
+They share the first 4,096 coordinates and have case-specific midpoint
+halves.
+
+The offline comparator replays the 15 GPU trees and checks the BF16 rounding
+against the drained F32 values. It reproduced the independent counts on the
+prior failing indices. It rejected corrupted bytes, a changed fixture pin,
+an invalid cancellation witness, aliased merge directions and swapped tree
+outputs. The last two controls had updated payload digests. The admitted
+`comparison.json` in the run directory has SHA-256
+`ea3a6039458dcaa06ba0c1606715d75b707ddd1d9c5446b1fa2cfac2aaa67a5d`.
+
+The next discriminator uses the adjacent K64 pair alone and compares
+carrying the first tile's accumulator into the second against merging their
+isolated sums. A different mask/order must reproduce its prediction on the
+cached case before it can inform a native kernel. Refresh on source,
+backend, geometry, mask, sample or fixture changes.
