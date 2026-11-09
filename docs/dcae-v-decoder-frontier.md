@@ -681,3 +681,84 @@ channel-interleaved FMA across temporal taps on the same channel range;
 `34/106` also reaches the prior-frame cache and `106/178` provides a second
 pair. Require a prediction on both activations before expanding the mask.
 Refresh on source, backend, geometry, masks, sample or fixture changes.
+
+## Conv3D carry across temporal taps
+
+Keep the authenticated C512/T40/H72/W128 fixture and the original operator.
+Mask the same 64 input channels (128–191) at the center spatial position
+of temporal taps 0/1 (`34/106`) and 1/2 (`106/178`). Test isolated sums,
+F32 addition of those sums, and continuous FMA in both tap directions.
+For continuous FMA, alternate chunks of 1, 2, 4, 8, 16, 32 or 64 channels
+from each tap; 64 is whole-tap carry. The primary discriminator is 1
+versus 64. The other sizes test whether an intermediate chunk width
+reproduces the observations without changing the upstream calls.
+
+Before ranking a candidate, require identical F32 isolated-tile bytes and
+fresh unmasked controls, GPU cancellation witnesses with known answers,
+and singleton agreement. On the first frame of `34/106`, the first tap
+must be zero with the cold cache and nonzero on active cached samples.
+On the last frame of `106/178`, the second tap reads zero padding in both
+cases. Report exact F32 and actual BF16 comparisons separately, including
+active cache points and prior full-weight failing coordinates. Only a
+fixed policy that survives both pairs and both activations merits a
+wider-mask test. An exact match is scoped to these masks and geometry.
+
+The opt-in GPU probe is guarded by the existing cache-aware 10% floor,
+18 GiB process-group cap and 64 MiB swap-growth cap. Its DoD is a successful
+guarded launch and offline replay of the drained observations, including
+rejection of a forged boundary or aliased policy. One terminal transfer;
+no model-wide run, native kernel promotion or performance claim. Removal
+of the diagnostic is the rollback.
+
+The guarded capture and offline replay passed. `g8_ab` was the only fixed
+policy with exact F32 on all 32,768 sampled outputs: visit eight channels
+of the earlier tap, eight of the later tap, then advance the channel
+range, carrying one accumulator throughout. These are F32 bit mismatches:
+
+| Input | Mask | Merge | `g1_ab` | `g4_ab` | `g8_ab` | `g64_ab` |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Cold | 34/106 | 2,981 | 1,195 | 777 | 0 | 2,520 |
+| Cold | 106/178 | 2,970 | 1,263 | 820 | 0 | 2,504 |
+| Cached | 34/106 | 3,044 | 1,254 | 825 | 0 | 2,628 |
+| Cached | 106/178 | 2,931 | 1,239 | 802 | 0 | 2,415 |
+
+On the cached first frame, both contributions were nonzero at 327 points;
+`g1_ab` and `g64_ab` differed at 114 of them. `g8_ab` matched all 327.
+The post-drain audit located the nonzero cache and weight words for 45
+active singleton points and confirmed the cold-cache and right-padding
+controls. The 14 GPU cancellation inputs distinguished all 15 policies.
+Fresh unmasked controls and isolated F32 samples matched their respective
+references. All 15 policies passed the actual BF16 gate at `atol=rtol=2e-5`
+on these sparse masks; `g8_ab` had zero BF16 value differences. This gate
+does not distinguish the candidate orders on the masked samples.
+
+The source-pinned command, sampled guard telemetry, observations, replay
+and adversary audit are in
+`/opt/mldata_ssd/cogni-ml/dcae-cross-tap-k64-20261108.8x8migwz`.
+The observation SHA-256 is
+`c4a7c34c63414d08fab98054878afdbb1989c74b936c26540e70eec496c8304a`.
+The comparison SHA-256 is
+`1d88a280fe180991772472b0b4c7d99199157288ef40bdede05485d928935c1c`.
+The audit independently recounted the F32 and BF16 comparisons and
+rejected aliased policies, invalid BF16 rounding and a forged cold-cache
+contribution with consistent isolated reference values. It imports no
+Torch and dispatches no Metal. To reproduce the report without a GPU:
+
+```sh
+python3 -B examples/support/dcae_v_cross_tap_k64.py \
+  /opt/mldata_ssd/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/real \
+  /opt/mldata_ssd/cogni-ml/dcae-cross-tap-k64-20261108.8x8migwz --replay
+```
+
+The admitted run took 72.058 s including all controls, with one terminal
+reporting transfer and no explicit intermediate wait. Sampled group peak
+was 5.112 GiB, minimum cache-aware headroom 16.419 GiB, and swap growth
+zero. This elapsed time is for the diagnostic, not a kernel speedup.
+
+The evidence establishes G8 for the tested masked operator, including
+the cache edge. The next falsifier is an exact prediction for the three
+aligned taps `34/106/178` plus a crossed mask with an earlier spatial tap
+or disjoint channel blocks. This separates pairwise agreement from a
+general channel-group order. Keep the production MPS path until the
+dense F32 and BF16 checks pass. Refresh this result on changes to the
+upstream operator, MPS runtime, precision, geometry, masks or fixture.

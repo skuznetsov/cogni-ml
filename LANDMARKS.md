@@ -39731,3 +39731,19 @@ Refresh after source/toolchain/device/model/workload changes.
   channel interleaving across temporal taps on aligned channels; include
   a tap that reads the prior-frame cache. See docs/dcae-v-decoder-frontier.md
   for pins and refresh conditions. The dense reduction is still open.
+
+### 2026-11-08 — DCAE Conv3D cross-tap G8 accumulation
+
+- On the same C512/T40/H72/W128 fixtures, G8 in temporal order was the
+  only fixed policy with bitwise F32 agreement on all 32,768 outputs for
+  masks `34/106` and `106/178`, including 327 active cached points. It
+  visits eight aligned channels per tap with one carried FMA accumulator.
+  All 15 policies passed the actual sparse BF16 gate at `atol=rtol=2e-5`.
+- The post-drain audit reproduced the counts, confirmed active singleton
+  cache inputs, and rejected aliased policies, bad BF16 rounding and
+  forged cold-cache contributions. One terminal transfer, no explicit
+  intermediate wait, 5.112 GiB sampled peak, 10% reserve and zero swap
+  growth. See docs/dcae-v-decoder-frontier.md for evidence and replay.
+- Keep MPS as the production path. Predict the three aligned taps and a
+  crossed spatial/channel mask before trying the dense reduction. Refresh
+  on backend, operator, precision, geometry, mask or fixture changes.
