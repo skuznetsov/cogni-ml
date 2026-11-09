@@ -39910,3 +39910,17 @@ Refresh after source/toolchain/device/model/workload changes.
   reserve policy and zero swap growth. The order comparison and receipt
   are in `docs/dcae-v-decoder-frontier.md`. Refresh on runtime, input,
   geometry, resources, observer or thermal regime changes.
+
+### 2026-11-09 — Both 301 s recovery orders miss strict live-tile Nominal
+
+- MPS → C8 and C8 → MPS both started at Nominal after the recovery
+  gate. Both arms left Nominal on the live tile in each pair. The reverse
+  pair matched mean and median active frequencies within 2%. Its thermal
+  mismatch keeps the live and whole-request gains descriptive. The
+  reverse-order cold tile matched and showed 18.84–18.94% lower GPU
+  root time with C8. A Nominal start alone fails to certify the live tile.
+- All four outputs matched the saved upstream BF16 prefix bitwise at
+  `atol=rtol=2e-5`. One terminal wait per request, 13.46 GiB minimum
+  cache-aware headroom with the 10% reserve policy and zero swap growth.
+  `docs/dcae-v-decoder-frontier.md` links the receipt and replay. Refresh
+  on runtime, input, geometry, resources, observer or thermal regime changes.

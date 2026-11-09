@@ -1404,3 +1404,55 @@ The paired receipt and replay scripts are in
 `/opt/mldata_ssd/cogni-ml/dcae-mps-c8-301s-20261109.5ZPBqdvV`.
 SHA-256 of `pair-result.json` is
 `b0f66ab87a34aaf28daa7fd9f6ee3f6ee423c4db97244d15944c36c354cbf23e`.
+
+### Both orders with a strict Nominal live-tile gate
+
+The repeat fixed the order to MPS → C8 → C8 → MPS, with a fresh
+process and at least 301 s of recovery before each first request.
+The measured pauses were 302.537, 301.032, 301.040 and 301.148 s.
+The last 30 samples of each pause passed the quiet Nominal gate.
+The binary, real T20 BF16 prefix, weights, output reference and
+2 s observer cadence were pinned as in the previous pairs.
+
+The live-tile gate required at least 30 valid interior samples, all
+Nominal, and both mean and median active frequencies within 2% of
+MPS. The boundary filter excluded one sample interval at either end.
+All eligible samples were valid and showed 100% GPU active residency.
+The time bounds account for command-buffer roots shared across tiles.
+
+| Order | Backend | Mean / median active GPU frequency (MHz) | Nominal / Moderate / Heavy | Live tile GPU root seconds |
+| --- | --- | ---: | ---: | ---: |
+| MPS → C8 | MPS | 1227.85 / 1235.5 | 0 / 4 / 50 | 113.981–114.044 |
+| MPS → C8 | C8 | 1297.10 / 1295 | 21 / 12 / 8 | 87.692–87.751 |
+| C8 → MPS | C8 | 1316.90 / 1315 | 39 / 2 / 0 | 86.731–86.791 |
+| C8 → MPS | MPS | 1334.90 / 1337.5 | 33 / 12 / 5 | 105.447–105.506 |
+
+Both live pairs failed admission. In the first order, C8's mean and
+median clocks were 5.64% and 4.82% higher, and both arms reached
+Heavy. In the reverse order, C8's clocks were 1.35% and 1.68% lower,
+within the frequency bound. C8 first reached Moderate in an interior
+sample ending 82.26 s into the live tile. MPS first reached Moderate
+71.22 s into the tile and later reached Heavy. Nominal at launch after
+301 s of recovery therefore fails to guarantee Nominal under sustained
+load in either order. The measured two-tile wall reductions of 22.40%
+and 18.31% are descriptive. The reverse-order cold tile did pass its
+matching gate and showed an 18.84–18.94% GPU root-time reduction.
+
+An independent recount from the finalized observer records reproduced
+the live-tile counts and frequency statistics. Each request matched
+all 35,389,440 BF16 pixel words across both tiles bitwise at
+`atol=rtol=2e-5`. A separate byte-range hash matched the pixel and
+latent payloads to the pinned, saved upstream causal slice. All GPU
+requests used one terminal wait with zero preterminal waits, readbacks
+and allocations in the recorded request counters. Sampled peak process
+footprints were 9.66 GiB for MPS and 9.89 GiB for C8. The lowest
+cache-aware headroom was 13.46 GiB with the 10% reserve policy, and
+swap growth was zero. The scope was the two-tile decoder probe.
+
+The receipt, replay scripts and finalized telemetry are in
+`/opt/mldata_ssd/cogni-ml/dcae-c8-mps-301s-both-20261109.vY8S0H6i`.
+SHA-256 of `pair-result.json` is
+`d864f48530eb00da0ebe9c05bcf5dbb2c8c56087cc56c7f1019f4883fc0e30a7`.
+Replay in a fresh sibling directory using the commands above.
+Refresh the timing evidence after changes to the runtime, geometry,
+input, resource plan, observer or thermal regime.
