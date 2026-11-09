@@ -616,3 +616,68 @@ carrying the first tile's accumulator into the second against merging their
 isolated sums. A different mask/order must reproduce its prediction on the
 cached case before it can inform a native kernel. Refresh on source,
 backend, geometry, mask, sample or fixture changes.
+
+## Conv3D accumulator carry across adjacent K64 tiles
+
+Test pairs `106/107` and `181/182` in distinct temporal taps on both retained
+activations. Freeze forward FMA within each tile. Compare the full-geometry
+upstream union in F32 with `F32(A + B)`, `fold(B, A)` and `fold(A, B)`, where
+`A` and `B` are the isolated F32 sums. Score exact matches where the
+alternatives disagree, including the prior failing coordinates. Each tile
+must first reproduce the separately masked upstream output. A cancellation
+control must distinguish both carry directions from the sum and channels
+with one product per tile must reproduce the union. Fresh unmasked outputs
+must reproduce the pinned F32 and BF16 baselines. The actual BF16 union is
+checked separately at `atol=rtol=2e-5`.
+
+Retain the previous 10% cache-aware reserve, 18 GiB process-group cap,
+64 MiB swap-growth cap and single terminal transfer. The new probe is
+opt-in and rolls back by removal. A second pair and a cached activation
+falsify a carry rule inferred from the first cold pair. Kernel selection,
+full-weight equivalence and performance are outside this comparison.
+
+Each isolated tile matched the pinned upstream F32 bytes on all 8,192
+samples per case. Carrying the accumulator A → B matched the upstream
+union bitwise in F32 and after rounding to BF16 on all four comparisons
+(32,768 selected values). These are exact F32 mismatch counts:
+
+| Adjacent tiles | Cache | Add the isolated sums | Carry A → B | Carry B → A |
+| --- | --- | ---: | ---: | ---: |
+| 106/107 | Cold | 2,340 | 0 | 3,465 |
+| 106/107 | Previous frame | 2,353 | 0 | 3,381 |
+| 181/182 | Cold | 2,119 | 0 | 3,105 |
+| 181/182 | Previous frame | 1,996 | 0 | 3,017 |
+
+The GPU cancellation witness distinguished both carry directions and the
+single-product channels matched all three policies. On the previous
+full-weight failing coordinates, carry A → B was the only exact F32
+candidate on 459/469 samples for 106/107 and 413/406 for 181/182
+(cold/cached). All three policies passed the F32 tolerance gate. After BF16
+rounding, adding the isolated sums also matched exactly in all four cases.
+Reverse carry had one BF16 gate failure on cold 106/107 (`abs=2.4414e-4`).
+The fresh unmasked outputs matched the retained F32 and BF16 baselines.
+
+The corrected command exited zero with unchanged pinned sources. Its
+2,424,832 observation bytes matched those saved by the first run before a
+report-key error. The post-drain audit independently replayed the counts
+and rejected an aliased carry, bad BF16 rounding, changed isolated-tile
+samples, and changed unmasked reference samples. The source-pinned command,
+guard telemetry, audit and report are in
+`/opt/mldata_ssd/cogni-ml/dcae-adjacent-k64-20261108._hlrsdg4`.
+The observation SHA-256 is
+`009eec11878bc8138d2f5aea9970d088cdedd04882af55bdf2e40e30f458f194`.
+The comparison SHA-256 is
+`9059657f4581349f4857506a6cd842cfcb5fb611b866e2f87f84c7d548947150`.
+
+The corrected run used one process, one terminal reporting transfer and no
+explicit intermediate wait. Sampled peak was 4.409 GiB, minimum cache-aware
+headroom 19.372 GiB, and observed swap growth zero under the 10% policy.
+The 82.129 s interval includes all controls and is diagnostic elapsed time.
+
+The result distinguishes continuous FMA from adding frozen F32 sums inside
+these two sparse, same-tap masks. It does not identify the dense reduction
+schedule. Keep the production MPS path. Next compare whole-tap carry with
+channel-interleaved FMA across temporal taps on the same channel range;
+`34/106` also reaches the prior-frame cache and `106/178` provides a second
+pair. Require a prediction on both activations before expanding the mask.
+Refresh on source, backend, geometry, masks, sample or fixture changes.

@@ -39714,3 +39714,20 @@ Refresh after source/toolchain/device/model/workload changes.
   sample evidence. The next falsifier uses the adjacent K64 pair alone to
   compare a running FMA accumulator against frozen partials on both
   activations.
+
+### 2026-11-08 — DCAE Conv3D carry across adjacent K64 tiles
+
+- With full stage-2 geometry and sparse masks 106/107 and 181/182, each
+  isolated tile matched upstream F32 exactly on both authenticated inputs.
+  Forward FMA with accumulator carry matched the upstream pair bitwise
+  in F32 and BF16 on 32,768 selected values. Summing frozen F32 tile sums
+  missed 1,996–2,353 exact values per comparison yet matched after BF16
+  rounding. Reverse carry had one BF16 failure at `atol=rtol=2e-5`.
+- The corrected GPU probe repeated the observation bytes, passed the
+  cancellation and unmasked controls, and used one terminal transfer and
+  the 10% reserve with zero swap growth. The post-drain audit checked
+  numerical counts and rejected aliased, bad-rounding and changed-reference
+  inputs. No default or speed claim changes. Next falsifier is carry versus
+  channel interleaving across temporal taps on aligned channels; include
+  a tap that reads the prior-frame cache. See docs/dcae-v-decoder-frontier.md
+  for pins and refresh conditions. The dense reduction is still open.
