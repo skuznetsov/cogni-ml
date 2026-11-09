@@ -1940,10 +1940,13 @@ or a new end-to-end generation rate. Focused 21 Python tests, four-file Ruff,
 the release probe build and artifact checks pass.
 
 Evidence: `.landmark/evidence/2026-11-08-hy-nomas-final-dcae-pixelumm.json`.
-Next proposed discriminator: a blinded review of preselected crops across
-the full exported interval, without another model run. The late eyelid change
-remains a separate open question. No additional model run is admitted by this
-slice. Refresh on source/binary/runtime, weights, input, normalization, noise,
+The follow-up blinded review found a subtle recurring appearance difference
+across T1 and a similar late eyelid change in the still sequence. That
+observation triggered a decoder-only C8 replay across all six T0/T1 tiles.
+All six matched the saved upstream DCAE output bitwise. See
+`docs/dcae-v-decoder-frontier.md`
+for the review scope, full-context check and unmatched timing. Refresh on
+source/binary/runtime, weights, input, normalization, noise,
 schedule, geometry or artifact changes. Rollback: omit the final-DCAE helper;
 the clean-T0 helper retains its previous rendering path and production
 defaults are unchanged.

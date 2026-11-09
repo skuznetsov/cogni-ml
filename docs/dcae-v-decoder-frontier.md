@@ -1,11 +1,11 @@
 # Original DCAE-V native decoder frontier
 
 The native opt-in decoder has verified full-context BF16 parity.
-The optional packed C8 route preserves bitwise parity and reduces observed
-two-tile decoder time on M2 Max. The earlier strided tiled G8 diagnostic
-matched the full stage-2 pre-bias Conv3D output bitwise on both cache cases
-but did not consistently beat MPS. Other reduction schedules failed the
-full-weight upstream gate.
+The optional packed C8 route preserves bitwise parity through all six T0/T1
+tiles and reduces observed two-tile decoder time on M2 Max. The earlier
+strided tiled G8 diagnostic matched the full stage-2 pre-bias Conv3D output
+bitwise on both cache cases but did not consistently beat MPS. Other
+reduction schedules failed the full-weight upstream gate.
 
 ## Goal and boundary
 
@@ -1456,3 +1456,56 @@ SHA-256 of `pair-result.json` is
 Replay in a fresh sibling directory using the commands above.
 Refresh the timing evidence after changes to the runtime, geometry,
 input, resource plan, observer or thermal regime.
+
+## Blinded decoder review and six-tile C8 replay, 2026-11-09
+
+The saved five-second T1 comparison uses the same final latents for both
+decoders. The first random reorder retained the names baked into the
+video. The actual review used a fresh random assignment after removing
+the same 36-pixel title strip from both sides. One reviewer saw only the
+A/B sheets with 12 frame pairs across T1 and consecutive eye crops from
+frames 112–119. The reviewer saw a subtle recurring skin-texture difference
+at 0, 1.5, 3.5 and 4.5 s. The late eyelid change looked similar in the
+consecutive frames. This met the visual trigger for the replay, with no
+strong preference from the stills. The five-second A/B video and assignment
+key are kept separately.
+
+One guarded request decoded the authenticated BF16 bank
+`[1,32,60,9,16]` into `[1,3,240,288,512]`, with three history tiles and
+three live T1 tiles in a single plan. All 180 C8 residual convolutions ran
+across stages 1 and 2. The GPU request used one terminal wait. Instrumented
+preterminal waits, readbacks and named allocations were zero. The saved
+upstream DCAE artifact at `911cea6458a89c2663513ff7099561ec190dd491`
+matched all 106,168,320 BF16 pixel values bitwise at `atol=rtol=2e-5`.
+The post-drain audit compared each tile by channel and reconciled the
+tile counts with the whole-tensor comparator. A negative control altered
+one BF16 word at `[0,1,120,0,0]` and produced exactly one tolerance failure
+in tile 3, the first T1 tile. The GPU scope was the decoder.
+
+| Segment | Tiles (zero-based) | GPU root seconds per tile |
+| --- | --- | --- |
+| T0 | 0, 1, 2 | 88.68–88.75, 89.58–89.71, 95.29–95.42 |
+| T1 | 3, 4, 5 | 111.71–111.86, 130.97–131.13, 128.86–128.94 |
+
+The native request took 645.498 s, with 645.450 s summed GPU root time.
+Tile bounds include shared command roots. The 5.72% wall-time difference
+from the earlier full MPS observation of 684.661 s is descriptive. Clock
+and thermal state were unpaired and the late tiles ran longer. The process
+peaked at 10.842 GiB sampled footprint with 5.753 GiB named buffers.
+Cache-aware headroom started at 34.995 GiB and reached a minimum of
+15.786 GiB under the 10% reserve and 14 GiB process cap. Swap growth was
+zero.
+
+The run directory is
+`/opt/mldata_ssd/cogni-ml/dcae-c8-t60-blind-20261109.YTGH7nPM`.
+Its `result.json` SHA-256 is
+`2e9ffa4b113a4617ff49ff2fb40b997d6c31d4ef61ac094b9bf642fc8d89528e`.
+The first labeled preview and duplicate C8 pixel file were removed after
+the audit. Reproduce in a fresh sibling directory with the saved plan,
+blind evidence and replay scripts. Create an empty `tmp` subdirectory
+and run `python3 -B <run-directory>/run_c8.py` followed by
+`python3 -B <run-directory>/verify_c8.py` from the repository root.
+The verification emits six matching tile hashes and rejects the boundary
+negative. Refresh parity on source, binary, weight, latent, geometry or
+cache-plan changes. Refresh the visual observation with new content or
+decoder settings and the timing observation under a new hardware regime.

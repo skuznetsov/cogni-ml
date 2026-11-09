@@ -39924,3 +39924,18 @@ Refresh after source/toolchain/device/model/workload changes.
   cache-aware headroom with the 10% reserve policy and zero swap growth.
   `docs/dcae-v-decoder-frontier.md` links the receipt and replay. Refresh
   on runtime, input, geometry, resources, observer or thermal regime changes.
+
+### 2026-11-09 — Six-tile C8 matches upstream across the T0/T1 seam
+
+- A blinded review of the fixed T1 portrait found a small recurring
+  appearance difference between DCAE and PixelUMM, with similar late
+  eyelid changes. It triggered one C8 decoder replay on the saved T0/T1
+  bank. All 106,168,320 BF16 pixel values matched upstream across the six
+  tiles at `atol=rtol=2e-5`. A one-word negative isolated the first T1
+  frame. The decoder used one terminal wait, 10.842 GiB sampled peak,
+  15.786 GiB minimum cache-aware headroom under the 10% reserve, and
+  zero swap growth.
+- The full C8 request took 645.498 s. Its late tiles rose to 131 s from
+  89 s on the first. Treat the difference from the historical 684.661 s
+  MPS request as descriptive. Return pointer
+  `docs/dcae-v-decoder-frontier.md` records scope, replay and refresh.
