@@ -839,3 +839,74 @@ on the retained sampled coordinates with both caches. Score the prior
 full-weight failure points separately. Dense parity and any performance
 gain are separate gates. Refresh on upstream operator, MPS runtime,
 precision, geometry, mask or fixture changes.
+
+## Dense Conv3D G8 on the retained stage-2 coordinates
+
+Predict bitwise F32 parity for a continuous FMA over all 13,824 terms,
+ordered by eight-channel group, then ascending `kt,kh,kw`, then lane.
+Run the same native kernel with full weights and with the two preceding
+three-tile masks. The masked arms must reproduce their pinned upstream
+F32 values, including boundary points. Fresh dense upstream F32 and
+actual BF16 must reproduce their pinned controls. An exact F32 mismatch
+with these controls intact falsifies this dense schedule at that point.
+
+Compare the native and upstream F32 results rounded to BF16 separately
+against actual upstream BF16 at `atol=rtol=2e-5`. Record boundary,
+stratified, midpoint-selected and prior-failure counts. Count both fixed
+and new BF16 failures to expose churn behind a lower aggregate. These
+counts describe the selected coordinates.
+
+The completion check is a guarded `dcae_v_dense_g8.py --admitted` capture,
+then `--replay` and offline challenges to the controls. The process-group
+cap is 6 GiB, based on the previous 5.107 GiB peak with more upstream arms
+and the same tensor shapes. The cache-aware reserve is 10% and the
+swap-growth limit is 64 MiB. One terminal transfer and zero explicit
+intermediate waits. Removing the isolated diagnostic rolls it back.
+
+The full-weight G8 kernel matched upstream bitwise in F32 and after
+rounding to BF16 at all 16,384 tested coordinates before bias. The BF16
+reference comes from a separate upstream call with BF16 inputs and weights.
+Both masked controls matched their pinned upstream F32 bytes at every point.
+Fresh dense upstream F32 and actual BF16 matched the authenticated references.
+
+| Cache | F32 bit mismatches | BF16 bit mismatches | Prior BF16 failures resolved | New BF16 failures |
+| --- | ---: | ---: | ---: | ---: |
+| Cold | 0 / 8,192 | 0 / 8,192 | 1,855 / 1,855 | 0 |
+| Live | 0 / 8,192 | 0 / 8,192 | 1,947 / 1,947 | 0 |
+
+Each cache case includes 512 boundary, 3,584 stratified and 4,096
+midpoint-enriched coordinates. The previous BF16 failures comprised 5/3
+stratified and 1,850/1,944 midpoint-enriched coordinates (cold/live).
+The offline audit independently verified the 13,824-weight traversal,
+raw F32 and BF16 bits, and earlier failure counts. It rejected swapped
+mask and cache references and a corrupted BF16 rounding value. Changing
+two candidate results with consistent rounding correctly produced one
+surviving prior failure and one new failure for each cache case.
+
+The source-pinned command, guard telemetry, observations, replay and
+audit are in `/opt/mldata_ssd/cogni-ml/dcae-dense-g8-20261108.3JZuRnrX`.
+The observation SHA-256 is
+`8c9b561030bd1facf8c941f532089aa945d2727e2c3f9496c89d15eaebde5510`.
+The comparison SHA-256 is
+`f97086af6de6e36913b2f165e2b0ee55f6dab3dc48aaa164085350c86dc95603`.
+The audit SHA-256 is
+`2be30f050b98a488b0fcb6072137278c53a5eaf47c8259ce617b1bcaefca3056`.
+
+```sh
+python3 -B examples/support/dcae_v_dense_g8.py \
+  /opt/mldata_ssd/cogni-ml/dcae-real-stage2-20261108.9Enu7v29/real \
+  /opt/mldata_ssd/cogni-ml/dcae-dense-g8-20261108.3JZuRnrX --replay
+```
+
+The guarded diagnostic on Apple M2 Max (macOS build `25G83`, Torch 2.8.0)
+took 15.133 s including all controls. Sampled process-group peak was
+5.061 GiB, minimum cache-aware headroom 10.746 GiB, and observed swap
+growth zero. It used one terminal readout and zero explicit intermediate
+waits. The 62 focused comparator, oracle and memory-guard tests passed.
+
+The next performance falsifier is an output-tiled native kernel that
+preserves one G8 accumulator per output. Verify full-tensor F32 and BF16
+parity on both cache cases before timing paired full-shape Conv3D against
+MPS. The sampled result covers stage-2 conv1 before bias for the pinned
+fixture and runtime. Refresh it on upstream operator, MPS runtime,
+precision, geometry, weight, fixture or sampling changes.

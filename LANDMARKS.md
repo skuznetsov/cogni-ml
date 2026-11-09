@@ -39764,3 +39764,23 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next falsifier is continuous G8 over dense K at the original sampled
   coordinates, including the previous BF16 failure points. Scope the
   result to the pinned upstream, runtime, precision, shape and fixtures.
+
+### 2026-11-08 — DCAE dense G8 matches the sampled upstream Conv3D
+
+- One F32 FMA accumulator per output in global eight-channel group,
+  ascending `kt,kh,kw`, ascending lane order matched dense `K=13,824`
+  pre-bias upstream F32 bitwise at all 16,384 authenticated stage-2
+  coordinates across cold and live caches. Its rounded result matched
+  actual upstream BF16 bitwise, resolving all 1,855/1,947 prior BF16
+  gate failures at `atol=rtol=2e-5` with zero new failures.
+- The same kernel reproduced both masked controls and the fresh dense
+  upstream columns reproduced the retained references. The post-drain
+  audit confirmed raw bits and caught swapped references, bad BF16
+  rounding and candidate failure churn. One terminal transfer, zero
+  explicit intermediate waits, 5.061 GiB sampled group peak, a 10%
+  cache-aware reserve and zero observed swap growth.
+- Return pointer is `docs/dcae-v-decoder-frontier.md`. The next gate is a
+  native kernel tiled across outputs, with full-tensor parity on both
+  cache cases and a paired full-shape timing against MPS. Refresh the
+  sampled certificate on upstream, runtime, precision, geometry, weight,
+  fixture or sampling changes.
