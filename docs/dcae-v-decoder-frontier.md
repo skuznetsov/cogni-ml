@@ -1291,3 +1291,73 @@ For replay, copy `run_pair.py` and `analyze_pair.py` to a fresh directory
 on the same SSD and run them in that order with `python3 -B` from the
 worktree. Refresh timing evidence after changes to the runtime, geometry,
 input, resource plan, observer or thermal regime.
+
+## Two-tile C8 versus MPS with thermal recovery, 2026-11-09
+
+The probe reused the pinned BF16 weights and real T20 prefix on M2 Max
+(64 GiB, macOS 26.6.2). Each fresh process decoded the same two causal
+tiles once. The MPS baseline used MPS for every Conv3D. The C8 plan
+replaced 60 residual convolutions in stages 1 and 2 and included their
+GPU packs in the request. Both plans used the same 482 semantic
+operations and the same profiling flags. The wall interval covers
+encoding through the terminal wait. The output audit followed that
+wait.
+
+The first matrix ran MPS → C8 and C8 → MPS after at least 120 s of
+recovery and 12 consecutive quiet Nominal samples per arm. Before
+launch, tile admission required at least 30 valid interior 2 s
+samples, at least 99% mean active GPU residency, mean and median active
+GPU frequency within 2% of MPS, equal unique thermal modes, thermal
+histogram total variation at most 0.20, and zero Critical samples.
+Both tiles had to pass for a matched wall comparison. The two-order
+speedup gate also required at least 3% reduction in each matched pair.
+
+| Order | Recovery | MPS wall | C8 wall | Observed wall reduction | Cold / live gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| MPS → C8 | 120 s | 217.588 s | 180.090 s | 17.23% | Frequency mismatch / frequency and thermal mismatch |
+| C8 → MPS | 120 s | 210.599 s | 170.807 s | 18.89% | Median frequency mismatch / thermal mismatch |
+| C8 → MPS | 301 s | 209.761 s | 169.883 s | 19.01% | Passed / thermal mismatch |
+
+The two 120 s pairs both reached Moderate and Heavy on the live tile
+in the second arm. Their first arms stayed Nominal. In the 301 s
+follow-up, both arms met a final 30-sample quiet Nominal gate and had
+0% median idle GPU active residency. On the cold tile, both were
+Nominal and C8 differed from MPS by −0.53% mean and +0.22% median
+frequency. C8 took 84.041–84.100 s of GPU command-root time versus
+104.444–104.503 s for MPS, a matched reduction of 19.48–19.58%.
+On the live tile the mean and median frequency differences were below
+1%. MPS had 13 Moderate samples out of 49 while C8 had 40 Nominal
+samples, so thermal total variation was 0.265. The matched claim covers
+the cold tile. All full-request reductions in the table are descriptive.
+The system-wide telemetry leaves physical die temperature and the
+causal contribution of clock changes unresolved.
+
+The 37.50–39.88 s wall savings agreed with the GPU root-interval union
+savings within 1.4 ms. Root count fell from 593 to 443. Roots entirely
+within stage 1 or 2 with a residual Conv3D candidate accounted for
+37.76–39.83 s of the savings, including co-encoded work.
+`commitAndContinue` wall time overlaps GPU execution.
+
+All six runs matched 35,389,440 BF16 pixel words bitwise across both
+cache tiles at `atol=rtol=2e-5`. The reference is the authenticated
+T20 causal slice of the saved upstream decoder output. The post-drain
+CPU comparator rejected a one-word mutation in the live tile. Each
+request had one terminal wait and zero instrumented preterminal waits,
+readbacks and allocations. C8 added 769.5 MiB of named GPU storage. Sampled peak
+process-group footprint was 9.66 GiB for MPS and 9.89 GiB for C8.
+Minimum cache-aware headroom was 18.84 GiB under the 10% reserve
+policy, with zero swap growth. The probe ran the decoder alone.
+
+The paired receipts, source and fixture pins, and sampled conditions
+are in these directories on the scratch SSD.
+
+- `/opt/mldata_ssd/cogni-ml/dcae-c8-mps-matched-20261109.4ncMqUEE/pair-result.json`,
+  SHA-256 `c276542120b86d527c95a89b361eee6b239158812f7e0e9aaf04599eb1b43e85`.
+- `/opt/mldata_ssd/cogni-ml/dcae-c8-mps-long-recovery-20261109.PrH53Ucj/pair-result.json`,
+  SHA-256 `e7681d964a817c41e4bed39fa1d13a2477cdac44f6833854344d1f5fc6194a29`.
+
+To regenerate the output tensors and replay the audit, copy each
+directory's `run_matched.py` and `analyze_matched.py` to its own fresh
+sibling directory and run them in order with `python3 -B` from the
+worktree. Refresh timing evidence after changes to the runtime, geometry,
+input, resource plan, observer or thermal regime.

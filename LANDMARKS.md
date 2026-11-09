@@ -39875,3 +39875,23 @@ Refresh after source/toolchain/device/model/workload changes.
   growth. Return pointer `docs/dcae-v-decoder-frontier.md` records the
   receipt and replay. Refresh on runtime, input, geometry, resource plan,
   observer or thermal regime changes.
+
+### 2026-11-09 — C8 cuts matched cold-tile DCAE GPU time by 19.5%
+
+- On the same pinned real T20 BF16 prefix, C8 stages 1 and 2 reduced
+  two-tile wall time by 17.2%, 18.9% and 19.0% against MPS. After 301 s
+  of quiet recovery per arm, the cold tile passed the predeclared
+  frequency and thermal gate at 84.04–84.10 s versus 104.44–104.50 s.
+  The live tile still exceeded the thermal variation limit of 0.20
+  at 0.265. Treat whole-request timings as descriptive.
+- Two-minute recovery admitted Nominal starts but let both second
+  arms reach Heavy on the live tile. Longer recovery removed Heavy
+  in the follow-up. GPU root-time savings accounted for essentially
+  the entire wall delta. Compare root intervals and API time separately.
+- All six outputs matched upstream bitwise on both cache tiles at
+  `atol=rtol=2e-5`. One terminal wait per request, 9.66/9.89 GiB
+  sampled MPS/C8 peaks, 18.84 GiB minimum cache-aware headroom at the
+  10% floor and no swap growth. Return pointer
+  `docs/dcae-v-decoder-frontier.md` records both receipts and replay.
+  Refresh on runtime, input, geometry, resources, observer or thermal
+  regime changes.
