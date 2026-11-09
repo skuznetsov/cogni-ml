@@ -71,9 +71,10 @@ module ML::Video
     getter config : DCAEVDecoderConfig
     getter planned_bytes : Int64
     getter packed_c8 : Bool
+    getter packed_c8_stage1 : Bool
 
     def initialize(@arena : Arena, @config : DCAEVDecoderConfig, @planned_bytes : Int64,
-                   @packed_c8 : Bool = false)
+                   @packed_c8 : Bool = false, @packed_c8_stage1 : Bool = false)
     end
 
     def scratch(index : Int32) : ML::MetalBuffer
@@ -120,7 +121,8 @@ module ML::Video
     getter graph_private_bytes_known : Bool = false
     getter c8_convolution_count = 0_i32
 
-    def initialize(@owners : Array(ML::MetalBuffer), @c8 : DCAEVDecoderC8::Plan? = nil)
+    def initialize(@owners : Array(ML::MetalBuffer), @c8 : DCAEVDecoderC8::Plan? = nil,
+                   @c8_stage1 : DCAEVDecoderC8::Plan? = nil)
     end
 
     def add(name : String, category : String, stage : String,
@@ -140,8 +142,9 @@ module ML::Video
 
     def add_c8(input : ML::MetalBuffer, cache : ML::MetalBuffer?, weight : ML::MetalBuffer,
                bias : ML::MetalBuffer?, output : ML::MetalBuffer, name : String,
-               stage : String) : Nil
-      c8 = @c8 || raise ArgumentError.new("DCAE-V C8 workspace was not prepared")
+               stage : String, stage_index : Int32) : Nil
+      c8 = (stage_index == 1 ? @c8_stage1 : @c8) ||
+           raise ArgumentError.new("DCAE-V C8 workspace was not prepared for stage #{stage_index}")
       @c8_convolution_count += 1
       add(name, "residual_conv3d_c8", stage) do |chain|
         c8.encode(chain, input, cache, weight, bias, output)
@@ -204,6 +207,7 @@ module ML::Video
       @templates.clear
       @owners.clear
       @c8 = nil
+      @c8_stage1 = nil
       @last_chain = nil
       @released = true
     end
@@ -302,7 +306,11 @@ module ML::Video
       specs
     end
 
-    def self.workspace_required_bytes(cfg : DCAEVDecoderConfig, *, packed_c8 : Bool = false) : Int64
+    def self.workspace_required_bytes(cfg : DCAEVDecoderConfig, *, packed_c8 : Bool = false,
+                                      packed_c8_stage1 : Bool = false) : Int64
+      if packed_c8_stage1 && !packed_c8
+        raise ArgumentError.new("DCAE-V stage-1 C8 requires stage-2 C8")
+      end
       caches = cache_specs(cfg).sum do |spec|
         DCAEVShape.count("decoder cache", cfg.batches, spec.channels, spec.height, spec.width).to_i64
       end
@@ -311,7 +319,7 @@ module ML::Video
         unless cfg.batches == 1 && cfg.height == 9 && cfg.width == 16
           raise ArgumentError.new("DCAE-V C8 requires a single latent tile grid of 9x16")
         end
-        planned += DCAEVDecoderC8.scratch_bytes
+        planned += packed_c8_stage1 ? DCAEVDecoderC8.shared_scratch_bytes : DCAEVDecoderC8.scratch_bytes
       end
       planned
     end
@@ -341,9 +349,9 @@ module ML::Video
 
     def self.prepare!(arena : Arena, cfg : DCAEVDecoderConfig,
                       budget_bytes : Int64, reserve_bytes : Int64 = 0_i64,
-                      *, packed_c8 : Bool = false) : DCAEVDecoderWorkspace
+                      *, packed_c8 : Bool = false, packed_c8_stage1 : Bool = false) : DCAEVDecoderWorkspace
       raise ArgumentError.new("DCAE-V decoder workspace must start empty") unless arena.resident_bytes == 0
-      planned = workspace_required_bytes(cfg, packed_c8: packed_c8)
+      planned = workspace_required_bytes(cfg, packed_c8: packed_c8, packed_c8_stage1: packed_c8_stage1)
       unless budget_bytes > 0 && reserve_bytes >= 0 && planned <= budget_bytes && reserve_bytes <= budget_bytes - planned
         raise ArgumentError.new("DCAE-V decoder workspace exceeds residency budget")
       end
@@ -367,7 +375,8 @@ module ML::Video
           allocated << name
         end
         if packed_c8
-          {DCAEVDecoderC8::INPUT_PACK  => DCAEVDecoderC8::INPUT_PACK_VALUES,
+          input_values = packed_c8_stage1 ? DCAEVDecoderC8::SHARED_INPUT_PACK_VALUES : DCAEVDecoderC8::INPUT_PACK_VALUES
+          {DCAEVDecoderC8::INPUT_PACK  => input_values,
            DCAEVDecoderC8::WEIGHT_PACK => DCAEVDecoderC8::WEIGHT_PACK_VALUES}.each do |name, count|
             arena.alloc_weight(name, count, WeightDType::BF16)
             allocated << name
@@ -378,7 +387,7 @@ module ML::Video
         raise ex
       end
       raise "DCAE-V decoder workspace allocation differs from plan" unless arena.resident_bytes == planned
-      DCAEVDecoderWorkspace.new(arena, cfg, planned, packed_c8)
+      DCAEVDecoderWorkspace.new(arena, cfg, planned, packed_c8, packed_c8_stage1)
     end
 
     # All validation and graph preparation precede the timed encode. Optional
@@ -387,7 +396,8 @@ module ML::Video
                           weights : Arena, workspace : DCAEVDecoderWorkspace,
                           cfg : DCAEVDecoderConfig,
                           traces = {} of String => ML::MetalBuffer) : DCAEVDecoderPlan
-      unless workspace.config == cfg && workspace.planned_bytes == workspace_required_bytes(cfg, packed_c8: workspace.packed_c8) &&
+      unless workspace.config == cfg && workspace.planned_bytes == workspace_required_bytes(cfg,
+               packed_c8: workspace.packed_c8, packed_c8_stage1: workspace.packed_c8_stage1) &&
              workspace.arena.resident_bytes == workspace.planned_bytes
         raise ArgumentError.new("DCAE-V decoder workspace/config mismatch")
       end
@@ -409,7 +419,8 @@ module ML::Video
         end
       end
       c8 = DCAEVDecoderC8::Plan.new(workspace.arena) if workspace.packed_c8
-      plan = DCAEVDecoderPlan.new(owners, c8)
+      c8_stage1 = DCAEVDecoderC8::Plan.new(workspace.arena, stage: 1) if workspace.packed_c8_stage1
+      plan = DCAEVDecoderPlan.new(owners, c8, c8_stage1)
       begin
         cfg.tile_count.times do |tile|
           h, w, t, slot = cfg.height, cfg.width, 10, 0
@@ -493,9 +504,13 @@ module ML::Video
       weight = weights["#{prefix}.conv.weight"]
       bias_buffer = bias ? weights["#{prefix}.conv.bias"] : nil
       operation = "tile#{tile}/#{prefix}.conv3d"
-      if workspace.packed_c8 && stage == "stage_2" && category == "residual_conv3d" &&
-         DCAEVDecoderC8.eligible?(cfg.batches, cin, cout, t, h, w)
-        plan.add_c8(input, live_cache, weight, bias_buffer, output, operation, stage)
+      c8_stage = case stage
+                 when "stage_1" then 1 if workspace.packed_c8_stage1
+                 when "stage_2" then 2 if workspace.packed_c8
+                 end
+      if c8_stage && category == "residual_conv3d" &&
+         DCAEVDecoderC8.eligible?(cfg.batches, cin, cout, t, h, w, stage: c8_stage)
+        plan.add_c8(input, live_cache, weight, bias_buffer, output, operation, stage, c8_stage)
       else
         key = [cfg.batches, cin, cout, t, h, w, tile > 0, bias].map(&.to_s).join("|")
         template = plan.template(key) do

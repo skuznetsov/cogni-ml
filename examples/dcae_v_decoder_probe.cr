@@ -186,6 +186,7 @@ module DCAEVDecoderProbe
     profile_enabled = false
     cache_profile = false
     packed_c8 = false
+    packed_c8_stage1 = false
     OptionParser.parse do |p|
       p.banner = "Native original BF16 DCAE-V decoder; run under wan_memory_guard.py"
       p.on("--weights PATH", "Original decoder-only BF16 safetensors") { |v| weights_path = v }
@@ -199,9 +200,17 @@ module DCAEVDecoderProbe
       p.on("--profile", "Record per-operation host encode time and existing MPS root intervals") { profile_enabled = true }
       p.on("--cache-profile", "Summarize existing GPU root intervals by causal cache tile") { cache_profile = true }
       p.on("--c8", "Use packed C8 for the verified stage-2 residual Conv3D geometry") { packed_c8 = true }
+      p.on("--c8-stage1", "Use packed C8 for residual Conv3D in stages 1 and 2") { packed_c8_stage1 = true }
       p.on("--plan-only", "Authenticate and plan without Metal") { plan_only = true }
     end
-    layout = packed_c8 ? "c8_stage2" : "native"
+    packed_c8 ||= packed_c8_stage1
+    layout = if packed_c8_stage1
+               "c8_stage1_stage2"
+             elsif packed_c8
+               "c8_stage2"
+             else
+               "native"
+             end
     unless [weights_path, weights_sha, reference_path, reference_sha].none?(&.empty?) &&
            (3072..32768).includes?(budget_mib) && (1..4).includes?(runs)
       raise ArgumentError.new("Pinned weights/reference and budget 3..32 GiB, runs 1..4 are required")
@@ -231,7 +240,8 @@ module DCAEVDecoderProbe
         raise ArgumentError.new("DCAE-V decoder reference keys or shapes differ from declared capture")
       end
       io_bytes = expected.sum { |_, dims| dims.product * 2 }
-      workspace_bytes = ML::Video::DCAEVDecoder.workspace_required_bytes(cfg, packed_c8: packed_c8)
+      workspace_bytes = ML::Video::DCAEVDecoder.workspace_required_bytes(cfg, packed_c8: packed_c8,
+        packed_c8_stage1: packed_c8_stage1)
       budget = budget_mib * 1024 * 1024
       weight_plan = ML::Video::WeightPlan.new([weights], ML::Video::DCAEVDecoder.checkpoint_bindings(cfg),
         budget, reserve_bytes: io_bytes + workspace_bytes,
@@ -254,7 +264,7 @@ module DCAEVDecoderProbe
       io_arena = ia = ML::Video::Arena.new
       prepared = pw = ML::Video::PreparedWeights.new(weight_plan, wa)
       workspace = ML::Video::DCAEVDecoder.prepare!(ws, cfg, budget, weight_plan.destination_bytes + io_bytes,
-        packed_c8: packed_c8)
+        packed_c8: packed_c8, packed_c8_stage1: packed_c8_stage1)
       tensors = {} of String => Tuple(ML::MetalBuffer, Array(Int64))
       expected.each do |name, dims|
         tensors[name] = {ia.alloc_weight(name, dims.product.to_i32, ML::Video::WeightDType::BF16), dims}
@@ -266,8 +276,12 @@ module DCAEVDecoderProbe
       plan_prepare_start = Time.instant
       plan = active_plan = ML::Video::DCAEVDecoder.prepare_mps!(input, tensors["output.pixels"][0], wa,
         workspace, cfg, traces)
-      if packed_c8 && active_plan.c8_convolution_count != cfg.tile_count * 2 * ML::Video::DCAEVDecoder::DEPTHS[2]
-        raise "DCAE-V C8 plan does not cover all stage-2 residual convolutions"
+      if packed_c8
+        depths = ML::Video::DCAEVDecoder::DEPTHS
+        c8_blocks = depths[2] + (packed_c8_stage1 ? depths[1] : 0)
+        if active_plan.c8_convolution_count != cfg.tile_count * 2 * c8_blocks
+          raise "DCAE-V C8 plan does not cover all selected residual convolutions"
+        end
       end
       plan_prepare_seconds = (Time.instant - plan_prepare_start).total_seconds
       raise "DCAE-V decoder memory plan/allocation mismatch" unless wa.resident_bytes + ws.resident_bytes + ia.resident_bytes == named_bytes

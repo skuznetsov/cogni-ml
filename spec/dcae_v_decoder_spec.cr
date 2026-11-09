@@ -55,6 +55,14 @@ describe ML::Video::DCAEVDecoderConfig do
     decoder.workspace_required_bytes(cfg, packed_c8: true).should eq(base + 410_517_504_i64)
     decoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(9, 16, 10), packed_c8: true)
       .should eq(base + 410_517_504_i64)
+    [10, 20].each do |frames|
+      tiled = ML::Video::DCAEVDecoderConfig.new(9, 16, frames)
+      decoder.workspace_required_bytes(tiled, packed_c8: true, packed_c8_stage1: true)
+        .should eq(base + 806_879_232_i64)
+    end
+    expect_raises(ArgumentError, /requires stage-2 C8/) do
+      decoder.workspace_required_bytes(cfg, packed_c8_stage1: true)
+    end
     expect_raises(ArgumentError, /9x16/) do
       decoder.workspace_required_bytes(ML::Video::DCAEVDecoderConfig.new(9, 15, 20), packed_c8: true)
     end
@@ -64,6 +72,9 @@ describe ML::Video::DCAEVDecoderConfig do
     ML::Video::DCAEVDecoderC8.eligible?(1, 512, 512, 40, 72, 128).should be_true
     ML::Video::DCAEVDecoderC8.eligible?(1, 512, 2048, 40, 72, 128).should be_false
     ML::Video::DCAEVDecoderC8.eligible?(1, 512, 512, 40, 36, 64).should be_false
+    ML::Video::DCAEVDecoderC8.eligible?(1, 256, 256, 40, 144, 256, stage: 1).should be_true
+    ML::Video::DCAEVDecoderC8.eligible?(1, 256, 256, 40, 144, 256).should be_false
+    ML::Video::DCAEVDecoderC8.eligible?(1, 512, 512, 40, 72, 128, stage: 1).should be_false
   end
 
   it "rejects unsupported or overflowing geometry before GPU work" do

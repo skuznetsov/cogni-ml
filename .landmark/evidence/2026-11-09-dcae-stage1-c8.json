@@ -1,0 +1,514 @@
+{
+  "schema": "cogni_ml.dcae_v_decoder_stage1_c8/v1",
+  "date": "2026-11-09",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Isolated stage-1 Conv3D and connected complete decoder depth on the pinned cold and live T20 tiles. Exact BF16 and a lower sampled process peak in both connected pairs. Optional stage-1 mode.",
+    "adversary": "Robust for parity and the sampled run records. Both full outputs and each cache tile passed exact comparison. Final-word mutations rejected the GPU isolated check and the live connected check. The reverse pair contradicts a stable decoder speedup.",
+    "measurement_limits": "Two sequential causal tiles on one host. Fresh processes, sampled footprints, and unconstrained host/GPU clocks. GPU root intervals include all work in a command root. No full-generation result.",
+    "refresh": "Rerun the guarded isolated and connected checks after upstream, weights, input, geometry, precision, workspace, toolchain/device, or measurement changes."
+  },
+  "host": "Apple M2 Max, macOS 26.6.2 (25G83), 64 GiB unified memory",
+  "source_base_commit": "e7fa10f8a7a7ee216935b6be6663e528690e3936",
+  "implementation_sources": {
+    "examples/dcae_v_decoder_probe.cr": "a987533bd83a921a7d2aa85ab53e5693ac58e0e9292143c45f85a39972aa9928",
+    "src/ml/video/dcae_v_decoder.cr": "8d3774b40d732eaf7b4fd59c655446a18597ba9b791e9fd90c9b3f59a755c9be",
+    "src/ml/video/dcae_v_decoder_profile.cr": "156f903ef2fe1e2d90e8f6c8d68bf1a556f3f8e7e65d7d50e9d23e1458426cb9",
+    "src/ml/video/dcae_v_mps.cr": "91033a4e9ee3ddb8a1ebb58642470054c27c407b1cd4a61cb5e7e930c65b1978",
+    "src/ml/video/dcae_v_mps_bridge.mm": "31c8298dc5fcfe00bee9c08edd6cd3d479b1b437596d243ed4d5ef26952cd56d",
+    "src/ml/video/dcae_v_norm_mps_bridge.mm": "e0068a7967073748cebd4ba09687f4253abf5a6bd1513b93e6298620afcf23ce",
+    "src/ml/video/dcae_v_encoder.cr": "161c242c318c0fe709d31b9864f8b3269a5c5c93997398138b6047d2e7d90464",
+    "src/ml/video/kernels/dcae_v_decoder.metal": "ac8ba52ced97a16b3576007ac3d4ad71426cfa390a63d1b0bd6c2f932c3d2a5b",
+    "src/ml/video/kernels/dcae_v_encoder.metal": "0df35bf37254ffbc9f69124069775145842b6209ccf955a90133ff82fda2ee15",
+    "src/ml/video/metal_mps_command_chain.cr": "d0cf19431bc06888fdf058bd3299c8ff6bda07268be5a8905afb32ce5ff50893",
+    "src/ml/video/metal_mps_command_chain.mm": "f973b615fcc9a7d56541a974c6cf1862110f30babdff709234555b2d7ec44ba3",
+    "examples/support/hy_nomas_probe_instrumentation.cr": "5a7c5283219f4b3ff0cfb29ace3b58c19f35518c151722129abfe4f64e877d48",
+    "examples/support/wan_memory_guard.py": "8a3a323a1ab93caa53f7d58393da6ef7a67f00089b3b8a89c818ccc2b69ee8df",
+    "src/ml/video/dcae_v_mps_profile.h": "ebfee79ef5f978aa5ba0e7100041cf9e414e4dde2200c281161a952c812d4b5a",
+    "src/ml/video/mps_api_profile.h": "8993c3cd22562a799d7fc682aa9230815e88d54988cad9d1eea52190cf390817",
+    "src/ml/video/dcae_v_decoder_c8.cr": "747427bcb478533c1a15a2c74960c084801686ea36f1cfb02efa3b9c22b0ce82",
+    "src/ml/video/kernels/dcae_v_decoder_c8.metal": "6709eabdf4469277ea5901f3e2c31a7a692280187df01b4d6b81014ff99b439a",
+    "src/ml/video/metal_ops.cr": "b31c1bfa9eb9028389e69b546377f26cf7980e726a488ce5fc061e0bbc79098a",
+    "src/ml/video/metal_stage_io.mm": "87ef86f5eb6f76fbc6019e0bc63613a8ca58b091a069347604fc27aed7a02150",
+    "src/ml/metal/bridge.mm": "68caaa7855bb874937772491e9ba56f4fa19d2b162ba097766119f88434ccf13",
+    "spec/dcae_v_decoder_spec.cr": "d97b927e3a16aa5945ea62daf97a37305cca9a706f4407416e4a733d0304b177",
+    "spec/support/dcae_v_decoder_compare.py": "704b2809fe743f72faae022023abfecdc2a13a340b10e3592b1d1b939b5d0812"
+  },
+  "binary": {
+    "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/build/dcae_v_decoder_probe",
+    "bytes": 1340392,
+    "sha256": "94b30f49c8625b8d8fb4fe274790ed099ae9fc48abdb8ab3958577693729fd69"
+  },
+  "upstream": {
+    "revision": "911cea6458a89c2663513ff7099561ec190dd491",
+    "module_sha256": "38163ebead9a6bb643d27843022c1757c45c6b8638c334a476aee5b373edf8c1",
+    "original_checkpoint_sha256": "ebbee483c80890c7795a2babc06e1cb4d42564174cf3bae2b698c0589d95cc3b",
+    "native_weights_path": "/opt/mldata_ssd/models/hy-nomas/dcae-v-native-decoder-ebbee483/decoder-bf16.safetensors",
+    "native_weights_sha256": "f53c94b06685027b8131b7f52cab519edee1e51287d93d8fdac6a17506f8881b",
+    "connected_prefix": {
+      "path": "/Volumes/Nata's Data/MLData/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/upstream-prefix20.safetensors",
+      "sha256": "db96ee9247e69b338e3ce8d4ea349404208d6d50d6ba022548751b566632bc4e",
+      "tensor": "input.latent",
+      "tensor_shape": [
+        1,
+        32,
+        20,
+        9,
+        16
+      ],
+      "tensor_dtype": "BF16",
+      "tensor_sha256": "43081cf72cc0feda5edff7531f449209a542a2fb8d5ba8ae15d3067a06462a3c",
+      "pixels_tensor_sha256": "1ea898048e2cc31bd82baf0c85bf4586f0d99137d14c8ba6b75f7d780dd0b9fe",
+      "lineage_audit_path": "/opt/mldata_ssd/cogni-ml/dcae-conv-profile-20261108.dwteqxm5/prefix-lineage-verified.json",
+      "lineage_audit_sha256": "7961bd5f4ed32793e83ddd5eb5e982c49a3958d647f5718046ce3f867eaa256c",
+      "full_source_reference_path": "/opt/mldata_ssd/cogni-ml/dcae-native-decoder-20261108.t9_k76ut/upstream-full/decoder-reference.safetensors",
+      "full_source_reference_sha256": "0e873cba80446ef26920469ef3c1700f6e1686d021fb35b973872de4e383c2c7",
+      "lineage_scope": "The latent and pixel payloads are byte-exact prefixes of a retained full upstream reference; this oracle independently reruns pinned upstream prefix activations."
+    },
+    "connected_reference_derivation": "Pinned two-tile prefix of the retained full upstream BF16 output.",
+    "tolerance": {
+      "atol": 2e-05,
+      "rtol": 2e-05
+    }
+  },
+  "isolated": {
+    "convolution": "decoder.stages.1.op_list.1.main.conv1.conv",
+    "shape_bcthw": [
+      1,
+      256,
+      40,
+      144,
+      256
+    ],
+    "oracle": "Fresh pinned Torch 2.8.0 MPS run with CPU fallback disabled and original checkpoint weights.",
+    "prefix_weights_joined": 144,
+    "prefix_weight_bytes_joined": 2411936256,
+    "upstream_capture": {
+      "bytes": 1509949624,
+      "sha256": "c99fd2aabfcf261a9d050614febc92cde32ef2ccfc15cde0a7b1fce55c963d3d",
+      "retained": false
+    },
+    "first_layout_failure": {
+      "first_cthw": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "store_channel_stride_words": 368640,
+      "required_channel_stride_words": 1474560,
+      "bitwise_mismatches_cold": 282671010,
+      "bitwise_mismatches_live": 282570749,
+      "audit": {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/first-layout-failure.json",
+        "bytes": 3027,
+        "sha256": "f1c939596e75560cbe2a5e425aa5844f58973305bc14456186d1f00d8b0decd6"
+      },
+      "binary": {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/build/stage1_probe.layout-failure",
+        "bytes": 1245696,
+        "sha256": "496a994e4a0cc28e54385f792015e83a19fe7860a2cd71c70df50f2e3b874240"
+      }
+    },
+    "words_per_cache": 377487360,
+    "bitwise_mismatches": {
+      "mps_vs_upstream_cold": 0,
+      "c8_vs_upstream_cold": 0,
+      "c8_vs_mps_cold": 0,
+      "mps_vs_upstream_live": 0,
+      "c8_vs_upstream_live": 0,
+      "c8_vs_mps_live": 0
+    },
+    "controls": {
+      "zero_live_cache_frame_zero_changes": 9399772,
+      "zero_live_cache_later_changes": 0,
+      "last_word_mutation_rejections": 1
+    },
+    "timing_scope": "Identical resident input and weight buffers. Wall and GPU pairs include both C8 packs; each timed arm uses one terminal wait.",
+    "pairs_by_tile": {
+      "0": {
+        "median_seconds": {
+          "mps": 2.736825708,
+          "c8": 2.2002870205000002
+        },
+        "wall_ratios": [
+          0.7737272189633649,
+          0.8332063859213559
+        ],
+        "median_gpu_seconds": {
+          "mps": 2.7269777498440817,
+          "c8": 2.18260152079165
+        }
+      },
+      "1": {
+        "median_seconds": {
+          "mps": 2.8154987289999998,
+          "c8": 2.1923844375000003
+        },
+        "wall_ratios": [
+          0.793967674177863,
+          0.7637187227271658
+        ],
+        "median_gpu_seconds": {
+          "mps": 2.7992678543087095,
+          "c8": 2.183851541718468
+        }
+      }
+    },
+    "memory": {
+      "upstream": {
+        "samples": 355,
+        "peak_bytes": 13551012600,
+        "min_headroom_bytes": 19353174016,
+        "start_headroom_bytes": 35379314688,
+        "swap_growth_bytes": 0
+      },
+      "native": {
+        "samples": 369,
+        "peak_bytes": 13738840096,
+        "min_headroom_bytes": 21019049984,
+        "start_headroom_bytes": 36374167552,
+        "swap_growth_bytes": 0
+      }
+    },
+    "audit": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/verified-native.json",
+      "bytes": 5164,
+      "sha256": "1f5f81802c9b413e67841de94cfbdd3bc1e939c45c1699596d666b55ab78886c"
+    },
+    "kernel_sha256": "93c737af4e569f50deff55de363ed2dec92c01dea39e5b350bc270e688891280",
+    "binary": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/build/stage1_probe",
+      "bytes": 1245696,
+      "sha256": "7148fa00d5d0c10750a344e68a6ee8d2c72c1e48190642139782061aef633cef"
+    },
+    "replay": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/upstream_stage1.py",
+        "bytes": 4139,
+        "sha256": "061faa28c1a2c82de91b6278d3e2d9d00ed673bda83f8d0d6b091363ad20b5ea"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/stage1_probe.cr",
+        "bytes": 11957,
+        "sha256": "29fb274ca4459ce26eee3816b5d24a97abf30d42cf8c9c78bc1f83dd316c250e"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/run_native.sh",
+        "bytes": 849,
+        "sha256": "7164ef0c61fc8d81a8380a135770645cffeff18aace42a35d76653eaf5487ffc"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/verify_native.py",
+        "bytes": 5616,
+        "sha256": "6b5773f7f548811695e0d41bc794175b7ce4ce32795223bf9cdaceaf4d33808b"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/isolated-probe.patch",
+        "bytes": 31395,
+        "sha256": "3e9453ba79c4c4ad8061b19f591d105c9bd183cdd0af63c7ce94ba58f6d21582"
+      }
+    ]
+  },
+  "connected": {
+    "arm_a": "C8 stage 2, MPS stage 1 (--c8)",
+    "arm_b": "C8 stages 1 and 2 (--c8-stage1)",
+    "order": [
+      "b1",
+      "a1",
+      "a2",
+      "b2"
+    ],
+    "measurement": "First request per fresh process with the same prepared resources, input, and output policy. Timing excludes setup and post-drain export and checking.",
+    "shared_pack_bytes": 806879232,
+    "guard": {
+      "memory_accounting": "file-cache",
+      "runtime_floor_pct": 10,
+      "max_footprint_bytes": 13958643712,
+      "max_swap_growth_bytes": 67108864
+    },
+    "parity": {
+      "shape_bcthw": [
+        1,
+        3,
+        80,
+        288,
+        512
+      ],
+      "exact_pixels_per_tile_per_run": 17694720,
+      "zero_bitwise_mismatches_in_each_run": true,
+      "mutated_live_pixel_bcthw": [
+        0,
+        2,
+        79,
+        287,
+        511
+      ],
+      "mutated_live_pixel_rejections": 1,
+      "cold_bitwise_exact_after_live_mutation": true
+    },
+    "hot_path": {
+      "terminal_waits": 1,
+      "preterminal_waits": 0,
+      "tensor_readbacks": 0,
+      "named_allocations": 0
+    },
+    "pairs": [
+      {
+        "b_label": "b1",
+        "a_label": "a1",
+        "wall_ratio_b_over_a": 0.9676527334502405,
+        "gpu_ratio_b_over_a": 0.9676040029540881,
+        "paired_peak_footprint_delta_bytes_b_minus_a": -474857544,
+        "b_named_bytes": 6035592728,
+        "a_named_bytes": 5639231000,
+        "named_bytes_delta_b_minus_a": 396361728
+      },
+      {
+        "b_label": "b2",
+        "a_label": "a2",
+        "wall_ratio_b_over_a": 1.0607913682798844,
+        "gpu_ratio_b_over_a": 1.0607870743739507,
+        "paired_peak_footprint_delta_bytes_b_minus_a": -474546248,
+        "b_named_bytes": 6035592728,
+        "a_named_bytes": 5639231000,
+        "named_bytes_delta_b_minus_a": 396361728
+      }
+    ],
+    "runs": {
+      "b1": {
+        "wall_seconds": 185.256373791,
+        "gpu_root_seconds": 185.20131504605524,
+        "encode_seconds": 148.468831166,
+        "terminal_wait_seconds": 36.787542542,
+        "command_roots": 443,
+        "named_bytes": 6035592728,
+        "sampled_process_peak_bytes": 10621504512,
+        "min_cache_aware_headroom_bytes": 19458211840,
+        "max_swap_growth_bytes": 0,
+        "phase_gpu_root_seconds_bounds": {
+          "cold": [
+            93.37200237764046,
+            93.43441800260916
+          ],
+          "live": [
+            91.76689704344608,
+            91.82931266841479
+          ]
+        },
+        "receipts": {
+          "command.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b1.command.json",
+            "bytes": 4985,
+            "sha256": "7bd63d6b38df158dad6cefb1c65685a23e42fbfe51a6e7ed8a46abbb73d898cc"
+          },
+          "execution.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b1.execution.json",
+            "bytes": 261,
+            "sha256": "ceb900cfb6b4b5f31cb6305251b4319c93a5554177ae311fb2b56a6531d1349e"
+          },
+          "guard.jsonl": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b1.guard.jsonl",
+            "bytes": 112868,
+            "sha256": "edcc698cd69d69f2432fb4546a1f5445243a11c0107f3e3a6344c7af9cec1f9c"
+          },
+          "log": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b1.log",
+            "bytes": 2629,
+            "sha256": "7fbefed9a4098bd8b82a260c5262acb96f7a22ec6d828afa97f1ec8acb59786f"
+          }
+        },
+        "output": {
+          "bytes": 70963432,
+          "sha256": "b71ded62a8a4ca30ec5596387b836130af7ce280ed1a7ba23f0055142c92e49d",
+          "retained": false
+        }
+      },
+      "a1": {
+        "wall_seconds": 191.449233167,
+        "gpu_root_seconds": 191.40197279118001,
+        "encode_seconds": 165.506287917,
+        "terminal_wait_seconds": 25.942945125,
+        "command_roots": 493,
+        "named_bytes": 5639231000,
+        "sampled_process_peak_bytes": 11096362056,
+        "min_cache_aware_headroom_bytes": 24730402816,
+        "max_swap_growth_bytes": 0,
+        "phase_gpu_root_seconds_bounds": {
+          "cold": [
+            94.8498099995777,
+            94.90882537467405
+          ],
+          "live": [
+            96.49314741650596,
+            96.55216279160231
+          ]
+        },
+        "receipts": {
+          "command.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a1.command.json",
+            "bytes": 4964,
+            "sha256": "77e0f0bc1ee89deef1d19a153fa29443eb273ec78e1a1f28df8f8ecc60be2ed7"
+          },
+          "execution.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a1.execution.json",
+            "bytes": 262,
+            "sha256": "54dde0f224a4669f896a59b91e4e0a7d7b9b0c98fd6998ca2b8e4fde1a63e9ac"
+          },
+          "guard.jsonl": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a1.guard.jsonl",
+            "bytes": 116862,
+            "sha256": "d6755b309c857bdc7a936c01c34e732064e174e02555abb544638c00e28af024"
+          },
+          "log": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a1.log",
+            "bytes": 2589,
+            "sha256": "60169651805e117bd19d0b6df4c961c5961dd148617580702efd49a26630ff93"
+          }
+        },
+        "output": {
+          "bytes": 70963424,
+          "sha256": "0017b1df7ba152297423a7ef2284336e508aefc4a2dfd4c417f76013a32855ac",
+          "retained": false
+        }
+      },
+      "a2": {
+        "wall_seconds": 199.447703417,
+        "gpu_root_seconds": 199.40098341973498,
+        "encode_seconds": 170.880766542,
+        "terminal_wait_seconds": 28.566936792,
+        "command_roots": 493,
+        "named_bytes": 5639231000,
+        "sampled_process_peak_bytes": 11096460360,
+        "min_cache_aware_headroom_bytes": 24254169088,
+        "max_swap_growth_bytes": 0,
+        "phase_gpu_root_seconds_bounds": {
+          "cold": [
+            98.37889479403384,
+            98.43925666902214
+          ],
+          "live": [
+            100.96172675071284,
+            101.02208862570114
+          ]
+        },
+        "receipts": {
+          "command.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a2.command.json",
+            "bytes": 4964,
+            "sha256": "382a459fc24c4c935309ff0ac17909ad8cf2e799b3324f4edfdcc2f2f0d26331"
+          },
+          "execution.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a2.execution.json",
+            "bytes": 262,
+            "sha256": "5dff0bd39b3fc3edff0bb2262139072dd00b2041a61cc1e1dd75cef5055c5593"
+          },
+          "guard.jsonl": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a2.guard.jsonl",
+            "bytes": 121806,
+            "sha256": "390b6f3f5af9d71ad934f4decc17a8d2ae3a127c9936b59769a801ba4c9484b8"
+          },
+          "log": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/a2.log",
+            "bytes": 2594,
+            "sha256": "919e9c23a2598b7381153488aa6faf2a29031a8bd9ab697dd6cc11bcec50f40b"
+          }
+        },
+        "output": {
+          "bytes": 70963424,
+          "sha256": "0017b1df7ba152297423a7ef2284336e508aefc4a2dfd4c417f76013a32855ac",
+          "retained": false
+        }
+      },
+      "b2": {
+        "wall_seconds": 211.572402208,
+        "gpu_root_seconds": 211.52198582910933,
+        "encode_seconds": 166.814051541,
+        "terminal_wait_seconds": 44.758350583,
+        "command_roots": 443,
+        "named_bytes": 6035592728,
+        "sampled_process_peak_bytes": 10621914112,
+        "min_cache_aware_headroom_bytes": 22172221440,
+        "max_swap_growth_bytes": 0,
+        "phase_gpu_root_seconds_bounds": {
+          "cold": [
+            103.00054774829186,
+            103.06686299829744
+          ],
+          "live": [
+            108.45512283081189,
+            108.52143808081746
+          ]
+        },
+        "receipts": {
+          "command.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b2.command.json",
+            "bytes": 4985,
+            "sha256": "c1b521d9bfbb21d48979717858e91f190dc769909ebeacafa207573021233a18"
+          },
+          "execution.json": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b2.execution.json",
+            "bytes": 262,
+            "sha256": "a70f2d2726150e34c59b8734b891de80c4f077e388ebdb7a0692683d0dbe5990"
+          },
+          "guard.jsonl": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b2.guard.jsonl",
+            "bytes": 128597,
+            "sha256": "6f32b6167ca507d56d88cb2d2657c18de2f8e448bf4745af3fedc556d0193bc4"
+          },
+          "log": {
+            "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/b2.log",
+            "bytes": 2633,
+            "sha256": "bac9a73337d8cbc6a96d5325f99587e1ba675f18027bc24198f7fd3ab2e1d06a"
+          }
+        },
+        "output": {
+          "bytes": 70963432,
+          "sha256": "b71ded62a8a4ca30ec5596387b836130af7ce280ed1a7ba23f0055142c92e49d",
+          "retained": false
+        }
+      }
+    },
+    "audit": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/verification-b1-a1-a2-b2.json",
+      "bytes": 35151,
+      "sha256": "88aa1f155206ee7b7f187e09aaecdb52b7488beca4bbeb6929a6152ef574e88c"
+    },
+    "negative_audit": {
+      "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/live-negative.json",
+      "bytes": 1378,
+      "sha256": "1994db1b6f1d08ee9b3bf13d85ec7ff85769c14fa215b3851e61e840688154a3"
+    },
+    "replay": [
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/run_probe.py",
+        "bytes": 8804,
+        "sha256": "702a2c7b98fb69f5c231fced59824133f127e1fc3d117cf4c6abc121c4bb4568"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/check_probe.py",
+        "bytes": 17662,
+        "sha256": "ebc47db37d81cccb0d858349a2470d15465af9be81a4bccf4ffdcbd912935c39"
+      },
+      {
+        "path": "/opt/mldata_ssd/cogni-ml/dcae-stage1-c8-20261109.P2cdWV7a/connected/verify_live_negative.py",
+        "bytes": 3452,
+        "sha256": "d842572d1c7e98e5847c75f8a9415ea8fc9e3c4bc09ada2231f0d0eb52e16639"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "command": "make spec_dcae_v_decoder",
+      "result": "8 examples passed"
+    },
+    {
+      "command": "python3 -B -m unittest spec.dcae_v_decoder_checkpoint_test spec.dcae_v_decoder_reference_test spec.dcae_v_decoder_compare_test spec.wan_memory_guard_spec",
+      "result": "67 tests passed"
+    },
+    {
+      "command": "make BUILD_DIR=<external-build-dir> dcae_v_decoder_probe",
+      "result": "Release probe built and used for every connected run"
+    }
+  ]
+}

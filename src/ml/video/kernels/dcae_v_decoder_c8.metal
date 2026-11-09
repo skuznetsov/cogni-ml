@@ -1,29 +1,14 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Fixed stage-2 Conv3D geometry. Inputs are BF16 BCTHW with B=1. The packed
+// Two fixed Conv3D geometries. Inputs are BF16 BCTHW with B=1. The packed
 // input scratch has 42 temporal slots: optional cached frame, 40 source
 // frames, then one logical zero frame.
-constant uint DcaeVC8Channels = 512u;
 constant uint DcaeVC8Frames = 40u;
-constant uint DcaeVC8Height = 72u;
-constant uint DcaeVC8Width = 128u;
 constant uint DcaeVC8ChannelGroup = 8u;
 constant uint DcaeVC8Taps = 27u;
-constant uint DcaeVC8K = DcaeVC8Channels * DcaeVC8Taps;
-constant uint DcaeVC8OutputStride =
-    DcaeVC8Frames * DcaeVC8Height * DcaeVC8Width;
-constant uint DcaeVC8InputStride =
-    (DcaeVC8Frames + 2u) * DcaeVC8Height * DcaeVC8Width;
-constant uint DcaeVC8TilePositions = DcaeVC8OutputStride / 2u;
 constant uint DcaeVC8TileChannels = 4u;
 constant uint DcaeVC8OutputTilesPerDispatch = 8u;
-constant uint DcaeVC8PackInputPositions =
-    (DcaeVC8Channels / DcaeVC8ChannelGroup) * DcaeVC8InputStride;
-constant uint DcaeVC8PackWeightCount =
-    (DcaeVC8Channels / DcaeVC8TileChannels) * DcaeVC8K;
-constant uint DcaeVC8ConvThreadCount =
-    DcaeVC8OutputTilesPerDispatch * DcaeVC8TilePositions;
 
 inline float4 dcae_v_c8_decode_bf16x4(ushort4 value) {
   return as_type<float4>(uint4(value) << 16u);
@@ -40,42 +25,46 @@ inline ushort4 dcae_v_c8_round_bf16(float4 value) {
 
 inline void dcae_v_c8_store_channels(device ushort* output,
                                      uint index,
+                                     uint channel_stride,
                                      ushort4 value) {
   output[index] = value.x;
-  output[index + DcaeVC8OutputStride] = value.y;
-  output[index + 2u * DcaeVC8OutputStride] = value.z;
-  output[index + 3u * DcaeVC8OutputStride] = value.w;
+  output[index + channel_stride] = value.y;
+  output[index + 2u * channel_stride] = value.z;
+  output[index + 3u * channel_stride] = value.w;
 }
 
-// Pack the cache and contiguous [512,40,72,128] BF16 source into C8 scratch.
+// Pack the cache and contiguous BF16 source into C8 scratch.
 // Destination order is [channel_group,42,H,W], with two ushort4 values per
 // pixel. If use_cache is zero, frame 0 is written as logical zero and cache is
 // never read. The final temporal slot (41) is always logical zero.
-kernel void dcae_v_c8_pack_input(
-    device const ushort* input [[buffer(0)]],
-    device const ushort* cache [[buffer(1)]],
-    device ushort4* packed [[buffer(2)]],
-    constant uint& use_cache [[buffer(3)]],
-    uint tid [[thread_position_in_grid]]) {
-  if (tid >= DcaeVC8PackInputPositions) return;
+template <uint Channels, uint Height, uint Width>
+inline void dcae_v_c8_pack_input_impl(
+    device const ushort* input,
+    device const ushort* cache,
+    device ushort4* packed,
+    uint use_cache,
+    uint tid) {
+  const uint input_stride = (DcaeVC8Frames + 2u) * Height * Width;
+  const uint pack_positions = (Channels / DcaeVC8ChannelGroup) * input_stride;
+  if (tid >= pack_positions) return;
 
-  const uint group = tid / DcaeVC8InputStride;
-  const uint pixel = tid % DcaeVC8InputStride;
-  const uint frame = pixel / (DcaeVC8Height * DcaeVC8Width);
-  const uint spatial = pixel % (DcaeVC8Height * DcaeVC8Width);
+  const uint group = tid / input_stride;
+  const uint pixel = tid % input_stride;
+  const uint frame = pixel / (Height * Width);
+  const uint spatial = pixel % (Height * Width);
   const uint channel = group * DcaeVC8ChannelGroup;
   ushort values[8] = {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
 
   if (frame == 0u) {
     if (use_cache != 0u) {
-      const uint plane = DcaeVC8Height * DcaeVC8Width;
+      const uint plane = Height * Width;
       #pragma clang loop unroll(full)
       for (uint lane = 0u; lane < DcaeVC8ChannelGroup; ++lane) {
         values[lane] = cache[(channel + lane) * plane + spatial];
       }
     }
   } else if (frame <= DcaeVC8Frames) {
-    const uint plane = DcaeVC8Height * DcaeVC8Width;
+    const uint plane = Height * Width;
     #pragma clang loop unroll(full)
     for (uint lane = 0u; lane < DcaeVC8ChannelGroup; ++lane) {
       const uint source_channel = channel + lane;
@@ -89,47 +78,56 @@ kernel void dcae_v_c8_pack_input(
   packed[dst + 1u] = ushort4(values[4], values[5], values[6], values[7]);
 }
 
-// Reorder contiguous upstream [512,512,3,3,3] BF16 weights into the existing
+// Reorder contiguous upstream [C,C,3,3,3] BF16 weights into the existing
 // OC4/C8 layout used by the DCAE G8 kernel profile.
-kernel void dcae_v_c8_pack_weight(
-    device const ushort* weight [[buffer(0)]],
-    device ushort4* packed_weight [[buffer(1)]],
-    uint tid [[thread_position_in_grid]]) {
-  if (tid >= DcaeVC8PackWeightCount) return;
+template <uint Channels>
+inline void dcae_v_c8_pack_weight_impl(
+    device const ushort* weight,
+    device ushort4* packed_weight,
+    uint tid) {
+  const uint k_count = Channels * DcaeVC8Taps;
+  const uint pack_weights = (Channels / DcaeVC8TileChannels) * k_count;
+  if (tid >= pack_weights) return;
 
-  const uint oc = (tid / DcaeVC8K) * DcaeVC8TileChannels;
+  const uint oc = (tid / k_count) * DcaeVC8TileChannels;
   const uint group =
       tid / (DcaeVC8ChannelGroup * DcaeVC8Taps) %
-      (DcaeVC8Channels / DcaeVC8ChannelGroup);
+      (Channels / DcaeVC8ChannelGroup);
   const uint tap = tid / DcaeVC8ChannelGroup % DcaeVC8Taps;
   const uint lane = tid % DcaeVC8ChannelGroup;
   const uint k = (group * DcaeVC8ChannelGroup + lane) * DcaeVC8Taps + tap;
-  const device ushort* row = weight + oc * DcaeVC8K + k;
-  packed_weight[tid] = ushort4(row[0u], row[DcaeVC8K],
-                               row[2u * DcaeVC8K], row[3u * DcaeVC8K]);
+  const device ushort* row = weight + oc * k_count + k;
+  packed_weight[tid] = ushort4(row[0u], row[k_count],
+                               row[2u * k_count], row[3u * k_count]);
 }
 
 // Compute 4 output channels at two x positions per thread. first_tile is in
-// OC4 units. Launch 16 dispatches, each covering 8 OC4 tiles (32 channels).
-kernel void dcae_v_c8_conv(
-    device const ushort4* packed_input [[buffer(0)]],
-    device const ushort4* packed_weight [[buffer(1)]],
-    device ushort* output [[buffer(2)]],
-    device const ushort* bias [[buffer(3)]],
-    constant uint& first_tile [[buffer(4)]],
-    constant uint& use_bias [[buffer(5)]],
-    uint tid [[thread_position_in_grid]]) {
+// OC4 units. Each dispatch covers 8 OC4 tiles (32 channels).
+template <uint Channels, uint Height, uint Width>
+inline void dcae_v_c8_conv_impl(
+    device const ushort4* packed_input,
+    device const ushort4* packed_weight,
+    device ushort* output,
+    device const ushort* bias,
+    uint first_tile,
+    uint use_bias,
+    uint tid) {
   #pragma clang fp contract(off)
   #pragma clang fp reassociate(off)
-  if (tid >= DcaeVC8ConvThreadCount) return;
+  const uint input_stride = (DcaeVC8Frames + 2u) * Height * Width;
+  const uint output_stride = DcaeVC8Frames * Height * Width;
+  const uint tile_positions = output_stride / 2u;
+  const uint thread_count = DcaeVC8OutputTilesPerDispatch * tile_positions;
+  const uint k_count = Channels * DcaeVC8Taps;
+  if (tid >= thread_count) return;
 
-  const uint oc_tile = first_tile + tid / DcaeVC8TilePositions;
-  const uint p = tid % DcaeVC8TilePositions;
-  const uint t = p / (DcaeVC8Height * (DcaeVC8Width / 2u));
-  const int y = int(p / (DcaeVC8Width / 2u) % DcaeVC8Height);
-  const uint column = p % (DcaeVC8Width / 2u);
+  const uint oc_tile = first_tile + tid / tile_positions;
+  const uint p = tid % tile_positions;
+  const uint t = p / (Height * (Width / 2u));
+  const int y = int(p / (Width / 2u) % Height);
+  const uint column = p % (Width / 2u);
   const int x = int(column / 32u * 64u + column % 32u);
-  const device ushort4* row = packed_weight + oc_tile * DcaeVC8K;
+  const device ushort4* row = packed_weight + oc_tile * k_count;
   float4 first = 0.0f;
   float4 second = 0.0f;
 
@@ -137,17 +135,17 @@ kernel void dcae_v_c8_conv(
   // then input lane 0 through 7.
   #pragma clang loop unroll(disable)
   for (uint group = 0u;
-       group < DcaeVC8Channels / DcaeVC8ChannelGroup;
+       group < Channels / DcaeVC8ChannelGroup;
        ++group) {
     #pragma clang loop unroll(disable)
     for (uint tap = 0u; tap < DcaeVC8Taps; ++tap) {
       const int yy = y + int(tap / 3u % 3u) - 1;
-      if (yy < 0 || yy >= int(DcaeVC8Height)) continue;
+      if (yy < 0 || yy >= int(Height)) continue;
       const int xx = x + int(tap % 3u) - 1;
       const bool first_in = xx >= 0;
-      const bool second_in = xx + 32 < int(DcaeVC8Width);
-      const uint src = group * DcaeVC8InputStride +
-          ((t + tap / 9u) * DcaeVC8Height + uint(yy)) * DcaeVC8Width;
+      const bool second_in = xx + 32 < int(Width);
+      const uint src = group * input_stride +
+          ((t + tap / 9u) * Height + uint(yy)) * Width;
       const device ushort4* tap_weights =
           row + (group * DcaeVC8Taps + tap) * DcaeVC8ChannelGroup;
       float4 first_low = 0.0f;
@@ -198,8 +196,63 @@ kernel void dcae_v_c8_conv(
         dcae_v_c8_decode_bf16x4(second_result) + bias_value);
   }
 
-  const uint dst = oc_tile * DcaeVC8TileChannels * DcaeVC8OutputStride +
-      (t * DcaeVC8Height + uint(y)) * DcaeVC8Width + uint(x);
-  dcae_v_c8_store_channels(output, dst, first_result);
-  dcae_v_c8_store_channels(output, dst + 32u, second_result);
+  const uint dst = oc_tile * DcaeVC8TileChannels * output_stride +
+      (t * Height + uint(y)) * Width + uint(x);
+  dcae_v_c8_store_channels(output, dst, output_stride, first_result);
+  dcae_v_c8_store_channels(output, dst + 32u, output_stride,
+                           second_result);
+}
+
+kernel void dcae_v_c8_pack_input(
+    device const ushort* input [[buffer(0)]],
+    device const ushort* cache [[buffer(1)]],
+    device ushort4* packed [[buffer(2)]],
+    constant uint& use_cache [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_pack_input_impl<512u, 72u, 128u>(input, cache, packed, use_cache, tid);
+}
+
+kernel void dcae_v_c8_pack_weight(
+    device const ushort* weight [[buffer(0)]],
+    device ushort4* packed_weight [[buffer(1)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_pack_weight_impl<512u>(weight, packed_weight, tid);
+}
+
+kernel void dcae_v_c8_conv(
+    device const ushort4* packed_input [[buffer(0)]],
+    device const ushort4* packed_weight [[buffer(1)]],
+    device ushort* output [[buffer(2)]],
+    device const ushort* bias [[buffer(3)]],
+    constant uint& first_tile [[buffer(4)]],
+    constant uint& use_bias [[buffer(5)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_conv_impl<512u, 72u, 128u>(packed_input, packed_weight, output, bias, first_tile, use_bias, tid);
+}
+
+kernel void dcae_v_c8_stage1_pack_input(
+    device const ushort* input [[buffer(0)]],
+    device const ushort* cache [[buffer(1)]],
+    device ushort4* packed [[buffer(2)]],
+    constant uint& use_cache [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_pack_input_impl<256u, 144u, 256u>(input, cache, packed, use_cache, tid);
+}
+
+kernel void dcae_v_c8_stage1_pack_weight(
+    device const ushort* weight [[buffer(0)]],
+    device ushort4* packed_weight [[buffer(1)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_pack_weight_impl<256u>(weight, packed_weight, tid);
+}
+
+kernel void dcae_v_c8_stage1_conv(
+    device const ushort4* packed_input [[buffer(0)]],
+    device const ushort4* packed_weight [[buffer(1)]],
+    device ushort* output [[buffer(2)]],
+    device const ushort* bias [[buffer(3)]],
+    constant uint& first_tile [[buffer(4)]],
+    constant uint& use_bias [[buffer(5)]],
+    uint tid [[thread_position_in_grid]]) {
+  dcae_v_c8_conv_impl<256u, 144u, 256u>(packed_input, packed_weight, output, bias, first_tile, use_bias, tid);
 }

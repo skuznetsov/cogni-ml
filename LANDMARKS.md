@@ -39837,3 +39837,22 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/dcae-v-decoder-frontier.md` and
   `.landmark/evidence/2026-11-09-dcae-c8-decoder.json`. Refresh after an
   upstream, runtime, geometry, input, precision, or measurement change.
+
+### 2026-11-09 — Stage-1 C8 lowers the measured DCAE-V decoder footprint
+
+- Passing the active channel stride corrected the C256 stage-1 C8 store.
+  The first residual convolution matched upstream and MPS bitwise on
+  377,487,360 words per cache case. Four isolated pairs improved wall time
+  by 16.7–23.6% with activation and weight packing included.
+- The two-tile decoder applies C8 to 10 more convolutions per tile. It
+  shares one pair of GPU packs across stages 1 and 2 and adds 378 MiB of
+  named storage. The whole sampled peak fell from 10.33 to 9.89 GiB in
+  both orders and command roots fell from 493 to 443. Wall time changed
+  by −3.2% and +6.1%; the isolated speedup did not establish a decoder win.
+- All four runs matched both upstream tiles bitwise at the existing
+  `atol=rtol=2e-5` gate. The final live-frame mutation failed. One
+  terminal wait per decode, 18.12 GiB minimum cache-aware headroom at the
+  10% floor and zero swap growth. `--c8-stage1` is opt-in. Return pointer
+  `docs/dcae-v-decoder-frontier.md` and
+  `.landmark/evidence/2026-11-09-dcae-stage1-c8.json`. Refresh on source,
+  runtime, geometry, inputs, precision, workspace or measurement changes.

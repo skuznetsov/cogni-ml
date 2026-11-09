@@ -1164,3 +1164,61 @@ host states or a full-generation rate. Keep MPS as the default. Select
 admitted geometry. The source and binary pins, guard samples, paired
 deltas and audit are indexed by
 `.landmark/evidence/2026-11-09-dcae-c8-decoder.json`.
+
+## Packed C8 for stage 1, 2026-11-09
+
+The next target was the ten stage-1 residual convolutions per causal tile.
+The first test of the `C256/T40/H144/W256` specialization failed at output
+channel 1 because its four-channel store used the smaller stage-2 channel
+stride. Passing the stride from the active geometry fixed the addressing.
+The kernel retains one F32 FMA accumulator per output in G8 order and the
+BF16 rounding boundaries before and after bias.
+
+The corrected isolated probe matched upstream and native MPS bitwise on
+all 377,487,360 output words per cache case at the existing `atol=rtol=2e-5`
+gate. Zeroing the live cache affected only the first output frame. A
+single-word mutation at the end of the tensor failed the GPU comparison.
+Including both GPU packs, C8 took 2.08–2.32 s per convolution against
+2.69–2.85 s for MPS. The four adjacent pairs favored C8 by 16.7–23.6%.
+
+### Connected two-tile decoder
+
+The connected probe used the same real T20 latent prefix as the stage-2
+experiment. A used C8 for 20 convolutions per tile in stage 2. B used it
+for 30 per tile across stages 1 and 2. The two stages reuse one input
+pack sized for stage 1 and one filter pack sized for stage 2. The larger
+input pack adds 378 MiB to the named workspace. Both paths retained the
+same GPU-resident causal caches and used one terminal wait with zero
+preterminal waits, tensor readbacks or named GPU allocations.
+
+Each row is the first request in a fresh process with the same release
+binary, weights and input. Wall time includes packing, command encoding
+and the terminal wait. The GPU ranges sum existing command-root intervals
+and bound the contribution of the root shared by both tiles. Peaks are
+sampled whole process-group footprints, including MPS resources.
+
+| Order | Cold GPU time | Live GPU time | Decode wall | Peak |
+| --- | ---: | ---: | ---: | ---: |
+| B1 stages 1 and 2 | 93.372–93.434 s | 91.767–91.829 s | 185.256 s | 9.892 GiB |
+| A1 stage 2 | 94.850–94.909 s | 96.493–96.552 s | 191.449 s | 10.334 GiB |
+| A2 stage 2 | 98.379–98.439 s | 100.962–101.022 s | 199.448 s | 10.334 GiB |
+| B2 stages 1 and 2 | 103.001–103.067 s | 108.455–108.521 s | 211.572 s | 9.892 GiB |
+
+All four runs matched the upstream BF16 output bitwise on all 17,694,720
+values in each cache tile. A one-word change in frame 79 failed the full
+and live-tile gates while the cold tile passed. The guard kept a 10%
+cache-aware reserve with a 13 GiB process cap. Minimum sampled headroom
+was 18.12 GiB with zero swap growth.
+
+B cut command roots from 493 to 443 and lowered the measured peak by
+about 0.44 GiB in both pairs. Wall time fell 3.2% in the first pair and
+rose 6.1% in the reverse pair. The variation between repeats and the
+opposite signs leave the connected speedup unresolved. Use `--c8-stage1`
+in the probe or `packed_c8: true, packed_c8_stage1: true` in workspace
+preparation to select the lower observed footprint on this geometry.
+MPS is the default. The numerical and memory evidence applies to the
+pinned runtime, geometry, input and weights. Recheck after a change to
+those inputs, the kernel, buffer plan or measurement method.
+
+See `.landmark/evidence/2026-11-09-dcae-stage1-c8.json` for source pins,
+timings, guard samples and replay paths.
