@@ -1002,3 +1002,95 @@ The guarded timing took 113.221 s including setup, warmups and all
 measured batches. The sampled process-group peak was 5.933 GiB, minimum
 cache-aware headroom 23.997 GiB and observed swap growth zero. Both runs
 kept the 10% reserve. The focused 62 tests passed.
+
+## Stage-2 tiled G8 load and accumulator probes
+
+Use the same pinned stage-2 pre-bias Conv3D fixtures and G8 schedule.
+On four 32-channel slices at full spatial and temporal extent, cross a
+GPU-repacked C8 input with two independent even/odd FMA accumulators.
+Repacking preserves the order of each output's operations. Splitting the
+accumulator changes it and serves only as a diagnostic. The probes change
+load instructions, dependencies and register use. Measure the combined
+effect of each intervention on completed batch time.
+
+Use A/A and counterbalanced pairs with the same dispatch shape, output
+buffer and terminal readout. Keep the input pack outside the slice timing.
+For any exact candidate, the gate is full F32 and actual BF16 bit equality
+against fresh upstream on both cache inputs at `atol=rtol=2e-5`. Include
+the per-call pack in the full BF16 timing and compare both orders with
+baseline G8 and MPS. Require consistent gains outside the A/A drift
+envelope. Keep all intermediates on GPU.
+
+Run `dcae_v_g8_profile.py` under the existing cache-aware 10% reserve,
+8 GiB process-group limit and 64 MiB swap-growth stop. Each independent
+batch has one terminal readout and no explicit intermediate GPU wait.
+Rollback is removal of the diagnostic files.
+
+The C8 layout stores eight BF16 channels together for each input position
+in a channel group. Each output position reads two four-value vectors
+per tap instead of eight scalar values at channel strides. The exact
+kernel still visits group, tap and lane in the same order, with one
+continuous F32 accumulator per output. The reused pack scratch is
+378 MiB at this shape.
+
+| Paired slice ratio | Cold causal cache | Live causal cache |
+| --- | ---: | ---: |
+| A/A, identical strided kernel | 0.999× | 1.001× |
+| C8 / strided, ordered FMA | 0.541× | 0.536× |
+| Split / ordered, strided input | 1.147× | 1.139× |
+| Split / ordered, C8 input | 1.106× | 1.114× |
+| C8 / strided, split FMA | 0.514× | 0.553× |
+
+These medians use four adjacent pairs per comparison. The widest A/A
+range was 0.982–1.013×. Packing helped in both accumulator schedules.
+Splitting slowed both layouts and exceeded the unchanged tolerance at
+33,290 cold and 33,037 live outputs out of 47,185,920 per cache. The two
+ordered slice arms matched the original tiled kernel bitwise. The
+controlled strided and packed shaders differ in how they load and
+decode activations, and the split probes also change live register state.
+The matrix supports using C8 for these inputs and measures the combined
+effect of these code changes on completed batch time.
+
+The full-output probe checks the packed candidate against the fresh
+pinned upstream operator. Both precisions had zero bit mismatches across
+all 188,743,680 values per cache, with zero maximum absolute error.
+The retained 8,192-sample columns and comparator negative witnesses
+passed in both precisions.
+
+Each full-shape BF16 pair uses two calls per batch, with the same reused
+output buffer for the two native arms and eager output allocation for
+MPS. C8 includes a fresh input pack on every call. The strided control
+here is the original tiled G8, and both native arms match the MPS
+reference at each of the four full-output warmups per cache. Completed
+wall time includes encoding and the amortized terminal scalar readout.
+
+| Cache | Control | Control / C8 median time per call | Median paired C8 / control | Pair range |
+| --- | --- | ---: | ---: | ---: |
+| Cold | Original G8 | 2.907 / 2.371 s | 0.811× | 0.804–0.823× |
+| Cold | MPS | 2.974 / 2.295 s | 0.789× | 0.749–0.834× |
+| Live | Original G8 | 3.517 / 2.836 s | 0.835× | 0.749–0.872× |
+| Live | MPS | 4.072 / 3.203 s | 0.787× | 0.773–0.803× |
+
+All 16 adjacent pairs favored C8. Each comparison uses its own
+counterbalanced sequence, so compare the pair ratios when absolute
+times drift. The gate covers one BF16 pre-bias stage-2 Conv3D on M2 Max
+(macOS build `25G83`, Torch 2.8.0). A connected decoder gate must include
+the producer layout, subsequent consumers and whole-decoder peak and
+timing before promoting C8 to the production route.
+
+Source-pinned commands, receipts, reports and the audit are in
+`/opt/mldata_ssd/cogni-ml/dcae-g8-profile-20261108.J8CrlIDS`. Report
+SHA-256 values are
+
+- Profile `ee182fbee7785a1571b39992c98cf4362f5e9926034b6e00df7baf26999ba391`.
+- Parity `68d0b234c4a9ef637f569f9a04a8736f5a5e8e0acb876482e0d55ac6ca910108`.
+- Timing `1bd09fee2d75307d95d8f9bac5bed9c3112cbdaefff7ae91d3eb84df132bf643`.
+
+The audit rechecked the source pins, coverage, raw pair times and
+memory telemetry. It rejected a shortened output count, a swapped arm
+and a changed terminal witness. The three guarded runs took 75.181,
+21.787 and 222.403 s respectively. The maximum sampled process-group
+footprint was 6.085 GiB, minimum cache-aware headroom was 18.876 GiB
+and observed swap growth was zero. The focused 62 tests passed.
+Refresh on changes to the pinned operator, runtime, GPU, input or
+weight layout, geometry, cache semantics or timing method.

@@ -39803,3 +39803,21 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/dcae-v-decoder-frontier.md` has the source pins and timing
   protocol. Refresh on upstream, runtime, geometry, inputs, precision
   or timing-method changes.
+
+### 2026-11-08 — Packed C8 reduces exact DCAE G8 Conv3D time
+
+- A counterbalanced load and dependency probe at full T/H/W shows
+  C8 / strided ratios of 0.541× cold and 0.536× live for 128 output
+  channels. Splitting G8 into even/odd FMA chains slows both layouts
+  and fails the existing tolerance. A/A spans 0.982–1.013×. This
+  measures the effect of the interventions on completed batches.
+- C8 with one ordered F32 accumulator matches pinned upstream
+  bitwise for all 188,743,680 values in each precision and cache.
+  Including a GPU pack per call, full-shape BF16 paired ratios are
+  0.811×/0.835× against original G8 and 0.789×/0.787× against MPS
+  (cold/live). All 16 pairs favor C8. The reused pack buffer is 378 MiB.
+- One terminal readout per independent chain, 6.085 GiB sampled
+  peak, 18.876 GiB minimum cache-aware headroom and zero swap growth
+  at the 10% floor. Return pointer `docs/dcae-v-decoder-frontier.md`
+  holds the pins and replay evidence. Promotion requires a connected
+  decoder result with the same precision gate and end-to-end timing.
