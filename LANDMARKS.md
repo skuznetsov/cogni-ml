@@ -39968,3 +39968,34 @@ Refresh after source/toolchain/device/model/workload changes.
   were removed after review. Refresh parity after code, weights, runtime,
   geometry, inputs or conditioning changes; visual rejection is seed- and
   intervention-specific. Production code was not changed.
+
+### 2026-11-10 — Wan research separates trained references from history substitution
+
+- Read-only source review at `f7892f98`: native Wan is S2V component support,
+  including separate reference tokens through `model.patch_embedding` and
+  `trainable_cond_mask.weight`; it is not a Wan-Animate port. See
+  `src/ml/video/wan_s2v_transformer.cr:631` and `docs/wan-transformer.md`.
+  Current Hy-Nomas initializes T0 history from DCAE latents; its pinned Qwen
+  route is text-only. No separate identity-image adapter is wired in the
+  inspected path (`examples/support/hy_nomas_sequence.cr:1082`, upstream
+  `911cea6458a8` text encoder `encoder.py:415`).
+- [Wan2.2 I2V](https://github.com/Wan-Video/Wan2.2/blob/1ea34ff48f87168174e12956e200b1d908b1c5ff/wan/image2video.py#L314)
+  supplies VAE reference latents plus a mask at every denoising step.
+  [Wan-Animate](https://github.com/Wan-Video/Wan2.2/blob/1ea34ff48f87168174e12956e200b1d908b1c5ff/wan/modules/animate/model_animate.py#L288)
+  additionally has trained image cross-attention, pose embedding and facial
+  motion adapters. Facial motion features are not a dedicated identity code.
+- [Wan-Animate-2](https://github.com/Wan-Video/Wan-Animate-2/tree/3ad2fef7d61d6200c9c653e0fe47be7616b323f3)
+  publishes image-plus-driving-video inference and Base/Distillation weights.
+  The photo enters through VAE/mask and CLIP conditions; a separate clean
+  driving-video branch writes per-layer K/V, reused with temporally aligned
+  sparse attention. [The paper](https://arxiv.org/html/2608.06009v1#S3)
+  describes trained shared QKV projections. The README's distilled example
+  uses 10 steps; its Lite claim is not evidence of an available Lite checkpoint
+  or M2 Max speed. No model was run or downloaded for this review.
+- Decision: a spatial mask alone does not establish learned identity/motion
+  separation. Wan's weights and latent interfaces are not drop-in Hy-Nomas
+  identity conditioning. Next useful discriminator is a bounded pretrained
+  Animate control with an approved identity reference and accepted B driving
+  motion, judging likeness, expression, proportions and foot lifts before a
+  native port. Cross-model seeds are not equivalent latent noise. This is a
+  proposal, not a quality or performance result; refresh after source changes.
