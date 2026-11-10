@@ -39939,3 +39939,32 @@ Refresh after source/toolchain/device/model/workload changes.
   89 s on the first. Treat the difference from the historical 684.661 s
   MPS request as descriptive. Return pointer
   `docs/dcae-v-decoder-frontier.md` records scope, replay and refresh.
+
+### 2026-11-10 — Close-portrait T0 writer fails tap-dance identity retention
+
+- On native source `24d9d14c`, an authenticated portrait latent replaced
+  only the T0 cache writer; clean full-body T0, prompt and T1 noise stayed
+  fixed. At each of four steps, velocity outside the head was projected
+  to accepted take B before capture and Euler. All 12 non-head captures
+  remained bitwise B. Decoded non-head RGB is not guaranteed invariant.
+- Against pinned upstream `911cea6458a8`, all 12 velocity/x0/post-Euler
+  tensors and final T1 matched bitwise at unchanged `atol=rtol=2e-5`.
+  The first source control was discarded: an asynchronous upload outlived
+  its host owners and consumed a baseline velocity instead of the portrait.
+  Retaining the upload owners through the existing terminal transfer
+  corrected the control without adding a synchronization.
+- Direct review rejected the candidate: likeness still drifted, head scale
+  and background leaked, and eyes were mostly closed. Numerical parity is
+  robust for this intervention; identity retention and live expression are
+  not established. Do not promote this writer substitution. A separately
+  registered, spatially masked identity donor is an untested next falsifier;
+  an identity adapter may be needed.
+- Native sampled peak was 24.70 GiB, minimum cache-aware headroom 13.72 GiB,
+  with the 10% reserve, zero swap growth and no new in-chain waits/readbacks.
+  Video, scripts and receipts remain under
+  `/opt/mldata_ssd/cogni-ml/hy-nomas-face-appearance-20261110.rtzd_lkc/`;
+  `result.json` indexes the evidence and `appearance/source-comparison.json`
+  records the executed gate. Owned large tensors and restored input links
+  were removed after review. Refresh parity after code, weights, runtime,
+  geometry, inputs or conditioning changes; visual rejection is seed- and
+  intervention-specific. Production code was not changed.
