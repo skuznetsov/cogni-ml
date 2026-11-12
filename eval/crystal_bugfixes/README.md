@@ -70,3 +70,63 @@ python3 scripts/crystal_bugfix_fragments.py prepare cr104 answer.txt build/repla
 ~~~
 
 Run the printed spec command from the replay directory in a disposable environment without credentials or external network access. Record replacement rejection, compilation failure, spec failure, timeout or pass for each attempt. For the base, LoRA-5 and LoRA-20 comparison, pin the same checkpoint and tokenizer, prompt and decoding settings, attempt count and feedback. Keep the two adapters' rank, placement, update budget and optimizer settings matched. These replays verify the dataset and provide no model comparison scores.
+
+## Native Qwen3.5-0.8B QLoRA
+
+The experimental Crystal trainer runs against a frozen Qwen3.5-0.8B GGUF.
+It caches the first 23 blocks' outputs per training example and trains only
+FP32 rank-8, alpha-16 factors on the final block's Q (including its attention
+gate), K, V, O, and FFN gate, up and down projections. The optimizer is
+`ML::Optim::Adam` with learning rate `0.0001`. Training computes next-token
+cross-entropy on the assistant completion and its end token. The output head
+uses the dequantized GGUF values for the loss and hidden gradient, with logits
+processed in 32-token tiles. Metal executes the quantized layer projections,
+and Accelerate executes the adapter multiplications and dense gradients on
+macOS. The checkpoint has 200,704 FP32 parameters and binds them to the GGUF
+SHA-256. Base generation uses the same native route with a zero adapter update.
+
+The comparison used `Qwen3.5-0.8B-Q4_K_M.gguf` with SHA-256
+`b4e71cb32694733ba40c69e595a0524dfbc2cabe3c28fb7fef99eed4cf8730bf`.
+Run these commands from the repository root on macOS.
+
+~~~sh
+mkdir -p build/qlora
+xcrun clang++ -c src/ml/metal/bridge.mm -o build/qlora/bridge.o \
+  -std=c++17 -fobjc-arc -fPIC -fno-objc-msgsend-selector-stubs
+crystal build --release bin/qwen35_qlora.cr -o build/qlora/qwen35_qlora \
+  --link-flags="$PWD/build/qlora/bridge.o -framework Metal -framework Foundation -lc++"
+python3 scripts/crystal_bugfix_fragments.py export build/qlora/data
+model=/absolute/path/to/Qwen3.5-0.8B-Q4_K_M.gguf
+shasum -a 256 "$model"
+for cohort in sft-5 sft-expanded; do
+  build/qlora/qwen35_qlora train "$model" \
+    "build/qlora/data/$cohort/train.jsonl" "build/qlora/data/$cohort/valid.jsonl" \
+    "build/qlora/$cohort.adapter" 50 42 2>"build/qlora/$cohort.log"
+done
+~~~
+
+`qwen35_qlora generate MODEL ADAPTER_OR_DASH MAX_NEW_TOKENS` reads NDJSON
+chat requests on stdin and writes replies to stdout. Use `-` for the base
+arm. Generation uses the embedded GGUF tokenizer, greedy decoding, and the
+no-thinking chat prompt. The experiment caps training examples at 2,400
+tokens and total generation context at 4,096 tokens.
+
+Evaluate each arm against the six held-out families with the same replay
+protocol. The output directory must be a new child of `build/qlora`.
+
+~~~sh
+for arm in base sft-5 sft-expanded; do
+  adapter=-
+  if [ "$arm" != base ]; then
+    adapter="build/qlora/$arm.adapter"
+  fi
+  python3 scripts/crystal_bugfix_qlora_eval.py \
+    --binary build/qlora/qwen35_qlora --model "$model" --adapter "$adapter" \
+    --arm "$arm" --output "build/qlora/$arm" --max-new-tokens 768 --repairs 2
+done
+~~~
+
+The evaluator preserves each attempt's prompt, answer and failure diagnostics.
+The replay runner validates the macOS sandbox before compiling and executing
+the focused spec. An evaluator exit code of 1 means one or more cases failed
+after the allotted attempts. Exit code 2 indicates an infrastructure error.
