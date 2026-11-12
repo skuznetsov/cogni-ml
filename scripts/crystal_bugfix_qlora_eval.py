@@ -533,6 +533,7 @@ def run(args):
         "arm": args.arm,
         "model": str(model),
         "adapter": adapter,
+        "full_blocks": args.full_blocks,
         "generator_binary": binary,
         "replay_runner": str(runner),
         "started_at": utc_now(),
@@ -553,6 +554,8 @@ def run(args):
     save_report(output, report)
 
     command = [binary, "generate", str(model), adapter, str(args.max_new_tokens)]
+    if args.full_blocks is not None:
+        command.append(str(args.full_blocks))
     generator = None
     candidate_scratch = set()
     stop_for_infrastructure = False
@@ -734,6 +737,8 @@ def parse_args(argv=None):
     parser.add_argument("--binary", required=True, help="native-binary executable")
     parser.add_argument("--model", required=True, help="GGUF model path")
     parser.add_argument("--adapter", default="-", help="adapter path or '-' for base weights")
+    parser.add_argument("--full-blocks", type=int, choices=(1, 4),
+                        help="override the generation route for a matched comparison")
     parser.add_argument("--arm", required=True, help="short label recorded in the report")
     parser.add_argument("--output", type=Path, help=f"new directory beneath {OUTPUT_ROOT}")
     parser.add_argument("--replay-runner", default=str(DEFAULT_RUNNER),

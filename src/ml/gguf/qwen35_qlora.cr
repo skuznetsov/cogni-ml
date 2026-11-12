@@ -5,6 +5,7 @@ require "./qwen35_cpu"
 require "./qwen35_chat"
 require "./qwen35_tokenizer"
 require "./qwen35_qlora_block"
+require "./qwen35_qlora_recurrent"
 require "../optim/adam"
 
 module ML::GGUF
@@ -12,8 +13,9 @@ module ML::GGUF
     # The ordinary prefill route returns only the last chunk's hidden rows
     # when it owns chunking. Keep chunks here to preserve every prefix row.
     def qlora_prefix(weights : Qwen35Weights, tokens : Array(Int32),
-                     pos : Int32, state : State) : Array(Float32)
+                     pos : Int32, state : State, stop_layer : Int32 = weights.layers.size - 1) : Array(Float32)
       raise ArgumentError.new("invalid QLoRA prefix span") if tokens.empty? || pos < 0 || pos + tokens.size > state.max_seq
+      raise ArgumentError.new("invalid QLoRA prefix layer") unless 0 <= stop_layer < weights.layers.size
 
       result = Array(Float32).new(tokens.size * weights.hparams.n_embd)
       limit = Math.min(256, prefill_chunk_size(false))
@@ -22,7 +24,7 @@ module ML::GGUF
         while offset < tokens.size
           length = Math.min(limit, tokens.size - offset)
           rows = prefill_tokens_hidden(weights, tokens[offset, length], pos + offset, state,
-            stop_layer: weights.layers.size - 1)
+            stop_layer: stop_layer)
           result.concat(rows)
           offset += length
         end
@@ -37,6 +39,7 @@ module ML::GGUF
     MAX_SEQ       =    4096
     EXPECTED_SIZE = 200_704
     ADAPTER_MAGIC = "COGNI-QWEN35-QLORA-1"
+    STACK_MAGIC   = "COGNI-QWEN35-QLORA-2"
     private ENDIAN        = IO::ByteFormat::LittleEndian
 
     record Example, input : Array(Float32), targets : Array(Int32), first : Int32
@@ -126,10 +129,15 @@ module ML::GGUF
     class Model
       getter weights : Qwen35Weights
       getter tokenizer : Qwen35Tokenizer
-      getter block : Block
       getter digest : String
+      getter layer_indices : Array(Int32)
+      getter projections : Array(Projection)
 
-      def initialize(path : String, seed : UInt64 = 42_u64)
+      @tail : Array(Block | RecurrentBlock)
+      @prefix_layers : Int32
+
+      def initialize(path : String, seed : UInt64 = 42_u64, *, full_blocks : Int32 = 1)
+        raise ArgumentError.new("QLoRA supports one or four full-attention blocks") unless {1, 4}.includes?(full_blocks)
         @weights = Qwen35Weights.from_gguf(path)
         metadata = GGUFFile.new(path, mmap_tensors: false)
         begin
@@ -144,10 +152,30 @@ module ML::GGUF
                @tokenizer.vocab.size == @weights.output.out_dim
           raise ArgumentError.new("QLoRA requires the Qwen3.5-0.8B text decoder")
         end
-        @block = Block.new(@weights.layers.last.as(Qwen35FullAttnWeights), hp, seed)
-        unless factors.sum(&.size) == EXPECTED_SIZE && @block.projections.all? { |p| p.rank == RANK && p.alpha == ALPHA }
+        full = @weights.layers.each_index.select { |index| @weights.layers[index].is_a?(Qwen35FullAttnWeights) }.to_a
+        raise ArgumentError.new("GGUF has too few full-attention blocks") if full.size < full_blocks
+        @layer_indices = full.last(full_blocks)
+        @prefix_layers = @layer_indices.first
+        @tail = [] of Block | RecurrentBlock
+        @projections = [] of Projection
+        (@prefix_layers...@weights.layers.size).each do |index|
+          case layer = @weights.layers[index]
+          in Qwen35FullAttnWeights
+            layer_seed = index == @weights.layers.size - 1 ? seed : seed ^ index.to_u64
+            adapted = Block.new(layer, hp, layer_seed)
+            @tail << adapted
+            @projections.concat(adapted.projections)
+          in Qwen35RecurrentWeights
+            @tail << RecurrentBlock.new(layer, hp)
+          end
+        end
+        unless factors.sum(&.size) == full_blocks * EXPECTED_SIZE && @projections.all? { |p| p.rank == RANK && p.alpha == ALPHA }
           raise "unexpected QLoRA projection layout"
         end
+      end
+
+      def block : Block
+        @tail.last.as(Block)
       end
 
       def close : Nil
@@ -163,7 +191,7 @@ module ML::GGUF
         inputs = prompt + completion[0...-1]
         check_length(inputs.size)
         input = with_prefix_state(inputs.size) do |state|
-          Qwen35CPU.qlora_prefix(@weights, inputs, 0, state)
+          Qwen35CPU.qlora_prefix(@weights, inputs, 0, state, @prefix_layers)
         end
         Example.new(input, completion, prompt.size - 1)
       end
@@ -179,9 +207,9 @@ module ML::GGUF
         result = Array(Int32).new(max_new)
         stopped = false
         with_prefix_state(tokens.size + max_new) do |state|
-          prefix = Qwen35CPU.qlora_prefix(@weights, tokens, 0, state)
-          decode_state = DecodeState.new
-          hidden = @block.prefill(prefix, decode_state)[-width, width]
+          prefix = Qwen35CPU.qlora_prefix(@weights, tokens, 0, state, @prefix_layers)
+          decode_states = Array(DecodeState).new(@layer_indices.size) { DecodeState.new }
+          hidden = generation_prefill(prefix, state, decode_states)[-width, width]
           max_new.times do |i|
             token, _ = Qwen35CPU.hidden_top1(@weights, hidden)
             if eos.includes?(token)
@@ -190,8 +218,8 @@ module ML::GGUF
             end
             result << token
             break if i + 1 == max_new
-            next_row = Qwen35CPU.qlora_prefix(@weights, [token], tokens.size + i, state)
-            hidden = @block.decode(next_row, decode_state)
+            next_row = Qwen35CPU.qlora_prefix(@weights, [token], tokens.size + i, state, @prefix_layers)
+            hidden = generation_tail(next_row, state, decode_states)
           end
         end
         {@tokenizer.decode(result).scrub, result.size, stopped ? "eos" : "limit"}
@@ -202,7 +230,38 @@ module ML::GGUF
       end
 
       def factors : Array(Array(Float32))
-        @block.projections.flat_map { |proj| [proj.a, proj.b] }
+        @projections.flat_map { |proj| [proj.a, proj.b] }
+      end
+
+      def forward(input : Array(Float32), *, retain_tape : Bool) : Array(Float32)
+        @tail.each do |layer|
+          input = layer.forward(input, retain_tape: retain_tape)
+        end
+        input
+      end
+
+      def backward(grad : Array(Float32)) : Nil
+        (@tail.size - 1).downto(0) do |offset|
+          case layer = @tail[offset]
+          in Block
+            grad = layer.backward(grad, need_input: offset > 0)
+          in RecurrentBlock
+            grad = layer.backward(grad)
+          end
+        end
+      end
+
+      def self.adapter_full_blocks(path : String) : Int32
+        File.open(path) { |file| adapter_full_blocks(file) }
+      end
+
+      # :nodoc:
+      def self.adapter_full_blocks(file : IO) : Int32
+        case file.gets(ADAPTER_MAGIC.bytesize + 1, chomp: true)
+        when ADAPTER_MAGIC then 1
+        when STACK_MAGIC   then 4
+        else                    raise ArgumentError.new("unrecognized QLoRA adapter format")
+        end
       end
 
       def save(path : String) : Nil
@@ -211,7 +270,8 @@ module ML::GGUF
 
         file = File.tempfile(".qlora-", nil, dir: File.dirname(path))
         begin
-          file << ADAPTER_MAGIC << '\n' << @digest << '\n'
+          file << (@layer_indices.size == 1 ? ADAPTER_MAGIC : STACK_MAGIC) << '\n' << @digest << '\n'
+          file << @layer_indices.join(',') << '\n' if @layer_indices.size > 1
           arrays.each do |factor|
             factor.each { |value| file.write_bytes(value, ENDIAN) }
           end
@@ -224,12 +284,21 @@ module ML::GGUF
       end
 
       def load(path : String) : Nil
+        targets = factors
+        skipped = 0
         values = File.open(path, "rb") do |file|
-          unless file.gets(ADAPTER_MAGIC.bytesize + 1, chomp: true) == ADAPTER_MAGIC &&
-                 file.gets(65, chomp: true) == @digest
-            raise ArgumentError.new("QLoRA adapter format or GGUF digest mismatch")
+          blocks = self.class.adapter_full_blocks(file)
+          unless file.gets(65, chomp: true) == @digest
+            raise ArgumentError.new("QLoRA adapter GGUF digest mismatch")
           end
-          arrays = factors.map do |factor|
+          if blocks > 1
+            indices = @layer_indices.join(',')
+            unless blocks == @layer_indices.size && file.gets(indices.bytesize + 1, chomp: true) == indices
+              raise ArgumentError.new("QLoRA adapter block placement mismatch")
+            end
+          end
+          skipped = (@layer_indices.size - blocks) * block.projections.size * 2
+          arrays = targets[skipped..].map do |factor|
             Array(Float32).new(factor.size) { file.read_bytes(Float32, ENDIAN) }
           end
           unless file.read_byte.nil? && arrays.all? { |array| array.all?(&.finite?) }
@@ -237,7 +306,43 @@ module ML::GGUF
           end
           arrays
         end
-        factors.zip(values).each { |target, source| target.to_unsafe.copy_from(source.to_unsafe, source.size) }
+        @projections.first(skipped // 2).each { |projection| projection.b.fill(0.0_f32) }
+        targets[skipped..].zip(values).each { |target, source| target.to_unsafe.copy_from(source.to_unsafe, source.size) }
+      end
+
+      private def generation_prefill(input : Array(Float32), state : Qwen35CPU::State,
+                                     decode_states : Array(DecodeState)) : Array(Float32)
+        return generation_tail(input, state, decode_states) if @layer_indices.size == 1
+
+        # Match the frozen prefix's bounded Metal prefill chunks. Each tail
+        # layer keeps its own attention or recurrent state between chunks.
+        width = @weights.hparams.n_embd
+        chunk = Math.min(256, Qwen35CPU.prefill_chunk_size(false)) * width
+        offset = 0
+        output = [] of Float32
+        while offset < input.size
+          length = Math.min(chunk, input.size - offset)
+          output = generation_tail(input[offset, length], state, decode_states)
+          offset += length
+        end
+        output
+      end
+
+      private def generation_tail(input : Array(Float32), state : Qwen35CPU::State,
+                                  decode_states : Array(DecodeState)) : Array(Float32)
+        attention_index = 0
+        @tail.each_with_index do |layer, offset|
+          case layer
+          in Block
+            input = layer.prefill(input, decode_states[attention_index])
+            attention_index += 1
+          in RecurrentBlock
+            index = @prefix_layers + offset
+            lw = @weights.layers[index].as(Qwen35RecurrentWeights)
+            input = Qwen35CPU.qlora_recurrent(input, lw, state.layers[index], @weights.hparams, state.max_seq)
+          end
+        end
+        input
       end
 
       private def encode_prompt(messages : Array(Qwen35Chat::Message)) : Array(Int32)
@@ -256,7 +361,9 @@ module ML::GGUF
           Qwen35CPU.prepare_state_metal!(state, @weights.hparams, admit_adaptive_resident_kv: false)
           yield state
         ensure
-          Qwen35CPU.release_state_metal!(state)
+          {% unless flag?(:cpu_only) %}
+            Qwen35CPU.release_state_metal!(state)
+          {% end %}
         end
       end
     end
@@ -275,17 +382,16 @@ module ML::GGUF
       end
 
       def loss(example : Example) : Float64
-        value, _ = @head.calculate(@model.block.forward(example.input), example.first, example.targets, backward: false)
+        value, _ = @head.calculate(@model.forward(example.input, retain_tape: false), example.first, example.targets, backward: false)
         value
       end
 
       def step(example : Example) : Float64
-        block = @model.block
-        block.projections.each(&.zero_grad)
-        value, gradient = @head.calculate(block.forward(example.input), example.first, example.targets, backward: true)
+        @model.projections.each(&.zero_grad)
+        value, gradient = @head.calculate(@model.forward(example.input, retain_tape: true), example.first, example.targets, backward: true)
         raise "nonfinite QLoRA loss" unless value.finite?
-        block.backward(gradient)
-        grads = block.projections.flat_map { |proj| [proj.grad_a, proj.grad_b] }
+        @model.backward(gradient)
+        grads = @model.projections.flat_map { |proj| [proj.grad_a, proj.grad_b] }
         @params.zip(grads).each do |param, grad|
           raise "nonfinite QLoRA factor gradient" unless grad.all?(&.finite?)
           param.grad = Tensor.from_array(grad, param.shape)

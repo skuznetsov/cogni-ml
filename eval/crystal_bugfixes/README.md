@@ -130,3 +130,31 @@ The evaluator preserves each attempt's prompt, answer and failure diagnostics.
 The replay runner validates the macOS sandbox before compiling and executing
 the focused spec. An evaluator exit code of 1 means one or more cases failed
 after the allotted attempts. Exit code 2 indicates an infrastructure error.
+
+### Four full-attention blocks
+
+Append `4` to the training command to adapt the last four full-attention
+blocks. Their zero-based indices on the pinned GGUF are 11, 15, 19 and 23.
+The first 11 layers are cached per example. Gradients pass through the nine
+frozen DeltaNet and SwiGLU blocks between adapters. Their forward projections
+use the frozen GGUF weights and their transpose products use the dequantized
+weights. The recurrent backward pass recomputes bounded state segments.
+The four-block checkpoint stores 802,816 FP32 parameters and records the
+block indices and GGUF digest. The single-block checkpoint format is still
+supported.
+
+~~~sh
+build/qlora/qwen35_qlora train "$model" \
+  build/qlora/data/sft-expanded/train.jsonl build/qlora/data/sft-expanded/valid.jsonl \
+  build/qlora/sft-expanded-four.adapter 50 42 4
+for arm in sft-expanded sft-expanded-four; do
+  python3 scripts/crystal_bugfix_qlora_eval.py \
+    --binary build/qlora/qwen35_qlora --model "$model" \
+    --adapter "build/qlora/$arm.adapter" --full-blocks 4 \
+    --arm "$arm" --output "build/qlora/matched-$arm" --max-new-tokens 768 --repairs 2
+done
+~~~
+
+Both evaluation arms traverse the same four-block generation route. Loading a
+single-block checkpoint on this route places its factors in the final block and
+zeros the other three adapter updates.

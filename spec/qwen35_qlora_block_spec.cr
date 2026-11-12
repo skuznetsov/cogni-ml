@@ -168,7 +168,7 @@ describe ML::GGUF::Qwen35QLoRA::Block do
 
     block.zero_grad
     block.forward(input)
-    block.backward(output_grad)
+    block.backward(output_grad).should be_empty
 
     block.projections.each_with_index do |projection, projection_index|
       selected = 0
@@ -189,6 +189,55 @@ describe ML::GGUF::Qwen35QLoRA::Block do
       numeric = ((plus - minus) / (2.0_f64 * epsilon.to_f64)).to_f32
       tolerance = 3.0e-3_f32 + analytic.abs * 0.04_f32
       (numeric - analytic).abs.should be < tolerance
+    end
+  end
+
+  it "matches centered differences for input gradients with active adapters and causal tokens" do
+    hp = qlora_tiny_hparams
+    block = ML::GGUF::Qwen35QLoRA::Block.new(qlora_tiny_weights, hp, 121_u64)
+    input = [
+      0.3_f32, -0.7_f32, 0.2_f32, 0.9_f32,
+      -0.5_f32, 0.4_f32, 0.8_f32, -0.1_f32,
+      0.6_f32, 0.1_f32, -0.4_f32, 0.7_f32,
+    ]
+    output_grad = Array(Float32).new(input.size) { |i| (((i * 7) % 13) - 6).to_f32 / 11.0_f32 }
+
+    block.projections.each_with_index do |projection, projection_index|
+      projection.b.size.times do |i|
+        projection.b[i] = ((((i * 7 + projection_index * 3) % 17) - 8).to_f32 / 40.0_f32)
+      end
+    end
+
+    block.zero_grad
+    block.forward(input)
+    analytic = block.backward(output_grad, need_input: true)
+    analytic.size.should eq(input.size)
+    analytic.all?(&.finite?).should be_true
+    (analytic.zip(output_grad).count { |actual, residual| (actual - residual).abs > 1.0e-4_f32 }).should be > 0
+
+    epsilon = 2.0e-3_f32
+    analytic.each_with_index do |value, i|
+      plus_input = input.dup
+      minus_input = input.dup
+      plus_input[i] += epsilon
+      minus_input[i] -= epsilon
+      plus = qlora_loss(block.forward(plus_input, retain_tape: false), output_grad)
+      minus = qlora_loss(block.forward(minus_input, retain_tape: false), output_grad)
+      numeric = ((plus - minus) / (2.0_f64 * epsilon.to_f64)).to_f32
+      tolerance = 5.0e-3_f32 + value.abs * 0.05_f32
+      (numeric - value).abs.should be < tolerance
+    end
+  end
+
+  it "skips retaining a tape when requested for validation" do
+    hp = qlora_tiny_hparams
+    block = ML::GGUF::Qwen35QLoRA::Block.new(qlora_tiny_weights, hp, 37_u64)
+    input = [0.3_f32, -0.7_f32, 0.2_f32, 0.9_f32]
+    expected = block.forward(input)
+
+    block.forward(input, retain_tape: false).should eq(expected)
+    expect_raises(ArgumentError, "backward requires an unconsumed forward tape") do
+      block.backward(Array(Float32).new(input.size, 1.0_f32))
     end
   end
 end

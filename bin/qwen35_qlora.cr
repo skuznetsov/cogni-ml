@@ -21,15 +21,15 @@ def load_examples(model : QLoRA::Model, path : String) : Array(QLoRA::Example)
   rows
 end
 
-case ARGV.size
-when 7
-  command, path, train_path, valid_path, adapter, updates_text, seed_text = ARGV
-  abort "expected train" unless command == "train"
+case {ARGV.first?, ARGV.size}
+when {"train", 7}, {"train", 8}
+  _, path, train_path, valid_path, adapter, updates_text, seed_text = ARGV
   updates = updates_text.to_i
   seed = seed_text.to_u64
+  full_blocks = ARGV[7]?.try(&.to_i) || 1
   abort "updates must be positive" unless updates > 0
   abort "adapter output already exists" if File.exists?(adapter)
-  model = QLoRA::Model.new(path, seed)
+  model = QLoRA::Model.new(path, seed, full_blocks: full_blocks)
   begin
     start = Time.instant
     train = load_examples(model, train_path)
@@ -37,7 +37,8 @@ when 7
     trainer = QLoRA::Trainer.new(model)
     initial = valid.sum { |row| trainer.loss(row) } / valid.size
     STDERR.puts({event: "start", model_sha256: model.digest, seed: seed, updates: updates,
-                 examples: train.size, validation_loss: initial, seconds: (Time.instant - start).total_seconds}.to_json)
+                 examples: train.size, blocks: model.layer_indices, validation_loss: initial,
+                 seconds: (Time.instant - start).total_seconds}.to_json)
     order = (0...train.size).to_a
     random = Random::PCG32.new(seed)
     updates.times do |i|
@@ -53,12 +54,12 @@ when 7
   ensure
     model.close
   end
-when 4
-  command, path, adapter, limit_text = ARGV
-  abort "expected generate" unless command == "generate"
+when {"generate", 4}, {"generate", 5}
+  _, path, adapter, limit_text = ARGV
   limit = limit_text.to_i
   abort "invalid generation limit" unless 0 < limit < QLoRA::MAX_SEQ
-  model = QLoRA::Model.new(path)
+  full_blocks = ARGV[4]?.try(&.to_i) || (adapter == "-" ? 1 : QLoRA::Model.adapter_full_blocks(adapter))
+  model = QLoRA::Model.new(path, full_blocks: full_blocks)
   begin
     model.load(adapter) unless adapter == "-"
     STDIN.each_line do |line|
@@ -71,6 +72,6 @@ when 4
     model.close
   end
 else
-  abort "usage: qwen35_qlora train MODEL TRAIN_JSONL VALID_JSONL ADAPTER UPDATES SEED\n" +
-        "       qwen35_qlora generate MODEL ADAPTER_OR_DASH MAX_NEW_TOKENS"
+  abort "usage: qwen35_qlora train MODEL TRAIN_JSONL VALID_JSONL ADAPTER UPDATES SEED [FULL_BLOCKS]\n" +
+        "       qwen35_qlora generate MODEL ADAPTER_OR_DASH MAX_NEW_TOKENS [FULL_BLOCKS]"
 end

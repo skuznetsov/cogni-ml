@@ -53,6 +53,7 @@ module ML::GGUF::Qwen35QLoRA
 
   private class TrainingTape
     getter rows : Int32
+    getter input : Array(Float32)
     getter norm1 : Array(Float32)
     getter q_projected : Array(Float32)
     getter k_projected : Array(Float32)
@@ -63,7 +64,7 @@ module ML::GGUF::Qwen35QLoRA
     getter gate_pre : Array(Float32)
     getter up_pre : Array(Float32)
 
-    def initialize(@rows : Int32, @norm1 : Array(Float32),
+    def initialize(@rows : Int32, @input : Array(Float32), @norm1 : Array(Float32),
                    @q_projected : Array(Float32), @k_projected : Array(Float32),
                    @v_projected : Array(Float32), @attention_input : Array(Float32),
                    @residual1 : Array(Float32), @norm2 : Array(Float32),
@@ -121,22 +122,25 @@ module ML::GGUF::Qwen35QLoRA
       @tape = nil
     end
 
-    # Training forward for a flattened row-major token sample. Positions begin
-    # at zero and attention is causal across rows. The retained tape is limited
+    # Forward for a flattened row-major token sample. Positions begin at zero
+    # and attention is causal across rows. Retained training tapes are limited
     # to activations needed by this block's adapter gradients; prefix weights
     # and inputs remain frozen.
-    def forward(input : Array(Float32)) : Array(Float32)
+    def forward(input : Array(Float32), *, retain_tape : Bool = true) : Array(Float32)
       rows = validate_input!(input)
-      raise ArgumentError.new("training sample exceeds #{MAX_TRAINING_SEQUENCE_LENGTH} tokens") if rows > MAX_TRAINING_SEQUENCE_LENGTH
-      pass = forward_core(input, rows, 0, [] of Float32, [] of Float32, retain_tape: true)
+      if retain_tape && rows > MAX_TRAINING_SEQUENCE_LENGTH
+        raise ArgumentError.new("training sample exceeds #{MAX_TRAINING_SEQUENCE_LENGTH} tokens")
+      end
+      pass = forward_core(input, rows, 0, [] of Float32, [] of Float32, retain_tape: retain_tape)
       @tape = pass.tape
       pass.output
     end
 
     # Backpropagates a flattened output gradient and accumulates FP32 adapter
-    # gradients. The tape is consumed once. The input side of the final block
-    # is frozen, so no gradient is returned to the prefix.
-    def backward(grad : Array(Float32)) : Nil
+    # gradients. The tape is consumed once. Input gradients can be requested
+    # when this block feeds an earlier trainable adapter; callers training only
+    # this block keep the default empty result.
+    def backward(grad : Array(Float32), *, need_input : Bool = false) : Array(Float32)
       tape = @tape
       raise ArgumentError.new("backward requires an unconsumed forward tape") unless tape
       @tape = nil
@@ -200,9 +204,25 @@ module ML::GGUF::Qwen35QLoRA
       q_projection_grad = Array(Float32).new(rows * 2 * q_dim, 0.0_f32)
       join_q_and_gate_grads!(dq_raw, attention_grads.gate, q_projection_grad, rows)
 
-      @projections[0].backward(tape.norm1, q_projection_grad, rows, need_input: false)
-      @projections[1].backward(tape.norm1, dk_raw, rows, need_input: false)
-      @projections[2].backward(tape.norm1, attention_grads.v, rows, need_input: false)
+      if need_input
+        q_input_grad = @projections[0].backward(tape.norm1, q_projection_grad, rows)
+        k_input_grad = @projections[1].backward(tape.norm1, dk_raw, rows)
+        v_input_grad = @projections[2].backward(tape.norm1, attention_grads.v, rows)
+        grad_norm1 = Array(Float32).new(rows * hidden, 0.0_f32)
+        grad_norm1.size.times do |i|
+          grad_norm1[i] = q_input_grad[i] + k_input_grad[i] + v_input_grad[i]
+        end
+        grad_input_norm1 = rmsnorm_backward_rows(
+          tape.input, grad_norm1, rows, hidden, @attn_norm, @hparams.rms_eps,
+        )
+        grad_residual1.size.times { |i| grad_residual1[i] += grad_input_norm1[i] }
+        grad_residual1
+      else
+        @projections[0].backward(tape.norm1, q_projection_grad, rows, need_input: false)
+        @projections[1].backward(tape.norm1, dk_raw, rows, need_input: false)
+        @projections[2].backward(tape.norm1, attention_grads.v, rows, need_input: false)
+        [] of Float32
+      end
     end
 
     # Single-token autoregressive decode. State is mutated only after the
@@ -291,7 +311,7 @@ module ML::GGUF::Qwen35QLoRA
 
       tape = if retain_tape
                TrainingTape.new(
-                 rows, norm1, q_projected, k_projected, v_projected,
+                 rows, input, norm1, q_projected, k_projected, v_projected,
                  attention_input, residual1, norm2, gate_ff, up_ff,
                )
              else
