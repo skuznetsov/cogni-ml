@@ -1,0 +1,133 @@
+{
+  "history": "d07e3089da3daf09f59b2d8da0604da4fd73ddd5",
+  "cases": [
+    {
+      "id": "cr001",
+      "split": "train",
+      "family": "ngram-risk-policy",
+      "fix": "82a7b905a2422799e2ee09047f5259a91dcc3fed",
+      "source": "src/ml/gguf/ngram_draft.cr",
+      "spec": "spec/ngram_draft_spec.cr",
+      "spec_ranges": [[1, 53], [55, 65]],
+      "problem": "The n-gram risk gate accepts an eight-token continuation such as [1, 2, 3, 4, 5, 6, 1, 7] even though it has period eight and repeats a token internally. Flag this shape as risky even when it is shorter than min_size. Keep eight distinct tokens and compact lower-period repeats eligible.",
+      "examples": 9,
+      "red_count": 1,
+      "failure": "risky_candidate_shape?(ids, min_size: 16).should be_true"
+    },
+    {
+      "id": "cr002",
+      "split": "train",
+      "family": "ngram-risk-policy",
+      "fix": "2dce738c93ffbf3a17a5001a3e76c1ce2dd2d517",
+      "source": "src/ml/gguf/ngram_draft.cr",
+      "spec": "spec/ngram_draft_spec.cr",
+      "problem": "The n-gram candidate guard misses structured continuations with high pair diversity, lag-four reuse between 5% and 10%, and lag-eight reuse below 20%. Treat lag-four reuse below 10% as weak in this existing rule, retaining its other conditions.",
+      "examples": 15,
+      "red_count": 1,
+      "failure": "risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true"
+    },
+    {
+      "id": "cr003",
+      "split": "train",
+      "family": "ngram-risk-policy",
+      "fix": "82e91f66d4c4733f2b53429a3f49870526fab19b",
+      "source": "src/ml/gguf/ngram_draft.cr",
+      "spec": "spec/ngram_draft_spec.cr",
+      "problem": "The n-gram guard misses medium continuations under a long suffix match. For candidates from 12 tokens up to but excluding min_size and with a match length of at least eight, flag a candidate if its adjacent-pair uniqueness is at least 0.95, normalized entropy is at least 0.80, and both lag-four and lag-eight reuse are below 0.10. Keep existing risk rules.",
+      "examples": 27,
+      "red_count": 1,
+      "failure": "risky_candidate_shape?(ids, min_size: 16, match_len: 8).should be_true"
+    },
+    {
+      "id": "cr004",
+      "split": "train",
+      "family": "prompt-state-artifact-codecs",
+      "fix": "c5b7d620a465fcf9dfec984b15a45d8792a105f6",
+      "source": "src/ml/gguf/qwen35_state_snapshot.cr",
+      "spec": "spec/qwen35_state_snapshot_spec.cr",
+      "spec_ranges": [[1, 4], [8, 8], [99, 150], [253, 253], [293, 317]],
+      "problem": "A Qwen v2 snapshot written with a recurrent codec also compresses its attention K/V records. K/V payloads must round-trip exactly as raw Float32 while convolution and SSM state may use the configured codec. Record the actual codec per record and accept raw records in a compressed v2 artifact while still rejecting unrelated codecs.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "encoded.records[0].codec.should eq"
+    },
+    {
+      "id": "cr005",
+      "split": "train",
+      "family": "prompt-state-artifact-codecs",
+      "fix": "ddbc5fcba01b525ebb4c2091f67337d39b310715",
+      "source": "src/ml/gguf/qwen35_prompt_cache.cr",
+      "spec": "spec/qwen35_prompt_cache_spec.cr",
+      "spec_ranges": [[1, 2], [7, 7], [159, 224], [350, 350]],
+      "problem": "A newer compressed prompt-cache entry with missing validation metadata can displace a valid raw entry. Filter out compressed entries with incomplete validation metadata in cache lookups. Keep legacy and raw entries usable. Only raw artifacts may be restored through the raw restore entry point.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "hit.artifact_codec.should be_nil"
+    },
+    {
+      "id": "cr006",
+      "split": "valid",
+      "family": "gguf-reader-resource-cleanup",
+      "fix": "4217730f7dd98050faa0efc6b26ecd40f6cf7bd9",
+      "source": "src/ml/gguf/reader.cr",
+      "spec": "spec/qwen35_chat_spec.cr",
+      "fixture": "reader_cleanup_spec.cr",
+      "problem": "Opening malformed GGUF files repeatedly leaks file descriptors when construction fails after opening the file. Close resources acquired during construction on failure and propagate the original parsing error. Preserve the successful default opening path.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "(open_fd_count.not_nil! - before).should be <= 2"
+    },
+    {
+      "id": "cr007",
+      "split": "test",
+      "family": "constrained-tool-decoding",
+      "fix": "2cf731cc24245d45d4198dfc3fbe71affcd5a2e1",
+      "source": "src/ml/gguf/qwen35_constraints.cr",
+      "spec": "spec/qwen35_constraints_spec.cr",
+      "problem": "During constrained decoding a token may emit only the first byte of a UTF-8 character. If the remaining literal is é and the emitted token contains only 0xC3, advancing the frontier must leave byte 0xA9 for the next token. Fix both the plain and labeled literal frontiers, keeping their behavior for nonmatching prefixes.",
+      "examples": 22,
+      "red_count": 1,
+      "failure": "remaining[0].bytes.to_a.should eq(expected_tail)"
+    },
+    {
+      "id": "cr008",
+      "split": "test",
+      "family": "constrained-tool-decoding",
+      "fix": "24fa2013ed8cb76bdcae727bcbbb5de891c31155",
+      "source": "src/ml/gguf/gemma4_chat.cr",
+      "spec": "spec/gemma4_chat_spec.cr",
+      "problem": "The Gemma finite tool-call generator emits one argument per literal even for schemas with multiple required parameters. Generate complete calls for the finite combinations of required parameters in schema order. If any required domain cannot be enumerated or the product exceeds 256 options, emit no finite calls for that tool. Preserve existing single-property options for schemas without required parameters.",
+      "examples": 9,
+      "red_count": 2,
+      "failure": "native_tool_finite_call_options(open_tools).should be_empty"
+    },
+    {
+      "id": "cr009",
+      "split": "test",
+      "family": "gguf-special-token-partition",
+      "fix": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+      "source": "src/ml/gguf/qwen35_tokenizer.cr",
+      "spec": "spec/qwen35_tokenizer_spec.cr",
+      "fixture": "typed_tokens_spec.cr",
+      "problem": "Native BPE splits GGUF chat markers into ordinary pieces. Honor tokenizer.ggml.token_type when reading metadata: unknown (2), control (3), and user-defined (4) pieces are indivisible. Partition those pieces longest-first, with vocabulary ID as a tie-breaker, and run existing BPE on the ordinary fragments. Missing type metadata should preserve the existing behavior.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "ids.should eq([2, 3, 2, 4, 5, 2])"
+    },
+    {
+      "id": "cr010",
+      "split": "test",
+      "family": "clickhouse-http-query-framing",
+      "fix": "7211fc03663119d60b118413cb5006973725417e",
+      "source": "src/ml/gguf/qwen_qbit_clickhouse_cache.cr",
+      "spec": "spec/qwen_qbit_clickhouse_cache_spec.cr",
+      "spec_ranges": [[1, 26], [304, 304], [819, 876], [1034, 1034]],
+      "context": [[187, 232]],
+      "problem": "The ClickHouse HTTP transport puts long SQL in a URL parameter and the server rejects the request with HTTP 414. When there is no input payload, send the SQL in the POST body and omit the query URL parameter for both in-memory and streamed response sinks. Preserve URL SQL when the request body contains input data and reject empty queries consistently.",
+      "examples": 3,
+      "red_count": 1,
+      "red_errors": 1,
+      "failure": "ClickHouse HTTP 414: 414 URI Too Long"
+    }
+  ]
+}
