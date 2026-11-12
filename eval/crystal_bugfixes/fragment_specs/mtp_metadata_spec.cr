@@ -1,0 +1,33 @@
+require "base64"
+require "spec"
+require "../src/ml/gguf/reader"
+require "../src/ml/gguf/qwen35_meta"
+
+# Synthetic GGUF with no downloaded model or real weights.
+GGUF_FIXTURE = Base64.decode(
+  "R0dVRgMAAAAAAAAAAAAAABMAAAAAAAAAFAAAAAAAAABnZW5lcmFsLmFyY2hpdGVjdHVyZQgAAAAGAAAAAAAAAHF3ZW4zNRIA" \
+  "AAAAAAAAcXdlbjM1LmJsb2NrX2NvdW50BQAAAEEAAAAbAAAAAAAAAHF3ZW4zNS5uZXh0bl9wcmVkaWN0X2xheWVycwUAAAAB" \
+  "AAAAFwAAAAAAAABxd2VuMzUuZW1iZWRkaW5nX2xlbmd0aAUAAAAABAAAGgAAAAAAAABxd2VuMzUuZmVlZF9mb3J3YXJkX2xl" \
+  "bmd0aAUAAAAADAAAFQAAAAAAAABxd2VuMzUuY29udGV4dF9sZW5ndGgFAAAAAAACABsAAAAAAAAAcXdlbjM1LmF0dGVudGlv" \
+  "bi5oZWFkX2NvdW50BQAAAAgAAAAeAAAAAAAAAHF3ZW4zNS5hdHRlbnRpb24uaGVhZF9jb3VudF9rdgUAAAACAAAAGwAAAAAA" \
+  "AABxd2VuMzUuYXR0ZW50aW9uLmtleV9sZW5ndGgFAAAAgAAAAB0AAAAAAAAAcXdlbjM1LmF0dGVudGlvbi52YWx1ZV9sZW5n" \
+  "dGgFAAAAgAAAAB4AAAAAAAAAcXdlbjM1LmZ1bGxfYXR0ZW50aW9uX2ludGVydmFsBQAAAAQAAAAVAAAAAAAAAHF3ZW4zNS5y" \
+  "b3BlLmZyZXFfYmFzZQYAAACAlhhLGwAAAAAAAABxd2VuMzUucm9wZS5kaW1lbnNpb25fY291bnQFAAAAQAAAAB4AAAAAAAAA" \
+  "cXdlbjM1LnJvcGUuZGltZW5zaW9uX3NlY3Rpb25zCQAAAAUAAAAEAAAAAAAAAAsAAAALAAAACgAAAAAAAAAWAAAAAAAAAHF3" \
+  "ZW4zNS5zc20uY29udl9rZXJuZWwFAAAABAAAABUAAAAAAAAAcXdlbjM1LnNzbS5zdGF0ZV9zaXplBQAAAIAAAAAWAAAAAAAA" \
+  "AHF3ZW4zNS5zc20uZ3JvdXBfY291bnQFAAAACAAAABkAAAAAAAAAcXdlbjM1LnNzbS50aW1lX3N0ZXBfcmFuawUAAAAQAAAA" \
+  "FQAAAAAAAABxd2VuMzUuc3NtLmlubmVyX3NpemUFAAAAAAgAAA=="
+)
+
+describe ML::GGUF::Qwen35Hparams do
+  it "excludes an appended MTP nextn block from target layers" do
+    File.tempfile("mtp") do |file|
+      file.write(GGUF_FIXTURE)
+      file.flush
+      g = ML::GGUF::GGUFFile.new(file.path)
+      h = ML::GGUF::Qwen35Hparams.new(g)
+      h.n_layer.should eq(64)
+      g.close
+    end
+  end
+end

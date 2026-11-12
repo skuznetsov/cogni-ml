@@ -1,0 +1,396 @@
+{
+  "history": "d07e3089da3daf09f59b2d8da0604da4fd73ddd5",
+  "small_train": [
+    "cr001",
+    "cr002",
+    "cr003",
+    "cr004",
+    "cr005"
+  ],
+  "retain_train": {
+    "cr001": {
+      "lines": [
+        32,
+        43
+      ]
+    },
+    "cr002": {
+      "lines": [
+        60,
+        66
+      ]
+    },
+    "cr003": {
+      "lines": [
+        307,
+        312
+      ]
+    },
+    "cr004": {
+      "fragmented": true
+    },
+    "cr005": {
+      "fragmented": true
+    }
+  },
+  "cases": [
+    {
+      "id": "cr101",
+      "split": "train",
+      "family": "qbit-live-prefix-artifact-boundary",
+      "fix": "b6cf33bc934cae7c569a9985c55f098f84c3b19b",
+      "source": "src/ml/gguf/qwen_qbit_cache_envelope.cr",
+      "spec": "spec/qwen_qbit_cache_envelope_spec.cr",
+      "problem": "Valid exact-KV version 3 artifacts may store only the live prefix. Accept a raw K/V payload when its length matches the context's certified prefix and reject payloads for a different prefix or a nonintegral row size. Keep full-length validation for previous versions.",
+      "examples": 13,
+      "red_count": 0,
+      "failure": "QBit exact artifact record is truncated",
+      "red_errors": 1,
+      "fragmented": true
+    },
+    {
+      "id": "cr102",
+      "split": "train",
+      "family": "async-checkpoint-close-durability",
+      "fix": "850f2663cd4bd11de00901f1bcc9d78f256b07d3",
+      "source": "src/ml/gguf/qwen_qbit_async_writer.cr",
+      "spec": "spec/qwen_qbit_async_writer_spec.cr",
+      "problem": "Closing an asynchronous QBit writer concurrently or retrying close loses an earlier publication failure for every caller other than the one that drained the job. Make close return the same drained completion to each caller while shutting down the worker once.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "retry.should_not be_nil",
+      "fragmented": true,
+      "fixture": "fragment_specs/async_writer_retry_spec.cr"
+    },
+    {
+      "id": "cr103",
+      "split": "train",
+      "family": "deltanet-convolution-weight-layout",
+      "fix": "4dfafdb69c745a5bafb9dd9d4ed06c3ec5ef9e1a",
+      "source": "src/ml/gguf/qwen35_cpu.cr",
+      "spec": "spec/qwen35_deltanet_spec.cr",
+      "lines": [
+        389,
+        403
+      ],
+      "problem": "The recurrent layer's convolution weights have channel-major storage with the kernel axis contiguous. Read each channel's coefficient at its own time offset for both saved input and the current token. Keep the saved input history in its existing time-major layout.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "Expected 0.0 to be GreaterThan",
+      "fixture": "fragment_specs/deltanet_conv_spec.cr"
+    },
+    {
+      "id": "cr104",
+      "split": "test",
+      "family": "nomic-rope-pairing",
+      "fix": "5b3f584f32a29d130b3f8df346f2a5f4b94f142b",
+      "source": "src/ml/gguf/nomic_bert.cr",
+      "spec": "spec/nomic_rope_spec.cr",
+      "lines": [
+        381,
+        397
+      ],
+      "problem": "NeoX rotary embedding pairs corresponding dimensions in the two halves of each attention head. Correct the rotation so both values in a pair are read before writing, and leave neighboring heads unchanged.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "values.should eq",
+      "fixture": "fragment_specs/nomic_rope_spec.cr"
+    },
+    {
+      "id": "cr105",
+      "split": "test",
+      "family": "nomic-moe-routing-probability",
+      "fix": "d5f5922d160dcd7966d19a4d0e45d0f736add42f",
+      "source": "src/ml/gguf/nomic_bert.cr",
+      "spec": "spec/nomic_router_spec.cr",
+      "lines": [
+        339,
+        354
+      ],
+      "problem": "The Nomic MoE router selects the top experts after softmax over all experts. Each selected expert should contribute at its original softmax probability, preserving the probability mass of discarded experts. Keep top-k selection and the expert computations unchanged.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "Expected 0.841192",
+      "fixture": "fragment_specs/nomic_router_spec.cr"
+    },
+    {
+      "id": "cr106",
+      "split": "test",
+      "family": "causal-decoder-kv-buffer-write",
+      "fix": "6438f995c627c9803475d5d075c28fcc3aa1740b",
+      "source": "src/ml/gguf/decoder.cr",
+      "spec": "spec/decoder_kv_write_spec.cr",
+      "lines": [
+        90,
+        110
+      ],
+      "problem": "Appending to the causal decoder's K/V cache uses an offset parameter unavailable on MetalBuffer.write_bytes. Append at the current position using the shared buffer's writable memory, preserving existing rows. Write transposed V in head, dimension, then sequence position order.",
+      "examples": 1,
+      "red_count": 0,
+      "failure": "Error: no parameter named 'offset'",
+      "red_compile": true,
+      "fixture": "fragment_specs/decoder_kv_write_spec.cr"
+    },
+    {
+      "id": "cr107",
+      "split": "test",
+      "family": "causal-decoder-config-validation",
+      "fix": "ebf2314f236c99f4cf99f66547d3d56553fcad66",
+      "source": "src/ml/gguf/decoder.cr",
+      "spec": "spec/decoder_config_spec.cr",
+      "lines": [
+        38,
+        52
+      ],
+      "problem": "Reject inconsistent attention geometry when constructing a decoder configuration. Model width must equal heads times head width, KV heads must divide the query heads, and rotary heads must have an even width. Preserve valid grouped-query configurations.",
+      "examples": 4,
+      "red_count": 3,
+      "failure": "Expected Exception but nothing was raised",
+      "reference_lines": [
+        38,
+        56
+      ],
+      "fixture": "fragment_specs/decoder_config_spec.cr"
+    },
+    {
+      "id": "cr108",
+      "split": "train",
+      "family": "qbit-adaptive-session-admission",
+      "fix": "c15719f778f8c3d7b3eb6ada855de7e4e8b8d042",
+      "source": "src/ml/gguf/qwen35_native_runtime.cr",
+      "spec": "spec/qwen35_native_runtime_spec.cr",
+      "lines": [
+        329,
+        335
+      ],
+      "problem": "An explicitly enabled adaptive QBit session must supply a complete resident-KV map. Reject legacy single-layer or tier selectors for those sessions. Preserve standalone probe behavior and return false for sessions where adaptive restore is disabled.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "Expected ArgumentError but nothing was raised",
+      "fixture": "fragment_specs/adaptive_session_spec.cr"
+    },
+    {
+      "id": "cr109",
+      "split": "train",
+      "family": "qbit-snapshot-owner-abi",
+      "fix": "1b0f7aecafd2b08594838cf26c16f42f2562ea50",
+      "source": "src/ml/gguf/qwen_qbit_state_snapshot.cr",
+      "spec": "spec/qwen_qbit_state_snapshot_spec.cr",
+      "problem": "A raw Float32 QBit snapshot must not restore into a state whose K/V owner is F16. Enforce the owner ABI for direct Metal and fallback restore entry points before route selection or snapshot validation.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "Expected ArgumentError but nothing was raised",
+      "backend": "metal",
+      "fixture": "fragment_specs/recent_f16_qbit_reject_spec.cr",
+      "fragmented": true
+    },
+    {
+      "id": "cr110",
+      "split": "train",
+      "family": "qwen-mtp-target-layer-count",
+      "fix": "33b643adddf789ce3ff6f26981cb7b2688699d01",
+      "source": "src/ml/gguf/qwen35_meta.cr",
+      "spec": "spec/qwen35_meta_spec.cr",
+      "problem": "When GGUF reports trailing next-token prediction blocks, the main target model currently tries to load them as normal target layers. Track the raw and nextn block counts separately and subtract nextn from the target depth. With missing nextn metadata the target depth is unchanged. Reject impossible counts.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "h.n_layer.should eq(64)",
+      "fixture": "fragment_specs/mtp_metadata_spec.cr",
+      "fragmented": true
+    },
+    {
+      "id": "cr111",
+      "split": "train",
+      "family": "qwen-chunk-off-prefill-hidden-shape",
+      "fix": "28f948ca890cdd723f3a0b5e27b5c7e47721c6c7",
+      "source": "src/ml/gguf/qwen35_cpu.cr",
+      "spec": "spec/qwen35_forward_spec.cr",
+      "problem": "With chunked prefill disabled, the final hidden row is currently returned as the token embedding. Produce each token's final hidden row from serial layer execution, retain the requested stop-layer limit, and preserve the row-major shape for callers using the final hidden.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: [0.2, 1.0]",
+      "fixture": "fragment_specs/chunkoff_hidden_spec.cr",
+      "fragmented": true
+    },
+    {
+      "id": "cr112",
+      "split": "train",
+      "family": "spec-system-memory-pressure",
+      "fix": "cfc832ddce38a4b54e0d9e3a243a7b74a1acc300",
+      "source": "spec/support/rss_guard.cr",
+      "spec": "spec/rss_pressure_spec.cr",
+      "problem": "The in-process spec guard is disabled when the RSS ceiling is unset, even if a system free-memory floor is configured. Enable it for either limit, apply the floor at preflight and during polling, retain RSS enforcement, and allow an explicit opt-out.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "CogniSpecRSSGuard.enabled?.should be_true",
+      "fixture": "fragment_specs/rss_pressure_spec.cr",
+      "fragmented": true
+    },
+    {
+      "id": "cr113",
+      "split": "valid",
+      "family": "llama-context-parameter-abi",
+      "fix": "f42faee6a311e4497fe6cf6b358574698b0bb1a3",
+      "source": "src/ml/llm/llama_ffi.cr",
+      "spec": "spec/llama_context_abi_spec.cr",
+      "lines": [
+        38,
+        129
+      ],
+      "problem": "Bring the llama.cpp context parameter layout up to the b9960 ABI. Define the context type enum and add the fields for recurrent snapshots, maximum outputs, context type and the associated context pointer with the native order and types.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: 136",
+      "reference_lines": [
+        39,
+        139
+      ],
+      "fixture": "fragment_specs/abi_regression_spec.cr"
+    },
+    {
+      "id": "cr114",
+      "split": "train",
+      "family": "llama-wrapper-native-model-lifecycle",
+      "fix": "c4a6fe5cea51b725a616a353c9b5c456b0216458",
+      "source": "src/ml/llm/llama.cr",
+      "spec": "spec/llama_model_free_spec.cr",
+      "lines": [
+        36,
+        67
+      ],
+      "problem": "The model wrapper can free the same native model handle more than once. Make explicit cleanup and finalization use a common idempotent release path. A null handle is still safe to release.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: 2",
+      "reference_lines": [
+        36,
+        75
+      ],
+      "fixture": "fragment_specs/llama_model_free_spec.cr"
+    },
+    {
+      "id": "cr115",
+      "split": "train",
+      "family": "qwen-direct-output-tokenizer-identity",
+      "fix": "562809685ea606fa5fe9e588b0e1dc714217d417",
+      "source": "src/ml/gguf/qwen35_prompt_cache.cr",
+      "spec": "spec/qwen35_prompt_cache_spec.cr",
+      "problem": "Direct-output cache hits validate the model and prompt but can reuse results produced with a different tokenizer. Thread optional tokenizer identity through the direct-output lookup and validation methods and reject a mismatch when the caller supplies it.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: true",
+      "fragmented": true,
+      "fixture": "fragment_specs/tokenizer_regression_spec.cr"
+    },
+    {
+      "id": "cr116",
+      "split": "train",
+      "family": "llama-generator-sampler-seed",
+      "fix": "2ab295d9bc986e6b1c71610e669ce66ab615b108",
+      "source": "src/ml/llm/llama.cr",
+      "spec": "spec/llama_seed_spec.cr",
+      "problem": "The generator honors its sampler seed at construction but silently replaces it with the default when generation, chat, or streaming resets the sampler. Keep the configured seed and pass it to all sampler resets.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "4294967295",
+      "fragmented": true,
+      "fixture": "fragment_specs/llama_seed_spec.cr"
+    },
+    {
+      "id": "cr117",
+      "split": "train",
+      "family": "qwen-source-history-generated-text-integrity",
+      "fix": "637a897cbace4c58bd1bab64a79ea0760c478530",
+      "source": "src/ml/gguf/qwen35_prompt_cache.cr",
+      "spec": "spec/qwen35_prompt_cache_spec.cr",
+      "problem": "Persist an optional SHA-256 digest of cached generated text, with domain tag qwen35-generated-text-v1 followed by a NUL. Add a validation helper that requires a positive matching generated token count, text, and matching digest. Legacy records must still deserialize.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: nil",
+      "fragmented": true,
+      "fixture": "fragment_specs/generated_text_hash_spec.cr"
+    },
+    {
+      "id": "cr118",
+      "split": "train",
+      "family": "qwen-chunk-off-prefill-hidden-shape",
+      "fix": "4d94ced69d7abcb1bf2707d838cb78ac30cc50b1",
+      "source": "src/ml/gguf/qwen35_cpu.cr",
+      "spec": "spec/qwen35_top1_spec.cr",
+      "lines": [
+        1886,
+        1891
+      ],
+      "problem": "When chunked prefill is disabled, the multi-token verifier attempts to slice one hidden row per token from a serial helper that returns only the final row. In this mode, use serial top-one forward calls for each input position so the verifier gets every token result.",
+      "examples": 1,
+      "red_count": 0,
+      "failure": "Index out of bounds (IndexError)",
+      "red_errors": 1,
+      "fixture": "fragment_specs/chunkoff_top1_spec.cr"
+    },
+    {
+      "id": "cr119",
+      "split": "train",
+      "family": "llama-backend-cleanup-order",
+      "fix": "46e790b0b3d28c1ec9998dbe4d24bbcca0955ca8",
+      "source": "src/ml/llm/llama.cr",
+      "spec": "spec/llama_backend_cleanup_spec.cr",
+      "problem": "Repeated initialization and cleanup call the native backend more than once. Track live models and contexts, free contexts then models before releasing the backend, and make initialization and cleanup idempotent within a lifecycle.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: [:init, :init, :free, :free, :init, :free]",
+      "fragmented": true,
+      "fixture": "fragment_specs/llama_backend_cleanup_spec.cr"
+    },
+    {
+      "id": "cr120",
+      "split": "train",
+      "family": "llama-mmap-default-page-lock",
+      "fix": "7299977fd3bb61f15a921ca551c5995f54aa2c6e",
+      "source": "src/ml/llm/llama.cr",
+      "spec": "spec/llama_model_mlock_spec.cr",
+      "lines": [
+        85,
+        94
+      ],
+      "problem": "Model loading enables mmap, leaving mapped pages exposed to eviction-related SIGBUS. Request locked pages by default and make the behavior configurable on the existing model constructor.",
+      "examples": 1,
+      "red_count": 1,
+      "failure": "got: [false]",
+      "fixture": "fragment_specs/llama_model_mlock_spec.cr"
+    },
+    {
+      "id": "cr121",
+      "split": "test",
+      "family": "nomic-matrix-device-admission",
+      "fix": "b846b5babe3061f6c56961441156609cc7d909cb",
+      "source": "src/ml/gguf/nomic_metal_policy.cr",
+      "spec": "spec/nomic_metal_policy_spec.cr",
+      "lines": [
+        3,
+        15
+      ],
+      "problem": "The matrix GEMM and MoE route was repaired for Apple M5 Max. In automatic mode, enable it for Apple M-series devices and reject other devices. Give matrix attention its own override and keep it disabled by default on M5 Max. Preserve the explicit on/off overrides.",
+      "examples": 4,
+      "red_count": 3,
+      "failure": "Missing independent matrix attention policy",
+      "fixture": "fragment_specs/nomic_matrix_policy_spec.cr"
+    },
+    {
+      "id": "cr122",
+      "split": "test",
+      "family": "metal-compute-graph-buffer-binding",
+      "fix": "de1867d1af707a0bfeb613de29e911a94bd79922",
+      "source": "src/ml/metal/compute_graph.cr",
+      "spec": "spec/compute_graph_spec.cr",
+      "problem": "The ComputeGraph operation builder puts access in the wrong BufBinding field and cannot represent explicit buffer lengths or partitions. Accept those optional fields and preserve each value in the binding so disjoint partitions can share a wave. Keep the CPU-only signature aligned.",
+      "examples": 1,
+      "red_count": 0,
+      "failure": "no parameters named 'length', 'partition'",
+      "backend": "metal",
+      "red_compile": true,
+      "fragmented": true,
+      "fixture": "fragment_specs/compute_graph_builder_spec.cr"
+    }
+  ]
+}

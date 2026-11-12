@@ -168,7 +168,7 @@ def apply_candidate(case, output, answer):
     apply()
 
 
-def run_spec(output):
+def run_spec(output, command=SPEC_COMMAND):
     scratch = output / ".pilot"
     scratch.mkdir(exist_ok=True)
     env = {
@@ -177,7 +177,7 @@ def run_spec(output):
         "TMPDIR": str(scratch),
         "CRYSTAL_CACHE_DIR": str(scratch / "cache"),
     }
-    return subprocess.run(SPEC_COMMAND, cwd=output, env=env, timeout=120,
+    return subprocess.run(command, cwd=output, env=env, timeout=120,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
