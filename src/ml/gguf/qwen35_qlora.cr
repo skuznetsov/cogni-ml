@@ -41,6 +41,9 @@ module ML::GGUF
     ADAPTER_MAGIC = "COGNI-QWEN35-QLORA-1"
     STACK_MAGIC   = "COGNI-QWEN35-QLORA-2"
     private ENDIAN        = IO::ByteFormat::LittleEndian
+    private STACK_COUNTS  = {4, 6}
+    # Up to six nonnegative Int32 indices, with one separator each.
+    private PLACEMENT_LINE_LIMIT = 6 * 11
 
     record Example, input : Array(Float32), targets : Array(Int32), first : Int32
 
@@ -137,7 +140,9 @@ module ML::GGUF
       @prefix_layers : Int32
 
       def initialize(path : String, seed : UInt64 = 42_u64, *, full_blocks : Int32 = 1)
-        raise ArgumentError.new("QLoRA supports one or four full-attention blocks") unless {1, 4}.includes?(full_blocks)
+        unless full_blocks == 1 || STACK_COUNTS.includes?(full_blocks)
+          raise ArgumentError.new("QLoRA supports one, four, or six full-attention blocks")
+        end
         @weights = Qwen35Weights.from_gguf(path)
         metadata = GGUFFile.new(path, mmap_tensors: false)
         begin
@@ -252,16 +257,36 @@ module ML::GGUF
       end
 
       def self.adapter_full_blocks(path : String) : Int32
-        File.open(path) { |file| adapter_full_blocks(file) }
+        File.open(path) do |file|
+          _, indices = read_adapter_header(file)
+          indices ? indices.size : 1
+        end
       end
 
       # :nodoc:
-      def self.adapter_full_blocks(file : IO) : Int32
-        case file.gets(ADAPTER_MAGIC.bytesize + 1, chomp: true)
-        when ADAPTER_MAGIC then 1
-        when STACK_MAGIC   then 4
-        else                    raise ArgumentError.new("unrecognized QLoRA adapter format")
+      def self.read_adapter_header(file : IO) : {String, Array(Int32)?}
+        magic = file.gets(ADAPTER_MAGIC.bytesize + 1)
+        unless magic == ADAPTER_MAGIC + "\n" || magic == STACK_MAGIC + "\n"
+          raise ArgumentError.new("unrecognized QLoRA adapter format")
         end
+        digest_line = file.gets(65)
+        unless digest_line && digest_line.matches?(/\A[0-9a-f]{64}\n\z/)
+          raise ArgumentError.new("invalid QLoRA adapter GGUF digest")
+        end
+        digest = digest_line.chomp
+        return {digest, nil} if magic == ADAPTER_MAGIC + "\n"
+
+        line = file.gets(PLACEMENT_LINE_LIMIT)
+        unless line && line.ends_with?('\n')
+          raise ArgumentError.new("QLoRA adapter block placement is incomplete")
+        end
+        placement = line.byte_slice(0, line.bytesize - 1)
+        indices = placement.split(',').compact_map(&.to_i?)
+        unless STACK_COUNTS.includes?(indices.size) && indices.join(',') == placement &&
+               indices.all? { |index| index >= 0 } && indices == indices.sort.uniq
+          raise ArgumentError.new("QLoRA adapter block placement is invalid")
+        end
+        {digest, indices}
       end
 
       def save(path : String) : Nil
@@ -287,15 +312,13 @@ module ML::GGUF
         targets = factors
         skipped = 0
         values = File.open(path, "rb") do |file|
-          blocks = self.class.adapter_full_blocks(file)
-          unless file.gets(65, chomp: true) == @digest
+          digest, indices = self.class.read_adapter_header(file)
+          unless digest == @digest
             raise ArgumentError.new("QLoRA adapter GGUF digest mismatch")
           end
-          if blocks > 1
-            indices = @layer_indices.join(',')
-            unless blocks == @layer_indices.size && file.gets(indices.bytesize + 1, chomp: true) == indices
-              raise ArgumentError.new("QLoRA adapter block placement mismatch")
-            end
+          blocks = indices ? indices.size : 1
+          if indices && (blocks > @layer_indices.size || indices != @layer_indices.last(blocks))
+            raise ArgumentError.new("QLoRA adapter block placement mismatch")
           end
           skipped = (@layer_indices.size - blocks) * block.projections.size * 2
           arrays = targets[skipped..].map do |factor|

@@ -158,3 +158,13 @@ done
 Both evaluation arms traverse the same four-block generation route. Loading a
 single-block checkpoint on this route places its factors in the final block and
 zeros the other three adapter updates.
+
+### Six full-attention blocks
+
+Append `6` to the training command to adapt all six full-attention blocks
+on the pinned GGUF. Their zero-based indices are 3, 7, 11, 15, 19 and 23.
+The checkpoint records the same v2 metadata and stores 1,204,224 FP32
+parameters. The generation command infers the route from the checkpoint.
+To compare the existing four-block checkpoint with the six-block checkpoint,
+run both evaluator arms with `--full-blocks 6`. The four-block checkpoint
+loads at layers 11, 15, 19 and 23 and the first two adapter updates are zero.
