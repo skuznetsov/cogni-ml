@@ -159,6 +159,15 @@ Both evaluation arms traverse the same four-block generation route. Loading a
 single-block checkpoint on this route places its factors in the final block and
 zeros the other three adapter updates.
 
+### Qwen3.5-2B with four full-attention blocks
+
+The native trainer accepts the Qwen3.5-2B text geometry. The four-block route
+selects layers 11, 15, 19 and 23 and stores 1,277,952 FP32 factors. Use the
+[pinned Q4_K_M GGUF](https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/blob/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf)
+with SHA-256 `aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223`.
+Use the expanded one-shot split and the four-block commands above with this
+GGUF for both base and adapted evaluation.
+
 ### Qwen3.5-4B with four full-attention blocks
 
 The native trainer also accepts the Qwen3.5-4B text geometry. The four-block
