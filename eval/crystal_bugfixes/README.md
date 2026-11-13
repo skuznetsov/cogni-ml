@@ -159,10 +159,24 @@ Both evaluation arms traverse the same four-block generation route. Loading a
 single-block checkpoint on this route places its factors in the final block and
 zeros the other three adapter updates.
 
+### Qwen3.5-4B with four full-attention blocks
+
+The native trainer also accepts the Qwen3.5-4B text geometry. The four-block
+route selects layers 19, 23, 27 and 31 and stores 1,916,928 FP32 factors.
+Use the same base GGUF for both arms. The checkpoint records its digest and
+cannot be loaded against the 0.8B GGUF.
+
+The pilot uses the [Unsloth Q4_K_M GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/blob/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf)
+with SHA-256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`.
+Use the expanded one-shot split and append `4` to the training command.
+Evaluate the base and trained adapter with `--full-blocks 4 --repairs 2
+--max-new-tokens 768`. Model size changes the number of factors even when
+rank, projection names and placement relative to the last block are matched.
+
 ### Six full-attention blocks
 
 Append `6` to the training command to adapt all six full-attention blocks
-on the pinned GGUF. Their zero-based indices are 3, 7, 11, 15, 19 and 23.
+on the pinned 0.8B GGUF. Their zero-based indices are 3, 7, 11, 15, 19 and 23.
 The checkpoint records the same v2 metadata and stores 1,204,224 FP32
 parameters. The generation command infers the route from the checkpoint.
 To compare the existing four-block checkpoint with the six-block checkpoint,

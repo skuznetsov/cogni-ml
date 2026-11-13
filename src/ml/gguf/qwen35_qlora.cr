@@ -152,10 +152,19 @@ module ML::GGUF
         end
         @digest = File.open(path) { |io| Digest::SHA256.hexdigest(io) }
         hp = @weights.hparams
-        unless {hp.n_layer, hp.n_embd, hp.n_ff, hp.n_head, hp.n_head_kv, hp.head_dim} == {24, 1024, 3584, 8, 2, 256} &&
-               @weights.layers.last.is_a?(Qwen35FullAttnWeights) &&
+        geometry = {hp.n_layer, hp.n_embd, hp.n_ff, hp.n_head, hp.n_head_kv, hp.head_dim}
+        factors_per_block = case geometry
+                            when {24, 1024, 3584, 8, 2, 256}
+                              EXPECTED_SIZE
+                            when {32, 2560, 9216, 16, 4, 256}
+                              if {hp.full_attention_interval, hp.ssm_conv_kernel, hp.ssm_state_size,
+                                  hp.ssm_group_count, hp.ssm_time_step_rank, hp.ssm_inner_size} == {4, 4, 128, 16, 32, 4096}
+                                479_232
+                              end
+                            end
+        unless factors_per_block && @weights.layers.last.is_a?(Qwen35FullAttnWeights) &&
                @tokenizer.vocab.size == @weights.output.out_dim
-          raise ArgumentError.new("QLoRA requires the Qwen3.5-0.8B text decoder")
+          raise ArgumentError.new("QLoRA requires a supported Qwen3.5-0.8B or Qwen3.5-4B text decoder")
         end
         full = @weights.layers.each_index.select { |index| @weights.layers[index].is_a?(Qwen35FullAttnWeights) }.to_a
         raise ArgumentError.new("GGUF has too few full-attention blocks") if full.size < full_blocks
@@ -174,7 +183,7 @@ module ML::GGUF
             @tail << RecurrentBlock.new(layer, hp)
           end
         end
-        unless factors.sum(&.size) == full_blocks * EXPECTED_SIZE && @projections.all? { |p| p.rank == RANK && p.alpha == ALPHA }
+        unless factors.sum(&.size) == full_blocks * factors_per_block && @projections.all? { |p| p.rank == RANK && p.alpha == ALPHA }
           raise "unexpected QLoRA projection layout"
         end
       end
