@@ -125,6 +125,9 @@ def main():
             "CRYSTAL_CACHE_DIR": str(work / "crystal-cache"),
             "CC": clang,
             "SDKROOT": sdk,
+            # Crystal tempfiles use Time.local. UTC avoids reading the host's
+            # time zone database from inside the sandbox.
+            "TZ": "UTC",
         }
         profile = work / "sandbox.sb"
         profile.write_text(profile_for(replay, work, developer, brew), encoding="utf-8")

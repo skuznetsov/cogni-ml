@@ -168,3 +168,70 @@ parameters. The generation command infers the route from the checkpoint.
 To compare the existing four-block checkpoint with the six-block checkpoint,
 run both evaluator arms with `--full-blocks 6`. The four-block checkpoint
 loads at layers 11, 15, 19 and 23 and the first two adapter updates are zero.
+
+### Four blocks with repair examples
+
+Collect model mistakes from the expanded training split. Each accepted
+conversation includes the original prompt, a generated replacement that
+fails compilation or the focused spec, the replay diagnostic, and the
+historical replacement that passes the same spec. The failed replacement
+and diagnostic are context for the final assistant completion. Gold
+answers are used by the scorer and as training targets.
+
+Run these commands with the exported fragment dataset, the native
+generator, and the existing four-block checkpoint. Use fresh output paths.
+
+~~~sh
+bin=build/qlora/qwen35_qlora
+expanded=build/qlora/data/sft-expanded
+control=build/qlora/sft-expanded-four.adapter
+run=build/qlora/four-repair
+python3 scripts/crystal_bugfix_qlora_collect.py --binary "$bin" \
+  --model "$model" --adapter "$control" --output "$run/current-candidates"
+python3 scripts/crystal_bugfix_qlora_collect.py --binary "$bin" \
+  --model "$model" --adapter - --stage compile --output "$run/stock-candidates"
+crystal build --release eval/crystal_bugfixes/qlora_token_counts.cr \
+  -o "$run/token_counts"
+python3 scripts/crystal_bugfix_qlora_assemble.py --expanded "$expanded" \
+  --model "$model" --token-counter "$run/token_counts" --output "$run/data" \
+  "$run/current-candidates/candidates.jsonl" "$run/stock-candidates/candidates.jsonl"
+"$bin" train "$model" "$run/data/train.jsonl" "$run/data/valid.jsonl" \
+  "$run/sft-expanded-repair-four.adapter" 50 42 4 2>"$run/train.log"
+~~~
+
+Assembly checks the recorded prompt, response and replay logs against the
+training manifest. It adds distinct failed answers with their passing fixes
+when they fit the 2,400-token training limit. It preserves the original
+one-shot rows and validation file byte for byte. The assembly manifest
+records the accepted histories and file digests. Collection uses the same
+sandbox as held-out evaluation, with UTC for Crystal's tempfile operations.
+Replay diagnostics can include timings and other process-specific text.
+Use the recorded JSONL and candidate order to reproduce an existing run.
+
+Both arms use the same four-block route, quantized checkpoint, six held-out
+prompts, greedy generation limit of 768 tokens, and up to two repair rounds.
+Each round receives its own previous answer and diagnostic. The repair
+adapter starts from fresh factors with the same seed and 50 updates as the
+control. The added examples change the shuffled training mixture and the
+number of one-shot updates.
+
+~~~sh
+for arm in control repair; do
+  checkpoint="$control"
+  if [ "$arm" = repair ]; then
+    checkpoint="$run/sft-expanded-repair-four.adapter"
+  fi
+  python3 scripts/crystal_bugfix_qlora_eval.py \
+    --binary "$bin" --model "$model" --adapter "$checkpoint" --full-blocks 4 \
+    --arm "$arm" --output "$run/eval-$arm" --max-new-tokens 768 --repairs 2
+done
+~~~
+
+The first run added 19 repair histories from 14 training cases, with 13
+test diagnostics and six compiler diagnostics. At 50 updates, the new
+mixture used 25 one-shot and 25 repair updates. Both checkpoints solved
+0/6 held-out cases and reached tests on 4/6. The control compiled 12/18
+responses and the repair-trained checkpoint compiled 8/18. On cr105 and
+cr107 the new checkpoint introduced compile errors after test feedback.
+On cr106 it reached the generation cap with an unfinished replacement
+on all three attempts. These measurements use one seed.
