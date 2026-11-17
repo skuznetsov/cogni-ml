@@ -138,3 +138,28 @@ Paths are relative to `build/qlora/scale-2b/own-vs-peer-v1`.
 | `evaluation/counterexamples/results.json` | `f7592ffe017b34813d52b2a4d1bd3752c8d5f312907170a65099832cbecca36f` |
 | `train/own/adapter.bin` | `20144e02c683364ef9c048d23a845afb0cd27d479dd120d2f8ef20e8b7a31c8f` |
 | `train/peer/adapter.bin` | `f29b7192700a5c3db4cdb5b49b15cfef5c44ea9f74c4b36ca856e46d9861c42b` |
+
+## Free generation on the training problems
+
+A follow-up used the same native sampler and frozen weights. For each training row, the sampler received all four messages up to the failed draft and its diagnostic. It generated one answer with seed 101, temperature 0.8, top-k 40 and a 128-token generation budget. Teacher completions were withheld. Each one-line candidate was compiled and run against the original training specs. In the second condition only the original failure log in the first user message was removed. The description, code, draft and feedback on that draft were preserved.
+
+| Prompt | Model | Passed training specs / 12 | Survived two supplementary checks / 12 | Matched teacher line / 12 |
+|---|---|---:|---:|---:|
+| Own-error training rows | tool-four | 0 | 0 | 0 |
+| Own-error training rows | own continuation | 6 | 4 | 4 |
+| Peer-error training rows | tool-four | 0 | 0 | 0 |
+| Peer-error training rows | peer continuation | 5 | 4 | 4 |
+| Own-error rows, original failure log omitted | own continuation | 5 | 3 | 2 |
+| Peer-error rows, original failure log omitted | peer continuation | 6 | 5 | 5 |
+
+The supplementary checks were designed after inspecting accepted answers in the full training contexts. Softmax on logits 1000 and 999 in a row with a nonzero offset caught index-based substitutes for the row maximum. A reasoning budget of `Int32::MAX` plus one answer token exposed an `OverflowError` where the Gemma profile requires an `ArgumentError`. Both teacher lines passed. Only the two affected tasks received additional checks. Teacher matches use the same one-line normalization as the training scorer.
+
+These 72 sampled answers measure recall and sensitivity on seen problems at one seed. The unchanged held-out report above measures transfer. The adapter files each contain 1,277,952 FP32 values. The GGUF header identifies 24 Q4_K and four Q6_K matrices among the 28 adapted base projections.
+
+The local evidence root is `build/qlora/scale-2b/own-vs-peer-v1/diagnostics/seen-repair`. Run `python3 -B probe.py`, `python3 -B probe.py --omit-original-failure` and `python3 -B guards.py` there. The saved results have these fingerprints.
+
+| File | SHA-256 |
+|---|---|
+| `results.json` | `a177a66178a9ae5a53866f4fee9e541e264caab779eecba0afcad80097e52c9d` |
+| `without-initial-failure/results.json` | `2a4b84472724b4d16dd7c325330dea90f031eee4c17aa9786e0b3c30e603a7fa` |
+| `guards/results.json` | `1dc520e04b53f58cc00f25b019e3cee205aa6637e458c4b742e642b5308e72c4` |
