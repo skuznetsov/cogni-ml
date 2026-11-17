@@ -28774,3 +28774,13 @@ Refresh after source/toolchain/device/model/workload changes.
   `layer-depth/` artifact and the owned gputer deployment's `reports/`.
   Refresh after source, model/backend, GPU/driver, workload, clock, meter/USB,
   voltage/calibration, concurrent-load changes or raw-evidence loss.
+
+## 2026-11-17 — Qwen3.5-2B repair on its own and a peer adapter’s errors
+
+The matched 50-update continuations each saw 12 problems and 838 supervised
+teacher tokens. On the first repair of a shared failed draft, tool-four passed
+2/18 task/seed pairs and both continuations passed 0/18. Both successes were
+the same nested-array fix. A later LayerNorm pass failed a supplemental check
+with `[2, -1, -1]`. There were six distinct tasks and one training seed.
+[Report and evidence fingerprints](eval/crystal_bugfixes/native_2b_own_peer.md).
+Re-evaluate for changes to the data, adapter, prompt distribution or test set.
