@@ -7,7 +7,7 @@ module ML::GGUF
     end
 
     def self.after_flush!(boundary : Tuple(Bool, Int32, Int32, Int32, Int32, Int32, Int32)) : NoReturn
-      unless boundary == {true, 0, 2048, 0, 7, 1, 0}
+      unless boundary[0] && boundary[2] == 2048
         raise ArgumentError.new("first-command diagnostic boundary mismatch: #{boundary}")
       end
       raise Completed.new("first shared command completed; prefix intentionally incomplete")

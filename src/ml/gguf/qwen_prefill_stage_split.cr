@@ -12,7 +12,7 @@ module ML::GGUF
 
     def self.enabled?(standalone : Bool, ordinary_f32 : Bool,
                       configured : String? = ENV["QWEN35_FULL_PREFILL_STAGE_SPLIT"]?) : Bool
-      (configured == "1" || configured == "after_attention") && standalone && ordinary_f32
+      (configured == "1" || configured == "after_attention") && (standalone || ordinary_f32)
     end
 
     def self.build(standalone : Bool, ordinary_f32 : Bool, start_pos : Int32, rows : Int32,

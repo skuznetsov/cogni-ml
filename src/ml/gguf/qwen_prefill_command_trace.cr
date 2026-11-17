@@ -43,7 +43,7 @@ module ML::GGUF
         emit("call_failed", fields, (Time.instant - started).total_milliseconds, prefix: "qwen35_prefill_layer")
         raise ex
       end
-      phase = result.nil? ? "call_declined" : "call_end"
+      phase = result ? "call_end" : "call_declined"
       emit(phase, fields, (Time.instant - started).total_milliseconds, prefix: "qwen35_prefill_layer")
       result
     end

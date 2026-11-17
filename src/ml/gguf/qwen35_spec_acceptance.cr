@@ -35,7 +35,7 @@ module ML::GGUF
           emitted << cand
           accepted += 1
           expected = target_nexts[i][0] if i < target_nexts.size
-          break if eos_id && cand == eos_id
+          break if eos_id && expected == eos_id
         else
           emitted << expected
           reject_index = i
