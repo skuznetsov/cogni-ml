@@ -31,7 +31,7 @@ On the mask, both invalid-byte checks stayed green. Both the decoding target and
 
 All eight trace replies repeated their respective previous raw answers verbatim. In the own/own dialogue, removing the duplicated `completed =` alone had passed 3/3 in the parent experiment's separate replay.
 
-The retry prompts used 774–3,121 prefix tokens. The native sampler recovered prefill on three requests with the same prompt and seed. The observations cover three selected failed rewrites at one seed. Measuring a causal effect of feedback would require a matched generation run without diagnostics.
+The retry prompts used 774–3,121 prefix tokens. The native sampler recovered prefill on three requests with the same prompt and seed. The observations cover three selected failed rewrites at one seed. The [paired control](blind-control.md) compares these outcomes with neutral retry instructions on the same conversations.
 
 | Evidence in the output directory | SHA-256 |
 |---|---|
