@@ -56,3 +56,5 @@ python3 -B eval/crystal_bugfixes/caller_transfer/truth_training/measure_first_to
 The output folder includes the sealed error IDs, per-token logits, vocabulary ranks, raw and sampling probabilities, one-token replays and both paired comparisons. An alternative output directory keeps a fresh build or run separate from the immutable evidence.
 
 Run protocol SHA-256 `3e5a653ab9dedcb0c876aa66a29fd4e7bc67ddcb0fc2618cbf4a730a608f366c`. Results SHA-256 `998f968f3c0a01cc6bda8f75d2b1cb26a806b0839815cd5abbb0894d9ca26492`.
+
+The next run trains on just the two literal logits at the first answer slot and repeats the matched comparison. [Two-choice first-token training](FIRST_TOKEN_LOSS.md)

@@ -49,30 +49,52 @@ module ML::GGUF
 
     # Only completion rows visit the frozen LM head. Its dequantized view is
     # shared by the forward and transpose GEMMs, with bounded logits scratch.
+    # Choice mode dequantizes only its two selected rows and maps external token
+    # IDs to the two local logits used by the same loss and backward path.
     class CompletionLoss
-      def initialize(weight : QuantWeight, @norm : Array(Float32), @eps : Float32)
+      @head : Array(Float32)
+      @choices : Tuple(Int32, Int32)?
+
+      def initialize(weight : QuantWeight, @norm : Array(Float32), @eps : Float32,
+                     *, choices : Tuple(Int32, Int32)? = nil)
         @width = weight.in_dim
-        @vocab = weight.out_dim
-        unless @width > 0 && @vocab > 0 && @norm.size == @width && @eps > 0 &&
-               @vocab.to_i64 * @width <= Int32::MAX
+        @choices = choices
+        unless @width > 0 && weight.out_dim > 0 && @norm.size == @width && @eps > 0
           raise ArgumentError.new("invalid QLoRA output head")
         end
-        @head = Dequant.dequantize(weight.raw, weight.type, @vocab * @width)
+        if ids = choices
+          unless 0 <= ids[0] < weight.out_dim && 0 <= ids[1] < weight.out_dim && ids[0] != ids[1]
+            raise ArgumentError.new("invalid QLoRA two-class output head")
+          end
+          @vocab = 2
+          @head = dequantize_row(weight, ids[0]) + dequantize_row(weight, ids[1])
+        else
+          @vocab = weight.out_dim
+          unless @vocab.to_i64 * @width <= Int32::MAX
+            raise ArgumentError.new("invalid QLoRA output head")
+          end
+          @head = Dequant.dequantize(weight.raw, weight.type, @vocab * @width)
+        end
       end
 
       def calculate(hidden : Array(Float32), first : Int32,
                     targets : Array(Int32), *, backward : Bool) : {Float64, Array(Float32)}
         unless hidden.size % @width == 0 && first >= 0 && !targets.empty? &&
-               first + targets.size <= hidden.size // @width && targets.all? { |id| 0 <= id < @vocab }
+               first + targets.size <= hidden.size // @width && valid_targets?(targets)
           raise ArgumentError.new("invalid QLoRA completion targets")
         end
 
+        labels = if ids = @choices
+                   [targets[0] == ids[0] ? 0 : 1]
+                 else
+                   targets
+                 end
         grad = backward ? Array(Float32).new(hidden.size, 0_f32) : [] of Float32
         loss = 0.0
-        inv_count = 1_f32 / targets.size
+        inv_count = 1_f32 / labels.size
         offset = 0
-        while offset < targets.size
-          rows = Math.min(32, targets.size - offset)
+        while offset < labels.size
+          rows = Math.min(32, labels.size - offset)
           start = (first + offset) * @width
           x = hidden[start, rows * @width]
           normalized = Array(Float32).new(x.size, 0_f32)
@@ -91,7 +113,7 @@ module ML::GGUF
           values = logits.to_unsafe
           rows.times do |i|
             row = values + i * @vocab
-            label = targets[offset + i]
+            label = labels[offset + i]
             correct = row[label]
             max = row[0]
             @vocab.times { |j| max = Math.max(max, row[j]) }
@@ -125,7 +147,29 @@ module ML::GGUF
           end
           offset += rows
         end
-        {loss / targets.size, grad}
+        {loss / labels.size, grad}
+      end
+
+      private def valid_targets?(targets : Array(Int32)) : Bool
+        if ids = @choices
+          targets.size == 1 && (targets[0] == ids[0] || targets[0] == ids[1])
+        else
+          targets.all? { |id| 0 <= id < @vocab }
+        end
+      end
+
+      private def dequantize_row(weight : QuantWeight, row : Int32) : Array(Float32)
+        block_elements = weight.type.block_elements
+        unless block_elements > 0 && weight.in_dim % block_elements == 0
+          raise ArgumentError.new("QLoRA output row is not quantization-block aligned")
+        end
+        row_bytes = (weight.in_dim // block_elements).to_i64 * weight.type.block_bytes
+        offset = row.to_i64 * row_bytes
+        unless row_bytes > 0 && offset + row_bytes <= weight.raw.size
+          raise ArgumentError.new("QLoRA output row exceeds frozen head bytes")
+        end
+        bytes = Bytes.new(weight.raw.to_unsafe + offset, row_bytes.to_i32, read_only: true)
+        Dequant.dequantize(bytes, weight.type, weight.in_dim)
       end
     end
 
@@ -201,18 +245,22 @@ module ML::GGUF
         @weights.close
       end
 
-      def example(messages : Array(Qwen35Chat::Message)) : Example
+      def example(messages : Array(Qwen35Chat::Message), *, first_token_only : Bool = false) : Example
         unless messages.size >= 2 && messages.last.role == "assistant" && !messages.last.content.empty?
           raise ArgumentError.new("QLoRA example needs a prompt and nonempty assistant completion")
         end
         prompt = encode_prompt(messages[0...-1])
         completion = @tokenizer.encode(messages.last.content + "<|im_end|>", add_bos_override: false)
-        inputs = prompt + completion[0...-1]
+        if first_token_only && completion.size < 2
+          raise ArgumentError.new("QLoRA first-token example needs a real assistant completion token")
+        end
+        targets = first_token_only ? [completion.first] : completion
+        inputs = first_token_only ? prompt : prompt + completion[0...-1]
         check_length(inputs.size)
         input = with_prefix_state(inputs.size) do |state|
           Qwen35CPU.qlora_prefix(@weights, inputs, 0, state, @prefix_layers)
         end
-        Example.new(input, completion, prompt.size - 1)
+        Example.new(input, targets, prompt.size - 1)
       end
 
       def generate(messages : Array(Qwen35Chat::Message), max_new : Int32) : {String, Int32, String}
@@ -410,8 +458,14 @@ module ML::GGUF
       @params : Array(Autograd::Variable)
       @adam : Optim::Adam
 
-      def initialize(@model : Model, learning_rate : Float32 = 0.0001_f32)
-        @head = @model.loss_head
+      def initialize(@model : Model, learning_rate : Float32 = 0.0001_f32,
+                     *, choices : Tuple(Int32, Int32)? = nil)
+        @head = if ids = choices
+                  CompletionLoss.new(@model.weights.output, @model.weights.output_norm,
+                    @model.weights.hparams.rms_eps, choices: ids)
+                else
+                  @model.loss_head
+                end
         @params = @model.factors.map do |factor|
           Autograd::Variable.from_tensor(Tensor.from_array(factor, Shape.new([factor.size])), requires_grad: true)
         end
