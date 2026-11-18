@@ -47,3 +47,5 @@ This is a single generation seed, four fresh templates in three familiar layouts
 | Combined scored rows | `bf44b71bba64e13802ccc541fbc3d046fc0b2084809506d46b74bb7e6f9c3535` |
 | Training audit | `9688ce78e0db627fb174d772f4ae296d593b1b986e071478c0a704355942c76d` |
 | Child adapter | `7b20bf1e61d7134694ecc64b6d2c7a0e6026a640e0c8bf68b98527a3faac6716` |
+
+The follow-up measures how inserting `!` changes the probability of each first answer token on the same 16 pairs. [First-token measurements](FIRST_TOKEN.md)
