@@ -47,6 +47,79 @@ module ML::GGUF
 
     record Example, input : Array(Float32), targets : Array(Int32), first : Int32
 
+    # Pure native kernels for the pairwise first-token hinge. The scale fields
+    # are the derivative of the weighted hinge with respect to each margin.
+    module PairedObjective
+      def self.calculate(sft : Float64, anchor_margin : Float32, mate_margin : Float32,
+                         weight : Float32, minimum_margin : Float32) : NamedTuple(loss: Float64,
+        pair: Float64, anchor_scale: Float32, mate_scale: Float32)
+        unless sft.finite? && anchor_margin.finite? && mate_margin.finite? &&
+               weight.finite? && weight > 0_f32 && minimum_margin.finite? && minimum_margin > 0_f32
+          raise ArgumentError.new("invalid QLoRA paired objective values")
+        end
+
+        gap = minimum_margin - Math.min(anchor_margin, mate_margin)
+        pair = gap > 0_f32 ? gap.to_f64 : 0.0
+        loss = sft + weight.to_f64 * pair
+        anchor_scale = 0_f32
+        mate_scale = 0_f32
+        if gap > 0_f32
+          if anchor_margin < mate_margin
+            anchor_scale = -weight
+          elsif mate_margin < anchor_margin
+            mate_scale = -weight
+          else
+            anchor_scale = -weight / 2_f32
+            mate_scale = anchor_scale
+          end
+        end
+
+        {loss: loss, pair: pair, anchor_scale: anchor_scale, mate_scale: mate_scale}
+      end
+
+      # Margin is logit(correct) - logit(other). The derivative applies the
+      # selected two-row head GEMM followed by the frozen output RMSNorm rule.
+      def self.two_choice_margin_and_hidden_gradient(hidden : Array(Float32), norm : Array(Float32),
+                                                     correct_head : Array(Float32), other_head : Array(Float32),
+                                                     eps : Float32, *, backward : Bool = true) : NamedTuple(margin: Float32, gradient: Array(Float32))
+        width = hidden.size
+        unless width > 0 && norm.size == width && correct_head.size == width &&
+               other_head.size == width && eps.finite? && eps > 0_f32
+          raise ArgumentError.new("invalid QLoRA paired margin dimensions")
+        end
+
+        normalized = Array(Float32).new(width, 0_f32)
+        sum_squares = 0_f32
+        width.times do |i|
+          value = hidden.unsafe_fetch(i)
+          sum_squares += value * value
+        end
+        inv_rms = 1_f32 / Math.sqrt(sum_squares / width + eps)
+        width.times do |i|
+          normalized[i] = hidden.unsafe_fetch(i) * inv_rms * norm.unsafe_fetch(i)
+        end
+
+        head = correct_head + other_head
+        logits = MathOps.gemm(normalized, head, 1, 2, width, transpose_b: true)
+        margin = logits.unsafe_fetch(0) - logits.unsafe_fetch(1)
+        gradient = if backward
+                     logit_grad = [1_f32, -1_f32]
+                     dx_norm = MathOps.gemm(logit_grad, head, 1, width, 2)
+                     dot = 0_f32
+                     width.times do |i|
+                       dot += dx_norm.unsafe_fetch(i) * norm.unsafe_fetch(i) * hidden.unsafe_fetch(i)
+                     end
+                     correction = dot * inv_rms * inv_rms / width
+                     Array(Float32).new(width) do |i|
+                       inv_rms * (dx_norm.unsafe_fetch(i) * norm.unsafe_fetch(i) - correction * hidden.unsafe_fetch(i))
+                     end
+                   else
+                     [] of Float32
+                   end
+        {margin: margin, gradient: gradient}
+      end
+    end
+
     # Only completion rows visit the frozen LM head. Its dequantized view is
     # shared by the forward and transpose GEMMs, with bounded logits scratch.
     # Choice mode dequantizes only its two selected rows and maps external token
@@ -148,6 +221,29 @@ module ML::GGUF
           offset += rows
         end
         {loss / labels.size, grad}
+      end
+
+      def choice_margin_and_hidden_gradient(hidden : Array(Float32), first : Int32,
+                                            correct_token : Int32, *, backward : Bool = true) : NamedTuple(margin: Float32, gradient: Array(Float32))
+        ids = @choices
+        raise ArgumentError.new("QLoRA margin needs a two-choice output head") unless ids
+        unless hidden.size % @width == 0 && first >= 0 && first < hidden.size // @width
+          raise ArgumentError.new("invalid QLoRA paired margin row")
+        end
+
+        correct_index = if correct_token == ids[0]
+                          0
+                        elsif correct_token == ids[1]
+                          1
+                        else
+                          raise ArgumentError.new("QLoRA first target is outside paired choices")
+                        end
+        other_index = 1 - correct_index
+        offset = first * @width
+        PairedObjective.two_choice_margin_and_hidden_gradient(
+          hidden[offset, @width], @norm,
+          @head[correct_index * @width, @width], @head[other_index * @width, @width], @eps,
+          backward: backward)
       end
 
       private def valid_targets?(targets : Array(Int32)) : Bool
@@ -455,17 +551,30 @@ module ML::GGUF
 
     class Trainer
       @head : CompletionLoss
+      @paired_head : CompletionLoss?
+      @paired_choices : Tuple(Int32, Int32)?
       @params : Array(Autograd::Variable)
       @adam : Optim::Adam
 
       def initialize(@model : Model, learning_rate : Float32 = 0.0001_f32,
-                     *, choices : Tuple(Int32, Int32)? = nil)
+                     *, choices : Tuple(Int32, Int32)? = nil,
+                     paired_choices : Tuple(Int32, Int32)? = nil)
+        if choices && paired_choices
+          raise ArgumentError.new("QLoRA trainer cannot combine choice CE and paired objective modes")
+        end
+        @paired_choices = paired_choices
         @head = if ids = choices
                   CompletionLoss.new(@model.weights.output, @model.weights.output_norm,
                     @model.weights.hparams.rms_eps, choices: ids)
                 else
                   @model.loss_head
                 end
+        @paired_head = if ids = paired_choices
+                         CompletionLoss.new(@model.weights.output, @model.weights.output_norm,
+                           @model.weights.hparams.rms_eps, choices: ids)
+                       else
+                         nil
+                       end
         @params = @model.factors.map do |factor|
           Autograd::Variable.from_tensor(Tensor.from_array(factor, Shape.new([factor.size])), requires_grad: true)
         end
@@ -492,6 +601,84 @@ module ML::GGUF
           factor.to_unsafe.copy_from(param.data.cpu_data.not_nil!.to_unsafe, factor.size)
         end
         value
+      end
+
+      def step_paired(anchor : Example, mate : Example, *, weight : Float32 = 0.5_f32,
+                      minimum_margin : Float32 = 0.5_f32) : NamedTuple(loss: Float64, sft: Float64,
+        pair: Float64, anchor_margin: Float32, mate_margin: Float32)
+        choices = @paired_choices
+        pair_head = @paired_head
+        unless choices && pair_head
+          raise ArgumentError.new("paired QLoRA step requires a trainer configured with paired choices")
+        end
+        unless weight.finite? && weight > 0_f32 && minimum_margin.finite? && minimum_margin > 0_f32
+          raise ArgumentError.new("paired QLoRA weight and minimum margin must be positive and finite")
+        end
+
+        validate_paired_example!(anchor)
+        validate_paired_example!(mate)
+        anchor_target = anchor.targets.first
+        mate_target = mate.targets.first
+        unless (anchor_target == choices[0] || anchor_target == choices[1]) &&
+               (mate_target == choices[0] || mate_target == choices[1]) && anchor_target != mate_target
+          raise ArgumentError.new("paired QLoRA examples need oppositely labeled first targets")
+        end
+
+        @model.projections.each(&.zero_grad)
+        mate_hidden = @model.forward(mate.input, retain_tape: false)
+        mate_margin = pair_head.choice_margin_and_hidden_gradient(mate_hidden, mate.first, mate_target,
+          backward: false).[:margin]
+
+        anchor_hidden = @model.forward(anchor.input, retain_tape: true)
+        sft, anchor_gradient = @head.calculate(anchor_hidden, anchor.first, anchor.targets, backward: true)
+        raise "nonfinite QLoRA SFT loss" unless sft.finite?
+        anchor_margin = pair_head.choice_margin_and_hidden_gradient(anchor_hidden, anchor.first, anchor_target,
+          backward: false).[:margin]
+        objective = PairedObjective.calculate(sft, anchor_margin, mate_margin, weight, minimum_margin)
+
+        if objective[:anchor_scale] != 0_f32
+          anchor_result = pair_head.choice_margin_and_hidden_gradient(anchor_hidden, anchor.first, anchor_target)
+          start = anchor.first * @model.weights.hparams.n_embd
+          anchor_result[:gradient].size.times do |i|
+            anchor_gradient[start + i] += objective[:anchor_scale] * anchor_result[:gradient].unsafe_fetch(i)
+          end
+        end
+        @model.backward(anchor_gradient)
+
+        if objective[:mate_scale] != 0_f32
+          mate_hidden = @model.forward(mate.input, retain_tape: true)
+          mate_result = pair_head.choice_margin_and_hidden_gradient(mate_hidden, mate.first, mate_target)
+          mate_gradient = Array(Float32).new(mate_hidden.size, 0_f32)
+          start = mate.first * @model.weights.hparams.n_embd
+          mate_result[:gradient].size.times do |i|
+            mate_gradient[start + i] = objective[:mate_scale] * mate_result[:gradient].unsafe_fetch(i)
+          end
+          @model.backward(mate_gradient)
+        end
+
+        raise "nonfinite QLoRA paired loss" unless objective[:loss].finite? && objective[:pair].finite?
+        grads = @model.projections.flat_map { |proj| [proj.grad_a, proj.grad_b] }
+        @params.zip(grads).each do |param, grad|
+          raise "nonfinite QLoRA factor gradient" unless grad.all?(&.finite?)
+          param.grad = Tensor.from_array(grad, param.shape)
+        end
+        @adam.step
+        @model.factors.zip(@params).each do |factor, param|
+          factor.to_unsafe.copy_from(param.data.cpu_data.not_nil!.to_unsafe, factor.size)
+        end
+
+        {loss: objective[:loss], sft: sft, pair: objective[:pair],
+         anchor_margin: anchor_margin, mate_margin: mate_margin}
+      end
+
+      private def validate_paired_example!(example : Example) : Nil
+        width = @model.weights.hparams.n_embd
+        rows = example.input.size // width
+        unless example.input.size % width == 0 && !example.targets.empty? && example.first >= 0 &&
+               example.first.to_i64 + example.targets.size.to_i64 <= rows &&
+               example.targets.all? { |target| 0 <= target < @model.weights.output.out_dim }
+          raise ArgumentError.new("invalid full-token QLoRA paired example")
+        end
       end
     end
   end

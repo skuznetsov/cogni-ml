@@ -12,7 +12,6 @@ import fit_first_token as training
 import measure_first_token as reference
 
 prior = reference.prior
-ARMS = ("parent", "trained", "choice")
 LITERALS = ("true", "false")
 READOUT_PINS = {
     "protocol.json": "3e5a653ab9dedcb0c876aa66a29fd4e7bc67ddcb0fc2618cbf4a730a608f366c",
@@ -46,7 +45,7 @@ def validate_readout(case, record):
     assert t["raw_probability"] + f["raw_probability"] <= 1 + 1e-9
 
 
-def score_choice(cases, requests, adapter, readouts, out):
+def score_choice(cases, requests, adapter, readouts, out, *, arm="choice"):
     command = [prior.runner.SAMPLED_NATIVE, "generate", prior.runner.MODEL, adapter]
     generated = run(cases, requests, [*command, "128", "4"])
     single = run(cases, requests, [*command, "1", "4"])
@@ -68,7 +67,7 @@ def score_choice(cases, requests, adapter, readouts, out):
         values = prior.probe.score_truth(prior.probe.normalize(result))
         scores[idx] = dict(values=values, correct=values == case["truth"], raw=result["answer"],
                            stop=result["stop"], tokens=result["tokens"])
-    fit._write_new(out / "choice-generations.json", dict(full=generated, first_token=single))
+    fit._write_new(out / f"{arm}-generations.json", dict(full=generated, first_token=single))
     return scores
 
 
@@ -80,9 +79,10 @@ def conditional(record, target):
 
 
 def summarize(cases, cases_scores, readouts, errors):
+    assert cases_scores.keys() == readouts.keys()
     pairs = reference.pair_rows(cases, readouts, errors)
     for row in pairs:
-        for arm in ARMS:
+        for arm in readouts:
             direct, inverted = row["direct"], row["inverted"]
             target = row["target"]
             before, base = conditional(readouts[arm][direct], target)
@@ -93,7 +93,7 @@ def summarize(cases, cases_scores, readouts, errors):
                 both_sampled_correct=all(cases_scores[arm][idx]["correct"] for idx in (direct, inverted)),
             )
     summaries = {}
-    for arm in ARMS:
+    for arm in readouts:
         summary = prior.summary([dict(c, **cases_scores[arm][c["id"]]) for c in cases])
         obs = [row["arms"][arm] for row in pairs]
         assert summary["pairs"] == sum(r["both_sampled_correct"] for r in obs)

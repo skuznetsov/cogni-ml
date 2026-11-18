@@ -1,5 +1,7 @@
 # Two-choice first-token training
 
+The [paired-margin follow-up](PAIRED_LOSS.md) keeps full SFT and adds a first-token constraint on both sides of each sign pair.
+
 Both children branch from tool-four on the same Qwen3.5-2B Q4_K_M GGUF. Both use the original 32 examples in the same 50-update order, seed 42, Adam with a learning rate of 0.0001, LoRA rank 8 and seven projections in blocks 11, 15, 19 and 23. The [full-SFT child](README.md) supervises four completion tokens per update. The choice child consumes the same prompt and supervises only the first completion token, which is either `true` (1802) or `false` (3721).
 
 The choice loss for target t is `logsumexp(z_true, z_false) - z_t`. It extracts two rows from the frozen Q6_K output head and reuses the native completion loss and RMSNorm backward path. The training audit checks the original prompt lengths, one target per update, the exact update order, finite loss and changes to both factors in all 28 projections.
