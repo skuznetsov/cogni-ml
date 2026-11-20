@@ -1,4 +1,4 @@
-"""Compare centered and ordinary paired choice CE on the same native QLoRA schedule."""
+"""Compare pair center and hinge penalties on the same native QLoRA schedule."""
 
 import argparse
 from contextlib import redirect_stdout
@@ -14,72 +14,109 @@ import run as paired
 
 archive = paired.archive
 digest, keep, read = paired.digest, paired.keep, paired.read
-REFERENCE = paired.OUT.with_name("real-choice-pairs-v1-attempt2")
 OUT = paired.OUT.with_name("real-choice-pairs-centered-v1")
-REFERENCE_PROTOCOL = "f2f30b03bab310b965f6d0d4051bb9e13ba9604556202cc039aad4f0274caa93"
-REFERENCE_RESULTS = "b2531921256f6b8caf4d90c2b1fe3404be69051b79d05bdf9a4a9b7cf85f5fc0"
+HINGE_OUT = paired.OUT.with_name("real-choice-pairs-centered-hinge-v1")
+REFERENCES = {
+    "paired": (
+        paired.OUT.with_name("real-choice-pairs-v1-attempt2"),
+        "f2f30b03bab310b965f6d0d4051bb9e13ba9604556202cc039aad4f0274caa93",
+        "b2531921256f6b8caf4d90c2b1fe3404be69051b79d05bdf9a4a9b7cf85f5fc0",
+    ),
+    "centered": (
+        OUT.with_name("real-choice-pairs-centered-v1-attempt2"),
+        "2a183b65c62f8063738fa74ee11f0483ed666f18a95dea3434615aacffc6c2ce",
+        "8b2be0f9419c3c8111713e8363354787a58ae439919e5fb8f4da7539af718cae",
+    ),
+}
 CENTER_WEIGHT = 0.25
+HINGE_WEIGHT = 0.5
+MINIMUM_MARGIN = 0.5
 
 
-def freeze(out, trainer, binary):
-    assert digest(REFERENCE / "protocol.json") == REFERENCE_PROTOCOL
-    assert digest(REFERENCE / "results.json") == REFERENCE_RESULTS
-    protocol, results = (read(REFERENCE / name) for name in ("protocol.json", "results.json"))
-    assert results["protocol"] == REFERENCE_PROTOCOL
-    assert digest(REFERENCE / "training-audit.json") == results["training"]
-    audit = read(REFERENCE / "training-audit.json")
-    assert audit["protocol"] == REFERENCE_PROTOCOL
-    assert digest(REFERENCE / "adapter.bin") == audit["adapter"]
-    assert digest(REFERENCE / "paired-logits.json") == results["logits"]["paired"]
+def freeze(out, trainer, binary, baseline):
+    reference, protocol_sha, results_sha = REFERENCES[baseline]
+    assert digest(reference / "protocol.json") == protocol_sha
+    assert digest(reference / "results.json") == results_sha
+    protocol, results = (read(reference / name) for name in ("protocol.json", "results.json"))
+    assert results["protocol"] == protocol_sha
+    assert digest(reference / "training-audit.json") == results["training"]
+    audit = read(reference / "training-audit.json")
+    assert audit["protocol"] == protocol_sha
+    logits = reference / f"{baseline}-logits.json"
+    assert digest(reference / "adapter.bin") == audit["adapter"]
+    assert digest(logits) == results["logits"][baseline]
     assert digest(paired.MODEL) == protocol["model"] == paired.fit.MODEL_SHA
     assert digest(paired.INITIAL) == protocol["initial"] == paired.fit.INITIAL_SHA
     assert len(protocol["training_pairs"]) == 9
     assert subprocess.check_output(["crystal", "--version"], text=True).strip() == protocol["crystal"]
 
+    loss = "mean two-choice CE + center_weight * mean(logit(X) - logit(Y))^2 within each pair"
+    hinge_weight = 0.0
+    reference_files = [reference / "adapter.bin", logits]
+    if baseline == "centered":
+        assert protocol["center_weight"] == CENTER_WEIGHT
+        assert digest(reference / "train.log") == audit["log"]
+        reference_files.append(reference / "train.log")
+        hinge_weight = HINGE_WEIGHT
+        loss += " + hinge_weight * max(0, minimum_margin - min(correct_margin_a, correct_margin_b))"
+
+    replaced = {"train", "run.py", "train_choice_pairs.cr", Path(__file__).name}
     shared = {path: sha for path, sha in protocol["files"].items()
-              if Path(path).name not in {"train", "run.py", "train_choice_pairs.cr"}}
+              if Path(path).name not in replaced}
     for path, sha in shared.items():
         assert digest(Path(path)) == sha, path
     assert digest(binary) == next(sha for path, sha in shared.items() if Path(path).name == "readout")
     views, cases, plans = paired.load_holdout()
     out.mkdir(parents=True)
     for name, sha in protocol["inputs"].items():
-        assert digest(REFERENCE / name) == sha, name
+        assert digest(reference / name) == sha, name
         if name != "controls.json":
-            copyfile(REFERENCE / name, out / name)
+            copyfile(reference / name, out / name)
 
     with redirect_stdout(io.StringIO()):
         controls = archive.choice.check_candidates(out, cases, plans)
-    assert controls == read(REFERENCE / "controls.json")
+    assert controls == read(reference / "controls.json")
     assert digest(out / "controls.json") == protocol["inputs"]["controls.json"]
     here = Path(__file__).resolve().parent
     files = [trainer, binary, here / "run.py", here / "train_choice_pairs.cr",
-             here / "choice_pair_center.cr", Path(__file__).resolve(), REFERENCE / "adapter.bin",
-             Path(archive.__file__).resolve(), archive.OUT / "plan.json"]
+             here / "choice_pair_center.cr", here / "choice_pair_hinge.cr", Path(__file__).resolve(),
+             Path(archive.__file__).resolve(), archive.OUT / "plan.json", *reference_files]
     keep(out / "protocol.json", dict(
         protocol, files={**shared, **{str(path): digest(path) for path in files}},
-        reference=dict(protocol=REFERENCE_PROTOCOL, results=REFERENCE_RESULTS, adapter=audit["adapter"]),
-        loss="mean two-choice CE + center_weight * mean(logit(X) - logit(Y))^2 within each pair",
-        center_weight=CENTER_WEIGHT, criterion=paired.CRITERION,
+        reference=dict(arm=baseline, protocol=protocol_sha, results=results_sha, adapter=audit["adapter"]),
+        loss=loss, center_weight=CENTER_WEIGHT, hinge_weight=hinge_weight, minimum_margin=MINIMUM_MARGIN,
+        criterion=paired.CRITERION,
     ))
     print(f"Froze nine pairs and the exact 50-batch schedule; rebuilt all {2 * len(cases)} holdout candidates", flush=True)
     return views, controls, results
 
 
 def train(out, trainer, rows):
-    paired.verify_inputs(out)
+    protocol = paired.verify_inputs(out)
+    hinge_weight, minimum_margin = protocol["hinge_weight"], protocol["minimum_margin"]
     adapter, log = out / "adapter.bin", out / "train.log"
     command = [trainer, paired.MODEL, paired.INITIAL, out / "train.jsonl", out / "schedule.json",
                adapter, str(CENTER_WEIGHT)]
-    print(f"Native training with center weight {CENTER_WEIGHT}; live log {log}", flush=True)
+    if hinge_weight:
+        command += [str(hinge_weight), str(minimum_margin)]
+    print(f"Native training with center weight {CENTER_WEIGHT}, hinge weight {hinge_weight}; live log {log}",
+          flush=True)
     with log.open("x") as stream:
         subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, cwd=paired.prior.REPO, check=True)
 
     paired.audit_training(out, rows)
     events = paired.fit._events(log)
-    assert events[0]["center_weight"] == CENTER_WEIGHT
-    penalties = []
-    for event in (e for e in events if e["event"] == "update"):
+    start = events[0]
+    assert start["center_weight"] == CENTER_WEIGHT
+    updates = [event for event in events if event["event"] == "update"]
+    if hinge_weight:
+        assert start["hinge_weight"] == hinge_weight and start["minimum_margin"] == minimum_margin
+        control_events = paired.fit._events(REFERENCES["centered"][0] / "train.log")
+        first = next(event for event in control_events if event["event"] == "update")
+        for key in ("rows", "target_ids", "center", "loss_a", "loss_b", "ce_loss"):
+            assert updates[0][key] == first[key], key
+    penalties, hinge_penalties = [], []
+    for event in updates:
         center = event["center"]
         b = mean((center["log_odds_a"], center["log_odds_b"]))
         assert math.isclose(center["mean_log_odds"], b, rel_tol=1e-6, abs_tol=1e-6)
@@ -88,10 +125,29 @@ def train(out, trainer, rows):
         assert math.isclose(center["penalty"], expected, abs_tol=1e-12)
         ce_loss = mean((event["loss_a"], event["loss_b"]))
         assert math.isclose(event["ce_loss"], ce_loss, abs_tol=1e-12)
-        assert math.isclose(event["loss"], ce_loss + expected, abs_tol=1e-12)
+        hinge_penalty = 0.0
+        if hinge_weight:
+            hinge = event["hinge"]
+            sign = 1 if event["target_ids"][0] == start["labels"]["X"] else -1
+            margin_a, margin_b = sign * center["log_odds_a"], -sign * center["log_odds_b"]
+            assert (hinge["margin_a"], hinge["margin_b"]) == (margin_a, margin_b)
+            gap = max(0.0, minimum_margin - min(margin_a, margin_b))
+            assert math.isclose(hinge["penalty"], hinge_weight * gap, rel_tol=1e-6, abs_tol=1e-7)
+            fraction_a = 0.5 if margin_a == margin_b else float(margin_a < margin_b)
+            assert hinge["scale_a"] == (-sign * hinge_weight * fraction_a if gap else 0.0)
+            assert hinge["scale_b"] == (sign * hinge_weight * (1 - fraction_a) if gap else 0.0)
+            hinge_penalty = hinge["penalty"]
+            hinge_penalties.append(hinge_penalty)
+        else:
+            assert event.get("hinge") is None
+        assert math.isclose(event["loss"], ce_loss + expected + hinge_penalty, rel_tol=0.0, abs_tol=1e-12)
         penalties.append(center["penalty"])
     assert len(penalties) == paired.UPDATES and any(p > 0 for p in penalties)
     print(f"Audited all {len(penalties)} centered losses; mean penalty {mean(penalties):.6f}", flush=True)
+    if hinge_weight:
+        active = sum(p > 0 for p in hinge_penalties)
+        print(f"Audited all paired hinges; active {active}/{len(updates)}, "
+              f"mean penalty {mean(hinge_penalties):.6f}", flush=True)
     return adapter
 
 
@@ -114,9 +170,11 @@ def train_scores(rows, schedule, raw):
     return dict(presentations=presentations, first_presentation=first)
 
 
-def evaluate(out, binary, adapter, views, controls, reference, rows):
+def evaluate(out, binary, adapter, views, controls, reference, rows, baseline):
     assert digest(adapter) == read(out / "training-audit.json")["adapter"]
-    expected = read(REFERENCE / "paired-logits.json")
+    reference_path = REFERENCES[baseline][0]
+    candidate = "centered_hinge" if baseline == "centered" else "centered"
+    expected = read(reference_path / f"{baseline}-logits.json")
     first = expected[views[0]["view"]]
     label_ids = (first["x_id"], first["y_id"])
     train_views = [dict(view="train/" + row["id"], prefix_tokens=row["prefix_tokens"],
@@ -124,17 +182,19 @@ def evaluate(out, binary, adapter, views, controls, reference, rows):
                    for row in rows]
     schedule = read(out / "schedule.json")
     comparisons, fitted = {}, {}
-    for arm, path in (("paired", REFERENCE / "adapter.bin"), ("centered", adapter)):
+    for arm, path in ((baseline, reference_path / "adapter.bin"), (candidate, adapter)):
         raw = paired.measure(binary, path, arm, views + train_views, out)
         assert {(o["x_id"], o["y_id"]) for o in raw.values()} == {label_ids}
-        if arm == "paired":
+        if arm == baseline:
             assert all(raw[key] == value for key, value in expected.items())
         keep(out / f"{arm}-logits.json", raw)
         annotated = [dict(v, archived={arm: paired.letter(raw[v["view"]], sampled=True)}) for v in views]
         comparisons[arm] = archive.analyze(annotated, controls, {arm: raw})[arm]
-        if arm == "paired":
-            assert comparisons[arm] == reference["holdout"]["paired"]
+        if arm == baseline:
+            assert comparisons[arm] == reference["holdout"][baseline]
         fitted[arm] = train_scores(rows, schedule, raw)
+        if arm == baseline == "centered":
+            assert fitted[arm] == reference["training_probe"][baseline]
         for wording in archive.ARCHIVES:
             score = comparisons[arm][wording]
             print(f"{arm} {wording}: full={score['full']}/6, "
@@ -144,9 +204,9 @@ def evaluate(out, binary, adapter, views, controls, reference, rows):
         return comparisons[arm][wording]["families"][family]["both_correct"]
 
     gains = [family for family, kind in archive.FAMILIES.items() if kind == "flip"
-             and all(correct("centered", w, family) for w in archive.ARCHIVES)
-             and not all(correct("paired", w, family) for w in archive.ARCHIVES)]
-    preserves = all(correct("centered", w, "outbox_pending_count") for w in archive.ARCHIVES)
+             and all(correct(candidate, w, family) for w in archive.ARCHIVES)
+             and not all(correct(baseline, w, family) for w in archive.ARCHIVES)]
+    preserves = all(correct(candidate, w, "outbox_pending_count") for w in archive.ARCHIVES)
     keep(out / "results.json", dict(
         protocol=digest(out / "protocol.json"), training=digest(out / "training-audit.json"),
         logits={arm: digest(out / f"{arm}-logits.json") for arm in comparisons},
@@ -160,13 +220,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trainer", type=Path)
     parser.add_argument("readout", type=Path)
-    parser.add_argument("--out", type=Path, default=OUT)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--hinge", action="store_true", help="add a paired hinge and compare against centered CE")
     args = parser.parse_args()
-    out, trainer, binary = args.out.resolve(), args.trainer.resolve(), args.readout.resolve()
-    views, controls, reference = freeze(out, trainer, binary)
+    baseline = "centered" if args.hinge else "paired"
+    out = (args.out or (HINGE_OUT if args.hinge else OUT)).resolve()
+    trainer, binary = args.trainer.resolve(), args.readout.resolve()
+    views, controls, reference = freeze(out, trainer, binary, baseline)
     rows = [json.loads(line) for line in (out / "train.jsonl").read_text().splitlines()]
     adapter = train(out, trainer, rows)
-    evaluate(out, binary, adapter, views, controls, reference, rows)
+    evaluate(out, binary, adapter, views, controls, reference, rows, baseline)
 
 
 if __name__ == "__main__":

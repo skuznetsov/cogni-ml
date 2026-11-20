@@ -2,6 +2,7 @@ require "digest/sha256"
 require "json"
 require "../../../../src/ml/gguf/qwen35_qlora"
 require "./choice_pair_center"
+require "./choice_pair_hinge"
 
 alias QLoRA = ML::GGUF::Qwen35QLoRA
 alias QChat = ML::GGUF::Qwen35Chat
@@ -9,9 +10,10 @@ alias QChat = ML::GGUF::Qwen35Chat
 class ML::GGUF::Qwen35QLoRA::Trainer
   # The two backward passes accumulate on the same factors. The two-class
   # completion head computes softplus(-margin) for each required sign.
-  def step_choice_pair(left : Example, right : Example, *, x_token : Int32, center_weight : Float32)
+  def step_choice_pair(left : Example, right : Example, *, x_token : Int32, center_weight : Float32,
+                       hinge_weight : Float32, minimum_margin : Float32)
     @model.projections.each(&.zero_grad)
-    if center_weight > 0_f32
+    if center_weight > 0_f32 || hinge_weight > 0_f32
       # Each layer retains only one tape. Read the right margin first, then
       # replay that forward after the left backward on the same factors.
       right_margin = @head.choice_margin_and_hidden_gradient(
@@ -19,14 +21,21 @@ class ML::GGUF::Qwen35QLoRA::Trainer
       left_hidden = @model.forward(left.input, retain_tape: true)
       left_readout = @head.choice_margin_and_hidden_gradient(left_hidden, left.first, x_token)
       center = ChoicePairCenter.calculate(left_readout[:margin], right_margin, center_weight)
-      left_loss = accumulate_choice_gradient(left, left_hidden, left_readout[:gradient], center[:scale])
+      scale_a = scale_b = center[:scale]
+      if hinge_weight > 0_f32
+        hinge = ChoicePairHinge.calculate(left_readout[:margin], right_margin,
+          left.targets.first == x_token, hinge_weight, minimum_margin)
+        scale_a += hinge[:scale_a]
+        scale_b += hinge[:scale_b]
+      end
+      left_loss = accumulate_choice_gradient(left, left_hidden, left_readout[:gradient], scale_a)
 
       right_hidden = @model.forward(right.input, retain_tape: true)
       right_readout = @head.choice_margin_and_hidden_gradient(right_hidden, right.first, x_token)
       unless right_readout[:margin].finite? && (right_readout[:margin] - right_margin).abs <= 1e-4_f32
         raise "QLoRA pair margin changed during forward replay"
       end
-      right_loss = accumulate_choice_gradient(right, right_hidden, right_readout[:gradient], center[:scale])
+      right_loss = accumulate_choice_gradient(right, right_hidden, right_readout[:gradient], scale_b)
     else
       left_loss = accumulate_choice_gradient(left, @model.forward(left.input, retain_tape: true))
       right_loss = accumulate_choice_gradient(right, @model.forward(right.input, retain_tape: true))
@@ -42,8 +51,8 @@ class ML::GGUF::Qwen35QLoRA::Trainer
       factor.to_unsafe.copy_from(param.data.cpu_data.not_nil!.to_unsafe, factor.size)
     end
     ce_loss = (left_loss + right_loss) * 0.5
-    {loss_a: left_loss, loss_b: right_loss, ce_loss: ce_loss, center: center,
-     loss: ce_loss + (center.try(&.[:penalty]) || 0.0)}
+    {loss_a: left_loss, loss_b: right_loss, ce_loss: ce_loss, center: center, hinge: hinge,
+     loss: ce_loss + (center.try(&.[:penalty]) || 0.0) + (hinge.try(&.[:penalty]) || 0.0)}
   end
 
   def verify_choice_pair_adam!(expected : Int32) : Nil
@@ -54,14 +63,14 @@ class ML::GGUF::Qwen35QLoRA::Trainer
   end
 
   private def accumulate_choice_gradient(example : Example, hidden : Array(Float32),
-                                         margin_gradient : Array(Float32)? = nil, center_scale : Float32 = 0_f32) : Float64
+                                         margin_gradient : Array(Float32)? = nil, margin_scale : Float32 = 0_f32) : Float64
     loss, gradient = @head.calculate(hidden, example.first, example.targets, backward: true)
     raise "nonfinite QLoRA choice loss" unless loss.finite?
     gradient.map! { |value| value * 0.5_f32 }
     if margin_gradient
       offset = example.first * @model.weights.hparams.n_embd
       margin_gradient.each_with_index do |value, index|
-        gradient[offset + index] += center_scale * value
+        gradient[offset + index] += margin_scale * value
       end
     end
     @model.backward(gradient)
@@ -109,10 +118,13 @@ module TrainChoicePairs
   end
 
   def run(model_path : String, initial : String, train_path : String, schedule_path : String,
-          output : String, center_weight : Float32) : Nil
+          output : String, center_weight : Float32, hinge_weight : Float32, minimum_margin : Float32) : Nil
     raise ArgumentError.new("adapter output already exists: #{output}") if File.exists?(output)
     unless center_weight.finite? && center_weight >= 0_f32
       raise ArgumentError.new("center weight must be nonnegative and finite")
+    end
+    unless hinge_weight.finite? && hinge_weight >= 0_f32 && minimum_margin.finite? && minimum_margin > 0_f32
+      raise ArgumentError.new("hinge weight must be nonnegative and the minimum margin must be positive and finite")
     end
     schedule = Array(Array(Int32)).from_json(File.read(schedule_path))
     rows = File.read_lines(train_path).map { |line| JSON.parse(line) }
@@ -132,7 +144,7 @@ module TrainChoicePairs
       event("start", model_sha256: model.digest, initial_sha256: File.open(initial) { |io| Digest::SHA256.hexdigest(io) },
         rank: QLoRA::RANK, blocks: model.layer_indices, projections: model.projections.size,
         updates: UPDATES, train_seed: TRAIN_SEED, learning_rate: LEARNING_RATE, labels: labels,
-        center_weight: center_weight)
+        center_weight: center_weight, hinge_weight: hinge_weight, minimum_margin: minimum_margin)
 
       # Repeated views share the frozen prefix. Materialize lazily to avoid
       # delaying the first update for the whole cohort.
@@ -143,7 +155,8 @@ module TrainChoicePairs
         unless left.targets.first != right.targets.first
           raise ArgumentError.new("each update requires opposite label targets")
         end
-        report = trainer.step_choice_pair(left, right, x_token: labels["X"], center_weight: center_weight)
+        report = trainer.step_choice_pair(left, right, x_token: labels["X"], center_weight: center_weight,
+          hinge_weight: hinge_weight, minimum_margin: minimum_margin)
         step = index + 1
         trainer.verify_choice_pair_adam!(step)
         event("update", **{step: step, rows: pair, target_ids: [left.targets.first, right.targets.first],
@@ -160,7 +173,8 @@ module TrainChoicePairs
   end
 end
 
-unless (5..6).includes?(ARGV.size)
-  abort "usage: train_choice_pairs MODEL TOOL_FOUR TRAIN_JSONL SCHEDULE_JSON OUTPUT_ADAPTER [CENTER_WEIGHT]"
+unless (5..8).includes?(ARGV.size)
+  abort "usage: train_choice_pairs MODEL TOOL_FOUR TRAIN_JSONL SCHEDULE_JSON OUTPUT_ADAPTER [CENTER_WEIGHT [HINGE_WEIGHT [MINIMUM_MARGIN]]]"
 end
-TrainChoicePairs.run(ARGV[0], ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5]?.try(&.to_f32) || 0_f32)
+TrainChoicePairs.run(ARGV[0], ARGV[1], ARGV[2], ARGV[3], ARGV[4],
+  ARGV[5]?.try(&.to_f32) || 0_f32, ARGV[6]?.try(&.to_f32) || 0_f32, ARGV[7]?.try(&.to_f32) || 0.5_f32)

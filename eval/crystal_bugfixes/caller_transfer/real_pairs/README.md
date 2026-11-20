@@ -110,3 +110,50 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
 ~~~
 
 Use a fresh `--out` directory for each repetition. The recorded run uses `real-choice-pairs-centered-v1-attempt2` beside the previous run.
+
+## Minimum correct margin ablation
+
+Both arms start from tool-four and use the same nine Crystal pairs, 50 Adam updates and 100 target tokens. The control uses the centered objective above. The new arm adds `0.5 * max(0, 0.5 - min(m_a, m_b))`, where each `m` is the logit of the correct letter minus the logit of the other letter in its context. Below the floor, the hinge gradient goes to the weaker side. Tied sides split it equally. Both correct margins must reach 0.5 logits for the hinge to vanish.
+
+The comparison replays the control on the 48 pinned holdout requests and 72 training views. The holdout settings remain 4,096 tokens and seed 101. Crystal recompiles and tests both lines in all six holdout variants. The transfer criterion still requires a correct flip for Cursor or Slot under both wordings and full-suite passes for both Outbox variants.
+
+### Ablation results
+
+The native run took 655.7 seconds and updated both Float32 factors in all 28 projections. Recomputing the CE, center and hinge terms from the logged margins verified the objective on all 50 batches. The first batch matched the centered control's logit differences and CE exactly. The hinge was active on 49 batches.
+
+On the 36 training presentations, correct choices on both sides rose from 17/36 to 19/36. Both margins reached 0.5 logits in 1/36 → 2/36. The first scheduled presentation of each distinct pair stayed at 5/9 correct. Mean separation increased from 0.114 to 0.152, and RMS pair center increased from 0.120 to 0.159.
+
+| Variant | Required sign | `X or Y` | `Y or X` | Crystal examples passed |
+|---|---:|---:|---:|---|
+| Cursor a | + | +0.04020 → +0.04371 | +0.01976 → +0.02443 | 4/4 |
+| Cursor b | − | +0.02749 → +0.03001 | +0.01098 → +0.01199 | 2/4. Both direction targets fail |
+| Slot a | + | +0.07428 → +0.08818 | +0.07089 → +0.08754 | 6/6 |
+| Slot b | − | +0.06870 → +0.07846 | +0.05675 → +0.06728 | 5/6. Last allocated slot regression fails |
+| Outbox a | + | +0.42604 → +0.50264 | +0.42761 → +0.52937 | 4/4 |
+| Outbox b | + | +0.46215 → +0.55528 | +0.45834 → +0.57604 | 4/4 |
+
+The table shows centered CE → centered CE with hinge. Each test count applies to both arms and both wordings. Cursor and Slot gained separation between contexts, while the preference for the canonical line increased in both contexts. Neither family met the flip criterion. Both Outbox cases passed all checks. Each arm and wording compiled 6/6 selected lines and passed 5/6 target groups, 5/6 regression groups and 4/6 full suites.
+
+First-token draws passed 14/24 full suites for both arms under `X or Y`. Under `Y or X`, the hinge arm gained one correct Outbox draw, moving from 13/24 to 14/24. Restricted argmax stayed at 16/24 and 14/24, respectively. Neither flip family had a complete correct pair in any matched single presentation by either scoring rule.
+
+The centered control reproduced all 120 archived records exactly. A fresh process reproduced all 48 holdout records for the hinge arm with the requests in reverse order. An independent scorer reconstructed the decisions from candidate text, raw logits, and Crystal exit statuses and test logs. The focused QLoRA specs passed 32 examples. This result covers the specified loss weights and margin floor on three synthetic holdout families at one seed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `2e34ac6455a12f79f1a9423294fd38cc9eba68b0b6d6af6f3fe8a99ac59ce6f9` |
+| Native training audit | `e217f5e07687ef3f9a6d96b9f862050f36fe81112d862f43c6371297e192f42e` |
+| Center and hinge adapter | `9a5c166dffdd5b93b6bbc604e211835d8435cd892aef8fa69b4833244f59fc6d` |
+| Results | `5b1c2649517d8a7234ce1d365fec047799a429ddb6c7149ab779d4ac43e14b05` |
+
+### Reproduce the ablation
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+crystal build eval/crystal_bugfixes/caller_transfer/real_pairs/train_choice_pairs.cr --release \
+  -o "$bins/train_centered_hinge" \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_centered_hinge" build/qlora/scale-2b/choice-first-token/readout --hinge
+~~~
+
+The driver pins the centered control from `real-choice-pairs-centered-v1-attempt2`. The default output directory is its sibling `real-choice-pairs-centered-hinge-v1`. Use `--out` with a fresh directory for another run.
