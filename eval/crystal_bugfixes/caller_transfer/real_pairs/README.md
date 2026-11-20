@@ -255,3 +255,48 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
 ~~~
 
 The default output directory is `real-choice-pairs-directed-hinge-center-1-v1` beside the `real-choice-pairs-directed-hinge-v1` control. Use `--out` with a fresh directory for another run.
+
+## Higher directed hinge weight at center weight one
+
+This ablation raises the multiplier of `max(0, 0.5 - s)` from 0.5 to 2.0. Both arms use `1.0 * b^2` and restart from tool-four with the same Qwen3.5-2B Q4_K_M model, nine pairs, 50 Adam updates and 100 target tokens. The driver pins the control and reuses the same native binaries. It compiles and tests both candidate lines on all six holdout variants and evaluates the same 48 requests at a 4,096-token cap and sampler seed 101.
+
+### Ablation results
+
+The native run took 753.1 seconds and updated both Float32 factors in all 28 projections. The first batch reproduced the control's margins, CE and center term exactly. The hinge contribution and its slopes were four times larger. Recomputing from the logged margins verified all 50 losses and hinge slopes. The hinge was active on 49/50 → 44/50 batches.
+
+On the 36 training presentations, mean separation rose from 0.045 to 0.216 and RMS center rose from 0.072 to 0.233. The number reaching the directed floor rose from 0/36 to 5/36. Both correct signs stayed at 16/36 overall and 4/9 on the first presentations of the nine pairs.
+
+| Family | Wording | Separation, 0.5 → 2.0 | Absolute center, 0.5 → 2.0 |
+|---|---|---:|---:|
+| Cursor | `X or Y` | +0.00280 → +0.01308 | 0.01398 → 0.06079 |
+| Cursor | `Y or X` | +0.00156 → +0.00898 | 0.00496 → 0.02881 |
+| Slot | `X or Y` | +0.00106 → +0.00463 | 0.04209 → 0.10800 |
+| Slot | `Y or X` | +0.00415 → +0.01212 | 0.03857 → 0.09408 |
+| Outbox | `X or Y` | −0.00668 → −0.02605 | 0.21053 → 0.73591 |
+| Outbox | `Y or X` | −0.00508 → −0.02484 | 0.21735 → 0.69936 |
+
+The flip slack `s - |b|` fell under both wordings for both flip families. The closest case was still Cursor under `Y or X`, where slack moved from −0.00340 to −0.01983. Both Outbox margins stayed positive. In each arm and wording, 6/6 selected lines compiled, 5/6 target groups passed, 5/6 regression groups passed and 4/6 full suites passed.
+
+Cursor a passed 4/4. Cursor b scored 2/4 with `left < right` and failed both direction targets. Slot a passed 6/6. Slot b scored 5/6 with `index < limit` and failed the last allocated slot regression. Both Outbox variants passed 4/4 with `pending_count > 0`.
+
+Single-prompt first-token draws passed 12/24 → 16/24 under `X or Y` and 12/24 → 14/24 under `Y or X`. All net gains came from Outbox, which rose from 4/8 to 8/8 and from 4/8 to 6/8, respectively. Restricted argmax held at 16/24 and 14/24. Cursor and Slot both scored 0/4 paired passes on matched single presentations under either scoring rule and either wording.
+
+The control reproduced all 120 archived records. A fresh native process reproduced all 48 new holdout records with the requests in reverse order. An independent scorer reconstructed the choices and outcomes from the displayed candidates, raw logits, Crystal exit statuses and test logs. The focused QLoRA specs passed 34 examples. The result covers the three pinned holdout families and one sampler seed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `ac9bcca88cd0419225191a72f71f8259b04dfcdde6fb527af1b4049f208f7682` |
+| Native training audit | `a19dd3c07fc313b694478130e35df3e362288b54b49013526f42801c2da8e012` |
+| Higher hinge weight adapter | `89ec9cde82a502823379a41bcb20aba6e8391e33a6dffee36d5596b80108cead` |
+| Results | `d4de912b7e7129d7a4b0770b016111e0d9bdd8e75bb405312dbd6cad64fd7d28` |
+
+### Reproduce the ablation
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_directed_hinge" build/qlora/scale-2b/choice-first-token/readout \
+  --directed-hinge-2-center-1
+~~~
+
+The default output directory is `real-choice-pairs-directed-hinge-2-center-1-v1` beside the `real-choice-pairs-directed-hinge-center-1-v1` control. Use `--out` with a fresh directory for another run.

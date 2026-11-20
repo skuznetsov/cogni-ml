@@ -19,11 +19,13 @@ OUT = paired.OUT.with_name("real-choice-pairs-centered-v1")
 HINGE_OUT = paired.OUT.with_name("real-choice-pairs-centered-hinge-v1")
 DIRECTED_OUT = paired.OUT.with_name("real-choice-pairs-directed-hinge-v1")
 DIRECTED_CENTER_ONE_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-center-1-v1")
+DIRECTED_HINGE_TWO_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-2-center-1-v1")
 CANDIDATES = {
     "paired": ("centered", OUT),
     "centered": ("centered_hinge", HINGE_OUT),
     "centered_hinge": ("directed_hinge", DIRECTED_OUT),
     "directed_hinge": ("directed_hinge_center_1", DIRECTED_CENTER_ONE_OUT),
+    "directed_hinge_center_1": ("directed_hinge_2_center_1", DIRECTED_HINGE_TWO_OUT),
 }
 REFERENCES = {
     "paired": (
@@ -45,6 +47,11 @@ REFERENCES = {
         DIRECTED_OUT,
         "79d688b3e4ff52f989e6256394a5804e879f4dad6cadeddeae8c393eff8ce89e",
         "0aba166d10b79deb6d56f72255706e39c74d37641dc5222c2b53ef506d326764",
+    ),
+    "directed_hinge_center_1": (
+        DIRECTED_CENTER_ONE_OUT,
+        "c6064a99a5792cc3377c5f54ac2e31c96810865726876bb4efc3d6284de14135",
+        "aef557d5dbbba1a67188a49d1106fa1e61f20db88fe9b82dc08efe0d2ce795ae",
     ),
 }
 CENTER_WEIGHT = 0.25
@@ -70,24 +77,27 @@ def freeze(out, trainer, binary, baseline):
     assert subprocess.check_output(["crystal", "--version"], text=True).strip() == protocol["crystal"]
 
     loss = "mean two-choice CE + center_weight * mean(logit(X) - logit(Y))^2 within each pair"
-    center_weight = 1.0 if baseline == "directed_hinge" else CENTER_WEIGHT
+    center_weight = CENTER_WEIGHT
     hinge_weight = 0.0
     hinge_mode = "minimum"
     reference_files = [reference / "adapter.bin", logits]
     if baseline != "paired":
-        assert protocol["center_weight"] == CENTER_WEIGHT
+        assert protocol["center_weight"] == (1.0 if baseline == "directed_hinge_center_1" else CENTER_WEIGHT)
         assert digest(reference / "train.log") == audit["log"]
         reference_files.append(reference / "train.log")
         hinge_weight = HINGE_WEIGHT
-        if baseline in ("centered_hinge", "directed_hinge"):
+        if baseline in ("centered_hinge", "directed_hinge", "directed_hinge_center_1"):
             assert protocol["hinge_weight"] == HINGE_WEIGHT and protocol["minimum_margin"] == MINIMUM_MARGIN
             hinge_mode = "difference"
             loss += " + hinge_weight * max(0, minimum_margin - (correct_margin_a + correct_margin_b) / 2)"
         else:
             loss += " + hinge_weight * max(0, minimum_margin - min(correct_margin_a, correct_margin_b))"
-    if baseline == "directed_hinge":
+    if baseline in ("directed_hinge", "directed_hinge_center_1"):
         assert protocol["hinge_mode"] == hinge_mode
         assert protocol["files"][str(trainer)] == digest(trainer)
+        center_weight = 1.0
+        if baseline == "directed_hinge_center_1":
+            hinge_weight = 2.0
 
     replaced = {"train", "run.py", "train_choice_pairs.cr", "choice_pair_hinge.cr", Path(__file__).name}
     shared = {path: sha for path, sha in protocol["files"].items()
@@ -150,19 +160,26 @@ def train(out, trainer, rows):
         assert start["hinge_weight"] == hinge_weight and start["minimum_margin"] == minimum_margin
         assert start.get("hinge_mode", "minimum") == hinge_mode
         control_events = paired.fit._events(REFERENCES[protocol["reference"]["arm"]][0] / "train.log")
+        control_start = control_events[0]
         first = next(event for event in control_events if event["event"] == "update")
         for key in ("rows", "target_ids", "loss_a", "loss_b", "ce_loss"):
             assert updates[0][key] == first[key], key
-        if center_weight == CENTER_WEIGHT:
+        if center_weight == control_start["center_weight"]:
             assert updates[0]["center"] == first["center"]
         else:
             center, reference_center = updates[0]["center"], first["center"]
             for key in ("log_odds_a", "log_odds_b", "mean_log_odds"):
                 assert center[key] == reference_center[key], key
-            ratio = center_weight / CENTER_WEIGHT
+            ratio = center_weight / control_start["center_weight"]
             assert center["penalty"] == ratio * reference_center["penalty"]
             assert math.isclose(center["scale"], ratio * reference_center["scale"], rel_tol=1e-6)
-            assert updates[0]["hinge"] == first["hinge"]
+        if control_start.get("hinge_weight", 0.0) and control_start.get("hinge_mode", "minimum") == hinge_mode:
+            hinge, reference_hinge = updates[0]["hinge"], first["hinge"]
+            ratio = hinge_weight / control_start["hinge_weight"]
+            for key in ("margin_a", "margin_b"):
+                assert hinge[key] == reference_hinge[key], key
+            for key in ("penalty", "scale_a", "scale_b"):
+                assert hinge[key] == ratio * reference_hinge[key], key
     penalties, hinge_penalties = [], []
     for event in updates:
         center = event["center"]
@@ -283,6 +300,8 @@ def main():
                             help="replace the minimum-margin hinge with a hinge on the directed difference")
     objectives.add_argument("--directed-hinge-center-1", dest="baseline", action="store_const",
                             const="directed_hinge", help="raise the directed-hinge center weight from 0.25 to 1.0")
+    objectives.add_argument("--directed-hinge-2-center-1", dest="baseline", action="store_const",
+                            const="directed_hinge_center_1", help="raise directed hinge weight to 2.0 at center weight 1.0")
     parser.set_defaults(baseline="paired")
     args = parser.parse_args()
     baseline = args.baseline
