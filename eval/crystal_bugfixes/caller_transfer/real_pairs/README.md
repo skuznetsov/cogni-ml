@@ -60,3 +60,53 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run.py "$bins/train"
 ~~~
 
 The default output directory is `build/qlora/scale-2b/own-vs-peer-v1/diagnostics/helper-truth-training-v1/real-choice-pairs-v1`. The recorded run uses the sibling directory `real-choice-pairs-v1-attempt2`. Use `--out` with a fresh directory for another run. The run keeps the frozen train rows, schedule, protocol, candidate test logs, adapter, native training audit and per-presentation holdout readouts.
+
+## Pair center ablation
+
+The follow-up restarts from tool-four and replays the exact 50-update schedule from `real-choice-pairs-v1-attempt2`. The only objective change is adding `0.25 * ((d(a) + d(b)) / 2)^2` to the mean choice CE. Both differences `d` use `logit(X) - logit(Y)` regardless of which letter is correct. The derivative with respect to either difference is `0.25 * (d(a) + d(b)) / 2`. One extra forward obtains both differences before either backward pass. The trainer accumulates both gradients and updates Adam once per pair.
+
+The holdout reuses all 48 pinned requests at 4K and sampling seed 101. The comparison uses a fresh readout of the archived paired CE adapter and a fresh Crystal replay of both candidate lines in every holdout variant. For a pair of canonical-line scores `s_a` and `s_b`, the center is `(s_a + s_b) / 2` and the separation is `(s_a - s_b) / 2`. A correct flip requires separation greater than the absolute center. Outbox must retain a positive score on both sides. The driver also measures both adapters on all 36 training presentations.
+
+### Ablation results
+
+The native run completed 50 Adam updates and supervised 100 first tokens in 672.3 seconds. Both Float32 factors changed in all 28 projections. The first attempt stopped after a Float32 rounding discrepancy in the reported penalty. The recorded run restarted from tool-four with the penalty value computed in Float64 and Float32 gradients. Recomputing the two CE terms from the fixed-orientation margins verified the objective on all 50 batches. The first CE terms matched the control exactly.
+
+Across the 36 training presentations, RMS pair center fell from 0.685 to 0.120 and mean separation fell from 1.000 to 0.114. Both correct signs occurred in 20/36 presentations with paired CE and 17/36 with the added penalty. The corresponding first-presentation counts were 6/9 and 5/9.
+
+All holdout scores below are paired CE → centered CE. Each test count applies to both adapters and both wordings.
+
+| Variant | Required sign | `X or Y` | `Y or X` | Crystal examples passed |
+|---|---:|---:|---:|---|
+| Cursor a | + | +0.1845 → +0.0402 | +0.0925 → +0.0198 | 4/4 |
+| Cursor b | − | +0.0989 → +0.0275 | +0.0273 → +0.0110 | 2/4. Both direction targets fail |
+| Slot a | + | +0.2361 → +0.0743 | +0.1861 → +0.0709 | 6/6 |
+| Slot b | − | +0.2009 → +0.0687 | +0.1193 → +0.0568 | 5/6. Last allocated slot regression fails |
+| Outbox a | + | +2.1276 → +0.4260 | +2.1700 → +0.4276 | 4/4 |
+| Outbox b | + | +2.4030 → +0.4621 | +2.5027 → +0.4583 | 4/4 |
+
+The transfer criterion was unmet for both wordings. Both adapters compiled 6/6 selected lines and passed 5/6 target groups, 5/6 regression groups, and 4/6 full suites. Cursor and Slot each had a smaller center and separation, with both scores still positive. Outbox kept both full-suite passes. Single-presentation first-token draws produced 16/24 → 14/24 full passes under `X or Y` and 14/24 → 13/24 under `Y or X`. Restricted argmax full passes were 16/24 → 16/24 and 15/24 → 14/24. Neither flip family had a complete correct pair on any matched single presentation under either scoring rule.
+
+The current paired CE adapter exactly reproduced its archived 48 holdout and 18 training-probe readouts. A fresh process reproduced the centered adapter's 48 holdout readouts exactly in reversed request order. An independent replay derived choices from the displayed candidate text, raw logits, Crystal exit statuses, and test logs. The focused QLoRA spec run passed 30 examples. These measurements cover candidate selection on three pinned synthetic holdout families at one sampler seed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `2a183b65c62f8063738fa74ee11f0483ed666f18a95dea3434615aacffc6c2ce` |
+| Native training audit | `657ab1c16ad8eb38987953a8015227edcddf7e9f6ab63c53a288a93015a18a78` |
+| Centered adapter | `39dddfe8db8baf5950d37dc833bd7a6495b60493b6721d7934ed5a53c207c678` |
+| Results | `8b2be0f9419c3c8111713e8363354787a58ae439919e5fb8f4da7539af718cae` |
+
+### Reproduce the ablation
+
+Build an updated trainer and use the exact archived `choice-first-token/readout` binary from the original run. The driver checks the original protocol, adapter, training rows, schedule, scoring fixtures and readout hashes before training.
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+crystal build eval/crystal_bugfixes/caller_transfer/real_pairs/train_choice_pairs.cr --release \
+  -o "$bins/train_centered_replay" \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_centered_replay" build/qlora/scale-2b/choice-first-token/readout \
+  --out "$bins/centered-replay"
+~~~
+
+Use a fresh `--out` directory for each repetition. The recorded run uses `real-choice-pairs-centered-v1-attempt2` beside the previous run.
