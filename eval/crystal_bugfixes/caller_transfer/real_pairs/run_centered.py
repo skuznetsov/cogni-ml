@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 from shutil import copyfile
 from statistics import mean
+from struct import pack, unpack
 import subprocess
 
 import run as paired
@@ -16,6 +17,12 @@ archive = paired.archive
 digest, keep, read = paired.digest, paired.keep, paired.read
 OUT = paired.OUT.with_name("real-choice-pairs-centered-v1")
 HINGE_OUT = paired.OUT.with_name("real-choice-pairs-centered-hinge-v1")
+DIRECTED_OUT = paired.OUT.with_name("real-choice-pairs-directed-hinge-v1")
+CANDIDATES = {
+    "paired": ("centered", OUT),
+    "centered": ("centered_hinge", HINGE_OUT),
+    "centered_hinge": ("directed_hinge", DIRECTED_OUT),
+}
 REFERENCES = {
     "paired": (
         paired.OUT.with_name("real-choice-pairs-v1-attempt2"),
@@ -26,6 +33,11 @@ REFERENCES = {
         OUT.with_name("real-choice-pairs-centered-v1-attempt2"),
         "2a183b65c62f8063738fa74ee11f0483ed666f18a95dea3434615aacffc6c2ce",
         "8b2be0f9419c3c8111713e8363354787a58ae439919e5fb8f4da7539af718cae",
+    ),
+    "centered_hinge": (
+        HINGE_OUT,
+        "2e34ac6455a12f79f1a9423294fd38cc9eba68b0b6d6af6f3fe8a99ac59ce6f9",
+        "5b1c2649517d8a7234ce1d365fec047799a429ddb6c7149ab779d4ac43e14b05",
     ),
 }
 CENTER_WEIGHT = 0.25
@@ -52,15 +64,21 @@ def freeze(out, trainer, binary, baseline):
 
     loss = "mean two-choice CE + center_weight * mean(logit(X) - logit(Y))^2 within each pair"
     hinge_weight = 0.0
+    hinge_mode = "minimum"
     reference_files = [reference / "adapter.bin", logits]
-    if baseline == "centered":
+    if baseline != "paired":
         assert protocol["center_weight"] == CENTER_WEIGHT
         assert digest(reference / "train.log") == audit["log"]
         reference_files.append(reference / "train.log")
         hinge_weight = HINGE_WEIGHT
-        loss += " + hinge_weight * max(0, minimum_margin - min(correct_margin_a, correct_margin_b))"
+        if baseline == "centered_hinge":
+            assert protocol["hinge_weight"] == HINGE_WEIGHT and protocol["minimum_margin"] == MINIMUM_MARGIN
+            hinge_mode = "difference"
+            loss += " + hinge_weight * max(0, minimum_margin - (correct_margin_a + correct_margin_b) / 2)"
+        else:
+            loss += " + hinge_weight * max(0, minimum_margin - min(correct_margin_a, correct_margin_b))"
 
-    replaced = {"train", "run.py", "train_choice_pairs.cr", Path(__file__).name}
+    replaced = {"train", "run.py", "train_choice_pairs.cr", "choice_pair_hinge.cr", Path(__file__).name}
     shared = {path: sha for path, sha in protocol["files"].items()
               if Path(path).name not in replaced}
     for path, sha in shared.items():
@@ -85,21 +103,28 @@ def freeze(out, trainer, binary, baseline):
         protocol, files={**shared, **{str(path): digest(path) for path in files}},
         reference=dict(arm=baseline, protocol=protocol_sha, results=results_sha, adapter=audit["adapter"]),
         loss=loss, center_weight=CENTER_WEIGHT, hinge_weight=hinge_weight, minimum_margin=MINIMUM_MARGIN,
-        criterion=paired.CRITERION,
+        hinge_mode=hinge_mode, criterion=paired.CRITERION,
     ))
     print(f"Froze nine pairs and the exact 50-batch schedule; rebuilt all {2 * len(cases)} holdout candidates", flush=True)
     return views, controls, results
 
 
+def float32(value):
+    return unpack("<f", pack("<f", value))[0]
+
+
 def train(out, trainer, rows):
     protocol = paired.verify_inputs(out)
     hinge_weight, minimum_margin = protocol["hinge_weight"], protocol["minimum_margin"]
+    hinge_mode = protocol["hinge_mode"]
     adapter, log = out / "adapter.bin", out / "train.log"
     command = [trainer, paired.MODEL, paired.INITIAL, out / "train.jsonl", out / "schedule.json",
                adapter, str(CENTER_WEIGHT)]
     if hinge_weight:
         command += [str(hinge_weight), str(minimum_margin)]
-    print(f"Native training with center weight {CENTER_WEIGHT}, hinge weight {hinge_weight}; live log {log}",
+        if hinge_mode == "difference":
+            command.append(hinge_mode)
+    print(f"Native training with center weight {CENTER_WEIGHT}, {hinge_mode} hinge weight {hinge_weight}; live log {log}",
           flush=True)
     with log.open("x") as stream:
         subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, cwd=paired.prior.REPO, check=True)
@@ -111,7 +136,8 @@ def train(out, trainer, rows):
     updates = [event for event in events if event["event"] == "update"]
     if hinge_weight:
         assert start["hinge_weight"] == hinge_weight and start["minimum_margin"] == minimum_margin
-        control_events = paired.fit._events(REFERENCES["centered"][0] / "train.log")
+        assert start.get("hinge_mode", "minimum") == hinge_mode
+        control_events = paired.fit._events(REFERENCES[protocol["reference"]["arm"]][0] / "train.log")
         first = next(event for event in control_events if event["event"] == "update")
         for key in ("rows", "target_ids", "center", "loss_a", "loss_b", "ce_loss"):
             assert updates[0][key] == first[key], key
@@ -131,9 +157,15 @@ def train(out, trainer, rows):
             sign = 1 if event["target_ids"][0] == start["labels"]["X"] else -1
             margin_a, margin_b = sign * center["log_odds_a"], -sign * center["log_odds_b"]
             assert (hinge["margin_a"], hinge["margin_b"]) == (margin_a, margin_b)
-            gap = max(0.0, minimum_margin - min(margin_a, margin_b))
-            assert math.isclose(hinge["penalty"], hinge_weight * gap, rel_tol=1e-6, abs_tol=1e-7)
-            fraction_a = 0.5 if margin_a == margin_b else float(margin_a < margin_b)
+            a, b = float32(margin_a), float32(margin_b)
+            if hinge_mode == "difference":
+                score = float32((a + b) / 2)
+                fraction_a = 0.5
+            else:
+                score = min(a, b)
+                fraction_a = 0.5 if a == b else float(a < b)
+            gap = max(0.0, float32(minimum_margin - score))
+            assert hinge["penalty"] == hinge_weight * gap
             assert hinge["scale_a"] == (-sign * hinge_weight * fraction_a if gap else 0.0)
             assert hinge["scale_b"] == (sign * hinge_weight * (1 - fraction_a) if gap else 0.0)
             hinge_penalty = hinge["penalty"]
@@ -173,7 +205,7 @@ def train_scores(rows, schedule, raw):
 def evaluate(out, binary, adapter, views, controls, reference, rows, baseline):
     assert digest(adapter) == read(out / "training-audit.json")["adapter"]
     reference_path = REFERENCES[baseline][0]
-    candidate = "centered_hinge" if baseline == "centered" else "centered"
+    candidate, _ = CANDIDATES[baseline]
     expected = read(reference_path / f"{baseline}-logits.json")
     first = expected[views[0]["view"]]
     label_ids = (first["x_id"], first["y_id"])
@@ -193,7 +225,8 @@ def evaluate(out, binary, adapter, views, controls, reference, rows, baseline):
         if arm == baseline:
             assert comparisons[arm] == reference["holdout"][baseline]
         fitted[arm] = train_scores(rows, schedule, raw)
-        if arm == baseline == "centered":
+        if arm == baseline and baseline != "paired":
+            assert raw.keys() == expected.keys()
             assert fitted[arm] == reference["training_probe"][baseline]
         for wording in archive.ARCHIVES:
             score = comparisons[arm][wording]
@@ -221,10 +254,16 @@ def main():
     parser.add_argument("trainer", type=Path)
     parser.add_argument("readout", type=Path)
     parser.add_argument("--out", type=Path)
-    parser.add_argument("--hinge", action="store_true", help="add a paired hinge and compare against centered CE")
+    objectives = parser.add_mutually_exclusive_group()
+    objectives.add_argument("--hinge", dest="baseline", action="store_const", const="centered",
+                            help="add a paired minimum-margin hinge and compare against centered CE")
+    objectives.add_argument("--directed-hinge", dest="baseline", action="store_const", const="centered_hinge",
+                            help="replace the minimum-margin hinge with a hinge on the directed difference")
+    parser.set_defaults(baseline="paired")
     args = parser.parse_args()
-    baseline = "centered" if args.hinge else "paired"
-    out = (args.out or (HINGE_OUT if args.hinge else OUT)).resolve()
+    baseline = args.baseline
+    _, default_out = CANDIDATES[baseline]
+    out = (args.out or default_out).resolve()
     trainer, binary = args.trainer.resolve(), args.readout.resolve()
     views, controls, reference = freeze(out, trainer, binary, baseline)
     rows = [json.loads(line) for line in (out / "train.jsonl").read_text().splitlines()]

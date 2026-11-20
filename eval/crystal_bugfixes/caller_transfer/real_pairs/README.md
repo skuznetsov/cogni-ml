@@ -157,3 +157,52 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
 ~~~
 
 The driver pins the centered control from `real-choice-pairs-centered-v1-attempt2`. The default output directory is its sibling `real-choice-pairs-centered-hinge-v1`. Use `--out` with a fresh directory for another run.
+
+## Directed log-odds difference ablation
+
+Both arms start from tool-four and use the same nine pairs, 50 Adam updates and 100 target tokens. For each pair let `d_a` and `d_b` be the X-minus-Y logit differences in the two contexts, and let `t` be +1 when X is correct in the first context and −1 when Y is correct. Write `s = t * (d_a - d_b) / 2` and `b = (d_a + d_b) / 2`. Both arms use the same choice CE and `0.25 * b^2` center penalty. The minimum-margin control adds `0.5 * max(0, 0.5 - (s - abs(b)))`. The new arm adds `0.5 * max(0, 0.5 - s)`.
+
+The normalized difference keeps both hinge values equal at a zero center. Its 0.5-logit floor is equivalent to a 1.0-logit floor on the full directed difference. An active hinge adds equal and opposite slopes to the two raw logit differences. Both sides choose correctly only when `s > abs(b)`, so reaching the directed floor still allows a wrong leader when the center is large.
+
+The driver replays the minimum-margin control on the 48 pinned holdout requests and 72 training views. It rebuilds and tests both candidates for each of the six holdout variants. Evaluation stays at 4,096 tokens and seed 101. The transfer criterion requires a new complete flip for Cursor or Slot under both wordings and full-suite passes for both Outbox variants.
+
+### Ablation results
+
+The native training run took 675.4 seconds and updated both Float32 factors in all 28 projections. The first-batch CE and logit differences matched the control exactly. An independent calculation from the recorded logit differences reproduced the loss and the hinge slopes for all 50 updates. The directed hinge was active on 41/50 batches. In two of the nine inactive batches one side still ranked the wrong line first before the update.
+
+On the 36 training presentations, mean separation rose from 0.152 to 0.243 and the number meeting the directed floor increased from 3/36 to 6/36. RMS pair center increased from 0.159 to 0.254. Both correct signs occurred in 19/36 → 18/36, and both correct margins reached 0.5 logits in 2/36 → 3/36. The first scheduled presentations scored 5/9 → 4/9.
+
+| Variant | Required sign | `X or Y` | `Y or X` | Crystal examples passed |
+|---|---:|---:|---:|---|
+| Cursor a | + | +0.04371 → +0.07909 | +0.02443 → +0.04013 | 4/4 |
+| Cursor b | − | +0.03001 → +0.05180 | +0.01199 → +0.01943 | 2/4. Both direction targets fail |
+| Slot a | + | +0.08818 → +0.11918 | +0.08754 → +0.11140 | 6/6 |
+| Slot b | − | +0.07846 → +0.10893 | +0.06728 → +0.08502 | 5/6. Last allocated slot regression fails |
+| Outbox a | + | +0.50264 → +0.77815 | +0.52937 → +0.74070 | 4/4 |
+| Outbox b | + | +0.55528 → +0.84252 | +0.57604 → +0.80116 | 4/4 |
+
+The table shows minimum-margin hinge → directed-difference hinge. The test counts apply to both arms and wordings. Cursor and Slot gained separation, and their centers increased by more than their separation did. Their variant b scores moved further above zero. Outbox kept both full-suite passes. Each arm and wording compiled 6/6 selected lines and passed 5/6 target groups, 5/6 regression groups and 4/6 full suites. The transfer criterion was unmet.
+
+First-token draws passed 14/24 → 16/24 under `X or Y` and 14/24 → 14/24 under `Y or X`. The `X or Y` draws gained one pass on each Outbox variant. One Slot a draw gained a pass and one Slot b draw lost a pass. Restricted argmax passed 16/24 → 15/24 and 14/24 → 14/24, respectively. Neither flip family achieved both correct choices in any matched single presentation by either scoring rule.
+
+The minimum-margin control reproduced all 120 archived records exactly. A fresh process reproduced all 48 directed hinge holdout records with the requests in reverse order. An independent scorer reconstructed the holdout from the displayed code, raw logits, Crystal exit statuses and test logs. The focused QLoRA specs passed 34 examples. The measurements cover ranking the supplied lines on three synthetic holdout families at one seed with the specified loss weights and floor.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `79d688b3e4ff52f989e6256394a5804e879f4dad6cadeddeae8c393eff8ce89e` |
+| Native training audit | `51a6daf21393e3371b4a47107c664466db96eb4bc38c0f0bc35fb3f737989b66` |
+| Directed hinge adapter | `93726831eca4c0b05157d5f08a5b4f0182e4a52c43b44a5db6ab8898dcfc7df9` |
+| Results | `0aba166d10b79deb6d56f72255706e39c74d37641dc5222c2b53ef506d326764` |
+
+### Reproduce the ablation
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+crystal build eval/crystal_bugfixes/caller_transfer/real_pairs/train_choice_pairs.cr --release \
+  -o "$bins/train_directed_hinge" \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_directed_hinge" build/qlora/scale-2b/choice-first-token/readout --directed-hinge
+~~~
+
+The control comes from `real-choice-pairs-centered-hinge-v1`. The default output directory is its sibling `real-choice-pairs-directed-hinge-v1`. Use `--out` with a fresh directory for another run.

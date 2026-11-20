@@ -11,7 +11,7 @@ class ML::GGUF::Qwen35QLoRA::Trainer
   # The two backward passes accumulate on the same factors. The two-class
   # completion head computes softplus(-margin) for each required sign.
   def step_choice_pair(left : Example, right : Example, *, x_token : Int32, center_weight : Float32,
-                       hinge_weight : Float32, minimum_margin : Float32)
+                       hinge_weight : Float32, minimum_margin : Float32, hinge_on_difference : Bool)
     @model.projections.each(&.zero_grad)
     if center_weight > 0_f32 || hinge_weight > 0_f32
       # Each layer retains only one tape. Read the right margin first, then
@@ -24,7 +24,7 @@ class ML::GGUF::Qwen35QLoRA::Trainer
       scale_a = scale_b = center[:scale]
       if hinge_weight > 0_f32
         hinge = ChoicePairHinge.calculate(left_readout[:margin], right_margin,
-          left.targets.first == x_token, hinge_weight, minimum_margin)
+          left.targets.first == x_token, hinge_weight, minimum_margin, on_difference: hinge_on_difference)
         scale_a += hinge[:scale_a]
         scale_b += hinge[:scale_b]
       end
@@ -118,7 +118,8 @@ module TrainChoicePairs
   end
 
   def run(model_path : String, initial : String, train_path : String, schedule_path : String,
-          output : String, center_weight : Float32, hinge_weight : Float32, minimum_margin : Float32) : Nil
+          output : String, center_weight : Float32, hinge_weight : Float32, minimum_margin : Float32,
+          hinge_mode : String) : Nil
     raise ArgumentError.new("adapter output already exists: #{output}") if File.exists?(output)
     unless center_weight.finite? && center_weight >= 0_f32
       raise ArgumentError.new("center weight must be nonnegative and finite")
@@ -126,6 +127,10 @@ module TrainChoicePairs
     unless hinge_weight.finite? && hinge_weight >= 0_f32 && minimum_margin.finite? && minimum_margin > 0_f32
       raise ArgumentError.new("hinge weight must be nonnegative and the minimum margin must be positive and finite")
     end
+    unless {"minimum", "difference"}.includes?(hinge_mode)
+      raise ArgumentError.new("hinge mode must be minimum or difference")
+    end
+    hinge_on_difference = hinge_mode == "difference"
     schedule = Array(Array(Int32)).from_json(File.read(schedule_path))
     rows = File.read_lines(train_path).map { |line| JSON.parse(line) }
     unless schedule.size == UPDATES &&
@@ -144,7 +149,8 @@ module TrainChoicePairs
       event("start", model_sha256: model.digest, initial_sha256: File.open(initial) { |io| Digest::SHA256.hexdigest(io) },
         rank: QLoRA::RANK, blocks: model.layer_indices, projections: model.projections.size,
         updates: UPDATES, train_seed: TRAIN_SEED, learning_rate: LEARNING_RATE, labels: labels,
-        center_weight: center_weight, hinge_weight: hinge_weight, minimum_margin: minimum_margin)
+        center_weight: center_weight, hinge_weight: hinge_weight, minimum_margin: minimum_margin,
+        hinge_mode: hinge_mode)
 
       # Repeated views share the frozen prefix. Materialize lazily to avoid
       # delaying the first update for the whole cohort.
@@ -156,7 +162,7 @@ module TrainChoicePairs
           raise ArgumentError.new("each update requires opposite label targets")
         end
         report = trainer.step_choice_pair(left, right, x_token: labels["X"], center_weight: center_weight,
-          hinge_weight: hinge_weight, minimum_margin: minimum_margin)
+          hinge_weight: hinge_weight, minimum_margin: minimum_margin, hinge_on_difference: hinge_on_difference)
         step = index + 1
         trainer.verify_choice_pair_adam!(step)
         event("update", **{step: step, rows: pair, target_ids: [left.targets.first, right.targets.first],
@@ -173,8 +179,9 @@ module TrainChoicePairs
   end
 end
 
-unless (5..8).includes?(ARGV.size)
-  abort "usage: train_choice_pairs MODEL TOOL_FOUR TRAIN_JSONL SCHEDULE_JSON OUTPUT_ADAPTER [CENTER_WEIGHT [HINGE_WEIGHT [MINIMUM_MARGIN]]]"
+unless (5..9).includes?(ARGV.size)
+  abort "usage: train_choice_pairs MODEL TOOL_FOUR TRAIN_JSONL SCHEDULE_JSON OUTPUT_ADAPTER [CENTER_WEIGHT [HINGE_WEIGHT [MINIMUM_MARGIN [HINGE_MODE]]]]"
 end
 TrainChoicePairs.run(ARGV[0], ARGV[1], ARGV[2], ARGV[3], ARGV[4],
-  ARGV[5]?.try(&.to_f32) || 0_f32, ARGV[6]?.try(&.to_f32) || 0_f32, ARGV[7]?.try(&.to_f32) || 0.5_f32)
+  ARGV[5]?.try(&.to_f32) || 0_f32, ARGV[6]?.try(&.to_f32) || 0_f32, ARGV[7]?.try(&.to_f32) || 0.5_f32,
+  ARGV[8]? || "minimum")
