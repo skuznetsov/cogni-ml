@@ -1,0 +1,194 @@
+[
+  {
+    "id": "nomic_m5_operation_policy",
+    "history": "Accepted runtime repair b846b5babe3061f6c56961441156609cc7d909cb changed Nomic's matrix GEMM/MoE automatic policy from excluding M5 Max to admitting Apple M-series devices, while adding a separate matrix-attention policy that remains disabled on M5 Max pending validation. The extracts reduce each policy's auto branch to its actual device predicate.",
+    "historical_edit": {
+      "revision": "b846b5babe3061f6c56961441156609cc7d909cb",
+      "path": "src/ml/gguf/nomic_metal_policy.cr",
+      "removed": "!device_name.starts_with?(\"Apple M5 Max\")",
+      "added": "device_name.starts_with?(\"Apple M\")"
+    },
+    "candidates": [
+      "device_name.starts_with?(\"Apple M\")",
+      "!device_name.starts_with?(\"Apple M5 Max\")"
+    ],
+    "variants": [
+      {
+        "issue": "The caller is the matrix GEMM/MoE route after its kernel repair. Determine automatic admission on the present device while retaining explicit operator overrides.",
+        "template": "def simdgroup_matrix_enabled?(device_name : String, override : String?) : Bool\n  case override.try(&.strip.downcase)\n  when nil, \"\", \"auto\"\n    <HOLE>\n  when \"1\", \"on\", \"true\"\n    true\n  when \"0\", \"off\", \"false\"\n    false\n  else\n    raise ArgumentError.new(\"override must be auto, on, or off\")\n  end\nend\n\nenabled = simdgroup_matrix_enabled?(\"Apple M5 Max\", nil)",
+        "target": "raise \"matrix GEMM route was not admitted\" unless enabled",
+        "regressions": "raise \"M2 Max should be admitted\" unless simdgroup_matrix_enabled?(\"Apple M2 Max\", nil)\nraise \"Intel should remain outside auto admission\" if simdgroup_matrix_enabled?(\"Intel GPU\", nil)\nraise \"explicit on override was ignored\" unless simdgroup_matrix_enabled?(\"Intel GPU\", \"on\")\nraise \"explicit off override was ignored\" if simdgroup_matrix_enabled?(\"Apple M2 Max\", \"off\")",
+        "source": {
+          "revision": "b846b5babe3061f6c56961441156609cc7d909cb",
+          "path": "src/ml/gguf/nomic_metal_policy.cr",
+          "anchor": "    def self.simdgroup_matrix_enabled?(device_name : String, override : String? = nil) : Bool\n      case override.try(&.strip.downcase)\n      when nil, \"\", \"auto\"\n        device_name.starts_with?(\"Apple M\")"
+        }
+      },
+      {
+        "issue": "The caller is the separate matrix-attention route. Its M5 Max tile path remains unqualified, although the same device has a repaired matrix GEMM route. Preserve explicit operator overrides.",
+        "template": "def matrix_attention_enabled?(device_name : String, override : String?) : Bool\n  case override.try(&.strip.downcase)\n  when nil, \"\", \"auto\"\n    <HOLE>\n  when \"1\", \"on\", \"true\"\n    true\n  when \"0\", \"off\", \"false\"\n    false\n  else\n    raise ArgumentError.new(\"override must be auto, on, or off\")\n  end\nend\n\nenabled = matrix_attention_enabled?(\"Apple M5 Max\", nil)",
+        "target": "raise \"matrix attention must remain disabled on M5 Max\" if enabled",
+        "regressions": "raise \"M2 Max should remain admitted\" unless matrix_attention_enabled?(\"Apple M2 Max\", nil)\nraise \"explicit on override was ignored\" unless matrix_attention_enabled?(\"Apple M5 Max\", \"on\")\nraise \"explicit off override was ignored\" if matrix_attention_enabled?(\"Apple M2 Max\", \"off\")",
+        "source": {
+          "revision": "b846b5babe3061f6c56961441156609cc7d909cb",
+          "path": "src/ml/gguf/nomic_metal_policy.cr",
+          "anchor": "    def self.matrix_attention_enabled?(device_name : String, override : String? = nil) : Bool\n      case override.try(&.strip.downcase)\n      when nil, \"\", \"auto\"\n        !device_name.starts_with?(\"Apple M5 Max\")"
+        }
+      }
+    ]
+  },
+  {
+    "id": "qwen_terminal_cache_vs_continuation",
+    "history": "Accepted route extraction a9e19147c763b9ad2abca823563e6526c8f5c3f5 defines terminal direct-output certificates versus state restoration for continuation. Follow-up repair 260f5a634cabc54bbbbb995c505ae4297291df77 added a validated source-history output fallback for terminal cache misses while preserving state restore for continuation-required requests. The fragments isolate the distinct terminal and continuation route results.",
+    "historical_edit": {
+      "revision": "260f5a634cabc54bbbbb995c505ae4297291df77",
+      "path": "src/ml/gguf/qwen35_serving_route.cr",
+      "removed": "      cached_prefix_tokens = full_history_tokens[0, exact_entry.prefix_len]\n      replay = store.restore_and_replay_suffix(",
+      "added": "      unless continuation_required\n        return Result.new(SOURCE_HISTORY_DIRECT_FALLBACK, output_token_ids.dup, prompt_token_count, nil)\n      end\n\n      cached_prefix_tokens = full_history_tokens[0, exact_entry.prefix_len]\n      replay = store.restore_and_replay_suffix("
+    },
+    "candidates": [
+      "SOURCE_HISTORY_DIRECT_FALLBACK",
+      "STATE_FAST_FORWARD_CONTINUATION"
+    ],
+    "variants": [
+      {
+        "issue": "This cached span is terminal: the caller consumes the validated output IDs and will not request another token from this runtime state. Select the result route that preserves the terminal contract.",
+        "template": "SOURCE_HISTORY_DIRECT_FALLBACK = \"source_history_direct_output_fallback\"\nSTATE_FAST_FORWARD_CONTINUATION = \"state_fast_forward_continuation\"\noutput_token_ids = [31, 32, 33]\ncontinuation_required = false\nif continuation_required\n  route = STATE_FAST_FORWARD_CONTINUATION\nelse\n  route = <HOLE>\nend",
+        "target": "raise \"terminal cache route mismatch\" unless route == \"source_history_direct_output_fallback\"",
+        "regressions": "raise \"cached output IDs changed\" unless output_token_ids == [31, 32, 33]\nraise \"terminal request unexpectedly requires continuation\" if continuation_required",
+        "source": {
+          "revision": "260f5a634cabc54bbbbb995c505ae4297291df77",
+          "path": "src/ml/gguf/qwen35_serving_route.cr",
+          "anchor": "      unless continuation_required\n        return Result.new(SOURCE_HISTORY_DIRECT_FALLBACK, output_token_ids.dup, prompt_token_count, nil)\n      end\n\n      cached_prefix_tokens = full_history_tokens[0, exact_entry.prefix_len]\n      replay = store.restore_and_replay_suffix("
+        }
+      },
+      {
+        "issue": "This cached span feeds another generation request that must continue from the exact recurrent/KV boundary. Output IDs alone do not establish the next-token state. Select the result route that preserves the continuation contract.",
+        "template": "SOURCE_HISTORY_DIRECT_FALLBACK = \"source_history_direct_output_fallback\"\nSTATE_FAST_FORWARD_CONTINUATION = \"state_fast_forward_continuation\"\noutput_token_ids = [31, 32, 33]\ncontinuation_required = true\nif continuation_required\n  route = <HOLE>\nelse\n  route = SOURCE_HISTORY_DIRECT_FALLBACK\nend",
+        "target": "raise \"continuation route mismatch\" unless route == \"state_fast_forward_continuation\"",
+        "regressions": "raise \"cached output IDs changed\" unless output_token_ids == [31, 32, 33]\nraise \"continuation request was lost\" unless continuation_required",
+        "source": {
+          "revision": "260f5a634cabc54bbbbb995c505ae4297291df77",
+          "path": "src/ml/gguf/qwen35_serving_route.cr",
+          "anchor": "      replay = store.restore_and_replay_suffix(\n        exact_entry,\n        weights,\n        cached_prefix_tokens,"
+        }
+      }
+    ]
+  },
+  {
+    "id": "gguf_metadata_only_vs_tensor_reader",
+    "history": "Accepted reader repair 4217730f7dd98050faa0efc6b26ecd40f6cf7bd9 added the opt-in mmap_tensors switch. The Qwen chat-template inspection call in spec/qwen35_chat_spec.cr opts out and asserts there is no mmap; Qwen35Weights.from_gguf in src/ml/gguf/qwen35_weights.cr uses the default because the mmap backs retained QuantWeight.raw views. The extracts rename these two callers as inspect_chat_template_metadata and load_qwen_model_weights and return the actual reader directly. Each candidate runs the real reader against a generated one-tensor GGUF fixture.",
+    "historical_edit": {
+      "revision": "4217730f7dd98050faa0efc6b26ecd40f6cf7bd9",
+      "path": "src/ml/gguf/reader.cr",
+      "removed": "    def initialize(@path)",
+      "added": "    def initialize(@path, *, mmap_tensors : Bool = true)"
+    },
+    "candidates": [
+      "mmap_tensors: false",
+      "mmap_tensors: true"
+    ],
+    "variants": [
+      {
+        "issue": "This caller inspects GGUF metadata and the chat template only; it does not consume tensor bytes. Avoid mapping the complete model file while preserving metadata access.",
+        "template": "path = \"/tmp/cogni-runtime-pair-#{Process.pid}.gguf\"\nwrite_fixture(path)\ndef inspect_chat_template_metadata(path : String)\n  ML::GGUF::GGUFFile.new(path, <HOLE>)\nend\ngguf = inspect_chat_template_metadata(path)\nat_exit do\n  gguf.close\n  File.delete(path) if File.exists?(path)\nend",
+        "target": "raise \"metadata-only reader unexpectedly mapped the file\" unless gguf.mmap_region.nil?",
+        "regressions": "tensor = gguf.tensor(\"x\").not_nil!\nraise \"metadata reader could not read tensor data on demand\" unless gguf.read_tensor_raw(tensor).to_a == [0_u8, 0_u8, 128_u8, 63_u8]",
+        "source": {
+          "revision": "4217730f7dd98050faa0efc6b26ecd40f6cf7bd9",
+          "path": "spec/qwen35_chat_spec.cr",
+          "anchor": "    qwen38_gguf = ML::GGUF::GGUFFile.new(QWEN_38_27B_CHAT, mmap_tensors: false)\n    qwen38_gguf.mmap_region.should be_nil\n    qwen38 = ML::GGUF::Qwen35Tokenizer.from_gguf(qwen38_gguf, QWEN_38_27B_CHAT)"
+        },
+        "setup": "require \"src/ml/gguf/reader\"\n\ndef write_fixture(path : String) : Nil\n  io = IO::Memory.new\n  io << \"GGUF\"\n  io.write_bytes(3_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_u64, IO::ByteFormat::LittleEndian)\n  io << \"x\"\n  io.write_bytes(1_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_u64, IO::ByteFormat::LittleEndian)\n  io << (\"\\0\" * ((32 - io.pos % 32) % 32).to_i)\n  io.write_bytes(1.0_f32, IO::ByteFormat::LittleEndian)\n  File.write(path, String.new(io.to_slice))\nend"
+      },
+      {
+        "issue": "This caller loads model tensor weights from GGUF and uses zero-copy tensor views. Keep the reader's tensor-mapping capability available for the duration of the load.",
+        "template": "path = \"/tmp/cogni-runtime-pair-#{Process.pid}.gguf\"\nwrite_fixture(path)\ndef load_qwen_model_weights(path : String)\n  ML::GGUF::GGUFFile.new(path, <HOLE>)\nend\ngguf = load_qwen_model_weights(path)\nat_exit do\n  gguf.close\n  File.delete(path) if File.exists?(path)\nend",
+        "target": "raise \"tensor consumer did not retain its mmap region\" if gguf.mmap_region.nil?",
+        "regressions": "tensor = gguf.tensor(\"x\").not_nil!\nraise \"mapped tensor bytes changed\" unless gguf.read_tensor_raw(tensor).to_a == [0_u8, 0_u8, 128_u8, 63_u8]",
+        "source": {
+          "revision": "4217730f7dd98050faa0efc6b26ecd40f6cf7bd9",
+          "path": "src/ml/gguf/qwen35_weights.cr",
+          "anchor": "    def self.from_gguf(path : String) : Qwen35Weights\n      g = GGUFFile.new(path)\n      begin\n        hp = Qwen35Hparams.new(g)\n        # Do NOT close `g` on success \u2014 the mmap backs every QuantWeight.raw;\n        # Qwen35Weights keeps a reference to it for its lifetime.\n        Qwen35Weights.new(g, hp)"
+        },
+        "setup": "require \"src/ml/gguf/reader\"\n\ndef write_fixture(path : String) : Nil\n  io = IO::Memory.new\n  io << \"GGUF\"\n  io.write_bytes(3_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_u64, IO::ByteFormat::LittleEndian)\n  io << \"x\"\n  io.write_bytes(1_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(1_i64, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_u32, IO::ByteFormat::LittleEndian)\n  io.write_bytes(0_u64, IO::ByteFormat::LittleEndian)\n  io << (\"\\0\" * ((32 - io.pos % 32) % 32).to_i)\n  io.write_bytes(1.0_f32, IO::ByteFormat::LittleEndian)\n  File.write(path, String.new(io.to_slice))\nend"
+      }
+    ]
+  },
+  {
+    "id": "qwen_tokenizer_bos_backend",
+    "history": "Accepted native tokenizer change 2aa3fc18d394379988c4024ac7ee6c3b1fd34c86 uses the in-process BPE path only when no BOS token is required and retains the external tokenizer otherwise. Follow-up correctness fix 7eca90ef6153064b01daedf6cc2c7abec98274bd added GGUF special-token partitioning so native encoding preserves Qwen chat markers. The extracts substitute deterministic local backends but keep the production routing contract.",
+    "historical_edit": {
+      "revision": "2aa3fc18d394379988c4024ac7ee6c3b1fd34c86",
+      "path": "src/ml/gguf/qwen35_tokenizer.cr",
+      "removed": "      bin = @llama_tokenize_bin\n      raise \"encode: llama_tokenize_bin not configured (pass to from_gguf)\" if bin.empty?",
+      "added": "      should_add_bos = (add_bos_override == true) || (add_bos_override.nil? && @add_bos)\n      if ENV[\"QWEN35_NATIVE_TOKENIZER_OFF\"]? != \"1\" && !should_add_bos && native_encoder_available?\n        return encode_native(text)\n      end\n\n      encode_external(text, add_bos_override: add_bos_override)"
+    },
+    "candidates": [
+      "tokenizer.encode_native(text)",
+      "tokenizer.encode_external(text, add_bos_override: add_bos_override)"
+    ],
+    "variants": [
+      {
+        "issue": "Native vocabulary and merge data are available, and this request explicitly disables a leading BOS token. Preserve both token IDs and the in-process request path.",
+        "template": "class TinyTokenizer\n  getter route : Symbol?\n  getter native_calls : Int32\n  getter external_calls : Int32\n\n  def initialize\n    @route = nil.as(Symbol?)\n    @native_calls = 0\n    @external_calls = 0\n  end\n\n  def encode_native(text : String) : Array(Int32)\n    @route = :native\n    @native_calls += 1\n    [11, 12]\n  end\n\n  def encode_external(text : String, *, add_bos_override : Bool? = nil) : Array(Int32)\n    @route = :external\n    @external_calls += 1\n    ids = [11, 12]\n    ids.unshift(1) if add_bos_override == true\n    ids\n  end\nend\n\ntokenizer = TinyTokenizer.new\ntext = \"hello\"\nadd_bos_override = false\nids = <HOLE>",
+        "target": "raise \"no-BOS token IDs changed\" unless ids == [11, 12]\nraise \"native fast path was not selected\" unless tokenizer.route == :native",
+        "regressions": "raise \"unexpected external subprocess path\" unless tokenizer.external_calls == 0\nraise \"native backend was not called once\" unless tokenizer.native_calls == 1",
+        "source": {
+          "revision": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+          "path": "src/ml/gguf/qwen35_tokenizer.cr",
+          "anchor": "      should_add_bos = (add_bos_override == true) || (add_bos_override.nil? && @add_bos)\n      if ENV[\"QWEN35_NATIVE_TOKENIZER_OFF\"]? != \"1\" && !should_add_bos && native_encoder_available?\n        return encode_native(text)\n      end\n\n      encode_external(text, add_bos_override: add_bos_override)"
+        }
+      },
+      {
+        "issue": "This request must include the BOS token configured by its caller. The native encoder's contract is limited to inputs that do not need BOS insertion; keep the token sequence complete.",
+        "template": "class TinyTokenizer\n  getter route : Symbol?\n  getter native_calls : Int32\n  getter external_calls : Int32\n\n  def initialize\n    @route = nil.as(Symbol?)\n    @native_calls = 0\n    @external_calls = 0\n  end\n\n  def encode_native(text : String) : Array(Int32)\n    @route = :native\n    @native_calls += 1\n    [11, 12]\n  end\n\n  def encode_external(text : String, *, add_bos_override : Bool? = nil) : Array(Int32)\n    @route = :external\n    @external_calls += 1\n    ids = [11, 12]\n    ids.unshift(1) if add_bos_override == true\n    ids\n  end\nend\n\ntokenizer = TinyTokenizer.new\ntext = \"hello\"\nadd_bos_override = true\nids = <HOLE>",
+        "target": "raise \"configured BOS token is missing\" unless ids == [1, 11, 12]\nraise \"BOS-capable path was not selected\" unless tokenizer.route == :external",
+        "regressions": "raise \"token payload changed\" unless ids[-2, 2] == [11, 12]\nraise \"external backend was not called once\" unless tokenizer.external_calls == 1",
+        "source": {
+          "revision": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+          "path": "src/ml/gguf/qwen35_tokenizer.cr",
+          "anchor": "      args = [\"-m\", @model_path, \"-p\", text, \"--ids\", \"--log-disable\"]\n      args << \"--no-bos\" if (add_bos_override == false) || (add_bos_override.nil? && !@add_bos)\n\n      stdout = IO::Memory.new"
+        }
+      }
+    ]
+  },
+  {
+    "id": "qwen_special_token_vs_normal_bpe",
+    "history": "Accepted fix 7eca90ef6153064b01daedf6cc2c7abec98274bd reads tokenizer.ggml.token_type and partitions GGUF unknown/control/user-defined tokens before normal BPE. It also preserves recognized markers as integer token IDs while sending ordinary text fragments through the native BPE encoder. The extracts isolate those two actual fragment-handler branches.",
+    "historical_edit": {
+      "revision": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+      "path": "src/ml/gguf/qwen35_tokenizer.cr",
+      "removed": "      text.scan(QWEN35_PRETOKENIZER) do |match|",
+      "added": "      partition_special_tokens(text).each do |fragment|\n        case fragment\n        when Int32\n          ids << fragment\n        when String\n          encode_native_text(fragment, ids)\n        end\n      end"
+    },
+    "candidates": [
+      "[token_id]",
+      "bpe(piece)"
+    ],
+    "variants": [
+      {
+        "issue": "GGUF marks this entry as a control token at a Qwen chat boundary. Preserve the model's token identity through this branch.",
+        "template": "def bpe(piece : String) : Array(Int32)\n  piece.chars.map { |char| char.ord.to_i32 }\nend\n\ntoken_type = 3\ntoken_id = 400\npiece = \"<\" + \"|im_start|>\"\nencoded = if {2, 3, 4}.includes?(token_type)\n  <HOLE>\nelse\n  bpe(piece)\nend",
+        "target": "raise \"control token identity was lost\" unless encoded == [400]",
+        "regressions": "raise \"BPE regression\" unless bpe(\"xy\") == [120, 121]\nraise \"unexpected empty control spelling\" if piece.empty?",
+        "source": {
+          "revision": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+          "path": "src/ml/gguf/qwen35_tokenizer.cr",
+          "anchor": "        token_type = @token_types[id]? || 0\n        # GGML token types: 2=unknown, 3=control, 4=user-defined. llama.cpp\n        # partitions these pieces before running the model pre-tokenizer.\n        if token_type == 2 || token_type == 3 || token_type == 4\n          @special_tokens << {piece, id.to_i32} unless piece.empty?"
+        }
+      },
+      {
+        "issue": "GGUF marks this entry as a normal vocabulary token. Keep it on the regular text-encoding branch so BPE merges remain available.",
+        "template": "def bpe(piece : String) : Array(Int32)\n  piece.chars.map { |char| char.ord.to_i32 }\nend\n\ntoken_type = 1\ntoken_id = 400\npiece = \"hello\"\nencoded = if {2, 3, 4}.includes?(token_type)\n  [token_id]\nelse\n  <HOLE>\nend",
+        "target": "raise \"ordinary token bypassed BPE\" unless encoded == [104, 101, 108, 108, 111]",
+        "regressions": "raise \"BPE regression\" unless bpe(\"xy\") == [120, 121]\nraise \"normal token ID is invalid\" unless token_id == 400",
+        "source": {
+          "revision": "7eca90ef6153064b01daedf6cc2c7abec98274bd",
+          "path": "src/ml/gguf/qwen35_tokenizer.cr",
+          "anchor": "        when Int32\n          ids << fragment\n        when String\n          encode_native_text(fragment, ids)\n        end"
+        }
+      }
+    ]
+  }
+]

@@ -1,0 +1,34 @@
+[
+  {
+    "id": "ngram-tail-regime",
+    "history": "82e91f66d4c4733f2b53429a3f49870526fab19b adds the structured medium-tail branch and a regression on a 14-token tail. The same method retains the existing long period-eight shortcut. These excerpts isolate the two guards, pass the precomputed statistics or period to the guard, and return false when it does not apply. The medium-tail target uses the token sequence from the added regression.",
+    "candidates": [
+      "ids.size < min_size",
+      "ids.size >= min_size"
+    ],
+    "variants": [
+      {
+        "issue": "This is the extra speculative-decoding risk rule for medium chunks. It covers at least 12 tokens, before the long-chunk policy applies, and requires a full suffix match.",
+        "template": "def risky_medium_tail?(ids : Array(Int32), min_size : Int32, match_len : Int32,\n                       pair_unique : Float64, entropy : Float64, lag4 : Float64, lag8 : Float64) : Bool\n  if ids.size >= 12 && <HOLE> && match_len >= 8\n    return pair_unique >= 0.95 && entropy >= 0.80 && lag4 < 0.10 && lag8 < 0.10\n  end\n  false\nend",
+        "target": "ids = [198, 220, 471, 850, 25, 221, 17, 199, 262, 803, 26, 8029, 869, 320]\nraise \"missed structured medium tail\" unless risky_medium_tail?(ids, 16, 8, 1.0, 0.99, 0.0, 0.0)",
+        "regressions": "ids = (1..14).to_a\nraise \"admitted a short match\" if risky_medium_tail?(ids, 16, 7, 1.0, 0.99, 0.0, 0.0)\nraise \"admitted strong lag reuse\" if risky_medium_tail?(ids, 16, 8, 1.0, 0.99, 0.5, 0.0)\nraise \"used the medium rule at the long boundary\" if risky_medium_tail?((1..16).to_a, 16, 8, 1.0, 0.99, 0.0, 0.0)",
+        "source": {
+          "revision": "82e91f66d4c4733f2b53429a3f49870526fab19b",
+          "path": "src/ml/gguf/ngram_draft.cr",
+          "anchor": "      if ids.size >= 12 && ids.size < min_size && match_len >= 8\n        return true if pair_unique_ratio(ids) >= 0.95 &&\n                       entropy_norm(ids) >= 0.80 &&\n                       lag_ratio(ids, 4) < 0.10 &&\n                       lag_ratio(ids, 8) < 0.10\n      end"
+        }
+      },
+      {
+        "issue": "This is the period-eight shortcut for long speculative-decoding chunks. The configured minimum is the first long size. Short repeats use a separate policy with more checks.",
+        "template": "def risky_long_period?(ids : Array(Int32), min_size : Int32, period : Int32) : Bool\n  return true if <HOLE> && period == 8\n  false\nend",
+        "target": "period8 = (1..8).to_a\nraise \"missed a long repeat at the boundary\" unless risky_long_period?(period8 + period8, 16, 8)",
+        "regressions": "period8 = (1..8).to_a\nraise \"applied the long shortcut to a short repeat\" if risky_long_period?(period8 + period8.first(6), 16, 8)\nraise \"admitted a different period\" if risky_long_period?([1, 2, 3, 4] * 4, 16, 4)\nraise \"admitted an aperiodic tail\" if risky_long_period?((1..20).to_a, 16, 0)",
+        "source": {
+          "revision": "82e91f66d4c4733f2b53429a3f49870526fab19b",
+          "path": "src/ml/gguf/ngram_draft.cr",
+          "anchor": "      period = exact_period(ids, 8)\n      return true if ids.size >= min_size && period == 8"
+        }
+      }
+    ]
+  }
+]

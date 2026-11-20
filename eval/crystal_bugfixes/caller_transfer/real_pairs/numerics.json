@@ -1,0 +1,108 @@
+[
+  {
+    "id": "tensor-strides-contiguous-vs-transpose",
+    "history": "Commit 989940a3799226b06fe13ef2307043398f6367e2 added row-major strides, transpose views, and logical row-major materialization to Crystal tensors. The fragments adapt Tensor#transpose plus the logical gather into a 2D address helper: variant 0 stores a contiguous [2,3] matrix, while variant 1 presents a transpose view over a contiguous [3,2] backing array. Names and the stride tuple are reduced to rows/columns and a flat Float64 array.",
+    "candidates": [
+      "offset = row * cols + col",
+      "offset = col * rows + row"
+    ],
+    "variants": [
+      {
+        "issue": "Read coordinates from a contiguous two-row, three-column tensor. The logical rows are [1, 2, 3] and [4, 5, 6].",
+        "template": "def contiguous_value_at(data : Array(Float64), rows : Int32, cols : Int32, row : Int32, col : Int32) : Float64\n  <HOLE>\n  data[offset]\nend",
+        "target": "data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nraise \"target coordinate mismatch\" unless contiguous_value_at(data, 2, 3, 1, 2) == 6.0",
+        "regressions": "data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nexpected = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nexpected.each_with_index do |value, index|\n  raise \"row-major read mismatch\" unless contiguous_value_at(data, 2, 3, index // 3, index % 3) == value\nend",
+        "source": {
+          "revision": "989940a3799226b06fe13ef2307043398f6367e2",
+          "path": "src/ml/core/shape.cr",
+          "anchor": "      if contiguous\n        # Row-major (C-style) strides\n        stride = 1_i64\n        (@ndim - 1).downto(0) do |i|\n          if stride > Int32::MAX\n            raise ArgumentError.new(\n              \"Shape contiguous stride overflow at dimension #{i}: #{stride}\"\n            )\n          end\n          @strides[i] = stride.to_i32\n          stride *= shape.dims[i]\n        end\n      end"
+        }
+      },
+      {
+        "issue": "Read coordinates from a transpose view whose backing storage is a contiguous three-row, two-column matrix [1, 2, 3, 4, 5, 6]. The view has two rows and three columns with the original strides swapped.",
+        "template": "def transpose_view_value_at(data : Array(Float64), rows : Int32, cols : Int32, row : Int32, col : Int32) : Float64\n  <HOLE>\n  data[offset]\nend",
+        "target": "data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nraise \"target coordinate mismatch\" unless transpose_view_value_at(data, 2, 3, 0, 1) == 3.0",
+        "regressions": "data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nexpected = [1.0, 3.0, 5.0, 2.0, 4.0, 6.0]\nexpected.each_with_index do |value, index|\n  raise \"transpose read mismatch\" unless transpose_view_value_at(data, 2, 3, index // 3, index % 3) == value\nend",
+        "source": {
+          "revision": "989940a3799226b06fe13ef2307043398f6367e2",
+          "path": "src/ml/core/tensor.cr",
+          "anchor": "    # Transpose (swap last two dims)\n    def transpose : Tensor\n      raise ArgumentError.new(\"transpose requires at least 2D tensor\") unless @shape.ndim >= 2\n\n      new_shape = ShapeOps.transpose_shape(@shape)\n      new_strides_arr = @strides.to_a\n      new_strides_arr[-1], new_strides_arr[-2] = new_strides_arr[-2], new_strides_arr[-1]\n\n      Tensor.new(\n        new_shape,\n        Strides.new(new_strides_arr),\n        @dtype,\n        @device,\n        @buffer,\n        @cpu_data\n      )\n    end"
+        }
+      }
+    ]
+  },
+  {
+    "id": "normalization-centering-contract",
+    "history": "Commit 989940a3799226b06fe13ef2307043398f6367e2 added separate CPU LayerNorm and RMSNorm APIs. The fragment factors their shared row scaling into one helper and removes affine weight/bias plumbing: the historical LayerNorm path subtracts the row mean, while RMSNorm accumulates raw squares. This tests that real API-contract split with synthetic rows.",
+    "candidates": [
+      "mean = total / values.size",
+      "mean = 0.0_f64"
+    ],
+    "variants": [
+      {
+        "issue": "This row operation must be invariant to adding the same constant to every feature. Its normalized coordinates must have zero mean and unit population variance.",
+        "template": "def layer_norm(values : Array(Float64)) : Array(Float64)\n  total = values.sum\n  <HOLE>\n  variance = values.sum { |value| (value - mean) ** 2 } / values.size\n  scale = Math.sqrt(variance)\n  values.map { |value| (value - mean) / scale }\nend\n\ndef close?(left : Float64, right : Float64) : Bool\n  (left - right).abs < 1e-12\nend",
+        "target": "result = layer_norm([1.0, 3.0, 5.0])\nraise \"normalized row mean is not zero\" unless result.sum.abs < 1e-12\nraise \"normalized row variance is not one\" unless close?(result.sum { |value| value * value } / 3.0, 1.0)",
+        "regressions": "base = layer_norm([1.0, 3.0, 5.0])\nshifted = layer_norm([4.0, 6.0, 8.0])\nraise \"constant shift changed the normalized row\" unless base.zip(shifted).all? { |left, right| close?(left, right) }",
+        "source": {
+          "revision": "989940a3799226b06fe13ef2307043398f6367e2",
+          "path": "src/ml/ops/normalization.cr",
+          "anchor": "      sum = 0.0_f64\n      norm_size.times { |index| sum += input_read[offset + index].to_f64 }\n      mean = sum / norm_size.to_f64\n\n      squared_deviation = 0.0_f64\n      norm_size.times do |index|\n        difference = input_read[offset + index].to_f64 - mean\n        squared_deviation += difference * difference\n      end"
+        }
+      },
+      {
+        "issue": "This caller normalizes by absolute row magnitude. For the supplied row, compute x divided by sqrt(mean(x squared)); preserve offsets instead of forcing the output to zero mean.",
+        "template": "def rms_norm(values : Array(Float64)) : Array(Float64)\n  total = values.sum\n  <HOLE>\n  variance = values.sum { |value| (value - mean) ** 2 } / values.size\n  scale = Math.sqrt(variance)\n  values.map { |value| (value - mean) / scale }\nend\n\ndef close?(left : Float64, right : Float64) : Bool\n  (left - right).abs < 1e-12\nend",
+        "target": "result = rms_norm([1.0, 3.0])\nraise \"first RMS-normalized value mismatch\" unless close?(result[0], 1.0 / Math.sqrt(5.0))\nraise \"second RMS-normalized value mismatch\" unless close?(result[1], 3.0 / Math.sqrt(5.0))",
+        "regressions": "base = rms_norm([1.0, 3.0])\nscaled = rms_norm([2.0, 6.0])\nraise \"positive rescaling changed RMS-normalized values\" unless base.zip(scaled).all? { |left, right| close?(left, right) }\nshifted = rms_norm([2.0, 4.0])\nraise \"constant offset was incorrectly discarded\" if base.zip(shifted).all? { |left, right| close?(left, right) }",
+        "source": {
+          "revision": "989940a3799226b06fe13ef2307043398f6367e2",
+          "path": "src/ml/ops/normalization.cr",
+          "anchor": "      sum_squares = 0.0_f64\n      dim.times do |index|\n        value = input_read[offset + index].to_f64\n        sum_squares += value * value\n      end\n      scale_f64 = 1.0 / Math.sqrt(sum_squares / dim.to_f64 + eps.to_f64)\n      inv_rms[batch] = scale_f64.to_f32"
+        }
+      }
+    ]
+  },
+  {
+    "id": "qwen3vl-query-vs-key-head-count",
+    "history": "Accepted fix fce5cb0515cc9622058fc9ae5640f1b170179345 extracted Q/K normalization and shape checks into a shared routine. Its real caller branches use config.heads for Q and config.kv_heads for K. The prompt fragments isolate the Q and K checks inside the actual normalize_qk helper, trim the sibling argument from each signature, and rename token_count/config to compact local arguments; they do not claim that the historical fix changed the head-count fields.",
+    "candidates": [
+      "expected = tokens * heads * head_dim",
+      "expected = tokens * kv_heads * head_dim"
+    ],
+    "variants": [
+      {
+        "issue": "This buffer contains projected Q values for 3 tokens, 4 query heads, 2 key/value heads, and head width 2. Check its flattened shape against the caller contract.",
+        "template": "def normalize_qk(q : Array(Float32), tokens : Int32, heads : Int32, kv_heads : Int32, head_dim : Int32) : Bool\n  <HOLE>\n  q.size == expected\nend",
+        "target": "q = Array(Float32).new(24, 0.0_f32)\nraise \"valid Q projection rejected\" unless normalize_qk(q, 3, 4, 2, 2)",
+        "regressions": "q = Array(Float32).new(24, 0.0_f32)\nq_one_token = Array(Float32).new(8, 0.0_f32)\nwrong_width = Array(Float32).new(12, 0.0_f32)\nraise \"Q width changed across token rows\" unless normalize_qk(q_one_token, 1, 4, 2, 2)\nraise \"undersized Q projection accepted\" if normalize_qk(wrong_width, 3, 4, 2, 2)",
+        "source": {
+          "revision": "fce5cb0515cc9622058fc9ae5640f1b170179345",
+          "path": "src/ml/gguf/qwen3vl_text_block.cr",
+          "anchor": "      expected_q = token_count * config.heads * config.head_dim\n      expected_k = token_count * config.kv_heads * config.head_dim\n      raise ArgumentError.new(\"Q projection shape mismatch\") unless q.size == expected_q\n      raise ArgumentError.new(\"K projection shape mismatch\") unless k.size == expected_k"
+        },
+        "historical_edit": {
+          "revision": "fce5cb0515cc9622058fc9ae5640f1b170179345",
+          "path": "src/ml/gguf/qwen3vl_text_block.cr",
+          "added": "      expected_q = token_count * config.heads * config.head_dim"
+        }
+      },
+      {
+        "issue": "This buffer contains projected K values for 3 tokens, 4 query heads, 2 key/value heads, and head width 2. Check its flattened shape against the caller contract.",
+        "template": "def normalize_qk(k : Array(Float32), tokens : Int32, heads : Int32, kv_heads : Int32, head_dim : Int32) : Bool\n  <HOLE>\n  k.size == expected\nend",
+        "target": "k = Array(Float32).new(12, 0.0_f32)\nraise \"valid K projection rejected\" unless normalize_qk(k, 3, 4, 2, 2)",
+        "regressions": "k = Array(Float32).new(12, 0.0_f32)\nk_one_token = Array(Float32).new(4, 0.0_f32)\nwrong_width = Array(Float32).new(24, 0.0_f32)\nraise \"K width changed across token rows\" unless normalize_qk(k_one_token, 1, 4, 2, 2)\nraise \"oversized K projection accepted\" if normalize_qk(wrong_width, 3, 4, 2, 2)",
+        "source": {
+          "revision": "fce5cb0515cc9622058fc9ae5640f1b170179345",
+          "path": "src/ml/gguf/qwen3vl_text_block.cr",
+          "anchor": "      expected_q = token_count * config.heads * config.head_dim\n      expected_k = token_count * config.kv_heads * config.head_dim\n      raise ArgumentError.new(\"Q projection shape mismatch\") unless q.size == expected_q\n      raise ArgumentError.new(\"K projection shape mismatch\") unless k.size == expected_k"
+        },
+        "historical_edit": {
+          "revision": "fce5cb0515cc9622058fc9ae5640f1b170179345",
+          "path": "src/ml/gguf/qwen3vl_text_block.cr",
+          "added": "      expected_k = token_count * config.kv_heads * config.head_dim"
+        }
+      }
+    ]
+  }
+]
