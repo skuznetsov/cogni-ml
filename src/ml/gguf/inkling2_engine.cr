@@ -365,6 +365,10 @@ module ML::GGUF
     end
 
     private def moe(layer : Inkling2LayerWeights, input : Array(Float32)) : Array(Float32)
+      if result = @matmul.try_moe(layer, input, config)
+        return result
+      end
+
       experts = Inkling2Math.route(@matmul.multiply(layer.router, input), layer.router_bias, config.n_expert_used, config.expert_scale)
       activated = @matmul.multiply_many(experts.map { |id, _| {layer.gate_up.expert(id), input} })
       width = config.expert_dim

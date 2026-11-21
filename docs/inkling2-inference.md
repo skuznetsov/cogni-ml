@@ -3,8 +3,12 @@
 The native Crystal engine supports the [Inkling 2 Mini IQ4_NL GGUF](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF)
 and the [TML-d24-varloop-research IQ4_NL GGUF](https://huggingface.co/ggml-org/TML-d24-varloop-research-GGUF).
 It runs one text sequence at a time. On Apple Silicon it reads quantized
-projections from the mapped GGUF through Metal. Attention, residual mixing,
-routing, convolution, and sequence state run on the CPU.
+projections from the mapped GGUF through Metal. For IQ4_NL and Q8_0 experts,
+Metal runs sigmoid routing, the selected experts' projections, SiTU, and
+the weighted reduction in one command buffer per layer visit. An engine
+reuses the same GPU workspace across prompt tokens, generated tokens, and
+core passes. Attention, residual mixing, convolution, and sequence state
+run on the CPU. Prefill uses the same token-by-token engine as generation.
 
 ```sh
 make build/inkling2_generate
@@ -61,6 +65,31 @@ The GGUF layout uses IQ4_NL for the early routed experts, Q8_0 for dense
 projections and the last four layers' experts, and F32 for the loop controllers
 and router. The loader checks loop metadata and tensor layout and extents
 before decode.
+
+## Native Metal MoE comparison
+
+On an Apple M2 Max with the research checkpoint, the Metal MoE path matched
+the native engine at `9fdba2dd` on all 256 top-ranked tokens. The comparison
+replayed the same token histories and checked all 200,058 float32 logits at
+each sampled position. The largest absolute logit difference was `6.99e-5`.
+
+Both builds warmed the first 16 prompt tokens and reset the sequence before
+timing prefill and 31 decode steps separately. The table gives the median of
+three runs per depth for the 46-token story prompt and one run per depth for
+the 188-token six-hop lookup prompt. The host had background CPU load during
+these runs.
+
+| Prompt tokens | Passes | Prefill before → after (tok/s) | Decode before → after (tok/s) |
+| --- | ---: | ---: | ---: |
+| 46 | 3 | 6.78 → 6.55 | 5.32 → 5.15 |
+| 46 | 10 | 1.77 → 2.10 | 1.63 → 1.85 |
+| 188 | 3 | 4.13 → 5.27 | 3.49 → 3.81 |
+| 188 | 10 | 1.33 → 1.55 | 1.16 → 1.24 |
+
+A separate eight-token decode trace counted 337 → 241 synchronous Metal
+submissions per token at 3 passes and 1,093 → 829 at 10 passes. In an
+adaptive smoke test with a 10-pass limit and Δ = 0.15, the engine backfilled
+16 passes and generated `Paris.`.
 
 ## Verification
 

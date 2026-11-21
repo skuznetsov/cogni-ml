@@ -44,7 +44,7 @@ spec: $(BRIDGE_OBJ)
 
 $(BUILD_DIR)/inkling2_generate: bin/inkling2_generate.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
 		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/reader.cr \
-		src/ml/gguf/kernels/gemm_q56k.metal $(BRIDGE_OBJ)
+		src/ml/gguf/kernels/gemm_q56k.metal src/ml/gguf/kernels/inkling2_moe.metal $(BRIDGE_OBJ)
 	$(CRYSTAL) build --release bin/inkling2_generate.cr -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
