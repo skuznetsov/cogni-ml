@@ -75,6 +75,10 @@ require "../src/ml/gguf/inkling2_engine"
         io.write(q8_bytes(39, 64))
 
         router = Array(Float32).new(3 * 32, 0_f32)
+        router[0] = 16_f32
+        router[32] = -16_f32
+        router[65] = 16_f32
+        io.write(Bytes.new((-io.pos % sizeof(Float32)).to_i, 0_u8))
         offsets["router"] = io.pos
         io.write(f32_bytes(router))
 
@@ -220,7 +224,7 @@ require "../src/ml/gguf/inkling2_engine"
         )
         iq4_layer = ML::GGUF::Inkling2LayerWeights.new(
           attention, [] of Float32, [] of Float32, [] of Float32, nil, [] of Float32, [] of Float32,
-          [] of Float32, router, [0_f32, 0_f32, -1_f32], iq4_gate_up, iq4_down, nil,
+          [] of Float32, router, [0_f32, 0_f32, -0.125_f32], iq4_gate_up, iq4_down, nil,
         )
         config = ML::GGUF::Inkling2Config.new(
           1_i32, 32_i32, 2_i32, 1_i32, 2_i32, 2_i32, 2_i32, 16_i32, 4_i32, 2_i32,
@@ -258,9 +262,29 @@ require "../src/ml/gguf/inkling2_engine"
         moe_output = linear.moe(encoder, scratch, layer, config, moe_input_view, bias_view, 3_i32)
         moe_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(3 * 32, 0_f32), buffers)
         ML::GGUF::Inkling2ResidentMath.copy(encoder, moe_output, moe_readback, 3 * 32)
-        iq4_output = linear.moe(encoder, scratch, iq4_layer, config, moe_input_view, bias_view, 3_i32)
+        iq4_bias_view = Inkling2LinearSpecSupport.float_view(iq4_layer.router_bias.not_nil!, buffers)
+        iq4_output = linear.moe(encoder, scratch, iq4_layer, config, moe_input_view, iq4_bias_view, 3_i32)
         iq4_readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(3 * 32, 0_f32), buffers)
         ML::GGUF::Inkling2ResidentMath.copy(encoder, iq4_output, iq4_readback, 3 * 32)
+
+        # Alternate the rank of experts 0 and 1. Expert 2 stays empty
+        # for Q8_0 and receives only the last token for IQ4_NL.
+        grouped_rows = 19_i32
+        grouped_input = Array(Float32).new(grouped_rows * 32) do |index|
+          row, column = index.divmod(32)
+          case column
+          when 0 then row.even? ? 0.25_f32 : -0.25_f32
+          when 1 then row == grouped_rows - 1 ? 0.25_f32 : -0.25_f32
+          else        ((index % 17) - 8).to_f32 * 0.01_f32
+          end
+        end
+        grouped_view = Inkling2LinearSpecSupport.float_view(grouped_input, buffers)
+        grouped_cases = {layer, iq4_layer}.zip({bias_view, iq4_bias_view}).map do |weights, bias|
+          result = linear.moe(encoder, scratch, weights, config, grouped_view, bias, grouped_rows)
+          readback = Inkling2LinearSpecSupport.float_view(Array(Float32).new(grouped_rows * 32, 0_f32), buffers)
+          ML::GGUF::Inkling2ResidentMath.copy(encoder, result, readback, grouped_rows * 32)
+          {weights, readback}
+        end
 
         encoder.end_encoding
         command.commit_and_wait
@@ -286,6 +310,13 @@ require "../src/ml/gguf/inkling2_engine"
         expected_iq4 = Inkling2LinearSpecSupport.moe_expected(iq4_layer, config, moe_input, 3_i32)
         Inkling2LinearSpecSupport.read(iq4_readback, 96_i32).zip(expected_iq4).each do |actual, expected|
           actual.should be_close(expected, 2e-2_f32)
+        end
+        grouped_cases.each do |weights, readback|
+          expected = Inkling2LinearSpecSupport.moe_expected(weights, config, grouped_input, grouped_rows)
+          tolerance = weights.gate_up.type.iq4_nl? ? 2e-2_f32 : 2e-3_f32
+          Inkling2LinearSpecSupport.read(readback, grouped_rows * 32).zip(expected).each do |actual, reference|
+            actual.should be_close(reference, tolerance)
+          end
         end
       ensure
         encoder.end_encoding
