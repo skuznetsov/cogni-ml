@@ -1,0 +1,91 @@
+# Inkling 2 text inference
+
+The native Crystal engine supports the [Inkling 2 Mini IQ4_NL GGUF](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF)
+and the [TML-d24-varloop-research IQ4_NL GGUF](https://huggingface.co/ggml-org/TML-d24-varloop-research-GGUF).
+It runs one text sequence at a time. On Apple Silicon it reads quantized
+projections from the mapped GGUF through Metal. Attention, residual mixing,
+routing, convolution, and sequence state run on the CPU.
+
+```sh
+make build/inkling2_generate
+./build/inkling2_generate --model /path/to/Inkling-2-Mini-IQ4_NL.gguf \
+  --raw --prompt 'The capital of France is' --tokens 8
+./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
+  --raw --prompt 'The capital of France is' --tokens 8 --passes 10 --trace-loops
+./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
+  --raw --prompt 'The capital of France is' --tokens 2 \
+  --passes 10 --stop-delta 0.15 --trace-loops
+```
+
+Pass `--cpu` to use the CPU backend in the Metal build. For a CPU-only build,
+run `crystal build -Dcpu_only --release bin/inkling2_generate -o inkling2_generate`.
+Use the raw mode for literal completions or omit `--raw` for the supported
+single-user chat template.
+
+The Mini checkpoint uses three passes. The research checkpoint defaults to
+three and accepts a fixed depth from one to ten. In each case the
+prelude and epilogue apply six layers once, and each pass through the core
+reuses the middle twelve layers. There are 48 layer visits per token at three
+passes and 132 at ten. Each visit has its own KV and convolution history. More
+passes also raise the cache cost, especially in the global-attention layers.
+
+Every core pass starts from the prelude's output. The second and subsequent
+passes read a message bank formed by the previous pass's completed core blocks
+and terminal state. `--trace-loops` reports the relative L2 change between
+successive banks after RMS normalization as
+`norm(B_current - B_previous) / max(norm(B_previous), 1e-6)`.
+
+The optional research-only `--stop-delta` uses `--passes` as a cap of at
+least three. A token exits after two successive changes at or below the
+specified positive threshold. If a later token reaches a deeper pass, the
+engine runs the missing core passes for earlier tokens in causal order
+to populate that pass's KV and convolution state. The epilogue retains
+the exit chosen for each earlier token. With tracing enabled,
+`backfilled_core_passes` counts this deferred work. Backfilling can defer
+compute to a later token, and stored continuations add memory overhead.
+The threshold measures movement in the latent and is an experimental policy
+for choosing depth.
+
+Thinking Machines Lab reports that the research checkpoint improves through
+ten passes on N-Hop Lookup. Its aggregate no-CoT time horizon is roughly flat
+past three. [Release evaluation](https://thinkingmachines.ai/news/inkling-2-mini/#no-cot-capabilities)
+
+## Checkpoints used for verification
+
+| Checkpoint | Hugging Face revision | SHA-256 |
+| --- | --- | --- |
+| Inkling-2-Mini-IQ4_NL.gguf | `db61c5b492a6a034d986328d28274af0a439aa6c` | `cbdf3fa9dc50a4124977980f37da4f1fa764b0cfe800d275cd43d26ce2a81af4` |
+| TML-d24-varloop-research-IQ4_NL.gguf | `618c48f1e3c54094333e3e652a92b1d99c52e34d` | `e9f70a167e54794bebce2d456b2118730b74fa7c35e23cb1abd4378f66b17bb2` |
+
+The GGUF layout uses IQ4_NL for the early routed experts, Q8_0 for dense
+projections and the last four layers' experts, and F32 for the loop controllers
+and router. The loader checks loop metadata and tensor layout and extents
+before decode.
+
+## Verification
+
+On Apple M2 Max, the CLI completed `The capital of France is` with `Paris.`.
+For fixed depth, the full-vocabulary comparison below used English and Russian
+prefixes for Mini and the English prefix for the research checkpoint. It
+included continuation tokens and used float32 attention caches.
+
+| Checkpoint and depth | Matching top-ranked token | Highest per-position logit RMSE |
+| --- | ---: | ---: |
+| Mini, 3 passes | 20 / 20 | 6.18 × 10⁻⁶ |
+| Research, 10 passes | 8 / 8 | 5.10 × 10⁻⁶ |
+
+The reference was
+[llama.cpp at `29b52d39`](https://github.com/ggml-org/llama.cpp/tree/29b52d398b294509746ec0a3f28948a3107c0213).
+Its 10-pass run used a larger graph allocation to fit 132 layer visits.
+
+In the adaptive example above, the six evaluated positions exited after
+4, 4, 6, 6, 9, and 7 passes. Each reported delta matched the corresponding
+fixed-depth trace. Including 16 deferred passes, the core ran 52 times
+compared with 60 for fixed depth. At a threshold of 0.08, the last two
+positions reached the cap and deferred work brought the total back to 60.
+
+Two local direct-answer lookup examples with five and nine hops scored zero
+correct at both fixed depths, three and ten. The last prompt token's delta
+decreased on both examples.
+
+Run the focused specs with `crystal spec -Dcpu_only spec/inkling2_*_spec.cr`.

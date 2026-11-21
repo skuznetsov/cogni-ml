@@ -1,4 +1,5 @@
 require "./reader"
+require "./gpt2_bpe"
 
 # Qwen 3.5 / 3.6 / 3.8 tokenizer (GPT-2-style BPE).
 #
@@ -201,51 +202,11 @@ module ML::GGUF
     end
 
     private def encode_piece_bytes(piece : String) : String
-      String.build do |io|
-        piece.to_slice.each do |byte|
-          io << self.class.gpt2_char_for(byte)
-        end
-      end
+      GPT2BPE.encode_bytes(piece)
     end
 
     private def bpe(piece : String) : Array(String)
-      return [piece] if @token_to_id.has_key?(piece)
-
-      word = piece.chars.map(&.to_s)
-      return word if word.size <= 1
-
-      loop do
-        best_rank = Int32::MAX
-        best_pair = nil.as(Tuple(String, String)?)
-        (word.size - 1).times do |i|
-          pair = {word[i], word[i + 1]}
-          if rank = @bpe_ranks[pair]?
-            if rank < best_rank
-              best_rank = rank
-              best_pair = pair
-            end
-          end
-        end
-
-        pair = best_pair
-        break unless pair
-
-        merged = [] of String
-        i = 0
-        while i < word.size
-          if i < word.size - 1 && word[i] == pair[0] && word[i + 1] == pair[1]
-            merged << word[i] + word[i + 1]
-            i += 2
-          else
-            merged << word[i]
-            i += 1
-          end
-        end
-        word = merged
-        break if word.size == 1
-      end
-
-      word
+      GPT2BPE.bpe(piece, @token_to_id, @bpe_ranks)
     end
 
     private def encode_external(text : String, *, add_bos_override : Bool? = nil) : Array(Int32)
@@ -272,45 +233,16 @@ module ML::GGUF
     # Characters in ranges 0x21..0x7E, 0xA1..0xAC, 0xAE..0xFF map directly.
     # The remaining 68 bytes get shifted into [0x100..0x143].
 
-    @@gpt2_byte_encoder : Hash(UInt8, Char)?
-    @@gpt2_byte_decoder : Hash(Char, UInt8)?
-
     def self.build_gpt2_maps
-      bs = [] of UInt8
-      cs = [] of Int32
-      (0x21_u8..0x7E_u8).each { |b| bs << b; cs << b.to_i32 }
-      (0xA1_u8..0xAC_u8).each { |b| bs << b; cs << b.to_i32 }
-      (0xAE_u8..0xFF_u8).each { |b| bs << b; cs << b.to_i32 }
-
-      n = 0
-      (0..255).each do |b|
-        ub = b.to_u8
-        unless bs.includes?(ub)
-          bs << ub
-          cs << (256 + n)
-          n += 1
-        end
-      end
-
-      enc = Hash(UInt8, Char).new
-      dec = Hash(Char, UInt8).new
-      bs.each_with_index do |b, i|
-        ch = cs[i].chr
-        enc[b] = ch
-        dec[ch] = b
-      end
-      @@gpt2_byte_encoder = enc
-      @@gpt2_byte_decoder = dec
+      GPT2BPE.build_maps
     end
 
     def self.gpt2_byte_for(ch : Char) : UInt8?
-      build_gpt2_maps if @@gpt2_byte_decoder.nil?
-      @@gpt2_byte_decoder.not_nil![ch]?
+      GPT2BPE.byte_for(ch)
     end
 
     def self.gpt2_char_for(byte : UInt8) : Char
-      build_gpt2_maps if @@gpt2_byte_encoder.nil?
-      @@gpt2_byte_encoder.not_nil![byte]
+      GPT2BPE.char_for(byte)
     end
   end
 end
