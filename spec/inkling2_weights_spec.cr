@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "../src/ml/gguf/inkling2_weights"
+require "../src/ml/gguf/inkling2_engine"
 
 private alias Inkling2TestValue = String | Int32 | Float32 | Bool | Array(Int32) | Array(Bool)
 private alias Inkling2TestTensor = NamedTuple(name: String, dims: Array(Int64), type_id: UInt32, offset: UInt64, bytes: Int32)
@@ -119,12 +120,14 @@ private def inkling2_test_tensors(
   core_start : Int32,
   core_end : Int32,
   sliding_pattern : Array(Bool),
+  quantized_experts : Bool,
 ) : Array(Inkling2TestTensor)
   tensors = [] of Inkling2TestTensor
   add = ->(name : String, dims : Array(Int64)) do
     elements = dims.product(1_i64)
-    bytes = (elements * 4_i64).to_i32
-    tensors << {name: name, dims: dims, type_id: 0_u32, offset: 0_u64, bytes: bytes}
+    type = quantized_experts && name.ends_with?("_exps.weight") ? ML::GGUF::TensorType::Q8_0 : ML::GGUF::TensorType::F32
+    bytes = (elements // type.block_elements * type.block_bytes).to_i32
+    tensors << {name: name, dims: dims, type_id: type.value, offset: 0_u64, bytes: bytes}
   end
   dim = ->(values : Array(Int32)) { values.map(&.to_i64) }
 
@@ -210,6 +213,8 @@ private def write_inkling2_test_gguf(
   sliding_pattern : Array(Bool) = [true, false, true, false],
   include_all_tensors : Bool = false,
   include_truncated_embedding : Bool = false,
+  patterned_weights : Bool = false,
+  quantized_experts : Bool = false,
 ) : Nil
   entries = inkling2_test_metadata(
     n_layer: n_layer, n_embd: n_embd, n_head: n_head, n_head_kv: n_head_kv, head_dim: head_dim,
@@ -224,7 +229,7 @@ private def write_inkling2_test_gguf(
               inkling2_test_tensors(
                 n_layer, n_embd, n_head, n_head_kv, head_dim, rel_dim, rel_extent,
                 sliding_window, conv_size, n_expert, expert_dim, vocab_size,
-                padded_vocab_size, core_start, core_end, sliding_pattern,
+                padded_vocab_size, core_start, core_end, sliding_pattern, quantized_experts,
               )
             elsif include_truncated_embedding
               [{name: "token_embd.weight", dims: [n_embd.to_i64, padded_vocab_size.to_i64], type_id: 0_u32,
@@ -259,13 +264,108 @@ private def write_inkling2_test_gguf(
   end
   inkling2_pad_to(io, 32)
   data_cursor = 0_i64
+  random = Random.new(54321)
   tensors.each do |tensor|
     target = tensor[:offset].to_i64
     io.write(Bytes.new((target - data_cursor).to_i, 0_u8)) if target > data_cursor
-    io.write(Bytes.new(tensor[:bytes], 0_u8)) if include_all_tensors
+    if include_all_tensors
+      if patterned_weights && tensor[:type_id] == ML::GGUF::TensorType::Q8_0.value
+        (tensor[:bytes] // 34).times do
+          io.write_bytes(0x2400_u16, IO::ByteFormat::LittleEndian)
+          32.times { io.write_byte(random.rand(-12..12).to_i8.unsafe_as(UInt8)) }
+        end
+      elsif patterned_weights
+        name = tensor[:name]
+        (tensor[:bytes] // 4).times do |i|
+          value = random.rand(-100..100).to_f32 * 0.0008_f32
+          value += 1_f32 if name.ends_with?("norm.weight") || name.ends_with?("_clip.weight")
+          value += i * 0.25_f32 if name.ends_with?(".bias")
+          io.write_bytes(value, IO::ByteFormat::LittleEndian)
+        end
+      else
+        io.write(Bytes.new(tensor[:bytes], 0_u8))
+      end
+    end
     data_cursor = target + tensor[:bytes]
   end
   File.write(path, io.to_slice)
+end
+
+describe ML::GGUF::Inkling2Engine do
+  it "rejects invalid prefill before changing the causal sequence" do
+    path = File.tempname("inkling2-prefill", ".gguf")
+    write_inkling2_test_gguf(path, include_all_tensors: true)
+    begin
+      engine = ML::GGUF::Inkling2Engine.new(path, 3, metal: false)
+      begin
+        expect_raises(ArgumentError, /empty/) { engine.prefill([] of Int32) }
+        expect_raises(ArgumentError, /vocabulary/) { engine.prefill([0, 1, 7]) }
+        expect_raises(ArgumentError, /context/) { engine.prefill([0, 1, 2, 3]) }
+        engine.position.should eq(0)
+        engine.prefill([1, 3]).size.should eq(7)
+        engine.position.should eq(2)
+        engine.forward(4).not_nil!.size.should eq(7)
+      ensure
+        engine.close
+      end
+    ensure
+      File.delete?(path)
+    end
+  end
+
+  {% if flag?(:darwin) && !flag?(:cpu_only) %}
+    it "matches staged logits and KV across a prefill tile that wraps the window" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-resident", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 6, n_embd: 32, expert_dim: 32, core_end: 4,
+        sliding_pattern: [true, false, true, false, false, true], include_all_tensors: true,
+        patterned_weights: true, quantized_experts: true)
+      begin
+        reference = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, resident: false)
+        resident = ML::GGUF::Inkling2Engine.new(path, 16, metal: true)
+        begin
+          resident.resident?.should be_true
+          reference.resident?.should be_false
+          2.times do
+            [[5, 1, 3], [2, 4, 1, 6], [0]].each do |ids|
+              expected = reference.prefill(ids)
+              actual = ids.size == 1 ? resident.forward(ids.first).not_nil! : resident.prefill(ids)
+              expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
+              resident.layer_visits.should eq(10)
+              resident.layer_visits.times do |visit|
+                resident.kv_count(visit).should eq(reference.kv_count(visit))
+                reference.kv_count(visit).times do |i|
+                  expected_k, expected_v, expected_pos = reference.key_value_at(visit, i)
+                  actual_k, actual_v, actual_pos = resident.key_value_at(visit, i)
+                  actual_pos.should eq(expected_pos)
+                  expected_k.zip(actual_k).each { |left, right| right.should be_close(left, 2e-4_f32) }
+                  expected_v.zip(actual_v).each { |left, right| right.should be_close(left, 2e-4_f32) }
+                end
+              end
+            end
+            resident.reset
+            reference.reset
+            resident.kv_count(0).should eq(0)
+          end
+        ensure
+          resident.close
+          reference.close
+        end
+
+        trace = ->(_position : Int32, _pass : Int32, _delta : Float32) { nil }
+        traced = ML::GGUF::Inkling2Engine.new(path, 16, metal: true, trace: trace)
+        begin
+          traced.resident?.should be_false
+          traced.forward(5).not_nil!.size.should eq(7)
+        ensure
+          traced.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+  {% end %}
 end
 
 describe ML::GGUF::Inkling2Weights do

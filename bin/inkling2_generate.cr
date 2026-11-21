@@ -39,6 +39,7 @@ forced_ids = nil.as(Array(Int32)?)
 max_new_tokens = 32
 context = 2048
 force_cpu = false
+staged_metal = false
 raw_prompt = false
 print_ids = false
 trace_loops = false
@@ -54,6 +55,7 @@ parser.on("--token-ids CSV", "Force prompt token IDs instead of tokenizing --pro
 parser.on("--tokens N", "Maximum new tokens (default: 32)") { |value| max_new_tokens = parse_cli_integer(value, "--tokens") }
 parser.on("--context N", "Model context size (default: 2048)") { |value| context = parse_cli_integer(value, "--context") }
 parser.on("--cpu", "Force CPU inference; Metal is the default on Darwin unless built with -Dcpu_only") { force_cpu = true }
+parser.on("--staged-metal", "Use the staged Metal backend with token-by-token prefill") { staged_metal = true }
 parser.on("--raw", "Use --prompt as a raw completion, without the chat template") { raw_prompt = true }
 parser.on("--passes N", "Pass override for variable-loop checkpoints; defaults to checkpoint depth") { |value| passes = parse_cli_integer(value, "--passes") }
 parser.on("--stop-delta DELTA", "Research only: stop after two successive loop deltas at or below DELTA") do |value|
@@ -104,7 +106,8 @@ begin
               nil
             end
 
-    engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, passes: passes, trace: trace, stop_delta: stop_delta)
+    engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
+      passes: passes, trace: trace, stop_delta: stop_delta)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids
@@ -124,11 +127,7 @@ begin
 
     generated_ids = [] of Int32
     if max_new_tokens > 0
-      logits = nil.as(Array(Float32)?)
-      prompt_ids.each_with_index do |token_id, index|
-        logits = engine.forward(token_id, logits: index == prompt_ids.size - 1)
-      end
-      current_logits = logits || raise "Inkling 2 did not return prompt logits"
+      current_logits = engine.prefill(prompt_ids)
 
       max_new_tokens.times do |index|
         next_id = greedy_token_id(current_logits)

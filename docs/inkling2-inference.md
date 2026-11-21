@@ -2,26 +2,25 @@
 
 The native Crystal engine supports the [Inkling 2 Mini IQ4_NL GGUF](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF)
 and the [TML-d24-varloop-research IQ4_NL GGUF](https://huggingface.co/ggml-org/TML-d24-varloop-research-GGUF).
-It runs one text sequence at a time. On Apple Silicon it reads quantized
-projections from the mapped GGUF through Metal. For IQ4_NL and Q8_0 experts,
-Metal runs sigmoid routing, the selected experts' projections, SiTU, and
-the weighted reduction in one command buffer per layer visit. An engine
-reuses the same GPU workspace across prompt tokens, generated tokens, and
-core passes. Attention, residual mixing, convolution, and sequence state
-run on the CPU. Prefill uses the same token-by-token engine as generation.
+It runs one text sequence at a time. The fixed-depth Metal path reads
+quantized weights from the mapped GGUF and keeps intermediate activations,
+attention, convolutions, loop controllers, and MoE on the device. Prefill
+runs up to 32 prompt tokens together per layer visit. The same engine
+reuses its GPU workspace across tiles, generated tokens, and core passes.
 
 ```sh
 make build/inkling2_generate
 ./build/inkling2_generate --model /path/to/Inkling-2-Mini-IQ4_NL.gguf \
   --raw --prompt 'The capital of France is' --tokens 8
 ./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
-  --raw --prompt 'The capital of France is' --tokens 8 --passes 10 --trace-loops
+  --raw --prompt 'The capital of France is' --tokens 8 --passes 10
 ./build/inkling2_generate --model /path/to/TML-d24-varloop-research-IQ4_NL.gguf \
   --raw --prompt 'The capital of France is' --tokens 2 \
   --passes 10 --stop-delta 0.15 --trace-loops
 ```
 
-Pass `--cpu` to use the CPU backend in the Metal build. For a CPU-only build,
+Pass `--staged-metal` to select token-by-token prefill on the staged Metal
+backend or `--cpu` to select the CPU backend. For a CPU-only build,
 run `crystal build -Dcpu_only --release bin/inkling2_generate -o inkling2_generate`.
 Use the raw mode for literal completions or omit `--raw` for the supported
 single-user chat template.
@@ -53,6 +52,25 @@ for choosing depth.
 Thinking Machines Lab reports that the research checkpoint improves through
 ten passes on N-Hop Lookup. Its aggregate no-CoT time horizon is roughly flat
 past three. [Release evaluation](https://thinkingmachines.ai/news/inkling-2-mini/#no-cot-capabilities)
+
+## Fixed-depth Metal execution contract
+
+Fixed-depth decode submits one Metal command per token. Prefill evaluates a
+bounded tile of consecutive tokens together at every layer visit and reads
+logits for the last token. The same per-visit KV and convolution histories
+continue into decode. Each new query reads old history and the causal part
+of its tile before the tile can overwrite the sliding cache.
+
+For a single query with more than 64 visible keys, attention splits the
+history across four SIMD groups per head and combines their softmax
+partials before applying the output gate.
+
+The staged backend remains available for adaptive depth, traces, and
+checkpoint layouts outside the resident kernel bounds. Backend selection
+occurs before the sequence starts. Validate resident execution against
+the staged backend with the same forced IDs, including a cache wrap and
+a continuation after prefill. The real-checkpoint gate compares every
+logit and each visit's retained KV with 3 and 10 passes.
 
 ## Checkpoints used for verification
 
@@ -91,6 +109,32 @@ submissions per token at 3 passes and 1,093 → 829 at 10 passes. In an
 adaptive smoke test with a 10-pass limit and Δ = 0.15, the engine backfilled
 16 passes and generated `Paris.`.
 
+## Resident Metal comparison
+
+The resident path matched the staged engine at all 68 output positions
+across the 46-token story and 188-token six-hop lookup prefixes, with 3 and
+10 passes on the research checkpoint. Each run compared all 200,058 logits
+at the end of prefill and after each of 16 identical decode steps. The
+maximum absolute logit difference was `1.01e-4`. Cache row counts and
+positions agreed at every layer visit after prefill and after decode. The
+largest absolute differences were `5.70e-4` for K and `5.20e-4` for V.
+The focused Metal specs also check an overflowing sliding window, continued
+decode after prefill, and cache reuse after reset.
+
+On an Apple M2 Max, both backends used this same GGUF, float32 KV,
+and a 256-token context. For each case, cogni-ml and llama.cpp ran
+consecutively, with the same 16 forced decode inputs. Each figure is the
+median of three timed repetitions after warmup. The host had background
+CPU load. Cogni-ml used tiles of up to 32 tokens and llama.cpp used one
+batch per prompt.
+
+| Prompt tokens | Passes | Cogni-ml prefill (tok/s) | llama.cpp prefill (tok/s) | Cogni-ml decode (tok/s) | llama.cpp decode (tok/s) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 46 | 3 | 61.38 | 146.38 | 15.23 | 18.70 |
+| 46 | 10 | 18.98 | 48.72 | 5.73 | 7.49 |
+| 188 | 3 | 52.52 | 303.74 | 15.98 | 26.89 |
+| 188 | 10 | 16.72 | 81.49 | 6.04 | 6.47 |
+
 ## Verification
 
 On Apple M2 Max, the CLI completed `The capital of France is` with `Paris.`.
@@ -117,4 +161,11 @@ Two local direct-answer lookup examples with five and nine hops scored zero
 correct at both fixed depths, three and ten. The last prompt token's delta
 decreased on both examples.
 
-Run the focused specs with `crystal spec -Dcpu_only spec/inkling2_*_spec.cr`.
+Run the focused CPU and Metal specs from the repository root.
+
+```sh
+crystal spec -Dcpu_only spec/inkling2_*_spec.cr
+make build/bridge.o
+crystal spec spec/inkling2_*_spec.cr \
+  --link-flags="-fuse-ld=/usr/bin/ld $PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+```
