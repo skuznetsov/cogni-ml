@@ -2,6 +2,10 @@ require "./inkling2_weights"
 require "./inkling2_matmul"
 require "./inkling2_attention"
 
+{% if flag?(:darwin) && !flag?(:cpu_only) %}
+  require "./inkling2_resident"
+{% end %}
+
 module ML::GGUF
   module Inkling2Math
     extend self
@@ -110,14 +114,17 @@ module ML::GGUF
     @failed = false
     @attention : Array(Inkling2AttentionState)
     @ffn_conv : Array(Inkling2Convolution)
-    @matmul : Inkling2Matmul
+    @matmul : Inkling2Matmul?
+    {% if flag?(:darwin) && !flag?(:cpu_only) %}
+      @resident : Inkling2Resident? = nil
+    {% end %}
     @core_prefix = [] of Int32
     @pending_core = {} of Int32 => PendingCore
 
-    def initialize(path : String, @max_seq : Int32, *, metal : Bool, passes : Int32? = nil,
+    def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil)
       @weights = Inkling2Weights.new(path)
-      @passes, @attention, @ffn_conv, @matmul = prepare(metal, passes)
+      @passes, @attention, @ffn_conv, @matmul = prepare(metal, resident, passes)
       @core_prefix = Array(Int32).new(@passes, 0) if @stop_delta
     end
 
@@ -132,13 +139,20 @@ module ML::GGUF
     end
 
     def forward(token : Int32, *, logits : Bool = true) : Array(Float32)?
-      raise "Inkling 2 engine is closed" if @closed
-      raise "Inkling 2 sequence must be reset after a failed forward pass" if @failed
-      raise ArgumentError.new("Token #{token} is outside the Inkling 2 vocabulary") unless token.in?(0...config.vocab_size)
+      validate_active!
+      validate_token!(token)
       raise ArgumentError.new("Inkling 2 context of #{@max_seq} tokens is full") if @position >= @max_seq
 
       begin
-        result = run_token(token, logits)
+        result = {% if flag?(:darwin) && !flag?(:cpu_only) %}
+                   if backend = @resident
+                     backend.forward(token, @position, logits)
+                   else
+                     run_token(token, logits)
+                   end
+                 {% else %}
+                   run_token(token, logits)
+                 {% end %}
         @position += 1
         result
       rescue ex
@@ -147,9 +161,76 @@ module ML::GGUF
       end
     end
 
+    # Extend this sequence and return only its last prompt row's logits.
+    def prefill(tokens : Indexable(Int32)) : Array(Float32)
+      validate_active!
+      raise ArgumentError.new("Inkling 2 prompt is empty") if tokens.empty?
+      if tokens.size > @max_seq - @position
+        raise ArgumentError.new("Inkling 2 prefill exceeds the context of #{@max_seq} tokens")
+      end
+      tokens.each { |token| validate_token!(token) }
+
+      begin
+        {% if flag?(:darwin) && !flag?(:cpu_only) %}
+          if backend = @resident
+            result = backend.prefill(tokens, @position)
+            @position += tokens.size
+            return result
+          end
+        {% end %}
+        result = nil
+        tokens.each_with_index do |token, index|
+          result = run_token(token, index == tokens.size - 1)
+          @position += 1
+        end
+        result.not_nil!
+      rescue ex
+        @failed = true
+        raise ex
+      end
+    end
+
+    def resident? : Bool
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        !@resident.nil?
+      {% else %}
+        false
+      {% end %}
+    end
+
+    def layer_visits : Int32
+      visit_for_pass(@passes) + config.n_layer - config.core_end
+    end
+
+    def kv_count(visit : Int32) : Int32
+      validate_visit!(visit)
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        if backend = @resident
+          return backend.kv_count(visit, @position)
+        end
+      {% end %}
+      @attention[visit].count
+    end
+
+    # A snapshot in chronological order, scoped to one physical layer visit.
+    def key_value_at(visit : Int32, index : Int32) : {Array(Float32), Array(Float32), Int32}
+      count = kv_count(visit)
+      raise IndexError.new("Inkling 2 attention cache index out of bounds") unless 0 <= index < count
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        if backend = @resident
+          return backend.key_value_at(visit, index, @position)
+        end
+      {% end %}
+      key, value, position = @attention[visit].key_value_at(index)
+      {key.dup, value.dup, position}
+    end
+
     def reset : Nil
       raise "Inkling 2 engine is closed" if @closed
 
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.try(&.reset)
+      {% end %}
       @attention.each(&.reset)
       @ffn_conv.each(&.reset)
       @core_prefix.fill(0)
@@ -163,7 +244,10 @@ module ML::GGUF
       return if @closed
 
       @closed = true
-      @matmul.close
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        @resident.try(&.close)
+      {% end %}
+      @matmul.try(&.close)
       @weights.close
       @attention.clear
       @ffn_conv.clear
@@ -174,7 +258,21 @@ module ML::GGUF
       @weights.config
     end
 
-    private def prepare(metal : Bool, passes : Int32?)
+    private def validate_active! : Nil
+      raise "Inkling 2 engine is closed" if @closed
+      raise "Inkling 2 sequence must be reset after a failed forward pass" if @failed
+    end
+
+    private def validate_token!(token : Int32) : Nil
+      raise ArgumentError.new("Token #{token} is outside the Inkling 2 vocabulary") unless token.in?(0...config.vocab_size)
+    end
+
+    private def validate_visit!(visit : Int32) : Nil
+      validate_active!
+      raise IndexError.new("Inkling 2 layer visit out of bounds") unless 0 <= visit < layer_visits
+    end
+
+    private def prepare(metal : Bool, resident : Bool, passes : Int32?)
       unless @max_seq.in?(1..config.context_length)
         raise ArgumentError.new("Context must be between 1 and #{config.context_length} tokens")
       end
@@ -189,6 +287,12 @@ module ML::GGUF
       visits = (0...config.core_start).to_a
       loops.times { visits.concat((config.core_start...config.core_end).to_a) }
       visits.concat((config.core_end...config.n_layer).to_a)
+      {% if flag?(:darwin) && !flag?(:cpu_only) %}
+        if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
+          @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq)
+          return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
+        end
+      {% end %}
       attention = visits.map { |layer| Inkling2AttentionState.new(config, config.sliding?(layer), @max_seq) }
       convolutions = visits.map { Inkling2Convolution.new(config.n_embd, config.conv_size) }
       {loops, attention, convolutions, make_matmul(metal)}
@@ -250,7 +354,7 @@ module ML::GGUF
 
       mixed = mix(blocks, current, @weights.output_res_query).first
       normalized = Inkling2Math.rms_norm(mixed, config.rms_eps, @weights.output_norm)
-      logits = @matmul.multiply(@weights.output, normalized)
+      logits = @matmul.not_nil!.multiply(@weights.output, normalized)
       cap = config.logit_softcap
       logits = logits[0, config.vocab_size]
       logits.map! { |value| cap * Math.tanh(value / cap) } if cap > 0
@@ -325,7 +429,7 @@ module ML::GGUF
         k_in = Inkling2Math.rms_norm(inputs[1], config.rms_eps, layer.k_norm)
         v_in = Inkling2Math.rms_norm(inputs[2], config.rms_eps, layer.v_norm)
       end
-      attended = Inkling2Attention.forward(layer.attention, config, @attention[visit], @matmul, q_in, k_in, v_in, position)
+      attended = Inkling2Attention.forward(layer.attention, config, @attention[visit], @matmul.not_nil!, q_in, k_in, v_in, position)
 
       if physical % config.res_block_size == 0
         blocks << current
@@ -350,12 +454,13 @@ module ML::GGUF
         features = Inkling2Math.rms_norm(input, Inkling2Math::DEPTH_EPS) + Inkling2Math.rms_norm(messages[id], Inkling2Math::DEPTH_EPS)
         {loop.down[id], features}
       end
-      gate = @matmul.multiply_many(down)
+      matmul = @matmul.not_nil!
+      gate = matmul.multiply_many(down)
       jobs = [] of {QuantWeight, Array(Float32)}
       gate.each_with_index do |state, i|
         jobs << {loop.gain[first + i], state} << {loop.forget[first + i], state}
       end
-      coefficients = @matmul.multiply_many(jobs)
+      coefficients = matmul.multiply_many(jobs)
       inputs.map_with_index do |input, i|
         gain, forget, message = coefficients[2 * i], coefficients[2 * i + 1], messages[first + i]
         Array(Float32).new(input.size) do |j|
@@ -365,12 +470,13 @@ module ML::GGUF
     end
 
     private def moe(layer : Inkling2LayerWeights, input : Array(Float32)) : Array(Float32)
-      if result = @matmul.try_moe(layer, input, config)
+      matmul = @matmul.not_nil!
+      if result = matmul.try_moe(layer, input, config)
         return result
       end
 
-      experts = Inkling2Math.route(@matmul.multiply(layer.router, input), layer.router_bias, config.n_expert_used, config.expert_scale)
-      activated = @matmul.multiply_many(experts.map { |id, _| {layer.gate_up.expert(id), input} })
+      experts = Inkling2Math.route(matmul.multiply(layer.router, input), layer.router_bias, config.n_expert_used, config.expert_scale)
+      activated = matmul.multiply_many(experts.map { |id, _| {layer.gate_up.expert(id), input} })
       width = config.expert_dim
       down = experts.map_with_index do |(id, _), i|
         gate_up = activated[i]
@@ -379,7 +485,7 @@ module ML::GGUF
         end
         {layer.down.expert(id), gated}
       end
-      values = @matmul.multiply_many(down)
+      values = matmul.multiply_many(down)
       result = Array(Float32).new(config.n_embd, 0_f32)
       experts.each_with_index do |(_, weight), i|
         value = values[i]

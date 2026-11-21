@@ -318,7 +318,7 @@ module ML::GGUF
     getter output_res_query : Array(Float32)
     getter token_embd_norm : Array(Float32)
 
-    @token_embd : QuantWeight
+    getter token_embd : QuantWeight
     @validated_infos : Hash(String, TensorInfo)
     @file_size : Int64
     @closed : Bool
