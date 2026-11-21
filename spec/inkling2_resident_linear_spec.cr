@@ -71,6 +71,9 @@ require "../src/ml/gguf/inkling2_engine"
         offsets["q8_projection"] = io.pos
         io.write(q8_projection)
 
+        offsets["q8_tiled_projection"] = io.pos
+        io.write(q8_bytes(39, 64))
+
         router = Array(Float32).new(3 * 32, 0_f32)
         offsets["router"] = io.pos
         io.write(f32_bytes(router))
@@ -190,6 +193,10 @@ require "../src/ml/gguf/inkling2_engine"
           Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_projection"], 7 * 34),
           ML::GGUF::TensorType::Q8_0, 7_i32, 32_i32,
         )
+        q8_tiled_projection = ML::GGUF::QuantWeight.new(
+          Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["q8_tiled_projection"], 39 * 2 * 34),
+          ML::GGUF::TensorType::Q8_0, 39_i32, 64_i32,
+        )
         router = ML::GGUF::QuantWeight.new(
           Inkling2LinearSpecSupport.mapped_bytes(gguf, fixture.offsets["router"], 3 * 32 * sizeof(Float32)),
           ML::GGUF::TensorType::F32, 3_i32, 32_i32,
@@ -239,6 +246,12 @@ require "../src/ml/gguf/inkling2_engine"
         linear.project(encoder, q8_projection, q8_view, q8_batch_output, 3_i32)
         linear.project(encoder, q8_projection, q8_view, q8_single_output, 1_i32)
 
+        # Two K blocks and partial tiles on both the batch and output axes.
+        q8_tiled_input = Array(Float32).new(35 * 64) { |index| ((index % 23) - 11).to_f32 * 0.013_f32 }
+        q8_tiled_view = Inkling2LinearSpecSupport.float_view(q8_tiled_input, buffers)
+        q8_tiled_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(35 * 39, 0_f32), buffers)
+        linear.project(encoder, q8_tiled_projection, q8_tiled_view, q8_tiled_output, 35_i32)
+
         moe_input = Array(Float32).new(3 * 32) { |index| ((index % 13) - 6).to_f32 * 0.015_f32 }
         moe_input_view = Inkling2LinearSpecSupport.float_view(moe_input, buffers)
         bias_view = Inkling2LinearSpecSupport.float_view([0_f32, 0_f32, -1_f32], buffers)
@@ -260,6 +273,10 @@ require "../src/ml/gguf/inkling2_engine"
           actual.should be_close(expected, 2e-5_f32)
         end
         Inkling2LinearSpecSupport.read(q8_single_output, 7_i32).zip(q8_expected[0, 7]).each do |actual, expected|
+          actual.should be_close(expected, 2e-5_f32)
+        end
+        q8_tiled_expected = Inkling2LinearSpecSupport.projection_expected(q8_tiled_projection, q8_tiled_input, 35_i32)
+        Inkling2LinearSpecSupport.read(q8_tiled_output, 35 * 39).zip(q8_tiled_expected).each do |actual, expected|
           actual.should be_close(expected, 2e-5_f32)
         end
         expected_moe = Inkling2LinearSpecSupport.moe_expected(layer, config, moe_input, 3_i32)
