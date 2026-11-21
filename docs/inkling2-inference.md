@@ -162,6 +162,30 @@ cogni-ml at 3 and 10 passes. The local llama.cpp checkout at
 `e6d624b9` reached 141.11 and 48.25 tok/s. Its 10-pass graph required
 increasing the node reserve from 22,528 to 44,032 in the benchmark build.
 
+### Grouped expert GEMM
+
+On Apple Silicon, resident prefill tiles of 16–32 tokens with up to 256
+experts bucket the selected routes on the GPU. The IQ4_NL and Q8_0 gate/up
+and down GEMMs share the route map and reuse each dequantized weight tile
+across up to 16 routes for one expert. The kernels scatter their output
+back to the original token and top-k rank before the weighted sum.
+
+On the same 188-token research-checkpoint case and six tiles, an interleaved
+A/B comparison on the M2 Max gave the following medians of three timed runs
+per path. The comparison kept the Q8_0 projection path active on both sides.
+
+| Passes | Per-route matvec (tok/s) | Grouped GEMM (tok/s) | Throughput gain |
+| ---: | ---: | ---: | ---: |
+| 3 | 80.42 | 92.95 | 15.6% |
+| 10 | 29.98 | 33.92 | 13.1% |
+
+All 17 top-ranked tokens at each depth matched across 200,058 logits per
+position. Cache row counts and positions matched at every layer visit
+after prefill and after the 16 forced decode steps. At 3 passes, maximum
+absolute differences were `1.00e-4` for logits, `4.79e-4` for K and
+`3.34e-4` for V. At 10 passes, they were `6.72e-4`, `3.65e-3` and
+`4.75e-3`, respectively.
+
 ## Verification
 
 On Apple M2 Max, the CLI completed `The capital of France is` with `Paris.`.
