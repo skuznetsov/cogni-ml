@@ -29,6 +29,7 @@ DIRECTED_HINGE_ONE_TWENTY_EIGHT_OUT = DIRECTED_OUT.with_name("real-choice-pairs-
 DIRECTED_CENTER_256_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-128-center-256-v1")
 DIRECTED_HINGE_512_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-512-center-256-v1")
 DIRECTED_CENTER_1024_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-512-center-1024-v1")
+DIRECTED_HINGE_2048_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-2048-center-1024-v1")
 CANDIDATES = {
     "paired": ("centered", OUT),
     "centered": ("centered_hinge", HINGE_OUT),
@@ -44,6 +45,7 @@ CANDIDATES = {
     "directed_hinge_128_center_64": ("directed_hinge_128_center_256", DIRECTED_CENTER_256_OUT),
     "directed_hinge_128_center_256": ("directed_hinge_512_center_256", DIRECTED_HINGE_512_OUT),
     "directed_hinge_512_center_256": ("directed_hinge_512_center_1024", DIRECTED_CENTER_1024_OUT),
+    "directed_hinge_512_center_1024": ("directed_hinge_2048_center_1024", DIRECTED_HINGE_2048_OUT),
 }
 REFERENCES = {
     "paired": (
@@ -116,6 +118,11 @@ REFERENCES = {
         "0c82dc180307d534d34fa61cb67a731c8bde6ece49734d87abb624c2585ed9bf",
         "d4a0df07f5305b03c4c1b73c56f256ce27b2a789f8a78e245b330cefb2e780c4",
     ),
+    "directed_hinge_512_center_1024": (
+        DIRECTED_CENTER_1024_OUT,
+        "45c45a3aeacc55d3686a36d51a28d213660cf3e7732b14aad9d60d7f6789d45b",
+        "e1f2358b017dfabf8e38b9379f6caab1748461a092e2b343b57595778647ffe4",
+    ),
 }
 CENTER_WEIGHT = 0.25
 HINGE_WEIGHT = 0.5
@@ -133,6 +140,7 @@ DIRECTED_WEIGHTS = {
     "directed_hinge_128_center_256": (256.0, 128.0),
     "directed_hinge_512_center_256": (256.0, 512.0),
     "directed_hinge_512_center_1024": (1024.0, 512.0),
+    "directed_hinge_2048_center_1024": (1024.0, 2048.0),
 }
 
 
@@ -397,6 +405,8 @@ def main():
                             const="directed_hinge_128_center_256", help="raise directed hinge weight to 512.0 at center weight 256.0")
     objectives.add_argument("--directed-hinge-512-center-1024", dest="baseline", action="store_const",
                             const="directed_hinge_512_center_256", help="raise center weight to 1024.0 at directed hinge weight 512.0")
+    objectives.add_argument("--directed-hinge-2048-center-1024", dest="baseline", action="store_const",
+                            const="directed_hinge_512_center_1024", help="raise directed hinge weight to 2048.0 at center weight 1024.0")
     parser.set_defaults(baseline="paired")
     args = parser.parse_args()
     baseline = args.baseline
