@@ -55,6 +55,12 @@ Qwen-Image 2.1 weights are governed by the
 [upstream Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE);
 consult it before redistribution or commercial use.
 
+## Inkling 2
+
+Run the [native Inkling 2 text engine](docs/inkling2-inference.md) with the
+Mini or variable-loop research GGUF. Projections use Metal on Apple Silicon
+or the quantized CPU backend.
+
 ## Qwen 3.5 Native Metal
 
 The native Qwen path targets `Qwen3.5-9B-Q4_K_M.gguf` on Apple Silicon. The code supports:
