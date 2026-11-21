@@ -40,6 +40,37 @@ struct block_iq4_nl_56 {
     uint8_t qs[16];
 };
 
+// Decode the sixteen IQ4_NL values owned by one (it) lane half and return their
+// dot product with the corresponding input values. Keep this operation order
+// shared by the existing GEMV and Inkling2's expert matvec.
+inline float iq4_nl_dot_half(
+    device const block_iq4_nl_56* blk,
+    ushort it,
+    float4 yl0,
+    float4 yl1,
+    float4 yl2,
+    float4 yl3)
+{
+    device const uint16_t* q4 = (device const uint16_t*)(blk->qs + 8 * it);
+    uint32_t aux32[2];
+    thread const uint8_t* q8 = (thread const uint8_t*)aux32;
+
+    aux32[0] = q4[0] | (q4[1] << 16);
+    aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
+    aux32[0] &= 0x0f0f0f0f;
+    const float4 qf10 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
+    const float4 qf11 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+
+    aux32[0] = q4[2] | (q4[3] << 16);
+    aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
+    aux32[0] &= 0x0f0f0f0f;
+    const float4 qf20 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
+    const float4 qf21 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+
+    const float4 acc = yl0 * qf10 + yl1 * qf11 + yl2 * qf20 + yl3 * qf21;
+    return acc[0] + acc[1] + acc[2] + acc[3];
+}
+
 constant short MV8_NSG = 4;
 constant short MV8_NR0 = 1;
 constant short MVF32_NSG = 4;
@@ -143,9 +174,6 @@ kernel void simd_mv_iq4_nl_f32(
     const ushort it = tiisg & 1;
     device const float * yb = y_base + ix * IQ4_NL_QK + it * 8;
 
-    uint32_t aux32[2];
-    thread const uint8_t * q8 = (thread const uint8_t *)aux32;
-
     for (uint ib = ix; ib < nb; ib += 16) {
         device const float4 * y4 = (device const float4 *)yb;
         const float4 yl0 = y4[0];
@@ -158,22 +186,7 @@ kernel void simd_mv_iq4_nl_f32(
             if (row_id >= out_dim) continue;
             device const block_iq4_nl_56 * blk =
                 (device const block_iq4_nl_56 *)(w_raw + row_id * row_bytes) + ib;
-            device const uint16_t * q4 = (device const uint16_t *)(blk->qs + 8 * it);
-
-            aux32[0] = q4[0] | (q4[1] << 16);
-            aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
-            aux32[0] &= 0x0f0f0f0f;
-            const float4 qf10 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
-            const float4 qf11 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
-
-            aux32[0] = q4[2] | (q4[3] << 16);
-            aux32[1] = (aux32[0] >> 4) & 0x0f0f0f0f;
-            aux32[0] &= 0x0f0f0f0f;
-            const float4 qf20 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
-            const float4 qf21 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
-
-            const float4 acc = yl0 * qf10 + yl1 * qf11 + yl2 * qf20 + yl3 * qf21;
-            sumf[row] += (float)blk->d * (acc[0] + acc[1] + acc[2] + acc[3]);
+            sumf[row] += (float)blk->d * iq4_nl_dot_half(blk, it, yl0, yl1, yl2, yl3);
         }
 
         yb += 16 * IQ4_NL_QK;
