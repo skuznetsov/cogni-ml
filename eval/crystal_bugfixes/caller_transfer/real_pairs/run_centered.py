@@ -20,12 +20,14 @@ HINGE_OUT = paired.OUT.with_name("real-choice-pairs-centered-hinge-v1")
 DIRECTED_OUT = paired.OUT.with_name("real-choice-pairs-directed-hinge-v1")
 DIRECTED_CENTER_ONE_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-center-1-v1")
 DIRECTED_HINGE_TWO_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-2-center-1-v1")
+DIRECTED_CENTER_FOUR_OUT = DIRECTED_OUT.with_name("real-choice-pairs-directed-hinge-2-center-4-v1")
 CANDIDATES = {
     "paired": ("centered", OUT),
     "centered": ("centered_hinge", HINGE_OUT),
     "centered_hinge": ("directed_hinge", DIRECTED_OUT),
     "directed_hinge": ("directed_hinge_center_1", DIRECTED_CENTER_ONE_OUT),
     "directed_hinge_center_1": ("directed_hinge_2_center_1", DIRECTED_HINGE_TWO_OUT),
+    "directed_hinge_2_center_1": ("directed_hinge_2_center_4", DIRECTED_CENTER_FOUR_OUT),
 }
 REFERENCES = {
     "paired": (
@@ -53,10 +55,21 @@ REFERENCES = {
         "c6064a99a5792cc3377c5f54ac2e31c96810865726876bb4efc3d6284de14135",
         "aef557d5dbbba1a67188a49d1106fa1e61f20db88fe9b82dc08efe0d2ce795ae",
     ),
+    "directed_hinge_2_center_1": (
+        DIRECTED_HINGE_TWO_OUT,
+        "ac9bcca88cd0419225191a72f71f8259b04dfcdde6fb527af1b4049f208f7682",
+        "d4de912b7e7129d7a4b0770b016111e0d9bdd8e75bb405312dbd6cad64fd7d28",
+    ),
 }
 CENTER_WEIGHT = 0.25
 HINGE_WEIGHT = 0.5
 MINIMUM_MARGIN = 0.5
+DIRECTED_WEIGHTS = {
+    "directed_hinge": (CENTER_WEIGHT, HINGE_WEIGHT),
+    "directed_hinge_center_1": (1.0, HINGE_WEIGHT),
+    "directed_hinge_2_center_1": (1.0, 2.0),
+    "directed_hinge_2_center_4": (4.0, 2.0),
+}
 
 
 def freeze(out, trainer, binary, baseline):
@@ -82,22 +95,22 @@ def freeze(out, trainer, binary, baseline):
     hinge_mode = "minimum"
     reference_files = [reference / "adapter.bin", logits]
     if baseline != "paired":
-        assert protocol["center_weight"] == (1.0 if baseline == "directed_hinge_center_1" else CENTER_WEIGHT)
+        reference_center, reference_hinge = DIRECTED_WEIGHTS.get(baseline, (CENTER_WEIGHT, HINGE_WEIGHT))
+        assert protocol["center_weight"] == reference_center
         assert digest(reference / "train.log") == audit["log"]
         reference_files.append(reference / "train.log")
         hinge_weight = HINGE_WEIGHT
-        if baseline in ("centered_hinge", "directed_hinge", "directed_hinge_center_1"):
-            assert protocol["hinge_weight"] == HINGE_WEIGHT and protocol["minimum_margin"] == MINIMUM_MARGIN
+        if baseline == "centered_hinge" or baseline in DIRECTED_WEIGHTS:
+            assert protocol["hinge_weight"] == reference_hinge and protocol["minimum_margin"] == MINIMUM_MARGIN
             hinge_mode = "difference"
             loss += " + hinge_weight * max(0, minimum_margin - (correct_margin_a + correct_margin_b) / 2)"
         else:
             loss += " + hinge_weight * max(0, minimum_margin - min(correct_margin_a, correct_margin_b))"
-    if baseline in ("directed_hinge", "directed_hinge_center_1"):
+    if baseline in DIRECTED_WEIGHTS:
         assert protocol["hinge_mode"] == hinge_mode
         assert protocol["files"][str(trainer)] == digest(trainer)
-        center_weight = 1.0
-        if baseline == "directed_hinge_center_1":
-            hinge_weight = 2.0
+        candidate, _ = CANDIDATES[baseline]
+        center_weight, hinge_weight = DIRECTED_WEIGHTS[candidate]
 
     replaced = {"train", "run.py", "train_choice_pairs.cr", "choice_pair_hinge.cr", Path(__file__).name}
     shared = {path: sha for path, sha in protocol["files"].items()
@@ -302,6 +315,8 @@ def main():
                             const="directed_hinge", help="raise the directed-hinge center weight from 0.25 to 1.0")
     objectives.add_argument("--directed-hinge-2-center-1", dest="baseline", action="store_const",
                             const="directed_hinge_center_1", help="raise directed hinge weight to 2.0 at center weight 1.0")
+    objectives.add_argument("--directed-hinge-2-center-4", dest="baseline", action="store_const",
+                            const="directed_hinge_2_center_1", help="raise center weight to 4.0 at directed hinge weight 2.0")
     parser.set_defaults(baseline="paired")
     args = parser.parse_args()
     baseline = args.baseline

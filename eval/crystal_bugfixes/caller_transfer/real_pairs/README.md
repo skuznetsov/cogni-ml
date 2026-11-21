@@ -300,3 +300,52 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
 ~~~
 
 The default output directory is `real-choice-pairs-directed-hinge-2-center-1-v1` beside the `real-choice-pairs-directed-hinge-center-1-v1` control. Use `--out` with a fresh directory for another run.
+
+## Center weight four with directed hinge weight two
+
+This ablation raises the coefficient of `b^2` from 1.0 to 4.0. Both arms keep `2.0 * max(0, 0.5 - s)` and restart from tool-four on the same Qwen3.5-2B Q4_K_M model. The native binaries, nine pairs, 50 Adam updates, and 100 target tokens are pinned. The driver compiles and tests both candidate lines in each holdout variant and evaluates the same 48 requests at 4,096 tokens and sampler seed 101.
+
+### Ablation results
+
+The native run took 671.7 seconds and updated both Float32 factors in all 28 projections. On the first batch, CE, logit differences, and the hinge matched the control. The center contribution rose from 0.10215 to 0.40859. Recomputing from the logged margins reproduced the loss and hinge slopes for all 50 updates. The hinge was active on 44/50 → 49/50 batches.
+
+On the 36 training presentations, RMS center fell from 0.233 to 0.051 and mean separation fell from 0.216 to 0.021. Both signs were correct on 16/36 → 12/36 presentations, including 4/9 → 3/9 first presentations. The number meeting the directed floor fell from 5/36 to 0/36.
+
+| Family | Wording | Separation, 1.0 → 4.0 | Absolute center, 1.0 → 4.0 |
+|---|---|---:|---:|
+| Cursor | `X or Y` | +0.01308 → +0.00072 | 0.06079 → 0.00516 |
+| Cursor | `Y or X` | +0.00898 → +0.00028 | 0.02881 → 0.00067 |
+| Slot | `X or Y` | +0.00463 → +0.00095 | 0.10800 → 0.02791 |
+| Slot | `Y or X` | +0.01212 → +0.00107 | 0.09408 → 0.02547 |
+| Outbox | `X or Y` | −0.02605 → −0.00346 | 0.73591 → 0.11315 |
+| Outbox | `Y or X` | −0.02484 → −0.00170 | 0.69936 → 0.12274 |
+
+Cursor and Slot moved closer to the flip condition `s > |b|` under both wordings. The closest case was Cursor under `Y or X`, where `s - |b|` rose from −0.01983 to −0.00038. Both still led with the same line across contexts. Outbox retained both positive margins. For each arm and wording, 6/6 selected lines compiled, 5/6 target groups passed, 5/6 regression groups passed, and 4/6 full suites passed.
+
+| Family | Variant a | Variant b |
+|---|---|---|
+| Cursor | 4/4 | 2/4. `left < right` fails both cursor direction targets. |
+| Slot | 6/6 | 5/6. `index < limit` fails the last allocated slot regression. |
+| Outbox | 4/4 | 4/4. Both variants selected `pending_count > 0`. |
+
+Single-prompt first-token draws passed 16/24 → 12/24 under `X or Y` and 14/24 → 12/24 under `Y or X`. All net losses came from Outbox, which went from 8/8 to 4/8 and from 6/8 to 4/8, respectively. Restricted argmax passed 16/24 → 15/24 and 14/24 → 14/24. Cursor and Slot each scored 0/4 paired passes on matched single presentations with either scoring rule and either wording.
+
+The control reproduced all 120 archived records. A fresh native process reproduced all 48 new holdout records in reverse request order. An independent scorer reconstructed choices and outcomes from the displayed candidates, raw logits, Crystal exit statuses, and test logs. The focused QLoRA specs passed 34 examples. The comparison covers ranking the supplied lines on three holdout families with one sampler seed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `cdd0692f0585875944cf2dbc7c3d043a3f43afa6390c2cb3c01c14f7c07cc9d8` |
+| Native training audit | `0a84f56c3ce443d454073f6320d92a72c453f02175c4d3ea0575a34a49183cbd` |
+| Center weight four adapter | `e4bc33c9472272b6ccd887c45782455b90cde8740d4dbd9d0ab3c9b7a93e6ca7` |
+| Results | `c224df3a630b0cbb80edcc182a40b110e7d11507987edb7f97b6b0c93140105d` |
+
+### Reproduce the ablation
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_directed_hinge" build/qlora/scale-2b/choice-first-token/readout \
+  --directed-hinge-2-center-4
+~~~
+
+The default output directory is `real-choice-pairs-directed-hinge-2-center-4-v1` beside the `real-choice-pairs-directed-hinge-2-center-1-v1` control. Use `--out` with a fresh directory for another run.
