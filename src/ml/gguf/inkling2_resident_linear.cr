@@ -21,6 +21,11 @@ module ML::GGUF
       private MAX_ROWS_PER_GRID = 4_096_i32
       private MAX_LINEAR_ELEMENTS_PER_GRID = 4_194_304_i32
       private BATCH_TILE = 4_i32
+      {% if flag?(:aarch64) %}
+        private Q8_MATRIX_TILE = 32_i32
+        private Q8_MATRIX_MIN_ROWS = 16_i32
+        private Q8_MATRIX_SOURCE = SOURCE + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_q8_gemm.metal") }}
+      {% end %}
 
       @base : UInt64
       @file_size : UInt64
@@ -166,7 +171,16 @@ module ML::GGUF
         end
 
         name = weight.type.f32? ? "inkling2_resident_gemm_f32" : "inkling2_resident_gemm_q8_0"
-        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, SOURCE))
+        source = SOURCE
+        tile = BATCH_TILE
+        {% if flag?(:aarch64) %}
+          if weight.type.q8_0? && rows >= Q8_MATRIX_MIN_ROWS
+            name = "inkling2_resident_gemm_q8_0_simd"
+            source = Q8_MATRIX_SOURCE
+            tile = Q8_MATRIX_TILE
+          end
+        {% end %}
+        encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, source))
         encoder.set_buffer(@model, 0, offset: weight_offset)
         encoder.set_buffer(input, 1, offset: input_offset)
         encoder.set_buffer(output, 2, ML::Metal::BufferAccess::Write, offset: output_offset)
@@ -174,8 +188,7 @@ module ML::GGUF
         encoder.set_value(weight.out_dim.to_u32, 4)
         encoder.set_value(rows.to_u32, 5)
         encoder.dispatch_threadgroups(
-          {(weight.out_dim + BATCH_TILE - 1) // BATCH_TILE,
-           (rows + BATCH_TILE - 1) // BATCH_TILE, 1},
+          {(weight.out_dim + tile - 1) // tile, (rows + tile - 1) // tile, 1},
           {128, 1, 1},
         )
       end

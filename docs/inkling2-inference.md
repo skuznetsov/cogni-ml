@@ -135,6 +135,33 @@ batch per prompt.
 | 188 | 3 | 52.52 | 303.74 | 15.98 | 26.89 |
 | 188 | 10 | 16.72 | 81.49 | 6.04 | 6.47 |
 
+### Matched prefill tiles and Q8_0 projections
+
+A repeat on the 188-token six-hop prefix used six matching Metal tiles
+of 32, 32, 32, 32, 32, and 28 tokens in both engines. At 3 and 10 passes
+the original resident path achieved 59.90 and 20.82 tok/s, and the
+pinned llama.cpp reference achieved 127.96 and 39.87 tok/s. Giving
+llama.cpp a single 188-token batch raised its throughput by about 2.1×.
+
+The M2 Max GPU profile at 3 passes attributed 46% of the GPU command
+time to MoE, 43% to attention projections, and 5.5% to attention and KV
+work. This diagnostic split compute encoders at stage boundaries.
+
+On Apple Silicon, Q8_0 projections with at least 16 input rows use
+SIMD matrix multiplication. Each threadgroup stages dequantized weight
+blocks and activations in float32 and accumulates a 32-by-32 output tile
+in float32. In an interleaved A/B run on a busy host, median prefill
+time fell from 4.97 to 3.59 seconds at 3 passes and from 11.78 to
+9.28 seconds at 10 passes. Across both depths the largest absolute
+logit difference was `8.48e-5` and the largest absolute K or V
+difference was `7.43e-4`. All 34 top-ranked tokens matched, as did
+all cache row counts and positions after prefill and forced decode.
+
+The final matched-tile comparison reached 82.88 and 30.29 tok/s for
+cogni-ml at 3 and 10 passes. The local llama.cpp checkout at
+`e6d624b9` reached 141.11 and 48.25 tok/s. Its 10-pass graph required
+increasing the node reserve from 22,528 to 44,032 in the benchmark build.
+
 ## Verification
 
 On Apple M2 Max, the CLI completed `The capital of France is` with `Paris.`.
