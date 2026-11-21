@@ -554,3 +554,55 @@ python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
 ~~~
 
 The default output directory is `real-choice-pairs-directed-hinge-32-center-64-v1` beside the `real-choice-pairs-directed-hinge-32-center-16-v1` control. Use `--out` with a fresh directory for another run.
+
+## Directed hinge weight one hundred twenty-eight at center weight sixty-four
+
+This ablation raises the multiplier of `max(0, 0.5 - s)` from 32.0 to 128.0. Both arms keep `64.0 * b^2` and restart from tool-four on the same Qwen3.5-2B Q4_K_M model. The native binaries, nine pairs, 50 Adam updates, and 100 target tokens are pinned. The driver rebuilds and tests both candidate lines in each holdout variant and evaluates the same 48 requests at a 4,096-token cap and sampler seed 101.
+
+### Ablation results
+
+The native run took 703.8 seconds and updated both Float32 factors in all 28 projections. The first batch matched the control on CE, logit differences, and the center term. The hinge contribution rose from 19.29468 to 77.17871. Recomputing from the logged margins reproduced all 50 losses and slopes. The hinge was active on 49/50 → 44/50 batches.
+
+On the 36 training presentations of the saved adapters, mean separation rose from 0.016 to 0.168 and RMS center rose from 0.049 to 0.189. Both signs were correct on 9/36 → 17/36 presentations, including 2/9 → 5/9 first presentations. The number meeting the directed floor rose from 0/36 to 4/36.
+
+| Family | Wording | Separation, 32.0 → 128.0 | Absolute center, 32.0 → 128.0 |
+|---|---|---:|---:|
+| Cursor | `X or Y` | +0.00070 → +0.00921 | 0.00276 → 0.04945 |
+| Cursor | `Y or X` | −0.00113 → +0.00613 | 0.00118 → 0.02353 |
+| Slot | `X or Y` | +0.00085 → +0.00378 | 0.02427 → 0.09270 |
+| Slot | `Y or X` | +0.00163 → +0.00975 | 0.02192 → 0.08178 |
+| Outbox | `X or Y` | −0.00234 → −0.02007 | 0.08968 → 0.60295 |
+| Outbox | `Y or X` | −0.00059 → −0.01865 | 0.09849 → 0.57142 |
+
+The flip slack `s - |b|` worsened in all four Cursor and Slot comparisons. It fell to −0.04024 and −0.01740 for Cursor and to −0.08892 and −0.07203 for Slot. Under `Y or X`, Cursor switched from `left > right` in both variants to `left < right` in both. Outbox ranked `pending_count > 0` first in both variants. Its smallest correct margin grew from +0.08734 to +0.58288 under `X or Y` and from +0.09790 to +0.55277 under `Y or X`.
+
+| Family and wording | Variant a, 32.0 → 128.0 | Variant b, 32.0 → 128.0 |
+|---|---|---|
+| Cursor, `X or Y` | 4/4 → 4/4 | 2/4 → 2/4 |
+| Cursor, `Y or X` | 2/4 → 4/4 | 4/4 → 2/4 |
+| Slot, both wordings | 6/6 → 6/6 | 5/6 → 5/6 |
+| Outbox, both wordings | 4/4 → 4/4 | 4/4 → 4/4 |
+
+The Cursor 2/4 outcomes fail both retry-direction targets and pass both regressions. Slot b selects `index < limit` and fails the last allocated slot regression. Each arm and wording compiles 6/6 selected lines and passes 5/6 target groups, 5/6 regression groups, and 4/6 full suites.
+
+Single-prompt first-token draws pass 12/24 → 16/24 under `X or Y` and 12/24 → 14/24 under `Y or X`. All net gains come from Outbox, which improves from 4/8 to 8/8 and from 4/8 to 6/8, respectively. Restricted argmax passes 14/24 → 16/24 and 14/24 → 14/24. Cursor and Slot each have 0/4 paired passes on matched single presentations under either rule and either wording.
+
+The control reproduced all 120 archived records. A new native readout process reproduced all 48 holdout records for the hinge 128.0 adapter in reverse request order. An independent scorer reconstructed choices and outcomes from the displayed code, raw logits, Crystal exit statuses, and test logs. The focused QLoRA specs passed all 34 examples. The comparison covers supplied-line ranking on three holdout families at one sampler seed.
+
+| Artifact | SHA-256 |
+|---|---|
+| Frozen protocol | `2885a5241a79cc2a64032015698bca6e8bf7c09baf081bd9663f55fdda19cb18` |
+| Native training audit | `ad1177f60a20572be17fbd7ab7fc08feb5003a88d7de516e83ad80458b2a75cd` |
+| Directed hinge 128.0 adapter | `2b63f7eae3be97df7101603e1d820675d0100e87e1f19666739abe7f7afb0b71` |
+| Results | `38d1019cc50a0c3751bc475494183a43c24eb14c55a1c3b9c951bd402364968b` |
+
+### Reproduce the ablation
+
+~~~sh
+bins=build/qlora/scale-2b/real-choice-pairs
+python3 -B eval/crystal_bugfixes/caller_transfer/real_pairs/run_centered.py \
+  "$bins/train_directed_hinge" build/qlora/scale-2b/choice-first-token/readout \
+  --directed-hinge-128-center-64
+~~~
+
+The default output directory is `real-choice-pairs-directed-hinge-128-center-64-v1` beside the `real-choice-pairs-directed-hinge-32-center-64-v1` control. Use `--out` with a fresh directory for another run.
