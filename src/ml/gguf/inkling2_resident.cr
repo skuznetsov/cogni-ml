@@ -83,7 +83,7 @@ module ML::GGUF
     end
 
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
-                   max_seq : Int32, @prefill_rows : Int32)
+                   max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil)
       @config = @weights.config
       @prelude_blocks = @config.core_start // @config.res_block_size
       @core_blocks = (@config.core_end - @config.core_start) // @config.res_block_size
@@ -98,11 +98,15 @@ module ML::GGUF
     end
 
     def prefill(tokens : Indexable(Int32), position : Int32) : Array(Float32)
+      tile_rows = @prefill_rows
+      if (append_rows = @append_prefill_rows) && position > 0 && tokens.size >= append_rows
+        tile_rows = append_rows
+      end
       ids = @ids.contents.as(Int32*)
       offset = 0
       result = nil
       while offset < tokens.size
-        rows = Math.min(@prefill_rows, tokens.size - offset)
+        rows = Math.min(tile_rows, tokens.size - offset)
         rows.times { |row| ids[row] = tokens[offset + row] }
         result = evaluate(position + offset, rows, offset + rows == tokens.size)
         offset += rows
@@ -145,7 +149,8 @@ module ML::GGUF
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size),
         )
       end
-      {upload_constants, allocate_shared(@prefill_rows.to_i64 * sizeof(Int32)),
+      id_rows = @append_prefill_rows || @prefill_rows
+      {upload_constants, allocate_shared(id_rows.to_i64 * sizeof(Int32)),
        allocate_shared(@config.vocab_size.to_i64 * sizeof(Float32))}
     rescue ex
       close

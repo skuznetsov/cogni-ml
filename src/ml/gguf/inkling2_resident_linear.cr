@@ -15,6 +15,7 @@ module ML::GGUF
     # Encode-only projection and MoE helpers for an inference-wide Metal
     # command buffer. The GGUF mmap remains owned by its GGUFFile/Weights.
     class Inkling2ResidentLinear
+      MAX_GROUPED_ROWS = 512
       SOURCE = {{ read_file("#{__DIR__}/kernels/gemm_q56k.metal") }} + "\n" + {{ read_file("#{__DIR__}/kernels/inkling2_resident_moe.metal") }}
 
       private MAX_ROUTE_SCRATCH_BYTES = 16_384_i32
@@ -267,7 +268,7 @@ module ML::GGUF
 
       private def grouped_experts?(rows : Int32, n_experts : Int32) : Bool
         {% if flag?(:aarch64) %}
-          16 <= rows <= 128 && n_experts <= 256
+          16 <= rows <= MAX_GROUPED_ROWS && n_experts <= 256
         {% else %}
           false
         {% end %}
