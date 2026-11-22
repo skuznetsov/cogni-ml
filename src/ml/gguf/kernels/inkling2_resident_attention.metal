@@ -457,6 +457,116 @@ kernel void inkling2_resident_attention_split(
     }
 }
 
+// Split-K specialization for 128 value channels and 16 relative channels.
+// The host guarantees all scores fit in threadgroup memory. The partition
+// boundaries and FP32 reductions match the single-SIMD split path.
+kernel void inkling2_resident_attention_split_parallel(
+    device const float* q               [[buffer(0)]],
+    device const float* k_tile          [[buffer(1)]],
+    device const float* v_tile          [[buffer(2)]],
+    device const float* q_relative      [[buffer(3)]],
+    device const float* gate            [[buffer(4)]],
+    device const float* sink            [[buffer(5)]],
+    device const float* relative_bias   [[buffer(6)]],
+    device const float* k_cache         [[buffer(7)]],
+    device const float* v_cache         [[buffer(8)]],
+    device       float* partials        [[buffer(9)]],
+    constant uint& start                [[buffer(10)]],
+    constant uint& rows                 [[buffer(11)]],
+    constant uint& capacity             [[buffer(12)]],
+    constant uint& kv_width             [[buffer(13)]],
+    constant uint& n_head               [[buffer(14)]],
+    constant uint& n_head_kv            [[buffer(15)]],
+    constant uint& head_dim             [[buffer(16)]],
+    constant uint& relative_dim         [[buffer(17)]],
+    constant uint& relative_extent      [[buffer(18)]],
+    constant uint& sliding_window       [[buffer(19)]],
+    constant uint& sliding              [[buffer(20)]],
+    constant uint& partitions           [[buffer(21)]],
+    constant uint& query_row_offset     [[buffer(22)]],
+    constant uint& score_slots         [[buffer(23)]],
+    threadgroup float* cached_scores   [[threadgroup(0)]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort group [[simdgroup_index_in_threadgroup]],
+    uint3 tgpig [[threadgroup_position_in_grid]])
+{
+    const uint partition = tgpig.x;
+    const uint row = tgpig.y;
+    const uint head = tgpig.z;
+    if (partition >= partitions || row >= rows || head >= n_head) return;
+
+    const uint groups = 4;
+    const uint channels = 128;
+    const uint rel_channels = 16;
+    const uint position = start + query_row_offset + row;
+    const uint kv_head = head / (n_head / n_head_kv);
+    const size_t query_head = (size_t)row * n_head + head;
+    const uint first_key = sliding != 0 && position + 1 > sliding_window
+        ? position + 1 - sliding_window : 0;
+    const uint key_count = position - first_key + 1;
+    const uint partition_base = key_count / partitions;
+    const uint partition_extra = key_count % partitions;
+    const uint partition_begin = partition_base * partition + min(partition, partition_extra);
+    const uint partition_end = partition_base * (partition + 1) + min(partition + 1, partition_extra);
+    const uint key_begin = first_key + partition_begin;
+    const uint count = partition_end - partition_begin;
+    device const float* query = q + query_head * channels;
+    device const float* query_relative = q_relative + query_head * rel_channels;
+    const float head_sink = sink[query_head];
+    const bool wrap_mask = sliding != 0 && (capacity & (capacity - 1)) == 0;
+
+    // Each SIMD group computes whole scores with the original lane reduction.
+    for (uint i = group; i < count; i += groups) {
+        const uint key_position = key_begin + i;
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding == 0 ? key_position
+            : wrap_mask ? key_position & (capacity - 1) : key_position % capacity;
+        const uint kv_row = in_tile ? key_position - start : slot;
+        device const float* key = (in_tile ? k_tile : k_cache) + (size_t)kv_row * kv_width + kv_head * channels;
+        const uint distance = position - key_position;
+        const float score = inkling2_resident_score(query, key, query_relative, relative_bias,
+            head_sink, channels, rel_channels, distance, relative_extent, lane);
+        if (lane == 0) cached_scores[i] = score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Scan the same contiguous partition in the same order as the single-SIMD kernel.
+    if (group == 0 && lane == 0) {
+        float max_score = -INFINITY;
+        for (uint i = 0; i < count; ++i) max_score = max(max_score, cached_scores[i]);
+        cached_scores[score_slots] = max_score;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const float max_score = cached_scores[score_slots];
+    const uint channel = group * 32 + lane;
+    for (uint i = channel; i < count; i += groups * 32) {
+        cached_scores[i] = exp(cached_scores[i] - max_score);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // One lane per output channel, still accumulating in ascending key order.
+    float context = 0.0f;
+    float denominator = 0.0f;
+    for (uint i = 0; i < count; ++i) {
+        const uint key_position = key_begin + i;
+        const bool in_tile = key_position >= start;
+        const uint slot = sliding == 0 ? key_position
+            : wrap_mask ? key_position & (capacity - 1) : key_position % capacity;
+        const uint kv_row = in_tile ? key_position - start : slot;
+        device const float* value = (in_tile ? v_tile : v_cache) + (size_t)kv_row * kv_width + kv_head * channels;
+        const float weight = cached_scores[i];
+        if (group == 0) denominator += weight;
+        context += weight * value[channel];
+    }
+    const size_t partial_base = (query_head * partitions + partition) * (channels + 2);
+    if (channel == 0) {
+        partials[partial_base] = max_score;
+        partials[partial_base + 1] = denominator;
+    }
+    partials[partial_base + 2 + channel] = context;
+}
+
 // Merge local softmax tuples. The sink contributes one zero logit globally,
 // then the resulting context is gated exactly as in the regular kernel.
 kernel void inkling2_resident_attention_combine(

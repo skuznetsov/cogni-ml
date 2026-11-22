@@ -253,6 +253,8 @@ module ML::GGUF
       private SPLIT_KEY_THRESHOLD = 64_i32
       private SPLIT_KEY_PARTITIONS = 4_i32
       private SPLIT_SCORE_CACHE_LIMIT = 256_i32
+      private SPLIT_PARALLEL_SCORE_LIMIT = 512_i32
+      private SPLIT_PARALLEL_THREADS = 128_i32
       MAX_HEAD_DIM = 256_i32
 
       getter sliding : Bool
@@ -656,19 +658,32 @@ module ML::GGUF
         partial_width = checked_elements(@config.n_head, partial_width, "split attention head")
         partial_count = checked_elements(rows, partial_width, "split attention output")
         partials = scratch.take(partial_count)
-        encoder.set_pipeline(pipeline("inkling2_resident_attention_split"))
+        keys = start + query_row_offset + rows
+        keys = Math.min(keys, @config.sliding_window) if @sliding
+        partition_size = (keys - 1) // SPLIT_KEY_PARTITIONS + 1
+
+        # Four SIMD groups score disjoint keys, then cover one channel per lane.
+        parallel = @config.head_dim == 128 && @config.rel_dim == 16 && partition_size <= SPLIT_PARALLEL_SCORE_LIMIT
+        if parallel
+          split_pipeline = "inkling2_resident_attention_split_parallel"
+          threads = SPLIT_PARALLEL_THREADS
+          score_slots = partition_size
+          shared_floats = score_slots + 1 # One extra float for the partition maximum.
+        else
+          split_pipeline = "inkling2_resident_attention_split"
+          threads = 32
+          score_slots = Math.min(partition_size, SPLIT_SCORE_CACHE_LIMIT)
+          shared_floats = score_slots
+        end
+        encoder.set_pipeline(pipeline(split_pipeline))
         bind_attention_inputs(encoder, q, k, v, q_rel, gate, sink, relative_bias,
           start, rows, relative_extent, query_row_offset)
         encoder.set_buffer(partials.buffer, 9, ML::Metal::BufferAccess::Write, offset: partials.offset)
         encoder.set_value(SPLIT_KEY_PARTITIONS.to_u32, 21)
         encoder.set_value(query_row_offset.to_u32, 22)
-        # Reserve at most 1 KiB of scores per partition, rounded for Metal.
-        keys = start + query_row_offset + rows
-        keys = Math.min(keys, @config.sliding_window) if @sliding
-        score_slots = Math.min((keys - 1) // SPLIT_KEY_PARTITIONS + 1, SPLIT_SCORE_CACHE_LIMIT)
         encoder.set_value(score_slots.to_u32, 23)
-        encoder.set_threadgroup_memory(((score_slots + 3) // 4) * 16, 0)
-        encoder.dispatch({32 * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {32, 1, 1})
+        encoder.set_threadgroup_memory(((shared_floats + 3) // 4) * 16, 0)
+        encoder.dispatch({threads * SPLIT_KEY_PARTITIONS, rows, @config.n_head}, {threads, 1, 1})
 
         encoder.set_pipeline(pipeline("inkling2_resident_attention_combine"))
         encoder.set_buffer(partials.buffer, 0, offset: partials.offset)

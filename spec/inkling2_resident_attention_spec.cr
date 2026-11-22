@@ -452,6 +452,39 @@ require "../src/ml/gguf/inkling2_resident_math"
         end
       end
 
+      it "preserves 128-channel split-K results across a four-row decode block and a reserved KV ring" do
+        config = resident_test_config(sliding: true, n_head: 2_i32, n_head_kv: 1_i32,
+          head_dim: 128_i32, rel_dim: 16_i32, window: 1024_i32, max_seq: 1026_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        pattern = resident_projected_rows(weights, matmul, resident_inputs(config, 23_i32))
+        projected = Array(ResidentProjectedRow).new(1026) { |row| pattern[row % pattern.size] }
+        blocked = ML::GGUF::Inkling2ResidentAttention.new(config, true, 1026_i32, rollback_rows: 4_i32)
+        serial = ML::GGUF::Inkling2ResidentAttention.new(config, true, 1026_i32)
+        begin
+          resident_run_tile(blocked, 0_i32, projected[0, 1022], weights, config)
+          resident_run_tile(serial, 0_i32, projected[0, 1022], weights, config)
+
+          expected = [] of Float32
+          4.times do |row|
+            expected.concat(resident_run_tile(serial, 1022 + row, [projected[1022 + row]], weights, config))
+          end
+          actual = resident_run_tile(blocked, 1022_i32, projected[1022, 4], weights, config, decode_block: true)
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+
+          {2_i32, 1023_i32, 1024_i32, 1025_i32}.each do |position|
+            block_key, block_value, block_position = blocked.key_value_at(position, 1026_i32)
+            serial_key, serial_value, serial_position = serial.key_value_at(position, 1026_i32)
+            block_position.should eq(serial_position)
+            block_key.map(&.unsafe_as(UInt32)).should eq(serial_key.map(&.unsafe_as(UInt32)))
+            block_value.map(&.unsafe_as(UInt32)).should eq(serial_value.map(&.unsafe_as(UInt32)))
+          end
+        ensure
+          blocked.close
+          serial.close
+        end
+      end
+
       it "rewinds a speculative sliding block without losing the accepted branch across cache wrap" do
         config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
           head_dim: 1_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 23_i32)
