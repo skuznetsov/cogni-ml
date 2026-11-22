@@ -291,11 +291,34 @@ private def write_inkling2_test_gguf(
   File.write(path, io.to_slice)
 end
 
+private def expect_inkling2_kv_parity(reference : ML::GGUF::Inkling2Engine,
+                                      actual : ML::GGUF::Inkling2Engine) : Nil
+  actual.layer_visits.should eq(reference.layer_visits)
+  reference.layer_visits.times do |visit|
+    actual.kv_count(visit).should eq(reference.kv_count(visit))
+    reference.kv_count(visit).times do |index|
+      expected_k, expected_v, expected_pos = reference.key_value_at(visit, index)
+      actual_k, actual_v, actual_pos = actual.key_value_at(visit, index)
+      actual_pos.should eq(expected_pos)
+      expected_k.zip(actual_k).each { |left, right| right.should be_close(left, 2e-4_f32) }
+      expected_v.zip(actual_v).each { |left, right| right.should be_close(left, 2e-4_f32) }
+    end
+  end
+end
+
 describe ML::GGUF::Inkling2Engine do
   it "rejects invalid prefill before changing the causal sequence" do
     path = File.tempname("inkling2-prefill", ".gguf")
     write_inkling2_test_gguf(path, include_all_tensors: true)
     begin
+      [0, 129].each do |tile|
+        expect_raises(ArgumentError, /prefill tile.*1.*128/) do
+          ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: tile)
+        end
+      end
+      expect_raises(ArgumentError, /requires resident Metal/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64)
+      end
       engine = ML::GGUF::Inkling2Engine.new(path, 3, metal: false)
       begin
         expect_raises(ArgumentError, /empty/) { engine.prefill([] of Int32) }
@@ -333,16 +356,7 @@ describe ML::GGUF::Inkling2Engine do
               actual = ids.size == 1 ? resident.forward(ids.first).not_nil! : resident.prefill(ids)
               expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
               resident.layer_visits.should eq(10)
-              resident.layer_visits.times do |visit|
-                resident.kv_count(visit).should eq(reference.kv_count(visit))
-                reference.kv_count(visit).times do |i|
-                  expected_k, expected_v, expected_pos = reference.key_value_at(visit, i)
-                  actual_k, actual_v, actual_pos = resident.key_value_at(visit, i)
-                  actual_pos.should eq(expected_pos)
-                  expected_k.zip(actual_k).each { |left, right| right.should be_close(left, 2e-4_f32) }
-                  expected_v.zip(actual_v).each { |left, right| right.should be_close(left, 2e-4_f32) }
-                end
-              end
+              expect_inkling2_kv_parity(reference, resident)
             end
             resident.reset
             reference.reset
@@ -360,6 +374,51 @@ describe ML::GGUF::Inkling2Engine do
           traced.forward(5).not_nil!.size.should eq(7)
         ensure
           traced.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
+    it "preserves logits and per-visit KV when widening prefill across a sliding window" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-wide-prefill", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 24, n_embd: 2304, expert_dim: 32,
+        core_start: 6, core_end: 18, res_block_size: 6, varying: true, sliding_window: 48,
+        sliding_pattern: Array(Bool).new(24) { |layer| layer % 3 != 1 },
+        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+      begin
+        prefix = [5, 1, 3, 4, 6, 0, 2, 1, 4]
+        prompt = Array(Int32).new(131) { |i| (i * 5 + i // 7) % 7 }
+        [3, 10].each do |passes|
+          reference = ML::GGUF::Inkling2Engine.new(path, 160, metal: true, passes: passes)
+          begin
+            reference.resident?.should be_true
+            [64, 128].each do |tile|
+              wide = ML::GGUF::Inkling2Engine.new(path, 160, metal: true, passes: passes, prefill_tile: tile)
+              begin
+                wide.resident?.should be_true
+                reference.reset
+                reference.prefill(prefix)
+                wide.prefill(prefix)
+                expected = reference.prefill(prompt)
+                actual = wide.prefill(prompt)
+                expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
+                expect_inkling2_kv_parity(reference, wide)
+                [5, 3, 1].each do |token|
+                  expected = reference.forward(token).not_nil!
+                  actual = wide.forward(token).not_nil!
+                  expected.zip(actual).each { |left, right| right.should be_close(left, 2e-4_f32) }
+                end
+                expect_inkling2_kv_parity(reference, wide)
+              ensure
+                wide.close
+              end
+            end
+          ensure
+            reference.close
+          end
         end
       ensure
         File.delete?(path)

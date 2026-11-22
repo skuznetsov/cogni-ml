@@ -6,8 +6,6 @@ module ML::GGUF
   # One command per decode token or causal prefill tile. Only IDs and the
   # requested final logits cross the CPU/GPU boundary.
   class Inkling2Resident
-    PREFILL_ROWS = 32
-
     private DEPTH_EPS = 1e-6_f32
     private alias MathOps = Inkling2ResidentMath
 
@@ -84,7 +82,8 @@ module ML::GGUF
       end
     end
 
-    def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32), max_seq : Int32)
+    def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
+                   max_seq : Int32, @prefill_rows : Int32)
       @config = @weights.config
       @prelude_blocks = @config.core_start // @config.res_block_size
       @core_blocks = (@config.core_end - @config.core_start) // @config.res_block_size
@@ -103,7 +102,7 @@ module ML::GGUF
       offset = 0
       result = nil
       while offset < tokens.size
-        rows = Math.min(PREFILL_ROWS, tokens.size - offset)
+        rows = Math.min(@prefill_rows, tokens.size - offset)
         rows.times { |row| ids[row] = tokens[offset + row] }
         result = evaluate(position + offset, rows, offset + rows == tokens.size)
         offset += rows
@@ -146,7 +145,7 @@ module ML::GGUF
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size),
         )
       end
-      {upload_constants, allocate_shared(PREFILL_ROWS.to_i64 * sizeof(Int32)),
+      {upload_constants, allocate_shared(@prefill_rows.to_i64 * sizeof(Int32)),
        allocate_shared(@config.vocab_size.to_i64 * sizeof(Float32))}
     rescue ex
       close
