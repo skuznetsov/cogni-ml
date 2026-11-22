@@ -322,6 +322,9 @@ describe ML::GGUF::Inkling2Engine do
       expect_raises(ArgumentError, /requires resident Metal/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, auto_prefill_tile: true)
       end
+      expect_raises(ArgumentError, /greedy verification requires fixed-depth resident Metal/) do
+        ML::GGUF::Inkling2Engine.new(path, 3, metal: false, greedy_verifier: true)
+      end
       expect_raises(ArgumentError, /cannot combine/) do
         ML::GGUF::Inkling2Engine.new(path, 3, metal: false, prefill_tile: 64, auto_prefill_tile: true)
       end
@@ -376,6 +379,56 @@ describe ML::GGUF::Inkling2Engine do
               pos.should eq(expected_pos)
               keys.map(&.unsafe_as(UInt32)).should eq(expected_keys.map(&.unsafe_as(UInt32)))
               values.map(&.unsafe_as(UInt32)).should eq(expected_values.map(&.unsafe_as(UInt32)))
+            end
+          end
+        ensure
+          serial.close
+          block.close
+        end
+      ensure
+        File.delete?(path)
+      end
+    end
+
+    it "preserves serial logits and live KV after rejecting any suffix of a wrapped block" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      path = File.tempname("inkling2-greedy-block", ".gguf")
+      write_inkling2_test_gguf(path, n_layer: 6, n_embd: 32, expert_dim: 32, core_end: 4,
+        sliding_window: 64, n_expert_used: 2, sliding_pattern: [true, false, true, false, false, true],
+        include_all_tensors: true, patterned_weights: true, quantized_experts: true)
+      begin
+        prefix = Array(Int32).new(66) { |index| (index * 5 + index // 7) % 7 }
+        serial = ML::GGUF::Inkling2Engine.new(path, 80, metal: true)
+        block = ML::GGUF::Inkling2Engine.new(path, 80, metal: true, greedy_verifier: true)
+        begin
+          (1..4).each do |keep|
+            serial.reset
+            block.reset
+            scores = serial.prefill(prefix)
+            block.prefill(prefix)
+            ids = StaticArray(Int32, 4).new(0)
+            keep.times do |row|
+              ids[row] = ML::GGUF::Inkling2Engine.greedy_token_id(scores)
+              scores = serial.forward(ids[row]).not_nil!
+            end
+            expected = ML::GGUF::Inkling2Engine.greedy_token_id(scores)
+            ids[keep] = (expected + 1) % 7 if keep < 4
+            block.verify_greedy_block4(ids).should eq({keep, expected})
+            block.position.should eq(serial.position)
+            block.layer_visits.times do |visit|
+              block.kv_count(visit).should eq(serial.kv_count(visit))
+              block.kv_count(visit).times do |index|
+                key, value, position = block.key_value_at(visit, index)
+                k_ref, v_ref, pos_ref = serial.key_value_at(visit, index)
+                position.should eq(pos_ref)
+                key.map(&.unsafe_as(UInt32)).should eq(k_ref.map(&.unsafe_as(UInt32)))
+                value.map(&.unsafe_as(UInt32)).should eq(v_ref.map(&.unsafe_as(UInt32)))
+              end
+            end
+            [expected, 4, 1, 6].each do |id|
+              actual = block.forward(id).not_nil!.map(&.unsafe_as(UInt32))
+              actual.should eq(serial.forward(id).not_nil!.map(&.unsafe_as(UInt32)))
             end
           end
         ensure

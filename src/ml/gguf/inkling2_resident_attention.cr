@@ -17,14 +17,22 @@ module ML::GGUF
 
       @history : ML::MetalBuffer? = nil
       @last_end_position : Int32? = nil
+      @last_encoded_start_position : Int32? = nil
+      @last_encoded_end_position : Int32? = nil
+      @history_slots : Int32
       @closed = false
 
       getter channels : Int32
       getter taps : Int32
+      getter rollback_rows : Int32
 
-      def initialize(@channels : Int32, @taps : Int32)
+      def initialize(@channels : Int32, @taps : Int32, *, @rollback_rows : Int32 = 0)
         raise ArgumentError.new("Inkling 2 resident convolution width must be positive") unless @channels > 0
         raise ArgumentError.new("Inkling 2 resident convolution needs at least one tap") unless @taps > 0
+        raise ArgumentError.new("Inkling 2 resident convolution rollback rows must be non-negative") if @rollback_rows < 0
+        history_slots = @taps > 1 ? (@taps - 1).to_i64 + @rollback_rows : 0_i64
+        raise ArgumentError.new("Inkling 2 resident convolution history slots exceed Int32") if history_slots > Int32::MAX
+        @history_slots = history_slots.to_i32
       end
 
       # Encode a row-major [rows, channels] causal convolution. Static taps
@@ -58,7 +66,8 @@ module ML::GGUF
         end
 
         output = scratch.take(total)
-        history_slots = @taps - 1
+        history_slots = @history_slots
+        history_count = checked_elements(history_slots, @channels, "convolution history dispatch")
         history = @history
         if history_slots > 0
           history ||= begin
@@ -91,10 +100,12 @@ module ML::GGUF
           encoder.set_value(rows.to_u32, 3)
           encoder.set_value(start.to_u32, 4)
           encoder.set_value(history_slots.to_u32, 5)
-          encoder.dispatch_1d(history_slots * @channels)
+          encoder.dispatch_1d(history_count)
         end
 
         @last_end_position = start + rows
+        @last_encoded_start_position = start
+        @last_encoded_end_position = start + rows
         output
       end
 
@@ -102,6 +113,24 @@ module ML::GGUF
       # untouched; negative history indices are masked in the convolution.
       def reset : Nil
         @last_end_position = nil
+        @last_encoded_start_position = nil
+        @last_encoded_end_position = nil
+      end
+
+      # Rewind only the logical end. The enlarged history ring preserves the
+      # prefix while the caller overwrites the speculative suffix.
+      def rewind(end_position : Int32) : Nil
+        ensure_open!
+        last_end = @last_end_position || raise IndexError.new("Inkling 2 resident convolution history is empty")
+        encoded_start = @last_encoded_start_position || raise IndexError.new("Inkling 2 resident convolution has no encoded tile")
+        unless encoded_start <= end_position <= last_end
+          raise ArgumentError.new("Inkling 2 resident convolution rewind must stay within its latest encoded tile")
+        end
+        encoded_end = @last_encoded_end_position || raise IndexError.new("Inkling 2 resident convolution has no encoded tile")
+        if encoded_end.to_i64 - end_position > @rollback_rows
+          raise ArgumentError.new("Inkling 2 resident convolution rewind exceeds #{@rollback_rows} reserved rows")
+        end
+        @last_end_position = end_position
       end
 
       def close : Nil
@@ -117,6 +146,8 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 resident convolution end exceeds Int32") if start.to_i64 + rows > Int32::MAX
         if start == 0
           @last_end_position = nil
+          @last_encoded_start_position = nil
+          @last_encoded_end_position = nil
         elsif @last_end_position != start
           raise ArgumentError.new("Inkling 2 resident convolution tiles must be contiguous from position zero")
         end
@@ -163,22 +194,32 @@ module ML::GGUF
       getter max_seq : Int32
       getter kv_width : Int32
       getter capacity : Int32
+      getter rollback_rows : Int32
 
       @key_convolution : Inkling2ResidentConvolution
       @value_convolution : Inkling2ResidentConvolution
       @k_cache : ML::MetalBuffer? = nil
       @v_cache : ML::MetalBuffer? = nil
       @cache_capacity = 0_i32
+      @physical_cache_capacity : Int32
       @retired_caches = [] of ML::MetalBuffer
       @last_end_position : Int32? = nil
+      @last_encoded_start_position : Int32? = nil
+      @last_encoded_end_position : Int32? = nil
       @closed = false
 
-      def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32)
+      def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32, *, @rollback_rows : Int32 = 0)
         raise ArgumentError.new("Inkling 2 resident max_seq must be positive") unless @max_seq > 0
+        raise ArgumentError.new("Inkling 2 resident attention rollback rows must be non-negative") if @rollback_rows < 0
         @kv_width = @config.n_head_kv * @config.head_dim
         @capacity = @sliding ? Math.min(@max_seq, @config.sliding_window) : @max_seq
-        @key_convolution = Inkling2ResidentConvolution.new(@kv_width, @config.conv_size)
-        @value_convolution = Inkling2ResidentConvolution.new(@kv_width, @config.conv_size)
+        @physical_cache_capacity = if @sliding
+                                     Math.min(@max_seq.to_i64, @capacity.to_i64 + @rollback_rows).to_i32
+                                   else
+                                     @capacity
+                                   end
+        @key_convolution = Inkling2ResidentConvolution.new(@kv_width, @config.conv_size, rollback_rows: @rollback_rows)
+        @value_convolution = Inkling2ResidentConvolution.new(@kv_width, @config.conv_size, rollback_rows: @rollback_rows)
       end
 
       # Q, K, V, relative-Q, gate, and sink are row-major projection tiles.
@@ -250,7 +291,28 @@ module ML::GGUF
           start, rows, relative_extent, decode_block)
         encode_cache_commit(encoder, key, value, start, rows)
         @last_end_position = start + rows
+        @last_encoded_start_position = start
+        @last_encoded_end_position = start + rows
         attended
+      end
+
+      # Move the logical end back within the most recently encoded tile. K/V
+      # bytes stay in place; reserved physical ring rows keep the accepted
+      # prefix available for the next append.
+      def rewind(end_position : Int32) : Nil
+        ensure_open!
+        last_end = @last_end_position || raise IndexError.new("Inkling 2 resident cache is empty")
+        encoded_start = @last_encoded_start_position || raise IndexError.new("Inkling 2 resident attention has no encoded tile")
+        unless encoded_start <= end_position <= last_end
+          raise ArgumentError.new("Inkling 2 resident attention rewind must stay within its latest encoded tile")
+        end
+        encoded_end = @last_encoded_end_position || raise IndexError.new("Inkling 2 resident attention has no encoded tile")
+        if encoded_end.to_i64 - end_position > @rollback_rows
+          raise ArgumentError.new("Inkling 2 resident attention rewind exceeds #{@rollback_rows} reserved rows")
+        end
+        @key_convolution.rewind(end_position)
+        @value_convolution.rewind(end_position)
+        @last_end_position = end_position
       end
 
       # Key/value indices and end_position are absolute token positions;
@@ -271,7 +333,7 @@ module ML::GGUF
         raise IndexError.new("Inkling 2 resident cache position has been evicted") if index < earliest
         key_cache = @k_cache || raise IndexError.new("Inkling 2 resident cache has no keys")
         value_cache = @v_cache || raise IndexError.new("Inkling 2 resident cache has no values")
-        slot = @sliding ? index % @capacity : index
+        slot = @sliding ? index % @cache_capacity : index
         key_cache.sync
         value_cache.sync
         key_ptr = key_cache.contents.as(Pointer(Float32)) + slot * @kv_width
@@ -292,6 +354,8 @@ module ML::GGUF
       def reset : Nil
         ensure_open!
         @last_end_position = nil
+        @last_encoded_start_position = nil
+        @last_encoded_end_position = nil
         @key_convolution.reset
         @value_convolution.reset
       end
@@ -312,7 +376,7 @@ module ML::GGUF
       private def ensure_cache_capacity(encoder : ML::Metal::ComputeEncoder, required : Int32, start : Int32) : Nil
         if @sliding
           return if @k_cache && @v_cache
-          allocate_caches(encoder, @capacity, 0)
+          allocate_caches(encoder, @physical_cache_capacity, 0)
           return
         end
         return if required <= @cache_capacity
@@ -566,7 +630,7 @@ module ML::GGUF
       ) : Nil
         key_cache = @k_cache.not_nil!
         value_cache = @v_cache.not_nil!
-        total = checked_elements(@sliding ? Math.min(rows, @capacity) : rows, @kv_width, "KV cache commit")
+        total = checked_elements(@sliding ? Math.min(rows, @cache_capacity) : rows, @kv_width, "KV cache commit")
         encoder.set_pipeline(pipeline("inkling2_resident_cache_commit"))
         encoder.set_buffer(keys.buffer, 0, offset: keys.offset)
         encoder.set_buffer(values.buffer, 1, offset: values.offset)
@@ -613,6 +677,8 @@ module ML::GGUF
         raise ArgumentError.new("Inkling 2 resident attention exceeds Int32 positions") if end_position > Int32::MAX
         if start == 0
           @last_end_position = nil
+          @last_encoded_start_position = nil
+          @last_encoded_end_position = nil
         elsif @last_end_position != start
           raise ArgumentError.new("Inkling 2 resident attention tiles must be contiguous from position zero")
         end

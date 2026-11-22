@@ -48,6 +48,8 @@ $(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench: $(BUILD_DIR)/
 	$(CRYSTAL) build --release $< -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
+$(BUILD_DIR)/inkling2_generate: src/ml/gguf/ngram_draft.cr
+
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"

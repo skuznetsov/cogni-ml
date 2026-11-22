@@ -126,7 +126,7 @@ module ML::GGUF
 
     def initialize(path : String, @max_seq : Int32, *, metal : Bool, resident : Bool = true, passes : Int32? = nil,
                    @trace : LoopTrace? = nil, @stop_delta : Float32? = nil,
-                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false)
+                   prefill_tile : Int32? = nil, auto_prefill_tile : Bool = false, @greedy_verifier : Bool = false)
       if prefill_tile && auto_prefill_tile
         raise ArgumentError.new("Inkling 2 cannot combine automatic and explicit prefill tile sizes")
       end
@@ -146,6 +146,19 @@ module ML::GGUF
         raise ArgumentError.new("This checkpoint requires #{configured} passes. Use TML-d24-varloop-research to vary them.")
       end
       passes
+    end
+
+    def self.greedy_token_id(logits : Array(Float32)) : Int32
+      best_id = -1
+      best_score = -Float32::INFINITY
+      logits.each_with_index do |score, index|
+        if score.finite? && score > best_score
+          best_score = score
+          best_id = index
+        end
+      end
+      raise "Inkling 2 returned no finite logits" if best_id < 0
+      best_id
     end
 
     def forward(token : Int32, *, logits : Bool = true) : Array(Float32)?
@@ -174,6 +187,26 @@ module ML::GGUF
     # Evaluate four known continuation tokens with the serial decode numerics.
     # Commits all four to the sequence and returns the next-token logits after each.
     def decode_block4(tokens : StaticArray(Int32, 4)) : StaticArray(Array(Float32), 4)
+      evaluate_block4(tokens) { |rows| {rows, tokens.size} }
+    end
+
+    # The caller supplies the exact pending token in row zero. Commit it and
+    # the remaining consecutive candidates that match the target's greedy IDs.
+    # Return the committed row count and the exact next pending token ID.
+    def verify_greedy_block4(tokens : StaticArray(Int32, 4)) : {Int32, Int32}
+      raise ArgumentError.new("Inkling 2 greedy verification was not enabled") unless @greedy_verifier
+      evaluate_block4(tokens) do |rows|
+        accepted = 1
+        expected = self.class.greedy_token_id(rows[0])
+        while accepted < tokens.size && tokens[accepted] == expected
+          expected = self.class.greedy_token_id(rows[accepted])
+          accepted += 1
+        end
+        { {accepted, expected}, accepted }
+      end
+    end
+
+    private def evaluate_block4(tokens : StaticArray(Int32, 4), & : StaticArray(Array(Float32), 4) -> Tuple(T, Int32)) : T forall T
       validate_active!
       raise ArgumentError.new("Inkling 2 decode block exceeds the context of #{@max_seq} tokens") if tokens.size > @max_seq - @position
       tokens.each { |token| validate_token!(token) }
@@ -181,8 +214,9 @@ module ML::GGUF
       {% if flag?(:darwin) && !flag?(:cpu_only) %}
         backend = @resident || raise ArgumentError.new("Inkling 2 block decode requires fixed-depth resident Metal")
         begin
-          result = backend.decode_block4(tokens, @position)
-          @position += tokens.size
+          result, accepted = yield backend.decode_block4(tokens, @position)
+          backend.rewind_block(@position + accepted) if accepted < tokens.size
+          @position += accepted
           result
         rescue ex
           @failed = true
@@ -323,10 +357,12 @@ module ML::GGUF
         if metal && resident && !@stop_delta && !@trace && Inkling2Resident.supported?(@weights)
           rows = auto_prefill_tile ? MAX_PREFILL_TILE : (prefill_tile || DEFAULT_PREFILL_TILE)
           append_rows = Inkling2ResidentLinear::MAX_GROUPED_ROWS if auto_prefill_tile
-          @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows, append_prefill_rows: append_rows)
+          @resident = Inkling2Resident.new(@weights, loops, visits, @max_seq, rows,
+            append_prefill_rows: append_rows, rollback_rows: @greedy_verifier ? 4 : 0)
           return {loops, [] of Inkling2AttentionState, [] of Inkling2Convolution, nil}
         end
       {% end %}
+      raise ArgumentError.new("Inkling 2 greedy verification requires fixed-depth resident Metal") if @greedy_verifier
       if prefill_tile || auto_prefill_tile
         raise ArgumentError.new("Setting the Inkling 2 prefill tile requires resident Metal")
       end

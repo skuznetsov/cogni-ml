@@ -1,5 +1,5 @@
 require "option_parser"
-require "../src/ml/gguf/inkling2_engine"
+require "../src/ml/gguf/inkling2_greedy_decode"
 require "../src/ml/gguf/inkling2_tokenizer"
 
 private def parse_cli_integer(text : String, option : String) : Int32
@@ -19,20 +19,6 @@ private def parse_token_id_csv(text : String) : Array(Int32)
   end
 end
 
-private def greedy_token_id(logits : Array(Float32)) : Int32
-  best_id = -1
-  best_score = -Float32::INFINITY
-  logits.each_with_index do |score, index|
-    if score.finite? && score > best_score
-      best_score = score
-      best_id = index.to_i32
-    end
-  end
-  raise "Inkling 2 returned no finite logits" if best_id < 0
-
-  best_id
-end
-
 model_path = nil.as(String?)
 prompt_text = nil.as(String?)
 forced_ids = nil.as(Array(Int32)?)
@@ -42,6 +28,7 @@ force_cpu = false
 staged_metal = false
 raw_prompt = false
 print_ids = false
+ngram = false
 trace_loops = false
 passes = nil.as(Int32?)
 prefill_tile = nil.as(Int32?)
@@ -69,6 +56,7 @@ parser.on("--stop-delta DELTA", "Research only: stop after two successive loop d
 end
 parser.on("--trace-loops", "Write position, completed_pass, and relative_delta records to stderr") { trace_loops = true }
 parser.on("--print-ids", "Write generated token IDs as CSV to stderr") { print_ids = true }
+parser.on("--ngram", "Verify repeated continuations in four-token blocks on fixed-depth resident Metal") { ngram = true }
 parser.on("--help", "Show this help") { help = true }
 
 begin
@@ -114,7 +102,7 @@ begin
 
     engine = ML::GGUF::Inkling2Engine.new(model, context, metal: use_metal, resident: !staged_metal,
       passes: passes, trace: trace, stop_delta: stop_delta, prefill_tile: prefill_tile,
-      auto_prefill_tile: auto_prefill_tile)
+      auto_prefill_tile: auto_prefill_tile, greedy_verifier: ngram)
     tokenizer = ML::GGUF::Inkling2Tokenizer.from_gguf(engine.weights.gguf)
     prompt_ids = if ids = forced_ids
                    ids
@@ -134,16 +122,9 @@ begin
 
     generated_ids = [] of Int32
     if max_new_tokens > 0
-      current_logits = engine.prefill(prompt_ids)
-
-      max_new_tokens.times do |index|
-        next_id = greedy_token_id(current_logits)
-        generated_ids << next_id
-        break if next_id == tokenizer.eos_id
-        break if index + 1 == max_new_tokens
-
-        current_logits = engine.forward(next_id).not_nil!
-      end
+      first_id = ML::GGUF::Inkling2Engine.greedy_token_id(engine.prefill(prompt_ids))
+      generated_ids = ML::GGUF::Inkling2GreedyDecode.generate(engine, prompt_ids, first_id,
+        max_new_tokens, tokenizer.eos_id, ngram: ngram).ids
     end
 
     STDERR.puts("backfilled_core_passes=#{engine.backfilled_passes}") if trace_loops && stop_delta
