@@ -51,4 +51,60 @@ require "../src/ml/gguf/inkling2_engine"
       end
     end
   end
+
+  describe ML::GGUF::Inkling2ResidentLinear do
+    it "ranks tied experts by ID across SIMD lanes and keeps zero-sum weights finite" do
+      pending! "Metal unavailable" unless ML::Metal::Device.init!
+
+      experts = 33
+      rows = 2
+      picked = 4
+      logits = Array.new(rows * experts, -Float32::INFINITY)
+      logits[0] = Float32::NAN
+      logits[1] = Float32::INFINITY
+      logits[17] = 0_f32
+      logits[32] = Float32::INFINITY
+      bias = Array.new(experts, 0_f32)
+      bias[0] = Float32::NAN
+      bias[2] = -Float32::INFINITY
+
+      logit_buffer = ML::MetalBuffer.from_array(logits)
+      bias_buffer = ML::MetalBuffer.from_array(bias)
+      ids_buffer = ML::MetalBuffer.new(rows * picked * sizeof(UInt32))
+      weights_buffer = ML::MetalBuffer.new(rows * picked * sizeof(Float32))
+      begin
+        pipeline = ML::Metal::PipelineCache.get_or_compile("inkling2_resident_moe_route", ML::GGUF::Inkling2ResidentLinear::SOURCE)
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        begin
+          encoder.set_pipeline(pipeline)
+          encoder.set_buffer(logit_buffer, 0)
+          encoder.set_buffer(bias_buffer, 1)
+          encoder.set_buffer(ids_buffer, 2, ML::Metal::BufferAccess::Write)
+          encoder.set_buffer(weights_buffer, 3, ML::Metal::BufferAccess::Write)
+          encoder.set_value(experts.to_u32, 4)
+          encoder.set_value(picked.to_u32, 5)
+          encoder.set_value(1_f32, 6)
+          encoder.set_value(1_u32, 7)
+          encoder.set_value(rows.to_u32, 8)
+          encoder.set_value(0_u32, 9)
+          scratch_bytes = 2 * experts * sizeof(Float32)
+          encoder.set_threadgroup_memory((scratch_bytes + 15) // 16 * 16, 0)
+          encoder.dispatch_threadgroups({1, rows, 1}, {32, 1, 1})
+        ensure
+          encoder.end_encoding
+        end
+        command.commit_and_wait
+
+        ids = Slice.new(ids_buffer.contents.as(UInt32*), rows * picked).to_a
+        ids.should eq [1_u32, 32_u32, 17_u32, 3_u32, 1_u32, 3_u32, 4_u32, 5_u32]
+        weights_buffer.read(rows * picked).should eq [0.4_f32, 0.4_f32, 0.2_f32, 0_f32, 0_f32, 0_f32, 0_f32, 0_f32]
+      ensure
+        logit_buffer.release
+        bias_buffer.release
+        ids_buffer.release
+        weights_buffer.release
+      end
+    end
+  end
 {% end %}

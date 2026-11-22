@@ -136,27 +136,36 @@ kernel void inkling2_resident_moe_route(
         selection_scores[expert] = isnan(score) ? -INFINITY : score;
     }
 
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (lane == 0) {
-        float selected_probability_sum = 0.0f;
-        for (uint rank = 0; rank < k; ++rank) {
-            bool found = false;
-            float best_score = -INFINITY;
-            uint best_expert = 0;
-            for (uint expert = 0; expert < n_experts; ++expert) {
-                const float score = selection_scores[expert];
-                const bool consumed = as_type<uint>(score) == 0x7fc00000u;
-                if (!consumed && (!found || score > best_score)) {
-                    found = true;
-                    best_score = score;
-                    best_expert = expert;
-                }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    const uint no_expert = 0xffffffffu;
+    float selected_probability_sum = 0.0f;
+    for (uint rank = 0; rank < k; ++rank) {
+        float local_score = -INFINITY;
+        uint local_expert = no_expert;
+        for (uint expert = lane; expert < n_experts; expert += 32) {
+            const float score = selection_scores[expert];
+            const bool consumed = as_type<uint>(score) == 0x7fc00000u;
+            if (!consumed && (local_expert == no_expert || score > local_score)) {
+                local_score = score;
+                local_expert = expert;
             }
-            row_ids[rank] = best_expert;
-            selected_probability_sum += probabilities[best_expert];
-            selection_scores[best_expert] = as_type<float>(0x7fc00000u);
         }
 
+        const float best_score = simd_max(local_score);
+        const uint best_expert = simd_min(local_score == best_score ? local_expert : no_expert);
+
+        // Each lane reads and consumes only its own strided scores.
+        if ((best_expert & 31u) == lane) {
+            selection_scores[best_expert] = as_type<float>(0x7fc00000u);
+        }
+        if (lane == 0) {
+            row_ids[rank] = best_expert;
+            selected_probability_sum += probabilities[best_expert];
+        }
+    }
+
+    // Keep accumulation and normalization in the original rank order.
+    if (lane == 0) {
         const float normalization = selected_probability_sum + 1.0e-20f;
         for (uint rank = 0; rank < k; ++rank) {
             const uint expert = row_ids[rank];
