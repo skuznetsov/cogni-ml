@@ -63,7 +63,7 @@ inline float inkling2_expert_quant(device const block_iq4_nl_56& block, uint col
 // Four SIMD groups each own 16 adjacent output columns. Stage each block of
 // quantized weights once per tile, including when there are more than eight
 // routes. The second group of eight input rows is skipped for sparse tiles.
-template <typename Block>
+template <typename Block, bool FuseSiTU>
 kernel void inkling2_resident_moe_gemm(
     device const uint8_t* weights             [[buffer(0)]],
     device const float*   x                   [[buffer(1)]],
@@ -74,6 +74,8 @@ kernel void inkling2_resident_moe_gemm(
     constant     uint&    out_dim             [[buffer(6)]],
     constant     uint&    expert_bytes        [[buffer(7)]],
     constant     uint&    input_route_divisor [[buffer(8)]],
+    constant     float&   beta                [[buffer(9)]],
+    constant     float&   linear_beta         [[buffer(10)]],
     uint3 group [[threadgroup_position_in_grid]],
     ushort tid [[thread_index_in_threadgroup]],
     ushort simd [[simdgroup_index_in_threadgroup]])
@@ -85,7 +87,9 @@ kernel void inkling2_resident_moe_gemm(
 
     constexpr uint OUT = 64;
     constexpr uint K = 32;
-    const uint first_out = group.x * OUT;
+    constexpr uint PAIRS = OUT / 2;
+    const uint width = out_dim / 2;
+    const uint first_out = group.x * (FuseSiTU ? PAIRS : OUT);
     const uint out_rows = min(out_dim - first_out, OUT);
     const uint k_blocks = in_dim / K;
 
@@ -93,7 +97,12 @@ kernel void inkling2_resident_moe_gemm(
     const uint weight_row = tid / 2;
     const uint weight_column = (tid & 1) * 16;
     device const Block* expert = (device const Block*)(weights + (size_t)tile.expert * expert_bytes);
-    device const Block* row_weights = expert + (size_t)(first_out + min(weight_row, out_rows - 1)) * k_blocks;
+    // A fused tile loads matching rows from the two halves of gate/up.
+    // The host admits widths divisible by PAIRS via the quantized down input.
+    const uint model_row = FuseSiTU
+        ? first_out + (weight_row % PAIRS) + (weight_row / PAIRS) * width
+        : first_out + min(weight_row, out_rows - 1);
+    device const Block* row_weights = expert + (size_t)model_row * k_blocks;
 
     // Eight threads load the 32 activation values for one route.
     const uint route_row = tid / 8;
@@ -150,15 +159,27 @@ kernel void inkling2_resident_moe_gemm(
         simdgroup_store(high1, weight_tile + 8 * OUT + first_simd_out + 8, OUT);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint i = tid; i < tile.count * OUT; i += 128) {
-        const uint col = i % OUT;
-        if (col < out_rows) {
-            const uint route = routes[i / OUT];
-            output[(size_t)route * out_dim + first_out + col] = weight_tile[i];
+    if (FuseSiTU) {
+        for (uint i = tid; i < tile.count * PAIRS; i += 128) {
+            const uint row = i / PAIRS;
+            const uint col = i % PAIRS;
+            const uint offset = row * OUT + col;
+            output[(size_t)routes[row] * width + first_out + col] =
+                inkling2_resident_situ(weight_tile[offset], weight_tile[offset + PAIRS], beta, linear_beta);
+        }
+    } else {
+        for (uint i = tid; i < tile.count * OUT; i += 128) {
+            const uint col = i % OUT;
+            if (col < out_rows) {
+                const uint route = routes[i / OUT];
+                output[(size_t)route * out_dim + first_out + col] = weight_tile[i];
+            }
         }
     }
 }
 
-typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56>) inkling2_resident_moe_gemm_t;
-template [[host_name("inkling2_resident_moe_gemm_q8_0")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56>;
-template [[host_name("inkling2_resident_moe_gemm_iq4_nl")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56>;
+typedef decltype(inkling2_resident_moe_gemm<block_q8_0_56, false>) inkling2_resident_moe_gemm_t;
+template [[host_name("inkling2_resident_moe_gemm_q8_0")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56, false>;
+template [[host_name("inkling2_resident_moe_gemm_iq4_nl")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, false>;
+template [[host_name("inkling2_resident_moe_gemm_situ_q8_0")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_q8_0_56, true>;
+template [[host_name("inkling2_resident_moe_gemm_situ_iq4_nl")]] kernel inkling2_resident_moe_gemm_t inkling2_resident_moe_gemm<block_iq4_nl_56, true>;
