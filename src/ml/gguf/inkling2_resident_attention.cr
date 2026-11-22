@@ -226,8 +226,25 @@ module ML::GGUF
       end
     end
 
-    # Encode-only per-visit Inkling 2 attention. It transforms the already
-    # projected Q/K/V, performs causal attention, then commits K/V for later
+    private lib LibInkling2Attention
+      # Matches Inkling2PrepareQKVRParams in inkling2_resident_attention.metal.
+      struct PrepareQKVRParams
+        n_head : UInt32
+        n_head_kv : UInt32
+        head_dim : UInt32
+        relative_dim : UInt32
+        start : UInt32
+        sliding : UInt32
+        log_scale_floor : UInt32
+        qk_clip : Float32
+        rel_clip : Float32
+        rms_eps : Float32
+        log_scale_alpha : Float32
+      end
+    end
+
+    # Encode-only per-visit Inkling 2 attention. It prepares Q/K/V and
+    # relative queries, performs causal attention, then commits K/V for later
     # tiles. The caller owns submission, synchronization, and scratch lifetime.
     class Inkling2ResidentAttention
       SOURCE = Inkling2ResidentConvolution::SOURCE
@@ -330,9 +347,7 @@ module ML::GGUF
         key = @key_convolution.encode(encoder, scratch, start, rows, k, k_taps, dynamic_k, dynamic_heads: dynamic_k ? n_head_kv : 0)
         value = @value_convolution.encode(encoder, scratch, start, rows, v, v_taps, dynamic_v, dynamic_heads: dynamic_v ? n_head_kv : 0)
 
-        encode_clip_heads(encoder, q, q_clip, rows, n_head, head_dim, start, @config.qk_clip)
-        encode_clip_heads(encoder, q_rel, rel_clip, rows, n_head, rel_dim, start, @config.rel_clip)
-        encode_prepare_kv(encoder, key, value, rows)
+        encode_prepare_qkvr(encoder, q, key, value, q_rel, q_clip, rel_clip, start, rows)
 
         attended = scratch.take(checked_elements(rows, q_width, "attention output"))
         # Keep this before the cache commit below: later rows in the block read
@@ -501,45 +516,39 @@ module ML::GGUF
         end
       end
 
-      private def encode_clip_heads(
+      private def encode_prepare_qkvr(
         encoder : ML::Metal::ComputeEncoder,
-        values : Inkling2View,
-        scales : Inkling2View,
-        rows : Int32,
-        heads : Int32,
-        width : Int32,
-        start : Int32,
-        threshold : Float32,
-      ) : Nil
-        encoder.set_pipeline(pipeline("inkling2_resident_clip_heads"))
-        encoder.set_buffer(values.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: values.offset)
-        encoder.set_buffer(scales.buffer, 1, offset: scales.offset)
-        encoder.set_value(rows.to_u32, 2)
-        encoder.set_value(heads.to_u32, 3)
-        encoder.set_value(width.to_u32, 4)
-        encoder.set_value(start.to_u32, 5)
-        encoder.set_value(@config.log_scale_floor.to_u32, 6)
-        encoder.set_value(@sliding ? 1_u32 : 0_u32, 7)
-        encoder.set_value(threshold, 8)
-        encoder.set_value(@config.log_scale_alpha, 9)
-        encoder.dispatch({32, rows, heads}, {32, 1, 1})
-      end
-
-      private def encode_prepare_kv(
-        encoder : ML::Metal::ComputeEncoder,
+        q : Inkling2View,
         keys : Inkling2View,
         values : Inkling2View,
+        q_rel : Inkling2View,
+        q_clip : Inkling2View,
+        rel_clip : Inkling2View,
+        start : Int32,
         rows : Int32,
       ) : Nil
-        encoder.set_pipeline(pipeline("inkling2_resident_prepare_kv"))
-        encoder.set_buffer(keys.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: keys.offset)
-        encoder.set_buffer(values.buffer, 1, ML::Metal::BufferAccess::ReadWrite, offset: values.offset)
-        encoder.set_value(rows.to_u32, 2)
-        encoder.set_value(@config.n_head_kv.to_u32, 3)
-        encoder.set_value(@config.head_dim.to_u32, 4)
-        encoder.set_value(@config.qk_clip, 5)
-        encoder.set_value(@config.rms_eps, 6)
-        encoder.dispatch({32, rows, @config.n_head_kv}, {32, 1, 1})
+        params = LibInkling2Attention::PrepareQKVRParams.new(
+          n_head: @config.n_head.to_u32,
+          n_head_kv: @config.n_head_kv.to_u32,
+          head_dim: @config.head_dim.to_u32,
+          relative_dim: @config.rel_dim.to_u32,
+          start: start.to_u32,
+          sliding: @sliding ? 1_u32 : 0_u32,
+          log_scale_floor: @config.log_scale_floor.to_u32,
+          qk_clip: @config.qk_clip,
+          rel_clip: @config.rel_clip,
+          rms_eps: @config.rms_eps,
+          log_scale_alpha: @config.log_scale_alpha,
+        )
+        encoder.set_pipeline(pipeline("inkling2_resident_prepare_qkvr"))
+        encoder.set_buffer(q.buffer, 0, ML::Metal::BufferAccess::ReadWrite, offset: q.offset)
+        encoder.set_buffer(keys.buffer, 1, ML::Metal::BufferAccess::ReadWrite, offset: keys.offset)
+        encoder.set_buffer(values.buffer, 2, ML::Metal::BufferAccess::ReadWrite, offset: values.offset)
+        encoder.set_buffer(q_rel.buffer, 3, ML::Metal::BufferAccess::ReadWrite, offset: q_rel.offset)
+        encoder.set_buffer(q_clip.buffer, 4, offset: q_clip.offset)
+        encoder.set_buffer(rel_clip.buffer, 5, offset: rel_clip.offset)
+        encoder.set_bytes(pointerof(params).as(Void*), sizeof(LibInkling2Attention::PrepareQKVRParams), 6)
+        encoder.dispatch({32, rows, 2 * @config.n_head + @config.n_head_kv}, {32, 1, 1})
       end
 
       private def encode_attention(
