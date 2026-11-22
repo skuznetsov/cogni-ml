@@ -22,25 +22,38 @@ kernel void inkling2_resident_gemm_q8_0_simd(
     const uint in_quadrant = 16 * (simd >> 1);
     const uint blocks = in_dim / TILE;
 
-    threadgroup float weight_tile[TILE * TILE];
-    threadgroup float input_tile[TILE * TILE];
+    threadgroup float4 weight_vectors[TILE * TILE / 4];
+    threadgroup float4 input_vectors[TILE * TILE / 4];
+    threadgroup float* weight_tile = (threadgroup float*)weight_vectors;
+    threadgroup float* input_tile = (threadgroup float*)input_vectors;
+    // Four threads stage eight adjacent values each from a weight and input row.
+    const uint load_row = tid / 4;
+    const uint load_col = (tid % 4) * 8;
+    const bool weight_valid = load_row < out_rows;
+    const bool input_valid = load_row < in_rows;
+    const device block_q8_0_56* weight_row =
+        weights + (size_t)(first_out + min(load_row, out_rows - 1)) * blocks;
+    const device float* input_row =
+        x + (size_t)(first_in + min(load_row, in_rows - 1)) * in_dim + load_col;
     simdgroup_float8x8 accum[4];
     for (uint i = 0; i < 4; ++i) {
         accum[i] = make_filled_simdgroup_matrix<float, 8>(0.0f);
     }
 
     for (uint block = 0; block < blocks; ++block) {
-        for (uint i = tid; i < TILE * TILE; i += 128) {
-            const uint row = i / TILE;
-            const uint col = i % TILE;
-            if (row < out_rows) {
-                device const block_q8_0_56& packed = weights[(size_t)(first_out + row) * blocks + block];
-                weight_tile[i] = (float)packed.d * (float)packed.qs[col];
-            } else {
-                weight_tile[i] = 0.0f;
-            }
-            input_tile[i] = row < in_rows ? x[(size_t)(first_in + row) * in_dim + block * TILE + col] : 0.0f;
+        if (weight_valid) {
+            const device block_q8_0_56& packed = weight_row[block];
+            const float scale = (float)packed.d;
+            const device packed_char4* codes = (const device packed_char4*)(packed.qs + load_col);
+            weight_vectors[2 * tid] = scale * float4((char4)codes[0]);
+            weight_vectors[2 * tid + 1] = scale * float4((char4)codes[1]);
+        } else {
+            weight_vectors[2 * tid] = float4(0.0f);
+            weight_vectors[2 * tid + 1] = float4(0.0f);
         }
+        const device packed_float4* values = (const device packed_float4*)(input_row + block * TILE);
+        input_vectors[2 * tid] = input_valid ? float4(values[0]) : float4(0.0f);
+        input_vectors[2 * tid + 1] = input_valid ? float4(values[1]) : float4(0.0f);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         #pragma unroll
