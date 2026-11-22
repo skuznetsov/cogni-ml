@@ -86,13 +86,14 @@ module ML::GGUF
     end
 
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
-                   max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil)
+                   max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil,
+                   rollback_rows : Int32 = 0)
       @config = @weights.config
       @prelude_blocks = @config.core_start // @config.res_block_size
       @core_blocks = (@config.core_end - @config.core_start) // @config.res_block_size
       @block_slots = (@config.n_layer - 1) // @config.res_block_size + 1
       @linear = Inkling2ResidentLinear.new(@weights.gguf)
-      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq)
+      @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows)
     end
 
     def forward(token : Int32, position : Int32, with_logits : Bool) : Array(Float32)?
@@ -111,6 +112,14 @@ module ML::GGUF
         result = Array(Float32).new(vocab, 0_f32)
         result.to_unsafe.copy_from(data + row * vocab, vocab)
         result
+      end
+    end
+
+    def rewind_block(end_position : Int32) : Nil
+      @visits.each do |visit|
+        visit.attention.rewind(end_position)
+        visit.post_conv.rewind(end_position)
+        visit.ffn_conv.rewind(end_position)
       end
     end
 
@@ -157,13 +166,13 @@ module ML::GGUF
       @linear.close
     end
 
-    private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32)
+    private def prepare_buffers(physical_visits : Array(Int32), max_seq : Int32, rollback_rows : Int32)
       physical_visits.each do |physical|
         sliding = @config.sliding?(physical)
         @visits << Visit.new(
-          Inkling2ResidentAttention.new(@config, sliding, max_seq),
-          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size),
-          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size),
+          Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows),
+          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
+          Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
         )
       end
       id_rows = Math.max(4, @append_prefill_rows || @prefill_rows)

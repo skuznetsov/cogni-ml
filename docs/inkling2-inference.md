@@ -132,6 +132,27 @@ submissions for both lane orders. This timing measures blocks with four
 known inputs. Speculative generation also depends on how many rows it
 can commit per block.
 
+## Greedy n-gram verification
+
+Use `inkling2_generate --ngram` with fixed-depth resident Metal to accelerate
+exact repeats. The decoder looks for a matching suffix of six to eight token
+IDs in its history. When the match supplies three candidate IDs, it verifies
+them in one block with the exact pending token. It commits the matching
+prefix and takes the next ID from the target model.
+
+Sliding KV and convolution histories reserve up to four extra physical rows.
+The logical attention window is unchanged. After a mismatch the decoder
+shortens the logical prefix, and later steps overwrite rejected rows. This
+requires no GPU cache copy or replay. The decoder takes a scalar step
+whenever it finds fewer than three candidates. If verification commits
+fewer than three rows, the rest of the completion uses scalar decode.
+
+On the research IQ4_NL checkpoint at 3 and 10 passes, two repeating
+continuations accepted all 24 proposed tokens over eight blocks each.
+The story and six-hop lookup continuations produced no drafts.
+Greedy output matched scalar decode in these cases and on a mixed
+counter-record continuation with partial acceptance.
+
 ## Checkpoints used for verification
 
 | Checkpoint | Hugging Face revision | SHA-256 |
