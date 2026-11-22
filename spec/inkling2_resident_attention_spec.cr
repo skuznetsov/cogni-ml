@@ -244,6 +244,36 @@ require "../src/ml/gguf/inkling2_resident_math"
     end
   end
 
+  private def resident_run_convolution_tile(
+    convolution : ML::GGUF::Inkling2ResidentConvolution,
+    start : Int32,
+    input_values : Array(Float32),
+    tap_values : Array(Float32),
+  ) : Array(Float32)
+    count = input_values.size.to_i32
+    buffers = [] of ML::MetalBuffer
+    scratch = ML::GGUF::Inkling2ResidentScratch.new
+    output = ML::MetalBuffer.new(count.to_i64 * sizeof(Float32), ML::StorageMode::Shared)
+    command = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(command)
+    begin
+      input = resident_shared_view(input_values, buffers)
+      taps = resident_shared_view(tap_values, buffers)
+      begin
+        result = convolution.encode(encoder, scratch, start, count, input, taps)
+        ML::GGUF::Inkling2ResidentMath.copy(encoder, result, ML::GGUF::Inkling2View.new(output), count)
+      ensure
+        encoder.end_encoding
+      end
+      command.commit_and_wait
+      output.read(count)
+    ensure
+      scratch.close
+      buffers.each(&.release)
+      output.release
+    end
+  end
+
   if ML::Metal::Device.init!
     describe ML::GGUF::Inkling2ResidentAttention do
       it "matches sliding attention across tile boundaries, ring wrap, oversized batches, reset, and KV snapshots" do
@@ -482,6 +512,88 @@ require "../src/ml/gguf/inkling2_resident_math"
           end
         ensure
           gpu.close
+        end
+      end
+
+      it "retains a partial prefix across four scalar speculative writes over ring wrap" do
+        config = resident_test_config(sliding: true, n_head: 1_i32, n_head_kv: 1_i32,
+          head_dim: 1_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 23_i32)
+        weights = resident_attention_weights(config)
+        matmul = ML::GGUF::Inkling2CPUMatmul.new
+        original_inputs = resident_inputs(config, 23_i32)
+        alternate_inputs = resident_inputs(config, 1_i32).map do |(q_in, k_in, v_in)|
+          {q_in.map { |value| value * 1.7_f32 + 0.1_f32 },
+           k_in.map { |value| value * -0.8_f32 + 0.2_f32 },
+           v_in.map { |value| value * 1.3_f32 - 0.15_f32 }}
+        end
+        original_projected = resident_projected_rows(weights, matmul, original_inputs)
+        alternate_projected = resident_projected_rows(weights, matmul, alternate_inputs)
+        gpu = ML::GGUF::Inkling2ResidentAttention.new(config, true, 23_i32, rollback_rows: 4_i32)
+        cpu = ML::GGUF::Inkling2AttentionState.new(config, true, 23_i32)
+
+        begin
+          resident_run_tile(gpu, 0_i32, original_projected[0, 19], weights, config)
+          expect_raises(ArgumentError) { gpu.begin_speculation(18_i32) }
+          gpu.begin_speculation(19_i32)
+          4.times do |offset|
+            resident_run_tile(gpu, 19_i32 + offset, [original_projected[19 + offset]], weights, config)
+          end
+          expect_raises(ArgumentError) { gpu.rewind(22_i32) }
+          expect_raises(ArgumentError) do
+            resident_run_tile(gpu, 23_i32, [original_projected[22]], weights, config)
+          end
+          expect_raises(ArgumentError) { gpu.finish_speculation(18_i32) }
+          gpu.finish_speculation(21_i32)
+
+          21.times do |position|
+            q_in, k_in, v_in = original_inputs[position]
+            ML::GGUF::Inkling2Attention.forward(weights, config, cpu, matmul,
+              q_in, k_in, v_in, position.to_i32)
+          end
+          q_in, k_in, v_in = alternate_inputs[0]
+          expected = ML::GGUF::Inkling2Attention.forward(weights, config, cpu, matmul, q_in, k_in, v_in, 21_i32)
+            .map { |value| value * Math.sqrt(config.conv_size + 1).to_f32 }
+          actual = resident_run_tile(gpu, 21_i32, [alternate_projected[0]], weights, config)
+          actual.size.times { |index| (actual[index] - expected[index]).abs.should be < 4e-5_f32 }
+
+          {19_i32, 20_i32, 21_i32}.each_with_index do |position, chronological|
+            actual_key, actual_value, actual_position = gpu.key_value_at(position, 22_i32)
+            expected_key, expected_value, expected_position = cpu.key_value_at(chronological.to_i32)
+            actual_position.should eq position
+            expected_position.should eq position
+            (actual_key[0] - expected_key[0]).abs.should be < 4e-5_f32
+            (actual_value[0] - expected_value[0]).abs.should be < 4e-5_f32
+          end
+        ensure
+          gpu.close
+        end
+      end
+
+      it "supports a bounded partial speculation span on standalone convolution" do
+        convolution = ML::GGUF::Inkling2ResidentConvolution.new(1_i32, 2_i32, rollback_rows: 4_i32)
+        taps = [0.65_f32, -0.25_f32]
+        inputs = Array(Float32).new(12) { |index| (index % 11 - 5).to_f32 * 0.07_f32 }
+        replacement = -0.31_f32
+
+        begin
+          resident_run_convolution_tile(convolution, 0_i32, inputs[0, 8], taps)
+          expect_raises(ArgumentError) { convolution.begin_speculation(7_i32) }
+          convolution.begin_speculation(8_i32)
+          4.times do |offset|
+            resident_run_convolution_tile(convolution, 8_i32 + offset, [inputs[8 + offset]], taps)
+          end
+          expect_raises(ArgumentError) { convolution.rewind(11_i32) }
+          expect_raises(ArgumentError) do
+            resident_run_convolution_tile(convolution, 12_i32, [replacement], taps)
+          end
+          expect_raises(ArgumentError) { convolution.finish_speculation(7_i32) }
+          convolution.finish_speculation(10_i32)
+
+          actual = resident_run_convolution_tile(convolution, 10_i32, [replacement], taps)
+          expected = (replacement + inputs[9] * taps[0] + replacement * taps[1]) / Math.sqrt(3_f32).to_f32
+          (actual[0] - expected).abs.should be < 2e-6_f32
+        ensure
+          convolution.close
         end
       end
 

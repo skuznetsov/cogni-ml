@@ -6,11 +6,40 @@ module ML::GGUF
   # One command per decode token, known continuation block, or causal prefill
   # tile. Only IDs and the requested logits cross the CPU/GPU boundary.
   class Inkling2Resident
-    private DEPTH_EPS = 1e-6_f32
+    private DEPTH_EPS          = 1e-6_f32
+    private DEPTH_DRAFT_PASSES =    3_i32
     private alias MathOps = Inkling2ResidentMath
 
     private record Visit, attention : Inkling2ResidentAttention,
       post_conv : Inkling2ResidentConvolution, ffn_conv : Inkling2ResidentConvolution do
+      def begin_speculation(start : Int32) : Nil
+        attention.begin_speculation(start)
+        post_conv.begin_speculation(start)
+        ffn_conv.begin_speculation(start)
+      end
+
+      def finish_speculation(end_position : Int32) : Nil
+        attention.finish_speculation(end_position)
+        post_conv.finish_speculation(end_position)
+        ffn_conv.finish_speculation(end_position)
+      end
+
+      def rewind(end_position : Int32) : Nil
+        attention.rewind(end_position)
+        post_conv.rewind(end_position)
+        ffn_conv.rewind(end_position)
+      end
+
+      def reset : Nil
+        attention.reset
+        post_conv.reset
+        ffn_conv.reset
+      end
+
+      def finish : Nil
+        attention.finish
+      end
+
       def close : Nil
         attention.close
         post_conv.close
@@ -50,6 +79,7 @@ module ML::GGUF
     @config : Inkling2Config
     @prelude_blocks : Int32
     @core_blocks : Int32
+    @max_seq : Int32
     @block_slots : Int32
     @constants : ML::MetalBuffer
     @ids : ML::MetalBuffer
@@ -57,8 +87,16 @@ module ML::GGUF
     @block_logits : ML::MetalBuffer? = nil
     @scratch = Inkling2ResidentScratch.new
     @visits = [] of Visit
+    @draft_epilogue_visits = [] of Visit
     @float_offsets = {} of UInt64 => Int64
     @shared = [] of ML::MetalBuffer
+    @depth_checkpoint : ML::MetalBuffer? = nil
+    @depth_speculation : Bool
+    @depth_frontier = 0_i32
+    @depth_block_start : Int32? = nil
+    @depth_draft_rows = 0_i32
+    @depth_verified = false
+    @depth_failed = false
 
     def self.supported?(weights : Inkling2Weights) : Bool
       config = weights.config
@@ -87,11 +125,17 @@ module ML::GGUF
 
     def initialize(@weights : Inkling2Weights, @passes : Int32, physical_visits : Array(Int32),
                    max_seq : Int32, @prefill_rows : Int32, *, @append_prefill_rows : Int32? = nil,
-                   rollback_rows : Int32 = 0)
+                   rollback_rows : Int32 = 0, @depth_speculation : Bool = false)
       @config = @weights.config
+      @max_seq = max_seq
       @prelude_blocks = @config.core_start // @config.res_block_size
       @core_blocks = (@config.core_end - @config.core_start) // @config.res_block_size
       @block_slots = (@config.n_layer - 1) // @config.res_block_size + 1
+      if @depth_speculation
+        raise ArgumentError.new("Inkling 2 depth speculation requires exactly 10 target passes") unless @passes == 10
+        raise ArgumentError.new("Inkling 2 depth speculation requires four rollback rows") unless rollback_rows == 4
+        raise ArgumentError.new("Inkling 2 depth speculation requires at least one core block") unless @core_blocks > 0
+      end
       @linear = Inkling2ResidentLinear.new(@weights.gguf)
       @constants, @ids, @logits = prepare_buffers(physical_visits, max_seq, rollback_rows)
     end
@@ -102,28 +146,27 @@ module ML::GGUF
     end
 
     def decode_block4(tokens : StaticArray(Int32, 4), position : Int32) : StaticArray(Array(Float32), 4)
+      ensure_ordinary_mode! if @depth_speculation
       ids = @ids.contents.as(Int32*)
       tokens.each_with_index { |token, row| ids[row] = token }
       vocab = @config.vocab_size
       logits = @block_logits ||= allocate_shared(tokens.size.to_i64 * vocab * sizeof(Float32))
       submit_tile(position, tokens.size, logits, decode_block: true)
-      data = logits.contents.as(Float32*)
-      StaticArray(Array(Float32), 4).new do |row|
-        result = Array(Float32).new(vocab, 0_f32)
-        result.to_unsafe.copy_from(data + row * vocab, vocab)
-        result
-      end
+      read_block_logits(logits)
     end
 
     def rewind_block(end_position : Int32) : Nil
-      @visits.each do |visit|
-        visit.attention.rewind(end_position)
-        visit.post_conv.rewind(end_position)
-        visit.ffn_conv.rewind(end_position)
+      if @depth_speculation
+        ensure_ordinary_mode!
+        raise ArgumentError.new("Inkling 2 resident rewind end is outside the current frontier") unless 0 <= end_position <= @depth_frontier
       end
+      @visits.each(&.rewind(end_position))
+      @draft_epilogue_visits.each(&.rewind(end_position))
+      @depth_frontier = end_position if @depth_speculation
     end
 
     def prefill(tokens : Indexable(Int32), position : Int32) : Array(Float32)
+      ensure_ordinary_mode! if @depth_speculation
       tile_rows = @prefill_rows
       if (append_rows = @append_prefill_rows) && position > 0 && tokens.size >= append_rows
         tile_rows = append_rows
@@ -149,19 +192,105 @@ module ML::GGUF
       Math.min(@visits[visit].attention.capacity, end_position)
     end
 
-    def reset : Nil
-      @visits.each do |visit|
-        visit.attention.reset
-        visit.post_conv.reset
-        visit.ffn_conv.reset
+    def draft_kv_count(visit : Int32, end_position : Int32) : Int32
+      Math.min(draft_visit(visit, end_position).attention.capacity, end_position)
+    end
+
+    def draft_key_value_at(visit : Int32, index : Int32, end_position : Int32) : {Array(Float32), Array(Float32), Int32}
+      owner = draft_visit(visit, end_position).attention
+      count = Math.min(owner.capacity, end_position)
+      raise IndexError.new("Inkling 2 draft attention cache index out of bounds") unless 0 <= index < count
+      position = end_position - count + index
+      owner.key_value_at(position, end_position)
+    end
+
+    def begin_depth_block(position : Int32) : Nil
+      ensure_depth_enabled!
+      ensure_depth_healthy!
+      raise "Inkling 2 depth block is already active" if @depth_block_start
+      unless position >= 0 && position == @depth_frontier
+        raise ArgumentError.new("Inkling 2 depth block must begin at the current position #{@depth_frontier}")
       end
+      if position.to_i64 + 4 > @max_seq
+        raise ArgumentError.new("Inkling 2 depth block exceeds the context of #{@max_seq} tokens")
+      end
+
+      begin
+        @visits.each(&.begin_speculation(position))
+        @draft_epilogue_visits.each(&.begin_speculation(position))
+        @depth_block_start = position
+        @depth_draft_rows = 0
+        @depth_verified = false
+      rescue ex
+        @depth_failed = true
+        raise ex
+      end
+    end
+
+    def draft_depth_row(token : Int32, position : Int32, *, logits : Bool) : Array(Float32)?
+      ensure_depth_enabled!
+      ensure_depth_healthy!
+      start = active_depth_start
+      unless position == start + @depth_draft_rows && @depth_draft_rows < 4
+        raise ArgumentError.new("Inkling 2 depth draft rows must be consecutive and limited to four")
+      end
+      raise ArgumentError.new("Token #{token} is outside the Inkling 2 vocabulary") unless token.in?(0...@config.vocab_size)
+
+      @ids.contents.as(Int32*).value = token
+      submit_depth_draft_row(position, @depth_draft_rows, logits)
+      @depth_draft_rows += 1
+      logits ? @logits.read(@config.vocab_size) : nil
+    end
+
+    def verify_depth_block(position : Int32) : StaticArray(Array(Float32), 4)
+      ensure_depth_enabled!
+      ensure_depth_healthy!
+      start = active_depth_start
+      raise ArgumentError.new("Inkling 2 depth verification position does not match its draft block") unless position == start
+      raise ArgumentError.new("Inkling 2 depth verification requires four draft rows") unless @depth_draft_rows == 4
+      raise "Inkling 2 depth block has already been verified" if @depth_verified
+
+      result = submit_depth_verification(position)
+      @depth_verified = true
+      result
+    end
+
+    def finish_depth_block(end_position : Int32) : Nil
+      ensure_depth_enabled!
+      ensure_depth_healthy!
+      start = active_depth_start
+      unless @depth_verified && end_position.in?(start..(start + 4))
+        raise ArgumentError.new("Inkling 2 depth block must be verified and retain an end within its four rows")
+      end
+
+      begin
+        @visits.each(&.finish_speculation(end_position))
+        @draft_epilogue_visits.each(&.finish_speculation(end_position))
+        @depth_frontier = end_position
+        clear_depth_block
+      rescue ex
+        @depth_failed = true
+        raise ex
+      end
+    end
+
+    def reset : Nil
+      @visits.each(&.reset)
+      @draft_epilogue_visits.each(&.reset)
+      @depth_frontier = 0 if @depth_speculation
+      @depth_failed = false
+      clear_depth_block
     end
 
     def close : Nil
       @visits.each(&.close)
       @visits.clear
+      @draft_epilogue_visits.each(&.close)
+      @draft_epilogue_visits.clear
       @shared.each(&.release)
       @shared.clear
+      @depth_checkpoint.try(&.release)
+      @depth_checkpoint = nil
       @scratch.close
       @linear.close
     end
@@ -175,6 +304,17 @@ module ML::GGUF
           Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
         )
       end
+      if @depth_speculation
+        (@config.core_end...@config.n_layer).each do |physical|
+          sliding = @config.sliding?(physical)
+          @draft_epilogue_visits << Visit.new(
+            Inkling2ResidentAttention.new(@config, sliding, max_seq, rollback_rows: rollback_rows),
+            Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
+            Inkling2ResidentConvolution.new(@config.n_embd, @config.conv_size, rollback_rows: rollback_rows),
+          )
+        end
+        @depth_checkpoint = allocate_private(checkpoint_bytes)
+      end
       id_rows = Math.max(4, @append_prefill_rows || @prefill_rows)
       {upload_constants, allocate_shared(id_rows.to_i64 * sizeof(Int32)),
        allocate_shared(@config.vocab_size.to_i64 * sizeof(Float32))}
@@ -187,6 +327,29 @@ module ML::GGUF
       buffer = ML::MetalBuffer.new(bytes)
       @shared << buffer
       buffer
+    end
+
+    private def allocate_private(bytes : Int64) : ML::MetalBuffer
+      ML::MetalBuffer.new(bytes, ML::StorageMode::Private)
+    end
+
+    private def checkpoint_bytes : Int64
+      planes = 1_i64 + @prelude_blocks + @core_blocks
+      elements = planes * 4_i64 * @config.n_embd
+      raise ArgumentError.new("Inkling 2 depth checkpoint exceeds Int32 elements") if elements > Int32::MAX
+      elements * sizeof(Float32)
+    end
+
+    private def checkpoint_view(plane : Int32, row : Int32 = 0) : Inkling2View
+      raise ArgumentError.new("Inkling 2 depth checkpoint plane is out of bounds") unless plane.in?(0...checkpoint_plane_count)
+      raise ArgumentError.new("Inkling 2 depth checkpoint row is out of bounds") unless row.in?(0...4)
+      buffer = @depth_checkpoint || raise "Inkling 2 depth checkpoint is not allocated"
+      offset = (plane.to_i64 * 4 + row) * @config.n_embd * sizeof(Float32)
+      Inkling2View.new(buffer, offset)
+    end
+
+    private def checkpoint_plane_count : Int32
+      1 + @prelude_blocks + @core_blocks
     end
 
     private def upload_constants : ML::MetalBuffer
@@ -224,20 +387,131 @@ module ML::GGUF
       @logits.read(@config.vocab_size) if with_logits
     end
 
+    private def submit_depth_draft_row(position : Int32, row : Int32, with_logits : Bool) : Nil
+      submit_command do |encoder|
+        encode_depth_draft_row(encoder, position, row, with_logits)
+      end
+    end
+
+    private def encode_depth_draft_row(encoder : ML::Metal::ComputeEncoder, position : Int32,
+                                       checkpoint_row : Int32, with_logits : Bool) : Nil
+      rows = 1
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, false)
+      prelude = tile.hidden
+      banks = StaticArray[
+        @scratch.take(@core_blocks * tile.elements),
+        @scratch.take(@core_blocks * tile.elements),
+      ]
+
+      visit = encode_prelude(tile, prelude)
+      MathOps.copy(encoder, prelude, checkpoint_view(0, checkpoint_row), tile.elements)
+      @prelude_blocks.times do |plane|
+        source = tile.blocks.slice(plane * tile.elements)
+        MathOps.copy(encoder, source, checkpoint_view(1 + plane, checkpoint_row), tile.elements)
+      end
+
+      previous_bank = nil
+      DEPTH_DRAFT_PASSES.times do |pass|
+        visit = encode_core_pass(tile, visit, prelude, previous_bank, restore_prelude: pass > 0)
+
+        bank = banks[pass % 2]
+        encode_core_bank(tile, bank)
+        previous_bank = bank
+
+        if pass + 1 == DEPTH_DRAFT_PASSES
+          @core_blocks.times do |plane|
+            MathOps.copy(encoder, bank.slice(plane * tile.elements),
+              checkpoint_view(1 + @prelude_blocks + plane, checkpoint_row), tile.elements)
+          end
+        end
+      end
+
+      encode_epilogue_branch(tile, @draft_epilogue_visits, with_logits ? @logits : nil)
+    end
+
+    private def submit_depth_verification(position : Int32) : StaticArray(Array(Float32), 4)
+      logits = @block_logits ||= allocate_shared(4_i64 * @config.vocab_size * sizeof(Float32))
+      submit_command do |encoder|
+        encode_depth_verification(encoder, position, logits)
+      end
+
+      read_block_logits(logits)
+    end
+
+    private def read_block_logits(buffer : ML::MetalBuffer) : StaticArray(Array(Float32), 4)
+      data = buffer.contents.as(Float32*)
+      vocab = @config.vocab_size
+      StaticArray(Array(Float32), 4).new do |row|
+        result = Array(Float32).new(vocab, 0_f32)
+        result.to_unsafe.copy_from(data + row * vocab, vocab)
+        result
+      end
+    end
+
+    private def encode_depth_verification(encoder : ML::Metal::ComputeEncoder, position : Int32,
+                                          logits : ML::MetalBuffer) : Nil
+      rows = 4
+      tile = Tile.new(encoder, @scratch, position, rows, @config.n_embd, @block_slots, true)
+      elements = tile.elements
+      prelude = tile.hidden
+      MathOps.copy(encoder, checkpoint_view(0), prelude, elements)
+      @prelude_blocks.times do |plane|
+        MathOps.copy(encoder, checkpoint_view(1 + plane), tile.blocks.slice(plane * elements), elements)
+      end
+
+      banks = StaticArray[
+        @scratch.take(@core_blocks * elements),
+        @scratch.take(@core_blocks * elements),
+      ]
+      previous_bank = checkpoint_view(1 + @prelude_blocks)
+      visit = @config.core_start + DEPTH_DRAFT_PASSES * (@config.core_end - @config.core_start)
+      (@passes - DEPTH_DRAFT_PASSES).times do |pass_offset|
+        pass = DEPTH_DRAFT_PASSES + pass_offset
+        visit = encode_core_pass(tile, visit, prelude, previous_bank, restore_prelude: true)
+
+        if pass + 1 < @passes
+          bank = banks[pass % 2]
+          encode_core_bank(tile, bank)
+          previous_bank = bank
+        end
+      end
+
+      (@config.core_end...@config.n_layer).each do |physical|
+        encode_layer(physical, visit, tile, nil)
+        visit += 1
+      end
+      encode_logits(tile, logits)
+    end
+
     private def submit_tile(position : Int32, rows : Int32, logits : ML::MetalBuffer?, *, decode_block : Bool = false) : Nil
+      if @depth_speculation
+        ensure_ordinary_mode!
+        raise ArgumentError.new("Inkling 2 resident tiles must be contiguous from position #{@depth_frontier}") unless position == @depth_frontier
+      end
+      submit_command do |encoder|
+        encode_tile(encoder, position, rows, logits, decode_block)
+      end
+      @depth_frontier = position + rows if @depth_speculation
+    end
+
+    private def submit_command(& : ML::Metal::ComputeEncoder -> Nil) : Nil
       @scratch.reset
       command = ML::Metal::CommandBuffer.new
       begin
         encoder = ML::Metal::ComputeEncoder.new(command)
         begin
-          encode_tile(encoder, position, rows, logits, decode_block)
+          yield encoder
         ensure
           encoder.end_encoding
         end
         command.commit_and_wait
+      rescue ex
+        @depth_failed = true if @depth_speculation
+        raise ex
       ensure
         command.discard unless command.committed?
-        @visits.each { |visit| visit.attention.finish }
+        @visits.each(&.finish)
+        @draft_epilogue_visits.each(&.finish)
       end
     end
 
@@ -247,45 +521,22 @@ module ML::GGUF
       prelude = tile.hidden if @passes > 1
       banks = StaticArray[@scratch.take(@core_blocks * tile.elements), @scratch.take(@core_blocks * tile.elements)] if @passes > 1
 
-      mark = @scratch.mark
-      embedding = tile.hidden
-      matrix = @weights.token_embd
-      unless MathOps.embed(encoder, @linear.view(matrix), matrix.type, Inkling2View.new(@ids), embedding, tile.width, rows)
-        raise "Inkling 2 resident embedding type was not admitted"
-      end
-      MathOps.rms(encoder, embedding, tile.current, constant(@weights.token_embd_norm), tile.width, rows, @config.rms_eps)
-      @scratch.rewind(mark)
-
-      visit = 0
-      (0...@config.core_start).each do |physical|
-        encode_layer(physical, visit, tile, nil)
-        visit += 1
-      end
-      if saved = prelude
-        MathOps.copy(encoder, tile.current, saved, tile.elements)
-      end
+      visit = encode_prelude(tile, prelude)
 
       previous_bank = nil
       @passes.times do |pass|
-        if pass > 0
-          tile.block_count = @prelude_blocks
-          MathOps.copy(encoder, prelude.not_nil!, tile.current, tile.elements)
-        end
-        (@config.core_start...@config.core_end).each do |physical|
-          encode_layer(physical, visit, tile, previous_bank)
-          visit += 1
-        end
+        visit = encode_core_pass(tile, visit, prelude, previous_bank, restore_prelude: pass > 0)
         if pass + 1 < @passes
           # The first core block's input is the shared prelude. Save the
           # remaining normalized blocks and the terminal state for messaging.
           bank = banks.not_nil![pass % 2]
-          if @core_blocks > 1
-            source = tile.blocks.slice((@prelude_blocks + 1) * tile.elements)
-            MathOps.copy(encoder, source, bank, (@core_blocks - 1) * tile.elements)
-          end
-          terminal = bank.slice((@core_blocks - 1) * tile.elements)
-          MathOps.rms(encoder, tile.current, terminal, nil, tile.width, rows, DEPTH_EPS)
+          encode_core_bank(tile, bank)
           previous_bank = bank
+        end
+        if @depth_speculation && pass + 1 == DEPTH_DRAFT_PASSES
+          # Pass 4 restores the saved prelude and block count before it resumes
+          # the target path, so the shallow epilogue can reuse this tile.
+          encode_epilogue_branch(tile, @draft_epilogue_visits, nil)
         end
       end
 
@@ -313,9 +564,103 @@ module ML::GGUF
       end
     end
 
-    private def encode_layer(physical : Int32, visit_index : Int32, tile : Tile, previous_bank : Inkling2View?) : Nil
+    private def draft_visit(visit : Int32, end_position : Int32) : Visit
+      ensure_depth_enabled!
+      ensure_depth_healthy!
+      raise ArgumentError.new("Inkling 2 draft history end position is out of bounds") unless end_position.in?(0..@max_seq)
+      unless visit.in?(0...@draft_epilogue_visits.size)
+        raise IndexError.new("Inkling 2 draft layer visit out of bounds")
+      end
+      @draft_epilogue_visits[visit]
+    end
+
+    private def active_depth_start : Int32
+      @depth_block_start || raise "Inkling 2 depth block has not begun"
+    end
+
+    private def clear_depth_block : Nil
+      @depth_block_start = nil
+      @depth_draft_rows = 0
+      @depth_verified = false
+    end
+
+    private def ensure_depth_enabled! : Nil
+      raise ArgumentError.new("Inkling 2 resident depth speculation is disabled") unless @depth_speculation
+    end
+
+    private def ensure_depth_healthy! : Nil
+      raise "Inkling 2 resident depth block failed; reset the sequence" if @depth_failed
+    end
+
+    private def ensure_ordinary_mode! : Nil
+      ensure_depth_healthy!
+      raise "Inkling 2 depth block is active" if @depth_block_start
+    end
+
+    private def encode_prelude(tile : Tile, saved : Inkling2View?) : Int32
+      encoder = tile.encoder
+      mark = @scratch.mark
+      embedding = tile.hidden
+      matrix = @weights.token_embd
+      unless MathOps.embed(encoder, @linear.view(matrix), matrix.type, Inkling2View.new(@ids), embedding, tile.width, tile.rows)
+        raise "Inkling 2 resident embedding type was not admitted"
+      end
+      MathOps.rms(encoder, embedding, tile.current, constant(@weights.token_embd_norm), tile.width, tile.rows, @config.rms_eps)
+      @scratch.rewind(mark)
+
+      visit = 0
+      (0...@config.core_start).each do |physical|
+        encode_layer(physical, visit, tile, nil)
+        visit += 1
+      end
+      if output = saved
+        MathOps.copy(encoder, tile.current, output, tile.elements)
+      end
+      visit
+    end
+
+    private def encode_core_pass(tile : Tile, visit : Int32, prelude : Inkling2View?,
+                                 previous_bank : Inkling2View?, *, restore_prelude : Bool) : Int32
+      if restore_prelude
+        tile.block_count = @prelude_blocks
+        MathOps.copy(tile.encoder, prelude.not_nil!, tile.current, tile.elements)
+      end
+      (@config.core_start...@config.core_end).each do |physical|
+        encode_layer(physical, visit, tile, previous_bank)
+        visit += 1
+      end
+      visit
+    end
+
+    private def encode_core_bank(tile : Tile, bank : Inkling2View) : Nil
+      if @core_blocks > 1
+        source = tile.blocks.slice((@prelude_blocks + 1) * tile.elements)
+        MathOps.copy(tile.encoder, source, bank, (@core_blocks - 1) * tile.elements)
+      end
+      terminal = bank.slice((@core_blocks - 1) * tile.elements)
+      MathOps.rms(tile.encoder, tile.current, terminal, nil, tile.width, tile.rows, DEPTH_EPS)
+    end
+
+    private def encode_epilogue_branch(tile : Tile, visits : Array(Visit), logits : ML::MetalBuffer?) : Nil
+      mark = @scratch.mark
+      begin
+        visit = 0
+        (@config.core_end...@config.n_layer).each do |physical|
+          encode_layer(physical, visit, tile, nil, visits)
+          visit += 1
+        end
+        if output = logits
+          encode_logits(tile, output)
+        end
+      ensure
+        @scratch.rewind(mark)
+      end
+    end
+
+    private def encode_layer(physical : Int32, visit_index : Int32, tile : Tile, previous_bank : Inkling2View?,
+                             visits : Array(Visit) = @visits) : Nil
       layer = @weights.layers[physical]
-      visit = @visits[visit_index]
+      visit = visits[visit_index]
       encoder = tile.encoder
       mark = @scratch.mark
       residual = tile.hidden

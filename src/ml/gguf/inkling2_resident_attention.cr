@@ -19,6 +19,7 @@ module ML::GGUF
       @last_end_position : Int32? = nil
       @last_encoded_start_position : Int32? = nil
       @last_encoded_end_position : Int32? = nil
+      @speculation_start_position : Int32? = nil
       @history_slots : Int32
       @closed = false
 
@@ -50,6 +51,7 @@ module ML::GGUF
         dynamic_heads : Int32 = 0,
       ) : Inkling2View
         ensure_open!
+        validate_speculation_tile!(start, rows)
         validate_tile!(start, rows)
         total = checked_elements(rows, @channels, "convolution output")
         validate_view!(input, total, "convolution input")
@@ -115,12 +117,14 @@ module ML::GGUF
         @last_end_position = nil
         @last_encoded_start_position = nil
         @last_encoded_end_position = nil
+        @speculation_start_position = nil
       end
 
       # Rewind only the logical end. The enlarged history ring preserves the
       # prefix while the caller overwrites the speculative suffix.
       def rewind(end_position : Int32) : Nil
         ensure_open!
+        raise ArgumentError.new("Inkling 2 resident convolution cannot rewind during active speculation") if @speculation_start_position
         last_end = @last_end_position || raise IndexError.new("Inkling 2 resident convolution history is empty")
         encoded_start = @last_encoded_start_position || raise IndexError.new("Inkling 2 resident convolution has no encoded tile")
         unless encoded_start <= end_position <= last_end
@@ -131,6 +135,34 @@ module ML::GGUF
           raise ArgumentError.new("Inkling 2 resident convolution rewind exceeds #{@rollback_rows} reserved rows")
         end
         @last_end_position = end_position
+      end
+
+      # Open one bounded append span. It may be filled by several consecutive
+      # scalar encodes; finish_speculation chooses the retained exclusive end.
+      def begin_speculation(start : Int32) : Nil
+        ensure_open!
+        raise ArgumentError.new("Inkling 2 resident convolution speculation requires a positive rollback reserve") unless @rollback_rows > 0
+        raise ArgumentError.new("Inkling 2 resident convolution speculation is already active") if @speculation_start_position
+        frontier = @last_end_position || 0_i32
+        unless start == frontier
+          raise ArgumentError.new("Inkling 2 resident convolution speculation must begin at frontier #{frontier}")
+        end
+        @speculation_start_position = start
+      end
+
+      # Keep the prefix ending at end_position and make it the append frontier.
+      def finish_speculation(end_position : Int32) : Nil
+        ensure_open!
+        span_start = @speculation_start_position || raise ArgumentError.new("Inkling 2 resident convolution speculation is not active")
+        last_end = @last_end_position || span_start
+        unless span_start <= end_position <= last_end
+          raise ArgumentError.new("Inkling 2 resident convolution speculation finish must stay within its encoded span")
+        end
+        if last_end.to_i64 - span_start > @rollback_rows
+          raise ArgumentError.new("Inkling 2 resident convolution speculation exceeds #{@rollback_rows} reserved rows")
+        end
+        @last_end_position = end_position
+        @speculation_start_position = nil
       end
 
       def close : Nil
@@ -150,6 +182,21 @@ module ML::GGUF
           @last_encoded_end_position = nil
         elsif @last_end_position != start
           raise ArgumentError.new("Inkling 2 resident convolution tiles must be contiguous from position zero")
+        end
+      end
+
+      private def validate_speculation_tile!(start : Int32, rows : Int32) : Nil
+        span_start = @speculation_start_position
+        return unless span_start
+        raise ArgumentError.new("Inkling 2 resident convolution rows must be positive") unless rows > 0
+        frontier = @last_end_position || span_start
+        unless start == frontier
+          raise ArgumentError.new("Inkling 2 resident convolution speculative tiles must be contiguous from position #{frontier}")
+        end
+        end_position = start.to_i64 + rows
+        span_end = span_start.to_i64 + @rollback_rows
+        if end_position > span_end
+          raise ArgumentError.new("Inkling 2 resident convolution speculation exceeds #{@rollback_rows} reserved rows")
         end
       end
 
@@ -206,6 +253,7 @@ module ML::GGUF
       @last_end_position : Int32? = nil
       @last_encoded_start_position : Int32? = nil
       @last_encoded_end_position : Int32? = nil
+      @speculation_start_position : Int32? = nil
       @closed = false
 
       def initialize(@config : Inkling2Config, @sliding : Bool, @max_seq : Int32, *, @rollback_rows : Int32 = 0)
@@ -247,6 +295,7 @@ module ML::GGUF
         decode_block : Bool = false,
       ) : Inkling2View
         ensure_open!
+        validate_speculation_tile!(start, rows)
         validate_tile!(start, rows)
 
         n_head = @config.n_head
@@ -301,6 +350,7 @@ module ML::GGUF
       # prefix available for the next append.
       def rewind(end_position : Int32) : Nil
         ensure_open!
+        raise ArgumentError.new("Inkling 2 resident attention cannot rewind during active speculation") if @speculation_start_position
         last_end = @last_end_position || raise IndexError.new("Inkling 2 resident cache is empty")
         encoded_start = @last_encoded_start_position || raise IndexError.new("Inkling 2 resident attention has no encoded tile")
         unless encoded_start <= end_position <= last_end
@@ -313,6 +363,38 @@ module ML::GGUF
         @key_convolution.rewind(end_position)
         @value_convolution.rewind(end_position)
         @last_end_position = end_position
+      end
+
+      # Open one bounded append span. It may be filled by several consecutive
+      # scalar encodes; finish_speculation chooses the retained exclusive end.
+      def begin_speculation(start : Int32) : Nil
+        ensure_open!
+        raise ArgumentError.new("Inkling 2 resident attention speculation requires a positive rollback reserve") unless @rollback_rows > 0
+        raise ArgumentError.new("Inkling 2 resident attention speculation is already active") if @speculation_start_position
+        frontier = @last_end_position || 0_i32
+        unless start == frontier
+          raise ArgumentError.new("Inkling 2 resident attention speculation must begin at frontier #{frontier}")
+        end
+        @key_convolution.begin_speculation(start)
+        @value_convolution.begin_speculation(start)
+        @speculation_start_position = start
+      end
+
+      # Keep the prefix ending at end_position and make it the append frontier.
+      def finish_speculation(end_position : Int32) : Nil
+        ensure_open!
+        span_start = @speculation_start_position || raise ArgumentError.new("Inkling 2 resident attention speculation is not active")
+        last_end = @last_end_position || span_start
+        unless span_start <= end_position <= last_end
+          raise ArgumentError.new("Inkling 2 resident attention speculation finish must stay within its encoded span")
+        end
+        if last_end.to_i64 - span_start > @rollback_rows
+          raise ArgumentError.new("Inkling 2 resident attention speculation exceeds #{@rollback_rows} reserved rows")
+        end
+        @key_convolution.finish_speculation(end_position)
+        @value_convolution.finish_speculation(end_position)
+        @last_end_position = end_position
+        @speculation_start_position = nil
       end
 
       # Key/value indices and end_position are absolute token positions;
@@ -356,6 +438,7 @@ module ML::GGUF
         @last_end_position = nil
         @last_encoded_start_position = nil
         @last_encoded_end_position = nil
+        @speculation_start_position = nil
         @key_convolution.reset
         @value_convolution.reset
       end
@@ -681,6 +764,21 @@ module ML::GGUF
           @last_encoded_end_position = nil
         elsif @last_end_position != start
           raise ArgumentError.new("Inkling 2 resident attention tiles must be contiguous from position zero")
+        end
+      end
+
+      private def validate_speculation_tile!(start : Int32, rows : Int32) : Nil
+        span_start = @speculation_start_position
+        return unless span_start
+        raise ArgumentError.new("Inkling 2 resident attention rows must be positive") unless rows > 0
+        frontier = @last_end_position || span_start
+        unless start == frontier
+          raise ArgumentError.new("Inkling 2 resident attention speculative tiles must be contiguous from position #{frontier}")
+        end
+        end_position = start.to_i64 + rows
+        span_end = span_start.to_i64 + @rollback_rows
+        if end_position > span_end
+          raise ArgumentError.new("Inkling 2 resident attention speculation exceeds #{@rollback_rows} reserved rows")
         end
       end
 

@@ -42,13 +42,12 @@ spec: $(BRIDGE_OBJ)
 	$(CRYSTAL) spec \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
 
-$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench: $(BUILD_DIR)/%: bin/%.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
+$(BUILD_DIR)/inkling2_generate $(BUILD_DIR)/inkling2_verify_bench $(BUILD_DIR)/inkling2_depth_bench: $(BUILD_DIR)/%: bin/%.cr $(wildcard src/ml/gguf/inkling2_*.cr) \
 		src/ml/gguf/gpt2_bpe.cr src/ml/gguf/compute.cr src/ml/gguf/reader.cr \
-		src/ml/gguf/kernels/gemm_q56k.metal $(wildcard src/ml/gguf/kernels/inkling2_*.metal) $(BRIDGE_OBJ)
+		src/ml/gguf/ngram_draft.cr src/ml/gguf/kernels/gemm_q56k.metal \
+		$(wildcard src/ml/gguf/kernels/inkling2_*.metal) $(BRIDGE_OBJ)
 	$(CRYSTAL) build --release $< -o $@ \
 		--link-flags="-fuse-ld=/usr/bin/ld $(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
-
-$(BUILD_DIR)/inkling2_generate: src/ml/gguf/ngram_draft.cr
 
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \

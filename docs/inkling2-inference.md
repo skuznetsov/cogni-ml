@@ -153,6 +153,62 @@ The story and six-hop lookup continuations produced no drafts.
 Greedy output matched scalar decode in these cases and on a mixed
 counter-record continuation with partial acceptance.
 
+## Greedy 3→10 depth speculation
+
+The experimental `inkling2_generate --depth-speculation --passes 10`
+path targets the variable-loop research checkpoint on resident Metal.
+It drafts up to three candidate IDs after the exact pending token. For
+each of the four inputs it saves the prelude state and third-pass message
+bank on the GPU, then feeds passes 4–10 with a single exact decode tile.
+The research layout uses a 144 KiB private Metal buffer for the four-row
+checkpoint. The draft epilogue has its own KV and convolution histories,
+which are populated during prefill and scalar fallback. At a mismatch
+or EOS, each history retains the prefix accepted by the target. The four
+reserved ring rows preserve the previous live prefix while the verifier
+runs. The flag is exclusive with n-gram drafting and requires fixed depth.
+
+The parity gate compares the raw bytes of all four float32 logit rows
+against serial depth 10. It hashes each visit's live KV bytes and positions
+against serial depth 10 for the target and serial depth 3 for the draft
+epilogue. It repeats the logit and KV checks after the next scalar row for
+each possible commit length. The 62-token prefix crosses the 64-key
+attention dispatch boundary. The 1,026-token prefix crosses the 1,028-row
+physical ring during the block while keeping a 1,024-token logical window.
+
+Timing measures natural greedy completions and counts committed rows
+of decode. Wall time includes draft, verification, rollback, replay, and
+scalar tails. Each pair starts from the same prefix and checks the exact
+generated token IDs. Prefill and decode are timed separately.
+
+```sh
+make build/inkling2_depth_bench
+./build/inkling2_depth_bench --model /path/to/research-IQ4_NL.gguf \
+  --case /path/to/four-row-fixture.txt --mode verify --scenario physical_wrap
+./build/inkling2_depth_bench --model /path/to/research-IQ4_NL.gguf \
+  --case /path/to/lookup-10.txt --case /path/to/story-10.txt --mode bench --pairs 4
+```
+
+On the M2 Max with research IQ4_NL weights and prefill tiles of up to
+128 tokens, the warmed runs produced the following decode results.
+Both intervals of each retained pair had sampled background CPU below
+one full core, with samples less than one second apart. The speedup is
+the median of the paired ratios.
+
+| Prompt | Prompt tokens | Committed decode rows | Discarded / verified rows | Pairs | Serial 10, tok/s | 3→10, tok/s | Decode speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Repeated sentence | 211 | 32 | 0 / 32 | 2 | 6.80 | 8.87 | 1.30× |
+| Repeated logs | 272 | 32 | 0 / 32 | 2 | 6.37 | 8.53 | 1.34× |
+| Counter records | 187 | 32 | 0 / 32 | 2 | 6.81 | 7.93 | 1.16× |
+| Six-hop lookup | 188 | 16 | 0 / 16 | 2 | 6.98 | 9.14 | 1.31× |
+| Short story | 46 | 16 | 2 / 16 | 1 | 6.91 | 7.77 | 1.12× |
+
+The story pair ran speculation first. Background CPU spikes excluded its
+serial-first pairs. The other four prompts each had a retained pair in
+each order. All generated IDs matched serial depth 10. Prefill timing
+varied with order. For the six-hop case, the combined prefill and decode
+ratios were 0.89× with the serial lane first and 1.18× with speculation
+first.
+
 ## Checkpoints used for verification
 
 | Checkpoint | Hugging Face revision | SHA-256 |
