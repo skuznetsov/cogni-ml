@@ -250,9 +250,9 @@ require "../src/ml/gguf/inkling2_engine"
         linear.project(encoder, q8_projection, q8_view, q8_batch_output, 3_i32)
         linear.project(encoder, q8_projection, q8_view, q8_single_output, 1_i32)
 
-        # Two K blocks and partial tiles on both the batch and output axes.
+        # Two K blocks, partial batch and output tiles, and a four-byte input offset.
         q8_tiled_input = Array(Float32).new(35 * 64) { |index| ((index % 23) - 11).to_f32 * 0.013_f32 }
-        q8_tiled_view = Inkling2LinearSpecSupport.float_view(q8_tiled_input, buffers)
+        q8_tiled_view = Inkling2LinearSpecSupport.float_view([0_f32] + q8_tiled_input, buffers).slice(1)
         q8_tiled_output = Inkling2LinearSpecSupport.float_view(Array(Float32).new(35 * 39, 0_f32), buffers)
         linear.project(encoder, q8_tiled_projection, q8_tiled_view, q8_tiled_output, 35_i32)
 
