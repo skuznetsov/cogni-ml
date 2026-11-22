@@ -89,28 +89,32 @@ kernel void inkling2_resident_convolution_commit(
     }
 }
 
-// In-place per-head Q/relative clipping and full-attention tau scaling.
-// The head dimension is bounded to 256 by the host, so each SIMD lane keeps
-// at most eight values while the norm reduction is in flight.
-kernel void inkling2_resident_clip_heads(
-    device float* values            [[buffer(0)]],
-    device const float* channel_scale [[buffer(1)]],
-    constant uint& rows             [[buffer(2)]],
-    constant uint& heads            [[buffer(3)]],
-    constant uint& width            [[buffer(4)]],
-    constant uint& start            [[buffer(5)]],
-    constant uint& log_scale_floor  [[buffer(6)]],
-    constant uint& sliding          [[buffer(7)]],
-    constant float& threshold       [[buffer(8)]],
-    constant float& log_scale_alpha [[buffer(9)]],
-    ushort lane [[thread_index_in_simdgroup]],
-    uint3 tgpig [[threadgroup_position_in_grid]])
-{
-    const uint row = tgpig.y;
-    const uint head = tgpig.z;
-    if (row >= rows || head >= heads || width > 256) return;
+struct Inkling2PrepareQKVRParams {
+    uint n_head;
+    uint n_head_kv;
+    uint head_dim;
+    uint relative_dim;
+    uint start;
+    uint sliding;
+    uint log_scale_floor;
+    float qk_clip;
+    float rel_clip;
+    float rms_eps;
+    float log_scale_alpha;
+};
 
-    const size_t base = (size_t)row * (size_t)heads * (size_t)width + (size_t)head * (size_t)width;
+// In-place query clipping and full-attention tau scaling.
+inline void inkling2_resident_clip_query_head(
+    device float* values,
+    device const float* channel_scale,
+    constant Inkling2PrepareQKVRParams& params,
+    uint row,
+    uint head,
+    uint width,
+    float threshold,
+    ushort lane)
+{
+    const size_t base = ((size_t)row * params.n_head + head) * width;
     const uint chunks = (width + 31) / 32;
     float local_values[8];
     float norm_partial = 0.0f;
@@ -127,9 +131,9 @@ kernel void inkling2_resident_clip_heads(
     const float norm = sqrt(simd_sum(norm_partial)) + 1.0e-6f;
     const float clip = min(1.0f, threshold / norm);
     float tau = 1.0f;
-    if (sliding == 0) {
-        const float ratio = ((float)(start + row) + 1.0f) / (float)log_scale_floor;
-        tau = 1.0f + log_scale_alpha * log(max(1.0f, ratio));
+    if (params.sliding == 0) {
+        const float ratio = ((float)(params.start + row) + 1.0f) / (float)params.log_scale_floor;
+        tau = 1.0f + params.log_scale_alpha * log(max(1.0f, ratio));
     }
 
     for (uint chunk = 0; chunk < chunks; ++chunk) {
@@ -140,23 +144,37 @@ kernel void inkling2_resident_clip_heads(
     }
 }
 
-// In-place key clipping and per-head value RMS normalization.
-kernel void inkling2_resident_prepare_kv(
-    device float* keys       [[buffer(0)]],
-    device float* values     [[buffer(1)]],
-    constant uint& rows      [[buffer(2)]],
-    constant uint& heads     [[buffer(3)]],
-    constant uint& head_dim  [[buffer(4)]],
-    constant float& qk_clip  [[buffer(5)]],
-    constant float& rms_eps  [[buffer(6)]],
+// Each SIMD group prepares one Q, relative-Q, or paired K/V head. The host
+// bounds both widths to 256 and dispatches only active rows and heads.
+kernel void inkling2_resident_prepare_qkvr(
+    device float* queries                 [[buffer(0)]],
+    device float* keys                    [[buffer(1)]],
+    device float* values                  [[buffer(2)]],
+    device float* relative_queries        [[buffer(3)]],
+    device const float* query_scale       [[buffer(4)]],
+    device const float* relative_scale    [[buffer(5)]],
+    constant Inkling2PrepareQKVRParams& params [[buffer(6)]],
     ushort lane [[thread_index_in_simdgroup]],
     uint3 tgpig [[threadgroup_position_in_grid]])
 {
     const uint row = tgpig.y;
-    const uint head = tgpig.z;
-    if (row >= rows || head >= heads || head_dim > 256) return;
+    const uint head_slot = tgpig.z;
+    const uint head_dim = params.head_dim;
+    if (head_slot < params.n_head) {
+        inkling2_resident_clip_query_head(queries, query_scale, params, row, head_slot,
+            head_dim, params.qk_clip, lane);
+        return;
+    }
 
-    const size_t base = (size_t)row * (size_t)heads * (size_t)head_dim + (size_t)head * (size_t)head_dim;
+    const uint remaining = head_slot - params.n_head;
+    if (remaining < params.n_head) {
+        inkling2_resident_clip_query_head(relative_queries, relative_scale, params, row, remaining,
+            params.relative_dim, params.rel_clip, lane);
+        return;
+    }
+
+    const uint kv_head = remaining - params.n_head;
+    const size_t base = ((size_t)row * params.n_head_kv + kv_head) * head_dim;
     const uint chunks = (head_dim + 31) / 32;
     float key_values[8];
     float value_values[8];
@@ -177,9 +195,9 @@ kernel void inkling2_resident_prepare_kv(
     }
 
     const float key_norm = sqrt(simd_sum(key_partial)) + 1.0e-6f;
-    const float key_clip = min(1.0f, qk_clip / key_norm);
+    const float key_clip = min(1.0f, params.qk_clip / key_norm);
     const float value_mean_square = simd_sum(value_partial) / (float)head_dim;
-    const float value_scale = rsqrt(value_mean_square + rms_eps);
+    const float value_scale = rsqrt(value_mean_square + params.rms_eps);
     for (uint chunk = 0; chunk < chunks; ++chunk) {
         const uint channel = (uint)lane + chunk * 32;
         if (channel < head_dim) {

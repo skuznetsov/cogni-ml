@@ -277,8 +277,8 @@ require "../src/ml/gguf/inkling2_resident_math"
   if ML::Metal::Device.init!
     describe ML::GGUF::Inkling2ResidentAttention do
       it "matches sliding attention across tile boundaries, ring wrap, oversized batches, reset, and KV snapshots" do
-        config = resident_test_config(sliding: true, n_head: 2_i32, n_head_kv: 1_i32,
-          head_dim: 2_i32, rel_dim: 2_i32, window: 3_i32, max_seq: 16_i32)
+        config = resident_test_config(sliding: true, n_head: 4_i32, n_head_kv: 2_i32,
+          head_dim: 3_i32, rel_dim: 1_i32, window: 3_i32, max_seq: 16_i32)
         weights = resident_attention_weights(config)
         matmul = ML::GGUF::Inkling2CPUMatmul.new
         inputs = resident_inputs(config, 9_i32)
